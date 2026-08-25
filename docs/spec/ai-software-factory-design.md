@@ -1,7 +1,7 @@
 # AI Software Factory 设计规格
 
-> 状态：设计基线 v1.0  
-> 日期：2026-08-24  
+> 状态：设计基线 v1.0
+> 日期：2026-08-24
 > 关联方案：[现有最终整合方案](探索的流程/PLAN.md)
 
 ## 1. 目标与边界
@@ -63,6 +63,197 @@ Explorer Thread / Sol / Codex Plan Mode
 | Infrastructure | SQLite、Git、进程、文件、时钟 | 解释业务状态 |
 | Adapter | Codex App、Superpowers、Git 能力映射 | 修改核心领域规则 |
 | API/UI | 展示状态、触发用户操作 | 绕过 Application Service 写库 |
+
+## 2.1 整体流程
+
+Factory 的一次生产闭环由“设计确认、计划发布、排队调度、隔离执行、验证提交、审查合并、结果归档”七个阶段组成。阶段之间通过 Registry 中的事实状态和事件连接，不通过 UI 页面是否打开或某个 Thread 是否可见来判断进度。
+
+~~~text
+┌──────────────────────────────────────────────────────────────────────┐
+│ 0. 项目准备                                                          │
+│    登记项目、默认分支、验证命令、并发上限、Executor Profile            │
+└──────────────────────────────┬───────────────────────────────────────┘
+                               ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│ 1. 设计与计划                                                        │
+│    Explorer 讨论 → 用户确认 → factory-write-plan → Plan Artifact      │
+└──────────────────────────────┬───────────────────────────────────────┘
+                               ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│ 2. 发布检查                                                          │
+│    解析、Schema、范围、依赖、冲突、基线 Commit、命令白名单、幂等键      │
+└──────────────────────────────┬───────────────────────────────────────┘
+                               ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│ 3. 排队与调度                                                        │
+│    用户批准发布 → QUEUED → 依赖/冲突/容量检查 → Run + Lease             │
+└──────────────────────────────┬───────────────────────────────────────┘
+                               ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│ 4. 执行                                                              │
+│    创建 Workspace/Branch → 绑定或创建 Thread → 按 Task 执行并记录心跳    │
+└──────────────────────────────┬───────────────────────────────────────┘
+                               ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│ 5. 验证与证据                                                        │
+│    执行白名单命令 → 失败有限修复/重试 → 成功后创建提交 → 生成证据包       │
+└──────────────────────────────┬───────────────────────────────────────┘
+                               ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│ 6. 审查与合并                                                        │
+│    Review → MERGE_READY → 人工合并目标分支 → confirm_merged → MERGED      │
+└──────────────────────────────────────────────────────────────────────┘
+~~~
+
+每个阶段的进入条件、责任人和产物如下：
+
+| 阶段 | 进入条件 | 主要责任人 | 必须产物 | 失败后的处理 |
+|---|---|---|---|---|
+| 项目准备 | FactoryProject 尚未登记或配置已变化 | Factory 管理员 | 项目配置、验证命令注册、能力配置 | 配置不完整时禁止发布 |
+| 设计与计划 | Explorer 已完成设计讨论 | Explorer、Plan Author | Approved Design、Plan Artifact | 回到设计讨论，不创建 Run |
+| 发布检查 | Artifact 已生成 | Factory | PlanRevision、解析索引、ValidationReport | 保持 PLANNED 或 BLOCKED，修订后生成新 Revision |
+| 排队与调度 | Revision 为 READY 且用户批准发布 | 计划负责人、Scheduler | QUEUED Plan、Run、Assignment、资源锁 | WAITING_DEPENDENCY / WAITING_CONFLICT / 保持 QUEUED |
+| 执行 | Run 已分配且 Runtime 具备所需能力 | Executor、Codex Runtime | Workspace、ThreadRef、Task 事件、心跳 | FAILED、STALE、CANCELLED 或 BLOCKED |
+| 验证与证据 | 所有必需 Task 已完成 | Executor、Factory | VerificationResult、Commit SHA、Diff 摘要 | 有限修复；超过上限进入 BLOCKED |
+| 审查与合并 | 验证成功且提交存在 | Reviewer、合并人 | Review、MergeRequest、目标 Commit | 驳回回到修复；目标不匹配时不确认合并 |
+
+### 2.2 标准操作流程
+
+以下流程是 V1 的正常操作路径。页面、CLI 或 API 可以不同，但必须调用同一组 Application Service，并产生相同的状态变化和事件。
+
+#### A. 一次性登记项目
+
+1. 管理员登记项目根目录、项目标识、默认分支和时区。
+2. 登记项目级并发上限、允许的 Executor Profile 以及验证命令标识。
+3. 为每个验证命令固定 argv、cwd、timeout、环境变量白名单和结果解析方式；Artifact 只能引用命令标识。
+4. Factory 读取默认分支的当前 Commit，确认根目录可访问、Git 状态可读取、基线 Commit 可解析。
+5. 管理员确认 Worktree 根目录、分支命名规则和清理策略。V1 只登记清理策略，不自动删除历史 Workspace。
+
+项目登记完成后才允许创建或发布 Plan。项目配置发生变化时，必须记录配置版本；已经发布的 PlanRevision 仍按发布时保存的基线和命令索引执行。
+
+#### B. 从 Explorer 设计生成 Plan
+
+1. Explorer 在长期 Thread 中说明目标、范围、验收标准、依赖、冲突键和验证方式。
+2. 用户完成设计确认；未确认的讨论内容只能停留在 Explorer 侧，不得直接进入队列。
+3. Factory Plan Writer 调用 `factory-write-plan`，生成 Markdown + YAML Front Matter 的 Plan Artifact。
+4. 发布前展示摘要供用户复核：目标、项目、基线 Commit、include/exclude、依赖、冲突键、Task、验证命令、修复上限和 Executor Profile。
+5. 用户确认 Artifact 内容后，Factory 计算 SHA-256，创建不可变 PlanRevision，并把可调度字段写入 Registry。
+
+此步骤只创建长期计划，不创建 Run、Assignment、Workspace 或 Codex Thread。修改已发布内容必须生成新的 Revision，旧 Revision 只能被标记为 SUPERSEDED。
+
+#### C. 发布检查与进入队列
+
+Factory 按以下顺序执行发布检查，任何一步失败都不能进入 QUEUED：
+
+1. 校验 schema_version、必填字段、ID 格式和字段类型。
+2. 校验项目存在、基线 branch/commit 可解析，且 include/exclude 使用项目相对路径。
+3. 校验 include 与 exclude 不产生越界范围；禁止访问项目外路径、敏感目录和未声明资源。
+4. 校验每个 Task 的 ID 唯一、依赖存在且无环，acceptance_refs 均能解析。
+5. 校验依赖 Plan 存在，冲突键格式正确，验证命令全部在项目白名单内。
+6. 校验 Executor Profile 和 `max_fix_attempts` 在项目允许范围内。
+7. 写入 ValidationReport、artifact_sha256 和发布事件；同一幂等键重复提交时返回原 Plan，不创建重复 Revision 或 Run。
+
+检查通过后 Plan 进入 READY。计划负责人复核检查报告并明确执行范围，调用“批准发布”操作；该操作将 READY 原子地变为 QUEUED，并记录 actor、时间和幂等键。只有 QUEUED Plan 才能被 Scheduler 选中。
+
+#### D. 调度、分配和资源准备
+
+Scheduler 周期运行或被事件唤醒，对 QUEUED、WAITING_DEPENDENCY 和 WAITING_CONFLICT 的 Plan 重新评估：
+
+1. 先判断依赖是否全部 MERGED；否则标记 WAITING_DEPENDENCY，并记录未满足的 Plan 和目标状态。
+2. 再判断冲突键是否被活动 Assignment 持有；否则标记 WAITING_CONFLICT，并记录持有 Run。
+3. 再判断项目和全局容量、兼容 Slot、基线 Commit 以及工作树安全前提。
+4. 条件满足时，在一个短事务中创建 Run、Assignment、Lease，锁定冲突键，并将 Plan 投影为 IN_PROGRESS。
+5. Dispatcher 创建或登记 Workspace、Branch 和基线 Commit，随后按 Runtime 能力决定绑定已有 Thread、请求用户创建 Thread，或自动驱动 Thread。
+6. 资源映射完成后写入 DISPATCHED 事件；Executor 开始工作并定期更新心跳。
+
+资源不足不是失败。依赖、冲突或容量发生变化时必须重新唤醒 Scheduler；只有资源无法恢复、基线不安全或 Runtime 能力缺失等明确原因才进入 BLOCKED。
+
+#### E. Executor 执行 Task
+
+Executor 只能在 Factory 分配的 Workspace 中工作，执行提示必须包含以下固定上下文：PlanRevision 摘要、当前 Task、include/exclude、验收标准、验证命令标识、禁止操作和当前 Run ID。
+
+1. Executor 启动时确认 Workspace 路径、Branch、base_commit 和 Run ID 与 Registry 一致。
+2. 按 `PlanTask.depends_on` 的拓扑顺序执行 Task；每完成一个 Task 都写入 `run_task.completed` 或 `run_task.failed` 事件。
+3. 只修改声明范围内的文件；发现需要扩大范围、改变依赖、修改验证命令或修改项目配置时，暂停并请求人工修订 Plan，不得自行扩大权限。
+4. Executor 每次获得工作、等待外部操作或完成一个阶段时更新心跳；长时间命令必须同时写入可观察的进程状态。
+5. Runtime 只有 Observe 能力时，Factory 可以登记和观测用户创建的资源，但不能自动发送执行提示，也不能把 Run 标记为自动执行成功。
+
+#### F. 验证、有限修复和提交
+
+1. 所有必需 Task 完成后，Run 进入 VERIFYING，Factory 按顺序执行白名单验证命令。
+2. 每条命令记录 command_id、解析后的 argv 摘要、退出码、开始/结束时间、超时标记和日志引用；不把完整敏感环境变量写入事件。
+3. 验证失败时，Executor 只能在 `max_fix_attempts` 范围内修复，然后重新执行受影响的验证命令；每次修复都记录原因和差异。
+4. 达到上限、出现越界修改、命令未登记或运行环境不满足时，Run 进入 FAILED 或 BLOCKED，并生成 Needs Attention 项。
+5. 全部验证通过后，Factory 检查提交 SHA 存在、提交祖先为 Run 的 base_commit、提交范围未越界，然后生成 Review 和 MergeRequest。
+6. 提交成功并完成证据收集后，Run 进入 SUCCEEDED，Plan 在同一事务中投影为 MERGE_READY。缺少提交时不得进入 MERGE_READY。
+
+#### G. Review、人工合并和闭环
+
+Reviewer 在 Review Queue 中检查：
+
+- PlanRevision 是否与 Run 一致，是否使用正确的 base_commit；
+- Diff 是否只覆盖声明范围，是否包含不应提交的配置、凭据或生成物；
+- 验证命令是否全部通过，是否存在超时、跳过或人工豁免；
+- 提交、日志、验证结果、Task 结果和 CodexThreadRef 是否可以互相追溯。
+
+审查通过只表示证据包可合并，不等于目标分支已经合并。合并人在线下或受控 Git 流程中完成合并后，调用 `confirm_merged(plan_id, target_branch, target_commit)`：
+
+1. Factory 验证目标分支、目标 Commit 和 MergeRequest 中的提交信息完整。
+2. Factory 通过只读 Git 检查确认目标 Commit 包含 Run 的提交；若检查不可用，必须保留为待确认，不得乐观推进状态。
+3. Factory 原子写入 merge confirmation 事件和目标 Commit，将 Plan 从 MERGE_READY 变为 MERGED。
+4. 若目标分支发生冲突、提交不匹配或合并后验证信息缺失，保持 MERGE_READY，创建 Needs Attention，不自动重跑或自动删除 Workspace。
+
+### 2.3 角色与操作边界
+
+| 角色 | 可以操作 | 不可以操作 | 主要交接物 |
+|---|---|---|---|
+| Explorer / 需求负责人 | 讨论目标、范围和验收标准；确认设计 | 直接创建 Run、修改已发布 Revision 状态 | Approved Design |
+| Plan Author | 生成 Artifact；修订并生成新 Revision | 绕过 Schema、写入任意 Shell、修改已发布 Revision | Plan Artifact、ValidationReport |
+| 计划负责人 | 复核发布检查；批准 READY → QUEUED；取消尚未完成的计划 | 绕过依赖/冲突检查；直接写库推进状态 | Publish decision、Cancel reason |
+| Scheduler | 计算依赖、冲突、容量；创建 Run 和 Lease | 修改 Plan 内容；自动合并或扩大锁范围 | Assignment、resource locks |
+| Executor / Codex Agent | 在 Workspace 内实现 Task、运行白名单验证、创建提交 | merge、push、deploy、删除 Workspace、修改项目配置 | Task events、verification results、commit SHA |
+| Reviewer | 审查范围、证据和差异；驳回并说明原因 | 代替验证命令；未经合并确认推进 MERGED | Review decision、MergeRequest |
+| 合并人 | 将已审查提交合并到目标分支；确认目标 Commit | 把未审查或未验证提交标记为已合并 | `confirm_merged`、target Commit |
+| Factory 管理员 | 登记项目、命令、Slot、Runtime 能力；处理恢复和清理 | 通过后台直接绕过状态机；无确认删除资源 | 配置版本、恢复/清理记录 |
+
+### 2.4 日常操作入口与结果
+
+| 操作入口 | 适用场景 | 前置条件 | 成功结果 | 不满足条件时 |
+|---|---|---|---|---|
+| `validate_plan` | 发布前检查 Artifact | 有效项目和 Artifact | 返回可读 ValidationReport | 不创建 Revision、Run 或执行资源 |
+| `publish_plan` | 创建或登记不可变 Revision | 幂等键、Artifact 校验通过 | Plan 进入 READY | 返回可定位的字段错误 |
+| `approve_enqueue` | 明确批准执行 | Plan 为 READY，用户确认范围 | Plan 进入 QUEUED | 保持 READY，记录拒绝原因 |
+| `schedule_once` | 立即触发一次调度 | 有待评估计划 | 创建 Run 或记录等待原因 | 不产生重复 Run |
+| `retry_run` | 对失败或取消的尝试重试 | 原 Run 已终止，Revision 未过期 | 创建新的 attempt 和 Workspace 映射 | 不复用旧 Run 的 Lease |
+| `cancel_run` | 停止尚未完成的 Run | actor 有权限 | 在当前边界停止并进入 CANCELLED | 仍需继续观察已启动进程 |
+| `recover_stale` | 处理 Lease 过期或服务重启 | Run 有资源快照 | 继续、重试或 BLOCKED，三者择一并有证据 | 不直接恢复为 RUNNING |
+| `review_run` | 审查已生成的证据包 | Run 为 SUCCEEDED / MERGE_READY | 通过或驳回并记录理由 | 不改变验证结果 |
+| `confirm_merged` | 登记人工合并事实 | 目标 Commit 可验证 | Plan 进入 MERGED | 保持 MERGE_READY |
+
+所有入口都必须支持幂等键或明确的状态前置条件。重复点击“发布、调度、取消、确认合并”不能产生重复 Run、重复锁或相互矛盾的终态。
+
+### 2.5 异常、恢复与人工介入流程
+
+~~~text
+依赖未满足 ───────► WAITING_DEPENDENCY ──依赖 MERGED──► 重新调度
+冲突键被占用 ─────► WAITING_CONFLICT ───锁释放──────► 重新调度
+无兼容 Slot ──────► 保持 QUEUED ───────容量释放────► 重新调度
+Runtime 无控制能力 ► BLOCKED ──────────人工准备资源──► 新 Run 或恢复
+Lease 过期/服务重启 ► STALE → RECOVERING ───────────► 继续/重试/BLOCKED
+验证失败 ─────────► 修复重试 ──达到上限──► FAILED/BLOCKED
+用户取消 ─────────► CANCELLED ──────────────────────► 释放 Lease/锁
+审查驳回 ─────────► Needs Attention ───────────────► 修订 Revision 后新 Run
+目标提交不匹配 ───► MERGE_READY ───────────────────► 人工补齐/重新合并
+~~~
+
+人工介入必须遵循“先保留证据、再改变状态”的顺序：
+
+1. 先查看最后事件、当前 Lease、Workspace、ThreadRef、进程和验证结果。
+2. 明确选择继续、取消、重试、修订计划或补齐合并证据中的一种动作。
+3. 通过 Application Service 执行动作，写入 actor、reason、时间和关联资源。
+4. 再次读取聚合状态，确认资源锁、Slot 和 Needs Attention 项与终态一致。
+
+人工不能通过修改数据库状态、删除事件或移动 Desktop 私有文件来“修复”流程。无法获得可靠事实时，宁可保持 BLOCKED 或 MERGE_READY，并把下一步检查记录在 Needs Attention 中。
 
 ## 3. 领域模型
 
