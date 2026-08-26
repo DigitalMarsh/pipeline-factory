@@ -1,14 +1,12 @@
-# AI Software Factory 设计规格
+# AI Software Pipeline Factory 设计规格
 
-> 状态：设计基线 v1.0
-> 日期：2026-08-24
-> 关联方案：[现有最终整合方案](探索的流程/PLAN.md)
+> 版本：v1.0
 
 ## 1. 目标与边界
 
-本系统是一个本地单用户 AI Software Factory 控制平面。它把一个长期存在的 Exploration Thread 中经过 Codex Plan Mode 讨论并由用户批准的设计，转换成可排队、可执行、可恢复、可审查的生产工单。
+本系统是一个本地单用户 AI Software Pipeline Factory 控制台。系统维护一个持久化的Exploration Thread，在Exploration Thread使用Plan Mode探索任务并生成执行计划，经过用户批准后转换成可排队、可执行、可恢复、可审查的生产工单。
 
-Factory 的职责是管理工作与事实状态；Codex App 的职责是运行 Agent；Superpowers 的职责是提供计划编写与执行方法；Git 的职责是提供分支和 Worktree 隔离。
+Pipeline Factory 的职责是管理工作与事实状态；Codex App 的职责是运行 Agent；Superpowers 的职责是提供计划编写与执行方法；Git 的职责是提供分支和 Worktree 隔离。
 
 ### 1.1 必须满足
 
