@@ -1,0 +1,49 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 4310
+  },
+  "web": {
+    "host": "127.0.0.1",
+    "port": 5173
+  },
+  "storage": {
+    "databasePath": "../pipeline-factory.sqlite",
+    "worktreeRoot": "../.pipeline-worktrees"
+  },
+  "project": {
+    "root": "../..",
+    "commands": [
+      { "commandId": "project.test", "argv": ["node", "-e", "process.exit(0)"], "environment": { "PATH": "/usr/local/bin:/usr/bin:/bin" } },
+      { "commandId": "project.typecheck", "argv": ["node", "-e", "process.exit(0)"], "environment": { "PATH": "/usr/local/bin:/usr/bin:/bin" } }
+    ]
+  },
+  "model": {
+    "backend": "codex-app-server",
+    "codexAppServer": {
+      "command": "codex",
+      "args": ["app-server", "--stdio"],
+      "cwd": "../..",
+      "startupTimeoutMs": 15000,
+      "requestTimeoutMs": 120000,
+      "maxRestarts": 3,
+      "clientName": "pipeline-factory",
+      "clientVersion": "3.0.0"
+    },
+    "roles": {
+      "explorer": {
+        "model": "gpt-5.6-luna",
+        "temperature": 0.1
+      },
+      "executor": {
+        "model": "gpt-5.6-luna",
+        "temperature": 0
+      }
+    }
+  },
+  "runtime": {
+    "globalConcurrency": 4,
+    "projectConcurrency": 2,
+    "defaultTimeoutMs": 120000
+  }
+}

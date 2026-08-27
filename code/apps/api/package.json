@@ -1,0 +1,19 @@
+{
+  "name": "@pipeline-factory/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc --outDir dist"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.2",
+    "@pipeline-factory/domain": "workspace:*",
+    "fastify": "^5.2.1",
+    "zod": "^3.24.1"
+  }
+}

@@ -1,0 +1,79 @@
+import { describe, expect, it } from "vitest";
+import {
+  CodexAppServerGateway,
+  type CodexAppServerSession,
+  type CodexAppServerSessionFactory,
+} from "./index.js";
+
+function createSessionFactory(events: Array<{ method: string; params: Record<string, unknown> }>, calls: Array<{ method: string; params: unknown }>): CodexAppServerSessionFactory {
+  const session: CodexAppServerSession = {
+    startThread: async (params) => {
+      calls.push({ method: "thread/start", params });
+      return "codex-thread-1";
+    },
+    resumeThread: async (threadId) => {
+      calls.push({ method: "thread/resume", params: { threadId } });
+    },
+    streamTurn: async function* (params) {
+      calls.push({ method: "turn/start", params });
+      for (const event of events) yield event;
+    },
+    interrupt: async (threadId, turnId) => {
+      calls.push({ method: "turn/interrupt", params: { threadId, turnId } });
+    },
+    close: async () => undefined,
+  };
+  return async () => session;
+}
+
+describe("CodexAppServerGateway", () => {
+  it("creates a read-only Explorer thread and maps App Server stream events", async () => {
+    const calls: Array<{ method: string; params: unknown }> = [];
+    const gateway = new CodexAppServerGateway({
+      roles: { explorer: { model: "explorer-model" }, executor: { model: "executor-model" } },
+      sessionFactory: createSessionFactory([
+        { method: "item/agentMessage/delta", params: { delta: "hello" } },
+        { method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } },
+      ], calls),
+    });
+
+    const events = [];
+    for await (const event of gateway.stream({
+      role: "explorer",
+      conversationId: "explorer-1",
+      messages: [{ role: "user", content: "inspect the repository" }],
+    })) events.push(event);
+
+    expect(events).toEqual([
+      { type: "thread.started", threadId: "codex-thread-1" },
+      { type: "text.delta", text: "hello" },
+      { type: "turn.completed" },
+    ]);
+    expect(calls[0]).toMatchObject({
+      method: "thread/start",
+      params: { model: "explorer-model", sandbox: "read-only", approvalPolicy: "never" },
+    });
+    expect(calls[1]).toMatchObject({ method: "turn/start", params: { threadId: "codex-thread-1" } });
+  });
+
+  it("reuses a persisted provider thread and maps an interrupted turn", async () => {
+    const calls: Array<{ method: string; params: unknown }> = [];
+    const gateway = new CodexAppServerGateway({
+      roles: { explorer: { model: "explorer-model" }, executor: { model: "executor-model" } },
+      sessionFactory: createSessionFactory([
+        { method: "turn/completed", params: { turn: { id: "turn-2", status: "interrupted" } } },
+      ], calls),
+    });
+    const events = [];
+    const stream = gateway.stream({
+      role: "explorer",
+      conversationId: "explorer-1",
+      providerThreadId: "codex-thread-existing",
+      messages: [{ role: "user", content: "continue" }],
+    });
+    for await (const event of stream) events.push(event);
+
+    expect(events).toEqual([{ type: "turn.cancelled" }]);
+    expect(calls.map((call) => call.method)).toEqual(["thread/resume", "turn/start"]);
+  });
+});
