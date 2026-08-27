@@ -2,7 +2,7 @@
 import { ChatDotRound, CircleCheck, Clock, Connection, Files, Setting, Warning } from "@element-plus/icons-vue";
 import type { ExplorerThread } from "../types";
 
-defineProps<{ thread: ExplorerThread | null }>();
+defineProps<{ thread: ExplorerThread | null; candidateCount?: number; dispatchedCount?: number; activeRunCount?: number; needsAttentionCount?: number }>();
 </script>
 
 <template>
@@ -20,11 +20,11 @@ defineProps<{ thread: ExplorerThread | null }>();
     </div>
     <div class="thread-meta"><span>{{ thread?.messageCount ?? 8 }} messages</span><span>Just now</span></div>
     <nav class="rail-nav" aria-label="ExplorerThread navigation">
-      <RouterLink class="rail-link active" :to="`/projects/${thread?.projectId ?? 'project-demo'}/explorer`"><ChatDotRound :size="16" /> Conversation <span class="nav-count">8</span></RouterLink>
-      <RouterLink class="rail-link" :to="`/projects/${thread?.projectId ?? 'project-demo'}/explorer#candidate`"><Files :size="16" /> Plan candidates <span class="nav-count">1</span></RouterLink>
-      <RouterLink class="rail-link" :to="`/projects/${thread?.projectId ?? 'project-demo'}/plans`"><CircleCheck :size="16" /> Dispatched plans <span class="nav-count muted-count">0</span></RouterLink>
-      <RouterLink class="rail-link" :to="`/projects/${thread?.projectId ?? 'project-demo'}/plans?status=IN_PROGRESS`"><Clock :size="16" /> Active runs</RouterLink>
-      <RouterLink class="rail-link needs" :to="`/projects/${thread?.projectId ?? 'project-demo'}/plans?status=BLOCKED`"><Warning :size="16" /> Needs attention <span class="warning-count">0</span></RouterLink>
+      <RouterLink class="rail-link active" :to="`/projects/${thread?.projectId ?? 'project-demo'}/explorer`"><ChatDotRound :size="16" /> Conversation <span class="nav-count">{{ thread?.messageCount ?? 0 }}</span></RouterLink>
+      <RouterLink class="rail-link" :to="`/projects/${thread?.projectId ?? 'project-demo'}/explorer#candidate`"><Files :size="16" /> Plan candidates <span class="nav-count">{{ candidateCount ?? 0 }}</span></RouterLink>
+      <RouterLink class="rail-link" :to="`/projects/${thread?.projectId ?? 'project-demo'}/plans`"><CircleCheck :size="16" /> Dispatched plans <span class="nav-count muted-count">{{ dispatchedCount ?? 0 }}</span></RouterLink>
+      <RouterLink class="rail-link" :to="`/projects/${thread?.projectId ?? 'project-demo'}/plans?status=IN_PROGRESS`"><Clock :size="16" /> Active runs <span class="nav-count muted-count">{{ activeRunCount ?? 0 }}</span></RouterLink>
+      <RouterLink class="rail-link needs" :to="`/projects/${thread?.projectId ?? 'project-demo'}/plans?status=BLOCKED`"><Warning :size="16" /> Needs attention <span class="warning-count">{{ needsAttentionCount ?? 0 }}</span></RouterLink>
     </nav>
     <div class="rail-section">
       <div class="rail-section-title">THREAD MEMORY</div>

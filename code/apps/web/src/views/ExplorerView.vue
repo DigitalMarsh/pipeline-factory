@@ -25,6 +25,8 @@ const policyOpen = ref(false);
 const moreOpen = ref(false);
 const explorerPaused = ref(false);
 const memoryPanel = ref<"summary" | "successors" | null>(null);
+const candidateEmptyOpen = ref(false);
+const candidateTitle = ref("New Explorer plan");
 const loading = ref(true);
 const error = ref<string | null>(null);
 const busy = ref(false);
@@ -32,6 +34,10 @@ const timeline = ref<HTMLElement | null>(null);
 
 const fallbackThread: ExplorerThread = { id: "thread-demo", projectId: "project-demo", parentThreadId: null, state: "ACTIVE", messageCount: 8, summaryRef: null, lastActivityAt: new Date().toISOString() };
 const fallbackPlan: Plan = { id: "plan-demo-1", title: "Build ExplorerThread workspace", revision: 1, status: "DRAFT", projectId: "project-demo", sourceExplorerThreadId: "thread-demo", queuedAt: null, runId: null, lastEventAt: new Date().toISOString(), attentionReason: null };
+const candidateCount = computed(() => candidate.value ? 1 : 0);
+const dispatchedCount = computed(() => dispatched.value.length);
+const activeRunCount = computed(() => dispatched.value.filter((plan) => plan.status === "IN_PROGRESS" || plan.status === "VERIFYING").length);
+const needsAttentionCount = computed(() => dispatched.value.filter((plan) => plan.status === "BLOCKED" || Boolean(plan.attentionReason)).length);
 
 function setPolicyOpen(value: boolean) {
   policyOpen.value = value ? openPolicyPanel(policyOpen.value) : closePolicyPanel(policyOpen.value);
@@ -44,7 +50,7 @@ function toggleExplorerPause() {
 
 async function refreshThread() {
   await load();
-  ElMessage.success("ExplorerThread 已刷新");
+  if (!error.value) ElMessage.success("ExplorerThread 已刷新");
 }
 
 function turnContent(turn: ExplorerTurn): string {
@@ -54,8 +60,34 @@ function turnContent(turn: ExplorerTurn): string {
 
 function syncHashPanel(hash: string) {
   if (hash === "#candidate" && candidate.value) drawerOpen.value = true;
+  if (hash === "#candidate" && !candidate.value) candidateEmptyOpen.value = true;
   if (hash === "#summary") memoryPanel.value = "summary";
   if (hash === "#successors") memoryPanel.value = "successors";
+}
+
+async function closeCandidateEmpty() {
+  candidateEmptyOpen.value = false;
+  if (route.hash === "#candidate") await router.replace({ hash: "" });
+}
+
+function setCandidateEmptyOpen(open: boolean) {
+  if (!open) void closeCandidateEmpty();
+}
+
+async function createCandidate() {
+  const title = candidateTitle.value.trim();
+  if (!title || busy.value) return;
+  busy.value = true;
+  error.value = null;
+  try {
+    candidate.value = (await api.createCandidate(projectId.value, title)).plan;
+    await closeCandidateEmpty();
+    drawerOpen.value = true;
+  } catch (caught) {
+    error.value = caught instanceof Error ? `候选计划创建失败：${caught.message}` : "候选计划创建失败";
+  } finally {
+    busy.value = false;
+  }
 }
 
 async function closeMemoryPanel() {
@@ -115,15 +147,21 @@ async function confirmPlan() {
   if (!candidate.value || !candidate.value.id && !candidate.value.planId || busy.value) return;
   const id = candidate.value.id ?? candidate.value.planId!;
   busy.value = true;
-  try { candidate.value = (await api.confirm(id)).plan; } catch { candidate.value = { ...candidate.value, status: "READY" }; } finally { busy.value = false; }
+  try { candidate.value = (await api.confirm(id)).plan; } catch (caught) { error.value = caught instanceof Error ? `Confirm plan 失败：${caught.message}` : "Confirm plan 失败"; } finally { busy.value = false; }
 }
 
 async function enqueuePlan() {
   if (!candidate.value || candidate.value.status !== "READY" || busy.value) return;
   const id = candidate.value.id ?? candidate.value.planId!;
   busy.value = true;
-  try { candidate.value = (await api.enqueue(id)).plan; } catch { candidate.value = { ...candidate.value, status: "QUEUED", queuedAt: new Date().toISOString() }; }
-  if (candidate.value.status === "QUEUED") dispatched.value = [candidate.value, ...dispatched.value];
+  try {
+    const queuedPlan = (await api.enqueue(id)).plan;
+    dispatched.value = [queuedPlan, ...dispatched.value];
+    candidate.value = null;
+    drawerOpen.value = false;
+  } catch (caught) {
+    error.value = caught instanceof Error ? `Enqueue plan 失败：${caught.message}` : "Enqueue plan 失败";
+  }
   busy.value = false;
 }
 
@@ -135,7 +173,7 @@ onMounted(() => { void load(); syncHashPanel(route.hash); });
 
 <template>
   <div class="console-layout">
-    <ThreadRail :thread="thread" />
+    <ThreadRail :thread="thread" :candidate-count="candidateCount" :dispatched-count="dispatchedCount" :active-run-count="activeRunCount" :needs-attention-count="needsAttentionCount" />
     <section class="conversation-column">
       <div class="conversation-header"><div><div class="eyebrow"><span class="mode-dot" /> PLAN MODE · READ ONLY</div><h1>ExplorerThread</h1><p>Shape the work before anything changes in the repository.</p></div><div class="conversation-tools"><el-button circle plain :aria-label="explorerPaused ? 'Resume' : 'Pause'" @click="toggleExplorerPause"><VideoPlay v-if="explorerPaused" :size="16" /><VideoPause v-else :size="16" /></el-button><el-popover v-model:visible="moreOpen" placement="bottom-end" :width="250" trigger="click"><template #reference><el-button circle plain aria-label="More"><MoreFilled :size="16" /></el-button></template><div class="thread-more-menu"><div class="eyebrow">THREAD ACTIONS</div><p>Manage read-only exploration without changing the repository.</p><el-button text @click="setPolicyOpen(true); moreOpen = false">View policy</el-button><el-button text @click="moreOpen = false; refreshThread()">Refresh thread</el-button></div></el-popover></div></div>
       <div class="thread-banner"><InfoFilled :size="16" /><span>Explorer can inspect the repository and Git history. Write, shell, test and commit tools are disabled until a plan is confirmed and dispatched.</span><el-button text aria-label="View Explorer policy" @click="setPolicyOpen(true)">View policy <Right :size="14" /></el-button></div>
@@ -154,9 +192,17 @@ onMounted(() => { void load(); syncHashPanel(route.hash); });
       </div>
       <div class="composer"><div class="composer-input"><input v-model="draft" :disabled="explorerPaused" aria-label="Explorer message" placeholder="Continue exploring or ask for a change…" @keydown.enter.prevent="sendTurn" /><span class="composer-mode">Plan Mode</span></div><div class="composer-footer"><span><InfoFilled :size="14" /> Explorer has read-only access</span><el-button type="primary" :loading="busy" :disabled="!draft.trim() || explorerPaused" @click="sendTurn">Send <Right :size="14" /></el-button></div></div>
     </section>
-    <aside class="context-panel"><div class="context-header"><div><div class="eyebrow">THREAD CONTEXT</div><h2>Working set</h2></div><el-button text circle aria-label="Refresh" @click="refreshThread"><Refresh :size="16" /></el-button></div><div class="context-section"><div class="context-section-title">CURRENT CANDIDATE <span>1</span></div><div class="mini-plan" v-if="candidate" @click="drawerOpen = true"><div class="mini-plan-title"><span class="mini-icon"><Promotion :size="14" /></span><strong>{{ candidate.title }}</strong></div><div class="mini-plan-meta"><el-tag size="small" type="warning" effect="light">{{ statusLabel(candidate.status) }}</el-tag><span>Rev {{ candidate.revision }}</span></div><div class="mini-plan-link">View full plan <Right :size="13" /></div></div></div><div class="context-section"><div class="context-section-title">DISPATCHED PLANS <span>{{ dispatched.length }}</span></div><div v-if="dispatched.length === 0" class="context-empty"><CircleCheck :size="20" /><p>No plans dispatched from this thread yet.</p><small>Confirmed plans will appear here and remain queryable even when the model is offline.</small></div><div v-else v-for="plan in dispatched" :key="plan.planId ?? plan.id" class="mini-plan dispatched"><div class="mini-plan-title"><span class="mini-icon success"><CircleCheck :size="14" /></span><strong>{{ plan.title }}</strong></div><div class="mini-plan-meta"><el-tag size="small" type="success" effect="light">{{ statusLabel(plan.status) }}</el-tag><span>Rev {{ plan.revision }}</span></div></div></div><div class="context-section context-memory"><div class="context-section-title">THREAD MEMORY</div><div class="memory-row"><span class="memory-icon">◎</span><div><strong>Context summary</strong><small>Updated just now</small></div><Right :size="14" /></div><div class="memory-row"><span class="memory-icon">↗</span><div><strong>Successor threads</strong><small>None yet</small></div><Right :size="14" /></div></div></aside>
+    <aside class="context-panel"><div class="context-header"><div><div class="eyebrow">THREAD CONTEXT</div><h2>Working set</h2></div><el-button text circle aria-label="Refresh" @click="refreshThread"><Refresh :size="16" /></el-button></div><div class="context-section"><div class="context-section-title">CURRENT CANDIDATE <span>{{ candidateCount }}</span></div><div class="mini-plan" v-if="candidate" @click="drawerOpen = true"><div class="mini-plan-title"><span class="mini-icon"><Promotion :size="14" /></span><strong>{{ candidate.title }}</strong></div><div class="mini-plan-meta"><el-tag size="small" type="warning" effect="light">{{ statusLabel(candidate.status) }}</el-tag><span>Rev {{ candidate.revision }}</span></div><div class="mini-plan-link">View full plan <Right :size="13" /></div></div><div v-else class="context-empty compact"><CircleCheck :size="20" /><p>No candidate plan</p><small>Use Plan candidates to create a reviewable plan.</small></div></div><div class="context-section"><div class="context-section-title">DISPATCHED PLANS <span>{{ dispatched.length }}</span></div><div v-if="dispatched.length === 0" class="context-empty"><CircleCheck :size="20" /><p>No plans dispatched from this thread yet.</p><small>Confirmed plans will appear here and remain queryable even when the model is offline.</small></div><div v-else v-for="plan in dispatched" :key="plan.planId ?? plan.id" class="mini-plan dispatched"><div class="mini-plan-title"><span class="mini-icon success"><CircleCheck :size="14" /></span><strong>{{ plan.title }}</strong></div><div class="mini-plan-meta"><el-tag size="small" type="success" effect="light">{{ statusLabel(plan.status) }}</el-tag><span>Rev {{ plan.revision }}</span></div></div></div><div class="context-section context-memory"><div class="context-section-title">THREAD MEMORY</div><div class="memory-row"><span class="memory-icon">◎</span><div><strong>Context summary</strong><small>Updated just now</small></div><Right :size="14" /></div><div class="memory-row"><span class="memory-icon">↗</span><div><strong>Successor threads</strong><small>None yet</small></div><Right :size="14" /></div></div></aside>
     <PlanDetailDrawer v-model="drawerOpen" :plan="candidate" @confirm="confirmPlan" @enqueue="enqueuePlan" />
     <ExplorerPolicyDrawer :model-value="policyOpen" @update:model-value="setPolicyOpen" />
+    <el-drawer :model-value="candidateEmptyOpen" direction="rtl" size="min(430px, 92vw)" :with-header="false" @update:model-value="setCandidateEmptyOpen">
+      <div class="global-drawer-shell">
+        <div class="drawer-header"><div><div class="eyebrow">PLAN CANDIDATES</div><h2>No candidate plan</h2></div><el-button text circle aria-label="Close candidate plans" @click="closeCandidateEmpty">×</el-button></div>
+        <div class="help-card"><strong>Shape a new execution contract</strong><p>This ExplorerThread has no unconfirmed CandidatePlan yet. Create one here, then review the full contract before confirming it.</p></div>
+        <label class="candidate-create-label">Plan title<input v-model="candidateTitle" aria-label="Candidate plan title" placeholder="Plan title" @keydown.enter.prevent="createCandidate" /></label>
+        <el-button type="primary" :loading="busy" :disabled="!candidateTitle.trim()" @click="createCandidate">Create candidate plan <Right /></el-button>
+      </div>
+    </el-drawer>
     <el-drawer :model-value="memoryPanel !== null" direction="rtl" size="min(430px, 92vw)" :with-header="false" @update:model-value="setMemoryPanelOpen">
       <div class="global-drawer-shell" v-if="memoryPanel">
         <div class="drawer-header"><div><div class="eyebrow">THREAD MEMORY</div><h2>{{ memoryPanel === "summary" ? "Context summary" : "Successor threads" }}</h2></div><el-button text circle aria-label="Close thread memory" @click="closeMemoryPanel">×</el-button></div>

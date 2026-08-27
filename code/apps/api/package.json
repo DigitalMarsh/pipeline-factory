@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/main.ts",
+    "dev": "node --import tsx/esm src/main.ts",
     "start": "node dist/main.js",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",

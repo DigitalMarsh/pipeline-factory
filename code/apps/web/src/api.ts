@@ -13,6 +13,7 @@ export const api = {
   turns: (projectId: string) => request<{ items: ExplorerTurn[] }>(`/api/v3/projects/${projectId}/explorer-thread/turns`),
   sendTurn: (projectId: string, content: string) => request<{ turn: { user: ExplorerTurn; assistant: ExplorerTurn } }>(`/api/v3/projects/${projectId}/explorer-thread/turns`, { method: "POST", body: JSON.stringify({ content }) }),
   candidate: (projectId: string) => request<{ plan: Plan }>(`/api/v3/projects/${projectId}/explorer-thread/candidate`),
+  createCandidate: (projectId: string, title: string) => request<{ plan: Plan }>(`/api/v3/projects/${projectId}/explorer-thread/candidate`, { method: "POST", body: JSON.stringify({ title }) }),
   plans: (projectId: string, query = "") => request<{ items: Plan[]; nextCursor: string | null }>(`/api/v3/projects/${projectId}/explorer-thread/plans${query}`),
   plan: (planId: string) => request<{ plan: Plan }>(`/api/v3/plans/${planId}`),
   confirm: (planId: string) => request<{ plan: Plan }>(`/api/v3/plans/${planId}/confirm`, { method: "POST", body: JSON.stringify({ actorId: "local-user" }) }),
