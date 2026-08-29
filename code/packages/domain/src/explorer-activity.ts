@@ -36,6 +36,70 @@ export type ExplorerActivityInput = {
 
 type ActivityWithOrder = ExplorerActivityItem & { order: number };
 
+type PlanActivityDisplay = {
+  summary: string;
+  details: Record<string, unknown> | null;
+};
+
+const STATUS_TAG = /<pipeline-factory-plan-status>\s*([^<]+?)\s*<\/pipeline-factory-plan-status>/i;
+const PLAN_TAG = /<pipeline-factory-plan>\s*([\s\S]*?)\s*<\/pipeline-factory-plan>/i;
+const STATUS_OPEN_TAG = /<pipeline-factory-plan-status>/i;
+const PLAN_OPEN_TAG = /<pipeline-factory-plan>/i;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function countArray(record: Record<string, unknown>, key: string): number {
+  return Array.isArray(record[key]) ? record[key].length : 0;
+}
+
+function stripPlanProtocol(content: string): string {
+  return content
+    .replace(/<pipeline-factory-plan-status>[\s\S]*?<\/pipeline-factory-plan-status>/gi, "")
+    .replace(/<pipeline-factory-plan>[\s\S]*?<\/pipeline-factory-plan>/gi, "")
+    .replace(/<pipeline-factory-plan-status>[\s\S]*$/gi, "")
+    .replace(/<pipeline-factory-plan>[\s\S]*$/gi, "")
+    .trim();
+}
+
+function formatPlanActivity(content: string): PlanActivityDisplay {
+  const hasProtocol = STATUS_OPEN_TAG.test(content) || PLAN_OPEN_TAG.test(content);
+  if (!hasProtocol) return { summary: content, details: null };
+
+  const prose = stripPlanProtocol(content);
+  const status = content.match(STATUS_TAG)?.[1]?.trim().toUpperCase();
+  const artifactText = content.match(PLAN_TAG)?.[1];
+  if (status !== "READY" || !artifactText) {
+    return { summary: [prose, "正在整理结构化计划…"].filter(Boolean).join(" "), details: { planProtocol: true, status: "GENERATING" } };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(artifactText);
+  } catch {
+    return { summary: [prose, "结构化计划校验失败，请继续完善。"].filter(Boolean).join(" "), details: { planProtocol: true, status: "INVALID" } };
+  }
+  if (!isRecord(parsed) || typeof parsed.title !== "string" || typeof parsed.goal !== "string") {
+    return { summary: [prose, "结构化计划校验失败，请继续完善。"].filter(Boolean).join(" "), details: { planProtocol: true, status: "INVALID" } };
+  }
+
+  return {
+    summary: [prose, `完整执行方案已生成：${parsed.title}`].filter(Boolean).join(" "),
+    details: {
+      planProtocol: true,
+      status: "READY",
+      title: parsed.title,
+      goal: parsed.goal,
+      includeCount: countArray(parsed, "include"),
+      excludeCount: countArray(parsed, "exclude"),
+      taskCount: countArray(parsed, "tasks"),
+      acceptanceCount: countArray(parsed, "acceptanceCriteria"),
+      verificationCount: countArray(parsed, "verificationCommandIds"),
+    },
+  };
+}
+
 export function projectExplorerActivity(input: ExplorerActivityInput): ExplorerActivityItem[] {
   const loopByOwner = new Map(input.loops.map((loop) => [loop.ownerId, loop]));
   const result: ActivityWithOrder[] = [];
@@ -76,8 +140,15 @@ export function projectExplorerActivity(input: ExplorerActivityInput): ExplorerA
       const activity = activityFromStep(turn, step);
       if (activity) append(activity, step.sequence);
     }
+    for (const item of result) {
+      if (item.turnId !== turn.id || item.kind !== "ASSISTANT_MESSAGE") continue;
+      const display = formatPlanActivity(item.summary);
+      item.summary = display.summary;
+      item.details = display.details;
+    }
     if (!assistantText && turn.content.trim()) {
-      append({ explorerId: turn.threadId, turnId: turn.id, kind: "ASSISTANT_MESSAGE", status: turn.status === "FAILED" ? "FAILED" : "COMPLETED", title: "Plan Explorer", summary: turn.content, details: turn.error ? { error: turn.error } : null, occurredAt: turn.createdAt }, assistantSequence);
+      const display = formatPlanActivity(turn.content);
+      append({ explorerId: turn.threadId, turnId: turn.id, kind: "ASSISTANT_MESSAGE", status: turn.status === "FAILED" ? "FAILED" : "COMPLETED", title: "Plan Explorer", summary: display.summary, details: turn.error ? { error: turn.error, ...(display.details ?? {}) } : display.details, occurredAt: turn.createdAt }, assistantSequence);
     }
     if (!steps.length && !turn.content.trim()) {
       append({ explorerId: turn.threadId, turnId: turn.id, kind: "TURN_STATUS", status: turn.status === "WAITING_FOR_INPUT" ? "WAITING" : turn.status === "FAILED" ? "FAILED" : "RUNNING", title: "Plan Explorer", summary: turn.status === "WAITING_FOR_INPUT" ? "Waiting for input" : "Plan Explorer is processing", details: turn.error ? { error: turn.error } : null, occurredAt: turn.createdAt }, turn.sequence);

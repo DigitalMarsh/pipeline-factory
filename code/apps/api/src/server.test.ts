@@ -254,6 +254,10 @@ describe("Pipeline Factory v3 API", () => {
     expect(candidate.statusCode).toBe(200);
     expect(candidate.json().plan).toMatchObject({ title: "API generated plan", status: "DRAFT" });
     expect(store.getThread("thread-1")).toMatchObject({ exploration: { status: "READY" } });
+    const activity = await app.inject({ method: "GET", url: "/api/v4/projects/project-1/explorers/thread-1/activity" });
+    expect(activity.statusCode).toBe(200);
+    expect(JSON.stringify(activity.json().items)).not.toContain("pipeline-factory-plan");
+    expect(activity.json().items.some((item: { details?: { title?: string } | null }) => item.details?.title === "API generated plan")).toBe(true);
   });
 
   it("creates and lists isolated business Explorers without reusing the old context", async () => {

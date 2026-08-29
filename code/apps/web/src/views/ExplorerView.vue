@@ -20,6 +20,8 @@ import { createSseReplayGate } from "../utils/sseReplayGate";
 import ExplorerInputDialog from "../components/ExplorerInputDialog.vue";
 import ExplorerHistoryDrawer from "../components/ExplorerHistoryDrawer.vue";
 import scrollToLatestIcon from "../assets/scroll-to-latest.png";
+import { normalizePlanProjection } from "../utils/planProjection";
+import { parsePlanProtocolDisplay } from "../utils/planProtocolDisplay";
 
 const route = useRoute();
 const router = useRouter();
@@ -56,6 +58,7 @@ const mounted = ref(false);
 let eventSource: EventSource | null = null;
 let loopEventSource: EventSource | null = null;
 let explorerEventSequence: number | null = null;
+let planProjectionVersion = 0;
 const { visible: showThreadBanner, dismiss: dismissThreadBanner } = useDismissibleNotice();
 type TimelineNavItem = { key: string; label: string; detail: string; target: string };
 
@@ -80,7 +83,7 @@ const planTimelineItems = computed<TimelineNavItem[]>(() => [
   ...(candidate.value ? [{ key: "plan-candidate", label: candidate.value.title, detail: `Candidate · Rev ${candidate.value.revision}`, target: "plan-candidate" }] : []),
   ...dispatched.value.map((plan) => ({ key: `plan-${planIdentity(plan)}`, label: plan.title, detail: `${statusLabel(plan.status)} · Rev ${plan.revision}`, target: `plan-event-${planIdentity(plan)}` })),
 ]);
-const visibleActivity = computed(() => activity.value.length ? activity.value : turns.value.map((turn) => ({ id: `fallback-${turn.id}`, explorerId: turn.threadId, turnId: turn.id, sequence: turn.sequence, kind: turn.role === "user" ? "USER_MESSAGE" : "ASSISTANT_MESSAGE", status: turn.status === "FAILED" ? "FAILED" : turn.status === "RUNNING" ? "RUNNING" : turn.status === "WAITING_FOR_INPUT" ? "WAITING" : "COMPLETED", title: turn.role === "user" ? "You" : "Plan Explorer", summary: turnContent(turn), details: turn.error ? { error: turn.error } : null, occurredAt: turn.createdAt })) as ExplorerActivityItem[]);
+const visibleActivity = computed(() => activity.value.length ? activity.value : turns.value.map((turn) => ({ id: `fallback-${turn.id}`, explorerId: turn.threadId, turnId: turn.id, sequence: turn.sequence, kind: turn.role === "user" ? "USER_MESSAGE" : "ASSISTANT_MESSAGE", status: turn.status === "FAILED" ? "FAILED" : turn.status === "RUNNING" ? "RUNNING" : turn.status === "WAITING_FOR_INPUT" ? "WAITING" : "COMPLETED", title: turn.role === "user" ? "You" : "Plan Explorer", summary: turn.role === "assistant" ? readableAssistantText(turnContent(turn)) : turnContent(turn), details: turn.error ? { error: turn.error } : null, occurredAt: turn.createdAt })) as ExplorerActivityItem[]);
 
 function setPolicyOpen(value: boolean) {
   policyOpen.value = value ? openPolicyPanel(policyOpen.value) : closePolicyPanel(policyOpen.value);
@@ -110,6 +113,46 @@ function turnContent(turn: ExplorerTurn): string {
   if (turn.status === "RUNNING") return "Plan Explorer 正在处理…";
   if (turn.status === "WAITING_FOR_INPUT") return "Plan Explorer 正在等待你的选择…";
   return turn.status === "FAILED" ? `模型调用失败：${turn.error ?? "未知错误"}` : "模型未返回内容";
+}
+
+function readableAssistantText(content: string): string {
+  const display = parsePlanProtocolDisplay(content);
+  if (display.kind === "ready") return [display.prose, `完整执行方案已生成：${display.title}`].filter(Boolean).join(" ");
+  return display.kind === "plain" ? display.text : display.text;
+}
+
+function planActivityDetails(item: ExplorerActivityItem): Record<string, unknown> | null {
+  return item.kind === "ASSISTANT_MESSAGE" && item.details?.planProtocol === true && item.details.status === "READY" ? item.details : null;
+}
+
+function planActivityGoal(item: ExplorerActivityItem): string {
+  const details = planActivityDetails(item);
+  return typeof details?.goal === "string" ? details.goal : "结构化执行方案已完成校验。";
+}
+
+function planActivityCount(item: ExplorerActivityItem, key: string): number {
+  const value = planActivityDetails(item)?.[key];
+  return typeof value === "number" ? value : 0;
+}
+
+async function refreshPlanProjection(): Promise<void> {
+  const explorerId = thread.value?.id;
+  if (!explorerId) return;
+  const requestVersion = ++planProjectionVersion;
+  try {
+    const [explorerResponse, plansResponse, candidateResponse] = await Promise.all([
+      api.explorer(projectId.value, explorerId),
+      api.explorerPlans(projectId.value, explorerId),
+      optional(() => api.explorerCandidate(projectId.value, explorerId)),
+    ]);
+    if (requestVersion !== planProjectionVersion || thread.value?.id !== explorerId) return;
+    const projection = normalizePlanProjection(explorerResponse.explorer, candidateResponse?.plan ?? null, plansResponse.items);
+    thread.value = projection.thread;
+    candidate.value = projection.candidate;
+    dispatched.value = projection.dispatched;
+  } catch {
+    // Keep the last known projection visible while the event stream catches up.
+  }
 }
 
 function formatTurnTime(value: string): string {
@@ -276,9 +319,10 @@ async function load() {
       api.explorerTurnsV4(projectId.value, selected.id),
       optional(() => api.explorerCandidate(projectId.value, selected!.id)),
     ]);
-    thread.value = selected;
-    candidate.value = candidateResponse?.plan ?? null;
-    dispatched.value = plansResponse.items;
+    const projection = normalizePlanProjection(selected, candidateResponse?.plan ?? null, plansResponse.items);
+    thread.value = projection.thread;
+    candidate.value = projection.candidate;
+    dispatched.value = projection.dispatched;
     turns.value = turnsResponse.items;
     explorerEventSequence = turnsResponse.lastEventSequence ?? null;
     const activityResponse = await api.explorerActivity(projectId.value, selected.id);
@@ -393,6 +437,7 @@ async function refreshTurnsAfterEvent() {
   const response = await api.explorerTurnsV4(projectId.value, thread.value.id);
   turns.value = response.items;
   await refreshActivity();
+  await refreshPlanProjection();
   const inputResponse = await api.inputRequests(projectId.value, thread.value.id);
   pendingInput.value = inputResponse.items.find((item) => item.status === "OPEN") ?? null;
   recoveryInput.value = inputResponse.items.find((item) => item.status === "RECOVERY_REQUIRED") ?? null;
@@ -429,7 +474,7 @@ function connectEvents() {
     recoveryInput.value = null;
     inputDialogOpen.value = Boolean(pendingInput.value?.isBlocking);
   });
-  for (const eventName of ["turn.completed", "turn.failed", "turn.cancelled", "turn.input.resolved"]) eventSource.addEventListener(eventName, () => { if (!replayGate.accept(eventName)) return; void refreshTurnsAfterEvent(); });
+  for (const eventName of ["turn.completed", "turn.failed", "turn.cancelled", "turn.input.resolved", "explorer.plan.ready"]) eventSource.addEventListener(eventName, () => { if (!replayGate.accept(eventName)) return; void refreshTurnsAfterEvent(); });
   eventSource.addEventListener("thread.state.changed", () => { if (!replayGate.accept("thread.state.changed")) return; void load(); });
   connectLoopEvents();
 }
@@ -444,7 +489,12 @@ function connectLoopEvents() {
     loopEventSource.addEventListener(eventName, () => {
       if (!replayGate.accept(eventName)) return;
       if (!agentLoop.value) return;
-      void api.agentLoop(agentLoop.value.id).then((response) => { agentLoop.value = response.loop; explorerPaused.value = response.loop.state === "PAUSED"; void refreshActivity(); }).catch(() => undefined);
+      void api.agentLoop(agentLoop.value.id).then(async (response) => {
+        agentLoop.value = response.loop;
+        explorerPaused.value = response.loop.state === "PAUSED";
+        await refreshActivity();
+        if (["agent.step.gate_checked", "agent.loop.completed", "agent.loop.failed", "agent.loop.cancelled", "agent.loop.recovery_required"].includes(eventName)) await refreshPlanProjection();
+      }).catch(() => undefined);
     });
   }
 }
@@ -455,7 +505,7 @@ async function confirmPlan() {
   if (!candidate.value || !candidate.value.id && !candidate.value.planId || busy.value) return;
   const id = candidate.value.id ?? candidate.value.planId!;
   busy.value = true;
-  try { candidate.value = (await api.confirm(id)).plan; } catch (caught) { error.value = caught instanceof Error ? `Confirm plan 失败：${caught.message}` : "Confirm plan 失败"; } finally { busy.value = false; }
+  try { candidate.value = (await api.confirm(id)).plan; await refreshPlanProjection(); } catch (caught) { error.value = caught instanceof Error ? `Confirm plan 失败：${caught.message}` : "Confirm plan 失败"; } finally { busy.value = false; }
 }
 
 async function enqueuePlan() {
@@ -467,6 +517,7 @@ async function enqueuePlan() {
     dispatched.value = [queuedPlan, ...dispatched.value];
     candidate.value = null;
     drawerOpen.value = false;
+    await refreshPlanProjection();
   } catch (caught) {
     error.value = caught instanceof Error ? `Enqueue plan 失败：${caught.message}` : "Enqueue plan 失败";
   }
@@ -520,7 +571,7 @@ onBeforeUnmount(closeEvents);
         <template v-for="(item, index) in visibleActivity" :key="item.id">
           <article v-if="item.kind === 'USER_MESSAGE' || item.kind === 'ASSISTANT_MESSAGE'" :id="activityTarget(item, index)" :data-nav-key="`message-${item.turnId}`" :class="['message-card', item.kind === 'USER_MESSAGE' ? 'user-message' : 'assistant-message', item.status === 'FAILED' ? 'failed-message' : '', item.status === 'RUNNING' ? 'processing-message' : '']">
             <div :class="['message-avatar', item.kind === 'USER_MESSAGE' ? 'user-avatar' : 'agent-avatar']">{{ item.kind === 'USER_MESSAGE' ? 'LS' : '' }}<span v-if="item.kind === 'ASSISTANT_MESSAGE'" :class="['brand-dot', { 'brand-dot-processing': item.status === 'RUNNING' }]" /></div>
-            <div class="message-body"><div class="message-meta"><strong>{{ item.title }}</strong><span v-if="item.kind === 'ASSISTANT_MESSAGE'" :class="['agent-chip', { 'processing-chip': item.status === 'RUNNING' }]">{{ item.status === 'RUNNING' ? 'Running' : item.status === 'FAILED' ? 'Failed' : 'Read only' }}</span><span>{{ formatTurnTime(item.occurredAt) }}</span></div><p :aria-live="item.status === 'RUNNING' ? 'polite' : undefined">{{ item.summary }}<span v-if="item.status === 'RUNNING'" class="processing-dots" aria-hidden="true"><i /><i /><i /></span></p></div>
+            <div class="message-body"><div class="message-meta"><strong>{{ item.title }}</strong><span v-if="item.kind === 'ASSISTANT_MESSAGE'" :class="['agent-chip', { 'processing-chip': item.status === 'RUNNING' }]">{{ item.status === 'RUNNING' ? 'Running' : item.status === 'FAILED' ? 'Failed' : 'Read only' }}</span><span>{{ formatTurnTime(item.occurredAt) }}</span></div><p :aria-live="item.status === 'RUNNING' ? 'polite' : undefined">{{ item.kind === 'ASSISTANT_MESSAGE' ? readableAssistantText(item.summary) : item.summary }}<span v-if="item.status === 'RUNNING'" class="processing-dots" aria-hidden="true"><i /><i /><i /></span></p><div v-if="planActivityDetails(item)" class="plan-protocol-preview"><div class="plan-protocol-preview-head"><strong>{{ planActivityDetails(item)?.title ?? '完整执行方案' }}</strong><span>READY</span></div><p>{{ planActivityGoal(item) }}</p><div class="plan-protocol-stats"><span>范围 {{ planActivityCount(item, 'includeCount') }} 项</span><span>任务 {{ planActivityCount(item, 'taskCount') }} 项</span><span>验收 {{ planActivityCount(item, 'acceptanceCount') }} 项</span><span>验证 {{ planActivityCount(item, 'verificationCount') }} 项</span></div><el-button v-if="candidate" text size="small" @click="drawerOpen = true">View full plan <Right :size="13" /></el-button><small v-else>计划正在同步到右侧 Plans…</small></div></div>
           </article>
           <article v-else :id="activityTarget(item, index)" class="loop-activity-card" :class="{ waiting: item.status === 'WAITING', failed: item.status === 'FAILED' }"><div class="loop-activity-icon"><InfoFilled v-if="activityIconKind(item.kind) === 'info'" :size="14" /><Check v-else-if="activityIconKind(item.kind) === 'success'" :size="14" /><Warning v-else :size="14" /></div><div class="loop-activity-copy"><div class="loop-activity-meta"><strong>{{ activityKindLabel(item.kind) }}</strong><span>{{ formatTurnTime(item.occurredAt) }}</span><span class="agent-chip">{{ activityStatusLabel(item) }}</span></div><p>{{ item.summary }}</p><code v-if="typeof item.details?.tool === 'string'">{{ item.details.tool }}</code></div></article>
         </template>
