@@ -94,6 +94,29 @@ describe("CodexAppServerGateway", () => {
     });
   });
 
+  it("uses a plain read-only model turn for Explorer title generation", async () => {
+    const calls: Array<{ method: string; params: unknown }> = [];
+    const gateway = new CodexAppServerGateway({
+      roles: { explorer: { model: "explorer-model" }, executor: { model: "executor-model" } },
+      sessionFactory: createSessionFactory([
+        { method: "item/agentMessage/delta", params: { threadId: "codex-thread-1", turnId: "turn-title", delta: "订单取消流程优化" } },
+        { method: "turn/completed", params: { turn: { id: "turn-title", status: "completed" } } },
+      ], calls),
+    });
+
+    for await (const _event of gateway.stream({
+      role: "explorer",
+      purpose: "title",
+      conversationId: "title-explorer-1",
+      messages: [{ role: "user", content: "请给这条需求生成标题" }],
+    })) { /* consume the stream */ }
+
+    expect(calls[0]).toMatchObject({ method: "thread/start", params: { sandbox: "read-only", approvalPolicy: "never" } });
+    expect((calls[0]?.params as { collaborationMode?: unknown } | undefined)?.collaborationMode).toMatchObject({ mode: "default", settings: { model: "explorer-model" } });
+    expect(calls[0]?.params).not.toHaveProperty("developerInstructions");
+    expect(calls[1]).toMatchObject({ method: "turn/start", params: { collaborationMode: { mode: "default" } } });
+  });
+
   it("reuses a persisted provider thread and maps an interrupted turn", async () => {
     const calls: Array<{ method: string; params: unknown }> = [];
     const gateway = new CodexAppServerGateway({

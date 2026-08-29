@@ -3,8 +3,11 @@ import type { MappedCodexRateLimits } from "./codex-rate-limits.js";
 import { BuiltinToolExecutor, type BuiltinToolContext, type BuiltinToolExecutorOptions } from "./builtin-tool-executor.js";
 import { AgentLoopEngine } from "./agent-loop.js";
 import { PlanCompletenessGate } from "./termination-gates.js";
+import { composeExplorerTitle, ModelExplorerTitleGenerator, normalizeExplorerTitle, placeholderExplorerTitle, type ExplorerTitleGenerator, type ExplorerTitleSource, type ExplorerTitleStatus } from "./explorer-title.js";
 export { projectExplorerActivity } from "./explorer-activity.js";
 export type { ExplorerActivityInput, ExplorerActivityItem, ExplorerActivityKind } from "./explorer-activity.js";
+export { composeExplorerTitle, explorerTimestamp, ModelExplorerTitleGenerator, normalizeExplorerTitle, placeholderExplorerTitle } from "./explorer-title.js";
+export type { ExplorerTitleGenerator, ExplorerTitleSource, ExplorerTitleStatus } from "./explorer-title.js";
 
 export type { AgentLoop, AgentLoopInput, AgentLoopMode, AgentLoopResult, AgentLoopState, AgentLoopStep, AgentLoopStepInput, AgentLoopStepStatus, AgentLoopRunner, AgentStepType, GateContext, GateDecision, TerminationGate } from "./agent-loop.js";
 export { AgentLoopEngine } from "./agent-loop.js";
@@ -72,6 +75,9 @@ export type ExplorerThread = {
   id: string;
   projectId: string;
   title: string;
+  createdAt: string;
+  titleSource: ExplorerTitleSource;
+  titleStatus: ExplorerTitleStatus;
   contextMode: "FRESH" | "EXPLICIT_CONTINUATION" | "LEGACY";
   originThreadId: string | null;
   parentThreadId: string | null;
@@ -197,6 +203,7 @@ export type DomainEvent = {
   type:
     | "explorer.thread.created"
     | "explorer.created"
+    | "explorer.title.updated"
     | "explorer.archived"
     | "explorer.activated"
     | "explorer.continued"
@@ -287,12 +294,14 @@ export type RegisterThreadInput = {
   title?: string | undefined;
   contextMode?: "FRESH" | "EXPLICIT_CONTINUATION" | "LEGACY" | undefined;
   originThreadId?: string | null | undefined;
+  createdAt?: string | undefined;
 };
 
 export type CreateExplorerInput = {
   projectId: string;
   title?: string | undefined;
   originThreadId?: string | undefined;
+  createdAt?: string | undefined;
 };
 
 export type HookDefinition = {
@@ -488,6 +497,14 @@ function parseStringArray(value: unknown, fallback: string[]): string[] {
   try { const parsed: unknown = JSON.parse(value); return isStringArray(parsed) ? parsed : [...fallback]; } catch { return [...fallback]; }
 }
 
+const LEGACY_AUTO_TITLES = new Set(["New Explorer", "Previous exploration", "ExplorerThread"]);
+
+function threadTitleMetadata(title: string | undefined, createdAt: string): { title: string; titleSource: ExplorerTitleSource; titleStatus: ExplorerTitleStatus } {
+  const normalized = title?.trim();
+  if (!normalized || LEGACY_AUTO_TITLES.has(normalized)) return { title: placeholderExplorerTitle(createdAt), titleSource: "AUTO", titleStatus: "PLACEHOLDER" };
+  return { title: normalized, titleSource: "MANUAL", titleStatus: "GENERATED" };
+}
+
 function buildContinuationPrompt(missing: string[]): string {
   const areas = missing.length > 0 ? missing.join("、") : "所有仍未明确的关键决策";
   return `继续完善当前需求的完整设计方案。当前仍缺少：${areas}。请先检查这些缺口；如果需要用户决策，请使用原生 item/tool/requestUserInput 一次询问当前可同时确认的问题。只有全部缺口解决后，才输出完整的 pipeline-factory-plan READY 协议块。`;
@@ -530,10 +547,13 @@ export class InMemoryPipelineStore implements PipelineStore {
   }
 
   saveThread(input: RegisterThreadInput): ExplorerThread {
+    const createdAt = input.createdAt ?? this.now();
+    const title = threadTitleMetadata(input.title, createdAt);
     const thread: ExplorerThread = {
       id: input.id,
       projectId: input.projectId,
-      title: input.title?.trim() || "New Explorer",
+      ...title,
+      createdAt,
       contextMode: input.contextMode ?? "FRESH",
       originThreadId: input.originThreadId ?? null,
       parentThreadId: input.parentThreadId,
@@ -706,6 +726,9 @@ export class SqlitePipelineStore implements PipelineStore {
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL,
         title TEXT NOT NULL DEFAULT 'New Explorer',
+        created_at TEXT,
+        title_source TEXT NOT NULL DEFAULT 'AUTO',
+        title_status TEXT NOT NULL DEFAULT 'PLACEHOLDER',
         context_mode TEXT NOT NULL DEFAULT 'FRESH',
         origin_thread_id TEXT,
         parent_thread_id TEXT,
@@ -885,10 +908,15 @@ export class SqlitePipelineStore implements PipelineStore {
       );
     `);
     try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN title TEXT NOT NULL DEFAULT 'New Explorer'"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN created_at TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN title_source TEXT NOT NULL DEFAULT 'AUTO'"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN title_status TEXT NOT NULL DEFAULT 'PLACEHOLDER'"); } catch { /* Existing databases already have the column. */ }
+    this.database.prepare("UPDATE explorer_threads SET created_at = COALESCE(created_at, (SELECT MIN(created_at) FROM explorer_turns WHERE explorer_turns.thread_id = explorer_threads.id), last_activity_at) WHERE created_at IS NULL").run();
+    this.database.prepare("UPDATE explorer_threads SET title_source = 'MANUAL', title_status = 'GENERATED' WHERE title NOT IN ('New Explorer', 'Previous exploration', 'ExplorerThread') AND title_source = 'AUTO' AND title_status = 'PLACEHOLDER'").run();
     try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN context_mode TEXT NOT NULL DEFAULT 'FRESH'"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN origin_thread_id TEXT"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN provider_thread_id TEXT"); } catch { /* Existing databases already have the column. */ }
-    this.database.prepare("UPDATE explorer_threads SET title = 'Previous exploration', context_mode = 'LEGACY' WHERE title = 'New Explorer' AND id NOT LIKE 'explorer-%' AND (message_count > 0 OR provider_thread_id IS NOT NULL)").run();
+    this.database.prepare("UPDATE explorer_threads SET context_mode = 'LEGACY' WHERE title = 'New Explorer' AND id NOT LIKE 'explorer-%' AND (message_count > 0 OR provider_thread_id IS NOT NULL)").run();
     try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN exploration_status TEXT NOT NULL DEFAULT 'INCOMPLETE'"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN exploration_missing_json TEXT NOT NULL DEFAULT '[]'"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN exploration_completed_json TEXT NOT NULL DEFAULT '[]'"); } catch { /* Existing databases already have the column. */ }
@@ -914,10 +942,13 @@ export class SqlitePipelineStore implements PipelineStore {
   nextId(prefix: string): string { return `${prefix}-${randomUUID().slice(0, 12)}`; }
 
   saveThread(input: RegisterThreadInput): ExplorerThread {
+    const createdAt = input.createdAt ?? this.now();
+    const title = threadTitleMetadata(input.title, createdAt);
     const thread: ExplorerThread = {
       id: input.id,
       projectId: input.projectId,
-      title: input.title?.trim() || "New Explorer",
+      ...title,
+      createdAt,
       contextMode: input.contextMode ?? "FRESH",
       originThreadId: input.originThreadId ?? null,
       parentThreadId: input.parentThreadId,
@@ -929,10 +960,10 @@ export class SqlitePipelineStore implements PipelineStore {
       exploration: defaultPlanExploration(),
     };
     this.database.prepare(`
-      INSERT INTO explorer_threads (id, project_id, title, context_mode, origin_thread_id, parent_thread_id, provider_thread_id, state, message_count, summary_ref, last_activity_at, exploration_status, exploration_missing_json, exploration_completed_json, candidate_plan_id, last_assessed_turn_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, title=excluded.title, context_mode=excluded.context_mode, origin_thread_id=excluded.origin_thread_id, parent_thread_id=excluded.parent_thread_id
-    `).run(thread.id, thread.projectId, thread.title, thread.contextMode, thread.originThreadId, thread.parentThreadId, thread.providerThreadId, thread.state, thread.messageCount, thread.summaryRef, thread.lastActivityAt, thread.exploration.status, JSON.stringify(thread.exploration.missing), JSON.stringify(thread.exploration.completed), thread.exploration.candidatePlanId, thread.exploration.lastAssessedTurnId);
+      INSERT INTO explorer_threads (id, project_id, title, created_at, title_source, title_status, context_mode, origin_thread_id, parent_thread_id, provider_thread_id, state, message_count, summary_ref, last_activity_at, exploration_status, exploration_missing_json, exploration_completed_json, candidate_plan_id, last_assessed_turn_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, title=excluded.title, created_at=excluded.created_at, title_source=excluded.title_source, title_status=excluded.title_status, context_mode=excluded.context_mode, origin_thread_id=excluded.origin_thread_id, parent_thread_id=excluded.parent_thread_id
+    `).run(thread.id, thread.projectId, thread.title, thread.createdAt, thread.titleSource, thread.titleStatus, thread.contextMode, thread.originThreadId, thread.parentThreadId, thread.providerThreadId, thread.state, thread.messageCount, thread.summaryRef, thread.lastActivityAt, thread.exploration.status, JSON.stringify(thread.exploration.missing), JSON.stringify(thread.exploration.completed), thread.exploration.candidatePlanId, thread.exploration.lastAssessedTurnId);
     return this.getThread(thread.id) as ExplorerThread;
   }
 
@@ -947,7 +978,7 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   updateThread(thread: ExplorerThread): ExplorerThread {
-    this.database.prepare("UPDATE explorer_threads SET title = ?, context_mode = ?, origin_thread_id = ?, provider_thread_id = ?, state = ?, message_count = ?, summary_ref = ?, last_activity_at = ?, exploration_status = ?, exploration_missing_json = ?, exploration_completed_json = ?, candidate_plan_id = ?, last_assessed_turn_id = ? WHERE id = ?").run(thread.title, thread.contextMode, thread.originThreadId, thread.providerThreadId, thread.state, thread.messageCount, thread.summaryRef, thread.lastActivityAt, thread.exploration.status, JSON.stringify(thread.exploration.missing), JSON.stringify(thread.exploration.completed), thread.exploration.candidatePlanId, thread.exploration.lastAssessedTurnId, thread.id);
+    this.database.prepare("UPDATE explorer_threads SET title = ?, created_at = ?, title_source = ?, title_status = ?, context_mode = ?, origin_thread_id = ?, provider_thread_id = ?, state = ?, message_count = ?, summary_ref = ?, last_activity_at = ?, exploration_status = ?, exploration_missing_json = ?, exploration_completed_json = ?, candidate_plan_id = ?, last_assessed_turn_id = ? WHERE id = ?").run(thread.title, thread.createdAt, thread.titleSource, thread.titleStatus, thread.contextMode, thread.originThreadId, thread.providerThreadId, thread.state, thread.messageCount, thread.summaryRef, thread.lastActivityAt, thread.exploration.status, JSON.stringify(thread.exploration.missing), JSON.stringify(thread.exploration.completed), thread.exploration.candidatePlanId, thread.exploration.lastAssessedTurnId, thread.id);
     return this.getThread(thread.id) as ExplorerThread;
   }
 
@@ -1200,7 +1231,7 @@ export class SqlitePipelineStore implements PipelineStore {
   close(): void { this.database.close(); }
 
   private threadFromRow(row: SqliteRow): ExplorerThread {
-    return { id: String(row.id), projectId: String(row.project_id), title: String(row.title ?? "New Explorer"), contextMode: String(row.context_mode ?? "FRESH") as ExplorerThread["contextMode"], originThreadId: row.origin_thread_id === null || row.origin_thread_id === undefined ? null : String(row.origin_thread_id), parentThreadId: row.parent_thread_id === null ? null : String(row.parent_thread_id), providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id), state: String(row.state) as ExplorerThreadState, messageCount: Number(row.message_count), summaryRef: row.summary_ref === null ? null : String(row.summary_ref), lastActivityAt: String(row.last_activity_at), exploration: { status: String(row.exploration_status ?? "INCOMPLETE") as PlanExplorationStatus, missing: parseStringArray(row.exploration_missing_json, [...REQUIRED_PLAN_AREAS]), completed: parseStringArray(row.exploration_completed_json, []), candidatePlanId: row.candidate_plan_id === null || row.candidate_plan_id === undefined ? null : String(row.candidate_plan_id), lastAssessedTurnId: row.last_assessed_turn_id === null || row.last_assessed_turn_id === undefined ? null : String(row.last_assessed_turn_id) } };
+    return { id: String(row.id), projectId: String(row.project_id), title: String(row.title ?? "New Explorer"), createdAt: String(row.created_at ?? row.last_activity_at), titleSource: String(row.title_source ?? "AUTO") as ExplorerTitleSource, titleStatus: String(row.title_status ?? "PLACEHOLDER") as ExplorerTitleStatus, contextMode: String(row.context_mode ?? "FRESH") as ExplorerThread["contextMode"], originThreadId: row.origin_thread_id === null || row.origin_thread_id === undefined ? null : String(row.origin_thread_id), parentThreadId: row.parent_thread_id === null ? null : String(row.parent_thread_id), providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id), state: String(row.state) as ExplorerThreadState, messageCount: Number(row.message_count), summaryRef: row.summary_ref === null ? null : String(row.summary_ref), lastActivityAt: String(row.last_activity_at), exploration: { status: String(row.exploration_status ?? "INCOMPLETE") as PlanExplorationStatus, missing: parseStringArray(row.exploration_missing_json, [...REQUIRED_PLAN_AREAS]), completed: parseStringArray(row.exploration_completed_json, []), candidatePlanId: row.candidate_plan_id === null || row.candidate_plan_id === undefined ? null : String(row.candidate_plan_id), lastAssessedTurnId: row.last_assessed_turn_id === null || row.last_assessed_turn_id === undefined ? null : String(row.last_assessed_turn_id) } };
   }
 
   private inputRequestFromRow(row: SqliteRow): ExplorerInputRequest {
@@ -1453,6 +1484,7 @@ export class ExplorerService {
       title: input.title?.trim() || "New Explorer",
       contextMode: origin ? "EXPLICIT_CONTINUATION" : "FRESH",
       originThreadId: origin?.id ?? null,
+      createdAt: input.createdAt,
     });
     this.store.appendEvent({ type: "explorer.created", aggregateId: thread.id, payload: { projectId: thread.projectId, contextMode: thread.contextMode, originThreadId: thread.originThreadId } });
     if (origin) this.store.appendEvent({ type: "explorer.continued", aggregateId: thread.id, payload: { originThreadId: origin.id } });
@@ -1489,7 +1521,7 @@ export class ExplorerService {
     const explorer = this.get(explorerId);
     const normalized = title.trim();
     if (!normalized) throw new Error("Explorer title cannot be empty");
-    return this.store.updateThread({ ...explorer, title: normalized, lastActivityAt: this.store.now() });
+    return this.store.updateThread({ ...explorer, title: normalized, titleSource: "MANUAL", titleStatus: "GENERATED", lastActivityAt: this.store.now() });
   }
 }
 
@@ -1826,6 +1858,7 @@ export type ModelToolDefinition = {
 export type ModelMessage = { role: "system" | "user" | "assistant" | "tool"; content: string; toolCallId?: string };
 export type ModelRequest = {
   role: ModelRole;
+  purpose?: "exploration" | "title" | undefined;
   messages: ModelMessage[];
   conversationId?: string | undefined;
   providerThreadId?: string | undefined;
@@ -1951,8 +1984,10 @@ export class ExplorerThreadService {
   private readonly plans: PlanService;
   private readonly maxAutoContinuationTurns: number;
   private readonly loopMaxSteps: number;
+  private readonly titleGenerator: ExplorerTitleGenerator | undefined;
 
-  constructor(private readonly store: PipelineStore, private readonly model: ModelGateway, options: { maxAutoContinuationTurns?: number | undefined; maxSteps?: number | undefined; maxDurationMs?: number | undefined; maxRepeatedToolCalls?: number | undefined; maxNoProgressSteps?: number | undefined } = {}) {
+  constructor(private readonly store: PipelineStore, private readonly model: ModelGateway, options: { maxAutoContinuationTurns?: number | undefined; maxSteps?: number | undefined; maxDurationMs?: number | undefined; maxRepeatedToolCalls?: number | undefined; maxNoProgressSteps?: number | undefined; titleGenerator?: ExplorerTitleGenerator | undefined } = {}) {
+    this.titleGenerator = options.titleGenerator;
     this.plans = new PlanService(store);
     this.loopMaxSteps = options.maxSteps ?? (options.maxAutoContinuationTurns ?? 4) + 1;
     this.agentLoops = new AgentLoopEngine(store, model, undefined, {
@@ -1962,6 +1997,9 @@ export class ExplorerThreadService {
       ...(options.maxNoProgressSteps === undefined ? {} : { defaultMaxNoProgressSteps: options.maxNoProgressSteps }),
     });
     this.maxAutoContinuationTurns = options.maxAutoContinuationTurns ?? 4;
+    for (const thread of store.listThreads()) {
+      if (thread.titleSource === "AUTO" && thread.titleStatus === "GENERATING") store.updateThread({ ...thread, titleStatus: "FAILED" });
+    }
     for (const thread of store.listThreads()) {
       const recoveredTurnIds = new Set<string>();
       for (const request of store.listInputRequests(thread.id)) {
@@ -1997,6 +2035,7 @@ export class ExplorerThreadService {
     this.store.saveTurn(user);
     this.store.saveTurn(assistant);
     this.store.updateThread({ ...thread, messageCount: thread.messageCount + 2, lastActivityAt: assistant.createdAt });
+    this.scheduleTitleGeneration(thread.id, input.content);
     const accepted = { user, assistant, eventsUrl: `/api/v4/projects/${thread.projectId}/explorer-thread/events?threadId=${encodeURIComponent(thread.id)}` };
     this.publish(this.store.appendEvent({ type: "explorer.turn.accepted", aggregateId: input.threadId, payload: { turnId: assistant.id, userTurnId: user.id } }));
     const job: { userId: string; assistantId: string; loopId?: string; providerThreadId: string | null; providerTurnId: string | null; resolveInput?: (() => void) | undefined; cancelled: boolean; continuationCount: number } = { userId: user.id, assistantId: assistant.id, providerThreadId: thread.providerThreadId, providerTurnId: null, cancelled: false, continuationCount: 0 };
@@ -2015,6 +2054,46 @@ export class ExplorerThreadService {
     const acceptedWithLoop = { ...accepted, loopId: loop.id };
     this.store.saveIdempotency("explorer-turn", input.clientTurnId, acceptedWithLoop as unknown as Record<string, unknown>);
     return acceptedWithLoop;
+  }
+
+  async backfillTitles(): Promise<void> {
+    if (!this.titleGenerator) return;
+    await Promise.all(this.store.listThreads().map(async (thread) => {
+      if (thread.titleSource !== "AUTO" || thread.titleStatus !== "PLACEHOLDER") return;
+      const firstUser = this.store.listTurns(thread.id).find((turn) => turn.role === "user" && turn.content.trim());
+      if (!firstUser) {
+        const placeholder = placeholderExplorerTitle(thread.createdAt);
+        if (thread.title !== placeholder) this.store.updateThread({ ...thread, title: placeholder });
+        return;
+      }
+      this.store.updateThread({ ...thread, titleStatus: "GENERATING" });
+      await this.generateTitle(thread.id, firstUser.content);
+    }));
+  }
+
+  private scheduleTitleGeneration(threadId: string, content: string): void {
+    if (!this.titleGenerator || !content.trim()) return;
+    const thread = this.store.getThread(threadId);
+    if (!thread || thread.titleSource !== "AUTO" || thread.titleStatus !== "PLACEHOLDER") return;
+    if (this.store.listTurns(threadId).filter((turn) => turn.role === "user" && turn.content.trim()).length !== 1) return;
+    this.store.updateThread({ ...thread, titleStatus: "GENERATING" });
+    void this.generateTitle(threadId, content);
+  }
+
+  private async generateTitle(threadId: string, content: string): Promise<void> {
+    const generator = this.titleGenerator;
+    if (!generator) return;
+    try {
+      const generated = normalizeExplorerTitle(await generator.generate({ threadId, content }));
+      if (!generated) throw new Error("Explorer title generator returned an invalid title");
+      const thread = this.store.getThread(threadId);
+      if (!thread || thread.titleSource !== "AUTO" || thread.titleStatus !== "GENERATING") return;
+      const updated = this.store.updateThread({ ...thread, title: composeExplorerTitle(thread.createdAt, generated), titleStatus: "GENERATED" });
+      this.publish(this.store.appendEvent({ type: "explorer.title.updated", aggregateId: threadId, payload: { explorerId: threadId, title: updated.title, titleStatus: updated.titleStatus } }));
+    } catch {
+      const thread = this.store.getThread(threadId);
+      if (thread?.titleSource === "AUTO" && thread.titleStatus === "GENERATING") this.store.updateThread({ ...thread, title: placeholderExplorerTitle(thread.createdAt), titleStatus: "FAILED" });
+    }
   }
 
   async answerInput(input: { threadId: string; requestId: string; answers: ModelInputAnswers; clientRequestId: string; actorId: string }): Promise<{ request: ExplorerInputRequest; turn: ExplorerTurn }> {
@@ -2125,6 +2204,7 @@ export class ExplorerThreadService {
     const user: ExplorerTurn = { id: this.store.nextId("turn"), threadId, role: "user", content, createdAt: this.store.now(), sequence: this.store.listTurns(threadId).length + 1 };
     this.store.saveTurn(user);
     this.store.updateThread({ ...thread, messageCount: thread.messageCount + 1, lastActivityAt: user.createdAt });
+    this.scheduleTitleGeneration(threadId, content);
     const messages = this.store.listTurns(threadId).map((turn) => ({ role: turn.role, content: turn.content }));
     let assistantContent = "";
     let cancelled = false;

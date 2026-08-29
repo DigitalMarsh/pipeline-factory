@@ -7,6 +7,7 @@ import {
   Scheduler,
   ExplorerService,
   ExplorerThreadService,
+  ModelExplorerTitleGenerator,
   LifecycleHookRunner,
   LocalGitWorktreeAdapter,
   OpenAIModelGateway,
@@ -110,7 +111,9 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     maxDurationMs: options.config?.model.loop.maxDurationMs,
     maxRepeatedToolCalls: options.config?.model.loop.maxRepeatedToolCalls,
     maxNoProgressSteps: options.config?.model.loop.maxNoProgressSteps,
+    titleGenerator: new ModelExplorerTitleGenerator(model),
   });
+  void explorer.backfillTitles();
   const scheduler = options.scheduler ?? (options.config ? createDefaultScheduler(store, options.config, model, mcpRegistry, pluginRegistry, options.computerUse) : undefined);
   const schedulerLoopController = scheduler?.agentLoopController();
   const loopController: Pick<AgentLoopRunner, "pause" | "resume" | "cancel"> = options.agentLoopController ?? {

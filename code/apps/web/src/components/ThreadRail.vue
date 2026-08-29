@@ -18,7 +18,7 @@ const explorerQuery = computed(() => props.thread ? `?explorerId=${encodeURIComp
     <div class="rail-label">EXPLORER THREAD</div>
     <div class="thread-identity">
       <div class="thread-icon"><Connection :size="16" /></div>
-      <div class="thread-copy"><strong>{{ thread?.contextMode === "LEGACY" ? "Previous exploration" : (thread?.title ?? "New Explorer") }}</strong><small>{{ thread?.id ?? "thread-demo" }}</small></div>
+      <div class="thread-copy"><strong>{{ thread?.title ?? "探索线程" }}</strong><small>{{ thread?.id ?? "thread-demo" }}</small></div>
       <span class="live-dot" />
     </div>
     <div class="thread-meta"><span>{{ thread?.messageCount ?? 8 }} messages</span><span>Just now</span></div>

@@ -18,6 +18,66 @@ afterEach(() => {
 });
 
 describe("SQLite pipeline persistence", () => {
+  it("migrates legacy Explorer defaults using message time without changing custom titles", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pipeline-factory-explorer-legacy-"));
+    tempDirectories.push(directory);
+    const databasePath = join(directory, "factory.sqlite");
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(`
+      CREATE TABLE explorer_threads (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        context_mode TEXT NOT NULL,
+        origin_thread_id TEXT,
+        parent_thread_id TEXT,
+        provider_thread_id TEXT,
+        state TEXT NOT NULL,
+        message_count INTEGER NOT NULL,
+        summary_ref TEXT,
+        last_activity_at TEXT NOT NULL,
+        exploration_status TEXT NOT NULL,
+        exploration_missing_json TEXT NOT NULL,
+        exploration_completed_json TEXT NOT NULL,
+        candidate_plan_id TEXT,
+        last_assessed_turn_id TEXT
+      );
+      CREATE TABLE explorer_turns (
+        id TEXT PRIMARY KEY,
+        thread_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        sequence INTEGER NOT NULL
+      );
+    `);
+    legacy.prepare("INSERT INTO explorer_threads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run("legacy-default", "project-1", "New Explorer", "FRESH", null, null, null, "ACTIVE", 1, null, "2026-08-29T05:50:00.000Z", "INCOMPLETE", "[]", "[]", null, null);
+    legacy.prepare("INSERT INTO explorer_threads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run("legacy-custom", "project-1", "已有人工名", "FRESH", null, null, null, "ACTIVE", 1, null, "2026-08-29T05:55:00.000Z", "INCOMPLETE", "[]", "[]", null, null);
+    legacy.prepare("INSERT INTO explorer_turns VALUES (?, ?, ?, ?, ?, ?)").run("legacy-turn", "legacy-default", "user", "历史需求", "2026-08-29T05:45:15.000Z", 1);
+    legacy.prepare("INSERT INTO explorer_turns VALUES (?, ?, ?, ?, ?, ?)").run("custom-turn", "legacy-custom", "user", "人工线程", "2026-08-29T05:46:15.000Z", 1);
+    legacy.close();
+
+    const reopened = new SqlitePipelineStore(databasePath);
+    expect(reopened.getThread("legacy-default")).toMatchObject({ createdAt: "2026-08-29T05:45:15.000Z", title: "New Explorer", titleSource: "AUTO", titleStatus: "PLACEHOLDER" });
+    expect(reopened.getThread("legacy-custom")).toMatchObject({ createdAt: "2026-08-29T05:46:15.000Z", title: "已有人工名", titleSource: "MANUAL" });
+    reopened.close();
+  });
+
+  it("persists Explorer creation time and automatic title metadata across restart", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pipeline-factory-title-"));
+    tempDirectories.push(directory);
+    const databasePath = join(directory, "factory.sqlite");
+    const firstStore = new SqlitePipelineStore(databasePath);
+    const explorer = firstStore.saveThread({ id: "explorer-title", projectId: "project-1", parentThreadId: null, createdAt: "2026-08-29T05:45:15.000Z" });
+    expect(explorer).toMatchObject({ title: "探索-20260829-13:45:15", createdAt: "2026-08-29T05:45:15.000Z", titleSource: "AUTO", titleStatus: "PLACEHOLDER" });
+    firstStore.updateThread({ ...explorer, title: "20260829-13:45:15-订单流程优化", titleStatus: "GENERATED" });
+    firstStore.close();
+
+    const reopened = new SqlitePipelineStore(databasePath);
+    expect(reopened.getThread(explorer.id)).toMatchObject({ title: "20260829-13:45:15-订单流程优化", createdAt: "2026-08-29T05:45:15.000Z", titleSource: "AUTO", titleStatus: "GENERATED" });
+    reopened.close();
+  });
+
   it("adds source metadata columns while preserving legacy plan rows", () => {
     const directory = mkdtempSync(join(tmpdir(), "pipeline-factory-legacy-"));
     tempDirectories.push(directory);

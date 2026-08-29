@@ -65,7 +65,7 @@ let planProjectionVersion = 0;
 const { visible: showThreadBanner, dismiss: dismissThreadBanner } = useDismissibleNotice();
 type TimelineNavItem = { key: string; label: string; detail: string; target: string };
 
-const fallbackThread: ExplorerThread = { id: "thread-demo", projectId: "project-demo", title: "Product workspace", contextMode: "FRESH", originThreadId: null, parentThreadId: null, state: "ACTIVE", messageCount: 0, summaryRef: null, lastActivityAt: new Date().toISOString(), exploration: { status: "INCOMPLETE", missing: ["Goal and scope"], completed: [], candidatePlanId: null, lastAssessedTurnId: null } };
+const fallbackThread: ExplorerThread = { id: "thread-demo", projectId: "project-demo", title: "Product workspace", createdAt: new Date().toISOString(), titleSource: "MANUAL", titleStatus: "GENERATED", contextMode: "FRESH", originThreadId: null, parentThreadId: null, state: "ACTIVE", messageCount: 0, summaryRef: null, lastActivityAt: new Date().toISOString(), exploration: { status: "INCOMPLETE", missing: ["Goal and scope"], completed: [], candidatePlanId: null, lastAssessedTurnId: null } };
 const fallbackPlan: Plan = { id: "plan-demo-1", title: "Build ExplorerThread workspace", revision: 1, status: "DRAFT", projectId: "project-demo", sourceExplorerThreadId: "thread-demo", queuedAt: null, runId: null, lastEventAt: new Date().toISOString(), attentionReason: null };
 const candidateCount = computed(() => candidate.value ? 1 : 0);
 const dispatchedCount = computed(() => dispatched.value.length);
@@ -176,7 +176,7 @@ function formatTurnTime(value: string): string {
 }
 
 function explorerDisplayTitle(item: ExplorerThread | null): string {
-  return item?.contextMode === "LEGACY" ? "Previous exploration" : item?.title || "ExplorerThread";
+  return item?.title || "探索线程";
 }
 
 function activityTarget(item: ExplorerActivityItem, index: number): string {
@@ -293,7 +293,7 @@ function setMemoryPanelOpen(open: boolean) {
 async function createExplorer() {
   if (busy.value) return;
   try {
-    const created = await api.createExplorer(projectId.value, "New Explorer");
+    const created = await api.createExplorer(projectId.value);
     explorers.value = [created.explorer, ...explorers.value.filter((item) => item.id !== created.explorer.id)];
     historyOpen.value = false;
     await router.push({ path: route.path, query: { explorerId: created.explorer.id }, hash: "" });
@@ -342,7 +342,7 @@ async function load() {
     if (!routeExplorerId && thread.value) selected = explorerResponse.items.find((item) => item.id === thread.value?.id);
     if (!selected) selected = explorerResponse.items.find((item) => item.state !== "ARCHIVED" && item.contextMode === "FRESH" && item.messageCount === 0);
     if (!selected) {
-      selected = (await api.createExplorer(projectId.value, "New Explorer")).explorer;
+      selected = (await api.createExplorer(projectId.value)).explorer;
       explorers.value = [selected, ...explorers.value];
     }
     const [plansResponse, turnsResponse, candidateResponse] = await Promise.all([
@@ -504,6 +504,13 @@ function connectEvents() {
     pendingInput.value = response.items.find((item) => item.id === payload.requestId) ?? null;
     recoveryInput.value = null;
     inputDialogOpen.value = Boolean(pendingInput.value?.isBlocking);
+  });
+  eventSource.addEventListener("title.updated", (raw) => {
+    if (!replayGate.accept("title.updated")) return;
+    const payload = JSON.parse((raw as MessageEvent).data) as { explorerId: string; title: string; titleStatus: ExplorerThread["titleStatus"] };
+    if (payload.explorerId !== thread.value?.id) return;
+    thread.value = { ...thread.value, title: payload.title, titleStatus: payload.titleStatus };
+    explorers.value = explorers.value.map((item) => item.id === payload.explorerId ? { ...item, title: payload.title, titleStatus: payload.titleStatus } : item);
   });
   for (const eventName of ["turn.completed", "turn.failed", "turn.cancelled", "turn.input.resolved", "explorer.plan.ready"]) eventSource.addEventListener(eventName, () => { if (!replayGate.accept(eventName)) return; void refreshTurnsAfterEvent(); });
   eventSource.addEventListener("thread.state.changed", () => { if (!replayGate.accept("thread.state.changed")) return; void load(); });

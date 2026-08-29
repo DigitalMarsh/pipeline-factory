@@ -403,7 +403,8 @@ export class CodexAppServerGateway implements ModelGateway {
           this.resumedThreads.add(providerThreadId);
         }
       } else {
-        const developerInstructions = request.role === "explorer"
+        const isTitleRequest = request.purpose === "title";
+        const developerInstructions = request.role === "explorer" && !isTitleRequest
           ? [EXPLORER_PLAN_INSTRUCTIONS, roleConfig.developerInstructions].filter(Boolean).join("\n\n")
           : roleConfig.developerInstructions;
         providerThreadId = await session.startThread({
@@ -413,7 +414,7 @@ export class CodexAppServerGateway implements ModelGateway {
           approvalPolicy: request.role === "explorer" ? "never" : "on-request",
           ...(systemInstructions(request.messages) ? { baseInstructions: systemInstructions(request.messages) } : {}),
           ...(developerInstructions ? { developerInstructions } : {}),
-          collaborationMode: { mode: request.role === "explorer" ? "plan" : "default", settings: { model: roleConfig.model, reasoning_effort: roleConfig.reasoningEffort ?? null, developer_instructions: roleConfig.developerInstructions ?? null } },
+          collaborationMode: { mode: request.role === "explorer" && !isTitleRequest ? "plan" : "default", settings: { model: roleConfig.model, reasoning_effort: roleConfig.reasoningEffort ?? null, developer_instructions: roleConfig.developerInstructions ?? null } },
         });
         if (request.conversationId) this.providerThreads.set(request.conversationId, providerThreadId);
         yield { type: "thread.started", threadId: providerThreadId };
@@ -425,7 +426,7 @@ export class CodexAppServerGateway implements ModelGateway {
         model: roleConfig.model,
         ...(roleConfig.reasoningEffort ? { effort: roleConfig.reasoningEffort } : {}),
         ...(request.cwd ? { cwd: request.cwd } : {}),
-        collaborationMode: { mode: request.role === "explorer" ? "plan" : "default", settings: { model: roleConfig.model, reasoning_effort: roleConfig.reasoningEffort ?? null, developer_instructions: roleConfig.developerInstructions ?? null } },
+        collaborationMode: { mode: request.role === "explorer" && request.purpose !== "title" ? "plan" : "default", settings: { model: roleConfig.model, reasoning_effort: roleConfig.reasoningEffort ?? null, developer_instructions: roleConfig.developerInstructions ?? null } },
         ...(request.signal ? { signal: request.signal } : {}),
       })) {
         const eventTurnId = getEventTurnId(event.params);

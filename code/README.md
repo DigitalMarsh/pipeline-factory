@@ -10,6 +10,19 @@
 
 ## 本地运行
 
+从项目根目录可以使用独立脚本管理两个服务；停止其中一个不会影响另一个：
+
+```bash
+./startApi.sh
+./stopApi.sh
+./startWeb.sh
+./stopWeb.sh
+```
+
+脚本会把 PID 和日志保存到项目根目录的 `.runtime/`，其中 API 日志为 `.runtime/api.log`，Web 日志为 `.runtime/web.log`。
+
+也可以继续使用下面的手动启动命令：
+
 ```bash
 pnpm install
 pnpm --filter @pipeline-factory/domain build

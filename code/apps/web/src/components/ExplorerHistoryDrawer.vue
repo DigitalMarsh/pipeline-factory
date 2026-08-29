@@ -32,7 +32,7 @@ function formatTime(value: string) {
 }
 
 function displayTitle(item: ExplorerThread) {
-  return item.contextMode === "LEGACY" ? "Previous exploration" : item.title || "New Explorer";
+  return item.title || "探索线程";
 }
 </script>
 

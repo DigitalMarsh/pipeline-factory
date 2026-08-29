@@ -4,6 +4,9 @@ export type ExplorerThread = {
   id: string;
   projectId: string;
   title: string;
+  createdAt: string;
+  titleSource: "AUTO" | "MANUAL";
+  titleStatus: "PLACEHOLDER" | "GENERATING" | "GENERATED" | "FAILED";
   contextMode: "FRESH" | "EXPLICIT_CONTINUATION" | "LEGACY";
   originThreadId: string | null;
   parentThreadId: string | null;

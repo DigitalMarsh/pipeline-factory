@@ -266,7 +266,12 @@ describe("Pipeline Factory v3 API", () => {
     const resumeOrder: string[] = [];
     const model: ModelGateway = {
       configFor: () => ({ model: "gpt-5.6-luna" }),
-      async *stream() {
+      async *stream(request) {
+        if (request.conversationId?.startsWith("title-")) {
+          yield { type: "text.delta", text: "测试标题" };
+          yield { type: "turn.completed" };
+          return;
+        }
         streamCount += 1;
         if (streamCount === 1) {
           yield { type: "thread.started", threadId: "provider-thread-1" };
@@ -334,6 +339,22 @@ describe("Pipeline Factory v3 API", () => {
     expect(archived.statusCode).toBe(200);
     expect(archived.json().explorer.state).toBe("ARCHIVED");
     expect(store.listTurns(fresh.id)).toEqual([]);
+  });
+
+  it("creates an Explorer with a timestamp placeholder and locks manual renames", async () => {
+    const store = new InMemoryPipelineStore();
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+
+    const created = await app.inject({ method: "POST", url: "/api/v4/projects/project-1/explorers" });
+    expect(created.statusCode).toBe(201);
+    const explorer = created.json().explorer;
+    expect(explorer.title).toMatch(/^探索-\d{8}-\d{2}:\d{2}:\d{2}$/);
+    expect(explorer).toMatchObject({ titleSource: "AUTO", titleStatus: "PLACEHOLDER" });
+
+    const renamed = await app.inject({ method: "POST", url: `/api/v4/projects/project-1/explorers/${explorer.id}/rename`, payload: { title: "人工名称" } });
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json().explorer).toMatchObject({ title: "人工名称", titleSource: "MANUAL" });
   });
 
   it("projects Agent Loop steps as ordered Explorer activity items", async () => {
