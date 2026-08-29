@@ -367,6 +367,7 @@ export class CodexAppServerGateway implements ModelGateway {
       const roleConfig = this.configFor(request.role);
       let providerThreadId = request.providerThreadId ?? (request.conversationId ? this.providerThreads.get(request.conversationId) : undefined);
       if (providerThreadId) {
+        if (request.conversationId) this.providerThreads.set(request.conversationId, providerThreadId);
         if (!this.resumedThreads.has(providerThreadId)) {
           await session.resumeThread(providerThreadId);
           this.resumedThreads.add(providerThreadId);
@@ -428,7 +429,9 @@ export class CodexAppServerGateway implements ModelGateway {
 
   async cancel(request: { conversationId: string; providerThreadId: string; providerTurnId?: string }): Promise<void> {
     if (!request.providerTurnId) return;
-    const session = await this.getSession(request.conversationId);
+    const mappedConversationId = [...this.providerThreads.entries()].find(([, providerThreadId]) => providerThreadId === request.providerThreadId)?.[0];
+    const session = this.sessions.get(request.conversationId) ?? (mappedConversationId ? this.sessions.get(mappedConversationId) : undefined);
+    if (!session) return;
     await session.interrupt(request.providerThreadId, request.providerTurnId);
   }
 
@@ -445,6 +448,16 @@ function mapCodexEvent(event: CodexAppServerEvent): ModelEvent | null {
   if (event.method === "item/agentMessage/delta") {
     const text = getString(event.params, "delta");
     return text === undefined ? null : { type: "text.delta", text };
+  }
+  if (event.method === "item/started" || event.method === "item/completed") {
+    const item = getObject(event.params, "item");
+    const itemId = getString(item, "id");
+    const itemType = getString(item, "type");
+    if (!itemId || !itemType) return null;
+    if (itemType === "agentMessage" || itemType === "message") return null;
+    const title = getString(item, "name") ?? getString(item, "title") ?? null;
+    const summary = getString(item, "command") ?? getString(item, "text") ?? null;
+    return { type: "provider.activity", phase: event.method === "item/started" ? "started" : "completed", itemId, itemType, title, summary };
   }
   if (event.method === "item/tool/requestUserInput") {
     const request = event.params;

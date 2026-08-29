@@ -124,4 +124,24 @@ describe("AgentLoopEngine", () => {
     await expect(engine.answerInput(loop.id, "request-fails", {})).rejects.toThrow("provider response uncertain");
     await expect(engine.wait(loop.id)).resolves.toMatchObject({ state: "FAILED" });
   });
+
+  it("cancels a loop waiting for input without an unhandled completion rejection", async () => {
+    const store = new InMemoryPipelineStore();
+    const model: ModelGateway = {
+      configFor: () => ({ model: "explorer" }),
+      capabilities: () => ({ supportsStructuredUserInput: true, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
+      async *stream() {
+        yield { type: "turn.input_required", request: { requestId: "request-cancel", threadId: "provider-thread", turnId: "provider-turn", itemId: "item-1", questions: [], isBlocking: true, autoResolutionMs: null } };
+        yield { type: "turn.completed" };
+      },
+      async answerUserInput() { return undefined; },
+      async cancel() { return undefined; },
+    };
+    const engine = new AgentLoopEngine(store, model);
+    const loop = await engine.start({ ...baseInput(), role: "explorer", mode: "provider-controlled", ownerType: "explorer-turn", ownerId: "turn-cancel", maxSteps: 1 });
+    for (let attempt = 0; attempt < 50 && store.getAgentLoop(loop.id)?.state !== "WAITING_FOR_INPUT"; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 1));
+
+    await expect(engine.cancel(loop.id, "user_cancelled")).resolves.toMatchObject({ state: "CANCELLED" });
+    await expect(engine.wait(loop.id)).resolves.toMatchObject({ state: "CANCELLED" });
+  });
 });

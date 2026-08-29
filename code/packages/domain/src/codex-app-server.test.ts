@@ -103,4 +103,48 @@ describe("CodexAppServerGateway", () => {
     await gateway.answerUserInput({ requestId: "server-request-1", answers: { q1: { answers: ["A"] } } });
     expect(calls.at(-1)).toMatchObject({ method: "input/answer", params: { requestId: "server-request-1", response: { answers: { q1: { answers: ["A"] } } } } });
   });
+
+  it("surfaces provider item lifecycle activity without pretending Factory owns the provider loop", async () => {
+    const calls: Array<{ method: string; params: unknown }> = [];
+    const gateway = new CodexAppServerGateway({
+      roles: { explorer: { model: "explorer-model" }, executor: { model: "executor-model" } },
+      sessionFactory: createSessionFactory([
+        { method: "item/started", params: { threadId: "codex-thread-1", turnId: "turn-1", item: { id: "item-mcp-1", type: "mcpToolCall", name: "search_text" } } },
+        { method: "item/completed", params: { threadId: "codex-thread-1", turnId: "turn-1", item: { id: "item-mcp-1", type: "mcpToolCall", name: "search_text" } } },
+        { method: "item/completed", params: { threadId: "codex-thread-1", turnId: "turn-1", item: { id: "item-message-1", type: "agentMessage", text: "do not duplicate" } } },
+        { method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } },
+      ], calls),
+    });
+
+    const events = [];
+    for await (const event of gateway.stream({ role: "explorer", conversationId: "explorer-activity", messages: [{ role: "user", content: "inspect" }] })) events.push(event);
+
+    expect(events).toMatchObject([
+      { type: "thread.started" },
+      { type: "provider.activity", phase: "started", itemId: "item-mcp-1", itemType: "mcpToolCall" },
+      { type: "provider.activity", phase: "completed", itemId: "item-mcp-1", itemType: "mcpToolCall" },
+      { type: "turn.completed" },
+    ]);
+  });
+
+  it("interrupts the existing provider session when the loop id differs from the Explorer id", async () => {
+    const calls: Array<{ method: string; params: unknown }> = [];
+    let factoryCalls = 0;
+    const sessionFactory: CodexAppServerSessionFactory = async () => {
+      factoryCalls += 1;
+      return createSessionFactory([
+        { method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } },
+      ], calls)();
+    };
+    const gateway = new CodexAppServerGateway({
+      roles: { explorer: { model: "explorer-model" }, executor: { model: "executor-model" } },
+      sessionFactory,
+    });
+
+    for await (const _event of gateway.stream({ role: "explorer", conversationId: "explorer-1", messages: [{ role: "user", content: "inspect" }] })) { /* consume */ }
+    await gateway.cancel({ conversationId: "agent-loop-1", providerThreadId: "codex-thread-1", providerTurnId: "turn-1" });
+
+    expect(factoryCalls).toBe(1);
+    expect(calls.at(-1)).toMatchObject({ method: "turn/interrupt", params: { threadId: "codex-thread-1", turnId: "turn-1" } });
+  });
 });

@@ -3,6 +3,9 @@ export type PlanStatus = "DRAFT" | "READY" | "QUEUED" | "IN_PROGRESS" | "VERIFYI
 export type ExplorerThread = {
   id: string;
   projectId: string;
+  title: string;
+  contextMode: "FRESH" | "EXPLICIT_CONTINUATION" | "LEGACY";
+  originThreadId: string | null;
   parentThreadId: string | null;
   state: "ACTIVE" | "WAITING_FOR_INPUT" | "COMPRESSED" | "ARCHIVED";
   messageCount: number;
@@ -15,6 +18,21 @@ export type ExplorerThread = {
     candidatePlanId: string | null;
     lastAssessedTurnId: string | null;
   };
+};
+
+export type ExplorerActivityKind = "USER_MESSAGE" | "ASSISTANT_MESSAGE" | "REASONING_SUMMARY" | "INPUT_REQUIRED" | "INPUT_RESOLVED" | "TOOL_STARTED" | "TOOL_COMPLETED" | "TOOL_DENIED" | "MCP_ACTIVITY" | "CONTEXT_COMPACTED" | "GATE_CHECKED" | "TURN_STATUS";
+
+export type ExplorerActivityItem = {
+  id: string;
+  explorerId: string;
+  turnId: string;
+  sequence: number;
+  kind: ExplorerActivityKind;
+  status: "RUNNING" | "COMPLETED" | "FAILED" | "WAITING";
+  title: string;
+  summary: string;
+  details: Record<string, unknown> | null;
+  occurredAt: string;
 };
 
 export type ExplorerTurn = {

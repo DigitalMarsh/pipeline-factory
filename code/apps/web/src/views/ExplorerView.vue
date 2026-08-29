@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { ArrowDown, ArrowUp, Check, CircleCheck, InfoFilled, MoreFilled, Promotion, Refresh, Right, VideoPause, VideoPlay } from "@element-plus/icons-vue";
+import { ArrowDown, ArrowUp, Check, CircleCheck, Connection, InfoFilled, MoreFilled, Promotion, Refresh, Right, VideoPause, VideoPlay, Warning } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 import { api } from "../api";
-import type { AgentLoop, ExplorerInputRequest, ExplorerThread, ExplorerTurn, Plan } from "../types";
+import type { AgentLoop, ExplorerActivityItem, ExplorerInputRequest, ExplorerThread, ExplorerTurn, Plan } from "../types";
 import PlanDetailDrawer from "../components/PlanDetailDrawer.vue";
 import ExplorerPolicyDrawer from "../components/ExplorerPolicyDrawer.vue";
 import ThreadRail from "../components/ThreadRail.vue";
@@ -18,12 +18,16 @@ import { isExplorerTurnProcessing } from "../utils/turnStatus";
 import { formatContextUsage, formatConversationId, formatRateLimit } from "../utils/explorerStatus";
 import { createSseReplayGate } from "../utils/sseReplayGate";
 import ExplorerInputDialog from "../components/ExplorerInputDialog.vue";
+import ExplorerHistoryDrawer from "../components/ExplorerHistoryDrawer.vue";
 import scrollToLatestIcon from "../assets/scroll-to-latest.png";
 
 const route = useRoute();
 const router = useRouter();
 const projectId = computed(() => String(route.params.projectId ?? "project-demo"));
 const thread = ref<ExplorerThread | null>(null);
+const explorers = ref<ExplorerThread[]>([]);
+const historyOpen = ref(false);
+const activity = ref<ExplorerActivityItem[]>([]);
 const candidate = ref<Plan | null>(null);
 const dispatched = ref<Plan[]>([]);
 const turns = ref<ExplorerTurn[]>([]);
@@ -48,13 +52,14 @@ const explorerModel = ref("gpt-5.6-luna");
 const statusOpen = ref(false);
 const inputDialogOpen = ref(false);
 const inputDialog = ref<{ onSubmitted: () => void; onFailed: (message: string) => void } | null>(null);
+const mounted = ref(false);
 let eventSource: EventSource | null = null;
 let loopEventSource: EventSource | null = null;
 let explorerEventSequence: number | null = null;
 const { visible: showThreadBanner, dismiss: dismissThreadBanner } = useDismissibleNotice();
 type TimelineNavItem = { key: string; label: string; detail: string; target: string };
 
-const fallbackThread: ExplorerThread = { id: "thread-demo", projectId: "project-demo", parentThreadId: null, state: "ACTIVE", messageCount: 8, summaryRef: null, lastActivityAt: new Date().toISOString(), exploration: { status: "INCOMPLETE", missing: ["Goal and scope"], completed: [], candidatePlanId: null, lastAssessedTurnId: null } };
+const fallbackThread: ExplorerThread = { id: "thread-demo", projectId: "project-demo", title: "Product workspace", contextMode: "FRESH", originThreadId: null, parentThreadId: null, state: "ACTIVE", messageCount: 0, summaryRef: null, lastActivityAt: new Date().toISOString(), exploration: { status: "INCOMPLETE", missing: ["Goal and scope"], completed: [], candidatePlanId: null, lastAssessedTurnId: null } };
 const fallbackPlan: Plan = { id: "plan-demo-1", title: "Build ExplorerThread workspace", revision: 1, status: "DRAFT", projectId: "project-demo", sourceExplorerThreadId: "thread-demo", queuedAt: null, runId: null, lastEventAt: new Date().toISOString(), attentionReason: null };
 const candidateCount = computed(() => candidate.value ? 1 : 0);
 const dispatchedCount = computed(() => dispatched.value.length);
@@ -66,10 +71,8 @@ const conversationId = computed(() => formatConversationId(thread.value?.id ?? "
 const rateLimits = computed(() => ({ fiveHour: formatRateLimit(null), sevenDay: formatRateLimit(null) }));
 const agentLoopLabel = computed(() => ({ CREATED: "Created", RUNNING: "Running", WAITING_FOR_INPUT: "Waiting for input", PAUSED: "Paused", RECOVERING: "Recovery required", BLOCKED: "Blocked", COMPLETED: "Completed", FAILED: "Failed", CANCELLED: "Cancelled", NEEDS_RECONCILIATION: "Needs reconciliation" } as Record<string, string>)[agentLoop.value?.state ?? ""] ?? "No active loop");
 const explorationProgress = computed(() => thread.value?.exploration ?? { status: "INCOMPLETE" as const, missing: [], completed: [], candidatePlanId: null, lastAssessedTurnId: null });
-const activeTimelineKey = ref("message-intro");
+const activeTimelineKey = ref("");
 const messageTimelineItems = computed<TimelineNavItem[]>(() => [
-  { key: "message-intro", label: "Your request", detail: "10:42", target: "message-intro" },
-  { key: "message-intro-response", label: "Plan Explorer", detail: "Scope mapped", target: "message-intro-response" },
   ...(inputCardRequest.value ? [{ key: "message-input-request", label: "Input required", detail: inputCardRequest.value.status === "RECOVERY_REQUIRED" ? "Recovery" : "Waiting", target: "message-input-request" }] : []),
   ...turns.value.map((turn) => ({ key: `message-${turn.id}`, label: turn.role === "user" ? "You" : "Plan Explorer", detail: formatTurnTime(turn.createdAt), target: `message-${turn.id}` })),
 ]);
@@ -77,6 +80,7 @@ const planTimelineItems = computed<TimelineNavItem[]>(() => [
   ...(candidate.value ? [{ key: "plan-candidate", label: candidate.value.title, detail: `Candidate · Rev ${candidate.value.revision}`, target: "plan-candidate" }] : []),
   ...dispatched.value.map((plan) => ({ key: `plan-${planIdentity(plan)}`, label: plan.title, detail: `${statusLabel(plan.status)} · Rev ${plan.revision}`, target: `plan-event-${planIdentity(plan)}` })),
 ]);
+const visibleActivity = computed(() => activity.value.length ? activity.value : turns.value.map((turn) => ({ id: `fallback-${turn.id}`, explorerId: turn.threadId, turnId: turn.id, sequence: turn.sequence, kind: turn.role === "user" ? "USER_MESSAGE" : "ASSISTANT_MESSAGE", status: turn.status === "FAILED" ? "FAILED" : turn.status === "RUNNING" ? "RUNNING" : turn.status === "WAITING_FOR_INPUT" ? "WAITING" : "COMPLETED", title: turn.role === "user" ? "You" : "Plan Explorer", summary: turnContent(turn), details: turn.error ? { error: turn.error } : null, occurredAt: turn.createdAt })) as ExplorerActivityItem[]);
 
 function setPolicyOpen(value: boolean) {
   policyOpen.value = value ? openPolicyPanel(policyOpen.value) : closePolicyPanel(policyOpen.value);
@@ -114,6 +118,43 @@ function formatTurnTime(value: string): string {
 
 function planIdentity(plan: Plan): string {
   return plan.planId ?? plan.id ?? plan.title;
+}
+
+function explorerDisplayTitle(item: ExplorerThread | null): string {
+  return item?.contextMode === "LEGACY" ? "Previous exploration" : item?.title || "ExplorerThread";
+}
+
+function activityTarget(item: ExplorerActivityItem, index: number): string {
+  const firstForTurn = visibleActivity.value.find((candidate) => candidate.turnId === item.turnId);
+  return firstForTurn?.id === item.id ? `message-${item.turnId}` : `activity-${item.id}-${index}`;
+}
+
+function activityStatusLabel(item: ExplorerActivityItem): string {
+  if (item.status === "WAITING") return "Waiting";
+  if (item.status === "FAILED") return "Failed";
+  if (item.status === "RUNNING") return "Running";
+  return "Completed";
+}
+
+function activityKindLabel(kind: ExplorerActivityItem["kind"]): string {
+  return ({
+    REASONING_SUMMARY: "Reasoning",
+    INPUT_REQUIRED: "Input required",
+    INPUT_RESOLVED: "Input resolved",
+    TOOL_STARTED: "Tool started",
+    TOOL_COMPLETED: "Tool completed",
+    TOOL_DENIED: "Tool denied",
+    MCP_ACTIVITY: "MCP activity",
+    CONTEXT_COMPACTED: "Context checkpoint",
+    GATE_CHECKED: "Gate checked",
+    TURN_STATUS: "Turn status",
+  } as Partial<Record<ExplorerActivityItem["kind"], string>>)[kind] ?? kind;
+}
+
+function activityIconKind(kind: ExplorerActivityItem["kind"]): "info" | "success" | "warning" {
+  if (kind === "TOOL_DENIED" || kind === "GATE_CHECKED") return "warning";
+  if (kind === "TOOL_COMPLETED" || kind === "INPUT_RESOLVED") return "success";
+  return "info";
 }
 
 function jumpToTimelineTarget(targetId: string, key: string) {
@@ -155,7 +196,7 @@ function syncHashPanel(hash: string) {
 
 async function closeCandidateEmpty() {
   candidateEmptyOpen.value = false;
-  if (route.hash === "#candidate") await router.replace({ hash: "" });
+  if (route.hash === "#candidate") await router.replace({ query: route.query, hash: "" });
 }
 
 function setCandidateEmptyOpen(open: boolean) {
@@ -168,7 +209,7 @@ async function createCandidate() {
   busy.value = true;
   error.value = null;
   try {
-    candidate.value = (await api.createCandidate(projectId.value, title)).plan;
+    candidate.value = thread.value ? (await api.createExplorerCandidate(projectId.value, thread.value.id, title)).plan : null;
     await closeCandidateEmpty();
     drawerOpen.value = true;
   } catch (caught) {
@@ -180,37 +221,77 @@ async function createCandidate() {
 
 async function closeMemoryPanel() {
   memoryPanel.value = null;
-  if (route.hash) await router.replace({ hash: "" });
+  if (route.hash) await router.replace({ query: route.query, hash: "" });
 }
 
 function setMemoryPanelOpen(open: boolean) {
   if (!open) void closeMemoryPanel();
 }
 
+async function createExplorer() {
+  if (busy.value) return;
+  try {
+    const created = await api.createExplorer(projectId.value, "New Explorer");
+    explorers.value = [created.explorer, ...explorers.value.filter((item) => item.id !== created.explorer.id)];
+    historyOpen.value = false;
+    await router.push({ path: route.path, query: { explorerId: created.explorer.id }, hash: "" });
+  } catch (caught) {
+    ElMessage.error(caught instanceof Error ? `新建 Explorer 失败：${caught.message}` : "新建 Explorer 失败");
+  }
+}
+
+async function selectExplorer(explorerId: string) {
+  if (explorerId === thread.value?.id) return;
+  await router.push({ path: route.path, query: { explorerId }, hash: "" });
+}
+
+async function refreshActivity() {
+  if (!thread.value) return;
+  try {
+    const response = await api.explorerActivity(projectId.value, thread.value.id);
+    activity.value = response.items;
+    explorerEventSequence = Math.max(explorerEventSequence ?? 0, response.lastEventSequence ?? 0);
+  } catch {
+    // The turn stream remains the source of truth while the activity projection catches up.
+  }
+}
+
 async function load() {
   loading.value = true;
   error.value = null;
   try {
-    const [healthResponse, threadResponse] = await Promise.all([optional(() => api.health()), api.thread(projectId.value)]);
+    const [healthResponse, explorerResponse] = await Promise.all([optional(() => api.health()), api.explorers(projectId.value)]);
     if (healthResponse?.model) explorerModel.value = healthResponse.model;
+    explorers.value = explorerResponse.items;
+    const routeExplorerId = typeof route.query.explorerId === "string" ? route.query.explorerId : null;
+    let selected = routeExplorerId ? explorerResponse.items.find((item) => item.id === routeExplorerId) : undefined;
+    if (!routeExplorerId && thread.value) selected = explorerResponse.items.find((item) => item.id === thread.value?.id);
+    if (!selected) selected = explorerResponse.items.find((item) => item.state !== "ARCHIVED" && item.contextMode === "FRESH" && item.messageCount === 0);
+    if (!selected) {
+      selected = (await api.createExplorer(projectId.value, "New Explorer")).explorer;
+      explorers.value = [selected, ...explorers.value];
+    }
     const [plansResponse, turnsResponse, candidateResponse] = await Promise.all([
-      api.plans(projectId.value),
-      api.explorerTurnsV4(projectId.value, threadResponse.thread.id),
-      optional(() => api.candidate(projectId.value)),
+      api.explorerPlans(projectId.value, selected.id),
+      api.explorerTurnsV4(projectId.value, selected.id),
+      optional(() => api.explorerCandidate(projectId.value, selected!.id)),
     ]);
-    thread.value = threadResponse.thread;
+    thread.value = selected;
     candidate.value = candidateResponse?.plan ?? null;
     dispatched.value = plansResponse.items;
     turns.value = turnsResponse.items;
     explorerEventSequence = turnsResponse.lastEventSequence ?? null;
-    const loopResponse = await api.explorerAgentLoops(projectId.value, threadResponse.thread.id);
+    const activityResponse = await api.explorerActivity(projectId.value, selected.id);
+    activity.value = activityResponse.items;
+    explorerEventSequence = Math.max(explorerEventSequence ?? 0, activityResponse.lastEventSequence ?? 0);
+    const loopResponse = await api.explorerAgentLoops(projectId.value, selected.id);
     agentLoop.value = [...loopResponse.items].sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? ""))[0] ?? null;
     if (eventSource) connectLoopEvents();
     explorerPaused.value = agentLoop.value?.state === "PAUSED";
     const activeTurn = turns.value.some((turn) => turn.status === "RUNNING" || turn.status === "WAITING_FOR_INPUT");
     busy.value = activeTurn;
     sendingTurn.value = activeTurn;
-    const inputResponse = await api.inputRequests(projectId.value, threadResponse.thread.id);
+    const inputResponse = await api.inputRequests(projectId.value, selected.id);
     pendingInput.value = inputResponse.items.find((item) => item.status === "OPEN") ?? null;
     recoveryInput.value = inputResponse.items.find((item) => item.status === "RECOVERY_REQUIRED") ?? null;
     inputDialogOpen.value = Boolean(pendingInput.value?.isBlocking);
@@ -218,9 +299,11 @@ async function load() {
     updateTimelineScrollState();
   } catch (caught) {
     thread.value = fallbackThread;
+    explorers.value = [fallbackThread];
     candidate.value = fallbackPlan;
     dispatched.value = [];
     turns.value = [];
+    activity.value = [];
     error.value = caught instanceof Error ? "API 未连接，当前显示本地演示数据" : "API 未连接，当前显示本地演示数据";
   } finally {
     loading.value = false;
@@ -239,6 +322,8 @@ async function sendTurn() {
     sequence: turns.value.length + 1,
   });
   turns.value = [...turns.value, optimisticUser];
+  const optimisticAssistant: ExplorerActivityItem = { id: `local-assistant-activity-${Date.now()}`, explorerId: optimisticUser.threadId, turnId: `local-assistant-turn-${Date.now()}`, sequence: optimisticUser.sequence + 1, kind: "ASSISTANT_MESSAGE", status: "RUNNING", title: "Plan Explorer", summary: "Plan Explorer 正在处理…", details: null, occurredAt: new Date().toISOString() };
+  activity.value = [...activity.value, { id: `local-user-activity-${optimisticUser.id}`, explorerId: optimisticUser.threadId, turnId: optimisticUser.id, sequence: optimisticUser.sequence, kind: "USER_MESSAGE", status: "COMPLETED", title: "You", summary: content, details: null, occurredAt: now }, optimisticAssistant];
   draft.value = "";
   busy.value = true;
   sendingTurn.value = true;
@@ -249,6 +334,7 @@ async function sendTurn() {
     agentLoop.value = (await api.agentLoop(response.loopId)).loop;
     connectLoopEvents();
     turns.value = settleOptimisticTurn(turns.value, optimisticUser.id, response.turn);
+    await refreshActivity();
     if (thread.value) thread.value = { ...thread.value, messageCount: thread.value.messageCount + 2, lastActivityAt: response.turn.assistant.createdAt };
     ElMessage.success("消息已发送");
   } catch (caught) {
@@ -306,6 +392,7 @@ async function refreshTurnsAfterEvent() {
   if (!thread.value) return;
   const response = await api.explorerTurnsV4(projectId.value, thread.value.id);
   turns.value = response.items;
+  await refreshActivity();
   const inputResponse = await api.inputRequests(projectId.value, thread.value.id);
   pendingInput.value = inputResponse.items.find((item) => item.status === "OPEN") ?? null;
   recoveryInput.value = inputResponse.items.find((item) => item.status === "RECOVERY_REQUIRED") ?? null;
@@ -331,6 +418,7 @@ function connectEvents() {
     const payload = JSON.parse((raw as MessageEvent).data) as { turnId: string; text: string };
     const current = turns.value.find((turn) => turn.id === payload.turnId);
     if (current) mergeTurn({ ...current, content: current.content + payload.text, status: "RUNNING" });
+    void refreshActivity();
   });
   eventSource.addEventListener("turn.input_required", async (raw) => {
     if (!replayGate.accept("turn.input_required")) return;
@@ -352,11 +440,11 @@ function connectLoopEvents() {
   const replayGate = createSseReplayGate();
   loopEventSource = new EventSource(api.agentLoopEventsUrl(agentLoop.value.id));
   loopEventSource.addEventListener("stream.ready", () => { replayGate.accept("stream.ready"); });
-  for (const eventName of ["agent.loop.started", "agent.step.started", "agent.input.required", "agent.input.resolved", "agent.loop.paused", "agent.loop.resumed", "agent.loop.completed", "agent.loop.failed", "agent.loop.cancelled", "agent.loop.recovery_required"]) {
+  for (const eventName of ["agent.loop.started", "agent.step.started", "agent.step.model_text_delta", "agent.step.tool_requested", "agent.step.tool_completed", "agent.step.tool_denied", "agent.step.input_required", "agent.step.input_resolved", "agent.step.context_compacted", "agent.step.gate_checked", "agent.provider.activity", "agent.input.required", "agent.input.resolved", "agent.loop.paused", "agent.loop.resumed", "agent.loop.completed", "agent.loop.failed", "agent.loop.cancelled", "agent.loop.recovery_required"]) {
     loopEventSource.addEventListener(eventName, () => {
       if (!replayGate.accept(eventName)) return;
       if (!agentLoop.value) return;
-      void api.agentLoop(agentLoop.value.id).then((response) => { agentLoop.value = response.loop; explorerPaused.value = response.loop.state === "PAUSED"; }).catch(() => undefined);
+      void api.agentLoop(agentLoop.value.id).then((response) => { agentLoop.value = response.loop; explorerPaused.value = response.loop.state === "PAUSED"; void refreshActivity(); }).catch(() => undefined);
     });
   }
 }
@@ -388,15 +476,16 @@ async function enqueuePlan() {
 function statusLabel(status: string) { return ({ DRAFT: "Candidate", READY: "Confirmed", QUEUED: "Queued", IN_PROGRESS: "Running", VERIFYING: "Verifying", MERGE_READY: "Ready for review", MERGED: "Merged", NEEDS_PLAN_CHANGE: "Plan change required", BLOCKED: "Blocked" } as Record<string, string>)[status] ?? status; }
 watch(() => route.hash, syncHashPanel);
 watch(candidate, () => syncHashPanel(route.hash));
-onMounted(() => { void load().then(connectEvents); syncHashPanel(route.hash); });
+watch(() => route.query.explorerId, () => { if (mounted.value) void load().then(connectEvents); });
+onMounted(() => { mounted.value = true; void load().then(connectEvents); syncHashPanel(route.hash); });
 onBeforeUnmount(closeEvents);
 </script>
 
 <template>
   <div class="console-layout">
-    <ThreadRail :thread="thread" :candidate-count="candidateCount" :dispatched-count="dispatchedCount" :active-run-count="activeRunCount" :needs-attention-count="needsAttentionCount" />
+    <ThreadRail :thread="thread" :candidate-count="candidateCount" :dispatched-count="dispatchedCount" :active-run-count="activeRunCount" :needs-attention-count="needsAttentionCount" @open-history="historyOpen = true" />
     <section class="conversation-column">
-      <div class="conversation-header"><div><div class="eyebrow"><span class="mode-dot" /> PLAN MODE · READ ONLY</div><h1>ExplorerThread</h1><p>Shape the work before anything changes in the repository.</p></div><div class="conversation-tools"><el-button class="new-thread-button" plain aria-label="新建" title="新建">新建</el-button><el-button circle plain :aria-label="explorerPaused ? 'Resume' : 'Pause'" @click="toggleExplorerPause"><VideoPlay v-if="explorerPaused" :size="16" /><VideoPause v-else :size="16" /></el-button><el-popover v-model:visible="moreOpen" placement="bottom-end" :width="250" trigger="click"><template #reference><el-button circle plain aria-label="More"><MoreFilled :size="16" /></el-button></template><div class="thread-more-menu"><div class="eyebrow">THREAD ACTIONS</div><p>Manage read-only exploration without changing the repository.</p><el-button text @click="setPolicyOpen(true); moreOpen = false">View policy</el-button><el-button text @click="moreOpen = false; refreshThread()">Refresh thread</el-button></div></el-popover></div></div>
+      <div class="conversation-header"><div><div class="eyebrow"><span class="mode-dot" /> PLAN MODE · READ ONLY</div><h1>{{ explorerDisplayTitle(thread) }}</h1><p>Shape the work before anything changes in the repository.</p></div><div class="conversation-tools"><el-button class="new-thread-button" plain aria-label="新建 Explorer" title="新建 Explorer" @click="createExplorer">新建</el-button><el-button circle plain :aria-label="explorerPaused ? 'Resume' : 'Pause'" @click="toggleExplorerPause"><VideoPlay v-if="explorerPaused" :size="16" /><VideoPause v-else :size="16" /></el-button><el-popover v-model:visible="moreOpen" placement="bottom-end" :width="250" trigger="click"><template #reference><el-button circle plain aria-label="More"><MoreFilled :size="16" /></el-button></template><div class="thread-more-menu"><div class="eyebrow">THREAD ACTIONS</div><p>Manage read-only exploration without changing the repository.</p><el-button text @click="setPolicyOpen(true); moreOpen = false">View policy</el-button><el-button text @click="moreOpen = false; refreshThread()">Refresh thread</el-button></div></el-popover></div></div>
       <div v-if="agentLoop" class="agent-loop-strip" role="status"><div><span class="eyebrow">EXPLORER AGENT LOOP</span><strong>{{ agentLoopLabel }}</strong></div><span class="agent-loop-budget">Steps {{ agentLoop.stepCount }} / {{ agentLoop.maxSteps }}</span><el-button v-if="agentLoop.state === 'RUNNING' || agentLoop.state === 'PAUSED'" size="small" plain @click="toggleExplorerPause">{{ agentLoop.state === 'PAUSED' ? 'Resume loop' : 'Pause loop' }}</el-button></div>
       <div v-if="showThreadBanner" class="thread-banner" role="status" @click="dismissThreadBanner"><InfoFilled :size="16" /><span>Explorer can inspect the repository and Git history. Write, shell, test and commit tools are disabled until a plan is confirmed and dispatched.</span><el-button text aria-label="View Explorer policy" @click.stop="setPolicyOpen(true)">View policy <Right :size="14" /></el-button></div>
       <div v-if="explorationProgress.status === 'INCOMPLETE' && explorationProgress.lastAssessedTurnId" class="exploration-progress exploration-progress-incomplete" role="status"><Refresh :size="15" /><div><strong>方案仍在探索中</strong><span>本轮结束不代表设计完成，Explorer 正在继续确认：{{ explorationProgress.missing.join('、') }}</span></div></div>
@@ -410,9 +499,8 @@ onBeforeUnmount(closeEvents);
       </aside>
       <div class="timeline-shell">
       <div ref="timeline" class="timeline" v-loading="loading" @scroll="updateTimelineScrollState">
-        <div class="timeline-day">TODAY · 10:42</div>
-        <article id="message-intro" data-nav-key="message-intro" class="message-card user-message"><div class="message-avatar user-avatar">LS</div><div class="message-body"><div class="message-meta"><strong>You</strong><span>10:42</span></div><p>We need an ExplorerThread-first workspace where I can review the full plan before sending it to execution.</p></div></article>
-        <article id="message-intro-response" data-nav-key="message-intro-response" class="message-card assistant-message"><div class="message-avatar agent-avatar"><span class="brand-dot" /></div><div class="message-body"><div class="message-meta"><strong>Plan Explorer</strong><span class="agent-chip">Read only</span><span>10:42</span></div><p>I mapped the thread model, the confirmation boundary and the plan projection. I found one design that meets the scope without changing execution permissions.</p><div class="insight-row"><span><Check :size="13" /> Scope checked</span><span><Check :size="13" /> Dependencies checked</span><span><Check :size="13" /> Verification defined</span></div></div></article>
+        <div class="timeline-day">{{ turns.length ? 'EXPLORER ACTIVITY' : 'NEW EXPLORATION' }}</div>
+        <div v-if="!visibleActivity.length && !candidate" class="timeline-empty"><Connection :size="24" /><strong>开始一次全新的需求探索</strong><span>在下方输入需求。当前 Explorer 与历史记录完全隔离。</span></div>
         <div class="timeline-marker"><span>PLAN CANDIDATE GENERATED</span></div>
         <article id="plan-candidate" data-nav-key="plan-candidate" class="candidate-card" v-if="candidate"><div class="candidate-head"><div class="candidate-icon"><Promotion :size="19" /></div><div><div class="eyebrow">CANDIDATE PLAN · REVISION {{ candidate.revision }}</div><h2>{{ candidate.title }}</h2></div><el-tag type="warning" effect="light">{{ statusLabel(candidate.status) }}</el-tag></div><p class="candidate-summary">{{ candidate.contract?.goal ?? candidate.goal ?? 'A complete, reviewable execution contract generated from this ExplorerThread.' }}</p><div class="candidate-stats"><div><span>Tasks</span><strong>{{ candidate.contract?.tasks.length ?? candidate.tasks?.length ?? 0 }}</strong></div><div><span>Scope entries</span><strong>{{ candidate.contract?.include.length ?? candidate.include?.length ?? 0 }}</strong></div><div><span>Verification</span><strong>{{ candidate.contract?.verificationCommandIds.length ?? candidate.verificationCommands?.length ?? 0 }} checks</strong></div><div><span>Merge</span><strong class="risk-low">Human review</strong></div></div><div class="candidate-actions"><el-button @click="drawerOpen = true">View full plan <Right :size="15" /></el-button><el-button v-if="candidate.status === 'DRAFT'" type="primary" :loading="busy" @click="confirmPlan">Confirm plan <Check :size="15" /></el-button><el-button v-else-if="candidate.status === 'READY'" type="primary" :loading="busy" @click="enqueuePlan">Enqueue plan <ArrowDown :size="15" /></el-button><span v-else class="confirmed-note"><CircleCheck :size="15" /> {{ statusLabel(candidate.status) }}</span></div></article>
         <div v-if="dispatched.length" class="timeline-marker plan-marker"><span>DISPATCHED PLAN TIMELINE</span></div>
@@ -429,8 +517,12 @@ onBeforeUnmount(closeEvents);
           <el-button v-if="pendingInput" type="primary" plain @click="openInputRequest">Answer</el-button>
         </article>
         <div class="timeline-marker"><span>THREAD READY FOR YOUR NEXT TURN</span></div>
-        <template v-for="turn in turns" :key="turn.id">
-          <article :id="`message-${turn.id}`" :data-nav-key="`message-${turn.id}`" :aria-busy="isExplorerTurnProcessing(turn) ? 'true' : undefined" :class="['message-card', turn.role === 'user' ? 'user-message' : 'assistant-message', turn.status === 'FAILED' ? 'failed-message' : '', isExplorerTurnProcessing(turn) ? 'processing-message' : '']"><div :class="['message-avatar', turn.role === 'user' ? 'user-avatar' : 'agent-avatar']">{{ turn.role === 'user' ? 'LS' : '' }}<span v-if="turn.role === 'assistant'" :class="['brand-dot', { 'brand-dot-processing': isExplorerTurnProcessing(turn) }]" /></div><div class="message-body"><div class="message-meta"><strong>{{ turn.role === 'user' ? 'You' : 'Plan Explorer' }}</strong><span v-if="turn.role === 'assistant'" :class="['agent-chip', { 'processing-chip': isExplorerTurnProcessing(turn) }]"><span v-if="isExplorerTurnProcessing(turn)" class="processing-dot" aria-hidden="true" />{{ turn.status === 'FAILED' ? 'Failed' : turn.status === 'WAITING_FOR_INPUT' ? 'Waiting for input' : turn.status === 'RUNNING' ? 'Running' : 'Read only' }}</span><span>{{ formatTurnTime(turn.createdAt) }}</span></div><p :aria-live="isExplorerTurnProcessing(turn) ? 'polite' : undefined">{{ turnContent(turn) }}<span v-if="isExplorerTurnProcessing(turn)" class="processing-dots" aria-hidden="true"><i /><i /><i /></span></p></div></article>
+        <template v-for="(item, index) in visibleActivity" :key="item.id">
+          <article v-if="item.kind === 'USER_MESSAGE' || item.kind === 'ASSISTANT_MESSAGE'" :id="activityTarget(item, index)" :data-nav-key="`message-${item.turnId}`" :class="['message-card', item.kind === 'USER_MESSAGE' ? 'user-message' : 'assistant-message', item.status === 'FAILED' ? 'failed-message' : '', item.status === 'RUNNING' ? 'processing-message' : '']">
+            <div :class="['message-avatar', item.kind === 'USER_MESSAGE' ? 'user-avatar' : 'agent-avatar']">{{ item.kind === 'USER_MESSAGE' ? 'LS' : '' }}<span v-if="item.kind === 'ASSISTANT_MESSAGE'" :class="['brand-dot', { 'brand-dot-processing': item.status === 'RUNNING' }]" /></div>
+            <div class="message-body"><div class="message-meta"><strong>{{ item.title }}</strong><span v-if="item.kind === 'ASSISTANT_MESSAGE'" :class="['agent-chip', { 'processing-chip': item.status === 'RUNNING' }]">{{ item.status === 'RUNNING' ? 'Running' : item.status === 'FAILED' ? 'Failed' : 'Read only' }}</span><span>{{ formatTurnTime(item.occurredAt) }}</span></div><p :aria-live="item.status === 'RUNNING' ? 'polite' : undefined">{{ item.summary }}<span v-if="item.status === 'RUNNING'" class="processing-dots" aria-hidden="true"><i /><i /><i /></span></p></div>
+          </article>
+          <article v-else :id="activityTarget(item, index)" class="loop-activity-card" :class="{ waiting: item.status === 'WAITING', failed: item.status === 'FAILED' }"><div class="loop-activity-icon"><InfoFilled v-if="activityIconKind(item.kind) === 'info'" :size="14" /><Check v-else-if="activityIconKind(item.kind) === 'success'" :size="14" /><Warning v-else :size="14" /></div><div class="loop-activity-copy"><div class="loop-activity-meta"><strong>{{ activityKindLabel(item.kind) }}</strong><span>{{ formatTurnTime(item.occurredAt) }}</span><span class="agent-chip">{{ activityStatusLabel(item) }}</span></div><p>{{ item.summary }}</p><code v-if="typeof item.details?.tool === 'string'">{{ item.details.tool }}</code></div></article>
         </template>
       </div>
       <button v-if="showScrollToLatest" class="scroll-to-latest" type="button" aria-label="Scroll to latest message" title="Scroll to latest message" @click="jumpToLatest"><img class="scroll-to-latest-image" :src="scrollToLatestIcon" alt="" /></button>
@@ -444,6 +536,7 @@ onBeforeUnmount(closeEvents);
       <div class="composer"><div class="composer-input"><textarea v-model="draft" :disabled="explorerPaused || busy" aria-label="Explorer message" placeholder="继续探索，或提出修改…" @keydown="handleComposerKeydown" /><span class="composer-mode">Plan Mode</span></div><div class="composer-footer"><div class="composer-metadata" aria-label="模型与上下文信息"><span class="composer-fact"><small>MODEL</small><strong>{{ explorerModel }}</strong></span><span class="composer-fact"><small>CONTEXT</small><strong>{{ contextUsage }}</strong><em>estimated</em></span><el-popover v-model:visible="statusOpen" placement="top-end" :width="330" trigger="click"><template #reference><button class="composer-status-trigger" type="button" aria-label="Status" :aria-expanded="statusOpen"><i aria-hidden="true" /><span>STATUS</span><InfoFilled :size="12" /></button></template><div class="codex-status-popover" role="dialog" aria-label="Codex usage status"><div class="codex-status-title"><InfoFilled :size="14" /><strong>状态</strong><button type="button" aria-label="关闭" @click="statusOpen = false">关闭</button></div><div class="codex-status-row"><span>模型：</span><strong>{{ explorerModel }}</strong></div><div class="codex-status-row"><span>会话/对话串：</span><code :title="thread?.id ?? 'thread-demo'">{{ conversationId }}</code></div><div class="codex-status-row"><span>背景信息：</span><strong>{{ contextUsage }}</strong><em>estimated</em></div><div class="codex-status-row"><span>5 小时限额：</span><strong>{{ rateLimits.fiveHour.remaining }}</strong><small>{{ rateLimits.fiveHour.reset }}</small></div><div class="codex-status-row"><span>7 天限额：</span><strong>{{ rateLimits.sevenDay.remaining }}</strong><small>{{ rateLimits.sevenDay.reset }}</small></div><p class="codex-status-note">当前服务未提供 Codex 速率限制遥测。</p></div></el-popover></div><span v-if="sendingTurn" class="composer-status" role="status" aria-live="polite">Message sent · waiting for Plan Explorer…</span><el-button class="composer-send" type="primary" circle :loading="busy" :disabled="!draft.trim() || explorerPaused || busy" aria-label="Send message" title="Send message" @click="sendTurn"><ArrowUp :size="18" /></el-button></div></div>
     </section>
     <aside class="context-panel"><div class="context-header"><div><div class="eyebrow">THREAD CONTEXT</div><h2>Working set</h2></div><el-button text circle aria-label="Refresh" @click="refreshThread"><Refresh :size="16" /></el-button></div><div class="context-section"><div class="context-section-title">CURRENT CANDIDATE <span>{{ candidateCount }}</span></div><div class="mini-plan" v-if="candidate" @click="drawerOpen = true"><div class="mini-plan-title"><span class="mini-icon"><Promotion :size="14" /></span><strong>{{ candidate.title }}</strong></div><div class="mini-plan-meta"><el-tag size="small" type="warning" effect="light">{{ statusLabel(candidate.status) }}</el-tag><span>Rev {{ candidate.revision }}</span></div><div class="mini-plan-link">View full plan <Right :size="13" /></div></div><div v-else class="context-empty compact"><CircleCheck :size="20" /><p>No candidate plan</p><small>Use Plan candidates to create a reviewable plan.</small></div></div><div class="context-section"><div class="context-section-title">DISPATCHED PLANS <span>{{ dispatched.length }}</span></div><div v-if="dispatched.length === 0" class="context-empty"><CircleCheck :size="20" /><p>No plans dispatched from this thread yet.</p><small>Confirmed plans will appear here and remain queryable even when the model is offline.</small></div><div v-else v-for="plan in dispatched" :key="plan.planId ?? plan.id" class="mini-plan dispatched"><div class="mini-plan-title"><span class="mini-icon success"><CircleCheck :size="14" /></span><strong>{{ plan.title }}</strong></div><div class="mini-plan-meta"><el-tag size="small" type="success" effect="light">{{ statusLabel(plan.status) }}</el-tag><span>Rev {{ plan.revision }}</span></div></div></div><div class="context-section context-memory"><div class="context-section-title">THREAD MEMORY</div><div class="memory-row"><span class="memory-icon">◎</span><div><strong>Context summary</strong><small>Updated just now</small></div><Right :size="14" /></div><div class="memory-row"><span class="memory-icon">↗</span><div><strong>Successor threads</strong><small>None yet</small></div><Right :size="14" /></div></div></aside>
+    <ExplorerHistoryDrawer v-model="historyOpen" :explorers="explorers" :current-id="thread?.id ?? null" @select="selectExplorer" @create="createExplorer" />
     <PlanDetailDrawer v-model="drawerOpen" :plan="candidate" @confirm="confirmPlan" @enqueue="enqueuePlan" />
     <ExplorerInputDialog ref="inputDialog" v-model="inputDialogOpen" :request="pendingInput" @submit="submitInput" @cancel="cancelInput" />
     <ExplorerPolicyDrawer :model-value="policyOpen" @update:model-value="setPolicyOpen" />

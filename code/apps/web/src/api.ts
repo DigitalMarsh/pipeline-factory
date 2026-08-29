@@ -1,4 +1,4 @@
-import type { AgentLoop, AgentLoopStep, ExecutionThread, ExplorerInputRequest, ExplorerThread, ExplorerTurn, MergeRequest, Plan, Run, VerificationRun } from "./types";
+import type { AgentLoop, AgentLoopStep, ExecutionThread, ExplorerActivityItem, ExplorerInputRequest, ExplorerThread, ExplorerTurn, MergeRequest, Plan, Run, VerificationRun } from "./types";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const headers = { ...(init?.headers ?? {}) } as Record<string, string>;
@@ -10,6 +10,16 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => request<{ status: string; model: string }>("/health"),
+  explorers: (projectId: string) => request<{ items: ExplorerThread[] }>(`/api/v4/projects/${projectId}/explorers`),
+  createExplorer: (projectId: string, title?: string, originThreadId?: string) => request<{ explorer: ExplorerThread }>(`/api/v4/projects/${projectId}/explorers`, { method: "POST", body: JSON.stringify({ ...(title ? { title } : {}), ...(originThreadId ? { originThreadId } : {}) }) }),
+  explorer: (projectId: string, explorerId: string) => request<{ explorer: ExplorerThread }>(`/api/v4/projects/${projectId}/explorers/${encodeURIComponent(explorerId)}`),
+  archiveExplorer: (projectId: string, explorerId: string) => request<{ explorer: ExplorerThread }>(`/api/v4/projects/${projectId}/explorers/${encodeURIComponent(explorerId)}/archive`, { method: "POST" }),
+  activateExplorer: (projectId: string, explorerId: string) => request<{ explorer: ExplorerThread }>(`/api/v4/projects/${projectId}/explorers/${encodeURIComponent(explorerId)}/activate`, { method: "POST" }),
+  renameExplorer: (projectId: string, explorerId: string, title: string) => request<{ explorer: ExplorerThread }>(`/api/v4/projects/${projectId}/explorers/${encodeURIComponent(explorerId)}/rename`, { method: "POST", body: JSON.stringify({ title }) }),
+  explorerActivity: (projectId: string, explorerId: string) => request<{ items: ExplorerActivityItem[]; lastEventSequence: number }>(`/api/v4/projects/${projectId}/explorers/${encodeURIComponent(explorerId)}/activity`),
+  explorerPlans: (projectId: string, explorerId: string, query = "") => request<{ items: Plan[]; nextCursor: string | null }>(`/api/v4/projects/${projectId}/explorers/${encodeURIComponent(explorerId)}/plans${query}`),
+  explorerCandidate: (projectId: string, explorerId: string) => request<{ plan: Plan }>(`/api/v4/projects/${projectId}/explorers/${encodeURIComponent(explorerId)}/candidate`),
+  createExplorerCandidate: (projectId: string, explorerId: string, title: string) => request<{ plan: Plan }>(`/api/v4/projects/${projectId}/explorers/${encodeURIComponent(explorerId)}/candidate`, { method: "POST", body: JSON.stringify({ title }) }),
   thread: (projectId: string) => request<{ thread: ExplorerThread }>(`/api/v3/projects/${projectId}/explorer-thread`),
   turns: (projectId: string) => request<{ items: ExplorerTurn[] }>(`/api/v3/projects/${projectId}/explorer-thread/turns`),
   sendTurn: (projectId: string, content: string) => request<{ turn: { user: ExplorerTurn; assistant: ExplorerTurn } }>(`/api/v3/projects/${projectId}/explorer-thread/turns`, { method: "POST", body: JSON.stringify({ content }) }),

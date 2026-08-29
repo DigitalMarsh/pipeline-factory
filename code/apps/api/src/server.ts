@@ -5,6 +5,7 @@ import {
   MergeService,
   SqlitePipelineStore,
   Scheduler,
+  ExplorerService,
   ExplorerThreadService,
   LifecycleHookRunner,
   LocalGitWorktreeAdapter,
@@ -27,11 +28,16 @@ import {
   type AgentLoopRunner,
   type PlanContract,
 } from "@pipeline-factory/domain";
+import { projectExplorerActivity } from "@pipeline-factory/domain";
 import { z } from "zod";
 import type { FactoryConfig } from "./config.js";
 
 const planIdParams = z.object({ planId: z.string().min(1) });
 const projectThreadParams = z.object({ projectId: z.string().min(1) });
+const projectExplorerParams = z.object({ projectId: z.string().min(1), explorerId: z.string().min(1) });
+const explorerCreateBody = z.object({ title: z.string().trim().min(1).max(200).optional(), originThreadId: z.string().min(1).optional() });
+const explorerRenameBody = z.object({ title: z.string().trim().min(1).max(200) });
+const explorerActivityQuery = z.object({ afterSequence: z.coerce.number().int().nonnegative().optional() });
 const threadPlanQuery = z.object({
   status: z.string().optional(),
   q: z.string().optional(),
@@ -80,6 +86,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
   const store = options.store ?? new SqlitePipelineStore(options.databasePath ?? options.config?.storage.databasePath ?? "pipeline-factory.sqlite");
   new RecoveryCoordinator(store).recover();
   const plans = new PlanService(store);
+  const explorers = new ExplorerService(store);
   const changeProposals = new ChangeProposalService(store);
   const verifier = new VerificationService(store);
   const merger = options.mergeService ?? new MergeService(store);
@@ -219,6 +226,107 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (!thread) return reply.code(404).send({ error: "ExplorerThread not found" });
     const turnIds = new Set(store.listTurns(thread.id).map((turn) => turn.id));
     return { items: store.listAgentLoops().filter((loop) => loop.ownerType === "explorer-turn" && turnIds.has(loop.ownerId)) };
+  });
+
+  app.post("/api/v4/projects/:projectId/explorers", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    const body = explorerCreateBody.safeParse(request.body ?? {});
+    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid Explorer creation request" });
+    try {
+      const explorer = explorers.create({ projectId: params.data.projectId, ...(body.data.title ? { title: body.data.title } : {}), ...(body.data.originThreadId ? { originThreadId: body.data.originThreadId } : {}) });
+      return reply.code(201).send({ explorer });
+    } catch (error) {
+      return reply.code(409).send({ error: error instanceof Error ? error.message : "Explorer cannot be created" });
+    }
+  });
+
+  app.get("/api/v4/projects/:projectId/explorers", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    return { items: explorers.list(params.data.projectId) };
+  });
+
+  app.get("/api/v4/projects/:projectId/explorers/:explorerId", async (request, reply) => {
+    const params = projectExplorerParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    const explorer = store.getThread(params.data.explorerId);
+    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
+    return { explorer };
+  });
+
+  app.post("/api/v4/projects/:projectId/explorers/:explorerId/archive", async (request, reply) => {
+    const params = projectExplorerParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    const explorer = store.getThread(params.data.explorerId);
+    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
+    return { explorer: explorers.archive(explorer.id) };
+  });
+
+  app.post("/api/v4/projects/:projectId/explorers/:explorerId/activate", async (request, reply) => {
+    const params = projectExplorerParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    const explorer = store.getThread(params.data.explorerId);
+    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
+    return { explorer: explorers.activate(explorer.id) };
+  });
+
+  app.post("/api/v4/projects/:projectId/explorers/:explorerId/rename", async (request, reply) => {
+    const params = projectExplorerParams.safeParse(request.params);
+    const body = explorerRenameBody.safeParse(request.body ?? {});
+    if (!params.success || !body.success) return reply.code(400).send({ error: "Explorer title is required" });
+    const explorer = store.getThread(params.data.explorerId);
+    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
+    return { explorer: explorers.rename(explorer.id, body.data.title) };
+  });
+
+  app.get("/api/v4/projects/:projectId/explorers/:explorerId/activity", async (request, reply) => {
+    const params = projectExplorerParams.safeParse(request.params);
+    const query = explorerActivityQuery.safeParse(request.query);
+    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid Explorer activity query" });
+    const explorer = store.getThread(params.data.explorerId);
+    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
+    const turns = store.listTurns(explorer.id);
+    const turnIds = new Set(turns.map((turn) => turn.id));
+    const loops = store.listAgentLoops().filter((loop) => loop.ownerType === "explorer-turn" && turnIds.has(loop.ownerId));
+    const loopIds = new Set(loops.map((loop) => loop.id));
+    const steps = loops.flatMap((loop) => store.listAgentLoopSteps(loop.id)).filter((step) => loopIds.has(step.loopId));
+    const items = projectExplorerActivity({ turns, loops, steps }).filter((item) => !query.data.afterSequence || item.sequence > query.data.afterSequence);
+    return { items, lastEventSequence: store.getLastEventSequence(explorer.id) };
+  });
+
+  app.get("/api/v4/projects/:projectId/explorers/:explorerId/plans", async (request, reply) => {
+    const params = projectExplorerParams.safeParse(request.params);
+    const query = threadPlanQuery.safeParse(request.query);
+    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid Explorer plan query" });
+    const explorer = store.getThread(params.data.explorerId);
+    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
+    const statuses = query.data.status?.split(",").filter(Boolean) as PlanStatus[] | undefined;
+    const rows = plans
+      .listThreadPlans(explorer.id)
+      .filter((row) => !statuses?.length || statuses.includes(row.status))
+      .filter((row) => !query.data.q || `${row.planId} ${row.title}`.toLowerCase().includes(query.data.q.toLowerCase()))
+      .sort((a, b) => query.data.sort === "last_event_at" ? b.lastEventAt.localeCompare(a.lastEventAt) : b.queuedAt.localeCompare(a.queuedAt))
+      .slice(0, query.data.limit);
+    return { items: rows, nextCursor: null };
+  });
+
+  app.get("/api/v4/projects/:projectId/explorers/:explorerId/candidate", async (request, reply) => {
+    const params = projectExplorerParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    const explorer = store.getThread(params.data.explorerId);
+    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
+    const candidate = store.listPlans().filter((plan) => plan.sourceExplorerThreadId === explorer.id && plan.queuedAt === null).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+    if (!candidate) return reply.code(404).send({ error: "Candidate plan not found" });
+    return { plan: candidate };
+  });
+
+  app.post("/api/v4/projects/:projectId/explorers/:explorerId/candidate", async (request, reply) => {
+    const params = projectExplorerParams.safeParse(request.params);
+    const body = z.object({ title: z.string().trim().min(1).max(200) }).safeParse(request.body ?? {});
+    if (!params.success || !body.success) return reply.code(400).send({ error: "Candidate plan title is required" });
+    const explorer = store.getThread(params.data.explorerId);
+    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
+    return reply.code(201).send({ plan: plans.createCandidatePlan({ projectId: explorer.projectId, sourceExplorerThreadId: explorer.id, title: body.data.title }) });
   });
 
   app.get("/api/v3/projects/:projectId/explorer-thread", async (request, reply) => {

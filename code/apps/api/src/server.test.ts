@@ -255,4 +255,43 @@ describe("Pipeline Factory v3 API", () => {
     expect(candidate.json().plan).toMatchObject({ title: "API generated plan", status: "DRAFT" });
     expect(store.getThread("thread-1")).toMatchObject({ exploration: { status: "READY" } });
   });
+
+  it("creates and lists isolated business Explorers without reusing the old context", async () => {
+    const store = new InMemoryPipelineStore();
+    store.saveThread({ id: "old-explorer", projectId: "project-1", parentThreadId: null, title: "Old exploration", providerThreadId: "provider-old" });
+    store.saveTurn({ id: "old-turn", threadId: "old-explorer", role: "user", content: "old plan", status: "COMPLETED", createdAt: store.now(), sequence: 1 });
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+
+    const created = await app.inject({ method: "POST", url: "/api/v4/projects/project-1/explorers", payload: { title: "Fresh requirement" } });
+    expect(created.statusCode).toBe(201);
+    const fresh = created.json().explorer;
+    expect(fresh).toMatchObject({ projectId: "project-1", title: "Fresh requirement", contextMode: "FRESH", providerThreadId: null });
+    expect(store.listTurns(fresh.id)).toEqual([]);
+
+    const listed = await app.inject({ method: "GET", url: "/api/v4/projects/project-1/explorers" });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json().items.map((item: { id: string }) => item.id)).toContain(fresh.id);
+    const archived = await app.inject({ method: "POST", url: `/api/v4/projects/project-1/explorers/${fresh.id}/archive` });
+    expect(archived.statusCode).toBe(200);
+    expect(archived.json().explorer.state).toBe("ARCHIVED");
+    expect(store.listTurns(fresh.id)).toEqual([]);
+  });
+
+  it("projects Agent Loop steps as ordered Explorer activity items", async () => {
+    const store = new InMemoryPipelineStore();
+    store.saveThread({ id: "explorer-1", projectId: "project-1", parentThreadId: null });
+    store.saveTurn({ id: "user-1", threadId: "explorer-1", role: "user", content: "hello", status: "COMPLETED", createdAt: "2026-08-29T10:00:00.000Z", sequence: 1 });
+    store.saveTurn({ id: "assistant-1", threadId: "explorer-1", role: "assistant", content: "hello", status: "COMPLETED", createdAt: "2026-08-29T10:00:01.000Z", sequence: 2 });
+    store.saveAgentLoop({ id: "loop-1", ownerType: "explorer-turn", ownerId: "assistant-1", role: "explorer", mode: "provider-controlled", state: "COMPLETED", stepCount: 1, maxSteps: 40, startedAt: "2026-08-29T10:00:00.500Z", completedAt: "2026-08-29T10:00:02.000Z", providerThreadId: null, providerTurnId: null, checkpointJson: null });
+    store.appendAgentLoopStep({ loopId: "loop-1", stepType: "MODEL_TEXT_DELTA", status: "COMPLETED", payload: { text: "hello" }, occurredAt: "2026-08-29T10:00:01.000Z" });
+    store.appendAgentLoopStep({ loopId: "loop-1", stepType: "TOOL_REQUESTED", status: "RUNNING", callId: "call-1", payload: { tool: "read_file" }, occurredAt: "2026-08-29T10:00:01.100Z" });
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+
+    const response = await app.inject({ method: "GET", url: "/api/v4/projects/project-1/explorers/explorer-1/activity" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().items.map((item: { kind: string }) => item.kind)).toEqual(["USER_MESSAGE", "ASSISTANT_MESSAGE", "TOOL_STARTED"]);
+  });
 });

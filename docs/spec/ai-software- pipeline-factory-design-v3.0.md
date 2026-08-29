@@ -725,6 +725,169 @@ idempotency_keys
 
 v3 不直接读取旧版本 Artifact；历史数据如需保留，必须经过显式转换并标记 schema 来源。旧运行记录不能作为 v3 活动 Run 的恢复来源。
 
+## 14. v4 Codex Plan Mode 结构化交互
+
+v4 保留 v3 的对象、状态和同步 API，并新增异步 Explorer 交互协议。结构化提问必须来自 Codex App Server 原生的带 JSON-RPC `id` 的 `item/tool/requestUserInput` 服务端请求；Factory 不解析模型自然语言中的“请选择”。ExplorerThread 创建 Provider Thread 时固定使用 `collaborationMode: { mode: "plan" }`、`sandbox: "read-only"` 和 `approvalPolicy: "never"`。Executor 继续使用 `gpt-5.6-luna` 的独立角色配置。当前 Codex CLI 0.149.0 使用 `default_mode_request_user_input` feature；配置升级时应先以 `codex features list` 检查本机名称，不能使用当前 CLI 不认识的 flag，否则 App Server 会在首次 Turn 前退出。
+
+### 14.1 数据流和边界
+
+```text
+Vue Composer
+  └─ POST /api/v4/.../turns (202)
+      └─ ExplorerThreadService.startTurn
+          └─ ModelGateway.stream
+              └─ Codex App Server item/tool/requestUserInput (JSON-RPC id)
+                  └─ explorer_input_requests + SSE turn.input_required
+                      └─ Vue blocking dialog / answer card
+                          └─ POST .../answer
+                              └─ ModelGateway.answerUserInput
+                                  └─ same Provider Turn continues
+```
+
+v4 `ModelGateway` 增加 `answerUserInput` 和 `cancel`。`ModelEvent` 增加 `turn.input_required`，其中保留 `requestId`、Provider thread/turn、item、问题、选项、阻塞标识和自动解析超时。App Server 客户端区分三种 JSON-RPC 消息：普通响应、带 `id` 的服务端请求和无 `id` 的通知，并通过 `respond(requestId, result)` 返回：
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "server-request-id",
+  "result": {
+    "answers": {
+      "question-id": { "answers": ["selected option"] }
+    }
+  }
+}
+```
+
+Explorer 仍不能写文件、执行 Shell、运行测试或提交。`openai-responses` 只保留文本能力；若调用其结构化答案接口，必须返回明确的不支持错误。
+
+### 14.2 输入请求状态和答案规则
+
+`ExplorerThread` 新增 `WAITING_FOR_INPUT`，`ExplorerTurn` 新增 `RUNNING` 和 `WAITING_FOR_INPUT`。`ExplorerInputRequest` 状态为 `OPEN`、`SUBMITTING`、`ANSWERED`、`CANCELLED`、`AUTO_RESOLVED` 或 `RECOVERY_REQUIRED`。每个线程同时只能有一个活动 Turn 和一个阻塞 `OPEN` 请求。
+
+- 问题 ID 必须在请求声明中；未知 ID 拒绝。
+- 有选项的问题只接受声明的 `options[].label`，多选仍以 `answers: string[]` 传递。
+- `isOther=true` 允许且只允许一个自定义答案。
+- 必填问题不能为空；敏感题使用密码输入控件。
+- 敏感答案不写入普通消息、事件、日志、审计正文或 SQLite；只保存状态、答案数量和 `secret=true` 摘要。
+- 阻塞问题使用不可通过遮罩或 Escape 关闭的居中弹窗；取消本轮调用 `turn/interrupt`。
+- 答案响应不确定时返回 `503`，请求置为 `RECOVERY_REQUIRED`，禁止自动重复提交。
+
+### 14.3 v4 REST 和 SSE
+
+```text
+POST /api/v4/projects/:projectId/explorer-thread/turns
+GET  /api/v4/projects/:projectId/explorer-thread/turns
+GET  /api/v4/projects/:projectId/explorer-thread/input-requests
+POST /api/v4/projects/:projectId/explorer-thread/input-requests/:requestId/answer
+POST /api/v4/projects/:projectId/explorer-thread/turns/:turnId/cancel
+GET  /api/v4/projects/:projectId/explorer-thread/events
+```
+
+发送 Turn 必须带 `threadId`、`content` 和 `clientTurnId`，接口先写用户消息和 assistant `RUNNING` 占位并返回 `202`。SSE 事件包括 `turn.accepted`、`turn.text.delta`、`turn.input_required`、`turn.input.resolved`、`turn.completed`、`turn.failed`、`turn.cancelled` 和 `thread.state.changed`。服务先按 `Last-Event-ID` 回放 `domain_events.sequence`，再订阅实时事件，每 15 秒发送心跳；断开时清理订阅。
+
+重复 `clientTurnId`、重复答案 `clientRequestId` 和重复 Provider `requestId` 必须返回第一次结果，不重复创建 Turn 或请求。v3 `/api/v3` 不改变原有同步响应；当同步模型收到结构化请求时安全中断并返回 `409 STRUCTURED_INPUT_REQUIRES_V4`。
+
+### 14.4 页面交互
+
+ExplorerThread 页面加载顺序为：加载 Turns、加载未完成输入请求、连接 SSE。发送后自己的消息立即出现，assistant 显示 `Running`。`isBlocking=true` 自动打开选择弹窗；非阻塞请求显示时间线卡片和“回答”按钮。弹窗支持多问题、单选/多选、其他文本、密码输入、提交禁用和取消本轮；提交成功后关闭弹窗并在时间线显示“已提交选择”，失败则保留弹窗并提供重试。刷新或 SSE 断线重连后通过数据库状态恢复未完成问题，不重复消息。
+
+### 14.5 v4 持久化和恢复
+
+新增 `explorer_input_requests` 和 `idempotency_keys` 表；`domain_events` 增加唯一 `sequence`。输入请求唯一约束为 `(provider_thread_id, provider_turn_id, provider_request_id)`。服务启动时，未能恢复当前 Provider Turn 的 `OPEN/SUBMITTING` 请求进入 `RECOVERY_REQUIRED`；用户可以查看原因，但 Factory 不自动重复可能产生副作用的答案响应。SQLite 继续使用 WAL，事件和请求状态均可用于重建时间线和 Needs Attention。
+
+### 14.6 需求级持续探索与完整性门禁
+
+一次 `turn.completed` 只表示当前 Provider Turn 已结束，不表示需求设计已经完成。`ExplorerThreadService` 在每次模型回合结束后执行 `PlanCompletionAssessment`，维护线程级探索进度：
+
+```text
+INCOMPLETE
+  ├─ 记录已确认决策
+  ├─ 列出仍缺少的设计区域
+  └─ 自动发起内部续探索或等待用户下一轮说明
+
+READY
+  ├─ 校验完整 pipeline-factory-plan 协议块
+  ├─ 生成 DRAFT CandidatePlan
+  └─ 允许用户 View full plan → Confirm plan → Enqueue plan
+```
+
+完整性门禁至少检查目标、范围、技术约束、数据与安全、验收与验证、任务与依赖、冲突键、Executor ToolPolicy、修复上限以及合并策略。模型必须使用原生 `item/tool/requestUserInput` 承载需要用户决定的问题，并把当前可同时确认的问题合并到一个请求中；普通文本中的“请选择”不参与门禁，也不会触发弹窗。
+
+模型回合返回普通说明但没有完整协议块时，Factory 使用内部 `continuationPrompt` 在同一个本地 Explorer Turn 中继续调用同一 Provider Thread，不新增用户可见的伪消息。结构化问题到达时仍暂停该本地 Turn，答案提交后继续原 Provider Turn；原 Provider Turn 完成后再执行完整性门禁。达到 `runtime.maxAutoContinuationTurns` 后，Turn 可以正常结束，但线程明确保持 `INCOMPLETE`，CandidatePlan 不生成，用户可以继续发送补充说明。
+
+完整协议块格式如下，协议标记不会展示在用户消息正文中：
+
+```text
+<pipeline-factory-plan-status>READY</pipeline-factory-plan-status>
+<pipeline-factory-plan>{严格 JSON 的完整 PlanContract 与 title}</pipeline-factory-plan>
+```
+
+只有协议状态为 `READY` 且契约所有字段通过校验时，线程才转为 `READY` 并创建 CandidatePlan。CandidatePlan 保存模型生成的契约，而不是使用占位默认值；Confirm 与 Enqueue 仍是两个独立的人工边界。
+
+## 15. Agent Loop 一体化运行时
+
+v3 的 Pipeline Flow（Plan → Run → Verify → Merge）与内部 Agent Loop 是两层不同的控制面。Pipeline Flow 负责不可变的 PlanRevision、Run、ExecutionThread、VerificationRun 和 MergeRequest 事实；Agent Loop 负责单个 Explorer Turn 或 Run 内的模型步骤、工具循环、结构化输入、checkpoint、上下文压缩和终止门禁。执行线程只能追加 Journal，不能回写已确认的 PlanRevision，也不能把模型自报完成直接提升为系统完成。
+
+### 15.1 Loop 所有权
+
+```text
+ExplorerThread / ExplorerTurn ──► Explorer AgentLoop ──► CandidatePlan Gate
+Run / ExecutionThread ──────────► Executor AgentLoop ──► TaskProgressGate
+                                                              │
+                                                              ▼
+                                           Deterministic Verifier ──► Review/Merge
+```
+
+系统支持两种互斥的循环所有权：
+
+- `provider-controlled`：Codex App Server 自己执行内部工具循环。Factory 只消费文本、原生 `requestUserInput`、取消和生命周期事件；若 Provider 没有可拦截的工具事件，Factory 不把它伪装成 Factory-controlled，也不会重复执行 Provider 工具。
+- `factory-controlled`：ModelGateway 必须声明 `supportsToolCalls=true`，Factory 才能把 `tool.call` 交给 ToolRuntime/ToolGateway，记录结果并作为下一步模型输入。能力不足时 Loop 以 `MODEL_CAPABILITY_UNAVAILABLE` fail closed。
+
+Explorer 固定使用 `provider-controlled`、`collaborationMode.mode=plan`、`sandbox=read-only`、`approvalPolicy=never`，只能访问仓库和 Git 只读工具。Executor 默认使用同一个 `gpt-5.6-luna` 角色配置和 Provider-controlled 模式；若未来切换 Factory-controlled，必须为该角色显式提供工具调用能力。两种模式不能嵌套。
+
+### 15.2 AgentLoop 状态、步骤和门禁
+
+每个 Loop 持久化 `agent_loops` 与追加式 `agent_loop_steps`。Step 至少包含模型开始/文本增量/完成、工具请求/拒绝/完成、结构化输入、上下文压缩、门禁检查、暂停/恢复和终止结果。每次模型请求前检查最大步骤、最大时长、取消信号、Lease 和上下文预算；重复工具调用、无进展、工具超时和未知副作用达到限制即停止。
+
+Explorer 使用 `PlanCompletenessGate`，必须同时具备目标、范围、排除项、基线 Branch/Commit、任务依赖、冲突键、验收和验证命令、Executor ToolPolicy、修复上限、人工合并策略以及正确的 Artifact hash，才生成完整 CandidatePlan。普通文本中的“请选择”永远不转换为结构化问题。
+
+Executor 使用 `TaskProgressGate`，要求任务及依赖已完成、无未解决工具调用、无待处理 ChangeProposal、所有修改在 include 范围内、有结构化执行报告且无受保护文件变更，才允许进入 `READY_FOR_VERIFY`。Verifier 脱离模型上下文执行登记命令；验证失败可以在同一 ExecutionThread 内有限修复，超过上限进入 `BLOCKED`。
+
+### 15.3 恢复、取消和未知副作用
+
+服务重启时扫描未完成 Loop：没有活动 Provider Turn 的 `RUNNING` Loop 转为 `RECOVERING`，未完成结构化问题转为 `RECOVERY_REQUIRED`；`UNKNOWN` 或 `NEEDS_RECONCILIATION` 工具调用禁止自动重放。答案提交只有在 App Server 明确接受后才把请求标记为 `ANSWERED`，响应不确定时返回 `503` 并保留人工处理状态。暂停先阻止新 Step，取消先中断当前 Provider Turn，之后才写入终止事实。恢复使用 checkpoint、最近任务状态、未完成门禁和最后事件序列，而不是只依赖完整聊天记录。
+
+### 15.4 ChangeProposal 与事实边界
+
+执行中发现范围、依赖或验收不足时创建 `ChangeProposal`，原 Run 进入 `NEEDS_PLAN_CHANGE`，原 PlanRevision 和 ExecutionJournal 保持不可变。人工批准后，Factory 生成新的不可变 PlanRevision，重新排队同一 Plan 的新 revision，并由 Scheduler 创建新的 Run；旧 Run 不能切换 revision，也不能被覆盖。批准操作使用 proposal ID 幂等，重复批准不生成第二个 revision 或 Run。
+
+### 15.5 管理 API 与可观测性
+
+`GET /api/v4/agent-loops/:loopId`、`steps`、`events`、`pause`、`resume`、`cancel` 用于查看和控制 Loop。`events` 在 `Accept: text/event-stream` 时返回按数据库全局序列编号的 SSE，并按 `Last-Event-ID` 先回放再轮询实时事件；不带 SSE Accept 时返回 JSON，便于管理页面诊断。Explorer 页面展示当前 Loop 状态、步骤预算和等待原因；Run 页面展示 Executor Loop、工具调用、结构化报告、验证结果和终止门禁。任何 `BLOCKED`、`RECOVERING`、`NEEDS_RECONCILIATION` 或能力不足都必须进入 Needs Attention，而不是显示为成功。
+
+### 15.6 配置
+
+```json
+{
+  "model": {
+    "backend": "codex-app-server",
+    "roles": {
+      "explorer": { "model": "gpt-5.6-luna", "mode": "plan", "loopMode": "provider-controlled", "temperature": 0.1 },
+      "executor": { "model": "gpt-5.6-luna", "mode": "default", "loopMode": "provider-controlled", "temperature": 0 }
+    },
+    "loop": {
+      "maxSteps": 40,
+      "maxDurationMs": 1800000,
+      "maxRepeatedToolCalls": 2,
+      "maxNoProgressSteps": 3,
+      "requireFactoryToolGatewayForExecutor": false
+    }
+  }
+}
+```
+
+配置只从 JSON 文件读取，不使用环境变量。`runtime.maxAutoContinuationTurns` 仍可读取以兼容旧配置，但新实现以 `model.loop.maxSteps` 作为 Agent Loop 的步骤预算。
+
 ## 13. 验收标准
 
 ### 13.1 技术栈

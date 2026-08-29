@@ -1,6 +1,8 @@
 import type { AgentLoop, AgentLoopEvent, AgentLoopRunner, AgentLoopStep, AgentLoopStepInput } from "./agent-loop.js";
 import { AgentLoopEngine } from "./agent-loop.js";
 import { PlanCompletenessGate } from "./termination-gates.js";
+export { projectExplorerActivity } from "./explorer-activity.js";
+export type { ExplorerActivityInput, ExplorerActivityItem, ExplorerActivityKind } from "./explorer-activity.js";
 
 export type { AgentLoop, AgentLoopInput, AgentLoopMode, AgentLoopResult, AgentLoopState, AgentLoopStep, AgentLoopStepInput, AgentLoopStepStatus, AgentLoopRunner, AgentStepType, GateContext, GateDecision, TerminationGate } from "./agent-loop.js";
 export { AgentLoopEngine } from "./agent-loop.js";
@@ -55,6 +57,9 @@ export const EXPLORER_PLAN_INSTRUCTIONS = `
 export type ExplorerThread = {
   id: string;
   projectId: string;
+  title: string;
+  contextMode: "FRESH" | "EXPLICIT_CONTINUATION" | "LEGACY";
+  originThreadId: string | null;
   parentThreadId: string | null;
   providerThreadId: string | null;
   state: ExplorerThreadState;
@@ -168,6 +173,10 @@ export type DomainEvent = {
   sequence: number;
   type:
     | "explorer.thread.created"
+    | "explorer.created"
+    | "explorer.archived"
+    | "explorer.activated"
+    | "explorer.continued"
     | "explorer.turn.accepted"
     | "explorer.turn.text.delta"
     | "explorer.turn.input_required"
@@ -243,6 +252,15 @@ export type RegisterThreadInput = {
   projectId: string;
   parentThreadId: string | null;
   providerThreadId?: string | undefined;
+  title?: string | undefined;
+  contextMode?: "FRESH" | "EXPLICIT_CONTINUATION" | "LEGACY" | undefined;
+  originThreadId?: string | null | undefined;
+};
+
+export type CreateExplorerInput = {
+  projectId: string;
+  title?: string | undefined;
+  originThreadId?: string | undefined;
 };
 
 export type HookDefinition = {
@@ -483,6 +501,9 @@ export class InMemoryPipelineStore implements PipelineStore {
     const thread: ExplorerThread = {
       id: input.id,
       projectId: input.projectId,
+      title: input.title?.trim() || "New Explorer",
+      contextMode: input.contextMode ?? "FRESH",
+      originThreadId: input.originThreadId ?? null,
       parentThreadId: input.parentThreadId,
       providerThreadId: input.providerThreadId ?? null,
       state: "ACTIVE",
@@ -606,7 +627,7 @@ export class InMemoryPipelineStore implements PipelineStore {
   }
   appendAgentLoopStep(input: AgentLoopStepInput): AgentLoopStep {
     const current = this.agentLoopSteps.get(input.loopId) ?? [];
-    const step: AgentLoopStep = { ...input, callId: input.callId ?? null, providerThreadId: input.providerThreadId ?? null, providerTurnId: input.providerTurnId ?? null, sequence: current.length + 1, occurredAt: this.now() };
+    const step: AgentLoopStep = { ...input, callId: input.callId ?? null, providerThreadId: input.providerThreadId ?? null, providerTurnId: input.providerTurnId ?? null, sequence: current.length + 1, occurredAt: input.occurredAt ?? this.now() };
     current.push(step);
     this.agentLoopSteps.set(input.loopId, current);
     return step;
@@ -652,6 +673,9 @@ export class SqlitePipelineStore implements PipelineStore {
       CREATE TABLE IF NOT EXISTS explorer_threads (
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL,
+        title TEXT NOT NULL DEFAULT 'New Explorer',
+        context_mode TEXT NOT NULL DEFAULT 'FRESH',
+        origin_thread_id TEXT,
         parent_thread_id TEXT,
         provider_thread_id TEXT,
         state TEXT NOT NULL,
@@ -824,7 +848,11 @@ export class SqlitePipelineStore implements PipelineStore {
         PRIMARY KEY(scope, key)
       );
     `);
+    try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN title TEXT NOT NULL DEFAULT 'New Explorer'"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN context_mode TEXT NOT NULL DEFAULT 'FRESH'"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN origin_thread_id TEXT"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN provider_thread_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    this.database.prepare("UPDATE explorer_threads SET title = 'Previous exploration', context_mode = 'LEGACY' WHERE title = 'New Explorer' AND id NOT LIKE 'explorer-%' AND (message_count > 0 OR provider_thread_id IS NOT NULL)").run();
     try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN exploration_status TEXT NOT NULL DEFAULT 'INCOMPLETE'"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN exploration_missing_json TEXT NOT NULL DEFAULT '[]'"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN exploration_completed_json TEXT NOT NULL DEFAULT '[]'"); } catch { /* Existing databases already have the column. */ }
@@ -849,6 +877,9 @@ export class SqlitePipelineStore implements PipelineStore {
     const thread: ExplorerThread = {
       id: input.id,
       projectId: input.projectId,
+      title: input.title?.trim() || "New Explorer",
+      contextMode: input.contextMode ?? "FRESH",
+      originThreadId: input.originThreadId ?? null,
       parentThreadId: input.parentThreadId,
       providerThreadId: input.providerThreadId ?? null,
       state: "ACTIVE",
@@ -858,10 +889,10 @@ export class SqlitePipelineStore implements PipelineStore {
       exploration: defaultPlanExploration(),
     };
     this.database.prepare(`
-      INSERT INTO explorer_threads (id, project_id, parent_thread_id, provider_thread_id, state, message_count, summary_ref, last_activity_at, exploration_status, exploration_missing_json, exploration_completed_json, candidate_plan_id, last_assessed_turn_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, parent_thread_id=excluded.parent_thread_id
-    `).run(thread.id, thread.projectId, thread.parentThreadId, thread.providerThreadId, thread.state, thread.messageCount, thread.summaryRef, thread.lastActivityAt, thread.exploration.status, JSON.stringify(thread.exploration.missing), JSON.stringify(thread.exploration.completed), thread.exploration.candidatePlanId, thread.exploration.lastAssessedTurnId);
+      INSERT INTO explorer_threads (id, project_id, title, context_mode, origin_thread_id, parent_thread_id, provider_thread_id, state, message_count, summary_ref, last_activity_at, exploration_status, exploration_missing_json, exploration_completed_json, candidate_plan_id, last_assessed_turn_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, title=excluded.title, context_mode=excluded.context_mode, origin_thread_id=excluded.origin_thread_id, parent_thread_id=excluded.parent_thread_id
+    `).run(thread.id, thread.projectId, thread.title, thread.contextMode, thread.originThreadId, thread.parentThreadId, thread.providerThreadId, thread.state, thread.messageCount, thread.summaryRef, thread.lastActivityAt, thread.exploration.status, JSON.stringify(thread.exploration.missing), JSON.stringify(thread.exploration.completed), thread.exploration.candidatePlanId, thread.exploration.lastAssessedTurnId);
     return this.getThread(thread.id) as ExplorerThread;
   }
 
@@ -876,7 +907,7 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   updateThread(thread: ExplorerThread): ExplorerThread {
-    this.database.prepare("UPDATE explorer_threads SET provider_thread_id = ?, state = ?, message_count = ?, summary_ref = ?, last_activity_at = ?, exploration_status = ?, exploration_missing_json = ?, exploration_completed_json = ?, candidate_plan_id = ?, last_assessed_turn_id = ? WHERE id = ?").run(thread.providerThreadId, thread.state, thread.messageCount, thread.summaryRef, thread.lastActivityAt, thread.exploration.status, JSON.stringify(thread.exploration.missing), JSON.stringify(thread.exploration.completed), thread.exploration.candidatePlanId, thread.exploration.lastAssessedTurnId, thread.id);
+    this.database.prepare("UPDATE explorer_threads SET title = ?, context_mode = ?, origin_thread_id = ?, provider_thread_id = ?, state = ?, message_count = ?, summary_ref = ?, last_activity_at = ?, exploration_status = ?, exploration_missing_json = ?, exploration_completed_json = ?, candidate_plan_id = ?, last_assessed_turn_id = ? WHERE id = ?").run(thread.title, thread.contextMode, thread.originThreadId, thread.providerThreadId, thread.state, thread.messageCount, thread.summaryRef, thread.lastActivityAt, thread.exploration.status, JSON.stringify(thread.exploration.missing), JSON.stringify(thread.exploration.completed), thread.exploration.candidatePlanId, thread.exploration.lastAssessedTurnId, thread.id);
     return this.getThread(thread.id) as ExplorerThread;
   }
 
@@ -1056,7 +1087,7 @@ export class SqlitePipelineStore implements PipelineStore {
 
   appendAgentLoopStep(input: AgentLoopStepInput): AgentLoopStep {
     const nextSequence = Number((this.database.prepare("SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM agent_loop_steps WHERE loop_id = ?").get(input.loopId) as SqliteRow).next_sequence);
-    const step: AgentLoopStep = { ...input, callId: input.callId ?? null, providerThreadId: input.providerThreadId ?? null, providerTurnId: input.providerTurnId ?? null, sequence: nextSequence, occurredAt: this.now() };
+    const step: AgentLoopStep = { ...input, callId: input.callId ?? null, providerThreadId: input.providerThreadId ?? null, providerTurnId: input.providerTurnId ?? null, sequence: nextSequence, occurredAt: input.occurredAt ?? this.now() };
     this.database.prepare("INSERT INTO agent_loop_steps (loop_id, sequence, step_type, status, call_id, provider_thread_id, provider_turn_id, payload_json, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(step.loopId, step.sequence, step.stepType, step.status, step.callId, step.providerThreadId, step.providerTurnId, JSON.stringify(step.payload), step.occurredAt);
     return step;
   }
@@ -1129,7 +1160,7 @@ export class SqlitePipelineStore implements PipelineStore {
   close(): void { this.database.close(); }
 
   private threadFromRow(row: SqliteRow): ExplorerThread {
-    return { id: String(row.id), projectId: String(row.project_id), parentThreadId: row.parent_thread_id === null ? null : String(row.parent_thread_id), providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id), state: String(row.state) as ExplorerThreadState, messageCount: Number(row.message_count), summaryRef: row.summary_ref === null ? null : String(row.summary_ref), lastActivityAt: String(row.last_activity_at), exploration: { status: String(row.exploration_status ?? "INCOMPLETE") as PlanExplorationStatus, missing: parseStringArray(row.exploration_missing_json, [...REQUIRED_PLAN_AREAS]), completed: parseStringArray(row.exploration_completed_json, []), candidatePlanId: row.candidate_plan_id === null || row.candidate_plan_id === undefined ? null : String(row.candidate_plan_id), lastAssessedTurnId: row.last_assessed_turn_id === null || row.last_assessed_turn_id === undefined ? null : String(row.last_assessed_turn_id) } };
+    return { id: String(row.id), projectId: String(row.project_id), title: String(row.title ?? "New Explorer"), contextMode: String(row.context_mode ?? "FRESH") as ExplorerThread["contextMode"], originThreadId: row.origin_thread_id === null || row.origin_thread_id === undefined ? null : String(row.origin_thread_id), parentThreadId: row.parent_thread_id === null ? null : String(row.parent_thread_id), providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id), state: String(row.state) as ExplorerThreadState, messageCount: Number(row.message_count), summaryRef: row.summary_ref === null ? null : String(row.summary_ref), lastActivityAt: String(row.last_activity_at), exploration: { status: String(row.exploration_status ?? "INCOMPLETE") as PlanExplorationStatus, missing: parseStringArray(row.exploration_missing_json, [...REQUIRED_PLAN_AREAS]), completed: parseStringArray(row.exploration_completed_json, []), candidatePlanId: row.candidate_plan_id === null || row.candidate_plan_id === undefined ? null : String(row.candidate_plan_id), lastAssessedTurnId: row.last_assessed_turn_id === null || row.last_assessed_turn_id === undefined ? null : String(row.last_assessed_turn_id) } };
   }
 
   private inputRequestFromRow(row: SqliteRow): ExplorerInputRequest {
@@ -1357,6 +1388,59 @@ export class PlanService {
         attentionReason: plan.attentionReason,
       }))
       .sort((a, b) => b.queuedAt.localeCompare(a.queuedAt));
+  }
+}
+
+export class ExplorerService {
+  constructor(private readonly store: PipelineStore) {}
+
+  create(input: CreateExplorerInput): ExplorerThread {
+    const origin = input.originThreadId ? this.store.getThread(input.originThreadId) : undefined;
+    if (input.originThreadId && (!origin || origin.projectId !== input.projectId)) throw new Error("Origin Explorer does not belong to this project");
+    const thread = this.store.saveThread({
+      id: this.store.nextId("explorer"),
+      projectId: input.projectId,
+      parentThreadId: null,
+      title: input.title?.trim() || "New Explorer",
+      contextMode: origin ? "EXPLICIT_CONTINUATION" : "FRESH",
+      originThreadId: origin?.id ?? null,
+    });
+    this.store.appendEvent({ type: "explorer.created", aggregateId: thread.id, payload: { projectId: thread.projectId, contextMode: thread.contextMode, originThreadId: thread.originThreadId } });
+    if (origin) this.store.appendEvent({ type: "explorer.continued", aggregateId: thread.id, payload: { originThreadId: origin.id } });
+    return thread;
+  }
+
+  get(explorerId: string): ExplorerThread {
+    const explorer = this.store.getThread(explorerId);
+    if (!explorer) throw new Error(`Explorer ${explorerId} not found`);
+    return explorer;
+  }
+
+  list(projectId: string): ExplorerThread[] {
+    return this.store.listThreads().filter((thread) => thread.projectId === projectId).sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
+  }
+
+  archive(explorerId: string): ExplorerThread {
+    const explorer = this.get(explorerId);
+    if (explorer.state === "ARCHIVED") return explorer;
+    const archived = this.store.updateThread({ ...explorer, state: "ARCHIVED", lastActivityAt: this.store.now() });
+    this.store.appendEvent({ type: "explorer.archived", aggregateId: explorerId, payload: { explorerId } });
+    return archived;
+  }
+
+  activate(explorerId: string): ExplorerThread {
+    const explorer = this.get(explorerId);
+    if (explorer.state === "ACTIVE") return explorer;
+    const active = this.store.updateThread({ ...explorer, state: "ACTIVE", lastActivityAt: this.store.now() });
+    this.store.appendEvent({ type: "explorer.activated", aggregateId: explorerId, payload: { explorerId } });
+    return active;
+  }
+
+  rename(explorerId: string, title: string): ExplorerThread {
+    const explorer = this.get(explorerId);
+    const normalized = title.trim();
+    if (!normalized) throw new Error("Explorer title cannot be empty");
+    return this.store.updateThread({ ...explorer, title: normalized, lastActivityAt: this.store.now() });
   }
 }
 
@@ -1657,6 +1741,7 @@ export type ModelRequest = {
 export type ModelEvent =
   | { type: "thread.started"; threadId: string }
   | { type: "text.delta"; text: string }
+  | { type: "provider.activity"; phase: "started" | "completed"; itemId: string; itemType: string; title: string | null; summary: string | null }
   | { type: "tool.call"; call: ToolCall }
   | { type: "turn.input_required"; request: ModelInputRequest }
   | { type: "turn.completed" }
