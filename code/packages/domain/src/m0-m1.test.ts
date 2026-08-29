@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   InMemoryPipelineStore,
@@ -17,6 +18,34 @@ afterEach(() => {
 });
 
 describe("SQLite pipeline persistence", () => {
+  it("adds source metadata columns while preserving legacy plan rows", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pipeline-factory-legacy-"));
+    tempDirectories.push(directory);
+    const databasePath = join(directory, "factory.sqlite");
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(`CREATE TABLE candidate_plans (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      source_explorer_thread_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      confirmed_by TEXT,
+      confirmed_at TEXT,
+      queued_at TEXT,
+      run_id TEXT,
+      last_event_at TEXT NOT NULL,
+      attention_reason TEXT
+    )`);
+    legacy.prepare("INSERT INTO candidate_plans (id, project_id, source_explorer_thread_id, title, revision, status, created_at, last_event_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run("legacy-plan", "project-1", "thread-1", "Legacy plan", 1, "DRAFT", "2026-08-29T10:00:00.000Z", "2026-08-29T10:00:00.000Z");
+    legacy.close();
+
+    const reopened = new SqlitePipelineStore(databasePath);
+    expect(reopened.getPlan("legacy-plan")).toMatchObject({ id: "legacy-plan", createdAt: "2026-08-29T10:00:00.000Z", sourceTurnId: null, providerThreadId: null, providerTurnId: null, providerItemId: null });
+    reopened.close();
+  });
+
   it("restores plans and append-only events after a service restart", () => {
     const directory = mkdtempSync(join(tmpdir(), "pipeline-factory-"));
     tempDirectories.push(directory);

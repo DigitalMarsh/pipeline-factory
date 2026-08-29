@@ -44,7 +44,7 @@ describe("ExplorerThread", () => {
         if (requests.length === 1) {
           yield { type: "text.delta", text: "已记录这个选择，但设计还需要继续确认。" };
         } else {
-          yield { type: "text.delta", text: completeArtifact };
+          yield { type: "text.delta", text: completeArtifact, providerThreadId: "provider-thread-1", providerTurnId: "provider-turn-1", providerItemId: "item-plan-1" };
         }
         yield { type: "turn.completed" };
       },
@@ -59,7 +59,7 @@ describe("ExplorerThread", () => {
     expect(requests).toHaveLength(2);
     expect(requests[1]?.continuationPrompt).toContain("继续完善");
     expect(store.listPlans()).toHaveLength(1);
-    expect(store.listPlans()[0]).toMatchObject({ title: "Personal information manager", status: "DRAFT", sourceExplorerThreadId: "thread-1" });
+    expect(store.listPlans()[0]).toMatchObject({ title: "Personal information manager", status: "DRAFT", sourceExplorerThreadId: "thread-1", sourceTurnId: accepted.assistant.id, providerThreadId: "provider-thread-1", providerTurnId: "provider-turn-1", providerItemId: "item-plan-1" });
     expect(store.getThread("thread-1")).toMatchObject({ exploration: { status: "READY", missing: [], candidatePlanId: store.listPlans()[0]?.id }, messageCount: 2 });
     expect(store.listTurns("thread-1")[1]).toMatchObject({ id: accepted.assistant.id, status: "COMPLETED" });
     expect(store.listTurns("thread-1")[1]?.content).not.toContain("pipeline-factory-plan");

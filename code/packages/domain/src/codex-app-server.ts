@@ -428,7 +428,8 @@ export class CodexAppServerGateway implements ModelGateway {
         collaborationMode: { mode: request.role === "explorer" ? "plan" : "default", settings: { model: roleConfig.model, reasoning_effort: roleConfig.reasoningEffort ?? null, developer_instructions: roleConfig.developerInstructions ?? null } },
         ...(request.signal ? { signal: request.signal } : {}),
       })) {
-        const mapped = mapCodexEvent(event);
+        const eventTurnId = getEventTurnId(event.params);
+        const mapped = mapCodexEvent(event, { providerThreadId, ...(eventTurnId ? { providerTurnId: eventTurnId } : {}) });
         if (mapped) {
           if (mapped.type === "turn.input_required") {
             if (event.id === undefined) throw new Error("Codex App Server input request did not include a JSON-RPC id");
@@ -476,10 +477,14 @@ export class CodexAppServerGateway implements ModelGateway {
   }
 }
 
-function mapCodexEvent(event: CodexAppServerEvent): ModelEvent | null {
+function mapCodexEvent(event: CodexAppServerEvent, source: { providerThreadId?: string; providerTurnId?: string } = {}): ModelEvent | null {
   if (event.method === "item/agentMessage/delta") {
     const text = getString(event.params, "delta");
-    return text === undefined ? null : { type: "text.delta", text };
+    if (text === undefined) return null;
+    const providerThreadId = getString(event.params, "threadId") ?? source.providerThreadId;
+    const providerTurnId = getEventTurnId(event.params) ?? source.providerTurnId;
+    const providerItemId = getString(event.params, "itemId") ?? getString(getObject(event.params, "item"), "id");
+    return { type: "text.delta", text, ...(providerThreadId ? { providerThreadId } : {}), ...(providerTurnId ? { providerTurnId } : {}), ...(providerItemId ? { providerItemId } : {}) };
   }
   if (event.method === "item/started" || event.method === "item/completed") {
     const item = getObject(event.params, "item");
@@ -489,7 +494,9 @@ function mapCodexEvent(event: CodexAppServerEvent): ModelEvent | null {
     if (itemType === "agentMessage" || itemType === "message") return null;
     const title = getString(item, "name") ?? getString(item, "title") ?? null;
     const summary = getString(item, "command") ?? getString(item, "text") ?? null;
-    return { type: "provider.activity", phase: event.method === "item/started" ? "started" : "completed", itemId, itemType, title, summary };
+    const providerThreadId = getString(event.params, "threadId") ?? source.providerThreadId;
+    const providerTurnId = getEventTurnId(event.params) ?? source.providerTurnId;
+    return { type: "provider.activity", phase: event.method === "item/started" ? "started" : "completed", itemId, itemType, title, summary, ...(providerThreadId ? { providerThreadId } : {}), ...(providerTurnId ? { providerTurnId } : {}), providerItemId: itemId };
   }
   if (event.method === "item/tool/requestUserInput") {
     const request = event.params;

@@ -123,7 +123,7 @@ describe("Pipeline Factory v3 API", () => {
     const planService = (await import("@pipeline-factory/domain")).PlanService;
     const plans = new planService(store);
     plans.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "API plan" });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", sourceTurnId: "assistant-1", title: "API plan" });
 
     const rejected = await app.inject({ method: "POST", url: `/api/v3/plans/${plan.id}/enqueue` });
     expect(rejected.statusCode).toBe(409);
@@ -131,7 +131,7 @@ describe("Pipeline Factory v3 API", () => {
     await app.inject({ method: "POST", url: `/api/v3/plans/${plan.id}/enqueue` });
     const response = await app.inject({ method: "GET", url: "/api/v3/projects/project-1/explorer-thread/plans" });
     expect(response.statusCode).toBe(200);
-    expect(response.json().items[0]).toMatchObject({ planId: plan.id, status: "QUEUED" });
+    expect(response.json().items[0]).toMatchObject({ planId: plan.id, status: "QUEUED", createdAt: plan.createdAt, sourceTurnId: "assistant-1" });
   });
 
   it("keeps ExplorerThread turns in the API without granting write tools", async () => {

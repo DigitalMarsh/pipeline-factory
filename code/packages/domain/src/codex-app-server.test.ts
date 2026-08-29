@@ -60,7 +60,7 @@ describe("CodexAppServerGateway", () => {
     const gateway = new CodexAppServerGateway({
       roles: { explorer: { model: "explorer-model" }, executor: { model: "executor-model" } },
       sessionFactory: createSessionFactory([
-        { method: "item/agentMessage/delta", params: { delta: "hello" } },
+        { method: "item/agentMessage/delta", params: { threadId: "codex-thread-1", turnId: "turn-1", delta: "hello" } },
         { method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } },
       ], calls),
     });
@@ -74,7 +74,7 @@ describe("CodexAppServerGateway", () => {
 
     expect(events).toEqual([
       { type: "thread.started", threadId: "codex-thread-1" },
-      { type: "text.delta", text: "hello" },
+      { type: "text.delta", text: "hello", providerThreadId: "codex-thread-1", providerTurnId: "turn-1" },
       { type: "turn.completed" },
     ]);
     expect(calls[0]).toMatchObject({
@@ -147,8 +147,8 @@ describe("CodexAppServerGateway", () => {
 
     expect(events).toMatchObject([
       { type: "thread.started" },
-      { type: "provider.activity", phase: "started", itemId: "item-mcp-1", itemType: "mcpToolCall" },
-      { type: "provider.activity", phase: "completed", itemId: "item-mcp-1", itemType: "mcpToolCall" },
+      { type: "provider.activity", phase: "started", itemId: "item-mcp-1", itemType: "mcpToolCall", providerThreadId: "codex-thread-1", providerTurnId: "turn-1" },
+      { type: "provider.activity", phase: "completed", itemId: "item-mcp-1", itemType: "mcpToolCall", providerThreadId: "codex-thread-1", providerTurnId: "turn-1" },
       { type: "turn.completed" },
     ]);
   });

@@ -281,8 +281,22 @@ export class AgentLoopEngine implements AgentLoopRunner {
         for await (const event of this.model.stream({ ...input.modelRequest, role: input.role, messages, providerThreadId: loop.providerThreadId ?? undefined, ...(continuationPrompt ? { continuationPrompt } : {}), signal: controller.signal })) {
           loop = this.get(initial.id);
           if (event.type === "thread.started") { loop = { ...loop, providerThreadId: event.threadId }; this.store.updateAgentLoop(loop); this.emit(loop, "agent.provider.thread.started", { threadId: event.threadId }); }
-          if (event.type === "text.delta") { stepText += event.text; fullText += event.text; progress = progress || event.text.trim().length > 0; this.appendStep(loop, "MODEL_TEXT_DELTA", "COMPLETED", { text: event.text }); this.emit(loop, "agent.model.text.delta", { text: event.text }); }
-          if (event.type === "provider.activity") { progress = true; this.appendStep(loop, "PROVIDER_ACTIVITY", event.phase === "completed" ? "COMPLETED" : "RUNNING", { phase: event.phase, itemId: event.itemId, itemType: event.itemType, title: event.title, summary: event.summary, providerControlled: true }); this.emit(loop, "agent.provider.activity", { phase: event.phase, itemId: event.itemId, itemType: event.itemType, title: event.title, summary: event.summary }); }
+          if (event.type === "text.delta") {
+            stepText += event.text;
+            fullText += event.text;
+            progress = progress || event.text.trim().length > 0;
+            loop = { ...loop, ...(event.providerThreadId ? { providerThreadId: event.providerThreadId } : {}), ...(event.providerTurnId ? { providerTurnId: event.providerTurnId } : {}) };
+            this.store.updateAgentLoop(loop);
+            this.appendStep(loop, "MODEL_TEXT_DELTA", "COMPLETED", { text: event.text, ...(event.providerItemId ? { providerItemId: event.providerItemId } : {}) });
+            this.emit(loop, "agent.model.text.delta", { text: event.text, ...(event.providerThreadId ? { providerThreadId: event.providerThreadId } : {}), ...(event.providerTurnId ? { providerTurnId: event.providerTurnId } : {}), ...(event.providerItemId ? { providerItemId: event.providerItemId } : {}) });
+          }
+          if (event.type === "provider.activity") {
+            progress = true;
+            loop = { ...loop, ...(event.providerThreadId ? { providerThreadId: event.providerThreadId } : {}), ...(event.providerTurnId ? { providerTurnId: event.providerTurnId } : {}) };
+            this.store.updateAgentLoop(loop);
+            this.appendStep(loop, "PROVIDER_ACTIVITY", event.phase === "completed" ? "COMPLETED" : "RUNNING", { phase: event.phase, itemId: event.itemId, itemType: event.itemType, title: event.title, summary: event.summary, providerItemId: event.providerItemId ?? event.itemId, providerControlled: true });
+            this.emit(loop, "agent.provider.activity", { phase: event.phase, itemId: event.itemId, itemType: event.itemType, title: event.title, summary: event.summary, ...(event.providerThreadId ? { providerThreadId: event.providerThreadId } : {}), ...(event.providerTurnId ? { providerTurnId: event.providerTurnId } : {}), ...(event.providerItemId ? { providerItemId: event.providerItemId } : {}) });
+          }
           if (event.type === "tool.call") {
             progress = true;
             const signature = `${event.call.tool}:${JSON.stringify(event.call.input)}`;

@@ -129,6 +129,11 @@ export type Plan = {
   status: PlanStatus;
   projectId: string;
   sourceExplorerThreadId: string;
+  sourceTurnId?: string | null;
+  providerThreadId?: string | null;
+  providerTurnId?: string | null;
+  providerItemId?: string | null;
+  createdAt?: string;
   queuedAt: string | null;
   runId: string | null;
   lastEventAt: string;

@@ -122,6 +122,10 @@ export type CandidatePlan = {
   id: string;
   projectId: string;
   sourceExplorerThreadId: string;
+  sourceTurnId: string | null;
+  providerThreadId: string | null;
+  providerTurnId: string | null;
+  providerItemId: string | null;
   title: string;
   revision: number;
   status: PlanStatus;
@@ -176,6 +180,11 @@ export type PlanIndexRow = {
   status: PlanStatus;
   projectId: string;
   sourceExplorerThreadId: string;
+  sourceTurnId: string | null;
+  providerThreadId: string | null;
+  providerTurnId: string | null;
+  providerItemId: string | null;
+  createdAt: string;
   queuedAt: string;
   runId: string | null;
   lastEventAt: string;
@@ -264,6 +273,10 @@ export type CreateCandidatePlanInput = {
   sourceExplorerThreadId: string;
   title: string;
   contract?: PlanContract | undefined;
+  sourceTurnId?: string | null | undefined;
+  providerThreadId?: string | null | undefined;
+  providerTurnId?: string | null | undefined;
+  providerItemId?: string | null | undefined;
 };
 
 export type RegisterThreadInput = {
@@ -721,6 +734,10 @@ export class SqlitePipelineStore implements PipelineStore {
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL,
         source_explorer_thread_id TEXT NOT NULL,
+        source_turn_id TEXT,
+        provider_thread_id TEXT,
+        provider_turn_id TEXT,
+        provider_item_id TEXT,
         title TEXT NOT NULL,
         revision INTEGER NOT NULL,
         status TEXT NOT NULL,
@@ -882,6 +899,10 @@ export class SqlitePipelineStore implements PipelineStore {
     try { this.database.exec("ALTER TABLE explorer_turns ADD COLUMN error TEXT"); } catch { /* Existing databases already have the column. */ }
     this.database.exec("UPDATE explorer_turns SET status = 'FAILED', error = COALESCE(error, '历史记录未包含模型文本') WHERE role = 'assistant' AND trim(content) = '' AND status = 'COMPLETED'");
     try { this.database.exec("ALTER TABLE candidate_plans ADD COLUMN contract_json TEXT NOT NULL DEFAULT '{}'"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE candidate_plans ADD COLUMN source_turn_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE candidate_plans ADD COLUMN provider_thread_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE candidate_plans ADD COLUMN provider_turn_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE candidate_plans ADD COLUMN provider_item_id TEXT"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE domain_events ADD COLUMN sequence INTEGER"); } catch { /* Existing databases already have the column. */ }
     this.database.exec("UPDATE domain_events SET sequence = rowid WHERE sequence IS NULL");
     try { this.database.exec("CREATE UNIQUE INDEX IF NOT EXISTS domain_events_sequence_uq ON domain_events(sequence)"); } catch { /* Existing databases already have the index. */ }
@@ -970,10 +991,10 @@ export class SqlitePipelineStore implements PipelineStore {
 
   savePlan(plan: CandidatePlan): CandidatePlan {
     this.database.prepare(`
-      INSERT INTO candidate_plans (id, project_id, source_explorer_thread_id, title, revision, status, created_at, confirmed_by, confirmed_at, queued_at, run_id, last_event_at, attention_reason, contract_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, source_explorer_thread_id=excluded.source_explorer_thread_id, title=excluded.title, revision=excluded.revision, status=excluded.status, confirmed_by=excluded.confirmed_by, confirmed_at=excluded.confirmed_at, queued_at=excluded.queued_at, run_id=excluded.run_id, last_event_at=excluded.last_event_at, attention_reason=excluded.attention_reason, contract_json=excluded.contract_json
-    `).run(plan.id, plan.projectId, plan.sourceExplorerThreadId, plan.title, plan.revision, plan.status, plan.createdAt, plan.confirmedBy, plan.confirmedAt, plan.queuedAt, plan.runId, plan.lastEventAt, plan.attentionReason, JSON.stringify(plan.contract));
+      INSERT INTO candidate_plans (id, project_id, source_explorer_thread_id, source_turn_id, provider_thread_id, provider_turn_id, provider_item_id, title, revision, status, created_at, confirmed_by, confirmed_at, queued_at, run_id, last_event_at, attention_reason, contract_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, source_explorer_thread_id=excluded.source_explorer_thread_id, source_turn_id=excluded.source_turn_id, provider_thread_id=excluded.provider_thread_id, provider_turn_id=excluded.provider_turn_id, provider_item_id=excluded.provider_item_id, title=excluded.title, revision=excluded.revision, status=excluded.status, confirmed_by=excluded.confirmed_by, confirmed_at=excluded.confirmed_at, queued_at=excluded.queued_at, run_id=excluded.run_id, last_event_at=excluded.last_event_at, attention_reason=excluded.attention_reason, contract_json=excluded.contract_json
+    `).run(plan.id, plan.projectId, plan.sourceExplorerThreadId, plan.sourceTurnId, plan.providerThreadId, plan.providerTurnId, plan.providerItemId, plan.title, plan.revision, plan.status, plan.createdAt, plan.confirmedBy, plan.confirmedAt, plan.queuedAt, plan.runId, plan.lastEventAt, plan.attentionReason, JSON.stringify(plan.contract));
     return this.getPlan(plan.id) as CandidatePlan;
   }
 
@@ -1222,7 +1243,7 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   private planFromRow(row: SqliteRow): CandidatePlan {
-    return { id: String(row.id), projectId: String(row.project_id), sourceExplorerThreadId: String(row.source_explorer_thread_id), title: String(row.title), revision: Number(row.revision), status: String(row.status) as PlanStatus, createdAt: String(row.created_at), confirmedBy: row.confirmed_by === null ? null : String(row.confirmed_by), confirmedAt: row.confirmed_at === null ? null : String(row.confirmed_at), queuedAt: row.queued_at === null ? null : String(row.queued_at), runId: row.run_id === null ? null : String(row.run_id), lastEventAt: String(row.last_event_at), attentionReason: row.attention_reason === null ? null : String(row.attention_reason), contract: JSON.parse(String(row.contract_json ?? "{}")) as PlanContract };
+    return { id: String(row.id), projectId: String(row.project_id), sourceExplorerThreadId: String(row.source_explorer_thread_id), sourceTurnId: row.source_turn_id === null || row.source_turn_id === undefined ? null : String(row.source_turn_id), providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id), providerTurnId: row.provider_turn_id === null || row.provider_turn_id === undefined ? null : String(row.provider_turn_id), providerItemId: row.provider_item_id === null || row.provider_item_id === undefined ? null : String(row.provider_item_id), title: String(row.title), revision: Number(row.revision), status: String(row.status) as PlanStatus, createdAt: String(row.created_at), confirmedBy: row.confirmed_by === null ? null : String(row.confirmed_by), confirmedAt: row.confirmed_at === null ? null : String(row.confirmed_at), queuedAt: row.queued_at === null ? null : String(row.queued_at), runId: row.run_id === null ? null : String(row.run_id), lastEventAt: String(row.last_event_at), attentionReason: row.attention_reason === null ? null : String(row.attention_reason), contract: JSON.parse(String(row.contract_json ?? "{}")) as PlanContract };
   }
 
   private changeProposalFromRow(row: SqliteRow): ChangeProposal {
@@ -1308,6 +1329,10 @@ export class PlanService {
       id: this.store.nextId("plan"),
       projectId: input.projectId,
       sourceExplorerThreadId: input.sourceExplorerThreadId,
+      sourceTurnId: input.sourceTurnId ?? null,
+      providerThreadId: input.providerThreadId ?? null,
+      providerTurnId: input.providerTurnId ?? null,
+      providerItemId: input.providerItemId ?? null,
       title: input.title,
       revision: 1,
       status: "DRAFT",
@@ -1321,7 +1346,7 @@ export class PlanService {
       contract: input.contract ?? defaultPlanContract(input.title),
     };
     this.store.savePlan(plan);
-    this.store.appendEvent({ type: "plan.candidate.created", aggregateId: plan.id, payload: { title: plan.title } });
+    this.store.appendEvent({ type: "plan.candidate.created", aggregateId: plan.id, payload: { title: plan.title, sourceTurnId: plan.sourceTurnId, providerThreadId: plan.providerThreadId, providerTurnId: plan.providerTurnId, providerItemId: plan.providerItemId } });
     return plan;
   }
 
@@ -1401,6 +1426,11 @@ export class PlanService {
         status: plan.status,
         projectId: plan.projectId,
         sourceExplorerThreadId: plan.sourceExplorerThreadId,
+        sourceTurnId: plan.sourceTurnId,
+        providerThreadId: plan.providerThreadId,
+        providerTurnId: plan.providerTurnId,
+        providerItemId: plan.providerItemId,
+        createdAt: plan.createdAt,
         queuedAt: plan.queuedAt as string,
         runId: plan.runId,
         lastEventAt: plan.lastEventAt,
@@ -1806,8 +1836,8 @@ export type ModelRequest = {
 };
 export type ModelEvent =
   | { type: "thread.started"; threadId: string }
-  | { type: "text.delta"; text: string }
-  | { type: "provider.activity"; phase: "started" | "completed"; itemId: string; itemType: string; title: string | null; summary: string | null }
+  | { type: "text.delta"; text: string; providerThreadId?: string | undefined; providerTurnId?: string | undefined; providerItemId?: string | undefined }
+  | { type: "provider.activity"; phase: "started" | "completed"; itemId: string; itemType: string; title: string | null; summary: string | null; providerThreadId?: string | undefined; providerTurnId?: string | undefined; providerItemId?: string | undefined }
   | { type: "tool.call"; call: ToolCall }
   | { type: "turn.input_required"; request: ModelInputRequest }
   | { type: "turn.completed" }
@@ -2197,7 +2227,8 @@ export class ExplorerThreadService {
     this.publish(this.store.appendEvent({ type: assessment.status === "READY" ? "explorer.plan.ready" : "explorer.plan.incomplete", aggregateId: threadId, payload: { turnId: assistantId, missing: assessment.missing, completed: assessment.completed } }));
     if (assessment.status === "READY" && assessment.artifact) {
       const existing = this.store.listPlans().find((plan) => plan.sourceExplorerThreadId === threadId && plan.status === "DRAFT");
-      const plan = existing ?? this.plans.createCandidatePlan({ projectId: thread.projectId, sourceExplorerThreadId: threadId, title: assessment.artifact.title, contract: assessment.artifact.contract });
+      const source = this.planSource(assistantId);
+      const plan = existing ? this.store.updatePlan({ ...existing, ...source }) : this.plans.createCandidatePlan({ projectId: thread.projectId, sourceExplorerThreadId: threadId, title: assessment.artifact.title, contract: assessment.artifact.contract, ...source });
       this.store.updateThread({ ...this.store.getThread(threadId)!, exploration: { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], candidatePlanId: plan.id, lastAssessedTurnId: assistantId }, lastActivityAt: this.store.now() });
     }
     this.store.updateTurn({ ...current, status: "COMPLETED", content: stripPlanProtocol(current.content) });
@@ -2221,6 +2252,18 @@ export class ExplorerThreadService {
     const thread = this.store.getThread(threadId);
     if (thread && thread.state !== "ARCHIVED") this.store.updateThread({ ...thread, state: "ACTIVE", lastActivityAt: this.store.now() });
     this.jobs.delete(threadId);
+  }
+
+  private planSource(assistantId: string): { sourceTurnId: string; providerThreadId: string | null; providerTurnId: string | null; providerItemId: string | null } {
+    const loop = this.store.listAgentLoops(assistantId).at(-1);
+    const steps = loop ? this.store.listAgentLoopSteps(loop.id) : [];
+    const latestProviderStep = [...steps].reverse().find((step) => typeof step.payload.providerItemId === "string" || typeof step.payload.itemId === "string");
+    const providerThreadId = loop?.providerThreadId ?? [...steps].reverse().find((step) => step.providerThreadId)?.providerThreadId ?? null;
+    const providerTurnId = loop?.providerTurnId ?? [...steps].reverse().find((step) => step.providerTurnId)?.providerTurnId ?? null;
+    const providerItemId = typeof latestProviderStep?.payload.providerItemId === "string"
+      ? latestProviderStep.payload.providerItemId
+      : typeof latestProviderStep?.payload.itemId === "string" ? latestProviderStep.payload.itemId : null;
+    return { sourceTurnId: assistantId, providerThreadId, providerTurnId, providerItemId };
   }
 
   private async runAsyncTurn(threadId: string, user: ExplorerTurn, assistant: ExplorerTurn, job: { userId: string; assistantId: string; providerThreadId: string | null; providerTurnId: string | null; resolveInput?: (() => void) | undefined; cancelled: boolean; continuationCount: number }): Promise<void> {
@@ -2273,7 +2316,8 @@ export class ExplorerThreadService {
         }
         if (assessment.status === "READY" && assessment.artifact) {
           const existing = this.store.listPlans().find((plan) => plan.sourceExplorerThreadId === threadId && plan.status === "DRAFT");
-          const plan = existing ?? this.plans.createCandidatePlan({ projectId: currentThread?.projectId ?? "", sourceExplorerThreadId: threadId, title: assessment.artifact.title, contract: assessment.artifact.contract });
+          const source = this.planSource(assistant.id);
+          const plan = existing ? this.store.updatePlan({ ...existing, ...source }) : this.plans.createCandidatePlan({ projectId: currentThread?.projectId ?? "", sourceExplorerThreadId: threadId, title: assessment.artifact.title, contract: assessment.artifact.contract, ...source });
           const latest = this.store.getThread(threadId);
           if (latest) this.store.updateThread({ ...latest, exploration: { ...latest.exploration, status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], candidatePlanId: plan.id, lastAssessedTurnId: assistant.id }, lastActivityAt: this.store.now() });
           this.store.updateTurn({ ...current, content: stripPlanProtocol(current.content), status: "COMPLETED" });
