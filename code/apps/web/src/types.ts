@@ -1,5 +1,54 @@
 export type PlanStatus = "DRAFT" | "READY" | "QUEUED" | "IN_PROGRESS" | "VERIFYING" | "MERGE_READY" | "MERGED" | "BLOCKED" | "NEEDS_PLAN_CHANGE";
 
+export type ProjectSettings = {
+  concurrency: {
+    maxParallelRuns: number;
+    defaultTimeoutMs: number;
+    maxAutoContinuationTurns: number;
+    maxRepairAttempts: number;
+  };
+  commands: Array<{ commandId: string; argv: string[]; environment?: Record<string, string> }>;
+  hooks: {
+    start?: { commandId: string; enabled?: boolean; timeoutMs?: number };
+    cleanup?: { commandId: string; enabled?: boolean; timeoutMs?: number };
+  };
+  models: {
+    explorer: { model: string; mode?: string; loopMode?: string; temperature?: number; maxOutputTokens?: number; reasoningEffort?: string; developerInstructions?: string };
+    executor: { model: string; mode?: string; loopMode?: string; temperature?: number; maxOutputTokens?: number; reasoningEffort?: string; developerInstructions?: string };
+  };
+  toolPolicy: { allowedMcpTools: string[]; allowedPluginTools: string[]; computerUseEnabled: boolean };
+};
+
+export type Project = {
+  id: string;
+  name: string;
+  repoRoot: string;
+  defaultBranch: string;
+  worktreeRoot: string;
+  status: "ACTIVE" | "ARCHIVED";
+  currentExplorerThreadId: string | null;
+  configVersion: number;
+  configHash: string;
+  settings: ProjectSettings;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt: string | null;
+};
+
+export type ProjectSummary = {
+  project: Project;
+  currentExplorerThread: string | null;
+  threadCount: number;
+  planCount: number;
+  runCount: number;
+  activeRunCount: number;
+  needsAttentionCount: number;
+  lastActivityAt: string | null;
+};
+
+export type ProjectCatalogSummary = Omit<ProjectSummary, "project" | "currentExplorerThread"> & { currentExplorerThread: string | null; currentExplorerTitle: string | null };
+export type ProjectCatalogItem = Project & { summary: ProjectCatalogSummary };
+
 export type ExplorerThread = {
   id: string;
   projectId: string;
@@ -141,6 +190,9 @@ export type Plan = {
   runId: string | null;
   lastEventAt: string;
   attentionReason: string | null;
+  projectConfigVersion?: number | null;
+  projectConfigHash?: string | null;
+  projectConfigStatus?: "CURRENT" | "CHANGED" | "LEGACY";
   goal?: string;
   acceptanceCriteria?: string[];
   include?: string[];

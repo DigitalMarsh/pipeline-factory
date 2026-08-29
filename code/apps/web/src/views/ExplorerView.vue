@@ -4,7 +4,7 @@ import { ArrowDown, ArrowUp, Check, CircleCheck, Connection, InfoFilled, MoreFil
 import { ElMessage } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 import { api } from "../api";
-import type { AgentLoop, CodexRateLimitsStatus, ExplorerActivityItem, ExplorerInputRequest, ExplorerThread, ExplorerTurn, Plan } from "../types";
+import type { AgentLoop, CodexRateLimitsStatus, ExplorerActivityItem, ExplorerInputRequest, ExplorerThread, ExplorerTurn, Plan, Project } from "../types";
 import PlanDetailDrawer from "../components/PlanDetailDrawer.vue";
 import ExplorerPolicyDrawer from "../components/ExplorerPolicyDrawer.vue";
 import ThreadRail from "../components/ThreadRail.vue";
@@ -26,7 +26,8 @@ import { findPlanForActivity, planIdentity, planTimelineItems as buildPlanTimeli
 
 const route = useRoute();
 const router = useRouter();
-const projectId = computed(() => String(route.params.projectId ?? "project-demo"));
+const projectId = computed(() => String(route.params.projectId ?? ""));
+const project = ref<Project | null>(null);
 const thread = ref<ExplorerThread | null>(null);
 const explorers = ref<ExplorerThread[]>([]);
 const historyOpen = ref(false);
@@ -65,15 +66,13 @@ let planProjectionVersion = 0;
 const { visible: showThreadBanner, dismiss: dismissThreadBanner } = useDismissibleNotice();
 type TimelineNavItem = { key: string; label: string; detail: string; target: string };
 
-const fallbackThread: ExplorerThread = { id: "thread-demo", projectId: "project-demo", title: "Product workspace", createdAt: new Date().toISOString(), titleSource: "MANUAL", titleStatus: "GENERATED", contextMode: "FRESH", originThreadId: null, parentThreadId: null, state: "ACTIVE", messageCount: 0, summaryRef: null, lastActivityAt: new Date().toISOString(), exploration: { status: "INCOMPLETE", missing: ["Goal and scope"], completed: [], candidatePlanId: null, lastAssessedTurnId: null } };
-const fallbackPlan: Plan = { id: "plan-demo-1", title: "Build ExplorerThread workspace", revision: 1, status: "DRAFT", projectId: "project-demo", sourceExplorerThreadId: "thread-demo", queuedAt: null, runId: null, lastEventAt: new Date().toISOString(), attentionReason: null };
 const candidateCount = computed(() => candidate.value ? 1 : 0);
 const dispatchedCount = computed(() => dispatched.value.length);
 const activeRunCount = computed(() => dispatched.value.filter((plan) => plan.status === "IN_PROGRESS" || plan.status === "VERIFYING").length);
 const needsAttentionCount = computed(() => dispatched.value.filter((plan) => plan.status === "BLOCKED" || Boolean(plan.attentionReason)).length);
 const inputCardRequest = computed(() => pendingInput.value ?? recoveryInput.value);
 const contextUsage = computed(() => formatContextUsage(turns.value));
-const conversationId = computed(() => formatConversationId(thread.value?.id ?? "thread-demo"));
+const conversationId = computed(() => formatConversationId(thread.value?.id ?? "no-thread"));
 const rateLimits = computed(() => ({ fiveHour: formatRateLimit(rateLimitStatus.value?.fiveHour ?? null), sevenDay: formatRateLimit(rateLimitStatus.value?.sevenDay ?? null) }));
 const rateLimitNote = computed(() => rateLimitStatus.value?.available ? "数据来自 Codex App Server 的精确窗口。" : rateLimitStatus.value?.reason ?? "当前服务未提供 Codex 速率限制遥测。");
 const agentLoopLabel = computed(() => ({ CREATED: "Created", RUNNING: "Running", WAITING_FOR_INPUT: "Waiting for input", PAUSED: "Paused", RECOVERING: "Recovery required", BLOCKED: "Blocked", COMPLETED: "Completed", FAILED: "Failed", CANCELLED: "Cancelled", NEEDS_RECONCILIATION: "Needs reconciliation" } as Record<string, string>)[agentLoop.value?.state ?? ""] ?? "No active loop");
@@ -295,6 +294,7 @@ async function createExplorer() {
   try {
     const created = await api.createExplorer(projectId.value);
     explorers.value = [created.explorer, ...explorers.value.filter((item) => item.id !== created.explorer.id)];
+    try { project.value = (await api.selectProjectExplorer(projectId.value, created.explorer.id)).project; } catch { /* Legacy API instances may not have a Project registry yet. */ }
     historyOpen.value = false;
     await router.push({ path: route.path, query: { explorerId: created.explorer.id }, hash: "" });
   } catch (caught) {
@@ -304,7 +304,31 @@ async function createExplorer() {
 
 async function selectExplorer(explorerId: string) {
   if (explorerId === thread.value?.id) return;
+  const selected = explorers.value.find((item) => item.id === explorerId);
+  if (selected?.state !== "ARCHIVED") {
+    try { project.value = (await api.selectProjectExplorer(projectId.value, explorerId)).project; } catch { /* Keep navigation available for legacy API instances. */ }
+  }
   await router.push({ path: route.path, query: { explorerId }, hash: "" });
+}
+
+async function archiveExplorer(explorerId: string) {
+  try {
+    await api.archiveExplorer(projectId.value, explorerId);
+    explorers.value = explorers.value.map((item) => item.id === explorerId ? { ...item, state: "ARCHIVED" } : item);
+    ElMessage.success("ExplorerThread 已归档");
+    if (thread.value?.id === explorerId) {
+      const next = explorers.value.find((item) => item.state !== "ARCHIVED");
+      if (next) await selectExplorer(next.id);
+    }
+  } catch (caught) { ElMessage.error(caught instanceof Error ? caught.message : "ExplorerThread 归档失败"); }
+}
+
+async function activateExplorer(explorerId: string) {
+  try {
+    const response = await api.activateExplorer(projectId.value, explorerId);
+    explorers.value = explorers.value.map((item) => item.id === explorerId ? response.explorer : item);
+    ElMessage.success("ExplorerThread 已恢复");
+  } catch (caught) { ElMessage.error(caught instanceof Error ? caught.message : "ExplorerThread 恢复失败"); }
 }
 
 async function refreshActivity() {
@@ -334,16 +358,19 @@ async function load() {
   loading.value = true;
   error.value = null;
   try {
-    const [healthResponse, explorerResponse] = await Promise.all([optional(() => api.health()), api.explorers(projectId.value)]);
+    const [healthResponse, projectResponse, explorerResponse] = await Promise.all([optional(() => api.health()), api.project(projectId.value), api.explorers(projectId.value)]);
+    project.value = projectResponse.project;
     if (healthResponse?.model) explorerModel.value = healthResponse.model;
     explorers.value = explorerResponse.items;
     const routeExplorerId = typeof route.query.explorerId === "string" ? route.query.explorerId : null;
     let selected = routeExplorerId ? explorerResponse.items.find((item) => item.id === routeExplorerId) : undefined;
+    if (!routeExplorerId && projectResponse.project.currentExplorerThreadId) selected = explorerResponse.items.find((item) => item.id === projectResponse.project.currentExplorerThreadId);
     if (!routeExplorerId && thread.value) selected = explorerResponse.items.find((item) => item.id === thread.value?.id);
     if (!selected) selected = explorerResponse.items.find((item) => item.state !== "ARCHIVED" && item.contextMode === "FRESH" && item.messageCount === 0);
     if (!selected) {
       selected = (await api.createExplorer(projectId.value)).explorer;
       explorers.value = [selected, ...explorers.value];
+      project.value = (await api.selectProjectExplorer(projectId.value, selected.id)).project;
     }
     const [plansResponse, turnsResponse, candidateResponse] = await Promise.all([
       api.explorerPlans(projectId.value, selected.id),
@@ -373,13 +400,14 @@ async function load() {
     await nextTick();
     updateTimelineScrollState();
   } catch (caught) {
-    thread.value = fallbackThread;
-    explorers.value = [fallbackThread];
-    candidate.value = fallbackPlan;
+    project.value = null;
+    thread.value = null;
+    explorers.value = [];
+    candidate.value = null;
     dispatched.value = [];
     turns.value = [];
     activity.value = [];
-    error.value = caught instanceof Error ? "API 未连接，当前显示本地演示数据" : "API 未连接，当前显示本地演示数据";
+    error.value = caught instanceof Error ? caught.message : "Project 加载失败";
   } finally {
     loading.value = false;
   }
@@ -387,11 +415,11 @@ async function load() {
 
 async function sendTurn() {
   const content = draft.value.trim();
-  if (!content || busy.value) return;
+  if (!content || busy.value || !thread.value || thread.value.state === "ARCHIVED" || project.value?.status === "ARCHIVED") return;
   const now = new Date().toISOString();
   const optimisticUser = createOptimisticUserTurn({
     id: `local-user-${Date.now()}`,
-    threadId: thread.value?.id ?? "thread-demo",
+    threadId: thread.value.id,
     content,
     createdAt: now,
     sequence: turns.value.length + 1,
@@ -572,7 +600,7 @@ onBeforeUnmount(closeEvents);
 
 <template>
   <div class="console-layout">
-    <ThreadRail :thread="thread" :candidate-count="candidateCount" :dispatched-count="dispatchedCount" :active-run-count="activeRunCount" :needs-attention-count="needsAttentionCount" @open-history="historyOpen = true" />
+    <ThreadRail :thread="thread" :project="project" :candidate-count="candidateCount" :dispatched-count="dispatchedCount" :active-run-count="activeRunCount" :needs-attention-count="needsAttentionCount" @open-history="historyOpen = true" />
     <section class="conversation-column">
       <div class="conversation-header"><div><div class="eyebrow"><span class="mode-dot" /> PLAN MODE · READ ONLY</div><h1>{{ explorerDisplayTitle(thread) }}</h1><p>Shape the work before anything changes in the repository.</p></div><div class="conversation-tools"><el-button class="new-thread-button" plain aria-label="新建 Explorer" title="新建 Explorer" @click="createExplorer">新建</el-button><el-button circle plain :aria-label="explorerPaused ? 'Resume' : 'Pause'" @click="toggleExplorerPause"><VideoPlay v-if="explorerPaused" :size="16" /><VideoPause v-else :size="16" /></el-button><el-popover v-model:visible="moreOpen" placement="bottom-end" :width="250" trigger="click"><template #reference><el-button circle plain aria-label="More"><MoreFilled :size="16" /></el-button></template><div class="thread-more-menu"><div class="eyebrow">THREAD ACTIONS</div><p>Manage read-only exploration without changing the repository.</p><el-button text @click="setPolicyOpen(true); moreOpen = false">View policy</el-button><el-button text @click="moreOpen = false; refreshThread()">Refresh thread</el-button></div></el-popover></div></div>
       <div v-if="agentLoop" class="agent-loop-strip" role="status"><div><span class="eyebrow">EXPLORER AGENT LOOP</span><strong>{{ agentLoopLabel }}</strong></div><span class="agent-loop-budget">Steps {{ agentLoop.stepCount }} / {{ agentLoop.maxSteps }}</span><el-button v-if="agentLoop.state === 'RUNNING' || agentLoop.state === 'PAUSED'" size="small" plain @click="toggleExplorerPause">{{ agentLoop.state === 'PAUSED' ? 'Resume loop' : 'Pause loop' }}</el-button></div>
@@ -617,10 +645,10 @@ onBeforeUnmount(closeEvents);
         <div v-if="!planTimelineItems.length" class="timeline-rail-empty">No generated plans yet.</div>
       </aside>
       </div>
-      <div class="composer"><div class="composer-input"><textarea v-model="draft" :disabled="explorerPaused || busy" aria-label="Explorer message" placeholder="继续探索，或提出修改…" @keydown="handleComposerKeydown" /><span class="composer-mode">Plan Mode</span></div><div class="composer-footer"><div class="composer-metadata" aria-label="模型与上下文信息"><span class="composer-fact"><small>MODEL</small><strong>{{ explorerModel }}</strong></span><span class="composer-fact"><small>CONTEXT</small><strong>{{ contextUsage }}</strong><em>estimated</em></span><el-popover v-model:visible="statusOpen" placement="top-end" :width="330" trigger="click" @show="void loadRateLimits()"><template #reference><button class="composer-status-trigger" type="button" aria-label="Status" :aria-expanded="statusOpen"><i aria-hidden="true" /><span>STATUS</span><InfoFilled :size="12" /></button></template><div class="codex-status-popover" role="dialog" aria-label="Codex usage status"><div class="codex-status-title"><InfoFilled :size="14" /><strong>状态</strong><button type="button" aria-label="关闭" @click="statusOpen = false">关闭</button></div><div class="codex-status-row"><span>模型：</span><strong>{{ explorerModel }}</strong></div><div class="codex-status-row"><span>会话/对话串：</span><code :title="thread?.id ?? 'thread-demo'">{{ conversationId }}</code></div><div class="codex-status-row"><span>背景信息：</span><strong>{{ contextUsage }}</strong><em>estimated</em></div><div class="codex-status-row"><span>5 小时限额：</span><strong>{{ rateLimits.fiveHour.remaining }}</strong><small>{{ rateLimits.fiveHour.reset }}</small></div><div class="codex-status-row"><span>7 天限额：</span><strong>{{ rateLimits.sevenDay.remaining }}</strong><small>{{ rateLimits.sevenDay.reset }}</small></div><p class="codex-status-note">{{ rateLimitNote }}</p></div></el-popover></div><span v-if="sendingTurn" class="composer-status" role="status" aria-live="polite">Message sent · waiting for Plan Explorer…</span><el-button class="composer-send" type="primary" circle :loading="busy" :disabled="!draft.trim() || explorerPaused || busy" aria-label="Send message" title="Send message" @click="sendTurn"><ArrowUp :size="18" /></el-button></div></div>
+      <div class="composer"><div class="composer-input"><textarea v-model="draft" :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || explorerPaused || busy" aria-label="Explorer message" placeholder="继续探索，或提出修改…" @keydown="handleComposerKeydown" /><span class="composer-mode">Plan Mode</span></div><div class="composer-footer"><div class="composer-metadata" aria-label="模型与上下文信息"><span class="composer-fact"><small>MODEL</small><strong>{{ explorerModel }}</strong></span><span class="composer-fact"><small>CONTEXT</small><strong>{{ contextUsage }}</strong><em>estimated</em></span><el-popover v-model:visible="statusOpen" placement="top-end" :width="330" trigger="click" @show="void loadRateLimits()"><template #reference><button class="composer-status-trigger" type="button" aria-label="Status" :aria-expanded="statusOpen"><i aria-hidden="true" /><span>STATUS</span><InfoFilled :size="12" /></button></template><div class="codex-status-popover" role="dialog" aria-label="Codex usage status"><div class="codex-status-title"><InfoFilled :size="14" /><strong>状态</strong><button type="button" aria-label="关闭" @click="statusOpen = false">关闭</button></div><div class="codex-status-row"><span>模型：</span><strong>{{ explorerModel }}</strong></div><div class="codex-status-row"><span>会话/对话串：</span><code :title="thread?.id ?? 'no-thread'">{{ conversationId }}</code></div><div class="codex-status-row"><span>背景信息：</span><strong>{{ contextUsage }}</strong><em>estimated</em></div><div class="codex-status-row"><span>5 小时限额：</span><strong>{{ rateLimits.fiveHour.remaining }}</strong><small>{{ rateLimits.fiveHour.reset }}</small></div><div class="codex-status-row"><span>7 天限额：</span><strong>{{ rateLimits.sevenDay.remaining }}</strong><small>{{ rateLimits.sevenDay.reset }}</small></div><p class="codex-status-note">{{ rateLimitNote }}</p></div></el-popover></div><span v-if="sendingTurn" class="composer-status" role="status" aria-live="polite">Message sent · waiting for Plan Explorer…</span><el-button class="composer-send" type="primary" circle :loading="busy" :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || !draft.trim() || explorerPaused || busy" aria-label="Send message" title="Send message" @click="sendTurn"><ArrowUp :size="18" /></el-button></div></div>
     </section>
     <aside class="context-panel"><div class="context-header"><div><div class="eyebrow">THREAD CONTEXT</div><h2>Working set</h2></div><el-button text circle aria-label="Refresh" @click="refreshThread"><Refresh :size="16" /></el-button></div><div class="context-section"><div class="context-section-title">CURRENT CANDIDATE <span>{{ candidateCount }}</span></div><div class="mini-plan" v-if="candidate" @click="drawerOpen = true"><div class="mini-plan-title"><span class="mini-icon"><Promotion :size="14" /></span><strong>{{ candidate.title }}</strong></div><div class="mini-plan-meta"><el-tag size="small" type="warning" effect="light">{{ statusLabel(candidate.status) }}</el-tag><span>Rev {{ candidate.revision }}</span></div><div class="mini-plan-link">View full plan <Right :size="13" /></div></div><div v-else class="context-empty compact"><CircleCheck :size="20" /><p>No candidate plan</p><small>Use Plan candidates to create a reviewable plan.</small></div></div><div class="context-section"><div class="context-section-title">DISPATCHED PLANS <span>{{ dispatched.length }}</span></div><div v-if="dispatched.length === 0" class="context-empty"><CircleCheck :size="20" /><p>No plans dispatched from this thread yet.</p><small>Confirmed plans will appear here and remain queryable even when the model is offline.</small></div><div v-else v-for="plan in dispatched" :key="plan.planId ?? plan.id" class="mini-plan dispatched"><div class="mini-plan-title"><span class="mini-icon success"><CircleCheck :size="14" /></span><strong>{{ plan.title }}</strong></div><div class="mini-plan-meta"><el-tag size="small" type="success" effect="light">{{ statusLabel(plan.status) }}</el-tag><span>Rev {{ plan.revision }}</span></div></div></div><div class="context-section context-memory"><div class="context-section-title">THREAD MEMORY</div><div class="memory-row"><span class="memory-icon">◎</span><div><strong>Context summary</strong><small>Updated just now</small></div><Right :size="14" /></div><div class="memory-row"><span class="memory-icon">↗</span><div><strong>Successor threads</strong><small>None yet</small></div><Right :size="14" /></div></div></aside>
-    <ExplorerHistoryDrawer v-model="historyOpen" :explorers="explorers" :current-id="thread?.id ?? null" @select="selectExplorer" @create="createExplorer" />
+    <ExplorerHistoryDrawer v-model="historyOpen" :explorers="explorers" :current-id="thread?.id ?? null" @select="selectExplorer" @create="createExplorer" @archive="archiveExplorer" @activate="activateExplorer" />
     <PlanDetailDrawer v-model="drawerOpen" :plan="candidate" @confirm="confirmPlan" @enqueue="enqueuePlan" />
     <ExplorerInputDialog ref="inputDialog" v-model="inputDialogOpen" :request="pendingInput" @submit="submitInput" @cancel="cancelInput" />
     <ExplorerPolicyDrawer :model-value="policyOpen" @update:model-value="setPolicyOpen" />
@@ -635,7 +663,7 @@ onBeforeUnmount(closeEvents);
     <el-drawer :model-value="memoryPanel !== null" direction="rtl" size="min(430px, 92vw)" :with-header="false" @update:model-value="setMemoryPanelOpen">
       <div class="global-drawer-shell" v-if="memoryPanel">
         <div class="drawer-header"><div><div class="eyebrow">THREAD MEMORY</div><h2>{{ memoryPanel === "summary" ? "Context summary" : "Successor threads" }}</h2></div><el-button text circle aria-label="Close thread memory" @click="closeMemoryPanel">×</el-button></div>
-        <div class="help-card" v-if="memoryPanel === 'summary'"><strong>Current ExplorerThread memory</strong><p>The thread keeps the project context, confirmed boundaries and recent exploration turns available to the Plan Explorer.</p><p class="memory-detail">Thread: {{ thread?.id ?? "thread-demo" }}<br />Messages: {{ thread?.messageCount ?? 0 }}<br />Last activity: {{ thread?.lastActivityAt ? new Date(thread.lastActivityAt).toLocaleString('zh-CN') : "—" }}</p></div>
+        <div class="help-card" v-if="memoryPanel === 'summary'"><strong>Current ExplorerThread memory</strong><p>The thread keeps the project context, confirmed boundaries and recent exploration turns available to the Plan Explorer.</p><p class="memory-detail">Thread: {{ thread?.id ?? "no-thread" }}<br />Messages: {{ thread?.messageCount ?? 0 }}<br />Last activity: {{ thread?.lastActivityAt ? new Date(thread.lastActivityAt).toLocaleString('zh-CN') : "—" }}</p></div>
         <div class="help-card" v-else><strong>No successor thread yet</strong><p>This ExplorerThread remains the active project thread. A successor will appear here when context compression creates one, while preserving the parent thread lineage.</p></div>
         <el-button type="primary" @click="closeMemoryPanel">Done <Right /></el-button>
       </div>

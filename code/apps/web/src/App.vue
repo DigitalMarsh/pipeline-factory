@@ -1,16 +1,39 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { Bell, FolderOpened, Help, Search } from "@element-plus/icons-vue";
+import { useRoute, useRouter } from "vue-router";
+import { api } from "./api";
+import type { Project } from "./types";
 
 const helpOpen = ref(false);
 const notificationsOpen = ref(false);
+const projects = ref<Project[]>([]);
+const route = useRoute();
+const router = useRouter();
+const currentProjectId = computed(() => typeof route.params.projectId === "string" ? route.params.projectId : null);
+const currentProject = computed(() => projects.value.find((project) => project.id === currentProjectId.value) ?? null);
+
+async function loadProjects() {
+  try { projects.value = (await api.projects()).items; } catch { projects.value = []; }
+}
+
+function switchProject(projectId: string) {
+  if (projectId === "catalog") { void router.push("/projects"); return; }
+  void router.push(`/projects/${projectId}/explorer`);
+}
+
+watch(currentProjectId, () => { if (!projects.value.length) void loadProjects(); });
+onMounted(() => { void loadProjects(); });
 </script>
 
 <template>
   <div class="app-shell">
     <header class="topbar">
       <div class="brand-mark"><span class="brand-dot" /> Pipeline Factory <small>v4</small></div>
-      <div class="topbar-project"><FolderOpened :size="15" /> <span>project-demo</span><span class="project-live">● Active</span></div>
+      <el-dropdown class="project-switcher" trigger="click" @command="switchProject">
+        <button class="topbar-project" type="button" aria-label="Switch Project"><FolderOpened :size="15" /> <span>{{ currentProject?.name ?? "Projects" }}</span><span v-if="currentProject" class="project-live">● {{ currentProject.status === "ACTIVE" ? "Active" : "Archived" }}</span><span v-else class="project-switch-chevron">⌄</span></button>
+        <template #dropdown><el-dropdown-menu><el-dropdown-item v-for="project in projects" :key="project.id" :command="project.id"><span class="project-menu-item"><FolderOpened :size="14" />{{ project.name }}<small>{{ project.status === "ACTIVE" ? "Active" : "Archived" }}</small></span></el-dropdown-item><el-dropdown-item divided command="catalog">Manage Projects</el-dropdown-item></el-dropdown-menu></template>
+      </el-dropdown>
       <div class="topbar-actions">
         <div class="global-search"><Search :size="15" /><span>Search plans, runs, threads</span><kbd>⌘ K</kbd></div>
         <el-tooltip content="System healthy"><span class="system-health"><i /> Healthy</span></el-tooltip>

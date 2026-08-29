@@ -1,14 +1,71 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { InMemoryPipelineStore, LifecycleHookRunner, PlanService, Scheduler, type AgentLoop, type ModelGateway, type VerificationCommandExecutor } from "@pipeline-factory/domain";
+import { InMemoryPipelineStore, LifecycleHookRunner, PlanService, ProjectService, Scheduler, type AgentLoop, type ModelGateway, type VerificationCommandExecutor } from "@pipeline-factory/domain";
 import { createApp } from "./server.js";
 
 const apps: Array<Awaited<ReturnType<typeof createApp>>> = [];
+
+function createTestProject(store: InMemoryPipelineStore, id = "project-1") {
+  return new ProjectService(store).create({ id, name: id, repoRoot: `/repo/${id}`, defaultBranch: "main", worktreeRoot: `/tmp/${id}-worktrees` });
+}
 
 afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
 });
 
 describe("Pipeline Factory v3 API", () => {
+  it("lists Project configuration and summary data", async () => {
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    const project = projects.create({ id: "project-1", name: "Demo", repoRoot: "/repo/demo", defaultBranch: "main", worktreeRoot: "/tmp/demo-worktrees" });
+    const plans = new PlanService(store, projects);
+    plans.registerThread({ id: "explorer-1", projectId: project.id, parentThreadId: null });
+    projects.selectExplorer(project.id, "explorer-1");
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+
+    const list = await app.inject({ method: "GET", url: "/api/v4/projects" });
+    const detail = await app.inject({ method: "GET", url: "/api/v4/projects/project-1" });
+
+    expect(list.statusCode).toBe(200);
+    expect(list.json().items).toMatchObject([{ id: "project-1", name: "Demo", repoRoot: "/repo/demo", status: "ACTIVE" }]);
+    expect(list.json().items[0].summary).toMatchObject({ currentExplorerThread: "explorer-1", currentExplorerTitle: expect.any(String), threadCount: 1, runCount: 0 });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.json().summary).toMatchObject({ threadCount: 1, planCount: 0, runCount: 0, currentExplorerThread: "explorer-1" });
+  });
+
+  it("rejects project-scoped requests for an unknown Project", async () => {
+    const store = new InMemoryPipelineStore();
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+
+    const response = await app.inject({ method: "GET", url: "/api/v4/projects/missing/explorers" });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toMatchObject({ code: "PROJECT_NOT_FOUND" });
+  });
+
+  it("lists all dispatched plans for a Project across ExplorerThreads", async () => {
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    const project = projects.create({ id: "project-plans", name: "Plans", repoRoot: "/repo/plans", defaultBranch: "main", worktreeRoot: "/tmp/plans-worktrees" });
+    const plans = new PlanService(store, projects);
+    plans.registerThread({ id: "explorer-a", projectId: project.id, parentThreadId: null });
+    plans.registerThread({ id: "explorer-b", projectId: project.id, parentThreadId: null });
+    const first = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "explorer-a", title: "Plan A" });
+    const second = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "explorer-b", title: "Plan B" });
+    plans.confirm(first.id, "user-1");
+    plans.enqueue(first.id);
+    plans.confirm(second.id, "user-1");
+    plans.enqueue(second.id);
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+
+    const response = await app.inject({ method: "GET", url: `/api/v4/projects/${project.id}/plans` });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().items.map((item: { title: string }) => item.title).sort()).toEqual(["Plan A", "Plan B"]);
+  });
+
   it("exposes the active Explorer model in health metadata", async () => {
     const store = new InMemoryPipelineStore();
     const model: ModelGateway = {
@@ -118,6 +175,7 @@ describe("Pipeline Factory v3 API", () => {
 
   it("enforces confirm before enqueue and exposes the thread plan projection", async () => {
     const store = new InMemoryPipelineStore();
+    createTestProject(store);
     const app = createApp({ store, seed: false });
     apps.push(app);
     const planService = (await import("@pipeline-factory/domain")).PlanService;
@@ -136,6 +194,7 @@ describe("Pipeline Factory v3 API", () => {
 
   it("keeps ExplorerThread turns in the API without granting write tools", async () => {
     const store = new InMemoryPipelineStore();
+    createTestProject(store);
     const app = createApp({ store, seed: false });
     apps.push(app);
     const plans = new (await import("@pipeline-factory/domain")).PlanService(store);
@@ -161,6 +220,7 @@ describe("Pipeline Factory v3 API", () => {
     const app = createApp({ store, model, seed: false });
     apps.push(app);
     const plans = new (await import("@pipeline-factory/domain")).PlanService(store);
+    createTestProject(store);
     plans.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
 
     const response = await app.inject({ method: "POST", url: "/api/v3/projects/project-1/explorer-thread/turns", payload: { content: "hello" } });
@@ -171,6 +231,7 @@ describe("Pipeline Factory v3 API", () => {
 
   it("starts a queued plan only through the injected Scheduler", async () => {
     const store = new InMemoryPipelineStore();
+    createTestProject(store);
     const plans = new PlanService(store);
     plans.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
     const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Start from API" });
@@ -187,6 +248,7 @@ describe("Pipeline Factory v3 API", () => {
 
   it("creates and approves a ChangeProposal through the v4 API without switching the old Run revision", async () => {
     const store = new InMemoryPipelineStore();
+    createTestProject(store, "project-change");
     const plans = new PlanService(store);
     plans.registerThread({ id: "thread-change", projectId: "project-change", parentThreadId: null });
     const plan = plans.createCandidatePlan({ projectId: "project-change", sourceExplorerThreadId: "thread-change", title: "Change API plan" });
@@ -210,6 +272,7 @@ describe("Pipeline Factory v3 API", () => {
 
   it("verifies a run, opens a merge request, and confirms the reviewed commit", async () => {
     const store = new InMemoryPipelineStore();
+    createTestProject(store);
     const plans = new PlanService(store);
     plans.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
     const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Review from API" });
@@ -238,6 +301,7 @@ describe("Pipeline Factory v3 API", () => {
 
   it("pauses, resumes, and journals bounded user guidance for a run", async () => {
     const store = new InMemoryPipelineStore();
+    createTestProject(store);
     const plans = new PlanService(store);
     plans.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
     const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Control from API" });
@@ -261,6 +325,7 @@ describe("Pipeline Factory v3 API", () => {
 
   it("supports asynchronous v4 turns and structured answers without changing v3", async () => {
     const store = new InMemoryPipelineStore();
+    createTestProject(store);
     store.saveThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
     let streamCount = 0;
     const resumeOrder: string[] = [];
@@ -289,7 +354,6 @@ describe("Pipeline Factory v3 API", () => {
     const app = createApp({ store, model, seed: false });
     apps.push(app);
     const plans = new (await import("@pipeline-factory/domain")).PlanService(store);
-    plans.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
     const accepted = await app.inject({ method: "POST", url: "/api/v4/projects/project-1/explorer-thread/turns", payload: { threadId: "thread-1", content: "继续探索", clientTurnId: "client-1" } });
     expect(accepted.statusCode).toBe(202);
     expect(accepted.json().turn.assistant.status).toBe("RUNNING");
@@ -321,6 +385,7 @@ describe("Pipeline Factory v3 API", () => {
 
   it("creates and lists isolated business Explorers without reusing the old context", async () => {
     const store = new InMemoryPipelineStore();
+    createTestProject(store);
     store.saveThread({ id: "old-explorer", projectId: "project-1", parentThreadId: null, title: "Old exploration", providerThreadId: "provider-old" });
     store.saveTurn({ id: "old-turn", threadId: "old-explorer", role: "user", content: "old plan", status: "COMPLETED", createdAt: store.now(), sequence: 1 });
     const app = createApp({ store, seed: false });
@@ -343,6 +408,7 @@ describe("Pipeline Factory v3 API", () => {
 
   it("creates an Explorer with a timestamp placeholder and locks manual renames", async () => {
     const store = new InMemoryPipelineStore();
+    createTestProject(store);
     const app = createApp({ store, seed: false });
     apps.push(app);
 
@@ -359,6 +425,7 @@ describe("Pipeline Factory v3 API", () => {
 
   it("projects Agent Loop steps as ordered Explorer activity items", async () => {
     const store = new InMemoryPipelineStore();
+    createTestProject(store);
     store.saveThread({ id: "explorer-1", projectId: "project-1", parentThreadId: null });
     store.saveTurn({ id: "user-1", threadId: "explorer-1", role: "user", content: "hello", status: "COMPLETED", createdAt: "2026-08-29T10:00:00.000Z", sequence: 1 });
     store.saveTurn({ id: "assistant-1", threadId: "explorer-1", role: "assistant", content: "hello", status: "COMPLETED", createdAt: "2026-08-29T10:00:01.000Z", sequence: 2 });

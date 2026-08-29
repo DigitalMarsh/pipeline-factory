@@ -394,7 +394,7 @@ export class CodexAppServerGateway implements ModelGateway {
     }
     try {
       const session = await this.getSession(request.conversationId ?? request.role);
-      const roleConfig = this.configFor(request.role);
+      const roleConfig = { ...this.configFor(request.role), ...(request.modelConfig ?? {}) };
       let providerThreadId = request.providerThreadId ?? (request.conversationId ? this.providerThreads.get(request.conversationId) : undefined);
       if (providerThreadId) {
         if (request.conversationId) this.providerThreads.set(request.conversationId, providerThreadId);

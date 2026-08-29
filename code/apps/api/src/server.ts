@@ -1,5 +1,9 @@
+import { execFile, execFileSync } from "node:child_process";
+import { realpath } from "node:fs/promises";
+import { basename, dirname, resolve as resolvePath } from "node:path";
+import { promisify } from "node:util";
 import cors from "@fastify/cors";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import {
   PlanService,
   MergeService,
@@ -18,6 +22,7 @@ import {
   McpToolRegistry,
   PluginRegistry,
   ComputerUseBridge,
+  ProjectService,
   StubModelGateway,
   RecoveryCoordinator,
   ExecutorAgent,
@@ -34,10 +39,14 @@ import {
   type AgentLoop,
   type AgentLoopRunner,
   type PlanContract,
+  type ProjectSettingsInput,
+  type ProjectExecutionSnapshot,
 } from "@pipeline-factory/domain";
 import { projectExplorerActivity } from "@pipeline-factory/domain";
 import { z } from "zod";
 import type { FactoryConfig } from "./config.js";
+
+const execFileAsync = promisify(execFile);
 
 const planIdParams = z.object({ planId: z.string().min(1) });
 const projectThreadParams = z.object({ projectId: z.string().min(1) });
@@ -73,8 +82,24 @@ const targetCommitBody = z.object({ targetCommit: z.string().trim().min(1).max(2
 const changeProposalBody = z.object({ reason: z.string().trim().min(1).max(4_000), requestedChanges: z.array(z.string().trim().min(1).max(2_000)).min(1).max(50), contract: z.record(z.unknown()), createdBy: z.string().min(1).default("executor") });
 const agentLoopParams = z.object({ loopId: z.string().min(1) });
 const loopReasonBody = z.object({ reason: z.string().trim().min(1).max(500).default("user_requested") });
-
-type ProjectHookConfig = { start?: HookDefinition | undefined; cleanup?: HookDefinition | undefined };
+const projectCreateBody = z.object({
+  id: z.string().trim().min(1).max(100).optional(),
+  name: z.string().trim().min(1).max(200),
+  repoRoot: z.string().trim().min(1),
+  defaultBranch: z.string().trim().min(1).optional(),
+  worktreeRoot: z.string().trim().min(1).optional(),
+  settings: z.record(z.unknown()).optional(),
+});
+const projectUpdateBody = z.object({
+  name: z.string().trim().min(1).max(200).optional(),
+  repoRoot: z.string().trim().min(1).optional(),
+  defaultBranch: z.string().trim().min(1).optional(),
+  worktreeRoot: z.string().trim().min(1).optional(),
+  settings: z.record(z.unknown()).optional(),
+  expectedConfigVersion: z.number().int().positive().optional(),
+});
+const projectValidateBody = z.object({ repoRoot: z.string().trim().min(1).optional() });
+const projectSelectExplorerBody = z.object({ explorerId: z.string().trim().min(1) });
 
 export type PipelineAppOptions = {
   store?: PipelineStore;
@@ -95,12 +120,13 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
   const ownsStore = !options.store;
   const store = options.store ?? new SqlitePipelineStore(options.databasePath ?? options.config?.storage.databasePath ?? "pipeline-factory.sqlite");
   new RecoveryCoordinator(store).recover();
-  const plans = new PlanService(store);
+  const projects = new ProjectService(store);
+  const plans = new PlanService(store, projects);
   const explorers = new ExplorerService(store);
   const changeProposals = new ChangeProposalService(store);
   const verifier = new VerificationService(store);
   const merger = options.mergeService ?? new MergeService(store);
-  const verificationExecutor = options.verificationExecutor ?? (options.config ? createDefaultVerificationExecutor(options.config) : undefined);
+  const verificationExecutor = options.verificationExecutor ?? (options.config ? createDefaultVerificationExecutor(store, options.config) : undefined);
   const ownsModel = !options.model;
   const model = options.model ?? (options.config ? createModelGateway(options.config) : new StubModelGateway({ explorer: { model: "stub-explorer", temperature: 0.1 }, executor: { model: "stub-executor", temperature: 0 } }));
   const mcpRegistry = options.mcpRegistry ?? (options.config ? new McpToolRegistry(options.config.mcp.servers) : undefined);
@@ -111,6 +137,8 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     maxDurationMs: options.config?.model.loop.maxDurationMs,
     maxRepeatedToolCalls: options.config?.model.loop.maxRepeatedToolCalls,
     maxNoProgressSteps: options.config?.model.loop.maxNoProgressSteps,
+    cwdForProject: (projectId) => store.getProject(projectId)?.repoRoot,
+    modelConfigForProject: (projectId) => store.getProject(projectId)?.settings.models.explorer,
     titleGenerator: new ModelExplorerTitleGenerator(model),
   });
   void explorer.backfillTitles();
@@ -139,14 +167,65 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       return persistLoopControl(store, loop, "CANCELLED", reason);
     },
   };
-  const hookConfigs = new Map<string, ProjectHookConfig>();
 
   if (options.seed !== false && !store.getThread("thread-demo")) {
     plans.registerThread({ id: "thread-demo", projectId: "project-demo", parentThreadId: null });
   }
+  if (options.config) {
+    const projectRoot = options.config.project.root;
+    const projectName = basename(projectRoot);
+    const defaultBranch = detectDefaultBranch(projectRoot);
+    projects.bootstrapLegacy({
+      id: "project-demo",
+        name: projectName,
+        repoRoot: projectRoot,
+        defaultBranch,
+        worktreeRoot: options.config.storage.worktreeRoot,
+        settings: {
+        commands: options.config.project.commands.map((command) => ({ ...command, argv: command.argv as [string, ...string[]] })),
+        concurrency: {
+          maxParallelRuns: options.config.runtime.projectConcurrency,
+          defaultTimeoutMs: options.config.runtime.defaultTimeoutMs,
+          maxAutoContinuationTurns: options.config.runtime.maxAutoContinuationTurns,
+          maxRepairAttempts: 2,
+        },
+        models: options.config.model.roles,
+        toolPolicy: {
+          allowedMcpTools: options.config.mcp.servers.flatMap((server) => server.allowedTools.map((tool) => `mcp:${server.name}:${tool}`)),
+          allowedPluginTools: options.config.plugins.allowedTools,
+          computerUseEnabled: options.config.computerUse.enabled,
+        },
+      },
+    });
+  }
 
   const app = Fastify({ logger: false });
   void app.register(cors, { origin: true });
+  app.addHook("preHandler", async (request, reply) => {
+    const path = request.url.split("?", 1)[0] ?? request.url;
+    const match = path.match(/^\/api\/v[34]\/projects\/([^/]+)/);
+    if (!match) return;
+    const projectId = decodeURIComponent(match[1] ?? "");
+    const project = store.getProject(projectId);
+    if (!project) {
+      return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${projectId} not found` });
+    }
+    if (project.status === "ARCHIVED" && request.method !== "GET" && !path.endsWith("/activate") && !path.endsWith("/validate-repository")) {
+      return reply.code(409).send({ code: "PROJECT_ARCHIVED", error: `Project ${projectId} is archived` });
+    }
+  });
+  const ensurePlanProject = (projectId: string, reply: FastifyReply, write = false) => {
+    const project = store.getProject(projectId);
+    if (!project) {
+      reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${projectId} not found` });
+      return null;
+    }
+    if (write && project?.status === "ARCHIVED") {
+      reply.code(409).send({ code: "PROJECT_ARCHIVED", error: `Project ${projectId} is archived` });
+      return null;
+    }
+    return project;
+  };
   app.addHook("onClose", async () => {
     if (ownsStore && "close" in store && typeof store.close === "function") store.close();
     if (ownsModel && "close" in model && typeof model.close === "function") await model.close();
@@ -154,6 +233,137 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
   });
 
   app.get("/health", async () => ({ status: "ok", service: "pipeline-factory-api", version: "v4", modelBackend: options.config?.model.backend ?? "stub", model: model.configFor("explorer").model }));
+
+  app.get("/api/v4/projects", async (request) => {
+    const query = z.object({ status: z.enum(["ACTIVE", "ARCHIVED"]).optional() }).safeParse(request.query ?? {});
+    const list = query.success ? projects.list(query.data.status) : projects.list();
+    return { items: list.map((project) => {
+      const summary = projects.summary(project.id);
+      return {
+        ...project,
+        summary: {
+          currentExplorerThread: summary.currentExplorerThread,
+          currentExplorerTitle: summary.currentExplorerThread ? store.getThread(summary.currentExplorerThread)?.title ?? null : null,
+          threadCount: summary.threadCount,
+          planCount: summary.planCount,
+          runCount: summary.runCount,
+          activeRunCount: summary.activeRunCount,
+          needsAttentionCount: summary.needsAttentionCount,
+          lastActivityAt: summary.lastActivityAt,
+        },
+      };
+    }) };
+  });
+
+  app.post("/api/v4/projects", async (request, reply) => {
+    const body = projectCreateBody.safeParse(request.body ?? {});
+    if (!body.success) return reply.code(400).send({ error: body.error.flatten() });
+    try {
+      const repository = await inspectGitRepository(body.data.repoRoot);
+      const defaultBranch = body.data.defaultBranch ?? repository.defaultBranch;
+      await assertGitBranch(repository.repoRoot, defaultBranch);
+      const worktreeRoot = body.data.worktreeRoot ?? resolvePath(dirname(repository.repoRoot), `.${basename(repository.repoRoot)}-pipeline-worktrees`);
+      let project = projects.create({
+        ...(body.data.id ? { id: body.data.id } : {}),
+        name: body.data.name,
+        repoRoot: repository.repoRoot,
+        defaultBranch,
+        worktreeRoot,
+        ...(body.data.settings ? { settings: body.data.settings as ProjectSettingsInput } : {}),
+      });
+      const existingExplorer = store.listThreads().find((thread) => thread.projectId === project.id && thread.state !== "ARCHIVED");
+      const explorerThread = existingExplorer ?? plans.registerThread({ id: store.nextId("explorer"), projectId: project.id, parentThreadId: null, title: "New Explorer" });
+      project = projects.selectExplorer(project.id, explorerThread.id);
+      return reply.code(201).send({ project, explorer: explorerThread });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const status = /Git repository|does not exist|absolute path/i.test(message) ? 422 : 409;
+      return reply.code(status).send({ code: status === 422 ? "INVALID_GIT_REPOSITORY" : "PROJECT_CONFLICT", error: message });
+    }
+  });
+
+  app.post("/api/v4/projects/:projectId/validate-repository", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    const body = projectValidateBody.safeParse(request.body ?? {});
+    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid repository validation request" });
+    const project = store.getProject(params.data.projectId);
+    if (!project) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
+    try {
+      const repository = await inspectGitRepository(body.data.repoRoot ?? project.repoRoot);
+      return { valid: true, repoRoot: repository.repoRoot, defaultBranch: repository.defaultBranch };
+    } catch (error) {
+      return reply.code(422).send({ code: "INVALID_GIT_REPOSITORY", error: error instanceof Error ? error.message : String(error) });
+    }
+  });
+
+  app.get("/api/v4/projects/:projectId", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    const project = store.getProject(params.data.projectId);
+    if (!project) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
+    return { project, summary: projects.summary(project.id) };
+  });
+
+  app.get("/api/v4/projects/:projectId/summary", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    if (!store.getProject(params.data.projectId)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
+    return { summary: projects.summary(params.data.projectId) };
+  });
+
+  app.patch("/api/v4/projects/:projectId", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    const body = projectUpdateBody.safeParse(request.body ?? {});
+    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid Project update request" });
+    try {
+      const project = projects.get(params.data.projectId);
+      const repository = body.data.repoRoot ? await inspectGitRepository(body.data.repoRoot) : undefined;
+      const defaultBranch = body.data.defaultBranch ?? (repository ? repository.defaultBranch : undefined);
+      if (defaultBranch) await assertGitBranch(repository?.repoRoot ?? project.repoRoot, defaultBranch);
+      const updated = projects.update(params.data.projectId, {
+        ...(body.data.name ? { name: body.data.name } : {}),
+        ...(repository ? { repoRoot: repository.repoRoot, ...(body.data.defaultBranch ? {} : { defaultBranch: repository.defaultBranch }) } : body.data.repoRoot ? { repoRoot: body.data.repoRoot } : {}),
+        ...(body.data.defaultBranch ? { defaultBranch: body.data.defaultBranch } : {}),
+        ...(body.data.worktreeRoot ? { worktreeRoot: body.data.worktreeRoot } : {}),
+        ...(body.data.expectedConfigVersion ? { expectedConfigVersion: body.data.expectedConfigVersion } : {}),
+        ...(body.data.settings ? { settings: body.data.settings as ProjectSettingsInput } : {}),
+      });
+      return { project: updated };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const code = /not found/i.test(message) ? "PROJECT_NOT_FOUND" : /configuration version conflict/i.test(message) ? "CONFIG_VERSION_CONFLICT" : /active runs/i.test(message) ? "PROJECT_HAS_ACTIVE_RUNS" : /Git repository|branch|does not exist|absolute path/i.test(message) ? "INVALID_GIT_REPOSITORY" : "PROJECT_UPDATE_FAILED";
+      return reply.code(code === "INVALID_GIT_REPOSITORY" ? 422 : code === "PROJECT_NOT_FOUND" ? 404 : 409).send({ code, error: message });
+    }
+  });
+
+  app.post("/api/v4/projects/:projectId/archive", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    try { return { project: projects.archive(params.data.projectId) }; }
+    catch (error) { const message = error instanceof Error ? error.message : String(error); return reply.code(/not found/i.test(message) ? 404 : 409).send({ code: /not found/i.test(message) ? "PROJECT_NOT_FOUND" : "PROJECT_HAS_ACTIVE_RUNS", error: message }); }
+  });
+
+  app.post("/api/v4/projects/:projectId/activate", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    try { return { project: projects.activate(params.data.projectId) }; }
+    catch (error) { const message = error instanceof Error ? error.message : String(error); return reply.code(/not found/i.test(message) ? 404 : 409).send({ code: /not found/i.test(message) ? "PROJECT_NOT_FOUND" : "PROJECT_ACTIVATION_FAILED", error: message }); }
+  });
+
+  app.post("/api/v4/projects/:projectId/select-explorer", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    const body = projectSelectExplorerBody.safeParse(request.body ?? {});
+    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid Explorer selection request" });
+    try { return { project: projects.selectExplorer(params.data.projectId, body.data.explorerId) }; }
+    catch (error) { const message = error instanceof Error ? error.message : String(error); return reply.code(/Project .* not found/i.test(message) ? 404 : 409).send({ code: /Project .* not found/i.test(message) ? "PROJECT_NOT_FOUND" : "EXPLORER_SELECTION_FAILED", error: message }); }
+  });
+
+  app.get("/api/v4/projects/:projectId/config-history", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    try { return { items: projects.configHistory(params.data.projectId) }; }
+    catch (error) { const message = error instanceof Error ? error.message : String(error); return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: message }); }
+  });
 
   app.get("/api/v4/codex/rate-limits", async () => {
     const rateLimits = model.readRateLimits ? await model.readRateLimits().catch(() => mapCodexRateLimits(null)) : mapCodexRateLimits(null);
@@ -340,6 +550,20 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     return { items, lastEventSequence: store.getLastEventSequence(explorer.id) };
   });
 
+  app.get("/api/v4/projects/:projectId/plans", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    const query = threadPlanQuery.safeParse(request.query);
+    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid project plan query" });
+    if (!store.getProject(params.data.projectId)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
+    const statuses = query.data.status?.split(",").filter(Boolean) as PlanStatus[] | undefined;
+    const rows = plans
+      .listProjectPlans(params.data.projectId)
+      .filter((row) => !statuses?.length || statuses.includes(row.status))
+      .filter((row) => !query.data.q || `${row.planId} ${row.title}`.toLowerCase().includes(query.data.q.toLowerCase()))
+      .slice(0, query.data.limit);
+    return { items: decoratePlanRows(store, rows), nextCursor: null };
+  });
+
   app.get("/api/v4/projects/:projectId/explorers/:explorerId/plans", async (request, reply) => {
     const params = projectExplorerParams.safeParse(request.params);
     const query = threadPlanQuery.safeParse(request.query);
@@ -353,7 +577,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       .filter((row) => !query.data.q || `${row.planId} ${row.title}`.toLowerCase().includes(query.data.q.toLowerCase()))
       .sort((a, b) => query.data.sort === "last_event_at" ? b.lastEventAt.localeCompare(a.lastEventAt) : b.queuedAt.localeCompare(a.queuedAt))
       .slice(0, query.data.limit);
-    return { items: rows, nextCursor: null };
+    return { items: decoratePlanRows(store, rows), nextCursor: null };
   });
 
   app.get("/api/v4/projects/:projectId/explorers/:explorerId/candidate", async (request, reply) => {
@@ -499,7 +723,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       .filter((row) => !query.data.q || `${row.planId} ${row.title}`.toLowerCase().includes(query.data.q.toLowerCase()))
       .sort((a, b) => query.data.sort === "last_event_at" ? b.lastEventAt.localeCompare(a.lastEventAt) : b.queuedAt.localeCompare(a.queuedAt))
       .slice(0, query.data.limit);
-    return { items: rows, nextCursor: null };
+    return { items: decoratePlanRows(store, rows), nextCursor: null };
   });
 
   app.get("/api/v3/projects/:projectId/explorer-thread/candidate", async (request, reply) => {
@@ -520,6 +744,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     try {
       const plan = plans.get(params.data.planId);
+      if (ensurePlanProject(plan.projectId, reply) === null) return;
       const revision = store.getRevision(plan.id, plan.revision);
       return { plan, revision: revision ?? null };
     } catch {
@@ -532,6 +757,8 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     const body = actorBody.safeParse(request.body ?? {});
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid confirmation request" });
     try {
+      const plan = plans.get(params.data.planId);
+      if (ensurePlanProject(plan.projectId, reply, true) === null) return;
       return { plan: plans.confirm(params.data.planId, body.data.actorId) };
     } catch (error) {
       return reply.code(409).send({ error: error instanceof Error ? error.message : "Plan cannot be confirmed" });
@@ -542,6 +769,8 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     const params = planIdParams.safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     try {
+      const plan = plans.get(params.data.planId);
+      if (ensurePlanProject(plan.projectId, reply, true) === null) return;
       return { plan: plans.enqueue(params.data.planId) };
     } catch (error) {
       return reply.code(409).send({ error: error instanceof Error ? error.message : "Plan cannot be enqueued" });
@@ -554,9 +783,12 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (!scheduler) return reply.code(503).send({ error: "Scheduler is not configured for this API instance" });
     try {
       const plan = plans.get(params.data.planId);
-      return { run: await scheduler.start(plan.id, hookConfigs.get(plan.projectId) ?? {}) };
+      if (ensurePlanProject(plan.projectId, reply, true) === null) return;
+      const project = store.getProject(plan.projectId);
+      return { run: await scheduler.start(plan.id, project?.settings.hooks ?? {}) };
     } catch (error) {
-      return reply.code(409).send({ error: error instanceof Error ? error.message : "Run cannot be started" });
+      const message = error instanceof Error ? error.message : "Run cannot be started";
+      return reply.code(409).send({ code: /concurrency limit/i.test(message) ? "PROJECT_CONCURRENCY_LIMIT" : "RUN_START_FAILED", error: message });
     }
   });
 
@@ -585,7 +817,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (!proposal) return reply.code(404).send({ error: "ChangeProposal not found" });
     try {
       const plan = store.getPlan(proposal.planId);
-      const approved = await changeProposals.approve(params.data.proposalId, body.data.actorId, scheduler ? (planId) => scheduler.start(planId, plan ? hookConfigs.get(plan.projectId) ?? {} : {}) : undefined);
+      const approved = await changeProposals.approve(params.data.proposalId, body.data.actorId, scheduler ? (planId) => scheduler.start(planId, plan ? store.getProject(plan.projectId)?.settings.hooks ?? {} : {}) : undefined);
       return { ...approved, plan: store.getPlan(approved.plan.id) ?? approved.plan };
     } catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "ChangeProposal cannot be approved" }); }
   });
@@ -595,7 +827,10 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     const body = z.object({ exitReason: z.string().min(1).default("completed") }).safeParse(request.body ?? {});
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid run completion request" });
     if (!scheduler) return reply.code(503).send({ error: "Scheduler is not configured for this API instance" });
-    try { return { run: await scheduler.finish(params.data.runId, body.data.exitReason, hookConfigs.get(scheduler.run(params.data.runId).projectId) ?? {}) }; }
+    try {
+      const run = scheduler.run(params.data.runId);
+      return { run: await scheduler.finish(params.data.runId, body.data.exitReason, store.getProject(run.projectId)?.settings.hooks ?? {}) };
+    }
     catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "Run cannot be finished" }); }
   });
 
@@ -695,14 +930,26 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
   app.get("/api/v3/projects/:projectId/settings/hooks", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    return { projectId: params.data.projectId, lifecycle: hookConfigs.get(params.data.projectId) ?? {} };
+    return { projectId: params.data.projectId, lifecycle: store.getProject(params.data.projectId)?.settings.hooks ?? {} };
   });
 
   app.put("/api/v3/projects/:projectId/settings/hooks", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
     const body = hookBody.safeParse(request.body ?? {});
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid hook configuration" });
-    hookConfigs.set(params.data.projectId, body.data);
+    const project = store.getProject(params.data.projectId);
+    if (project) {
+      const lifecycle = {
+        ...(body.data.start ? { start: { commandId: body.data.start.commandId, ...(body.data.start.enabled === undefined ? {} : { enabled: body.data.start.enabled }), ...(body.data.start.timeoutMs === undefined ? {} : { timeoutMs: body.data.start.timeoutMs }) } } : {}),
+        ...(body.data.cleanup ? { cleanup: { commandId: body.data.cleanup.commandId, ...(body.data.cleanup.enabled === undefined ? {} : { enabled: body.data.cleanup.enabled }), ...(body.data.cleanup.timeoutMs === undefined ? {} : { timeoutMs: body.data.cleanup.timeoutMs }) } } : {}),
+      };
+      try {
+        projects.update(params.data.projectId, { settings: { hooks: lifecycle } });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return reply.code(/active runs/i.test(message) ? 409 : 422).send({ code: /active runs/i.test(message) ? "PROJECT_HAS_ACTIVE_RUNS" : "HOOK_SETTINGS_INVALID", error: message });
+      }
+    }
     return { projectId: params.data.projectId, lifecycle: body.data };
   });
 
@@ -735,6 +982,62 @@ function findProjectThread(store: PipelineStore, projectId: string, threadId?: s
   return store.listThreads().find((thread) => thread.projectId === projectId && (threadId ? thread.id === threadId : thread.parentThreadId === null));
 }
 
+function decoratePlanRows(store: PipelineStore, rows: Array<{ planId: string; revision: number; projectId: string }>) {
+  return rows.map((row) => {
+    const revision = store.getRevision(row.planId, row.revision);
+    const snapshot = revision?.projectConfigSnapshot;
+    const project = store.getProject(row.projectId);
+    return {
+      ...row,
+      projectConfigVersion: revision?.projectConfigVersion ?? null,
+      projectConfigHash: revision?.projectConfigHash ?? null,
+      projectConfigStatus: !snapshot ? "LEGACY" : project && snapshot.configVersion === project.configVersion && snapshot.configHash === project.configHash ? "CURRENT" : "CHANGED",
+    };
+  });
+}
+
+async function inspectGitRepository(inputPath: string): Promise<{ repoRoot: string; defaultBranch: string }> {
+  const candidate = await realpath(resolvePath(inputPath));
+  let gitRoot: string;
+  try {
+    const result = await execFileAsync("git", ["rev-parse", "--show-toplevel"], { cwd: candidate });
+    gitRoot = await realpath(String(result.stdout).trim());
+  } catch (error) {
+    throw new Error(`Path is not a Git repository: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (gitRoot !== candidate) throw new Error(`Path must be the Git repository root: ${gitRoot}`);
+  let defaultBranch = "main";
+  try {
+    const result = await execFileAsync("git", ["symbolic-ref", "--short", "HEAD"], { cwd: gitRoot });
+    const branch = String(result.stdout).trim();
+    if (branch) defaultBranch = branch;
+  } catch {
+    try {
+      const result = await execFileAsync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: gitRoot });
+      const branch = String(result.stdout).trim();
+      if (branch && branch !== "HEAD") defaultBranch = branch;
+    } catch { /* Detached or unavailable branch metadata keeps the safe default. */ }
+  }
+  return { repoRoot: gitRoot, defaultBranch };
+}
+
+async function assertGitBranch(repoRoot: string, branch: string): Promise<void> {
+  const normalized = branch.trim();
+  if (!normalized || normalized.startsWith("-") || normalized.includes("..")) throw new Error(`Invalid default branch ${branch}`);
+  try {
+    await execFileAsync("git", ["rev-parse", "--verify", `refs/heads/${normalized}`], { cwd: repoRoot });
+  } catch {
+    throw new Error(`Default branch ${normalized} does not exist in ${repoRoot}`);
+  }
+}
+
+function detectDefaultBranch(repoRoot: string): string {
+  try {
+    const value = execFileSync("git", ["symbolic-ref", "--short", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
+    return value || "main";
+  } catch { return "main"; }
+}
+
 function persistLoopControl(store: PipelineStore, loop: AgentLoop, state: AgentLoop["state"], reason: string): AgentLoop {
   const terminal = new Set<AgentLoop["state"]>(["BLOCKED", "COMPLETED", "FAILED", "CANCELLED", "NEEDS_RECONCILIATION"]);
   if (terminal.has(loop.state)) throw new Error(`AgentLoop ${loop.id} is already ${loop.state}`);
@@ -752,24 +1055,39 @@ function createDefaultScheduler(store: PipelineStore, config: FactoryConfig, mod
   const commands = new RegisteredCommandExecutor(definitions);
   const registeredCommandIds = new Set(definitions.map((definition) => definition.commandId));
   const mcpAllowedTools = new Set(config.mcp.servers.flatMap((server) => server.allowedTools.map((tool) => "mcp:" + server.name + ":" + tool)));
+  const projectCommands = (snapshot: ProjectExecutionSnapshot) => new RegisteredCommandExecutor(snapshot.settings.commands);
+  const projectDefinitions = (snapshot: ProjectExecutionSnapshot) => [...snapshot.settings.commands];
   return new Scheduler({
     store,
+    globalConcurrency: config.runtime.globalConcurrency,
     workspace: new LocalGitWorktreeAdapter({ projectRoot: config.project.root, worktreeRoot: config.storage.worktreeRoot }),
     hooks: new LifecycleHookRunner(commands.execute.bind(commands), { cleanupCwd: config.project.root }),
+    workspaceFactory: (snapshot) => new LocalGitWorktreeAdapter({ projectRoot: snapshot.repoRoot, worktreeRoot: snapshot.worktreeRoot }),
+    hookRunnerFactory: (snapshot) => {
+      const snapshotCommands = projectCommands(snapshot);
+      return new LifecycleHookRunner(snapshotCommands.execute.bind(snapshotCommands), { cleanupCwd: snapshot.repoRoot });
+    },
     executor: new ExecutorAgent(store, model, undefined, {
       maxSteps: config.model.loop.maxSteps,
       maxDurationMs: config.model.loop.maxDurationMs,
       maxRepeatedToolCalls: config.model.loop.maxRepeatedToolCalls,
       maxNoProgressSteps: config.model.loop.maxNoProgressSteps,
-      toolRuntimeFactory: (run) => new DurableToolRuntime(store, new ToolGateway({
+      toolRuntimeFactory: (run, revision) => {
+        const snapshot = revision.projectConfigSnapshot;
+        const snapshotDefinitions = snapshot ? projectDefinitions(snapshot) : definitions;
+        const snapshotCommands = snapshot ? new RegisteredCommandExecutor(snapshotDefinitions) : commands;
+        const snapshotCommandIds = new Set(snapshotDefinitions.map((definition) => definition.commandId));
+        const snapshotMcpTools = snapshot ? new Set(snapshot.settings.toolPolicy.allowedMcpTools) : mcpAllowedTools;
+        const snapshotPluginTools = snapshot ? new Set(snapshot.settings.toolPolicy.allowedPluginTools) : new Set(config.plugins.allowedTools);
+        return new DurableToolRuntime(store, new ToolGateway({
         role: "executor",
         workspaceRoot: run.workspacePath!,
-        registeredCommandIds,
-        mcpAllowedTools,
-        pluginAllowedTools: new Set(config.plugins.allowedTools),
-        computerUseAllowed: config.computerUse.enabled && Boolean(computerUse),
+        registeredCommandIds: snapshot ? snapshotCommandIds : registeredCommandIds,
+        mcpAllowedTools: snapshotMcpTools,
+        pluginAllowedTools: snapshotPluginTools,
+        computerUseAllowed: (snapshot?.settings.toolPolicy.computerUseEnabled ?? config.computerUse.enabled) && Boolean(computerUse),
         builtin: {
-          registeredCommandExecutor: (invocation) => commands.execute({
+          registeredCommandExecutor: (invocation) => snapshotCommands.execute({
             ...invocation,
             context: {
               ...invocation.context,
@@ -790,16 +1108,20 @@ function createDefaultScheduler(store: PipelineStore, config: FactoryConfig, mod
             }),
           } : {}),
         },
-      })),
+      }));
+      },
     }),
   });
 }
 
-function createDefaultVerificationExecutor(config: FactoryConfig): VerificationCommandExecutor {
+function createDefaultVerificationExecutor(store: PipelineStore, config: FactoryConfig): VerificationCommandExecutor {
   const commands = new RegisteredCommandExecutor(readCommandDefinitions(config));
   return (commandId, run) => {
     if (!run.workspacePath) return Promise.resolve({ exitCode: 1, stdout: "", stderr: "Run workspace is not available" });
-    return commands.execute({ commandId, cwd: run.workspacePath, timeoutMs: 120_000, context: { projectId: run.projectId, runId: run.id, workspacePath: run.workspacePath, branch: run.branch, baseCommit: run.baseCommit, exitReason: "verification" } });
+    const revision = store.getRevision(run.planId, run.planRevision);
+    const snapshot = revision?.projectConfigSnapshot;
+    const snapshotCommands = snapshot ? new RegisteredCommandExecutor(snapshot.settings.commands) : commands;
+    return snapshotCommands.execute({ commandId, cwd: run.workspacePath, timeoutMs: snapshot?.settings.concurrency.defaultTimeoutMs ?? 120_000, context: { projectId: run.projectId, runId: run.id, workspacePath: run.workspacePath, branch: run.branch, baseCommit: run.baseCommit, exitReason: "verification" } });
   };
 }
 

@@ -4,6 +4,10 @@ import { BuiltinToolExecutor, type BuiltinToolContext, type BuiltinToolExecutorO
 import { AgentLoopEngine } from "./agent-loop.js";
 import { PlanCompletenessGate } from "./termination-gates.js";
 import { composeExplorerTitle, ModelExplorerTitleGenerator, normalizeExplorerTitle, placeholderExplorerTitle, type ExplorerTitleGenerator, type ExplorerTitleSource, type ExplorerTitleStatus } from "./explorer-title.js";
+import { ProjectService } from "./project.js";
+import type { Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings } from "./project.js";
+export { ProjectService } from "./project.js";
+export type { CreateProjectInput, Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings, ProjectSettingsInput, ProjectStatus, ProjectSummary, UpdateProjectInput } from "./project.js";
 export { projectExplorerActivity } from "./explorer-activity.js";
 export type { ExplorerActivityInput, ExplorerActivityItem, ExplorerActivityKind } from "./explorer-activity.js";
 export { composeExplorerTitle, explorerTimestamp, ModelExplorerTitleGenerator, normalizeExplorerTitle, placeholderExplorerTitle } from "./explorer-title.js";
@@ -177,6 +181,9 @@ export type PlanRevisionV2 = Readonly<{
   confirmedBy: string;
   confirmedAt: string;
   sourceExplorerThreadId: string;
+  projectConfigVersion?: number;
+  projectConfigHash?: string;
+  projectConfigSnapshot?: ProjectExecutionSnapshot;
 }>;
 
 export type PlanIndexRow = {
@@ -201,6 +208,11 @@ export type DomainEvent = {
   id: string;
   sequence: number;
   type:
+    | "project.created"
+    | "project.config.updated"
+    | "project.archived"
+    | "project.activated"
+    | "project.explorer.selected"
     | "explorer.thread.created"
     | "explorer.created"
     | "explorer.title.updated"
@@ -390,6 +402,12 @@ export type PipelineStore = {
   getThread(id: string): ExplorerThread | undefined;
   listThreads(): ExplorerThread[];
   updateThread(thread: ExplorerThread): ExplorerThread;
+  saveProject(project: Project): Project;
+  getProject(projectId: string): Project | undefined;
+  listProjects(): Project[];
+  updateProject(project: Project): Project;
+  saveProjectConfigRevision(revision: ProjectConfigRevision): ProjectConfigRevision;
+  listProjectConfigRevisions(projectId: string): ProjectConfigRevision[];
   saveTurn(turn: ExplorerTurn): ExplorerTurn;
   updateTurn(turn: ExplorerTurn): ExplorerTurn;
   listTurns(threadId: string): ExplorerTurn[];
@@ -518,6 +536,8 @@ function stripPlanProtocol(content: string): string {
 }
 
 export class InMemoryPipelineStore implements PipelineStore {
+  private readonly projects = new Map<string, Project>();
+  private readonly projectConfigRevisions = new Map<string, ProjectConfigRevision[]>();
   private readonly plans = new Map<string, CandidatePlan>();
   private readonly revisions = new Map<string, PlanRevisionV2>();
   private readonly changeProposals = new Map<string, ChangeProposal>();
@@ -577,6 +597,21 @@ export class InMemoryPipelineStore implements PipelineStore {
   }
 
   updateThread(thread: ExplorerThread): ExplorerThread { this.threads.set(thread.id, thread); return thread; }
+  saveProject(project: Project): Project { this.projects.set(project.id, project); return project; }
+  getProject(projectId: string): Project | undefined { return this.projects.get(projectId); }
+  listProjects(): Project[] { return [...this.projects.values()]; }
+  updateProject(project: Project): Project {
+    if (!this.projects.has(project.id)) throw new Error(`Project ${project.id} does not exist`);
+    this.projects.set(project.id, project);
+    return project;
+  }
+  saveProjectConfigRevision(revision: ProjectConfigRevision): ProjectConfigRevision {
+    const revisions = this.projectConfigRevisions.get(revision.projectId) ?? [];
+    if (!revisions.some((item) => item.version === revision.version)) revisions.push(revision);
+    this.projectConfigRevisions.set(revision.projectId, revisions);
+    return revisions.find((item) => item.version === revision.version)!;
+  }
+  listProjectConfigRevisions(projectId: string): ProjectConfigRevision[] { return [...(this.projectConfigRevisions.get(projectId) ?? [])]; }
   saveTurn(turn: ExplorerTurn): ExplorerTurn {
     const current = this.turns.get(turn.threadId) ?? [];
     current.push(turn);
@@ -722,6 +757,29 @@ export class SqlitePipelineStore implements PipelineStore {
     this.database = new DatabaseSync(databasePath);
     this.database.exec("PRAGMA journal_mode = WAL;");
     this.database.exec(`
+      CREATE TABLE IF NOT EXISTS factory_projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        repo_root TEXT NOT NULL UNIQUE,
+        default_branch TEXT NOT NULL,
+        worktree_root TEXT NOT NULL,
+        status TEXT NOT NULL,
+        current_explorer_thread_id TEXT,
+        config_version INTEGER NOT NULL,
+        config_hash TEXT NOT NULL,
+        settings_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        archived_at TEXT
+      );
+      CREATE TABLE IF NOT EXISTS project_config_revisions (
+        project_id TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        hash TEXT NOT NULL,
+        snapshot_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, version)
+      );
       CREATE TABLE IF NOT EXISTS explorer_threads (
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL,
@@ -781,6 +839,9 @@ export class SqlitePipelineStore implements PipelineStore {
         confirmed_by TEXT NOT NULL,
         confirmed_at TEXT NOT NULL,
         source_explorer_thread_id TEXT NOT NULL,
+        project_config_version INTEGER,
+        project_config_hash TEXT,
+        project_config_snapshot_json TEXT,
         PRIMARY KEY (plan_id, revision)
       );
       CREATE TABLE IF NOT EXISTS change_proposals (
@@ -935,11 +996,48 @@ export class SqlitePipelineStore implements PipelineStore {
     this.database.exec("UPDATE domain_events SET sequence = rowid WHERE sequence IS NULL");
     try { this.database.exec("CREATE UNIQUE INDEX IF NOT EXISTS domain_events_sequence_uq ON domain_events(sequence)"); } catch { /* Existing databases already have the index. */ }
     try { this.database.exec("ALTER TABLE change_proposals ADD COLUMN revision INTEGER"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN project_config_version INTEGER"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN project_config_hash TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN project_config_snapshot_json TEXT"); } catch { /* Existing databases already have the column. */ }
   }
 
   now(): string { return new Date().toISOString(); }
 
   nextId(prefix: string): string { return `${prefix}-${randomUUID().slice(0, 12)}`; }
+
+  saveProject(project: Project): Project {
+    this.database.prepare(`
+      INSERT INTO factory_projects (id, name, repo_root, default_branch, worktree_root, status, current_explorer_thread_id, config_version, config_hash, settings_json, created_at, updated_at, archived_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET name=excluded.name, repo_root=excluded.repo_root, default_branch=excluded.default_branch, worktree_root=excluded.worktree_root, status=excluded.status, current_explorer_thread_id=excluded.current_explorer_thread_id, config_version=excluded.config_version, config_hash=excluded.config_hash, settings_json=excluded.settings_json, created_at=excluded.created_at, updated_at=excluded.updated_at, archived_at=excluded.archived_at
+    `).run(project.id, project.name, project.repoRoot, project.defaultBranch, project.worktreeRoot, project.status, project.currentExplorerThreadId, project.configVersion, project.configHash, JSON.stringify(project.settings), project.createdAt, project.updatedAt, project.archivedAt);
+    return this.getProject(project.id) as Project;
+  }
+
+  getProject(projectId: string): Project | undefined {
+    const row = this.database.prepare("SELECT * FROM factory_projects WHERE id = ?").get(projectId) as SqliteRow | undefined;
+    return row ? this.projectFromRow(row) : undefined;
+  }
+
+  listProjects(): Project[] {
+    const rows = this.database.prepare("SELECT * FROM factory_projects ORDER BY name ASC").all() as unknown as SqliteRow[];
+    return rows.map((row) => this.projectFromRow(row));
+  }
+
+  updateProject(project: Project): Project {
+    if (!this.getProject(project.id)) throw new Error(`Project ${project.id} does not exist`);
+    return this.saveProject(project);
+  }
+
+  saveProjectConfigRevision(revision: ProjectConfigRevision): ProjectConfigRevision {
+    this.database.prepare("INSERT OR IGNORE INTO project_config_revisions (project_id, version, hash, snapshot_json, created_at) VALUES (?, ?, ?, ?, ?)").run(revision.projectId, revision.version, revision.hash, JSON.stringify(revision.snapshot), revision.createdAt);
+    return this.listProjectConfigRevisions(revision.projectId).find((item) => item.version === revision.version) as ProjectConfigRevision;
+  }
+
+  listProjectConfigRevisions(projectId: string): ProjectConfigRevision[] {
+    const rows = this.database.prepare("SELECT * FROM project_config_revisions WHERE project_id = ? ORDER BY version ASC").all(projectId) as unknown as SqliteRow[];
+    return rows.map((row) => ({ projectId: String(row.project_id), version: Number(row.version), hash: String(row.hash), snapshot: JSON.parse(String(row.snapshot_json)) as ProjectExecutionSnapshot, createdAt: String(row.created_at) }));
+  }
 
   saveThread(input: RegisterThreadInput): ExplorerThread {
     const createdAt = input.createdAt ?? this.now();
@@ -1042,14 +1140,14 @@ export class SqlitePipelineStore implements PipelineStore {
   updatePlan(plan: CandidatePlan): CandidatePlan { return this.savePlan(plan); }
 
   saveRevision(revision: PlanRevisionV2): PlanRevisionV2 {
-    this.database.prepare("INSERT OR IGNORE INTO plan_revisions (plan_id, revision, contract_json, artifact_hash, confirmed_by, confirmed_at, source_explorer_thread_id) VALUES (?, ?, ?, ?, ?, ?, ?)").run(revision.planId, revision.revision, JSON.stringify(revision.contract), revision.artifactHash, revision.confirmedBy, revision.confirmedAt, revision.sourceExplorerThreadId);
+    this.database.prepare("INSERT OR IGNORE INTO plan_revisions (plan_id, revision, contract_json, artifact_hash, confirmed_by, confirmed_at, source_explorer_thread_id, project_config_version, project_config_hash, project_config_snapshot_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(revision.planId, revision.revision, JSON.stringify(revision.contract), revision.artifactHash, revision.confirmedBy, revision.confirmedAt, revision.sourceExplorerThreadId, revision.projectConfigVersion ?? null, revision.projectConfigHash ?? null, revision.projectConfigSnapshot ? JSON.stringify(revision.projectConfigSnapshot) : null);
     return this.getRevision(revision.planId, revision.revision) as PlanRevisionV2;
   }
 
   getRevision(planId: string, revision: number): PlanRevisionV2 | undefined {
     const row = this.database.prepare("SELECT * FROM plan_revisions WHERE plan_id = ? AND revision = ?").get(planId, revision) as SqliteRow | undefined;
     if (!row) return undefined;
-    return freezeRevision({ planId: String(row.plan_id), revision: Number(row.revision), contract: JSON.parse(String(row.contract_json)) as PlanContract, artifactHash: String(row.artifact_hash), confirmedBy: String(row.confirmed_by), confirmedAt: String(row.confirmed_at), sourceExplorerThreadId: String(row.source_explorer_thread_id) });
+    return freezeRevision({ planId: String(row.plan_id), revision: Number(row.revision), contract: JSON.parse(String(row.contract_json)) as PlanContract, artifactHash: String(row.artifact_hash), confirmedBy: String(row.confirmed_by), confirmedAt: String(row.confirmed_at), sourceExplorerThreadId: String(row.source_explorer_thread_id), ...(row.project_config_version === null || row.project_config_version === undefined ? {} : { projectConfigVersion: Number(row.project_config_version) }), ...(row.project_config_hash === null || row.project_config_hash === undefined ? {} : { projectConfigHash: String(row.project_config_hash) }), ...(row.project_config_snapshot_json === null || row.project_config_snapshot_json === undefined ? {} : { projectConfigSnapshot: JSON.parse(String(row.project_config_snapshot_json)) as ProjectExecutionSnapshot }) });
   }
 
   saveChangeProposal(proposal: ChangeProposal): ChangeProposal {
@@ -1230,6 +1328,24 @@ export class SqlitePipelineStore implements PipelineStore {
 
   close(): void { this.database.close(); }
 
+  private projectFromRow(row: SqliteRow): Project {
+    return {
+      id: String(row.id),
+      name: String(row.name),
+      repoRoot: String(row.repo_root),
+      defaultBranch: String(row.default_branch),
+      worktreeRoot: String(row.worktree_root),
+      status: String(row.status) as Project["status"],
+      currentExplorerThreadId: row.current_explorer_thread_id === null || row.current_explorer_thread_id === undefined ? null : String(row.current_explorer_thread_id),
+      configVersion: Number(row.config_version),
+      configHash: String(row.config_hash),
+      settings: JSON.parse(String(row.settings_json)) as ProjectSettings,
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+      archivedAt: row.archived_at === null || row.archived_at === undefined ? null : String(row.archived_at),
+    };
+  }
+
   private threadFromRow(row: SqliteRow): ExplorerThread {
     return { id: String(row.id), projectId: String(row.project_id), title: String(row.title ?? "New Explorer"), createdAt: String(row.created_at ?? row.last_activity_at), titleSource: String(row.title_source ?? "AUTO") as ExplorerTitleSource, titleStatus: String(row.title_status ?? "PLACEHOLDER") as ExplorerTitleStatus, contextMode: String(row.context_mode ?? "FRESH") as ExplorerThread["contextMode"], originThreadId: row.origin_thread_id === null || row.origin_thread_id === undefined ? null : String(row.origin_thread_id), parentThreadId: row.parent_thread_id === null ? null : String(row.parent_thread_id), providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id), state: String(row.state) as ExplorerThreadState, messageCount: Number(row.message_count), summaryRef: row.summary_ref === null ? null : String(row.summary_ref), lastActivityAt: String(row.last_activity_at), exploration: { status: String(row.exploration_status ?? "INCOMPLETE") as PlanExplorationStatus, missing: parseStringArray(row.exploration_missing_json, [...REQUIRED_PLAN_AREAS]), completed: parseStringArray(row.exploration_completed_json, []), candidatePlanId: row.candidate_plan_id === null || row.candidate_plan_id === undefined ? null : String(row.candidate_plan_id), lastAssessedTurnId: row.last_assessed_turn_id === null || row.last_assessed_turn_id === undefined ? null : String(row.last_assessed_turn_id) } };
   }
@@ -1339,7 +1455,11 @@ function freezeRevision(revision: PlanRevisionV2): PlanRevisionV2 {
 }
 
 export class PlanService {
-  constructor(private readonly store: PipelineStore) {}
+  private readonly projects: ProjectService;
+
+  constructor(private readonly store: PipelineStore, projects?: ProjectService) {
+    this.projects = projects ?? new ProjectService(store);
+  }
 
   registerThread(input: RegisterThreadInput): ExplorerThread {
     const thread = this.store.saveThread(input);
@@ -1394,14 +1514,17 @@ export class PlanService {
       throw new Error(`Plan ${planId} cannot be confirmed from ${plan.status}`);
     }
     const confirmedAt = this.store.now();
+    const project = this.store.getProject(plan.projectId);
+    const projectConfigSnapshot = project ? this.projects.snapshot(project.id) : undefined;
     const revision = freezeRevision({
       planId: plan.id,
       revision: plan.revision,
       contract: plan.contract,
-      artifactHash: `sha256:${createHash("sha256").update(JSON.stringify(plan.contract)).digest("hex")}`,
+      artifactHash: `sha256:${createHash("sha256").update(JSON.stringify({ contract: plan.contract, projectConfigSnapshot })).digest("hex")}`,
       confirmedBy,
       confirmedAt,
       sourceExplorerThreadId: plan.sourceExplorerThreadId,
+      ...(projectConfigSnapshot ? { projectConfigVersion: projectConfigSnapshot.configVersion, projectConfigHash: projectConfigSnapshot.configHash, projectConfigSnapshot } : {}),
     });
     this.store.saveRevision(revision);
     const updated = this.store.updatePlan({ ...plan, status: "READY", confirmedBy, confirmedAt, lastEventAt: confirmedAt });
@@ -1468,6 +1591,30 @@ export class PlanService {
         attentionReason: plan.attentionReason,
       }))
       .sort((a, b) => b.queuedAt.localeCompare(a.queuedAt));
+  }
+
+  listProjectPlans(projectId: string): PlanIndexRow[] {
+    return this.store
+      .listPlans()
+      .filter((plan) => plan.projectId === projectId && plan.queuedAt !== null)
+      .map((plan) => ({
+        planId: plan.id,
+        title: plan.title,
+        revision: plan.revision,
+        status: plan.status,
+        projectId: plan.projectId,
+        sourceExplorerThreadId: plan.sourceExplorerThreadId,
+        sourceTurnId: plan.sourceTurnId,
+        providerThreadId: plan.providerThreadId,
+        providerTurnId: plan.providerTurnId,
+        providerItemId: plan.providerItemId,
+        createdAt: plan.createdAt,
+        queuedAt: plan.queuedAt as string,
+        runId: plan.runId,
+        lastEventAt: plan.lastEventAt,
+        attentionReason: plan.attentionReason,
+      }))
+      .sort((a, b) => b.lastEventAt.localeCompare(a.lastEventAt));
   }
 }
 
@@ -1584,14 +1731,17 @@ export class ChangeProposalService {
     if (proposal.status !== "OPEN") throw new Error(`ChangeProposal ${proposal.id} cannot be approved from ${proposal.status}`);
     const revisionNumber = plan.revision + 1;
     const confirmedAt = this.store.now();
+    const project = this.store.getProject(plan.projectId);
+    const projectConfigSnapshot = project ? new ProjectService(this.store).snapshot(project.id) : undefined;
     const revision = freezeRevision({
       planId: plan.id,
       revision: revisionNumber,
       contract: proposal.contract,
-      artifactHash: `sha256:${createHash("sha256").update(JSON.stringify(proposal.contract)).digest("hex")}`,
+      artifactHash: `sha256:${createHash("sha256").update(JSON.stringify({ contract: proposal.contract, projectConfigSnapshot })).digest("hex")}`,
       confirmedBy: actorId,
       confirmedAt,
       sourceExplorerThreadId: plan.sourceExplorerThreadId,
+      ...(projectConfigSnapshot ? { projectConfigVersion: projectConfigSnapshot.configVersion, projectConfigHash: projectConfigSnapshot.configHash, projectConfigSnapshot } : {}),
     });
     this.store.saveRevision(revision);
     const approvedProposal = this.store.updateChangeProposal({ ...proposal, status: "APPROVED", decidedAt: confirmedAt, decidedBy: actorId, revision: revisionNumber });
@@ -1858,6 +2008,7 @@ export type ModelToolDefinition = {
 export type ModelMessage = { role: "system" | "user" | "assistant" | "tool"; content: string; toolCallId?: string };
 export type ModelRequest = {
   role: ModelRole;
+  modelConfig?: ModelRoleConfig | undefined;
   purpose?: "exploration" | "title" | undefined;
   messages: ModelMessage[];
   conversationId?: string | undefined;
@@ -1935,7 +2086,7 @@ export class OpenAIModelGateway implements ModelGateway {
   }
 
   async complete(request: ModelRequest): Promise<ModelResult> {
-    const config = this.configFor(request.role);
+    const config = { ...this.configFor(request.role), ...(request.modelConfig ?? {}) };
     const input = request.continuationPrompt ? [...request.messages, { role: "user" as const, content: request.continuationPrompt }] : request.messages;
     const body: Record<string, unknown> = { model: config.model, input, stream: false };
     if (request.tools?.length) body.tools = request.tools;
@@ -1985,9 +2136,13 @@ export class ExplorerThreadService {
   private readonly maxAutoContinuationTurns: number;
   private readonly loopMaxSteps: number;
   private readonly titleGenerator: ExplorerTitleGenerator | undefined;
+  private readonly cwdForProject: ((projectId: string) => string | undefined) | undefined;
+  private readonly modelConfigForProject: ((projectId: string) => ModelRoleConfig | undefined) | undefined;
 
-  constructor(private readonly store: PipelineStore, private readonly model: ModelGateway, options: { maxAutoContinuationTurns?: number | undefined; maxSteps?: number | undefined; maxDurationMs?: number | undefined; maxRepeatedToolCalls?: number | undefined; maxNoProgressSteps?: number | undefined; titleGenerator?: ExplorerTitleGenerator | undefined } = {}) {
+  constructor(private readonly store: PipelineStore, private readonly model: ModelGateway, options: { maxAutoContinuationTurns?: number | undefined; maxSteps?: number | undefined; maxDurationMs?: number | undefined; maxRepeatedToolCalls?: number | undefined; maxNoProgressSteps?: number | undefined; titleGenerator?: ExplorerTitleGenerator | undefined; cwdForProject?: ((projectId: string) => string | undefined) | undefined; modelConfigForProject?: ((projectId: string) => ModelRoleConfig | undefined) | undefined } = {}) {
     this.titleGenerator = options.titleGenerator;
+    this.cwdForProject = options.cwdForProject;
+    this.modelConfigForProject = options.modelConfigForProject;
     this.plans = new PlanService(store);
     this.loopMaxSteps = options.maxSteps ?? (options.maxAutoContinuationTurns ?? 4) + 1;
     this.agentLoops = new AgentLoopEngine(store, model, undefined, {
@@ -2044,9 +2199,9 @@ export class ExplorerThreadService {
       ownerType: "explorer-turn",
       ownerId: assistant.id,
       role: "explorer",
-      mode: "provider-controlled",
+      mode: this.modelConfigForProject?.(thread.projectId)?.loopMode ?? "provider-controlled",
       maxSteps: this.loopMaxSteps,
-      modelRequest: { messages: this.store.listTurns(thread.id).filter((turn) => turn.id !== assistant.id).map((turn) => ({ role: turn.role, content: turn.content })), conversationId: thread.id, ...(thread.providerThreadId ? { providerThreadId: thread.providerThreadId } : {}) },
+      modelRequest: { messages: this.store.listTurns(thread.id).filter((turn) => turn.id !== assistant.id).map((turn) => ({ role: turn.role, content: turn.content })), conversationId: thread.id, ...(thread.providerThreadId ? { providerThreadId: thread.providerThreadId } : {}), ...(this.cwdForProject?.(thread.projectId) ? { cwd: this.cwdForProject(thread.projectId) } : {}), ...(this.modelConfigForProject?.(thread.projectId) ? { modelConfig: this.modelConfigForProject(thread.projectId) } : {}) },
       gate: new PlanCompletenessGate(),
       onEvent: (event) => this.handleExplorerLoopEvent(thread.id, assistant.id, event),
     });
@@ -2211,6 +2366,7 @@ export class ExplorerThreadService {
     let failure: string | null = null;
     const modelRequest: ModelRequest = {
       role: "explorer",
+      ...(this.modelConfigForProject?.(thread.projectId) ? { modelConfig: this.modelConfigForProject(thread.projectId) } : {}),
       messages,
       conversationId: thread.id,
       ...(thread.providerThreadId ? { providerThreadId: thread.providerThreadId } : {}),
@@ -2528,6 +2684,9 @@ export type SchedulerOptions = {
   store: PipelineStore;
   workspace: WorkspaceAdapter;
   hooks: LifecycleHookRunner;
+  globalConcurrency?: number;
+  workspaceFactory?: (snapshot: ProjectExecutionSnapshot) => WorkspaceAdapter;
+  hookRunnerFactory?: (snapshot: ProjectExecutionSnapshot) => LifecycleHookRunner;
   executor?: {
     start(run: Run, revision: PlanRevisionV2): Promise<AgentLoop>;
     pause?: AgentLoopRunner["pause"];
@@ -2563,6 +2722,7 @@ export class Scheduler {
     if (plan.status !== "QUEUED") throw new Error(`Plan ${planId} must be queued before a run starts`);
     const revision = this.options.store.getRevision(plan.id, plan.revision);
     if (!revision) throw new Error(`Plan revision ${plan.id}@${plan.revision} is missing`);
+    this.assertConcurrency(plan.projectId, revision);
     const createdAt = this.options.store.now();
     const runId = this.options.store.nextId("run");
     const thread: ExecutionThread = { id: this.options.store.nextId("execution-thread"), runId, state: "ACTIVE", journal: [] };
@@ -2572,9 +2732,12 @@ export class Scheduler {
     this.options.store.saveRun(run);
     this.options.store.saveExecutionThread(thread);
     this.append(thread, "RUN_CREATED", { planId: plan.id, revision: revision.revision });
-    const workspace = await this.options.workspace.create({ projectId: plan.projectId, runId, branch: run.branch, baseCommit: run.baseCommit });
+    const workspaceAdapter = this.workspaceAdapterFor(revision);
+    const hookRunner = this.hookRunnerFor(revision);
+    const executionHooks = revision.projectConfigSnapshot?.settings.hooks ?? hooks;
+    const workspace = await workspaceAdapter.create({ projectId: plan.projectId, runId, branch: run.branch, baseCommit: run.baseCommit });
     run.workspacePath = workspace.path;
-    const startResult = await this.options.hooks.runStart(hooks.start, { projectId: plan.projectId, runId, workspacePath: workspace.path, branch: workspace.branch, baseCommit: workspace.baseCommit, exitReason: "running" });
+    const startResult = await hookRunner.runStart(executionHooks.start, { projectId: plan.projectId, runId, workspacePath: workspace.path, branch: workspace.branch, baseCommit: workspace.baseCommit, exitReason: "running" });
     if (startResult.status === "failed") {
       run.status = "BLOCKED";
       thread.state = "BLOCKED";
@@ -2608,10 +2771,14 @@ export class Scheduler {
   async finish(runId: string, exitReason: string, hooks: { cleanup?: HookDefinition | undefined } = {}): Promise<Run> {
     const run = this.run(runId);
     const thread = this.thread(run.executionThreadId);
+    const revision = this.options.store.getRevision(run.planId, run.planRevision);
+    const workspaceAdapter = this.workspaceAdapterFor(revision);
+    const hookRunner = this.hookRunnerFor(revision);
+    const executionHooks = revision?.projectConfigSnapshot?.settings.hooks ?? hooks;
     if (run.workspacePath) {
-      await this.options.workspace.remove({ path: run.workspacePath, branch: run.branch, baseCommit: run.baseCommit });
+      await workspaceAdapter.remove({ path: run.workspacePath, branch: run.branch, baseCommit: run.baseCommit });
     }
-    const cleanupResult = await this.options.hooks.runCleanup(hooks.cleanup, { projectId: run.projectId, runId: run.id, workspacePath: run.workspacePath ?? "", branch: run.branch, baseCommit: run.baseCommit, exitReason });
+    const cleanupResult = await hookRunner.runCleanup(executionHooks.cleanup, { projectId: run.projectId, runId: run.id, workspacePath: run.workspacePath ?? "", branch: run.branch, baseCommit: run.baseCommit, exitReason });
     this.append(thread, cleanupResult.status === "failed" ? "HOOK_FAILED" : cleanupResult.status === "skipped" ? "HOOK_SKIPPED" : "HOOK_COMPLETED", { hook: "cleanup", exitReason });
     if (cleanupResult.needsAttention) {
       const plan = this.options.store.getPlan(run.planId);
@@ -2622,6 +2789,24 @@ export class Scheduler {
     this.options.store.saveRun(run);
     this.options.store.saveExecutionThread(thread);
     return run;
+  }
+
+  private workspaceAdapterFor(revision: PlanRevisionV2 | undefined): WorkspaceAdapter {
+    const snapshot = revision?.projectConfigSnapshot;
+    return snapshot && this.options.workspaceFactory ? this.options.workspaceFactory(snapshot) : this.options.workspace;
+  }
+
+  private hookRunnerFor(revision: PlanRevisionV2 | undefined): LifecycleHookRunner {
+    const snapshot = revision?.projectConfigSnapshot;
+    return snapshot && this.options.hookRunnerFactory ? this.options.hookRunnerFactory(snapshot) : this.options.hooks;
+  }
+
+  private assertConcurrency(projectId: string, revision: PlanRevisionV2): void {
+    const activeStatuses = new Set<RunStatus>(["STARTING", "IN_PROGRESS", "READY_FOR_VERIFY", "VERIFYING", "MERGE_READY", "RECOVERING"]);
+    const activeRuns = this.options.store.listRuns().filter((run) => activeStatuses.has(run.status));
+    const projectLimit = revision.projectConfigSnapshot?.settings.concurrency.maxParallelRuns;
+    if (projectLimit !== undefined && activeRuns.filter((run) => run.projectId === projectId).length >= projectLimit) throw new Error(`Project ${projectId} concurrency limit reached (${projectLimit})`);
+    if (this.options.globalConcurrency !== undefined && activeRuns.length >= this.options.globalConcurrency) throw new Error(`Global concurrency limit reached (${this.options.globalConcurrency})`);
   }
 
   pause(runId: string): Run {

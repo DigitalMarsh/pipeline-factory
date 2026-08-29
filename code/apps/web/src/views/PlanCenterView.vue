@@ -4,12 +4,13 @@ import { ArrowRight, CircleCheck, Clock, Document, Search, Warning } from "@elem
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage } from "element-plus";
 import { api } from "../api";
-import type { Plan } from "../types";
+import type { Plan, Project } from "../types";
 import { planStatusForStat } from "../utils/planFilters";
 
 const route = useRoute();
 const router = useRouter();
-const projectId = computed(() => String(route.params.projectId ?? "project-demo"));
+const projectId = computed(() => String(route.params.projectId ?? ""));
+const project = ref<Project | null>(null);
 const plans = ref<Plan[]>([]);
 const search = ref("");
 const status = ref("all");
@@ -37,12 +38,17 @@ const counts = computed(() => ({
   merged: plans.value.filter((p) => p.status === "MERGED").length,
   blocked: plans.value.filter((p) => p.status === "BLOCKED").length,
 }));
+const snapshotNotice = computed(() => plans.value.some((plan) => plan.projectConfigStatus === "CHANGED" || plan.projectConfigStatus === "LEGACY"));
 
 async function load() {
   loading.value = true;
   error.value = null;
-  try { plans.value = (await api.plans(projectId.value)).items; }
-  catch { plans.value = []; error.value = "API 未连接，暂无已下发计划"; }
+  try {
+    const [projectResponse, plansResponse] = await Promise.all([api.project(projectId.value), api.plans(projectId.value)]);
+    project.value = projectResponse.project;
+    plans.value = plansResponse.items;
+  }
+  catch (caught) { project.value = null; plans.value = []; error.value = caught instanceof Error ? caught.message : "Project 加载失败"; }
   finally { loading.value = false; }
 }
 
@@ -78,7 +84,7 @@ onMounted(() => { syncQueryStatus(route.query.status); void load(); });
 <template>
   <div class="plan-center">
     <div class="page-title-row">
-      <div><div class="eyebrow">PROJECT · PROJECT-DEMO</div><h1>Plan Center</h1><p>Every plan dispatched from the ExplorerThread lineage, with registry-backed status.</p></div>
+      <div><div class="eyebrow">PROJECT · {{ project?.name ?? projectId }}</div><h1>Plan Center</h1><p>{{ project?.repoRoot || 'Project plans and execution history' }}</p></div>
       <el-button plain @click="refreshPlanCenter"><CircleCheck :size="15" /> Registry synced</el-button>
     </div>
     <div class="stat-grid">
@@ -91,11 +97,12 @@ onMounted(() => { syncQueryStatus(route.query.status); void load(); });
       <el-select v-model="status" placeholder="Status" size="large" style="width: 170px"><el-option label="All statuses" value="all" /><el-option label="Queued" value="QUEUED" /><el-option label="Running" value="IN_PROGRESS" /><el-option label="Verifying" value="VERIFYING" /><el-option label="Review" value="MERGE_READY" /><el-option label="Merged" value="MERGED" /><el-option label="Blocked" value="BLOCKED" /></el-select>
       <el-button text @click="refreshPlanCenter">Refresh</el-button>
     </div>
+    <div v-if="snapshotNotice" class="demo-notice"><Warning :size="14" /> 已确认 Plan 继续使用各自保存的 Project 配置快照；当前 Project 配置可能已发生变化。</div>
     <div v-if="error" class="demo-notice"><Warning :size="14" /> {{ error }}</div>
     <div class="plans-table" v-loading="loading">
       <div class="table-head"><span>PLAN</span><span>STATUS</span><span>SOURCE THREAD</span><span>RUN</span><span>LAST EVENT</span><span /></div>
       <RouterLink v-for="plan in filtered" :key="plan.planId ?? plan.id ?? plan.title" :to="plan.runId ? `/projects/${projectId}/runs/${plan.runId}` : `/projects/${projectId}/explorer`" class="table-row">
-        <div class="table-plan"><span class="mini-icon"><Document :size="15" /></span><div><strong>{{ plan.title }}</strong><small>{{ plan.planId ?? plan.id }} · Revision {{ plan.revision }}</small></div></div>
+        <div class="table-plan"><span class="mini-icon"><Document :size="15" /></span><div><strong>{{ plan.title }}</strong><small>{{ plan.planId ?? plan.id }} · Revision {{ plan.revision }}</small><small v-if="plan.projectConfigStatus">Project config {{ plan.projectConfigVersion ? `v${plan.projectConfigVersion}` : 'LEGACY' }} · {{ plan.projectConfigStatus }}</small><code v-if="plan.projectConfigHash" :title="plan.projectConfigHash">{{ plan.projectConfigHash.slice(0, 18) }}…</code></div></div>
         <div><el-tag :type="plan.status === 'MERGED' ? 'success' : plan.status === 'BLOCKED' ? 'danger' : 'warning'" effect="light">{{ label(plan.status) }}</el-tag></div>
         <code>{{ plan.sourceExplorerThreadId }}</code><code>{{ plan.runId ?? "—" }}</code>
         <span class="event-time">{{ new Date(plan.lastEventAt).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }}</span><el-button v-if="plan.status === 'QUEUED'" size="small" type="primary" @click.prevent.stop="startRun(plan)">Start run</el-button><ArrowRight v-else :size="16" class="row-arrow" />

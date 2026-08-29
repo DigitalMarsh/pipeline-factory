@@ -12,7 +12,7 @@
     "worktreeRoot": "../.pipeline-worktrees"
   },
   "project": {
-    "root": "../..",
+    "root": "../../..",
     "commands": [
       { "commandId": "project.test", "argv": ["node", "-e", "process.exit(0)"], "environment": { "PATH": "/usr/local/bin:/usr/bin:/bin" } },
       { "commandId": "project.typecheck", "argv": ["node", "-e", "process.exit(0)"], "environment": { "PATH": "/usr/local/bin:/usr/bin:/bin" } }
@@ -23,7 +23,7 @@
     "codexAppServer": {
       "command": "codex",
       "args": ["app-server", "--stdio", "--enable", "default_mode_request_user_input"],
-      "cwd": "../..",
+      "cwd": "../../..",
       "startupTimeoutMs": 15000,
       "requestTimeoutMs": 120000,
       "maxRestarts": 3,

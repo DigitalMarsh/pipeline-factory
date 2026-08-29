@@ -39,7 +39,9 @@ export class ExecutorAgent {
 
   async start(run: Run, revision: PlanRevisionV2): Promise<AgentLoop> {
     this.assertRunnable(run, revision);
-    const mode = this.options.mode ?? this.model.configFor("executor").loopMode ?? "provider-controlled";
+    const projectConfig = revision.projectConfigSnapshot?.settings.models.executor;
+    const mode = projectConfig?.loopMode ?? this.options.mode ?? this.model.configFor("executor").loopMode ?? "provider-controlled";
+    const maxDurationMs = revision.projectConfigSnapshot?.settings.concurrency.defaultTimeoutMs ?? this.options.maxDurationMs;
     this.assertCapabilities(mode);
     const openToolCalls = new Set<string>();
     const gate = new TaskProgressGate();
@@ -54,13 +56,14 @@ export class ExecutorAgent {
       role: "executor",
       mode,
       maxSteps: this.options.maxSteps ?? 40,
-      ...(this.options.maxDurationMs === undefined ? {} : { maxDurationMs: this.options.maxDurationMs }),
+      ...(maxDurationMs === undefined ? {} : { maxDurationMs }),
       ...(this.options.maxRepeatedToolCalls === undefined ? {} : { maxRepeatedToolCalls: this.options.maxRepeatedToolCalls }),
       ...(this.options.maxNoProgressSteps === undefined ? {} : { maxNoProgressSteps: this.options.maxNoProgressSteps }),
       workspacePath: run.workspacePath!,
       ...(toolRuntime ? { toolRuntime } : {}),
       modelRequest: {
         conversationId: run.id,
+        ...(projectConfig ? { modelConfig: projectConfig } : {}),
         ...(run.workspacePath ? { cwd: run.workspacePath } : {}),
         messages: [
           { role: "system", content: this.systemInstructions(revision) },
@@ -75,7 +78,9 @@ export class ExecutorAgent {
 
   async run(run: Run, revision: PlanRevisionV2): Promise<AgentLoop> {
     this.assertRunnable(run, revision);
-    const mode = this.options.mode ?? this.model.configFor("executor").loopMode ?? "provider-controlled";
+    const projectConfig = revision.projectConfigSnapshot?.settings.models.executor;
+    const mode = projectConfig?.loopMode ?? this.options.mode ?? this.model.configFor("executor").loopMode ?? "provider-controlled";
+    const maxDurationMs = revision.projectConfigSnapshot?.settings.concurrency.defaultTimeoutMs ?? this.options.maxDurationMs;
     this.assertCapabilities(mode);
     const openToolCalls = new Set<string>();
     const gate = new TaskProgressGate();
@@ -86,13 +91,14 @@ export class ExecutorAgent {
       role: "executor",
       mode,
       maxSteps: this.options.maxSteps ?? 40,
-      ...(this.options.maxDurationMs === undefined ? {} : { maxDurationMs: this.options.maxDurationMs }),
+      ...(maxDurationMs === undefined ? {} : { maxDurationMs }),
       ...(this.options.maxRepeatedToolCalls === undefined ? {} : { maxRepeatedToolCalls: this.options.maxRepeatedToolCalls }),
       ...(this.options.maxNoProgressSteps === undefined ? {} : { maxNoProgressSteps: this.options.maxNoProgressSteps }),
       workspacePath: run.workspacePath!,
       ...(toolRuntime ? { toolRuntime } : {}),
       modelRequest: {
         conversationId: run.id,
+        ...(projectConfig ? { modelConfig: projectConfig } : {}),
         ...(run.workspacePath ? { cwd: run.workspacePath } : {}),
         messages: [
           { role: "system", content: this.systemInstructions(revision) },

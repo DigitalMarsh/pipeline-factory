@@ -13,6 +13,8 @@ const emit = defineEmits<{
   "update:modelValue": [value: boolean];
   select: [explorerId: string];
   create: [];
+  archive: [explorerId: string];
+  activate: [explorerId: string];
 }>();
 
 const activeExplorers = computed(() => props.explorers.filter((item) => item.state !== "ARCHIVED"));
@@ -52,23 +54,25 @@ function displayTitle(item: ExplorerThread) {
 
       <section class="explorer-history-section">
         <div class="history-section-title"><span>当前与历史</span><strong>{{ activeExplorers.length }}</strong></div>
-        <button v-for="item in activeExplorers" :key="item.id" type="button" :class="['explorer-history-item', { active: item.id === currentId }]" @click="select(item.id)">
+        <div v-for="item in activeExplorers" :key="item.id" :class="['explorer-history-item', { active: item.id === currentId }]">
           <span class="history-item-icon"><Connection :size="15" /></span>
-          <span class="history-item-copy"><strong>{{ displayTitle(item) }}</strong><small>{{ item.id }} · {{ item.messageCount }} messages</small><small>{{ formatTime(item.lastActivityAt) }}</small></span>
+          <button class="history-item-select" type="button" @click="select(item.id)"><span class="history-item-copy"><strong>{{ displayTitle(item) }}</strong><small>{{ item.id }} · {{ item.messageCount }} messages</small><small>{{ formatTime(item.lastActivityAt) }}</small></span></button>
           <span v-if="item.state === 'WAITING_FOR_INPUT'" class="history-item-status waiting"><Warning :size="13" /></span>
           <span v-else-if="item.id === currentId" class="history-item-status current"><CircleCheck :size="13" /></span>
           <Right :size="14" />
-        </button>
+          <button class="history-item-action" type="button" aria-label="Archive Explorer" @click.stop="emit('archive', item.id)">Archive</button>
+        </div>
         <div v-if="!activeExplorers.length" class="history-empty"><ChatDotRound :size="22" /><strong>还没有探索记录</strong><span>创建一个 Explorer 开始全新的需求探索。</span></div>
       </section>
 
       <section v-if="archivedExplorers.length" class="explorer-history-section archived-history-section">
         <div class="history-section-title"><span>已归档</span><strong>{{ archivedExplorers.length }}</strong></div>
-        <button v-for="item in archivedExplorers" :key="item.id" type="button" class="explorer-history-item archived" @click="select(item.id)">
+        <div v-for="item in archivedExplorers" :key="item.id" class="explorer-history-item archived">
           <span class="history-item-icon"><Connection :size="15" /></span>
-          <span class="history-item-copy"><strong>{{ displayTitle(item) }}</strong><small>{{ item.id }} · {{ item.messageCount }} messages</small><small>{{ formatTime(item.lastActivityAt) }}</small></span>
+          <button class="history-item-select" type="button" @click="select(item.id)"><span class="history-item-copy"><strong>{{ displayTitle(item) }}</strong><small>{{ item.id }} · {{ item.messageCount }} messages</small><small>{{ formatTime(item.lastActivityAt) }}</small></span></button>
           <Right :size="14" />
-        </button>
+          <button class="history-item-action" type="button" aria-label="Activate Explorer" @click.stop="emit('activate', item.id)">Activate</button>
+        </div>
       </section>
     </div>
   </el-drawer>

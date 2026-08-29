@@ -1,4 +1,4 @@
-import type { AgentLoop, AgentLoopStep, CodexRateLimitsStatus, ExecutionThread, ExplorerActivityItem, ExplorerInputRequest, ExplorerThread, ExplorerTurn, MergeRequest, Plan, Run, ToolCall, VerificationRun } from "./types";
+import type { AgentLoop, AgentLoopStep, CodexRateLimitsStatus, ExecutionThread, ExplorerActivityItem, ExplorerInputRequest, ExplorerThread, ExplorerTurn, MergeRequest, Plan, Project, ProjectCatalogItem, ProjectSummary, Run, ToolCall, VerificationRun } from "./types";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const headers = { ...(init?.headers ?? {}) } as Record<string, string>;
@@ -10,6 +10,15 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 
 export const api = {
   health: () => request<{ status: string; model: string }>("/health"),
+  projects: (status?: string) => request<{ items: ProjectCatalogItem[] }>(`/api/v4/projects${status ? `?status=${encodeURIComponent(status)}` : ""}`),
+  project: (projectId: string) => request<{ project: Project; summary: ProjectSummary }>(`/api/v4/projects/${encodeURIComponent(projectId)}`),
+  createProject: (input: { name: string; repoRoot: string; defaultBranch?: string; worktreeRoot?: string; settings?: Record<string, unknown> }) => request<{ project: Project; explorer: ExplorerThread }>("/api/v4/projects", { method: "POST", body: JSON.stringify(input) }),
+  updateProject: (projectId: string, input: Record<string, unknown>) => request<{ project: Project }>(`/api/v4/projects/${encodeURIComponent(projectId)}`, { method: "PATCH", body: JSON.stringify(input) }),
+  validateRepository: (projectId: string, repoRoot?: string) => request<{ valid: boolean; repoRoot: string; defaultBranch: string }>(`/api/v4/projects/${encodeURIComponent(projectId)}/validate-repository`, { method: "POST", body: JSON.stringify(repoRoot ? { repoRoot } : {}) }),
+  archiveProject: (projectId: string) => request<{ project: Project }>(`/api/v4/projects/${encodeURIComponent(projectId)}/archive`, { method: "POST" }),
+  activateProject: (projectId: string) => request<{ project: Project }>(`/api/v4/projects/${encodeURIComponent(projectId)}/activate`, { method: "POST" }),
+  selectProjectExplorer: (projectId: string, explorerId: string) => request<{ project: Project }>(`/api/v4/projects/${encodeURIComponent(projectId)}/select-explorer`, { method: "POST", body: JSON.stringify({ explorerId }) }),
+  projectConfigHistory: (projectId: string) => request<{ items: Array<{ projectId: string; version: number; hash: string; snapshot: Record<string, unknown>; createdAt: string }> }>(`/api/v4/projects/${encodeURIComponent(projectId)}/config-history`),
   agentLoopTools: (loopId: string) => request<{ items: ToolCall[] }>("/api/v4/agent-loops/" + encodeURIComponent(loopId) + "/tools"),
   codexRateLimits: () => request<{ rateLimits: CodexRateLimitsStatus }>("/api/v4/codex/rate-limits"),
   explorers: (projectId: string) => request<{ items: ExplorerThread[] }>(`/api/v4/projects/${projectId}/explorers`),
@@ -40,7 +49,7 @@ export const api = {
   cancelAgentLoop: (loopId: string, reason = "user_requested") => request<{ loop: AgentLoop }>(`/api/v4/agent-loops/${encodeURIComponent(loopId)}/cancel`, { method: "POST", body: JSON.stringify({ reason }) }),
   candidate: (projectId: string) => request<{ plan: Plan }>(`/api/v3/projects/${projectId}/explorer-thread/candidate`),
   createCandidate: (projectId: string, title: string) => request<{ plan: Plan }>(`/api/v3/projects/${projectId}/explorer-thread/candidate`, { method: "POST", body: JSON.stringify({ title }) }),
-  plans: (projectId: string, query = "") => request<{ items: Plan[]; nextCursor: string | null }>(`/api/v3/projects/${projectId}/explorer-thread/plans${query}`),
+  plans: (projectId: string, query = "") => request<{ items: Plan[]; nextCursor: string | null }>(`/api/v4/projects/${projectId}/plans${query}`),
   plan: (planId: string) => request<{ plan: Plan }>(`/api/v3/plans/${planId}`),
   confirm: (planId: string) => request<{ plan: Plan }>(`/api/v3/plans/${planId}/confirm`, { method: "POST", body: JSON.stringify({ actorId: "local-user" }) }),
   enqueue: (planId: string) => request<{ plan: Plan }>(`/api/v3/plans/${planId}/enqueue`, { method: "POST" }),

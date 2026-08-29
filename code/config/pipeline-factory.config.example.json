@@ -12,7 +12,7 @@
     "worktreeRoot": "../var/worktrees"
   },
   "project": {
-    "root": "../..",
+    "root": "../../..",
     "commands": [
       {
         "commandId": "project.start",
@@ -31,7 +31,7 @@
     "codexAppServer": {
       "command": "codex",
       "args": ["app-server", "--stdio", "--enable", "default_mode_request_user_input"],
-      "cwd": "../..",
+      "cwd": "../../..",
       "startupTimeoutMs": 15000,
       "requestTimeoutMs": 120000,
       "maxRestarts": 3,
