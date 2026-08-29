@@ -10,10 +10,12 @@ const commandSchema = z.object({
 
 const roleSchema = z.object({
   model: z.string().min(1),
+  mode: z.enum(["plan", "default"]).optional(),
   temperature: z.number().min(0).max(2).optional(),
   maxOutputTokens: z.number().int().positive().optional(),
   reasoningEffort: z.enum(["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]).optional(),
   developerInstructions: z.string().optional(),
+  loopMode: z.enum(["provider-controlled", "factory-controlled"]).default("provider-controlled"),
 });
 
 const configSchema = z.object({
@@ -37,13 +39,13 @@ const configSchema = z.object({
     backend: z.enum(["codex-app-server", "openai-responses", "stub"]).default("codex-app-server"),
     codexAppServer: z.object({
       command: z.string().min(1).default("codex"),
-      args: z.array(z.string()).default(["app-server", "--stdio"]),
+      args: z.array(z.string()).default(["app-server", "--stdio", "--enable", "default_mode_request_user_input"]),
       cwd: z.string().min(1).default(".."),
       startupTimeoutMs: z.number().int().positive().default(15_000),
       requestTimeoutMs: z.number().int().positive().default(120_000),
       maxRestarts: z.number().int().min(0).default(3),
       clientName: z.string().min(1).default("pipeline-factory"),
-      clientVersion: z.string().min(1).default("3.0.0"),
+      clientVersion: z.string().min(1).default("4.0.0"),
     }).optional(),
     openai: z.object({
       apiKey: z.string().min(1).optional(),
@@ -53,11 +55,19 @@ const configSchema = z.object({
       explorer: roleSchema.default({ model: "gpt-5.6-luna", temperature: 0.1 }),
       executor: roleSchema.default({ model: "gpt-5.6-luna", temperature: 0 }),
     }).default({}),
+    loop: z.object({
+      maxSteps: z.number().int().positive().default(40),
+      maxDurationMs: z.number().int().positive().default(1_800_000),
+      maxRepeatedToolCalls: z.number().int().nonnegative().default(2),
+      maxNoProgressSteps: z.number().int().positive().default(3),
+      requireFactoryToolGatewayForExecutor: z.boolean().default(false),
+    }).default({}),
   }).default({}),
   runtime: z.object({
     globalConcurrency: z.number().int().positive().default(4),
     projectConcurrency: z.number().int().positive().default(2),
     defaultTimeoutMs: z.number().int().positive().default(120_000),
+    maxAutoContinuationTurns: z.number().int().min(0).max(20).default(4),
   }).default({}),
 });
 

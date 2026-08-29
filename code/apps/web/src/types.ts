@@ -1,13 +1,20 @@
-export type PlanStatus = "DRAFT" | "READY" | "QUEUED" | "IN_PROGRESS" | "VERIFYING" | "MERGE_READY" | "MERGED" | "BLOCKED";
+export type PlanStatus = "DRAFT" | "READY" | "QUEUED" | "IN_PROGRESS" | "VERIFYING" | "MERGE_READY" | "MERGED" | "BLOCKED" | "NEEDS_PLAN_CHANGE";
 
 export type ExplorerThread = {
   id: string;
   projectId: string;
   parentThreadId: string | null;
-  state: "ACTIVE" | "COMPRESSED" | "ARCHIVED";
+  state: "ACTIVE" | "WAITING_FOR_INPUT" | "COMPRESSED" | "ARCHIVED";
   messageCount: number;
   summaryRef: string | null;
   lastActivityAt: string;
+  exploration: {
+    status: "INCOMPLETE" | "READY";
+    missing: string[];
+    completed: string[];
+    candidatePlanId: string | null;
+    lastAssessedTurnId: string | null;
+  };
 };
 
 export type ExplorerTurn = {
@@ -15,10 +22,73 @@ export type ExplorerTurn = {
   threadId: string;
   role: "user" | "assistant";
   content: string;
-  status?: "COMPLETED" | "FAILED" | "CANCELLED";
+  status?: "QUEUED" | "RUNNING" | "WAITING_FOR_INPUT" | "COMPLETED" | "FAILED" | "CANCELLED";
   error?: string;
   createdAt: string;
   sequence: number;
+};
+
+export type ModelInputQuestion = {
+  id: string;
+  header: string;
+  question: string;
+  isOther: boolean;
+  isSecret: boolean;
+  options: Array<{ label: string; description: string }> | null;
+};
+
+export type ExplorerInputRequest = {
+  id: string;
+  threadId: string;
+  localTurnId: string;
+  providerRequestId: string | number;
+  providerThreadId: string;
+  providerTurnId: string;
+  itemId: string;
+  questions: ModelInputQuestion[];
+  isBlocking: boolean;
+  autoResolutionMs: number | null;
+  status: "OPEN" | "SUBMITTING" | "ANSWERED" | "CANCELLED" | "AUTO_RESOLVED" | "RECOVERY_REQUIRED";
+  createdAt: string;
+  answeredAt: string | null;
+  answeredBy: string | null;
+  redactedAnswerSummary: Record<string, unknown> | null;
+};
+
+export type ExplorerRealtimeEvent = {
+  sequence: number;
+  type: string;
+  payload: Record<string, unknown>;
+};
+
+export type AgentLoopState = "CREATED" | "RUNNING" | "WAITING_FOR_INPUT" | "PAUSED" | "RECOVERING" | "BLOCKED" | "COMPLETED" | "FAILED" | "CANCELLED" | "NEEDS_RECONCILIATION";
+
+export type AgentLoop = {
+  id: string;
+  ownerType: "explorer-turn" | "run";
+  ownerId: string;
+  role: "explorer" | "executor";
+  mode: "provider-controlled" | "factory-controlled";
+  state: AgentLoopState;
+  stepCount: number;
+  maxSteps: number;
+  startedAt: string | null;
+  completedAt: string | null;
+  providerThreadId: string | null;
+  providerTurnId: string | null;
+  checkpointJson: string | null;
+};
+
+export type AgentLoopStep = {
+  loopId: string;
+  sequence: number;
+  stepType: string;
+  status: string;
+  callId: string | null;
+  providerThreadId: string | null;
+  providerTurnId: string | null;
+  payload: Record<string, unknown>;
+  occurredAt: string;
 };
 
 export type Plan = {
@@ -37,9 +107,25 @@ export type Plan = {
   acceptanceCriteria?: string[];
   include?: string[];
   exclude?: string[];
-  tasks?: Array<{ title: string; status: string; dependencies: string[] }>;
+  tasks?: Array<{ id?: string; title: string; status: string; dependencies: string[] }>;
   verificationCommands?: string[];
   toolPolicy?: string;
+  contract?: {
+    goal: string;
+    acceptanceCriteria: string[];
+    include: string[];
+    exclude: string[];
+    baseBranch: string;
+    baseCommit: string;
+    tasks: Array<{ id: string; title: string; dependencies: string[]; status: string }>;
+    conflictKeys: string[];
+    executorModelRole: string;
+    toolPolicy: string;
+    verificationCommandIds: string[];
+    maxRepairAttempts: number;
+    mergeStrategy: string;
+    requireHumanMerge: boolean;
+  };
 };
 
 export type Run = {
@@ -54,6 +140,7 @@ export type Run = {
   executionThreadId: string;
   createdAt: string;
   startedAt: string | null;
+  agentLoops?: AgentLoop[];
 };
 
 export type VerificationRun = {

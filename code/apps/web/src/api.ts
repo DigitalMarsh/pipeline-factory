@@ -1,4 +1,4 @@
-import type { ExecutionThread, ExplorerThread, ExplorerTurn, MergeRequest, Plan, Run, VerificationRun } from "./types";
+import type { AgentLoop, AgentLoopStep, ExecutionThread, ExplorerInputRequest, ExplorerThread, ExplorerTurn, MergeRequest, Plan, Run, VerificationRun } from "./types";
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const headers = { ...(init?.headers ?? {}) } as Record<string, string>;
@@ -9,9 +9,23 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  health: () => request<{ status: string; model: string }>("/health"),
   thread: (projectId: string) => request<{ thread: ExplorerThread }>(`/api/v3/projects/${projectId}/explorer-thread`),
   turns: (projectId: string) => request<{ items: ExplorerTurn[] }>(`/api/v3/projects/${projectId}/explorer-thread/turns`),
   sendTurn: (projectId: string, content: string) => request<{ turn: { user: ExplorerTurn; assistant: ExplorerTurn } }>(`/api/v3/projects/${projectId}/explorer-thread/turns`, { method: "POST", body: JSON.stringify({ content }) }),
+  startExplorerTurn: (projectId: string, threadId: string, content: string, clientTurnId: string) => request<{ turn: { user: ExplorerTurn; assistant: ExplorerTurn }; eventsUrl: string; loopId: string; state: string }>(`/api/v4/projects/${projectId}/explorer-thread/turns`, { method: "POST", body: JSON.stringify({ threadId, content, clientTurnId }) }),
+  explorerTurnsV4: (projectId: string, threadId: string) => request<{ items: ExplorerTurn[]; lastEventSequence: number }>(`/api/v4/projects/${projectId}/explorer-thread/turns?threadId=${encodeURIComponent(threadId)}`),
+  explorerAgentLoops: (projectId: string, threadId: string) => request<{ items: AgentLoop[] }>(`/api/v4/projects/${projectId}/explorer-thread/agent-loops?threadId=${encodeURIComponent(threadId)}`),
+  inputRequests: (projectId: string, threadId: string, status?: string) => request<{ items: ExplorerInputRequest[] }>(`/api/v4/projects/${projectId}/explorer-thread/input-requests?threadId=${encodeURIComponent(threadId)}${status ? `&status=${encodeURIComponent(status)}` : ""}`),
+  answerInput: (projectId: string, requestId: string, answers: Record<string, { answers: string[] }>, clientRequestId: string, actorId = "local-user") => request<{ request: ExplorerInputRequest; turn: ExplorerTurn }>(`/api/v4/projects/${projectId}/explorer-thread/input-requests/${requestId}/answer`, { method: "POST", body: JSON.stringify({ answers, clientRequestId, actorId }) }),
+  cancelExplorerTurn: (projectId: string, threadId: string, turnId: string, reason = "user_cancelled") => request<{ turn: ExplorerTurn }>(`/api/v4/projects/${projectId}/explorer-thread/turns/${turnId}/cancel`, { method: "POST", body: JSON.stringify({ threadId, reason }) }),
+  explorerEventsUrl: (projectId: string, threadId: string, afterSequence?: number) => `/api/v4/projects/${projectId}/explorer-thread/events?threadId=${encodeURIComponent(threadId)}${afterSequence === undefined ? "" : `&afterSequence=${afterSequence}`}`,
+  agentLoopEventsUrl: (loopId: string) => `/api/v4/agent-loops/${encodeURIComponent(loopId)}/events`,
+  agentLoop: (loopId: string) => request<{ loop: AgentLoop }>(`/api/v4/agent-loops/${encodeURIComponent(loopId)}`),
+  agentLoopSteps: (loopId: string) => request<{ items: AgentLoopStep[] }>(`/api/v4/agent-loops/${encodeURIComponent(loopId)}/steps`),
+  pauseAgentLoop: (loopId: string, reason = "user_requested") => request<{ loop: AgentLoop }>(`/api/v4/agent-loops/${encodeURIComponent(loopId)}/pause`, { method: "POST", body: JSON.stringify({ reason }) }),
+  resumeAgentLoop: (loopId: string) => request<{ loop: AgentLoop }>(`/api/v4/agent-loops/${encodeURIComponent(loopId)}/resume`, { method: "POST" }),
+  cancelAgentLoop: (loopId: string, reason = "user_requested") => request<{ loop: AgentLoop }>(`/api/v4/agent-loops/${encodeURIComponent(loopId)}/cancel`, { method: "POST", body: JSON.stringify({ reason }) }),
   candidate: (projectId: string) => request<{ plan: Plan }>(`/api/v3/projects/${projectId}/explorer-thread/candidate`),
   createCandidate: (projectId: string, title: string) => request<{ plan: Plan }>(`/api/v3/projects/${projectId}/explorer-thread/candidate`, { method: "POST", body: JSON.stringify({ title }) }),
   plans: (projectId: string, query = "") => request<{ items: Plan[]; nextCursor: string | null }>(`/api/v3/projects/${projectId}/explorer-thread/plans${query}`),

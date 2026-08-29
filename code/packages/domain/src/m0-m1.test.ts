@@ -66,4 +66,13 @@ describe("ToolGateway", () => {
     await expect(gateway.call({ callId: randomUUID(), tool: "write_file", input: { path: "src/index.ts", content: "export {}" } })).resolves.toMatchObject({ allowed: true });
     await expect(gateway.call({ callId: randomUUID(), tool: "write_file", input: { path: "../outside.txt", content: "nope" } })).resolves.toMatchObject({ allowed: false, reason: expect.stringMatching(/path/i) });
   });
+
+  it("protects secrets, repository internals, lockfiles and project configuration for both roles", async () => {
+    for (const role of ["explorer", "executor"] as const) {
+      const gateway = new ToolGateway({ role, workspaceRoot: "/tmp/project" });
+      for (const path of [".env", ".git/config", "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "tsconfig.json"]) {
+        await expect(gateway.call({ callId: `${role}-${path}`, tool: "read_file", input: { path } })).resolves.toMatchObject({ allowed: false, reason: expect.stringMatching(/protected|secret|internals/i) });
+      }
+    }
+  });
 });

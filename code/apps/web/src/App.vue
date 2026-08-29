@@ -9,7 +9,7 @@ const notificationsOpen = ref(false);
 <template>
   <div class="app-shell">
     <header class="topbar">
-      <div class="brand-mark"><span class="brand-dot" /> Pipeline Factory <small>v3</small></div>
+      <div class="brand-mark"><span class="brand-dot" /> Pipeline Factory <small>v4</small></div>
       <div class="topbar-project"><FolderOpened :size="15" /> <span>project-demo</span><span class="project-live">● Active</span></div>
       <div class="topbar-actions">
         <div class="global-search"><Search :size="15" /><span>Search plans, runs, threads</span><kbd>⌘ K</kbd></div>

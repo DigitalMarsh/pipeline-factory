@@ -6,9 +6,10 @@ const config = loadFactoryConfig(configPath);
 const app = createApp({ config });
 
 app.listen({ port: config.server.port, host: config.server.host }).then(() => {
-  console.log(`Pipeline Factory API v3 listening on http://${config.server.host}:${config.server.port}`);
+  console.log(`Pipeline Factory API v4 listening on http://${config.server.host}:${config.server.port}`);
 }).catch((error: unknown) => {
   app.log.error(error);
+  console.error(`Pipeline Factory API failed to start: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
   process.exitCode = 1;
 });
 

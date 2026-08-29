@@ -30,28 +30,40 @@
     "backend": "codex-app-server",
     "codexAppServer": {
       "command": "codex",
-      "args": ["app-server", "--stdio"],
+      "args": ["app-server", "--stdio", "--enable", "default_mode_request_user_input"],
       "cwd": "../..",
       "startupTimeoutMs": 15000,
       "requestTimeoutMs": 120000,
       "maxRestarts": 3,
       "clientName": "pipeline-factory",
-      "clientVersion": "3.0.0"
+      "clientVersion": "4.0.0"
     },
     "roles": {
       "explorer": {
         "model": "gpt-5.6-luna",
-        "temperature": 0.1
+        "mode": "plan",
+        "temperature": 0.1,
+        "loopMode": "provider-controlled"
       },
       "executor": {
         "model": "gpt-5.6-luna",
-        "temperature": 0
+        "mode": "default",
+        "temperature": 0,
+        "loopMode": "provider-controlled"
       }
+    },
+    "loop": {
+      "maxSteps": 40,
+      "maxDurationMs": 1800000,
+      "maxRepeatedToolCalls": 2,
+      "maxNoProgressSteps": 3,
+      "requireFactoryToolGatewayForExecutor": false
     }
   },
   "runtime": {
     "globalConcurrency": 4,
     "projectConcurrency": 2,
-    "defaultTimeoutMs": 120000
+    "defaultTimeoutMs": 120000,
+    "maxAutoContinuationTurns": 4
   }
 }

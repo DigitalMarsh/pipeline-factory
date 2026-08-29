@@ -41,4 +41,31 @@ describe("CodexAppServerClient", () => {
     ]);
     await client.close();
   });
+
+  it("preserves a server request id and responds to item/tool/requestUserInput", async () => {
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const child = Object.assign(new EventEmitter(), { stdin, stdout, stderr, kill: () => true });
+    const writes: Array<Record<string, unknown>> = [];
+    stdin.on("data", (chunk: Buffer) => {
+      const message = JSON.parse(chunk.toString()) as Record<string, unknown>;
+      writes.push(message);
+      if (message.method === "initialize") stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: message.id, result: {} })}\n`);
+      if (message.method === "thread/start") stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { thread: { id: "thread-1" } } })}\n`);
+      if (message.method === "turn/start") {
+        stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { turn: { id: "turn-1" } } })}\n`);
+        stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: "server-request-id", method: "item/tool/requestUserInput", params: { threadId: "thread-1", turnId: "turn-1", itemId: "item-1", questions: [], isBlocking: true, autoResolutionMs: null } })}\n`);
+      }
+    });
+    const client = new CodexAppServerClient({ command: "codex", args: ["app-server"], cwd: "/tmp", startupTimeoutMs: 5000, requestTimeoutMs: 5000, clientName: "test", clientVersion: "1.0.0", spawnProcess: () => child as unknown as ReturnType<CodexSpawnProcess> });
+    await client.startThread({ model: "gpt-5", cwd: "/tmp/project", sandbox: "read-only", approvalPolicy: "never" });
+    const stream = client.streamTurn({ threadId: "thread-1", input: [{ type: "text", text: "inspect" }], model: "gpt-5" });
+    const event = await stream[Symbol.asyncIterator]().next();
+    expect(event.value).toMatchObject({ id: "server-request-id", method: "item/tool/requestUserInput" });
+    await client.answerUserInput("server-request-id", { answers: {} });
+    expect(writes.at(-1)).toMatchObject({ id: "server-request-id", result: { answers: {} } });
+    expect(writes[0]).toMatchObject({ method: "initialize", params: { capabilities: { experimentalApi: true } } });
+    await client.close();
+  });
 });

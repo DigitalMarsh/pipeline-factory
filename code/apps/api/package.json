@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "predev": "pnpm --filter @pipeline-factory/domain build",
     "dev": "node --import tsx/esm src/main.ts",
     "start": "node dist/main.js",
     "test": "vitest run",

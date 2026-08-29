@@ -5,7 +5,7 @@ import {
   type CodexAppServerSessionFactory,
 } from "./index.js";
 
-function createSessionFactory(events: Array<{ method: string; params: Record<string, unknown> }>, calls: Array<{ method: string; params: unknown }>): CodexAppServerSessionFactory {
+function createSessionFactory(events: Array<{ id?: string | number; method: string; params: Record<string, unknown> }>, calls: Array<{ method: string; params: unknown }>): CodexAppServerSessionFactory {
   const session: CodexAppServerSession = {
     startThread: async (params) => {
       calls.push({ method: "thread/start", params });
@@ -21,6 +21,8 @@ function createSessionFactory(events: Array<{ method: string; params: Record<str
     interrupt: async (threadId, turnId) => {
       calls.push({ method: "turn/interrupt", params: { threadId, turnId } });
     },
+    respond: async (requestId, result) => { calls.push({ method: "response", params: { requestId, result } }); },
+    answerUserInput: async (requestId, response) => { calls.push({ method: "input/answer", params: { requestId, response } }); },
     close: async () => undefined,
   };
   return async () => session;
@@ -53,7 +55,17 @@ describe("CodexAppServerGateway", () => {
       method: "thread/start",
       params: { model: "explorer-model", sandbox: "read-only", approvalPolicy: "never" },
     });
-    expect(calls[1]).toMatchObject({ method: "turn/start", params: { threadId: "codex-thread-1" } });
+    expect((calls[0]?.params as { collaborationMode?: unknown } | undefined)?.collaborationMode).toMatchObject({ mode: "plan", settings: { model: "explorer-model" } });
+    expect(calls[1]).toMatchObject({
+      method: "turn/start",
+      params: {
+        threadId: "codex-thread-1",
+        collaborationMode: {
+          mode: "plan",
+          settings: { model: "explorer-model", developer_instructions: null },
+        },
+      },
+    });
   });
 
   it("reuses a persisted provider thread and maps an interrupted turn", async () => {
@@ -75,5 +87,20 @@ describe("CodexAppServerGateway", () => {
 
     expect(events).toEqual([{ type: "turn.cancelled" }]);
     expect(calls.map((call) => call.method)).toEqual(["thread/resume", "turn/start"]);
+  });
+
+  it("maps a structured App Server request and answers it using the preserved request id", async () => {
+    const calls: Array<{ method: string; params: unknown }> = [];
+    const gateway = new CodexAppServerGateway({
+      roles: { explorer: { model: "explorer-model" }, executor: { model: "executor-model" } },
+      sessionFactory: createSessionFactory([{ id: "server-request-1", method: "item/tool/requestUserInput", params: { threadId: "codex-thread-1", turnId: "turn-1", itemId: "item-1", questions: [{ id: "q1", header: "Choice", question: "Pick one", isOther: false, isSecret: false, options: [{ label: "A", description: "Option A" }] }], isBlocking: true, autoResolutionMs: null } }], calls),
+    });
+
+    const events = [];
+    for await (const event of gateway.stream({ role: "explorer", conversationId: "explorer-structured", messages: [{ role: "user", content: "ask me" }] })) events.push(event);
+    expect(events).toMatchObject([{ type: "thread.started", threadId: "codex-thread-1" }, { type: "turn.input_required", request: { requestId: "server-request-1", threadId: "codex-thread-1", turnId: "turn-1", itemId: "item-1" } }]);
+
+    await gateway.answerUserInput({ requestId: "server-request-1", answers: { q1: { answers: ["A"] } } });
+    expect(calls.at(-1)).toMatchObject({ method: "input/answer", params: { requestId: "server-request-1", response: { answers: { q1: { answers: ["A"] } } } } });
   });
 });

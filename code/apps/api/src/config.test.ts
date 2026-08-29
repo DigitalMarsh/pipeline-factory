@@ -56,6 +56,7 @@ describe("Factory configuration", () => {
 
     expect(config.model.roles.explorer.model).toBe("gpt-5.6-luna");
     expect(config.model.roles.executor.model).toBe("gpt-5.6-luna");
+    expect(config.runtime.maxAutoContinuationTurns).toBe(4);
   });
 
   it("resolves a relative CLI path from an ancestor workspace when pnpm changes the package cwd", () => {

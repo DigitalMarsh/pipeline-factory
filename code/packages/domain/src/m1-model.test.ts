@@ -12,6 +12,11 @@ describe("ModelGateway", () => {
 
     expect(gateway.configFor("explorer").model).toBe("explorer-model");
     expect(gateway.configFor("executor").model).toBe("executor-model");
+    expect(gateway.capabilities("explorer")).toMatchObject({
+      supportsStructuredUserInput: false,
+      supportsToolCalls: false,
+      supportedLoopModes: ["provider-controlled"],
+    });
     expect(events).toEqual(expect.arrayContaining([{ type: "text.delta", text: "Stub Explorer response" }, { type: "turn.completed" }]));
   });
 
@@ -37,5 +42,10 @@ describe("ModelGateway", () => {
 
     await expect(gateway.complete({ role: "executor", messages: [{ role: "user", content: "execute" }] })).resolves.toMatchObject({ text: "model response", requestId: "resp-1" });
     expect(requestBody).toMatchObject({ model: "gpt-executor", stream: false });
+  });
+
+  it("reports provider-controlled capability boundaries", () => {
+    const gateway = new OpenAIModelGateway({ apiKey: "test-key", roles: { explorer: { model: "gpt-explorer" }, executor: { model: "gpt-executor" } } });
+    expect(gateway.capabilities("executor")).toEqual({ supportsStructuredUserInput: false, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] });
   });
 });

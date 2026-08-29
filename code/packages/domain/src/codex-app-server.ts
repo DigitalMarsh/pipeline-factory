@@ -1,9 +1,10 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import type { ModelEvent, ModelGateway, ModelMessage, ModelRequest, ModelRole, ModelRoleConfig } from "./index.js";
+import { EXPLORER_PLAN_INSTRUCTIONS, type ModelCapabilities, type ModelEvent, type ModelGateway, type ModelMessage, type ModelRequest, type ModelRole, type ModelRoleConfig } from "./index.js";
 
 type JsonObject = Record<string, unknown>;
+export type CodexRequestId = string | number;
 
-export type CodexAppServerEvent = { method: string; params: JsonObject };
+export type CodexAppServerEvent = { id?: CodexRequestId; method: string; params: JsonObject };
 
 export type CodexThreadStartParams = {
   model: string;
@@ -12,6 +13,7 @@ export type CodexThreadStartParams = {
   approvalPolicy: "never" | "on-request";
   baseInstructions?: string;
   developerInstructions?: string;
+  collaborationMode?: { mode: "plan" | "default"; settings: { model: string; reasoning_effort: string | null; developer_instructions: string | null } };
 };
 
 export type CodexTurnStartParams = {
@@ -20,6 +22,7 @@ export type CodexTurnStartParams = {
   model: string;
   effort?: string;
   cwd?: string;
+  collaborationMode?: { mode: "plan" | "default"; settings: { model: string; reasoning_effort: string | null; developer_instructions: string | null } };
   signal?: AbortSignal;
 };
 
@@ -28,6 +31,8 @@ export type CodexAppServerSession = {
   resumeThread(threadId: string): Promise<void>;
   streamTurn(params: CodexTurnStartParams): AsyncIterable<CodexAppServerEvent>;
   interrupt(threadId: string, turnId: string): Promise<void>;
+  respond(requestId: CodexRequestId, result: JsonObject): Promise<void>;
+  answerUserInput(requestId: CodexRequestId, response: { answers: Record<string, { answers: string[] }> }): Promise<void>;
   close(): Promise<void>;
 };
 
@@ -144,6 +149,7 @@ export class CodexAppServerClient implements CodexAppServerSession {
         model: params.model,
         ...(params.effort ? { effort: params.effort } : {}),
         ...(params.cwd ? { cwd: params.cwd } : {}),
+        ...(params.collaborationMode ? { collaborationMode: params.collaborationMode } : {}),
       }, params.signal);
       const turn = getObject(result, "turn");
       turnId = getString(turn, "id");
@@ -171,6 +177,15 @@ export class CodexAppServerClient implements CodexAppServerSession {
   async interrupt(threadId: string, turnId: string): Promise<void> {
     await this.ensureReady();
     await this.request("turn/interrupt", { threadId, turnId });
+  }
+
+  async respond(requestId: CodexRequestId, result: JsonObject): Promise<void> {
+    if (!this.process) throw new Error("Codex App Server process is not running");
+    this.process.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id: requestId, result })}\n`);
+  }
+
+  async answerUserInput(requestId: CodexRequestId, response: { answers: Record<string, { answers: string[] }> }): Promise<void> {
+    await this.respond(requestId, response as unknown as JsonObject);
   }
 
   async close(): Promise<void> {
@@ -219,6 +234,7 @@ export class CodexAppServerClient implements CodexAppServerSession {
     });
     await this.request("initialize", {
       clientInfo: { name: this.options.clientName, version: this.options.clientVersion },
+      capabilities: { experimentalApi: true },
     }, undefined, this.options.startupTimeoutMs);
     this.initialized = true;
   }
@@ -283,7 +299,7 @@ export class CodexAppServerClient implements CodexAppServerSession {
       return;
     }
     if (typeof message.method !== "string" || !message.params || typeof message.params !== "object") return;
-    const event: CodexAppServerEvent = { method: message.method, params: message.params as JsonObject };
+    const event: CodexAppServerEvent = { ...(id === undefined ? {} : { id: id as CodexRequestId }), method: message.method, params: message.params as JsonObject };
     for (const subscription of this.subscriptions) subscription.push(event);
   }
 
@@ -320,6 +336,7 @@ export class CodexAppServerGateway implements ModelGateway {
   private readonly resumedThreads = new Set<string>();
   private readonly sessionFactory: CodexAppServerSessionFactory;
   private readonly providerThreads = new Map<string, string>();
+  private readonly pendingInputSessions = new Map<string, CodexAppServerSession>();
 
   constructor(private readonly options: CodexAppServerGatewayOptions) {
     this.sessionFactory = options.sessionFactory ?? (async () => new CodexAppServerClient({
@@ -330,11 +347,15 @@ export class CodexAppServerGateway implements ModelGateway {
       requestTimeoutMs: options.requestTimeoutMs ?? 120_000,
       maxRestarts: options.maxRestarts ?? 3,
       clientName: options.clientName ?? "pipeline-factory",
-      clientVersion: options.clientVersion ?? "3.0.0",
+      clientVersion: options.clientVersion ?? "4.0.0",
     }));
   }
 
   configFor(role: ModelRole): ModelRoleConfig { return this.options.roles[role]; }
+
+  capabilities(role: ModelRole): ModelCapabilities {
+    return { supportsStructuredUserInput: role === "explorer", supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] };
+  }
 
   async *stream(request: ModelRequest): AsyncIterable<ModelEvent> {
     if (request.signal?.aborted) {
@@ -351,13 +372,17 @@ export class CodexAppServerGateway implements ModelGateway {
           this.resumedThreads.add(providerThreadId);
         }
       } else {
+        const developerInstructions = request.role === "explorer"
+          ? [EXPLORER_PLAN_INSTRUCTIONS, roleConfig.developerInstructions].filter(Boolean).join("\n\n")
+          : roleConfig.developerInstructions;
         providerThreadId = await session.startThread({
           model: roleConfig.model,
           cwd: request.cwd ?? process.cwd(),
           sandbox: request.role === "explorer" ? "read-only" : "workspace-write",
           approvalPolicy: request.role === "explorer" ? "never" : "on-request",
           ...(systemInstructions(request.messages) ? { baseInstructions: systemInstructions(request.messages) } : {}),
-          ...(roleConfig.developerInstructions ? { developerInstructions: roleConfig.developerInstructions } : {}),
+          ...(developerInstructions ? { developerInstructions } : {}),
+          collaborationMode: { mode: request.role === "explorer" ? "plan" : "default", settings: { model: roleConfig.model, reasoning_effort: roleConfig.reasoningEffort ?? null, developer_instructions: roleConfig.developerInstructions ?? null } },
         });
         if (request.conversationId) this.providerThreads.set(request.conversationId, providerThreadId);
         yield { type: "thread.started", threadId: providerThreadId };
@@ -365,14 +390,21 @@ export class CodexAppServerGateway implements ModelGateway {
       const text = latestUserMessage(request.messages);
       for await (const event of session.streamTurn({
         threadId: providerThreadId,
-        input: [{ type: "text", text }],
+        input: [{ type: "text", text: request.continuationPrompt ?? text }],
         model: roleConfig.model,
         ...(roleConfig.reasoningEffort ? { effort: roleConfig.reasoningEffort } : {}),
         ...(request.cwd ? { cwd: request.cwd } : {}),
+        collaborationMode: { mode: request.role === "explorer" ? "plan" : "default", settings: { model: roleConfig.model, reasoning_effort: roleConfig.reasoningEffort ?? null, developer_instructions: roleConfig.developerInstructions ?? null } },
         ...(request.signal ? { signal: request.signal } : {}),
       })) {
         const mapped = mapCodexEvent(event);
-        if (mapped) yield mapped;
+        if (mapped) {
+          if (mapped.type === "turn.input_required") {
+            if (event.id === undefined) throw new Error("Codex App Server input request did not include a JSON-RPC id");
+            this.pendingInputSessions.set(String(event.id), session);
+          }
+          yield mapped;
+        }
       }
     } catch (error) {
       if (request.signal?.aborted || isAbortError(error)) yield { type: "turn.cancelled" };
@@ -383,7 +415,21 @@ export class CodexAppServerGateway implements ModelGateway {
   async close(): Promise<void> {
     const sessions = [...new Set(this.sessions.values())];
     this.sessions.clear();
+    this.pendingInputSessions.clear();
     await Promise.all(sessions.map((session) => session.close()));
+  }
+
+  async answerUserInput(input: { requestId: string | number; answers: import("./index.js").ModelInputAnswers }): Promise<void> {
+    const session = this.pendingInputSessions.get(String(input.requestId));
+    if (!session) throw new Error(`No active Codex App Server input request ${String(input.requestId)}`);
+    await session.answerUserInput(input.requestId, { answers: input.answers });
+    this.pendingInputSessions.delete(String(input.requestId));
+  }
+
+  async cancel(request: { conversationId: string; providerThreadId: string; providerTurnId?: string }): Promise<void> {
+    if (!request.providerTurnId) return;
+    const session = await this.getSession(request.conversationId);
+    await session.interrupt(request.providerThreadId, request.providerTurnId);
   }
 
   private async getSession(key: string): Promise<CodexAppServerSession> {
@@ -399,6 +445,30 @@ function mapCodexEvent(event: CodexAppServerEvent): ModelEvent | null {
   if (event.method === "item/agentMessage/delta") {
     const text = getString(event.params, "delta");
     return text === undefined ? null : { type: "text.delta", text };
+  }
+  if (event.method === "item/tool/requestUserInput") {
+    const request = event.params;
+    const threadId = getString(request, "threadId");
+    const turnId = getString(request, "turnId");
+    const itemId = getString(request, "itemId");
+    if (!threadId || !turnId || !itemId || !Array.isArray(request.questions)) throw new Error("Invalid item/tool/requestUserInput payload");
+    const questions = request.questions.flatMap((question) => {
+      if (!question || typeof question !== "object") return [];
+      const value = question as JsonObject;
+      const id = getString(value, "id");
+      const header = getString(value, "header");
+      const text = getString(value, "question");
+      if (!id || !header || !text) return [];
+      const options = value.options === null ? null : Array.isArray(value.options) ? value.options.flatMap((option) => {
+        if (!option || typeof option !== "object") return [];
+        const item = option as JsonObject;
+        const label = getString(item, "label");
+        const description = getString(item, "description");
+        return label && description ? [{ label, description }] : [];
+      }) : null;
+      return [{ id, header, question: text, isOther: value.isOther === true, isSecret: value.isSecret === true, options }];
+    });
+    return { type: "turn.input_required", request: { requestId: event.id ?? "", threadId, turnId, itemId, questions, isBlocking: request.isBlocking === true, autoResolutionMs: typeof request.autoResolutionMs === "number" ? request.autoResolutionMs : null } };
   }
   if (event.method !== "turn/completed") return null;
   const turn = getObject(event.params, "turn");
