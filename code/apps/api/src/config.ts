@@ -8,6 +8,31 @@ const commandSchema = z.object({
   environment: z.record(z.string()).default({}),
 });
 
+const mcpServerSchema = z.object({
+  name: z.string().min(1),
+  transport: z.enum(["stdio", "streamable-http"]),
+  command: z.string().min(1).optional(),
+  args: z.array(z.string()).default([]),
+  cwd: z.string().min(1).optional(),
+  environment: z.record(z.string()).default({}),
+  url: z.string().url().optional(),
+  headers: z.record(z.string()).default({}),
+  requestTimeoutMs: z.number().int().positive().default(120_000),
+  allowedTools: z.array(z.string().min(1)).default([]),
+});
+
+const pluginsSchema = z.object({
+  directories: z.array(z.string().min(1)).default([]),
+  supportedApiMajor: z.number().int().positive().default(1),
+  allowedTools: z.array(z.string().min(1)).default([]),
+}).default({});
+
+const computerUseSchema = z.object({
+  enabled: z.boolean().default(false),
+  requireApproval: z.boolean().default(true),
+  timeoutMs: z.number().int().positive().default(120_000),
+}).default({});
+
 const roleSchema = z.object({
   model: z.string().min(1),
   mode: z.enum(["plan", "default"]).optional(),
@@ -35,6 +60,11 @@ const configSchema = z.object({
     root: z.string().min(1).default(".."),
     commands: z.array(commandSchema).default([]),
   }).default({}),
+  mcp: z.object({
+    servers: z.array(mcpServerSchema).default([]),
+  }).default({}),
+  plugins: pluginsSchema,
+  computerUse: computerUseSchema,
   model: z.object({
     backend: z.enum(["codex-app-server", "openai-responses", "stub"]).default("codex-app-server"),
     codexAppServer: z.object({
@@ -110,6 +140,13 @@ export function loadFactoryConfig(configPath = resolveConfigPath(undefined)): Fa
     project: {
       ...parsed.data.project,
       root: resolveFromConfig(baseDirectory, parsed.data.project.root),
+    },
+    mcp: {
+      servers: parsed.data.mcp.servers.map((server) => ({ ...server, ...(server.cwd ? { cwd: resolveFromConfig(baseDirectory, server.cwd) } : {}) })),
+    },
+    plugins: {
+      ...parsed.data.plugins,
+      directories: parsed.data.plugins.directories.map((directory) => resolveFromConfig(baseDirectory, directory)),
     },
     model: {
       ...parsed.data.model,

@@ -18,14 +18,17 @@ export type ExecutorAgentOptions = {
   maxRepeatedToolCalls?: number;
   maxNoProgressSteps?: number;
   mode?: AgentLoopMode;
+  toolRuntimeFactory?: (run: Run, revision: PlanRevisionV2) => ToolRuntime;
 };
 
 export class ExecutorAgent {
   private readonly engine: AgentLoopEngine;
   private readonly options: ExecutorAgentOptions;
+  private readonly defaultToolRuntime: ToolRuntime | undefined;
 
   constructor(private readonly store: PipelineStore, private readonly model: ModelGateway, toolRuntime?: ToolRuntime, options: ExecutorAgentOptions = {}) {
     this.options = options;
+    this.defaultToolRuntime = toolRuntime;
     this.engine = new AgentLoopEngine(store, model, toolRuntime, {
       defaultMaxSteps: options.maxSteps ?? 40,
       defaultMaxDurationMs: options.maxDurationMs ?? 1_800_000,
@@ -40,6 +43,7 @@ export class ExecutorAgent {
     this.assertCapabilities(mode);
     const openToolCalls = new Set<string>();
     const gate = new TaskProgressGate();
+    const toolRuntime = this.options.toolRuntimeFactory?.(run, revision) ?? this.defaultToolRuntime;
     const evaluate = (context: GateContext) => gate.evaluate({
       ...context,
       ...this.progressContext(run.id, revision, context.content ?? "", openToolCalls),
@@ -54,6 +58,7 @@ export class ExecutorAgent {
       ...(this.options.maxRepeatedToolCalls === undefined ? {} : { maxRepeatedToolCalls: this.options.maxRepeatedToolCalls }),
       ...(this.options.maxNoProgressSteps === undefined ? {} : { maxNoProgressSteps: this.options.maxNoProgressSteps }),
       workspacePath: run.workspacePath!,
+      ...(toolRuntime ? { toolRuntime } : {}),
       modelRequest: {
         conversationId: run.id,
         ...(run.workspacePath ? { cwd: run.workspacePath } : {}),
@@ -74,6 +79,7 @@ export class ExecutorAgent {
     this.assertCapabilities(mode);
     const openToolCalls = new Set<string>();
     const gate = new TaskProgressGate();
+    const toolRuntime = this.options.toolRuntimeFactory?.(run, revision) ?? this.defaultToolRuntime;
     const loop = await this.engine.run({
       ownerType: "run",
       ownerId: run.id,
@@ -84,6 +90,7 @@ export class ExecutorAgent {
       ...(this.options.maxRepeatedToolCalls === undefined ? {} : { maxRepeatedToolCalls: this.options.maxRepeatedToolCalls }),
       ...(this.options.maxNoProgressSteps === undefined ? {} : { maxNoProgressSteps: this.options.maxNoProgressSteps }),
       workspacePath: run.workspacePath!,
+      ...(toolRuntime ? { toolRuntime } : {}),
       modelRequest: {
         conversationId: run.id,
         ...(run.workspacePath ? { cwd: run.workspacePath } : {}),
@@ -150,9 +157,10 @@ export class ExecutorAgent {
       openToolCalls.add(payload.callId);
       this.append(thread, "TOOL_CALL", { action: "requested", ...payload });
     }
-    if ((event.type === "agent.tool.completed" || event.type === "agent.tool.denied") && typeof payload.callId === "string") {
+    if ((event.type === "agent.tool.completed" || event.type === "agent.tool.denied" || event.type === "agent.tool.failed" || event.type === "agent.tool.needs_reconciliation") && typeof payload.callId === "string") {
       openToolCalls.delete(payload.callId);
-      this.append(thread, "TOOL_CALL", { action: event.type.endsWith("denied") ? "denied" : "completed", ...payload });
+      const action = event.type.endsWith("denied") ? "denied" : event.type.endsWith("failed") ? "failed" : event.type.endsWith("reconciliation") ? "needs-reconciliation" : "completed";
+      this.append(thread, "TOOL_CALL", { action, ...payload });
     }
     if (event.type === "agent.gate.checked") this.append(thread, "TASK_PROGRESS", payload);
     if (event.type === "agent.loop.completed") {
@@ -161,6 +169,10 @@ export class ExecutorAgent {
     }
     if (event.type === "agent.loop.failed") {
       this.append(thread, "TASK_PROGRESS", { state: "BLOCKED", ...payload });
+      this.setRunStatus(run, "BLOCKED");
+    }
+    if (event.type === "agent.loop.recovery_required") {
+      this.append(thread, "RECOVERY", payload);
       this.setRunStatus(run, "BLOCKED");
     }
     if (event.type === "agent.loop.cancelled") {

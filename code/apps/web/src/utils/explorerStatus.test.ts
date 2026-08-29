@@ -14,4 +14,11 @@ describe("Codex usage status", () => {
   it("does not invent rate-limit values when Codex telemetry is unavailable", () => {
     expect(formatRateLimit(null)).toEqual({ remaining: "Unavailable", reset: "Not provided" });
   });
+
+  it("formats exact Codex rate-limit values for the status popover", () => {
+    expect(formatRateLimit({ remainingPercent: 77, resetAt: "2026-06-17T00:00:00.000Z" })).toEqual({
+      remaining: "剩余 77%",
+      reset: "重置时间: 2026-06-17T00:00:00.000Z",
+    });
+  });
 });

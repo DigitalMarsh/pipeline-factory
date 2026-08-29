@@ -4,7 +4,7 @@ import { ArrowLeft, Check, CircleCheck, Clock, Document, VideoPause, VideoPlay, 
 import { ElMessage } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 import { api } from "../api";
-import type { AgentLoopStep, ExecutionThread, MergeRequest, Run, VerificationRun } from "../types";
+import type { AgentLoopStep, ExecutionThread, MergeRequest, Run, ToolCall, VerificationRun } from "../types";
 import { canPauseRun } from "../utils/runControls";
 
 const route = useRoute();
@@ -21,6 +21,7 @@ const sourceCommit = ref("");
 const targetCommit = ref("");
 const executorLoop = computed(() => run.value?.agentLoops?.find((loop) => loop.role === "executor") ?? null);
 const executorSteps = ref<AgentLoopStep[]>([]);
+const toolCalls = ref<ToolCall[]>([]);
 const loopStatusLabel = computed(() => ({ CREATED: "Created", RUNNING: "Running", WAITING_FOR_INPUT: "Waiting for input", PAUSED: "Paused", RECOVERING: "Recovery required", BLOCKED: "Blocked", COMPLETED: "Completed", FAILED: "Failed", CANCELLED: "Cancelled", NEEDS_RECONCILIATION: "Needs reconciliation" } as Record<string, string>)[executorLoop.value?.state ?? ""] ?? "No loop");
 async function load() {
   loading.value = true;
@@ -31,7 +32,15 @@ async function load() {
     thread.value = response.executionThread;
     verification.value = response.verification;
     mergeRequest.value = response.mergeRequest;
-    executorSteps.value = response.run.agentLoops?.[0] ? (await api.agentLoopSteps(response.run.agentLoops[0].id)).items : [];
+    const loopId = response.run.agentLoops?.[0]?.id;
+    if (loopId) {
+      const [stepsResponse, toolsResponse] = await Promise.all([api.agentLoopSteps(loopId), api.agentLoopTools(loopId)]);
+      executorSteps.value = stepsResponse.items;
+      toolCalls.value = toolsResponse.items;
+    } else {
+      executorSteps.value = [];
+      toolCalls.value = [];
+    }
     if (!sourceCommit.value) sourceCommit.value = response.run.baseCommit;
     if (!targetCommit.value) targetCommit.value = response.run.baseCommit;
   } catch { error.value = "Run 不存在或 API 尚未连接"; }
@@ -110,5 +119,6 @@ onMounted(load);
       <section v-if="mergeRequest" class="evidence-card merge-card"><div class="evidence-heading"><div><div class="eyebrow">MERGE REQUEST · {{ mergeRequest.id }}</div><h2>Human merge confirmation</h2></div><el-tag :type="mergeRequest.status === 'MERGED' ? 'success' : 'warning'" effect="light">{{ mergeRequest.status }}</el-tag></div><div class="verification-summary"><span>Source <code>{{ mergeRequest.sourceCommit }}</code></span><span>Target <code>{{ mergeRequest.targetBranch }}</code></span></div><div v-if="mergeRequest.status === 'OPEN'" class="review-form"><el-input v-model="targetCommit" size="small" aria-label="Target commit" placeholder="Actual target commit after manual merge" /><el-button type="primary" size="small" :loading="actionBusy" @click="confirmMerged">Confirm merged</el-button></div></section>
       <section class="journal-panel"><div class="journal-heading"><div><div class="eyebrow">EXECUTION JOURNAL</div><h2>What happened</h2></div><span>{{ thread?.journal.length ?? 0 }} entries</span></div><div v-if="thread?.journal.length" class="journal-list"><div v-for="entry in thread.journal" :key="entry.sequence" class="journal-entry"><div class="journal-icon" :class="{ success: entry.type.includes('COMPLETED') || entry.type === 'COMMIT', warning: entry.type.includes('FAILED') }"><CircleCheck v-if="entry.type.includes('COMPLETED') || entry.type === 'COMMIT'" :size="15" /><Warning v-else-if="entry.type.includes('FAILED')" :size="15" /><Clock v-else :size="15" /></div><div><div class="journal-meta"><strong>{{ entry.type }}</strong><span>{{ new Date(entry.occurredAt).toLocaleTimeString('zh-CN') }}</span></div><p>{{ JSON.stringify(entry.payload) }}</p></div></div></div><div v-else class="empty-state"><Document :size="28" /><h3>No journal entries</h3><p>The execution thread has not recorded activity yet.</p></div></section>
     </template>
+    <section v-if="toolCalls.length" class="journal-panel tool-call-panel"><div class="journal-heading"><div><div class="eyebrow">TOOL CALLS</div><h2>Audited tool activity</h2></div><span>{{ toolCalls.length }} calls</span></div><div class="journal-list"><div v-for="tool in toolCalls" :key="tool.callId" class="journal-entry"><div class="journal-icon" :class="{ success: tool.status === 'SUCCEEDED', warning: tool.status === 'FAILED' || tool.status === 'DENIED' || tool.status === 'UNKNOWN' || tool.status === 'NEEDS_RECONCILIATION' }"><CircleCheck v-if="tool.status === 'SUCCEEDED'" :size="15" /><Warning v-else-if="tool.status === 'FAILED' || tool.status === 'DENIED' || tool.status === 'UNKNOWN' || tool.status === 'NEEDS_RECONCILIATION'" :size="15" /><Clock v-else :size="15" /></div><div><div class="journal-meta"><strong>{{ tool.tool }}</strong><span>{{ tool.status }}</span><span>{{ new Date(tool.startedAt).toLocaleTimeString('zh-CN') }}</span></div><p>{{ tool.result ? JSON.stringify(tool.result) : 'No result yet' }}</p></div></div></div></section>
   </div>
 </template>

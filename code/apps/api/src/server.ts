@@ -12,11 +12,17 @@ import {
   OpenAIModelGateway,
   CodexAppServerGateway,
   RegisteredCommandExecutor,
+  ToolGateway,
+  DurableToolRuntime,
+  McpToolRegistry,
+  PluginRegistry,
+  ComputerUseBridge,
   StubModelGateway,
   RecoveryCoordinator,
   ExecutorAgent,
   ChangeProposalService,
   VerificationService,
+  mapCodexRateLimits,
   type PipelineStore,
   type HookDefinition,
   type PlanStatus,
@@ -79,6 +85,9 @@ export type PipelineAppOptions = {
   mergeService?: MergeService | undefined;
   agentLoopController?: Pick<AgentLoopRunner, "pause" | "resume" | "cancel"> | undefined;
   seed?: boolean;
+  mcpRegistry?: McpToolRegistry;
+  pluginRegistry?: PluginRegistry;
+  computerUse?: ComputerUseBridge;
 };
 
 export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
@@ -93,6 +102,8 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
   const verificationExecutor = options.verificationExecutor ?? (options.config ? createDefaultVerificationExecutor(options.config) : undefined);
   const ownsModel = !options.model;
   const model = options.model ?? (options.config ? createModelGateway(options.config) : new StubModelGateway({ explorer: { model: "stub-explorer", temperature: 0.1 }, executor: { model: "stub-executor", temperature: 0 } }));
+  const mcpRegistry = options.mcpRegistry ?? (options.config ? new McpToolRegistry(options.config.mcp.servers) : undefined);
+  const pluginRegistry = options.pluginRegistry ?? (options.config ? new PluginRegistry({ supportedApiMajor: options.config.plugins.supportedApiMajor }) : undefined);
   const explorer = new ExplorerThreadService(store, model, {
     maxAutoContinuationTurns: options.config?.runtime.maxAutoContinuationTurns,
     maxSteps: options.config?.model.loop.maxSteps,
@@ -100,7 +111,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     maxRepeatedToolCalls: options.config?.model.loop.maxRepeatedToolCalls,
     maxNoProgressSteps: options.config?.model.loop.maxNoProgressSteps,
   });
-  const scheduler = options.scheduler ?? (options.config ? createDefaultScheduler(store, options.config, model) : undefined);
+  const scheduler = options.scheduler ?? (options.config ? createDefaultScheduler(store, options.config, model, mcpRegistry, pluginRegistry, options.computerUse) : undefined);
   const schedulerLoopController = scheduler?.agentLoopController();
   const loopController: Pick<AgentLoopRunner, "pause" | "resume" | "cancel"> = options.agentLoopController ?? {
     pause: async (loopId, reason) => {
@@ -136,9 +147,34 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
   app.addHook("onClose", async () => {
     if (ownsStore && "close" in store && typeof store.close === "function") store.close();
     if (ownsModel && "close" in model && typeof model.close === "function") await model.close();
+    if (!options.mcpRegistry) await mcpRegistry?.close();
   });
 
   app.get("/health", async () => ({ status: "ok", service: "pipeline-factory-api", version: "v4", modelBackend: options.config?.model.backend ?? "stub", model: model.configFor("explorer").model }));
+
+  app.get("/api/v4/codex/rate-limits", async () => {
+    const rateLimits = model.readRateLimits ? await model.readRateLimits().catch(() => mapCodexRateLimits(null)) : mapCodexRateLimits(null);
+    return { rateLimits };
+  });
+
+  app.get("/api/v4/mcp/tools", async (request, reply) => {
+    if (!mcpRegistry) return { tools: [] };
+    try {
+      return { tools: await mcpRegistry.discover() };
+    } catch (error) {
+      return reply.code(502).send({ error: error instanceof Error ? error.message : "MCP discovery failed" });
+    }
+  });
+
+  app.get("/api/v4/plugins/tools", async (request, reply) => {
+    if (!pluginRegistry) return { tools: [] };
+    try {
+      if (options.config?.plugins.directories.length) await pluginRegistry.discover(options.config.plugins.directories);
+      return { tools: pluginRegistry.listTools() };
+    } catch (error) {
+      return reply.code(502).send({ error: error instanceof Error ? error.message : "Plugin discovery failed" });
+    }
+  });
 
   app.get("/api/v4/agent-loops/:loopId", async (request, reply) => {
     const params = agentLoopParams.safeParse(request.params);
@@ -153,6 +189,13 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (!params.success) return reply.code(400).send({ error: "Invalid Agent Loop id" });
     if (!store.getAgentLoop(params.data.loopId)) return reply.code(404).send({ error: "AgentLoop not found" });
     return { items: store.listAgentLoopSteps(params.data.loopId) };
+  });
+
+  app.get("/api/v4/agent-loops/:loopId/tools", async (request, reply) => {
+    const params = agentLoopParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: "Invalid Agent Loop id" });
+    if (!store.getAgentLoop(params.data.loopId)) return reply.code(404).send({ error: "AgentLoop not found" });
+    return { items: store.listToolCalls(params.data.loopId) };
   });
 
   app.get("/api/v4/agent-loops/:loopId/events", async (request, reply) => {
@@ -701,14 +744,51 @@ function persistLoopControl(store: PipelineStore, loop: AgentLoop, state: AgentL
   return updated;
 }
 
-function createDefaultScheduler(store: PipelineStore, config: FactoryConfig, model: ModelGateway): Scheduler {
+function createDefaultScheduler(store: PipelineStore, config: FactoryConfig, model: ModelGateway, mcpRegistry?: McpToolRegistry, pluginRegistry?: PluginRegistry, computerUse?: ComputerUseBridge): Scheduler {
   const definitions = readCommandDefinitions(config);
   const commands = new RegisteredCommandExecutor(definitions);
+  const registeredCommandIds = new Set(definitions.map((definition) => definition.commandId));
+  const mcpAllowedTools = new Set(config.mcp.servers.flatMap((server) => server.allowedTools.map((tool) => "mcp:" + server.name + ":" + tool)));
   return new Scheduler({
     store,
     workspace: new LocalGitWorktreeAdapter({ projectRoot: config.project.root, worktreeRoot: config.storage.worktreeRoot }),
     hooks: new LifecycleHookRunner(commands.execute.bind(commands), { cleanupCwd: config.project.root }),
-    executor: new ExecutorAgent(store, model, undefined, { maxSteps: config.model.loop.maxSteps, maxDurationMs: config.model.loop.maxDurationMs, maxRepeatedToolCalls: config.model.loop.maxRepeatedToolCalls, maxNoProgressSteps: config.model.loop.maxNoProgressSteps }),
+    executor: new ExecutorAgent(store, model, undefined, {
+      maxSteps: config.model.loop.maxSteps,
+      maxDurationMs: config.model.loop.maxDurationMs,
+      maxRepeatedToolCalls: config.model.loop.maxRepeatedToolCalls,
+      maxNoProgressSteps: config.model.loop.maxNoProgressSteps,
+      toolRuntimeFactory: (run) => new DurableToolRuntime(store, new ToolGateway({
+        role: "executor",
+        workspaceRoot: run.workspacePath!,
+        registeredCommandIds,
+        mcpAllowedTools,
+        pluginAllowedTools: new Set(config.plugins.allowedTools),
+        computerUseAllowed: config.computerUse.enabled && Boolean(computerUse),
+        builtin: {
+          registeredCommandExecutor: (invocation) => commands.execute({
+            ...invocation,
+            context: {
+              ...invocation.context,
+              projectId: run.projectId,
+              runId: run.id,
+              workspacePath: run.workspacePath!,
+              branch: run.branch,
+              baseCommit: run.baseCommit,
+            },
+          }),
+          ...(mcpRegistry ? { mcpToolExecutor: (name: string, input: Record<string, unknown>) => mcpRegistry.call(name, input) } : {}),
+          ...(pluginRegistry ? { pluginToolExecutor: (name: string, input: Record<string, unknown>) => pluginRegistry.bridge.call(name, input) } : {}),
+          ...(computerUse ? {
+            computerUseExecutor: (input: Record<string, unknown>) => computerUse.call({
+              action: input.action as import("@pipeline-factory/domain").ComputerUseAction,
+              ...(typeof input.requestId === "string" ? { requestId: input.requestId } : {}),
+              ...(typeof input.timeoutMs === "number" ? { timeoutMs: input.timeoutMs } : {}),
+            }),
+          } : {}),
+        },
+      })),
+    }),
   });
 }
 

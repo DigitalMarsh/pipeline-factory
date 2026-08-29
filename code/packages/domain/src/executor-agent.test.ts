@@ -1,3 +1,6 @@
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { ExecutorAgent } from "./executor-agent.js";
 import { InMemoryPipelineStore, LifecycleHookRunner, PlanService, Scheduler, ToolGateway, type AgentLoop, type ModelEvent, type ModelGateway, type ModelRequest } from "./index.js";
@@ -78,6 +81,40 @@ describe("ExecutorAgent", () => {
     expect(loop.state).toBe("BLOCKED");
     expect(store.getRun(run.id)?.status).toBe("BLOCKED");
     expect(store.getRun(run.id)?.status).not.toBe("READY_FOR_VERIFY");
+  });
+
+  it("injects a durable built-in ToolRuntime for Factory-controlled execution", async () => {
+    const { store, plan, run } = createQueuedRun();
+    const workspace = await mkdtemp(join(tmpdir(), "pipeline-executor-"));
+    run.workspacePath = workspace;
+    store.saveRun(run);
+    let modelCalls = 0;
+    const model: ModelGateway = {
+      configFor: () => ({ model: "executor", loopMode: "factory-controlled" }),
+      capabilities: () => ({ supportsStructuredUserInput: false, supportsToolCalls: true, supportedLoopModes: ["factory-controlled"] }),
+      async *stream() {
+        modelCalls += 1;
+        if (modelCalls === 1) yield { type: "tool.call", call: { callId: "write-1", tool: "write_file", input: { path: "src/generated.ts", content: "export const generated = true;\n" } } };
+        else yield { type: "text.delta", text: executionReport(plan.contract.tasks[0]!.id) };
+        yield { type: "turn.completed" };
+      },
+      async answerUserInput() { return undefined; },
+      async cancel() { return undefined; },
+    };
+
+    try {
+      const agent = new ExecutorAgent(store, model, undefined, {
+        mode: "factory-controlled",
+        toolRuntimeFactory: () => new DurableToolRuntime(store, new ToolGateway({ role: "executor", workspaceRoot: workspace })),
+      });
+      const loop = await agent.run(run, plan);
+
+      expect(loop.state).toBe("COMPLETED");
+      await expect(readFile(join(workspace, "src/generated.ts"), "utf8")).resolves.toContain("generated");
+      expect(store.listToolCalls()).toMatchObject([{ callId: "write-1", status: "SUCCEEDED" }]);
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
   });
 
   it("starts the Executor Loop only after the workspace and start hook succeed", async () => {

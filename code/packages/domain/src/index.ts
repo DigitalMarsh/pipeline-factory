@@ -1,4 +1,6 @@
 import type { AgentLoop, AgentLoopEvent, AgentLoopRunner, AgentLoopStep, AgentLoopStepInput } from "./agent-loop.js";
+import type { MappedCodexRateLimits } from "./codex-rate-limits.js";
+import { BuiltinToolExecutor, type BuiltinToolContext, type BuiltinToolExecutorOptions } from "./builtin-tool-executor.js";
 import { AgentLoopEngine } from "./agent-loop.js";
 import { PlanCompletenessGate } from "./termination-gates.js";
 export { projectExplorerActivity } from "./explorer-activity.js";
@@ -10,6 +12,18 @@ export { PlanCompletenessGate, TaskProgressGate } from "./termination-gates.js";
 export { ExecutorAgent, parseExecutorReport } from "./executor-agent.js";
 export type { ExecutorAgentOptions, ExecutorReport } from "./executor-agent.js";
 export { RecoveryCoordinator } from "./recovery-coordinator.js";
+export { mapCodexRateLimits } from "./codex-rate-limits.js";
+export type { CodexRateLimitBucket, CodexRateLimitWindow, CodexRateLimitsResponse, MappedCodexRateLimits, MappedRateLimit } from "./codex-rate-limits.js";
+export { BuiltinToolExecutor } from "./builtin-tool-executor.js";
+export type { BuiltinToolContext, BuiltinToolExecutorOptions } from "./builtin-tool-executor.js";
+export { DurableToolRuntime } from "./tool-runtime.js";
+export type { ToolExecutionContext, ToolRuntime } from "./tool-runtime.js";
+export { McpClient, McpToolRegistry } from "./mcp.js";
+export type { McpClientOptions, McpRpcTransport, McpServerConfig, McpToolCallResult, McpToolDefinition, McpToolRegistryOptions, QualifiedMcpTool } from "./mcp.js";
+export { PluginRegistry, PluginToolBridge } from "./plugin.js";
+export type { PluginManifest, PluginRegistryOptions, PluginStatus, PluginTool, PluginToolDefinition, PluginToolHandler } from "./plugin.js";
+export { ComputerUseBridge } from "./computer-use.js";
+export type { ComputerUseAction, ComputerUseBridgeOptions, ComputerUseEvent, ComputerUseHostAdapter, ComputerUseScreenshot } from "./computer-use.js";
 
 export type PlanStatus =
   | "DRAFT"
@@ -217,6 +231,8 @@ export type DomainEvent = {
     | "agent.step.tool_requested"
     | "agent.step.tool_denied"
     | "agent.step.tool_completed"
+    | "agent.step.tool_failed"
+    | "agent.step.tool_needs_reconciliation"
     | "agent.step.input_required"
     | "agent.step.input_resolved"
     | "agent.step.context_compacted"
@@ -231,8 +247,11 @@ export type DomainEvent = {
     | "agent.input.required"
     | "agent.input.resolved"
     | "agent.tool.requested"
+    | "agent.tool.running"
     | "agent.tool.denied"
     | "agent.tool.completed"
+    | "agent.tool.failed"
+    | "agent.tool.needs_reconciliation"
     | "agent.gate.checked"
     | "agent.context.compacted";
   aggregateId: string;
@@ -1616,7 +1635,7 @@ function defaultProcessRunner(argv: string[], cwd: string, timeoutMs: number, en
 }
 
 export type ToolRole = "explorer" | "executor";
-export type ToolName = "read_file" | "list_files" | "git_status" | "git_diff" | "git_log" | "search_text" | "write_file" | "apply_patch" | "run_command" | "run_registered_command" | "run_verification" | "git_commit";
+export type ToolName = "read_file" | "list_files" | "git_status" | "git_diff" | "git_log" | "search_text" | "write_file" | "apply_patch" | "run_command" | "run_registered_command" | "run_verification" | "git_commit" | string;
 
 export type ToolCall = {
   callId: string;
@@ -1627,6 +1646,7 @@ export type ToolCall = {
 export type ToolCallResult = {
   callId: string;
   allowed: boolean;
+  status?: "SUCCEEDED" | "DENIED" | "FAILED" | "NEEDS_RECONCILIATION" | undefined;
   reason: string | null;
   result: unknown | null;
   audited: true;
@@ -1649,7 +1669,11 @@ export type ToolGatewayOptions = {
   role: ToolRole;
   workspaceRoot: string;
   registeredCommandIds?: ReadonlySet<string>;
-  handler?: (call: ToolCall) => Promise<unknown>;
+  mcpAllowedTools?: ReadonlySet<string>;
+  pluginAllowedTools?: ReadonlySet<string>;
+  computerUseAllowed?: boolean;
+  builtin?: Omit<BuiltinToolExecutorOptions, "workspaceRoot">;
+  handler?: (call: ToolCall, context?: BuiltinToolContext) => Promise<unknown>;
 };
 
 const READ_ONLY_TOOLS = new Set<ToolName>(["read_file", "list_files", "git_status", "git_diff", "git_log", "search_text"]);
@@ -1660,31 +1684,69 @@ export class ToolGateway {
   private readonly calls = new Map<string, ToolCallResult>();
   private readonly workspaceRoot: string;
   private readonly registeredCommandIds: ReadonlySet<string>;
+  private readonly mcpAllowedTools: ReadonlySet<string>;
+  private readonly pluginAllowedTools: ReadonlySet<string>;
+  private readonly builtin: BuiltinToolExecutor;
 
   constructor(private readonly options: ToolGatewayOptions) {
     this.workspaceRoot = resolve(options.workspaceRoot);
     this.registeredCommandIds = options.registeredCommandIds ?? new Set();
+    this.mcpAllowedTools = options.mcpAllowedTools ?? new Set();
+    this.pluginAllowedTools = options.pluginAllowedTools ?? new Set();
+    this.builtin = new BuiltinToolExecutor({ workspaceRoot: this.workspaceRoot, ...(options.builtin ?? {}) });
   }
 
-  async call(call: ToolCall): Promise<ToolCallResult> {
+  async call(call: ToolCall, context?: BuiltinToolContext): Promise<ToolCallResult> {
     const previous = this.calls.get(call.callId);
     if (previous) return previous;
     const denied = this.validate(call);
     if (denied) {
-      const result = this.save({ callId: call.callId, allowed: false, reason: denied, result: null, audited: true });
+      const result = this.save({ callId: call.callId, allowed: false, status: "DENIED", reason: denied, result: null, audited: true });
       return result;
     }
-    const value = this.options.handler ? await this.options.handler(call) : null;
-    return this.save({ callId: call.callId, allowed: true, reason: null, result: value, audited: true });
+    try {
+      const value = this.options.handler ? await this.options.handler(call, context) : await this.builtin.execute(call, { workspacePath: context?.workspacePath ?? this.workspaceRoot, ...(context ?? {}) });
+      return this.save({ callId: call.callId, allowed: true, reason: null, result: value, audited: true });
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      if (isToolExecutionFailure(reason)) return this.save({ callId: call.callId, allowed: true, reason: null, result: { error: reason }, audited: true });
+      if (/outside the configured workspace boundary|Protected secrets|repository internals/i.test(reason)) return this.save({ callId: call.callId, allowed: false, status: "DENIED", reason, result: null, audited: true });
+      throw error;
+    }
   }
 
   private validate(call: ToolCall): string | null {
+    if (call.tool.startsWith("mcp:")) {
+      if (!this.mcpAllowedTools.has(call.tool)) return this.options.role === "explorer" ? "Explorer MCP tool is not explicitly allowed" : "MCP tool is not allowed by Executor policy";
+      if (!this.options.builtin?.mcpToolExecutor && !this.options.handler) return "MCP tool executor is not configured";
+      return null;
+    }
+    if (call.tool.startsWith("plugin:")) {
+      if (!this.pluginAllowedTools.has(call.tool)) return this.options.role === "explorer" ? "Explorer plugin tool is not explicitly allowed" : "Plugin tool is not allowed by Executor policy";
+      if (!this.options.builtin?.pluginToolExecutor && !this.options.handler) return "Plugin tool executor is not configured";
+      return null;
+    }
+    if (call.tool === "computer_use") {
+      if (this.options.computerUseAllowed !== true) return "Computer Use is denied by host policy";
+      if (!this.options.builtin?.computerUseExecutor && !this.options.handler) return "Computer Use host adapter is not configured";
+      return null;
+    }
     const allowedTools = this.options.role === "explorer" ? READ_ONLY_TOOLS : EXECUTOR_TOOLS;
     if (!allowedTools.has(call.tool)) return this.options.role === "explorer" ? "Explorer is read-only; this tool is disabled" : "Tool is not allowed by Executor policy";
     if (["read_file", "write_file", "apply_patch"].includes(call.tool)) {
       const path = call.input.path;
-      if (typeof path !== "string" || !this.isInsideWorkspace(path)) return "Path is outside the workspace boundary";
+      if (call.tool !== "apply_patch" && (typeof path !== "string" || !this.isInsideWorkspace(path))) return "Path is outside the workspace boundary";
       if (typeof path === "string" && this.isProtectedPath(path)) return "Protected secrets, project configuration and Git internals are not accessible";
+    }
+    if (["list_files", "search_text", "git_diff"].includes(call.tool)) {
+      const path = call.input.path;
+      if (path !== undefined && (typeof path !== "string" || !this.isInsideWorkspace(path))) return "Path is outside the workspace boundary";
+      if (typeof path === "string" && this.isProtectedPath(path)) return "Protected secrets, project configuration and Git internals are not accessible";
+    }
+    if (call.tool === "git_commit" && call.input.paths !== undefined) {
+      const paths = call.input.paths;
+      if (!Array.isArray(paths) || paths.some((path) => typeof path !== "string" || !this.isInsideWorkspace(path))) return "Commit paths must stay inside the workspace boundary";
+      if (paths.some((path) => this.isProtectedPath(path as string))) return "Protected secrets, project configuration and Git internals are not accessible";
     }
     if (["run_registered_command", "run_verification"].includes(call.tool)) {
       const commandId = call.input.commandId;
@@ -1705,6 +1767,10 @@ export class ToolGateway {
   }
 
   private save(result: ToolCallResult): ToolCallResult { this.calls.set(result.callId, result); return result; }
+}
+
+function isToolExecutionFailure(reason: string): boolean {
+  return /does not exist|not a file|not a directory|No registered command executor|spawn/i.test(reason);
 }
 
 export type ModelRole = "explorer" | "executor";
@@ -1754,6 +1820,7 @@ export interface ModelGateway {
   cancel(request: { conversationId: string; providerThreadId: string; providerTurnId?: string }): Promise<void>;
   configFor(role: ModelRole): ModelRoleConfig;
   capabilities?(role: ModelRole): ModelCapabilities;
+  readRateLimits?(): Promise<MappedCodexRateLimits>;
 }
 
 export class StubModelGateway implements ModelGateway {
@@ -1776,6 +1843,7 @@ export class StubModelGateway implements ModelGateway {
 
   async answerUserInput(): Promise<void> { return undefined; }
   async cancel(): Promise<void> { return undefined; }
+  async readRateLimits(): Promise<MappedCodexRateLimits> { return { available: false, fiveHour: null, sevenDay: null, reason: "Codex rate-limit telemetry is unavailable" }; }
 }
 
 export type ModelResult = { text: string; requestId: string | null; model: string };

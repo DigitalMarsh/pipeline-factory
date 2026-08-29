@@ -25,6 +25,9 @@ describe("Factory configuration", () => {
         roles: { explorer: { model: "gpt-5", temperature: 0.1 }, executor: { model: "gpt-5", temperature: 0 } },
       },
       runtime: { globalConcurrency: 4, projectConcurrency: 2, defaultTimeoutMs: 120000 },
+      mcp: { servers: [{ name: "docs", transport: "streamable-http", url: "http://127.0.0.1:8787/mcp", allowedTools: ["search"], requestTimeoutMs: 5000 }] },
+      plugins: { directories: ["./plugins"], supportedApiMajor: 1, allowedTools: ["plugin:com.example.docs:search"] },
+      computerUse: { enabled: true, requireApproval: true, timeoutMs: 5000 },
     }), "utf8");
 
     const config = loadFactoryConfig(configPath);
@@ -35,6 +38,9 @@ describe("Factory configuration", () => {
     expect(config.project.root).toBe(join(directory, "project"));
     expect(config.model.backend).toBe("codex-app-server");
     expect(config.model.codexAppServer?.args).toEqual(["app-server", "--stdio"]);
+    expect(config.mcp.servers[0]).toMatchObject({ name: "docs", transport: "streamable-http", allowedTools: ["search"] });
+    expect(config.plugins).toMatchObject({ directories: [join(directory, "plugins")], allowedTools: ["plugin:com.example.docs:search"] });
+    expect(config.computerUse).toMatchObject({ enabled: true, requireApproval: true, timeoutMs: 5000 });
   });
 
   it("rejects an invalid configuration instead of silently falling back", () => {

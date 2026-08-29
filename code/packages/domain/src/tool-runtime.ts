@@ -11,6 +11,11 @@ export type ToolExecutionContext = {
   loopId: string;
   role: ToolRole;
   workspacePath: string;
+  projectId?: string;
+  runId?: string;
+  branch?: string;
+  baseCommit?: string;
+  exitReason?: string;
 };
 
 export interface ToolRuntime {
@@ -35,12 +40,12 @@ export class DurableToolRuntime implements ToolRuntime {
     const pending = this.store.getToolCall(call.callId)!;
     this.store.updateToolCall({ ...pending, status: "RUNNING" });
     try {
-      const result = await this.gateway.call(call);
-      const status = result.allowed ? "SUCCEEDED" as const : "DENIED" as const;
+      const result = await this.gateway.call(call, context);
+      const status = result.allowed ? "SUCCEEDED" as const : result.status === "NEEDS_RECONCILIATION" ? "NEEDS_RECONCILIATION" as const : result.status === "FAILED" ? "FAILED" as const : "DENIED" as const;
       this.store.updateToolCall({ ...this.store.getToolCall(call.callId)!, status, result, completedAt: this.store.now() });
       return result;
     } catch (error) {
-      const result: ToolCallResult = { callId: call.callId, allowed: false, reason: error instanceof Error ? error.message : String(error), result: null, audited: true };
+      const result: ToolCallResult = { callId: call.callId, allowed: false, status: "NEEDS_RECONCILIATION", reason: error instanceof Error ? error.message : String(error), result: null, audited: true };
       this.store.updateToolCall({ ...this.store.getToolCall(call.callId)!, status: "UNKNOWN", result, completedAt: null });
       return result;
     }
@@ -49,10 +54,10 @@ export class DurableToolRuntime implements ToolRuntime {
   async reconcile(callId: string, result: ToolCallResult): Promise<void> {
     const call = this.store.getToolCall(callId);
     if (!call) throw new Error(`Tool call ${callId} not found`);
-    this.store.updateToolCall({ ...call, status: result.allowed ? "SUCCEEDED" : "FAILED", result, completedAt: this.store.now() });
+    this.store.updateToolCall({ ...call, status: result.allowed ? "SUCCEEDED" : "FAILED", result: { ...result, status: result.allowed ? "SUCCEEDED" : "FAILED" }, completedAt: this.store.now() });
   }
 
   private rejected(call: ToolCall, reason: string): ToolCallResult {
-    return { callId: call.callId, allowed: false, reason, result: null, audited: true };
+    return { callId: call.callId, allowed: false, status: "DENIED", reason, result: null, audited: true };
   }
 }

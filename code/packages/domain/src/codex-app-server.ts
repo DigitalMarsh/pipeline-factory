@@ -1,5 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EXPLORER_PLAN_INSTRUCTIONS, type ModelCapabilities, type ModelEvent, type ModelGateway, type ModelMessage, type ModelRequest, type ModelRole, type ModelRoleConfig } from "./index.js";
+import { mapCodexRateLimits, type CodexRateLimitsResponse, type MappedCodexRateLimits } from "./codex-rate-limits.js";
 
 type JsonObject = Record<string, unknown>;
 export type CodexRequestId = string | number;
@@ -33,6 +34,8 @@ export type CodexAppServerSession = {
   interrupt(threadId: string, turnId: string): Promise<void>;
   respond(requestId: CodexRequestId, result: JsonObject): Promise<void>;
   answerUserInput(requestId: CodexRequestId, response: { answers: Record<string, { answers: string[] }> }): Promise<void>;
+  readRateLimits?(): Promise<CodexRateLimitsResponse>;
+  onRateLimitsUpdated?(listener: (response: CodexRateLimitsResponse) => void): () => void;
   close(): Promise<void>;
 };
 
@@ -109,6 +112,7 @@ export class CodexAppServerClient implements CodexAppServerSession {
   private readonly spawnProcess: CodexSpawnProcess;
   private readonly pending = new Map<string, PendingRequest>();
   private readonly subscriptions = new Set<NotificationSubscription>();
+  private readonly rateLimitListeners = new Set<(response: CodexRateLimitsResponse) => void>();
   private process: ChildProcessWithoutNullStreams | undefined;
   private startup: Promise<void> | undefined;
   private initialized = false;
@@ -134,6 +138,16 @@ export class CodexAppServerClient implements CodexAppServerSession {
   async resumeThread(threadId: string): Promise<void> {
     await this.ensureReady();
     await this.request("thread/resume", { threadId });
+  }
+
+  async readRateLimits(): Promise<CodexRateLimitsResponse> {
+    await this.ensureReady();
+    return await this.request("account/rateLimits/read", {}) as CodexRateLimitsResponse;
+  }
+
+  onRateLimitsUpdated(listener: (response: CodexRateLimitsResponse) => void): () => void {
+    this.rateLimitListeners.add(listener);
+    return () => this.rateLimitListeners.delete(listener);
   }
 
   async *streamTurn(params: CodexTurnStartParams): AsyncIterable<CodexAppServerEvent> {
@@ -300,6 +314,9 @@ export class CodexAppServerClient implements CodexAppServerSession {
     }
     if (typeof message.method !== "string" || !message.params || typeof message.params !== "object") return;
     const event: CodexAppServerEvent = { ...(id === undefined ? {} : { id: id as CodexRequestId }), method: message.method, params: message.params as JsonObject };
+    if (event.method === "account/rateLimits/updated") {
+      for (const listener of this.rateLimitListeners) listener(event.params as CodexRateLimitsResponse);
+    }
     for (const subscription of this.subscriptions) subscription.push(event);
   }
 
@@ -337,6 +354,8 @@ export class CodexAppServerGateway implements ModelGateway {
   private readonly sessionFactory: CodexAppServerSessionFactory;
   private readonly providerThreads = new Map<string, string>();
   private readonly pendingInputSessions = new Map<string, CodexAppServerSession>();
+  private readonly rateLimitUnsubscribers = new Map<CodexAppServerSession, () => void>();
+  private cachedRateLimits: MappedCodexRateLimits | null = null;
 
   constructor(private readonly options: CodexAppServerGatewayOptions) {
     this.sessionFactory = options.sessionFactory ?? (async () => new CodexAppServerClient({
@@ -352,6 +371,17 @@ export class CodexAppServerGateway implements ModelGateway {
   }
 
   configFor(role: ModelRole): ModelRoleConfig { return this.options.roles[role]; }
+
+  async readRateLimits(): Promise<MappedCodexRateLimits> {
+    const session = await this.getSession("__account-status__");
+    if (!this.rateLimitUnsubscribers.has(session)) {
+      const unsubscribe = session.onRateLimitsUpdated?.((response) => { this.cachedRateLimits = mapCodexRateLimits(response); });
+      if (unsubscribe) this.rateLimitUnsubscribers.set(session, unsubscribe);
+    }
+    const response = await session.readRateLimits?.();
+    if (response) this.cachedRateLimits = mapCodexRateLimits(response ?? null);
+    return this.cachedRateLimits ?? mapCodexRateLimits(null);
+  }
 
   capabilities(role: ModelRole): ModelCapabilities {
     return { supportsStructuredUserInput: role === "explorer", supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] };
@@ -414,6 +444,8 @@ export class CodexAppServerGateway implements ModelGateway {
   }
 
   async close(): Promise<void> {
+    for (const unsubscribe of this.rateLimitUnsubscribers.values()) unsubscribe();
+    this.rateLimitUnsubscribers.clear();
     const sessions = [...new Set(this.sessions.values())];
     this.sessions.clear();
     this.pendingInputSessions.clear();

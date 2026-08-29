@@ -26,6 +26,46 @@ describe("Pipeline Factory v3 API", () => {
     expect(response.json()).toMatchObject({ status: "ok", model: "gpt-5.6-luna" });
   });
 
+  it("exposes exact Codex 5-hour and 7-day rate-limit windows", async () => {
+    const store = new InMemoryPipelineStore();
+    const model: ModelGateway = {
+      configFor: () => ({ model: "gpt-5.6-luna" }),
+      async *stream() { yield { type: "turn.completed" }; },
+      async answerUserInput() { return undefined; },
+      async cancel() { return undefined; },
+      async readRateLimits() {
+        return {
+          available: true,
+          fiveHour: { remainingPercent: 80, resetAt: "2026-06-17T00:00:00.000Z" },
+          sevenDay: { remainingPercent: 45, resetAt: "2026-06-24T00:00:00.000Z" },
+          reason: null,
+        };
+      },
+    };
+    const app = createApp({ store, model, seed: false });
+    apps.push(app);
+
+    const response = await app.inject({ method: "GET", url: "/api/v4/codex/rate-limits" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ rateLimits: {
+      available: true,
+      fiveHour: { remainingPercent: 80, resetAt: "2026-06-17T00:00:00.000Z" },
+      sevenDay: { remainingPercent: 45, resetAt: "2026-06-24T00:00:00.000Z" },
+      reason: null,
+    } });
+  });
+
+  it("exposes an empty MCP capability registry when no servers are configured", async () => {
+    const app = createApp({ store: new InMemoryPipelineStore(), seed: false });
+    apps.push(app);
+
+    const response = await app.inject({ method: "GET", url: "/api/v4/mcp/tools" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ tools: [] });
+  });
+
   it("exposes persisted Agent Loop state, steps, and event history", async () => {
     const store = new InMemoryPipelineStore();
     const loop: AgentLoop = { id: "loop-1", ownerType: "run", ownerId: "run-1", role: "executor", mode: "provider-controlled", state: "RUNNING", stepCount: 1, maxSteps: 40, startedAt: store.now(), completedAt: null, providerThreadId: "provider-thread-1", providerTurnId: "provider-turn-1", checkpointJson: null };
@@ -43,6 +83,20 @@ describe("Pipeline Factory v3 API", () => {
     expect(state.json().loop).toMatchObject({ id: "loop-1", state: "RUNNING" });
     expect(steps.json().items).toHaveLength(1);
     expect(events.json().items[0]).toMatchObject({ type: "agent.loop.started", aggregateId: "loop-1" });
+  });
+
+  it("exposes durable tool-call status for an Agent Loop", async () => {
+    const store = new InMemoryPipelineStore();
+    const loop: AgentLoop = { id: "loop-tools", ownerType: "run", ownerId: "run-1", role: "executor", mode: "factory-controlled", state: "RUNNING", stepCount: 1, maxSteps: 4, startedAt: store.now(), completedAt: null, providerThreadId: null, providerTurnId: null, checkpointJson: null };
+    store.saveAgentLoop(loop);
+    store.saveToolCall({ callId: "tool-1", loopId: loop.id, role: "executor", tool: "mcp:docs:search", status: "RUNNING", inputHash: "hash", result: null, startedAt: store.now(), completedAt: null });
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+
+    const response = await app.inject({ method: "GET", url: "/api/v4/agent-loops/" + loop.id + "/tools" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().items).toMatchObject([{ callId: "tool-1", tool: "mcp:docs:search", status: "RUNNING" }]);
   });
 
   it("makes Agent Loop pause, resume, and cancel controls observable", async () => {

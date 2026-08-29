@@ -46,4 +46,18 @@ describe("DurableToolRuntime", () => {
     expect(result.reason).toContain("reconciliation");
     expect(result.result).toBeNull();
   });
+
+  it("marks an infrastructure failure as unknown so recovery can reconcile it", async () => {
+    const store = new InMemoryPipelineStore();
+    const runtime = new DurableToolRuntime(store, new ToolGateway({
+      role: "executor",
+      workspaceRoot: "/tmp/project",
+      builtin: { processRunner: async () => { throw new Error("process exited unexpectedly"); } },
+    }));
+
+    const result = await runtime.execute({ callId: "call-4", tool: "git_status", input: {} }, { loopId: "loop-4", role: "executor", workspacePath: "/tmp/project" });
+
+    expect(result).toMatchObject({ allowed: false, reason: "process exited unexpectedly" });
+    expect(store.getToolCall("call-4")).toMatchObject({ status: "UNKNOWN", completedAt: null });
+  });
 });

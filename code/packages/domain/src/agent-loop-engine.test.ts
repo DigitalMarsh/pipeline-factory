@@ -46,6 +46,56 @@ describe("AgentLoopEngine", () => {
     expect(loop).toMatchObject({ state: "COMPLETED", stepCount: 2 });
     expect(store.listToolCalls()).toHaveLength(1);
     expect(store.listAgentLoopSteps(loop.id).map((step) => step.stepType)).toEqual(expect.arrayContaining(["TOOL_REQUESTED", "TOOL_COMPLETED", "GATE_CHECKED", "LOOP_COMPLETED"]));
+    expect(store.listEvents({ aggregateId: loop.id }).map((event) => event.type)).toEqual(expect.arrayContaining(["agent.tool.requested", "agent.tool.running", "agent.tool.completed"]));
+  });
+
+  it("emits a failed tool event separately from a policy denial", async () => {
+    const store = new InMemoryPipelineStore();
+    let calls = 0;
+    const model: ModelGateway = {
+      configFor: () => ({ model: "executor" }),
+      capabilities: () => ({ supportsStructuredUserInput: false, supportsToolCalls: true, supportedLoopModes: ["factory-controlled"] }),
+      async *stream() {
+        calls += 1;
+        if (calls === 1) yield { type: "tool.call", call: { callId: "failed-tool", tool: "git_status", input: {} } };
+        else yield { type: "text.delta", text: "done" };
+        yield { type: "turn.completed" };
+      },
+      async answerUserInput() { return undefined; },
+      async cancel() { return undefined; },
+    };
+    const runtime: import("./tool-runtime.js").ToolRuntime = {
+      async execute(call) { return { callId: call.callId, allowed: false, status: "FAILED", reason: "MCP timeout", result: null, audited: true }; },
+      async reconcile() { return undefined; },
+    };
+    const loop = await new AgentLoopEngine(store, model, runtime).run({ ...baseInput(), workspacePath: "/tmp/project" });
+
+    expect(loop.state).toBe("COMPLETED");
+    expect(store.listAgentLoopSteps(loop.id).map((step) => step.stepType)).toContain("TOOL_FAILED");
+    expect(store.listEvents({ aggregateId: loop.id }).map((event) => event.type)).toContain("agent.tool.failed");
+  });
+
+  it("stops the loop when a tool result needs reconciliation", async () => {
+    const store = new InMemoryPipelineStore();
+    const model: ModelGateway = {
+      configFor: () => ({ model: "executor" }),
+      capabilities: () => ({ supportsStructuredUserInput: false, supportsToolCalls: true, supportedLoopModes: ["factory-controlled"] }),
+      async *stream() {
+        yield { type: "tool.call", call: { callId: "uncertain-tool", tool: "write_file", input: { path: "src/index.ts", content: "unknown" } } };
+        yield { type: "turn.completed" };
+      },
+      async answerUserInput() { return undefined; },
+      async cancel() { return undefined; },
+    };
+    const runtime: import("./tool-runtime.js").ToolRuntime = {
+      async execute(call) { return { callId: call.callId, allowed: false, status: "NEEDS_RECONCILIATION", reason: "side effect status is unknown", result: null, audited: true }; },
+      async reconcile() { return undefined; },
+    };
+
+    const loop = await new AgentLoopEngine(store, model, runtime).run({ ...baseInput(), workspacePath: "/tmp/project" });
+
+    expect(loop.state).toBe("NEEDS_RECONCILIATION");
+    expect(store.listEvents({ aggregateId: loop.id }).map((event) => event.type)).toContain("agent.loop.recovery_required");
   });
 
   it("suspends on structured input and resumes the same loop", async () => {

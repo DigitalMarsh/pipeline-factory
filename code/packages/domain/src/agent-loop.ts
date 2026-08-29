@@ -20,6 +20,8 @@ export type AgentStepType =
   | "TOOL_REQUESTED"
   | "TOOL_DENIED"
   | "TOOL_COMPLETED"
+  | "TOOL_FAILED"
+  | "TOOL_NEEDS_RECONCILIATION"
   | "INPUT_REQUIRED"
   | "INPUT_RESOLVED"
   | "CONTEXT_COMPACTED"
@@ -289,13 +291,16 @@ export class AgentLoopEngine implements AgentLoopRunner {
             this.appendStep(loop, "TOOL_REQUESTED", count > maxRepeatedToolCalls ? "FAILED" : "RUNNING", { callId: event.call.callId, tool: event.call.tool, delegatedToProvider: input.mode === "provider-controlled" });
             this.emit(loop, "agent.tool.requested", { callId: event.call.callId, tool: event.call.tool, delegatedToProvider: input.mode === "provider-controlled" });
             if (count > maxRepeatedToolCalls) { this.block(initial.id, "REPEATED_TOOL_CALL"); return; }
+            this.emit(loop, "agent.tool.running", { callId: event.call.callId, tool: event.call.tool, delegatedToProvider: input.mode === "provider-controlled" });
             if (input.mode === "provider-controlled") continue;
             const runtime = input.toolRuntime ?? this.defaultToolRuntime;
             if (!runtime) { this.block(initial.id, "TOOL_RUNTIME_UNAVAILABLE"); return; }
             const result = await runtime.execute(event.call, { loopId: initial.id, role: input.role, workspacePath: input.workspacePath ?? input.modelRequest.cwd ?? process.cwd() });
-            const resultType = result.allowed ? "TOOL_COMPLETED" : "TOOL_DENIED";
-            this.appendStep(loop, resultType, result.allowed ? "COMPLETED" : "DENIED", { callId: event.call.callId, reason: result.reason, result: result.result });
-            this.emit(loop, result.allowed ? "agent.tool.completed" : "agent.tool.denied", { callId: event.call.callId, reason: result.reason });
+            const resultType = result.allowed ? "TOOL_COMPLETED" : result.status === "NEEDS_RECONCILIATION" ? "TOOL_NEEDS_RECONCILIATION" : result.status === "FAILED" ? "TOOL_FAILED" : "TOOL_DENIED";
+            const eventType = resultType === "TOOL_COMPLETED" ? "agent.tool.completed" : resultType === "TOOL_NEEDS_RECONCILIATION" ? "agent.tool.needs_reconciliation" : resultType === "TOOL_FAILED" ? "agent.tool.failed" : "agent.tool.denied";
+            this.appendStep(loop, resultType, result.allowed ? "COMPLETED" : resultType === "TOOL_DENIED" ? "DENIED" : "FAILED", { callId: event.call.callId, reason: result.reason, result: result.result });
+            this.emit(loop, eventType, { callId: event.call.callId, reason: result.reason });
+            if (resultType === "TOOL_NEEDS_RECONCILIATION") { this.needsReconciliation(initial.id, result.reason ?? "UNKNOWN_TOOL_RESULT"); return; }
             messages.push({ role: "assistant", content: JSON.stringify({ toolCall: event.call }) }, { role: "tool", content: JSON.stringify(result), toolCallId: event.call.callId });
           }
           if (event.type === "turn.input_required") {
@@ -404,6 +409,7 @@ export class AgentLoopEngine implements AgentLoopRunner {
   private complete(loopId: string, reason: string): void { const loop = { ...this.get(loopId), state: "COMPLETED" as const, completedAt: this.store.now() }; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_COMPLETED", "COMPLETED", { reason }); this.emit(loop, "agent.loop.completed", { reason }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); }
   private block(loopId: string, reason: string): void { const loop = { ...this.get(loopId), state: "BLOCKED" as const, completedAt: this.store.now(), checkpointJson: JSON.stringify({ reason }) }; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_FAILED", "FAILED", { reason }); this.emit(loop, "agent.loop.failed", { reason }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); }
   private fail(loopId: string, error: string): void { const loop = { ...this.get(loopId), state: "FAILED" as const, completedAt: this.store.now(), checkpointJson: JSON.stringify({ error }) }; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_FAILED", "FAILED", { error }); this.emit(loop, "agent.loop.failed", { error }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); }
+  private needsReconciliation(loopId: string, reason: string): void { const loop = { ...this.get(loopId), state: "NEEDS_RECONCILIATION" as const, completedAt: this.store.now(), checkpointJson: JSON.stringify({ reason }) }; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_FAILED", "NEEDS_RECONCILIATION", { reason }); this.emit(loop, "agent.loop.recovery_required", { reason }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); }
 }
 
 function isTerminal(state: AgentLoopState): boolean {

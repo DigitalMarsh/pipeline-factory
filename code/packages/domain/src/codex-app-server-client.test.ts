@@ -4,6 +4,47 @@ import { describe, expect, it } from "vitest";
 import { CodexAppServerClient, type CodexSpawnProcess } from "./index.js";
 
 describe("CodexAppServerClient", () => {
+  it("requests ChatGPT rate limits through JSON-RPC", async () => {
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const child = Object.assign(new EventEmitter(), { stdin, stdout, stderr, kill: () => true });
+    const requests: string[] = [];
+    stdin.on("data", (chunk: Buffer) => {
+      const request = JSON.parse(chunk.toString()) as { id: string; method: string };
+      requests.push(request.method);
+      const result = request.method === "initialize" ? {} : { rateLimitsByLimitId: { codex: { primary: null, secondary: null } } };
+      stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: request.id, result })}\n`);
+    });
+    const client = new CodexAppServerClient({ command: "codex", args: ["app-server"], cwd: "/tmp", startupTimeoutMs: 5000, requestTimeoutMs: 5000, clientName: "test", clientVersion: "1.0.0", spawnProcess: () => child as unknown as ReturnType<CodexSpawnProcess> });
+
+    await expect(client.readRateLimits()).resolves.toMatchObject({ rateLimitsByLimitId: { codex: { primary: null } } });
+    expect(requests).toEqual(["initialize", "account/rateLimits/read"]);
+    await client.close();
+  });
+
+  it("delivers account/rateLimits/updated notifications to subscribers", async () => {
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const child = Object.assign(new EventEmitter(), { stdin, stdout, stderr, kill: () => true });
+    stdin.on("data", (chunk: Buffer) => {
+      const request = JSON.parse(chunk.toString()) as { id: string; method: string };
+      const result = request.method === "initialize" ? {} : { rateLimitsByLimitId: { codex: { primary: null, secondary: null } } };
+      stdout.write(JSON.stringify({ jsonrpc: "2.0", id: request.id, result }) + "\n");
+      if (request.method === "account/rateLimits/read") stdout.write(JSON.stringify({ jsonrpc: "2.0", method: "account/rateLimits/updated", params: { rateLimitsByLimitId: { codex: { primary: { usedPercent: 12, windowDurationMins: 300, resetsAt: 1_781_654_400 }, secondary: null } } } }) + "\n");
+    });
+    const client = new CodexAppServerClient({ command: "codex", args: ["app-server"], cwd: "/tmp", startupTimeoutMs: 5000, requestTimeoutMs: 5000, clientName: "test", clientVersion: "1.0.0", spawnProcess: () => child as unknown as ReturnType<CodexSpawnProcess> });
+    const updates: number[] = [];
+    client.onRateLimitsUpdated((update) => updates.push(update.rateLimitsByLimitId?.codex?.primary?.usedPercent ?? -1));
+
+    await client.readRateLimits();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(updates).toEqual([12]);
+    await client.close();
+  });
+
   it("performs initialize, sends JSON-RPC requests, and routes streamed notifications to a turn", async () => {
     const stdin = new PassThrough();
     const stdout = new PassThrough();

@@ -29,6 +29,32 @@ function createSessionFactory(events: Array<{ id?: string | number; method: stri
 }
 
 describe("CodexAppServerGateway", () => {
+  it("reads and maps ChatGPT rate-limit windows from the App Server account surface", async () => {
+    const calls: Array<{ method: string; params: unknown }> = [];
+    const baseFactory = createSessionFactory([], calls);
+    const gateway = new CodexAppServerGateway({
+      roles: { explorer: { model: "explorer-model" }, executor: { model: "executor-model" } },
+      sessionFactory: async () => ({
+        ...(await baseFactory()),
+        readRateLimits: async () => ({
+          rateLimitsByLimitId: {
+            codex: {
+              primary: { usedPercent: 20, windowDurationMins: 300, resetsAt: 1_781_654_400 },
+              secondary: { usedPercent: 55, windowDurationMins: 10_080, resetsAt: 1_782_259_200 },
+            },
+          },
+        }),
+      }),
+    });
+
+    await expect(gateway.readRateLimits()).resolves.toMatchObject({
+      available: true,
+      fiveHour: { remainingPercent: 80 },
+      sevenDay: { remainingPercent: 45 },
+    });
+    expect(calls).toEqual([]);
+  });
+
   it("creates a read-only Explorer thread and maps App Server stream events", async () => {
     const calls: Array<{ method: string; params: unknown }> = [];
     const gateway = new CodexAppServerGateway({

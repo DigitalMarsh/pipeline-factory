@@ -20,6 +20,18 @@ export type ExplorerThread = {
   };
 };
 
+export type CodexRateLimitValue = {
+  remainingPercent: number;
+  resetAt: string;
+};
+
+export type CodexRateLimitsStatus = {
+  available: boolean;
+  fiveHour: CodexRateLimitValue | null;
+  sevenDay: CodexRateLimitValue | null;
+  reason: string | null;
+};
+
 export type ExplorerActivityKind = "USER_MESSAGE" | "ASSISTANT_MESSAGE" | "REASONING_SUMMARY" | "INPUT_REQUIRED" | "INPUT_RESOLVED" | "TOOL_STARTED" | "TOOL_COMPLETED" | "TOOL_DENIED" | "MCP_ACTIVITY" | "CONTEXT_COMPACTED" | "GATE_CHECKED" | "TURN_STATUS";
 
 export type ExplorerActivityItem = {
@@ -187,4 +199,15 @@ export type ExecutionThread = {
   runId: string;
   state: string;
   journal: Array<{ sequence: number; type: string; occurredAt: string; payload: Record<string, unknown> }>;
+};
+
+export type ToolCall = {
+  callId: string;
+  loopId: string;
+  role: "explorer" | "executor";
+  tool: string;
+  status: "PENDING" | "RUNNING" | "SUCCEEDED" | "FAILED" | "DENIED" | "UNKNOWN" | "NEEDS_RECONCILIATION";
+  result: Record<string, unknown> | null;
+  startedAt: string;
+  completedAt: string | null;
 };
