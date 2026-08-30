@@ -39,6 +39,25 @@ describe("PlanService", () => {
     expect(service.listThreadPlans("successor").map((item) => item.title)).toEqual(["Queued", "Confirmed"]);
     expect(service.listThreadPlans("successor").some((item) => item.planId === draft.id)).toBe(false);
   });
+
+  it("discards only a draft plan and blocks every execution transition", () => {
+    const store = new InMemoryPipelineStore();
+    const service = new PlanService(store);
+    const plan = service.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "thread-1",
+      title: "Discard this plan",
+    });
+
+    const discarded = service.discard(plan.id, "user-1");
+
+    expect(discarded).toMatchObject({ id: plan.id, status: "DISCARDED", revision: 1, queuedAt: null, runId: null });
+    expect(store.listEvents().at(-1)).toMatchObject({ type: "plan.discarded", aggregateId: plan.id, payload: { actorId: "user-1" } });
+    expect(() => service.discard(plan.id, "user-1")).toThrow(/cannot be discarded/i);
+    expect(() => service.confirm(plan.id, "user-1")).toThrow(/cannot be confirmed/i);
+    expect(() => service.enqueue(plan.id)).toThrow(/must be confirmed/i);
+    expect(service.listThreadPlans("thread-1")).toEqual([]);
+  });
 });
 
 describe("LifecycleHookRunner", () => {

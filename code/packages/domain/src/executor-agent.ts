@@ -144,12 +144,22 @@ export class ExecutorAgent {
   }
 
   private systemInstructions(revision: PlanRevisionV2): string {
+    const executionContract = {
+      planId: revision.planId,
+      revision: revision.revision,
+      contract: revision.contract,
+      projectConfig: revision.projectConfigSnapshot
+        ? { version: revision.projectConfigVersion, hash: revision.projectConfigHash, snapshot: revision.projectConfigSnapshot }
+        : { legacy: true, note: "This revision predates Project configuration snapshots; use the embedded contract and the runtime settings supplied by the Factory." },
+    };
     return [
       "You are the Pipeline Factory Executor.",
+      "The approved Plan contract is the source of truth. The Plan is stored by the Factory, not as a file in the worktree; use the embedded contract below and do not search the worktree for a plan document.",
       `Work only inside the approved include scope: ${revision.contract.include.join(", ")}.`,
       `Never modify excluded or protected paths: ${revision.contract.exclude.join(", ")}.`,
       "Do not claim completion in prose. End with <pipeline-factory-execution-report> JSON </pipeline-factory-execution-report>.",
       "The JSON must contain completedTaskIds, pathsWithinScope, and a non-empty report.",
+      `Approved Plan contract:\n${JSON.stringify(executionContract, null, 2)}`,
     ].join(" ");
   }
 

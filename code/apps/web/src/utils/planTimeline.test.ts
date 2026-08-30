@@ -36,7 +36,7 @@ describe("plan timeline bindings", () => {
     const candidate = plan("plan-1", "turn-2");
 
     expect(findPlanForActivity(generated, [candidate])).toBe(candidate);
-    expect(getPlanTimelineTarget(candidate, [generated])).toBe("message-turn-2");
+    expect(getPlanTimelineTarget(candidate, [generated])).toBe("plan-generated-plan-1");
   });
 
   it("uses a unique title match for legacy plans without a source turn", () => {
@@ -44,7 +44,7 @@ describe("plan timeline bindings", () => {
     const legacy = plan("plan-1", null);
 
     expect(findPlanForActivity(generated, [legacy])).toBe(legacy);
-    expect(getPlanTimelineTarget(legacy, [generated])).toBe("message-turn-2");
+    expect(getPlanTimelineTarget(legacy, [generated])).toBe("plan-generated-plan-1");
   });
 
   it("does not guess an anchor when legacy title matching is ambiguous", () => {

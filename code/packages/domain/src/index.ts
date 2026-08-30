@@ -4,9 +4,9 @@ import { BuiltinToolExecutor, type BuiltinToolContext, type BuiltinToolExecutorO
 import { AgentLoopEngine } from "./agent-loop.js";
 import { PlanCompletenessGate } from "./termination-gates.js";
 import { composeExplorerTitle, ModelExplorerTitleGenerator, normalizeExplorerTitle, placeholderExplorerTitle, type ExplorerTitleGenerator, type ExplorerTitleSource, type ExplorerTitleStatus } from "./explorer-title.js";
-import { ProjectService } from "./project.js";
+import { EXECUTION_SLOT_RUN_STATUSES, ProjectService } from "./project.js";
 import type { Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings } from "./project.js";
-export { ProjectService } from "./project.js";
+export { EXECUTION_SLOT_RUN_STATUSES, ProjectService } from "./project.js";
 export type { CreateProjectInput, Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings, ProjectSettingsInput, ProjectStatus, ProjectSummary, UpdateProjectInput } from "./project.js";
 export { projectExplorerActivity } from "./explorer-activity.js";
 export type { ExplorerActivityInput, ExplorerActivityItem, ExplorerActivityKind } from "./explorer-activity.js";
@@ -34,6 +34,7 @@ export type { ComputerUseAction, ComputerUseBridgeOptions, ComputerUseEvent, Com
 
 export type PlanStatus =
   | "DRAFT"
+  | "DISCARDED"
   | "DESIGNED"
   | "PLANNED"
   | "READY"
@@ -230,6 +231,7 @@ export type DomainEvent = {
     | "explorer.plan.incomplete"
     | "explorer.plan.ready"
     | "plan.candidate.created"
+    | "plan.discarded"
     | "plan.confirmed"
     | "plan.enqueued"
     | "change.proposal.created"
@@ -242,6 +244,7 @@ export type DomainEvent = {
     | "run.paused"
     | "run.resumed"
     | "run.guidance.added"
+    | "run.recovery_required"
     | "run.executor.event"
     | "verification.completed"
     | "merge.request.created"
@@ -1507,6 +1510,15 @@ export class PlanService {
     return plan;
   }
 
+  discard(planId: string, actorId: string): CandidatePlan {
+    const plan = this.get(planId);
+    if (plan.status !== "DRAFT") throw new Error(`Plan ${planId} cannot be discarded from ${plan.status}`);
+    const discardedAt = this.store.now();
+    const updated = this.store.updatePlan({ ...plan, status: "DISCARDED", lastEventAt: discardedAt });
+    this.store.appendEvent({ type: "plan.discarded", aggregateId: planId, payload: { actorId } });
+    return updated;
+  }
+
   confirm(planId: string, confirmedBy: string): CandidatePlan {
     const plan = this.get(planId);
     if (plan.status === "READY" || plan.status === "QUEUED") return plan;
@@ -1572,7 +1584,7 @@ export class PlanService {
     }
     return this.store
       .listPlans()
-      .filter((plan) => lineage.has(plan.sourceExplorerThreadId) && plan.queuedAt !== null)
+      .filter((plan) => lineage.has(plan.sourceExplorerThreadId) && (plan.queuedAt !== null || plan.status === "READY"))
       .map((plan) => ({
         planId: plan.id,
         title: plan.title,
@@ -2275,7 +2287,16 @@ export class ExplorerThreadService {
       this.publish(this.store.appendEvent({ type: "explorer.turn.failed", aggregateId: input.threadId, payload: { inputRequestId: request.id, recoveryRequired: true, error: error instanceof Error ? error.message : String(error) } }));
       throw new Error(`Structured input response is uncertain; recovery is required: ${error instanceof Error ? error.message : String(error)}`);
     }
-    const answered: ExplorerInputRequest = { ...request, status: "ANSWERED", answeredAt: this.store.now(), answeredBy: input.actorId, redactedAnswerSummary: Object.fromEntries(request.questions.map((question) => [question.id, { answerCount: input.answers[question.id]?.answers.length ?? 0, secret: question.isSecret }])) };
+    const answered: ExplorerInputRequest = {
+      ...request,
+      status: "ANSWERED",
+      answeredAt: this.store.now(),
+      answeredBy: input.actorId,
+      redactedAnswerSummary: Object.fromEntries(request.questions.map((question) => {
+        const answers = (input.answers[question.id]?.answers ?? []).map((answer) => answer.trim()).filter(Boolean);
+        return [question.id, { answerCount: answers.length, secret: question.isSecret, ...(question.isSecret ? {} : { answers }) }];
+      })),
+    };
     this.store.updateInputRequest(answered);
     const assistant = this.currentAssistant(input.threadId);
     this.store.updateTurn({ ...assistant, status: "RUNNING" });
@@ -2749,6 +2770,7 @@ export class Scheduler {
     run.status = "IN_PROGRESS";
     run.startedAt = this.options.store.now();
     this.append(thread, startResult.status === "skipped" ? "HOOK_SKIPPED" : "HOOK_COMPLETED", { hook: "start" });
+    if (!revision.projectConfigSnapshot) this.append(thread, "TASK_PROGRESS", { action: "legacy_plan_revision", reason: "Project configuration snapshot unavailable; using legacy/global runtime settings" });
     this.options.store.updatePlan({ ...plan, runId, status: "IN_PROGRESS", lastEventAt: run.startedAt });
     this.options.store.saveRun(run);
     if (this.options.executor) {
@@ -2768,8 +2790,17 @@ export class Scheduler {
     return run;
   }
 
-  async finish(runId: string, exitReason: string, hooks: { cleanup?: HookDefinition | undefined } = {}): Promise<Run> {
+  async finish(runId: string, exitReason: string, hooks: { cleanup?: HookDefinition | undefined } = {}, cancellationReason = exitReason): Promise<Run> {
     const run = this.run(runId);
+    if (run.status === "CANCELLED") {
+      if (exitReason === "cancelled") {
+        const plan = this.options.store.getPlan(run.planId);
+        if (plan && plan.status !== "BLOCKED" && plan.status !== "MERGED") {
+          this.options.store.updatePlan({ ...plan, status: "BLOCKED", attentionReason: `Run cancelled: ${cancellationReason}`, lastEventAt: this.options.store.now() });
+        }
+      }
+      return run;
+    }
     const thread = this.thread(run.executionThreadId);
     const revision = this.options.store.getRevision(run.planId, run.planRevision);
     const workspaceAdapter = this.workspaceAdapterFor(revision);
@@ -2788,6 +2819,10 @@ export class Scheduler {
     thread.state = exitReason === "cancelled" ? "CANCELLED" : "COMPLETED";
     this.options.store.saveRun(run);
     this.options.store.saveExecutionThread(thread);
+    if (exitReason === "cancelled") {
+      const plan = this.options.store.getPlan(run.planId);
+      if (plan) this.options.store.updatePlan({ ...plan, status: "BLOCKED", attentionReason: `Run cancelled: ${cancellationReason}`, lastEventAt: this.options.store.now() });
+    }
     return run;
   }
 
@@ -2802,8 +2837,7 @@ export class Scheduler {
   }
 
   private assertConcurrency(projectId: string, revision: PlanRevisionV2): void {
-    const activeStatuses = new Set<RunStatus>(["STARTING", "IN_PROGRESS", "READY_FOR_VERIFY", "VERIFYING", "MERGE_READY", "RECOVERING"]);
-    const activeRuns = this.options.store.listRuns().filter((run) => activeStatuses.has(run.status));
+    const activeRuns = this.options.store.listRuns().filter((run) => EXECUTION_SLOT_RUN_STATUSES.has(run.status));
     const projectLimit = revision.projectConfigSnapshot?.settings.concurrency.maxParallelRuns;
     if (projectLimit !== undefined && activeRuns.filter((run) => run.projectId === projectId).length >= projectLimit) throw new Error(`Project ${projectId} concurrency limit reached (${projectLimit})`);
     if (this.options.globalConcurrency !== undefined && activeRuns.length >= this.options.globalConcurrency) throw new Error(`Global concurrency limit reached (${this.options.globalConcurrency})`);
@@ -2915,6 +2949,15 @@ export class VerificationService {
     if (!this.store) return;
     this.store.saveVerificationRun(verification);
     this.store.saveRun(run);
+    const plan = this.store.getPlan(run.planId);
+    if (plan && plan.runId === run.id) {
+      this.store.updatePlan({
+        ...plan,
+        status: verification.status === "PASSED" ? "MERGE_READY" : "BLOCKED",
+        attentionReason: verification.status === "PASSED" ? null : "Verification failed",
+        lastEventAt: verification.completedAt,
+      });
+    }
     const thread = this.store.getExecutionThread(run.executionThreadId);
     if (thread) {
       thread.journal.push({ sequence: thread.journal.length + 1, type: "VERIFICATION", occurredAt: verification.completedAt, payload: verification });

@@ -139,7 +139,10 @@ describe("ExplorerThread", () => {
             threadId: "provider-thread-1",
             turnId: "provider-turn-1",
             itemId: "item-1",
-            questions: [{ id: "q1", header: "方向", question: "选择方案", isOther: false, isSecret: false, options: [{ label: "方案 A", description: "保持兼容" }] }],
+            questions: [
+              { id: "q1", header: "方向", question: "选择方案", isOther: false, isSecret: false, options: [{ label: "方案 A", description: "保持兼容" }] },
+              { id: "secret", header: "密钥", question: "请输入密钥", isOther: true, isSecret: true, options: null },
+            ],
             isBlocking: true,
             autoResolutionMs: null,
           },
@@ -164,8 +167,10 @@ describe("ExplorerThread", () => {
         if (current) { clearInterval(timer); resolve(current); }
       }, 1);
     });
-    const answered = await service.answerInput({ threadId: "thread-1", requestId: request.id, answers: { q1: { answers: ["方案 A"] } }, clientRequestId: "answer-1", actorId: "local-user" });
+    const answered = await service.answerInput({ threadId: "thread-1", requestId: request.id, answers: { q1: { answers: ["方案 A"] }, secret: { answers: ["do-not-display"] } }, clientRequestId: "answer-1", actorId: "local-user" });
     expect(answered.request.status).toBe("ANSWERED");
+    expect(answered.request.redactedAnswerSummary).toEqual({ q1: { answerCount: 1, secret: false, answers: ["方案 A"] }, secret: { answerCount: 1, secret: true } });
+    expect(JSON.stringify(answered.request.redactedAnswerSummary)).not.toContain("do-not-display");
     for (let attempt = 0; attempt < 100 && store.listTurns("thread-1")[1]?.status !== "COMPLETED"; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 1));
     expect(resumeOrder).toEqual(["answer-called", "stream-resumed"]);
     expect(store.listTurns("thread-1")[1]).toMatchObject({ status: "COMPLETED", content: "已收到方案 A" });

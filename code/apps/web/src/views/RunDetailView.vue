@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { ArrowLeft, Check, CircleCheck, Clock, Document, VideoPause, VideoPlay, Warning } from "@element-plus/icons-vue";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 import { api } from "../api";
-import type { AgentLoopStep, ExecutionThread, MergeRequest, Run, ToolCall, VerificationRun } from "../types";
-import { canPauseRun } from "../utils/runControls";
+import type { AgentLoopStep, ExecutionThread, MergeRequest, Run, RunJournalEvent, ToolCall, VerificationRun } from "../types";
+import { projectExecutionJournal, type ExecutionJournalEntry, type ExecutionStreamItem } from "../utils/executionStream";
+import { canPauseRun, canTerminateRun } from "../utils/runControls";
 
 const route = useRoute();
 const router = useRouter();
@@ -22,14 +23,85 @@ const targetCommit = ref("");
 const executorLoop = computed(() => run.value?.agentLoops?.find((loop) => loop.role === "executor") ?? null);
 const executorSteps = ref<AgentLoopStep[]>([]);
 const toolCalls = ref<ToolCall[]>([]);
+const executionMessages = ref<ExecutionStreamItem[]>([]);
+const executionTimeline = ref<HTMLElement | null>(null);
+const showScrollToLatest = ref(false);
+const runStreamConnected = ref(false);
+let runEventSource: EventSource | null = null;
+let runEventSequence = 0;
 const loopStatusLabel = computed(() => ({ CREATED: "Created", RUNNING: "Running", WAITING_FOR_INPUT: "Waiting for input", PAUSED: "Paused", RECOVERING: "Recovery required", BLOCKED: "Blocked", COMPLETED: "Completed", FAILED: "Failed", CANCELLED: "Cancelled", NEEDS_RECONCILIATION: "Needs reconciliation" } as Record<string, string>)[executorLoop.value?.state ?? ""] ?? "No loop");
+const executionStatusLabel = computed(() => runStreamConnected.value ? "Live" : ["IN_PROGRESS", "STARTING"].includes(run.value?.status ?? "") ? "Reconnecting" : "Saved");
+const executionBlockReason = computed(() => {
+  for (const entry of [...(thread.value?.journal ?? [])].reverse()) {
+    const reason = entry.payload.reason ?? entry.payload.error;
+    if (typeof reason === "string" && reason.trim()) return reason;
+  }
+  return null;
+});
+
+function setExecutionThread(next: ExecutionThread | null): void {
+  thread.value = next;
+  const journal = next?.journal ?? [];
+  runEventSequence = Math.max(runEventSequence, ...journal.map((entry) => entry.sequence), 0);
+  executionMessages.value = projectExecutionJournal(journal, next?.state ?? run.value?.status ?? "ACTIVE");
+}
+
+function isAtExecutionLatest(): boolean {
+  const element = executionTimeline.value;
+  return !element || element.scrollHeight - element.scrollTop - element.clientHeight < 48;
+}
+
+function updateExecutionScrollState(): void {
+  showScrollToLatest.value = !isAtExecutionLatest();
+}
+
+function scrollExecutionToLatest(): void {
+  void nextTick(() => {
+    const element = executionTimeline.value;
+    if (!element) return;
+    element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+    showScrollToLatest.value = false;
+  });
+}
+
+function appendRunJournalEvent(event: RunJournalEvent): void {
+  if (!thread.value || event.sequence <= runEventSequence) return;
+  const shouldFollow = isAtExecutionLatest();
+  const entry: ExecutionJournalEntry = { sequence: event.sequence, type: event.type, occurredAt: event.occurredAt, payload: event.payload };
+  thread.value = { ...thread.value, state: event.threadState ?? thread.value.state, journal: [...thread.value.journal, entry] };
+  runEventSequence = event.sequence;
+  if (event.runStatus && run.value) run.value = { ...run.value, status: event.runStatus };
+  executionMessages.value = projectExecutionJournal(thread.value.journal, thread.value.state);
+  if (event.runStatus && ["BLOCKED", "CANCELLED", "MERGE_READY", "MERGED"].includes(event.runStatus)) closeRunEvents();
+  if (shouldFollow) scrollExecutionToLatest();
+  else showScrollToLatest.value = true;
+}
+
+function connectRunEvents(): void {
+  if (!run.value || typeof EventSource === "undefined" || ["BLOCKED", "CANCELLED", "MERGE_READY", "MERGED"].includes(run.value.status)) return;
+  runEventSource?.close();
+  runEventSource = new EventSource(api.runEventsUrl(run.value.id, runEventSequence));
+  runEventSource.addEventListener("open", () => { runStreamConnected.value = true; });
+  runEventSource.addEventListener("stream.ready", () => { runStreamConnected.value = true; });
+  runEventSource.addEventListener("journal.entry", (raw) => {
+    try { appendRunJournalEvent(JSON.parse((raw as MessageEvent).data) as RunJournalEvent); }
+    catch { /* The next reconnect will replay from the last accepted sequence. */ }
+  });
+  runEventSource.addEventListener("error", () => { runStreamConnected.value = false; });
+}
+
+function closeRunEvents(): void {
+  runEventSource?.close();
+  runEventSource = null;
+  runStreamConnected.value = false;
+}
 async function load() {
   loading.value = true;
   error.value = null;
   try {
     const response = await api.run(String(route.params.runId));
     run.value = response.run;
-    thread.value = response.executionThread;
+    setExecutionThread(response.executionThread);
     verification.value = response.verification;
     mergeRequest.value = response.mergeRequest;
     const loopId = response.run.agentLoops?.[0]?.id;
@@ -65,14 +137,27 @@ async function togglePause() {
   try {
     const response = thread.value?.state === "PAUSED" ? await api.resumeRun(run.value.id) : await api.pauseRun(run.value.id);
     run.value = response.run;
-    thread.value = response.thread;
+    setExecutionThread(response.thread);
+  } catch (caught) { notifyError(caught); }
+  finally { actionBusy.value = false; }
+}
+async function terminateRun() {
+  if (!run.value || actionBusy.value || !canTerminateRun(run.value.status)) return;
+  try {
+    await ElMessageBox.confirm("Terminate this run? The confirmed Plan will remain in history.", "Terminate run", { confirmButtonText: "Terminate", cancelButtonText: "Keep running", type: "warning" });
+  } catch { return; }
+  actionBusy.value = true;
+  try {
+    await api.cancelRun(run.value.id, "user_requested");
+    ElMessage.success("Run 已终止");
+    await router.push(`/projects/${String(route.params.projectId)}/plans`);
   } catch (caught) { notifyError(caught); }
   finally { actionBusy.value = false; }
 }
 async function sendGuidance() {
   if (!run.value || !guidance.value.trim() || actionBusy.value) return;
   actionBusy.value = true;
-  try { thread.value = (await api.addGuidance(run.value.id, guidance.value.trim())).thread; guidance.value = ""; ElMessage.success("已写入执行线程"); }
+  try { setExecutionThread((await api.addGuidance(run.value.id, guidance.value.trim())).thread); guidance.value = ""; ElMessage.success("已写入执行线程"); }
   catch (caught) { notifyError(caught); }
   finally { actionBusy.value = false; }
 }
@@ -97,21 +182,38 @@ async function confirmMerged() {
   catch (caught) { notifyError(caught); }
   finally { actionBusy.value = false; }
 }
-onMounted(load);
+  onMounted(async () => { await load(); connectRunEvents(); scrollExecutionToLatest(); });
+  onBeforeUnmount(closeRunEvents);
 </script>
 
 <template>
   <div class="detail-page" v-loading="loading">
-    <div class="detail-top"><el-button text @click="router.back()"><ArrowLeft :size="15" /> Back</el-button><span class="eyebrow">EXECUTION THREAD</span></div>
+    <div class="detail-top"><el-button text @click="router.push(`/projects/${String(route.params.projectId)}/plans`)"><ArrowLeft :size="15" /> Back</el-button><span class="eyebrow">EXECUTION THREAD</span></div>
     <div v-if="error" class="demo-notice"><Warning :size="14" /> {{ error }}</div>
     <template v-if="run">
       <div class="detail-heading"><div><div class="eyebrow">RUN · {{ run.id }}</div><h1>Execution run</h1><p>Plan <code>{{ run.planId }}</code> · Revision {{ run.planRevision }} · <code>{{ run.branch }}</code></p></div><el-tag :type="run.status === 'BLOCKED' ? 'danger' : run.status === 'MERGE_READY' || run.status === 'MERGED' ? 'success' : 'warning'" effect="light">{{ label(run.status) }}</el-tag></div>
       <div class="run-facts"><div><span>WORKSPACE</span><code>{{ run.workspacePath ?? "Not created" }}</code></div><div><span>BASE COMMIT</span><code>{{ run.baseCommit }}</code></div><div><span>THREAD</span><code>{{ run.executionThreadId }}</code></div><div><span>STARTED</span><strong>{{ run.startedAt ? new Date(run.startedAt).toLocaleString('zh-CN') : "—" }}</strong></div></div>
       <section v-if="executorLoop" class="agent-loop-detail"><div><div class="eyebrow">EXECUTOR AGENT LOOP</div><h2>{{ loopStatusLabel }}</h2><p>Provider-controlled · {{ executorLoop.mode }} · {{ executorLoop.stepCount }} / {{ executorLoop.maxSteps }} steps</p><div v-if="executorSteps.length" class="loop-step-list"><span v-for="step in executorSteps.slice(-6)" :key="`${step.loopId}-${step.sequence}`" class="loop-step"><strong>#{{ step.sequence }}</strong> {{ step.stepType }}</span></div></div><div class="loop-detail-actions"><el-button v-if="executorLoop.state === 'RUNNING'" size="small" @click="controlExecutorLoop('pause')"><VideoPause :size="14" /> Pause loop</el-button><el-button v-if="executorLoop.state === 'PAUSED' || executorLoop.state === 'RECOVERING'" size="small" @click="controlExecutorLoop('resume')"><VideoPlay :size="14" /> Resume loop</el-button><el-button v-if="['RUNNING', 'PAUSED', 'RECOVERING', 'WAITING_FOR_INPUT'].includes(executorLoop.state)" size="small" type="danger" plain @click="controlExecutorLoop('cancel')">Cancel loop</el-button></div></section>
+      <div v-if="run.status === 'BLOCKED' && executionBlockReason" class="run-blocked-notice" role="alert"><Warning :size="16" /><div><strong>Why execution stopped</strong><span>{{ executionBlockReason }}</span></div></div>
+      <section class="execution-conversation-panel">
+        <div class="journal-heading"><div><div class="eyebrow">EXECUTION CONVERSATION</div><h2>What the Executor is doing</h2></div><div class="execution-stream-status" role="status"><i :class="{ connected: runStreamConnected }" /> {{ executionStatusLabel }}</div></div>
+        <div ref="executionTimeline" class="execution-conversation" @scroll="updateExecutionScrollState">
+          <div v-if="!executionMessages.length" class="empty-state"><Document :size="28" /><h3>Waiting for executor activity</h3><p>The execution conversation will appear here when the Run starts.</p></div>
+          <article v-for="item in executionMessages" :key="item.id" :class="['execution-message', `execution-message-${item.kind}`, { failed: item.status === 'FAILED', waiting: item.status === 'WAITING', running: item.status === 'RUNNING' }]">
+            <div class="execution-message-avatar">{{ item.role === 'user' ? 'LS' : item.kind === 'model' ? 'EX' : '·' }}</div>
+            <div class="execution-message-body">
+              <div class="execution-message-meta"><strong>{{ item.title }}</strong><span v-if="item.status !== 'INFO'" class="agent-chip">{{ item.status }}</span><span>{{ new Date(item.occurredAt).toLocaleTimeString('zh-CN') }}</span></div>
+              <p v-if="item.kind === 'model' || item.kind === 'guidance'" :aria-live="item.status === 'RUNNING' ? 'polite' : undefined">{{ item.content }}<span v-if="item.status === 'RUNNING'" class="processing-dots" aria-hidden="true"><i /><i /><i /></span></p>
+              <p v-else class="execution-activity-detail">{{ item.detail }}</p>
+            </div>
+          </article>
+        </div>
+        <el-button v-if="showScrollToLatest" class="execution-scroll-latest" size="small" @click="scrollExecutionToLatest">Jump to latest</el-button>
+      </section>
       <section class="run-actions">
         <div class="action-toolbar">
           <div><div class="eyebrow">RUN CONTROL</div><h2>Execution controls</h2><p>Controls append facts to the ExecutionThread; they do not change the confirmed PlanRevision.</p></div>
-          <div class="action-buttons"><el-button v-if="canPauseRun(run.status, thread?.state ?? '')" :loading="actionBusy" @click="togglePause"><VideoPlay v-if="thread?.state === 'PAUSED'" :size="14" /><VideoPause v-else :size="14" /> {{ thread?.state === 'PAUSED' ? 'Resume' : 'Pause' }}</el-button><el-button v-if="run.status === 'IN_PROGRESS' || run.status === 'READY_FOR_VERIFY'" type="primary" :loading="actionBusy" @click="verifyRun"><Check :size="14" /> Run verification</el-button></div>
+          <div class="action-buttons"><el-button v-if="canTerminateRun(run.status)" type="danger" plain :loading="actionBusy" @click="terminateRun">Terminate run</el-button><el-button v-if="canPauseRun(run.status, thread?.state ?? '')" :loading="actionBusy" @click="togglePause"><VideoPlay v-if="thread?.state === 'PAUSED'" :size="14" /><VideoPause v-else :size="14" /> {{ thread?.state === 'PAUSED' ? 'Resume' : 'Pause' }}</el-button><el-button v-if="run.status === 'IN_PROGRESS' || run.status === 'READY_FOR_VERIFY'" type="primary" :loading="actionBusy" @click="verifyRun"><Check :size="14" /> Run verification</el-button></div>
         </div>
         <div v-if="run.status === 'IN_PROGRESS' || run.status === 'READY_FOR_VERIFY'" class="guidance-row"><el-input v-model="guidance" size="small" aria-label="User guidance" placeholder="Add in-scope guidance to the execution thread…" @keyup.enter="sendGuidance" /><el-button size="small" :disabled="!guidance.trim()" :loading="actionBusy" @click="sendGuidance">Add guidance</el-button></div>
       </section>

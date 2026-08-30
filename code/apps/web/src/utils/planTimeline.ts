@@ -51,10 +51,11 @@ export function findPlanForActivity(activity: ExplorerActivityItem, plans: Plan[
 }
 
 export function getPlanTimelineTarget(plan: Plan, activities: ExplorerActivityItem[], allPlans: Plan[] = [plan]): string {
-  if (plan.sourceTurnId) return `message-${plan.sourceTurnId}`;
+  const generatedPlanTarget = `plan-generated-${planIdentity(plan)}`;
+  if (plan.sourceTurnId) return generatedPlanTarget;
   const matches = activities.filter((activity) => readyPlanTitle(activity) === plan.title);
   const matchingLegacyPlans = allPlans.filter((candidate) => !candidate.sourceTurnId && candidate.title === plan.title);
-  return matches.length === 1 && matchingLegacyPlans.length === 1 ? `message-${matches[0]!.turnId}` : `plan-created-${planIdentity(plan)}`;
+  return matches.length === 1 && matchingLegacyPlans.length === 1 ? generatedPlanTarget : `plan-created-${planIdentity(plan)}`;
 }
 
 export function planTimelineItems(plans: Plan[], activities: ExplorerActivityItem[]): PlanTimelineItem[] {

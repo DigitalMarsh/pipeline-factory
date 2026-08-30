@@ -93,6 +93,20 @@ describe("Verifier and MergeService", () => {
     expect(run.status).toBe("BLOCKED");
   });
 
+  it("synchronizes the Plan projection when verification blocks a Run", async () => {
+    const store = new InMemoryPipelineStore();
+    const plans = new PlanService(store);
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Sync blocked plan" });
+    plans.confirm(plan.id, "user-1");
+    const run = makeRun(plan.id);
+    store.saveRun(run);
+    store.updatePlan({ ...plan, status: "IN_PROGRESS", runId: run.id });
+
+    await new VerificationService(store).verify(run, plans.getRevision(plan.id, 1), async () => ({ exitCode: 1, stdout: "", stderr: "failed" }));
+
+    expect(store.getPlan(plan.id)).toMatchObject({ status: "BLOCKED", attentionReason: "Verification failed" });
+  });
+
   it("uses the frozen plan base branch as the merge target", async () => {
     const store = new InMemoryPipelineStore();
     const plans = new PlanService(store);

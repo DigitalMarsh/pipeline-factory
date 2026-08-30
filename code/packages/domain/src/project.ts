@@ -108,13 +108,10 @@ export type ProjectSummary = {
   lastActivityAt: string | null;
 };
 
-const ACTIVE_RUN_STATUSES = new Set<RunStatus>([
+export const EXECUTION_SLOT_RUN_STATUSES: ReadonlySet<RunStatus> = new Set<RunStatus>([
   "STARTING",
   "IN_PROGRESS",
-  "READY_FOR_VERIFY",
   "VERIFYING",
-  "MERGE_READY",
-  "RECOVERING",
 ]);
 
 export const DEFAULT_PROJECT_SETTINGS: ProjectSettings = {
@@ -197,7 +194,7 @@ function assertProjectPaths(repoRoot: string, worktreeRoot: string): void {
 }
 
 function hasActiveRun(store: PipelineStore, projectId: string): boolean {
-  return store.listRuns().some((run) => run.projectId === projectId && ACTIVE_RUN_STATUSES.has(run.status));
+  return store.listRuns().some((run) => run.projectId === projectId && EXECUTION_SLOT_RUN_STATUSES.has(run.status));
 }
 
 export class ProjectService {
@@ -362,7 +359,7 @@ export class ProjectService {
       threadCount: threads.length,
       planCount: plans.length,
       runCount: runs.length,
-      activeRunCount: runs.filter((run) => ACTIVE_RUN_STATUSES.has(run.status)).length,
+      activeRunCount: runs.filter((run) => EXECUTION_SLOT_RUN_STATUSES.has(run.status)).length,
       needsAttentionCount: plans.filter((plan) => Boolean(plan.attentionReason) || plan.status === "BLOCKED" || plan.status === "NEEDS_PLAN_CHANGE").length,
       lastActivityAt,
     };

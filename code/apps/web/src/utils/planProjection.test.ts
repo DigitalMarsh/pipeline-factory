@@ -39,4 +39,11 @@ describe("plan projection", () => {
     expect(projection.candidate?.id).toBe("plan-1");
     expect(projection.dispatched.map((item) => item.id)).toEqual(["plan-2"]);
   });
+
+  it("keeps an unqueued READY plan as the current candidate after refresh", () => {
+    const projection = normalizePlanProjection(explorer, null, [plan("plan-1", "READY"), plan("plan-2", "QUEUED")]);
+
+    expect(projection.candidate?.id).toBe("plan-1");
+    expect(projection.dispatched.map((item) => item.id)).toEqual(["plan-2"]);
+  });
 });

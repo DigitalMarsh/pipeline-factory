@@ -42,6 +42,29 @@ function createQueuedRun(saveRun = true) {
 }
 
 describe("ExecutorAgent", () => {
+  it("sends the complete approved Plan contract to the executor model", async () => {
+    const { store, plan, run } = createQueuedRun();
+    let receivedMessages: ModelRequest["messages"] = [];
+    const model: ModelGateway = {
+      configFor: () => ({ model: "gpt-5.6-luna", loopMode: "provider-controlled" }),
+      capabilities: () => ({ supportsStructuredUserInput: false, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
+      async *stream(request: ModelRequest): AsyncIterable<ModelEvent> {
+        receivedMessages = request.messages;
+        yield { type: "text.delta", text: executionReport(plan.contract.tasks[0]!.id) };
+        yield { type: "turn.completed" };
+      },
+      async answerUserInput() { return undefined; },
+      async cancel() { return undefined; },
+    };
+
+    await new ExecutorAgent(store, model).run(run, plan);
+
+    const systemMessage = receivedMessages.find((message) => message.role === "system");
+    expect(systemMessage?.content).toContain("The approved Plan contract is the source of truth");
+    expect(systemMessage?.content).toContain("Implement the feature");
+    expect(systemMessage?.content).toContain('"id": "task-1"');
+  });
+
   it("runs the executor loop and only becomes ready for verification after the task gate passes", async () => {
     const { store, plan, run } = createQueuedRun();
     const model: ModelGateway = {

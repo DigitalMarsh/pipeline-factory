@@ -2,10 +2,11 @@
 import { computed, onMounted, ref } from "vue";
 import { ArrowRight, CircleCheck, Clock, Document, Search, Warning } from "@element-plus/icons-vue";
 import { useRoute, useRouter } from "vue-router";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { api } from "../api";
 import type { Plan, Project } from "../types";
 import { planStatusForStat } from "../utils/planFilters";
+import { canTerminateRun } from "../utils/runControls";
 
 const route = useRoute();
 const router = useRouter();
@@ -72,6 +73,24 @@ async function startRun(plan: Plan) {
   }
 }
 
+function canTerminate(plan: Plan): boolean {
+  return Boolean(plan.runId) && canTerminateRun(plan.status);
+}
+
+async function terminateRun(plan: Plan) {
+  if (!plan.runId) return;
+  try {
+    await ElMessageBox.confirm(`Terminate run for “${plan.title}”? The confirmed Plan will remain in history.`, "Terminate run", { confirmButtonText: "Terminate", cancelButtonText: "Keep running", type: "warning" });
+  } catch { return; }
+  try {
+    await api.cancelRun(plan.runId, "user_requested");
+    await load();
+    ElMessage.success("Run 已终止");
+  } catch (caught) {
+    ElMessage.error(caught instanceof Error ? caught.message : "Run 终止失败");
+  }
+}
+
 const allowedQueryStatuses = new Set(["all", "QUEUED", "IN_PROGRESS", "VERIFYING", "MERGE_READY", "MERGED", "BLOCKED"]);
 function syncQueryStatus(value: unknown) {
   const queryStatus = typeof value === "string" && allowedQueryStatuses.has(value) ? value : "all";
@@ -105,7 +124,7 @@ onMounted(() => { syncQueryStatus(route.query.status); void load(); });
         <div class="table-plan"><span class="mini-icon"><Document :size="15" /></span><div><strong>{{ plan.title }}</strong><small>{{ plan.planId ?? plan.id }} · Revision {{ plan.revision }}</small><small v-if="plan.projectConfigStatus">Project config {{ plan.projectConfigVersion ? `v${plan.projectConfigVersion}` : 'LEGACY' }} · {{ plan.projectConfigStatus }}</small><code v-if="plan.projectConfigHash" :title="plan.projectConfigHash">{{ plan.projectConfigHash.slice(0, 18) }}…</code></div></div>
         <div><el-tag :type="plan.status === 'MERGED' ? 'success' : plan.status === 'BLOCKED' ? 'danger' : 'warning'" effect="light">{{ label(plan.status) }}</el-tag></div>
         <code>{{ plan.sourceExplorerThreadId }}</code><code>{{ plan.runId ?? "—" }}</code>
-        <span class="event-time">{{ new Date(plan.lastEventAt).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }}</span><el-button v-if="plan.status === 'QUEUED'" size="small" type="primary" @click.prevent.stop="startRun(plan)">Start run</el-button><ArrowRight v-else :size="16" class="row-arrow" />
+        <span class="event-time">{{ new Date(plan.lastEventAt).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) }}</span><el-button v-if="plan.status === 'QUEUED'" size="small" type="primary" @click.prevent.stop="startRun(plan)">Start run</el-button><el-button v-else-if="canTerminate(plan)" size="small" type="danger" plain @click.prevent.stop="terminateRun(plan)">Terminate</el-button><ArrowRight v-else :size="16" class="row-arrow" />
       </RouterLink>
       <div v-if="!loading && filtered.length === 0" class="empty-state"><Document :size="32" /><h3>No dispatched plans</h3><p>Plans appear here after they are confirmed and enqueued from an ExplorerThread.</p><RouterLink :to="`/projects/${projectId}/explorer`">Open ExplorerThread <ArrowRight :size="14" /></RouterLink></div>
     </div>

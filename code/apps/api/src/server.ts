@@ -417,7 +417,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid Agent Loop event query" });
     if (!store.getAgentLoop(params.data.loopId)) return reply.code(404).send({ error: "AgentLoop not found" });
     const headerSequence = Number(request.headers["last-event-id"] ?? "0") || 0;
-    const afterSequence = query.data.afterSequence ?? headerSequence;
+    const afterSequence = Math.max(query.data.afterSequence ?? 0, headerSequence);
     const acceptsSse = query.data.format === "sse" || (request.headers.accept ?? "").includes("text/event-stream");
     if (!acceptsSse) return { items: store.listEvents({ aggregateId: params.data.loopId, afterSequence }) };
     reply.hijack();
@@ -429,6 +429,38 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       for (const event of events) {
         cursor = event.sequence;
         raw.write(`id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify({ loopId: params.data.loopId, sequence: event.sequence, ...event.payload })}\n\n`);
+      }
+    };
+    send();
+    raw.write(`id: ${cursor}\nevent: stream.ready\ndata: ${JSON.stringify({ afterSequence: cursor })}\n\n`);
+    const poll = setInterval(send, 250);
+    const heartbeat = setInterval(() => raw.write(`: heartbeat ${Date.now()}\n\n`), 15_000);
+    const cleanup = () => { clearInterval(poll); clearInterval(heartbeat); };
+    request.raw.once("close", cleanup);
+  });
+
+  app.get("/api/v4/runs/:runId/events", async (request, reply) => {
+    const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
+    const query = loopEventsQuery.safeParse(request.query);
+    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid Run event query" });
+    const run = store.getRun(params.data.runId);
+    if (!run) return reply.code(404).send({ error: "Run not found" });
+    const thread = store.getExecutionThread(run.executionThreadId);
+    if (!thread) return reply.code(404).send({ error: "ExecutionThread not found" });
+    const headerSequence = Number(request.headers["last-event-id"] ?? "0") || 0;
+    const afterSequence = Math.max(query.data.afterSequence ?? 0, headerSequence);
+    const acceptsSse = query.data.format === "sse" || (request.headers.accept ?? "").includes("text/event-stream");
+    if (!acceptsSse) return { items: thread.journal.filter((entry) => entry.sequence > afterSequence) };
+    reply.hijack();
+    const raw = reply.raw;
+    raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive", "access-control-allow-origin": "*" });
+    let cursor = afterSequence;
+    const send = () => {
+      const currentRun = store.getRun(run.id);
+      const currentThread = currentRun ? store.getExecutionThread(currentRun.executionThreadId) : undefined;
+      for (const entry of currentThread?.journal.filter((item) => item.sequence > cursor) ?? []) {
+        cursor = entry.sequence;
+        raw.write(`id: ${entry.sequence}\nevent: journal.entry\ndata: ${JSON.stringify({ runId: run.id, runStatus: currentRun?.status ?? null, threadState: currentThread?.state ?? null, ...entry })}\n\n`);
       }
     };
     send();
@@ -585,7 +617,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     const explorer = store.getThread(params.data.explorerId);
     if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
-    const candidate = store.listPlans().filter((plan) => plan.sourceExplorerThreadId === explorer.id && plan.queuedAt === null).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+    const candidate = store.listPlans().filter((plan) => plan.sourceExplorerThreadId === explorer.id && plan.status === "DRAFT" && plan.queuedAt === null).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
     if (!candidate) return reply.code(404).send({ error: "Candidate plan not found" });
     return { plan: candidate };
   });
@@ -733,7 +765,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (!thread) return reply.code(404).send({ error: "ExplorerThread not found" });
     const candidate = store
       .listPlans()
-      .filter((plan) => plan.sourceExplorerThreadId === thread.id && plan.queuedAt === null)
+      .filter((plan) => plan.sourceExplorerThreadId === thread.id && plan.status === "DRAFT" && plan.queuedAt === null)
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
     if (!candidate) return reply.code(404).send({ error: "Candidate plan not found" });
     return { plan: candidate };
@@ -762,6 +794,21 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       return { plan: plans.confirm(params.data.planId, body.data.actorId) };
     } catch (error) {
       return reply.code(409).send({ error: error instanceof Error ? error.message : "Plan cannot be confirmed" });
+    }
+  });
+
+  app.post("/api/v3/plans/:planId/discard", async (request, reply) => {
+    const params = planIdParams.safeParse(request.params);
+    const body = actorBody.safeParse(request.body ?? {});
+    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid discard request" });
+    try {
+      const plan = plans.get(params.data.planId);
+      if (ensurePlanProject(plan.projectId, reply, true) === null) return;
+      return { plan: plans.discard(params.data.planId, body.data.actorId) };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Plan cannot be discarded";
+      if (/not found/i.test(message)) return reply.code(404).send({ code: "PLAN_NOT_FOUND", error: "Plan not found" });
+      return reply.code(409).send({ code: "PLAN_CANNOT_BE_DISCARDED", error: message });
     }
   });
 
@@ -832,6 +879,21 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       return { run: await scheduler.finish(params.data.runId, body.data.exitReason, store.getProject(run.projectId)?.settings.hooks ?? {}) };
     }
     catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "Run cannot be finished" }); }
+  });
+
+  app.post("/api/v3/runs/:runId/cancel", async (request, reply) => {
+    const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
+    const body = loopReasonBody.safeParse(request.body ?? {});
+    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid run cancellation request" });
+    if (!scheduler) return reply.code(503).send({ error: "Scheduler is not configured for this API instance" });
+    try {
+      const run = scheduler.run(params.data.runId);
+      const cancellableStatuses = new Set(["STARTING", "IN_PROGRESS", "READY_FOR_VERIFY", "VERIFYING", "RECOVERING", "BLOCKED"]);
+      if (!cancellableStatuses.has(run.status)) throw new Error(`Run ${run.id} cannot be cancelled from ${run.status}`);
+      const cancellableLoopStates = new Set(["CREATED", "RUNNING", "WAITING_FOR_INPUT", "PAUSED", "RECOVERING"]);
+      for (const loop of store.listAgentLoops(run.id).filter((item) => cancellableLoopStates.has(item.state))) await loopController.cancel(loop.id, body.data.reason);
+      return { run: await scheduler.finish(run.id, "cancelled", store.getProject(run.projectId)?.settings.hooks ?? {}, body.data.reason) };
+    } catch (error) { return reply.code(409).send({ code: "RUN_CANCEL_FAILED", error: error instanceof Error ? error.message : "Run cannot be cancelled" }); }
   });
 
   app.post("/api/v3/runs/:runId/pause", async (request, reply) => {

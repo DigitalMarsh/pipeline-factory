@@ -1,4 +1,4 @@
-export type PlanStatus = "DRAFT" | "READY" | "QUEUED" | "IN_PROGRESS" | "VERIFYING" | "MERGE_READY" | "MERGED" | "BLOCKED" | "NEEDS_PLAN_CHANGE";
+export type PlanStatus = "DRAFT" | "DISCARDED" | "READY" | "QUEUED" | "IN_PROGRESS" | "VERIFYING" | "MERGE_READY" | "MERGED" | "BLOCKED" | "NEEDS_PLAN_CHANGE";
 
 export type ProjectSettings = {
   concurrency: {
@@ -259,6 +259,16 @@ export type ExecutionThread = {
   runId: string;
   state: string;
   journal: Array<{ sequence: number; type: string; occurredAt: string; payload: Record<string, unknown> }>;
+};
+
+export type RunJournalEvent = {
+  runId: string;
+  runStatus: string | null;
+  threadState: string | null;
+  sequence: number;
+  type: string;
+  occurredAt: string;
+  payload: Record<string, unknown>;
 };
 
 export type ToolCall = {

@@ -62,6 +62,18 @@ describe("ProjectService", () => {
     expect(() => projects.archive("project-1")).toThrow(/active runs/i);
   });
 
+  it("counts only execution states as active runs", () => {
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    projects.create({ id: "project-1", name: "Demo", repoRoot: "/repo/demo", defaultBranch: "main", worktreeRoot: "/tmp/demo-worktrees" });
+    const baseRun = { projectId: "project-1", planId: "plan-1", planRevision: 1, branch: "factory/run", workspacePath: "/tmp/demo-worktrees/run", baseCommit: "abc", executionThreadId: "execution-1", createdAt: store.now(), startedAt: store.now() };
+    for (const [index, status] of (["MERGE_READY", "READY_FOR_VERIFY", "VERIFYING"] as const).entries()) {
+      store.saveRun({ ...baseRun, id: `run-${index}`, status });
+    }
+
+    expect(projects.summary("project-1").activeRunCount).toBe(1);
+  });
+
   it("freezes the project snapshot when a plan is confirmed", () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);

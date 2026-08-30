@@ -11,10 +11,11 @@ function planIdentity(plan: Plan): string {
 }
 
 export function normalizePlanProjection(thread: ExplorerThread, candidate: Plan | null, dispatched: Plan[]): PlanProjection {
-  const candidateId = candidate ? planIdentity(candidate) : null;
+  const readyCandidate = candidate ?? dispatched.find((plan) => plan.status === "READY" && plan.queuedAt === null) ?? null;
+  const candidateId = readyCandidate ? planIdentity(readyCandidate) : null;
   return {
     thread,
-    candidate,
+    candidate: readyCandidate,
     dispatched: dispatched.filter((plan) => planIdentity(plan) !== candidateId),
   };
 }

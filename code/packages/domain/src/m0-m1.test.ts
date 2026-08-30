@@ -124,6 +124,23 @@ describe("SQLite pipeline persistence", () => {
     reopened.close();
   });
 
+  it("persists a discarded candidate and its audit event across restart", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pipeline-factory-discarded-"));
+    tempDirectories.push(directory);
+    const databasePath = join(directory, "factory.sqlite");
+    const firstStore = new SqlitePipelineStore(databasePath);
+    const firstService = new PlanService(firstStore);
+    firstService.registerThread({ id: "discard-thread", projectId: "project-1", parentThreadId: null });
+    const plan = firstService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "discard-thread", title: "Persist discarded" });
+    firstService.discard(plan.id, "user-1");
+    firstStore.close();
+
+    const reopened = new SqlitePipelineStore(databasePath);
+    expect(new PlanService(reopened).get(plan.id)).toMatchObject({ id: plan.id, status: "DISCARDED" });
+    expect(reopened.listEvents().map((event) => event.type)).toContain("plan.discarded");
+    reopened.close();
+  });
+
   it("restores an execution thread journal snapshot after a service restart", () => {
     const directory = mkdtempSync(join(tmpdir(), "pipeline-runtime-"));
     tempDirectories.push(directory);

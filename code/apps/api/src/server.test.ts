@@ -142,6 +142,31 @@ describe("Pipeline Factory v3 API", () => {
     expect(events.json().items[0]).toMatchObject({ type: "agent.loop.started", aggregateId: "loop-1" });
   });
 
+  it("replays Run execution journal entries from a requested sequence", async () => {
+    const store = new InMemoryPipelineStore();
+    store.saveRun({ id: "run-stream", projectId: "project-1", planId: "plan-1", planRevision: 1, status: "IN_PROGRESS", branch: "factory/run-stream", workspacePath: "/tmp/run-stream", baseCommit: "abc", executionThreadId: "execution-stream", createdAt: store.now(), startedAt: store.now() });
+    store.saveExecutionThread({ id: "execution-stream", runId: "run-stream", state: "ACTIVE", journal: [
+      { sequence: 1, type: "RUN_CREATED", occurredAt: store.now(), payload: { planId: "plan-1" } },
+      { sequence: 2, type: "MODEL_OUTPUT", occurredAt: store.now(), payload: { text: "正在执行" } },
+    ] });
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+
+    const response = await app.inject({ method: "GET", url: "/api/v4/runs/run-stream/events?afterSequence=1" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ items: [{ sequence: 2, type: "MODEL_OUTPUT", occurredAt: expect.any(String), payload: { text: "正在执行" } }] });
+
+    const replayedFromLastEventId = await app.inject({
+      method: "GET",
+      url: "/api/v4/runs/run-stream/events?afterSequence=0",
+      headers: { "last-event-id": "1" },
+    });
+
+    expect(replayedFromLastEventId.statusCode).toBe(200);
+    expect(replayedFromLastEventId.json().items).toEqual([{ sequence: 2, type: "MODEL_OUTPUT", occurredAt: expect.any(String), payload: { text: "正在执行" } }]);
+  });
+
   it("exposes durable tool-call status for an Agent Loop", async () => {
     const store = new InMemoryPipelineStore();
     const loop: AgentLoop = { id: "loop-tools", ownerType: "run", ownerId: "run-1", role: "executor", mode: "factory-controlled", state: "RUNNING", stepCount: 1, maxSteps: 4, startedAt: store.now(), completedAt: null, providerThreadId: null, providerTurnId: null, checkpointJson: null };
@@ -190,6 +215,30 @@ describe("Pipeline Factory v3 API", () => {
     const response = await app.inject({ method: "GET", url: "/api/v3/projects/project-1/explorer-thread/plans" });
     expect(response.statusCode).toBe(200);
     expect(response.json().items[0]).toMatchObject({ planId: plan.id, status: "QUEUED", createdAt: plan.createdAt, sourceTurnId: "assistant-1" });
+  });
+
+  it("discards a candidate through the API and hides it from candidate endpoints", async () => {
+    const store = new InMemoryPipelineStore();
+    createTestProject(store);
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+    const plans = new PlanService(store);
+    plans.registerThread({ id: "discard-thread", projectId: "project-1", parentThreadId: null });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "discard-thread", title: "Discard through API" });
+
+    const discarded = await app.inject({ method: "POST", url: `/api/v3/plans/${plan.id}/discard`, payload: { actorId: "user-1" } });
+    expect(discarded.statusCode).toBe(200);
+    expect(discarded.json()).toMatchObject({ plan: { id: plan.id, status: "DISCARDED" } });
+
+    const candidate = await app.inject({ method: "GET", url: "/api/v3/projects/project-1/explorer-thread/candidate" });
+    expect(candidate.statusCode).toBe(404);
+    const v4Candidate = await app.inject({ method: "GET", url: "/api/v4/projects/project-1/explorers/discard-thread/candidate" });
+    expect(v4Candidate.statusCode).toBe(404);
+    const confirm = await app.inject({ method: "POST", url: `/api/v3/plans/${plan.id}/confirm`, payload: { actorId: "user-1" } });
+    expect(confirm.statusCode).toBe(409);
+    const enqueue = await app.inject({ method: "POST", url: `/api/v3/plans/${plan.id}/enqueue` });
+    expect(enqueue.statusCode).toBe(409);
+    expect(store.listRuns()).toEqual([]);
   });
 
   it("keeps ExplorerThread turns in the API without granting write tools", async () => {
@@ -321,6 +370,30 @@ describe("Pipeline Factory v3 API", () => {
     expect(resumed.statusCode).toBe(200);
     expect(resumed.json().thread.state).toBe("ACTIVE");
     expect(store.getExecutionThread(started.json().run.executionThreadId)?.journal.some((entry) => entry.type === "USER_GUIDANCE")).toBe(true);
+  });
+
+  it("terminates a run and synchronizes its Plan status", async () => {
+    const store = new InMemoryPipelineStore();
+    createTestProject(store);
+    const plans = new PlanService(store);
+    plans.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Terminate stale run" });
+    plans.confirm(plan.id, "user-1");
+    plans.enqueue(plan.id);
+    const scheduler = new Scheduler({ store, workspace: { create: async () => ({ path: "/tmp/run", branch: "factory/run", baseCommit: "abc" }), remove: async () => undefined }, hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })) });
+    const app = createApp({ store, scheduler, seed: false });
+    apps.push(app);
+
+    const started = await app.inject({ method: "POST", url: `/api/v3/plans/${plan.id}/run` });
+    const runId = started.json().run.id as string;
+    store.saveAgentLoop({ id: "loop-stale", ownerType: "run", ownerId: runId, role: "executor", mode: "provider-controlled", state: "RUNNING", stepCount: 1, maxSteps: 40, startedAt: store.now(), completedAt: null, providerThreadId: null, providerTurnId: null, checkpointJson: null });
+    const cancelled = await app.inject({ method: "POST", url: `/api/v3/runs/${runId}/cancel`, payload: { reason: "stale_run" } });
+
+    expect(cancelled.statusCode).toBe(200);
+    expect(cancelled.json().run).toMatchObject({ id: runId, status: "CANCELLED" });
+    expect(store.getAgentLoop("loop-stale")).toMatchObject({ state: "CANCELLED" });
+    expect(store.getExecutionThread(cancelled.json().run.executionThreadId)?.state).toBe("CANCELLED");
+    expect(store.getPlan(plan.id)).toMatchObject({ status: "BLOCKED", attentionReason: "Run cancelled: stale_run" });
   });
 
   it("supports asynchronous v4 turns and structured answers without changing v3", async () => {
