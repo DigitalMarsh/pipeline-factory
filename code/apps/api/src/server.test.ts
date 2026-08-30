@@ -10,7 +10,7 @@ import { createApp } from "./server.js";
 const apps: Array<Awaited<ReturnType<typeof createApp>>> = [];
 
 function createTestProject(store: InMemoryPipelineStore, id = "project-1") {
-  return new ProjectService(store).create({ id, name: id, repoRoot: `/repo/${id}`, defaultBranch: "main", worktreeRoot: `/tmp/${id}-worktrees` });
+  return new ProjectService(store).create({ id, name: id, repoRoot: `/repo/${id}`, defaultBranch: "main", worktreeRoot: `/tmp/${id}-worktrees`, settings: { commands: [{ commandId: "project.test", argv: ["true"] }, { commandId: "project.typecheck", argv: ["true"] }] } });
 }
 
 afterEach(async () => {

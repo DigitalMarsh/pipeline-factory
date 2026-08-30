@@ -3,17 +3,19 @@
  * 设计说明：fixture 只构造本测试需要的持久化事实，边界行为优先于实现细节。
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  */
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ExecutorAgent } from "./executor-agent.js";
+import { ExecutorAgent, inspectWorkspaceScope, parseExecutorReport } from "./executor-agent.js";
 import { InMemoryPipelineStore, LifecycleHookRunner, PlanService, Scheduler, ToolGateway, type AgentLoop, type ModelEvent, type ModelGateway, type ModelRequest } from "./index.js";
 import { DurableToolRuntime } from "./tool-runtime.js";
 
 const executionReport = (taskId: string) => `<pipeline-factory-execution-report>${JSON.stringify({
   completedTaskIds: [taskId],
-  pathsWithinScope: true,
+  changedPaths: ["src/implemented.ts"],
   report: "Task completed with verification-ready evidence",
 })}</pipeline-factory-execution-report>`;
 
@@ -47,6 +49,43 @@ function createQueuedRun(saveRun = true) {
 }
 
 describe("ExecutorAgent", () => {
+  it("normalizes provider reports that return changed paths as an array", () => {
+    const report = parseExecutorReport(`<pipeline-factory-execution-report>${JSON.stringify({
+      completedTaskIds: ["task-1"],
+      pathsWithinScope: ["README.md", "docs/guide.md"],
+      report: "All work completed",
+    })}</pipeline-factory-execution-report>`);
+
+    expect(report).toEqual({
+      completedTaskIds: ["task-1"],
+      changedPaths: ["README.md", "docs/guide.md"],
+      report: "All work completed",
+    });
+  });
+
+  it("checks the actual Git diff instead of trusting the model scope claim", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "pipeline-scope-"));
+    try {
+      execFileSync("git", ["init", "-q"], { cwd: workspace });
+      execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: workspace });
+      execFileSync("git", ["config", "user.name", "Pipeline Test"], { cwd: workspace });
+      await writeFile(join(workspace, "README.md"), "base\n");
+      execFileSync("git", ["add", "README.md"], { cwd: workspace });
+      execFileSync("git", ["commit", "-qm", "base"], { cwd: workspace });
+      mkdirSync(join(workspace, "docs"));
+      await writeFile(join(workspace, "README.md"), "changed\n");
+      await writeFile(join(workspace, "docs", "guide.md"), "guide\n");
+
+      await expect(inspectWorkspaceScope({ workspacePath: workspace, baseCommit: "HEAD", include: ["docs"], exclude: [] })).resolves.toEqual({
+        changedPaths: ["README.md", "docs/guide.md"],
+        outsidePaths: ["README.md"],
+        pathsWithinScope: false,
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   it("sends the complete approved Plan contract to the executor model", async () => {
     const { store, plan, run } = createQueuedRun();
     let receivedMessages: ModelRequest["messages"] = [];
@@ -111,6 +150,21 @@ describe("ExecutorAgent", () => {
     expect(store.getRun(run.id)?.status).not.toBe("READY_FOR_VERIFY");
   });
 
+  it("projects a blocked executor loop onto its execution thread", async () => {
+    const { store, plan, run } = createQueuedRun();
+    const model: ModelGateway = {
+      configFor: () => ({ model: "gpt-5.6-luna", loopMode: "provider-controlled" }),
+      capabilities: () => ({ supportsStructuredUserInput: false, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
+      async *stream() { yield { type: "text.delta", text: "not finished" }; yield { type: "turn.completed" }; },
+      async answerUserInput() { return undefined; },
+      async cancel() { return undefined; },
+    };
+
+    await new ExecutorAgent(store, model, undefined, { maxSteps: 1 }).run(run, plan);
+
+    expect(store.getExecutionThread(run.executionThreadId)?.state).toBe("BLOCKED");
+  });
+
   it("injects a durable built-in ToolRuntime for Factory-controlled execution", async () => {
     const { store, plan, run } = createQueuedRun();
     const workspace = await mkdtemp(join(tmpdir(), "pipeline-executor-"));
@@ -158,6 +212,11 @@ describe("ExecutorAgent", () => {
       executor: {
         start: async (run, revision) => {
           order.push("executor.start");
+          const latestThread = store.getExecutionThread(run.executionThreadId)!;
+          store.saveExecutionThread({
+            ...latestThread,
+            journal: [...latestThread.journal, { sequence: latestThread.journal.length + 1, type: "TASK_PROGRESS", occurredAt: store.now(), payload: { event: "agent.loop.started" } }],
+          });
           expect(run.workspacePath).toBe("/tmp/project");
           expect(revision.planId).toBe(plan.planId);
           return { id: "loop-1", ownerType: "run", ownerId: run.id, role: "executor", mode: "provider-controlled", state: "CREATED", stepCount: 0, maxSteps: 40, startedAt: null, completedAt: null, providerThreadId: null, providerTurnId: null, checkpointJson: null } satisfies AgentLoop;
@@ -170,5 +229,6 @@ describe("ExecutorAgent", () => {
     expect(run.status).toBe("IN_PROGRESS");
     expect(order).toEqual(["worktree.add", "project.start", "executor.start"]);
     expect(store.listEvents().some((event) => event.type === "run.executor.event")).toBe(true);
+    expect(store.getExecutionThread(run.executionThreadId)?.journal.some((entry) => entry.payload.event === "agent.loop.started")).toBe(true);
   });
 });

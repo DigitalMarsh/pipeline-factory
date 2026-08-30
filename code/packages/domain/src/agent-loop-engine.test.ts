@@ -25,6 +25,29 @@ function baseInput(gate: TerminationGate = completeWhenTextContainsDone) {
 }
 
 describe("AgentLoopEngine", () => {
+  it("aborts an in-flight provider turn when the execution deadline expires", async () => {
+    const store = new InMemoryPipelineStore();
+    let aborted = false;
+    const model: ModelGateway = {
+      configFor: () => ({ model: "executor" }),
+      capabilities: () => ({ supportsStructuredUserInput: false, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
+      async *stream(request: ModelRequest) {
+        await new Promise((resolve) => setTimeout(resolve, 30));
+        aborted = request.signal?.aborted === true;
+        yield { type: "text.delta", text: "done" };
+        yield { type: "turn.completed" };
+      },
+      async answerUserInput() { return undefined; },
+      async cancel() { return undefined; },
+    };
+
+    const loop = await new AgentLoopEngine(store, model).run({ ...baseInput(), mode: "provider-controlled", maxDurationMs: 5 });
+
+    expect(loop.state).toBe("BLOCKED");
+    expect(store.listAgentLoopSteps(loop.id).at(-1)?.payload).toMatchObject({ reason: "MAX_DURATION_EXCEEDED" });
+    expect(aborted).toBe(true);
+  });
+
   it("runs model, tool, tool result, and model again within one loop", async () => {
     const store = new InMemoryPipelineStore();
     let calls = 0;

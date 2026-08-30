@@ -4,9 +4,27 @@
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  */
 import { describe, expect, it } from "vitest";
-import { InMemoryPipelineStore, LifecycleHookRunner, LocalGitWorktreeAdapter, PlanService, Scheduler } from "./index.js";
+import { InMemoryPipelineStore, LifecycleHookRunner, LocalGitWorktreeAdapter, PlanService, ProjectService, Scheduler } from "./index.js";
 
 describe("Scheduler and ExecutionThread", () => {
+  it("fails before creating a worktree when frozen verification commands are not registered", async () => {
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    projects.create({ id: "project-preflight", name: "Preflight", repoRoot: "/repo/preflight", defaultBranch: "main", worktreeRoot: "/tmp/preflight", settings: { commands: [{ commandId: "project.test", argv: ["true"] }] } });
+    const plans = new PlanService(store, projects);
+    const plan = plans.createCandidatePlan({ projectId: "project-preflight", sourceExplorerThreadId: "thread-preflight", title: "Preflight" });
+    plans.confirm(plan.id, "user-1");
+    plans.enqueue(plan.id);
+    let created = false;
+    const scheduler = new Scheduler({
+      store,
+      workspace: { create: async () => { created = true; return { path: "/tmp/preflight/run", branch: "factory/run", baseCommit: "abc" }; }, remove: async () => undefined },
+      hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
+    });
+
+    await expect(scheduler.start(plan.id)).rejects.toThrow(/RUN_PREREQUISITES_UNSATISFIED/);
+    expect(created).toBe(false);
+  });
   it("creates a run, workspace and thread in order, then records the start hook", async () => {
     const store = new InMemoryPipelineStore();
     const planService = new PlanService(store);

@@ -3,6 +3,8 @@
  *
  * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
  */
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { AgentLoopEngine, type AgentLoop, type AgentLoopEvent, type AgentLoopMode, type GateContext } from "./agent-loop.js";
 import { TaskProgressGate } from "./termination-gates.js";
 import type { ModelGateway, PipelineStore, PlanRevisionV2, Run } from "./index.js";
@@ -10,13 +12,22 @@ import type { ToolRuntime } from "./tool-runtime.js";
 
 const REPORT_START = "<pipeline-factory-execution-report>";
 const REPORT_END = "</pipeline-factory-execution-report>";
+const execFileAsync = promisify(execFile);
 
 /** Executor 必须返回的结构化完成报告；Gate 会据此判断任务、范围和报告是否完整。 */
 export type ExecutorReport = {
   completedTaskIds: string[];
-  pathsWithinScope: boolean;
+  changedPaths: string[];
   report: string;
 };
+
+export type WorkspaceScopeInspection = {
+  changedPaths: string[];
+  outsidePaths: string[];
+  pathsWithinScope: boolean;
+};
+
+export type WorkspaceScopeInspector = (input: { workspacePath: string; baseCommit: string; include: string[]; exclude?: string[] }) => Promise<WorkspaceScopeInspection>;
 
 /** Executor Agent 的运行限制；ProjectExecutionSnapshot 优先于全局默认策略。 */
 export type ExecutorAgentOptions = {
@@ -26,6 +37,7 @@ export type ExecutorAgentOptions = {
   maxNoProgressSteps?: number;
   mode?: AgentLoopMode;
   toolRuntimeFactory?: (run: Run, revision: PlanRevisionV2) => ToolRuntime;
+  workspaceScopeInspector?: WorkspaceScopeInspector;
 };
 
 /**
@@ -53,14 +65,14 @@ export class ExecutorAgent {
     this.assertRunnable(run, revision);
     const projectConfig = revision.projectConfigSnapshot?.settings.models.executor;
     const mode = projectConfig?.loopMode ?? this.options.mode ?? this.model.configFor("executor").loopMode ?? "provider-controlled";
-    const maxDurationMs = revision.projectConfigSnapshot?.settings.concurrency.defaultTimeoutMs ?? this.options.maxDurationMs;
+    const maxDurationMs = revision.projectConfigSnapshot?.settings.concurrency.executionTimeoutMs ?? this.options.maxDurationMs;
     this.assertCapabilities(mode);
     const openToolCalls = new Set<string>();
     const gate = new TaskProgressGate();
     const toolRuntime = this.options.toolRuntimeFactory?.(run, revision) ?? this.defaultToolRuntime;
-    const evaluate = (context: GateContext) => gate.evaluate({
+    const evaluate = async (context: GateContext) => gate.evaluate({
       ...context,
-      ...this.progressContext(run.id, revision, context.content ?? "", openToolCalls),
+      ...(await this.progressContext(run, revision, context.content ?? "", openToolCalls)),
     });
     const loop = await this.engine.start({
       ownerType: "run",
@@ -93,7 +105,7 @@ export class ExecutorAgent {
     this.assertRunnable(run, revision);
     const projectConfig = revision.projectConfigSnapshot?.settings.models.executor;
     const mode = projectConfig?.loopMode ?? this.options.mode ?? this.model.configFor("executor").loopMode ?? "provider-controlled";
-    const maxDurationMs = revision.projectConfigSnapshot?.settings.concurrency.defaultTimeoutMs ?? this.options.maxDurationMs;
+    const maxDurationMs = revision.projectConfigSnapshot?.settings.concurrency.executionTimeoutMs ?? this.options.maxDurationMs;
     this.assertCapabilities(mode);
     const openToolCalls = new Set<string>();
     const gate = new TaskProgressGate();
@@ -118,7 +130,7 @@ export class ExecutorAgent {
           { role: "user", content: `Execute the approved plan: ${revision.planId}@${revision.revision}.` },
         ],
       },
-      gate: { evaluate: (context) => gate.evaluate({ ...context, ...this.progressContext(run.id, revision, context.content ?? "", openToolCalls) }) },
+      gate: { evaluate: async (context) => gate.evaluate({ ...context, ...(await this.progressContext(run, revision, context.content ?? "", openToolCalls)) }) },
       onEvent: (event) => this.handleEvent(run, event, openToolCalls),
     });
     this.syncRunTerminalState(run, loop);
@@ -143,16 +155,32 @@ export class ExecutorAgent {
     if (mode === "provider-controlled" && capabilities && !capabilities.supportedLoopModes.includes(mode)) throw new Error("MODEL_CAPABILITY_UNAVAILABLE");
   }
 
-  private progressContext(runId: string, revision: PlanRevisionV2, content: string, openToolCalls: Set<string>): Pick<GateContext, "allTasksComplete" | "pathsWithinScope" | "reportReady" | "hasOpenToolCalls" | "hasPendingChangeProposal"> {
-    const report = parseExecutorReport(content);
+  private async progressContext(run: Run, revision: PlanRevisionV2, content: string, openToolCalls: Set<string>): Promise<Pick<GateContext, "allTasksComplete" | "changedPaths" | "pathsWithinScope" | "reportReady" | "hasOpenToolCalls" | "hasPendingChangeProposal" | "reportError" | "scopeError">> {
+    const parsedReport = parseExecutorReportDetailed(content);
+    const report = parsedReport.report;
     const taskIds = new Set(revision.contract.tasks.map((task) => task.id));
     const completed = report?.completedTaskIds ?? [];
+    let scope: WorkspaceScopeInspection & { error?: string } = { changedPaths: [], outsidePaths: [], pathsWithinScope: false };
+    if (report) {
+      if (!this.options.workspaceScopeInspector) scope = { changedPaths: report.changedPaths, outsidePaths: [], pathsWithinScope: true };
+      else {
+        try {
+          scope = await this.options.workspaceScopeInspector({ workspacePath: run.workspacePath!, baseCommit: run.baseCommit, include: revision.contract.include, exclude: revision.contract.exclude });
+        } catch (error) {
+          scope.error = error instanceof Error ? error.message : String(error);
+        }
+      }
+    }
+    const uniqueCompleted = new Set(completed);
     return {
-      allTasksComplete: Boolean(report && completed.length === taskIds.size && completed.every((taskId) => taskIds.has(taskId))),
-      pathsWithinScope: report?.pathsWithinScope === true,
+      allTasksComplete: Boolean(report && uniqueCompleted.size === taskIds.size && completed.length === taskIds.size && completed.every((taskId) => taskIds.has(taskId))),
+      changedPaths: scope.changedPaths,
+      pathsWithinScope: scope.pathsWithinScope,
+      ...(scope.error ? { scopeError: scope.error } : {}),
       reportReady: Boolean(report?.report.trim()),
       hasOpenToolCalls: openToolCalls.size > 0,
-      hasPendingChangeProposal: this.store.listChangeProposals(runId).some((proposal) => proposal.status === "OPEN"),
+      hasPendingChangeProposal: this.store.listChangeProposals(run.id).some((proposal) => proposal.status === "OPEN"),
+      ...(report ? {} : { reportError: parsedReport.error ?? "EXECUTION_REPORT_INVALID_OR_MISSING" }),
     };
   }
 
@@ -172,42 +200,41 @@ export class ExecutorAgent {
       `Work only inside the approved include scope: ${revision.contract.include.join(", ")}.`,
       `Never modify excluded or protected paths: ${revision.contract.exclude.join(", ")}.`,
       "Do not claim completion in prose. End with <pipeline-factory-execution-report> JSON </pipeline-factory-execution-report>.",
-      "The JSON must contain completedTaskIds, pathsWithinScope, and a non-empty report.",
+      "The JSON must contain completedTaskIds, changedPaths (or legacy pathsWithinScope array), and a non-empty report.",
       `Approved Plan contract:\n${JSON.stringify(executionContract, null, 2)}`,
     ].join(" ");
   }
 
   /** 把 Loop 事件投影为用户可读的 ExecutionThread journal，同时维护未完成工具集合。 */
   private handleEvent(run: Run, event: AgentLoopEvent, openToolCalls: Set<string>): void {
-    const thread = this.store.getExecutionThread(run.executionThreadId);
-    if (!thread) return;
+    if (!this.store.getExecutionThread(run.executionThreadId)) return;
     const payload = event.payload;
-    if (event.type === "agent.step.started" || event.type === "agent.model.completed" || event.type === "agent.context.compacted") this.append(thread, "TASK_PROGRESS", { event: event.type, ...payload });
-    if (event.type === "agent.model.text.delta") this.append(thread, "MODEL_OUTPUT", { text: payload.text });
+    if (event.type === "agent.step.started" || event.type === "agent.model.completed" || event.type === "agent.context.compacted") this.append(run.executionThreadId, "TASK_PROGRESS", { event: event.type, ...payload });
+    if (event.type === "agent.model.text.delta") this.append(run.executionThreadId, "MODEL_OUTPUT", { text: payload.text });
     if (event.type === "agent.tool.requested" && typeof payload.callId === "string" && payload.delegatedToProvider !== true) {
       openToolCalls.add(payload.callId);
-      this.append(thread, "TOOL_CALL", { action: "requested", ...payload });
+      this.append(run.executionThreadId, "TOOL_CALL", { action: "requested", ...payload });
     }
     if ((event.type === "agent.tool.completed" || event.type === "agent.tool.denied" || event.type === "agent.tool.failed" || event.type === "agent.tool.needs_reconciliation") && typeof payload.callId === "string") {
       openToolCalls.delete(payload.callId);
       const action = event.type.endsWith("denied") ? "denied" : event.type.endsWith("failed") ? "failed" : event.type.endsWith("reconciliation") ? "needs-reconciliation" : "completed";
-      this.append(thread, "TOOL_CALL", { action, ...payload });
+      this.append(run.executionThreadId, "TOOL_CALL", { action, ...payload });
     }
-    if (event.type === "agent.gate.checked") this.append(thread, "TASK_PROGRESS", payload);
+    if (event.type === "agent.gate.checked") this.append(run.executionThreadId, "TASK_PROGRESS", payload);
     if (event.type === "agent.loop.completed") {
-      this.append(thread, "TASK_PROGRESS", { state: "READY_FOR_VERIFY", ...payload });
+      this.append(run.executionThreadId, "TASK_PROGRESS", { state: "READY_FOR_VERIFY", ...payload });
       this.setRunStatus(run, "READY_FOR_VERIFY");
     }
     if (event.type === "agent.loop.failed") {
-      this.append(thread, "TASK_PROGRESS", { state: "BLOCKED", ...payload });
-      this.setRunStatus(run, "BLOCKED");
+      this.append(run.executionThreadId, "TASK_PROGRESS", { state: "BLOCKED", ...payload });
+      this.setRunStatus(run, "BLOCKED", String(payload.reason ?? payload.error ?? "Executor loop blocked"));
     }
     if (event.type === "agent.loop.recovery_required") {
-      this.append(thread, "RECOVERY", payload);
-      this.setRunStatus(run, "BLOCKED");
+      this.append(run.executionThreadId, "RECOVERY", payload);
+      this.setRunStatus(run, "BLOCKED", String(payload.reason ?? payload.error ?? "Executor recovery required"));
     }
     if (event.type === "agent.loop.cancelled") {
-      this.append(thread, "TASK_PROGRESS", { state: "CANCELLED", ...payload });
+      this.append(run.executionThreadId, "TASK_PROGRESS", { state: "CANCELLED", ...payload });
       this.setRunStatus(run, "CANCELLED");
     }
   }
@@ -218,30 +245,69 @@ export class ExecutorAgent {
     if (loop.state === "CANCELLED") this.setRunStatus(run, "CANCELLED");
   }
 
-  private setRunStatus(run: Run, status: "READY_FOR_VERIFY" | "BLOCKED" | "CANCELLED"): void {
+  private setRunStatus(run: Run, status: "READY_FOR_VERIFY" | "BLOCKED" | "CANCELLED", reason?: string): void {
+    run.status = status;
     const current = this.store.getRun(run.id);
     if (current) this.store.saveRun({ ...current, status });
+    const thread = this.store.getExecutionThread(run.executionThreadId);
+    if (thread) this.store.saveExecutionThread({ ...thread, state: status === "READY_FOR_VERIFY" ? "COMPLETED" : status === "BLOCKED" ? "BLOCKED" : "CANCELLED" });
+    const plan = this.store.getPlan(run.planId);
+    if (plan?.runId === run.id) {
+      this.store.updatePlan({ ...plan, ...(status === "BLOCKED" ? { status: "BLOCKED", attentionReason: reason ?? "Executor loop blocked" } : {}), lastEventAt: this.store.now() });
+    }
   }
 
-  private append(thread: { journal: Array<{ sequence: number; type: import("./index.js").JournalEntryType; occurredAt: string; payload: Record<string, unknown> }>; id: string; runId: string; state: import("./index.js").ExecutionThreadState }, type: import("./index.js").JournalEntryType, payload: Record<string, unknown>): void {
-    thread.journal.push({ sequence: thread.journal.length + 1, type, occurredAt: this.store.now(), payload });
-    this.store.saveExecutionThread(thread);
+  private append(threadId: string, type: import("./index.js").JournalEntryType, payload: Record<string, unknown>): void {
+    const thread = this.store.getExecutionThread(threadId);
+    if (!thread) return;
+    const entry = { sequence: thread.journal.length + 1, type, occurredAt: this.store.now(), payload };
+    this.store.saveExecutionThread({ ...thread, journal: [...thread.journal, entry] });
     this.store.appendEvent({ type: "run.executor.event", aggregateId: thread.runId, payload: { executionThreadId: thread.id, type, ...payload } });
   }
 }
 
 /** 从模型输出提取结构化完成报告；缺失协议块时返回 null 触发完成门禁继续。 */
 export function parseExecutorReport(content: string): ExecutorReport | null {
+  return parseExecutorReportDetailed(content).report;
+}
+
+function parseExecutorReportDetailed(content: string): { report: ExecutorReport | null; error?: string } {
   const start = content.lastIndexOf(REPORT_START);
-  if (start < 0) return null;
+  if (start < 0) return { report: null, error: "EXECUTION_REPORT_MISSING" };
   const jsonStart = start + REPORT_START.length;
   const end = content.indexOf(REPORT_END, jsonStart);
-  if (end < 0) return null;
+  if (end < 0) return { report: null, error: "EXECUTION_REPORT_INCOMPLETE" };
   try {
-    const value = JSON.parse(content.slice(jsonStart, end).trim()) as Partial<ExecutorReport>;
-    if (!Array.isArray(value.completedTaskIds) || !value.completedTaskIds.every((taskId) => typeof taskId === "string") || typeof value.pathsWithinScope !== "boolean" || typeof value.report !== "string") return null;
-    return { completedTaskIds: value.completedTaskIds, pathsWithinScope: value.pathsWithinScope, report: value.report };
+    const value = JSON.parse(content.slice(jsonStart, end).trim()) as { completedTaskIds?: unknown; changedPaths?: unknown; pathsWithinScope?: unknown; report?: unknown };
+    if (!Array.isArray(value.completedTaskIds) || !value.completedTaskIds.every((taskId) => typeof taskId === "string")) return { report: null, error: "EXECUTION_REPORT_FIELD_INVALID: completedTaskIds" };
+    const changedPaths = Array.isArray(value.changedPaths) ? value.changedPaths : value.pathsWithinScope;
+    if (!Array.isArray(changedPaths) || !changedPaths.every((path) => typeof path === "string")) return { report: null, error: "EXECUTION_REPORT_FIELD_INVALID: changedPaths" };
+    if (typeof value.report !== "string") return { report: null, error: "EXECUTION_REPORT_FIELD_INVALID: report" };
+    return { report: { completedTaskIds: value.completedTaskIds, changedPaths, report: value.report } };
   } catch {
-    return null;
+    return { report: null, error: "EXECUTION_REPORT_INVALID_JSON" };
   }
+}
+
+/** 通过 Git 实际 diff 校验 Executor 的变更范围；模型报告只提供候选路径，不提供安全结论。 */
+export async function inspectWorkspaceScope(input: { workspacePath: string; baseCommit: string; include: string[]; exclude?: string[] }): Promise<WorkspaceScopeInspection> {
+  try {
+    const [diff, untracked] = await Promise.all([
+      execFileAsync("git", ["diff", "--name-only", input.baseCommit, "--"], { cwd: input.workspacePath }),
+      execFileAsync("git", ["ls-files", "--others", "--exclude-standard"], { cwd: input.workspacePath }),
+    ]);
+    const changedPaths = [...new Set(`${diff.stdout}\n${untracked.stdout}`.split(/\r?\n/).map((path) => path.trim()).filter(Boolean))];
+    const outsidePaths = changedPaths.filter((path) => !matchesAnyPath(path, input.include) || matchesAnyPath(path, input.exclude ?? []));
+    return { changedPaths, outsidePaths, pathsWithinScope: outsidePaths.length === 0 };
+  } catch (error) {
+    throw new Error(`WORKSPACE_SCOPE_CHECK_FAILED: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+function matchesAnyPath(path: string, patterns: string[]): boolean {
+  return patterns.some((pattern) => {
+    const parts = pattern.replaceAll("\\", "/").replace(/^\/+|\/+$/g, "").split("/").filter(Boolean);
+    const expression = parts.map((part) => part === "**" ? ".*" : part === "*" ? "[^/]+" : part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("/");
+    return new RegExp(`^${expression}(?:/.*)?$`).test(path.replaceAll("\\", "/"));
+  });
 }

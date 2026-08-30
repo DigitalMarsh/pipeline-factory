@@ -7,9 +7,18 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ExplorerThreadService, InMemoryPipelineStore, LifecycleHookRunner, PlanService, ProjectService, Scheduler, SqlitePipelineStore, type ModelGateway } from "./index.js";
+import { ExplorerThreadService, InMemoryPipelineStore, LifecycleHookRunner, PlanService, ProjectService, Scheduler, SqlitePipelineStore, validatePlanContract, type ModelGateway } from "./index.js";
 
 describe("ProjectService", () => {
+  it("rejects duplicate, unknown, and cyclic task dependencies before confirmation", () => {
+    const base = {
+      goal: "goal", acceptanceCriteria: ["works"], include: ["src"], exclude: [], baseBranch: "main", baseCommit: "HEAD",
+      conflictKeys: [], executorModelRole: "executor", toolPolicy: "executor-scoped-write", verificationCommandIds: ["project.test"], maxRepairAttempts: 1, mergeStrategy: "manual" as const, requireHumanMerge: true,
+    };
+    expect(() => validatePlanContract({ ...base, tasks: [{ id: "task-1", title: "one", dependencies: [], status: "READY" }, { id: "task-1", title: "duplicate", dependencies: [], status: "READY" }] })).toThrow(/unique/i);
+    expect(() => validatePlanContract({ ...base, tasks: [{ id: "task-1", title: "one", dependencies: ["missing"], status: "READY" }] })).toThrow(/unknown/i);
+    expect(() => validatePlanContract({ ...base, tasks: [{ id: "task-1", title: "one", dependencies: ["task-2"], status: "READY" }, { id: "task-2", title: "two", dependencies: ["task-1"], status: "READY" }] })).toThrow(/cycle/i);
+  });
   it("creates a project with a versioned configuration", () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);
@@ -191,7 +200,7 @@ describe("ProjectService", () => {
   it("runs confirmed plans with the immutable project snapshot adapters", async () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);
-    projects.create({ id: "project-snapshot", name: "Snapshot", repoRoot: "/repo/snapshot", defaultBranch: "main", worktreeRoot: "/tmp/snapshot-worktrees" });
+    projects.create({ id: "project-snapshot", name: "Snapshot", repoRoot: "/repo/snapshot", defaultBranch: "main", worktreeRoot: "/tmp/snapshot-worktrees", settings: { commands: [{ commandId: "project.test", argv: ["true"] }, { commandId: "project.typecheck", argv: ["true"] }] } });
     const plans = new PlanService(store, projects);
     plans.registerThread({ id: "thread-snapshot", projectId: "project-snapshot", parentThreadId: null });
     const plan = plans.createCandidatePlan({ projectId: "project-snapshot", sourceExplorerThreadId: "thread-snapshot", title: "Snapshot execution" });

@@ -124,12 +124,15 @@ export type GateContext = {
   allTasksComplete?: boolean;
   hasOpenToolCalls?: boolean;
   hasPendingChangeProposal?: boolean;
+  changedPaths?: string[];
+  reportError?: string;
+  scopeError?: string;
   pathsWithinScope?: boolean;
 };
 
 export interface TerminationGate {
   /** 根据当前模型输出和运行上下文决定继续、暂停、完成或阻塞。 */
-  evaluate(context: GateContext): GateDecision;
+  evaluate(context: GateContext): GateDecision | Promise<GateDecision>;
 }
 
 /** 对外实时事件；payload 保持结构化以便 API SSE 和 UI 投影复用。 */
@@ -165,6 +168,7 @@ export class AgentLoopEngine implements AgentLoopRunner {
     fail: (error: Error) => void;
   }>();
   private readonly controllers = new Map<string, AbortController>();
+  private readonly deadlineTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly callbacks = new Map<string, (event: AgentLoopEvent) => void>();
   private readonly options: Required<AgentLoopEngineOptions>;
 
@@ -295,11 +299,22 @@ export class AgentLoopEngine implements AgentLoopRunner {
     const maxDurationMs = input.maxDurationMs ?? this.options.defaultMaxDurationMs;
     const maxRepeatedToolCalls = input.maxRepeatedToolCalls ?? this.options.defaultMaxRepeatedToolCalls;
     const maxNoProgressSteps = input.maxNoProgressSteps ?? this.options.defaultMaxNoProgressSteps;
+    let timedOut = false;
+    const deadlineTimer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+      const current = this.get(initial.id);
+      if (current.providerThreadId && current.providerTurnId) {
+        void this.model.cancel({ conversationId: current.id, providerThreadId: current.providerThreadId, providerTurnId: current.providerTurnId }).catch(() => undefined);
+      }
+    }, maxDurationMs);
+    this.deadlineTimers.set(initial.id, deadlineTimer);
 
     // 每一轮只允许一个模型步骤；步骤完成后先过 gate，再决定是否继续上下文压缩。
     // 这保证“模型说完成”不会绕过 Plan/Task 的业务门禁，也为暂停和恢复留下 checkpoint。
     for (;;) {
       loop = this.get(initial.id);
+      if (timedOut) { this.block(initial.id, "MAX_DURATION_EXCEEDED"); return; }
       if (loop.state === "PAUSED") { await this.waitUntilResumed(initial.id, controller.signal); continue; }
       if (loop.state === "CANCELLED") return;
       if (controller.signal.aborted) { await this.cancel(initial.id, "aborted"); return; }
@@ -375,18 +390,20 @@ export class AgentLoopEngine implements AgentLoopRunner {
             this.emit(loop, "agent.input.resolved", { requestId: event.request.requestId });
           }
           if (event.type === "turn.failed") { this.fail(initial.id, event.error); return; }
-          if (event.type === "turn.cancelled") { await this.cancel(initial.id, "provider_cancelled"); return; }
+          if (event.type === "turn.cancelled") { if (timedOut) this.block(initial.id, "MAX_DURATION_EXCEEDED"); else await this.cancel(initial.id, "provider_cancelled"); return; }
           if (event.type === "turn.completed") break;
         }
       } catch (error) {
+        if (timedOut) { this.block(initial.id, "MAX_DURATION_EXCEEDED"); return; }
         if (controller.signal.aborted) { await this.cancel(initial.id, "aborted"); return; }
         this.fail(initial.id, error instanceof Error ? error.message : String(error));
         return;
       }
       loop = this.get(initial.id);
+      if (timedOut || Date.now() - startedMs >= maxDurationMs) { this.block(initial.id, "MAX_DURATION_EXCEEDED"); return; }
       this.appendStep(loop, "MODEL_COMPLETED", "COMPLETED", { step: loop.stepCount });
       this.emit(loop, "agent.model.completed", { step: loop.stepCount });
-      const decision = (input.gate ?? { evaluate: () => ({ action: "complete", reason: "MODEL_COMPLETED" } as GateDecision) }).evaluate({ content: fullText });
+      const decision = await (input.gate ?? { evaluate: () => ({ action: "complete", reason: "MODEL_COMPLETED" } as GateDecision) }).evaluate({ content: fullText });
       this.appendStep(loop, "GATE_CHECKED", decision.action === "blocked" ? "FAILED" : "COMPLETED", { action: decision.action, reason: decision.reason });
       this.emit(loop, "agent.gate.checked", decision);
       if (decision.action === "complete") { this.complete(initial.id, decision.reason); return; }
@@ -453,10 +470,11 @@ export class AgentLoopEngine implements AgentLoopRunner {
     this.store.appendEvent({ type: type as import("./index.js").DomainEvent["type"], aggregateId: loop.id, payload });
   }
 
-  private complete(loopId: string, reason: string): void { const loop = { ...this.get(loopId), state: "COMPLETED" as const, completedAt: this.store.now() }; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_COMPLETED", "COMPLETED", { reason }); this.emit(loop, "agent.loop.completed", { reason }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); }
-  private block(loopId: string, reason: string): void { const loop = { ...this.get(loopId), state: "BLOCKED" as const, completedAt: this.store.now(), checkpointJson: JSON.stringify({ reason }) }; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_FAILED", "FAILED", { reason }); this.emit(loop, "agent.loop.failed", { reason }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); }
-  private fail(loopId: string, error: string): void { const loop = { ...this.get(loopId), state: "FAILED" as const, completedAt: this.store.now(), checkpointJson: JSON.stringify({ error }) }; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_FAILED", "FAILED", { error }); this.emit(loop, "agent.loop.failed", { error }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); }
-  private needsReconciliation(loopId: string, reason: string): void { const loop = { ...this.get(loopId), state: "NEEDS_RECONCILIATION" as const, completedAt: this.store.now(), checkpointJson: JSON.stringify({ reason }) }; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_FAILED", "NEEDS_RECONCILIATION", { reason }); this.emit(loop, "agent.loop.recovery_required", { reason }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); }
+  private clearDeadline(loopId: string): void { const timer = this.deadlineTimers.get(loopId); if (timer) clearTimeout(timer); this.deadlineTimers.delete(loopId); }
+  private complete(loopId: string, reason: string): void { this.clearDeadline(loopId); const loop = { ...this.get(loopId), state: "COMPLETED" as const, completedAt: this.store.now() }; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_COMPLETED", "COMPLETED", { reason }); this.emit(loop, "agent.loop.completed", { reason }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); }
+  private block(loopId: string, reason: string): void { this.clearDeadline(loopId); const loop = { ...this.get(loopId), state: "BLOCKED" as const, completedAt: this.store.now(), checkpointJson: JSON.stringify({ reason }) }; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_FAILED", "FAILED", { reason }); this.emit(loop, "agent.loop.failed", { reason }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); }
+  private fail(loopId: string, error: string): void { this.clearDeadline(loopId); const loop = { ...this.get(loopId), state: "FAILED" as const, completedAt: this.store.now(), checkpointJson: JSON.stringify({ error }) }; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_FAILED", "FAILED", { error }); this.emit(loop, "agent.loop.failed", { error }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); }
+  private needsReconciliation(loopId: string, reason: string): void { this.clearDeadline(loopId); const loop = { ...this.get(loopId), state: "NEEDS_RECONCILIATION" as const, completedAt: this.store.now(), checkpointJson: JSON.stringify({ reason }) }; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_FAILED", "NEEDS_RECONCILIATION", { reason }); this.emit(loop, "agent.loop.recovery_required", { reason }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); }
 }
 
 function isTerminal(state: AgentLoopState): boolean {

@@ -21,6 +21,7 @@ export type ProjectSettings = {
   concurrency: {
     maxParallelRuns: number;
     defaultTimeoutMs: number;
+    executionTimeoutMs: number;
     maxAutoContinuationTurns: number;
     maxRepairAttempts: number;
   };
@@ -134,6 +135,7 @@ export const DEFAULT_PROJECT_SETTINGS: ProjectSettings = {
   concurrency: {
     maxParallelRuns: 2,
     defaultTimeoutMs: 120_000,
+    executionTimeoutMs: 1_800_000,
     maxAutoContinuationTurns: 4,
     maxRepairAttempts: 2,
   },

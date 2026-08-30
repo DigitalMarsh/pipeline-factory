@@ -67,6 +67,7 @@ describe("Factory configuration", () => {
 
     expect(config.model.roles.explorer.model).toBe("gpt-5.6-luna");
     expect(config.model.roles.executor.model).toBe("gpt-5.6-luna");
+    expect(config.runtime.executionTimeoutMs).toBe(1_800_000);
     expect(config.runtime.maxAutoContinuationTurns).toBe(4);
   });
 

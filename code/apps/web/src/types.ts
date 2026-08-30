@@ -9,6 +9,7 @@ export type ProjectSettings = {
   concurrency: {
     maxParallelRuns: number;
     defaultTimeoutMs: number;
+    executionTimeoutMs: number;
     maxAutoContinuationTurns: number;
     maxRepairAttempts: number;
   };

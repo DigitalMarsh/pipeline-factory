@@ -31,6 +31,7 @@ import {
   StubModelGateway,
   RecoveryCoordinator,
   ExecutorAgent,
+  inspectWorkspaceScope,
   ChangeProposalService,
   VerificationService,
   mapCodexRateLimits,
@@ -196,6 +197,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
         concurrency: {
           maxParallelRuns: options.config.runtime.projectConcurrency,
           defaultTimeoutMs: options.config.runtime.defaultTimeoutMs,
+          executionTimeoutMs: options.config.runtime.executionTimeoutMs,
           maxAutoContinuationTurns: options.config.runtime.maxAutoContinuationTurns,
           maxRepairAttempts: 2,
         },
@@ -851,7 +853,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       return { run: await scheduler.start(plan.id, project?.settings.hooks ?? {}) };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Run cannot be started";
-      return reply.code(409).send({ code: /concurrency limit/i.test(message) ? "PROJECT_CONCURRENCY_LIMIT" : "RUN_START_FAILED", error: message });
+      return reply.code(409).send({ code: /concurrency limit/i.test(message) ? "PROJECT_CONCURRENCY_LIMIT" : /RUN_PREREQUISITES_UNSATISFIED/.test(message) ? "RUN_PREREQUISITES_UNSATISFIED" : "RUN_START_FAILED", error: message });
     }
   });
 
@@ -1155,6 +1157,7 @@ function createDefaultScheduler(store: PipelineStore, config: FactoryConfig, mod
       maxDurationMs: config.model.loop.maxDurationMs,
       maxRepeatedToolCalls: config.model.loop.maxRepeatedToolCalls,
       maxNoProgressSteps: config.model.loop.maxNoProgressSteps,
+      workspaceScopeInspector: inspectWorkspaceScope,
       toolRuntimeFactory: (run, revision) => {
         const snapshot = revision.projectConfigSnapshot;
         const snapshotDefinitions = snapshot ? projectDefinitions(snapshot) : definitions;

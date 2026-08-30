@@ -19,9 +19,11 @@ export class PlanCompletenessGate implements TerminationGate {
 /** Executor 的完成门禁：任务、工具调用、范围、变更提案和执行报告必须同时满足。 */
 export class TaskProgressGate implements TerminationGate {
   evaluate(context: GateContext): GateDecision {
+    if (context.reportError) return { action: "continue", reason: context.reportError };
     if (!context.allTasksComplete) return { action: "continue", reason: "TASKS_INCOMPLETE" };
     if (context.hasOpenToolCalls) return { action: "continue", reason: "OPEN_TOOL_CALLS" };
     if (context.hasPendingChangeProposal) return { action: "continue", reason: "PENDING_CHANGE_PROPOSAL" };
+    if (context.scopeError) return { action: "blocked", reason: context.scopeError };
     if (!context.pathsWithinScope) return { action: "blocked", reason: "PATH_OUTSIDE_SCOPE" };
     if (!context.reportReady) return { action: "continue", reason: "EXECUTION_REPORT_MISSING" };
     return { action: "complete", reason: "READY_FOR_VERIFY" };

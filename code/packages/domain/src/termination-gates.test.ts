@@ -58,4 +58,9 @@ describe("TaskProgressGate", () => {
     });
     expect(decision).toEqual({ action: "complete", reason: "READY_FOR_VERIFY" });
   });
+
+  it("keeps an invalid report in the continuation path and blocks scope inspection failures", () => {
+    expect(new TaskProgressGate().evaluate({ reportError: "EXECUTION_REPORT_INVALID_OR_MISSING" })).toEqual({ action: "continue", reason: "EXECUTION_REPORT_INVALID_OR_MISSING" });
+    expect(new TaskProgressGate().evaluate({ allTasksComplete: true, hasOpenToolCalls: false, hasPendingChangeProposal: false, reportReady: true, pathsWithinScope: false, scopeError: "WORKSPACE_SCOPE_CHECK_FAILED" })).toEqual({ action: "blocked", reason: "WORKSPACE_SCOPE_CHECK_FAILED" });
+  });
 });

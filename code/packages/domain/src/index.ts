@@ -21,8 +21,8 @@ export type { ExplorerTitleGenerator, ExplorerTitleSource, ExplorerTitleStatus }
 export type { AgentLoop, AgentLoopInput, AgentLoopMode, AgentLoopResult, AgentLoopState, AgentLoopStep, AgentLoopStepInput, AgentLoopStepStatus, AgentLoopRunner, AgentStepType, GateContext, GateDecision, TerminationGate } from "./agent-loop.js";
 export { AgentLoopEngine } from "./agent-loop.js";
 export { PlanCompletenessGate, TaskProgressGate } from "./termination-gates.js";
-export { ExecutorAgent, parseExecutorReport } from "./executor-agent.js";
-export type { ExecutorAgentOptions, ExecutorReport } from "./executor-agent.js";
+export { ExecutorAgent, inspectWorkspaceScope, parseExecutorReport } from "./executor-agent.js";
+export type { ExecutorAgentOptions, ExecutorReport, WorkspaceScopeInspection, WorkspaceScopeInspector } from "./executor-agent.js";
 export { RecoveryCoordinator } from "./recovery-coordinator.js";
 export { mapCodexRateLimits } from "./codex-rate-limits.js";
 export type { CodexRateLimitBucket, CodexRateLimitWindow, CodexRateLimitsResponse, MappedCodexRateLimits, MappedRateLimit } from "./codex-rate-limits.js";
@@ -1485,6 +1485,30 @@ function defaultPlanContract(title: string): PlanContract {
   };
 }
 
+/** Confirm/Enqueue 前校验执行合同的结构，避免无效任务图进入不可恢复的 Run。 */
+export function validatePlanContract(contract: PlanContract): void {
+  const taskIds = contract.tasks.map((task) => task.id);
+  if (taskIds.some((id) => !id.trim())) throw new Error("Plan task ids must be non-empty");
+  if (new Set(taskIds).size !== taskIds.length) throw new Error("Plan task ids must be unique");
+  const known = new Set(taskIds);
+  for (const task of contract.tasks) {
+    if (!["PENDING", "READY", "DONE"].includes(task.status)) throw new Error(`Invalid status for task ${task.id}`);
+    for (const dependency of task.dependencies) if (!known.has(dependency)) throw new Error(`Task ${task.id} depends on unknown task ${dependency}`);
+  }
+  const visiting = new Set<string>();
+  const visited = new Set<string>();
+  const visit = (taskId: string): void => {
+    if (visiting.has(taskId)) throw new Error(`Plan task dependency cycle includes ${taskId}`);
+    if (visited.has(taskId)) return;
+    visiting.add(taskId);
+    const task = contract.tasks.find((candidate) => candidate.id === taskId)!;
+    for (const dependency of task.dependencies) visit(dependency);
+    visiting.delete(taskId);
+    visited.add(taskId);
+  };
+  for (const taskId of taskIds) visit(taskId);
+}
+
 function freezeDeep<T>(value: T): T {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {
     Object.freeze(value);
@@ -1574,6 +1598,7 @@ export class PlanService {
     if (plan.status !== "DRAFT" && plan.status !== "DESIGNED" && plan.status !== "PLANNED") {
       throw new Error(`Plan ${planId} cannot be confirmed from ${plan.status}`);
     }
+    validatePlanContract(plan.contract);
     const confirmedAt = this.store.now();
     const project = this.store.getProject(plan.projectId);
     const projectConfigSnapshot = project ? this.projects.snapshot(project.id) : undefined;
@@ -2837,7 +2862,7 @@ export class Scheduler {
 
   /** 为已排队 Plan 创建一次 Run；重复调用会复用同一未取消运行，保证启动幂等。 */
   async start(planId: string, hooks: { start?: HookDefinition | undefined; cleanup?: HookDefinition | undefined } = {}): Promise<Run> {
-    const existing = this.options.store.listRuns().find((run) => run.planId === planId && run.status !== "CANCELLED" && run.status !== "NEEDS_PLAN_CHANGE");
+    const existing = this.options.store.listRuns().find((run) => run.planId === planId && run.status !== "CANCELLED" && run.status !== "NEEDS_PLAN_CHANGE" && run.status !== "BLOCKED");
     if (existing) {
       this.runs.set(existing.id, existing);
       const savedThread = this.options.store.getExecutionThread(existing.executionThreadId);
@@ -2848,6 +2873,7 @@ export class Scheduler {
     if (plan.status !== "QUEUED") throw new Error(`Plan ${planId} must be queued before a run starts`);
     const revision = this.options.store.getRevision(plan.id, plan.revision);
     if (!revision) throw new Error(`Plan revision ${plan.id}@${plan.revision} is missing`);
+    this.assertVerificationCommands(revision);
     this.assertConcurrency(plan.projectId, revision);
     const createdAt = this.options.store.now();
     const runId = this.options.store.nextId("run");
@@ -2857,7 +2883,7 @@ export class Scheduler {
     this.threads.set(thread.id, thread);
     this.options.store.saveRun(run);
     this.options.store.saveExecutionThread(thread);
-    this.append(thread, "RUN_CREATED", { planId: plan.id, revision: revision.revision });
+    this.append(thread.id, "RUN_CREATED", { planId: plan.id, revision: revision.revision });
     const workspaceAdapter = this.workspaceAdapterFor(revision);
     const hookRunner = this.hookRunnerFor(revision);
     const executionHooks = revision.projectConfigSnapshot?.settings.hooks ?? hooks;
@@ -2869,27 +2895,28 @@ export class Scheduler {
     if (startResult.status === "failed") {
       run.status = "BLOCKED";
       thread.state = "BLOCKED";
-      this.append(thread, "HOOK_FAILED", { hook: "start", stderr: startResult.result?.stderr ?? "" });
+      this.setThreadState(thread.id, "BLOCKED");
+      this.append(thread.id, "HOOK_FAILED", { hook: "start", stderr: startResult.result?.stderr ?? "" });
       this.options.store.updatePlan({ ...plan, runId, status: "BLOCKED", attentionReason: "start hook failed", lastEventAt: this.options.store.now() });
       this.options.store.saveRun(run);
       return run;
     }
     run.status = "IN_PROGRESS";
     run.startedAt = this.options.store.now();
-    this.append(thread, startResult.status === "skipped" ? "HOOK_SKIPPED" : "HOOK_COMPLETED", { hook: "start" });
-    if (!revision.projectConfigSnapshot) this.append(thread, "TASK_PROGRESS", { action: "legacy_plan_revision", reason: "Project configuration snapshot unavailable; using legacy/global runtime settings" });
+    this.append(thread.id, startResult.status === "skipped" ? "HOOK_SKIPPED" : "HOOK_COMPLETED", { hook: "start" });
+    if (!revision.projectConfigSnapshot) this.append(thread.id, "TASK_PROGRESS", { action: "legacy_plan_revision", reason: "Project configuration snapshot unavailable; using legacy/global runtime settings" });
     this.options.store.updatePlan({ ...plan, runId, status: "IN_PROGRESS", lastEventAt: run.startedAt });
     this.options.store.saveRun(run);
     if (this.options.executor) {
       try {
         const loop = await this.options.executor.start(run, revision);
-        this.append(thread, "TASK_PROGRESS", { action: "executor_loop_created", loopId: loop.id });
+        this.append(thread.id, "TASK_PROGRESS", { action: "executor_loop_created", loopId: loop.id });
         this.options.store.appendEvent({ type: "run.executor.event", aggregateId: run.id, payload: { executionThreadId: thread.id, action: "executor_loop_created", loopId: loop.id } });
       } catch (error) {
         run.status = "BLOCKED";
-        thread.state = "BLOCKED";
+        this.setThreadState(thread.id, "BLOCKED");
         const reason = error instanceof Error ? error.message : String(error);
-        this.append(thread, "RECOVERY", { action: "executor_loop_start_failed", reason });
+        this.append(thread.id, "RECOVERY", { action: "executor_loop_start_failed", reason });
         this.options.store.updatePlan({ ...plan, runId, status: "BLOCKED", attentionReason: reason, lastEventAt: this.options.store.now() });
         this.options.store.saveRun(run);
       }
@@ -2918,15 +2945,14 @@ export class Scheduler {
       await workspaceAdapter.remove({ path: run.workspacePath, branch: run.branch, baseCommit: run.baseCommit });
     }
     const cleanupResult = await hookRunner.runCleanup(executionHooks.cleanup, { projectId: run.projectId, runId: run.id, workspacePath: run.workspacePath ?? "", branch: run.branch, baseCommit: run.baseCommit, exitReason });
-    this.append(thread, cleanupResult.status === "failed" ? "HOOK_FAILED" : cleanupResult.status === "skipped" ? "HOOK_SKIPPED" : "HOOK_COMPLETED", { hook: "cleanup", exitReason });
+    this.append(thread.id, cleanupResult.status === "failed" ? "HOOK_FAILED" : cleanupResult.status === "skipped" ? "HOOK_SKIPPED" : "HOOK_COMPLETED", { hook: "cleanup", exitReason });
     if (cleanupResult.needsAttention) {
       const plan = this.options.store.getPlan(run.planId);
       if (plan) this.options.store.updatePlan({ ...plan, attentionReason: "cleanup hook failed", lastEventAt: this.options.store.now() });
     }
     if (exitReason === "cancelled") run.status = "CANCELLED";
-    thread.state = exitReason === "cancelled" ? "CANCELLED" : "COMPLETED";
+    this.setThreadState(thread.id, exitReason === "cancelled" ? "CANCELLED" : "COMPLETED");
     this.options.store.saveRun(run);
-    this.options.store.saveExecutionThread(thread);
     if (exitReason === "cancelled") {
       const plan = this.options.store.getPlan(run.planId);
       if (plan) this.options.store.updatePlan({ ...plan, status: "BLOCKED", attentionReason: `Run cancelled: ${cancellationReason}`, lastEventAt: this.options.store.now() });
@@ -2958,8 +2984,8 @@ export class Scheduler {
     if (run.status !== "IN_PROGRESS") throw new Error(`Run ${runId} cannot be paused from ${run.status}`);
     const thread = this.thread(run.executionThreadId);
     if (thread.state !== "ACTIVE") throw new Error(`ExecutionThread ${thread.id} cannot be paused from ${thread.state}`);
-    thread.state = "PAUSED";
-    this.append(thread, "TASK_PROGRESS", { action: "paused", runId });
+    this.setThreadState(thread.id, "PAUSED");
+    this.append(thread.id, "TASK_PROGRESS", { action: "paused", runId });
     this.options.store.appendEvent({ type: "run.paused", aggregateId: run.id, payload: { executionThreadId: thread.id } });
     return this.options.store.saveRun(run);
   }
@@ -2969,8 +2995,8 @@ export class Scheduler {
     const run = this.run(runId);
     const thread = this.thread(run.executionThreadId);
     if (run.status !== "IN_PROGRESS" || thread.state !== "PAUSED") throw new Error(`Run ${runId} cannot be resumed from ${run.status}/${thread.state}`);
-    thread.state = "ACTIVE";
-    this.append(thread, "TASK_PROGRESS", { action: "resumed", runId });
+    this.setThreadState(thread.id, "ACTIVE");
+    this.append(thread.id, "TASK_PROGRESS", { action: "resumed", runId });
     this.options.store.appendEvent({ type: "run.resumed", aggregateId: run.id, payload: { executionThreadId: thread.id } });
     return this.options.store.saveRun(run);
   }
@@ -2980,7 +3006,7 @@ export class Scheduler {
     const run = this.run(runId);
     const thread = this.thread(run.executionThreadId);
     if (thread.state === "CANCELLED" || thread.state === "COMPLETED") throw new Error(`Run ${runId} is no longer accepting guidance`);
-    this.append(thread, "USER_GUIDANCE", { content, runId });
+    this.append(thread.id, "USER_GUIDANCE", { content, runId });
     this.options.store.appendEvent({ type: "run.guidance.added", aggregateId: run.id, payload: { executionThreadId: thread.id } });
     return thread;
   }
@@ -3001,9 +3027,24 @@ export class Scheduler {
     return run;
   }
 
-  private append(thread: ExecutionThread, type: JournalEntryType, payload: Record<string, unknown>): void {
-    thread.journal.push({ sequence: thread.journal.length + 1, type, occurredAt: this.options.store.now(), payload });
-    this.options.store.saveExecutionThread(thread);
+  private append(threadId: string, type: JournalEntryType, payload: Record<string, unknown>): void {
+    const thread = this.options.store.getExecutionThread(threadId) ?? this.threads.get(threadId);
+    if (!thread) return;
+    const entry = { sequence: thread.journal.length + 1, type, occurredAt: this.options.store.now(), payload };
+    this.options.store.saveExecutionThread({ ...thread, journal: [...thread.journal, entry] });
+  }
+
+  private setThreadState(threadId: string, state: ExecutionThreadState): void {
+    const thread = this.options.store.getExecutionThread(threadId) ?? this.threads.get(threadId);
+    if (thread) this.options.store.saveExecutionThread({ ...thread, state });
+  }
+
+  private assertVerificationCommands(revision: PlanRevisionV2): void {
+    const snapshot = revision.projectConfigSnapshot;
+    if (!snapshot) return;
+    const registered = new Set(snapshot.settings.commands.map((command) => command.commandId));
+    const missing = revision.contract.verificationCommandIds.filter((commandId) => !registered.has(commandId));
+    if (missing.length > 0) throw new Error(`RUN_PREREQUISITES_UNSATISFIED: missing registered commands: ${missing.join(", ")}`);
   }
 }
 

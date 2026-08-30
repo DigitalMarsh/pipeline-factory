@@ -102,6 +102,7 @@ const configSchema = z.object({
     globalConcurrency: z.number().int().positive().default(4),
     projectConcurrency: z.number().int().positive().default(2),
     defaultTimeoutMs: z.number().int().positive().default(120_000),
+    executionTimeoutMs: z.number().int().positive().default(1_800_000),
     maxAutoContinuationTurns: z.number().int().min(0).max(20).default(4),
   }).default({}),
 });
