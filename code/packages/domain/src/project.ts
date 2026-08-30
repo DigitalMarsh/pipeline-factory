@@ -1,3 +1,8 @@
+/**
+ * 模块职责：定义 Project 配置、版本、快照、路径校验和归档生命周期。
+ *
+ * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
+ */
 import { createHash } from "node:crypto";
 import { basename, isAbsolute, resolve } from "node:path";
 import type {
@@ -8,8 +13,10 @@ import type {
   RunStatus,
 } from "./index.js";
 
+/** Project 生命周期状态；ARCHIVED 保留历史但关闭新的写入和执行入口。 */
 export type ProjectStatus = "ACTIVE" | "ARCHIVED";
 
+/** Project 的项目级运行策略；确认 Plan 时会深拷贝进不可变执行快照。 */
 export type ProjectSettings = {
   concurrency: {
     maxParallelRuns: number;
@@ -33,6 +40,7 @@ export type ProjectSettings = {
   };
 };
 
+/** Project Settings 的局部更新输入；未提供的字段沿用当前配置。 */
 export type ProjectSettingsInput = {
   concurrency?: Partial<ProjectSettings["concurrency"]>;
   commands?: RegisteredCommandDefinition[];
@@ -44,6 +52,7 @@ export type ProjectSettingsInput = {
   toolPolicy?: Partial<ProjectSettings["toolPolicy"]>;
 };
 
+/** Project 的当前配置实体；configHash 与 configVersion 标识可执行策略版本。 */
 export type Project = {
   id: string;
   name: string;
@@ -60,6 +69,7 @@ export type Project = {
   archivedAt: string | null;
 };
 
+/** 随 PlanRevision 冻结的执行输入，后续 Project 修改不得回写此对象。 */
 export type ProjectExecutionSnapshot = Readonly<{
   projectId: string;
   name: string;
@@ -71,6 +81,7 @@ export type ProjectExecutionSnapshot = Readonly<{
   settings: ProjectSettings;
 }>;
 
+/** Project 配置历史记录，用于审计和解释旧 Run 的行为。 */
 export type ProjectConfigRevision = Readonly<{
   projectId: string;
   version: number;
@@ -79,6 +90,7 @@ export type ProjectConfigRevision = Readonly<{
   createdAt: string;
 }>;
 
+/** 创建 Project 所需的仓库、Worktree 和初始运行策略。 */
 export type CreateProjectInput = {
   id?: string;
   name: string;
@@ -88,6 +100,7 @@ export type CreateProjectInput = {
   settings?: ProjectSettingsInput;
 };
 
+/** 更新 Project 的局部输入；expectedConfigVersion 用于乐观并发控制。 */
 export type UpdateProjectInput = {
   name?: string;
   repoRoot?: string;
@@ -97,6 +110,7 @@ export type UpdateProjectInput = {
   expectedConfigVersion?: number;
 };
 
+/** Project Catalog/详情页使用的聚合统计，不复制领域写模型。 */
 export type ProjectSummary = {
   project: Project;
   currentExplorerThread: string | null;
@@ -108,12 +122,14 @@ export type ProjectSummary = {
   lastActivityAt: string | null;
 };
 
+/** 占用并发槽位的 Run 状态；QUEUED 和终态不占用执行中的槽位。 */
 export const EXECUTION_SLOT_RUN_STATUSES: ReadonlySet<RunStatus> = new Set<RunStatus>([
   "STARTING",
   "IN_PROGRESS",
   "VERIFYING",
 ]);
 
+/** 新 Project 的安全默认值；具体项目可在创建向导中显式覆盖。 */
 export const DEFAULT_PROJECT_SETTINGS: ProjectSettings = {
   concurrency: {
     maxParallelRuns: 2,
@@ -146,6 +162,7 @@ function freezeDeep<T>(value: T): T {
   return value;
 }
 
+/** 合并并校验局部 Settings，返回可安全保存和快照的完整配置。 */
 export function normalizeProjectSettings(input?: ProjectSettingsInput, base: ProjectSettings = DEFAULT_PROJECT_SETTINGS): ProjectSettings {
   const value = input ?? {};
   return {
@@ -169,6 +186,7 @@ function projectHash(input: Pick<Project, "name" | "repoRoot" | "defaultBranch" 
   return `sha256:${createHash("sha256").update(JSON.stringify({ name: input.name, repoRoot: input.repoRoot, defaultBranch: input.defaultBranch, worktreeRoot: input.worktreeRoot, settings: input.settings })).digest("hex")}`;
 }
 
+/** 从当前 Project 生成深拷贝快照；快照不含运行时可变字段。 */
 export function projectSnapshot(project: Project): ProjectExecutionSnapshot {
   return freezeDeep({
     projectId: project.id,
@@ -197,9 +215,14 @@ function hasActiveRun(store: PipelineStore, projectId: string): boolean {
   return store.listRuns().some((run) => run.projectId === projectId && EXECUTION_SLOT_RUN_STATUSES.has(run.status));
 }
 
+/**
+ * 管理 Project 的生命周期、配置版本和执行快照。
+ * 所有高风险路径或运行策略变更都会递增 configVersion，并为历史 Plan 保留旧快照。
+ */
 export class ProjectService {
   constructor(private readonly store: PipelineStore) {}
 
+  /** 创建唯一绑定一个 Git 根目录的 Project，并保存初始配置版本。 */
   create(input: CreateProjectInput): Project {
     const name = input.name.trim();
     if (!name) throw new Error("Project name is required");
@@ -230,17 +253,16 @@ export class ProjectService {
     return saved;
   }
 
+  /** 幂等补全旧数据迁移；只修复未被用户修改且没有活动 Run 的旧种子。 */
   bootstrapLegacy(input: CreateProjectInput): Project {
     const existing = this.store.getProject(input.id ?? "");
     if (existing) {
-      // The first migration may have seeded project-demo from a stale relative
-      // root. Once a user changes the project name/configuration, the version
-      // advances and this repair path is no longer eligible.
+      // 首次迁移可能从过期的相对路径创建 project-demo；用户改过名称或配置后，
+      // configVersion 已推进，此修复分支不再自动改写用户数据。
       const isUnmodifiedLegacySeed = existing.configVersion === 1 && existing.name === basename(existing.repoRoot);
       if (isUnmodifiedLegacySeed && existing.repoRoot !== input.repoRoot) {
-        // Never rewrite a high-risk project path while an old Run is still
-        // active. The next restart will retry this idempotent repair after the
-        // Run is resolved, while the existing history remains readable.
+        // 旧 Run 活动期间不改写高风险路径；Run 结束后下次启动仍可幂等重试，
+        // 同时确保现有历史数据始终可读。
         if (hasActiveRun(this.store, existing.id)) return existing;
         const repair: UpdateProjectInput = {
           name: input.name,
@@ -267,16 +289,19 @@ export class ProjectService {
     return this.store.updateProject({ ...project, currentExplorerThreadId: current.id, updatedAt: this.store.now() });
   }
 
+  /** 读取 Project；未知 ID 明确失败，禁止回退到默认 Project。 */
   get(projectId: string): Project {
     const project = this.store.getProject(projectId);
     if (!project) throw new Error(`Project ${projectId} not found`);
     return project;
   }
 
+  /** 按状态列出 Project，结果按名称稳定排序以供 Catalog 使用。 */
   list(status?: ProjectStatus): Project[] {
     return this.store.listProjects().filter((project) => !status || project.status === status).sort((a, b) => a.name.localeCompare(b.name));
   }
 
+  /** 更新 Project 配置；expectedConfigVersion 用于阻止并发编辑覆盖最新版本。 */
   update(projectId: string, input: UpdateProjectInput): Project {
     const project = this.get(projectId);
     if (project.status === "ARCHIVED") throw new Error(`Project ${projectId} is archived`);
@@ -311,6 +336,7 @@ export class ProjectService {
     return saved;
   }
 
+  /** 归档 Project；历史数据保留，但活动 Run 存在时拒绝归档。 */
   archive(projectId: string): Project {
     const project = this.get(projectId);
     if (project.status === "ARCHIVED") return project;
@@ -320,6 +346,7 @@ export class ProjectService {
     return archived;
   }
 
+  /** 恢复已归档 Project 的新建和执行能力。 */
   activate(projectId: string): Project {
     const project = this.get(projectId);
     if (project.status === "ACTIVE") return project;
@@ -328,6 +355,7 @@ export class ProjectService {
     return active;
   }
 
+  /** 设置当前 ExplorerThread；线程必须属于同一 Project 且未归档。 */
   selectExplorer(projectId: string, explorerId: string): Project {
     const project = this.get(projectId);
     const thread = this.store.getThread(explorerId);
@@ -338,15 +366,18 @@ export class ProjectService {
     return updated;
   }
 
+  /** 生成深度冻结的执行快照，供 Confirm 后的 PlanRevision 长期使用。 */
   snapshot(projectId: string): ProjectExecutionSnapshot {
     return projectSnapshot(this.get(projectId));
   }
 
+  /** 返回 Project 配置版本历史，便于解释旧 Plan 使用的运行策略。 */
   configHistory(projectId: string): ProjectConfigRevision[] {
     this.get(projectId);
     return this.store.listProjectConfigRevisions(projectId);
   }
 
+  /** 聚合 Project 维度的线程、Plan、Run 和 Needs Attention 统计。 */
   summary(projectId: string): ProjectSummary {
     const project = this.get(projectId);
     const threads = this.store.listThreads().filter((thread) => thread.projectId === projectId);

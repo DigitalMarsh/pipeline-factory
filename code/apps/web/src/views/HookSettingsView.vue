@@ -1,3 +1,7 @@
+<!--
+  模块职责：编辑 Project Hook 配置并反馈持久化状态。
+  维护提示：交互状态和数据流变化时，应同步更新组件边界说明。
+-->
 <script setup lang="ts">
 import { onMounted, reactive, ref } from "vue";
 import { ArrowLeft, CircleCheck, InfoFilled, Setting } from "@element-plus/icons-vue";
@@ -10,7 +14,9 @@ const saving = ref(false);
 const saved = ref(false);
 const error = ref<string | null>(null);
 const form = reactive({ startEnabled: false, startCommandId: "", startTimeoutMs: 120000, cleanupEnabled: false, cleanupCommandId: "", cleanupTimeoutMs: 120000 });
+/** 读取 Project 持久化 Hook；API 不可用时只显示可编辑草稿，不冒充已保存配置。 */
 async function load() { error.value = null; try { const response = await api.hooks(String(route.params.projectId)); if (response.lifecycle.start) { form.startEnabled = response.lifecycle.start.enabled !== false; form.startCommandId = response.lifecycle.start.commandId; form.startTimeoutMs = response.lifecycle.start.timeoutMs ?? 120000; } if (response.lifecycle.cleanup) { form.cleanupEnabled = response.lifecycle.cleanup.enabled !== false; form.cleanupCommandId = response.lifecycle.cleanup.commandId; form.cleanupTimeoutMs = response.lifecycle.cleanup.timeoutMs ?? 120000; } } catch { error.value = "API 未连接，当前显示可编辑的本地配置"; } }
+/** 保存 Hook 配置并让 ProjectService 负责版本冲突和活动 Run 保护。 */
 async function save() { saving.value = true; saved.value = false; error.value = null; const lifecycle: Record<string, unknown> = {}; if (form.startCommandId) lifecycle.start = { commandId: form.startCommandId, enabled: form.startEnabled, timeoutMs: form.startTimeoutMs }; if (form.cleanupCommandId) lifecycle.cleanup = { commandId: form.cleanupCommandId, enabled: form.cleanupEnabled, timeoutMs: form.cleanupTimeoutMs }; try { await api.saveHooks(String(route.params.projectId), lifecycle); saved.value = true; } catch { error.value = "保存失败，请检查 API 状态和命令配置"; } finally { saving.value = false; } }
 onMounted(load);
 </script>

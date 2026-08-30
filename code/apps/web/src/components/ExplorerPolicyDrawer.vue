@@ -1,3 +1,7 @@
+<!--
+  模块职责：展示 Explorer 的只读策略和能力边界。
+  维护提示：交互状态和数据流变化时，应同步更新组件边界说明。
+-->
 <script setup lang="ts">
 import { Close, DocumentChecked, Lock, Right } from "@element-plus/icons-vue";
 import { explorerPolicySections } from "../utils/policyPanel";

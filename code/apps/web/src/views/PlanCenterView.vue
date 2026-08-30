@@ -1,3 +1,7 @@
+<!--
+  模块职责：展示 Project 下 Plan/Run 状态、配置快照和执行入口。
+  维护提示：交互状态和数据流变化时，应同步更新组件边界说明。
+-->
 <script setup lang="ts">
 import { computed, onMounted, ref } from "vue";
 import { ArrowRight, CircleCheck, Clock, Document, Search, Warning } from "@element-plus/icons-vue";
@@ -41,6 +45,7 @@ const counts = computed(() => ({
 }));
 const snapshotNotice = computed(() => plans.value.some((plan) => plan.projectConfigStatus === "CHANGED" || plan.projectConfigStatus === "LEGACY"));
 
+/** 加载当前 Project 的 Plan 投影和统计，丢弃/启动后统一通过此入口刷新。 */
 async function load() {
   loading.value = true;
   error.value = null;
@@ -62,6 +67,7 @@ function label(s: string) {
   return ({ QUEUED: "Queued", IN_PROGRESS: "Running", VERIFYING: "Verifying", MERGE_READY: "Review", MERGED: "Merged", BLOCKED: "Blocked" } as Record<string, string>)[s] ?? s;
 }
 
+/** 只为已排队 Plan 请求 Start Run；并发限制和快照选择由服务端决定。 */
 async function startRun(plan: Plan) {
   const planId = plan.planId ?? plan.id;
   if (!planId) return;
@@ -77,6 +83,7 @@ function canTerminate(plan: Plan): boolean {
   return Boolean(plan.runId) && canTerminateRun(plan.status);
 }
 
+/** 对仍在执行的 Run 做二次确认后终止，不删除 Plan 或 ExecutionThread 历史。 */
 async function terminateRun(plan: Plan) {
   if (!plan.runId) return;
   try {

@@ -1,8 +1,15 @@
+/**
+ * 模块职责：协调 Agent Loop 和 Run 在中断、重启及不确定副作用后的恢复状态。
+ *
+ * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
+ */
 import type { AgentLoop, PipelineStore, PlanStatus, RunStatus } from "./index.js";
 
+/** 启动恢复协调器，把未完成 Loop、未知工具副作用和 Run/Plan 投影恢复到可诊断状态。 */
 export class RecoveryCoordinator {
   constructor(private readonly store: PipelineStore) {}
 
+  /** 恢复所有活动 Loop；未知副作用进入 NEEDS_RECONCILIATION，禁止自动重放。 */
   recover(): AgentLoop[] {
     const affected = new Map<string, AgentLoop>();
     const uncertainLoopIds = new Set(

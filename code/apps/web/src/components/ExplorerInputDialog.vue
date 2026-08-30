@@ -1,3 +1,7 @@
+<!--
+  模块职责：以固定视口承载结构化问题的逐题选择、回退和提交。
+  维护提示：交互状态和数据流变化时，应同步更新组件边界说明。
+-->
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
@@ -27,6 +31,7 @@ const isLastQuestion = computed(() => {
 });
 const completedQuestionCount = computed(() => props.request?.questions.filter((question) => inputQuestionComplete(question, answers.value[question.id] ?? [], otherAnswers.value[question.id] ?? "")).length ?? 0);
 
+// 每个请求只初始化一次本地答案；切换问题序号不会丢失其他题目的已选内容。
 watch(() => props.request?.id, async () => {
   const next: Record<string, string[]> = {};
   for (const question of props.request?.questions ?? []) next[question.id] = [];
@@ -38,6 +43,7 @@ watch(() => props.request?.id, async () => {
   focusCurrentQuestion();
 });
 
+/** 将键盘焦点留在当前题目，避免固定视口切题后用户需要重新寻找输入控件。 */
 function focusCurrentQuestion() {
   const first = document.querySelector<HTMLElement>(".explorer-input-dialog .input-question-current input, .explorer-input-dialog .input-question-current textarea, .explorer-input-dialog .input-question-current button");
   first?.focus();
@@ -53,6 +59,7 @@ function emitProgress() {
   });
 }
 
+/** 支持直接点击序号跳题，但提交中禁止改变本次答案快照。 */
 function selectQuestion(index: number) {
   if (!props.request || submitting.value || index < 0 || index >= props.request.questions.length) return;
   currentIndex.value = index;
@@ -66,6 +73,7 @@ function previousQuestion() {
   void nextTick(focusCurrentQuestion);
 }
 
+/** 下一题前校验当前题目；序号导航允许回看，提交则要求全部问题完成。 */
 function nextQuestion() {
   if (!currentQuestion.value) return;
   if (!currentQuestionAnswered.value) {
@@ -96,6 +104,7 @@ function setOther(questionId: string, value: string) {
   emitProgress();
 }
 
+/** 把 UI 的选项/Other 输入转换为 Provider 协议，并将敏感值留在本次请求内。 */
 function submit() {
   if (!allAnswers.value || submitting.value) return;
   submitting.value = true;

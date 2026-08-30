@@ -1,3 +1,7 @@
+<!--
+  模块职责：承载 Explorer 对话、消息流、计划定位、输入请求和 SSE 生命周期。
+  维护提示：交互状态和数据流变化时，应同步更新组件边界说明。
+-->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ArrowDown, ArrowUp, Check, CircleCheck, Connection, InfoFilled, MoreFilled, Promotion, Refresh, Right, VideoPause, VideoPlay, Warning } from "@element-plus/icons-vue";
@@ -27,6 +31,8 @@ import { inputAnswerLabels, resolveQuestionAnswers } from "../utils/explorerInpu
 
 const route = useRoute();
 const router = useRouter();
+// 页面状态按 Project 当前 Explorer、候选 Plan、已派发 Plan 和消息流分层保存，
+// 避免切换 Project/Thread 时把旧项目的响应式数据留在当前视图。
 const projectId = computed(() => String(route.params.projectId ?? ""));
 const project = ref<Project | null>(null);
 const thread = ref<ExplorerThread | null>(null);
@@ -141,6 +147,7 @@ function planForActivity(item: ExplorerActivityItem): Plan | null {
   return findPlanForActivity(item, allPlans.value);
 }
 
+/** 使用 Plan 身份而不是消息起始点作为锚点，保证右侧 Plans 点击后定位到聊天中的计划卡片。 */
 function planAnchorId(plan: Plan | null): string {
   return plan ? `plan-generated-${planIdentity(plan)}` : "";
 }
@@ -205,7 +212,7 @@ async function refreshPlanProjection(): Promise<void> {
     candidate.value = projection.candidate;
     dispatched.value = projection.dispatched;
   } catch {
-    // Keep the last known projection visible while the event stream catches up.
+    // 事件流追赶期间保留上一次投影，避免切换或重连时页面短暂清空。
   }
 }
 
@@ -382,7 +389,7 @@ async function refreshActivity() {
     activity.value = response.items;
     explorerEventSequence = Math.max(explorerEventSequence ?? 0, response.lastEventSequence ?? 0);
   } catch {
-    // The turn stream remains the source of truth while the activity projection catches up.
+    // activity 投影追赶期间，以 turn stream 为消息真相来源，避免重复或丢失内容。
   }
 }
 
@@ -398,6 +405,7 @@ async function loadRateLimits() {
   }
 }
 
+/** 以当前路由参数重新加载 Project、Thread、Plan 和事件游标，是切换项目后的唯一入口。 */
 async function load() {
   loading.value = true;
   error.value = null;
@@ -460,6 +468,7 @@ async function load() {
   }
 }
 
+/** 先乐观写入用户消息，再由 v4 API/SSE 补齐 Provider 输出和 Plan 活动。 */
 async function sendTurn() {
   const content = draft.value.trim();
   if (!content || busy.value || !thread.value || thread.value.state === "ARCHIVED" || project.value?.status === "ARCHIVED") return;
@@ -510,6 +519,7 @@ function updateInputProgress(progress: InputProgress) {
   inputProgress.value = progress;
 }
 
+/** 提交结构化选择；失败时保留对话框状态，允许用户修正或重试而不丢答案。 */
 async function submitInput(answers: Record<string, { answers: string[] }>) {
   if (!pendingInput.value) return;
   try {

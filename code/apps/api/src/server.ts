@@ -1,3 +1,8 @@
+/**
+ * 模块职责：组装 Fastify 应用、Project/Thread/Plan/Run 路由和 SSE 控制面。
+ *
+ * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
+ */
 import { execFile, execFileSync } from "node:child_process";
 import { realpath } from "node:fs/promises";
 import { basename, dirname, resolve as resolvePath } from "node:path";
@@ -101,6 +106,7 @@ const projectUpdateBody = z.object({
 const projectValidateBody = z.object({ repoRoot: z.string().trim().min(1).optional() });
 const projectSelectExplorerBody = z.object({ explorerId: z.string().trim().min(1) });
 
+/** API 组装依赖；生产环境使用 SQLite/真实 Gateway，测试可注入内存 Store 和 Stub。 */
 export type PipelineAppOptions = {
   store?: PipelineStore;
   config?: FactoryConfig;
@@ -116,6 +122,10 @@ export type PipelineAppOptions = {
   computerUse?: ComputerUseBridge;
 };
 
+/**
+ * 创建 Fastify API。所有 Project 相关路由通过同一组 Domain Service 访问数据，
+ * 这样 HTTP 错误码与 Domain 状态约束保持一致，且不会在路由中隐式创建默认 Project。
+ */
 export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
   const ownsStore = !options.store;
   const store = options.store ?? new SqlitePipelineStore(options.databasePath ?? options.config?.storage.databasePath ?? "pipeline-factory.sqlite");
@@ -201,6 +211,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
 
   const app = Fastify({ logger: false });
   void app.register(cors, { origin: true });
+  // 先做 Project 存在性和归档状态校验，再进入具体 handler；前端禁用按钮不能替代这一层保护。
   app.addHook("preHandler", async (request, reply) => {
     const path = request.url.split("?", 1)[0] ?? request.url;
     const match = path.match(/^\/api\/v[34]\/projects\/([^/]+)/);
@@ -232,8 +243,10 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (!options.mcpRegistry) await mcpRegistry?.close();
   });
 
+  // Health 端点不挂在 /api/v4/projects 下，便于启动脚本在没有 Project 上下文时确认服务就绪。
   app.get("/health", async () => ({ status: "ok", service: "pipeline-factory-api", version: "v4", modelBackend: options.config?.model.backend ?? "stub", model: model.configFor("explorer").model }));
 
+  // Project Catalog 和设置路由只负责 HTTP 输入/输出，具体版本、路径和归档规则由 ProjectService 决定。
   app.get("/api/v4/projects", async (request) => {
     const query = z.object({ status: z.enum(["ACTIVE", "ARCHIVED"]).optional() }).safeParse(request.query ?? {});
     const list = query.success ? projects.list(query.data.status) : projects.list();
@@ -411,6 +424,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     return { items: store.listToolCalls(params.data.loopId) };
   });
 
+  // Agent Loop SSE 面向诊断和控制页；非 SSE 请求仍返回 JSON，方便测试和故障排查。
   app.get("/api/v4/agent-loops/:loopId/events", async (request, reply) => {
     const params = agentLoopParams.safeParse(request.params);
     const query = loopEventsQuery.safeParse(request.query);
@@ -439,6 +453,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     request.raw.once("close", cleanup);
   });
 
+  // Run SSE 只回放 ExecutionThread journal，并同时带上当前 Run/Thread 状态供 UI 更新按钮显隐。
   app.get("/api/v4/runs/:runId/events", async (request, reply) => {
     const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
     const query = loopEventsQuery.safeParse(request.query);
@@ -713,6 +728,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "Turn cannot be cancelled" }); }
   });
 
+  // Explorer SSE 使用 Last-Event-ID 与数据库事件序列回放，断线重连不会丢失已持久化消息。
   app.get("/api/v4/projects/:projectId/explorer-thread/events", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
     const query = v4ThreadQuery.safeParse(request.query);
@@ -1040,10 +1056,12 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
   return app;
 }
 
+/** 在指定 Project 内解析 Thread；不允许用相同 Thread ID 跨 Project 访问数据。 */
 function findProjectThread(store: PipelineStore, projectId: string, threadId?: string) {
   return store.listThreads().find((thread) => thread.projectId === projectId && (threadId ? thread.id === threadId : thread.parentThreadId === null));
 }
 
+/** 将 PlanRevision 的快照版本与当前 Project 对比，供 Plan Center 显示 CURRENT/CHANGED/LEGACY。 */
 function decoratePlanRows(store: PipelineStore, rows: Array<{ planId: string; revision: number; projectId: string }>) {
   return rows.map((row) => {
     const revision = store.getRevision(row.planId, row.revision);
@@ -1058,6 +1076,7 @@ function decoratePlanRows(store: PipelineStore, rows: Array<{ planId: string; re
   });
 }
 
+/** canonicalize 并校验 Git 根目录；子目录、非 Git 目录和不可读路径均拒绝导入。 */
 async function inspectGitRepository(inputPath: string): Promise<{ repoRoot: string; defaultBranch: string }> {
   const candidate = await realpath(resolvePath(inputPath));
   let gitRoot: string;
@@ -1100,6 +1119,7 @@ function detectDefaultBranch(repoRoot: string): string {
   } catch { return "main"; }
 }
 
+/** 在没有真实 Loop Controller 的测试/降级场景中持久化控制事实，并复用相同状态转换检查。 */
 function persistLoopControl(store: PipelineStore, loop: AgentLoop, state: AgentLoop["state"], reason: string): AgentLoop {
   const terminal = new Set<AgentLoop["state"]>(["BLOCKED", "COMPLETED", "FAILED", "CANCELLED", "NEEDS_RECONCILIATION"]);
   if (terminal.has(loop.state)) throw new Error(`AgentLoop ${loop.id} is already ${loop.state}`);
@@ -1112,6 +1132,7 @@ function persistLoopControl(store: PipelineStore, loop: AgentLoop, state: AgentL
   return updated;
 }
 
+/** 用全局配置组装默认 Scheduler；每个 Run 启动后再由 Revision 快照解析项目级适配器。 */
 function createDefaultScheduler(store: PipelineStore, config: FactoryConfig, model: ModelGateway, mcpRegistry?: McpToolRegistry, pluginRegistry?: PluginRegistry, computerUse?: ComputerUseBridge): Scheduler {
   const definitions = readCommandDefinitions(config);
   const commands = new RegisteredCommandExecutor(definitions);
@@ -1176,6 +1197,7 @@ function createDefaultScheduler(store: PipelineStore, config: FactoryConfig, mod
   });
 }
 
+/** 构造验证命令执行器；存在快照时优先使用快照命令和超时，旧 Revision 才使用全局兼容配置。 */
 function createDefaultVerificationExecutor(store: PipelineStore, config: FactoryConfig): VerificationCommandExecutor {
   const commands = new RegisteredCommandExecutor(readCommandDefinitions(config));
   return (commandId, run) => {

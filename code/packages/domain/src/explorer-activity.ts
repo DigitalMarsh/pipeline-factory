@@ -1,6 +1,12 @@
+/**
+ * 模块职责：定义 Explorer 活动事件及其面向消息流的投影。
+ *
+ * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
+ */
 import type { AgentLoop, AgentLoopStep } from "./agent-loop.js";
 import type { ExplorerTurn } from "./index.js";
 
+/** Explorer 时间线中的消息、工具、Plan 和状态事件类型。 */
 export type ExplorerActivityKind =
   | "USER_MESSAGE"
   | "ASSISTANT_MESSAGE"
@@ -15,6 +21,7 @@ export type ExplorerActivityKind =
   | "GATE_CHECKED"
   | "TURN_STATUS";
 
+/** 前端可直接渲染的 Explorer 活动项，保留来源事实以支持定位。 */
 export type ExplorerActivityItem = {
   id: string;
   explorerId: string;
@@ -28,6 +35,7 @@ export type ExplorerActivityItem = {
   occurredAt: string;
 };
 
+/** 将数据库 Turn、Loop Step 和 Provider activity 投影为时间线的输入。 */
 export type ExplorerActivityInput = {
   turns: readonly ExplorerTurn[];
   loops: readonly AgentLoop[];
@@ -100,6 +108,7 @@ function formatPlanActivity(content: string): PlanActivityDisplay {
   };
 }
 
+/** 把 Turn、Loop Step 和 Provider activity 合并为稳定排序的 Explorer 消息流。 */
 export function projectExplorerActivity(input: ExplorerActivityInput): ExplorerActivityItem[] {
   const loopByOwner = new Map(input.loops.map((loop) => [loop.ownerId, loop]));
   const result: ActivityWithOrder[] = [];
@@ -108,6 +117,7 @@ export function projectExplorerActivity(input: ExplorerActivityInput): ExplorerA
     result.push({ ...item, id: `activity-${item.turnId}-${stableSequence}-${result.length}`, sequence: result.length + 1, order: order++ });
   };
 
+  // Turn 是对话主序列，Loop Step 只补充模型推理、工具和门禁活动；最终序号按发生时间重新归一化。
   for (const turn of [...input.turns].sort((a, b) => a.sequence - b.sequence)) {
     if (turn.role === "user") {
       append({ explorerId: turn.threadId, turnId: turn.id, kind: "USER_MESSAGE", status: "COMPLETED", title: "You", summary: turn.content, details: null, occurredAt: turn.createdAt }, turn.sequence);

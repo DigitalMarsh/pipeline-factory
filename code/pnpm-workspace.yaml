@@ -1,3 +1,4 @@
+# 工程职责：声明 monorepo 的 workspace 包边界，确保 Domain、API 和 Web 使用一致的依赖解析。
 packages:
   - apps/*
   - packages/*

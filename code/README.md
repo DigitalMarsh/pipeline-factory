@@ -4,6 +4,8 @@
 
 ## 目录
 
+代码注释规范见仓库根目录的 [`docs/COMMENTING.md`](../docs/COMMENTING.md)。
+
 - `packages/domain`：Plan 状态、ExplorerThread 谱系投影、生命周期 Hook 领域服务。
 - `apps/api`：Node.js + Fastify API，提供 ExplorerThread、Plan confirm/enqueue、Plan 查询、Hook 配置和 v4 SSE/结构化输入接口。
 - `apps/web`：Vue 3 + Vite + Element Plus 控制台，提供 ExplorerThread 工作区、Full Plan 抽屉、结构化选择弹窗和 Plan Center。

@@ -1,3 +1,7 @@
+<!--
+  模块职责：展示 Plan 全量执行契约并承载编辑、确认和丢弃操作。
+  维护提示：交互状态和数据流变化时，应同步更新组件边界说明。
+-->
 <script setup lang="ts">
 import { computed } from "vue";
 import { Close, DocumentChecked, Lock, Right } from "@element-plus/icons-vue";
@@ -11,6 +15,7 @@ const canConfirm = computed(() => props.plan?.status === "DRAFT");
 const canDiscard = computed(() => canDiscardPlan(props.plan?.status));
 const canEnqueue = computed(() => props.plan?.status === "READY");
 const contract = computed(() => props.plan?.contract);
+// 操作按钮由服务端状态的只读投影驱动：DISCARDED/QUEUED 等状态不提供越权的后续动作。
 const statusTagType = computed(() => props.plan?.status === "DRAFT" ? "warning" : props.plan?.status === "DISCARDED" ? "danger" : "success");
 </script>
 

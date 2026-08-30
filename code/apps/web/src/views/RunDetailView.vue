@@ -1,3 +1,7 @@
+<!--
+  模块职责：展示 Execution Run、Executor 消息流、控制操作和执行日志。
+  维护提示：交互状态和数据流变化时，应同步更新组件边界说明。
+-->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { ArrowLeft, Check, CircleCheck, Clock, Document, VideoPause, VideoPlay, Warning } from "@element-plus/icons-vue";
@@ -29,6 +33,8 @@ const showScrollToLatest = ref(false);
 const runStreamConnected = ref(false);
 let runEventSource: EventSource | null = null;
 let runEventSequence = 0;
+// ExecutionThread journal 是持久化事实，conversation projection 只负责把事实转换为可读消息。
+// sequence 同时作为 SSE 游标，重连时从最后一条已接受的事件继续回放。
 const loopStatusLabel = computed(() => ({ CREATED: "Created", RUNNING: "Running", WAITING_FOR_INPUT: "Waiting for input", PAUSED: "Paused", RECOVERING: "Recovery required", BLOCKED: "Blocked", COMPLETED: "Completed", FAILED: "Failed", CANCELLED: "Cancelled", NEEDS_RECONCILIATION: "Needs reconciliation" } as Record<string, string>)[executorLoop.value?.state ?? ""] ?? "No loop");
 const executionStatusLabel = computed(() => runStreamConnected.value ? "Live" : ["IN_PROGRESS", "STARTING"].includes(run.value?.status ?? "") ? "Reconnecting" : "Saved");
 const executionBlockReason = computed(() => {
@@ -39,6 +45,7 @@ const executionBlockReason = computed(() => {
   return null;
 });
 
+/** 用服务端 journal 重建执行对话，并更新 SSE 回放游标。 */
 function setExecutionThread(next: ExecutionThread | null): void {
   thread.value = next;
   const journal = next?.journal ?? [];
@@ -64,6 +71,7 @@ function scrollExecutionToLatest(): void {
   });
 }
 
+/** 接收单条 Run SSE；重复 sequence 直接忽略，避免重连导致消息重复。 */
 function appendRunJournalEvent(event: RunJournalEvent): void {
   if (!thread.value || event.sequence <= runEventSequence) return;
   const shouldFollow = isAtExecutionLatest();
@@ -77,6 +85,7 @@ function appendRunJournalEvent(event: RunJournalEvent): void {
   else showScrollToLatest.value = true;
 }
 
+/** 仅为仍可能产生事实的 Run 建立 SSE；终态 Run 依赖已加载的持久化 journal。 */
 function connectRunEvents(): void {
   if (!run.value || typeof EventSource === "undefined" || ["BLOCKED", "CANCELLED", "MERGE_READY", "MERGED"].includes(run.value.status)) return;
   runEventSource?.close();
@@ -90,6 +99,7 @@ function connectRunEvents(): void {
   runEventSource.addEventListener("error", () => { runStreamConnected.value = false; });
 }
 
+/** 清理 EventSource 和连接状态，避免离开页面后继续轮询服务端。 */
 function closeRunEvents(): void {
   runEventSource?.close();
   runEventSource = null;
@@ -141,6 +151,7 @@ async function togglePause() {
   } catch (caught) { notifyError(caught); }
   finally { actionBusy.value = false; }
 }
+/** 终止前要求二次确认；服务端会同步取消关联 AgentLoop 并执行 cleanup。 */
 async function terminateRun() {
   if (!run.value || actionBusy.value || !canTerminateRun(run.value.status)) return;
   try {
@@ -161,6 +172,7 @@ async function sendGuidance() {
   catch (caught) { notifyError(caught); }
   finally { actionBusy.value = false; }
 }
+/** 触发脱离模型会话的确定性验证，结果落入 VerificationRun 后再更新页面。 */
 async function verifyRun() {
   if (!run.value || actionBusy.value) return;
   actionBusy.value = true;

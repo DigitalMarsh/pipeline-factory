@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+
+# 停止 Web 前先校验 PID 对应的命令属于本项目，避免复用旧 PID 时误操作其他 Vite 进程。
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,6 +35,7 @@ case "$command" in
 esac
 
 stop_tree() {
+  # 递归处理 pnpm 与 Vite 的子进程，保证 Web 停止后不会继续持有 5173 端口。
   local parent="$1"
   local child
   for child in $(pgrep -P "$parent" 2>/dev/null || true); do
@@ -42,6 +45,7 @@ stop_tree() {
 }
 
 stop_tree "$pid"
+# 使用有限等待并在失败时保留 PID，方便后续人工排查而不是静默丢失状态。
 for _ in {1..50}; do
   if ! kill -0 "$pid" 2>/dev/null; then
     rm -f "$PID_FILE"

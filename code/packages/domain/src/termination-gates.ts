@@ -1,6 +1,12 @@
+/**
+ * 模块职责：实现 Plan 完整性和 Task 进度等终止门禁。
+ *
+ * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
+ */
 import { assessPlanCompletion } from "./index.js";
 import type { GateContext, GateDecision, TerminationGate } from "./agent-loop.js";
 
+/** 只有解析出完整的 machine-readable Plan contract 才允许 Explorer Loop 完成。 */
 export class PlanCompletenessGate implements TerminationGate {
   evaluate(context: GateContext): GateDecision {
     const assessment = assessPlanCompletion(context.content ?? "");
@@ -10,6 +16,7 @@ export class PlanCompletenessGate implements TerminationGate {
   }
 }
 
+/** Executor 的完成门禁：任务、工具调用、范围、变更提案和执行报告必须同时满足。 */
 export class TaskProgressGate implements TerminationGate {
   evaluate(context: GateContext): GateDecision {
     if (!context.allTasksComplete) return { action: "continue", reason: "TASKS_INCOMPLETE" };

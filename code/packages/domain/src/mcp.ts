@@ -1,5 +1,11 @@
+/**
+ * 模块职责：管理 MCP Server、工具注册、输入校验和传输适配。
+ *
+ * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
+ */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
+/** 一个 MCP Server 的启动方式、命名空间和允许工具列表。 */
 export type McpServerConfig = {
   name: string;
   transport: "stdio" | "streamable-http";
@@ -13,34 +19,40 @@ export type McpServerConfig = {
   allowedTools?: readonly string[] | undefined;
 };
 
+/** MCP tools/list 返回的工具定义和输入 schema。 */
 export type McpToolDefinition = {
   name: string;
   description?: string;
   inputSchema?: Record<string, unknown>;
 };
 
+/** 加上 Server 命名空间后的工具定义，供统一 ToolGateway 使用。 */
 export type QualifiedMcpTool = McpToolDefinition & {
   name: string;
   serverName: string;
   toolName: string;
 };
 
+/** MCP tools/call 的归一化结果；失败和结构化内容均显式保留。 */
 export type McpToolCallResult = {
   content?: unknown[];
   structuredContent?: unknown;
   isError?: boolean;
 };
 
+/** MCP JSON-RPC transport 端口；实现负责 stdio 或其他传输细节。 */
 export interface McpRpcTransport {
   request(method: string, params: Record<string, unknown>): Promise<unknown>;
   notify(method: string, params: Record<string, unknown>): Promise<void>;
   close(): Promise<void>;
 }
 
+/** 单个 MCP Client 的配置和可注入 transport。 */
 export type McpClientOptions = {
   transportFactory?: (config: McpServerConfig) => Promise<McpRpcTransport>;
 };
 
+/** MCP 单服务客户端；负责连接生命周期、tools/list、tools/call 和取消通知。 */
 export class McpClient {
   private transport: McpRpcTransport | undefined;
   private connected = false;
@@ -87,10 +99,12 @@ export class McpClient {
   }
 }
 
+/** 多 Server 注册表的依赖注入选项。 */
 export type McpToolRegistryOptions = {
   clientFactory?: (config: McpServerConfig) => McpClient;
 };
 
+/** 为多个 MCP Server 建立命名空间和 allowlist，防止未注册工具被模型直接调用。 */
 export class McpToolRegistry {
   private readonly clients = new Map<string, McpClient>();
   private readonly discovered = new Map<string, QualifiedMcpTool>();
@@ -142,6 +156,7 @@ function isToolDefinition(value: unknown): value is McpToolDefinition {
   return Boolean(value && typeof value === "object" && typeof (value as Record<string, unknown>).name === "string");
 }
 
+/** 在跨进程调用前执行最小 JSON Schema required/type 校验，失败不发送请求。 */
 function validateInput(schema: Record<string, unknown> | undefined, input: Record<string, unknown>): void {
   if (!schema) return;
   const required = Array.isArray(schema.required) ? schema.required.filter((key): key is string => typeof key === "string") : [];

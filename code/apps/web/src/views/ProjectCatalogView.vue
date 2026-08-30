@@ -1,3 +1,7 @@
+<!--
+  模块职责：展示 Project 清单、状态、仓库信息和进入入口。
+  维护提示：交互状态和数据流变化时，应同步更新组件边界说明。
+-->
 <script setup lang="ts">
 import { onMounted, reactive, ref } from "vue";
 import { ArrowRight, ChatDotRound, Clock, Connection, FolderOpened, Plus, Refresh, Setting, VideoPlay, Warning } from "@element-plus/icons-vue";
@@ -14,6 +18,7 @@ const createOpen = ref(false);
 const saving = ref(false);
 const form = reactive({ name: "", repoRoot: "", defaultBranch: "", worktreeRoot: "" });
 
+/** 加载 Project 清单及统计；路由切换和归档操作完成后复用同一刷新入口。 */
 async function load() {
   loading.value = true;
   error.value = null;
@@ -22,11 +27,13 @@ async function load() {
   finally { loading.value = false; }
 }
 
+/** 打开创建向导，表单状态与已存在 Project 清单隔离。 */
 function openCreate() {
   Object.assign(form, { name: "", repoRoot: "", defaultBranch: "", worktreeRoot: "" });
   createOpen.value = true;
 }
 
+/** 提交 Project 创建请求；服务端负责 Git 根目录和重复仓库校验。 */
 async function createProject() {
   if (!form.name.trim() || !form.repoRoot.trim()) {
     ElMessage.warning("请填写项目名称和 Git 仓库目录");
@@ -41,6 +48,7 @@ async function createProject() {
   finally { saving.value = false; }
 }
 
+/** 归档或恢复 Project；归档失败时保留列表状态并显示服务端原因。 */
 async function toggleArchive(project: Project) {
   try {
     if (project.status === "ACTIVE") {

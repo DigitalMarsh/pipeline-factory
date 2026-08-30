@@ -1,3 +1,7 @@
+<!--
+  模块职责：展示 Project、ExplorerThread 导航和计划入口。
+  维护提示：交互状态和数据流变化时，应同步更新组件边界说明。
+-->
 <script setup lang="ts">
 import { computed } from "vue";
 import { ChatDotRound, CircleCheck, Clock, Connection, Files, Setting, Warning } from "@element-plus/icons-vue";

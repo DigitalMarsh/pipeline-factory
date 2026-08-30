@@ -1,3 +1,8 @@
+/**
+ * 模块职责：提供 Pipeline Factory Web 层的类型、请求或状态辅助能力。
+ *
+ * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
+ */
 export type PlanProtocolDisplay =
   | { kind: "plain"; text: string }
   | { kind: "generating"; text: string }
@@ -42,6 +47,7 @@ function withMessage(prose: string, message: string): string {
   return [prose, message].filter(Boolean).join(" ");
 }
 
+/** 解析消息中的 Plan protocol，仅把完整合法协议渲染为可执行方案摘要。 */
 export function parsePlanProtocolDisplay(content: string): PlanProtocolDisplay {
   const hasProtocol = STATUS_OPEN_TAG.test(content) || PLAN_OPEN_TAG.test(content);
   if (!hasProtocol) return { kind: "plain", text: content };

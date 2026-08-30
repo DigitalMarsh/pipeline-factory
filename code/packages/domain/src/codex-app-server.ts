@@ -1,12 +1,20 @@
+/**
+ * 模块职责：封装 Codex App Server 的进程、JSON-RPC 会话和事件映射。
+ *
+ * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
+ */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EXPLORER_PLAN_INSTRUCTIONS, type ModelCapabilities, type ModelEvent, type ModelGateway, type ModelMessage, type ModelRequest, type ModelRole, type ModelRoleConfig } from "./index.js";
 import { mapCodexRateLimits, type CodexRateLimitsResponse, type MappedCodexRateLimits } from "./codex-rate-limits.js";
 
 type JsonObject = Record<string, unknown>;
+/** JSON-RPC 请求和通知使用的 Provider request id。 */
 export type CodexRequestId = string | number;
 
+/** Codex App Server 推送的通知或响应事件。 */
 export type CodexAppServerEvent = { id?: CodexRequestId; method: string; params: JsonObject };
 
+/** 启动外部 Codex Thread 的固定工作目录、沙箱和审批策略。 */
 export type CodexThreadStartParams = {
   model: string;
   cwd: string;
@@ -17,6 +25,7 @@ export type CodexThreadStartParams = {
   collaborationMode?: { mode: "plan" | "default"; settings: { model: string; reasoning_effort: string | null; developer_instructions: string | null } };
 };
 
+/** 启动 Provider turn 的输入和可取消信号。 */
 export type CodexTurnStartParams = {
   threadId: string;
   input: Array<{ type: "text"; text: string }>;
@@ -27,6 +36,7 @@ export type CodexTurnStartParams = {
   signal?: AbortSignal;
 };
 
+/** App Server 会话端口；Domain 通过它隔离具体 JSON-RPC 传输。 */
 export type CodexAppServerSession = {
   startThread(params: CodexThreadStartParams): Promise<string>;
   resumeThread(threadId: string): Promise<void>;
@@ -39,8 +49,10 @@ export type CodexAppServerSession = {
   close(): Promise<void>;
 };
 
+/** 创建新 Provider 会话的工厂，便于重启和测试注入。 */
 export type CodexAppServerSessionFactory = () => Promise<CodexAppServerSession>;
 
+/** Codex App Server Client 的进程、超时和重启参数。 */
 export type CodexAppServerClientOptions = {
   command: string;
   args: readonly string[];
@@ -53,6 +65,7 @@ export type CodexAppServerClientOptions = {
   spawnProcess?: CodexSpawnProcess;
 };
 
+/** 可替换的进程启动函数，用于隔离真实子进程和测试桩。 */
 export type CodexSpawnProcess = (
   command: string,
   args: readonly string[],
@@ -108,6 +121,7 @@ class NotificationSubscription implements AsyncIterableIterator<CodexAppServerEv
   [Symbol.asyncIterator](): AsyncIterableIterator<CodexAppServerEvent> { return this; }
 }
 
+/** 通过 stdio JSON-RPC 管理 Codex App Server 进程、请求超时、通知订阅和重启。 */
 export class CodexAppServerClient implements CodexAppServerSession {
   private readonly spawnProcess: CodexSpawnProcess;
   private readonly pending = new Map<string, PendingRequest>();
@@ -335,6 +349,7 @@ export class CodexAppServerClient implements CodexAppServerSession {
   }
 }
 
+/** 将 App Server 事件映射成 ModelGateway 事件时使用的角色和会话工厂。 */
 export type CodexAppServerGatewayOptions = {
   roles: Record<ModelRole, ModelRoleConfig>;
   command?: string;
@@ -348,6 +363,7 @@ export type CodexAppServerGatewayOptions = {
   sessionFactory?: CodexAppServerSessionFactory;
 };
 
+/** 将 Codex App Server 协议映射为 Domain ModelGateway，并保留 Provider activity 与输入请求。 */
 export class CodexAppServerGateway implements ModelGateway {
   private readonly sessions = new Map<string, CodexAppServerSession>();
   private readonly resumedThreads = new Set<string>();
@@ -478,6 +494,7 @@ export class CodexAppServerGateway implements ModelGateway {
   }
 }
 
+/** 把外部通知转换成内部统一 ModelEvent；未知通知安全忽略而不伪造模型输出。 */
 function mapCodexEvent(event: CodexAppServerEvent, source: { providerThreadId?: string; providerTurnId?: string } = {}): ModelEvent | null {
   if (event.method === "item/agentMessage/delta") {
     const text = getString(event.params, "delta");

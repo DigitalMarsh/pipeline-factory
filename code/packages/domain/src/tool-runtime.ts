@@ -1,3 +1,8 @@
+/**
+ * 模块职责：提供持久化工具调用、重试和执行结果记录的运行时边界.
+ *
+ * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
+ */
 import { createHash } from "node:crypto";
 import {
   ToolGateway,
@@ -7,6 +12,7 @@ import {
   type ToolRole,
 } from "./index.js";
 
+/** 持久化工具运行上下文；loopId 用于幂等和恢复关联。 */
 export type ToolExecutionContext = {
   loopId: string;
   role: ToolRole;
@@ -18,11 +24,13 @@ export type ToolExecutionContext = {
   exitReason?: string;
 };
 
+/** 工具运行时端口；实现必须持久化调用事实并显式表达未知副作用。 */
 export interface ToolRuntime {
   execute(call: ToolCall, context: ToolExecutionContext): Promise<ToolCallResult>;
   reconcile(callId: string, result: ToolCallResult): Promise<void>;
 }
 
+/** 将 ToolGateway 调用包装为可审计、可恢复但不自动重放的工具执行记录。 */
 export class DurableToolRuntime implements ToolRuntime {
   constructor(private readonly store: PipelineStore, private readonly gateway: ToolGateway) {}
 

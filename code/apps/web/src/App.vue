@@ -1,3 +1,7 @@
+<!--
+  模块职责：提供控制台根布局、Project 入口和全局导航容器。
+  维护提示：交互状态和数据流变化时，应同步更新组件边界说明。
+-->
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
 import { Bell, FolderOpened, Help, Search } from "@element-plus/icons-vue";

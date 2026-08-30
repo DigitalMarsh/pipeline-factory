@@ -1,3 +1,8 @@
+/**
+ * 模块职责：提供 Pipeline Factory Web 层的类型、请求或状态辅助能力。
+ *
+ * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
+ */
 import type { ExplorerInputRequest, ModelInputQuestion } from "../types";
 
 export function hasSelectableOptions(question: ModelInputQuestion): boolean {
@@ -8,6 +13,7 @@ export function hasFreeformInput(question: ModelInputQuestion): boolean {
   return question.isOther || !question.options;
 }
 
+/** 将当前题目的选择合并为 Provider 协议答案，并处理 Other 单选约束。 */
 export function resolveQuestionAnswers(question: ModelInputQuestion, selectedOptions: string[], otherValue: string): string[] {
   const customValue = otherValue.trim();
   return customValue ? [customValue] : selectedOptions;
@@ -17,6 +23,7 @@ export function inputQuestionComplete(question: ModelInputQuestion, selectedOpti
   return resolveQuestionAnswers(question, selectedOptions, otherValue).some((answer) => answer.trim());
 }
 
+/** 只有所有问题完成才允许最终提交；题目之间切换不会触发半成品提交。 */
 export function allInputQuestionsAnswered(questions: ModelInputQuestion[], values: Record<string, string[]>, otherValues: Record<string, string>): boolean {
   return questions.length > 0 && questions.every((question) => inputQuestionComplete(question, values[question.id] ?? [], otherValues[question.id] ?? ""));
 }
@@ -57,6 +64,7 @@ export function buildInputAnswers(questions: ModelInputQuestion[], values: Recor
   }));
 }
 
+/** 生成可持久化的答案摘要；isSecret 题目只保留数量和 secret 标记。 */
 export function redactedAnswerSummary(request: ExplorerInputRequest, values: Record<string, string[]>): Record<string, { answerCount: number; secret: boolean; answers?: string[] }> {
   return Object.fromEntries(request.questions.map((question) => {
     const answers = (values[question.id] ?? []).map((answer) => answer.trim()).filter(Boolean);

@@ -1,3 +1,7 @@
+<!--
+  模块职责：编辑 Project 基础配置、仓库、Worktree 和执行策略。
+  维护提示：交互状态和数据流变化时，应同步更新组件边界说明。
+-->
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
 import { ArrowLeft, CircleCheck, Connection, Delete, FolderOpened, InfoFilled, Plus, Setting, Warning } from "@element-plus/icons-vue";
@@ -38,6 +42,7 @@ function setForm(value: Project) {
   });
 }
 
+/** 读取 Project 当前配置并填充表单；不把表单中间态写回全局 Project。 */
 async function load() {
   loading.value = true;
   error.value = null;
@@ -49,6 +54,7 @@ async function load() {
 function listValue(value: string) { return value.split(",").map((item) => item.trim()).filter(Boolean); }
 function environmentValue(value: string) { return Object.fromEntries(value.split("\n").map((item) => item.trim()).filter(Boolean).map((item) => { const index = item.indexOf("="); return index < 1 ? [item, ""] : [item.slice(0, index), item.slice(index + 1)]; })); }
 
+/** 将表单文本转换为 API 的结构化 ProjectSettings，保存时递增配置版本。 */
 function settingsPayload(): ProjectSettings {
   const lifecycle = {
     ...(form.startCommandId ? { start: { commandId: form.startCommandId, enabled: form.startEnabled, timeoutMs: form.startTimeoutMs } } : {}),
@@ -63,6 +69,7 @@ function settingsPayload(): ProjectSettings {
   };
 }
 
+/** 使用 expectedConfigVersion 保存，避免多个设置页面互相覆盖配置。 */
 async function save() {
   if (!project.value) return;
   saving.value = true; saved.value = false; error.value = null;
@@ -73,6 +80,7 @@ async function save() {
   finally { saving.value = false; }
 }
 
+/** 在保存前调用服务端 Git 校验，展示 canonical repoRoot 和 defaultBranch。 */
 async function validateRepository() {
   validating.value = true; error.value = null;
   try { const response = await api.validateRepository(String(route.params.projectId), form.repoRoot); form.repoRoot = response.repoRoot; if (!form.defaultBranch) form.defaultBranch = response.defaultBranch; ElMessage.success(`Git 仓库校验通过 · ${response.defaultBranch}`); }
@@ -82,6 +90,7 @@ async function validateRepository() {
 
 function addCommand() { form.commands.push({ commandId: "", argv: "", environment: "" }); }
 function removeCommand(index: number) { form.commands.splice(index, 1); }
+/** 只更新设置页的 tab query，不改变 Project 或运行时配置。 */
 function selectTab(tab: string) { activeTab.value = tab; void router.replace({ query: { ...route.query, tab } }); }
 
 const statusText = computed(() => project.value?.status === "ARCHIVED" ? "Archived · read only" : `Config v${form.configVersion}`);

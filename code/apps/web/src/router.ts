@@ -1,3 +1,8 @@
+/**
+ * 模块职责：定义控制台页面路由和 Project/Thread/Run 的参数边界。
+ *
+ * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
+ */
 import { createRouter, createWebHistory } from "vue-router";
 import ExplorerView from "./views/ExplorerView.vue";
 import PlanCenterView from "./views/PlanCenterView.vue";
@@ -6,6 +11,7 @@ import ProjectCatalogView from "./views/ProjectCatalogView.vue";
 import ProjectSettingsView from "./views/ProjectSettingsView.vue";
 import { api } from "./api";
 
+/** 页面路由以 Project 为隔离边界，未知 Project 由页面加载错误引导回 Catalog。 */
 export const router = createRouter({
   history: createWebHistory(),
   routes: [

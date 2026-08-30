@@ -1,3 +1,7 @@
+<!--
+  模块职责：展示 ExplorerThread 历史并处理线程切换入口。
+  维护提示：交互状态和数据流变化时，应同步更新组件边界说明。
+-->
 <script setup lang="ts">
 import { computed } from "vue";
 import { ChatDotRound, CircleCheck, Connection, Plus, Right, Warning } from "@element-plus/icons-vue";
@@ -24,6 +28,7 @@ function close() {
   emit("update:modelValue", false);
 }
 
+/** 选择线程后由父视图重新加载全部 Project-scoped 数据。 */
 function select(explorerId: string) {
   emit("select", explorerId);
   close();

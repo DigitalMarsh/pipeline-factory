@@ -1,12 +1,19 @@
+/**
+ * 模块职责：管理插件清单、插件工具注册及其受控调用桥接。
+ *
+ * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
+ */
 import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
+/** Plugin manifest 声明的工具名称、描述和输入约束。 */
 export type PluginToolDefinition = {
   name: string;
   description?: string | undefined;
   inputSchema?: Record<string, unknown> | undefined;
 };
 
+/** 插件身份、协议版本和工具清单；注册前必须通过 manifest 校验。 */
 export type PluginManifest = {
   id: string;
   name: string;
@@ -15,7 +22,9 @@ export type PluginManifest = {
   tools: PluginToolDefinition[];
 };
 
+/** 宿主为插件工具提供的受控调用入口。 */
 export type PluginToolHandler = (toolName: string, input: Record<string, unknown>) => Promise<unknown>;
+/** 插件是否允许被 ToolGateway 调用。 */
 export type PluginStatus = "ACTIVE" | "DISABLED";
 
 type RegisteredPlugin = {
@@ -25,6 +34,7 @@ type RegisteredPlugin = {
   handler?: PluginToolHandler | undefined;
 };
 
+/** 暴露给模型的带插件命名空间的工具定义。 */
 export type PluginTool = {
   name: string;
   pluginId: string;
@@ -33,6 +43,7 @@ export type PluginTool = {
   inputSchema?: Record<string, unknown> | undefined;
 };
 
+/** 插件工具的宿主桥接；插件状态和输入校验在进入 handler 前统一检查。 */
 export class PluginToolBridge {
   private readonly plugins = new Map<string, RegisteredPlugin>();
 
@@ -83,11 +94,13 @@ export class PluginToolBridge {
   }
 }
 
+/** 插件发现和注册策略；supportedApiMajor 防止协议不兼容插件被加载。 */
 export type PluginRegistryOptions = {
   supportedApiMajor?: number;
   bridge?: PluginToolBridge;
 };
 
+/** 从插件目录发现并校验 manifest，注册后再暴露给 ToolGateway。 */
 export class PluginRegistry {
   readonly bridge: PluginToolBridge;
   private readonly supportedApiMajor: number;
@@ -152,6 +165,7 @@ function parseQualifiedName(qualifiedName: string): { pluginId: string; toolName
   return { pluginId: value.slice(0, separator), toolName: value.slice(separator + 1) };
 }
 
+/** 拒绝缺少身份、工具或不兼容 API major version 的插件。 */
 function validateManifest(manifest: PluginManifest, supportedApiMajor: number): void {
   if (!manifest.id || !manifest.name || !manifest.version || !manifest.apiVersion || !Array.isArray(manifest.tools)) throw new Error("Invalid plugin manifest");
   const apiMajor = Number.parseInt(manifest.apiVersion.split(".")[0] ?? "", 10);

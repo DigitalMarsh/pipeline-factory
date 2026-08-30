@@ -1,3 +1,8 @@
+/**
+ * 模块职责：集中声明 Web 使用的领域响应、事件和交互状态类型。
+ *
+ * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
+ */
 export type PlanStatus = "DRAFT" | "DISCARDED" | "READY" | "QUEUED" | "IN_PROGRESS" | "VERIFYING" | "MERGE_READY" | "MERGED" | "BLOCKED" | "NEEDS_PLAN_CHANGE";
 
 export type ProjectSettings = {
@@ -19,6 +24,7 @@ export type ProjectSettings = {
   toolPolicy: { allowedMcpTools: string[]; allowedPluginTools: string[]; computerUseEnabled: boolean };
 };
 
+/** Project Catalog 和设置页使用的后端 Project 投影。 */
 export type Project = {
   id: string;
   name: string;
@@ -49,6 +55,7 @@ export type ProjectSummary = {
 export type ProjectCatalogSummary = Omit<ProjectSummary, "project" | "currentExplorerThread"> & { currentExplorerThread: string | null; currentExplorerTitle: string | null };
 export type ProjectCatalogItem = Project & { summary: ProjectCatalogSummary };
 
+/** Explorer 工作区的前端投影；providerThreadId 仅用于诊断，不作为本地主键。 */
 export type ExplorerThread = {
   id: string;
   projectId: string;
@@ -119,6 +126,7 @@ export type ModelInputQuestion = {
   options: Array<{ label: string; description: string }> | null;
 };
 
+/** 结构化提问的安全投影；答案正文不从 API 响应回填，避免泄露敏感值。 */
 export type ExplorerInputRequest = {
   id: string;
   threadId: string;
@@ -173,6 +181,7 @@ export type AgentLoopStep = {
   occurredAt: string;
 };
 
+/** Plan Center 和 PlanDetailDrawer 使用的候选/执行计划投影。 */
 export type Plan = {
   planId?: string;
   id?: string;
@@ -218,6 +227,7 @@ export type Plan = {
   };
 };
 
+/** Execution Run 的页面投影，关联冻结 Revision、Worktree 和 Executor Loop。 */
 export type Run = {
   id: string;
   projectId: string;
@@ -254,6 +264,7 @@ export type MergeRequest = {
   mergedAt: string | null;
 };
 
+/** Run 的可审计 journal 容器，也是执行对话的事实来源。 */
 export type ExecutionThread = {
   id: string;
   runId: string;
@@ -261,6 +272,7 @@ export type ExecutionThread = {
   journal: Array<{ sequence: number; type: string; occurredAt: string; payload: Record<string, unknown> }>;
 };
 
+/** Run SSE 单条事件；sequence 用于去重和 Last-Event-ID 回放。 */
 export type RunJournalEvent = {
   runId: string;
   runStatus: string | null;

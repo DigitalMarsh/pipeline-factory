@@ -1,3 +1,8 @@
+/**
+ * 模块职责：聚合 Pipeline Factory 的核心领域模型、存储、Plan、Run、Scheduler 和验证服务。
+ *
+ * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
+ */
 import type { AgentLoop, AgentLoopEvent, AgentLoopRunner, AgentLoopStep, AgentLoopStepInput } from "./agent-loop.js";
 import type { MappedCodexRateLimits } from "./codex-rate-limits.js";
 import { BuiltinToolExecutor, type BuiltinToolContext, type BuiltinToolExecutorOptions } from "./builtin-tool-executor.js";
@@ -32,6 +37,7 @@ export type { PluginManifest, PluginRegistryOptions, PluginStatus, PluginTool, P
 export { ComputerUseBridge } from "./computer-use.js";
 export type { ComputerUseAction, ComputerUseBridgeOptions, ComputerUseEvent, ComputerUseHostAdapter, ComputerUseScreenshot } from "./computer-use.js";
 
+/** Plan 从草稿到执行、验证和合并的持久化状态；DISCARDED 为不可逆终态。 */
 export type PlanStatus =
   | "DRAFT"
   | "DISCARDED"
@@ -46,10 +52,13 @@ export type PlanStatus =
   | "BLOCKED"
   | "NEEDS_PLAN_CHANGE";
 
+/** ExplorerThread 的工作状态；ARCHIVED 只禁止新写入，不删除历史。 */
 export type ExplorerThreadState = "ACTIVE" | "WAITING_FOR_INPUT" | "COMPRESSED" | "ARCHIVED";
 
+/** 当前 Explorer 方案是否仍缺少关键决策。 */
 export type PlanExplorationStatus = "INCOMPLETE" | "READY";
 
+/** Explorer 对 Plan 完整性检查的投影，供线程页和候选页显示进度。 */
 export type PlanExploration = {
   status: PlanExplorationStatus;
   missing: string[];
@@ -58,6 +67,7 @@ export type PlanExploration = {
   lastAssessedTurnId: string | null;
 };
 
+/** 形成可执行方案必须覆盖的业务和工程领域。 */
 export const REQUIRED_PLAN_AREAS = [
   "目标与用户范围",
   "功能范围与排除项",
@@ -68,6 +78,7 @@ export const REQUIRED_PLAN_AREAS = [
   "合并策略与人工确认",
 ] as const;
 
+/** 注入 Explorer 的职责和 machine-readable Plan 协议；变更需同步协议解析器。 */
 export const EXPLORER_PLAN_INSTRUCTIONS = `
 你是 Pipeline Factory 的 Plan Explorer。你的职责是围绕用户需求持续探索，直到形成可执行的完整设计方案；一次普通 turn 结束不代表探索完成。
 先分析目标、用户范围、功能边界、技术方案、数据与安全、异常处理、验收标准、实施任务、依赖、冲突、验证和合并策略。把当前所有互不依赖且需要用户决策的问题合并到一次原生 item/tool/requestUserInput 请求中；不要在普通文本中把问题伪装成选择题。收到答案后重新检查仍未决的关键项，仍有缺口就继续提问或继续探索。
@@ -76,6 +87,7 @@ export const EXPLORER_PLAN_INSTRUCTIONS = `
 <pipeline-factory-plan>{"title":"...","goal":"...","acceptanceCriteria":["..."],"include":["..."],"exclude":["..."],"baseBranch":"...","baseCommit":"...","tasks":[{"id":"task-1","title":"...","dependencies":[],"status":"READY"}],"conflictKeys":[],"executorModelRole":"executor","toolPolicy":"executor-scoped-write","verificationCommandIds":["project.test"],"maxRepairAttempts":2,"mergeStrategy":"manual","requireHumanMerge":true}</pipeline-factory-plan>
 不要在缺少关键决策时输出 READY；不要把“已记录某个选择”当作完整方案。`;
 
+/** Factory 内部的长期 Explorer 工作区，与外部 Provider Thread 标识分离。 */
 export type ExplorerThread = {
   id: string;
   projectId: string;
@@ -94,6 +106,7 @@ export type ExplorerThread = {
   exploration: PlanExploration;
 };
 
+/** Explorer 的用户/模型消息事实；sequence 用于稳定回放和定位 Plan 卡片。 */
 export type ExplorerTurn = {
   id: string;
   threadId: string;
@@ -105,6 +118,7 @@ export type ExplorerTurn = {
   sequence: number;
 };
 
+/** Plan 中可独立追踪的任务及其依赖状态。 */
 export type PlanTask = {
   id: string;
   title: string;
@@ -112,6 +126,7 @@ export type PlanTask = {
   status: "PENDING" | "READY" | "DONE";
 };
 
+/** Confirm 后供 Executor、Verification 和 Merge 共同消费的执行合同。 */
 export type PlanContract = {
   goal: string;
   acceptanceCriteria: string[];
@@ -129,6 +144,7 @@ export type PlanContract = {
   requireHumanMerge: boolean;
 };
 
+/** 从 Explorer 对话投影出的候选 Plan；Confirm 前仍允许编辑或丢弃。 */
 export type CandidatePlan = {
   id: string;
   projectId: string;
@@ -150,8 +166,10 @@ export type CandidatePlan = {
   contract: PlanContract;
 };
 
+/** 执行中发现范围变化时，ChangeProposal 的人工决策状态。 */
 export type ChangeProposalStatus = "OPEN" | "APPROVED" | "REJECTED" | "SUPERSEDED";
 
+/** 从 Run 返回 Plan 的变更提案；合同原值保持不可变。 */
 export type ChangeProposal = Readonly<{
   id: string;
   runId: string;
@@ -167,6 +185,7 @@ export type ChangeProposal = Readonly<{
   revision: number | null;
 }>;
 
+/** 已批准变更及其新 Revision/Run 的聚合返回值。 */
 export type ApprovedChangeProposal = {
   proposal: ChangeProposal;
   plan: CandidatePlan;
@@ -174,6 +193,7 @@ export type ApprovedChangeProposal = {
   run: Run | null;
 };
 
+/** Confirm 时冻结的 Plan 合同和 ProjectExecutionSnapshot，不随当前配置变化。 */
 export type PlanRevisionV2 = Readonly<{
   planId: string;
   revision: number;
@@ -187,6 +207,7 @@ export type PlanRevisionV2 = Readonly<{
   projectConfigSnapshot?: ProjectExecutionSnapshot;
 }>;
 
+/** Plan Center 和 Explorer Plans 导航使用的轻量索引行。 */
 export type PlanIndexRow = {
   planId: string;
   title: string;
@@ -205,6 +226,7 @@ export type PlanIndexRow = {
   attentionReason: string | null;
 };
 
+/** 所有聚合共享的审计事件格式；payload 只保存结构化业务事实。 */
 export type DomainEvent = {
   id: string;
   sequence: number;
@@ -290,6 +312,7 @@ export type DomainEvent = {
   payload: Record<string, unknown>;
 };
 
+/** 从 Explorer turn 创建 CandidatePlan 的最小输入。 */
 export type CreateCandidatePlanInput = {
   projectId: string;
   sourceExplorerThreadId: string;
@@ -301,6 +324,7 @@ export type CreateCandidatePlanInput = {
   providerItemId?: string | null | undefined;
 };
 
+/** 注册已有 Provider 关联的本地 ExplorerThread。 */
 export type RegisterThreadInput = {
   id: string;
   projectId: string;
@@ -312,6 +336,7 @@ export type RegisterThreadInput = {
   createdAt?: string | undefined;
 };
 
+/** 创建全新或显式继承来源的 ExplorerThread。 */
 export type CreateExplorerInput = {
   projectId: string;
   title?: string | undefined;
@@ -319,12 +344,14 @@ export type CreateExplorerInput = {
   createdAt?: string | undefined;
 };
 
+/** Project 快照中注册的 Hook 命令及其启用/超时策略。 */
 export type HookDefinition = {
   commandId: string;
   enabled?: boolean | undefined;
   timeoutMs?: number | undefined;
 };
 
+/** Hook 执行上下文；路径固定指向当前 Run 的 Worktree。 */
 export type HookContext = {
   projectId: string;
   runId: string;
@@ -334,6 +361,7 @@ export type HookContext = {
   exitReason: string;
 };
 
+/** 已注册命令的一次确定性调用，不携带任意 shell 字符串。 */
 export type CommandInvocation = {
   commandId: string;
   cwd: string;
@@ -341,14 +369,17 @@ export type CommandInvocation = {
   context: HookContext;
 };
 
+/** 进程执行结果；exitCode 为 null 表示进程被信号或运行时中断。 */
 export type CommandResult = {
   exitCode: number | null;
   stdout: string;
   stderr: string;
 };
 
+/** Hook/验证共用的命令执行端口。 */
 export type CommandExecutor = (command: CommandInvocation) => Promise<CommandResult>;
 
+/** Provider 结构化询问中的单个问题；secret 答案只能保存脱敏摘要。 */
 export type ModelInputQuestion = {
   id: string;
   header: string;
@@ -358,6 +389,7 @@ export type ModelInputQuestion = {
   options: Array<{ label: string; description: string }> | null;
 };
 
+/** Provider 等待用户回答的结构化请求及其生命周期标识。 */
 export type ModelInputRequest = {
   requestId: string | number;
   threadId: string;
@@ -368,10 +400,13 @@ export type ModelInputRequest = {
   autoResolutionMs: number | null;
 };
 
+/** 提交给 Provider 的按问题 id 分组答案。 */
 export type ModelInputAnswers = Record<string, { answers: string[] }>;
 
+/** 本地持久化的结构化输入请求状态。 */
 export type ExplorerInputRequestStatus = "OPEN" | "SUBMITTING" | "ANSWERED" | "CANCELLED" | "AUTO_RESOLVED" | "RECOVERY_REQUIRED";
 
+/** Explorer 输入请求事实；保存可回放的脱敏摘要而非 secret 原文。 */
 export type ExplorerInputRequest = {
   id: string;
   threadId: string;
@@ -390,6 +425,7 @@ export type ExplorerInputRequest = {
   redactedAnswerSummary: Record<string, unknown> | null;
 };
 
+/** Start/Cleanup Hook 的归一化结果及其是否阻塞 Run 的判断。 */
 export type HookRunResult = {
   hook: "start" | "cleanup";
   status: "completed" | "failed" | "skipped";
@@ -398,6 +434,7 @@ export type HookRunResult = {
   result: CommandResult | null;
 };
 
+/** Domain 的持久化端口；内存和 SQLite 实现必须保持相同的事实及事件语义。 */
 export type PipelineStore = {
   now(): string;
   nextId(prefix: string): string;
@@ -473,6 +510,7 @@ export type PlanCompletionAssessment = {
   artifact: PlanArtifact | null;
 };
 
+/** 解析模型协议块并检查 Plan 是否具备可执行的完整契约。 */
 export function assessPlanCompletion(content: string): PlanCompletionAssessment {
   const status = content.match(/<pipeline-factory-plan-status>\s*([^<]+?)\s*<\/pipeline-factory-plan-status>/i)?.[1]?.toUpperCase();
   const artifactText = content.match(/<pipeline-factory-plan>\s*([\s\S]*?)\s*<\/pipeline-factory-plan>/i)?.[1];
@@ -538,6 +576,7 @@ function stripPlanProtocol(content: string): string {
     .trim();
 }
 
+/** 用于测试和轻量集成的内存 Store，不改变领域服务的持久化接口。 */
 export class InMemoryPipelineStore implements PipelineStore {
   private readonly projects = new Map<string, Project>();
   private readonly projectConfigRevisions = new Map<string, ProjectConfigRevision[]>();
@@ -753,6 +792,7 @@ function parseRequestId(value: string): string | number {
   return /^-?\d+$/.test(value) ? Number(value) : value;
 }
 
+/** SQLite Store；启动时负责幂等 migration，并保留事件、快照和运行历史。 */
 export class SqlitePipelineStore implements PipelineStore {
   private readonly database: DatabaseSync;
 
@@ -1457,6 +1497,10 @@ function freezeRevision(revision: PlanRevisionV2): PlanRevisionV2 {
   return freezeDeep(revision);
 }
 
+/**
+ * 负责 ExplorerThread、CandidatePlan、Confirm、Enqueue 和 Revision 的业务边界。
+ * CandidatePlan 的状态变化始终先写事实，再追加领域事件，避免 UI 投影领先于持久化状态。
+ */
 export class PlanService {
   private readonly projects: ProjectService;
 
@@ -1464,6 +1508,7 @@ export class PlanService {
     this.projects = projects ?? new ProjectService(store);
   }
 
+  /** 注册与 Project 绑定的本地线程，并追加创建事件。 */
   registerThread(input: RegisterThreadInput): ExplorerThread {
     const thread = this.store.saveThread(input);
     this.store.appendEvent({
@@ -1474,6 +1519,7 @@ export class PlanService {
     return thread;
   }
 
+  /** 创建 Draft CandidatePlan；只在源线程产生新的候选投影，不创建 Revision 或 Run。 */
   createCandidatePlan(input: CreateCandidatePlanInput): CandidatePlan {
     if (!this.store.getThread(input.sourceExplorerThreadId)) {
       this.registerThread({ id: input.sourceExplorerThreadId, projectId: input.projectId, parentThreadId: null });
@@ -1504,12 +1550,14 @@ export class PlanService {
     return plan;
   }
 
+  /** 读取 Plan；未知 id 直接失败，调用方不得回退到默认 Project。 */
   get(planId: string): CandidatePlan {
     const plan = this.store.getPlan(planId);
     if (!plan) throw new Error(`Plan ${planId} not found`);
     return plan;
   }
 
+  /** 丢弃仍处于 DRAFT 的候选计划；记录审计事件且不生成后续执行事实。 */
   discard(planId: string, actorId: string): CandidatePlan {
     const plan = this.get(planId);
     if (plan.status !== "DRAFT") throw new Error(`Plan ${planId} cannot be discarded from ${plan.status}`);
@@ -1519,6 +1567,7 @@ export class PlanService {
     return updated;
   }
 
+  /** 确认 Plan 并冻结当前 Project 配置，生成后续 Run 唯一使用的 Revision。 */
   confirm(planId: string, confirmedBy: string): CandidatePlan {
     const plan = this.get(planId);
     if (plan.status === "READY" || plan.status === "QUEUED") return plan;
@@ -1544,12 +1593,14 @@ export class PlanService {
     return updated;
   }
 
+  /** 读取指定不可变 Revision；缺失快照的旧数据仍按 LEGACY 兼容读取。 */
   getRevision(planId: string, revision: number): PlanRevisionV2 {
     const value = this.store.getRevision(planId, revision);
     if (!value) throw new Error(`Plan revision ${planId}@${revision} not found`);
     return value;
   }
 
+  /** 将已确认 Plan 放入队列；Enqueue 与 Confirm 分离，便于人工控制执行时机。 */
   enqueue(planId: string): CandidatePlan {
     const plan = this.get(planId);
     if (plan.status === "QUEUED" || plan.status === "IN_PROGRESS" || plan.status === "VERIFYING" || plan.status === "MERGE_READY" || plan.status === "MERGED") {
@@ -1562,6 +1613,7 @@ export class PlanService {
     return updated;
   }
 
+  /** 返回线程谱系下已确认或已排队的 Plan，供 Explorer 的 Plans 导航使用。 */
   listThreadPlans(threadId: string): PlanIndexRow[] {
     const current = this.store.getThread(threadId);
     if (!current) return [];
@@ -1605,6 +1657,7 @@ export class PlanService {
       .sort((a, b) => b.queuedAt.localeCompare(a.queuedAt));
   }
 
+  /** 按 Project 隔离返回 Plan，避免多个仓库之间出现跨项目数据串联。 */
   listProjectPlans(projectId: string): PlanIndexRow[] {
     return this.store
       .listPlans()
@@ -1630,9 +1683,11 @@ export class PlanService {
   }
 }
 
+/** 管理 ExplorerThread 的创建、继承、归档、激活和标题修改。 */
 export class ExplorerService {
   constructor(private readonly store: PipelineStore) {}
 
+  /** 创建 Project 内的新 ExplorerThread，可显式继承来源线程。 */
   create(input: CreateExplorerInput): ExplorerThread {
     const origin = input.originThreadId ? this.store.getThread(input.originThreadId) : undefined;
     if (input.originThreadId && (!origin || origin.projectId !== input.projectId)) throw new Error("Origin Explorer does not belong to this project");
@@ -1650,16 +1705,19 @@ export class ExplorerService {
     return thread;
   }
 
+  /** 按 id 读取 ExplorerThread。 */
   get(explorerId: string): ExplorerThread {
     const explorer = this.store.getThread(explorerId);
     if (!explorer) throw new Error(`Explorer ${explorerId} not found`);
     return explorer;
   }
 
+  /** 只列出指定 Project 的线程，按最近活动倒序。 */
   list(projectId: string): ExplorerThread[] {
     return this.store.listThreads().filter((thread) => thread.projectId === projectId).sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
   }
 
+  /** 归档线程并保留其 Turn、Plan 和事件历史。 */
   archive(explorerId: string): ExplorerThread {
     const explorer = this.get(explorerId);
     if (explorer.state === "ARCHIVED") return explorer;
@@ -1668,6 +1726,7 @@ export class ExplorerService {
     return archived;
   }
 
+  /** 恢复归档线程的可写状态。 */
   activate(explorerId: string): ExplorerThread {
     const explorer = this.get(explorerId);
     if (explorer.state === "ACTIVE") return explorer;
@@ -1676,6 +1735,7 @@ export class ExplorerService {
     return active;
   }
 
+  /** 更新手工标题；空标题被拒绝且不会覆盖已有标题。 */
   rename(explorerId: string, title: string): ExplorerThread {
     const explorer = this.get(explorerId);
     const normalized = title.trim();
@@ -1692,14 +1752,11 @@ export type CreateChangeProposalInput = {
   createdBy?: string;
 };
 
-/**
- * A ChangeProposal is the only supported bridge from an execution discovery
- * back to planning. It never edits the old Run or its Revision; approval
- * creates a new immutable Revision and queues the owning Plan for a new Run.
- */
+/** 将执行阶段发现的范围变化安全地送回 Plan；批准会创建新的不可变 Revision。 */
 export class ChangeProposalService {
   constructor(private readonly store: PipelineStore) {}
 
+  /** 为 Run 创建唯一 OPEN 提案；重复调用返回已有开放提案。 */
   create(input: CreateChangeProposalInput): ChangeProposal {
     const run = this.store.getRun(input.runId);
     if (!run) throw new Error(`Run ${input.runId} not found`);
@@ -1766,6 +1823,7 @@ export class ChangeProposalService {
   }
 }
 
+/** 执行 Project 快照中声明的 Start/Cleanup Hook，并把失败映射为运行关注项。 */
 export class LifecycleHookRunner {
   private readonly cleanupCwd: string;
 
@@ -1810,6 +1868,7 @@ export class LifecycleHookRunner {
 export type RegisteredCommandDefinition = { commandId: string; argv: readonly [string, ...string[]]; environment?: Readonly<Record<string, string>> | undefined };
 export type ProcessRunner = (argv: string[], cwd: string, timeoutMs: number, env: Record<string, string>) => Promise<CommandResult>;
 
+/** 只执行已注册的 argv 命令，禁止模型通过字符串拼接调用任意 Shell。 */
 export class RegisteredCommandExecutor {
   private readonly commands = new Map<string, RegisteredCommandDefinition>();
   private readonly runProcess: ProcessRunner;
@@ -1858,15 +1917,19 @@ function defaultProcessRunner(argv: string[], cwd: string, timeoutMs: number, en
   });
 }
 
+/** 工具调用角色；Explorer 和 Executor 使用不同的允许集合。 */
 export type ToolRole = "explorer" | "executor";
+/** 内置、MCP、Plugin 和宿主工具的统一名称。 */
 export type ToolName = "read_file" | "list_files" | "git_status" | "git_diff" | "git_log" | "search_text" | "write_file" | "apply_patch" | "run_command" | "run_registered_command" | "run_verification" | "git_commit" | string;
 
+/** 一次模型发起的工具调用；callId 用于幂等、审计和恢复。 */
 export type ToolCall = {
   callId: string;
   tool: ToolName;
   input: Record<string, unknown>;
 };
 
+/** 工具调用的归一化结果；禁止、失败和未知副作用必须可区分。 */
 export type ToolCallResult = {
   callId: string;
   allowed: boolean;
@@ -1876,7 +1939,9 @@ export type ToolCallResult = {
   audited: true;
 };
 
+/** 持久化工具调用状态；UNKNOWN 不允许静默重放。 */
 export type DurableToolCallStatus = "PENDING" | "RUNNING" | "SUCCEEDED" | "FAILED" | "DENIED" | "UNKNOWN" | "NEEDS_RECONCILIATION";
+/** SQLite 中保存的工具调用事实和输入 hash。 */
 export type PersistedToolCall = {
   callId: string;
   loopId: string;
@@ -1889,6 +1954,7 @@ export type PersistedToolCall = {
   completedAt: string | null;
 };
 
+/** ToolGateway 的角色白名单、工作区边界和外部工具桥接配置。 */
 export type ToolGatewayOptions = {
   role: ToolRole;
   workspaceRoot: string;
@@ -1904,6 +1970,7 @@ const READ_ONLY_TOOLS = new Set<ToolName>(["read_file", "list_files", "git_statu
 const EXECUTOR_TOOLS = new Set<ToolName>([...READ_ONLY_TOOLS, "write_file", "apply_patch", "run_registered_command", "run_verification", "git_commit"]);
 const PROTECTED_PATHS = new Set(["package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "tsconfig.json"]);
 
+/** 汇总 Builtin、MCP、Plugin 和 Computer Use 工具，并执行统一白名单检查。 */
 export class ToolGateway {
   private readonly calls = new Map<string, ToolCallResult>();
   private readonly workspaceRoot: string;
@@ -1997,7 +2064,9 @@ function isToolExecutionFailure(reason: string): boolean {
   return /does not exist|not a file|not a directory|No registered command executor|spawn/i.test(reason);
 }
 
+/** 模型职责角色；Explorer 只读分析，Executor 在 Run Worktree 中执行。 */
 export type ModelRole = "explorer" | "executor";
+/** 一个角色的模型和推理/循环策略，来源可为全局默认或 Project 快照。 */
 export type ModelRoleConfig = {
   model: string;
   mode?: "plan" | "default" | undefined;
@@ -2007,17 +2076,21 @@ export type ModelRoleConfig = {
   reasoningEffort?: string | undefined;
   developerInstructions?: string | undefined;
 };
+/** Provider 能力声明，决定结构化输入、工具和 Loop 模式是否可用。 */
 export type ModelCapabilities = {
   supportsStructuredUserInput: boolean;
   supportsToolCalls: boolean;
   supportedLoopModes: import("./agent-loop.js").AgentLoopMode[];
 };
+/** 传给模型的受控工具描述和输入 schema。 */
 export type ModelToolDefinition = {
   name: ToolName;
   description: string;
   inputSchema: Record<string, unknown>;
 };
+/** Provider 会话中的规范化消息。 */
 export type ModelMessage = { role: "system" | "user" | "assistant" | "tool"; content: string; toolCallId?: string };
+/** 一次 Explorer/Executor 模型调用的完整上下文。 */
 export type ModelRequest = {
   role: ModelRole;
   modelConfig?: ModelRoleConfig | undefined;
@@ -2030,6 +2103,7 @@ export type ModelRequest = {
   tools?: ModelToolDefinition[] | undefined;
   signal?: AbortSignal | undefined;
 };
+/** ModelGateway 输出的统一流事件，供 Agent Loop 和消息流共同消费。 */
 export type ModelEvent =
   | { type: "thread.started"; threadId: string }
   | { type: "text.delta"; text: string; providerThreadId?: string | undefined; providerTurnId?: string | undefined; providerItemId?: string | undefined }
@@ -2041,14 +2115,19 @@ export type ModelEvent =
   | { type: "turn.cancelled" };
 
 export interface ModelGateway {
+  /** 流式调用模型并按事件顺序返回文本、工具和输入请求。 */
   stream(request: ModelRequest): AsyncIterable<ModelEvent>;
+  /** 将本地脱敏校验后的答案转交给 Provider。 */
   answerUserInput(input: { requestId: string | number; answers: ModelInputAnswers }): Promise<void>;
+  /** 取消指定 Provider conversation/turn。 */
   cancel(request: { conversationId: string; providerThreadId: string; providerTurnId?: string }): Promise<void>;
+  /** 返回指定角色当前生效的模型配置。 */
   configFor(role: ModelRole): ModelRoleConfig;
   capabilities?(role: ModelRole): ModelCapabilities;
   readRateLimits?(): Promise<MappedCodexRateLimits>;
 }
 
+/** 测试用 ModelGateway；保持事件协议但不访问外部模型。 */
 export class StubModelGateway implements ModelGateway {
   constructor(private readonly configs: Record<ModelRole, ModelRoleConfig>) {}
 
@@ -2072,11 +2151,16 @@ export class StubModelGateway implements ModelGateway {
   async readRateLimits(): Promise<MappedCodexRateLimits> { return { available: false, fiveHour: null, sevenDay: null, reason: "Codex rate-limit telemetry is unavailable" }; }
 }
 
+/** 非流式模型调用的规范化结果。 */
 export type ModelResult = { text: string; requestId: string | null; model: string };
+/** OpenAI Responses API 的最小响应端口，便于测试替换 fetch。 */
 export type ModelFetchResponse = { ok: boolean; status: number; json(): Promise<unknown> };
+/** 可注入的 HTTP 调用函数，避免 Domain 直接绑定全局 fetch。 */
 export type ModelFetch = (url: string, init: { method: "POST"; headers: Record<string, string>; body: string; signal?: AbortSignal | undefined }) => Promise<ModelFetchResponse>;
+/** OpenAI ModelGateway 配置；apiKey 由运行环境提供，不应持久化到 Project。 */
 export type OpenAIModelGatewayOptions = { apiKey: string; roles: Record<ModelRole, ModelRoleConfig>; baseUrl?: string | undefined; fetchFn?: ModelFetch | undefined };
 
+/** OpenAI Responses API 适配器；API Key 只从运行时配置读取。 */
 export class OpenAIModelGateway implements ModelGateway {
   private readonly fetchFn: ModelFetch;
   private readonly baseUrl: string;
@@ -2140,6 +2224,10 @@ function extractResponseText(payload: Record<string, unknown>): string {
   }).join("");
 }
 
+/**
+ * 运行 Explorer 对话和结构化输入流程，并把 Provider 事件投影为本地消息流。
+ * 模型回合结束后必须通过 Plan completeness gate，才会创建 CandidatePlan；普通文本完成不会越过门禁。
+ */
 export class ExplorerThreadService {
   private readonly jobs = new Map<string, { userId: string; assistantId: string; loopId?: string | undefined; providerThreadId: string | null; providerTurnId: string | null; resolveInput?: (() => void) | undefined; cancelled: boolean; continuationCount: number }>();
   private readonly agentLoops: AgentLoopEngine;
@@ -2632,10 +2720,14 @@ function validateInputAnswers(questions: ModelInputQuestion[], answers: ModelInp
 export { CodexAppServerClient, CodexAppServerGateway } from "./codex-app-server.js";
 export type { CodexAppServerClientOptions, CodexAppServerEvent, CodexAppServerGatewayOptions, CodexAppServerSession, CodexAppServerSessionFactory, CodexSpawnProcess, CodexThreadStartParams, CodexTurnStartParams } from "./codex-app-server.js";
 
+/** Run 的执行、验证、合并和恢复状态；BLOCKED 需要人工关注。 */
 export type RunStatus = "QUEUED" | "STARTING" | "IN_PROGRESS" | "READY_FOR_VERIFY" | "VERIFYING" | "MERGE_READY" | "BLOCKED" | "NEEDS_PLAN_CHANGE" | "STALE" | "RECOVERING" | "CANCELLED";
+/** ExecutionThread 的展示状态，承载 Run 的实时模型输出和控制事实。 */
 export type ExecutionThreadState = "ACTIVE" | "PAUSED" | "BLOCKED" | "CANCELLED" | "COMPLETED";
+/** Run journal 中可回放的事件类别。 */
 export type JournalEntryType = "RUN_CREATED" | "HOOK_COMPLETED" | "HOOK_FAILED" | "HOOK_SKIPPED" | "MODEL_OUTPUT" | "TOOL_CALL" | "TASK_PROGRESS" | "USER_GUIDANCE" | "REPAIR" | "VERIFICATION" | "COMMIT" | "RECOVERY";
 
+/** 一条 Execution journal 事实；payload 供详情页诊断而不是控制状态的唯一来源。 */
 export type ExecutionJournalEntry = {
   sequence: number;
   type: JournalEntryType;
@@ -2643,6 +2735,7 @@ export type ExecutionJournalEntry = {
   payload: Record<string, unknown>;
 };
 
+/** Run 专属的执行消息流聚合。 */
 export type ExecutionThread = {
   id: string;
   runId: string;
@@ -2650,6 +2743,7 @@ export type ExecutionThread = {
   journal: ExecutionJournalEntry[];
 };
 
+/** 运行实例；projectId、planRevision 和 workspacePath 共同确定执行边界。 */
 export type Run = {
   id: string;
   projectId: string;
@@ -2664,15 +2758,20 @@ export type Run = {
   startedAt: string | null;
 };
 
+/** 一个 Run 的 Git Worktree 事实。 */
 export type Workspace = { path: string; branch: string; baseCommit: string };
+/** Worktree 创建/移除端口；实现必须使用 Revision 快照中的路径。 */
 export type WorkspaceAdapter = {
   create(input: { projectId: string; runId: string; branch: string; baseCommit: string }): Promise<Workspace>;
   remove(workspace: Workspace): Promise<void>;
 };
 
+/** 可注入的 Git 命令执行端口。 */
 export type GitCommandRunner = (args: string[], cwd: string) => Promise<CommandResult>;
+/** 本地 Git Worktree 适配器配置。 */
 export type LocalGitWorktreeOptions = { projectRoot: string; worktreeRoot: string; runGit?: GitCommandRunner | undefined };
 
+/** 使用 Git 创建和移除 Run 专属 Worktree；执行目录与只读 Explorer 的 repoRoot 分离。 */
 export class LocalGitWorktreeAdapter implements WorkspaceAdapter {
   private readonly runGit: GitCommandRunner;
 
@@ -2716,6 +2815,10 @@ export type SchedulerOptions = {
   };
 };
 
+/**
+ * 协调 Plan 队列、Worktree、Hook、Executor、Verification 和 Run 状态。
+ * 调度使用 Revision 中冻结的 Project 快照，不重新读取当前 Project 配置。
+ */
 export class Scheduler {
   private readonly planService: PlanService;
   private readonly runs = new Map<string, Run>();
@@ -2725,12 +2828,14 @@ export class Scheduler {
     this.planService = new PlanService(options.store);
   }
 
+  /** 暴露 Executor Loop 的控制端口，供 API 的暂停、恢复和终止按钮调用。 */
   agentLoopController(): Pick<AgentLoopRunner, "pause" | "resume" | "cancel"> | undefined {
     const executor = this.options.executor;
     if (!executor?.pause || !executor.resume || !executor.cancel) return undefined;
     return { pause: executor.pause.bind(executor), resume: executor.resume.bind(executor), cancel: executor.cancel.bind(executor) };
   }
 
+  /** 为已排队 Plan 创建一次 Run；重复调用会复用同一未取消运行，保证启动幂等。 */
   async start(planId: string, hooks: { start?: HookDefinition | undefined; cleanup?: HookDefinition | undefined } = {}): Promise<Run> {
     const existing = this.options.store.listRuns().find((run) => run.planId === planId && run.status !== "CANCELLED" && run.status !== "NEEDS_PLAN_CHANGE");
     if (existing) {
@@ -2756,6 +2861,8 @@ export class Scheduler {
     const workspaceAdapter = this.workspaceAdapterFor(revision);
     const hookRunner = this.hookRunnerFor(revision);
     const executionHooks = revision.projectConfigSnapshot?.settings.hooks ?? hooks;
+    // Worktree、Start Hook 和 Executor 按顺序执行：任何前置阶段失败都阻止模型写入，
+    // 同时把 BLOCKED 事实写回 Plan 和 ExecutionThread，便于 UI 显示可诊断原因。
     const workspace = await workspaceAdapter.create({ projectId: plan.projectId, runId, branch: run.branch, baseCommit: run.baseCommit });
     run.workspacePath = workspace.path;
     const startResult = await hookRunner.runStart(executionHooks.start, { projectId: plan.projectId, runId, workspacePath: workspace.path, branch: workspace.branch, baseCommit: workspace.baseCommit, exitReason: "running" });
@@ -2790,6 +2897,7 @@ export class Scheduler {
     return run;
   }
 
+  /** 完成或取消 Run，按同一 Revision 执行 Worktree 清理和 Cleanup Hook。 */
   async finish(runId: string, exitReason: string, hooks: { cleanup?: HookDefinition | undefined } = {}, cancellationReason = exitReason): Promise<Run> {
     const run = this.run(runId);
     if (run.status === "CANCELLED") {
@@ -2836,6 +2944,7 @@ export class Scheduler {
     return snapshot && this.options.hookRunnerFactory ? this.options.hookRunnerFactory(snapshot) : this.options.hooks;
   }
 
+  /** 先按 Project 快照限制并发，再按 Runtime 全局上限限制所有 Project 的总槽位。 */
   private assertConcurrency(projectId: string, revision: PlanRevisionV2): void {
     const activeRuns = this.options.store.listRuns().filter((run) => EXECUTION_SLOT_RUN_STATUSES.has(run.status));
     const projectLimit = revision.projectConfigSnapshot?.settings.concurrency.maxParallelRuns;
@@ -2843,6 +2952,7 @@ export class Scheduler {
     if (this.options.globalConcurrency !== undefined && activeRuns.length >= this.options.globalConcurrency) throw new Error(`Global concurrency limit reached (${this.options.globalConcurrency})`);
   }
 
+  /** 暂停活动 Run；暂停事实写入 ExecutionThread，便于恢复和审计。 */
   pause(runId: string): Run {
     const run = this.run(runId);
     if (run.status !== "IN_PROGRESS") throw new Error(`Run ${runId} cannot be paused from ${run.status}`);
@@ -2854,6 +2964,7 @@ export class Scheduler {
     return this.options.store.saveRun(run);
   }
 
+  /** 恢复已暂停 Run；仅允许 ACTIVE/PAUSED 的合法状态转换。 */
   resume(runId: string): Run {
     const run = this.run(runId);
     const thread = this.thread(run.executionThreadId);
@@ -2864,6 +2975,7 @@ export class Scheduler {
     return this.options.store.saveRun(run);
   }
 
+  /** 向执行消息流追加人工指导，不改写已确认的 PlanRevision。 */
   addGuidance(runId: string, content: string): ExecutionThread {
     const run = this.run(runId);
     const thread = this.thread(run.executionThreadId);
@@ -2873,6 +2985,7 @@ export class Scheduler {
     return thread;
   }
 
+  /** 读取 Run 的 ExecutionThread。 */
   thread(threadId: string): ExecutionThread {
     const thread = this.options.store.getExecutionThread(threadId) ?? this.threads.get(threadId);
     if (!thread) throw new Error(`ExecutionThread ${threadId} not found`);
@@ -2880,6 +2993,7 @@ export class Scheduler {
     return thread;
   }
 
+  /** 读取 Run 并同步到 Scheduler 的短期缓存。 */
   run(runId: string): Run {
     const run = this.options.store.getRun(runId) ?? this.runs.get(runId);
     if (!run) throw new Error(`Run ${runId} not found`);
@@ -2894,6 +3008,7 @@ export class Scheduler {
 }
 
 export type VerificationStatus = "PASSED" | "FAILED" | "BLOCKED";
+/** 单次验证及其修复尝试结果。 */
 export type VerificationRun = {
   id: string;
   runId: string;
@@ -2902,12 +3017,16 @@ export type VerificationRun = {
   commandResults: Array<{ commandId: string; result: CommandResult }>;
   completedAt: string;
 };
+/** 按 Project/Plan 注册命令执行验证的端口。 */
 export type VerificationCommandExecutor = (commandId: string, run: Run) => Promise<CommandResult>;
+/** 验证失败后的受控修复端口。 */
 export type RepairExecutor = (run: Run, attempt: number) => Promise<boolean>;
 
+/** 脱离模型会话执行确定性验证，并按 Revision 的 repair limit 控制修复重试。 */
 export class VerificationService {
   constructor(private readonly store?: PipelineStore) {}
 
+  /** 执行验证命令，失败时最多按 Plan contract 重试 repair。 */
   async verify(run: Run, revision: PlanRevisionV2, execute: VerificationCommandExecutor, repair?: RepairExecutor): Promise<VerificationRun> {
     if (run.status !== "IN_PROGRESS" && run.status !== "READY_FOR_VERIFY") throw new Error(`Run ${run.id} cannot be verified from ${run.status}`);
     run.status = "VERIFYING";
@@ -2967,6 +3086,7 @@ export class VerificationService {
   }
 }
 
+/** 等待人工确认的源提交与目标分支关系。 */
 export type MergeRequest = {
   id: string;
   runId: string;
@@ -2979,9 +3099,11 @@ export type MergeRequest = {
   mergedAt: string | null;
 };
 
+/** 创建并确认人工 MergeRequest；Factory 不替用户直接改写目标分支。 */
 export class MergeService {
   constructor(private readonly store: PipelineStore) {}
 
+  /** 为验证通过的 Run 创建幂等 MergeRequest。 */
   createRequest(run: Run, verification: VerificationRun, sourceCommit: string): MergeRequest {
     if (run.status !== "MERGE_READY" || verification.status !== "PASSED") throw new Error("MergeRequest requires a passed verification");
     if (verification.runId !== run.id) throw new Error("Verification evidence must belong to the same run");
@@ -2995,10 +3117,14 @@ export class MergeService {
     return request;
   }
 
+  /** 查找 Run 对应的 MergeRequest。 */
   findByRun(runId: string): MergeRequest | undefined { return this.store.findMergeRequestByRun(runId); }
+  /** 按 id 读取 MergeRequest。 */
   get(requestId: string): MergeRequest | undefined { return this.store.getMergeRequest(requestId); }
+  /** 列出全部 MergeRequest 供人工审核台使用。 */
   list(): MergeRequest[] { return this.store.listMergeRequests(); }
 
+  /** 只有目标提交与已审核源提交一致时才确认合并。 */
   confirmMerged(requestId: string, targetCommit: string): MergeRequest {
     const request = this.store.getMergeRequest(requestId);
     if (!request) throw new Error(`MergeRequest ${requestId} not found`);
@@ -3016,6 +3142,7 @@ export class MergeService {
 export type ToolCallLedgerStatus = "PENDING" | "COMPLETED" | "DENIED" | "UNCERTAIN" | "NEEDS_RECONCILIATION";
 export type ToolCallLedgerEntry = { callId: string; tool: ToolName; status: ToolCallLedgerStatus; result: ToolCallResult; replay: boolean };
 
+/** 记录工具调用的确定性结果；UNCERTAIN 恢复为 NEEDS_RECONCILIATION，禁止静默重放。 */
 export class ToolCallLedger {
   private readonly entries = new Map<string, ToolCallLedgerEntry>();
 

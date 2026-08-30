@@ -1,3 +1,9 @@
+/**
+ * 模块职责：封装 Computer Use 能力的动作、截图、事件和宿主适配器。
+ *
+ * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
+ */
+/** 宿主可执行的 Computer Use 动作；坐标和滚动量由调用方明确提供。 */
 export type ComputerUseAction =
   | { type: "screenshot" }
   | { type: "click"; x: number; y: number; button?: "left" | "right" | "middle" | undefined }
@@ -5,17 +11,20 @@ export type ComputerUseAction =
   | { type: "key"; key: string }
   | { type: "scroll"; deltaX?: number | undefined; deltaY?: number | undefined };
 
+/** 宿主返回的截图事实，供模型下一步观察使用。 */
 export type ComputerUseScreenshot = {
   mediaType: string;
   data: string;
 };
 
+/** Desktop 宿主适配器；Domain 不直接依赖具体 GUI 自动化实现。 */
 export interface ComputerUseHostAdapter {
   screenshot(signal?: AbortSignal): Promise<ComputerUseScreenshot>;
   perform(action: Exclude<ComputerUseAction, { type: "screenshot" }>, signal?: AbortSignal): Promise<unknown>;
   cancel?(requestId: string, reason: string): Promise<void>;
 }
 
+/** Computer Use 审计事件，记录请求、结果和失败原因。 */
 export type ComputerUseEvent = {
   type: "requested" | "approved" | "denied" | "started" | "completed" | "failed" | "cancelled";
   requestId: string;
@@ -23,6 +32,7 @@ export type ComputerUseEvent = {
   reason?: string | undefined;
 };
 
+/** Computer Use 桥接策略，包括超时和是否允许宿主动作。 */
 export type ComputerUseBridgeOptions = {
   adapter: ComputerUseHostAdapter;
   enabled?: boolean;
@@ -32,6 +42,7 @@ export type ComputerUseBridgeOptions = {
   onEvent?: (event: ComputerUseEvent) => void;
 };
 
+/** 将 Computer Use 请求转交给宿主适配器，并统一超时、审批和事件记录。 */
 export class ComputerUseBridge {
   private readonly active = new Map<string, AbortController>();
   private readonly enabled: boolean;

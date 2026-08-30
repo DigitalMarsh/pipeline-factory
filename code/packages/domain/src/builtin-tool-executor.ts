@@ -1,9 +1,15 @@
+/**
+ * 模块职责：实现受控内置工具的参数校验、路径保护和执行边界。
+ *
+ * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
+ */
 import { realpathSync } from "node:fs";
 import { mkdir, readdir, readFile as readFileAsync, realpath, stat, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { dirname, relative, resolve, sep } from "node:path";
 import type { CommandExecutor, CommandResult, HookContext, ToolCall, ToolRole } from "./index.js";
 
+/** 内置工具执行上下文；workspacePath 是所有文件和命令的安全边界。 */
 export type BuiltinToolContext = {
   loopId?: string;
   role?: ToolRole;
@@ -15,6 +21,7 @@ export type BuiltinToolContext = {
   exitReason?: string;
 };
 
+/** 内置工具依赖注入；外部工具通过显式桥接进入，不允许任意 Shell。 */
 export type BuiltinToolExecutorOptions = {
   workspaceRoot: string;
   registeredCommandExecutor?: CommandExecutor;
@@ -28,6 +35,7 @@ const MAX_FILE_BYTES = 1_048_576;
 const MAX_SEARCH_RESULTS = 200;
 const DEFAULT_TIMEOUT_MS = 120_000;
 
+/** 执行文件、搜索、Git 和已注册命令等内置工具，并强制 workspace 路径边界。 */
 export class BuiltinToolExecutor {
   private readonly workspaceRoot: string;
   private readonly processRunner: NonNullable<BuiltinToolExecutorOptions["processRunner"]>;

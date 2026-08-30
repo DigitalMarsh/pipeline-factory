@@ -1,3 +1,8 @@
+/**
+ * 模块职责：提供 Pipeline Factory Web 层的类型、请求或状态辅助能力。
+ *
+ * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
+ */
 export type ExecutionJournalEntry = {
   sequence: number;
   type: string;
@@ -17,6 +22,7 @@ export type ExecutionStreamItem = {
   sequence: number;
 };
 
+/** 将 ExecutionThread journal 映射成类似 Explorer 对话的模型/活动消息流。 */
 export function projectExecutionJournal(journal: ExecutionJournalEntry[], threadState: string = "ACTIVE"): ExecutionStreamItem[] {
   const items: ExecutionStreamItem[] = [];
   for (const entry of journal) {

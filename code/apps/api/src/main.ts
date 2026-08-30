@@ -1,3 +1,7 @@
+/**
+ * API 进程入口：解析启动参数并加载 Factory 配置后创建 HTTP 服务。
+ * 入口保持轻量，实际路由和运行时组装由 server 模块负责。
+ */
 import { createApp } from "./server.js";
 import { loadFactoryConfig, resolveConfigPath } from "./config.js";
 

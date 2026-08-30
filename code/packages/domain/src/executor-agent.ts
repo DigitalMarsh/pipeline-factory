@@ -1,3 +1,8 @@
+/**
+ * 模块职责：构造 Executor Agent 的系统约束、执行报告协议和 Agent Loop。
+ *
+ * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
+ */
 import { AgentLoopEngine, type AgentLoop, type AgentLoopEvent, type AgentLoopMode, type GateContext } from "./agent-loop.js";
 import { TaskProgressGate } from "./termination-gates.js";
 import type { ModelGateway, PipelineStore, PlanRevisionV2, Run } from "./index.js";
@@ -6,12 +11,14 @@ import type { ToolRuntime } from "./tool-runtime.js";
 const REPORT_START = "<pipeline-factory-execution-report>";
 const REPORT_END = "</pipeline-factory-execution-report>";
 
+/** Executor 必须返回的结构化完成报告；Gate 会据此判断任务、范围和报告是否完整。 */
 export type ExecutorReport = {
   completedTaskIds: string[];
   pathsWithinScope: boolean;
   report: string;
 };
 
+/** Executor Agent 的运行限制；ProjectExecutionSnapshot 优先于全局默认策略。 */
 export type ExecutorAgentOptions = {
   maxSteps?: number;
   maxDurationMs?: number;
@@ -21,6 +28,10 @@ export type ExecutorAgentOptions = {
   toolRuntimeFactory?: (run: Run, revision: PlanRevisionV2) => ToolRuntime;
 };
 
+/**
+ * 在 Run 的 Worktree 中启动 Executor Agent，并把模型输出转换为 ExecutionThread 事实。
+ * Executor 始终校验 Run、PlanRevision 和 workspace 的对应关系，避免跨项目或跨版本写入。
+ */
 export class ExecutorAgent {
   private readonly engine: AgentLoopEngine;
   private readonly options: ExecutorAgentOptions;
@@ -37,6 +48,7 @@ export class ExecutorAgent {
     });
   }
 
+  /** 异步启动 Executor Loop；RunDetail 可通过 AgentLoop/SSE 观察实时进度。 */
   async start(run: Run, revision: PlanRevisionV2): Promise<AgentLoop> {
     this.assertRunnable(run, revision);
     const projectConfig = revision.projectConfigSnapshot?.settings.models.executor;
@@ -76,6 +88,7 @@ export class ExecutorAgent {
     return loop;
   }
 
+  /** 同步运行 Executor Loop，完成后同步 Run 的终态映射。 */
   async run(run: Run, revision: PlanRevisionV2): Promise<AgentLoop> {
     this.assertRunnable(run, revision);
     const projectConfig = revision.projectConfigSnapshot?.settings.models.executor;
@@ -143,6 +156,7 @@ export class ExecutorAgent {
     };
   }
 
+  /** 将冻结的 Plan 合同和 Project 配置注入模型，确保执行阶段不读取当前 Project。 */
   private systemInstructions(revision: PlanRevisionV2): string {
     const executionContract = {
       planId: revision.planId,
@@ -163,6 +177,7 @@ export class ExecutorAgent {
     ].join(" ");
   }
 
+  /** 把 Loop 事件投影为用户可读的 ExecutionThread journal，同时维护未完成工具集合。 */
   private handleEvent(run: Run, event: AgentLoopEvent, openToolCalls: Set<string>): void {
     const thread = this.store.getExecutionThread(run.executionThreadId);
     if (!thread) return;
@@ -215,6 +230,7 @@ export class ExecutorAgent {
   }
 }
 
+/** 从模型输出提取结构化完成报告；缺失协议块时返回 null 触发完成门禁继续。 */
 export function parseExecutorReport(content: string): ExecutorReport | null {
   const start = content.lastIndexOf(REPORT_START);
   if (start < 0) return null;

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+
+# 停止 API 的目标由独立 PID 文件确定，并在发送信号前检查命令行，防止陈旧 PID 误杀其他进程。
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -33,6 +35,7 @@ case "$command" in
 esac
 
 stop_tree() {
+  # 先递归停止 pnpm/Vite/Node 子进程，避免父进程退出后留下孤儿 API 进程。
   local parent="$1"
   local child
   for child in $(pgrep -P "$parent" 2>/dev/null || true); do
@@ -42,6 +45,7 @@ stop_tree() {
 }
 
 stop_tree "$pid"
+# 给进程树一个有限的退出窗口；超时保留现场，便于操作者继续诊断。
 for _ in {1..50}; do
   if ! kill -0 "$pid" 2>/dev/null; then
     rm -f "$PID_FILE"

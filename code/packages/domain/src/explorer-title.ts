@@ -1,6 +1,13 @@
+/**
+ * 模块职责：负责 ExplorerThread 标题的生成、规范化和降级显示。
+ *
+ * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
+ */
 import type { ModelGateway } from "./index.js";
 
+/** Explorer 标题来源；手工标题不会被模型自动覆盖。 */
 export type ExplorerTitleSource = "AUTO" | "MANUAL";
+/** Explorer 标题生成生命周期，用于显示降级和重试状态。 */
 export type ExplorerTitleStatus = "PLACEHOLDER" | "GENERATING" | "GENERATED" | "FAILED";
 
 const TITLE_MAX_LENGTH = 24;
@@ -12,10 +19,12 @@ const titleGenerationPrompt = `
 首条用户需求：
 `;
 
+/** 标题生成端口；Provider 失败不影响 Explorer 主流程。 */
 export type ExplorerTitleGenerator = {
   generate(input: { threadId: string; content: string; signal?: AbortSignal }): Promise<string>;
 };
 
+/** 使用 Explorer 角色生成短标题；Provider 失败时由调用方保留 placeholder/FAILED 状态。 */
 export class ModelExplorerTitleGenerator implements ExplorerTitleGenerator {
   constructor(private readonly model: ModelGateway) {}
 
@@ -38,6 +47,7 @@ export class ModelExplorerTitleGenerator implements ExplorerTitleGenerator {
   }
 }
 
+/** 从创建时间生成稳定的默认标题时间片段。 */
 export function explorerTimestamp(createdAt: string): string {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: "Asia/Shanghai",
@@ -53,14 +63,17 @@ export function explorerTimestamp(createdAt: string): string {
   return `${value("year")}${value("month")}${value("day")}-${value("hour")}:${value("minute")}:${value("second")}`;
 }
 
+/** 生成尚未完成自动命名时使用的占位标题。 */
 export function placeholderExplorerTitle(createdAt: string): string {
   return `探索-${explorerTimestamp(createdAt)}`;
 }
 
+/** 组合时间片段和模型标题，保证导航栏始终有可读名称。 */
 export function composeExplorerTitle(createdAt: string, title: string): string {
   return `${explorerTimestamp(createdAt)}-${title}`;
 }
 
+/** 清理 Markdown、前缀和尾部标点，并限制标题长度以保证导航栏可读。 */
 export function normalizeExplorerTitle(value: string): string | null {
   let title = value.trim().replace(/^```(?:text|markdown)?\s*/i, "").replace(/\s*```$/i, "").split(/\r?\n/, 1)[0]!.trim();
   title = title.replace(/[。.!！?？:：,，;；、…]+$/u, "").trim();

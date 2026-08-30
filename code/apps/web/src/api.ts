@@ -1,5 +1,11 @@
+/**
+ * 模块职责：集中封装 Web 调用 API 的请求、错误转换和 SSE 连接。
+ *
+ * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
+ */
 import type { AgentLoop, AgentLoopStep, CodexRateLimitsStatus, ExecutionThread, ExplorerActivityItem, ExplorerInputRequest, ExplorerThread, ExplorerTurn, MergeRequest, Plan, Project, ProjectCatalogItem, ProjectSummary, Run, ToolCall, VerificationRun } from "./types";
 
+/** 统一处理 JSON 请求和错误响应，保证页面只依赖稳定的 typed API 方法。 */
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const headers = { ...(init?.headers ?? {}) } as Record<string, string>;
   if (init?.body && !Object.keys(headers).some((key) => key.toLowerCase() === "content-type")) headers["content-type"] = "application/json";
@@ -8,6 +14,9 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+/**
+ * Web 端 API facade。方法按业务域分组，路径拼接集中在此处，避免各页面自行构造 Project/Thread/Run URL。
+ */
 export const api = {
   health: () => request<{ status: string; model: string }>("/health"),
   projects: (status?: string) => request<{ items: ProjectCatalogItem[] }>(`/api/v4/projects${status ? `?status=${encodeURIComponent(status)}` : ""}`),

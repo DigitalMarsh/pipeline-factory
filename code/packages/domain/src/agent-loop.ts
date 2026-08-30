@@ -1,5 +1,12 @@
+/**
+ * 模块职责：定义 Agent Loop 的状态、步骤事件、终止门禁和生命周期控制。
+ *
+ * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
+ */
+/** 标识继续策略由 Provider 还是 Factory 的本地状态机负责。 */
 export type AgentLoopMode = "provider-controlled" | "factory-controlled";
 
+/** Agent Loop 的持久化状态；终态不会再创建新的模型步骤。 */
 export type AgentLoopState =
   | "CREATED"
   | "RUNNING"
@@ -12,6 +19,7 @@ export type AgentLoopState =
   | "CANCELLED"
   | "NEEDS_RECONCILIATION";
 
+/** Agent Loop 可审计的步骤类型；每种类型都可通过 journal/SSE 回放。 */
 export type AgentStepType =
   | "MODEL_STARTED"
   | "MODEL_TEXT_DELTA"
@@ -31,6 +39,7 @@ export type AgentStepType =
   | "LOOP_COMPLETED"
   | "LOOP_FAILED";
 
+/** Loop 的持久化聚合；providerThreadId/providerTurnId 用于恢复和取消外部会话。 */
 export type AgentLoop = {
   id: string;
   ownerType: "explorer-turn" | "run";
@@ -47,6 +56,7 @@ export type AgentLoop = {
   checkpointJson: string | null;
 };
 
+/** 单步生命周期状态；NEEDS_RECONCILIATION 表示外部副作用结果未知。 */
 export type AgentLoopStepStatus =
   | "PENDING"
   | "RUNNING"
@@ -56,6 +66,7 @@ export type AgentLoopStepStatus =
   | "CANCELLED"
   | "NEEDS_RECONCILIATION";
 
+/** Loop 内单步事实，sequence 与 Domain Event 共同支持审计和增量回放。 */
 export type AgentLoopStep = {
   loopId: string;
   sequence: number;
@@ -68,12 +79,14 @@ export type AgentLoopStep = {
   occurredAt: string;
 };
 
+/** 创建 Loop 步骤时允许调用方省略由 Store/Engine 生成的审计字段。 */
 export type AgentLoopStepInput = Omit<AgentLoopStep, "sequence" | "occurredAt" | "callId" | "providerThreadId" | "providerTurnId"> & Partial<Pick<AgentLoopStep, "callId" | "providerThreadId" | "providerTurnId" | "occurredAt">>;
 
 import type { ModelEvent, ModelGateway, ModelMessage, ModelRequest, ModelRole, ToolCall } from "./index.js";
 import type { PipelineStore } from "./index.js";
 import type { ToolRuntime } from "./tool-runtime.js";
 
+/** 启动 Loop 所需的角色、循环限制、模型请求和可选工具/门禁。 */
 export type AgentLoopInput = {
   id?: string;
   ownerType: AgentLoop["ownerType"];
@@ -91,17 +104,20 @@ export type AgentLoopInput = {
   onEvent?: (event: AgentLoopEvent) => void;
 };
 
+/** Loop 的终态结果；reason 用于 UI、审计和恢复诊断。 */
 export type AgentLoopResult = {
   loop: AgentLoop;
   reason: string;
 };
 
+/** 终止门禁的明确决策；blocked 与 complete 都会结束当前 Loop。 */
 export type GateDecision =
   | { action: "continue"; reason: string }
   | { action: "suspend"; reason: string }
   | { action: "complete"; reason: string }
   | { action: "blocked"; reason: string };
 
+/** 门禁可见的模型输出和执行事实，不直接暴露 Store 给策略实现。 */
 export type GateContext = {
   content?: string;
   reportReady?: boolean;
@@ -112,9 +128,11 @@ export type GateContext = {
 };
 
 export interface TerminationGate {
+  /** 根据当前模型输出和运行上下文决定继续、暂停、完成或阻塞。 */
   evaluate(context: GateContext): GateDecision;
 }
 
+/** 对外实时事件；payload 保持结构化以便 API SSE 和 UI 投影复用。 */
 export type AgentLoopEvent = {
   loopId: string;
   type: string;
@@ -129,6 +147,11 @@ export type AgentLoopEngineOptions = {
   defaultMaxNoProgressSteps?: number;
 };
 
+/**
+ * 驱动一次可恢复的模型循环，并把步骤、事件和控制状态持久化到 PipelineStore。
+ * Provider-controlled 模式只消费 Provider 事件；factory-controlled 模式才会调用 ToolRuntime，
+ * 这样两种工具循环不会嵌套，也不会重复执行 Provider 已经处理的工具。
+ */
 export class AgentLoopEngine implements AgentLoopRunner {
   private readonly waiters = new Map<string, Promise<AgentLoop>>();
   private readonly resolveWaiters = new Map<string, (loop: AgentLoop) => void>();
@@ -154,6 +177,7 @@ export class AgentLoopEngine implements AgentLoopRunner {
     };
   }
 
+  /** 创建并异步启动 Loop；调用方可通过事件订阅或 wait 获取最终状态。 */
   async start(input: AgentLoopInput): Promise<AgentLoop> {
     const loop = this.create(input);
     if (input.onEvent) this.callbacks.set(loop.id, input.onEvent);
@@ -162,6 +186,7 @@ export class AgentLoopEngine implements AgentLoopRunner {
     return loop;
   }
 
+  /** 创建并同步运行 Loop，适合需要等待完整执行结果的后台任务。 */
   async run(input: AgentLoopInput): Promise<AgentLoop> {
     const loop = this.create(input);
     if (input.onEvent) this.callbacks.set(loop.id, input.onEvent);
@@ -170,6 +195,7 @@ export class AgentLoopEngine implements AgentLoopRunner {
     return this.get(loop.id);
   }
 
+  /** 等待指定 Loop 进入终态；已完成的 Loop 直接返回持久化状态。 */
   async wait(loopId: string): Promise<AgentLoop> {
     const loop = this.get(loopId);
     if (isTerminal(loop.state)) return loop;
@@ -177,6 +203,7 @@ export class AgentLoopEngine implements AgentLoopRunner {
     return this.waiters.get(loopId)!;
   }
 
+  /** 提交当前结构化问题的答案，并等待 Provider 接收答案后的状态更新。 */
   async answerInput(loopId: string, requestId: string | number, answers: Record<string, { answers: string[] }>): Promise<AgentLoop> {
     const pending = this.pendingInputs.get(loopId);
     if (!pending || String(pending.requestId) !== String(requestId)) throw new Error("AgentLoop input request is not open");
@@ -185,6 +212,7 @@ export class AgentLoopEngine implements AgentLoopRunner {
     return this.get(loopId);
   }
 
+  /** 订阅实时事件；返回的函数用于解绑，持久化事件仍由 Store 保留。 */
   subscribe(loopId: string, listener: (event: AgentLoopEvent) => void): () => void {
     const listeners = this.listeners.get(loopId) ?? new Set<(event: AgentLoopEvent) => void>();
     listeners.add(listener);
@@ -192,6 +220,7 @@ export class AgentLoopEngine implements AgentLoopRunner {
     return () => { listeners.delete(listener); if (listeners.size === 0) this.listeners.delete(loopId); };
   }
 
+  /** 从 PAUSED 或 RECOVERING 恢复 Loop，不重放已经完成的步骤。 */
   async resume(loopId: string): Promise<AgentLoop> {
     const loop = this.get(loopId);
     if (loop.state !== "PAUSED" && loop.state !== "RECOVERING") throw new Error(`AgentLoop ${loopId} cannot be resumed from ${loop.state}`);
@@ -201,6 +230,7 @@ export class AgentLoopEngine implements AgentLoopRunner {
     return resumed;
   }
 
+  /** 写入 checkpoint 后暂停 Loop；当前 Provider 调用由控制器决定是否继续中断。 */
   async pause(loopId: string, reason: string): Promise<AgentLoop> {
     const loop = this.get(loopId);
     if (isTerminal(loop.state)) throw new Error(`AgentLoop ${loopId} is already ${loop.state}`);
@@ -210,6 +240,7 @@ export class AgentLoopEngine implements AgentLoopRunner {
     return paused;
   }
 
+  /** 取消 Loop，并尽力取消 Provider Turn；取消本身是幂等的。 */
   async cancel(loopId: string, reason: string): Promise<AgentLoop> {
     const loop = this.get(loopId);
     if (isTerminal(loop.state)) return loop;
@@ -226,6 +257,7 @@ export class AgentLoopEngine implements AgentLoopRunner {
     return cancelled;
   }
 
+  /** 读取持久化 Loop，不为未知 ID 创建隐式对象。 */
   get(loopId: string): AgentLoop {
     const loop = this.store.getAgentLoop(loopId);
     if (!loop) throw new Error(`AgentLoop ${loopId} not found`);
@@ -264,6 +296,8 @@ export class AgentLoopEngine implements AgentLoopRunner {
     const maxRepeatedToolCalls = input.maxRepeatedToolCalls ?? this.options.defaultMaxRepeatedToolCalls;
     const maxNoProgressSteps = input.maxNoProgressSteps ?? this.options.defaultMaxNoProgressSteps;
 
+    // 每一轮只允许一个模型步骤；步骤完成后先过 gate，再决定是否继续上下文压缩。
+    // 这保证“模型说完成”不会绕过 Plan/Task 的业务门禁，也为暂停和恢复留下 checkpoint。
     for (;;) {
       loop = this.get(initial.id);
       if (loop.state === "PAUSED") { await this.waitUntilResumed(initial.id, controller.signal); continue; }
@@ -378,9 +412,8 @@ export class AgentLoopEngine implements AgentLoopRunner {
         this.pendingInputs.delete(loopId);
         const error = new Error("AgentLoop input was cancelled");
         reject(error);
-        // The input promise is already being rejected above. Resolve the
-        // auxiliary completion promise so cancellation cannot become an
-        // unhandled rejection when no answer request is in flight.
+        // 上方已经拒绝输入 Promise；这里仍需完成辅助 Promise，避免没有答案请求
+        // 在途时因取消产生未处理的 rejection。
         complete();
       };
       signal.addEventListener("abort", onAbort, { once: true });
@@ -431,9 +464,14 @@ function isTerminal(state: AgentLoopState): boolean {
 }
 
 export interface AgentLoopRunner {
+  /** 启动并返回可观察的 Loop 聚合。 */
   start(input: AgentLoopInput): Promise<AgentLoop>;
+  /** 从已持久化 checkpoint 恢复 Loop。 */
   resume(loopId: string): Promise<AgentLoop>;
+  /** 暂停仍可继续的 Loop，并记录暂停原因。 */
   pause(loopId: string, reason: string): Promise<AgentLoop>;
+  /** 取消 Loop 和外部 Provider turn。 */
   cancel(loopId: string, reason: string): Promise<AgentLoop>;
+  /** 读取 Loop 当前持久化状态。 */
   get(loopId: string): AgentLoop;
 }

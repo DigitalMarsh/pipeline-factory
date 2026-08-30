@@ -1,3 +1,8 @@
+/**
+ * 模块职责：负责 Factory 配置的 schema 校验、路径解析和默认配置加载。
+ *
+ * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
+ */
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { z } from "zod";
@@ -101,10 +106,12 @@ const configSchema = z.object({
   }).default({}),
 });
 
+/** 经过 Zod 校验且已完成相对路径解析的服务级配置。 */
 export type FactoryConfig = z.infer<typeof configSchema> & {
   configPath: string;
 };
 
+/** 从当前目录向上寻找配置文件，支持脚本从仓库任意子目录启动。 */
 export function resolveConfigPath(configPath: string | undefined, startDirectory = process.cwd()): string {
   const requestedPath = configPath ?? "./config/pipeline-factory.config.json";
   if (isAbsolute(requestedPath)) return requestedPath;
@@ -118,6 +125,7 @@ export function resolveConfigPath(configPath: string | undefined, startDirectory
   }
 }
 
+/** 读取并校验严格 JSON 配置，同时将存储、Project、MCP 和插件路径解析为绝对路径。 */
 export function loadFactoryConfig(configPath = resolveConfigPath(undefined)): FactoryConfig {
   const absoluteConfigPath = resolveConfigPath(configPath);
   let raw: unknown;
