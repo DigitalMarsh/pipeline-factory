@@ -67,13 +67,11 @@ const threadPlanQuery = z.object({
   sort: z.enum(["queued_at", "last_event_at"]).default("queued_at"),
 });
 const actorBody = z.object({ actorId: z.string().min(1).default("local-user") });
-const turnBody = z.object({ threadId: z.string().min(1).optional(), content: z.string().trim().min(1).max(20_000) });
 const v4TurnBody = z.object({ threadId: z.string().min(1), content: z.string().trim().min(1).max(20_000), clientTurnId: z.string().min(1).max(200) });
 const v4AnswerBody = z.object({ clientRequestId: z.string().min(1).max(200), answers: z.record(z.object({ answers: z.array(z.string().max(20_000)).min(1) })), actorId: z.string().min(1).default("local-user") });
 const v4ThreadQuery = z.object({ threadId: z.string().min(1).optional(), afterSequence: z.coerce.number().int().nonnegative().optional() });
 const loopEventsQuery = z.object({ format: z.enum(["json", "sse"]).optional(), afterSequence: z.coerce.number().int().nonnegative().optional() });
 const v4InputQuery = z.object({ threadId: z.string().min(1).optional(), status: z.enum(["OPEN", "SUBMITTING", "ANSWERED", "CANCELLED", "AUTO_RESOLVED", "RECOVERY_REQUIRED"]).optional() });
-const candidateBody = z.object({ threadId: z.string().min(1).optional(), title: z.string().trim().min(1).max(200) });
 const hookBody = z.object({
   start: z
     .object({ commandId: z.string().min(1), enabled: z.boolean().optional(), timeoutMs: z.number().int().positive().optional() })
@@ -648,32 +646,6 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     return reply.code(201).send({ plan: plans.createCandidatePlan({ projectId: explorer.projectId, sourceExplorerThreadId: explorer.id, title: body.data.title }) });
   });
 
-  app.get("/api/v3/projects/:projectId/explorer-thread", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    const thread = store.listThreads().find((item) => item.projectId === params.data.projectId && item.parentThreadId === null);
-    if (!thread) return reply.code(404).send({ error: "ExplorerThread not found" });
-    return { thread };
-  });
-
-  app.get("/api/v3/projects/:projectId/explorer-thread/turns", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    const thread = store.listThreads().find((item) => item.projectId === params.data.projectId && item.parentThreadId === null);
-    if (!thread) return reply.code(404).send({ error: "ExplorerThread not found" });
-    return { items: store.listTurns(thread.id) };
-  });
-
-  app.post("/api/v3/projects/:projectId/explorer-thread/turns", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    const body = turnBody.safeParse(request.body ?? {});
-    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid ExplorerThread turn" });
-    const thread = store.listThreads().find((item) => item.projectId === params.data.projectId && (body.data.threadId ? item.id === body.data.threadId : item.parentThreadId === null));
-    if (!thread) return reply.code(404).send({ error: "ExplorerThread not found" });
-    try { return { turn: await explorer.send(thread.id, body.data.content) }; }
-    catch (error) { if (error instanceof Error && error.message === "STRUCTURED_INPUT_REQUIRES_V4") return reply.code(409).send({ error: error.message }); throw error; }
-  });
-
   app.post("/api/v4/projects/:projectId/explorer-thread/turns", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
     const body = v4TurnBody.safeParse(request.body ?? {});
@@ -751,45 +723,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     request.raw.once("close", cleanup);
   });
 
-  app.post("/api/v3/projects/:projectId/explorer-thread/candidate", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    const body = candidateBody.safeParse(request.body ?? {});
-    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid candidate plan" });
-    const thread = store.listThreads().find((item) => item.projectId === params.data.projectId && (body.data.threadId ? item.id === body.data.threadId : item.parentThreadId === null));
-    if (!thread) return reply.code(404).send({ error: "ExplorerThread not found" });
-    return { plan: plans.createCandidatePlan({ projectId: params.data.projectId, sourceExplorerThreadId: thread.id, title: body.data.title }) };
-  });
-
-  app.get("/api/v3/projects/:projectId/explorer-thread/plans", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    const query = threadPlanQuery.safeParse(request.query);
-    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid plan query" });
-    const thread = store.listThreads().find((item) => item.projectId === params.data.projectId && item.parentThreadId === null);
-    if (!thread) return reply.code(404).send({ error: "ExplorerThread not found" });
-    const statuses = query.data.status?.split(",").filter(Boolean) as PlanStatus[] | undefined;
-    const rows = plans
-      .listThreadPlans(thread.id)
-      .filter((row) => !statuses?.length || statuses.includes(row.status))
-      .filter((row) => !query.data.q || `${row.planId} ${row.title}`.toLowerCase().includes(query.data.q.toLowerCase()))
-      .sort((a, b) => query.data.sort === "last_event_at" ? b.lastEventAt.localeCompare(a.lastEventAt) : b.queuedAt.localeCompare(a.queuedAt))
-      .slice(0, query.data.limit);
-    return { items: decoratePlanRows(store, rows), nextCursor: null };
-  });
-
-  app.get("/api/v3/projects/:projectId/explorer-thread/candidate", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    const thread = store.listThreads().find((item) => item.projectId === params.data.projectId && item.parentThreadId === null);
-    if (!thread) return reply.code(404).send({ error: "ExplorerThread not found" });
-    const candidate = store
-      .listPlans()
-      .filter((plan) => plan.sourceExplorerThreadId === thread.id && plan.status === "DRAFT" && plan.queuedAt === null)
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-    if (!candidate) return reply.code(404).send({ error: "Candidate plan not found" });
-    return { plan: candidate };
-  });
-
-  app.get("/api/v3/plans/:planId", async (request, reply) => {
+  app.get("/api/v4/plans/:planId", async (request, reply) => {
     const params = planIdParams.safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     try {
@@ -802,7 +736,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     }
   });
 
-  app.post("/api/v3/plans/:planId/confirm", async (request, reply) => {
+  app.post("/api/v4/plans/:planId/confirm", async (request, reply) => {
     const params = planIdParams.safeParse(request.params);
     const body = actorBody.safeParse(request.body ?? {});
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid confirmation request" });
@@ -815,7 +749,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     }
   });
 
-  app.post("/api/v3/plans/:planId/discard", async (request, reply) => {
+  app.post("/api/v4/plans/:planId/discard", async (request, reply) => {
     const params = planIdParams.safeParse(request.params);
     const body = actorBody.safeParse(request.body ?? {});
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid discard request" });
@@ -830,7 +764,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     }
   });
 
-  app.post("/api/v3/plans/:planId/enqueue", async (request, reply) => {
+  app.post("/api/v4/plans/:planId/enqueue", async (request, reply) => {
     const params = planIdParams.safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     try {
@@ -842,7 +776,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     }
   });
 
-  app.post("/api/v3/plans/:planId/run", async (request, reply) => {
+  app.post("/api/v4/plans/:planId/run", async (request, reply) => {
     const params = planIdParams.safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     if (!scheduler) return reply.code(503).send({ error: "Scheduler is not configured for this API instance" });
@@ -887,7 +821,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     } catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "ChangeProposal cannot be approved" }); }
   });
 
-  app.post("/api/v3/runs/:runId/finish", async (request, reply) => {
+  app.post("/api/v4/runs/:runId/finish", async (request, reply) => {
     const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
     const body = z.object({ exitReason: z.string().min(1).default("completed") }).safeParse(request.body ?? {});
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid run completion request" });
@@ -899,7 +833,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "Run cannot be finished" }); }
   });
 
-  app.post("/api/v3/runs/:runId/cancel", async (request, reply) => {
+  app.post("/api/v4/runs/:runId/cancel", async (request, reply) => {
     const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
     const body = loopReasonBody.safeParse(request.body ?? {});
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid run cancellation request" });
@@ -914,7 +848,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     } catch (error) { return reply.code(409).send({ code: "RUN_CANCEL_FAILED", error: error instanceof Error ? error.message : "Run cannot be cancelled" }); }
   });
 
-  app.post("/api/v3/runs/:runId/pause", async (request, reply) => {
+  app.post("/api/v4/runs/:runId/pause", async (request, reply) => {
     const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     if (!scheduler) return reply.code(503).send({ error: "Scheduler is not configured for this API instance" });
@@ -926,7 +860,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     }
   });
 
-  app.post("/api/v3/runs/:runId/resume", async (request, reply) => {
+  app.post("/api/v4/runs/:runId/resume", async (request, reply) => {
     const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     if (!scheduler) return reply.code(503).send({ error: "Scheduler is not configured for this API instance" });
@@ -938,7 +872,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     }
   });
 
-  app.post("/api/v3/runs/:runId/guidance", async (request, reply) => {
+  app.post("/api/v4/runs/:runId/guidance", async (request, reply) => {
     const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
     const body = guidanceBody.safeParse(request.body ?? {});
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid user guidance" });
@@ -947,7 +881,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "Guidance cannot be added" }); }
   });
 
-  app.post("/api/v3/runs/:runId/verify", async (request, reply) => {
+  app.post("/api/v4/runs/:runId/verify", async (request, reply) => {
     const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     if (!verificationExecutor) return reply.code(503).send({ error: "Verification command executor is not configured" });
@@ -965,7 +899,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     }
   });
 
-  app.get("/api/v3/runs/:runId/verification", async (request, reply) => {
+  app.get("/api/v4/runs/:runId/verification", async (request, reply) => {
     const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     const run = store.getRun(params.data.runId);
@@ -975,7 +909,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     return { verification };
   });
 
-  app.post("/api/v3/runs/:runId/merge-request", async (request, reply) => {
+  app.post("/api/v4/runs/:runId/merge-request", async (request, reply) => {
     const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
     const body = sourceCommitBody.safeParse(request.body ?? {});
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid merge request" });
@@ -989,7 +923,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "MergeRequest cannot be created" }); }
   });
 
-  app.get("/api/v3/runs/:runId/merge-request", async (request, reply) => {
+  app.get("/api/v4/runs/:runId/merge-request", async (request, reply) => {
     const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     const run = store.getRun(params.data.runId);
@@ -999,7 +933,15 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     return { mergeRequest };
   });
 
-  app.post("/api/v3/merge-requests/:mergeRequestId/confirm-merged", async (request, reply) => {
+  app.get("/api/v4/merge-requests/:mergeRequestId", async (request, reply) => {
+    const params = z.object({ mergeRequestId: z.string().min(1) }).safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    const mergeRequest = merger.get(params.data.mergeRequestId);
+    if (!mergeRequest) return reply.code(404).send({ error: "MergeRequest not found" });
+    return { mergeRequest };
+  });
+
+  app.post("/api/v4/merge-requests/:mergeRequestId/confirm-merged", async (request, reply) => {
     const params = z.object({ mergeRequestId: z.string().min(1) }).safeParse(request.params);
     const body = targetCommitBody.safeParse(request.body ?? {});
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid merge confirmation" });
@@ -1007,13 +949,13 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "MergeRequest cannot be confirmed" }); }
   });
 
-  app.get("/api/v3/projects/:projectId/settings/hooks", async (request, reply) => {
+  app.get("/api/v4/projects/:projectId/settings/hooks", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     return { projectId: params.data.projectId, lifecycle: store.getProject(params.data.projectId)?.settings.hooks ?? {} };
   });
 
-  app.put("/api/v3/projects/:projectId/settings/hooks", async (request, reply) => {
+  app.put("/api/v4/projects/:projectId/settings/hooks", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
     const body = hookBody.safeParse(request.body ?? {});
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid hook configuration" });
@@ -1033,13 +975,13 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     return { projectId: params.data.projectId, lifecycle: body.data };
   });
 
-  app.get("/api/v3/projects/:projectId/runs", async (request, reply) => {
+  app.get("/api/v4/projects/:projectId/runs", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     return { items: store.listRuns().filter((run) => run.projectId === params.data.projectId) };
   });
 
-  app.get("/api/v3/runs/:runId", async (request, reply) => {
+  app.get("/api/v4/runs/:runId", async (request, reply) => {
     const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     const run = store.getRun(params.data.runId);
@@ -1047,7 +989,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     return { run: { ...run, agentLoops: store.listAgentLoops(run.id) }, executionThread: store.getExecutionThread(run.executionThreadId) ?? null, verification: store.getVerificationRun(run.id) ?? null, mergeRequest: merger.findByRun(run.id) ?? null };
   });
 
-  app.get("/api/v3/execution-threads/:threadId", async (request, reply) => {
+  app.get("/api/v4/execution-threads/:threadId", async (request, reply) => {
     const params = z.object({ threadId: z.string().min(1) }).safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     const thread = store.getExecutionThread(params.data.threadId);

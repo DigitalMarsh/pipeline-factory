@@ -17,7 +17,7 @@ afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
 });
 
-describe("Pipeline Factory v3 API", () => {
+describe("Pipeline Factory v4 API", () => {
   it("lists Project configuration and summary data", async () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);
@@ -213,11 +213,11 @@ describe("Pipeline Factory v3 API", () => {
     plans.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
     const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", sourceTurnId: "assistant-1", title: "API plan" });
 
-    const rejected = await app.inject({ method: "POST", url: `/api/v3/plans/${plan.id}/enqueue` });
+    const rejected = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/enqueue` });
     expect(rejected.statusCode).toBe(409);
-    await app.inject({ method: "POST", url: `/api/v3/plans/${plan.id}/confirm`, payload: { actorId: "user-1" } });
-    await app.inject({ method: "POST", url: `/api/v3/plans/${plan.id}/enqueue` });
-    const response = await app.inject({ method: "GET", url: "/api/v3/projects/project-1/explorer-thread/plans" });
+    await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/confirm`, payload: { actorId: "user-1" } });
+    await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/enqueue` });
+    const response = await app.inject({ method: "GET", url: "/api/v4/projects/project-1/plans" });
     expect(response.statusCode).toBe(200);
     expect(response.json().items[0]).toMatchObject({ planId: plan.id, status: "QUEUED", createdAt: plan.createdAt, sourceTurnId: "assistant-1" });
   });
@@ -231,22 +231,20 @@ describe("Pipeline Factory v3 API", () => {
     plans.registerThread({ id: "discard-thread", projectId: "project-1", parentThreadId: null });
     const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "discard-thread", title: "Discard through API" });
 
-    const discarded = await app.inject({ method: "POST", url: `/api/v3/plans/${plan.id}/discard`, payload: { actorId: "user-1" } });
+    const discarded = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/discard`, payload: { actorId: "user-1" } });
     expect(discarded.statusCode).toBe(200);
     expect(discarded.json()).toMatchObject({ plan: { id: plan.id, status: "DISCARDED" } });
 
-    const candidate = await app.inject({ method: "GET", url: "/api/v3/projects/project-1/explorer-thread/candidate" });
+    const candidate = await app.inject({ method: "GET", url: "/api/v4/projects/project-1/explorers/discard-thread/candidate" });
     expect(candidate.statusCode).toBe(404);
-    const v4Candidate = await app.inject({ method: "GET", url: "/api/v4/projects/project-1/explorers/discard-thread/candidate" });
-    expect(v4Candidate.statusCode).toBe(404);
-    const confirm = await app.inject({ method: "POST", url: `/api/v3/plans/${plan.id}/confirm`, payload: { actorId: "user-1" } });
+    const confirm = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/confirm`, payload: { actorId: "user-1" } });
     expect(confirm.statusCode).toBe(409);
-    const enqueue = await app.inject({ method: "POST", url: `/api/v3/plans/${plan.id}/enqueue` });
+    const enqueue = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/enqueue` });
     expect(enqueue.statusCode).toBe(409);
     expect(store.listRuns()).toEqual([]);
   });
 
-  it("keeps ExplorerThread turns in the API without granting write tools", async () => {
+  it("accepts ExplorerThread turns through the asynchronous v4 API", async () => {
     const store = new InMemoryPipelineStore();
     createTestProject(store);
     const app = createApp({ store, seed: false });
@@ -254,10 +252,10 @@ describe("Pipeline Factory v3 API", () => {
     const plans = new (await import("@pipeline-factory/domain")).PlanService(store);
     plans.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
 
-    const sent = await app.inject({ method: "POST", url: "/api/v3/projects/project-1/explorer-thread/turns", payload: { content: "Explore the repository" } });
-    expect(sent.statusCode).toBe(200);
-    expect(sent.json().turn.assistant.content).toBe("Stub Explorer response");
-    const turns = await app.inject({ method: "GET", url: "/api/v3/projects/project-1/explorer-thread/turns" });
+    const sent = await app.inject({ method: "POST", url: "/api/v4/projects/project-1/explorer-thread/turns", payload: { threadId: "thread-1", content: "Explore the repository", clientTurnId: "client-1" } });
+    expect(sent.statusCode).toBe(202);
+    expect(sent.json().turn.assistant.status).toBe("RUNNING");
+    const turns = await app.inject({ method: "GET", url: "/api/v4/projects/project-1/explorer-thread/turns?threadId=thread-1" });
     expect(turns.json().items).toHaveLength(2);
   });
 
@@ -277,10 +275,11 @@ describe("Pipeline Factory v3 API", () => {
     createTestProject(store);
     plans.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
 
-    const response = await app.inject({ method: "POST", url: "/api/v3/projects/project-1/explorer-thread/turns", payload: { content: "hello" } });
+    const response = await app.inject({ method: "POST", url: "/api/v4/projects/project-1/explorer-thread/turns", payload: { threadId: "thread-1", content: "hello", clientTurnId: "client-failure" } });
 
-    expect(response.statusCode).toBe(200);
-    expect(response.json().turn.assistant).toMatchObject({ status: "FAILED", content: "模型调用失败：Codex turn failed" });
+    expect(response.statusCode).toBe(202);
+    for (let attempt = 0; attempt < 50 && store.listTurns("thread-1")[1]?.status !== "FAILED"; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 1));
+    expect(store.listTurns("thread-1")[1]).toMatchObject({ status: "FAILED", content: "模型调用失败：Codex turn failed" });
   });
 
   it("starts a queued plan only through the injected Scheduler", async () => {
@@ -295,7 +294,7 @@ describe("Pipeline Factory v3 API", () => {
     const app = createApp({ store, scheduler, seed: false });
     apps.push(app);
 
-    const response = await app.inject({ method: "POST", url: `/api/v3/plans/${plan.id}/run` });
+    const response = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/run` });
     expect(response.statusCode).toBe(200);
     expect(response.json().run).toMatchObject({ planId: plan.id, status: "IN_PROGRESS" });
   });
@@ -311,7 +310,7 @@ describe("Pipeline Factory v3 API", () => {
     const scheduler = new Scheduler({ store, workspace: { create: async () => ({ path: "/tmp/change-api", branch: "factory/change-api", baseCommit: "abc" }), remove: async () => undefined }, hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })) });
     const app = createApp({ store, scheduler, seed: false });
     apps.push(app);
-    const started = await app.inject({ method: "POST", url: `/api/v3/plans/${plan.id}/run` });
+    const started = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/run` });
     const run = started.json().run as { id: string };
     const contract = { ...plan.contract, include: [...plan.contract.include, "docs/*"] };
     const created = await app.inject({ method: "POST", url: `/api/v4/runs/${run.id}/change-proposals`, payload: { reason: "Documentation is in scope", requestedChanges: ["Include docs"], contract } });
@@ -337,17 +336,20 @@ describe("Pipeline Factory v3 API", () => {
     const app = createApp({ store, scheduler, verificationExecutor, seed: false });
     apps.push(app);
 
-    const started = await app.inject({ method: "POST", url: `/api/v3/plans/${plan.id}/run` });
+    const started = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/run` });
     const runId = started.json().run.id as string;
-    const verified = await app.inject({ method: "POST", url: `/api/v3/runs/${runId}/verify` });
+    const verified = await app.inject({ method: "POST", url: `/api/v4/runs/${runId}/verify` });
     expect(verified.statusCode).toBe(200);
     expect(verified.json().verification).toMatchObject({ runId, status: "PASSED" });
     expect(store.getRun(runId)?.status).toBe("MERGE_READY");
 
-    const review = await app.inject({ method: "POST", url: `/api/v3/runs/${runId}/merge-request`, payload: { sourceCommit: "abc123" } });
+    const review = await app.inject({ method: "POST", url: `/api/v4/runs/${runId}/merge-request`, payload: { sourceCommit: "abc123" } });
     expect(review.statusCode).toBe(200);
     const mergeRequestId = review.json().mergeRequest.id as string;
-    const merged = await app.inject({ method: "POST", url: `/api/v3/merge-requests/${mergeRequestId}/confirm-merged`, payload: { targetCommit: "abc123" } });
+    const queried = await app.inject({ method: "GET", url: `/api/v4/merge-requests/${mergeRequestId}` });
+    expect(queried.statusCode).toBe(200);
+    expect(queried.json().mergeRequest).toMatchObject({ id: mergeRequestId, status: "OPEN" });
+    const merged = await app.inject({ method: "POST", url: `/api/v4/merge-requests/${mergeRequestId}/confirm-merged`, payload: { targetCommit: "abc123" } });
     expect(merged.statusCode).toBe(200);
     expect(merged.json().mergeRequest.status).toBe("MERGED");
     expect(store.getPlan(plan.id)?.status).toBe("MERGED");
@@ -365,13 +367,13 @@ describe("Pipeline Factory v3 API", () => {
     const app = createApp({ store, scheduler, seed: false });
     apps.push(app);
 
-    const started = await app.inject({ method: "POST", url: `/api/v3/plans/${plan.id}/run` });
+    const started = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/run` });
     const runId = started.json().run.id as string;
-    const paused = await app.inject({ method: "POST", url: `/api/v3/runs/${runId}/pause` });
+    const paused = await app.inject({ method: "POST", url: `/api/v4/runs/${runId}/pause` });
     expect(paused.statusCode).toBe(200);
-    const guidance = await app.inject({ method: "POST", url: `/api/v3/runs/${runId}/guidance`, payload: { content: "Keep the approved scope only" } });
+    const guidance = await app.inject({ method: "POST", url: `/api/v4/runs/${runId}/guidance`, payload: { content: "Keep the approved scope only" } });
     expect(guidance.statusCode).toBe(200);
-    const resumed = await app.inject({ method: "POST", url: `/api/v3/runs/${runId}/resume` });
+    const resumed = await app.inject({ method: "POST", url: `/api/v4/runs/${runId}/resume` });
     expect(resumed.statusCode).toBe(200);
     expect(resumed.json().thread.state).toBe("ACTIVE");
     expect(store.getExecutionThread(started.json().run.executionThreadId)?.journal.some((entry) => entry.type === "USER_GUIDANCE")).toBe(true);
@@ -389,10 +391,10 @@ describe("Pipeline Factory v3 API", () => {
     const app = createApp({ store, scheduler, seed: false });
     apps.push(app);
 
-    const started = await app.inject({ method: "POST", url: `/api/v3/plans/${plan.id}/run` });
+    const started = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/run` });
     const runId = started.json().run.id as string;
     store.saveAgentLoop({ id: "loop-stale", ownerType: "run", ownerId: runId, role: "executor", mode: "provider-controlled", state: "RUNNING", stepCount: 1, maxSteps: 40, startedAt: store.now(), completedAt: null, providerThreadId: null, providerTurnId: null, checkpointJson: null });
-    const cancelled = await app.inject({ method: "POST", url: `/api/v3/runs/${runId}/cancel`, payload: { reason: "stale_run" } });
+    const cancelled = await app.inject({ method: "POST", url: `/api/v4/runs/${runId}/cancel`, payload: { reason: "stale_run" } });
 
     expect(cancelled.statusCode).toBe(200);
     expect(cancelled.json().run).toMatchObject({ id: runId, status: "CANCELLED" });
@@ -401,7 +403,7 @@ describe("Pipeline Factory v3 API", () => {
     expect(store.getPlan(plan.id)).toMatchObject({ status: "BLOCKED", attentionReason: "Run cancelled: stale_run" });
   });
 
-  it("supports asynchronous v4 turns and structured answers without changing v3", async () => {
+  it("supports asynchronous v4 turns and structured answers", async () => {
     const store = new InMemoryPipelineStore();
     createTestProject(store);
     store.saveThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
@@ -451,7 +453,7 @@ describe("Pipeline Factory v3 API", () => {
     for (let attempt = 0; attempt < 50 && store.listPlans().length === 0; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 1));
     expect(store.listTurns("thread-1")[1]).toMatchObject({ status: "COMPLETED", content: "已记录选择，继续完善。" });
     expect(resumeOrder).toEqual(["answer-called", "stream-resumed"]);
-    const candidate = await app.inject({ method: "GET", url: "/api/v3/projects/project-1/explorer-thread/candidate" });
+    const candidate = await app.inject({ method: "GET", url: "/api/v4/projects/project-1/explorers/thread-1/candidate" });
     expect(candidate.statusCode).toBe(200);
     expect(candidate.json().plan).toMatchObject({ title: "API generated plan", status: "DRAFT" });
     expect(store.getThread("thread-1")).toMatchObject({ exploration: { status: "READY" } });
@@ -517,5 +519,32 @@ describe("Pipeline Factory v3 API", () => {
 
     expect(response.statusCode).toBe(200);
     expect(response.json().items.map((item: { kind: string }) => item.kind)).toEqual(["USER_MESSAGE", "ASSISTANT_MESSAGE", "TOOL_STARTED"]);
+  });
+
+  it("exposes the Plan and Run lifecycle only through the v4 API", async () => {
+    const store = new InMemoryPipelineStore();
+    createTestProject(store);
+    const plans = new PlanService(store);
+    plans.registerThread({ id: "v4-only-thread", projectId: "project-1", parentThreadId: null });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "v4-only-thread", title: "v4-only plan" });
+    const scheduler = new Scheduler({ store, workspace: { create: async () => ({ path: "/tmp/v4-only", branch: "factory/v4-only", baseCommit: "abc" }), remove: async () => undefined }, hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })) });
+    const app = createApp({ store, scheduler, seed: false });
+    apps.push(app);
+
+    const legacyPlan = await app.inject({ method: "GET", url: "/api/" + "v" + "3" + `/plans/${plan.id}` });
+    const v4Plan = await app.inject({ method: "GET", url: `/api/v4/plans/${plan.id}` });
+    const confirmed = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/confirm`, payload: { actorId: "user-1" } });
+    const enqueued = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/enqueue` });
+    const started = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/run` });
+    const runId = started.json().run.id as string;
+    const run = await app.inject({ method: "GET", url: `/api/v4/runs/${runId}` });
+
+    expect(legacyPlan.statusCode).toBe(404);
+    expect(v4Plan.statusCode).toBe(200);
+    expect(confirmed.statusCode).toBe(200);
+    expect(enqueued.statusCode).toBe(200);
+    expect(started.statusCode).toBe(200);
+    expect(run.statusCode).toBe(200);
+    expect(run.json().run.id).toBe(runId);
   });
 });

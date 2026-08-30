@@ -72,7 +72,7 @@ async function startRun(plan: Plan) {
   const planId = plan.planId ?? plan.id;
   if (!planId) return;
   try {
-    const response = await api.startRun(planId);
+    const response = await api.startPlanRun(planId);
     await router.push(`/projects/${projectId.value}/runs/${response.run.id}`);
   } catch (caught) {
     ElMessage.error(caught instanceof Error ? caught.message : "Run 启动失败");

@@ -109,7 +109,7 @@ async function load() {
   loading.value = true;
   error.value = null;
   try {
-    const response = await api.run(String(route.params.runId));
+    const response = await api.getRun(String(route.params.runId));
     run.value = response.run;
     setExecutionThread(response.executionThread);
     verification.value = response.verification;
@@ -168,7 +168,7 @@ async function terminateRun() {
 async function sendGuidance() {
   if (!run.value || !guidance.value.trim() || actionBusy.value) return;
   actionBusy.value = true;
-  try { setExecutionThread((await api.addGuidance(run.value.id, guidance.value.trim())).thread); guidance.value = ""; ElMessage.success("已写入执行线程"); }
+  try { setExecutionThread((await api.addRunGuidance(run.value.id, guidance.value.trim())).thread); guidance.value = ""; ElMessage.success("已写入执行线程"); }
   catch (caught) { notifyError(caught); }
   finally { actionBusy.value = false; }
 }

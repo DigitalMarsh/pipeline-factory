@@ -1,6 +1,6 @@
 # AI Software Pipeline Factory v4
 
-这是 v3/v4 设计对应的 TypeScript/Vue 最小可运行实现，代码范围限定在本目录。v4 在 v3 API 之外增加了基于 Codex App Server 的异步 Plan Mode 结构化提问。
+这是 v4 设计对应的 TypeScript/Vue 最小可运行实现，代码范围限定在本目录。v4 是唯一的 HTTP API、Web 客户端调用方式和测试协议，并通过 Codex App Server 支持异步 Plan Mode 结构化提问。
 
 ## 目录
 
@@ -62,7 +62,21 @@ API 默认监听 `http://127.0.0.1:4310`，前端默认监听 `http://127.0.0.1:
 }
 ```
 
-v4 的 `POST /api/v4/projects/:projectId/explorer-thread/turns` 会立即返回 `202`，用户消息和 assistant `RUNNING` 占位先进入时间线；随后通过 `/events` SSE 接收文本增量、`turn.input_required`、完成和取消事件。选择答案通过 `/input-requests/:requestId/answer` 回传到同一个 Provider Turn。Explorer 不会把一次 `turn.completed` 直接当作设计完成：模型回合结束后会经过计划完整性门禁，缺少关键项时自动发起内部续探索，只有收到并校验 `pipeline-factory-plan` 完整契约后才自动生成 CandidatePlan。v3 API 仍保持同步语义；遇到结构化提问时返回 `STRUCTURED_INPUT_REQUIRES_V4`。
+v4 的 `POST /api/v4/projects/:projectId/explorer-thread/turns` 会立即返回 `202`，用户消息和 assistant `RUNNING` 占位先进入时间线；随后通过 `/events` SSE 接收文本增量、`turn.input_required`、完成和取消事件。选择答案通过 `/input-requests/:requestId/answer` 回传到同一个 Provider Turn。Explorer 不会把一次 `turn.completed` 直接当作设计完成：模型回合结束后会经过计划完整性门禁，缺少关键项时自动发起内部续探索，只有收到并校验 `pipeline-factory-plan` 完整契约后才自动生成 CandidatePlan。
+
+核心 v4 资源路径保持稳定且唯一：
+
+```text
+GET      /api/v4/plans/:planId                 # 详情
+POST     /api/v4/plans/:planId/{confirm,discard,enqueue,run}
+GET      /api/v4/runs/:runId                  # 详情
+POST     /api/v4/runs/:runId/{cancel,pause,resume,guidance,verify}
+GET      /api/v4/merge-requests/:mergeRequestId # 查询
+POST     /api/v4/merge-requests/:mergeRequestId/confirm-merged
+GET      /api/v4/projects/:projectId/runs
+GET/PUT  /api/v4/projects/:projectId/settings/hooks
+GET      /api/v4/execution-threads/:threadId
+```
 
 SSE 使用数据库事件序列和 `Last-Event-ID` 回放。Explorer 首次加载 turns 时取得当前事件游标，再从该游标订阅 SSE，避免重复回放历史消息；断线重连仍按 `Last-Event-ID` 补发遗漏事件。App Server 重启或答案响应不确定时，输入请求进入 `RECOVERY_REQUIRED`，Factory 不自动重复提交。敏感答案只在内存中传给 App Server，持久化的仅是题目状态和答案数量摘要；普通 assistant 文本中的“请选择”不会触发弹窗。
 

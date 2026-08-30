@@ -2487,57 +2487,6 @@ export class ExplorerThreadService {
     return () => { listeners.delete(listener); if (listeners.size === 0) this.listeners.delete(threadId); };
   }
 
-  async send(threadId: string, content: string, signal?: AbortSignal): Promise<{ user: ExplorerTurn; assistant: ExplorerTurn }> {
-    const thread = this.store.getThread(threadId);
-    if (!thread) throw new Error(`ExplorerThread ${threadId} not found`);
-    const user: ExplorerTurn = { id: this.store.nextId("turn"), threadId, role: "user", content, createdAt: this.store.now(), sequence: this.store.listTurns(threadId).length + 1 };
-    this.store.saveTurn(user);
-    this.store.updateThread({ ...thread, messageCount: thread.messageCount + 1, lastActivityAt: user.createdAt });
-    this.scheduleTitleGeneration(threadId, content);
-    const messages = this.store.listTurns(threadId).map((turn) => ({ role: turn.role, content: turn.content }));
-    let assistantContent = "";
-    let cancelled = false;
-    let failure: string | null = null;
-    const modelRequest: ModelRequest = {
-      role: "explorer",
-      ...(this.modelConfigForProject?.(thread.projectId) ? { modelConfig: this.modelConfigForProject(thread.projectId) } : {}),
-      messages,
-      conversationId: thread.id,
-      ...(thread.providerThreadId ? { providerThreadId: thread.providerThreadId } : {}),
-      ...(signal ? { signal } : {}),
-    };
-    for await (const event of this.model.stream(modelRequest)) {
-      if (event.type === "thread.started") {
-        const current = this.store.getThread(threadId) ?? thread;
-        this.store.updateThread({ ...current, providerThreadId: event.threadId });
-      }
-      if (event.type === "text.delta") assistantContent += event.text;
-      if (event.type === "turn.input_required") {
-        await this.model.cancel({ conversationId: threadId, providerThreadId: event.request.threadId, providerTurnId: event.request.turnId }).catch(() => undefined);
-        throw new Error("STRUCTURED_INPUT_REQUIRES_V4");
-      }
-      if (event.type === "turn.cancelled") cancelled = true;
-      if (event.type === "turn.failed") failure = event.error;
-    }
-    if (!cancelled && !failure && !assistantContent.trim()) failure = "模型未返回内容";
-    const status = cancelled ? "CANCELLED" : failure ? "FAILED" : "COMPLETED";
-    const assistant: ExplorerTurn = {
-      id: this.store.nextId("turn"),
-      threadId,
-      role: "assistant",
-      content: cancelled ? "Turn cancelled" : failure ? `模型调用失败：${failure}` : assistantContent,
-      status,
-      ...(failure ? { error: failure } : {}),
-      createdAt: this.store.now(),
-      sequence: user.sequence + 1,
-    };
-    this.store.saveTurn(assistant);
-    const current = this.store.getThread(threadId) ?? thread;
-    this.store.updateThread({ ...current, messageCount: current.messageCount + 1, lastActivityAt: assistant.createdAt });
-    this.store.appendEvent({ type: failure ? "explorer.turn.failed" : "explorer.turn.completed", aggregateId: threadId, payload: { userTurnId: user.id, assistantTurnId: assistant.id, cancelled, ...(failure ? { error: failure } : {}) } });
-    return { user, assistant };
-  }
-
   private handleExplorerLoopEvent(threadId: string, assistantId: string, event: AgentLoopEvent): void {
     const job = this.jobs.get(threadId);
     if (!job) return;

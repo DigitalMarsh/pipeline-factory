@@ -350,7 +350,7 @@ cleanup 的 cwd 必须是项目主目录或 Factory 指定的稳定目录，不�
 ### 6.1 查询接口
 
 ~~~text
-GET /api/v3/projects/{projectId}/explorer-thread/plans
+GET /api/v4/projects/{projectId}/plans
 ~~~
 
 查询参数：
@@ -727,7 +727,7 @@ v3 不直接读取旧版本 Artifact；历史数据如需保留，必须经过�
 
 ## 14. v4 Codex Plan Mode 结构化交互
 
-v4 保留 v3 的对象、状态和同步 API，并新增异步 Explorer 交互协议。结构化提问必须来自 Codex App Server 原生的带 JSON-RPC `id` 的 `item/tool/requestUserInput` 服务端请求；Factory 不解析模型自然语言中的“请选择”。ExplorerThread 创建 Provider Thread 时固定使用 `collaborationMode: { mode: "plan" }`、`sandbox: "read-only"` 和 `approvalPolicy: "never"`。Executor 继续使用 `gpt-5.6-luna` 的独立角色配置。当前 Codex CLI 0.149.0 使用 `default_mode_request_user_input` feature；配置升级时应先以 `codex features list` 检查本机名称，不能使用当前 CLI 不认识的 flag，否则 App Server 会在首次 Turn 前退出。
+v4 是唯一正式 API，Plan、Run、Verification、MergeRequest、Project 和 Explorer 均通过 v4 路径访问；Explorer 统一使用异步交互协议。结构化提问必须来自 Codex App Server 原生的带 JSON-RPC `id` 的 `item/tool/requestUserInput` 服务端请求；Factory 不解析模型自然语言中的“请选择”。ExplorerThread 创建 Provider Thread 时固定使用 `collaborationMode: { mode: "plan" }`、`sandbox: "read-only"` 和 `approvalPolicy: "never"`。Executor 继续使用 `gpt-5.6-luna` 的独立角色配置。当前 Codex CLI 0.149.0 使用 `default_mode_request_user_input` feature；配置升级时应先以 `codex features list` 检查本机名称，不能使用当前 CLI 不认识的 flag，否则 App Server 会在首次 Turn 前退出。
 
 ### 14.1 数据流和边界
 
@@ -785,7 +785,7 @@ GET  /api/v4/projects/:projectId/explorer-thread/events
 
 发送 Turn 必须带 `threadId`、`content` 和 `clientTurnId`，接口先写用户消息和 assistant `RUNNING` 占位并返回 `202`。SSE 事件包括 `turn.accepted`、`turn.text.delta`、`turn.input_required`、`turn.input.resolved`、`turn.completed`、`turn.failed`、`turn.cancelled` 和 `thread.state.changed`。服务先按 `Last-Event-ID` 回放 `domain_events.sequence`，再订阅实时事件，每 15 秒发送心跳；断开时清理订阅。
 
-重复 `clientTurnId`、重复答案 `clientRequestId` 和重复 Provider `requestId` 必须返回第一次结果，不重复创建 Turn 或请求。v3 `/api/v3` 不改变原有同步响应；当同步模型收到结构化请求时安全中断并返回 `409 STRUCTURED_INPUT_REQUIRES_V4`。
+重复 `clientTurnId`、重复答案 `clientRequestId` 和重复 Provider `requestId` 必须返回第一次结果，不重复创建 Turn 或请求。v4 不保留同步 Explorer 协议；所有 Explorer Turn 均使用异步语义，结构化输入通过 SSE 和 input request 回传。
 
 ### 14.4 页面交互
 

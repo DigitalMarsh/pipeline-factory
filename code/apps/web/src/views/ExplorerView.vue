@@ -426,7 +426,7 @@ async function load() {
     }
     const [plansResponse, turnsResponse, candidateResponse] = await Promise.all([
       api.explorerPlans(projectId.value, selected.id),
-      api.explorerTurnsV4(projectId.value, selected.id),
+      api.getExplorerTurns(projectId.value, selected.id),
       optional(() => api.explorerCandidate(projectId.value, selected!.id)),
     ]);
     const projection = normalizePlanProjection(selected, candidateResponse?.plan ?? null, plansResponse.items);
@@ -557,7 +557,7 @@ function mergeTurn(turn: ExplorerTurn) {
 
 async function refreshTurnsAfterEvent() {
   if (!thread.value) return;
-  const response = await api.explorerTurnsV4(projectId.value, thread.value.id);
+  const response = await api.getExplorerTurns(projectId.value, thread.value.id);
   turns.value = response.items;
   await refreshActivity();
   await refreshPlanProjection();
@@ -635,7 +635,7 @@ async function confirmPlan() {
   if (!candidate.value || !candidate.value.id && !candidate.value.planId || busy.value) return;
   const id = candidate.value.id ?? candidate.value.planId!;
   busy.value = true;
-  try { candidate.value = (await api.confirm(id)).plan; await refreshPlanProjection(); } catch (caught) { error.value = caught instanceof Error ? `Confirm plan 失败：${caught.message}` : "Confirm plan 失败"; } finally { busy.value = false; }
+  try { candidate.value = (await api.confirmPlan(id)).plan; await refreshPlanProjection(); } catch (caught) { error.value = caught instanceof Error ? `Confirm plan 失败：${caught.message}` : "Confirm plan 失败"; } finally { busy.value = false; }
 }
 
 async function enqueuePlan() {
@@ -643,7 +643,7 @@ async function enqueuePlan() {
   const id = candidate.value.id ?? candidate.value.planId!;
   busy.value = true;
   try {
-    const queuedPlan = (await api.enqueue(id)).plan;
+    const queuedPlan = (await api.enqueuePlan(id)).plan;
     dispatched.value = [queuedPlan, ...dispatched.value];
     candidate.value = null;
     drawerOpen.value = false;
@@ -666,7 +666,7 @@ async function discardPlan() {
   busy.value = true;
   error.value = null;
   try {
-    await api.discard(id);
+    await api.discardPlan(id);
     candidate.value = null;
     drawerOpen.value = false;
     await refreshPlanProjection();
