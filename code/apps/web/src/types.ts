@@ -182,6 +182,13 @@ export type AgentLoopStep = {
 };
 
 /** Plan Center 和 PlanDetailDrawer 使用的候选/执行计划投影。 */
+export type PlanTask = {
+  id?: string;
+  title: string;
+  status: string;
+  dependencies: string[];
+};
+
 export type Plan = {
   planId?: string;
   id?: string;
@@ -206,7 +213,7 @@ export type Plan = {
   acceptanceCriteria?: string[];
   include?: string[];
   exclude?: string[];
-  tasks?: Array<{ id?: string; title: string; status: string; dependencies: string[] }>;
+  tasks?: PlanTask[];
   verificationCommands?: string[];
   toolPolicy?: string;
   contract?: {
@@ -216,7 +223,7 @@ export type Plan = {
     exclude: string[];
     baseBranch: string;
     baseCommit: string;
-    tasks: Array<{ id: string; title: string; dependencies: string[]; status: string }>;
+    tasks: PlanTask[];
     conflictKeys: string[];
     executorModelRole: string;
     toolPolicy: string;
