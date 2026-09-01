@@ -11,6 +11,7 @@ import { api } from "../api";
 import type { AgentLoopStep, ExecutionThread, MergeRequest, Run, RunJournalEvent, ToolCall, VerificationRun } from "../types";
 import { projectExecutionJournal, type ExecutionJournalEntry, type ExecutionStreamItem } from "../utils/executionStream";
 import { canPauseRun, canTerminateRun } from "../utils/runControls";
+import { describeRunLoadError } from "../utils/runLoadError";
 
 const route = useRoute();
 const router = useRouter();
@@ -115,17 +116,18 @@ async function load() {
     verification.value = response.verification;
     mergeRequest.value = response.mergeRequest;
     const loopId = response.run.agentLoops?.[0]?.id;
+    executorSteps.value = [];
+    toolCalls.value = [];
     if (loopId) {
-      const [stepsResponse, toolsResponse] = await Promise.all([api.agentLoopSteps(loopId), api.agentLoopTools(loopId)]);
-      executorSteps.value = stepsResponse.items;
-      toolCalls.value = toolsResponse.items;
-    } else {
-      executorSteps.value = [];
-      toolCalls.value = [];
+      try {
+        const [stepsResponse, toolsResponse] = await Promise.all([api.agentLoopSteps(loopId), api.agentLoopTools(loopId)]);
+        executorSteps.value = stepsResponse.items;
+        toolCalls.value = toolsResponse.items;
+      } catch (caught) { error.value = describeRunLoadError(caught, "agent-loop"); }
     }
     if (!sourceCommit.value) sourceCommit.value = response.run.baseCommit;
     if (!targetCommit.value) targetCommit.value = response.run.baseCommit;
-  } catch { error.value = "Run 不存在或 API 尚未连接"; }
+  } catch (caught) { error.value = describeRunLoadError(caught, "run"); }
   finally { loading.value = false; }
 }
 function label(status: string) { return ({ STARTING: "Starting", IN_PROGRESS: "Running", READY_FOR_VERIFY: "Ready for verification", VERIFYING: "Verifying", MERGE_READY: "Ready for review", MERGED: "Merged", NEEDS_PLAN_CHANGE: "Plan change required", RECOVERING: "Recovering", BLOCKED: "Blocked", CANCELLED: "Cancelled" } as Record<string, string>)[status] ?? status; }

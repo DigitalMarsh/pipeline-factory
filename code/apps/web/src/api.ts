@@ -5,12 +5,19 @@
  */
 import type { AgentLoop, AgentLoopStep, CodexRateLimitsStatus, ExecutionThread, ExplorerActivityItem, ExplorerInputRequest, ExplorerThread, ExplorerTurn, MergeRequest, Plan, Project, ProjectCatalogItem, ProjectSummary, Run, ToolCall, VerificationRun } from "./types";
 
+export class ApiRequestError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = "ApiRequestError";
+  }
+}
+
 /** 统一处理 JSON 请求和错误响应，保证页面只依赖稳定的 typed API 方法。 */
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const headers = { ...(init?.headers ?? {}) } as Record<string, string>;
   if (init?.body && !Object.keys(headers).some((key) => key.toLowerCase() === "content-type")) headers["content-type"] = "application/json";
   const response = await fetch(url, { ...init, headers });
-  if (!response.ok) throw new Error((await response.json().catch(() => null))?.error ?? `Request failed: ${response.status}`);
+  if (!response.ok) throw new ApiRequestError((await response.json().catch(() => null))?.error ?? `Request failed: ${response.status}`, response.status);
   return response.json() as Promise<T>;
 }
 
@@ -61,7 +68,7 @@ export const api = {
   discardPlan: (planId: string) => request<{ plan: Plan }>(`/api/v4/plans/${planId}/discard`, { method: "POST", body: JSON.stringify({ actorId: "local-user" }) }),
   enqueuePlan: (planId: string) => request<{ plan: Plan }>(`/api/v4/plans/${planId}/enqueue`, { method: "POST" }),
   startPlanRun: (planId: string) => request<{ run: Run }>(`/api/v4/plans/${planId}/run`, { method: "POST" }),
-  getRun: (runId: string) => request<{ run: Run; executionThread: ExecutionThread | null; verification: VerificationRun | null; mergeRequest: MergeRequest | null }>(`/api/v4/runs/${runId}`),
+  getRun: (runId: string) => request<{ run: Run; executionThread: ExecutionThread | null; verification: VerificationRun | null; mergeRequest: MergeRequest | null }>(`/api/v4/runs/${encodeURIComponent(runId)}`),
   getExecutionThread: (threadId: string) => request<{ thread: ExecutionThread }>(`/api/v4/execution-threads/${threadId}`),
   cancelRun: (runId: string, reason = "user_requested") => request<{ run: Run }>(`/api/v4/runs/${runId}/cancel`, { method: "POST", body: JSON.stringify({ reason }) }),
   pauseRun: (runId: string) => request<{ run: Run; thread: ExecutionThread }>(`/api/v4/runs/${runId}/pause`, { method: "POST" }),
