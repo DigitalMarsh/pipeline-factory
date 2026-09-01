@@ -7,6 +7,13 @@ import { describe, expect, it } from "vitest";
 import { RegisteredCommandExecutor, type HookContext } from "./index.js";
 
 describe("RegisteredCommandExecutor", () => {
+  it("inherits the host PATH when a command does not declare an environment", async () => {
+    const executor = new RegisteredCommandExecutor([{ commandId: "project.test", argv: ["node", "-e", "process.exit(0)"] }]);
+    const context: HookContext = { projectId: "project-1", runId: "run-1", workspacePath: process.cwd(), branch: "factory/run-1", baseCommit: "abc", exitReason: "running" };
+
+    await expect(executor.execute({ commandId: "project.test", cwd: process.cwd(), timeoutMs: 5000, context })).resolves.toMatchObject({ exitCode: 0 });
+  });
+
   it("runs only fixed registered argv and injects structured HookContext", async () => {
     let received: { argv: string[]; cwd: string; timeoutMs: number; env: Record<string, string> } | null = null;
     const executor = new RegisteredCommandExecutor([

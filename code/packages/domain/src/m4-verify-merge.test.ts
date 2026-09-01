@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { InMemoryPipelineStore, MergeService, PlanService, SqlitePipelineStore, VerificationService, type Run } from "./index.js";
+import { InMemoryPipelineStore, MergeService, PlanService, SqlitePipelineStore, VerificationService, type ExecutionThread, type Run } from "./index.js";
 
 function makeRun(planId: string): Run {
   return { id: "run-1", projectId: "project-1", planId, planRevision: 1, status: "IN_PROGRESS", branch: "factory/run-1", workspacePath: "/tmp/run-1", baseCommit: "abc", executionThreadId: "thread-run-1", createdAt: new Date().toISOString(), startedAt: new Date().toISOString() };
@@ -81,6 +81,31 @@ describe("Verifier and MergeService", () => {
       const reopened = new SqlitePipelineStore(databasePath);
       expect(reopened.getVerificationRun(run.id)).toEqual(verification);
       expect(reopened.listVerificationRuns(run.id)).toHaveLength(1);
+      reopened.close();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("backfills legacy verification evidence from the execution journal", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pipeline-factory-legacy-verification-"));
+    const databasePath = join(directory, "factory.sqlite");
+    try {
+      const store = new SqlitePipelineStore(databasePath);
+      const plans = new PlanService(store);
+      const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Legacy verification" });
+      plans.confirm(plan.id, "user-1");
+      const run = makeRun(plan.id);
+      run.status = "MERGE_READY";
+      store.saveRun(run);
+      const verification = { id: "verification-legacy", runId: run.id, status: "PASSED" as const, repairAttempts: 0, commandResults: [], completedAt: new Date().toISOString() };
+      const thread: ExecutionThread = { id: run.executionThreadId, runId: run.id, state: "COMPLETED", journal: [{ sequence: 1, type: "VERIFICATION", occurredAt: verification.completedAt, payload: verification }] };
+      store.saveExecutionThread(thread);
+      store.close();
+
+      const reopened = new SqlitePipelineStore(databasePath);
+      expect(reopened.getVerificationRun(run.id)).toEqual(verification);
+      expect(reopened.listVerificationRuns(run.id)).toEqual([verification]);
       reopened.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });

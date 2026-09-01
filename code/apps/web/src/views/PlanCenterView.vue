@@ -11,6 +11,7 @@ import { api } from "../api";
 import type { Plan, Project } from "../types";
 import { planStatusForStat } from "../utils/planFilters";
 import { canTerminateRun } from "../utils/runControls";
+import { parseMissingRunCommands } from "../utils/runPrerequisites";
 
 const route = useRoute();
 const router = useRouter();
@@ -21,6 +22,7 @@ const search = ref("");
 const status = ref("all");
 const loading = ref(true);
 const error = ref<string | null>(null);
+const missingRunCommands = ref<string[]>([]);
 const statItems = [
   { key: "all", label: "All", icon: Document },
   { key: "queued", label: "Queued", icon: Clock },
@@ -71,11 +73,15 @@ function label(s: string) {
 async function startRun(plan: Plan) {
   const planId = plan.planId ?? plan.id;
   if (!planId) return;
+  missingRunCommands.value = [];
   try {
     const response = await api.startPlanRun(planId);
     await router.push(`/projects/${projectId.value}/runs/${response.run.id}`);
   } catch (caught) {
-    ElMessage.error(caught instanceof Error ? caught.message : "Run 启动失败");
+    const message = caught instanceof Error ? caught.message : "Run 启动失败";
+    const missing = parseMissingRunCommands(message);
+    if (missing.length > 0) missingRunCommands.value = missing;
+    else ElMessage.error(message);
   }
 }
 
@@ -125,6 +131,7 @@ onMounted(() => { syncQueryStatus(route.query.status); void load(); });
     </div>
     <div v-if="snapshotNotice" class="demo-notice"><Warning :size="14" /> 已确认 Plan 继续使用各自保存的 Project 配置快照；当前 Project 配置可能已发生变化。</div>
     <div v-if="error" class="demo-notice"><Warning :size="14" /> {{ error }}</div>
+    <div v-if="missingRunCommands.length" class="demo-notice"><Warning :size="14" /> 当前 Project 尚未注册启动此 Plan 所需的验证命令：<code>{{ missingRunCommands.join(', ') }}</code>。请先在 Commands 中完成配置，再重新点击 Start run。<RouterLink :to="`/projects/${projectId}/settings?tab=commands`">Open Project settings <ArrowRight :size="14" /></RouterLink></div>
     <div class="plans-table" v-loading="loading">
       <div class="table-head"><span>PLAN</span><span>STATUS</span><span>SOURCE THREAD</span><span>RUN</span><span>LAST EVENT</span><span /></div>
       <RouterLink v-for="plan in filtered" :key="plan.planId ?? plan.id ?? plan.title" :to="plan.runId ? `/projects/${projectId}/runs/${plan.runId}` : `/projects/${projectId}/explorer`" class="table-row">

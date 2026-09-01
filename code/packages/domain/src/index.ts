@@ -543,6 +543,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function isVerificationRun(value: unknown): value is VerificationRun {
+  if (!isRecord(value)) return false;
+  return typeof value.id === "string"
+    && typeof value.runId === "string"
+    && (value.status === "PASSED" || value.status === "FAILED" || value.status === "BLOCKED")
+    && typeof value.repairAttempts === "number"
+    && Number.isInteger(value.repairAttempts)
+    && Array.isArray(value.commandResults)
+    && typeof value.completedAt === "string";
+}
+
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
@@ -1042,6 +1053,7 @@ export class SqlitePipelineStore implements PipelineStore {
     try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN project_config_version INTEGER"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN project_config_hash TEXT"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN project_config_snapshot_json TEXT"); } catch { /* Existing databases already have the column. */ }
+    this.backfillLegacyVerificationRuns();
   }
 
   now(): string { return new Date().toISOString(); }
@@ -1246,6 +1258,21 @@ export class SqlitePipelineStore implements PipelineStore {
   listVerificationRuns(runId?: string): VerificationRun[] {
     const rows = this.database.prepare(`SELECT * FROM verification_runs ${runId ? "WHERE run_id = ?" : ""} ORDER BY completed_at ASC, rowid ASC`).all(...(runId ? [runId] : [])) as unknown as SqliteRow[];
     return rows.map((row) => this.verificationFromRow(row));
+  }
+
+  private backfillLegacyVerificationRuns(): void {
+    const insert = this.database.prepare("INSERT OR IGNORE INTO verification_runs (id, run_id, status, repair_attempts, command_results_json, completed_at) VALUES (?, ?, ?, ?, ?, ?)");
+    const rows = this.database.prepare("SELECT journal_json FROM execution_threads").all() as unknown as SqliteRow[];
+    for (const row of rows) {
+      let journal: unknown;
+      try { journal = JSON.parse(String(row.journal_json)); } catch { continue; }
+      if (!Array.isArray(journal)) continue;
+      for (const entry of journal) {
+        if (!isRecord(entry) || entry.type !== "VERIFICATION" || !isVerificationRun(entry.payload)) continue;
+        const verification = entry.payload;
+        insert.run(verification.id, verification.runId, verification.status, verification.repairAttempts, JSON.stringify(verification.commandResults), verification.completedAt);
+      }
+    }
   }
 
   saveMergeRequest(request: MergeRequest): MergeRequest {
@@ -1907,6 +1934,10 @@ export class RegisteredCommandExecutor {
     const definition = this.commands.get(command.commandId);
     if (!definition) return Promise.resolve({ exitCode: 127, stdout: "", stderr: `Command ${command.commandId} is not registered` });
     const env: Record<string, string> = { ...(definition.environment ?? {}) };
+    // PATH is process resolution infrastructure, not project data; preserve it
+    // when a Project command leaves the optional environment block empty.
+    if (!env.PATH && process.env.PATH) env.PATH = process.env.PATH;
+    if (!env.Path && process.env.Path) env.Path = process.env.Path;
     Object.assign(env, {
       PIPELINE_PROJECT_ID: command.context.projectId,
       PIPELINE_RUN_ID: command.context.runId,

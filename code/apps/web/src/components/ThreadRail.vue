@@ -6,11 +6,12 @@
 import { computed } from "vue";
 import { ChatDotRound, CircleCheck, Clock, Connection, Files, Setting, Warning } from "@element-plus/icons-vue";
 import type { ExplorerThread, Project } from "../types";
+import { normalizeProjectId } from "../utils/projectRoutes";
 
 const props = defineProps<{ thread: ExplorerThread | null; project?: Project | null; candidateCount?: number; dispatchedCount?: number; activeRunCount?: number; needsAttentionCount?: number }>();
 const emit = defineEmits<{ "open-history": [] }>();
 const explorerQuery = computed(() => props.thread ? `?explorerId=${encodeURIComponent(props.thread.id)}` : "");
-const projectPath = computed(() => props.project?.id ?? props.thread?.projectId ?? "");
+const projectPath = computed(() => normalizeProjectId(props.project?.id ?? props.thread?.projectId));
 </script>
 
 <template>
@@ -28,18 +29,18 @@ const projectPath = computed(() => props.project?.id ?? props.thread?.projectId 
     </div>
     <div class="thread-meta"><span>{{ thread?.messageCount ?? 8 }} messages</span><span>Just now</span></div>
     <button class="thread-history-button" type="button" aria-label="Open Explorer history" @click="emit('open-history')"><Connection :size="14" /> Explorer history <span>›</span></button>
-    <nav class="rail-nav" aria-label="ExplorerThread navigation">
+    <nav v-if="projectPath" class="rail-nav" aria-label="ExplorerThread navigation">
       <RouterLink class="rail-link active" :to="`/projects/${projectPath}/explorer${explorerQuery}`"><ChatDotRound :size="16" /> Conversation <span class="nav-count">{{ thread?.messageCount ?? 0 }}</span></RouterLink>
       <RouterLink class="rail-link" :to="`/projects/${projectPath}/explorer${explorerQuery}#candidate`"><Files :size="16" /> Plan candidates <span class="nav-count">{{ candidateCount ?? 0 }}</span></RouterLink>
       <RouterLink class="rail-link" :to="`/projects/${projectPath}/plans`"><CircleCheck :size="16" /> Dispatched plans <span class="nav-count muted-count">{{ dispatchedCount ?? 0 }}</span></RouterLink>
       <RouterLink class="rail-link" :to="`/projects/${projectPath}/plans?status=IN_PROGRESS`"><Clock :size="16" /> Active runs <span class="nav-count muted-count">{{ activeRunCount ?? 0 }}</span></RouterLink>
       <RouterLink class="rail-link needs" :to="`/projects/${projectPath}/plans?status=BLOCKED`"><Warning :size="16" /> Needs attention <span class="warning-count">{{ needsAttentionCount ?? 0 }}</span></RouterLink>
     </nav>
-    <div class="rail-section">
+    <div v-if="projectPath" class="rail-section">
       <div class="rail-section-title">THREAD MEMORY</div>
       <RouterLink class="rail-link subdued" :to="`/projects/${projectPath}/explorer${explorerQuery}#successors`"><Connection :size="15" /> Successor threads <span>›</span></RouterLink>
       <RouterLink class="rail-link subdued" :to="`/projects/${projectPath}/explorer${explorerQuery}#summary`"><Files :size="15" /> Context summary <span>›</span></RouterLink>
     </div>
-    <div class="rail-bottom"><RouterLink :to="`/projects/${thread?.projectId ?? props.project?.id ?? ''}/settings`" class="rail-link subdued"><Setting :size="16" /> Project settings</RouterLink></div>
+    <div v-if="projectPath" class="rail-bottom"><RouterLink :to="`/projects/${projectPath}/settings`" class="rail-link subdued"><Setting :size="16" /> Project settings</RouterLink></div>
   </aside>
 </template>
