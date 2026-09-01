@@ -29,6 +29,7 @@ import { parsePlanProtocolDisplay } from "../utils/planProtocolDisplay";
 import { findPlanForActivity, planIdentity, planTimelineItems as buildPlanTimelineItems } from "../utils/planTimeline";
 import { inputAnswerLabels, resolveQuestionAnswers } from "../utils/explorerInput";
 import { createProjectRequestScope } from "../utils/projectRoutes";
+import { buildExplorerTimeline } from "../utils/explorerTimeline";
 
 const route = useRoute();
 const router = useRouter();
@@ -92,11 +93,13 @@ const agentLoopLabel = computed(() => ({ CREATED: "Created", RUNNING: "Running",
 const explorationProgress = computed(() => thread.value?.exploration ?? { status: "INCOMPLETE" as const, missing: [], completed: [], candidatePlanId: null, lastAssessedTurnId: null });
 const activeTimelineKey = ref("");
 const activePlanKey = ref("");
-const messageTimelineItems = computed<TimelineNavItem[]>(() => [
-  ...(inputCardRequest.value ? [{ key: "message-input-request", label: "Input required", detail: inputCardRequest.value.status === "RECOVERY_REQUIRED" ? "Recovery" : "Waiting", target: "message-input-request" }] : []),
-  ...turns.value.map((turn) => ({ key: `message-${turn.id}`, label: turn.role === "user" ? "You" : "Plan Explorer", detail: formatTurnTime(turn.createdAt), target: `message-${turn.id}` })),
-]);
 const visibleActivity = computed(() => activity.value.length ? activity.value : turns.value.map((turn) => ({ id: `fallback-${turn.id}`, explorerId: turn.threadId, turnId: turn.id, sequence: turn.sequence, kind: turn.role === "user" ? "USER_MESSAGE" : "ASSISTANT_MESSAGE", status: turn.status === "FAILED" ? "FAILED" : turn.status === "RUNNING" ? "RUNNING" : turn.status === "WAITING_FOR_INPUT" ? "WAITING" : "COMPLETED", title: turn.role === "user" ? "You" : "Plan Explorer", summary: turn.role === "assistant" ? readableAssistantText(turnContent(turn)) : turnContent(turn), details: turn.error ? { error: turn.error } : null, occurredAt: turn.createdAt })) as ExplorerActivityItem[]);
+const timelineItems = computed(() => buildExplorerTimeline(visibleActivity.value, inputRequests.value));
+const messageTimelineItems = computed<TimelineNavItem[]>(() => timelineItems.value.flatMap((item) => {
+  if (item.kind === "input") return [{ key: `input:${item.request.id}`, label: "Plan Explorer input", detail: inputTimelineDetail(item.request), target: inputRequestTarget(item.request) }];
+  if (item.activity.kind !== "USER_MESSAGE" && item.activity.kind !== "ASSISTANT_MESSAGE") return [];
+  return [{ key: `message-${item.activity.turnId}`, label: item.activity.kind === "USER_MESSAGE" ? "You" : "Plan Explorer", detail: formatTurnTime(item.activity.occurredAt), target: `message-${item.activity.turnId}` }];
+}));
 const allPlans = computed<Plan[]>(() => {
   const unique = new Map<string, Plan>();
   for (const plan of [candidate.value, ...dispatched.value]) if (plan) unique.set(planIdentity(plan), plan);
@@ -104,7 +107,6 @@ const allPlans = computed<Plan[]>(() => {
 });
 const planTimelineItems = computed(() => buildPlanTimelineItems(allPlans.value, visibleActivity.value));
 const syntheticPlanItems = computed(() => planTimelineItems.value.filter((item) => item.target.startsWith("plan-created-")));
-const answeredInputRequests = computed(() => inputRequests.value.filter((request) => request.status === "ANSWERED" || request.status === "AUTO_RESOLVED").sort((a, b) => a.createdAt.localeCompare(b.createdAt)));
 
 function setPolicyOpen(value: boolean) {
   policyOpen.value = value ? openPolicyPanel(policyOpen.value) : closePolicyPanel(policyOpen.value);
@@ -252,6 +254,28 @@ async function refreshPlanProjection(): Promise<void> {
 
 function formatTurnTime(value: string): string {
   return new Date(value).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+}
+
+function inputRequestTarget(request: ExplorerInputRequest): string {
+  return `input-request-${request.id}`;
+}
+
+function inputStatusLabel(request: ExplorerInputRequest): string {
+  return ({
+    OPEN: "Waiting for answer",
+    SUBMITTING: "Submitting",
+    ANSWERED: "Answered",
+    AUTO_RESOLVED: "Auto-resolved",
+    CANCELLED: "Cancelled",
+    RECOVERY_REQUIRED: "Recovery required",
+  } as Record<ExplorerInputRequest["status"], string>)[request.status];
+}
+
+function inputTimelineDetail(request: ExplorerInputRequest): string {
+  const generatedAt = formatTurnTime(request.createdAt);
+  const answeredAt = request.answeredAt ? formatTurnTime(request.answeredAt) : null;
+  if (answeredAt && (request.status === "ANSWERED" || request.status === "AUTO_RESOLVED")) return `${generatedAt} → ${answeredAt} · ${inputStatusLabel(request)}`;
+  return `${generatedAt} · ${inputStatusLabel(request)}`;
 }
 
 function explorerDisplayTitle(item: ExplorerThread | null): string {
@@ -789,43 +813,34 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
       <div class="timeline-shell">
       <div ref="timeline" class="timeline" v-loading="loading" @scroll="updateTimelineScrollState">
         <div class="timeline-day">{{ turns.length ? 'EXPLORER ACTIVITY' : 'NEW EXPLORATION' }}</div>
-        <div v-if="!visibleActivity.length && !candidate && !dispatched.length" class="timeline-empty"><Connection :size="24" /><strong>开始一次全新的需求探索</strong><span>在下方输入需求。当前 Explorer 与历史记录完全隔离。</span></div>
-        <article id="message-input-request" data-nav-key="message-input-request" v-if="inputCardRequest" :class="['input-request-card', { recovery: Boolean(recoveryInput) }]">
-          <div class="input-request-card-icon"><InfoFilled :size="16" /></div>
-          <div class="input-request-card-body">
-            <div class="message-meta"><strong>{{ recoveryInput ? 'Plan Explorer input needs recovery' : 'Plan Explorer needs your input' }}</strong><span class="agent-chip">{{ recoveryInput ? 'Recovery required' : (inputCardRequest.isBlocking ? 'Blocking' : 'Optional') }}</span></div>
-            <p v-if="recoveryInput">The App Server connection ended before this answer was confirmed. No answer was retried automatically; restart the provider session and continue from this thread.</p>
-            <p v-else>{{ inputCardRequest.questions.length }} structured question{{ inputCardRequest.questions.length === 1 ? '' : 's' }} are waiting before this turn can continue.</p>
-            <div class="input-stream-questions">
-              <div v-for="(question, questionIndex) in inputCardRequest.questions" :key="question.id" class="input-stream-question">
-                <span class="question-index">{{ questionIndex + 1 }}</span>
-                <div><strong>{{ question.header }}</strong><p>{{ question.question }}</p><small :class="{ answered: inputAnswerLabelsFor(inputCardRequest, question).length }">选择：{{ inputAnswerText(inputCardRequest, question) }}</small></div>
+        <div v-if="!visibleActivity.length && !inputRequests.length && !candidate && !dispatched.length" class="timeline-empty"><Connection :size="24" /><strong>开始一次全新的需求探索</strong><span>在下方输入需求。当前 Explorer 与历史记录完全隔离。</span></div>
+        <template v-for="(item, index) in timelineItems" :key="item.key">
+          <article v-if="item.kind === 'input'" :id="inputRequestTarget(item.request)" :data-nav-key="`input:${item.request.id}`" :class="['input-request-card', 'timeline-input-request', { recovery: item.request.status === 'RECOVERY_REQUIRED', answered: item.request.status === 'ANSWERED' || item.request.status === 'AUTO_RESOLVED', cancelled: item.request.status === 'CANCELLED' }]">
+            <div class="input-request-card-icon"><Check v-if="item.request.status === 'ANSWERED' || item.request.status === 'AUTO_RESOLVED'" :size="16" /><Warning v-else-if="item.request.status === 'RECOVERY_REQUIRED' || item.request.status === 'CANCELLED'" :size="16" /><InfoFilled v-else :size="16" /></div>
+            <div class="input-request-card-body">
+              <div class="message-meta"><strong>Plan Explorer input</strong><span :class="['agent-chip', { 'input-resolved-chip': item.request.status === 'ANSWERED' || item.request.status === 'AUTO_RESOLVED' }]">{{ inputStatusLabel(item.request) }}</span></div>
+              <div class="input-request-event-times"><span><strong>问题生成</strong><time>{{ formatTurnTime(item.request.createdAt) }}</time></span><span v-if="item.request.answeredAt"><strong>回答提交</strong><time>{{ formatTurnTime(item.request.answeredAt) }}</time></span></div>
+              <p v-if="item.request.status === 'RECOVERY_REQUIRED'">App Server 在回答确认前中断。本次回答不会自动重试，请恢复 Provider 会话后从此线程继续。</p>
+              <p v-else-if="item.request.status === 'CANCELLED'">本次结构化输入已取消，问题和当时的时间点仍保留在对话记录中。</p>
+              <p v-else-if="item.request.status === 'ANSWERED' || item.request.status === 'AUTO_RESOLVED'">本轮结构化问题与回答已按原始时间线保留。</p>
+              <p v-else>{{ item.request.questions.length }} 个结构化问题正在等待回答，回答后本轮才能继续。</p>
+              <div class="input-request-section-label">问题与回答</div>
+              <div class="input-stream-questions">
+                <div v-for="(question, questionIndex) in item.request.questions" :key="question.id" class="input-stream-question">
+                  <span class="question-index">{{ questionIndex + 1 }}</span>
+                  <div><strong>{{ question.header }}</strong><p>{{ question.question }}</p><small :class="{ answered: inputAnswerLabelsFor(item.request, question).length }">回答：{{ inputAnswerText(item.request, question) }}</small></div>
+                </div>
               </div>
             </div>
-          </div>
-          <el-button v-if="pendingInput" type="primary" plain @click="openInputRequest">Answer</el-button>
-        </article>
-        <div class="timeline-marker"><span>THREAD READY FOR YOUR NEXT TURN</span></div>
-        <template v-for="(item, index) in visibleActivity" :key="item.id">
-          <article v-if="item.kind === 'USER_MESSAGE' || item.kind === 'ASSISTANT_MESSAGE'" :id="activityTarget(item, index)" :data-nav-key="`message-${item.turnId}`" :class="['message-card', item.kind === 'USER_MESSAGE' ? 'user-message' : 'assistant-message', item.status === 'FAILED' ? 'failed-message' : '', item.status === 'RUNNING' ? 'processing-message' : '']">
-            <div :class="['message-avatar', item.kind === 'USER_MESSAGE' ? 'user-avatar' : 'agent-avatar']">{{ item.kind === 'USER_MESSAGE' ? 'LS' : '' }}<span v-if="item.kind === 'ASSISTANT_MESSAGE'" :class="['brand-dot', { 'brand-dot-processing': item.status === 'RUNNING' }]" /></div>
-            <div class="message-body"><div class="message-meta"><strong>{{ item.title }}</strong><span v-if="item.kind === 'ASSISTANT_MESSAGE'" :class="['agent-chip', { 'processing-chip': item.status === 'RUNNING' }]">{{ item.status === 'RUNNING' ? 'Running' : item.status === 'FAILED' ? 'Failed' : 'Read only' }}</span><span>{{ formatTurnTime(item.occurredAt) }}</span></div><p :aria-live="item.status === 'RUNNING' ? 'polite' : undefined">{{ item.kind === 'ASSISTANT_MESSAGE' ? readableAssistantText(item.summary) : item.summary }}<span v-if="item.status === 'RUNNING'" class="processing-dots" aria-hidden="true"><i /><i /><i /></span></p><div v-if="planForActivity(item)" :id="planAnchorId(planForActivity(item))" :data-nav-key="planAnchorKey(planForActivity(item))" class="inline-plan-card"><div class="candidate-head"><div class="candidate-icon"><Promotion :size="19" /></div><div><div class="eyebrow">CANDIDATE PLAN · REVISION {{ planForActivity(item)?.revision }}</div><h2>{{ planForActivity(item)?.title }}</h2></div><el-tag type="warning" effect="light">{{ statusLabel(planForActivity(item)?.status ?? 'DRAFT') }}</el-tag></div><p class="candidate-summary">{{ planForActivity(item)?.contract?.goal ?? planForActivity(item)?.goal ?? 'A complete, reviewable execution contract generated from this ExplorerThread.' }}</p><div class="candidate-stats"><div><span>Tasks</span><strong>{{ planForActivity(item)?.contract?.tasks.length ?? planForActivity(item)?.tasks?.length ?? 0 }}</strong></div><div><span>Scope entries</span><strong>{{ planForActivity(item)?.contract?.include.length ?? planForActivity(item)?.include?.length ?? 0 }}</strong></div><div><span>Verification</span><strong>{{ planForActivity(item)?.contract?.verificationCommandIds.length ?? planForActivity(item)?.verificationCommands?.length ?? 0 }} checks</strong></div><div><span>Merge</span><strong class="risk-low">Human review</strong></div></div><div class="candidate-actions"><el-button v-if="isCandidatePlan(planForActivity(item))" @click="drawerOpen = true">View full plan <Right :size="15" /></el-button><el-button v-if="isCandidatePlan(planForActivity(item)) && planForActivity(item)?.status === 'DRAFT'" type="primary" :loading="busy" @click="confirmPlan">Confirm plan <Check :size="15" /></el-button><el-button v-else-if="isCandidatePlan(planForActivity(item)) && planForActivity(item)?.status === 'READY'" type="primary" :loading="busy" @click="enqueuePlan">Enqueue plan <ArrowDown :size="15" /></el-button><span v-else class="confirmed-note"><CircleCheck :size="15" /> {{ statusLabel(planForActivity(item)?.status ?? 'DRAFT') }}</span></div></div></div>
+            <el-button v-if="pendingInput?.id === item.request.id" type="primary" plain @click="openInputRequest">回答</el-button>
           </article>
-          <article v-else :id="activityTarget(item, index)" class="loop-activity-card" :class="{ waiting: item.status === 'WAITING', failed: item.status === 'FAILED' }"><div class="loop-activity-icon"><InfoFilled v-if="activityIconKind(item.kind) === 'info'" :size="14" /><Check v-else-if="activityIconKind(item.kind) === 'success'" :size="14" /><Warning v-else :size="14" /></div><div class="loop-activity-copy"><div class="loop-activity-meta"><strong>{{ activityKindLabel(item.kind) }}</strong><span>{{ formatTurnTime(item.occurredAt) }}</span><span class="agent-chip">{{ activityStatusLabel(item) }}</span></div><p>{{ item.summary }}</p><code v-if="typeof item.details?.tool === 'string'">{{ item.details.tool }}</code></div></article>
+          <article v-else-if="item.activity.kind === 'USER_MESSAGE' || item.activity.kind === 'ASSISTANT_MESSAGE'" :id="activityTarget(item.activity, index)" :data-nav-key="`message-${item.activity.turnId}`" :class="['message-card', item.activity.kind === 'USER_MESSAGE' ? 'user-message' : 'assistant-message', item.activity.status === 'FAILED' ? 'failed-message' : '', item.activity.status === 'RUNNING' ? 'processing-message' : '']">
+            <div :class="['message-avatar', item.activity.kind === 'USER_MESSAGE' ? 'user-avatar' : 'agent-avatar']">{{ item.activity.kind === 'USER_MESSAGE' ? 'LS' : '' }}<span v-if="item.activity.kind === 'ASSISTANT_MESSAGE'" :class="['brand-dot', { 'brand-dot-processing': item.activity.status === 'RUNNING' }]" /></div>
+            <div class="message-body"><div class="message-meta"><strong>{{ item.activity.title }}</strong><span v-if="item.activity.kind === 'ASSISTANT_MESSAGE'" :class="['agent-chip', { 'processing-chip': item.activity.status === 'RUNNING' }]">{{ item.activity.status === 'RUNNING' ? 'Running' : item.activity.status === 'FAILED' ? 'Failed' : 'Read only' }}</span><span>{{ formatTurnTime(item.activity.occurredAt) }}</span></div><p :aria-live="item.activity.status === 'RUNNING' ? 'polite' : undefined">{{ item.activity.kind === 'ASSISTANT_MESSAGE' ? readableAssistantText(item.activity.summary) : item.activity.summary }}<span v-if="item.activity.status === 'RUNNING'" class="processing-dots" aria-hidden="true"><i /><i /><i /></span></p><div v-if="planForActivity(item.activity)" :id="planAnchorId(planForActivity(item.activity))" :data-nav-key="planAnchorKey(planForActivity(item.activity))" class="inline-plan-card"><div class="candidate-head"><div class="candidate-icon"><Promotion :size="19" /></div><div><div class="eyebrow">CANDIDATE PLAN · REVISION {{ planForActivity(item.activity)?.revision }}</div><h2>{{ planForActivity(item.activity)?.title }}</h2></div><el-tag type="warning" effect="light">{{ statusLabel(planForActivity(item.activity)?.status ?? 'DRAFT') }}</el-tag></div><p class="candidate-summary">{{ planForActivity(item.activity)?.contract?.goal ?? planForActivity(item.activity)?.goal ?? 'A complete, reviewable execution contract generated from this ExplorerThread.' }}</p><div class="candidate-stats"><div><span>Tasks</span><strong>{{ planForActivity(item.activity)?.contract?.tasks.length ?? planForActivity(item.activity)?.tasks?.length ?? 0 }}</strong></div><div><span>Scope entries</span><strong>{{ planForActivity(item.activity)?.contract?.include.length ?? planForActivity(item.activity)?.include?.length ?? 0 }}</strong></div><div><span>Verification</span><strong>{{ planForActivity(item.activity)?.contract?.verificationCommandIds.length ?? planForActivity(item.activity)?.verificationCommands?.length ?? 0 }} checks</strong></div><div><span>Merge</span><strong class="risk-low">Human review</strong></div></div><div class="candidate-actions"><el-button v-if="isCandidatePlan(planForActivity(item.activity))" @click="drawerOpen = true">View full plan <Right :size="15" /></el-button><el-button v-if="isCandidatePlan(planForActivity(item.activity)) && planForActivity(item.activity)?.status === 'DRAFT'" type="primary" :loading="busy" @click="confirmPlan">Confirm plan <Check :size="15" /></el-button><el-button v-else-if="isCandidatePlan(planForActivity(item.activity)) && planForActivity(item.activity)?.status === 'READY'" type="primary" :loading="busy" @click="enqueuePlan">Enqueue plan <ArrowDown :size="15" /></el-button><span v-else class="confirmed-note"><CircleCheck :size="15" /> {{ statusLabel(planForActivity(item.activity)?.status ?? 'DRAFT') }}</span></div></div></div>
+          </article>
+          <article v-else :id="activityTarget(item.activity, index)" class="loop-activity-card" :class="{ waiting: item.activity.status === 'WAITING', failed: item.activity.status === 'FAILED' }"><div class="loop-activity-icon"><InfoFilled v-if="activityIconKind(item.activity.kind) === 'info'" :size="14" /><Check v-else-if="activityIconKind(item.activity.kind) === 'success'" :size="14" /><Warning v-else :size="14" /></div><div class="loop-activity-copy"><div class="loop-activity-meta"><strong>{{ activityKindLabel(item.activity.kind) }}</strong><span>{{ formatTurnTime(item.activity.occurredAt) }}</span><span class="agent-chip">{{ activityStatusLabel(item.activity) }}</span></div><p>{{ item.activity.summary }}</p><code v-if="typeof item.activity.details?.tool === 'string'">{{ item.activity.details.tool }}</code></div></article>
         </template>
-        <article v-for="request in answeredInputRequests" :id="`input-transcript-${request.id}`" :key="`input-transcript-${request.id}`" class="input-transcript-card">
-          <div class="input-request-card-icon"><Check :size="16" /></div>
-          <div class="input-request-card-body">
-            <div class="message-meta"><strong>Plan Explorer input</strong><span class="agent-chip input-resolved-chip">Answered</span><span>{{ formatTurnTime(request.answeredAt ?? request.createdAt) }}</span></div>
-            <p>本轮结构化选择已提交，以下内容作为对话记录保留。</p>
-            <div class="input-stream-questions">
-              <div v-for="(question, questionIndex) in request.questions" :key="question.id" class="input-stream-question">
-                <span class="question-index">{{ questionIndex + 1 }}</span>
-                <div><strong>{{ question.header }}</strong><p>{{ question.question }}</p><small class="answered">选择：{{ inputAnswerText(request, question) }}</small></div>
-              </div>
-            </div>
-          </div>
-        </article>
+        <div v-if="!inputCardRequest" class="timeline-marker"><span>THREAD READY FOR YOUR NEXT TURN</span></div>
         <article v-for="item in syntheticPlanItems" :id="item.target" :key="item.key" :data-nav-key="item.key" class="inline-plan-card plan-created-event"><div class="candidate-head"><div class="candidate-icon"><Promotion :size="19" /></div><div><div class="eyebrow">PLAN CREATED · REVISION {{ item.plan.revision }}</div><h2>{{ item.plan.title }}</h2></div><el-tag type="warning" effect="light">{{ statusLabel(item.plan.status) }}</el-tag></div><p class="candidate-summary">{{ item.plan.contract?.goal ?? item.plan.goal ?? 'A complete, reviewable execution contract generated from this ExplorerThread.' }}</p><div class="candidate-actions"><el-button v-if="isCandidatePlan(item.plan)" @click="drawerOpen = true">View full plan <Right :size="15" /></el-button><el-button v-if="isCandidatePlan(item.plan) && item.plan.status === 'DRAFT'" type="primary" :loading="busy" @click="confirmPlan">Confirm plan <Check :size="15" /></el-button><el-button v-else-if="isCandidatePlan(item.plan) && item.plan.status === 'READY'" type="primary" :loading="busy" @click="enqueuePlan">Enqueue plan <ArrowDown :size="15" /></el-button><span v-else class="confirmed-note"><CircleCheck :size="15" /> {{ statusLabel(item.plan.status) }}</span></div></article>
       </div>
       <button v-if="showScrollToLatest" class="scroll-to-latest" type="button" aria-label="Scroll to latest message" title="Scroll to latest message" @click="jumpToLatest"><img class="scroll-to-latest-image" :src="scrollToLatestIcon" alt="" /></button>
