@@ -3,7 +3,7 @@
  *
  * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
  */
-import type { AgentLoop, AgentLoopStep, CodexRateLimitsStatus, ExecutionThread, ExplorerActivityItem, ExplorerInputRequest, ExplorerThread, ExplorerTurn, MergeRequest, Plan, Project, ProjectCatalogItem, ProjectSummary, Run, ToolCall, VerificationRun, WorkbenchSnapshot, WorkbenchEvent } from "./types";
+import type { AgentLoop, AgentLoopStep, CodexRateLimitsStatus, ExecutionThread, ExplorerActivityItem, ExplorerInputRequest, ExplorerThread, ExplorerTurn, MergeRequest, Plan, PlanDispatchState, Project, ProjectCatalogItem, ProjectSummary, Run, ToolCall, VerificationRun, WorkbenchSnapshot, WorkbenchEvent } from "./types";
 
 export class ApiRequestError extends Error {
   constructor(message: string, readonly status: number) {
@@ -70,7 +70,7 @@ export const api = {
   confirmPlan: (planId: string) => request<{ plan: Plan }>(`/api/v4/plans/${planId}/confirm`, { method: "POST", body: JSON.stringify({ actorId: "local-user" }) }),
   discardPlan: (planId: string) => request<{ plan: Plan }>(`/api/v4/plans/${planId}/discard`, { method: "POST", body: JSON.stringify({ actorId: "local-user" }) }),
   enqueuePlan: (planId: string) => request<{ plan: Plan }>(`/api/v4/plans/${planId}/enqueue`, { method: "POST" }),
-  startPlanRun: (planId: string) => request<{ run: Run }>(`/api/v4/plans/${planId}/run`, { method: "POST" }),
+  startPlanRun: (planId: string) => request<{ run: Run | null; dispatch: PlanDispatchState | null }>(`/api/v4/plans/${planId}/run`, { method: "POST" }),
   getRun: (runId: string) => request<{ run: Run; executionThread: ExecutionThread | null; verification: VerificationRun | null; mergeRequest: MergeRequest | null }>(`/api/v4/runs/${encodeURIComponent(runId)}`),
   getExecutionThread: (threadId: string) => request<{ thread: ExecutionThread }>(`/api/v4/execution-threads/${threadId}`),
   cancelRun: (runId: string, reason = "user_requested") => request<{ run: Run }>(`/api/v4/runs/${runId}/cancel`, { method: "POST", body: JSON.stringify({ reason }) }),
@@ -81,6 +81,6 @@ export const api = {
   createMergeRequest: (runId: string, sourceCommit: string) => request<{ mergeRequest: MergeRequest }>(`/api/v4/runs/${runId}/merge-request`, { method: "POST", body: JSON.stringify({ sourceCommit }) }),
   getMergeRequest: (mergeRequestId: string) => request<{ mergeRequest: MergeRequest }>(`/api/v4/merge-requests/${mergeRequestId}`),
   confirmMerged: (mergeRequestId: string, targetCommit: string) => request<{ mergeRequest: MergeRequest }>(`/api/v4/merge-requests/${mergeRequestId}/confirm-merged`, { method: "POST", body: JSON.stringify({ targetCommit }) }),
-  getProjectHooks: (projectId: string) => request<{ projectId: string; lifecycle: { start?: { commandId: string; enabled?: boolean; timeoutMs?: number }; cleanup?: { commandId: string; enabled?: boolean; timeoutMs?: number } } }>(`/api/v4/projects/${projectId}/settings/hooks`),
+  getProjectHooks: (projectId: string) => request<{ projectId: string; lifecycle: { start?: { commandId: string; enabled?: boolean; timeoutMs?: number; maxAttempts?: number }; cleanup?: { commandId: string; enabled?: boolean; timeoutMs?: number; maxAttempts?: number } } }>(`/api/v4/projects/${projectId}/settings/hooks`),
   saveProjectHooks: (projectId: string, lifecycle: Record<string, unknown>) => request<{ projectId: string; lifecycle: Record<string, unknown> }>(`/api/v4/projects/${projectId}/settings/hooks`, { method: "PUT", body: JSON.stringify(lifecycle) }),
 };

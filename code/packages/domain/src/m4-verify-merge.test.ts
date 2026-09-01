@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { InMemoryPipelineStore, MergeService, PlanService, SqlitePipelineStore, VerificationService, type ExecutionThread, type Run } from "./index.js";
+import { InMemoryPipelineStore, MergeService, PlanService, ProjectService, SqlitePipelineStore, VerificationService, type ExecutionThread, type Run } from "./index.js";
 
 function makeRun(planId: string): Run {
   return { id: "run-1", projectId: "project-1", planId, planRevision: 1, status: "IN_PROGRESS", branch: "factory/run-1", workspacePath: "/tmp/run-1", baseCommit: "abc", executionThreadId: "thread-run-1", createdAt: new Date().toISOString(), startedAt: new Date().toISOString() };
@@ -52,6 +52,27 @@ describe("Verifier and MergeService", () => {
     expect(() => merge.confirmMerged(request.id, "wrong-commit")).toThrow(/target commit/i);
     expect(merge.confirmMerged(request.id, "def456").status).toBe("MERGED");
     expect(plans.get(plan.id).status).toBe("MERGED");
+  });
+
+  it("requires Git evidence that the reviewed source is contained by the target branch", () => {
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    projects.create({ id: "project-1", name: "Project", repoRoot: "/repo/project", defaultBranch: "main", worktreeRoot: "/tmp/project-worktrees" });
+    const plans = new PlanService(store, projects);
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Git evidence" });
+    plans.confirm(plan.id, "user-1");
+    const run = makeRun(plan.id);
+    run.status = "MERGE_READY";
+    const verification = { id: "verification-1", runId: run.id, status: "PASSED" as const, repairAttempts: 0, commandResults: [], completedAt: new Date().toISOString() };
+    const merge = new MergeService(store, { git: {
+      commitExists: (_repoRoot, commit) => commit === "source" || commit === "target",
+      isAncestor: (_repoRoot, source, target) => source === "source" && target === "target",
+      branchContains: () => true,
+    } });
+
+    expect(() => merge.createRequest(run, verification, "missing")).toThrow(/source commit/i);
+    const request = merge.createRequest(run, verification, "source");
+    expect(() => merge.confirmMerged(request.id, "target")).not.toThrow();
   });
 
   it("persists verification evidence in the pipeline store", async () => {

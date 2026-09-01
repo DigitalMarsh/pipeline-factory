@@ -28,8 +28,8 @@ export type ProjectSettings = {
   };
   commands: Array<{ commandId: string; argv: string[]; environment?: Record<string, string> }>;
   hooks: {
-    start?: { commandId: string; enabled?: boolean; timeoutMs?: number };
-    cleanup?: { commandId: string; enabled?: boolean; timeoutMs?: number };
+    start?: { commandId: string; enabled?: boolean; timeoutMs?: number; maxAttempts?: number };
+    cleanup?: { commandId: string; enabled?: boolean; timeoutMs?: number; maxAttempts?: number };
   };
   models: {
     explorer: { model: string; mode?: string; loopMode?: string; temperature?: number; maxOutputTokens?: number; reasoningEffort?: string; developerInstructions?: string };

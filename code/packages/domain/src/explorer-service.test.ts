@@ -4,7 +4,7 @@
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  */
 import { describe, expect, it } from "vitest";
-import { ExplorerService, InMemoryPipelineStore, PlanService } from "./index.js";
+import { ExplorerService, InMemoryPipelineStore, PlanService, ProjectService } from "./index.js";
 
 describe("ExplorerService", () => {
   it("creates a fresh business Explorer without inheriting old turns or plans", () => {
@@ -25,6 +25,20 @@ describe("ExplorerService", () => {
     expect(store.listTurns(fresh.id)).toEqual([]);
     expect(plans.listThreadPlans(fresh.id)).toEqual([]);
     expect(explorers.list("project-1").map((item) => item.id)).toEqual([fresh.id, oldExplorer.id]);
+  });
+
+  it("keeps exactly one active Explorer per Project and updates the selected Explorer", () => {
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    projects.create({ id: "project-1", name: "Project", repoRoot: "/repo/project", defaultBranch: "main", worktreeRoot: "/tmp/project-worktrees" });
+    const explorers = new ExplorerService(store);
+
+    const first = explorers.create({ projectId: "project-1", title: "First" });
+    const second = explorers.create({ projectId: "project-1", title: "Second" });
+
+    expect(store.getThread(first.id)?.state).toBe("ARCHIVED");
+    expect(store.getThread(second.id)?.state).toBe("ACTIVE");
+    expect(projects.get("project-1").currentExplorerThreadId).toBe(second.id);
   });
 
   it("archives an Explorer without deleting its history", () => {

@@ -12,6 +12,7 @@ import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import {
   PlanService,
   MergeService,
+  localGitMergeInspector,
   SqlitePipelineStore,
   Scheduler,
   ExplorerService,
@@ -62,10 +63,15 @@ const explorerCreateBody = z.object({ title: z.string().trim().min(1).max(200).o
 const explorerRenameBody = z.object({ title: z.string().trim().min(1).max(200) });
 const explorerActivityQuery = z.object({ afterSequence: z.coerce.number().int().nonnegative().optional() });
 const threadPlanQuery = z.object({
+  explorerThreadId: z.string().min(1).optional(),
+  includeLineage: z.preprocess((value) => value === "false" ? false : value === "true" ? true : value, z.boolean().default(true)),
   status: z.string().optional(),
   q: z.string().optional(),
+  from: z.string().datetime({ offset: true }).optional(),
+  to: z.string().datetime({ offset: true }).optional(),
+  cursor: z.string().min(1).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
-  sort: z.enum(["queued_at", "last_event_at"]).default("queued_at"),
+  sort: z.enum(["queued_at", "last_event_at", "priority", "status"]).default("queued_at"),
 });
 const workbenchQuery = z.object({
   projectId: z.string().min(1).optional(),
@@ -80,10 +86,10 @@ const loopEventsQuery = z.object({ format: z.enum(["json", "sse"]).optional(), a
 const v4InputQuery = z.object({ threadId: z.string().min(1).optional(), status: z.enum(["OPEN", "SUBMITTING", "ANSWERED", "CANCELLED", "AUTO_RESOLVED", "RECOVERY_REQUIRED"]).optional() });
 const hookBody = z.object({
   start: z
-    .object({ commandId: z.string().min(1), enabled: z.boolean().optional(), timeoutMs: z.number().int().positive().optional() })
+    .object({ commandId: z.string().min(1), enabled: z.boolean().optional(), timeoutMs: z.number().int().positive().optional(), maxAttempts: z.number().int().min(1).max(5).optional() })
     .optional(),
   cleanup: z
-    .object({ commandId: z.string().min(1), enabled: z.boolean().optional(), timeoutMs: z.number().int().positive().optional() })
+    .object({ commandId: z.string().min(1), enabled: z.boolean().optional(), timeoutMs: z.number().int().positive().optional(), maxAttempts: z.number().int().min(1).max(5).optional() })
     .optional(),
 });
 const guidanceBody = z.object({ content: z.string().trim().min(1).max(20_000) });
@@ -140,7 +146,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
   const explorers = new ExplorerService(store);
   const changeProposals = new ChangeProposalService(store);
   const verifier = new VerificationService(store);
-  const merger = options.mergeService ?? new MergeService(store);
+  const merger = options.mergeService ?? new MergeService(store, { git: localGitMergeInspector });
   const verificationExecutor = options.verificationExecutor ?? (options.config ? createDefaultVerificationExecutor(store, options.config) : undefined);
   const ownsModel = !options.model;
   const model = options.model ?? (options.config ? createModelGateway(options.config) : new StubModelGateway({ explorer: { model: "stub-explorer", temperature: 0.1 }, executor: { model: "stub-executor", temperature: 0 } }));
@@ -645,32 +651,53 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
 
   app.get("/api/v4/projects/:projectId/plans", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
-    const query = threadPlanQuery.safeParse(request.query);
+    const query = threadPlanQuery.safeParse(request.query ?? {});
     if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid project plan query" });
     if (!store.getProject(params.data.projectId)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
     const statuses = query.data.status?.split(",").filter(Boolean) as PlanStatus[] | undefined;
-    const rows = plans
-      .listProjectPlans(params.data.projectId)
-      .filter((row) => !statuses?.length || statuses.includes(row.status))
-      .filter((row) => !query.data.q || `${row.planId} ${row.title}`.toLowerCase().includes(query.data.q.toLowerCase()))
-      .slice(0, query.data.limit);
-    return { items: decoratePlanRows(store, rows), nextCursor: null };
+    try {
+      const result = plans.query({
+        projectId: params.data.projectId,
+        includeLineage: query.data.includeLineage,
+        limit: query.data.limit,
+        sort: query.data.sort,
+        ...(query.data.explorerThreadId ? { explorerThreadId: query.data.explorerThreadId } : {}),
+        ...(statuses?.length ? { status: statuses } : {}),
+        ...(query.data.q !== undefined ? { q: query.data.q } : {}),
+        ...(query.data.from !== undefined ? { from: query.data.from } : {}),
+        ...(query.data.to !== undefined ? { to: query.data.to } : {}),
+        ...(query.data.cursor !== undefined ? { cursor: query.data.cursor } : {}),
+      });
+      return { items: decoratePlanRows(store, result.items), nextCursor: result.nextCursor };
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : "Invalid project plan query" });
+    }
   });
 
   app.get("/api/v4/projects/:projectId/explorers/:explorerId/plans", async (request, reply) => {
     const params = projectExplorerParams.safeParse(request.params);
-    const query = threadPlanQuery.safeParse(request.query);
+    const query = threadPlanQuery.safeParse(request.query ?? {});
     if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid Explorer plan query" });
     const explorer = store.getThread(params.data.explorerId);
     if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
     const statuses = query.data.status?.split(",").filter(Boolean) as PlanStatus[] | undefined;
-    const rows = plans
-      .listThreadPlans(explorer.id)
-      .filter((row) => !statuses?.length || statuses.includes(row.status))
-      .filter((row) => !query.data.q || `${row.planId} ${row.title}`.toLowerCase().includes(query.data.q.toLowerCase()))
-      .sort((a, b) => query.data.sort === "last_event_at" ? b.lastEventAt.localeCompare(a.lastEventAt) : b.queuedAt.localeCompare(a.queuedAt))
-      .slice(0, query.data.limit);
-    return { items: decoratePlanRows(store, rows), nextCursor: null };
+    try {
+      const result = plans.query({
+        projectId: params.data.projectId,
+        explorerThreadId: explorer.id,
+        includeLineage: query.data.includeLineage,
+        limit: query.data.limit,
+        sort: query.data.sort,
+        ...(statuses?.length ? { status: statuses } : {}),
+        ...(query.data.q !== undefined ? { q: query.data.q } : {}),
+        ...(query.data.from !== undefined ? { from: query.data.from } : {}),
+        ...(query.data.to !== undefined ? { to: query.data.to } : {}),
+        ...(query.data.cursor !== undefined ? { cursor: query.data.cursor } : {}),
+      });
+      return { items: decoratePlanRows(store, result.items), nextCursor: result.nextCursor };
+    } catch (error) {
+      return reply.code(400).send({ error: error instanceof Error ? error.message : "Invalid Explorer plan query" });
+    }
   });
 
   app.get("/api/v4/projects/:projectId/explorers/:explorerId/candidate", async (request, reply) => {
@@ -830,8 +857,12 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     try {
       const plan = plans.get(params.data.planId);
       if (ensurePlanProject(plan.projectId, reply, true) === null) return;
+      if (dispatchCoordinator) {
+        const dispatched = await dispatchCoordinator.enqueue(plan.id);
+        return { run: dispatched.state.runId ? store.getRun(dispatched.state.runId) ?? null : null, dispatch: dispatched.state };
+      }
       const project = store.getProject(plan.projectId);
-      return { run: await scheduler.start(plan.id, project?.settings.hooks ?? {}) };
+      return { run: await scheduler.start(plan.id, project?.settings.hooks ?? {}), dispatch: null };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Run cannot be started";
       return reply.code(409).send({ code: /concurrency limit/i.test(message) ? "PROJECT_CONCURRENCY_LIMIT" : /RUN_PREREQUISITES_UNSATISFIED/.test(message) ? "RUN_PREREQUISITES_UNSATISFIED" : "RUN_START_FAILED", error: message });
@@ -1013,8 +1044,8 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     const project = store.getProject(params.data.projectId);
     if (project) {
       const lifecycle = {
-        ...(body.data.start ? { start: { commandId: body.data.start.commandId, ...(body.data.start.enabled === undefined ? {} : { enabled: body.data.start.enabled }), ...(body.data.start.timeoutMs === undefined ? {} : { timeoutMs: body.data.start.timeoutMs }) } } : {}),
-        ...(body.data.cleanup ? { cleanup: { commandId: body.data.cleanup.commandId, ...(body.data.cleanup.enabled === undefined ? {} : { enabled: body.data.cleanup.enabled }), ...(body.data.cleanup.timeoutMs === undefined ? {} : { timeoutMs: body.data.cleanup.timeoutMs }) } } : {}),
+        ...(body.data.start ? { start: { commandId: body.data.start.commandId, ...(body.data.start.enabled === undefined ? {} : { enabled: body.data.start.enabled }), ...(body.data.start.timeoutMs === undefined ? {} : { timeoutMs: body.data.start.timeoutMs }), ...(body.data.start.maxAttempts === undefined ? {} : { maxAttempts: body.data.start.maxAttempts }) } } : {}),
+        ...(body.data.cleanup ? { cleanup: { commandId: body.data.cleanup.commandId, ...(body.data.cleanup.enabled === undefined ? {} : { enabled: body.data.cleanup.enabled }), ...(body.data.cleanup.timeoutMs === undefined ? {} : { timeoutMs: body.data.cleanup.timeoutMs }), ...(body.data.cleanup.maxAttempts === undefined ? {} : { maxAttempts: body.data.cleanup.maxAttempts }) } } : {}),
       };
       try {
         projects.update(params.data.projectId, { settings: { hooks: lifecycle } });

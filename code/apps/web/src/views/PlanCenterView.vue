@@ -84,7 +84,11 @@ async function startRun(plan: Plan) {
   missingRunCommands.value = [];
   try {
     const response = await api.startPlanRun(planId);
-    await router.push(`/projects/${projectId.value}/runs/${response.run.id}`);
+    if (response.run) await router.push(`/projects/${projectId.value}/runs/${response.run.id}`);
+    else {
+      await load();
+      ElMessage.info(response.dispatch?.waitReason ? `Run 已进入等待队列：${response.dispatch.waitReason}` : "Run 已进入调度队列");
+    }
   } catch (caught) {
     const message = caught instanceof Error ? caught.message : "Run 启动失败";
     const missing = parseMissingRunCommands(message);

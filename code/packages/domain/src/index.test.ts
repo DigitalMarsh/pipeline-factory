@@ -86,4 +86,15 @@ describe("LifecycleHookRunner", () => {
     await expect(runner.runCleanup({ commandId: "project.cleanup" }, context)).resolves.toMatchObject({ needsAttention: true });
     expect(calls).toEqual(["project.start", "project.cleanup"]);
   });
+
+  it("retries a failed lifecycle hook within its configured attempt bound", async () => {
+    let calls = 0;
+    const runner = new LifecycleHookRunner(async () => ({ exitCode: ++calls === 2 ? 0 : 1, stdout: `attempt-${calls}`, stderr: "" }));
+    const context = { projectId: "project-1", runId: "run-1", workspacePath: "/tmp/worktree", branch: "factory/run-1", baseCommit: "abc123", exitReason: "running" } as const;
+
+    const result = await runner.runStart({ commandId: "project.start", maxAttempts: 2 }, context);
+
+    expect(result).toMatchObject({ status: "completed", blocked: false, result: { stdout: "attempt-2" } });
+    expect(result.attempts.map((attempt) => [attempt.attempt, attempt.status])).toEqual([[1, "failed"], [2, "completed"]]);
+  });
 });

@@ -12,7 +12,9 @@ import { composeExplorerTitle, ModelExplorerTitleGenerator, normalizeExplorerTit
 import { EXECUTION_SLOT_RUN_STATUSES, ProjectService } from "./project.js";
 import type { Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings } from "./project.js";
 import type { PlanDispatchState } from "./dispatch-coordinator.js";
+import { redactAuditPayload, redactAuditText } from "./redaction.js";
 export { EXECUTION_SLOT_RUN_STATUSES, ProjectService } from "./project.js";
+export { redactAuditPayload, redactAuditText } from "./redaction.js";
 export type { CreateProjectInput, Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings, ProjectSettingsInput, ProjectStatus, ProjectSummary, UpdateProjectInput } from "./project.js";
 export { PlanDispatchCoordinator } from "./dispatch-coordinator.js";
 export type { PlanDispatchCoordinatorOptions, PlanDispatchState, PlanDispatchStatus, PlanDispatchWaitReason } from "./dispatch-coordinator.js";
@@ -146,6 +148,7 @@ export type PlanContract = {
   mergeStrategy: "manual" | "fast-forward" | "squash";
   requireHumanMerge: boolean;
   dependsOnPlanIds?: string[];
+  priority?: number;
 };
 
 /** 从 Explorer 对话投影出的候选 Plan；Confirm 前仍允许编辑或丢弃。 */
@@ -228,7 +231,92 @@ export type PlanIndexRow = {
   runId: string | null;
   lastEventAt: string;
   attentionReason: string | null;
+  priority: number;
 };
+
+/** Plan Center 使用的持久化查询投影；只包含可检索、可排序的只读字段。 */
+export type PlanQueryProjection = {
+  planId: string;
+  projectId: string;
+  sourceExplorerThreadId: string;
+  sourceTurnId: string | null;
+  title: string;
+  goal: string;
+  revision: number;
+  status: PlanStatus;
+  priority: number;
+  createdAt: string;
+  queuedAt: string | null;
+  lastEventAt: string;
+  runId: string | null;
+  attentionReason: string | null;
+};
+
+export type PlanQuerySort = "queued_at" | "last_event_at" | "priority" | "status";
+
+/** Plan Center 的完整查询契约；cursor 与 sort 一起形成稳定分页边界。 */
+export type PlanQuery = {
+  projectId: string;
+  explorerThreadId?: string;
+  includeLineage?: boolean;
+  status?: PlanStatus[];
+  q?: string;
+  from?: string;
+  to?: string;
+  cursor?: string;
+  limit: number;
+  sort: PlanQuerySort;
+};
+
+export type PlanQueryResult = { items: PlanIndexRow[]; nextCursor: string | null };
+
+function planQueryProjectionFor(plan: CandidatePlan): PlanQueryProjection {
+  return {
+    planId: plan.id,
+    projectId: plan.projectId,
+    sourceExplorerThreadId: plan.sourceExplorerThreadId,
+    sourceTurnId: plan.sourceTurnId,
+    title: plan.title,
+    goal: plan.contract.goal,
+    revision: plan.revision,
+    status: plan.status,
+    priority: plan.contract.priority ?? 0,
+    createdAt: plan.createdAt,
+    queuedAt: plan.queuedAt,
+    lastEventAt: plan.lastEventAt,
+    runId: plan.runId,
+    attentionReason: plan.attentionReason,
+  };
+}
+
+type PlanCursor = { sort: PlanQuerySort; planId: string };
+
+function encodePlanCursor(cursor: PlanCursor): string {
+  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
+}
+
+function decodePlanCursor(value: string): PlanCursor {
+  try {
+    const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as Partial<PlanCursor>;
+    if (typeof parsed.planId !== "string" || !parsed.planId || !["queued_at", "last_event_at", "priority", "status"].includes(parsed.sort ?? "")) throw new Error("invalid");
+    return { planId: parsed.planId, sort: parsed.sort as PlanQuerySort };
+  } catch {
+    throw new Error("Invalid Plan query cursor");
+  }
+}
+
+function activateOnlyExplorer(store: PipelineStore, thread: ExplorerThread): void {
+  for (const candidate of store.listThreads()) {
+    if (candidate.projectId !== thread.projectId || candidate.id === thread.id || candidate.state === "ARCHIVED") continue;
+    store.updateThread({ ...candidate, state: "ARCHIVED", lastActivityAt: store.now() });
+    store.appendEvent({ type: "explorer.archived", aggregateId: candidate.id, payload: { explorerId: candidate.id, supersededBy: thread.id } });
+  }
+  const project = store.getProject(thread.projectId);
+  if (project && project.currentExplorerThreadId !== thread.id) {
+    store.updateProject({ ...project, currentExplorerThreadId: thread.id, updatedAt: store.now() });
+    store.appendEvent({ type: "project.explorer.selected", aggregateId: project.id, payload: { projectId: project.id, explorerId: thread.id } });
+  }
+}
 
 /** 所有聚合共享的审计事件格式；payload 只保存结构化业务事实。 */
 export type DomainEvent = {
@@ -354,6 +442,7 @@ export type HookDefinition = {
   commandId: string;
   enabled?: boolean | undefined;
   timeoutMs?: number | undefined;
+  maxAttempts?: number | undefined;
 };
 
 /** Hook 执行上下文；路径固定指向当前 Run 的 Worktree。 */
@@ -437,6 +526,33 @@ export type HookRunResult = {
   blocked: boolean;
   needsAttention: boolean;
   result: CommandResult | null;
+  attempts: Array<{
+    attempt: number;
+    commandId: string | null;
+    cwd: string;
+    timeoutMs: number;
+    status: "completed" | "failed" | "skipped";
+    result: CommandResult | null;
+    startedAt: string;
+    completedAt: string;
+  }>;
+};
+
+/** 一次 Hook 尝试的完整审计事实；同一 Run/Hook 的 attempt 不可复用。 */
+export type HookExecution = {
+  id: string;
+  runId: string;
+  hookType: "start" | "cleanup";
+  attempt: number;
+  commandId: string | null;
+  cwd: string;
+  timeoutMs: number;
+  status: "completed" | "failed" | "skipped";
+  exitCode: number | null;
+  stdout: string;
+  stderr: string;
+  startedAt: string;
+  completedAt: string;
 };
 
 /** Domain 的持久化端口；内存和 SQLite 实现必须保持相同的事实及事件语义。 */
@@ -478,6 +594,11 @@ export type PipelineStore = {
   listRuns(): Run[];
   saveExecutionThread(thread: ExecutionThread): ExecutionThread;
   getExecutionThread(threadId: string): ExecutionThread | undefined;
+  appendExecutionJournal(input: { executionThreadId: string; runId: string; type: JournalEntryType; payload: Record<string, unknown>; occurredAt?: string }): ExecutionJournalEntry;
+  saveHookExecution(execution: HookExecution): HookExecution;
+  listHookExecutions(runId?: string): HookExecution[];
+  savePlanQueryProjection(projection: PlanQueryProjection): PlanQueryProjection;
+  listPlanQueryProjection(projectId?: string): PlanQueryProjection[];
   saveVerificationRun(verification: VerificationRun): VerificationRun;
   getVerificationRun(runId: string): VerificationRun | undefined;
   listVerificationRuns(runId?: string): VerificationRun[];
@@ -607,6 +728,8 @@ export class InMemoryPipelineStore implements PipelineStore {
   private readonly changeProposals = new Map<string, ChangeProposal>();
   private readonly runs = new Map<string, Run>();
   private readonly executionThreads = new Map<string, ExecutionThread>();
+  private readonly hookExecutions = new Map<string, HookExecution>();
+  private readonly planQueryProjections = new Map<string, PlanQueryProjection>();
   private readonly verificationRuns = new Map<string, VerificationRun>();
   private readonly mergeRequests = new Map<string, MergeRequest>();
   private readonly agentLoops = new Map<string, AgentLoop>();
@@ -711,6 +834,7 @@ export class InMemoryPipelineStore implements PipelineStore {
 
   savePlan(plan: CandidatePlan): CandidatePlan {
     this.plans.set(plan.id, plan);
+    if (this.getProject(plan.projectId) && this.getThread(plan.sourceExplorerThreadId)) this.savePlanQueryProjection(planQueryProjectionFor(plan));
     return plan;
   }
 
@@ -727,6 +851,7 @@ export class InMemoryPipelineStore implements PipelineStore {
       throw new Error(`Plan ${plan.id} does not exist`);
     }
     this.plans.set(plan.id, plan);
+    if (this.getProject(plan.projectId) && this.getThread(plan.sourceExplorerThreadId)) this.savePlanQueryProjection(planQueryProjectionFor(plan));
     return plan;
   }
 
@@ -770,8 +895,32 @@ export class InMemoryPipelineStore implements PipelineStore {
   saveRun(run: Run): Run { this.runs.set(run.id, run); return run; }
   getRun(runId: string): Run | undefined { return this.runs.get(runId); }
   listRuns(): Run[] { return [...this.runs.values()]; }
-  saveExecutionThread(thread: ExecutionThread): ExecutionThread { this.executionThreads.set(thread.id, thread); return thread; }
+  saveExecutionThread(thread: ExecutionThread): ExecutionThread {
+    const safe = { ...thread, journal: thread.journal.map((entry) => ({ ...entry, payload: redactAuditPayload(entry.payload) })) };
+    this.executionThreads.set(thread.id, safe);
+    return safe;
+  }
   getExecutionThread(threadId: string): ExecutionThread | undefined { return this.executionThreads.get(threadId); }
+  appendExecutionJournal(input: { executionThreadId: string; runId: string; type: JournalEntryType; payload: Record<string, unknown>; occurredAt?: string }): ExecutionJournalEntry {
+    const thread = this.executionThreads.get(input.executionThreadId);
+    if (!thread || thread.runId !== input.runId) throw new Error(`ExecutionThread ${input.executionThreadId} does not belong to Run ${input.runId}`);
+    const entry: ExecutionJournalEntry = { sequence: thread.journal.length + 1, type: input.type, occurredAt: input.occurredAt ?? this.now(), payload: redactAuditPayload(input.payload) };
+    this.executionThreads.set(thread.id, { ...thread, journal: [...thread.journal, entry] });
+    return entry;
+  }
+  saveHookExecution(execution: HookExecution): HookExecution {
+    const safe = { ...execution, stdout: redactAuditText(execution.stdout), stderr: redactAuditText(execution.stderr) };
+    const key = `${safe.runId}:${safe.hookType}:${safe.attempt}`;
+    if (!this.hookExecutions.has(key)) this.hookExecutions.set(key, safe);
+    return this.hookExecutions.get(key)!;
+  }
+  listHookExecutions(runId?: string): HookExecution[] {
+    return [...this.hookExecutions.values()].filter((execution) => !runId || execution.runId === runId).sort((a, b) => a.startedAt.localeCompare(b.startedAt) || a.attempt - b.attempt);
+  }
+  savePlanQueryProjection(projection: PlanQueryProjection): PlanQueryProjection { this.planQueryProjections.set(projection.planId, projection); return projection; }
+  listPlanQueryProjection(projectId?: string): PlanQueryProjection[] {
+    return [...this.planQueryProjections.values()].filter((projection) => !projectId || projection.projectId === projectId).sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.planId.localeCompare(b.planId));
+  }
   saveVerificationRun(verification: VerificationRun): VerificationRun {
     if (!this.verificationRuns.has(verification.id)) this.verificationRuns.set(verification.id, verification);
     return this.verificationRuns.get(verification.id)!;
@@ -807,7 +956,7 @@ export class InMemoryPipelineStore implements PipelineStore {
   updateToolCall(call: PersistedToolCall): PersistedToolCall { if (!this.toolCalls.has(call.callId)) throw new Error(`Tool call ${call.callId} does not exist`); this.toolCalls.set(call.callId, call); return call; }
 
   appendEvent(event: Omit<DomainEvent, "id" | "occurredAt" | "sequence">): DomainEvent {
-    const saved: DomainEvent = { ...event, id: this.nextId("event"), sequence: ++this.eventSequence, occurredAt: this.now() };
+    const saved: DomainEvent = { ...event, payload: redactAuditPayload(event.payload), id: this.nextId("event"), sequence: ++this.eventSequence, occurredAt: this.now() };
     this.events.push(saved);
     for (const listener of this.eventListeners) listener(saved);
     return saved;
@@ -843,6 +992,7 @@ export class SqlitePipelineStore implements PipelineStore {
 
   constructor(databasePath: string) {
     this.database = new DatabaseSync(databasePath);
+    this.database.exec("PRAGMA foreign_keys = ON;");
     this.database.exec("PRAGMA journal_mode = WAL;");
     this.database.exec(`
       CREATE TABLE IF NOT EXISTS factory_projects (
@@ -976,6 +1126,50 @@ export class SqlitePipelineStore implements PipelineStore {
         state TEXT NOT NULL,
         journal_json TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS execution_journal (
+        execution_thread_id TEXT NOT NULL REFERENCES execution_threads(id),
+        run_id TEXT NOT NULL REFERENCES runs(id),
+        sequence INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        occurred_at TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        PRIMARY KEY (run_id, sequence),
+        UNIQUE (execution_thread_id, sequence)
+      );
+      CREATE TABLE IF NOT EXISTS hook_executions (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES runs(id),
+        hook_type TEXT NOT NULL,
+        attempt INTEGER NOT NULL,
+        command_id TEXT,
+        cwd TEXT NOT NULL,
+        timeout_ms INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        exit_code INTEGER,
+        stdout TEXT NOT NULL,
+        stderr TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        completed_at TEXT NOT NULL,
+        UNIQUE (run_id, hook_type, attempt)
+      );
+      CREATE TABLE IF NOT EXISTS plan_query_projection (
+        plan_id TEXT PRIMARY KEY REFERENCES candidate_plans(id),
+        project_id TEXT NOT NULL REFERENCES factory_projects(id),
+        source_explorer_thread_id TEXT NOT NULL REFERENCES explorer_threads(id),
+        source_turn_id TEXT,
+        title TEXT NOT NULL,
+        goal TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        priority INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        queued_at TEXT,
+        last_event_at TEXT NOT NULL,
+        run_id TEXT,
+        attention_reason TEXT
+      );
+      CREATE INDEX IF NOT EXISTS plan_query_projection_project_idx ON plan_query_projection(project_id, status, queued_at, last_event_at);
+      CREATE INDEX IF NOT EXISTS plan_query_projection_source_idx ON plan_query_projection(source_explorer_thread_id, queued_at, last_event_at);
       CREATE TABLE IF NOT EXISTS verification_runs (
         id TEXT PRIMARY KEY,
         run_id TEXT NOT NULL,
@@ -1099,6 +1293,7 @@ export class SqlitePipelineStore implements PipelineStore {
     try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN project_config_hash TEXT"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN project_config_snapshot_json TEXT"); } catch { /* Existing databases already have the column. */ }
     this.backfillLegacyVerificationRuns();
+    this.backfillPlanQueryProjection();
   }
 
   now(): string { return new Date().toISOString(); }
@@ -1224,6 +1419,7 @@ export class SqlitePipelineStore implements PipelineStore {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, source_explorer_thread_id=excluded.source_explorer_thread_id, source_turn_id=excluded.source_turn_id, provider_thread_id=excluded.provider_thread_id, provider_turn_id=excluded.provider_turn_id, provider_item_id=excluded.provider_item_id, title=excluded.title, revision=excluded.revision, status=excluded.status, confirmed_by=excluded.confirmed_by, confirmed_at=excluded.confirmed_at, queued_at=excluded.queued_at, run_id=excluded.run_id, last_event_at=excluded.last_event_at, attention_reason=excluded.attention_reason, contract_json=excluded.contract_json
     `).run(plan.id, plan.projectId, plan.sourceExplorerThreadId, plan.sourceTurnId, plan.providerThreadId, plan.providerTurnId, plan.providerItemId, plan.title, plan.revision, plan.status, plan.createdAt, plan.confirmedBy, plan.confirmedAt, plan.queuedAt, plan.runId, plan.lastEventAt, plan.attentionReason, JSON.stringify(plan.contract));
+    if (this.getProject(plan.projectId) && this.getThread(plan.sourceExplorerThreadId)) this.savePlanQueryProjection(planQueryProjectionFor(plan));
     return this.getPlan(plan.id) as CandidatePlan;
   }
 
@@ -1305,8 +1501,52 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   saveExecutionThread(thread: ExecutionThread): ExecutionThread {
-    this.database.prepare("INSERT INTO execution_threads (id, run_id, state, journal_json) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET state=excluded.state, journal_json=excluded.journal_json").run(thread.id, thread.runId, thread.state, JSON.stringify(thread.journal));
-    return this.getExecutionThread(thread.id) as ExecutionThread;
+    const safe = { ...thread, journal: thread.journal.map((entry) => ({ ...entry, payload: redactAuditPayload(entry.payload) })) };
+    this.database.prepare("INSERT INTO execution_threads (id, run_id, state, journal_json) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET state=excluded.state").run(safe.id, safe.runId, safe.state, JSON.stringify(safe.journal));
+    for (const entry of safe.journal) {
+      this.database.prepare("INSERT OR IGNORE INTO execution_journal (execution_thread_id, run_id, sequence, type, occurred_at, payload_json) VALUES (?, ?, ?, ?, ?, ?)").run(safe.id, safe.runId, entry.sequence, entry.type, entry.occurredAt, JSON.stringify(entry.payload));
+    }
+    return this.getExecutionThread(safe.id) as ExecutionThread;
+  }
+
+  appendExecutionJournal(input: { executionThreadId: string; runId: string; type: JournalEntryType; payload: Record<string, unknown>; occurredAt?: string }): ExecutionJournalEntry {
+    const thread = this.getExecutionThread(input.executionThreadId);
+    if (!thread || thread.runId !== input.runId) throw new Error(`ExecutionThread ${input.executionThreadId} does not belong to Run ${input.runId}`);
+    const sequence = Number((this.database.prepare("SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM execution_journal WHERE run_id = ?").get(input.runId) as SqliteRow).next_sequence);
+    const entry: ExecutionJournalEntry = { sequence, type: input.type, occurredAt: input.occurredAt ?? this.now(), payload: redactAuditPayload(input.payload) };
+    this.database.prepare("INSERT INTO execution_journal (execution_thread_id, run_id, sequence, type, occurred_at, payload_json) VALUES (?, ?, ?, ?, ?, ?)").run(input.executionThreadId, input.runId, entry.sequence, entry.type, entry.occurredAt, JSON.stringify(entry.payload));
+    return entry;
+  }
+
+  saveHookExecution(execution: HookExecution): HookExecution {
+    const safe = { ...execution, stdout: redactAuditText(execution.stdout), stderr: redactAuditText(execution.stderr) };
+    this.database.prepare("INSERT OR IGNORE INTO hook_executions (id, run_id, hook_type, attempt, command_id, cwd, timeout_ms, status, exit_code, stdout, stderr, started_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(safe.id, safe.runId, safe.hookType, safe.attempt, safe.commandId, safe.cwd, safe.timeoutMs, safe.status, safe.exitCode, safe.stdout, safe.stderr, safe.startedAt, safe.completedAt);
+    return this.getHookExecution(safe.runId, safe.hookType, safe.attempt) as HookExecution;
+  }
+
+  getHookExecution(runId: string, hookType: HookExecution["hookType"], attempt: number): HookExecution | undefined {
+    const row = this.database.prepare("SELECT * FROM hook_executions WHERE run_id = ? AND hook_type = ? AND attempt = ?").get(runId, hookType, attempt) as SqliteRow | undefined;
+    return row ? this.hookExecutionFromRow(row) : undefined;
+  }
+
+  listHookExecutions(runId?: string): HookExecution[] {
+    const rows = this.database.prepare(`SELECT * FROM hook_executions ${runId ? "WHERE run_id = ?" : ""} ORDER BY started_at ASC, attempt ASC`).all(...(runId ? [runId] : [])) as unknown as SqliteRow[];
+    return rows.map((row) => this.hookExecutionFromRow(row));
+  }
+
+  savePlanQueryProjection(projection: PlanQueryProjection): PlanQueryProjection {
+    this.database.prepare("INSERT INTO plan_query_projection (plan_id, project_id, source_explorer_thread_id, source_turn_id, title, goal, revision, status, priority, created_at, queued_at, last_event_at, run_id, attention_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(plan_id) DO UPDATE SET project_id=excluded.project_id, source_explorer_thread_id=excluded.source_explorer_thread_id, source_turn_id=excluded.source_turn_id, title=excluded.title, goal=excluded.goal, revision=excluded.revision, status=excluded.status, priority=excluded.priority, created_at=excluded.created_at, queued_at=excluded.queued_at, last_event_at=excluded.last_event_at, run_id=excluded.run_id, attention_reason=excluded.attention_reason").run(projection.planId, projection.projectId, projection.sourceExplorerThreadId, projection.sourceTurnId, projection.title, projection.goal, projection.revision, projection.status, projection.priority, projection.createdAt, projection.queuedAt, projection.lastEventAt, projection.runId, projection.attentionReason);
+    return this.getPlanQueryProjection(projection.planId) as PlanQueryProjection;
+  }
+
+  getPlanQueryProjection(planId: string): PlanQueryProjection | undefined {
+    const row = this.database.prepare("SELECT * FROM plan_query_projection WHERE plan_id = ?").get(planId) as SqliteRow | undefined;
+    return row ? this.planQueryProjectionFromRow(row) : undefined;
+  }
+
+  listPlanQueryProjection(projectId?: string): PlanQueryProjection[] {
+    const rows = this.database.prepare(`SELECT * FROM plan_query_projection ${projectId ? "WHERE project_id = ?" : ""} ORDER BY created_at ASC, plan_id ASC`).all(...(projectId ? [projectId] : [])) as unknown as SqliteRow[];
+    return rows.map((row) => this.planQueryProjectionFromRow(row));
   }
 
   saveVerificationRun(verification: VerificationRun): VerificationRun {
@@ -1425,11 +1665,16 @@ export class SqlitePipelineStore implements PipelineStore {
 
   getExecutionThread(threadId: string): ExecutionThread | undefined {
     const row = this.database.prepare("SELECT * FROM execution_threads WHERE id = ?").get(threadId) as SqliteRow | undefined;
-    return row ? { id: String(row.id), runId: String(row.run_id), state: String(row.state) as ExecutionThreadState, journal: JSON.parse(String(row.journal_json)) as ExecutionJournalEntry[] } : undefined;
+    if (!row) return undefined;
+    const journalRows = this.database.prepare("SELECT sequence, type, occurred_at, payload_json FROM execution_journal WHERE execution_thread_id = ? ORDER BY sequence ASC").all(threadId) as unknown as SqliteRow[];
+    const journal = journalRows.length > 0
+      ? journalRows.map((entry) => ({ sequence: Number(entry.sequence), type: String(entry.type) as JournalEntryType, occurredAt: String(entry.occurred_at), payload: JSON.parse(String(entry.payload_json)) as Record<string, unknown> }))
+      : JSON.parse(String(row.journal_json)) as ExecutionJournalEntry[];
+    return { id: String(row.id), runId: String(row.run_id), state: String(row.state) as ExecutionThreadState, journal };
   }
 
   appendEvent(event: Omit<DomainEvent, "id" | "occurredAt" | "sequence">): DomainEvent {
-    const saved: DomainEvent = { ...event, id: this.nextId("event"), sequence: Number((this.database.prepare("SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM domain_events").get() as SqliteRow).next_sequence), occurredAt: this.now() };
+    const saved: DomainEvent = { ...event, payload: redactAuditPayload(event.payload), id: this.nextId("event"), sequence: Number((this.database.prepare("SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM domain_events").get() as SqliteRow).next_sequence), occurredAt: this.now() };
     this.database.prepare("INSERT INTO domain_events (id, sequence, type, aggregate_id, occurred_at, payload_json) VALUES (?, ?, ?, ?, ?, ?)").run(saved.id, saved.sequence, saved.type, saved.aggregateId, saved.occurredAt, JSON.stringify(saved.payload));
     for (const listener of this.eventListeners) listener(saved);
     return saved;
@@ -1515,6 +1760,49 @@ export class SqlitePipelineStore implements PipelineStore {
     };
   }
 
+  private hookExecutionFromRow(row: SqliteRow): HookExecution {
+    return {
+      id: String(row.id),
+      runId: String(row.run_id),
+      hookType: String(row.hook_type) as HookExecution["hookType"],
+      attempt: Number(row.attempt),
+      commandId: row.command_id === null || row.command_id === undefined ? null : String(row.command_id),
+      cwd: String(row.cwd),
+      timeoutMs: Number(row.timeout_ms),
+      status: String(row.status) as HookExecution["status"],
+      exitCode: row.exit_code === null || row.exit_code === undefined ? null : Number(row.exit_code),
+      stdout: String(row.stdout),
+      stderr: String(row.stderr),
+      startedAt: String(row.started_at),
+      completedAt: String(row.completed_at),
+    };
+  }
+
+  private planQueryProjectionFromRow(row: SqliteRow): PlanQueryProjection {
+    return {
+      planId: String(row.plan_id),
+      projectId: String(row.project_id),
+      sourceExplorerThreadId: String(row.source_explorer_thread_id),
+      sourceTurnId: row.source_turn_id === null || row.source_turn_id === undefined ? null : String(row.source_turn_id),
+      title: String(row.title),
+      goal: String(row.goal),
+      revision: Number(row.revision),
+      status: String(row.status) as PlanStatus,
+      priority: Number(row.priority),
+      createdAt: String(row.created_at),
+      queuedAt: row.queued_at === null || row.queued_at === undefined ? null : String(row.queued_at),
+      lastEventAt: String(row.last_event_at),
+      runId: row.run_id === null || row.run_id === undefined ? null : String(row.run_id),
+      attentionReason: row.attention_reason === null || row.attention_reason === undefined ? null : String(row.attention_reason),
+    };
+  }
+
+  private backfillPlanQueryProjection(): void {
+    for (const plan of this.listPlans()) {
+      if (this.getProject(plan.projectId) && this.getThread(plan.sourceExplorerThreadId)) this.savePlanQueryProjection(planQueryProjectionFor(plan));
+    }
+  }
+
   private mergeRequestFromRow(row: SqliteRow): MergeRequest {
     return {
       id: String(row.id),
@@ -1594,11 +1882,13 @@ function defaultPlanContract(title: string): PlanContract {
     mergeStrategy: "manual",
     requireHumanMerge: true,
     dependsOnPlanIds: [],
+    priority: 0,
   };
 }
 
 /** Confirm/Enqueue 前校验执行合同的结构，避免无效任务图进入不可恢复的 Run。 */
 export function validatePlanContract(contract: PlanContract): void {
+  if (contract.priority !== undefined && (!Number.isInteger(contract.priority) || contract.priority < 0)) throw new Error("Plan priority must be a non-negative integer");
   const taskIds = contract.tasks.map((task) => task.id);
   if (taskIds.some((id) => !id.trim())) throw new Error("Plan task ids must be non-empty");
   if (new Set(taskIds).size !== taskIds.length) throw new Error("Plan task ids must be unique");
@@ -1650,6 +1940,7 @@ export class PlanService {
   /** 注册与 Project 绑定的本地线程，并追加创建事件。 */
   registerThread(input: RegisterThreadInput): ExplorerThread {
     const thread = this.store.saveThread(input);
+    activateOnlyExplorer(this.store, thread);
     this.store.appendEvent({
       type: "explorer.thread.created",
       aggregateId: thread.id,
@@ -1762,6 +2053,97 @@ export class PlanService {
     visit(plan.id);
   }
 
+  /** 执行 Plan Center 查询：只读已下发计划，并以 projection 提供稳定排序和游标。 */
+  query(query: PlanQuery): PlanQueryResult {
+    if (!Number.isInteger(query.limit) || query.limit < 1 || query.limit > 100) throw new Error("Plan query limit must be between 1 and 100");
+    const sourceIds = query.explorerThreadId ? this.explorerLineage(query.explorerThreadId, query.includeLineage !== false) : null;
+    const keyword = query.q?.trim().toLowerCase();
+    const statuses = query.status && query.status.length > 0 ? new Set(query.status) : null;
+    const rows = this.store.listPlanQueryProjection(query.projectId)
+      .filter((row) => row.queuedAt !== null)
+      .filter((row) => !sourceIds || sourceIds.has(row.sourceExplorerThreadId))
+      .filter((row) => !statuses || statuses.has(row.status))
+      .filter((row) => !keyword || `${row.planId} ${row.title} ${row.goal}`.toLowerCase().includes(keyword))
+      .filter((row) => !query.from || Date.parse(row.queuedAt!) >= Date.parse(query.from))
+      .filter((row) => !query.to || Date.parse(row.queuedAt!) <= Date.parse(query.to))
+      .map((row) => {
+        const plan = this.store.getPlan(row.planId);
+        if (!plan) throw new Error(`Plan query projection ${row.planId} has no source Plan`);
+        return {
+          planId: row.planId,
+          title: row.title,
+          revision: row.revision,
+          status: row.status,
+          projectId: row.projectId,
+          sourceExplorerThreadId: row.sourceExplorerThreadId,
+          sourceTurnId: row.sourceTurnId,
+          providerThreadId: plan.providerThreadId,
+          providerTurnId: plan.providerTurnId,
+          providerItemId: plan.providerItemId,
+          createdAt: row.createdAt,
+          queuedAt: row.queuedAt as string,
+          runId: row.runId,
+          lastEventAt: row.lastEventAt,
+          attentionReason: row.attentionReason,
+          priority: row.priority,
+        } satisfies PlanIndexRow;
+      })
+      .sort((a, b) => this.comparePlanRows(a, b, query.sort));
+
+    let start = 0;
+    if (query.cursor) {
+      const cursor = decodePlanCursor(query.cursor);
+      if (cursor.sort !== query.sort) throw new Error("Plan query cursor sort does not match request");
+      const cursorIndex = rows.findIndex((row) => row.planId === cursor.planId);
+      if (cursorIndex < 0) throw new Error("Plan query cursor is no longer valid");
+      start = cursorIndex + 1;
+    }
+    const items = rows.slice(start, start + query.limit);
+    const last = items.at(-1);
+    return { items, nextCursor: last && start + items.length < rows.length ? encodePlanCursor({ sort: query.sort, planId: last.planId }) : null };
+  }
+
+  private explorerLineage(threadId: string, includeLineage: boolean): Set<string> {
+    const thread = this.store.getThread(threadId);
+    if (!thread) return new Set();
+    if (!includeLineage) return new Set([threadId]);
+    const lineage = new Set<string>([threadId]);
+    let parentId = thread.parentThreadId;
+    while (parentId) {
+      lineage.add(parentId);
+      parentId = this.store.getThread(parentId)?.parentThreadId ?? null;
+    }
+    let changed = true;
+    const projectThreads = this.store.listThreads().filter((candidate) => candidate.projectId === thread.projectId);
+    while (changed) {
+      changed = false;
+      for (const candidate of projectThreads) {
+        if (candidate.parentThreadId && lineage.has(candidate.parentThreadId) && !lineage.has(candidate.id)) {
+          lineage.add(candidate.id);
+          changed = true;
+        }
+      }
+    }
+    return lineage;
+  }
+
+  private comparePlanRows(a: PlanIndexRow, b: PlanIndexRow, sort: PlanQuerySort): number {
+    if (sort === "priority") {
+      const priority = b.priority - a.priority;
+      if (priority !== 0) return priority;
+      const queued = a.queuedAt.localeCompare(b.queuedAt);
+      if (queued !== 0) return queued;
+    } else if (sort === "status") {
+      const status = a.status.localeCompare(b.status);
+      if (status !== 0) return status;
+    } else {
+      const field = sort === "queued_at" ? "queuedAt" : "lastEventAt";
+      const time = b[field].localeCompare(a[field]);
+      if (time !== 0) return time;
+    }
+    return a.planId.localeCompare(b.planId);
+  }
+
   /** 读取指定不可变 Revision；缺失快照的旧数据仍按 LEGACY 兼容读取。 */
   getRevision(planId: string, revision: number): PlanRevisionV2 {
     const value = this.store.getRevision(planId, revision);
@@ -1822,6 +2204,7 @@ export class PlanService {
         runId: plan.runId,
         lastEventAt: plan.lastEventAt,
         attentionReason: plan.attentionReason,
+        priority: plan.contract.priority ?? 0,
       }))
       .sort((a, b) => b.queuedAt.localeCompare(a.queuedAt));
   }
@@ -1847,6 +2230,7 @@ export class PlanService {
         runId: plan.runId,
         lastEventAt: plan.lastEventAt,
         attentionReason: plan.attentionReason,
+        priority: plan.contract.priority ?? 0,
       }))
       .sort((a, b) => b.lastEventAt.localeCompare(a.lastEventAt));
   }
@@ -1871,6 +2255,7 @@ export class ExplorerService {
     });
     this.store.appendEvent({ type: "explorer.created", aggregateId: thread.id, payload: { projectId: thread.projectId, contextMode: thread.contextMode, originThreadId: thread.originThreadId } });
     if (origin) this.store.appendEvent({ type: "explorer.continued", aggregateId: thread.id, payload: { originThreadId: origin.id } });
+    activateOnlyExplorer(this.store, thread);
     return thread;
   }
 
@@ -1883,7 +2268,7 @@ export class ExplorerService {
 
   /** 只列出指定 Project 的线程，按最近活动倒序。 */
   list(projectId: string): ExplorerThread[] {
-    return this.store.listThreads().filter((thread) => thread.projectId === projectId).sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
+    return this.store.listThreads().filter((thread) => thread.projectId === projectId).sort((a, b) => Number(b.state === "ACTIVE") - Number(a.state === "ACTIVE") || b.lastActivityAt.localeCompare(a.lastActivityAt));
   }
 
   /** 归档线程并保留其 Turn、Plan 和事件历史。 */
@@ -1901,6 +2286,7 @@ export class ExplorerService {
     if (explorer.state === "ACTIVE") return explorer;
     const active = this.store.updateThread({ ...explorer, state: "ACTIVE", lastActivityAt: this.store.now() });
     this.store.appendEvent({ type: "explorer.activated", aggregateId: explorerId, payload: { explorerId } });
+    activateOnlyExplorer(this.store, active);
     return active;
   }
 
@@ -2014,22 +2400,42 @@ export class LifecycleHookRunner {
     context: HookContext,
     blocksRun: boolean,
   ): Promise<HookRunResult> {
+    const cwd = hook === "start" ? context.workspacePath : this.cleanupCwd;
+    const timeoutMs = definition?.timeoutMs ?? DEFAULT_HOOK_TIMEOUT_MS;
     if (!definition || definition.enabled === false) {
-      return { hook, status: "skipped", blocked: false, needsAttention: false, result: null };
+      return {
+        hook,
+        status: "skipped",
+        blocked: false,
+        needsAttention: false,
+        result: null,
+        attempts: [{ attempt: 1, commandId: definition?.commandId ?? null, cwd, timeoutMs, status: "skipped", result: null, startedAt: new Date().toISOString(), completedAt: new Date().toISOString() }],
+      };
     }
-    const result = await this.executor({
-      commandId: definition.commandId,
-      cwd: hook === "start" ? context.workspacePath : this.cleanupCwd,
-      timeoutMs: definition.timeoutMs ?? DEFAULT_HOOK_TIMEOUT_MS,
-      context,
-    });
-    const failed = result.exitCode !== 0;
+    const attempts: HookRunResult["attempts"] = [];
+    const maxAttempts = Math.max(1, definition.maxAttempts ?? 1);
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const startedAt = new Date().toISOString();
+      let result: CommandResult;
+      try {
+        result = await this.executor({ commandId: definition.commandId, cwd, timeoutMs, context });
+      } catch (error) {
+        result = { exitCode: 1, stdout: "", stderr: error instanceof Error ? error.message : String(error) };
+      }
+      const completedAt = new Date().toISOString();
+      const status = result.exitCode === 0 ? "completed" : "failed";
+      attempts.push({ attempt, commandId: definition.commandId, cwd, timeoutMs, status, result, startedAt, completedAt });
+      if (status === "completed") break;
+    }
+    const finalAttempt = attempts.at(-1)!;
+    const failed = finalAttempt.status === "failed";
     return {
       hook,
       status: failed ? "failed" : "completed",
       blocked: failed && blocksRun,
       needsAttention: failed && !blocksRun,
-      result,
+      result: finalAttempt.result,
+      attempts,
     };
   }
 }
@@ -2994,6 +3400,7 @@ export class Scheduler {
     const workspace = await workspaceAdapter.create({ projectId: plan.projectId, runId, branch: run.branch, baseCommit: run.baseCommit });
     run.workspacePath = workspace.path;
     const startResult = await hookRunner.runStart(executionHooks.start, { projectId: plan.projectId, runId, workspacePath: workspace.path, branch: workspace.branch, baseCommit: workspace.baseCommit, exitReason: "running" });
+    this.recordHookExecutions(run.id, startResult);
     if (startResult.status === "failed") {
       run.status = "BLOCKED";
       thread.state = "BLOCKED";
@@ -3047,6 +3454,7 @@ export class Scheduler {
       await workspaceAdapter.remove({ path: run.workspacePath, branch: run.branch, baseCommit: run.baseCommit });
     }
     const cleanupResult = await hookRunner.runCleanup(executionHooks.cleanup, { projectId: run.projectId, runId: run.id, workspacePath: run.workspacePath ?? "", branch: run.branch, baseCommit: run.baseCommit, exitReason });
+    this.recordHookExecutions(run.id, cleanupResult);
     this.append(thread.id, cleanupResult.status === "failed" ? "HOOK_FAILED" : cleanupResult.status === "skipped" ? "HOOK_SKIPPED" : "HOOK_COMPLETED", { hook: "cleanup", exitReason });
     if (cleanupResult.needsAttention) {
       const plan = this.options.store.getPlan(run.planId);
@@ -3132,8 +3540,28 @@ export class Scheduler {
   private append(threadId: string, type: JournalEntryType, payload: Record<string, unknown>): void {
     const thread = this.options.store.getExecutionThread(threadId) ?? this.threads.get(threadId);
     if (!thread) return;
-    const entry = { sequence: thread.journal.length + 1, type, occurredAt: this.options.store.now(), payload };
-    this.options.store.saveExecutionThread({ ...thread, journal: [...thread.journal, entry] });
+    this.options.store.appendExecutionJournal({ executionThreadId: thread.id, runId: thread.runId, type, payload });
+  }
+
+  private recordHookExecutions(runId: string, result: HookRunResult): void {
+    for (const attempt of result.attempts) {
+      const commandResult = attempt.result;
+      this.options.store.saveHookExecution({
+        id: `hook-execution-${runId}-${result.hook}-${attempt.attempt}`,
+        runId,
+        hookType: result.hook,
+        attempt: attempt.attempt,
+        commandId: attempt.commandId,
+        cwd: attempt.cwd,
+        timeoutMs: attempt.timeoutMs,
+        status: attempt.status,
+        exitCode: commandResult?.exitCode ?? null,
+        stdout: commandResult?.stdout ?? "",
+        stderr: commandResult?.stderr ?? "",
+        startedAt: attempt.startedAt,
+        completedAt: attempt.completedAt,
+      });
+    }
   }
 
   private setThreadState(threadId: string, state: ExecutionThreadState): void {
@@ -3222,8 +3650,7 @@ export class VerificationService {
     }
     const thread = this.store.getExecutionThread(run.executionThreadId);
     if (thread) {
-      thread.journal.push({ sequence: thread.journal.length + 1, type: "VERIFICATION", occurredAt: verification.completedAt, payload: verification });
-      this.store.saveExecutionThread(thread);
+      this.store.appendExecutionJournal({ executionThreadId: thread.id, runId: thread.runId, type: "VERIFICATION", occurredAt: verification.completedAt, payload: verification });
     }
     this.store.appendEvent({ type: "verification.completed", aggregateId: run.id, payload: verification });
   }
@@ -3242,9 +3669,41 @@ export type MergeRequest = {
   mergedAt: string | null;
 };
 
+/** Merge 前必须由 Git 证明源提交和目标分支的关系；测试可注入确定性实现。 */
+export type GitMergeInspector = {
+  commitExists(repoRoot: string, commit: string): boolean;
+  isAncestor(repoRoot: string, sourceCommit: string, targetCommit: string): boolean;
+  branchContains(repoRoot: string, targetBranch: string, targetCommit: string): boolean;
+};
+
+function gitCommand(repoRoot: string, args: string[]): boolean {
+  try {
+    execFileSync("git", args, { cwd: repoRoot, stdio: ["ignore", "ignore", "ignore"] });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 默认 Git 证据实现；无效的旧测试路径交由 Project API 的仓库校验拦截。 */
+export const localGitMergeInspector: GitMergeInspector = {
+  commitExists(repoRoot, commit) {
+    if (!existsSync(repoRoot)) return true;
+    return gitCommand(repoRoot, ["cat-file", "-e", `${commit}^{commit}`]);
+  },
+  isAncestor(repoRoot, sourceCommit, targetCommit) {
+    if (!existsSync(repoRoot)) return true;
+    return gitCommand(repoRoot, ["merge-base", "--is-ancestor", sourceCommit, targetCommit]);
+  },
+  branchContains(repoRoot, targetBranch, targetCommit) {
+    if (!existsSync(repoRoot)) return true;
+    return gitCommand(repoRoot, ["merge-base", "--is-ancestor", targetCommit, targetBranch]);
+  },
+};
+
 /** 创建并确认人工 MergeRequest；Factory 不替用户直接改写目标分支。 */
 export class MergeService {
-  constructor(private readonly store: PipelineStore) {}
+  constructor(private readonly store: PipelineStore, private readonly options: { git?: GitMergeInspector } = {}) {}
 
   /** 为验证通过的 Run 创建幂等 MergeRequest。 */
   createRequest(run: Run, verification: VerificationRun, sourceCommit: string): MergeRequest {
@@ -3254,6 +3713,10 @@ export class MergeService {
     if (existing) return existing;
     const plan = this.store.getPlan(run.planId);
     const revision = plan ? this.store.getRevision(plan.id, run.planRevision) : undefined;
+    const project = plan ? this.store.getProject(plan.projectId) : undefined;
+    if (project && this.options.git && !this.options.git.commitExists(project.repoRoot, sourceCommit)) {
+      throw new Error(`Source commit ${sourceCommit} could not be verified in the project repository`);
+    }
     const request: MergeRequest = { id: `merge-${randomUUID().slice(0, 12)}`, runId: run.id, planId: run.planId, sourceCommit, targetBranch: revision?.contract.baseBranch ?? "main", status: "OPEN", humanConfirmationRequired: true, createdAt: new Date().toISOString(), mergedAt: null };
     this.store.saveMergeRequest(request);
     this.store.appendEvent({ type: "merge.request.created", aggregateId: request.id, payload: request });
@@ -3272,10 +3735,16 @@ export class MergeService {
     const request = this.store.getMergeRequest(requestId);
     if (!request) throw new Error(`MergeRequest ${requestId} not found`);
     if (request.status === "MERGED") return request;
-    if (targetCommit !== request.sourceCommit) throw new Error("Target commit does not match the reviewed source commit");
+    if (!this.options.git && targetCommit !== request.sourceCommit) throw new Error("Target commit does not match the reviewed source commit");
+    const plan = this.store.getPlan(request.planId);
+    const project = plan ? this.store.getProject(plan.projectId) : undefined;
+    if (project && this.options.git) {
+      if (!this.options.git.commitExists(project.repoRoot, targetCommit)) throw new Error(`Target commit ${targetCommit} could not be verified in the project repository`);
+      if (!this.options.git.isAncestor(project.repoRoot, request.sourceCommit, targetCommit)) throw new Error("Source commit is not an ancestor of the target commit");
+      if (!this.options.git.branchContains(project.repoRoot, request.targetBranch, targetCommit)) throw new Error("Target branch does not contain the reviewed source commit");
+    }
     const merged = { ...request, status: "MERGED" as const, mergedAt: new Date().toISOString() };
     this.store.updateMergeRequest(merged);
-    const plan = this.store.getPlan(request.planId);
     if (plan) this.store.updatePlan({ ...plan, status: "MERGED", lastEventAt: merged.mergedAt ?? plan.lastEventAt });
     this.store.appendEvent({ type: "merge.confirmed", aggregateId: requestId, payload: { targetCommit, planId: request.planId } });
     return merged;
@@ -3310,6 +3779,7 @@ export class ToolCallLedger {
   list(): ToolCallLedgerEntry[] { return [...this.entries.values()]; }
 }
 import { createHash, randomUUID } from "node:crypto";
-import { execFile, spawn } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
+import { existsSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";

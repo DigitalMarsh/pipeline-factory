@@ -322,6 +322,29 @@ describe("Pipeline Factory v4 API", () => {
     expect(response.json().run).toMatchObject({ planId: plan.id, status: "IN_PROGRESS" });
   });
 
+  it("routes direct Run requests through the coordinator and returns WAITING when capacity is full", async () => {
+    const store = new InMemoryPipelineStore();
+    createTestProject(store);
+    const plans = new PlanService(store);
+    plans.registerThread({ id: "coordinator-run-thread", projectId: "project-1", parentThreadId: null });
+    const first = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "coordinator-run-thread", title: "First direct run" });
+    const second = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "coordinator-run-thread", title: "Second direct run" });
+    plans.confirm(first.id, "user-1");
+    plans.enqueue(first.id);
+    plans.confirm(second.id, "user-1");
+    plans.enqueue(second.id);
+    const scheduler = new Scheduler({ globalConcurrency: 1, store, workspace: { create: async ({ runId }) => ({ path: `/tmp/${runId}`, branch: `factory/${runId}`, baseCommit: "abc" }), remove: async () => undefined }, hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })) });
+    const app = createApp({ store, scheduler, seed: false });
+    apps.push(app);
+
+    const firstResponse = await app.inject({ method: "POST", url: `/api/v4/plans/${first.id}/run` });
+    const secondResponse = await app.inject({ method: "POST", url: `/api/v4/plans/${second.id}/run` });
+
+    expect(firstResponse.statusCode).toBe(200);
+    expect(secondResponse.statusCode).toBe(200);
+    expect(secondResponse.json()).toMatchObject({ run: null, dispatch: { planId: second.id, status: "WAITING", waitReason: "WAITING_GLOBAL_CAPACITY" } });
+  });
+
   it("automatically dispatches a plan from the v4 enqueue endpoint and exposes its dispatch state", async () => {
     const store = new InMemoryPipelineStore();
     createTestProject(store);

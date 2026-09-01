@@ -10,6 +10,7 @@ import ProjectCatalogView from "./views/ProjectCatalogView.vue";
 import ProjectSettingsView from "./views/ProjectSettingsView.vue";
 import WorkbenchView from "./views/WorkbenchView.vue";
 import ProjectCreateView from "./views/ProjectCreateView.vue";
+import PlanCenterView from "./views/PlanCenterView.vue";
 import { api } from "./api";
 
 /** 页面路由以 Project 为隔离边界，未知 Project 由页面加载错误引导回 Catalog。 */
@@ -20,8 +21,9 @@ export const router = createRouter({
     { path: "/projects", component: ProjectCatalogView },
     { path: "/projects/new", component: ProjectCreateView },
     { path: "/workbench", component: WorkbenchView },
+    { path: "/projects/:projectId/execute", component: WorkbenchView },
     { path: "/projects/:projectId/explorer", component: ExplorerView },
-    { path: "/projects/:projectId/plans", component: WorkbenchView },
+    { path: "/projects/:projectId/plans", component: PlanCenterView },
     { path: "/projects/:projectId/runs/:runId", component: RunDetailView },
     { path: "/projects/:projectId/settings", component: ProjectSettingsView },
     { path: "/projects/:projectId/settings/hooks", component: ProjectSettingsView },

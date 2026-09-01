@@ -164,12 +164,70 @@ function freezeDeep<T>(value: T): T {
   return value;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function assertFiniteInteger(value: unknown, field: string, minimum: number): asserts value is number {
+  if (typeof value !== "number" || !Number.isFinite(value) || !Number.isInteger(value) || value < minimum) {
+    throw new Error(`${field} must be a finite integer >= ${minimum}`);
+  }
+}
+
+function assertStringArray(value: unknown, field: string, allowEmpty = true): asserts value is string[] {
+  if (!Array.isArray(value) || (!allowEmpty && value.length === 0) || value.some((item) => typeof item !== "string" || item.trim() === "")) {
+    throw new Error(`${field} must be an array of non-empty strings`);
+  }
+}
+
+function validateProjectSettings(settings: ProjectSettings): void {
+  assertFiniteInteger(settings.concurrency.maxParallelRuns, "concurrency.maxParallelRuns", 1);
+  assertFiniteInteger(settings.concurrency.defaultTimeoutMs, "concurrency.defaultTimeoutMs", 1);
+  assertFiniteInteger(settings.concurrency.executionTimeoutMs, "concurrency.executionTimeoutMs", 1);
+  assertFiniteInteger(settings.concurrency.maxAutoContinuationTurns, "concurrency.maxAutoContinuationTurns", 0);
+  assertFiniteInteger(settings.concurrency.maxRepairAttempts, "concurrency.maxRepairAttempts", 0);
+
+  if (!Array.isArray(settings.commands)) throw new Error("commands must be an array");
+  for (const command of settings.commands) {
+    if (!isRecord(command) || typeof command.commandId !== "string" || command.commandId.trim() === "") throw new Error("commandId must be a non-empty string");
+    assertStringArray(command.argv, `command ${command.commandId}.argv`, false);
+    if (command.environment !== undefined) {
+      if (!isRecord(command.environment) || Object.entries(command.environment).some(([key, value]) => !key.trim() || typeof value !== "string")) throw new Error(`command ${command.commandId}.environment must contain string values`);
+    }
+  }
+
+  if (!isRecord(settings.hooks)) throw new Error("hooks must be an object");
+  for (const [name, hook] of Object.entries(settings.hooks)) {
+    if (!isRecord(hook) || typeof hook.commandId !== "string" || hook.commandId.trim() === "") throw new Error(`${name}.commandId must be a non-empty string`);
+    if (hook.enabled !== undefined && typeof hook.enabled !== "boolean") throw new Error(`${name}.enabled must be a boolean`);
+    if (hook.timeoutMs !== undefined) assertFiniteInteger(hook.timeoutMs, `${name}.timeoutMs`, 1);
+    if (hook.maxAttempts !== undefined) assertFiniteInteger(hook.maxAttempts, `${name}.maxAttempts`, 1);
+  }
+
+  for (const role of ["explorer", "executor"] as const) {
+    const model = settings.models[role];
+    if (!isRecord(model) || typeof model.model !== "string" || model.model.trim() === "") throw new Error(`models.${role}.model must be a non-empty string`);
+    if (model.temperature !== undefined && (typeof model.temperature !== "number" || !Number.isFinite(model.temperature) || model.temperature < 0 || model.temperature > 2)) throw new Error(`models.${role}.temperature must be between 0 and 2`);
+    if (model.maxOutputTokens !== undefined) assertFiniteInteger(model.maxOutputTokens, `models.${role}.maxOutputTokens`, 1);
+  }
+
+  assertStringArray(settings.toolPolicy.allowedMcpTools, "toolPolicy.allowedMcpTools");
+  assertStringArray(settings.toolPolicy.allowedPluginTools, "toolPolicy.allowedPluginTools");
+  if (typeof settings.toolPolicy.computerUseEnabled !== "boolean") throw new Error("toolPolicy.computerUseEnabled must be a boolean");
+}
+
 /** 合并并校验局部 Settings，返回可安全保存和快照的完整配置。 */
 export function normalizeProjectSettings(input?: ProjectSettingsInput, base: ProjectSettings = DEFAULT_PROJECT_SETTINGS): ProjectSettings {
   const value = input ?? {};
-  return {
+  if (!isRecord(value)) throw new Error("settings must be an object");
+  if (value.concurrency !== undefined && !isRecord(value.concurrency)) throw new Error("concurrency must be an object");
+  if (value.commands !== undefined && !Array.isArray(value.commands)) throw new Error("commands must be an array");
+  if (value.hooks !== undefined && !isRecord(value.hooks)) throw new Error("hooks must be an object");
+  if (value.models !== undefined && !isRecord(value.models)) throw new Error("models must be an object");
+  if (value.toolPolicy !== undefined && !isRecord(value.toolPolicy)) throw new Error("toolPolicy must be an object");
+  const settings: ProjectSettings = {
     concurrency: { ...base.concurrency, ...value.concurrency },
-    commands: value.commands ? value.commands.map((command) => ({ ...command, argv: [...command.argv], ...(command.environment ? { environment: { ...command.environment } } : {}) })) : clone(base.commands),
+    commands: value.commands ? value.commands.map((command) => ({ ...command, argv: [...command.argv] as [string, ...string[]], ...(command.environment ? { environment: { ...command.environment } } : {}) })) : clone(base.commands),
     hooks: { ...base.hooks, ...value.hooks },
     models: {
       explorer: { ...base.models.explorer, ...value.models?.explorer },
@@ -182,6 +240,8 @@ export function normalizeProjectSettings(input?: ProjectSettingsInput, base: Pro
       allowedPluginTools: value.toolPolicy?.allowedPluginTools ? [...value.toolPolicy.allowedPluginTools] : [...base.toolPolicy.allowedPluginTools],
     },
   };
+  validateProjectSettings(settings);
+  return settings;
 }
 
 function projectHash(input: Pick<Project, "name" | "repoRoot" | "defaultBranch" | "worktreeRoot" | "settings">): string {

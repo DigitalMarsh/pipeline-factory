@@ -108,7 +108,7 @@ export class PlanDispatchCoordinator {
     const queuedPlans = this.options.store
       .listPlans()
       .filter((plan) => plan.status === "QUEUED")
-      .sort((a, b) => (a.queuedAt ?? a.createdAt).localeCompare(b.queuedAt ?? b.createdAt) || a.id.localeCompare(b.id));
+      .sort((a, b) => (b.contract.priority ?? 0) - (a.contract.priority ?? 0) || (a.queuedAt ?? a.createdAt).localeCompare(b.queuedAt ?? b.createdAt) || a.id.localeCompare(b.id));
 
     for (const plan of queuedPlans) {
       const currentState = this.state(plan.id);
@@ -206,8 +206,10 @@ export class PlanDispatchCoordinator {
     switch (run.status) {
       case "STARTING":
       case "IN_PROGRESS":
-      case "RECOVERING":
         this.saveState(this.stateForRun(current, run, "RUNNING", null));
+        return;
+      case "RECOVERING":
+        this.saveState(this.stateForRun(current, run, "BLOCKED", null, plan?.attentionReason ?? `Run ${run.id} requires recovery`));
         return;
       case "VERIFYING":
         this.saveState(this.stateForRun(current, run, "VERIFYING", null));

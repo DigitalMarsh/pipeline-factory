@@ -43,6 +43,16 @@ describe("ProjectService", () => {
     expect(project.configHash).toMatch(/^sha256:/);
   });
 
+  it("rejects unsafe runtime settings before persisting a project", () => {
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    const base = { id: "project-settings", name: "Settings", repoRoot: "/repo/settings", defaultBranch: "main", worktreeRoot: "/tmp/settings-worktrees" };
+
+    expect(() => projects.create({ ...base, settings: { concurrency: { maxParallelRuns: 0 } } })).toThrow(/maxParallelRuns/i);
+    expect(() => projects.create({ ...base, id: "project-settings-command", settings: { commands: [{ commandId: "bad", argv: [] as never }] } })).toThrow(/argv/i);
+    expect(() => projects.create({ ...base, id: "project-settings-hook", settings: { hooks: { start: { commandId: "hook", maxAttempts: 0 } } } })).toThrow(/maxAttempts/i);
+  });
+
   it("increments the configuration version when project settings change", () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);

@@ -144,6 +144,19 @@ describe("PlanDispatchCoordinator", () => {
 
     expect(coordinator.state(plan.id)).toMatchObject({ status: "NEEDS_REVIEW", runId: run!.id });
   });
+
+  it("projects recovery-required Runs into Needs Attention instead of RUNNING", async () => {
+    const store = new InMemoryPipelineStore();
+    const plans = new PlanService(store);
+    const plan = createPlan(store, plans, "Recovery attention");
+    const coordinator = new coordinatorModule.PlanDispatchCoordinator({ store, plans, scheduler: schedulerFor(store) });
+    const dispatched = await coordinator.enqueue(plan.id);
+
+    store.saveRun({ ...store.getRun(dispatched.state.runId!)!, status: "RECOVERING" });
+    await coordinator.wake();
+
+    expect(coordinator.state(plan.id)).toMatchObject({ status: "BLOCKED", lastError: expect.stringContaining("recovery") });
+  });
 });
 
 describe("Plan dependency validation", () => {

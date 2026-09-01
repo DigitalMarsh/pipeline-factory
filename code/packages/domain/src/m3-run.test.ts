@@ -51,6 +51,28 @@ describe("Scheduler and ExecutionThread", () => {
     });
   });
 
+  it("persists every bounded lifecycle hook attempt", async () => {
+    const store = new InMemoryPipelineStore();
+    const planService = new PlanService(store);
+    const plan = planService.createCandidatePlan({ projectId: "project-hooks", sourceExplorerThreadId: "thread-hooks", title: "Hook audit" });
+    planService.confirm(plan.id, "user-1");
+    planService.enqueue(plan.id);
+    let calls = 0;
+    const scheduler = new Scheduler({
+      store,
+      workspace: { create: async () => ({ path: "/tmp/hook-audit", branch: "factory/hook-audit", baseCommit: "abc" }), remove: async () => undefined },
+      hooks: new LifecycleHookRunner(async () => ({ exitCode: ++calls === 2 ? 0 : 1, stdout: `attempt-${calls}`, stderr: "" })),
+    });
+
+    const run = await scheduler.start(plan.id, { start: { commandId: "project.start", maxAttempts: 2 } });
+
+    expect(run.status).toBe("IN_PROGRESS");
+    expect(store.listHookExecutions(run.id).map((item) => ({ attempt: item.attempt, status: item.status, stdout: item.stdout }))).toEqual([
+      { attempt: 1, status: "failed", stdout: "attempt-1" },
+      { attempt: 2, status: "completed", stdout: "attempt-2" },
+    ]);
+  });
+
   it("blocks a run after start failure and never opens an Executor turn", async () => {
     const store = new InMemoryPipelineStore();
     const planService = new PlanService(store);

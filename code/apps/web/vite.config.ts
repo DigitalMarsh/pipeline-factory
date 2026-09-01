@@ -13,7 +13,7 @@ const factoryConfig = JSON.parse(readFileSync(fileURLToPath(new URL("../../confi
   web?: { host?: string; port?: number };
 };
 const apiHost = factoryConfig.server?.host ?? "127.0.0.1";
-const apiPort = factoryConfig.server?.port ?? 4310;
+const apiPort = Number(process.env.PIPELINE_FACTORY_API_PORT ?? factoryConfig.server?.port ?? 4310);
 
 export default defineConfig({
   plugins: [vue()],
