@@ -29,8 +29,7 @@ async function load() {
 
 /** 打开创建向导，表单状态与已存在 Project 清单隔离。 */
 function openCreate() {
-  Object.assign(form, { name: "", repoRoot: "", defaultBranch: "", worktreeRoot: "" });
-  createOpen.value = true;
+  void router.push("/projects/new");
 }
 
 /** 提交 Project 创建请求；服务端负责 Git 根目录和重复仓库校验。 */

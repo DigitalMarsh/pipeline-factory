@@ -38,6 +38,29 @@ describe("Pipeline Factory v4 API", () => {
     expect(detail.json().summary).toMatchObject({ threadCount: 1, planCount: 0, runCount: 0, currentExplorerThread: "explorer-1" });
   });
 
+  it("serves a global or project-scoped Workbench snapshot with replayable events", async () => {
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    const project = projects.create({ id: "project-workbench", name: "Workbench", repoRoot: "/repo/workbench", defaultBranch: "main", worktreeRoot: "/tmp/workbench-worktrees" });
+    const plans = new PlanService(store, projects);
+    plans.registerThread({ id: "workbench-thread", projectId: project.id, parentThreadId: null });
+    const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "workbench-thread", title: "Workbench plan" });
+    plans.confirm(plan.id, "user-1");
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+
+    const global = await app.inject({ method: "GET", url: "/api/v4/workbench" });
+    const scoped = await app.inject({ method: "GET", url: `/api/v4/workbench?projectId=${project.id}` });
+    const cursor = global.json().cursor as number;
+    const replay = await app.inject({ method: "GET", url: `/api/v4/workbench/events?projectId=${project.id}&afterSequence=${cursor - 1}` });
+
+    expect(global.statusCode).toBe(200);
+    expect(global.json()).toMatchObject({ activeProjectId: null, projects: [{ id: project.id }], plans: [] });
+    expect(scoped.json()).toMatchObject({ activeProjectId: project.id, plans: [{ planId: plan.id, title: "Workbench plan", status: "READY", dispatch: null }] });
+    expect(replay.statusCode).toBe(200);
+    expect(replay.json().items.at(-1)).toMatchObject({ type: "plan.confirmed", aggregateId: plan.id });
+  });
+
   it("rejects project-scoped requests for an unknown Project", async () => {
     const store = new InMemoryPipelineStore();
     const app = createApp({ store, seed: false });
@@ -297,6 +320,25 @@ describe("Pipeline Factory v4 API", () => {
     const response = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/run` });
     expect(response.statusCode).toBe(200);
     expect(response.json().run).toMatchObject({ planId: plan.id, status: "IN_PROGRESS" });
+  });
+
+  it("automatically dispatches a plan from the v4 enqueue endpoint and exposes its dispatch state", async () => {
+    const store = new InMemoryPipelineStore();
+    createTestProject(store);
+    const plans = new PlanService(store);
+    plans.registerThread({ id: "auto-thread", projectId: "project-1", parentThreadId: null });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "auto-thread", title: "Automatic API dispatch" });
+    plans.confirm(plan.id, "user-1");
+    const scheduler = new Scheduler({ store, workspace: { create: async ({ runId }) => ({ path: `/tmp/${runId}`, branch: `factory/${runId}`, baseCommit: "abc" }), remove: async () => undefined }, hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })) });
+    const app = createApp({ store, scheduler, seed: false });
+    apps.push(app);
+
+    const enqueued = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/enqueue` });
+    const fetched = await app.inject({ method: "GET", url: `/api/v4/plans/${plan.id}` });
+
+    expect(enqueued.statusCode).toBe(200);
+    expect(enqueued.json()).toMatchObject({ plan: { id: plan.id, status: "IN_PROGRESS" }, state: { status: "RUNNING", waitReason: null } });
+    expect(fetched.json()).toMatchObject({ dispatch: { planId: plan.id, status: "RUNNING", runId: expect.any(String) } });
   });
 
   it("creates and approves a ChangeProposal through the v4 API without switching the old Run revision", async () => {

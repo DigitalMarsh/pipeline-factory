@@ -28,6 +28,7 @@ import { normalizePlanProjection } from "../utils/planProjection";
 import { parsePlanProtocolDisplay } from "../utils/planProtocolDisplay";
 import { findPlanForActivity, planIdentity, planTimelineItems as buildPlanTimelineItems } from "../utils/planTimeline";
 import { inputAnswerLabels, resolveQuestionAnswers } from "../utils/explorerInput";
+import { createProjectRequestScope } from "../utils/projectRoutes";
 
 const route = useRoute();
 const router = useRouter();
@@ -69,10 +70,12 @@ const rateLimitLoading = ref(false);
 const inputDialogOpen = ref(false);
 const inputDialog = ref<{ onSubmitted: () => void; onFailed: (message: string) => void } | null>(null);
 const mounted = ref(false);
+const requestScope = createProjectRequestScope();
 let eventSource: EventSource | null = null;
 let loopEventSource: EventSource | null = null;
 let explorerEventSequence: number | null = null;
 let planProjectionVersion = 0;
+let activeRequestToken = 0;
 const { visible: showThreadBanner, dismiss: dismissThreadBanner } = useDismissibleNotice();
 type TimelineNavItem = { key: string; label: string; detail: string; target: string };
 
@@ -178,6 +181,35 @@ function setInputRequests(items: ExplorerInputRequest[]) {
   recoveryInput.value = items.find((item) => item.status === "RECOVERY_REQUIRED") ?? null;
 }
 
+function isCurrentProjectScope(requestProjectId: string, requestToken = activeRequestToken): boolean {
+  return requestScope.isCurrent(requestToken, requestProjectId) && projectId.value === requestProjectId;
+}
+
+/** 项目切换时清空旧项目投影，避免旧 SSE 或异步请求重新填充当前工作区。 */
+function resetProjectState() {
+  project.value = null;
+  thread.value = null;
+  explorers.value = [];
+  candidate.value = null;
+  dispatched.value = [];
+  turns.value = [];
+  activity.value = [];
+  inputRequests.value = [];
+  pendingInput.value = null;
+  recoveryInput.value = null;
+  inputProgress.value = null;
+  agentLoop.value = null;
+  explorerEventSequence = null;
+  planProjectionVersion += 1;
+  drawerOpen.value = false;
+  policyOpen.value = false;
+  memoryPanel.value = null;
+  moreOpen.value = false;
+  inputDialogOpen.value = false;
+  busy.value = false;
+  sendingTurn.value = false;
+}
+
 function inputAnswerLabelsFor(request: ExplorerInputRequest, question: ExplorerInputRequest["questions"][number]): string[] {
   const progress = inputProgress.value?.requestId === request.id ? inputProgress.value : null;
   if (progress) {
@@ -199,14 +231,16 @@ function inputAnswerText(request: ExplorerInputRequest, question: ExplorerInputR
 async function refreshPlanProjection(): Promise<void> {
   const explorerId = thread.value?.id;
   if (!explorerId) return;
+  const requestProjectId = projectId.value;
+  const requestToken = activeRequestToken;
   const requestVersion = ++planProjectionVersion;
   try {
     const [explorerResponse, plansResponse, candidateResponse] = await Promise.all([
-      api.explorer(projectId.value, explorerId),
-      api.explorerPlans(projectId.value, explorerId),
-      optional(() => api.explorerCandidate(projectId.value, explorerId)),
+      api.explorer(requestProjectId, explorerId),
+      api.explorerPlans(requestProjectId, explorerId),
+      optional(() => api.explorerCandidate(requestProjectId, explorerId)),
     ]);
-    if (requestVersion !== planProjectionVersion || thread.value?.id !== explorerId) return;
+    if (!isCurrentProjectScope(requestProjectId, requestToken) || requestVersion !== planProjectionVersion || thread.value?.id !== explorerId) return;
     const projection = normalizePlanProjection(explorerResponse.explorer, candidateResponse?.plan ?? null, plansResponse.items);
     thread.value = projection.thread;
     candidate.value = projection.candidate;
@@ -384,8 +418,12 @@ async function activateExplorer(explorerId: string) {
 
 async function refreshActivity() {
   if (!thread.value) return;
+  const requestProjectId = projectId.value;
+  const requestThreadId = thread.value.id;
+  const requestToken = activeRequestToken;
   try {
-    const response = await api.explorerActivity(projectId.value, thread.value.id);
+    const response = await api.explorerActivity(requestProjectId, requestThreadId);
+    if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== requestThreadId) return;
     activity.value = response.items;
     explorerEventSequence = Math.max(explorerEventSequence ?? 0, response.lastEventSequence ?? 0);
   } catch {
@@ -406,11 +444,15 @@ async function loadRateLimits() {
 }
 
 /** 以当前路由参数重新加载 Project、Thread、Plan 和事件游标，是切换项目后的唯一入口。 */
-async function load() {
+async function load(): Promise<boolean> {
+  const requestProjectId = projectId.value;
+  const requestToken = requestScope.begin(requestProjectId);
+  activeRequestToken = requestToken;
   loading.value = true;
   error.value = null;
   try {
-    const [healthResponse, projectResponse, explorerResponse] = await Promise.all([optional(() => api.health()), api.project(projectId.value), api.explorers(projectId.value)]);
+    const [healthResponse, projectResponse, explorerResponse] = await Promise.all([optional(() => api.health()), api.project(requestProjectId), api.explorers(requestProjectId)]);
+    if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
     project.value = projectResponse.project;
     if (healthResponse?.model) explorerModel.value = healthResponse.model;
     explorers.value = explorerResponse.items;
@@ -420,37 +462,45 @@ async function load() {
     if (!routeExplorerId && thread.value) selected = explorerResponse.items.find((item) => item.id === thread.value?.id);
     if (!selected) selected = explorerResponse.items.find((item) => item.state !== "ARCHIVED" && item.contextMode === "FRESH" && item.messageCount === 0);
     if (!selected) {
-      selected = (await api.createExplorer(projectId.value)).explorer;
+      selected = (await api.createExplorer(requestProjectId)).explorer;
+      if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
       explorers.value = [selected, ...explorers.value];
-      project.value = (await api.selectProjectExplorer(projectId.value, selected.id)).project;
+      project.value = (await api.selectProjectExplorer(requestProjectId, selected.id)).project;
+      if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
     }
     const [plansResponse, turnsResponse, candidateResponse] = await Promise.all([
-      api.explorerPlans(projectId.value, selected.id),
-      api.getExplorerTurns(projectId.value, selected.id),
-      optional(() => api.explorerCandidate(projectId.value, selected!.id)),
+      api.explorerPlans(requestProjectId, selected.id),
+      api.getExplorerTurns(requestProjectId, selected.id),
+      optional(() => api.explorerCandidate(requestProjectId, selected!.id)),
     ]);
+    if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
     const projection = normalizePlanProjection(selected, candidateResponse?.plan ?? null, plansResponse.items);
     thread.value = projection.thread;
     candidate.value = projection.candidate;
     dispatched.value = projection.dispatched;
     turns.value = turnsResponse.items;
     explorerEventSequence = turnsResponse.lastEventSequence ?? null;
-    const activityResponse = await api.explorerActivity(projectId.value, selected.id);
+    const activityResponse = await api.explorerActivity(requestProjectId, selected.id);
+    if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
     activity.value = activityResponse.items;
     explorerEventSequence = Math.max(explorerEventSequence ?? 0, activityResponse.lastEventSequence ?? 0);
-    const loopResponse = await api.explorerAgentLoops(projectId.value, selected.id);
+    const loopResponse = await api.explorerAgentLoops(requestProjectId, selected.id);
+    if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
     agentLoop.value = [...loopResponse.items].sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? ""))[0] ?? null;
     if (eventSource) connectLoopEvents();
     explorerPaused.value = agentLoop.value?.state === "PAUSED";
     const activeTurn = turns.value.some((turn) => turn.status === "RUNNING" || turn.status === "WAITING_FOR_INPUT");
     busy.value = activeTurn;
     sendingTurn.value = activeTurn;
-    const inputResponse = await api.inputRequests(projectId.value, selected.id);
+    const inputResponse = await api.inputRequests(requestProjectId, selected.id);
+    if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
     setInputRequests(inputResponse.items);
     inputDialogOpen.value = Boolean(pendingInput.value?.isBlocking);
     await nextTick();
     updateTimelineScrollState();
+    return true;
   } catch (caught) {
+    if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
     project.value = null;
     thread.value = null;
     explorers.value = [];
@@ -463,8 +513,9 @@ async function load() {
     recoveryInput.value = null;
     inputProgress.value = null;
     error.value = caught instanceof Error ? caught.message : "Project 加载失败";
+    return false;
   } finally {
-    loading.value = false;
+    if (isCurrentProjectScope(requestProjectId, requestToken)) loading.value = false;
   }
 }
 
@@ -472,6 +523,9 @@ async function load() {
 async function sendTurn() {
   const content = draft.value.trim();
   if (!content || busy.value || !thread.value || thread.value.state === "ARCHIVED" || project.value?.status === "ARCHIVED") return;
+  const requestProjectId = projectId.value;
+  const requestThreadId = thread.value.id;
+  const requestToken = activeRequestToken;
   const now = new Date().toISOString();
   const optimisticUser = createOptimisticUserTurn({
     id: `local-user-${Date.now()}`,
@@ -489,14 +543,18 @@ async function sendTurn() {
   await nextTick();
   if (timeline.value) scrollTimelineToLatest(timeline.value);
   try {
-    const response = await api.startExplorerTurn(projectId.value, optimisticUser.threadId, content, `client-turn-${Date.now()}`);
-    agentLoop.value = (await api.agentLoop(response.loopId)).loop;
+    const response = await api.startExplorerTurn(requestProjectId, requestThreadId, content, `client-turn-${Date.now()}`);
+    if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== requestThreadId) return;
+    const loopResponse = await api.agentLoop(response.loopId);
+    if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== requestThreadId) return;
+    agentLoop.value = loopResponse.loop;
     connectLoopEvents();
     turns.value = settleOptimisticTurn(turns.value, optimisticUser.id, response.turn);
     await refreshActivity();
     if (thread.value) thread.value = { ...thread.value, messageCount: thread.value.messageCount + 2, lastActivityAt: response.turn.assistant.createdAt };
     ElMessage.success("消息已发送");
   } catch (caught) {
+    if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== requestThreadId) return;
     const message = caught instanceof Error ? caught.message : "API 未连接";
     turns.value = [...turns.value, { id: `local-assistant-${Date.now()}`, threadId: optimisticUser.threadId, role: "assistant", content: `消息已发送，但模型回复失败：${message}`, status: "FAILED", error: message, createdAt: new Date().toISOString(), sequence: optimisticUser.sequence + 1 }];
     sendingTurn.value = false;
@@ -557,11 +615,16 @@ function mergeTurn(turn: ExplorerTurn) {
 
 async function refreshTurnsAfterEvent() {
   if (!thread.value) return;
-  const response = await api.getExplorerTurns(projectId.value, thread.value.id);
+  const requestProjectId = projectId.value;
+  const requestThreadId = thread.value.id;
+  const requestToken = activeRequestToken;
+  const response = await api.getExplorerTurns(requestProjectId, requestThreadId);
+  if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== requestThreadId) return;
   turns.value = response.items;
   await refreshActivity();
   await refreshPlanProjection();
-  const inputResponse = await api.inputRequests(projectId.value, thread.value.id);
+  const inputResponse = await api.inputRequests(requestProjectId, requestThreadId);
+  if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== requestThreadId) return;
   setInputRequests(inputResponse.items);
   const activeTurn = response.items.some((turn) => turn.status === "RUNNING" || turn.status === "WAITING_FOR_INPUT");
   if (!pendingInput.value) { inputDialogOpen.value = false; busy.value = activeTurn; sendingTurn.value = activeTurn; }
@@ -571,55 +634,64 @@ async function refreshTurnsAfterEvent() {
 
 function connectEvents() {
   if (!thread.value || typeof EventSource === "undefined") return;
+  const connectionProjectId = projectId.value;
+  const connectionThreadId = thread.value.id;
+  const connectionToken = activeRequestToken;
+  const isConnectionCurrent = () => isCurrentProjectScope(connectionProjectId, connectionToken) && thread.value?.id === connectionThreadId;
   eventSource?.close();
   loopEventSource?.close();
   const replayGate = createSseReplayGate();
   if (explorerEventSequence !== null) replayGate.markReady();
-  eventSource = new EventSource(api.explorerEventsUrl(projectId.value, thread.value.id, explorerEventSequence ?? undefined));
+  eventSource = new EventSource(api.explorerEventsUrl(connectionProjectId, connectionThreadId, explorerEventSequence ?? undefined));
   eventSource.addEventListener("stream.ready", () => {
+    if (!isConnectionCurrent()) return;
     replayGate.accept("stream.ready");
     void refreshTurnsAfterEvent();
   });
   eventSource.addEventListener("turn.text.delta", (raw) => {
-    if (!replayGate.accept("turn.text.delta")) return;
+    if (!isConnectionCurrent() || !replayGate.accept("turn.text.delta")) return;
     const payload = JSON.parse((raw as MessageEvent).data) as { turnId: string; text: string };
     const current = turns.value.find((turn) => turn.id === payload.turnId);
     if (current) mergeTurn({ ...current, content: current.content + payload.text, status: "RUNNING" });
     void refreshActivity();
   });
   eventSource.addEventListener("turn.input_required", async (raw) => {
-    if (!replayGate.accept("turn.input_required")) return;
+    if (!isConnectionCurrent() || !replayGate.accept("turn.input_required")) return;
     const payload = JSON.parse((raw as MessageEvent).data) as { requestId: string };
-    if (!thread.value) return;
-    const response = await api.inputRequests(projectId.value, thread.value.id);
+    const response = await api.inputRequests(connectionProjectId, connectionThreadId);
+    if (!isConnectionCurrent()) return;
     setInputRequests(response.items);
     pendingInput.value = response.items.find((item) => item.id === payload.requestId) ?? null;
     recoveryInput.value = null;
     inputDialogOpen.value = Boolean(pendingInput.value?.isBlocking);
   });
   eventSource.addEventListener("title.updated", (raw) => {
-    if (!replayGate.accept("title.updated")) return;
+    if (!isConnectionCurrent() || !replayGate.accept("title.updated")) return;
     const payload = JSON.parse((raw as MessageEvent).data) as { explorerId: string; title: string; titleStatus: ExplorerThread["titleStatus"] };
-    if (payload.explorerId !== thread.value?.id) return;
+    if (payload.explorerId !== connectionThreadId || !thread.value) return;
     thread.value = { ...thread.value, title: payload.title, titleStatus: payload.titleStatus };
     explorers.value = explorers.value.map((item) => item.id === payload.explorerId ? { ...item, title: payload.title, titleStatus: payload.titleStatus } : item);
   });
-  for (const eventName of ["turn.completed", "turn.failed", "turn.cancelled", "turn.input.resolved", "explorer.plan.ready"]) eventSource.addEventListener(eventName, () => { if (!replayGate.accept(eventName)) return; void refreshTurnsAfterEvent(); });
-  eventSource.addEventListener("thread.state.changed", () => { if (!replayGate.accept("thread.state.changed")) return; void load(); });
+  for (const eventName of ["turn.completed", "turn.failed", "turn.cancelled", "turn.input.resolved", "explorer.plan.ready"]) eventSource.addEventListener(eventName, () => { if (!isConnectionCurrent() || !replayGate.accept(eventName)) return; void refreshTurnsAfterEvent(); });
+  eventSource.addEventListener("thread.state.changed", () => { if (!isConnectionCurrent() || !replayGate.accept("thread.state.changed")) return; closeEvents(); void load().then((loaded) => { if (loaded) connectEvents(); }); });
   connectLoopEvents();
 }
 
 function connectLoopEvents() {
   if (!agentLoop.value || typeof EventSource === "undefined") return;
+  const connectionProjectId = projectId.value;
+  const connectionThreadId = thread.value?.id;
+  const connectionToken = activeRequestToken;
+  const loopId = agentLoop.value.id;
   loopEventSource?.close();
   const replayGate = createSseReplayGate();
-  loopEventSource = new EventSource(api.agentLoopEventsUrl(agentLoop.value.id));
+  loopEventSource = new EventSource(api.agentLoopEventsUrl(loopId));
   loopEventSource.addEventListener("stream.ready", () => { replayGate.accept("stream.ready"); });
   for (const eventName of ["agent.loop.started", "agent.step.started", "agent.step.model_text_delta", "agent.step.tool_requested", "agent.step.tool_completed", "agent.step.tool_denied", "agent.step.tool_failed", "agent.step.tool_needs_reconciliation", "agent.step.input_required", "agent.step.input_resolved", "agent.step.context_compacted", "agent.step.gate_checked", "agent.provider.activity", "agent.input.required", "agent.input.resolved", "agent.loop.paused", "agent.loop.resumed", "agent.loop.completed", "agent.loop.failed", "agent.loop.cancelled", "agent.loop.recovery_required"]) {
     loopEventSource.addEventListener(eventName, () => {
-      if (!replayGate.accept(eventName)) return;
-      if (!agentLoop.value) return;
-      void api.agentLoop(agentLoop.value.id).then(async (response) => {
+      if (!isCurrentProjectScope(connectionProjectId, connectionToken) || thread.value?.id !== connectionThreadId || !replayGate.accept(eventName)) return;
+      void api.agentLoop(loopId).then(async (response) => {
+        if (!isCurrentProjectScope(connectionProjectId, connectionToken) || thread.value?.id !== connectionThreadId || agentLoop.value?.id !== loopId) return;
         agentLoop.value = response.loop;
         explorerPaused.value = response.loop.state === "PAUSED";
         await refreshActivity();
@@ -680,11 +752,22 @@ async function discardPlan() {
 }
 
 function statusLabel(status: string) { return ({ DRAFT: "Candidate", DISCARDED: "Discarded", READY: "Confirmed", QUEUED: "Queued", IN_PROGRESS: "Running", VERIFYING: "Verifying", MERGE_READY: "Ready for review", MERGED: "Merged", NEEDS_PLAN_CHANGE: "Plan change required", BLOCKED: "Blocked" } as Record<string, string>)[status] ?? status; }
+function reloadExplorer() {
+  closeEvents();
+  void load().then((loaded) => { if (loaded && mounted.value) connectEvents(); });
+}
 watch(() => route.hash, syncHashPanel);
 watch(candidate, () => syncHashPanel(route.hash));
-watch(() => route.query.explorerId, () => { if (mounted.value) void load().then(connectEvents); });
-onMounted(() => { mounted.value = true; void load().then(connectEvents); syncHashPanel(route.hash); });
-onBeforeUnmount(closeEvents);
+watch(projectId, (next, previous) => {
+  if (!mounted.value || next === previous) return;
+  closeEvents();
+  requestScope.invalidate();
+  resetProjectState();
+  void load().then((loaded) => { if (loaded && mounted.value) connectEvents(); });
+});
+watch(() => route.query.explorerId, () => { if (mounted.value) reloadExplorer(); });
+onMounted(() => { mounted.value = true; void load().then((loaded) => { if (loaded) connectEvents(); }); syncHashPanel(route.hash); });
+onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeEvents(); });
 </script>
 
 <template>

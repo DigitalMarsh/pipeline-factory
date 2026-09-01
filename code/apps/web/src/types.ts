@@ -4,6 +4,19 @@
  * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
  */
 export type PlanStatus = "DRAFT" | "DISCARDED" | "READY" | "QUEUED" | "IN_PROGRESS" | "VERIFYING" | "MERGE_READY" | "MERGED" | "BLOCKED" | "NEEDS_PLAN_CHANGE";
+export type PlanDispatchStatus = "QUEUED" | "WAITING" | "DISPATCHING" | "RUNNING" | "VERIFYING" | "NEEDS_REVIEW" | "BLOCKED" | "COMPLETED";
+export type PlanDispatchWaitReason = "WAITING_DEPENDENCY" | "WAITING_CONFLICT" | "WAITING_PROJECT_CAPACITY" | "WAITING_GLOBAL_CAPACITY" | "NEEDS_CONFIGURATION";
+export type PlanDispatchState = {
+  planId: string;
+  projectId: string;
+  status: PlanDispatchStatus;
+  waitReason: PlanDispatchWaitReason | null;
+  queuedAt: string;
+  runId: string | null;
+  attempt: number;
+  updatedAt: string;
+  lastError: string | null;
+};
 
 export type ProjectSettings = {
   concurrency: {
@@ -232,7 +245,9 @@ export type Plan = {
     maxRepairAttempts: number;
     mergeStrategy: string;
     requireHumanMerge: boolean;
+    dependsOnPlanIds?: string[];
   };
+  dispatch?: PlanDispatchState | null;
 };
 
 /** Execution Run 的页面投影，关联冻结 Revision、Worktree 和 Executor Loop。 */
@@ -300,4 +315,35 @@ export type ToolCall = {
   result: Record<string, unknown> | null;
   startedAt: string;
   completedAt: string | null;
+};
+
+export type WorkbenchEvent = {
+  id: string;
+  sequence: number;
+  type: string;
+  aggregateId: string;
+  occurredAt: string;
+  payload: Record<string, unknown>;
+};
+
+export type WorkbenchPlan = Plan & {
+  planId: string;
+  createdAt: string;
+  queuedAt: string | null;
+  contract: NonNullable<Plan["contract"]>;
+};
+
+export type WorkbenchRun = Run & {
+  planTitle: string;
+  dispatch: PlanDispatchState | null;
+};
+
+export type WorkbenchSnapshot = {
+  activeProjectId: string | null;
+  projects: ProjectCatalogItem[];
+  plans: WorkbenchPlan[];
+  runs: WorkbenchRun[];
+  dispatchStates: PlanDispatchState[];
+  events: WorkbenchEvent[];
+  cursor: number;
 };

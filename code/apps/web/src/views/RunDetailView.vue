@@ -3,7 +3,7 @@
   维护提示：交互状态和数据流变化时，应同步更新组件边界说明。
 -->
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ArrowLeft, Check, CircleCheck, Clock, Document, VideoPause, VideoPlay, Warning } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
@@ -12,9 +12,12 @@ import type { AgentLoopStep, ExecutionThread, MergeRequest, Run, RunJournalEvent
 import { projectExecutionJournal, type ExecutionJournalEntry, type ExecutionStreamItem } from "../utils/executionStream";
 import { canPauseRun, canTerminateRun } from "../utils/runControls";
 import { describeRunLoadError } from "../utils/runLoadError";
+import { createProjectRequestScope } from "../utils/projectRoutes";
 
 const route = useRoute();
 const router = useRouter();
+const projectId = computed(() => String(route.params.projectId ?? ""));
+const requestScope = createProjectRequestScope();
 const run = ref<Run | null>(null);
 const thread = ref<ExecutionThread | null>(null);
 const verification = ref<VerificationRun | null>(null);
@@ -107,10 +110,14 @@ function closeRunEvents(): void {
   runStreamConnected.value = false;
 }
 async function load() {
+  const requestRunId = String(route.params.runId ?? "");
+  const requestProjectId = projectId.value;
+  const requestToken = requestScope.begin(`${requestProjectId}:${requestRunId}`);
   loading.value = true;
   error.value = null;
   try {
-    const response = await api.getRun(String(route.params.runId));
+    const response = await api.getRun(requestRunId);
+    if (!requestScope.isCurrent(requestToken, `${requestProjectId}:${requestRunId}`)) return;
     run.value = response.run;
     setExecutionThread(response.executionThread);
     verification.value = response.verification;
@@ -121,14 +128,17 @@ async function load() {
     if (loopId) {
       try {
         const [stepsResponse, toolsResponse] = await Promise.all([api.agentLoopSteps(loopId), api.agentLoopTools(loopId)]);
+        if (!requestScope.isCurrent(requestToken, `${requestProjectId}:${requestRunId}`)) return;
         executorSteps.value = stepsResponse.items;
         toolCalls.value = toolsResponse.items;
       } catch (caught) { error.value = describeRunLoadError(caught, "agent-loop"); }
     }
     if (!sourceCommit.value) sourceCommit.value = response.run.baseCommit;
     if (!targetCommit.value) targetCommit.value = response.run.baseCommit;
-  } catch (caught) { error.value = describeRunLoadError(caught, "run"); }
-  finally { loading.value = false; }
+  } catch (caught) {
+    if (requestScope.isCurrent(requestToken, `${requestProjectId}:${requestRunId}`)) error.value = describeRunLoadError(caught, "run");
+  }
+  finally { if (requestScope.isCurrent(requestToken, `${requestProjectId}:${requestRunId}`)) loading.value = false; }
 }
 function label(status: string) { return ({ STARTING: "Starting", IN_PROGRESS: "Running", READY_FOR_VERIFY: "Ready for verification", VERIFYING: "Verifying", MERGE_READY: "Ready for review", MERGED: "Merged", NEEDS_PLAN_CHANGE: "Plan change required", RECOVERING: "Recovering", BLOCKED: "Blocked", CANCELLED: "Cancelled" } as Record<string, string>)[status] ?? status; }
 function notifyError(caught: unknown) { error.value = caught instanceof Error ? caught.message : "操作失败，请稍后重试"; }
@@ -196,8 +206,9 @@ async function confirmMerged() {
   catch (caught) { notifyError(caught); }
   finally { actionBusy.value = false; }
 }
+  watch([projectId, () => route.params.runId], () => { closeRunEvents(); void load().then(() => { if (run.value) connectRunEvents(); }); });
   onMounted(async () => { await load(); connectRunEvents(); scrollExecutionToLatest(); });
-  onBeforeUnmount(closeRunEvents);
+  onBeforeUnmount(() => { requestScope.invalidate(); closeRunEvents(); });
 </script>
 
 <template>

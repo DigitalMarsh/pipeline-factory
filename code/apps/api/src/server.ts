@@ -34,6 +34,7 @@ import {
   inspectWorkspaceScope,
   ChangeProposalService,
   VerificationService,
+  PlanDispatchCoordinator,
   mapCodexRateLimits,
   type PipelineStore,
   type HookDefinition,
@@ -65,6 +66,11 @@ const threadPlanQuery = z.object({
   q: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   sort: z.enum(["queued_at", "last_event_at"]).default("queued_at"),
+});
+const workbenchQuery = z.object({
+  projectId: z.string().min(1).optional(),
+  afterSequence: z.coerce.number().int().nonnegative().default(0),
+  format: z.enum(["json", "sse"]).default("json"),
 });
 const actorBody = z.object({ actorId: z.string().min(1).default("local-user") });
 const v4TurnBody = z.object({ threadId: z.string().min(1), content: z.string().trim().min(1).max(20_000), clientTurnId: z.string().min(1).max(200) });
@@ -152,6 +158,15 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
   });
   void explorer.backfillTitles();
   const scheduler = options.scheduler ?? (options.config ? createDefaultScheduler(store, options.config, model, mcpRegistry, pluginRegistry, options.computerUse) : undefined);
+  const globalConcurrency = options.config?.runtime.globalConcurrency ?? scheduler?.globalConcurrency();
+  const dispatchCoordinator = scheduler ? new PlanDispatchCoordinator({
+    store,
+    plans,
+    scheduler,
+    ...(globalConcurrency === undefined ? {} : { globalConcurrency }),
+    ...(verificationExecutor ? { verify: (run, revision) => verifier.verify(run, revision, verificationExecutor) } : {}),
+  }) : undefined;
+  if (dispatchCoordinator) void dispatchCoordinator.wake();
   const schedulerLoopController = scheduler?.agentLoopController();
   const loopController: Pick<AgentLoopRunner, "pause" | "resume" | "cancel"> = options.agentLoopController ?? {
     pause: async (loopId, reason) => {
@@ -238,6 +253,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     return project;
   };
   app.addHook("onClose", async () => {
+    dispatchCoordinator?.dispose();
     if (ownsStore && "close" in store && typeof store.close === "function") store.close();
     if (ownsModel && "close" in model && typeof model.close === "function") await model.close();
     if (!options.mcpRegistry) await mcpRegistry?.close();
@@ -322,6 +338,36 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     if (!store.getProject(params.data.projectId)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
     return { summary: projects.summary(params.data.projectId) };
+  });
+
+  app.get("/api/v4/workbench", async (request, reply) => {
+    const query = workbenchQuery.safeParse(request.query ?? {});
+    if (!query.success) return reply.code(400).send({ error: "Invalid Workbench query" });
+    if (query.data.projectId && !store.getProject(query.data.projectId)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${query.data.projectId} not found` });
+    return workbenchSnapshot(store, projects, query.data.projectId);
+  });
+
+  app.get("/api/v4/workbench/events", async (request, reply) => {
+    const query = workbenchQuery.safeParse(request.query ?? {});
+    if (!query.success) return reply.code(400).send({ error: "Invalid Workbench event query" });
+    if (query.data.projectId && !store.getProject(query.data.projectId)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `PROJECT_NOT_FOUND: ${query.data.projectId}` });
+    const eventsForProject = (afterSequence: number) => store.listEvents({ afterSequence }).filter((event) => !query.data.projectId || eventBelongsToProject(store, event, query.data.projectId));
+    if (query.data.format !== "sse") return { items: eventsForProject(query.data.afterSequence), cursor: store.getLastEventSequence() };
+    reply.hijack();
+    const raw = reply.raw;
+    raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive", "access-control-allow-origin": "*" });
+    let cursor = query.data.afterSequence;
+    const send = () => {
+      for (const event of eventsForProject(cursor)) {
+        cursor = event.sequence;
+        raw.write(`id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+      }
+    };
+    send();
+    raw.write(`id: ${cursor}\nevent: stream.ready\ndata: ${JSON.stringify({ cursor })}\n\n`);
+    const poll = setInterval(send, 250);
+    const heartbeat = setInterval(() => raw.write(`: heartbeat ${Date.now()}\n\n`), 15_000);
+    request.raw.once("close", () => { clearInterval(poll); clearInterval(heartbeat); });
   });
 
   app.patch("/api/v4/projects/:projectId", async (request, reply) => {
@@ -730,7 +776,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       const plan = plans.get(params.data.planId);
       if (ensurePlanProject(plan.projectId, reply) === null) return;
       const revision = store.getRevision(plan.id, plan.revision);
-      return { plan, revision: revision ?? null };
+      return { plan, revision: revision ?? null, dispatch: dispatchCoordinator?.state(plan.id) ?? store.getDispatchState(plan.id) ?? null };
     } catch {
       return reply.code(404).send({ error: "Plan not found" });
     }
@@ -770,7 +816,8 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     try {
       const plan = plans.get(params.data.planId);
       if (ensurePlanProject(plan.projectId, reply, true) === null) return;
-      return { plan: plans.enqueue(params.data.planId) };
+      if (dispatchCoordinator) return await dispatchCoordinator.enqueue(params.data.planId);
+      return { plan: plans.enqueue(params.data.planId), dispatch: null };
     } catch (error) {
       return reply.code(409).send({ error: error instanceof Error ? error.message : "Plan cannot be enqueued" });
     }
@@ -815,9 +862,13 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     const proposal = store.getChangeProposal(params.data.proposalId);
     if (!proposal) return reply.code(404).send({ error: "ChangeProposal not found" });
     try {
-      const plan = store.getPlan(proposal.planId);
-      const approved = await changeProposals.approve(params.data.proposalId, body.data.actorId, scheduler ? (planId) => scheduler.start(planId, plan ? store.getProject(plan.projectId)?.settings.hooks ?? {} : {}) : undefined);
-      return { ...approved, plan: store.getPlan(approved.plan.id) ?? approved.plan };
+      const approved = await changeProposals.approve(params.data.proposalId, body.data.actorId);
+      const dispatch = dispatchCoordinator ? await dispatchCoordinator.enqueue(approved.plan.id) : undefined;
+      const dispatchedRun = dispatch?.state.runId
+        ? store.getRun(dispatch.state.runId) ?? null
+        : store.listRuns().filter((item) => item.planId === approved.plan.id && item.planRevision === approved.revision.revision).at(-1) ?? null;
+      const run = dispatchedRun ?? approved.run;
+      return { ...approved, plan: store.getPlan(approved.plan.id) ?? approved.plan, run };
     } catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "ChangeProposal cannot be approved" }); }
   });
 
@@ -1016,8 +1067,70 @@ function decoratePlanRows(store: PipelineStore, rows: Array<{ planId: string; re
       projectConfigVersion: revision?.projectConfigVersion ?? null,
       projectConfigHash: revision?.projectConfigHash ?? null,
       projectConfigStatus: !snapshot ? "LEGACY" : project && snapshot.configVersion === project.configVersion && snapshot.configHash === project.configHash ? "CURRENT" : "CHANGED",
+      dispatch: store.getDispatchState(row.planId) ?? null,
     };
   });
+}
+
+function workbenchSnapshot(store: PipelineStore, projects: ProjectService, projectId?: string) {
+  const projectRows = projects.list().map((project) => ({ ...project, summary: projects.summary(project.id) }));
+  const plans = store.listPlans()
+    .filter((plan) => !projectId || plan.projectId === projectId)
+    .filter((plan) => projectId ? plan.status !== "DRAFT" && plan.status !== "DISCARDED" : plan.queuedAt !== null)
+    .map((plan) => ({
+      planId: plan.id,
+      title: plan.title,
+      revision: plan.revision,
+      status: plan.status,
+      projectId: plan.projectId,
+      sourceExplorerThreadId: plan.sourceExplorerThreadId,
+      sourceTurnId: plan.sourceTurnId,
+      providerThreadId: plan.providerThreadId,
+      providerTurnId: plan.providerTurnId,
+      providerItemId: plan.providerItemId,
+      createdAt: plan.createdAt,
+      queuedAt: plan.queuedAt,
+      runId: plan.runId,
+      lastEventAt: plan.lastEventAt,
+      attentionReason: plan.attentionReason,
+      contract: plan.contract,
+      dispatch: store.getDispatchState(plan.id) ?? null,
+    }));
+  const runs = store.listRuns().filter((run) => !projectId || run.projectId === projectId).map((run) => ({
+    ...run,
+    planTitle: store.getPlan(run.planId)?.title ?? run.planId,
+    dispatch: store.getDispatchState(run.planId) ?? null,
+  }));
+  const events = store.listEvents({ afterSequence: 0 }).filter((event) => !projectId || eventBelongsToProject(store, event, projectId));
+  return {
+    activeProjectId: projectId ?? null,
+    projects: projectRows,
+    plans,
+    runs,
+    dispatchStates: store.listDispatchStates(projectId),
+    events,
+    cursor: store.getLastEventSequence(),
+  };
+}
+
+function eventBelongsToProject(store: PipelineStore, event: import("@pipeline-factory/domain").DomainEvent, projectId: string): boolean {
+  const payloadProjectId = event.payload.projectId;
+  if (payloadProjectId === projectId) return true;
+  const plan = store.getPlan(event.aggregateId);
+  if (plan?.projectId === projectId) return true;
+  const run = store.getRun(event.aggregateId);
+  if (run?.projectId === projectId) return true;
+  const thread = store.getThread(event.aggregateId);
+  if (thread?.projectId === projectId) return true;
+  const mergeRequest = store.getMergeRequest(event.aggregateId);
+  if (mergeRequest && store.getRun(mergeRequest.runId)?.projectId === projectId) return true;
+  const loop = store.getAgentLoop(event.aggregateId);
+  if (loop?.ownerType === "run" && store.getRun(loop.ownerId)?.projectId === projectId) return true;
+  if (loop?.ownerType === "explorer-turn") {
+    const turn = store.listThreads().find((candidate) => store.listTurns(candidate.id).some((item) => item.id === loop.ownerId));
+    if (turn?.projectId === projectId) return true;
+  }
+  return false;
 }
 
 /** canonicalize 并校验 Git 根目录；子目录、非 Git 目录和不可读路径均拒绝导入。 */

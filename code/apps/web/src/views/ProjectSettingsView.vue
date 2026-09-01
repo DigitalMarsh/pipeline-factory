@@ -3,16 +3,19 @@
   维护提示：交互状态和数据流变化时，应同步更新组件边界说明。
 -->
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { ArrowLeft, CircleCheck, Connection, Delete, FolderOpened, InfoFilled, Plus, Setting, Warning } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 import { api } from "../api";
 import type { Project, ProjectSettings } from "../types";
+import { createProjectRequestScope } from "../utils/projectRoutes";
 
 type CommandForm = { commandId: string; argv: string; environment: string };
 const route = useRoute();
 const router = useRouter();
+const projectId = computed(() => String(route.params.projectId ?? ""));
+const requestScope = createProjectRequestScope();
 const project = ref<Project | null>(null);
 const loading = ref(true);
 const saving = ref(false);
@@ -44,11 +47,20 @@ function setForm(value: Project) {
 
 /** 读取 Project 当前配置并填充表单；不把表单中间态写回全局 Project。 */
 async function load() {
+  const requestProjectId = projectId.value;
+  const requestToken = requestScope.begin(requestProjectId);
   loading.value = true;
   error.value = null;
-  try { const response = await api.project(String(route.params.projectId)); project.value = response.project; setForm(response.project); }
-  catch (caught) { error.value = caught instanceof Error ? caught.message : "Project 加载失败"; }
-  finally { loading.value = false; }
+  try {
+    const response = await api.project(requestProjectId);
+    if (!requestScope.isCurrent(requestToken, requestProjectId)) return;
+    project.value = response.project; setForm(response.project);
+  }
+  catch (caught) {
+    if (!requestScope.isCurrent(requestToken, requestProjectId)) return;
+    error.value = caught instanceof Error ? caught.message : "Project 加载失败";
+  }
+  finally { if (requestScope.isCurrent(requestToken, requestProjectId)) loading.value = false; }
 }
 
 function listValue(value: string) { return value.split(",").map((item) => item.trim()).filter(Boolean); }
@@ -94,7 +106,10 @@ function removeCommand(index: number) { form.commands.splice(index, 1); }
 function selectTab(tab: string) { activeTab.value = tab; void router.replace({ query: { ...route.query, tab } }); }
 
 const statusText = computed(() => project.value?.status === "ARCHIVED" ? "Archived · read only" : `Config v${form.configVersion}`);
+watch(projectId, () => { void load(); });
+watch(() => route.query.tab, (tab) => { if (typeof tab === "string") activeTab.value = tab; });
 onMounted(() => { void load(); });
+onBeforeUnmount(() => requestScope.invalidate());
 </script>
 
 <template>

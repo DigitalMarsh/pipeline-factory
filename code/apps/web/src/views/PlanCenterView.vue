@@ -3,7 +3,7 @@
   维护提示：交互状态和数据流变化时，应同步更新组件边界说明。
 -->
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ArrowRight, CircleCheck, Clock, Document, Search, Warning } from "@element-plus/icons-vue";
 import { useRoute, useRouter } from "vue-router";
 import { ElMessage, ElMessageBox } from "element-plus";
@@ -12,10 +12,12 @@ import type { Plan, Project } from "../types";
 import { planStatusForStat } from "../utils/planFilters";
 import { canTerminateRun } from "../utils/runControls";
 import { parseMissingRunCommands } from "../utils/runPrerequisites";
+import { createProjectRequestScope } from "../utils/projectRoutes";
 
 const route = useRoute();
 const router = useRouter();
 const projectId = computed(() => String(route.params.projectId ?? ""));
+const requestScope = createProjectRequestScope();
 const project = ref<Project | null>(null);
 const plans = ref<Plan[]>([]);
 const search = ref("");
@@ -49,15 +51,21 @@ const snapshotNotice = computed(() => plans.value.some((plan) => plan.projectCon
 
 /** 加载当前 Project 的 Plan 投影和统计，丢弃/启动后统一通过此入口刷新。 */
 async function load() {
+  const requestProjectId = projectId.value;
+  const requestToken = requestScope.begin(requestProjectId);
   loading.value = true;
   error.value = null;
   try {
-    const [projectResponse, plansResponse] = await Promise.all([api.project(projectId.value), api.plans(projectId.value)]);
+    const [projectResponse, plansResponse] = await Promise.all([api.project(requestProjectId), api.plans(requestProjectId)]);
+    if (!requestScope.isCurrent(requestToken, requestProjectId)) return;
     project.value = projectResponse.project;
     plans.value = plansResponse.items;
   }
-  catch (caught) { project.value = null; plans.value = []; error.value = caught instanceof Error ? caught.message : "Project 加载失败"; }
-  finally { loading.value = false; }
+  catch (caught) {
+    if (!requestScope.isCurrent(requestToken, requestProjectId)) return;
+    project.value = null; plans.value = []; error.value = caught instanceof Error ? caught.message : "Project 加载失败";
+  }
+  finally { if (requestScope.isCurrent(requestToken, requestProjectId)) loading.value = false; }
 }
 
 async function refreshPlanCenter() {
@@ -110,7 +118,10 @@ function syncQueryStatus(value: unknown) {
   status.value = queryStatus;
 }
 
+watch(projectId, () => { void load(); });
+watch(() => route.query.status, syncQueryStatus);
 onMounted(() => { syncQueryStatus(route.query.status); void load(); });
+onBeforeUnmount(() => requestScope.invalidate());
 </script>
 
 <template>

@@ -3,7 +3,7 @@
  *
  * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
  */
-import type { AgentLoop, AgentLoopStep, CodexRateLimitsStatus, ExecutionThread, ExplorerActivityItem, ExplorerInputRequest, ExplorerThread, ExplorerTurn, MergeRequest, Plan, Project, ProjectCatalogItem, ProjectSummary, Run, ToolCall, VerificationRun } from "./types";
+import type { AgentLoop, AgentLoopStep, CodexRateLimitsStatus, ExecutionThread, ExplorerActivityItem, ExplorerInputRequest, ExplorerThread, ExplorerTurn, MergeRequest, Plan, Project, ProjectCatalogItem, ProjectSummary, Run, ToolCall, VerificationRun, WorkbenchSnapshot, WorkbenchEvent } from "./types";
 
 export class ApiRequestError extends Error {
   constructor(message: string, readonly status: number) {
@@ -36,6 +36,9 @@ export const api = {
   selectProjectExplorer: (projectId: string, explorerId: string) => request<{ project: Project }>(`/api/v4/projects/${encodeURIComponent(projectId)}/select-explorer`, { method: "POST", body: JSON.stringify({ explorerId }) }),
   projectConfigHistory: (projectId: string) => request<{ items: Array<{ projectId: string; version: number; hash: string; snapshot: Record<string, unknown>; createdAt: string }> }>(`/api/v4/projects/${encodeURIComponent(projectId)}/config-history`),
   projectRuns: (projectId: string) => request<{ items: Run[] }>(`/api/v4/projects/${encodeURIComponent(projectId)}/runs`),
+  workbench: (projectId?: string) => request<WorkbenchSnapshot>(`/api/v4/workbench${projectId ? `?projectId=${encodeURIComponent(projectId)}` : ""}`),
+  workbenchEventsUrl: (projectId?: string, afterSequence?: number) => `/api/v4/workbench/events?format=sse${projectId ? `&projectId=${encodeURIComponent(projectId)}` : ""}${afterSequence === undefined ? "" : `&afterSequence=${afterSequence}`}`,
+  workbenchEvents: (projectId?: string, afterSequence?: number) => request<{ items: WorkbenchEvent[]; cursor: number }>(`/api/v4/workbench/events?${projectId ? `projectId=${encodeURIComponent(projectId)}&` : ""}afterSequence=${afterSequence ?? 0}`),
   agentLoopTools: (loopId: string) => request<{ items: ToolCall[] }>("/api/v4/agent-loops/" + encodeURIComponent(loopId) + "/tools"),
   codexRateLimits: () => request<{ rateLimits: CodexRateLimitsStatus }>("/api/v4/codex/rate-limits"),
   explorers: (projectId: string) => request<{ items: ExplorerThread[] }>(`/api/v4/projects/${projectId}/explorers`),

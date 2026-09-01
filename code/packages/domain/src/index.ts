@@ -11,8 +11,11 @@ import { PlanCompletenessGate } from "./termination-gates.js";
 import { composeExplorerTitle, ModelExplorerTitleGenerator, normalizeExplorerTitle, placeholderExplorerTitle, type ExplorerTitleGenerator, type ExplorerTitleSource, type ExplorerTitleStatus } from "./explorer-title.js";
 import { EXECUTION_SLOT_RUN_STATUSES, ProjectService } from "./project.js";
 import type { Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings } from "./project.js";
+import type { PlanDispatchState } from "./dispatch-coordinator.js";
 export { EXECUTION_SLOT_RUN_STATUSES, ProjectService } from "./project.js";
 export type { CreateProjectInput, Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings, ProjectSettingsInput, ProjectStatus, ProjectSummary, UpdateProjectInput } from "./project.js";
+export { PlanDispatchCoordinator } from "./dispatch-coordinator.js";
+export type { PlanDispatchCoordinatorOptions, PlanDispatchState, PlanDispatchStatus, PlanDispatchWaitReason } from "./dispatch-coordinator.js";
 export { projectExplorerActivity } from "./explorer-activity.js";
 export type { ExplorerActivityInput, ExplorerActivityItem, ExplorerActivityKind } from "./explorer-activity.js";
 export { composeExplorerTitle, explorerTimestamp, ModelExplorerTitleGenerator, normalizeExplorerTitle, placeholderExplorerTitle } from "./explorer-title.js";
@@ -84,7 +87,7 @@ export const EXPLORER_PLAN_INSTRUCTIONS = `
 先分析目标、用户范围、功能边界、技术方案、数据与安全、异常处理、验收标准、实施任务、依赖、冲突、验证和合并策略。把当前所有互不依赖且需要用户决策的问题合并到一次原生 item/tool/requestUserInput 请求中；不要在普通文本中把问题伪装成选择题。收到答案后重新检查仍未决的关键项，仍有缺口就继续提问或继续探索。
 只有所有关键项都已确认，才能输出完整方案。完整方案必须在普通说明之后追加以下机器可校验协议块，JSON 必须是严格 JSON，不要使用 Markdown 代码围栏：
 <pipeline-factory-plan-status>READY</pipeline-factory-plan-status>
-<pipeline-factory-plan>{"title":"...","goal":"...","acceptanceCriteria":["..."],"include":["..."],"exclude":["..."],"baseBranch":"...","baseCommit":"...","tasks":[{"id":"task-1","title":"...","dependencies":[],"status":"READY"}],"conflictKeys":[],"executorModelRole":"executor","toolPolicy":"executor-scoped-write","verificationCommandIds":["project.test"],"maxRepairAttempts":2,"mergeStrategy":"manual","requireHumanMerge":true}</pipeline-factory-plan>
+<pipeline-factory-plan>{"title":"...","goal":"...","acceptanceCriteria":["..."],"include":["..."],"exclude":["..."],"baseBranch":"...","baseCommit":"...","tasks":[{"id":"task-1","title":"...","dependencies":[],"status":"READY"}],"dependsOnPlanIds":[],"conflictKeys":[],"executorModelRole":"executor","toolPolicy":"executor-scoped-write","verificationCommandIds":["project.test"],"maxRepairAttempts":2,"mergeStrategy":"manual","requireHumanMerge":true}</pipeline-factory-plan>
 不要在缺少关键决策时输出 READY；不要把“已记录某个选择”当作完整方案。`;
 
 /** Factory 内部的长期 Explorer 工作区，与外部 Provider Thread 标识分离。 */
@@ -142,6 +145,7 @@ export type PlanContract = {
   maxRepairAttempts: number;
   mergeStrategy: "manual" | "fast-forward" | "squash";
   requireHumanMerge: boolean;
+  dependsOnPlanIds?: string[];
 };
 
 /** 从 Explorer 对话投影出的候选 Plan；Confirm 前仍允许编辑或丢弃。 */
@@ -256,6 +260,7 @@ export type DomainEvent = {
     | "plan.discarded"
     | "plan.confirmed"
     | "plan.enqueued"
+    | "plan.dispatch.state.changed"
     | "change.proposal.created"
     | "change.proposal.approved"
     | "change.proposal.rejected"
@@ -459,6 +464,9 @@ export type PipelineStore = {
   getPlan(id: string): CandidatePlan | undefined;
   listPlans(): CandidatePlan[];
   updatePlan(plan: CandidatePlan): CandidatePlan;
+  saveDispatchState(state: PlanDispatchState): PlanDispatchState;
+  getDispatchState(planId: string): PlanDispatchState | undefined;
+  listDispatchStates(projectId?: string): PlanDispatchState[];
   saveRevision(revision: PlanRevisionV2): PlanRevisionV2;
   getRevision(planId: string, revision: number): PlanRevisionV2 | undefined;
   saveChangeProposal(proposal: ChangeProposal): ChangeProposal;
@@ -490,6 +498,7 @@ export type PipelineStore = {
   listToolCalls(loopId?: string): PersistedToolCall[];
   updateToolCall(call: PersistedToolCall): PersistedToolCall;
   appendEvent(event: Omit<DomainEvent, "id" | "occurredAt" | "sequence">): DomainEvent;
+  subscribeEvents?(listener: (event: DomainEvent) => void): () => void;
   listEvents(options?: { afterSequence?: number; aggregateId?: string }): DomainEvent[];
   getLastEventSequence(aggregateId?: string): number;
   getIdempotency(scope: string, key: string): Record<string, unknown> | undefined;
@@ -528,6 +537,7 @@ export function assessPlanCompletion(content: string): PlanCompletionAssessment 
   if (!isStringArray(contract.include) || !isStringArray(contract.exclude)) missing.push("功能范围与排除项");
   if (typeof contract.baseBranch !== "string" || !contract.baseBranch.trim() || typeof contract.baseCommit !== "string" || !contract.baseCommit.trim()) missing.push("基线 Branch 与 Commit");
   if (!Array.isArray(contract.tasks) || contract.tasks.length === 0 || contract.tasks.some((task) => !isRecord(task) || typeof task.id !== "string" || !task.id.trim() || typeof task.title !== "string" || !task.title.trim() || !isStringArray(task.dependencies))) missing.push("实施任务、依赖与冲突");
+  if (contract.dependsOnPlanIds !== undefined && !isStringArray(contract.dependsOnPlanIds)) missing.push("实施任务、依赖与冲突");
   if (!isStringArray(contract.conflictKeys)) missing.push("实施任务、依赖与冲突");
   if (typeof contract.executorModelRole !== "string" || !contract.executorModelRole.trim() || typeof contract.toolPolicy !== "string" || !contract.toolPolicy.trim()) missing.push("Executor 模型与 ToolPolicy");
   if (!isNonEmptyStringArray(contract.verificationCommandIds)) missing.push("验收标准与验证命令");
@@ -592,6 +602,7 @@ export class InMemoryPipelineStore implements PipelineStore {
   private readonly projects = new Map<string, Project>();
   private readonly projectConfigRevisions = new Map<string, ProjectConfigRevision[]>();
   private readonly plans = new Map<string, CandidatePlan>();
+  private readonly dispatchStates = new Map<string, PlanDispatchState>();
   private readonly revisions = new Map<string, PlanRevisionV2>();
   private readonly changeProposals = new Map<string, ChangeProposal>();
   private readonly runs = new Map<string, Run>();
@@ -606,6 +617,7 @@ export class InMemoryPipelineStore implements PipelineStore {
   private readonly events: DomainEvent[] = [];
   private readonly inputRequests = new Map<string, ExplorerInputRequest>();
   private readonly idempotency = new Map<string, Record<string, unknown>>();
+  private readonly eventListeners = new Set<(event: DomainEvent) => void>();
   private sequence = 0;
   private eventSequence = 0;
 
@@ -718,6 +730,21 @@ export class InMemoryPipelineStore implements PipelineStore {
     return plan;
   }
 
+  saveDispatchState(state: PlanDispatchState): PlanDispatchState {
+    this.dispatchStates.set(state.planId, state);
+    return state;
+  }
+
+  getDispatchState(planId: string): PlanDispatchState | undefined {
+    return this.dispatchStates.get(planId);
+  }
+
+  listDispatchStates(projectId?: string): PlanDispatchState[] {
+    return [...this.dispatchStates.values()]
+      .filter((state) => !projectId || state.projectId === projectId)
+      .sort((a, b) => a.queuedAt.localeCompare(b.queuedAt) || a.planId.localeCompare(b.planId));
+  }
+
   saveRevision(revision: PlanRevisionV2): PlanRevisionV2 {
     this.revisions.set(`${revision.planId}:${revision.revision}`, revision);
     return revision;
@@ -782,7 +809,13 @@ export class InMemoryPipelineStore implements PipelineStore {
   appendEvent(event: Omit<DomainEvent, "id" | "occurredAt" | "sequence">): DomainEvent {
     const saved: DomainEvent = { ...event, id: this.nextId("event"), sequence: ++this.eventSequence, occurredAt: this.now() };
     this.events.push(saved);
+    for (const listener of this.eventListeners) listener(saved);
     return saved;
+  }
+
+  subscribeEvents(listener: (event: DomainEvent) => void): () => void {
+    this.eventListeners.add(listener);
+    return () => this.eventListeners.delete(listener);
   }
 
   listEvents(options: { afterSequence?: number; aggregateId?: string } = {}): DomainEvent[] {
@@ -806,6 +839,7 @@ function parseRequestId(value: string): string | number {
 /** SQLite Store；启动时负责幂等 migration，并保留事件、快照和运行历史。 */
 export class SqlitePipelineStore implements PipelineStore {
   private readonly database: DatabaseSync;
+  private readonly eventListeners = new Set<(event: DomainEvent) => void>();
 
   constructor(databasePath: string) {
     this.database = new DatabaseSync(databasePath);
@@ -884,6 +918,17 @@ export class SqlitePipelineStore implements PipelineStore {
         last_event_at TEXT NOT NULL,
         attention_reason TEXT,
         contract_json TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS plan_dispatch_states (
+        plan_id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        wait_reason TEXT,
+        queued_at TEXT NOT NULL,
+        run_id TEXT,
+        attempt INTEGER NOT NULL,
+        updated_at TEXT NOT NULL,
+        last_error TEXT
       );
       CREATE TABLE IF NOT EXISTS plan_revisions (
         plan_id TEXT NOT NULL,
@@ -1194,6 +1239,25 @@ export class SqlitePipelineStore implements PipelineStore {
 
   updatePlan(plan: CandidatePlan): CandidatePlan { return this.savePlan(plan); }
 
+  saveDispatchState(state: PlanDispatchState): PlanDispatchState {
+    this.database.prepare(`
+      INSERT INTO plan_dispatch_states (plan_id, project_id, status, wait_reason, queued_at, run_id, attempt, updated_at, last_error)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(plan_id) DO UPDATE SET project_id=excluded.project_id, status=excluded.status, wait_reason=excluded.wait_reason, queued_at=excluded.queued_at, run_id=excluded.run_id, attempt=excluded.attempt, updated_at=excluded.updated_at, last_error=excluded.last_error
+    `).run(state.planId, state.projectId, state.status, state.waitReason, state.queuedAt, state.runId, state.attempt, state.updatedAt, state.lastError);
+    return this.getDispatchState(state.planId) as PlanDispatchState;
+  }
+
+  getDispatchState(planId: string): PlanDispatchState | undefined {
+    const row = this.database.prepare("SELECT * FROM plan_dispatch_states WHERE plan_id = ?").get(planId) as SqliteRow | undefined;
+    return row ? this.dispatchStateFromRow(row) : undefined;
+  }
+
+  listDispatchStates(projectId?: string): PlanDispatchState[] {
+    const rows = this.database.prepare(`SELECT * FROM plan_dispatch_states ${projectId ? "WHERE project_id = ?" : ""} ORDER BY queued_at ASC, plan_id ASC`).all(...(projectId ? [projectId] : [])) as unknown as SqliteRow[];
+    return rows.map((row) => this.dispatchStateFromRow(row));
+  }
+
   saveRevision(revision: PlanRevisionV2): PlanRevisionV2 {
     this.database.prepare("INSERT OR IGNORE INTO plan_revisions (plan_id, revision, contract_json, artifact_hash, confirmed_by, confirmed_at, source_explorer_thread_id, project_config_version, project_config_hash, project_config_snapshot_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(revision.planId, revision.revision, JSON.stringify(revision.contract), revision.artifactHash, revision.confirmedBy, revision.confirmedAt, revision.sourceExplorerThreadId, revision.projectConfigVersion ?? null, revision.projectConfigHash ?? null, revision.projectConfigSnapshot ? JSON.stringify(revision.projectConfigSnapshot) : null);
     return this.getRevision(revision.planId, revision.revision) as PlanRevisionV2;
@@ -1367,7 +1431,13 @@ export class SqlitePipelineStore implements PipelineStore {
   appendEvent(event: Omit<DomainEvent, "id" | "occurredAt" | "sequence">): DomainEvent {
     const saved: DomainEvent = { ...event, id: this.nextId("event"), sequence: Number((this.database.prepare("SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM domain_events").get() as SqliteRow).next_sequence), occurredAt: this.now() };
     this.database.prepare("INSERT INTO domain_events (id, sequence, type, aggregate_id, occurred_at, payload_json) VALUES (?, ?, ?, ?, ?, ?)").run(saved.id, saved.sequence, saved.type, saved.aggregateId, saved.occurredAt, JSON.stringify(saved.payload));
+    for (const listener of this.eventListeners) listener(saved);
     return saved;
+  }
+
+  subscribeEvents(listener: (event: DomainEvent) => void): () => void {
+    this.eventListeners.add(listener);
+    return () => this.eventListeners.delete(listener);
   }
 
   listEvents(options: { afterSequence?: number; aggregateId?: string } = {}): DomainEvent[] {
@@ -1463,6 +1533,20 @@ export class SqlitePipelineStore implements PipelineStore {
     return { id: String(row.id), projectId: String(row.project_id), sourceExplorerThreadId: String(row.source_explorer_thread_id), sourceTurnId: row.source_turn_id === null || row.source_turn_id === undefined ? null : String(row.source_turn_id), providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id), providerTurnId: row.provider_turn_id === null || row.provider_turn_id === undefined ? null : String(row.provider_turn_id), providerItemId: row.provider_item_id === null || row.provider_item_id === undefined ? null : String(row.provider_item_id), title: String(row.title), revision: Number(row.revision), status: String(row.status) as PlanStatus, createdAt: String(row.created_at), confirmedBy: row.confirmed_by === null ? null : String(row.confirmed_by), confirmedAt: row.confirmed_at === null ? null : String(row.confirmed_at), queuedAt: row.queued_at === null ? null : String(row.queued_at), runId: row.run_id === null ? null : String(row.run_id), lastEventAt: String(row.last_event_at), attentionReason: row.attention_reason === null ? null : String(row.attention_reason), contract: JSON.parse(String(row.contract_json ?? "{}")) as PlanContract };
   }
 
+  private dispatchStateFromRow(row: SqliteRow): PlanDispatchState {
+    return {
+      planId: String(row.plan_id),
+      projectId: String(row.project_id),
+      status: String(row.status) as PlanDispatchState["status"],
+      waitReason: row.wait_reason === null || row.wait_reason === undefined ? null : String(row.wait_reason) as PlanDispatchState["waitReason"],
+      queuedAt: String(row.queued_at),
+      runId: row.run_id === null || row.run_id === undefined ? null : String(row.run_id),
+      attempt: Number(row.attempt),
+      updatedAt: String(row.updated_at),
+      lastError: row.last_error === null || row.last_error === undefined ? null : String(row.last_error),
+    };
+  }
+
   private changeProposalFromRow(row: SqliteRow): ChangeProposal {
     return {
       id: String(row.id), runId: String(row.run_id), planId: String(row.plan_id), reason: String(row.reason),
@@ -1509,6 +1593,7 @@ function defaultPlanContract(title: string): PlanContract {
     maxRepairAttempts: 2,
     mergeStrategy: "manual",
     requireHumanMerge: true,
+    dependsOnPlanIds: [],
   };
 }
 
@@ -1521,6 +1606,9 @@ export function validatePlanContract(contract: PlanContract): void {
   for (const task of contract.tasks) {
     if (!["PENDING", "READY", "DONE"].includes(task.status)) throw new Error(`Invalid status for task ${task.id}`);
     for (const dependency of task.dependencies) if (!known.has(dependency)) throw new Error(`Task ${task.id} depends on unknown task ${dependency}`);
+  }
+  if (contract.dependsOnPlanIds !== undefined && (!isStringArray(contract.dependsOnPlanIds) || contract.dependsOnPlanIds.some((id) => id.trim().length === 0))) {
+    throw new Error("Plan dependencies must be a list of non-empty plan ids");
   }
   const visiting = new Set<string>();
   const visited = new Set<string>();
@@ -1626,6 +1714,7 @@ export class PlanService {
       throw new Error(`Plan ${planId} cannot be confirmed from ${plan.status}`);
     }
     validatePlanContract(plan.contract);
+    this.validatePlanDependencies(plan);
     const confirmedAt = this.store.now();
     const project = this.store.getProject(plan.projectId);
     const projectConfigSnapshot = project ? this.projects.snapshot(project.id) : undefined;
@@ -1643,6 +1732,34 @@ export class PlanService {
     const updated = this.store.updatePlan({ ...plan, status: "READY", confirmedBy, confirmedAt, lastEventAt: confirmedAt });
     this.store.appendEvent({ type: "plan.confirmed", aggregateId: planId, payload: { confirmedBy } });
     return updated;
+  }
+
+  private validatePlanDependencies(plan: CandidatePlan): void {
+    const dependencies = plan.contract.dependsOnPlanIds ?? [];
+    const plans = new Map(this.store.listPlans().filter((item) => item.projectId === plan.projectId).map((item) => [item.id, item]));
+    for (const dependencyId of dependencies) {
+      if (dependencyId === plan.id) throw new Error(`Plan ${plan.id} cannot depend on itself`);
+      if (!plans.has(dependencyId)) throw new Error(`Plan ${plan.id} depends on unknown plan ${dependencyId}`);
+    }
+
+    const visiting = new Set<string>();
+    const visited = new Set<string>();
+    const visit = (planId: string): void => {
+      if (visiting.has(planId)) throw new Error(`Plan dependency cycle detected at ${planId}`);
+      if (visited.has(planId)) return;
+      visiting.add(planId);
+      const current = plans.get(planId);
+      for (const dependencyId of current?.contract.dependsOnPlanIds ?? []) {
+        if (!plans.has(dependencyId)) {
+          if (planId === plan.id) throw new Error(`Plan ${plan.id} depends on unknown plan ${dependencyId}`);
+          continue;
+        }
+        visit(dependencyId);
+      }
+      visiting.delete(planId);
+      visited.add(planId);
+    };
+    visit(plan.id);
   }
 
   /** 读取指定不可变 Revision；缺失快照的旧数据仍按 LEGACY 兼容读取。 */
@@ -2831,6 +2948,11 @@ export class Scheduler {
 
   constructor(private readonly options: SchedulerOptions) {
     this.planService = new PlanService(options.store);
+  }
+
+  /** 返回 Runtime 全局并发上限，供自动调度协调器复用同一限制。 */
+  globalConcurrency(): number | undefined {
+    return this.options.globalConcurrency;
   }
 
   /** 暴露 Executor Loop 的控制端口，供 API 的暂停、恢复和终止按钮调用。 */
