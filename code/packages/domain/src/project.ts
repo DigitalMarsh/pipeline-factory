@@ -22,6 +22,7 @@ export type ProjectSettings = {
     maxParallelRuns: number;
     defaultTimeoutMs: number;
     executionTimeoutMs: number;
+    /** @deprecated Explorer and Executor use model.loop.maxSteps. Retained for persisted-config compatibility. */
     maxAutoContinuationTurns: number;
     maxRepairAttempts: number;
   };

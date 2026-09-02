@@ -82,6 +82,65 @@ export type AgentLoopStep = {
 /** 创建 Loop 步骤时允许调用方省略由 Store/Engine 生成的审计字段。 */
 export type AgentLoopStepInput = Omit<AgentLoopStep, "sequence" | "occurredAt" | "callId" | "providerThreadId" | "providerTurnId"> & Partial<Pick<AgentLoopStep, "callId" | "providerThreadId" | "providerTurnId" | "occurredAt">>;
 
+export type AgentLoopDiagnostics = {
+  providerActivityCount: number;
+  lastGate: { action: string; reason: string } | null;
+  terminal: { code: string; message: string } | null;
+};
+
+const TERMINAL_DIAGNOSTIC_MESSAGES: Record<string, string> = {
+  DATABASE_BUSY: "数据库写入暂时繁忙",
+  BLOCKED: "Agent Loop 已安全阻止",
+  CANCELLED: "本轮已取消",
+  MAX_STEPS_EXCEEDED: "已达到 Provider Turn 上限",
+  MAX_DURATION_EXCEEDED: "已超过 Agent Loop 时间上限",
+  NO_PROGRESS: "连续多个 Provider Turn 没有产生有效进展",
+  MODEL_CAPABILITY_UNAVAILABLE: "当前模型不支持此 Agent Loop 能力",
+  REPEATED_TOOL_CALL: "检测到重复工具调用，已安全停止",
+  TOOL_RUNTIME_UNAVAILABLE: "工具运行时不可用",
+  PROVIDER_TURN_NOT_ACTIVE: "服务重启后原 Provider Turn 已不可恢复",
+  STRUCTURED_INPUT_RECOVERY_REQUIRED: "服务重启后需要重新提交结构化输入",
+  EXPLORER_TURN_RECOVERY_REQUIRED: "服务重启后需要重新开始探索",
+  UNKNOWN_TOOL_RESULT: "工具副作用结果未知，需要人工核对",
+};
+
+function diagnosticCode(value: unknown): string {
+  const text = typeof value === "string" ? value : "";
+  if (/database is locked|SQLITE_BUSY/i.test(text)) return "DATABASE_BUSY";
+  return /^[A-Z][A-Z0-9_]{1,80}$/.test(text) ? text : "LOOP_FAILED";
+}
+
+function diagnosticMessage(code: string): string {
+  return TERMINAL_DIAGNOSTIC_MESSAGES[code] ?? "Agent Loop 执行失败";
+}
+
+export function projectAgentLoopDiagnostics(loop: AgentLoop, steps: AgentLoopStep[]): AgentLoopDiagnostics {
+  const providerItems = new Set<string>();
+  for (const step of steps) {
+    if (step.stepType !== "PROVIDER_ACTIVITY") continue;
+    const itemId = typeof step.payload.providerItemId === "string"
+      ? step.payload.providerItemId
+      : typeof step.payload.itemId === "string" ? step.payload.itemId : `${step.providerThreadId ?? "unknown"}:${step.providerTurnId ?? "unknown"}:${step.sequence}`;
+    providerItems.add(itemId);
+  }
+  const gateStep = [...steps].reverse().find((step) => step.stepType === "GATE_CHECKED");
+  const lastGate = gateStep && typeof gateStep.payload.action === "string" && typeof gateStep.payload.reason === "string"
+    ? { action: gateStep.payload.action, reason: gateStep.payload.reason }
+    : null;
+  if (loop.state === "COMPLETED") return { providerActivityCount: providerItems.size, lastGate, terminal: null };
+  if (!isTerminal(loop.state)) return { providerActivityCount: providerItems.size, lastGate, terminal: null };
+  let checkpoint: Record<string, unknown> = {};
+  if (loop.checkpointJson) {
+    try {
+      const parsed: unknown = JSON.parse(loop.checkpointJson);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) checkpoint = parsed as Record<string, unknown>;
+    } catch { /* malformed checkpoints are intentionally not exposed */ }
+  }
+  const terminalValue = checkpoint.error ?? checkpoint.reason ?? [...steps].reverse().find((step) => step.stepType === "LOOP_FAILED")?.payload.error ?? [...steps].reverse().find((step) => step.stepType === "LOOP_FAILED")?.payload.reason;
+  const code = diagnosticCode(terminalValue ?? loop.state);
+  return { providerActivityCount: providerItems.size, lastGate, terminal: { code, message: diagnosticMessage(code) } };
+}
+
 import type { ModelEvent, ModelGateway, ModelMessage, ModelRequest, ModelRole, ToolCall } from "./index.js";
 import type { PipelineStore } from "./index.js";
 import type { ToolRuntime } from "./tool-runtime.js";
@@ -112,7 +171,7 @@ export type AgentLoopResult = {
 
 /** 终止门禁的明确决策；blocked 与 complete 都会结束当前 Loop。 */
 export type GateDecision =
-  | { action: "continue"; reason: string }
+  | { action: "continue"; reason: string; continuationPrompt?: string }
   | { action: "suspend"; reason: string }
   | { action: "complete"; reason: string }
   | { action: "blocked"; reason: string };
@@ -224,20 +283,21 @@ export class AgentLoopEngine implements AgentLoopRunner {
     return () => { listeners.delete(listener); if (listeners.size === 0) this.listeners.delete(loopId); };
   }
 
-  /** 从 PAUSED 或 RECOVERING 恢复 Loop，不重放已经完成的步骤。 */
+  /** 只恢复仍由当前进程持有执行协程的 PAUSED Loop，不重放已经完成的步骤。 */
   async resume(loopId: string): Promise<AgentLoop> {
     const loop = this.get(loopId);
-    if (loop.state !== "PAUSED" && loop.state !== "RECOVERING") throw new Error(`AgentLoop ${loopId} cannot be resumed from ${loop.state}`);
+    if (loop.state !== "PAUSED") throw new Error(`AgentLoop ${loopId} cannot be resumed from ${loop.state}`);
+    if (!this.controllers.has(loopId)) throw new Error(`AgentLoop ${loopId} cannot be resumed without a live execution coroutine`);
     const resumed = { ...loop, state: "RUNNING" as const };
     this.store.updateAgentLoop(resumed);
     this.emit(resumed, "agent.loop.resumed", { loopId });
     return resumed;
   }
 
-  /** 写入 checkpoint 后暂停 Loop；当前 Provider 调用由控制器决定是否继续中断。 */
+  /** 仅允许仍在执行的 Loop 写入 checkpoint 后暂停。 */
   async pause(loopId: string, reason: string): Promise<AgentLoop> {
     const loop = this.get(loopId);
-    if (isTerminal(loop.state)) throw new Error(`AgentLoop ${loopId} is already ${loop.state}`);
+    if (loop.state !== "RUNNING") throw new Error(`AgentLoop ${loopId} cannot be paused from ${loop.state}`);
     const paused = { ...loop, state: "PAUSED" as const, checkpointJson: JSON.stringify({ stepCount: loop.stepCount, reason }) };
     this.store.updateAgentLoop(paused);
     this.emit(paused, "agent.loop.paused", { reason });
@@ -258,6 +318,8 @@ export class AgentLoopEngine implements AgentLoopRunner {
     this.appendStep(cancelled, "LOOP_COMPLETED", "CANCELLED", { reason });
     this.emit(cancelled, "agent.loop.cancelled", { reason });
     this.resolveWaiter(cancelled);
+    this.controllers.delete(loopId);
+    this.callbacks.delete(loopId);
     return cancelled;
   }
 
@@ -269,6 +331,7 @@ export class AgentLoopEngine implements AgentLoopRunner {
   }
 
   private create(input: AgentLoopInput): AgentLoop {
+    if (input.id && this.store.getAgentLoop(input.id)) throw new Error(`AgentLoop ${input.id} already exists`);
     const loop: AgentLoop = { id: input.id ?? this.store.nextId("agent-loop"), ownerType: input.ownerType, ownerId: input.ownerId, role: input.role, mode: input.mode, state: "CREATED", stepCount: 0, maxSteps: input.maxSteps || this.options.defaultMaxSteps, startedAt: null, completedAt: null, providerThreadId: null, providerTurnId: null, checkpointJson: null };
     this.store.saveAgentLoop(loop);
     return loop;
@@ -329,6 +392,7 @@ export class AgentLoopEngine implements AgentLoopRunner {
       try {
         for await (const event of this.model.stream({ ...input.modelRequest, role: input.role, messages, providerThreadId: loop.providerThreadId ?? undefined, ...(continuationPrompt ? { continuationPrompt } : {}), signal: controller.signal })) {
           loop = this.get(initial.id);
+          if (isTerminal(loop.state)) return;
           if (event.type === "thread.started") { loop = { ...loop, providerThreadId: event.threadId }; this.store.updateAgentLoop(loop); this.emit(loop, "agent.provider.thread.started", { threadId: event.threadId }); }
           if (event.type === "text.delta") {
             stepText += event.text;
@@ -400,18 +464,26 @@ export class AgentLoopEngine implements AgentLoopRunner {
         return;
       }
       loop = this.get(initial.id);
+      if (isTerminal(loop.state)) return;
       if (timedOut || Date.now() - startedMs >= maxDurationMs) { this.block(initial.id, "MAX_DURATION_EXCEEDED"); return; }
       this.appendStep(loop, "MODEL_COMPLETED", "COMPLETED", { step: loop.stepCount });
       this.emit(loop, "agent.model.completed", { step: loop.stepCount });
-      const decision = await (input.gate ?? { evaluate: () => ({ action: "complete", reason: "MODEL_COMPLETED" } as GateDecision) }).evaluate({ content: fullText });
-      this.appendStep(loop, "GATE_CHECKED", decision.action === "blocked" ? "FAILED" : "COMPLETED", { action: decision.action, reason: decision.reason });
+      let decision: GateDecision;
+      try {
+        decision = await (input.gate ?? { evaluate: () => ({ action: "complete", reason: "MODEL_COMPLETED" } as GateDecision) }).evaluate({ content: fullText });
+      } catch (error) {
+        this.fail(initial.id, error instanceof Error ? error.message : String(error));
+        return;
+      }
+      this.appendStep(loop, "GATE_CHECKED", decision.action === "blocked" ? "FAILED" : "COMPLETED", { action: decision.action, reason: decision.reason, ...(decision.action === "continue" && decision.continuationPrompt ? { continuationPrompt: decision.continuationPrompt } : {}) });
       this.emit(loop, "agent.gate.checked", decision);
       if (decision.action === "complete") { this.complete(initial.id, decision.reason); return; }
       if (decision.action === "blocked") { this.block(initial.id, decision.reason); return; }
       if (progress) noProgressSteps = 0; else noProgressSteps += 1;
       if (noProgressSteps >= maxNoProgressSteps) { this.block(initial.id, "NO_PROGRESS"); return; }
       if (stepText.trim()) messages.push({ role: "assistant", content: stepText });
-      continuationPrompt = `继续完善当前${input.role === "explorer" ? "计划" : "执行任务"}。不要重新开始已经完成的工作，只处理下一项必要内容。`;
+      const gateContinuationPrompt = decision.action === "continue" ? decision.continuationPrompt : undefined;
+      continuationPrompt = gateContinuationPrompt ?? `继续完善当前${input.role === "explorer" ? "计划" : "执行任务"}。不要重新开始已经完成的工作，只处理下一项必要内容。`;
       messages.push({ role: "user", content: continuationPrompt });
       loop = { ...this.get(initial.id), checkpointJson: JSON.stringify({ stepCount: loop.stepCount, providerThreadId: loop.providerThreadId, messageCount: messages.length, lastText: stepText.slice(-1000) }) };
       this.store.updateAgentLoop(loop);
@@ -473,7 +545,18 @@ export class AgentLoopEngine implements AgentLoopRunner {
   private clearDeadline(loopId: string): void { const timer = this.deadlineTimers.get(loopId); if (timer) clearTimeout(timer); this.deadlineTimers.delete(loopId); }
   private complete(loopId: string, reason: string): void { this.clearDeadline(loopId); const loop = { ...this.get(loopId), state: "COMPLETED" as const, completedAt: this.store.now() }; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_COMPLETED", "COMPLETED", { reason }); this.emit(loop, "agent.loop.completed", { reason }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); }
   private block(loopId: string, reason: string): void { this.clearDeadline(loopId); const loop = { ...this.get(loopId), state: "BLOCKED" as const, completedAt: this.store.now(), checkpointJson: JSON.stringify({ reason }) }; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_FAILED", "FAILED", { reason }); this.emit(loop, "agent.loop.failed", { reason }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); }
-  private fail(loopId: string, error: string): void { this.clearDeadline(loopId); const loop = { ...this.get(loopId), state: "FAILED" as const, completedAt: this.store.now(), checkpointJson: JSON.stringify({ error }) }; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_FAILED", "FAILED", { error }); this.emit(loop, "agent.loop.failed", { error }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); }
+  private fail(loopId: string, error: string): void {
+    this.clearDeadline(loopId);
+    const code = diagnosticCode(error);
+    const persistedError = code === "DATABASE_BUSY" ? code : error;
+    const loop = { ...this.get(loopId), state: "FAILED" as const, completedAt: this.store.now(), checkpointJson: JSON.stringify({ error: persistedError, detail: error }) };
+    this.store.updateAgentLoop(loop);
+    this.appendStep(loop, "LOOP_FAILED", "FAILED", { error: persistedError });
+    this.emit(loop, "agent.loop.failed", { error: persistedError });
+    this.resolveWaiter(loop);
+    this.controllers.delete(loopId);
+    this.callbacks.delete(loopId);
+  }
   private needsReconciliation(loopId: string, reason: string): void { this.clearDeadline(loopId); const loop = { ...this.get(loopId), state: "NEEDS_RECONCILIATION" as const, completedAt: this.store.now(), checkpointJson: JSON.stringify({ reason }) }; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_FAILED", "NEEDS_RECONCILIATION", { reason }); this.emit(loop, "agent.loop.recovery_required", { reason }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); }
 }
 

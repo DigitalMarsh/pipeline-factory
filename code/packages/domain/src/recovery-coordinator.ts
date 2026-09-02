@@ -11,6 +11,11 @@ export class RecoveryCoordinator {
 
   /** 恢复所有活动 Loop；未知副作用进入 NEEDS_RECONCILIATION，禁止自动重放。 */
   recover(): AgentLoop[] {
+    const recover = () => this.recoverInternal();
+    return this.store.runInTransaction ? this.store.runInTransaction(recover) : recover();
+  }
+
+  private recoverInternal(): AgentLoop[] {
     const affected = new Map<string, AgentLoop>();
     const uncertainLoopIds = new Set(
       this.store.listToolCalls()
@@ -18,7 +23,12 @@ export class RecoveryCoordinator {
         .map((call) => call.loopId),
     );
 
-    for (const loop of this.store.recoverAgentLoops()) {
+    for (const loop of this.store.listAgentLoops().filter((item) => item.ownerType === "explorer-turn" && !isTerminal(item.state))) {
+      const updated = this.terminalizeExplorerLoop(loop);
+      affected.set(updated.id, updated);
+    }
+
+    for (const loop of this.store.recoverAgentLoops().filter((item) => item.ownerType !== "explorer-turn")) {
       if (uncertainLoopIds.has(loop.id)) {
         const updated = this.transition(loop, "NEEDS_RECONCILIATION", "UNKNOWN_TOOL_RESULT");
         affected.set(updated.id, updated);
@@ -31,6 +41,30 @@ export class RecoveryCoordinator {
     }
     this.reconcilePlanProjections();
     return [...affected.values()];
+  }
+
+  private terminalizeExplorerLoop(loop: AgentLoop): AgentLoop {
+    const turn = this.store.listThreads()
+      .flatMap((thread) => this.store.listTurns(thread.id))
+      .find((candidate) => candidate.id === loop.ownerId);
+    const thread = turn ? this.store.getThread(turn.threadId) : undefined;
+    const requests = turn ? this.store.listInputRequests(turn.threadId).filter((request) => request.localTurnId === turn.id) : [];
+    const inputRecovery = requests.some((request) => request.status === "OPEN" || request.status === "SUBMITTING" || request.status === "RECOVERY_REQUIRED");
+    const reason = inputRecovery ? "STRUCTURED_INPUT_RECOVERY_REQUIRED" : "EXPLORER_TURN_RECOVERY_REQUIRED";
+    for (const request of requests) {
+      if (request.status === "OPEN" || request.status === "SUBMITTING") this.store.updateInputRequest({ ...request, status: "RECOVERY_REQUIRED" });
+    }
+    if (turn && (turn.status === "RUNNING" || turn.status === "WAITING_FOR_INPUT" || turn.status === "QUEUED")) {
+      this.store.updateTurn({ ...turn, status: "FAILED", error: reason, content: turn.content || "模型回合中断，需要重新开始探索" });
+    }
+    if (thread && thread.state === "WAITING_FOR_INPUT") this.store.updateThread({ ...thread, state: "ACTIVE", lastActivityAt: this.store.now() });
+    const completedAt = this.store.now();
+    const updated = { ...loop, state: "FAILED" as const, completedAt, checkpointJson: JSON.stringify({ error: reason, recoveredAt: completedAt }) };
+    this.store.updateAgentLoop(updated);
+    this.store.appendAgentLoopStep({ loopId: loop.id, stepType: "LOOP_FAILED", status: "FAILED", payload: { error: reason, recovered: true } });
+    this.store.appendEvent({ type: "agent.loop.failed", aggregateId: loop.id, payload: { error: reason, recovered: true } });
+    if (turn) this.store.appendEvent({ type: "explorer.turn.failed", aggregateId: turn.threadId, payload: { assistantTurnId: turn.id, error: reason, recoveryRequired: true } });
+    return updated;
   }
 
   private transition(loop: AgentLoop, state: AgentLoop["state"], reason: string): AgentLoop {
@@ -66,6 +100,10 @@ export class RecoveryCoordinator {
       this.store.updatePlan({ ...plan, status: targetStatus, attentionReason, lastEventAt: this.store.now() });
     }
   }
+}
+
+function isTerminal(state: AgentLoop["state"]): boolean {
+  return state === "BLOCKED" || state === "COMPLETED" || state === "FAILED" || state === "CANCELLED" || state === "NEEDS_RECONCILIATION";
 }
 
 const RECONCILIABLE_PLAN_STATUSES: ReadonlySet<PlanStatus> = new Set(["QUEUED", "IN_PROGRESS", "VERIFYING", "MERGE_READY"]);

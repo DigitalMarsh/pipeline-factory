@@ -64,4 +64,17 @@ describe("Explorer activity projection", () => {
     expect(items[0]?.summary).not.toContain("acceptanceCriteria");
     expect(items[0]?.details).toMatchObject({ planProtocol: true, status: "READY", title: "Personal information manager", taskCount: 1, verificationCount: 1 });
   });
+
+  it("renders the latest parseable READY protocol instead of an earlier invalid block", () => {
+    const earlier = "<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>{bad json}</pipeline-factory-plan>";
+    const later = "<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>" + JSON.stringify({ title: "Latest plan", goal: "Use the latest valid protocol" }) + "</pipeline-factory-plan>";
+    const items = projectExplorerActivity({
+      turns: [{ id: "assistant-1", threadId: "explorer-1", role: "assistant", content: "", status: "COMPLETED", createdAt: "2026-08-29T10:00:00.000Z", sequence: 1 }],
+      loops: [{ id: "loop-1", ownerType: "explorer-turn", ownerId: "assistant-1", role: "explorer", mode: "provider-controlled", state: "COMPLETED", stepCount: 2, maxSteps: 40, startedAt: "2026-08-29T10:00:00.000Z", completedAt: "2026-08-29T10:00:02.000Z", providerThreadId: null, providerTurnId: null, checkpointJson: null }],
+      steps: [{ loopId: "loop-1", sequence: 1, stepType: "MODEL_TEXT_DELTA", status: "COMPLETED", callId: null, providerThreadId: null, providerTurnId: null, payload: { text: earlier + later }, occurredAt: "2026-08-29T10:00:01.000Z" }],
+    });
+
+    expect(items[0]?.summary).toContain("完整执行方案已生成：Latest plan");
+    expect(items[0]?.details).toMatchObject({ title: "Latest plan", goal: "Use the latest valid protocol" });
+  });
 });

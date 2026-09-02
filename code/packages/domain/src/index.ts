@@ -3,7 +3,8 @@
  *
  * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
  */
-import type { AgentLoop, AgentLoopEvent, AgentLoopRunner, AgentLoopStep, AgentLoopStepInput } from "./agent-loop.js";
+import { projectAgentLoopDiagnostics } from "./agent-loop.js";
+import type { AgentLoop, AgentLoopDiagnostics, AgentLoopEvent, AgentLoopRunner, AgentLoopStep, AgentLoopStepInput } from "./agent-loop.js";
 import type { MappedCodexRateLimits } from "./codex-rate-limits.js";
 import { BuiltinToolExecutor, type BuiltinToolContext, type BuiltinToolExecutorOptions } from "./builtin-tool-executor.js";
 import { AgentLoopEngine } from "./agent-loop.js";
@@ -23,8 +24,9 @@ export type { ExplorerActivityInput, ExplorerActivityItem, ExplorerActivityKind 
 export { composeExplorerTitle, explorerTimestamp, ModelExplorerTitleGenerator, normalizeExplorerTitle, placeholderExplorerTitle } from "./explorer-title.js";
 export type { ExplorerTitleGenerator, ExplorerTitleSource, ExplorerTitleStatus } from "./explorer-title.js";
 
-export type { AgentLoop, AgentLoopInput, AgentLoopMode, AgentLoopResult, AgentLoopState, AgentLoopStep, AgentLoopStepInput, AgentLoopStepStatus, AgentLoopRunner, AgentStepType, GateContext, GateDecision, TerminationGate } from "./agent-loop.js";
+export type { AgentLoop, AgentLoopDiagnostics, AgentLoopInput, AgentLoopMode, AgentLoopResult, AgentLoopState, AgentLoopStep, AgentLoopStepInput, AgentLoopStepStatus, AgentLoopRunner, AgentStepType, GateContext, GateDecision, TerminationGate } from "./agent-loop.js";
 export { AgentLoopEngine } from "./agent-loop.js";
+export { projectAgentLoopDiagnostics } from "./agent-loop.js";
 export { PlanCompletenessGate, TaskProgressGate } from "./termination-gates.js";
 export { ExecutorAgent, inspectWorkspaceScope, parseExecutorReport } from "./executor-agent.js";
 export type { ExecutorAgentOptions, ExecutorReport, WorkspaceScopeInspection, WorkspaceScopeInspector } from "./executor-agent.js";
@@ -624,6 +626,8 @@ export type PipelineStore = {
   getLastEventSequence(aggregateId?: string): number;
   getIdempotency(scope: string, key: string): Record<string, unknown> | undefined;
   saveIdempotency(scope: string, key: string, result: Record<string, unknown>): void;
+  /** Optional store-level transaction used for startup recovery atomicity. */
+  runInTransaction?<T>(work: () => T): T;
 };
 
 const DEFAULT_HOOK_TIMEOUT_MS = 120_000;
@@ -642,10 +646,37 @@ export type PlanCompletionAssessment = {
 
 /** 解析模型协议块并检查 Plan 是否具备可执行的完整契约。 */
 export function assessPlanCompletion(content: string): PlanCompletionAssessment {
-  const status = content.match(/<pipeline-factory-plan-status>\s*([^<]+?)\s*<\/pipeline-factory-plan-status>/i)?.[1]?.toUpperCase();
-  const artifactText = content.match(/<pipeline-factory-plan>\s*([\s\S]*?)\s*<\/pipeline-factory-plan>/i)?.[1];
-  if (status !== "READY" || !artifactText) return { status: "INCOMPLETE", missing: [...REQUIRED_PLAN_AREAS], completed: [], artifact: null };
+  const candidates = planProtocolCandidates(content);
+  if (candidates.length === 0) return { status: "INCOMPLETE", missing: [...REQUIRED_PLAN_AREAS], completed: [], artifact: null };
 
+  let sawReadyCandidate = false;
+  let latestIncomplete: PlanCompletionAssessment | null = null;
+  for (const candidate of [...candidates].reverse()) {
+    if (candidate.status !== "READY") continue;
+    sawReadyCandidate = true;
+    const assessment = assessPlanArtifact(candidate.artifactText);
+    if (assessment.status === "READY") return assessment;
+    latestIncomplete ??= assessment;
+  }
+  if (latestIncomplete) return latestIncomplete;
+  return sawReadyCandidate
+    ? { status: "INCOMPLETE", missing: ["完整执行契约"], completed: [], artifact: null }
+    : { status: "INCOMPLETE", missing: [...REQUIRED_PLAN_AREAS], completed: [], artifact: null };
+}
+
+function planProtocolCandidates(content: string): Array<{ status: string; artifactText: string }> {
+  const statusMatches = [...content.matchAll(/<pipeline-factory-plan-status>\s*([^<]+?)\s*<\/pipeline-factory-plan-status>/gi)];
+  const planMatches = [...content.matchAll(/<pipeline-factory-plan>\s*([\s\S]*?)\s*<\/pipeline-factory-plan>/gi)];
+  return statusMatches.flatMap((statusMatch, index) => {
+    const statusEnd = (statusMatch.index ?? 0) + statusMatch[0].length;
+    const nextStatusStart = statusMatches[index + 1]?.index ?? content.length;
+    const plan = planMatches.find((candidate) => (candidate.index ?? -1) >= statusEnd && (candidate.index ?? content.length) < nextStatusStart);
+    const statusText = statusMatch[1];
+    return plan && typeof plan[1] === "string" && typeof statusText === "string" ? [{ status: statusText.trim().toUpperCase(), artifactText: plan[1] }] : [];
+  });
+}
+
+function assessPlanArtifact(artifactText: string): PlanCompletionAssessment {
   let parsed: unknown;
   try { parsed = JSON.parse(artifactText); } catch { return { status: "INCOMPLETE", missing: ["完整执行契约"], completed: [], artifact: null }; }
   if (!isRecord(parsed)) return { status: "INCOMPLETE", missing: ["完整执行契约"], completed: [], artifact: null };
@@ -665,6 +696,9 @@ export function assessPlanCompletion(content: string): PlanCompletionAssessment 
   if (typeof contract.maxRepairAttempts !== "number" || contract.maxRepairAttempts < 0 || !Number.isInteger(contract.maxRepairAttempts)) missing.push("修复次数上限");
   if (contract.mergeStrategy !== "manual" && contract.mergeStrategy !== "fast-forward" && contract.mergeStrategy !== "squash") missing.push("合并策略与人工确认");
   if (contract.requireHumanMerge !== true) missing.push("合并策略与人工确认");
+  if (missing.length === 0) {
+    try { validatePlanContract(contract as PlanContract); } catch { missing.push("实施任务、依赖与冲突"); }
+  }
   const uniqueMissing = [...new Set(missing)];
   if (uniqueMissing.length > 0) return { status: "INCOMPLETE", missing: uniqueMissing, completed: REQUIRED_PLAN_AREAS.filter((area) => !uniqueMissing.includes(area)), artifact: null };
   return { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], artifact: { title, contract: contract as PlanContract } };
@@ -704,11 +738,6 @@ function threadTitleMetadata(title: string | undefined, createdAt: string): { ti
   const normalized = title?.trim();
   if (!normalized || LEGACY_AUTO_TITLES.has(normalized)) return { title: placeholderExplorerTitle(createdAt), titleSource: "AUTO", titleStatus: "PLACEHOLDER" };
   return { title: normalized, titleSource: "MANUAL", titleStatus: "GENERATED" };
-}
-
-function buildContinuationPrompt(missing: string[]): string {
-  const areas = missing.length > 0 ? missing.join("、") : "所有仍未明确的关键决策";
-  return `继续完善当前需求的完整设计方案。当前仍缺少：${areas}。请先检查这些缺口；如果需要用户决策，请使用原生 item/tool/requestUserInput 一次询问当前可同时确认的问题。只有全部缺口解决后，才输出完整的 pipeline-factory-plan READY 协议块。`;
 }
 
 function stripPlanProtocol(content: string): string {
@@ -985,6 +1014,12 @@ function parseRequestId(value: string): string | number {
   return /^-?\d+$/.test(value) ? Number(value) : value;
 }
 
+function normalizeSqliteError(error: unknown): Error {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/database is locked|SQLITE_BUSY/i.test(message)) return new Error("DATABASE_BUSY");
+  return error instanceof Error ? error : new Error(message);
+}
+
 /** SQLite Store；启动时负责幂等 migration，并保留事件、快照和运行历史。 */
 export class SqlitePipelineStore implements PipelineStore {
   private readonly database: DatabaseSync;
@@ -994,6 +1029,7 @@ export class SqlitePipelineStore implements PipelineStore {
     this.database = new DatabaseSync(databasePath);
     this.database.exec("PRAGMA foreign_keys = ON;");
     this.database.exec("PRAGMA journal_mode = WAL;");
+    this.database.exec("PRAGMA busy_timeout = 5000;");
     this.database.exec(`
       CREATE TABLE IF NOT EXISTS factory_projects (
         id TEXT PRIMARY KEY,
@@ -1299,6 +1335,18 @@ export class SqlitePipelineStore implements PipelineStore {
   now(): string { return new Date().toISOString(); }
 
   nextId(prefix: string): string { return `${prefix}-${randomUUID().slice(0, 12)}`; }
+
+  runInTransaction<T>(work: () => T): T {
+    this.database.exec("BEGIN IMMEDIATE;");
+    try {
+      const result = work();
+      this.database.exec("COMMIT;");
+      return result;
+    } catch (error) {
+      try { this.database.exec("ROLLBACK;"); } catch { /* Preserve the original failure. */ }
+      throw normalizeSqliteError(error);
+    }
+  }
 
   saveProject(project: Project): Project {
     this.database.prepare(`
@@ -1888,6 +1936,16 @@ function defaultPlanContract(title: string): PlanContract {
 
 /** Confirm/Enqueue 前校验执行合同的结构，避免无效任务图进入不可恢复的 Run。 */
 export function validatePlanContract(contract: PlanContract): void {
+  if (typeof contract.goal !== "string" || !contract.goal.trim()) throw new Error("Plan goal is required");
+  if (!isNonEmptyStringArray(contract.acceptanceCriteria)) throw new Error("Plan acceptance criteria must be a non-empty list");
+  for (const [field, values] of [["include", contract.include], ["exclude", contract.exclude], ["conflictKeys", contract.conflictKeys], ["verificationCommandIds", contract.verificationCommandIds]] as const) {
+    if (!isStringArray(values) || values.some((value) => !value.trim())) throw new Error(`Plan ${field} must contain non-empty strings`);
+  }
+  if (typeof contract.baseBranch !== "string" || !contract.baseBranch.trim() || typeof contract.baseCommit !== "string" || !contract.baseCommit.trim()) throw new Error("Plan base branch and commit are required");
+  if (typeof contract.executorModelRole !== "string" || !contract.executorModelRole.trim() || typeof contract.toolPolicy !== "string" || !contract.toolPolicy.trim()) throw new Error("Plan executor and tool policy are required");
+  if (!Number.isInteger(contract.maxRepairAttempts) || contract.maxRepairAttempts < 0) throw new Error("Plan max repair attempts must be a non-negative integer");
+  if (!["manual", "fast-forward", "squash"].includes(contract.mergeStrategy)) throw new Error("Plan merge strategy is invalid");
+  if (contract.requireHumanMerge !== true) throw new Error("Plan requires human merge confirmation");
   if (contract.priority !== undefined && (!Number.isInteger(contract.priority) || contract.priority < 0)) throw new Error("Plan priority must be a non-negative integer");
   const taskIds = contract.tasks.map((task) => task.id);
   if (taskIds.some((id) => !id.trim())) throw new Error("Plan task ids must be non-empty");
@@ -2808,29 +2866,27 @@ function extractResponseText(payload: Record<string, unknown>): string {
  * 模型回合结束后必须通过 Plan completeness gate，才会创建 CandidatePlan；普通文本完成不会越过门禁。
  */
 export class ExplorerThreadService {
-  private readonly jobs = new Map<string, { userId: string; assistantId: string; loopId?: string | undefined; providerThreadId: string | null; providerTurnId: string | null; resolveInput?: (() => void) | undefined; cancelled: boolean; continuationCount: number }>();
+  private readonly jobs = new Map<string, { userId: string; assistantId: string; loopId?: string | undefined; providerThreadId: string | null; providerTurnId: string | null; resolveInput?: (() => void) | undefined; cancelled: boolean }>();
   private readonly agentLoops: AgentLoopEngine;
   private readonly listeners = new Map<string, Set<(event: DomainEvent) => void>>();
   private readonly plans: PlanService;
-  private readonly maxAutoContinuationTurns: number;
   private readonly loopMaxSteps: number;
   private readonly titleGenerator: ExplorerTitleGenerator | undefined;
   private readonly cwdForProject: ((projectId: string) => string | undefined) | undefined;
   private readonly modelConfigForProject: ((projectId: string) => ModelRoleConfig | undefined) | undefined;
 
-  constructor(private readonly store: PipelineStore, private readonly model: ModelGateway, options: { maxAutoContinuationTurns?: number | undefined; maxSteps?: number | undefined; maxDurationMs?: number | undefined; maxRepeatedToolCalls?: number | undefined; maxNoProgressSteps?: number | undefined; titleGenerator?: ExplorerTitleGenerator | undefined; cwdForProject?: ((projectId: string) => string | undefined) | undefined; modelConfigForProject?: ((projectId: string) => ModelRoleConfig | undefined) | undefined } = {}) {
+  constructor(private readonly store: PipelineStore, private readonly model: ModelGateway, options: { /** @deprecated retained for compatibility; Explorer uses the global model.loop.maxSteps. */ maxAutoContinuationTurns?: number | undefined; maxSteps?: number | undefined; maxDurationMs?: number | undefined; maxRepeatedToolCalls?: number | undefined; maxNoProgressSteps?: number | undefined; titleGenerator?: ExplorerTitleGenerator | undefined; cwdForProject?: ((projectId: string) => string | undefined) | undefined; modelConfigForProject?: ((projectId: string) => ModelRoleConfig | undefined) | undefined } = {}) {
     this.titleGenerator = options.titleGenerator;
     this.cwdForProject = options.cwdForProject;
     this.modelConfigForProject = options.modelConfigForProject;
     this.plans = new PlanService(store);
-    this.loopMaxSteps = options.maxSteps ?? (options.maxAutoContinuationTurns ?? 4) + 1;
+    this.loopMaxSteps = options.maxSteps ?? 40;
     this.agentLoops = new AgentLoopEngine(store, model, undefined, {
-      defaultMaxSteps: options.maxSteps ?? (options.maxAutoContinuationTurns ?? 4) + 1,
+      defaultMaxSteps: this.loopMaxSteps,
       ...(options.maxDurationMs === undefined ? {} : { defaultMaxDurationMs: options.maxDurationMs }),
       ...(options.maxRepeatedToolCalls === undefined ? {} : { defaultMaxRepeatedToolCalls: options.maxRepeatedToolCalls }),
       ...(options.maxNoProgressSteps === undefined ? {} : { defaultMaxNoProgressSteps: options.maxNoProgressSteps }),
     });
-    this.maxAutoContinuationTurns = options.maxAutoContinuationTurns ?? 4;
     for (const thread of store.listThreads()) {
       if (thread.titleSource === "AUTO" && thread.titleStatus === "GENERATING") store.updateThread({ ...thread, titleStatus: "FAILED" });
     }
@@ -2872,7 +2928,7 @@ export class ExplorerThreadService {
     this.scheduleTitleGeneration(thread.id, input.content);
     const accepted = { user, assistant, eventsUrl: `/api/v4/projects/${thread.projectId}/explorer-thread/events?threadId=${encodeURIComponent(thread.id)}` };
     this.publish(this.store.appendEvent({ type: "explorer.turn.accepted", aggregateId: input.threadId, payload: { turnId: assistant.id, userTurnId: user.id } }));
-    const job: { userId: string; assistantId: string; loopId?: string; providerThreadId: string | null; providerTurnId: string | null; resolveInput?: (() => void) | undefined; cancelled: boolean; continuationCount: number } = { userId: user.id, assistantId: assistant.id, providerThreadId: thread.providerThreadId, providerTurnId: null, cancelled: false, continuationCount: 0 };
+    const job: { userId: string; assistantId: string; loopId?: string; providerThreadId: string | null; providerTurnId: string | null; resolveInput?: (() => void) | undefined; cancelled: boolean } = { userId: user.id, assistantId: assistant.id, providerThreadId: thread.providerThreadId, providerTurnId: null, cancelled: false };
     this.jobs.set(input.threadId, job);
     const loop = await this.agentLoops.start({
       ownerType: "explorer-turn",
@@ -3137,86 +3193,6 @@ export class ExplorerThreadService {
       ? latestProviderStep.payload.providerItemId
       : typeof latestProviderStep?.payload.itemId === "string" ? latestProviderStep.payload.itemId : null;
     return { sourceTurnId: assistantId, providerThreadId, providerTurnId, providerItemId };
-  }
-
-  private async runAsyncTurn(threadId: string, user: ExplorerTurn, assistant: ExplorerTurn, job: { userId: string; assistantId: string; providerThreadId: string | null; providerTurnId: string | null; resolveInput?: (() => void) | undefined; cancelled: boolean; continuationCount: number }): Promise<void> {
-    let failure: string | null = null;
-    let continuationPrompt: string | undefined;
-    let turnCompleted = false;
-    try {
-      while (!job.cancelled && !failure) {
-        turnCompleted = false;
-        const historical = this.store.listTurns(threadId).filter((turn) => turn.id !== assistant.id).map((turn) => ({ role: turn.role, content: turn.content }));
-        for await (const event of this.model.stream({ role: "explorer", messages: historical, conversationId: threadId, ...(job.providerThreadId ? { providerThreadId: job.providerThreadId } : {}), ...(continuationPrompt ? { continuationPrompt } : {}) })) {
-          if (event.type === "thread.started") {
-            job.providerThreadId = event.threadId;
-            const thread = this.store.getThread(threadId);
-            if (thread) this.store.updateThread({ ...thread, providerThreadId: event.threadId, lastActivityAt: this.store.now() });
-          } else if (event.type === "text.delta") {
-            const current = this.currentAssistant(threadId);
-            this.store.updateTurn({ ...current, content: current.content + event.text, status: "RUNNING" });
-            this.publish(this.store.appendEvent({ type: "explorer.turn.text.delta", aggregateId: threadId, payload: { turnId: assistant.id, text: event.text } }));
-          } else if (event.type === "turn.input_required") {
-            job.providerThreadId = event.request.threadId;
-            job.providerTurnId = event.request.turnId;
-            const inputRequest: ExplorerInputRequest = { id: this.store.nextId("input"), threadId, localTurnId: assistant.id, providerRequestId: event.request.requestId, providerThreadId: event.request.threadId, providerTurnId: event.request.turnId, itemId: event.request.itemId, questions: event.request.questions, isBlocking: event.request.isBlocking, autoResolutionMs: event.request.autoResolutionMs, status: "OPEN", createdAt: this.store.now(), answeredAt: null, answeredBy: null, redactedAnswerSummary: null };
-            const saved = this.store.saveInputRequest(inputRequest);
-            const current = this.store.getThread(threadId);
-            if (current) this.store.updateThread({ ...current, state: "WAITING_FOR_INPUT", lastActivityAt: this.store.now() });
-            this.store.updateTurn({ ...this.currentAssistant(threadId), status: "WAITING_FOR_INPUT" });
-            this.publish(this.store.appendEvent({ type: "explorer.turn.input_required", aggregateId: threadId, payload: { requestId: saved.id, threadId, localTurnId: assistant.id, providerRequestId: saved.providerRequestId, providerThreadId: saved.providerThreadId, providerTurnId: saved.providerTurnId, itemId: saved.itemId, questions: saved.questions, isBlocking: saved.isBlocking, autoResolutionMs: saved.autoResolutionMs } }));
-            await new Promise<void>((resolve) => { job.resolveInput = resolve; });
-            if (job.cancelled) break;
-          } else if (event.type === "turn.cancelled") {
-            job.cancelled = true;
-          } else if (event.type === "turn.failed") {
-            failure = event.error;
-          } else if (event.type === "turn.completed") {
-            turnCompleted = true;
-          }
-        }
-        if (job.cancelled || failure) break;
-        if (!turnCompleted) {
-          failure = "模型回合未正常完成";
-          break;
-        }
-        const current = this.currentAssistant(threadId);
-        const assessment = assessPlanCompletion(current.content);
-        const currentThread = this.store.getThread(threadId);
-        if (currentThread) {
-          this.store.updateThread({ ...currentThread, exploration: { ...currentThread.exploration, status: assessment.status, missing: assessment.missing, completed: assessment.completed, lastAssessedTurnId: assistant.id }, lastActivityAt: this.store.now() });
-          this.publish(this.store.appendEvent({ type: assessment.status === "READY" ? "explorer.plan.ready" : "explorer.plan.incomplete", aggregateId: threadId, payload: { turnId: assistant.id, missing: assessment.missing, completed: assessment.completed } }));
-        }
-        if (assessment.status === "READY" && assessment.artifact) {
-          const existing = this.store.listPlans().find((plan) => plan.sourceExplorerThreadId === threadId && plan.status === "DRAFT");
-          const source = this.planSource(assistant.id);
-          const plan = existing ? this.store.updatePlan({ ...existing, ...source }) : this.plans.createCandidatePlan({ projectId: currentThread?.projectId ?? "", sourceExplorerThreadId: threadId, title: assessment.artifact.title, contract: assessment.artifact.contract, ...source });
-          const latest = this.store.getThread(threadId);
-          if (latest) this.store.updateThread({ ...latest, exploration: { ...latest.exploration, status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], candidatePlanId: plan.id, lastAssessedTurnId: assistant.id }, lastActivityAt: this.store.now() });
-          this.store.updateTurn({ ...current, content: stripPlanProtocol(current.content), status: "COMPLETED" });
-          break;
-        }
-        if (job.continuationCount >= this.maxAutoContinuationTurns) break;
-        job.continuationCount += 1;
-        continuationPrompt = buildContinuationPrompt(assessment.missing);
-      }
-    } catch (error) {
-      failure = error instanceof Error ? error.message : String(error);
-      for (const request of this.store.listInputRequests(threadId, "OPEN")) this.store.updateInputRequest({ ...request, status: "RECOVERY_REQUIRED" });
-    }
-    if (job.cancelled) {
-      const current = this.currentAssistant(threadId);
-      if (current.status !== "CANCELLED") this.store.updateTurn({ ...current, status: "CANCELLED", content: current.content || "本轮已取消" });
-      this.publish(this.store.appendEvent({ type: "explorer.turn.cancelled", aggregateId: threadId, payload: { turnId: assistant.id } }));
-    } else {
-      const current = this.currentAssistant(threadId);
-      if (!failure && !current.content.trim()) failure = "模型未返回内容";
-      this.store.updateTurn({ ...current, status: failure ? "FAILED" : "COMPLETED", content: failure ? `模型调用失败：${failure}` : stripPlanProtocol(current.content), ...(failure ? { error: failure } : {}) });
-      this.publish(this.store.appendEvent({ type: failure ? "explorer.turn.failed" : "explorer.turn.completed", aggregateId: threadId, payload: { userTurnId: user.id, assistantTurnId: assistant.id, ...(failure ? { error: failure } : {}) } }));
-    }
-    const thread = this.store.getThread(threadId);
-    if (thread && thread.state !== "ARCHIVED") this.store.updateThread({ ...thread, state: "ACTIVE", lastActivityAt: this.store.now() });
-    this.jobs.delete(threadId);
   }
 
   private currentAssistant(threadId: string): ExplorerTurn {

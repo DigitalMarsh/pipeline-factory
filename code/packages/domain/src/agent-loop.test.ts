@@ -10,6 +10,7 @@ import { join } from "node:path";
 import {
   InMemoryPipelineStore,
   SqlitePipelineStore,
+  projectAgentLoopDiagnostics,
   type AgentLoop,
   type AgentLoopStep,
 } from "./index.js";
@@ -79,5 +80,36 @@ describe("AgentLoop persistence contract", () => {
 
     expect(store.recoverAgentLoops()).toEqual([]);
     expect(store.listAgentLoopSteps(loop.id)[0]).toMatchObject({ status: "NEEDS_RECONCILIATION", callId: "call-1" } satisfies Partial<AgentLoopStep>);
+  });
+
+  it("sets SQLite busy_timeout to five seconds", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pipeline-factory-agent-loop-busy-"));
+    const path = join(directory, "factory.sqlite");
+    const store = new SqlitePipelineStore(path);
+    const database = (store as unknown as { database: { prepare(sql: string): { get(): unknown }; } }).database;
+    try {
+      const row = database.prepare("PRAGMA busy_timeout").get() as Record<string, unknown>;
+      expect(Number(Object.values(row)[0])).toBe(5000);
+    } finally {
+      store.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("counts unique provider items and projects safe terminal diagnostics", () => {
+    const store = new InMemoryPipelineStore();
+    const loop = store.saveAgentLoop({ id: "diagnostic-loop", ownerType: "run", ownerId: "run-1", role: "executor", mode: "provider-controlled", state: "FAILED", stepCount: 1, maxSteps: 40, startedAt: store.now(), completedAt: store.now(), providerThreadId: null, providerTurnId: null, checkpointJson: JSON.stringify({ error: "database is locked" }) });
+    store.appendAgentLoopStep({ loopId: loop.id, stepType: "PROVIDER_ACTIVITY", status: "RUNNING", payload: { providerItemId: "item-1" } });
+    store.appendAgentLoopStep({ loopId: loop.id, stepType: "PROVIDER_ACTIVITY", status: "COMPLETED", payload: { providerItemId: "item-1" } });
+    store.appendAgentLoopStep({ loopId: loop.id, stepType: "GATE_CHECKED", status: "COMPLETED", payload: { action: "blocked", reason: "DATABASE_BUSY" } });
+
+    expect(projectAgentLoopDiagnostics(loop, store.listAgentLoopSteps(loop.id))).toEqual({ providerActivityCount: 1, lastGate: { action: "blocked", reason: "DATABASE_BUSY" }, terminal: { code: "DATABASE_BUSY", message: "数据库写入暂时繁忙" } });
+  });
+
+  it("does not project a failure diagnostic for a completed loop", () => {
+    const store = new InMemoryPipelineStore();
+    const loop = store.saveAgentLoop({ id: "completed-loop", ownerType: "explorer-turn", ownerId: "turn-1", role: "explorer", mode: "provider-controlled", state: "COMPLETED", stepCount: 4, maxSteps: 40, startedAt: store.now(), completedAt: store.now(), providerThreadId: null, providerTurnId: null, checkpointJson: null });
+
+    expect(projectAgentLoopDiagnostics(loop, [])).toEqual({ providerActivityCount: 0, lastGate: null, terminal: null });
   });
 });

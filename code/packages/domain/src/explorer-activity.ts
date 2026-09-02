@@ -49,8 +49,8 @@ type PlanActivityDisplay = {
   details: Record<string, unknown> | null;
 };
 
-const STATUS_TAG = /<pipeline-factory-plan-status>\s*([^<]+?)\s*<\/pipeline-factory-plan-status>/i;
-const PLAN_TAG = /<pipeline-factory-plan>\s*([\s\S]*?)\s*<\/pipeline-factory-plan>/i;
+const STATUS_TAG = /<pipeline-factory-plan-status>\s*([^<]+?)\s*<\/pipeline-factory-plan-status>/gi;
+const PLAN_TAG = /<pipeline-factory-plan>\s*([\s\S]*?)\s*<\/pipeline-factory-plan>/gi;
 const STATUS_OPEN_TAG = /<pipeline-factory-plan-status>/i;
 const PLAN_OPEN_TAG = /<pipeline-factory-plan>/i;
 
@@ -76,36 +76,51 @@ function formatPlanActivity(content: string): PlanActivityDisplay {
   if (!hasProtocol) return { summary: content, details: null };
 
   const prose = stripPlanProtocol(content);
-  const status = content.match(STATUS_TAG)?.[1]?.trim().toUpperCase();
-  const artifactText = content.match(PLAN_TAG)?.[1];
-  if (status !== "READY" || !artifactText) {
+  const candidates = planProtocolCandidates(content);
+  const displayable = [...candidates].reverse().find((candidate) => candidate.status === "READY" && parsePlanArtifact(candidate.artifactText));
+  const latest = candidates.at(-1);
+  if (displayable) {
+    const parsed = parsePlanArtifact(displayable.artifactText)!;
+    return {
+      summary: [prose, `完整执行方案已生成：${parsed.title}`].filter(Boolean).join(" "),
+      details: {
+        planProtocol: true,
+        status: "READY",
+        title: parsed.title,
+        goal: parsed.goal,
+        includeCount: countArray(parsed, "include"),
+        excludeCount: countArray(parsed, "exclude"),
+        taskCount: countArray(parsed, "tasks"),
+        acceptanceCount: countArray(parsed, "acceptanceCriteria"),
+        verificationCount: countArray(parsed, "verificationCommandIds"),
+      },
+    };
+  }
+  if (latest?.status !== "READY" || !latest.artifactText) {
     return { summary: [prose, "正在整理结构化计划…"].filter(Boolean).join(" "), details: { planProtocol: true, status: "GENERATING" } };
   }
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(artifactText);
-  } catch {
-    return { summary: [prose, "结构化计划校验失败，请继续完善。"].filter(Boolean).join(" "), details: { planProtocol: true, status: "INVALID" } };
-  }
-  if (!isRecord(parsed) || typeof parsed.title !== "string" || typeof parsed.goal !== "string") {
-    return { summary: [prose, "结构化计划校验失败，请继续完善。"].filter(Boolean).join(" "), details: { planProtocol: true, status: "INVALID" } };
-  }
+  return { summary: [prose, "结构化计划校验失败，请继续完善。"].filter(Boolean).join(" "), details: { planProtocol: true, status: "INVALID" } };
+}
 
-  return {
-    summary: [prose, `完整执行方案已生成：${parsed.title}`].filter(Boolean).join(" "),
-    details: {
-      planProtocol: true,
-      status: "READY",
-      title: parsed.title,
-      goal: parsed.goal,
-      includeCount: countArray(parsed, "include"),
-      excludeCount: countArray(parsed, "exclude"),
-      taskCount: countArray(parsed, "tasks"),
-      acceptanceCount: countArray(parsed, "acceptanceCriteria"),
-      verificationCount: countArray(parsed, "verificationCommandIds"),
-    },
-  };
+function planProtocolCandidates(content: string): Array<{ status: string; artifactText: string }> {
+  const statusMatches = [...content.matchAll(STATUS_TAG)];
+  const planMatches = [...content.matchAll(PLAN_TAG)];
+  return statusMatches.flatMap((statusMatch, index) => {
+    const statusEnd = (statusMatch.index ?? 0) + statusMatch[0].length;
+    const nextStatusStart = statusMatches[index + 1]?.index ?? content.length;
+    const plan = planMatches.find((candidate) => (candidate.index ?? -1) >= statusEnd && (candidate.index ?? content.length) < nextStatusStart);
+    return plan?.[1] && typeof statusMatch[1] === "string" ? [{ status: statusMatch[1].trim().toUpperCase(), artifactText: plan[1] }] : [];
+  });
+}
+
+function parsePlanArtifact(artifactText: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(artifactText);
+    return isRecord(parsed) && typeof parsed.title === "string" && typeof parsed.goal === "string" ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 /** 把 Turn、Loop Step 和 Provider activity 合并为稳定排序的 Explorer 消息流。 */

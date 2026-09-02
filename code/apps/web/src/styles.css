@@ -215,6 +215,9 @@ a { color: inherit; text-decoration: none; }
 .agent-loop-strip strong { color: #334660; font-size: 11px; }
 .agent-loop-strip .agent-loop-budget { margin-left: auto; color: #8090a7; font-variant-numeric: tabular-nums; }
 .agent-loop-strip .el-button { font-size: 10px; }
+.agent-loop-strip .agent-loop-diagnostic, .agent-loop-strip .agent-loop-terminal, .agent-loop-strip .agent-loop-complete { color: #7183a3; white-space: nowrap; }
+.agent-loop-strip .agent-loop-terminal { color: #aa5962; }
+.agent-loop-strip .agent-loop-complete { color: #27946b; font-weight: 700; }
 .loop-step-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .loop-step { padding: 4px 7px; border-radius: 5px; background: #f5f7fb; color: #728096; font: 10px ui-monospace, monospace; }
 .loop-step strong { color: #4f78d9; }

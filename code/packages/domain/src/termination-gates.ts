@@ -10,9 +10,13 @@ import type { GateContext, GateDecision, TerminationGate } from "./agent-loop.js
 export class PlanCompletenessGate implements TerminationGate {
   evaluate(context: GateContext): GateDecision {
     const assessment = assessPlanCompletion(context.content ?? "");
-    return assessment.status === "READY"
-      ? { action: "complete", reason: "PLAN_READY" }
-      : { action: "continue", reason: `PLAN_INCOMPLETE:完整方案缺少${assessment.missing.join(",")}` };
+    if (assessment.status === "READY") return { action: "complete", reason: "PLAN_READY" };
+    const missing = assessment.missing.length > 0 ? assessment.missing.join("、") : "所有仍未明确的关键决策";
+    return {
+      action: "continue",
+      reason: `PLAN_INCOMPLETE:完整方案缺少${assessment.missing.join(",")}`,
+      continuationPrompt: `继续完善当前需求的完整设计方案。当前仍缺少：${missing}。请先检查这些缺口；如果需要用户决策，请使用原生 item/tool/requestUserInput 一次询问当前可同时确认的问题。只有全部缺口解决后，才输出完整的 pipeline-factory-plan READY 协议块。`,
+    };
   }
 }
 

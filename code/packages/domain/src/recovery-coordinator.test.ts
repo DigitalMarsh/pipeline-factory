@@ -4,7 +4,7 @@
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  */
 import { describe, expect, it } from "vitest";
-import { InMemoryPipelineStore, PlanService, ProjectService, type AgentLoop, type Run } from "./index.js";
+import { InMemoryPipelineStore, PlanService, ProjectService, type AgentLoop, type ExplorerInputRequest, type ExplorerTurn, type Run } from "./index.js";
 import { RecoveryCoordinator } from "./recovery-coordinator.js";
 
 function loop(store: InMemoryPipelineStore, id: string, state: AgentLoop["state"], providerThreadId: string | null = null, providerTurnId: string | null = null, ownerId = `run-${id}`): AgentLoop {
@@ -14,6 +14,32 @@ function loop(store: InMemoryPipelineStore, id: string, state: AgentLoop["state"
 }
 
 describe("RecoveryCoordinator", () => {
+  it("terminalizes every non-terminal Explorer Loop and recovers its input request", () => {
+    const store = new InMemoryPipelineStore();
+    store.saveThread({ id: "explorer-1", projectId: "project-1", parentThreadId: null });
+    const thread = { ...store.getThread("explorer-1")!, state: "WAITING_FOR_INPUT" as const, messageCount: 2 };
+    const turn: ExplorerTurn = { id: "turn-1", threadId: thread.id, role: "assistant", content: "已开始分析", status: "WAITING_FOR_INPUT", createdAt: store.now(), sequence: 2 };
+    const request: ExplorerInputRequest = { id: "input-1", threadId: thread.id, localTurnId: turn.id, providerRequestId: "request-1", providerThreadId: "provider-thread", providerTurnId: "provider-turn", itemId: "item-1", questions: [], isBlocking: true, autoResolutionMs: null, status: "OPEN", createdAt: store.now(), answeredAt: null, answeredBy: null, redactedAnswerSummary: null };
+    store.updateThread(thread);
+    store.saveTurn({ id: "user-1", threadId: thread.id, role: "user", content: "请探索", status: "COMPLETED", createdAt: store.now(), sequence: 1 });
+    store.saveTurn(turn);
+    store.saveInputRequest(request);
+    store.saveAgentLoop({ id: "explorer-loop", ownerType: "explorer-turn", ownerId: turn.id, role: "explorer", mode: "provider-controlled", state: "WAITING_FOR_INPUT", stepCount: 1, maxSteps: 40, startedAt: store.now(), completedAt: null, providerThreadId: "provider-thread", providerTurnId: "provider-turn", checkpointJson: null });
+    for (const [id, state] of [["explorer-running", "RUNNING"], ["explorer-paused", "PAUSED"], ["explorer-recovering", "RECOVERING"]] as const) {
+      store.saveAgentLoop({ id, ownerType: "explorer-turn", ownerId: `missing-${id}`, role: "explorer", mode: "provider-controlled", state, stepCount: 1, maxSteps: 40, startedAt: store.now(), completedAt: null, providerThreadId: null, providerTurnId: null, checkpointJson: null });
+    }
+
+    new RecoveryCoordinator(store).recover();
+
+    expect(store.getAgentLoop("explorer-loop")).toMatchObject({ state: "FAILED", completedAt: expect.any(String) });
+    expect(store.getAgentLoop("explorer-running")).toMatchObject({ state: "FAILED", completedAt: expect.any(String) });
+    expect(store.getAgentLoop("explorer-paused")).toMatchObject({ state: "FAILED", completedAt: expect.any(String) });
+    expect(store.getAgentLoop("explorer-recovering")).toMatchObject({ state: "FAILED", completedAt: expect.any(String) });
+    expect(store.getInputRequest(request.id)).toMatchObject({ status: "RECOVERY_REQUIRED" });
+    expect(store.listTurns(thread.id).find((item) => item.id === turn.id)).toMatchObject({ status: "FAILED", error: "STRUCTURED_INPUT_RECOVERY_REQUIRED" });
+    expect(store.getThread(thread.id)).toMatchObject({ state: "ACTIVE" });
+  });
+
   it("marks orphaned running loops as recovering without replaying work", () => {
     const store = new InMemoryPipelineStore();
     loop(store, "orphaned", "RUNNING");

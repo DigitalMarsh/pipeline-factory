@@ -156,6 +156,9 @@ describe("Pipeline Factory v4 API", () => {
     const loop: AgentLoop = { id: "loop-1", ownerType: "run", ownerId: "run-1", role: "executor", mode: "provider-controlled", state: "RUNNING", stepCount: 1, maxSteps: 40, startedAt: store.now(), completedAt: null, providerThreadId: "provider-thread-1", providerTurnId: "provider-turn-1", checkpointJson: null };
     store.saveAgentLoop(loop);
     store.appendAgentLoopStep({ loopId: loop.id, stepType: "MODEL_STARTED", status: "RUNNING", payload: { step: 1 } });
+    store.appendAgentLoopStep({ loopId: loop.id, stepType: "PROVIDER_ACTIVITY", status: "RUNNING", payload: { providerItemId: "provider-item-1", itemId: "activity-1" } });
+    store.appendAgentLoopStep({ loopId: loop.id, stepType: "PROVIDER_ACTIVITY", status: "COMPLETED", payload: { providerItemId: "provider-item-1", itemId: "activity-1" } });
+    store.appendAgentLoopStep({ loopId: loop.id, stepType: "GATE_CHECKED", status: "COMPLETED", payload: { action: "continue", reason: "PLAN_INCOMPLETE:完整方案缺少验收标准与验证命令" } });
     store.appendEvent({ type: "agent.loop.started", aggregateId: loop.id, payload: { role: loop.role } });
     const app = createApp({ store, seed: false });
     apps.push(app);
@@ -165,9 +168,10 @@ describe("Pipeline Factory v4 API", () => {
     const events = await app.inject({ method: "GET", url: "/api/v4/agent-loops/loop-1/events" });
 
     expect(state.statusCode).toBe(200);
-    expect(state.json().loop).toMatchObject({ id: "loop-1", state: "RUNNING" });
-    expect(steps.json().items).toHaveLength(1);
+    expect(state.json().loop).toMatchObject({ id: "loop-1", state: "RUNNING", diagnostics: { providerActivityCount: 1, lastGate: { action: "continue" }, terminal: null } });
+    expect(steps.json().items).toHaveLength(4);
     expect(events.json().items[0]).toMatchObject({ type: "agent.loop.started", aggregateId: "loop-1" });
+    expect(events.json().diagnostics).toMatchObject({ providerActivityCount: 1, lastGate: { action: "continue" }, terminal: null });
   });
 
   it("replays Run execution journal entries from a requested sequence", async () => {
@@ -195,6 +199,22 @@ describe("Pipeline Factory v4 API", () => {
     expect(replayedFromLastEventId.json().items).toEqual([{ sequence: 2, type: "MODEL_OUTPUT", occurredAt: expect.any(String), payload: { text: "正在执行" } }]);
   });
 
+  it("maps terminal database errors to safe Agent Loop diagnostics", async () => {
+    const store = new InMemoryPipelineStore();
+    const loop: AgentLoop = { id: "loop-database-busy", ownerType: "run", ownerId: "run-1", role: "executor", mode: "provider-controlled", state: "FAILED", stepCount: 1, maxSteps: 40, startedAt: store.now(), completedAt: store.now(), providerThreadId: null, providerTurnId: null, checkpointJson: JSON.stringify({ error: "DATABASE_BUSY", detail: "database is locked: secret local detail" }) };
+    store.saveAgentLoop(loop);
+    store.appendAgentLoopStep({ loopId: loop.id, stepType: "LOOP_FAILED", status: "FAILED", payload: { error: "DATABASE_BUSY" } });
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+
+    const response = await app.inject({ method: "GET", url: `/api/v4/agent-loops/${loop.id}` });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().loop.diagnostics).toEqual({ providerActivityCount: 0, lastGate: null, terminal: { code: "DATABASE_BUSY", message: "数据库写入暂时繁忙" } });
+    expect(response.json().loop.checkpointJson).toBeNull();
+    expect(JSON.stringify(response.json().loop.diagnostics)).not.toContain("secret local detail");
+  });
+
   it("exposes durable tool-call status for an Agent Loop", async () => {
     const store = new InMemoryPipelineStore();
     const loop: AgentLoop = { id: "loop-tools", ownerType: "run", ownerId: "run-1", role: "executor", mode: "factory-controlled", state: "RUNNING", stepCount: 1, maxSteps: 4, startedAt: store.now(), completedAt: null, providerThreadId: null, providerTurnId: null, checkpointJson: null };
@@ -219,10 +239,12 @@ describe("Pipeline Factory v4 API", () => {
     const paused = await app.inject({ method: "POST", url: `/api/v4/agent-loops/${loop.id}/pause`, payload: { reason: "inspect" } });
     const resumed = await app.inject({ method: "POST", url: `/api/v4/agent-loops/${loop.id}/resume` });
     const cancelled = await app.inject({ method: "POST", url: `/api/v4/agent-loops/${loop.id}/cancel`, payload: { reason: "stop" } });
+    const terminalResume = await app.inject({ method: "POST", url: `/api/v4/agent-loops/${loop.id}/resume` });
 
     expect(paused.json().loop.state).toBe("PAUSED");
     expect(resumed.json().loop.state).toBe("RUNNING");
     expect(cancelled.json().loop.state).toBe("CANCELLED");
+    expect(terminalResume.statusCode).toBe(409);
     expect(store.listAgentLoopSteps(loop.id).map((step) => step.stepType)).toEqual(["LOOP_SUSPENDED", "LOOP_RESUMED", "LOOP_COMPLETED"]);
   });
 

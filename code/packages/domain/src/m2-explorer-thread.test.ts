@@ -20,6 +20,19 @@ describe("ExplorerThread", () => {
     expect(() => store.saveInputRequest(request("input-2"))).toThrow("open blocking input request");
   });
 
+  it("uses the latest valid READY protocol block instead of an earlier invalid block", () => {
+    const artifact = JSON.stringify({ title: "Plan", goal: "Build the feature", acceptanceCriteria: ["test passes"], include: ["src"], exclude: [".env"], baseBranch: "main", baseCommit: "HEAD", tasks: [{ id: "task-1", title: "Implement", dependencies: [], status: "READY" }], conflictKeys: [], executorModelRole: "executor", toolPolicy: "executor-scoped-write", verificationCommandIds: ["project.test"], maxRepairAttempts: 1, mergeStrategy: "manual", requireHumanMerge: true });
+    const content = `<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>{bad json}</pipeline-factory-plan>\n后来补全了方案：\n<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>${artifact}</pipeline-factory-plan>`;
+
+    expect(assessPlanCompletion(content)).toMatchObject({ status: "READY", artifact: { title: "Plan" } });
+  });
+
+  it("rejects duplicate task IDs before creating a CandidatePlan", () => {
+    const artifact = JSON.stringify({ title: "Plan", goal: "Build the feature", acceptanceCriteria: ["test passes"], include: ["src"], exclude: [".env"], baseBranch: "main", baseCommit: "HEAD", tasks: [{ id: "task-1", title: "One", dependencies: [], status: "READY" }, { id: "task-1", title: "Duplicate", dependencies: [], status: "READY" }], conflictKeys: [], executorModelRole: "executor", toolPolicy: "executor-scoped-write", verificationCommandIds: ["project.test"], maxRepairAttempts: 1, mergeStrategy: "manual", requireHumanMerge: true });
+
+    expect(assessPlanCompletion(`<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>${artifact}</pipeline-factory-plan>`)).toMatchObject({ status: "INCOMPLETE", artifact: null, missing: expect.arrayContaining(["实施任务、依赖与冲突"]) });
+  });
+
   it("continues exploring after a turn completes until a complete plan artifact is available", async () => {
     const store = new InMemoryPipelineStore();
     store.saveThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
@@ -84,7 +97,7 @@ describe("ExplorerThread", () => {
       async cancel() { return undefined; },
     };
 
-    const service = new ExplorerThreadService(store, model, { maxAutoContinuationTurns: 0 });
+    const service = new ExplorerThreadService(store, model, { maxSteps: 1 });
     await service.startTurn({ threadId: "thread-1", content: "请继续设计", clientTurnId: "client-turn-incomplete-plan" });
     for (let attempt = 0; attempt < 50 && store.listTurns("thread-1")[1]?.status === "RUNNING"; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 1));
 
@@ -128,7 +141,7 @@ describe("ExplorerThread", () => {
       async cancel() { undefined; },
     };
 
-    const service = new ExplorerThreadService(store, model, { maxAutoContinuationTurns: 0 });
+    const service = new ExplorerThreadService(store, model, { maxSteps: 1 });
     const accepted = await service.startTurn({ threadId: "thread-1", content: "请继续", clientTurnId: "client-turn-1" });
     expect(accepted.assistant.status).toBe("RUNNING");
     const request = await new Promise<ReturnType<typeof store.listInputRequests>[number]>((resolve) => {

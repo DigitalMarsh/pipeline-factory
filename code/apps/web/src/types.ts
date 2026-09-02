@@ -18,11 +18,18 @@ export type PlanDispatchState = {
   lastError: string | null;
 };
 
+export type AgentLoopDiagnostics = {
+  providerActivityCount: number;
+  lastGate: { action: string; reason: string } | null;
+  terminal: { code: string; message: string } | null;
+};
+
 export type ProjectSettings = {
   concurrency: {
     maxParallelRuns: number;
     defaultTimeoutMs: number;
     executionTimeoutMs: number;
+    /** @deprecated Legacy persisted setting; the UI no longer edits or submits it. */
     maxAutoContinuationTurns: number;
     maxRepairAttempts: number;
   };
@@ -181,6 +188,7 @@ export type AgentLoop = {
   providerThreadId: string | null;
   providerTurnId: string | null;
   checkpointJson: string | null;
+  diagnostics?: AgentLoopDiagnostics;
 };
 
 export type AgentLoopStep = {

@@ -25,6 +25,98 @@ function baseInput(gate: TerminationGate = completeWhenTextContainsDone) {
 }
 
 describe("AgentLoopEngine", () => {
+  it("increments one Provider Turn per model start and uses the gate continuation prompt", async () => {
+    const store = new InMemoryPipelineStore();
+    const requests: ModelRequest[] = [];
+    const gate: TerminationGate = {
+      evaluate: ({ content }) => content?.includes("turn-4")
+        ? { action: "complete", reason: "READY" }
+        : { action: "continue", reason: "INCOMPLETE", continuationPrompt: `continue-${content?.match(/turn-(\d+)/g)?.at(-1)?.slice("turn-".length) ?? "unknown"}` },
+    };
+    const model: ModelGateway = {
+      configFor: () => ({ model: "explorer" }),
+      capabilities: () => ({ supportsStructuredUserInput: true, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
+      async *stream(request) {
+        requests.push(request);
+        const turn = requests.length;
+        yield { type: "provider.activity", phase: "started", itemId: `activity-${turn}`, itemType: "reasoning", title: "Reasoning", summary: "working" };
+        yield { type: "provider.activity", phase: "completed", itemId: `activity-${turn}`, itemType: "reasoning", title: "Reasoning", summary: "working" };
+        yield { type: "text.delta", text: `turn-${turn}` };
+        yield { type: "turn.completed" };
+      },
+      async answerUserInput() { return undefined; },
+      async cancel() { return undefined; },
+    };
+
+    const loop = await new AgentLoopEngine(store, model).run({ ...baseInput(gate), role: "explorer", ownerType: "explorer-turn", ownerId: "turn-1", mode: "provider-controlled" });
+
+    expect(loop).toMatchObject({ state: "COMPLETED", stepCount: 4, maxSteps: 4 });
+    expect(store.listAgentLoopSteps(loop.id).filter((step) => step.stepType === "MODEL_STARTED").map((step) => step.payload.step)).toEqual([1, 2, 3, 4]);
+    expect(requests.map((request) => request.continuationPrompt)).toEqual([undefined, "continue-1", "continue-2", "continue-3"]);
+  });
+
+  it("does not resume a paused persisted loop when no live execution coroutine exists", async () => {
+    const store = new InMemoryPipelineStore();
+    store.saveAgentLoop({ id: "paused-loop", ownerType: "run", ownerId: "run-1", role: "executor", mode: "provider-controlled", state: "PAUSED", stepCount: 1, maxSteps: 4, startedAt: store.now(), completedAt: null, providerThreadId: null, providerTurnId: null, checkpointJson: null });
+    const engine = new AgentLoopEngine(store, { configFor: () => ({ model: "executor" }), async *stream() { yield { type: "turn.completed" }; }, async answerUserInput() { return undefined; }, async cancel() { return undefined; } });
+
+    await expect(engine.resume("paused-loop")).rejects.toThrow(/live execution/i);
+  });
+
+  it("does not overwrite an existing terminal loop when a duplicate id is started", async () => {
+    const store = new InMemoryPipelineStore();
+    store.saveAgentLoop({ id: "completed-loop", ownerType: "run", ownerId: "run-1", role: "executor", mode: "provider-controlled", state: "COMPLETED", stepCount: 1, maxSteps: 4, startedAt: store.now(), completedAt: store.now(), providerThreadId: null, providerTurnId: null, checkpointJson: null });
+    const model: ModelGateway = {
+      configFor: () => ({ model: "executor" }),
+      async *stream() { throw new Error("the duplicate loop must not call the model"); },
+      async answerUserInput() { return undefined; },
+      async cancel() { return undefined; },
+    };
+
+    await expect(new AgentLoopEngine(store, model).start({ ...baseInput(), id: "completed-loop", mode: "provider-controlled" })).rejects.toThrow(/already exists/);
+    expect(store.getAgentLoop("completed-loop")).toMatchObject({ state: "COMPLETED", stepCount: 1 });
+  });
+
+  it("fails the loop when a termination gate throws", async () => {
+    const store = new InMemoryPipelineStore();
+    const model: ModelGateway = {
+      configFor: () => ({ model: "executor" }),
+      async *stream() { yield { type: "text.delta", text: "output" }; yield { type: "turn.completed" }; },
+      async answerUserInput() { return undefined; },
+      async cancel() { return undefined; },
+    };
+
+    const loop = await new AgentLoopEngine(store, model).run({ ...baseInput({ evaluate: () => { throw new Error("gate failed"); } }), mode: "provider-controlled" });
+
+    expect(loop).toMatchObject({ state: "FAILED", completedAt: expect.any(String) });
+  });
+
+  it("does not let a late provider event overwrite cancellation", async () => {
+    const store = new InMemoryPipelineStore();
+    let release!: () => void;
+    const providerReleased = new Promise<void>((resolve) => { release = resolve; });
+    const model: ModelGateway = {
+      configFor: () => ({ model: "executor" }),
+      async *stream() {
+        await providerReleased;
+        yield { type: "text.delta", text: "late output" };
+        yield { type: "turn.completed" };
+      },
+      async answerUserInput() { return undefined; },
+      async cancel() { return undefined; },
+    };
+    const engine = new AgentLoopEngine(store, model);
+    const started = await engine.start({ ...baseInput(), mode: "provider-controlled" });
+    for (let attempt = 0; attempt < 50 && store.getAgentLoop(started.id)?.state !== "RUNNING"; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 1));
+
+    const cancelled = await engine.cancel(started.id, "user_cancelled");
+    release();
+
+    expect(await engine.wait(started.id)).toMatchObject({ state: "CANCELLED" });
+    expect(cancelled.state).toBe("CANCELLED");
+    expect(store.listAgentLoopSteps(started.id).map((step) => step.stepType)).not.toContain("MODEL_COMPLETED");
+  });
+
   it("aborts an in-flight provider turn when the execution deadline expires", async () => {
     const store = new InMemoryPipelineStore();
     let aborted = false;

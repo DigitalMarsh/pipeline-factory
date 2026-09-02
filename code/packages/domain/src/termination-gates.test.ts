@@ -9,7 +9,7 @@ import { PlanCompletenessGate, TaskProgressGate } from "./termination-gates.js";
 describe("PlanCompletenessGate", () => {
   it("continues when the explicit plan artifact is incomplete", () => {
     const decision = new PlanCompletenessGate().evaluate({ content: "已记录目标，还需要确认验证方式。" });
-    expect(decision).toEqual({ action: "continue", reason: expect.stringContaining("完整") });
+    expect(decision).toMatchObject({ action: "continue", reason: expect.stringContaining("完整"), continuationPrompt: expect.stringContaining("验收标准与验证命令") });
   });
 
   it("completes only when the explicit READY artifact is valid", () => {

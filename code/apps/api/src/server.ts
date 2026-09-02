@@ -45,12 +45,13 @@ import {
   type ModelGateway,
   type ModelRole,
   type AgentLoop,
+  type AgentLoopDiagnostics,
   type AgentLoopRunner,
   type PlanContract,
   type ProjectSettingsInput,
   type ProjectExecutionSnapshot,
 } from "@pipeline-factory/domain";
-import { projectExplorerActivity } from "@pipeline-factory/domain";
+import { projectAgentLoopDiagnostics, projectExplorerActivity } from "@pipeline-factory/domain";
 import { z } from "zod";
 import type { FactoryConfig } from "./config.js";
 
@@ -459,7 +460,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (!params.success) return reply.code(400).send({ error: "Invalid Agent Loop id" });
     const loop = store.getAgentLoop(params.data.loopId);
     if (!loop) return reply.code(404).send({ error: "AgentLoop not found" });
-    return { loop };
+    return { loop: projectAgentLoopResponse(store, loop) };
   });
 
   app.get("/api/v4/agent-loops/:loopId/steps", async (request, reply) => {
@@ -485,20 +486,26 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     const headerSequence = Number(request.headers["last-event-id"] ?? "0") || 0;
     const afterSequence = Math.max(query.data.afterSequence ?? 0, headerSequence);
     const acceptsSse = query.data.format === "sse" || (request.headers.accept ?? "").includes("text/event-stream");
-    if (!acceptsSse) return { items: store.listEvents({ aggregateId: params.data.loopId, afterSequence }) };
+    if (!acceptsSse) {
+      const current = store.getAgentLoop(params.data.loopId)!;
+      return { items: store.listEvents({ aggregateId: params.data.loopId, afterSequence }), diagnostics: projectAgentLoopDiagnostics(current, store.listAgentLoopSteps(current.id)) };
+    }
     reply.hijack();
     const raw = reply.raw;
     raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive", "access-control-allow-origin": "*" });
     let cursor = afterSequence;
     const send = () => {
       const events = store.listEvents({ aggregateId: params.data.loopId, afterSequence: cursor });
+      const current = store.getAgentLoop(params.data.loopId);
+      const diagnostics = current ? projectAgentLoopDiagnostics(current, store.listAgentLoopSteps(current.id)) : null;
       for (const event of events) {
         cursor = event.sequence;
-        raw.write(`id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify({ loopId: params.data.loopId, sequence: event.sequence, ...event.payload })}\n\n`);
+        raw.write(`id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify({ loopId: params.data.loopId, sequence: event.sequence, ...event.payload, diagnostics })}\n\n`);
       }
     };
     send();
-    raw.write(`id: ${cursor}\nevent: stream.ready\ndata: ${JSON.stringify({ afterSequence: cursor })}\n\n`);
+    const readyLoop = store.getAgentLoop(params.data.loopId);
+    raw.write(`id: ${cursor}\nevent: stream.ready\ndata: ${JSON.stringify({ afterSequence: cursor, diagnostics: readyLoop ? projectAgentLoopDiagnostics(readyLoop, store.listAgentLoopSteps(readyLoop.id)) : null })}\n\n`);
     const poll = setInterval(send, 250);
     const heartbeat = setInterval(() => raw.write(`: heartbeat ${Date.now()}\n\n`), 15_000);
     const cleanup = () => { clearInterval(poll); clearInterval(heartbeat); };
@@ -546,7 +553,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (!loop) return reply.code(404).send({ error: "AgentLoop not found" });
     try {
       const paused = await loopController.pause(loop.id, body.data.reason);
-      return { loop: paused };
+      return { loop: projectAgentLoopResponse(store, paused) };
     } catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "AgentLoop cannot be paused" }); }
   });
 
@@ -557,7 +564,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (!loop) return reply.code(404).send({ error: "AgentLoop not found" });
     try {
       const resumed = await loopController.resume(loop.id);
-      return { loop: resumed };
+      return { loop: projectAgentLoopResponse(store, resumed) };
     } catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "AgentLoop cannot be resumed" }); }
   });
 
@@ -569,7 +576,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (!loop) return reply.code(404).send({ error: "AgentLoop not found" });
     try {
       const cancelled = await loopController.cancel(loop.id, body.data.reason);
-      return { loop: cancelled };
+      return { loop: projectAgentLoopResponse(store, cancelled) };
     } catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "AgentLoop cannot be cancelled" }); }
   });
 
@@ -580,7 +587,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     const thread = findProjectThread(store, params.data.projectId, query.data.threadId);
     if (!thread) return reply.code(404).send({ error: "ExplorerThread not found" });
     const turnIds = new Set(store.listTurns(thread.id).map((turn) => turn.id));
-    return { items: store.listAgentLoops().filter((loop) => loop.ownerType === "explorer-turn" && turnIds.has(loop.ownerId)) };
+    return { items: store.listAgentLoops().filter((loop) => loop.ownerType === "explorer-turn" && turnIds.has(loop.ownerId)).map((loop) => projectAgentLoopResponse(store, loop)) };
   });
 
   app.post("/api/v4/projects/:projectId/explorers", async (request, reply) => {
@@ -1211,13 +1218,17 @@ function detectDefaultBranch(repoRoot: string): string {
 function persistLoopControl(store: PipelineStore, loop: AgentLoop, state: AgentLoop["state"], reason: string): AgentLoop {
   const terminal = new Set<AgentLoop["state"]>(["BLOCKED", "COMPLETED", "FAILED", "CANCELLED", "NEEDS_RECONCILIATION"]);
   if (terminal.has(loop.state)) throw new Error(`AgentLoop ${loop.id} is already ${loop.state}`);
-  if (state === "RUNNING" && loop.state !== "PAUSED" && loop.state !== "RECOVERING") throw new Error(`AgentLoop ${loop.id} cannot be resumed from ${loop.state}`);
-  if (state === "PAUSED" && loop.state !== "RUNNING" && loop.state !== "WAITING_FOR_INPUT") throw new Error(`AgentLoop ${loop.id} cannot be paused from ${loop.state}`);
+  if (state === "RUNNING" && loop.state !== "PAUSED") throw new Error(`AgentLoop ${loop.id} cannot be resumed from ${loop.state}`);
+  if (state === "PAUSED" && loop.state !== "RUNNING") throw new Error(`AgentLoop ${loop.id} cannot be paused from ${loop.state}`);
   const updated = { ...loop, state, ...(state === "CANCELLED" ? { completedAt: store.now() } : {}), checkpointJson: JSON.stringify({ reason, stepCount: loop.stepCount }) };
   store.updateAgentLoop(updated);
   store.appendAgentLoopStep({ loopId: loop.id, stepType: state === "CANCELLED" ? "LOOP_COMPLETED" : state === "PAUSED" ? "LOOP_SUSPENDED" : "LOOP_RESUMED", status: state === "CANCELLED" ? "CANCELLED" : "RUNNING", payload: { reason } });
   store.appendEvent({ type: state === "CANCELLED" ? "agent.loop.cancelled" : state === "PAUSED" ? "agent.loop.paused" : "agent.loop.resumed", aggregateId: loop.id, payload: { reason } });
   return updated;
+}
+
+function projectAgentLoopResponse(store: PipelineStore, loop: AgentLoop): AgentLoop & { diagnostics: AgentLoopDiagnostics } {
+  return { ...loop, checkpointJson: null, diagnostics: projectAgentLoopDiagnostics(loop, store.listAgentLoopSteps(loop.id)) };
 }
 
 /** 用全局配置组装默认 Scheduler；每个 Run 启动后再由 Revision 快照解析项目级适配器。 */
