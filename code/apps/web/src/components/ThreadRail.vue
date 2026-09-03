@@ -4,31 +4,45 @@
 -->
 <script setup lang="ts">
 import { computed } from "vue";
-import { ChatDotRound, CircleCheck, Clock, Connection, Files, Setting, Warning } from "@element-plus/icons-vue";
+import { ChatDotRound, CircleCheck, Clock, Connection, Files, FolderOpened, Setting, Warning } from "@element-plus/icons-vue";
 import type { ExplorerThread, Project } from "../types";
 import { normalizeProjectId } from "../utils/projectRoutes";
 
-const props = defineProps<{ thread: ExplorerThread | null; project?: Project | null; candidateCount?: number; dispatchedCount?: number; activeRunCount?: number; needsAttentionCount?: number }>();
-const emit = defineEmits<{ "open-history": [] }>();
+const props = defineProps<{ thread: ExplorerThread | null; project?: Project | null; projects: Project[]; candidateCount?: number; dispatchedCount?: number; activeRunCount?: number; needsAttentionCount?: number }>();
+const emit = defineEmits<{ "open-history": []; "select-project": [projectId: string] }>();
 const explorerQuery = computed(() => props.thread ? `?explorerId=${encodeURIComponent(props.thread.id)}` : "");
 const projectPath = computed(() => normalizeProjectId(props.project?.id ?? props.thread?.projectId));
+
+function selectProject(projectId: string) {
+  emit("select-project", projectId);
+}
 </script>
 
 <template>
   <aside class="thread-rail">
-    <div class="rail-project">
-      <div class="project-icon">PF</div>
-      <div><strong>{{ props.project?.name ?? thread?.projectId ?? "Project" }}</strong><small>{{ props.project?.repoRoot ?? "Local workspace" }}</small></div>
-      <span class="chevron">⌄</span>
-    </div>
+    <el-dropdown class="rail-project-switcher" trigger="click" @command="selectProject">
+      <button class="rail-project" type="button" aria-label="Switch Project" title="Switch Project">
+        <div class="project-icon">PF</div>
+        <div class="rail-project-copy"><strong>{{ props.project?.name ?? thread?.projectId ?? "Project" }}</strong><small>{{ props.project?.repoRoot ?? "Local workspace" }}</small></div>
+        <span v-if="props.project" :class="['rail-project-status', { archived: props.project.status === 'ARCHIVED' }]">● {{ props.project.status === 'ACTIVE' ? 'Active' : 'Archived' }}</span>
+        <span class="chevron">⌄</span>
+      </button>
+      <template #dropdown>
+        <el-dropdown-menu>
+          <el-dropdown-item v-for="availableProject in props.projects" :key="availableProject.id" :command="availableProject.id">
+            <span class="project-menu-item"><FolderOpened :size="14" />{{ availableProject.name }}<small>{{ availableProject.status === "ACTIVE" ? "Active" : "Archived" }}</small></span>
+          </el-dropdown-item>
+          <el-dropdown-item divided command="catalog">Manage Projects</el-dropdown-item>
+        </el-dropdown-menu>
+      </template>
+    </el-dropdown>
     <div class="rail-label">EXPLORER THREAD</div>
-    <div class="thread-identity">
+    <button class="thread-identity" type="button" aria-label="Open Explorer history" title="Open Explorer history" @click="emit('open-history')">
       <div class="thread-icon"><Connection :size="16" /></div>
       <div class="thread-copy"><strong>{{ thread?.title ?? "探索线程" }}</strong><small>{{ thread?.id ?? "no-thread" }}</small></div>
       <span class="live-dot" />
-    </div>
+    </button>
     <div class="thread-meta"><span>{{ thread?.messageCount ?? 8 }} messages</span><span>Just now</span></div>
-    <button class="thread-history-button" type="button" aria-label="Open Explorer history" @click="emit('open-history')"><Connection :size="14" /> Explorer history <span>›</span></button>
     <nav v-if="projectPath" class="rail-nav" aria-label="ExplorerThread navigation">
       <RouterLink class="rail-link active" :to="`/projects/${projectPath}/explorer${explorerQuery}`"><ChatDotRound :size="16" /> Conversation <span class="nav-count">{{ thread?.messageCount ?? 0 }}</span></RouterLink>
       <RouterLink class="rail-link" :to="`/projects/${projectPath}/explorer${explorerQuery}#candidate`"><Files :size="16" /> Plan candidates <span class="nav-count">{{ candidateCount ?? 0 }}</span></RouterLink>

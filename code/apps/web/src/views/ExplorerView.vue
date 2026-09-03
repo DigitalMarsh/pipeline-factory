@@ -16,7 +16,6 @@ import { isTimelineAtLatest as isTimelineAtLatestPosition, scrollTimelineToLates
 import { optional } from "../utils/optional";
 import { closePolicyPanel, openPolicyPanel } from "../utils/policyPanel";
 import { createOptimisticUserTurn, settleOptimisticTurn } from "../utils/optimisticTurn";
-import { useDismissibleNotice } from "../utils/dismissibleNotice";
 import { shouldSubmitComposer } from "../utils/composerKeyboard";
 import { isExplorerTurnProcessing } from "../utils/turnStatus";
 import { formatContextUsage, formatConversationId, formatRateLimit } from "../utils/explorerStatus";
@@ -28,7 +27,7 @@ import { normalizePlanProjection } from "../utils/planProjection";
 import { parsePlanProtocolDisplay } from "../utils/planProtocolDisplay";
 import { findPlanForActivity, planIdentity, planTimelineItems as buildPlanTimelineItems } from "../utils/planTimeline";
 import { inputAnswerLabels, resolveQuestionAnswers } from "../utils/explorerInput";
-import { createProjectRequestScope } from "../utils/projectRoutes";
+import { createProjectRequestScope, projectPathForModule } from "../utils/projectRoutes";
 import { buildExplorerTimeline } from "../utils/explorerTimeline";
 import { formatAgentLoopCompletion, formatAgentLoopGate, formatAgentLoopTerminal } from "../utils/agentLoopPresentation";
 
@@ -38,6 +37,7 @@ const router = useRouter();
 // 避免切换 Project/Thread 时把旧项目的响应式数据留在当前视图。
 const projectId = computed(() => String(route.params.projectId ?? ""));
 const project = ref<Project | null>(null);
+const projects = ref<Project[]>([]);
 const thread = ref<ExplorerThread | null>(null);
 const explorers = ref<ExplorerThread[]>([]);
 const historyOpen = ref(false);
@@ -78,7 +78,6 @@ let loopEventSource: EventSource | null = null;
 let explorerEventSequence: number | null = null;
 let planProjectionVersion = 0;
 let activeRequestToken = 0;
-const { visible: showThreadBanner, dismiss: dismissThreadBanner } = useDismissibleNotice();
 type TimelineNavItem = { key: string; label: string; detail: string; target: string };
 
 const candidateCount = computed(() => candidate.value ? 1 : 0);
@@ -415,6 +414,14 @@ async function createExplorer() {
   }
 }
 
+function switchProject(selectedProjectId: string) {
+  if (selectedProjectId === "catalog") {
+    void router.push("/projects");
+    return;
+  }
+  void router.push(projectPathForModule("explore", selectedProjectId));
+}
+
 async function selectExplorer(explorerId: string) {
   if (explorerId === thread.value?.id) return;
   const selected = explorers.value.find((item) => item.id === explorerId);
@@ -479,8 +486,9 @@ async function load(): Promise<boolean> {
   loading.value = true;
   error.value = null;
   try {
-    const [healthResponse, projectResponse, explorerResponse] = await Promise.all([optional(() => api.health()), api.project(requestProjectId), api.explorers(requestProjectId)]);
+    const [healthResponse, projectListResponse, projectResponse, explorerResponse] = await Promise.all([optional(() => api.health()), optional(() => api.projects()), api.project(requestProjectId), api.explorers(requestProjectId)]);
     if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
+    projects.value = projectListResponse?.items ?? [];
     project.value = projectResponse.project;
     if (healthResponse?.model) explorerModel.value = healthResponse.model;
     explorers.value = explorerResponse.items;
@@ -800,11 +808,10 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
 
 <template>
   <div class="console-layout">
-    <ThreadRail :thread="thread" :project="project" :candidate-count="candidateCount" :dispatched-count="dispatchedCount" :active-run-count="activeRunCount" :needs-attention-count="needsAttentionCount" @open-history="historyOpen = true" />
+    <ThreadRail :thread="thread" :project="project" :projects="projects" :candidate-count="candidateCount" :dispatched-count="dispatchedCount" :active-run-count="activeRunCount" :needs-attention-count="needsAttentionCount" @open-history="historyOpen = true" @select-project="switchProject" />
     <section class="conversation-column">
       <div class="conversation-header"><div><div class="eyebrow"><span class="mode-dot" /> PLAN MODE · READ ONLY</div><h1>{{ explorerDisplayTitle(thread) }}</h1><p>Shape the work before anything changes in the repository.</p></div><div class="conversation-tools"><el-button class="new-thread-button" plain aria-label="新建 Explorer" title="新建 Explorer" @click="createExplorer">新建</el-button><el-button circle plain :aria-label="explorerPaused ? 'Resume' : 'Pause'" @click="toggleExplorerPause"><VideoPlay v-if="explorerPaused" :size="16" /><VideoPause v-else :size="16" /></el-button><el-popover v-model:visible="moreOpen" placement="bottom-end" :width="250" trigger="click"><template #reference><el-button circle plain aria-label="More"><MoreFilled :size="16" /></el-button></template><div class="thread-more-menu"><div class="eyebrow">THREAD ACTIONS</div><p>Manage read-only exploration without changing the repository.</p><el-button text @click="setPolicyOpen(true); moreOpen = false">View policy</el-button><el-button text @click="moreOpen = false; refreshThread()">Refresh thread</el-button></div></el-popover></div></div>
       <div v-if="agentLoop" class="agent-loop-strip" role="status"><div><span class="eyebrow">EXPLORER PROVIDER TURN LOOP</span><strong>{{ agentLoopLabel }}</strong></div><span class="agent-loop-budget">Provider Turns {{ agentLoop.stepCount }} / {{ agentLoop.maxSteps }} · Activities {{ agentLoop.diagnostics?.providerActivityCount ?? 0 }}</span><span v-if="agentLoopGateLabel" class="agent-loop-diagnostic">{{ agentLoopGateLabel }}</span><span v-if="agentLoopTerminalLabel" class="agent-loop-terminal">{{ agentLoopTerminalLabel }}</span><span v-if="agentLoopCompletionLabel" class="agent-loop-complete">{{ agentLoopCompletionLabel }}</span><el-button v-if="agentLoop.state === 'RUNNING' || agentLoop.state === 'PAUSED'" size="small" plain @click="toggleExplorerPause">{{ agentLoop.state === 'PAUSED' ? 'Resume loop' : 'Pause loop' }}</el-button></div>
-      <div v-if="showThreadBanner" class="thread-banner" role="status" @click="dismissThreadBanner"><InfoFilled :size="16" /><span>Explorer can inspect the repository and Git history. Write, shell, test and commit tools are disabled until a plan is confirmed and dispatched.</span><el-button text aria-label="View Explorer policy" @click.stop="setPolicyOpen(true)">View policy <Right :size="14" /></el-button></div>
       <div v-if="explorationProgress.status === 'INCOMPLETE' && explorationProgress.lastAssessedTurnId" class="exploration-progress exploration-progress-incomplete" role="status"><Refresh :size="15" /><div><strong>方案仍在探索中</strong><span>本轮结束不代表设计完成，Explorer 正在继续确认：{{ explorationProgress.missing.join('、') }}</span></div></div>
       <div v-else-if="explorationProgress.status === 'READY'" class="exploration-progress exploration-progress-ready" role="status"><CircleCheck :size="15" /><div><strong>完整设计方案已生成</strong><span>请在生成它的 assistant 消息内查看完整契约，确认后再下发执行。</span></div></div>
       <div v-if="explorerPaused" class="demo-notice pause-notice"><VideoPause :size="14" /> ExplorerThread is paused. New turns are disabled until you resume the thread.<el-button text @click="toggleExplorerPause">Resume</el-button></div>
