@@ -23,3 +23,13 @@ describe("Explorer project selector wiring", () => {
     expect(explorerViewSource).toContain("router.push(\"/projects\")");
   });
 });
+
+describe("Explorer context panel wiring", () => {
+  it("connects the sidebar context selection to a dynamic right panel", () => {
+    expect(explorerViewSource).toContain("contextPanel");
+    expect(explorerViewSource).toContain("@select-context=\"selectContextPanel\"");
+    expect(explorerViewSource).toContain("context-panel-content");
+    expect(explorerViewSource).toContain("DISPATCHED PLANS");
+    expect(explorerViewSource).toContain("ACTIVE RUNS");
+  });
+});

@@ -8,13 +8,21 @@ import { ChatDotRound, CircleCheck, Clock, Connection, Files, FolderOpened, Sett
 import type { ExplorerThread, Project } from "../types";
 import { normalizeProjectId } from "../utils/projectRoutes";
 
-const props = defineProps<{ thread: ExplorerThread | null; project?: Project | null; projects: Project[]; candidateCount?: number; dispatchedCount?: number; activeRunCount?: number; needsAttentionCount?: number }>();
-const emit = defineEmits<{ "open-history": []; "select-project": [projectId: string] }>();
+type ContextSelection = "candidate" | "dispatched" | "active";
+
+const props = withDefaults(defineProps<{ thread: ExplorerThread | null; project?: Project | null; projects: Project[]; candidateCount?: number; dispatchedCount?: number; activeRunCount?: number; needsAttentionCount?: number; contextSelection?: ContextSelection }>(), {
+  contextSelection: "candidate",
+});
+const emit = defineEmits<{ "open-history": []; "select-project": [projectId: string]; "select-context": [selection: ContextSelection] }>();
 const explorerQuery = computed(() => props.thread ? `?explorerId=${encodeURIComponent(props.thread.id)}` : "");
 const projectPath = computed(() => normalizeProjectId(props.project?.id ?? props.thread?.projectId));
 
 function selectProject(projectId: string) {
   emit("select-project", projectId);
+}
+
+function selectContext(selection: ContextSelection) {
+  emit("select-context", selection);
 }
 </script>
 
@@ -44,10 +52,10 @@ function selectProject(projectId: string) {
     </button>
     <div class="thread-meta"><span>{{ thread?.messageCount ?? 8 }} messages</span><span>Just now</span></div>
     <nav v-if="projectPath" class="rail-nav" aria-label="ExplorerThread navigation">
-      <RouterLink class="rail-link active" :to="`/projects/${projectPath}/explorer${explorerQuery}`"><ChatDotRound :size="16" /> Conversation <span class="nav-count">{{ thread?.messageCount ?? 0 }}</span></RouterLink>
-      <RouterLink class="rail-link" :to="`/projects/${projectPath}/explorer${explorerQuery}#candidate`"><Files :size="16" /> Plan candidates <span class="nav-count">{{ candidateCount ?? 0 }}</span></RouterLink>
-      <RouterLink class="rail-link" :to="`/projects/${projectPath}/plans`"><CircleCheck :size="16" /> Dispatched plans <span class="nav-count muted-count">{{ dispatchedCount ?? 0 }}</span></RouterLink>
-      <RouterLink class="rail-link" :to="`/projects/${projectPath}/plans?status=IN_PROGRESS`"><Clock :size="16" /> Active runs <span class="nav-count muted-count">{{ activeRunCount ?? 0 }}</span></RouterLink>
+      <RouterLink class="rail-link" :to="`/projects/${projectPath}/explorer${explorerQuery}`"><ChatDotRound :size="16" /> Conversation <span class="nav-count">{{ thread?.messageCount ?? 0 }}</span></RouterLink>
+      <button type="button" :class="['rail-link', 'rail-context-link', { active: props.contextSelection === 'candidate' }]" data-context="candidate" :aria-pressed="props.contextSelection === 'candidate'" @click="selectContext('candidate')"><Files :size="16" /> Plan candidates <span class="nav-count">{{ candidateCount ?? 0 }}</span></button>
+      <button type="button" :class="['rail-link', 'rail-context-link', { active: props.contextSelection === 'dispatched' }]" data-context="dispatched" :aria-pressed="props.contextSelection === 'dispatched'" @click="selectContext('dispatched')"><CircleCheck :size="16" /> Dispatched plans <span class="nav-count muted-count">{{ dispatchedCount ?? 0 }}</span></button>
+      <button type="button" :class="['rail-link', 'rail-context-link', { active: props.contextSelection === 'active' }]" data-context="active" :aria-pressed="props.contextSelection === 'active'" @click="selectContext('active')"><Clock :size="16" /> Active runs <span class="nav-count muted-count">{{ activeRunCount ?? 0 }}</span></button>
       <RouterLink class="rail-link needs" :to="`/projects/${projectPath}/plans?status=BLOCKED`"><Warning :size="16" /> Needs attention <span class="warning-count">{{ needsAttentionCount ?? 0 }}</span></RouterLink>
     </nav>
     <div v-if="projectPath" class="rail-section">
