@@ -25,13 +25,17 @@ describe("Explorer project selector wiring", () => {
 });
 
 describe("Explorer context panel wiring", () => {
-  it("connects vertical right-panel context navigation to a dynamic panel", () => {
+  it("connects horizontal right-panel context tabs to a dynamic panel", () => {
     expect(explorerViewSource).toContain("contextPanel");
     expect(explorerViewSource).toContain("context-panel-nav");
     expect(explorerViewSource).toContain("data-context");
     expect(explorerViewSource).toContain('key: "candidate"');
     expect(explorerViewSource).toContain('key: "dispatched"');
     expect(explorerViewSource).toContain('key: "active"');
+    expect(explorerViewSource).toContain('key: "attention"');
+    expect(explorerViewSource).toContain("needsAttentionCount");
+    expect(explorerViewSource).toContain("Needs attention");
+    expect(explorerViewSource).toContain("contextPanel === 'attention'");
     expect(explorerViewSource).toContain("selectContextPanel");
     expect(explorerViewSource).toContain("context-panel-content");
     expect(explorerViewSource).toContain("DISPATCHED PLANS");
@@ -45,6 +49,22 @@ describe("Explorer context panel wiring", () => {
     expect(explorerViewSource).toContain("context-nav-count");
     expect(explorerViewSource).not.toContain("context-nav-copy");
     expect(explorerViewSource).not.toContain("{{ item.description }}");
+  });
+
+  it("renders the context choices as a horizontal tablist", () => {
+    expect(explorerViewSource).toContain('role="tablist"');
+    expect(explorerViewSource).toContain('role="tab"');
+    expect(explorerViewSource).toContain(":aria-selected=");
+    expect(explorerViewSource).toContain("context-nav-tab");
+  });
+});
+
+describe("Explorer thread switching", () => {
+  it("reloads the current conversation when the selected thread changes", () => {
+    expect(explorerViewSource).toContain("async function selectExplorer(explorerId: string)");
+    expect(explorerViewSource).toContain("query: { explorerId }, hash: \"\" });");
+    expect(explorerViewSource).toContain("watch(() => route.query.explorerId, () => { if (mounted.value) reloadExplorer(); });");
+    expect(explorerViewSource).toContain("api.getExplorerTurns(requestProjectId, selected.id)");
   });
 });
 

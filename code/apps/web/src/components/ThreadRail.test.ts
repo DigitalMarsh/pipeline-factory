@@ -152,13 +152,16 @@ describe("ThreadRail current Explorer entry", () => {
     mounted.host.remove();
   });
 
-  it("keeps plan context navigation out of the left rail", () => {
+  it("keeps conversation and plan context navigation out of the left rail", () => {
     const mounted = mountRail();
 
+    expect(mounted.host.querySelector(".rail-nav")).toBeNull();
+    expect(mounted.host.textContent).not.toContain("Conversation");
     expect(mounted.host.querySelectorAll("button[data-context]")).toHaveLength(0);
-    expect(mounted.host.querySelector(".rail-nav")?.textContent).not.toContain("Plan candidates");
-    expect(mounted.host.querySelector(".rail-nav")?.textContent).not.toContain("Dispatched plans");
-    expect(mounted.host.querySelector(".rail-nav")?.textContent).not.toContain("Active runs");
+    expect(mounted.host.textContent).not.toContain("Plan candidates");
+    expect(mounted.host.textContent).not.toContain("Dispatched plans");
+    expect(mounted.host.textContent).not.toContain("Active runs");
+    expect(mounted.host.textContent).not.toContain("Needs attention");
 
     mounted.app.unmount();
     mounted.host.remove();

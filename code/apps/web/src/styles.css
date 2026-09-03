@@ -73,11 +73,21 @@ a { color: inherit; text-decoration: none; }
 @media (max-width: 720px) { .composer { padding: 10px 18px 12px; }.composer-input { height: 96px; min-height: 96px; padding: 11px 10px; }.composer-input .composer-mode { right: 10px; bottom: 9px; }.composer-input textarea { height: 69px; }.composer-send.el-button { width: 32px; height: 32px; } }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; } }
 
-/* Explorer Context 动态面板：侧栏入口切换同一块可滚动的内容区域。 */
-.rail-context-link { width: 100%; border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; text-align: left; }
-.rail-context-link:focus-visible { outline: 2px solid #5472aa; outline-offset: -2px; }
+/* Explorer Context 动态面板：右侧横向 Tab 入口切换同一块可滚动的内容区域。 */
 .context-panel { display: flex; min-height: 0; flex-direction: column; overflow: hidden; }
 .context-panel-scroll { min-height: 0; flex: 1 1 auto; overflow-y: auto; padding-bottom: 22px; scrollbar-width: thin; }
+.context-panel-nav { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; padding: 14px 5px 0; }
+.context-nav-item { position: relative; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 3px; width: 100%; min-width: 0; min-height: 68px; padding: 7px 3px 5px; border: 1px solid #245f96; border-radius: 5px; background: linear-gradient(180deg, #214d82 0%, #17385f 100%); box-shadow: inset 0 0 0 1px rgba(93, 181, 240, .14), 0 3px 8px rgba(20, 55, 95, .16); color: #dcecff; cursor: pointer; font: inherit; text-align: center; transition: border-color .16s ease, background .16s ease, box-shadow .16s ease; }
+.context-nav-item:hover { border-color: #4ca8e6; background: linear-gradient(180deg, #285f9c 0%, #1b4677 100%); }
+.context-nav-item.active { border-color: #48b9ff; background: linear-gradient(180deg, #2f70b8 0%, #20538b 100%); box-shadow: inset 0 0 0 1px rgba(118, 210, 255, .34), 0 0 0 1px rgba(57, 153, 222, .16), 0 4px 10px rgba(20, 74, 130, .24); }
+.context-nav-item:focus-visible { outline: 2px solid #49baff; outline-offset: 2px; }
+.context-nav-icon { display: grid; place-items: center; width: 24px; height: 24px; flex: 0 0 24px; border: 1px solid rgba(255, 255, 255, .24); border-radius: 4px; background: #eaf3ff; color: #2f78e8; box-shadow: 0 1px 0 rgba(255, 255, 255, .26); }
+.context-nav-item:nth-child(2) .context-nav-icon { background: #e8fbf2; color: #1cad73; }
+.context-nav-item:nth-child(3) .context-nav-icon { background: #e7f0ff; color: #397fe9; }
+.context-nav-item:nth-child(4) .context-nav-icon { background: #fff1f0; color: #dd5e5e; }
+.context-nav-label { max-width: 100%; min-width: 0; color: #f4f8ff; font-size: 9px; font-weight: 700; line-height: 1.15; text-align: center; white-space: normal; word-break: normal; }
+.context-nav-count { position: absolute; top: 4px; right: 4px; display: grid; place-items: center; min-width: 18px; height: 18px; padding: 0 4px; border: 1px solid rgba(181, 224, 255, .18); border-radius: 9px; background: rgba(7, 35, 70, .28); color: #dcecff; font-size: 9px; font-weight: 700; }
+.context-nav-item.active .context-nav-count { border-color: rgba(182, 231, 255, .48); background: #438bd7; color: #fff; }
 .context-panel-intro { display: flex; align-items: flex-start; gap: 10px; margin: 18px 5px 0; padding: 12px; border: 1px solid #dbe7ff; border-radius: 8px; background: #f7faff; }
 .context-panel-intro-icon { display: grid; place-items: center; width: 30px; height: 30px; flex: 0 0 30px; border-radius: 7px; background: #e8f0ff; color: var(--blue); }
 .context-panel-intro .eyebrow { display: flex; align-items: center; gap: 7px; color: #6f82a4; }
@@ -98,8 +108,10 @@ a { color: inherit; text-decoration: none; }
 .context-plan-row { padding: 13px; border: 1px solid #dfe7f2; border-radius: 8px; background: #fff; box-shadow: 0 2px 9px rgba(52, 83, 133, .04); }
 .context-plan-row:hover { border-color: #b8caf0; box-shadow: 0 4px 13px rgba(52, 83, 133, .08); }
 .context-plan-row.active-run-row { border-color: #cfddf8; background: #fbfdff; }
+.context-plan-row.attention-row { border-color: #f0cfd1; background: #fffafa; }
 .context-plan-row-meta { display: grid; grid-template-columns: 78px minmax(0, 1fr); gap: 7px; align-items: baseline; margin-top: 11px; color: #98a5b5; font-size: 9px; }
 .context-plan-row-meta code { overflow: hidden; color: #667fae; font: 9px ui-monospace, monospace; text-overflow: ellipsis; white-space: nowrap; }
+.context-attention-reason { overflow: hidden; color: #b15c62; text-overflow: ellipsis; }
 .context-plan-row-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid #eff2f6; }
 .context-plan-link { display: inline-flex; align-items: center; gap: 4px; color: #4d7be1; font-size: 10px; text-decoration: none; }
 .context-plan-link:hover { color: #2f61cf; text-decoration: underline; }

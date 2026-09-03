@@ -1,14 +1,14 @@
 <!--
-  模块职责：展示 Project、ExplorerThread 导航和计划入口。
+  模块职责：展示 Project 和 ExplorerThread 导航。
   维护提示：交互状态和数据流变化时，应同步更新组件边界说明。
 -->
 <script setup lang="ts">
 import { computed } from "vue";
-import { ChatDotRound, Connection, Files, FolderOpened, Setting, Warning } from "@element-plus/icons-vue";
+import { Connection, Files, FolderOpened, Setting } from "@element-plus/icons-vue";
 import type { ExplorerThread, Project } from "../types";
 import { normalizeProjectId } from "../utils/projectRoutes";
 
-const props = defineProps<{ thread: ExplorerThread | null; project?: Project | null; projects: Project[]; needsAttentionCount?: number }>();
+const props = defineProps<{ thread: ExplorerThread | null; project?: Project | null; projects: Project[] }>();
 const emit = defineEmits<{ "open-history": []; "select-project": [projectId: string]; "manage-projects": []; "open-settings": [projectId: string] }>();
 const explorerQuery = computed(() => props.thread ? `?explorerId=${encodeURIComponent(props.thread.id)}` : "");
 const projectPath = computed(() => normalizeProjectId(props.project?.id ?? props.thread?.projectId));
@@ -48,10 +48,6 @@ function selectProject(projectId: string) {
       <span class="live-dot" />
     </button>
     <div class="thread-meta"><span>{{ thread?.messageCount ?? 8 }} messages</span><span>Just now</span></div>
-    <nav v-if="projectPath" class="rail-nav" aria-label="ExplorerThread navigation">
-      <RouterLink class="rail-link" :to="`/projects/${projectPath}/explorer${explorerQuery}`"><ChatDotRound :size="16" /> Conversation <span class="nav-count">{{ thread?.messageCount ?? 0 }}</span></RouterLink>
-      <RouterLink class="rail-link needs" :to="`/projects/${projectPath}/plans?status=BLOCKED`"><Warning :size="16" /> Needs attention <span class="warning-count">{{ needsAttentionCount ?? 0 }}</span></RouterLink>
-    </nav>
     <div v-if="projectPath" class="rail-section">
       <div class="rail-section-title">THREAD MEMORY</div>
       <RouterLink class="rail-link subdued" :to="`/projects/${projectPath}/explorer${explorerQuery}#successors`"><Connection :size="15" /> Successor threads <span>›</span></RouterLink>
