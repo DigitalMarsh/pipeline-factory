@@ -37,12 +37,13 @@ const RouterLinkStub = defineComponent({
   },
 });
 
-function mountRail(contextSelection = "candidate") {
+function mountRail() {
   const host = document.createElement("div");
   document.body.appendChild(host);
   let openHistoryCount = 0;
   let selectedProjectId: string | null = null;
-  let selectedContext: string | null = null;
+  let manageProjectsCount = 0;
+  let openSettingsCount = 0;
   const app = createApp(ThreadRail, {
     thread: { id: "explorer-1", projectId: "project-1", title: "Current exploration", state: "ACTIVE", contextMode: "FRESH", messageCount: 2, lastActivityAt: "2026-09-02T14:00:00.000Z" },
     project: { id: "project-1", name: "Project 1", repoRoot: "/tmp/project-1", status: "ACTIVE", currentExplorerThreadId: "explorer-1" },
@@ -52,15 +53,15 @@ function mountRail(contextSelection = "candidate") {
     ],
     onOpenHistory: () => { openHistoryCount += 1; },
     onSelectProject: (projectId: string) => { selectedProjectId = projectId; },
-    contextSelection,
-    onSelectContext: (selection: string) => { selectedContext = selection; },
+    onManageProjects: () => { manageProjectsCount += 1; },
+    onOpenSettings: () => { openSettingsCount += 1; },
   });
   app.component("RouterLink", RouterLinkStub);
   app.component("ElDropdown", ElDropdownStub);
   app.component("ElDropdownMenu", ElDropdownMenuStub);
   app.component("ElDropdownItem", ElDropdownItemStub);
   app.mount(host);
-  return { app, host, getOpenHistoryCount: () => openHistoryCount, getSelectedProjectId: () => selectedProjectId, getSelectedContext: () => selectedContext };
+  return { app, host, getOpenHistoryCount: () => openHistoryCount, getSelectedProjectId: () => selectedProjectId, getManageProjectsCount: () => manageProjectsCount, getOpenSettingsCount: () => openSettingsCount };
 }
 
 describe("ThreadRail current Explorer entry", () => {
@@ -120,15 +121,44 @@ describe("ThreadRail current Explorer entry", () => {
     mounted.host.remove();
   });
 
-  it("switches the right-panel context when a context entry is selected", async () => {
+  it("opens project management instead of navigating to the catalog", async () => {
     const mounted = mountRail();
-    const dispatchedEntry = mounted.host.querySelector<HTMLButtonElement>('button[data-context="dispatched"]');
-
-    expect(dispatchedEntry).not.toBeNull();
-    dispatchedEntry?.click();
+    mounted.host.querySelector<HTMLButtonElement>("button.rail-project")?.click();
     await nextTick();
 
-    expect(mounted.getSelectedContext()).toBe("dispatched");
+    const manageProjectsItem = [...mounted.host.querySelectorAll<HTMLButtonElement>(".el-dropdown-item-stub")]
+      .find((item) => item.textContent?.includes("Manage Projects"));
+    manageProjectsItem?.click();
+    await nextTick();
+
+    expect(mounted.getManageProjectsCount()).toBe(1);
+    expect(mounted.getSelectedProjectId()).toBeNull();
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  it("opens project settings from the current project rail", async () => {
+    const mounted = mountRail();
+    const settingsEntry = mounted.host.querySelector<HTMLButtonElement>(".rail-bottom button.rail-link");
+
+    expect(settingsEntry).not.toBeNull();
+    settingsEntry?.click();
+    await nextTick();
+
+    expect(mounted.getOpenSettingsCount()).toBe(1);
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  it("keeps plan context navigation out of the left rail", () => {
+    const mounted = mountRail();
+
+    expect(mounted.host.querySelectorAll("button[data-context]")).toHaveLength(0);
+    expect(mounted.host.querySelector(".rail-nav")?.textContent).not.toContain("Plan candidates");
+    expect(mounted.host.querySelector(".rail-nav")?.textContent).not.toContain("Dispatched plans");
+    expect(mounted.host.querySelector(".rail-nav")?.textContent).not.toContain("Active runs");
 
     mounted.app.unmount();
     mounted.host.remove();

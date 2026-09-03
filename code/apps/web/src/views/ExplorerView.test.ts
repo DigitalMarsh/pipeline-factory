@@ -20,16 +20,48 @@ describe("Explorer project selector wiring", () => {
     expect(explorerViewSource).toContain(":projects=\"projects\"");
     expect(explorerViewSource).toContain("@select-project=\"switchProject\"");
     expect(explorerViewSource).toContain("projectPathForModule(\"explore\", selectedProjectId)");
-    expect(explorerViewSource).toContain("router.push(\"/projects\")");
+    expect(explorerViewSource).toContain("@manage-projects=\"projectManagementOpen = true\"");
   });
 });
 
 describe("Explorer context panel wiring", () => {
-  it("connects the sidebar context selection to a dynamic right panel", () => {
+  it("connects vertical right-panel context navigation to a dynamic panel", () => {
     expect(explorerViewSource).toContain("contextPanel");
-    expect(explorerViewSource).toContain("@select-context=\"selectContextPanel\"");
+    expect(explorerViewSource).toContain("context-panel-nav");
+    expect(explorerViewSource).toContain("data-context");
+    expect(explorerViewSource).toContain('key: "candidate"');
+    expect(explorerViewSource).toContain('key: "dispatched"');
+    expect(explorerViewSource).toContain('key: "active"');
+    expect(explorerViewSource).toContain("selectContextPanel");
     expect(explorerViewSource).toContain("context-panel-content");
     expect(explorerViewSource).toContain("DISPATCHED PLANS");
     expect(explorerViewSource).toContain("ACTIVE RUNS");
+    expect(explorerViewSource).not.toContain(":context-selection=\"contextPanel\"");
+    expect(explorerViewSource).not.toContain("@select-context=\"selectContextPanel\"");
+  });
+
+  it("uses compact button content instead of long menu descriptions", () => {
+    expect(explorerViewSource).toContain("context-nav-label");
+    expect(explorerViewSource).toContain("context-nav-count");
+    expect(explorerViewSource).not.toContain("context-nav-copy");
+    expect(explorerViewSource).not.toContain("{{ item.description }}");
+  });
+});
+
+describe("Explorer project management wiring", () => {
+  it("opens an in-place project management dialog from the project rail", () => {
+    expect(explorerViewSource).toContain("projectManagementOpen");
+    expect(explorerViewSource).toContain("@manage-projects=\"projectManagementOpen = true\"");
+    expect(explorerViewSource).toContain("ProjectManagementDialog");
+    expect(explorerViewSource).not.toContain('void router.push("/projects")');
+  });
+});
+
+describe("Explorer project settings wiring", () => {
+  it("opens project settings in a modal without leaving the Explorer", () => {
+    expect(explorerViewSource).toContain("projectSettingsOpen");
+    expect(explorerViewSource).toContain("ProjectSettingsDialog");
+    expect(explorerViewSource).toContain("@open-settings=\"openProjectSettingsDialog\"");
+    expect(explorerViewSource).not.toContain("/settings`);");
   });
 });
