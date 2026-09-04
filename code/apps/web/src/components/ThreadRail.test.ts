@@ -43,7 +43,6 @@ function mountRail() {
   let openHistoryCount = 0;
   let selectedProjectId: string | null = null;
   let manageProjectsCount = 0;
-  let openSettingsCount = 0;
   const app = createApp(ThreadRail, {
     thread: { id: "explorer-1", projectId: "project-1", title: "Current exploration", state: "ACTIVE", contextMode: "FRESH", messageCount: 2, lastActivityAt: "2026-09-02T14:00:00.000Z" },
     project: { id: "project-1", name: "Project 1", repoRoot: "/tmp/project-1", status: "ACTIVE", currentExplorerThreadId: "explorer-1" },
@@ -54,14 +53,13 @@ function mountRail() {
     onOpenHistory: () => { openHistoryCount += 1; },
     onSelectProject: (projectId: string) => { selectedProjectId = projectId; },
     onManageProjects: () => { manageProjectsCount += 1; },
-    onOpenSettings: () => { openSettingsCount += 1; },
   });
   app.component("RouterLink", RouterLinkStub);
   app.component("ElDropdown", ElDropdownStub);
   app.component("ElDropdownMenu", ElDropdownMenuStub);
   app.component("ElDropdownItem", ElDropdownItemStub);
   app.mount(host);
-  return { app, host, getOpenHistoryCount: () => openHistoryCount, getSelectedProjectId: () => selectedProjectId, getManageProjectsCount: () => manageProjectsCount, getOpenSettingsCount: () => openSettingsCount };
+  return { app, host, getOpenHistoryCount: () => openHistoryCount, getSelectedProjectId: () => selectedProjectId, getManageProjectsCount: () => manageProjectsCount };
 }
 
 describe("ThreadRail current Explorer entry", () => {
@@ -138,15 +136,11 @@ describe("ThreadRail current Explorer entry", () => {
     mounted.host.remove();
   });
 
-  it("opens project settings from the current project rail", async () => {
+  it("does not render a project settings entry in the current project rail", () => {
     const mounted = mountRail();
-    const settingsEntry = mounted.host.querySelector<HTMLButtonElement>(".rail-bottom button.rail-link");
 
-    expect(settingsEntry).not.toBeNull();
-    settingsEntry?.click();
-    await nextTick();
-
-    expect(mounted.getOpenSettingsCount()).toBe(1);
+    expect(mounted.host.querySelector(".rail-bottom")).toBeNull();
+    expect(mounted.host.textContent).not.toContain("Project settings");
 
     mounted.app.unmount();
     mounted.host.remove();

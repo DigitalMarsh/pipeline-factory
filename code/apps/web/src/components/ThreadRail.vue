@@ -3,15 +3,11 @@
   维护提示：交互状态和数据流变化时，应同步更新组件边界说明。
 -->
 <script setup lang="ts">
-import { computed } from "vue";
-import { Connection, Files, FolderOpened, Setting } from "@element-plus/icons-vue";
+import { Connection, FolderOpened } from "@element-plus/icons-vue";
 import type { ExplorerThread, Project } from "../types";
-import { normalizeProjectId } from "../utils/projectRoutes";
 
 const props = defineProps<{ thread: ExplorerThread | null; project?: Project | null; projects: Project[] }>();
-const emit = defineEmits<{ "open-history": []; "select-project": [projectId: string]; "manage-projects": []; "open-settings": [projectId: string] }>();
-const explorerQuery = computed(() => props.thread ? `?explorerId=${encodeURIComponent(props.thread.id)}` : "");
-const projectPath = computed(() => normalizeProjectId(props.project?.id ?? props.thread?.projectId));
+const emit = defineEmits<{ "open-history": []; "select-project": [projectId: string]; "manage-projects": [] }>();
 
 function selectProject(projectId: string) {
   if (projectId === "catalog") {
@@ -48,11 +44,5 @@ function selectProject(projectId: string) {
       <span class="live-dot" />
     </button>
     <div class="thread-meta"><span>{{ thread?.messageCount ?? 8 }} messages</span><span>Just now</span></div>
-    <div v-if="projectPath" class="rail-section">
-      <div class="rail-section-title">THREAD MEMORY</div>
-      <RouterLink class="rail-link subdued" :to="`/projects/${projectPath}/explorer${explorerQuery}#successors`"><Connection :size="15" /> Successor threads <span>›</span></RouterLink>
-      <RouterLink class="rail-link subdued" :to="`/projects/${projectPath}/explorer${explorerQuery}#summary`"><Files :size="15" /> Context summary <span>›</span></RouterLink>
-    </div>
-    <div v-if="projectPath" class="rail-bottom"><button type="button" class="rail-link subdued" @click="emit('open-settings', props.project?.id ?? thread?.projectId ?? '')"><Setting :size="16" /> Project settings</button></div>
   </aside>
 </template>

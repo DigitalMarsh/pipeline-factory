@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const explorerViewSource = readFileSync(fileURLToPath(new URL("./ExplorerView.vue", import.meta.url)), "utf8");
+const explorerStylesSource = readFileSync(fileURLToPath(new URL("../styles.css", import.meta.url)), "utf8");
+const threadRailSource = readFileSync(fileURLToPath(new URL("../components/ThreadRail.vue", import.meta.url)), "utf8");
 
 describe("Explorer policy notice surface", () => {
   it("does not render the redundant policy banner", () => {
@@ -83,5 +85,37 @@ describe("Explorer project settings wiring", () => {
     expect(explorerViewSource).toContain("ProjectSettingsDialog");
     expect(explorerViewSource).toContain("@open-settings=\"openProjectSettingsDialog\"");
     expect(explorerViewSource).not.toContain("/settings`);");
+  });
+});
+
+describe("Explorer provider loop layout", () => {
+  it("places long diagnostics in a flexible second row", () => {
+    expect(explorerViewSource).toContain('<div class="agent-loop-summary">');
+    expect(explorerViewSource).toContain('class="agent-loop-status"');
+    expect(explorerViewSource).toContain('class="agent-loop-action"');
+    expect(explorerStylesSource).toContain(".agent-loop-strip { display: grid;");
+    expect(explorerStylesSource).toContain("grid-template-columns: minmax(0, 1fr) auto;");
+    expect(explorerStylesSource).toContain(".agent-loop-status {");
+    expect(explorerStylesSource).toContain("overflow-wrap: anywhere;");
+  });
+});
+
+describe("Explorer thread memory removal", () => {
+  it("removes the obsolete thread memory entries and drawer", () => {
+    expect(threadRailSource).not.toContain("THREAD MEMORY");
+    expect(threadRailSource).not.toContain("Successor threads");
+    expect(threadRailSource).not.toContain("Context summary");
+    expect(explorerViewSource).not.toContain("memoryPanel");
+    expect(explorerViewSource).not.toContain("#summary");
+    expect(explorerViewSource).not.toContain("#successors");
+    expect(explorerViewSource).not.toContain("closeMemoryPanel");
+    expect(explorerViewSource).not.toContain("setMemoryPanelOpen");
+  });
+});
+
+describe("Explorer header actions", () => {
+  it("does not render a standalone new Explorer button", () => {
+    expect(explorerViewSource).not.toContain('class="new-thread-button"');
+    expect(explorerViewSource).not.toContain('aria-label="新建 Explorer"');
   });
 });
