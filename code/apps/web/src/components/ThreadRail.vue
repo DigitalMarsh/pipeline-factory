@@ -1,48 +1,109 @@
 <!--
   模块职责：展示 Project 和 ExplorerThread 导航。
-  维护提示：交互状态和数据流变化时，应同步更新组件边界说明。
+  维护提示：左侧入口只切换左侧内容，右侧执行上下文由 ExplorerView 独立管理。
 -->
 <script setup lang="ts">
 import { Connection, FolderOpened } from "@element-plus/icons-vue";
 import type { ExplorerThread, Project } from "../types";
 
-const props = defineProps<{ thread: ExplorerThread | null; project?: Project | null; projects: Project[] }>();
-const emit = defineEmits<{ "open-history": []; "select-project": [projectId: string]; "manage-projects": [] }>();
+type LeftPanel = "projects" | "explorers";
 
-function selectProject(projectId: string) {
-  if (projectId === "catalog") {
-    emit("manage-projects");
-    return;
-  }
-  emit("select-project", projectId);
+const props = defineProps<{
+  panel: LeftPanel;
+  thread: ExplorerThread | null;
+  project?: Project | null;
+  projects: Project[];
+  explorers: ExplorerThread[];
+}>();
+const emit = defineEmits<{
+  "select-panel": [panel: LeftPanel];
+  "select-project": [projectId: string];
+  "select-explorer": [explorerId: string];
+  "open-history": [];
+  "manage-projects": [];
+}>();
+
+const panelEntries: { key: LeftPanel; label: string }[] = [
+  { key: "projects", label: "项目" },
+  { key: "explorers", label: "探索" },
+];
+
+function projectStatusLabel(status: Project["status"]): string {
+  return status === "ACTIVE" ? "Active" : "Archived";
 }
 
+function explorerStatusLabel(state: ExplorerThread["state"]): string {
+  return state === "ACTIVE" ? "Active" : state === "ARCHIVED" ? "Archived" : "Completed";
+}
 </script>
 
 <template>
   <aside class="thread-rail">
-    <el-dropdown class="rail-project-switcher" trigger="click" @command="selectProject">
-      <button class="rail-project" type="button" aria-label="Switch Project" title="Switch Project">
-        <div class="project-icon">PF</div>
-        <div class="rail-project-copy"><strong>{{ props.project?.name ?? thread?.projectId ?? "Project" }}</strong><small>{{ props.project?.repoRoot ?? "Local workspace" }}</small></div>
-        <span v-if="props.project" :class="['rail-project-status', { archived: props.project.status === 'ARCHIVED' }]">● {{ props.project.status === 'ACTIVE' ? 'Active' : 'Archived' }}</span>
-        <span class="chevron">⌄</span>
+    <nav class="left-entry-rail" role="tablist" aria-label="Explorer workspace sections">
+      <button
+        v-for="entry in panelEntries"
+        :key="entry.key"
+        class="left-entry-button"
+        :class="{ active: props.panel === entry.key }"
+        type="button"
+        :data-left-panel="entry.key"
+        role="tab"
+        :aria-selected="props.panel === entry.key"
+        @click="emit('select-panel', entry.key)"
+      >
+        <FolderOpened v-if="entry.key === 'projects'" :size="17" />
+        <Connection v-else :size="17" />
+        <span>{{ entry.label }}</span>
       </button>
-      <template #dropdown>
-        <el-dropdown-menu>
-          <el-dropdown-item v-for="availableProject in props.projects" :key="availableProject.id" :command="availableProject.id">
-            <span class="project-menu-item"><FolderOpened :size="14" />{{ availableProject.name }}<small>{{ availableProject.status === "ACTIVE" ? "Active" : "Archived" }}</small></span>
-          </el-dropdown-item>
-          <el-dropdown-item divided command="catalog">Manage Projects</el-dropdown-item>
-        </el-dropdown-menu>
-      </template>
-    </el-dropdown>
-    <div class="rail-label">EXPLORER THREAD</div>
-    <button class="thread-identity" type="button" aria-label="Open Explorer history" title="Open Explorer history" @click="emit('open-history')">
-      <div class="thread-icon"><Connection :size="16" /></div>
-      <div class="thread-copy"><strong>{{ thread?.title ?? "探索线程" }}</strong><small>{{ thread?.id ?? "no-thread" }}</small></div>
-      <span class="live-dot" />
-    </button>
-    <div class="thread-meta"><span>{{ thread?.messageCount ?? 8 }} messages</span><span>Just now</span></div>
+    </nav>
+
+    <section class="left-panel">
+      <header class="left-panel-header">
+        <div class="eyebrow">{{ props.panel === "projects" ? "PROJECTS" : "EXPLORER THREADS" }}</div>
+        <strong>{{ props.panel === "projects" ? `${props.projects.length} projects` : `${props.explorers.length} explorations` }}</strong>
+        <small>{{ props.project?.name ?? props.thread?.projectId ?? "Local workspace" }}</small>
+      </header>
+
+      <div v-if="props.panel === 'projects'" class="left-panel-scroll project-list">
+        <button
+          v-for="availableProject in props.projects"
+          :key="availableProject.id"
+          class="project-list-item"
+          :class="{ active: availableProject.id === props.project?.id }"
+          type="button"
+          :data-project-id="availableProject.id"
+          @click="emit('select-project', availableProject.id)"
+        >
+          <span class="left-list-icon"><FolderOpened :size="16" /></span>
+          <span class="left-list-copy"><strong>{{ availableProject.name }}</strong><small>{{ availableProject.repoRoot }}</small></span>
+          <span :class="['left-list-status', { archived: availableProject.status === 'ARCHIVED' }]">{{ projectStatusLabel(availableProject.status) }}</span>
+        </button>
+        <button class="left-panel-manage" type="button" @click="emit('manage-projects')">Manage Projects</button>
+      </div>
+
+      <div v-else class="left-panel-scroll explorer-list">
+        <button class="thread-identity" type="button" aria-label="Open Explorer history" title="Open Explorer history" @click="emit('open-history')">
+          <span class="thread-icon"><Connection :size="16" /></span>
+          <span class="thread-copy"><strong>{{ props.thread?.title ?? "探索线程" }}</strong><small>{{ props.thread?.id ?? "no-thread" }}</small></span>
+          <span class="live-dot" />
+        </button>
+        <div class="thread-meta"><span>{{ props.thread?.messageCount ?? 0 }} messages</span><span>Current</span></div>
+
+        <div class="left-list-label">EXPLORER THREADS</div>
+        <button
+          v-for="availableExplorer in props.explorers"
+          :key="availableExplorer.id"
+          class="explorer-list-item"
+          :class="{ active: availableExplorer.id === props.thread?.id }"
+          type="button"
+          :data-explorer-id="availableExplorer.id"
+          @click="emit('select-explorer', availableExplorer.id)"
+        >
+          <span class="left-list-icon"><Connection :size="15" /></span>
+          <span class="left-list-copy"><strong>{{ availableExplorer.title }}</strong><small>{{ availableExplorer.messageCount }} messages · {{ availableExplorer.id }}</small></span>
+          <span :class="['left-list-status', { archived: availableExplorer.state === 'ARCHIVED' }]">{{ explorerStatusLabel(availableExplorer.state) }}</span>
+        </button>
+      </div>
+    </section>
   </aside>
 </template>

@@ -19,17 +19,24 @@ describe("Explorer policy notice surface", () => {
 describe("Explorer project selector wiring", () => {
   it("loads the project catalog and delegates sidebar selections", () => {
     expect(explorerViewSource).toContain("api.projects()");
+    expect(explorerViewSource).toContain(":panel=\"leftPanel\"");
     expect(explorerViewSource).toContain(":projects=\"projects\"");
+    expect(explorerViewSource).toContain(":explorers=\"explorers\"");
+    expect(explorerViewSource).toContain("@select-panel=\"leftPanel = $event\"");
     expect(explorerViewSource).toContain("@select-project=\"switchProject\"");
+    expect(explorerViewSource).toContain("@select-explorer=\"selectExplorer\"");
     expect(explorerViewSource).toContain("projectPathForModule(\"explore\", selectedProjectId)");
     expect(explorerViewSource).toContain("@manage-projects=\"projectManagementOpen = true\"");
   });
 });
 
 describe("Explorer context panel wiring", () => {
-  it("connects horizontal right-panel context tabs to a dynamic panel", () => {
+  it("connects the right entry rail to an independent dynamic panel", () => {
     expect(explorerViewSource).toContain("contextPanel");
-    expect(explorerViewSource).toContain("context-panel-nav");
+    expect(explorerViewSource).toContain("context-panel-shell");
+    expect(explorerViewSource).toContain("context-entry-rail");
+    expect(explorerViewSource).toContain("context-entry-button");
+    expect(explorerViewSource).not.toContain("context-panel-nav");
     expect(explorerViewSource).toContain("data-context");
     expect(explorerViewSource).toContain('key: "candidate"');
     expect(explorerViewSource).toContain('key: "dispatched"');
@@ -40,24 +47,46 @@ describe("Explorer context panel wiring", () => {
     expect(explorerViewSource).toContain("contextPanel === 'attention'");
     expect(explorerViewSource).toContain("selectContextPanel");
     expect(explorerViewSource).toContain("context-panel-content");
+    expect(explorerViewSource).toContain("PLAN CANDIDATE");
     expect(explorerViewSource).toContain("DISPATCHED PLANS");
     expect(explorerViewSource).toContain("ACTIVE RUNS");
+    expect(explorerViewSource).toContain("NEEDS ATTENTION");
     expect(explorerViewSource).not.toContain(":context-selection=\"contextPanel\"");
     expect(explorerViewSource).not.toContain("@select-context=\"selectContextPanel\"");
   });
 
   it("uses compact button content instead of long menu descriptions", () => {
-    expect(explorerViewSource).toContain("context-nav-label");
-    expect(explorerViewSource).toContain("context-nav-count");
-    expect(explorerViewSource).not.toContain("context-nav-copy");
+    expect(explorerViewSource).toContain("context-entry-label");
+    expect(explorerViewSource).toContain("context-entry-count");
+    expect(explorerViewSource).not.toContain("context-entry-copy");
     expect(explorerViewSource).not.toContain("{{ item.description }}");
   });
 
-  it("renders the context choices as a horizontal tablist", () => {
+  it("renders the context choices as a vertical entry rail", () => {
     expect(explorerViewSource).toContain('role="tablist"');
     expect(explorerViewSource).toContain('role="tab"');
     expect(explorerViewSource).toContain(":aria-selected=");
-    expect(explorerViewSource).toContain("context-nav-tab");
+    expect(explorerViewSource).toContain("context-entry-button");
+  });
+
+  it("keeps the right entry rail beside the content instead of inside its column", () => {
+    expect(explorerViewSource).toMatch(/<div class="context-panel">[\s\S]*?<div class="context-panel-scroll">[\s\S]*?<\/div>\s*<\/div>\s*<nav class="context-entry-rail"/);
+  });
+});
+
+describe("Explorer panel state independence", () => {
+  it("keeps left navigation and right context selection as separate state", () => {
+    expect(explorerViewSource).toContain('type LeftPanel = "projects" | "explorers"');
+    expect(explorerViewSource).toContain('const leftPanel = ref<LeftPanel>("explorers")');
+    expect(explorerViewSource).toContain('const contextPanel = ref<ContextPanel>("candidate")');
+    expect(explorerViewSource).toContain("function syncPanelStateFromRoute()");
+    expect(explorerViewSource).toContain("function panelStateQuery()");
+    expect(explorerViewSource).toContain("query: panelStateQuery()");
+    expect(explorerViewSource).toContain("...panelStateQuery()");
+
+    const resetSource = explorerViewSource.match(/function resetProjectState\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(resetSource).not.toContain("leftPanel.value");
+    expect(resetSource).not.toContain('contextPanel.value = "candidate"');
   });
 });
 
@@ -68,10 +97,22 @@ describe("Explorer candidate action layout", () => {
   });
 });
 
+describe("Explorer rail layout", () => {
+  it("gives both rails fixed entry columns while preserving timeline-only scrolling", () => {
+    expect(explorerStylesSource).toContain(".left-entry-rail");
+    expect(explorerStylesSource).toContain(".context-entry-rail");
+    expect(explorerStylesSource).toContain(".context-panel-shell");
+    expect(explorerStylesSource).toMatch(/grid-template-columns: 330px minmax\(560px, 1fr\) 360px;/);
+    expect(explorerStylesSource).toContain(".timeline { flex: 1 1 auto;");
+    expect(explorerStylesSource).toContain("overflow-y: auto;");
+    expect(explorerStylesSource).toContain(".composer { flex: 0 0 auto;");
+  });
+});
+
 describe("Explorer thread switching", () => {
   it("reloads the current conversation when the selected thread changes", () => {
     expect(explorerViewSource).toContain("async function selectExplorer(explorerId: string)");
-    expect(explorerViewSource).toContain("query: { explorerId }, hash: \"\" });");
+    expect(explorerViewSource).toContain("query: { explorerId, ...panelStateQuery() }, hash: \"\" });");
     expect(explorerViewSource).toContain("watch(() => route.query.explorerId, () => { if (mounted.value) reloadExplorer(); });");
     expect(explorerViewSource).toContain("api.getExplorerTurns(requestProjectId, selected.id)");
   });

@@ -55,6 +55,8 @@ const drawerOpen = ref(false);
 const policyOpen = ref(false);
 const moreOpen = ref(false);
 const explorerPaused = ref(false);
+type LeftPanel = "projects" | "explorers";
+const leftPanel = ref<LeftPanel>("explorers");
 type ContextPanel = "candidate" | "dispatched" | "active" | "attention";
 const contextPanel = ref<ContextPanel>("candidate");
 const candidateEmptyOpen = ref(false);
@@ -231,7 +233,6 @@ function resetProjectState() {
   planProjectionVersion += 1;
   drawerOpen.value = false;
   policyOpen.value = false;
-  contextPanel.value = "candidate";
   moreOpen.value = false;
   inputDialogOpen.value = false;
   busy.value = false;
@@ -394,6 +395,17 @@ function selectContextPanel(selection: ContextPanel) {
   contextPanel.value = selection;
 }
 
+function syncPanelStateFromRoute() {
+  const routeLeftPanel = route.query.leftPanel;
+  if (routeLeftPanel === "projects" || routeLeftPanel === "explorers") leftPanel.value = routeLeftPanel;
+  const routeContextPanel = route.query.contextPanel;
+  if (routeContextPanel === "candidate" || routeContextPanel === "dispatched" || routeContextPanel === "active" || routeContextPanel === "attention") contextPanel.value = routeContextPanel;
+}
+
+function panelStateQuery() {
+  return { leftPanel: leftPanel.value, contextPanel: contextPanel.value };
+}
+
 function planEventTime(value: string): string {
   return new Date(value).toLocaleString("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
@@ -434,7 +446,7 @@ async function createExplorer() {
     explorers.value = [created.explorer, ...explorers.value.filter((item) => item.id !== created.explorer.id)];
     try { project.value = (await api.selectProjectExplorer(projectId.value, created.explorer.id)).project; } catch { /* Legacy API instances may not have a Project registry yet. */ }
     historyOpen.value = false;
-    await router.push({ path: route.path, query: { explorerId: created.explorer.id }, hash: "" });
+    await router.push({ path: route.path, query: { explorerId: created.explorer.id, ...panelStateQuery() }, hash: "" });
   } catch (caught) {
     ElMessage.error(caught instanceof Error ? `新建 Explorer 失败：${caught.message}` : "新建 Explorer 失败");
   }
@@ -442,7 +454,7 @@ async function createExplorer() {
 
 function switchProject(selectedProjectId: string) {
   projectManagementOpen.value = false;
-  void router.push(projectPathForModule("explore", selectedProjectId));
+  void router.push({ path: projectPathForModule("explore", selectedProjectId), query: panelStateQuery() });
 }
 
 function openProjectSettingsDialog(selectedProjectId: string) {
@@ -469,7 +481,7 @@ function handleProjectsChanged(nextProjects: Project[]) {
 
 function handleProjectCreated(createdProject: Project) {
   projects.value = [createdProject, ...projects.value.filter((item) => item.id !== createdProject.id)];
-  void router.push(projectPathForModule("explore", createdProject.id));
+  void router.push({ path: projectPathForModule("explore", createdProject.id), query: panelStateQuery() });
 }
 
 async function selectExplorer(explorerId: string) {
@@ -478,7 +490,7 @@ async function selectExplorer(explorerId: string) {
   if (selected?.state !== "ARCHIVED") {
     try { project.value = (await api.selectProjectExplorer(projectId.value, explorerId)).project; } catch { /* Keep navigation available for legacy API instances. */ }
   }
-  await router.push({ path: route.path, query: { explorerId }, hash: "" });
+  await router.push({ path: route.path, query: { explorerId, ...panelStateQuery() }, hash: "" });
 }
 
 async function archiveExplorer(explorerId: string) {
@@ -852,13 +864,13 @@ watch(projectId, (next, previous) => {
   void load().then((loaded) => { if (loaded && mounted.value) connectEvents(); });
 });
 watch(() => route.query.explorerId, () => { if (mounted.value) reloadExplorer(); });
-onMounted(() => { mounted.value = true; void load().then((loaded) => { if (loaded) connectEvents(); }); syncHashPanel(route.hash); });
+onMounted(() => { mounted.value = true; syncPanelStateFromRoute(); void load().then((loaded) => { if (loaded) connectEvents(); }); syncHashPanel(route.hash); });
 onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeEvents(); });
 </script>
 
 <template>
   <div class="console-layout">
-    <ThreadRail :thread="thread" :project="project" :projects="projects" @open-history="historyOpen = true" @select-project="switchProject" @manage-projects="projectManagementOpen = true" />
+    <ThreadRail :panel="leftPanel" :thread="thread" :project="project" :projects="projects" :explorers="explorers" @select-panel="leftPanel = $event" @open-history="historyOpen = true" @select-project="switchProject" @select-explorer="selectExplorer" @manage-projects="projectManagementOpen = true" />
     <section class="conversation-column">
       <div class="conversation-header"><div><div class="eyebrow"><span class="mode-dot" /> PLAN MODE · READ ONLY</div><h1>{{ explorerDisplayTitle(thread) }}</h1><p>Shape the work before anything changes in the repository.</p></div><div class="conversation-tools"><el-button circle plain :aria-label="explorerPaused ? 'Resume' : 'Pause'" @click="toggleExplorerPause"><VideoPlay v-if="explorerPaused" :size="16" /><VideoPause v-else :size="16" /></el-button><el-popover v-model:visible="moreOpen" placement="bottom-end" :width="250" trigger="click"><template #reference><el-button circle plain aria-label="More"><MoreFilled :size="16" /></el-button></template><div class="thread-more-menu"><div class="eyebrow">THREAD ACTIONS</div><p>Manage read-only exploration without changing the repository.</p><el-button text @click="setPolicyOpen(true); moreOpen = false">View policy</el-button><el-button text @click="moreOpen = false; refreshThread()">Refresh thread</el-button></div></el-popover></div></div>
       <div v-if="agentLoop" class="agent-loop-strip" role="status"><div class="agent-loop-summary"><span class="eyebrow">EXPLORER PROVIDER TURN LOOP</span><strong>{{ agentLoopLabel }}</strong></div><span class="agent-loop-budget">Provider Turns {{ agentLoop.stepCount }} / {{ agentLoop.maxSteps }} · Activities {{ agentLoop.diagnostics?.providerActivityCount ?? 0 }}</span><div v-if="agentLoopGateLabel || agentLoopTerminalLabel || agentLoopCompletionLabel" class="agent-loop-status"><span v-if="agentLoopGateLabel" class="agent-loop-diagnostic">{{ agentLoopGateLabel }}</span><span v-if="agentLoopTerminalLabel" class="agent-loop-terminal">{{ agentLoopTerminalLabel }}</span><span v-if="agentLoopCompletionLabel" class="agent-loop-complete">{{ agentLoopCompletionLabel }}</span></div><el-button v-if="agentLoop.state === 'RUNNING' || agentLoop.state === 'PAUSED'" class="agent-loop-action" size="small" plain @click="toggleExplorerPause">{{ agentLoop.state === 'PAUSED' ? 'Resume loop' : 'Pause loop' }}</el-button></div>
@@ -914,22 +926,24 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
       </div>
       <div class="composer"><div class="composer-input"><textarea v-model="draft" :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || explorerPaused || busy" aria-label="Explorer message" placeholder="继续探索，或提出修改…" @keydown="handleComposerKeydown" /><span class="composer-mode">Plan Mode</span></div><div class="composer-footer"><div class="composer-metadata" aria-label="模型与上下文信息"><span class="composer-fact"><small>MODEL</small><strong>{{ explorerModel }}</strong></span><span class="composer-fact"><small>CONTEXT</small><strong>{{ contextUsage }}</strong><em>estimated</em></span><el-popover v-model:visible="statusOpen" placement="top-end" :width="330" trigger="click" @show="void loadRateLimits()"><template #reference><button class="composer-status-trigger" type="button" aria-label="Status" :aria-expanded="statusOpen"><i aria-hidden="true" /><span>STATUS</span><InfoFilled :size="12" /></button></template><div class="codex-status-popover" role="dialog" aria-label="Codex usage status"><div class="codex-status-title"><InfoFilled :size="14" /><strong>状态</strong><button type="button" aria-label="关闭" @click="statusOpen = false">关闭</button></div><div class="codex-status-row"><span>模型：</span><strong>{{ explorerModel }}</strong></div><div class="codex-status-row"><span>会话/对话串：</span><code :title="thread?.id ?? 'no-thread'">{{ conversationId }}</code></div><div class="codex-status-row"><span>背景信息：</span><strong>{{ contextUsage }}</strong><em>estimated</em></div><div class="codex-status-row"><span>5 小时限额：</span><strong>{{ rateLimits.fiveHour.remaining }}</strong><small>{{ rateLimits.fiveHour.reset }}</small></div><div class="codex-status-row"><span>7 天限额：</span><strong>{{ rateLimits.sevenDay.remaining }}</strong><small>{{ rateLimits.sevenDay.reset }}</small></div><p class="codex-status-note">{{ rateLimitNote }}</p></div></el-popover></div><span v-if="sendingTurn" class="composer-status" role="status" aria-live="polite">Message sent · waiting for Plan Explorer…</span><el-button class="composer-send" type="primary" circle :loading="busy" :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || !draft.trim() || explorerPaused || busy" aria-label="Send message" title="Send message" @click="sendTurn"><ArrowUp :size="18" /></el-button></div></div>
     </section>
-    <aside class="context-panel">
+    <aside class="context-panel-shell">
+      <div class="context-panel">
       <div class="context-header"><div><div class="eyebrow">THREAD CONTEXT</div><h2>{{ contextPanelTitle }}</h2></div><el-button text circle aria-label="Refresh" @click="refreshThread"><Refresh :size="16" /></el-button></div>
       <div class="context-panel-scroll">
-        <nav class="context-panel-nav" role="tablist" aria-label="Thread context sections">
-          <button v-for="item in contextMenuItems" :key="item.key" type="button" :class="['context-nav-item', 'context-nav-tab', { active: contextPanel === item.key }]" role="tab" :data-context="item.key" :aria-pressed="contextPanel === item.key" :aria-selected="contextPanel === item.key" @click="selectContextPanel(item.key)">
-            <span class="context-nav-icon"><component :is="item.icon" :size="17" /></span>
-            <span class="context-nav-label">{{ item.label }}</span>
-            <span class="context-nav-count">{{ item.count }}</span>
-          </button>
-        </nav>
         <div class="context-panel-intro"><span class="context-panel-intro-icon"><Promotion v-if="contextPanel === 'candidate'" :size="17" /><CircleCheck v-else-if="contextPanel === 'dispatched'" :size="17" /><Connection v-else-if="contextPanel === 'active'" :size="17" /><Warning v-else :size="17" /></span><div><div class="eyebrow">{{ contextPanelEyebrow }} <span class="context-panel-count">{{ contextPanelCount }}</span></div><p>{{ contextPanelDescription }}</p></div></div>
         <section v-if="contextPanel === 'candidate'" class="context-panel-content" aria-labelledby="candidate-panel-title"><div id="candidate-panel-title" class="context-section-title">PLAN CANDIDATE <span>{{ candidateCount }}</span></div><article v-if="candidate" class="context-plan-card"><div class="context-plan-card-head"><div class="mini-plan-title"><span class="mini-icon"><Promotion :size="16" /></span><div><strong>{{ candidate.title }}</strong><small>Revision {{ candidate.revision }}</small></div></div><el-tag size="small" type="warning" effect="light">{{ statusLabel(candidate.status) }}</el-tag></div><div class="context-plan-goal"><span>GOAL</span><p>{{ candidate.contract?.goal ?? candidate.goal ?? 'A complete, reviewable execution contract generated from this ExplorerThread.' }}</p></div><div class="candidate-stats context-plan-stats"><div><span>Tasks</span><strong>{{ candidate.contract?.tasks.length ?? candidate.tasks?.length ?? 0 }}</strong></div><div><span>Scope</span><strong>{{ candidate.contract?.include.length ?? candidate.include?.length ?? 0 }}</strong></div><div><span>Checks</span><strong>{{ candidate.contract?.verificationCommandIds.length ?? candidate.verificationCommands?.length ?? 0 }}</strong></div><div><span>Merge</span><strong class="risk-low">Human review</strong></div></div><div class="candidate-actions"><el-button @click="drawerOpen = true">View full plan <Right :size="15" /></el-button><el-button v-if="candidate.status === 'DRAFT'" type="primary" :loading="busy" @click="confirmPlan">Confirm plan <Check :size="15" /></el-button><el-button v-else-if="candidate.status === 'READY'" type="primary" :loading="busy" @click="enqueuePlan">Enqueue plan <ArrowDown :size="15" /></el-button></div></article><div v-else class="context-empty"><CircleCheck :size="24" /><p>No candidate plan</p><small>Use this panel to create a reviewable plan from the current ExplorerThread.</small><el-button plain @click="candidateEmptyOpen = true">Create candidate plan <Right :size="14" /></el-button></div></section>
         <section v-else-if="contextPanel === 'dispatched'" class="context-panel-content" aria-labelledby="dispatched-panel-title"><div id="dispatched-panel-title" class="context-section-title">DISPATCHED PLANS <span>{{ dispatchedCount }}</span></div><div v-if="dispatched.length" class="context-plan-list" role="list"><article v-for="plan in dispatched" :key="plan.planId ?? plan.id ?? plan.title" class="context-plan-row" role="listitem"><div class="context-plan-row-head"><div class="mini-plan-title"><span class="mini-icon success"><CircleCheck :size="16" /></span><div><strong>{{ plan.title }}</strong><small>{{ plan.planId ?? plan.id }} · Revision {{ plan.revision }}</small></div></div><el-tag size="small" :type="plan.status === 'MERGED' ? 'success' : plan.status === 'BLOCKED' ? 'danger' : plan.status === 'IN_PROGRESS' || plan.status === 'VERIFYING' ? 'primary' : 'warning'" effect="light">{{ statusLabel(plan.status) }}</el-tag></div><div class="context-plan-row-meta"><span>Source thread</span><code>{{ plan.sourceExplorerThreadId }}</code></div><div class="context-plan-row-meta"><span>Run</span><RouterLink v-if="planRunPath(plan)" :to="planRunPath(plan)!" class="context-plan-link">{{ plan.runId }} <Right :size="13" /></RouterLink><span v-else class="context-plan-muted">Waiting for run</span></div><div class="context-plan-row-footer"><span class="event-time">Last event {{ planEventTime(plan.lastEventAt) }}</span><RouterLink :to="planRunPath(plan) ?? projectPathForModule('execute', projectId)" class="context-plan-link">{{ planRunPath(plan) ? 'View run' : 'Open Plan Center' }} <Right :size="13" /></RouterLink></div></article></div><div v-else class="context-empty"><CircleCheck :size="24" /><p>No plans dispatched from this thread yet.</p><small>Confirmed plans will appear here and remain queryable even when the model is offline.</small><RouterLink :to="projectPathForModule('execute', projectId)" class="context-plan-link">Open Plan Center <Right :size="14" /></RouterLink></div></section>
         <section v-else-if="contextPanel === 'active'" class="context-panel-content" aria-labelledby="active-runs-panel-title"><div id="active-runs-panel-title" class="context-section-title">ACTIVE RUNS <span>{{ activeRunCount }}</span></div><div v-if="activePlans.length" class="context-plan-list" role="list"><article v-for="plan in activePlans" :key="plan.planId ?? plan.id ?? plan.title" class="context-plan-row active-run-row" role="listitem"><div class="context-plan-row-head"><div class="mini-plan-title"><span class="mini-icon"><Connection :size="16" /></span><div><strong>{{ plan.title }}</strong><small>{{ plan.planId ?? plan.id }} · Revision {{ plan.revision }}</small></div></div><el-tag size="small" type="primary" effect="light">{{ statusLabel(plan.status) }}</el-tag></div><div class="context-plan-row-meta"><span>Run</span><RouterLink v-if="planRunPath(plan)" :to="planRunPath(plan)!" class="context-plan-link">{{ plan.runId }} <Right :size="13" /></RouterLink><span v-else class="context-plan-muted">Run is being scheduled</span></div><div class="context-plan-row-footer"><span class="event-time">Last event {{ planEventTime(plan.lastEventAt) }}</span><RouterLink v-if="planRunPath(plan)" :to="planRunPath(plan)!" class="context-plan-link">Open run <Right :size="13" /></RouterLink></div></article></div><div v-else class="context-empty"><Connection :size="24" /><p>No active runs</p><small>Queued, verifying and running plans will appear here when execution starts.</small><RouterLink :to="projectPathForModule('execute', projectId)" class="context-plan-link">View all plans <Right :size="14" /></RouterLink></div></section>
         <section v-else-if="contextPanel === 'attention'" class="context-panel-content" aria-labelledby="attention-panel-title"><div id="attention-panel-title" class="context-section-title">NEEDS ATTENTION <span>{{ needsAttentionCount }}</span></div><div v-if="attentionPlans.length" class="context-plan-list" role="list"><article v-for="plan in attentionPlans" :key="plan.planId ?? plan.id ?? plan.title" class="context-plan-row attention-row" role="listitem"><div class="context-plan-row-head"><div class="mini-plan-title"><span class="mini-icon warning"><Warning :size="16" /></span><div><strong>{{ plan.title }}</strong><small>{{ plan.planId ?? plan.id }} · Revision {{ plan.revision }}</small></div></div><el-tag size="small" type="danger" effect="light">{{ statusLabel(plan.status) }}</el-tag></div><div class="context-plan-row-meta"><span>Reason</span><span class="context-attention-reason">{{ plan.attentionReason ?? 'This plan requires review before execution can continue.' }}</span></div><div class="context-plan-row-footer"><span class="event-time">Last event {{ planEventTime(plan.lastEventAt) }}</span><RouterLink :to="planRunPath(plan) ?? projectPathForModule('execute', projectId)" class="context-plan-link">{{ planRunPath(plan) ? 'Open run' : 'Open Plan Center' }} <Right :size="13" /></RouterLink></div></article></div><div v-else class="context-empty"><Warning :size="24" /><p>No items need attention</p><small>Blocked plans and plans with an explicit attention reason will appear here.</small><RouterLink :to="projectPathForModule('execute', projectId)" class="context-plan-link">View all plans <Right :size="14" /></RouterLink></div></section>
       </div>
+      </div>
+      <nav class="context-entry-rail" role="tablist" aria-label="Thread context sections">
+        <button v-for="item in contextMenuItems" :key="item.key" type="button" :class="['context-entry-button', { active: contextPanel === item.key }]" role="tab" :data-context="item.key" :aria-pressed="contextPanel === item.key" :aria-selected="contextPanel === item.key" :aria-label="item.label" @click="selectContextPanel(item.key)">
+          <span class="context-entry-icon"><component :is="item.icon" :size="17" /></span>
+          <span class="context-entry-label">{{ item.key === 'candidate' ? 'Candidate' : item.key === 'dispatched' ? 'Dispatched' : item.key === 'active' ? 'Active' : 'Attention' }}</span>
+          <span class="context-entry-count">{{ item.count }}</span>
+        </button>
+      </nav>
     </aside>
     <ExplorerHistoryDrawer v-model="historyOpen" :explorers="explorers" :current-id="thread?.id ?? null" @select="selectExplorer" @create="createExplorer" @archive="archiveExplorer" @activate="activateExplorer" />
     <PlanDetailDrawer v-model="drawerOpen" :plan="candidate" @confirm="confirmPlan" @discard="discardPlan" @enqueue="enqueuePlan" />
