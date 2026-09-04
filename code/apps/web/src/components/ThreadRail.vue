@@ -3,7 +3,7 @@
   维护提示：左侧入口只切换左侧内容，右侧执行上下文由 ExplorerView 独立管理。
 -->
 <script setup lang="ts">
-import { Connection, FolderOpened } from "@element-plus/icons-vue";
+import { Connection, FolderOpened, Plus } from "@element-plus/icons-vue";
 import type { ExplorerThread, Project } from "../types";
 
 type LeftPanel = "projects" | "explorers";
@@ -14,12 +14,13 @@ const props = defineProps<{
   project?: Project | null;
   projects: Project[];
   explorers: ExplorerThread[];
+  creatingExplorer?: boolean;
 }>();
 const emit = defineEmits<{
   "select-panel": [panel: LeftPanel];
   "select-project": [projectId: string];
   "select-explorer": [explorerId: string];
-  "open-history": [];
+  "create-explorer": [];
   "manage-projects": [];
 }>();
 
@@ -82,12 +83,17 @@ function explorerStatusLabel(state: ExplorerThread["state"]): string {
       </div>
 
       <div v-else class="left-panel-scroll explorer-list">
-        <button class="thread-identity" type="button" aria-label="Open Explorer history" title="Open Explorer history" @click="emit('open-history')">
-          <span class="thread-icon"><Connection :size="16" /></span>
-          <span class="thread-copy"><strong>{{ props.thread?.title ?? "探索线程" }}</strong><small>{{ props.thread?.id ?? "no-thread" }}</small></span>
-          <span class="live-dot" />
+        <button
+          class="left-panel-create"
+          type="button"
+          aria-label="新建 Explorer"
+          :disabled="props.creatingExplorer"
+          :aria-busy="props.creatingExplorer ? 'true' : undefined"
+          @click="emit('create-explorer')"
+        >
+          <span class="left-panel-create-icon"><Plus :size="16" /></span>
+          <span><strong>新建 Explorer</strong><small>从全新上下文开始</small></span>
         </button>
-        <div class="thread-meta"><span>{{ props.thread?.messageCount ?? 0 }} messages</span><span>Current</span></div>
 
         <div class="left-list-label">EXPLORER THREADS</div>
         <button

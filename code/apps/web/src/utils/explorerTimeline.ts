@@ -12,6 +12,13 @@ export type ExplorerTimelineItem =
 
 const inputLifecycleKinds = new Set<ExplorerActivityItem["kind"]>(["INPUT_REQUIRED", "INPUT_RESOLVED"]);
 
+export function explorerTimelineTarget(item: ExplorerActivityItem, index: number): string {
+  if (item.kind === "USER_MESSAGE" || item.kind === "ASSISTANT_MESSAGE") {
+    return `message-${item.turnId}`;
+  }
+  return `activity-${item.id}-${index}`;
+}
+
 function timestamp(value: string): number {
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? Number.MAX_SAFE_INTEGER : parsed;

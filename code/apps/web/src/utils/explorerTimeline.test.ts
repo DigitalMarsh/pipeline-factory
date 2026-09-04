@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { ExplorerActivityItem, ExplorerInputRequest } from "../types";
-import { buildExplorerTimeline } from "./explorerTimeline";
+import { buildExplorerTimeline, explorerTimelineTarget } from "./explorerTimeline";
 
 const activity = (id: string, kind: ExplorerActivityItem["kind"], occurredAt: string): ExplorerActivityItem => ({
   id,
@@ -60,5 +60,11 @@ describe("Explorer timeline projection", () => {
     );
 
     expect(items.map((item) => item.key)).toEqual(["activity:turn-1", "input:input-2"]);
+  });
+
+  it("keeps a message target stable when lifecycle activity precedes the assistant message", () => {
+    const assistant = activity("assistant-turn", "ASSISTANT_MESSAGE", "2026-09-01T10:03:00.000Z");
+
+    expect(explorerTimelineTarget(assistant, 4)).toBe("message-assistant-turn");
   });
 });

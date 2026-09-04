@@ -307,12 +307,7 @@ function decodePlanCursor(value: string): PlanCursor {
   }
 }
 
-function activateOnlyExplorer(store: PipelineStore, thread: ExplorerThread): void {
-  for (const candidate of store.listThreads()) {
-    if (candidate.projectId !== thread.projectId || candidate.id === thread.id || candidate.state === "ARCHIVED") continue;
-    store.updateThread({ ...candidate, state: "ARCHIVED", lastActivityAt: store.now() });
-    store.appendEvent({ type: "explorer.archived", aggregateId: candidate.id, payload: { explorerId: candidate.id, supersededBy: thread.id } });
-  }
+function selectCurrentExplorer(store: PipelineStore, thread: ExplorerThread): void {
   const project = store.getProject(thread.projectId);
   if (project && project.currentExplorerThreadId !== thread.id) {
     store.updateProject({ ...project, currentExplorerThreadId: thread.id, updatedAt: store.now() });
@@ -1998,7 +1993,7 @@ export class PlanService {
   /** 注册与 Project 绑定的本地线程，并追加创建事件。 */
   registerThread(input: RegisterThreadInput): ExplorerThread {
     const thread = this.store.saveThread(input);
-    activateOnlyExplorer(this.store, thread);
+    selectCurrentExplorer(this.store, thread);
     this.store.appendEvent({
       type: "explorer.thread.created",
       aggregateId: thread.id,
@@ -2313,7 +2308,7 @@ export class ExplorerService {
     });
     this.store.appendEvent({ type: "explorer.created", aggregateId: thread.id, payload: { projectId: thread.projectId, contextMode: thread.contextMode, originThreadId: thread.originThreadId } });
     if (origin) this.store.appendEvent({ type: "explorer.continued", aggregateId: thread.id, payload: { originThreadId: origin.id } });
-    activateOnlyExplorer(this.store, thread);
+    selectCurrentExplorer(this.store, thread);
     return thread;
   }
 
@@ -2344,7 +2339,7 @@ export class ExplorerService {
     if (explorer.state === "ACTIVE") return explorer;
     const active = this.store.updateThread({ ...explorer, state: "ACTIVE", lastActivityAt: this.store.now() });
     this.store.appendEvent({ type: "explorer.activated", aggregateId: explorerId, payload: { explorerId } });
-    activateOnlyExplorer(this.store, active);
+    selectCurrentExplorer(this.store, active);
     return active;
   }
 

@@ -27,7 +27,7 @@ describe("ExplorerService", () => {
     expect(explorers.list("project-1").map((item) => item.id)).toEqual([fresh.id, oldExplorer.id]);
   });
 
-  it("keeps exactly one active Explorer per Project and updates the selected Explorer", () => {
+  it("keeps multiple active Explorers and updates only the selected Explorer", () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);
     projects.create({ id: "project-1", name: "Project", repoRoot: "/repo/project", defaultBranch: "main", worktreeRoot: "/tmp/project-worktrees" });
@@ -36,7 +36,7 @@ describe("ExplorerService", () => {
     const first = explorers.create({ projectId: "project-1", title: "First" });
     const second = explorers.create({ projectId: "project-1", title: "Second" });
 
-    expect(store.getThread(first.id)?.state).toBe("ARCHIVED");
+    expect(store.getThread(first.id)?.state).toBe("ACTIVE");
     expect(store.getThread(second.id)?.state).toBe("ACTIVE");
     expect(projects.get("project-1").currentExplorerThreadId).toBe(second.id);
   });

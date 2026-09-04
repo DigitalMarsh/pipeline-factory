@@ -563,6 +563,7 @@ describe("Pipeline Factory v4 API", () => {
     const fresh = created.json().explorer;
     expect(fresh).toMatchObject({ projectId: "project-1", title: "Fresh requirement", contextMode: "FRESH", providerThreadId: null });
     expect(store.listTurns(fresh.id)).toEqual([]);
+    expect(store.getThread("old-explorer")?.state).toBe("ACTIVE");
 
     const listed = await app.inject({ method: "GET", url: "/api/v4/projects/project-1/explorers" });
     expect(listed.statusCode).toBe(200);

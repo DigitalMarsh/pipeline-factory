@@ -4,10 +4,10 @@ import { describe, expect, it } from "vitest";
 import ThreadRail from "./ThreadRail.vue";
 import type { ExplorerThread, Project } from "../types";
 
-function mountRail(panel: "projects" | "explorers" = "explorers") {
+function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplorer = false) {
   const host = document.createElement("div");
   document.body.appendChild(host);
-  let openHistoryCount = 0;
+  let createExplorerCount = 0;
   let selectedPanel: "projects" | "explorers" | null = null;
   let selectedProjectId: string | null = null;
   let selectedExplorerId: string | null = null;
@@ -31,7 +31,8 @@ function mountRail(panel: "projects" | "explorers" = "explorers") {
         project,
         projects,
         explorers,
-        onOpenHistory: () => { openHistoryCount += 1; },
+        creatingExplorer,
+        onCreateExplorer: () => { createExplorerCount += 1; },
         onSelectPanel: (value: "projects" | "explorers") => { selectedPanel = value; activePanel.value = value; },
         onSelectProject: (projectId: string) => { selectedProjectId = projectId; },
         onSelectExplorer: (explorerId: string) => { selectedExplorerId = explorerId; },
@@ -43,7 +44,7 @@ function mountRail(panel: "projects" | "explorers" = "explorers") {
   return {
     app,
     host,
-    getOpenHistoryCount: () => openHistoryCount,
+    getCreateExplorerCount: () => createExplorerCount,
     getSelectedPanel: () => selectedPanel,
     getSelectedProjectId: () => selectedProjectId,
     getSelectedExplorerId: () => selectedExplorerId,
@@ -107,14 +108,41 @@ describe("ThreadRail left workspace navigation", () => {
     mounted.host.remove();
   });
 
-  it("opens Explorer history from the current thread card", async () => {
+  it("renders all Explorer threads inline and marks the current thread active", () => {
     const mounted = mountRail();
-    const currentThread = mounted.host.querySelector<HTMLButtonElement>("button.thread-identity");
+    const currentThread = mounted.host.querySelector<HTMLButtonElement>('button[data-explorer-id="explorer-1"]');
+    const explorerRows = [...mounted.host.querySelectorAll<HTMLButtonElement>("button[data-explorer-id]")];
 
-    expect(currentThread).not.toBeNull();
-    currentThread?.click();
+    expect(mounted.host.querySelector(".thread-identity")).toBeNull();
+    expect(mounted.host.querySelector("[aria-label=\"Open Explorer history\"]")).toBeNull();
+    expect(explorerRows).toHaveLength(2);
+    expect(explorerRows.map((row) => row.textContent)).toEqual(expect.arrayContaining([expect.stringContaining("Current exploration"), expect.stringContaining("Second exploration")]));
+    expect(currentThread?.classList.contains("active")).toBe(true);
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  it("emits create-explorer from the inline new Explorer button", async () => {
+    const mounted = mountRail();
+    const createButton = mounted.host.querySelector<HTMLButtonElement>("button.left-panel-create");
+
+    expect(createButton).not.toBeNull();
+    expect(createButton?.textContent).toContain("新建 Explorer");
+    createButton?.click();
     await nextTick();
-    expect(mounted.getOpenHistoryCount()).toBe(1);
+    expect(mounted.getCreateExplorerCount()).toBe(1);
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  it("disables the new Explorer button while creation is in flight", () => {
+    const mounted = mountRail("explorers", true);
+    const createButton = mounted.host.querySelector<HTMLButtonElement>("button.left-panel-create");
+
+    expect(createButton?.disabled).toBe(true);
+    expect(createButton?.getAttribute("aria-busy")).toBe("true");
 
     mounted.app.unmount();
     mounted.host.remove();

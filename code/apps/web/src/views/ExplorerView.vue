@@ -21,7 +21,6 @@ import { isExplorerTurnProcessing } from "../utils/turnStatus";
 import { formatContextUsage, formatConversationId, formatRateLimit } from "../utils/explorerStatus";
 import { createSseReplayGate } from "../utils/sseReplayGate";
 import ExplorerInputDialog from "../components/ExplorerInputDialog.vue";
-import ExplorerHistoryDrawer from "../components/ExplorerHistoryDrawer.vue";
 import ProjectManagementDialog from "../components/ProjectManagementDialog.vue";
 import ProjectSettingsDialog from "../components/ProjectSettingsDialog.vue";
 import scrollToLatestIcon from "../assets/scroll-to-latest.png";
@@ -30,7 +29,7 @@ import { parsePlanProtocolDisplay } from "../utils/planProtocolDisplay";
 import { findPlanForActivity, planIdentity, planTimelineItems as buildPlanTimelineItems } from "../utils/planTimeline";
 import { inputAnswerLabels, resolveQuestionAnswers } from "../utils/explorerInput";
 import { createProjectRequestScope, projectPathForModule } from "../utils/projectRoutes";
-import { buildExplorerTimeline } from "../utils/explorerTimeline";
+import { buildExplorerTimeline, explorerTimelineTarget } from "../utils/explorerTimeline";
 import { formatAgentLoopCompletion, formatAgentLoopGate, formatAgentLoopTerminal } from "../utils/agentLoopPresentation";
 
 const route = useRoute();
@@ -42,7 +41,6 @@ const project = ref<Project | null>(null);
 const projects = ref<Project[]>([]);
 const thread = ref<ExplorerThread | null>(null);
 const explorers = ref<ExplorerThread[]>([]);
-const historyOpen = ref(false);
 const projectManagementOpen = ref(false);
 const projectSettingsOpen = ref(false);
 const projectSettingsProjectId = ref<string | null>(null);
@@ -64,6 +62,7 @@ const candidateTitle = ref("New Explorer plan");
 const loading = ref(true);
 const error = ref<string | null>(null);
 const busy = ref(false);
+const creatingExplorer = ref(false);
 const sendingTurn = ref(false);
 const showScrollToLatest = ref(false);
 const timeline = ref<HTMLElement | null>(null);
@@ -215,11 +214,8 @@ function isCurrentProjectScope(requestProjectId: string, requestToken = activeRe
   return requestScope.isCurrent(requestToken, requestProjectId) && projectId.value === requestProjectId;
 }
 
-/** 项目切换时清空旧项目投影，避免旧 SSE 或异步请求重新填充当前工作区。 */
-function resetProjectState() {
-  project.value = null;
+function resetThreadState() {
   thread.value = null;
-  explorers.value = [];
   candidate.value = null;
   dispatched.value = [];
   turns.value = [];
@@ -235,8 +231,18 @@ function resetProjectState() {
   policyOpen.value = false;
   moreOpen.value = false;
   inputDialogOpen.value = false;
+  explorerPaused.value = false;
+  activeTimelineKey.value = "";
+  activePlanKey.value = "";
   busy.value = false;
   sendingTurn.value = false;
+}
+
+/** 项目切换时清空旧项目投影，避免旧 SSE 或异步请求重新填充当前工作区。 */
+function resetProjectState() {
+  project.value = null;
+  explorers.value = [];
+  resetThreadState();
 }
 
 function inputAnswerLabelsFor(request: ExplorerInputRequest, question: ExplorerInputRequest["questions"][number]): string[] {
@@ -310,8 +316,7 @@ function explorerDisplayTitle(item: ExplorerThread | null): string {
 }
 
 function activityTarget(item: ExplorerActivityItem, index: number): string {
-  const firstForTurn = visibleActivity.value.find((candidate) => candidate.turnId === item.turnId);
-  return firstForTurn?.id === item.id ? `message-${item.turnId}` : `activity-${item.id}-${index}`;
+  return explorerTimelineTarget(item, index);
 }
 
 function activityStatusLabel(item: ExplorerActivityItem): string {
@@ -440,15 +445,20 @@ async function createCandidate() {
 }
 
 async function createExplorer() {
-  if (busy.value) return;
+  if (creatingExplorer.value) return;
+  creatingExplorer.value = true;
+  closeEvents();
+  requestScope.invalidate();
+  resetThreadState();
   try {
     const created = await api.createExplorer(projectId.value);
     explorers.value = [created.explorer, ...explorers.value.filter((item) => item.id !== created.explorer.id)];
     try { project.value = (await api.selectProjectExplorer(projectId.value, created.explorer.id)).project; } catch { /* Legacy API instances may not have a Project registry yet. */ }
-    historyOpen.value = false;
     await router.push({ path: route.path, query: { explorerId: created.explorer.id, ...panelStateQuery() }, hash: "" });
   } catch (caught) {
     ElMessage.error(caught instanceof Error ? `新建 Explorer 失败：${caught.message}` : "新建 Explorer 失败");
+  } finally {
+    creatingExplorer.value = false;
   }
 }
 
@@ -486,31 +496,14 @@ function handleProjectCreated(createdProject: Project) {
 
 async function selectExplorer(explorerId: string) {
   if (explorerId === thread.value?.id) return;
+  closeEvents();
+  requestScope.invalidate();
+  resetThreadState();
   const selected = explorers.value.find((item) => item.id === explorerId);
   if (selected?.state !== "ARCHIVED") {
     try { project.value = (await api.selectProjectExplorer(projectId.value, explorerId)).project; } catch { /* Keep navigation available for legacy API instances. */ }
   }
   await router.push({ path: route.path, query: { explorerId, ...panelStateQuery() }, hash: "" });
-}
-
-async function archiveExplorer(explorerId: string) {
-  try {
-    await api.archiveExplorer(projectId.value, explorerId);
-    explorers.value = explorers.value.map((item) => item.id === explorerId ? { ...item, state: "ARCHIVED" } : item);
-    ElMessage.success("ExplorerThread 已归档");
-    if (thread.value?.id === explorerId) {
-      const next = explorers.value.find((item) => item.state !== "ARCHIVED");
-      if (next) await selectExplorer(next.id);
-    }
-  } catch (caught) { ElMessage.error(caught instanceof Error ? caught.message : "ExplorerThread 归档失败"); }
-}
-
-async function activateExplorer(explorerId: string) {
-  try {
-    const response = await api.activateExplorer(projectId.value, explorerId);
-    explorers.value = explorers.value.map((item) => item.id === explorerId ? response.explorer : item);
-    ElMessage.success("ExplorerThread 已恢复");
-  } catch (caught) { ElMessage.error(caught instanceof Error ? caught.message : "ExplorerThread 恢复失败"); }
 }
 
 async function refreshActivity() {
@@ -852,6 +845,8 @@ async function discardPlan() {
 function statusLabel(status: string) { return ({ DRAFT: "Candidate", DISCARDED: "Discarded", READY: "Confirmed", QUEUED: "Queued", IN_PROGRESS: "Running", VERIFYING: "Verifying", MERGE_READY: "Ready for review", MERGED: "Merged", NEEDS_PLAN_CHANGE: "Plan change required", BLOCKED: "Blocked" } as Record<string, string>)[status] ?? status; }
 function reloadExplorer() {
   closeEvents();
+  requestScope.invalidate();
+  resetThreadState();
   void load().then((loaded) => { if (loaded && mounted.value) connectEvents(); });
 }
 watch(() => route.hash, syncHashPanel);
@@ -870,7 +865,7 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
 
 <template>
   <div class="console-layout">
-    <ThreadRail :panel="leftPanel" :thread="thread" :project="project" :projects="projects" :explorers="explorers" @select-panel="leftPanel = $event" @open-history="historyOpen = true" @select-project="switchProject" @select-explorer="selectExplorer" @manage-projects="projectManagementOpen = true" />
+    <ThreadRail :panel="leftPanel" :thread="thread" :project="project" :projects="projects" :explorers="explorers" :creating-explorer="creatingExplorer" @select-panel="leftPanel = $event" @create-explorer="createExplorer" @select-project="switchProject" @select-explorer="selectExplorer" @manage-projects="projectManagementOpen = true" />
     <section class="conversation-column">
       <div class="conversation-header"><div><div class="eyebrow"><span class="mode-dot" /> PLAN MODE · READ ONLY</div><h1>{{ explorerDisplayTitle(thread) }}</h1><p>Shape the work before anything changes in the repository.</p></div><div class="conversation-tools"><el-button circle plain :aria-label="explorerPaused ? 'Resume' : 'Pause'" @click="toggleExplorerPause"><VideoPlay v-if="explorerPaused" :size="16" /><VideoPause v-else :size="16" /></el-button><el-popover v-model:visible="moreOpen" placement="bottom-end" :width="250" trigger="click"><template #reference><el-button circle plain aria-label="More"><MoreFilled :size="16" /></el-button></template><div class="thread-more-menu"><div class="eyebrow">THREAD ACTIONS</div><p>Manage read-only exploration without changing the repository.</p><el-button text @click="setPolicyOpen(true); moreOpen = false">View policy</el-button><el-button text @click="moreOpen = false; refreshThread()">Refresh thread</el-button></div></el-popover></div></div>
       <div v-if="agentLoop" class="agent-loop-strip" role="status"><div class="agent-loop-summary"><span class="eyebrow">EXPLORER PROVIDER TURN LOOP</span><strong>{{ agentLoopLabel }}</strong></div><span class="agent-loop-budget">Provider Turns {{ agentLoop.stepCount }} / {{ agentLoop.maxSteps }} · Activities {{ agentLoop.diagnostics?.providerActivityCount ?? 0 }}</span><div v-if="agentLoopGateLabel || agentLoopTerminalLabel || agentLoopCompletionLabel" class="agent-loop-status"><span v-if="agentLoopGateLabel" class="agent-loop-diagnostic">{{ agentLoopGateLabel }}</span><span v-if="agentLoopTerminalLabel" class="agent-loop-terminal">{{ agentLoopTerminalLabel }}</span><span v-if="agentLoopCompletionLabel" class="agent-loop-complete">{{ agentLoopCompletionLabel }}</span></div><el-button v-if="agentLoop.state === 'RUNNING' || agentLoop.state === 'PAUSED'" class="agent-loop-action" size="small" plain @click="toggleExplorerPause">{{ agentLoop.state === 'PAUSED' ? 'Resume loop' : 'Pause loop' }}</el-button></div>
@@ -945,7 +940,6 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
         </button>
       </nav>
     </aside>
-    <ExplorerHistoryDrawer v-model="historyOpen" :explorers="explorers" :current-id="thread?.id ?? null" @select="selectExplorer" @create="createExplorer" @archive="archiveExplorer" @activate="activateExplorer" />
     <PlanDetailDrawer v-model="drawerOpen" :plan="candidate" @confirm="confirmPlan" @discard="discardPlan" @enqueue="enqueuePlan" />
     <ExplorerInputDialog ref="inputDialog" v-model="inputDialogOpen" :request="pendingInput" @submit="submitInput" @cancel="cancelInput" @progress="updateInputProgress" />
     <ProjectManagementDialog v-model="projectManagementOpen" :projects="projects" :current-project-id="projectId" @select-project="switchProject" @open-settings="openProjectSettingsDialog" @projects-changed="handleProjectsChanged" @project-created="handleProjectCreated" />

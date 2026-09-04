@@ -25,8 +25,19 @@ describe("Explorer project selector wiring", () => {
     expect(explorerViewSource).toContain("@select-panel=\"leftPanel = $event\"");
     expect(explorerViewSource).toContain("@select-project=\"switchProject\"");
     expect(explorerViewSource).toContain("@select-explorer=\"selectExplorer\"");
+    expect(explorerViewSource).toContain("@create-explorer=\"createExplorer\"");
     expect(explorerViewSource).toContain("projectPathForModule(\"explore\", selectedProjectId)");
     expect(explorerViewSource).toContain("@manage-projects=\"projectManagementOpen = true\"");
+  });
+
+  it("renders Explorer threads inline without the history drawer", () => {
+    expect(threadRailSource).toContain("explorer-list");
+    expect(threadRailSource).toContain("class=\"left-panel-create\"");
+    expect(explorerViewSource).not.toContain("ExplorerHistoryDrawer");
+    expect(explorerViewSource).not.toContain("historyOpen");
+    expect(explorerViewSource).not.toContain("open-history");
+    expect(threadRailSource).not.toContain("open-history");
+    expect(threadRailSource).not.toContain("thread-identity");
   });
 });
 
@@ -109,12 +120,40 @@ describe("Explorer rail layout", () => {
   });
 });
 
+describe("Explorer context panel dark theme", () => {
+  it("uses the left navigation palette across the right panel surfaces", () => {
+    expect(explorerStylesSource).toMatch(/\.context-panel-shell \{[^}]*background: #101827;/);
+    expect(explorerStylesSource).toMatch(/\.context-panel-shell \.context-panel \{[^}]*background: #101827;/);
+    expect(explorerStylesSource).toMatch(/\.context-entry-rail \{[^}]*border-left: 1px solid #29364d;[^}]*background: #101a2b;/);
+    expect(explorerStylesSource).toMatch(/\.context-entry-button \{[^}]*border: 1px solid #293b58;[^}]*background: #16253d;[^}]*color: #91a5c0;/);
+    expect(explorerStylesSource).toMatch(/\.context-entry-button\.active \{[^}]*border-color: #4c9cf0;[^}]*background: #24548b;[^}]*color: #fff;/);
+    expect(explorerStylesSource).toMatch(/\.context-panel-shell \.context-plan-card \{[^}]*border: 1px solid #355b8b;[^}]*background: #16253d;/);
+    expect(explorerStylesSource).toMatch(/\.context-panel-shell \.context-plan-row \{[^}]*border: 1px solid #293b58;[^}]*background: #16253d;/);
+  });
+
+  it("keeps dark-theme interaction states and semantic entry colors", () => {
+    expect(explorerStylesSource).toMatch(/\.context-entry-button:hover, \.context-entry-button:focus-visible \{[^}]*border-color: #4f86d7;[^}]*background: #1b3559;[^}]*color: #dcecff;/);
+    expect(explorerStylesSource).toContain(".context-entry-button:nth-child(2) .context-entry-icon { color: #70d5a4; }");
+    expect(explorerStylesSource).toContain(".context-entry-button:nth-child(3) .context-entry-icon { color: #75baf2; }");
+    expect(explorerStylesSource).toContain(".context-entry-button:nth-child(4) .context-entry-icon { color: #f19aa0; }");
+  });
+});
+
 describe("Explorer thread switching", () => {
   it("reloads the current conversation when the selected thread changes", () => {
     expect(explorerViewSource).toContain("async function selectExplorer(explorerId: string)");
     expect(explorerViewSource).toContain("query: { explorerId, ...panelStateQuery() }, hash: \"\" });");
     expect(explorerViewSource).toContain("watch(() => route.query.explorerId, () => { if (mounted.value) reloadExplorer(); });");
     expect(explorerViewSource).toContain("api.getExplorerTurns(requestProjectId, selected.id)");
+  });
+
+  it("separates Explorer creation from turn busy state and clears stale thread data", () => {
+    expect(explorerViewSource).toContain("const creatingExplorer = ref(false)");
+    expect(explorerViewSource).toContain("if (creatingExplorer.value) return;");
+    expect(explorerViewSource).not.toContain("async function createExplorer() {\n  if (busy.value) return;");
+    expect(explorerViewSource).toContain("function resetThreadState()");
+    expect(explorerViewSource).toContain("requestScope.invalidate();");
+    expect(explorerViewSource).toContain(":creating-explorer=\"creatingExplorer\"");
   });
 });
 
