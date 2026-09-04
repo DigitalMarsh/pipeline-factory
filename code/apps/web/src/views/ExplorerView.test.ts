@@ -155,6 +155,11 @@ describe("Explorer thread switching", () => {
     expect(explorerViewSource).toContain("requestScope.invalidate();");
     expect(explorerViewSource).toContain(":creating-explorer=\"creatingExplorer\"");
   });
+
+  it("keeps message navigation keys unique when a turn has multiple assistant activities", () => {
+    expect(explorerViewSource).toContain("key: `message:${item.activity.id}`");
+    expect(explorerViewSource).toContain("activeTimelineKey === item.target");
+  });
 });
 
 describe("Explorer project management wiring", () => {

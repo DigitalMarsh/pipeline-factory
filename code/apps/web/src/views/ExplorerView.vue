@@ -125,7 +125,7 @@ const timelineItems = computed(() => buildExplorerTimeline(visibleActivity.value
 const messageTimelineItems = computed<TimelineNavItem[]>(() => timelineItems.value.flatMap((item) => {
   if (item.kind === "input") return [{ key: `input:${item.request.id}`, label: "Plan Explorer input", detail: inputTimelineDetail(item.request), target: inputRequestTarget(item.request) }];
   if (item.activity.kind !== "USER_MESSAGE" && item.activity.kind !== "ASSISTANT_MESSAGE") return [];
-  return [{ key: `message-${item.activity.turnId}`, label: item.activity.kind === "USER_MESSAGE" ? "You" : "Plan Explorer", detail: formatTurnTime(item.activity.occurredAt), target: `message-${item.activity.turnId}` }];
+  return [{ key: `message:${item.activity.id}`, label: item.activity.kind === "USER_MESSAGE" ? "You" : "Plan Explorer", detail: formatTurnTime(item.activity.occurredAt), target: `message-${item.activity.turnId}` }];
 }));
 const allPlans = computed<Plan[]>(() => {
   const unique = new Map<string, Plan>();
@@ -876,7 +876,7 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
       <div class="timeline-stage">
       <aside class="timeline-rail timeline-rail-messages" aria-label="Message timeline">
         <div class="timeline-rail-heading"><span>MESSAGES</span><strong>{{ messageTimelineItems.length }}</strong></div>
-        <button v-for="item in messageTimelineItems" :key="item.key" type="button" :class="['timeline-rail-item', { active: activeTimelineKey === item.key }]" :aria-current="activeTimelineKey === item.key ? 'location' : undefined" @click="jumpToTimelineTarget(item.target, item.key)"><span class="timeline-rail-marker"><i /></span><span class="timeline-rail-copy"><strong>{{ item.label }}</strong><small>{{ item.detail }}</small></span></button>
+        <button v-for="item in messageTimelineItems" :key="item.key" type="button" :class="['timeline-rail-item', { active: activeTimelineKey === item.key || activeTimelineKey === item.target }]" :aria-current="activeTimelineKey === item.key || activeTimelineKey === item.target ? 'location' : undefined" @click="jumpToTimelineTarget(item.target, item.key)"><span class="timeline-rail-marker"><i /></span><span class="timeline-rail-copy"><strong>{{ item.label }}</strong><small>{{ item.detail }}</small></span></button>
       </aside>
       <div class="timeline-shell">
       <div ref="timeline" class="timeline" v-loading="loading" @scroll="updateTimelineScrollState">
