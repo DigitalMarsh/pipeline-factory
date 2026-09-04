@@ -61,6 +61,13 @@ describe("Explorer context panel wiring", () => {
   });
 });
 
+describe("Explorer candidate action layout", () => {
+  it("keeps right-panel plan actions on one equal-width row", () => {
+    expect(explorerStylesSource).toMatch(/\.context-plan-card \.candidate-actions \{[^}]*flex-wrap: nowrap;/);
+    expect(explorerStylesSource).toMatch(/\.context-plan-card \.candidate-actions \.el-button \{[^}]*flex: 1 1 0;[^}]*min-width: 0;[^}]*margin-left: 0;/);
+  });
+});
+
 describe("Explorer thread switching", () => {
   it("reloads the current conversation when the selected thread changes", () => {
     expect(explorerViewSource).toContain("async function selectExplorer(explorerId: string)");

@@ -103,7 +103,8 @@ a { color: inherit; text-decoration: none; }
 .context-plan-goal span { color: #9ba8b8; font-size: 9px; font-weight: 800; letter-spacing: .1em; }
 .context-plan-goal p { margin: 6px 0 0; color: #64738a; font-size: 11px; line-height: 1.6; }
 .context-plan-stats { margin-top: 13px; }
-.context-plan-card .candidate-actions { flex-wrap: wrap; }
+.context-plan-card .candidate-actions { flex-wrap: nowrap; }
+.context-plan-card .candidate-actions .el-button { flex: 1 1 0; min-width: 0; margin-left: 0; justify-content: center; }
 .context-plan-list { display: grid; gap: 10px; margin-top: 11px; }
 .context-plan-row { padding: 13px; border: 1px solid #dfe7f2; border-radius: 8px; background: #fff; box-shadow: 0 2px 9px rgba(52, 83, 133, .04); }
 .context-plan-row:hover { border-color: #b8caf0; box-shadow: 0 4px 13px rgba(52, 83, 133, .08); }
