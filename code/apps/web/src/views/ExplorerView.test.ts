@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 const explorerViewSource = readFileSync(fileURLToPath(new URL("./ExplorerView.vue", import.meta.url)), "utf8");
 const explorerStylesSource = readFileSync(fileURLToPath(new URL("../styles.css", import.meta.url)), "utf8");
 const threadRailSource = readFileSync(fileURLToPath(new URL("../components/ThreadRail.vue", import.meta.url)), "utf8");
+const projectCatalogSource = readFileSync(fileURLToPath(new URL("./ProjectCatalogView.vue", import.meta.url)), "utf8");
 
 describe("Explorer policy notice surface", () => {
   it("does not render the redundant policy banner", () => {
@@ -26,8 +27,9 @@ describe("Explorer project selector wiring", () => {
     expect(explorerViewSource).toContain("@select-project=\"switchProject\"");
     expect(explorerViewSource).toContain("@select-explorer=\"selectExplorer\"");
     expect(explorerViewSource).toContain("@create-explorer=\"createExplorer\"");
+    expect(explorerViewSource).toContain("@create-project=\"openProjectCreateDialog\"");
     expect(explorerViewSource).toContain("projectPathForModule(\"explore\", selectedProjectId)");
-    expect(explorerViewSource).toContain("@manage-projects=\"projectManagementOpen = true\"");
+    expect(explorerViewSource).toContain("@open-project=\"switchProject\"");
   });
 
   it("renders Explorer threads inline without the history drawer", () => {
@@ -163,11 +165,30 @@ describe("Explorer thread switching", () => {
 });
 
 describe("Explorer project management wiring", () => {
-  it("opens an in-place project management dialog from the project rail", () => {
-    expect(explorerViewSource).toContain("projectManagementOpen");
-    expect(explorerViewSource).toContain("@manage-projects=\"projectManagementOpen = true\"");
-    expect(explorerViewSource).toContain("ProjectManagementDialog");
+  it("uses inline project actions instead of a Manage Projects dialog", () => {
+    expect(explorerViewSource).not.toContain("projectManagementOpen");
+    expect(explorerViewSource).not.toContain("@manage-projects");
+    expect(explorerViewSource).not.toContain("ProjectManagementDialog");
+    expect(explorerViewSource).toContain("@open-project=\"switchProject\"");
+    expect(explorerViewSource).toContain("@create-project=\"openProjectCreateDialog\"");
+    expect(explorerViewSource).toContain("ProjectCreateDialog");
+    expect(explorerViewSource).toContain("@open-project-settings=\"openProjectSettingsDialog\"");
+    expect(explorerViewSource).toContain("@archive-project=\"toggleProjectArchive\"");
     expect(explorerViewSource).not.toContain('void router.push("/projects")');
+  });
+
+  it("opens project creation in the current Explorer dialog", () => {
+    expect(explorerViewSource).toContain("projectCreateOpen");
+    expect(explorerViewSource).toContain("function openProjectCreateDialog()");
+    expect(explorerViewSource).not.toContain('void router.push("/projects/new")');
+    expect(explorerViewSource).toContain("@project-created=\"handleProjectCreated\"");
+  });
+
+  it("preserves the project catalog while clearing the old Explorer projection", () => {
+    const resetSource = explorerViewSource.match(/function resetProjectState\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(resetSource).not.toContain("projects.value = []");
+    expect(explorerViewSource).toContain("projects.value.find((item) => item.id === nextProjectId)");
+    expect(explorerViewSource).toContain("resetThreadState();");
   });
 });
 
@@ -175,8 +196,17 @@ describe("Explorer project settings wiring", () => {
   it("opens project settings in a modal without leaving the Explorer", () => {
     expect(explorerViewSource).toContain("projectSettingsOpen");
     expect(explorerViewSource).toContain("ProjectSettingsDialog");
-    expect(explorerViewSource).toContain("@open-settings=\"openProjectSettingsDialog\"");
+    expect(explorerViewSource).toContain("@open-project-settings=\"openProjectSettingsDialog\"");
     expect(explorerViewSource).not.toContain("/settings`);");
+  });
+});
+
+describe("Project catalog project creation wiring", () => {
+  it("uses the shared creation dialog instead of navigating to a standalone page", () => {
+    expect(projectCatalogSource).toContain("ProjectCreateDialog");
+    expect(projectCatalogSource).toContain("createOpen");
+    expect(projectCatalogSource).not.toContain('void router.push("/projects/new")');
+    expect(projectCatalogSource).toContain("@project-created=\"handleProjectCreated\"");
   });
 });
 

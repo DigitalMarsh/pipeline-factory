@@ -13,7 +13,7 @@ const notificationsOpen = ref(false);
 function workspaceViewKey(viewRoute: { path: string; params: Record<string, unknown> }): string {
   const projectId = typeof viewRoute.params.projectId === "string" ? viewRoute.params.projectId : "catalog";
   const module = projectModuleForPath(viewRoute.path);
-  return module ? `${module}:${projectId}` : viewRoute.path;
+  return module === "explore" ? module : module ? `${module}:${projectId}` : viewRoute.path;
 }
 
 </script>
@@ -22,7 +22,6 @@ function workspaceViewKey(viewRoute: { path: string; params: Record<string, unkn
   <div class="app-shell">
     <header class="topbar">
       <div class="brand-mark"><span class="brand-dot" /> Pipeline Factory <small>v4</small></div>
-      <RouterLink to="/workbench" class="topbar-workbench">Workbench</RouterLink>
       <div class="topbar-actions">
         <div class="global-search"><Search :size="15" /><span>Search plans, runs, threads</span><kbd>⌘ K</kbd></div>
         <el-tooltip content="System healthy"><span class="system-health"><i /> Healthy</span></el-tooltip>

@@ -58,6 +58,7 @@ export type ProjectSettingsInput = {
 export type Project = {
   id: string;
   name: string;
+  shortName: string;
   repoRoot: string;
   defaultBranch: string;
   worktreeRoot: string;
@@ -75,6 +76,7 @@ export type Project = {
 export type ProjectExecutionSnapshot = Readonly<{
   projectId: string;
   name: string;
+  shortName: string;
   repoRoot: string;
   defaultBranch: string;
   worktreeRoot: string;
@@ -96,6 +98,7 @@ export type ProjectConfigRevision = Readonly<{
 export type CreateProjectInput = {
   id?: string;
   name: string;
+  shortName?: string;
   repoRoot: string;
   defaultBranch: string;
   worktreeRoot: string;
@@ -105,6 +108,7 @@ export type CreateProjectInput = {
 /** 更新 Project 的局部输入；expectedConfigVersion 用于乐观并发控制。 */
 export type UpdateProjectInput = {
   name?: string;
+  shortName?: string;
   repoRoot?: string;
   defaultBranch?: string;
   worktreeRoot?: string;
@@ -245,8 +249,8 @@ export function normalizeProjectSettings(input?: ProjectSettingsInput, base: Pro
   return settings;
 }
 
-function projectHash(input: Pick<Project, "name" | "repoRoot" | "defaultBranch" | "worktreeRoot" | "settings">): string {
-  return `sha256:${createHash("sha256").update(JSON.stringify({ name: input.name, repoRoot: input.repoRoot, defaultBranch: input.defaultBranch, worktreeRoot: input.worktreeRoot, settings: input.settings })).digest("hex")}`;
+function projectHash(input: Pick<Project, "name" | "shortName" | "repoRoot" | "defaultBranch" | "worktreeRoot" | "settings">): string {
+  return `sha256:${createHash("sha256").update(JSON.stringify({ name: input.name, shortName: input.shortName, repoRoot: input.repoRoot, defaultBranch: input.defaultBranch, worktreeRoot: input.worktreeRoot, settings: input.settings })).digest("hex")}`;
 }
 
 /** 从当前 Project 生成深拷贝快照；快照不含运行时可变字段。 */
@@ -254,6 +258,7 @@ export function projectSnapshot(project: Project): ProjectExecutionSnapshot {
   return freezeDeep({
     projectId: project.id,
     name: project.name,
+    shortName: project.shortName,
     repoRoot: project.repoRoot,
     defaultBranch: project.defaultBranch,
     worktreeRoot: project.worktreeRoot,
@@ -289,6 +294,7 @@ export class ProjectService {
   create(input: CreateProjectInput): Project {
     const name = input.name.trim();
     if (!name) throw new Error("Project name is required");
+    const shortName = input.shortName?.trim() || name;
     const repoRoot = normalizeAbsolutePath(input.repoRoot, "repoRoot");
     const worktreeRoot = normalizeAbsolutePath(input.worktreeRoot, "worktreeRoot");
     assertProjectPaths(repoRoot, worktreeRoot);
@@ -298,13 +304,14 @@ export class ProjectService {
     const project: Project = {
       id: input.id ?? this.store.nextId("project"),
       name,
+      shortName,
       repoRoot,
       defaultBranch: input.defaultBranch.trim() || "main",
       worktreeRoot,
       status: "ACTIVE",
       currentExplorerThreadId: null,
       configVersion: 1,
-      configHash: projectHash({ name, repoRoot, defaultBranch: input.defaultBranch.trim() || "main", worktreeRoot, settings }),
+      configHash: projectHash({ name, shortName, repoRoot, defaultBranch: input.defaultBranch.trim() || "main", worktreeRoot, settings }),
       settings,
       createdAt,
       updatedAt: createdAt,
@@ -329,6 +336,7 @@ export class ProjectService {
         if (hasActiveRun(this.store, existing.id)) return existing;
         const repair: UpdateProjectInput = {
           name: input.name,
+          ...(input.shortName === undefined ? {} : { shortName: input.shortName }),
           repoRoot: input.repoRoot,
           defaultBranch: input.defaultBranch,
           worktreeRoot: input.worktreeRoot,
@@ -371,6 +379,7 @@ export class ProjectService {
     if (input.expectedConfigVersion !== undefined && input.expectedConfigVersion !== project.configVersion) throw new Error(`Project ${projectId} configuration version conflict`);
     const name = input.name === undefined ? project.name : input.name.trim();
     if (!name) throw new Error("Project name is required");
+    const shortName = input.shortName === undefined ? project.shortName : input.shortName.trim() || name;
     const repoRoot = input.repoRoot === undefined ? project.repoRoot : normalizeAbsolutePath(input.repoRoot, "repoRoot");
     const worktreeRoot = input.worktreeRoot === undefined ? project.worktreeRoot : normalizeAbsolutePath(input.worktreeRoot, "worktreeRoot");
     assertProjectPaths(repoRoot, worktreeRoot);
@@ -378,19 +387,20 @@ export class ProjectService {
     const nextSettings = input.settings ? normalizeProjectSettings(input.settings, project.settings) : clone(project.settings);
     const defaultBranch = input.defaultBranch === undefined ? project.defaultBranch : input.defaultBranch.trim();
     if (!defaultBranch) throw new Error("defaultBranch is required");
-    const changed = name !== project.name || repoRoot !== project.repoRoot || worktreeRoot !== project.worktreeRoot || defaultBranch !== project.defaultBranch || JSON.stringify(nextSettings) !== JSON.stringify(project.settings);
+    const changed = name !== project.name || shortName !== project.shortName || repoRoot !== project.repoRoot || worktreeRoot !== project.worktreeRoot || defaultBranch !== project.defaultBranch || JSON.stringify(nextSettings) !== JSON.stringify(project.settings);
     if (!changed) return project;
     const highRiskChanged = repoRoot !== project.repoRoot || worktreeRoot !== project.worktreeRoot || defaultBranch !== project.defaultBranch || JSON.stringify(nextSettings) !== JSON.stringify(project.settings);
     if (highRiskChanged && hasActiveRun(this.store, projectId)) throw new Error(`Project ${projectId} has active runs`);
     const updated: Project = {
       ...project,
       name,
+      shortName,
       repoRoot,
       defaultBranch,
       worktreeRoot,
       settings: nextSettings,
       configVersion: project.configVersion + 1,
-      configHash: projectHash({ name, repoRoot, defaultBranch, worktreeRoot, settings: nextSettings }),
+      configHash: projectHash({ name, shortName, repoRoot, defaultBranch, worktreeRoot, settings: nextSettings }),
       updatedAt: this.store.now(),
     };
     const saved = this.store.updateProject(updated);

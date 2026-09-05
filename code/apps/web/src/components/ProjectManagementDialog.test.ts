@@ -34,6 +34,7 @@ function project(id: string, name: string, status: Project["status"] = "ACTIVE")
   return {
     id,
     name,
+    shortName: name.slice(0, 3),
     repoRoot: `/tmp/${id}`,
     defaultBranch: "main",
     worktreeRoot: `/tmp/${id}-worktrees`,

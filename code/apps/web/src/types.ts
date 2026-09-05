@@ -49,6 +49,7 @@ export type ProjectSettings = {
 export type Project = {
   id: string;
   name: string;
+  shortName: string;
   repoRoot: string;
   defaultBranch: string;
   worktreeRoot: string;

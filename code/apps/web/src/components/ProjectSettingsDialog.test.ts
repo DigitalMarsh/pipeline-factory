@@ -34,6 +34,7 @@ function project(): Project {
   return {
     id: "project-1",
     name: "Project 1",
+    shortName: "P1",
     repoRoot: "/tmp/project-1",
     defaultBranch: "main",
     worktreeRoot: "/tmp/project-1-worktrees",
@@ -86,12 +87,17 @@ describe("ProjectSettingsDialog", () => {
 
     expect(mounted.host.textContent).toContain("Project identity");
     expect(mounted.host.querySelector<HTMLInputElement>('input[disabled]')?.value).toBe("project-1");
+    const shortName = mounted.host.querySelector<HTMLInputElement>('input[placeholder="例如：PF"]');
+    if (shortName) {
+      shortName.value = "P1X";
+      shortName.dispatchEvent(new Event("input", { bubbles: true }));
+    }
     const save = [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Save Project configuration"));
     save?.click();
     await nextTick();
     await nextTick();
 
-    expect(api.updateProject).toHaveBeenCalledWith("project-1", expect.objectContaining({ expectedConfigVersion: 3 }));
+    expect(api.updateProject).toHaveBeenCalledWith("project-1", expect.objectContaining({ expectedConfigVersion: 3, shortName: "P1X" }));
     expect(mounted.saved).toEqual([updated]);
     expect(mounted.updates).toEqual([]);
 

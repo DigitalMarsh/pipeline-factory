@@ -12,7 +12,7 @@ import { api } from "../api";
 const router = useRouter();
 const saving = ref(false);
 const error = ref<string | null>(null);
-const form = reactive({ name: "", repoRoot: "", defaultBranch: "", worktreeRoot: "" });
+const form = reactive({ name: "", shortName: "", repoRoot: "", defaultBranch: "", worktreeRoot: "" });
 
 async function createProject() {
   error.value = null;
@@ -22,7 +22,7 @@ async function createProject() {
   }
   saving.value = true;
   try {
-    const result = await api.createProject({ name: form.name.trim(), repoRoot: form.repoRoot.trim(), ...(form.defaultBranch.trim() ? { defaultBranch: form.defaultBranch.trim() } : {}), ...(form.worktreeRoot.trim() ? { worktreeRoot: form.worktreeRoot.trim() } : {}) });
+    const result = await api.createProject({ name: form.name.trim(), ...(form.shortName.trim() ? { shortName: form.shortName.trim() } : {}), repoRoot: form.repoRoot.trim(), ...(form.defaultBranch.trim() ? { defaultBranch: form.defaultBranch.trim() } : {}), ...(form.worktreeRoot.trim() ? { worktreeRoot: form.worktreeRoot.trim() } : {}) });
     ElMessage.success("Project 创建成功");
     await router.push("/projects/" + result.project.id + "/explorer");
   } catch (caught) {
@@ -41,7 +41,7 @@ async function createProject() {
         <div class="create-heading"><div class="create-icon"><FolderOpened :size="21" /></div><div><div class="eyebrow">PROJECT SETUP · 01</div><h1>New Project</h1><p>将一个本地 Git 仓库注册为独立的 Pipeline Factory 工作空间。</p></div></div>
         <div v-if="error" class="create-alert"><Warning :size="15" />{{ error }}</div>
         <el-form label-position="top" @submit.prevent="createProject">
-          <el-form-item label="Project name" required><el-input v-model="form.name" placeholder="例如：Pipeline Factory" /></el-form-item>
+          <div class="create-form-grid"><el-form-item label="Project name" required><el-input v-model="form.name" placeholder="例如：Pipeline Factory" /></el-form-item><el-form-item label="Project short name"><el-input v-model="form.shortName" placeholder="例如：PF" /></el-form-item></div>
           <el-form-item label="Git repository root" required><el-input v-model="form.repoRoot" placeholder="/Users/you/Project/repository" /><small class="create-help">必须是本机可访问的绝对路径，并且是 Git repository root，不接受子目录。</small></el-form-item>
           <div class="create-form-grid"><el-form-item label="Default branch"><el-input v-model="form.defaultBranch" placeholder="自动检测" /></el-form-item><el-form-item label="Worktree root"><el-input v-model="form.worktreeRoot" placeholder="自动生成安全目录" /></el-form-item></div>
           <div class="create-actions"><el-button @click="router.push('/projects')">Cancel</el-button><el-button type="primary" :loading="saving" @click="createProject"><Check :size="14" /> Validate & Create</el-button></div>

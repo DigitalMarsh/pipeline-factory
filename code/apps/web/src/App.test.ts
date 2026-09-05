@@ -9,4 +9,14 @@ describe("global project selector", () => {
     expect(appSource).not.toContain("Switch Project");
     expect(appSource).not.toContain("api.projects()");
   });
+
+  it("keeps the Explorer view instance stable across project changes", () => {
+    expect(appSource).toContain('module === "explore" ? module');
+    expect(appSource).toContain('`${module}:${projectId}`');
+  });
+
+  it("does not expose the global Workbench entry", () => {
+    expect(appSource).not.toContain('to="/workbench"');
+    expect(appSource).not.toContain("topbar-workbench");
+  });
 });

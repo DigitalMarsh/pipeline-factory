@@ -21,8 +21,8 @@ import { isExplorerTurnProcessing } from "../utils/turnStatus";
 import { formatContextUsage, formatConversationId, formatRateLimit } from "../utils/explorerStatus";
 import { createSseReplayGate } from "../utils/sseReplayGate";
 import ExplorerInputDialog from "../components/ExplorerInputDialog.vue";
-import ProjectManagementDialog from "../components/ProjectManagementDialog.vue";
 import ProjectSettingsDialog from "../components/ProjectSettingsDialog.vue";
+import ProjectCreateDialog from "../components/ProjectCreateDialog.vue";
 import scrollToLatestIcon from "../assets/scroll-to-latest.png";
 import { normalizePlanProjection } from "../utils/planProjection";
 import { parsePlanProtocolDisplay } from "../utils/planProtocolDisplay";
@@ -41,7 +41,7 @@ const project = ref<Project | null>(null);
 const projects = ref<Project[]>([]);
 const thread = ref<ExplorerThread | null>(null);
 const explorers = ref<ExplorerThread[]>([]);
-const projectManagementOpen = ref(false);
+const projectCreateOpen = ref(false);
 const projectSettingsOpen = ref(false);
 const projectSettingsProjectId = ref<string | null>(null);
 const activity = ref<ExplorerActivityItem[]>([]);
@@ -63,6 +63,7 @@ const loading = ref(true);
 const error = ref<string | null>(null);
 const busy = ref(false);
 const creatingExplorer = ref(false);
+const projectActionId = ref<string | null>(null);
 const sendingTurn = ref(false);
 const showScrollToLatest = ref(false);
 const timeline = ref<HTMLElement | null>(null);
@@ -238,9 +239,9 @@ function resetThreadState() {
   sendingTurn.value = false;
 }
 
-/** 项目切换时清空旧项目投影，避免旧 SSE 或异步请求重新填充当前工作区。 */
-function resetProjectState() {
-  project.value = null;
+/** 项目切换时保留目录投影，清空旧线程数据，避免旧 SSE 或异步请求重新填充当前工作区。 */
+function resetProjectState(nextProjectId = projectId.value) {
+  project.value = projects.value.find((item) => item.id === nextProjectId) ?? null;
   explorers.value = [];
   resetThreadState();
 }
@@ -463,12 +464,20 @@ async function createExplorer() {
 }
 
 function switchProject(selectedProjectId: string) {
-  projectManagementOpen.value = false;
   void router.push({ path: projectPathForModule("explore", selectedProjectId), query: panelStateQuery() });
 }
 
+function openProjectCreateDialog() {
+  projectCreateOpen.value = true;
+}
+
+async function handleProjectCreated(createdProject: Project) {
+  projectCreateOpen.value = false;
+  projects.value = [createdProject, ...projects.value.filter((item) => item.id !== createdProject.id)];
+  await router.push({ path: projectPathForModule("explore", createdProject.id), query: panelStateQuery(), hash: "" });
+}
+
 function openProjectSettingsDialog(selectedProjectId: string) {
-  projectManagementOpen.value = false;
   projectSettingsProjectId.value = selectedProjectId;
   projectSettingsOpen.value = true;
 }
@@ -483,15 +492,32 @@ function handleProjectSettingsSaved(savedProject: Project) {
   if (project.value?.id === savedProject.id) project.value = savedProject;
 }
 
-function handleProjectsChanged(nextProjects: Project[]) {
-  projects.value = nextProjects;
-  const nextCurrentProject = nextProjects.find((item) => item.id === projectId.value);
-  if (nextCurrentProject) project.value = nextCurrentProject;
-}
-
-function handleProjectCreated(createdProject: Project) {
-  projects.value = [createdProject, ...projects.value.filter((item) => item.id !== createdProject.id)];
-  void router.push({ path: projectPathForModule("explore", createdProject.id), query: panelStateQuery() });
+async function toggleProjectArchive(selectedProjectId: string) {
+  if (projectActionId.value) return;
+  const selectedProject = projects.value.find((item) => item.id === selectedProjectId);
+  if (!selectedProject) return;
+  projectActionId.value = selectedProjectId;
+  error.value = null;
+  try {
+    let response: { project: Project };
+    if (selectedProject.status === "ACTIVE") {
+      await ElMessageBox.confirm("归档后项目历史仍可查看，但不能创建新的 Explorer Turn 或 Run。", `归档 ${selectedProject.name}？`, { type: "warning", confirmButtonText: "归档项目", cancelButtonText: "取消" });
+      response = await api.archiveProject(selectedProjectId);
+      ElMessage.success("项目已归档");
+    } else {
+      response = await api.activateProject(selectedProjectId);
+      ElMessage.success("项目已恢复");
+    }
+    projects.value = projects.value.map((item) => item.id === selectedProjectId ? { ...item, ...response.project } : item);
+    if (project.value?.id === selectedProjectId) project.value = response.project;
+  } catch (caught) {
+    if (caught === "cancel" || caught === "close") return;
+    const message = caught instanceof Error ? caught.message : "项目状态更新失败";
+    error.value = message;
+    ElMessage.error(message);
+  } finally {
+    projectActionId.value = null;
+  }
 }
 
 async function selectExplorer(explorerId: string) {
@@ -592,8 +618,7 @@ async function load(): Promise<boolean> {
     return true;
   } catch (caught) {
     if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
-    project.value = null;
-    thread.value = null;
+    project.value = projects.value.find((item) => item.id === requestProjectId) ?? null;
     explorers.value = [];
     candidate.value = null;
     dispatched.value = [];
@@ -855,7 +880,7 @@ watch(projectId, (next, previous) => {
   if (!mounted.value || next === previous) return;
   closeEvents();
   requestScope.invalidate();
-  resetProjectState();
+  resetProjectState(next);
   void load().then((loaded) => { if (loaded && mounted.value) connectEvents(); });
 });
 watch(() => route.query.explorerId, () => { if (mounted.value) reloadExplorer(); });
@@ -865,7 +890,7 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
 
 <template>
   <div class="console-layout">
-    <ThreadRail :panel="leftPanel" :thread="thread" :project="project" :projects="projects" :explorers="explorers" :creating-explorer="creatingExplorer" @select-panel="leftPanel = $event" @create-explorer="createExplorer" @select-project="switchProject" @select-explorer="selectExplorer" @manage-projects="projectManagementOpen = true" />
+    <ThreadRail :panel="leftPanel" :thread="thread" :project="project" :projects="projects" :explorers="explorers" :creating-explorer="creatingExplorer" :project-action-id="projectActionId" @select-panel="leftPanel = $event" @create-explorer="createExplorer" @create-project="openProjectCreateDialog" @select-project="switchProject" @open-project="switchProject" @open-project-settings="openProjectSettingsDialog" @archive-project="toggleProjectArchive" @select-explorer="selectExplorer" />
     <section class="conversation-column">
       <div class="conversation-header"><div><div class="eyebrow"><span class="mode-dot" /> PLAN MODE · READ ONLY</div><h1>{{ explorerDisplayTitle(thread) }}</h1><p>Shape the work before anything changes in the repository.</p></div><div class="conversation-tools"><el-button circle plain :aria-label="explorerPaused ? 'Resume' : 'Pause'" @click="toggleExplorerPause"><VideoPlay v-if="explorerPaused" :size="16" /><VideoPause v-else :size="16" /></el-button><el-popover v-model:visible="moreOpen" placement="bottom-end" :width="250" trigger="click"><template #reference><el-button circle plain aria-label="More"><MoreFilled :size="16" /></el-button></template><div class="thread-more-menu"><div class="eyebrow">THREAD ACTIONS</div><p>Manage read-only exploration without changing the repository.</p><el-button text @click="setPolicyOpen(true); moreOpen = false">View policy</el-button><el-button text @click="moreOpen = false; refreshThread()">Refresh thread</el-button></div></el-popover></div></div>
       <div v-if="agentLoop" class="agent-loop-strip" role="status"><div class="agent-loop-summary"><span class="eyebrow">EXPLORER PROVIDER TURN LOOP</span><strong>{{ agentLoopLabel }}</strong></div><span class="agent-loop-budget">Provider Turns {{ agentLoop.stepCount }} / {{ agentLoop.maxSteps }} · Activities {{ agentLoop.diagnostics?.providerActivityCount ?? 0 }}</span><div v-if="agentLoopGateLabel || agentLoopTerminalLabel || agentLoopCompletionLabel" class="agent-loop-status"><span v-if="agentLoopGateLabel" class="agent-loop-diagnostic">{{ agentLoopGateLabel }}</span><span v-if="agentLoopTerminalLabel" class="agent-loop-terminal">{{ agentLoopTerminalLabel }}</span><span v-if="agentLoopCompletionLabel" class="agent-loop-complete">{{ agentLoopCompletionLabel }}</span></div><el-button v-if="agentLoop.state === 'RUNNING' || agentLoop.state === 'PAUSED'" class="agent-loop-action" size="small" plain @click="toggleExplorerPause">{{ agentLoop.state === 'PAUSED' ? 'Resume loop' : 'Pause loop' }}</el-button></div>
@@ -942,7 +967,7 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
     </aside>
     <PlanDetailDrawer v-model="drawerOpen" :plan="candidate" @confirm="confirmPlan" @discard="discardPlan" @enqueue="enqueuePlan" />
     <ExplorerInputDialog ref="inputDialog" v-model="inputDialogOpen" :request="pendingInput" @submit="submitInput" @cancel="cancelInput" @progress="updateInputProgress" />
-    <ProjectManagementDialog v-model="projectManagementOpen" :projects="projects" :current-project-id="projectId" @select-project="switchProject" @open-settings="openProjectSettingsDialog" @projects-changed="handleProjectsChanged" @project-created="handleProjectCreated" />
+    <ProjectCreateDialog v-model="projectCreateOpen" @project-created="handleProjectCreated" />
     <ProjectSettingsDialog :model-value="projectSettingsOpen" :project-id="projectSettingsProjectId" @update:model-value="closeProjectSettings" @saved="handleProjectSettingsSaved" />
     <ExplorerPolicyDrawer :model-value="policyOpen" @update:model-value="setPolicyOpen" />
     <el-drawer :model-value="candidateEmptyOpen" direction="rtl" size="min(430px, 92vw)" :with-header="false" @update:model-value="setCandidateEmptyOpen">

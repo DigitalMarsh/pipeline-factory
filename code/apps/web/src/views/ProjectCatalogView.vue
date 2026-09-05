@@ -3,11 +3,12 @@
   维护提示：交互状态和数据流变化时，应同步更新组件边界说明。
 -->
 <script setup lang="ts">
-import { onMounted, reactive, ref } from "vue";
+import { onMounted, ref } from "vue";
 import { ArrowRight, ChatDotRound, Clock, Connection, FolderOpened, Plus, Refresh, Setting, VideoPlay, Warning } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useRouter } from "vue-router";
 import { api } from "../api";
+import ProjectCreateDialog from "../components/ProjectCreateDialog.vue";
 import type { Project, ProjectCatalogItem } from "../types";
 
 const router = useRouter();
@@ -15,8 +16,6 @@ const projects = ref<ProjectCatalogItem[]>([]);
 const loading = ref(true);
 const error = ref<string | null>(null);
 const createOpen = ref(false);
-const saving = ref(false);
-const form = reactive({ name: "", repoRoot: "", defaultBranch: "", worktreeRoot: "" });
 
 /** 加载 Project 清单及统计；路由切换和归档操作完成后复用同一刷新入口。 */
 async function load() {
@@ -29,22 +28,12 @@ async function load() {
 
 /** 打开创建向导，表单状态与已存在 Project 清单隔离。 */
 function openCreate() {
-  void router.push("/projects/new");
+  createOpen.value = true;
 }
 
-/** 提交 Project 创建请求；服务端负责 Git 根目录和重复仓库校验。 */
-async function createProject() {
-  if (!form.name.trim() || !form.repoRoot.trim()) {
-    ElMessage.warning("请填写项目名称和 Git 仓库目录");
-    return;
-  }
-  saving.value = true;
-  try {
-    const result = await api.createProject({ name: form.name, repoRoot: form.repoRoot, ...(form.defaultBranch ? { defaultBranch: form.defaultBranch } : {}), ...(form.worktreeRoot ? { worktreeRoot: form.worktreeRoot } : {}) });
-    createOpen.value = false;
-    await router.push(`/projects/${result.project.id}/explorer`);
-  } catch (caught) { ElMessage.error(caught instanceof Error ? caught.message : "项目创建失败"); }
-  finally { saving.value = false; }
+function handleProjectCreated(project: Project) {
+  createOpen.value = false;
+  void router.push(`/projects/${project.id}/explorer`);
 }
 
 /** 归档或恢复 Project；归档失败时保留列表状态并显示服务端原因。 */
@@ -96,7 +85,7 @@ onMounted(() => { void load(); });
     <div v-loading="loading" class="project-card-grid">
       <article v-for="project in projects" :key="project.id" class="project-card" :class="{ archived: project.status === 'ARCHIVED' }">
         <div class="project-card-top"><div class="project-card-icon"><FolderOpened :size="20" /></div><el-tag :type="project.status === 'ACTIVE' ? 'success' : 'info'" effect="light">{{ statusLabel(project.status) }}</el-tag></div>
-        <button class="project-card-title" type="button" @click="openProject(project)"><strong>{{ project.name }}</strong><ArrowRight :size="16" /></button>
+        <button class="project-card-title" type="button" @click="openProject(project)"><strong>{{ project.name }}<small v-if="project.shortName && project.shortName !== project.name">{{ project.shortName }}</small></strong><ArrowRight :size="16" /></button>
         <code class="project-id">{{ project.id }}</code>
         <div class="project-path"><FolderOpened :size="14" /><span>{{ project.repoRoot }}</span></div>
         <div class="project-current"><ChatDotRound :size="13" /><span>Current Explorer</span><code :title="project.summary.currentExplorerThread ?? undefined">{{ project.summary.currentExplorerTitle ?? project.summary.currentExplorerThread ?? "Not selected" }}</code></div>
@@ -108,15 +97,7 @@ onMounted(() => { void load(); });
       <div v-if="!loading && !projects.length" class="catalog-empty"><FolderOpened :size="30" /><strong>还没有 Project</strong><span>导入一个本地 Git 仓库开始使用。</span></div>
     </div>
 
-    <el-dialog v-model="createOpen" title="New Project" width="min(560px, 92vw)">
-      <div class="project-dialog-intro">新 Project 必须指向 Git 仓库根目录。创建前 API 会校验真实路径和默认分支。</div>
-      <el-form label-position="top" @submit.prevent="createProject">
-        <el-form-item label="Project name" required><el-input v-model="form.name" placeholder="例如：Pipeline Factory" /></el-form-item>
-        <el-form-item label="Git repository root" required><el-input v-model="form.repoRoot" placeholder="/Users/you/Project/repository" /><small class="form-help">请输入本机可访问的绝对路径，不能是仓库子目录。</small></el-form-item>
-        <div class="dialog-form-grid"><el-form-item label="Default branch"><el-input v-model="form.defaultBranch" placeholder="自动检测" /></el-form-item><el-form-item label="Worktree root"><el-input v-model="form.worktreeRoot" placeholder="自动生成" /></el-form-item></div>
-      </el-form>
-      <template #footer><el-button @click="createOpen = false">Cancel</el-button><el-button type="primary" :loading="saving" @click="createProject">Validate & Create</el-button></template>
-    </el-dialog>
+    <ProjectCreateDialog v-model="createOpen" @project-created="handleProjectCreated" />
   </div>
 </template>
 
@@ -134,7 +115,7 @@ onMounted(() => { void load(); });
 .project-card-top { display: flex; align-items: center; justify-content: space-between; }
 .project-card-icon { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 9px; background: #edf3ff; color: #4d7be4; }
 .project-card-title { display: flex; align-items: center; justify-content: space-between; width: 100%; margin: 18px 0 4px; padding: 0; border: 0; background: transparent; color: #33445d; cursor: pointer; text-align: left; }
-.project-card-title strong { overflow: hidden; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
+.project-card-title strong { overflow: hidden; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }.project-card-title strong small { margin-left: 7px; color: #7893bd; font-size: 10px; font-weight: 700; }
 .project-card-title:hover { color: #3f75dd; }
 .project-id { color: #9ba7b6; font-size: 9px; }
 .project-path { display: flex; gap: 7px; align-items: center; margin-top: 17px; color: #77869b; font: 10px ui-monospace, monospace; }

@@ -4,6 +4,10 @@
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  */
 import { afterEach, describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { InMemoryPipelineStore, LifecycleHookRunner, PlanService, ProjectService, Scheduler, type AgentLoop, type ModelGateway, type VerificationCommandExecutor } from "@pipeline-factory/domain";
 import { createApp } from "./server.js";
 
@@ -38,7 +42,32 @@ describe("Pipeline Factory v4 API", () => {
     expect(detail.json().summary).toMatchObject({ threadCount: 1, planCount: 0, runCount: 0, currentExplorerThread: "explorer-1" });
   });
 
-  it("serves a global or project-scoped Workbench snapshot with replayable events", async () => {
+  it("accepts a short name when creating and updating a Project", async () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), "pipeline-api-short-name-"));
+    try {
+      execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "ignore" });
+      execFileSync("git", ["-c", "user.name=Pipeline Test", "-c", "user.email=pipeline-test@example.com", "commit", "--allow-empty", "-m", "init"], { cwd: repoRoot, stdio: "ignore" });
+      const store = new InMemoryPipelineStore();
+      const app = createApp({ store, seed: false });
+      apps.push(app);
+
+      const created = await app.inject({ method: "POST", url: "/api/v4/projects", payload: { id: "project-short-api", name: "API Project", shortName: "APP", repoRoot, worktreeRoot: join(repoRoot, "worktrees") } });
+      expect(created.statusCode).toBe(201);
+      expect(created.json().project).toMatchObject({ name: "API Project", shortName: "APP" });
+
+      const updated = await app.inject({ method: "PATCH", url: "/api/v4/projects/project-short-api", payload: { shortName: "API", expectedConfigVersion: 1 } });
+      expect(updated.statusCode).toBe(200);
+      expect(updated.json().project).toMatchObject({ name: "API Project", shortName: "API", configVersion: 2 });
+
+      const reset = await app.inject({ method: "PATCH", url: "/api/v4/projects/project-short-api", payload: { shortName: "", expectedConfigVersion: 2 } });
+      expect(reset.statusCode).toBe(200);
+      expect(reset.json().project).toMatchObject({ name: "API Project", shortName: "API Project", configVersion: 3 });
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("serves only project-scoped Execute snapshots with replayable events", async () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);
     const project = projects.create({ id: "project-workbench", name: "Workbench", repoRoot: "/repo/workbench", defaultBranch: "main", worktreeRoot: "/tmp/workbench-worktrees" });
@@ -51,12 +80,12 @@ describe("Pipeline Factory v4 API", () => {
 
     const global = await app.inject({ method: "GET", url: "/api/v4/workbench" });
     const scoped = await app.inject({ method: "GET", url: `/api/v4/workbench?projectId=${project.id}` });
-    const cursor = global.json().cursor as number;
+    const cursor = scoped.json().cursor as number;
     const replay = await app.inject({ method: "GET", url: `/api/v4/workbench/events?projectId=${project.id}&afterSequence=${cursor - 1}` });
 
-    expect(global.statusCode).toBe(200);
-    expect(global.json()).toMatchObject({ activeProjectId: null, projects: [{ id: project.id }], plans: [] });
-    expect(scoped.json()).toMatchObject({ activeProjectId: project.id, plans: [{ planId: plan.id, title: "Workbench plan", status: "READY", dispatch: null }] });
+    expect(global.statusCode).toBe(400);
+    expect(scoped.statusCode).toBe(200);
+    expect(scoped.json()).toMatchObject({ activeProjectId: project.id, projects: [{ id: project.id }], plans: [{ planId: plan.id, title: "Workbench plan", status: "READY", dispatch: null }] });
     expect(replay.statusCode).toBe(200);
     expect(replay.json().items.at(-1)).toMatchObject({ type: "plan.confirmed", aggregateId: plan.id });
   });

@@ -24,7 +24,7 @@ const saving = ref(false);
 const actionProjectId = ref<string | null>(null);
 const error = ref<string | null>(null);
 const createMode = ref(false);
-const form = reactive({ name: "", repoRoot: "", defaultBranch: "", worktreeRoot: "" });
+const form = reactive({ name: "", shortName: "", repoRoot: "", defaultBranch: "", worktreeRoot: "" });
 
 watch(() => props.projects, (nextProjects) => {
   managedProjects.value = [...nextProjects];
@@ -52,6 +52,7 @@ function openCreate() {
 function cancelCreate() {
   createMode.value = false;
   form.name = "";
+  form.shortName = "";
   form.repoRoot = "";
   form.defaultBranch = "";
   form.worktreeRoot = "";
@@ -112,7 +113,7 @@ async function createProject() {
   saving.value = true;
   error.value = null;
   try {
-    const result = await api.createProject({ name: form.name.trim(), repoRoot: form.repoRoot.trim(), ...(form.defaultBranch.trim() ? { defaultBranch: form.defaultBranch.trim() } : {}), ...(form.worktreeRoot.trim() ? { worktreeRoot: form.worktreeRoot.trim() } : {}) });
+    const result = await api.createProject({ name: form.name.trim(), ...(form.shortName.trim() ? { shortName: form.shortName.trim() } : {}), repoRoot: form.repoRoot.trim(), ...(form.defaultBranch.trim() ? { defaultBranch: form.defaultBranch.trim() } : {}), ...(form.worktreeRoot.trim() ? { worktreeRoot: form.worktreeRoot.trim() } : {}) });
     ElMessage.success("项目已创建");
     emit("project-created", result.project);
     cancelCreate();
@@ -153,7 +154,7 @@ function statusLabel(status: Project["status"]) {
 
     <form v-if="createMode" class="project-create-form" @submit.prevent="createProject">
       <div class="project-dialog-intro">新 Project 必须指向 Git 仓库根目录。创建前 API 会校验真实路径和默认分支。</div>
-      <label>Project name <input v-model="form.name" autofocus placeholder="例如：Pipeline Factory" /></label>
+      <div class="project-create-grid"><label>Project name <input v-model="form.name" autofocus placeholder="例如：Pipeline Factory" /></label><label>Project short name <input v-model="form.shortName" placeholder="例如：PF" /></label></div>
       <label>Git repository root <input v-model="form.repoRoot" placeholder="/Users/you/Project/repository" /><small>请输入本机可访问的绝对路径，不能是仓库子目录。</small></label>
       <div class="project-create-grid"><label>Default branch <input v-model="form.defaultBranch" placeholder="自动检测" /></label><label>Worktree root <input v-model="form.worktreeRoot" placeholder="自动生成" /></label></div>
     </form>

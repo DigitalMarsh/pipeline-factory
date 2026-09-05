@@ -1,5 +1,5 @@
 <!--
-  模块职责：提供全局 Workbench 与 Project Execute 共用的 Plan/Run 工作区。
+  模块职责：提供 Project Execute 的 Plan/Run 工作区。
   维护提示：左侧历史、中央 Plan Inspector 和右侧 Policy/Memory/Evidence 保持固定分区。
 -->
 <script setup lang="ts">
@@ -14,7 +14,7 @@ import { statusVisualFor } from "../utils/statusVisual";
 
 const route = useRoute();
 const router = useRouter();
-const projectId = computed(() => typeof route.params.projectId === "string" ? route.params.projectId : undefined);
+const projectId = computed(() => String(route.params.projectId));
 const requestScope = createProjectRequestScope();
 const snapshot = ref<WorkbenchSnapshot | null>(null);
 const selectedPlanId = ref<string | null>(typeof route.query.plan === "string" ? route.query.plan : null);
@@ -33,8 +33,7 @@ const selectedRun = computed(() => {
   return snapshot.value?.runs.find((run) => run.id === plan.runId) ?? snapshot.value?.runs.find((run) => run.planId === plan.planId) ?? null;
 });
 const selectedProject = computed(() => {
-  const id = projectId.value ?? selectedPlan.value?.projectId;
-  return snapshot.value?.projects.find((project) => project.id === id) ?? null;
+  return snapshot.value?.projects.find((project) => project.id === projectId.value) ?? null;
 });
 const selectedDispatch = computed<PlanDispatchState | null>(() => selectedPlan.value?.dispatch ?? null);
 const currentStatus = computed(() => statusVisualFor(selectedDispatch.value?.waitReason ?? selectedDispatch.value?.status ?? selectedPlan.value?.status ?? "EMPTY"));
@@ -44,15 +43,15 @@ const evidence = computed(() => (snapshot.value?.events ?? []).filter((event) =>
   const plan = selectedPlan.value;
   return !plan || event.aggregateId === plan.planId || event.aggregateId === selectedRun.value?.id;
 }).slice(-8).reverse());
-const pageTitle = computed(() => projectId.value ? "Execute" : "Workbench");
-const pageKicker = computed(() => projectId.value ? "PROJECT · " + (selectedProject.value?.name ?? projectId.value) : "PIPELINE FACTORY · GLOBAL WORKBENCH");
+const pageTitle = "Execute";
+const pageKicker = computed(() => "PROJECT · " + (selectedProject.value?.name ?? projectId.value));
 
 function planStatus(plan: Plan | null) {
   return statusVisualFor(plan?.dispatch?.waitReason ?? plan?.dispatch?.status ?? plan?.status ?? "EMPTY");
 }
 
 async function load() {
-  const scopeKey = projectId.value ?? "global";
+  const scopeKey = projectId.value;
   const token = requestScope.begin(scopeKey);
   loading.value = true;
   error.value = null;
@@ -63,7 +62,7 @@ async function load() {
     if (!next.plans.some((plan) => plan.planId === selectedPlanId.value)) selectedPlanId.value = next.plans[0]?.planId ?? null;
   } catch (caught) {
     if (requestScope.isCurrent(token, scopeKey)) {
-      error.value = caught instanceof Error ? caught.message : "Workbench 加载失败";
+      error.value = caught instanceof Error ? caught.message : "Execute 加载失败";
       snapshot.value = null;
     }
   } finally {
@@ -124,10 +123,6 @@ function openRun() {
   if (selectedRun.value) void router.push("/projects/" + selectedRun.value.projectId + "/runs/" + selectedRun.value.id);
 }
 
-function openProject(project: { id: string }) {
-  void router.push("/projects/" + project.id + "/execute");
-}
-
 function relativeTime(value: string | null | undefined) {
   if (!value) return "—";
   return new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
@@ -152,7 +147,7 @@ onBeforeUnmount(() => { requestScope.invalidate(); closeEvents(); });
       <div>
         <div class="eyebrow">{{ pageKicker }}</div>
         <h1>{{ pageTitle }}</h1>
-        <p>{{ projectId ? "自动调度、执行状态与证据集中在一个 Project workspace。" : "跨 Project 查看队列、执行状态和需要人工处理的计划。" }}</p>
+        <p>自动调度、执行状态与证据集中在一个 Project workspace。</p>
       </div>
       <div class="workbench-header-actions">
         <span class="workbench-sync"><i /> Live replay · {{ snapshot?.cursor ?? 0 }}</span>
@@ -170,17 +165,12 @@ onBeforeUnmount(() => { requestScope.invalidate(); closeEvents(); });
 
     <div class="workbench-layout" v-loading="loading">
       <aside class="workbench-history" :class="{ 'mobile-panel-hidden': mobilePanel !== 'history' }">
-        <div class="workbench-panel-heading"><div><span class="eyebrow">HISTORY</span><h2>{{ projectId ? "Project plans" : "All projects" }}</h2></div><span class="history-count">{{ plans.length }}</span></div>
-        <div v-if="!projectId && snapshot?.projects.length" class="workspace-project-list">
-          <button v-for="project in snapshot.projects" :key="project.id" type="button" class="workspace-project" @click="openProject(project)">
-            <span class="workspace-project-icon"><FolderOpened :size="14" /></span><span><strong>{{ project.name }}</strong><small>{{ project.summary.activeRunCount }} active · {{ project.summary.needsAttentionCount }} attention</small></span><ArrowRight :size="13" />
-          </button>
-        </div>
+        <div class="workbench-panel-heading"><div><span class="eyebrow">HISTORY</span><h2>Project plans</h2></div><span class="history-count">{{ plans.length }}</span></div>
         <div class="history-list">
           <button v-for="plan in plans" :key="plan.planId" type="button" class="history-item" :class="{ selected: selectedPlan?.planId === plan.planId }" @click="selectPlan(plan)">
-            <span class="history-icon"><Document :size="14" /></span><span class="history-copy"><strong>{{ plan.title }}</strong><small>{{ projectId ? plan.planId : (snapshot?.projects.find((item) => item.id === plan.projectId)?.name ?? plan.projectId) }}</small><small>{{ relativeTime(plan.lastEventAt) }}</small></span><span class="history-status" :class="'tone-' + planStatus(plan).tone" :title="planStatus(plan).label" />
+            <span class="history-icon"><Document :size="14" /></span><span class="history-copy"><strong>{{ plan.title }}</strong><small>{{ plan.planId }}</small><small>{{ relativeTime(plan.lastEventAt) }}</small></span><span class="history-status" :class="'tone-' + planStatus(plan).tone" :title="planStatus(plan).label" />
           </button>
-          <div v-if="!loading && plans.length === 0" class="workbench-empty compact"><Collection :size="24" /><strong>No plans yet</strong><span>{{ projectId ? "Confirmed plans will appear here." : "Enqueued plans will appear here." }}</span><RouterLink :to="projectId ? '/projects/' + projectId + '/explorer' : '/projects'">{{ projectId ? "Open Explorer" : "Manage Projects" }} <ArrowRight :size="13" /></RouterLink></div>
+          <div v-if="!loading && plans.length === 0" class="workbench-empty compact"><Collection :size="24" /><strong>No plans yet</strong><span>Confirmed plans will appear here.</span><RouterLink :to="'/projects/' + projectId + '/explorer'">Open Explorer <ArrowRight :size="13" /></RouterLink></div>
         </div>
       </aside>
 
@@ -208,7 +198,7 @@ onBeforeUnmount(() => { requestScope.invalidate(); closeEvents(); });
         <section class="context-block"><div class="context-block-title"><Lock :size="14" /> Policy</div><div v-if="selectedPlan" class="context-facts"><div><span>Executor role</span><code>{{ selectedPlan.contract.executorModelRole }}</code></div><div><span>Tool policy</span><code>{{ selectedPlan.contract.toolPolicy }}</code></div><div><span>Merge</span><code>{{ selectedPlan.contract.mergeStrategy }} · human</code></div></div><div v-else class="context-muted">Select a Plan to inspect policy.</div></section>
         <section class="context-block"><div class="context-block-title"><Collection :size="14" /> Memory</div><div class="memory-card"><strong>{{ selectedProject?.name ?? "Workspace" }}</strong><span>{{ activeRunCount }} active Run{{ activeRunCount === 1 ? "" : "s" }}</span><span>{{ selectedProject?.summary.needsAttentionCount ?? 0 }} attention item{{ (selectedProject?.summary.needsAttentionCount ?? 0) === 1 ? "" : "s" }}</span></div></section>
         <section class="context-block evidence-block"><div class="context-block-title"><CircleCheck :size="14" /> Recent evidence <small>{{ evidence.length }}</small></div><div v-if="evidence.length" class="evidence-list"><div v-for="event in evidence" :key="event.id" class="evidence-item"><span class="evidence-dot" :class="{ success: event.type.includes('completed') || event.type.includes('confirmed') }" /><div><strong>{{ eventLabel(event.type) }}</strong><small>{{ relativeTime(event.occurredAt) }}</small></div></div></div><div v-else class="context-muted">No replayable evidence for this selection.</div></section>
-        <div class="context-footer"><span class="live-dot" /> Event cursor {{ snapshot?.cursor ?? 0 }}<RouterLink :to="projectId ? '/projects/' + projectId + '/settings?tab=commands' : '/projects'">Review policy <ArrowRight :size="13" /></RouterLink></div>
+        <div class="context-footer"><span class="live-dot" /> Event cursor {{ snapshot?.cursor ?? 0 }}<RouterLink :to="'/projects/' + projectId + '/settings?tab=commands'">Review policy <ArrowRight :size="13" /></RouterLink></div>
       </aside>
     </div>
   </div>

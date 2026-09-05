@@ -34,6 +34,7 @@ describe("ProjectService", () => {
     expect(project).toMatchObject({
       id: "project-1",
       name: "Demo",
+      shortName: "Demo",
       repoRoot: "/repo/demo",
       defaultBranch: "main",
       worktreeRoot: "/tmp/demo-worktrees",
@@ -63,6 +64,20 @@ describe("ProjectService", () => {
 
     expect(updated).toMatchObject({ name: "Renamed", configVersion: 2 });
     expect(updated.configHash).not.toBe(originalHash);
+  });
+
+  it("persists and snapshots an explicit project short name", () => {
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    const created = projects.create({ id: "project-short", name: "Demo Project", shortName: "DP", repoRoot: "/repo/short", defaultBranch: "main", worktreeRoot: "/tmp/short-worktrees" });
+
+    expect(created).toMatchObject({ name: "Demo Project", shortName: "DP", configVersion: 1 });
+    const originalHash = created.configHash;
+    const updated = projects.update("project-short", { shortName: "D2", expectedConfigVersion: 1 });
+
+    expect(updated).toMatchObject({ shortName: "D2", configVersion: 2 });
+    expect(updated.configHash).not.toBe(originalHash);
+    expect(projects.snapshot("project-short")).toMatchObject({ name: "Demo Project", shortName: "D2" });
   });
 
   it("blocks archiving while a run is active", () => {
@@ -193,7 +208,7 @@ describe("ProjectService", () => {
     const databasePath = join(directory, "factory.sqlite");
     const firstStore = new SqlitePipelineStore(databasePath);
     const firstProjects = new ProjectService(firstStore);
-    firstProjects.create({ id: "project-sqlite", name: "SQLite", repoRoot: "/repo/sqlite", defaultBranch: "main", worktreeRoot: "/tmp/sqlite-worktrees" });
+    firstProjects.create({ id: "project-sqlite", name: "SQLite", shortName: "SQL", repoRoot: "/repo/sqlite", defaultBranch: "main", worktreeRoot: "/tmp/sqlite-worktrees" });
     firstProjects.update("project-sqlite", { name: "SQLite Updated", expectedConfigVersion: 1 });
     firstStore.close();
 
@@ -203,7 +218,7 @@ describe("ProjectService", () => {
     reopened.close();
     rmSync(directory, { recursive: true, force: true });
 
-    expect(project).toMatchObject({ id: "project-sqlite", name: "SQLite Updated", configVersion: 2 });
+    expect(project).toMatchObject({ id: "project-sqlite", name: "SQLite Updated", shortName: "SQL", configVersion: 2 });
     expect(history.map((item) => item.version)).toEqual([1, 2]);
   });
 

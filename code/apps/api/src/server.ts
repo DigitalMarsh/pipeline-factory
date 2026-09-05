@@ -75,7 +75,7 @@ const threadPlanQuery = z.object({
   sort: z.enum(["queued_at", "last_event_at", "priority", "status"]).default("queued_at"),
 });
 const workbenchQuery = z.object({
-  projectId: z.string().min(1).optional(),
+  projectId: z.string().min(1),
   afterSequence: z.coerce.number().int().nonnegative().default(0),
   format: z.enum(["json", "sse"]).default("json"),
 });
@@ -102,6 +102,7 @@ const loopReasonBody = z.object({ reason: z.string().trim().min(1).max(500).defa
 const projectCreateBody = z.object({
   id: z.string().trim().min(1).max(100).optional(),
   name: z.string().trim().min(1).max(200),
+  shortName: z.string().trim().max(100).optional(),
   repoRoot: z.string().trim().min(1),
   defaultBranch: z.string().trim().min(1).optional(),
   worktreeRoot: z.string().trim().min(1).optional(),
@@ -109,6 +110,7 @@ const projectCreateBody = z.object({
 });
 const projectUpdateBody = z.object({
   name: z.string().trim().min(1).max(200).optional(),
+  shortName: z.string().trim().max(100).optional(),
   repoRoot: z.string().trim().min(1).optional(),
   defaultBranch: z.string().trim().min(1).optional(),
   worktreeRoot: z.string().trim().min(1).optional(),
@@ -302,6 +304,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       let project = projects.create({
         ...(body.data.id ? { id: body.data.id } : {}),
         name: body.data.name,
+        ...(body.data.shortName !== undefined ? { shortName: body.data.shortName } : {}),
         repoRoot: repository.repoRoot,
         defaultBranch,
         worktreeRoot,
@@ -350,15 +353,15 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
   app.get("/api/v4/workbench", async (request, reply) => {
     const query = workbenchQuery.safeParse(request.query ?? {});
     if (!query.success) return reply.code(400).send({ error: "Invalid Workbench query" });
-    if (query.data.projectId && !store.getProject(query.data.projectId)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${query.data.projectId} not found` });
+    if (!store.getProject(query.data.projectId)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${query.data.projectId} not found` });
     return workbenchSnapshot(store, projects, query.data.projectId);
   });
 
   app.get("/api/v4/workbench/events", async (request, reply) => {
     const query = workbenchQuery.safeParse(request.query ?? {});
     if (!query.success) return reply.code(400).send({ error: "Invalid Workbench event query" });
-    if (query.data.projectId && !store.getProject(query.data.projectId)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `PROJECT_NOT_FOUND: ${query.data.projectId}` });
-    const eventsForProject = (afterSequence: number) => store.listEvents({ afterSequence }).filter((event) => !query.data.projectId || eventBelongsToProject(store, event, query.data.projectId));
+    if (!store.getProject(query.data.projectId)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `PROJECT_NOT_FOUND: ${query.data.projectId}` });
+    const eventsForProject = (afterSequence: number) => store.listEvents({ afterSequence }).filter((event) => eventBelongsToProject(store, event, query.data.projectId));
     if (query.data.format !== "sse") return { items: eventsForProject(query.data.afterSequence), cursor: store.getLastEventSequence() };
     reply.hijack();
     const raw = reply.raw;
@@ -388,6 +391,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       if (defaultBranch) await assertGitBranch(repository?.repoRoot ?? project.repoRoot, defaultBranch);
       const updated = projects.update(params.data.projectId, {
         ...(body.data.name ? { name: body.data.name } : {}),
+        ...(body.data.shortName !== undefined ? { shortName: body.data.shortName } : {}),
         ...(repository ? { repoRoot: repository.repoRoot, ...(body.data.defaultBranch ? {} : { defaultBranch: repository.defaultBranch }) } : body.data.repoRoot ? { repoRoot: body.data.repoRoot } : {}),
         ...(body.data.defaultBranch ? { defaultBranch: body.data.defaultBranch } : {}),
         ...(body.data.worktreeRoot ? { worktreeRoot: body.data.worktreeRoot } : {}),
@@ -1110,11 +1114,12 @@ function decoratePlanRows(store: PipelineStore, rows: Array<{ planId: string; re
   });
 }
 
-function workbenchSnapshot(store: PipelineStore, projects: ProjectService, projectId?: string) {
-  const projectRows = projects.list().map((project) => ({ ...project, summary: projects.summary(project.id) }));
+function workbenchSnapshot(store: PipelineStore, projects: ProjectService, projectId: string) {
+  const project = projects.get(projectId);
+  const projectRows = [{ ...project, summary: projects.summary(project.id) }];
   const plans = store.listPlans()
-    .filter((plan) => !projectId || plan.projectId === projectId)
-    .filter((plan) => projectId ? plan.status !== "DRAFT" && plan.status !== "DISCARDED" : plan.queuedAt !== null)
+    .filter((plan) => plan.projectId === projectId)
+    .filter((plan) => plan.status !== "DRAFT" && plan.status !== "DISCARDED")
     .map((plan) => ({
       planId: plan.id,
       title: plan.title,
@@ -1134,14 +1139,14 @@ function workbenchSnapshot(store: PipelineStore, projects: ProjectService, proje
       contract: plan.contract,
       dispatch: store.getDispatchState(plan.id) ?? null,
     }));
-  const runs = store.listRuns().filter((run) => !projectId || run.projectId === projectId).map((run) => ({
+  const runs = store.listRuns().filter((run) => run.projectId === projectId).map((run) => ({
     ...run,
     planTitle: store.getPlan(run.planId)?.title ?? run.planId,
     dispatch: store.getDispatchState(run.planId) ?? null,
   }));
-  const events = store.listEvents({ afterSequence: 0 }).filter((event) => !projectId || eventBelongsToProject(store, event, projectId));
+  const events = store.listEvents({ afterSequence: 0 }).filter((event) => eventBelongsToProject(store, event, projectId));
   return {
-    activeProjectId: projectId ?? null,
+    activeProjectId: projectId,
     projects: projectRows,
     plans,
     runs,

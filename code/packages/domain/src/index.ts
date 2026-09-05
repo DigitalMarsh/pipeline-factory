@@ -1029,6 +1029,7 @@ export class SqlitePipelineStore implements PipelineStore {
       CREATE TABLE IF NOT EXISTS factory_projects (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
+        short_name TEXT NOT NULL,
         repo_root TEXT NOT NULL UNIQUE,
         default_branch TEXT NOT NULL,
         worktree_root TEXT NOT NULL,
@@ -1292,6 +1293,8 @@ export class SqlitePipelineStore implements PipelineStore {
         PRIMARY KEY(scope, key)
       );
     `);
+    try { this.database.exec("ALTER TABLE factory_projects ADD COLUMN short_name TEXT NOT NULL DEFAULT ''"); } catch { /* Existing databases already have the column. */ }
+    this.database.prepare("UPDATE factory_projects SET short_name = name WHERE short_name = ''").run();
     try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN title TEXT NOT NULL DEFAULT 'New Explorer'"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN created_at TEXT"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN title_source TEXT NOT NULL DEFAULT 'AUTO'"); } catch { /* Existing databases already have the column. */ }
@@ -1345,10 +1348,10 @@ export class SqlitePipelineStore implements PipelineStore {
 
   saveProject(project: Project): Project {
     this.database.prepare(`
-      INSERT INTO factory_projects (id, name, repo_root, default_branch, worktree_root, status, current_explorer_thread_id, config_version, config_hash, settings_json, created_at, updated_at, archived_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET name=excluded.name, repo_root=excluded.repo_root, default_branch=excluded.default_branch, worktree_root=excluded.worktree_root, status=excluded.status, current_explorer_thread_id=excluded.current_explorer_thread_id, config_version=excluded.config_version, config_hash=excluded.config_hash, settings_json=excluded.settings_json, created_at=excluded.created_at, updated_at=excluded.updated_at, archived_at=excluded.archived_at
-    `).run(project.id, project.name, project.repoRoot, project.defaultBranch, project.worktreeRoot, project.status, project.currentExplorerThreadId, project.configVersion, project.configHash, JSON.stringify(project.settings), project.createdAt, project.updatedAt, project.archivedAt);
+      INSERT INTO factory_projects (id, name, short_name, repo_root, default_branch, worktree_root, status, current_explorer_thread_id, config_version, config_hash, settings_json, created_at, updated_at, archived_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET name=excluded.name, short_name=excluded.short_name, repo_root=excluded.repo_root, default_branch=excluded.default_branch, worktree_root=excluded.worktree_root, status=excluded.status, current_explorer_thread_id=excluded.current_explorer_thread_id, config_version=excluded.config_version, config_hash=excluded.config_hash, settings_json=excluded.settings_json, created_at=excluded.created_at, updated_at=excluded.updated_at, archived_at=excluded.archived_at
+    `).run(project.id, project.name, project.shortName, project.repoRoot, project.defaultBranch, project.worktreeRoot, project.status, project.currentExplorerThreadId, project.configVersion, project.configHash, JSON.stringify(project.settings), project.createdAt, project.updatedAt, project.archivedAt);
     return this.getProject(project.id) as Project;
   }
 
@@ -1760,6 +1763,7 @@ export class SqlitePipelineStore implements PipelineStore {
     return {
       id: String(row.id),
       name: String(row.name),
+      shortName: String(row.short_name ?? row.name),
       repoRoot: String(row.repo_root),
       defaultBranch: String(row.default_branch),
       worktreeRoot: String(row.worktree_root),

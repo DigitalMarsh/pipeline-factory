@@ -4,14 +4,17 @@ import { describe, expect, it } from "vitest";
 import ThreadRail from "./ThreadRail.vue";
 import type { ExplorerThread, Project } from "../types";
 
-function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplorer = false) {
+function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplorer = false, projectActionId: string | null = null) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   let createExplorerCount = 0;
+  let createProjectCount = 0;
   let selectedPanel: "projects" | "explorers" | null = null;
   let selectedProjectId: string | null = null;
   let selectedExplorerId: string | null = null;
-  let manageProjectsCount = 0;
+  const openedProjectIds: string[] = [];
+  const settingsProjectIds: string[] = [];
+  const archivedProjectIds: string[] = [];
   const thread = { id: "explorer-1", projectId: "project-1", title: "Current exploration", state: "ACTIVE", contextMode: "FRESH", messageCount: 2, lastActivityAt: "2026-09-02T14:00:00.000Z" } as unknown as ExplorerThread;
   const project = { id: "project-1", name: "Project 1", repoRoot: "/tmp/project-1", status: "ACTIVE", currentExplorerThreadId: "explorer-1" } as unknown as Project;
   const projects = [
@@ -32,11 +35,15 @@ function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplor
         projects,
         explorers,
         creatingExplorer,
+        projectActionId,
         onCreateExplorer: () => { createExplorerCount += 1; },
+        onCreateProject: () => { createProjectCount += 1; },
         onSelectPanel: (value: "projects" | "explorers") => { selectedPanel = value; activePanel.value = value; },
         onSelectProject: (projectId: string) => { selectedProjectId = projectId; },
         onSelectExplorer: (explorerId: string) => { selectedExplorerId = explorerId; },
-        onManageProjects: () => { manageProjectsCount += 1; },
+        onOpenProject: (projectId: string) => { openedProjectIds.push(projectId); },
+        onOpenProjectSettings: (projectId: string) => { settingsProjectIds.push(projectId); },
+        onArchiveProject: (projectId: string) => { archivedProjectIds.push(projectId); },
       });
     },
   }));
@@ -45,10 +52,13 @@ function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplor
     app,
     host,
     getCreateExplorerCount: () => createExplorerCount,
+    getCreateProjectCount: () => createProjectCount,
     getSelectedPanel: () => selectedPanel,
     getSelectedProjectId: () => selectedProjectId,
     getSelectedExplorerId: () => selectedExplorerId,
-    getManageProjectsCount: () => manageProjectsCount,
+    getOpenedProjectIds: () => openedProjectIds,
+    getSettingsProjectIds: () => settingsProjectIds,
+    getArchivedProjectIds: () => archivedProjectIds,
   };
 }
 
@@ -76,7 +86,11 @@ describe("ThreadRail left workspace navigation", () => {
     expect(mounted.host.querySelector(".project-list")).not.toBeNull();
     expect(mounted.host.querySelector(".explorer-list")).toBeNull();
     expect(mounted.host.textContent).toContain("Project 1");
-    expect(mounted.host.textContent).toContain("Manage Projects");
+    expect(mounted.host.textContent).toContain("Open Explorer");
+    expect(mounted.host.textContent).toContain("Settings");
+    expect(mounted.host.textContent).toContain("Archive");
+    expect(mounted.host.textContent).toContain("New Project");
+    expect(mounted.host.querySelector(".left-panel-manage")).toBeNull();
 
     mounted.app.unmount();
     mounted.host.remove();
@@ -88,6 +102,17 @@ describe("ThreadRail left workspace navigation", () => {
     await nextTick();
 
     expect(mounted.getSelectedProjectId()).toBe("project-2");
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  it("emits create-project from the project list footer", async () => {
+    const mounted = mountRail("projects");
+    mounted.host.querySelector<HTMLButtonElement>('[data-project-action="create"]')?.click();
+    await nextTick();
+
+    expect(mounted.getCreateProjectCount()).toBe(1);
 
     mounted.app.unmount();
     mounted.host.remove();
@@ -148,13 +173,30 @@ describe("ThreadRail left workspace navigation", () => {
     mounted.host.remove();
   });
 
-  it("opens project management from the project list", async () => {
+  it("emits project actions independently from project selection", async () => {
     const mounted = mountRail("projects");
-    mounted.host.querySelector<HTMLButtonElement>("button.left-panel-manage")?.click();
+    const secondProject = mounted.host.querySelector<HTMLElement>('[data-project-row="project-2"]');
+    secondProject?.querySelector<HTMLButtonElement>('[data-project-action="open-explorer"]')?.click();
+    secondProject?.querySelector<HTMLButtonElement>('[data-project-action="settings"]')?.click();
+    secondProject?.querySelector<HTMLButtonElement>('[data-project-action="archive"]')?.click();
     await nextTick();
 
-    expect(mounted.getManageProjectsCount()).toBe(1);
+    expect(mounted.getOpenedProjectIds()).toEqual(["project-2"]);
+    expect(mounted.getSettingsProjectIds()).toEqual(["project-2"]);
+    expect(mounted.getArchivedProjectIds()).toEqual(["project-2"]);
     expect(mounted.getSelectedProjectId()).toBeNull();
+    expect(mounted.host.querySelector(".left-panel-manage")).toBeNull();
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  it("marks the active project action as busy and disables it", () => {
+    const mounted = mountRail("projects", false, "project-2");
+    const archive = mounted.host.querySelector<HTMLButtonElement>('[data-project-row="project-2"] [data-project-action="archive"]');
+
+    expect(archive?.disabled).toBe(true);
+    expect(archive?.getAttribute("aria-busy")).toBe("true");
 
     mounted.app.unmount();
     mounted.host.remove();

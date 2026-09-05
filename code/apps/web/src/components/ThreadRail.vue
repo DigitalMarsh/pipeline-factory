@@ -3,7 +3,7 @@
   维护提示：左侧入口只切换左侧内容，右侧执行上下文由 ExplorerView 独立管理。
 -->
 <script setup lang="ts">
-import { Connection, FolderOpened, Plus } from "@element-plus/icons-vue";
+import { ArrowRight, Connection, FolderOpened, Plus, Setting } from "@element-plus/icons-vue";
 import type { ExplorerThread, Project } from "../types";
 
 type LeftPanel = "projects" | "explorers";
@@ -15,13 +15,17 @@ const props = defineProps<{
   projects: Project[];
   explorers: ExplorerThread[];
   creatingExplorer?: boolean;
+  projectActionId?: string | null;
 }>();
 const emit = defineEmits<{
   "select-panel": [panel: LeftPanel];
   "select-project": [projectId: string];
+  "open-project": [projectId: string];
+  "open-project-settings": [projectId: string];
+  "archive-project": [projectId: string];
   "select-explorer": [explorerId: string];
   "create-explorer": [];
-  "manage-projects": [];
+  "create-project": [];
 }>();
 
 const panelEntries: { key: LeftPanel; label: string }[] = [
@@ -66,20 +70,47 @@ function explorerStatusLabel(state: ExplorerThread["state"]): string {
       </header>
 
       <div v-if="props.panel === 'projects'" class="left-panel-scroll project-list">
-        <button
+        <article
           v-for="availableProject in props.projects"
           :key="availableProject.id"
-          class="project-list-item"
+          class="project-list-row"
           :class="{ active: availableProject.id === props.project?.id }"
-          type="button"
-          :data-project-id="availableProject.id"
-          @click="emit('select-project', availableProject.id)"
+          :data-project-row="availableProject.id"
         >
-          <span class="left-list-icon"><FolderOpened :size="16" /></span>
-          <span class="left-list-copy"><strong>{{ availableProject.name }}</strong><small>{{ availableProject.repoRoot }}</small></span>
-          <span :class="['left-list-status', { archived: availableProject.status === 'ARCHIVED' }]">{{ projectStatusLabel(availableProject.status) }}</span>
+          <button
+            class="project-list-item"
+            :class="{ active: availableProject.id === props.project?.id }"
+            type="button"
+            :data-project-id="availableProject.id"
+            @click="emit('select-project', availableProject.id)"
+          >
+            <span class="left-list-icon"><FolderOpened :size="16" /></span>
+            <span class="left-list-copy"><strong>{{ availableProject.name }}<span v-if="availableProject.shortName && availableProject.shortName !== availableProject.name" class="left-list-short-name">{{ availableProject.shortName }}</span></strong><small>{{ availableProject.repoRoot }}</small></span>
+            <span :class="['left-list-status', { archived: availableProject.status === 'ARCHIVED' }]">{{ projectStatusLabel(availableProject.status) }}</span>
+          </button>
+          <div class="project-list-actions" aria-label="Project actions">
+            <button type="button" class="project-list-action" data-project-action="open-explorer" @click.stop="emit('open-project', availableProject.id)">
+              Open Explorer <ArrowRight :size="12" />
+            </button>
+            <button type="button" class="project-list-action" data-project-action="settings" @click.stop="emit('open-project-settings', availableProject.id)">
+              <Setting :size="12" /> Settings
+            </button>
+            <button
+              type="button"
+              class="project-list-action"
+              data-project-action="archive"
+              :disabled="props.projectActionId === availableProject.id"
+              :aria-busy="props.projectActionId === availableProject.id ? 'true' : undefined"
+              @click.stop="emit('archive-project', availableProject.id)"
+            >
+              {{ availableProject.status === "ACTIVE" ? "Archive" : "Activate" }}
+            </button>
+          </div>
+        </article>
+        <button class="left-panel-create-project" type="button" data-project-action="create" @click="emit('create-project')">
+          <span class="left-panel-create-icon"><Plus :size="16" /></span>
+          <span><strong>New Project</strong><small>添加 Git 仓库</small></span>
         </button>
-        <button class="left-panel-manage" type="button" @click="emit('manage-projects')">Manage Projects</button>
       </div>
 
       <div v-else class="left-panel-scroll explorer-list">

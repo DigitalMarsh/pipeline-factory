@@ -8,7 +8,7 @@ import ExplorerView from "./views/ExplorerView.vue";
 import RunDetailView from "./views/RunDetailView.vue";
 import ProjectCatalogView from "./views/ProjectCatalogView.vue";
 import ProjectSettingsView from "./views/ProjectSettingsView.vue";
-import WorkbenchView from "./views/WorkbenchView.vue";
+import ProjectExecuteView from "./views/WorkbenchView.vue";
 import ProjectCreateView from "./views/ProjectCreateView.vue";
 import PlanCenterView from "./views/PlanCenterView.vue";
 import { api } from "./api";
@@ -20,8 +20,7 @@ export const router = createRouter({
     { path: "/", redirect: "/projects" },
     { path: "/projects", component: ProjectCatalogView },
     { path: "/projects/new", component: ProjectCreateView },
-    { path: "/workbench", component: WorkbenchView },
-    { path: "/projects/:projectId/execute", component: WorkbenchView },
+    { path: "/projects/:projectId/execute", component: ProjectExecuteView },
     { path: "/projects/:projectId/explorer", component: ExplorerView },
     { path: "/projects/:projectId/plans", component: PlanCenterView },
     { path: "/projects/:projectId/runs/:runId", component: RunDetailView },

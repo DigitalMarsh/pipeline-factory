@@ -31,7 +31,6 @@ a { color: inherit; text-decoration: none; }
 .topbar { height: 60px; display: flex; align-items: center; gap: 28px; padding: 0 26px; color: #eef3fb; background: var(--navy); border-bottom: 1px solid #26344b; }
 .brand-mark { display: flex; align-items: center; gap: 9px; min-width: 220px; font-size: 15px; font-weight: 700; letter-spacing: -.02em; }
 .brand-mark small { color: #8392aa; font-size: 10px; font-weight: 700; letter-spacing: .1em; }
-.topbar-workbench { padding: 6px 10px; border: 1px solid #32425d; border-radius: 5px; color: #aebbd0; font-size: 10px; }.topbar-workbench:hover, .topbar-workbench.router-link-active { border-color: #5a7fc9; background: #1b2a43; color: #f2f6fc; }
 .brand-dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: #5e8bff; box-shadow: 0 0 0 4px rgba(94,139,255,.16); }
 .project-live { color: #6ac99e; font-size: 11px; margin-left: 5px; }
 .project-menu-item { display: flex; align-items: center; gap: 8px; min-width: 190px; }.project-menu-item small { margin-left: auto; color: #9aa6b5; font-size: 9px; }
@@ -309,13 +308,25 @@ a { color: inherit; text-decoration: none; }
 .left-panel-header small { display: block; margin-top: 5px; overflow: hidden; color: #8093ae; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .left-panel-scroll { min-height: 0; flex: 1 1 auto; overflow-y: auto; padding: 15px 1px 2px; scrollbar-width: thin; }
 .project-list, .explorer-list { display: flex; flex-direction: column; gap: 8px; }
-.project-list-item, .explorer-list-item { display: flex; min-width: 0; align-items: flex-start; gap: 8px; width: 100%; padding: 10px 8px; border: 1px solid #293b58; border-radius: 8px; outline: 0; background: #16253d; color: #9eafc6; cursor: pointer; font: inherit; text-align: left; transition: border-color .16s ease, background .16s ease, color .16s ease; }
+.project-list-row { overflow: hidden; border: 1px solid #293b58; border-radius: 8px; background: #16253d; }
+.project-list-item, .explorer-list-item { display: flex; min-width: 0; align-items: flex-start; gap: 8px; width: 100%; padding: 10px 8px; border: 1px solid transparent; border-radius: 8px 8px 0 0; outline: 0; background: transparent; color: #9eafc6; cursor: pointer; font: inherit; text-align: left; transition: border-color .16s ease, background .16s ease, color .16s ease; }
 .project-list-item:hover, .project-list-item:focus-visible, .explorer-list-item:hover, .explorer-list-item:focus-visible { border-color: #477dc8; background: #1b3559; color: #e6f1ff; }
 .project-list-item.active, .explorer-list-item.active { border-color: #4b91df; background: #214b7a; box-shadow: inset 0 0 0 1px rgba(113, 200, 255, .16); color: #fff; }
+.project-list-row.active { border-color: #4b91df; box-shadow: inset 0 0 0 1px rgba(113, 200, 255, .16); }
+.project-list-row.active .project-list-item { background: #214b7a; color: #fff; }
+.project-list-actions { display: flex; align-items: center; gap: 2px; padding: 7px 6px 7px 41px; border-top: 1px solid #293b58; }
+.project-list-action { display: inline-flex; align-items: center; gap: 3px; min-width: 0; padding: 2px 4px; border: 0; background: transparent; color: #8198b6; cursor: pointer; font: inherit; font-size: 9px; white-space: nowrap; }
+.project-list-action:hover, .project-list-action:focus-visible { color: #dcecff; outline: 0; }
+.project-list-action:disabled { color: #526b8e; cursor: wait; }
+.left-panel-create-project { display: flex; min-width: 0; flex: 0 0 auto; align-items: center; gap: 8px; width: 100%; min-height: 48px; margin-top: auto; padding: 8px; border: 1px dashed #31557e; border-radius: 8px; outline: 0; background: transparent; color: #8fc5f0; cursor: pointer; font: inherit; text-align: left; transition: border-color .16s ease, background .16s ease, color .16s ease; }
+.left-panel-create-project:hover, .left-panel-create-project:focus-visible { border-color: #5ca9e5; background: #193758; color: #dcecff; outline: 0; }
+.left-panel-create-project strong { display: block; color: currentColor; font-size: 11px; }
+.left-panel-create-project small { display: block; margin-top: 4px; color: #91adca; font-size: 9px; }
 .left-list-icon { display: grid; place-items: center; width: 25px; height: 25px; flex: 0 0 25px; border-radius: 6px; background: #213d63; color: #75baf2; }
-.project-list-item.active .left-list-icon, .explorer-list-item.active .left-list-icon { background: #2d659c; color: #c2edff; }
+.project-list-item.active .left-list-icon, .project-list-row.active .left-list-icon, .explorer-list-item.active .left-list-icon { background: #2d659c; color: #c2edff; }
 .left-list-copy { min-width: 0; flex: 1 1 auto; }
 .left-list-copy strong { display: block; overflow: hidden; color: currentColor; font-size: 11px; line-height: 1.35; text-overflow: ellipsis; white-space: nowrap; }
+.left-list-short-name { margin-left: 5px; color: #8fb8df; font-size: 9px; font-weight: 600; }
 .left-list-copy small { display: block; overflow: hidden; margin-top: 4px; color: #8196b1; font-size: 9px; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
 .left-list-status { flex: 0 0 auto; padding-top: 2px; color: #70d5a4; font-size: 9px; font-weight: 700; }
 .left-list-status.archived { color: #9ca9bc; }
