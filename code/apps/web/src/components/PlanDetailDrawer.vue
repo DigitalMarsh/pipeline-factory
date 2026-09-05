@@ -9,15 +9,14 @@ import type { Plan, PlanTask } from "../types";
 import { canDiscardPlan } from "../utils/planControls";
 
 const props = defineProps<{ modelValue: boolean; plan: Plan | null }>();
-const emit = defineEmits<{ "update:modelValue": [value: boolean]; confirm: []; discard: []; enqueue: [] }>();
+const emit = defineEmits<{ "update:modelValue": [value: boolean]; confirm: []; discard: [] }>();
 const planId = computed(() => props.plan?.planId ?? props.plan?.id ?? "—");
 const canConfirm = computed(() => props.plan?.status === "DRAFT");
 const canDiscard = computed(() => canDiscardPlan(props.plan?.status));
-const canEnqueue = computed(() => props.plan?.status === "READY");
 const contract = computed(() => props.plan?.contract);
 const fallbackTasks: PlanTask[] = [{ title: "Implement ExplorerThread workspace", status: "ready", dependencies: [] }];
 const tasks = computed(() => contract.value?.tasks ?? props.plan?.tasks ?? fallbackTasks);
-// 操作按钮由服务端状态的只读投影驱动：DISCARDED/QUEUED 等状态不提供越权的后续动作。
+// 操作按钮由服务端状态的只读投影驱动：Candidate 只允许确认或丢弃。
 const statusTagType = computed(() => props.plan?.status === "DRAFT" ? "warning" : props.plan?.status === "DISCARDED" ? "danger" : "success");
 </script>
 
@@ -31,7 +30,7 @@ const statusTagType = computed(() => props.plan?.status === "DRAFT" ? "warning" 
       <section class="contract-section"><div class="section-heading"><span>03</span><strong>Tasks & dependencies</strong></div><div class="task-list"><div v-for="(task, index) in tasks" :key="task.id ?? task.title" class="task-row"><span class="task-number">{{ index + 1 }}</span><div><strong>{{ task.title }}</strong><small>{{ task.dependencies.length ? `Depends on ${task.dependencies.join(', ')}` : 'No dependencies' }}</small></div><el-tag size="small" effect="plain">{{ task.status }}</el-tag></div></div></section>
       <section class="contract-section"><div class="section-heading"><span>04</span><strong>Execution policy</strong></div><div class="policy-grid"><div><label>BASE</label><strong>{{ contract?.baseBranch ?? 'main' }} · {{ contract?.baseCommit ?? 'HEAD' }}</strong></div><div><label>VERIFICATION</label><strong>{{ (contract?.verificationCommandIds ?? plan.verificationCommands ?? ['pnpm test', 'pnpm typecheck']).join(' · ') }}</strong></div><div><label>TOOL POLICY</label><strong>{{ contract?.toolPolicy ?? plan.toolPolicy ?? 'Executor / scoped write' }}</strong></div><div><label>REPAIR LIMIT</label><strong>{{ contract?.maxRepairAttempts ?? 2 }} attempts</strong></div></div></section>
       <section class="contract-section source-section"><div class="section-heading"><span>05</span><strong>Source evidence</strong></div><div class="source-row"><span>ExplorerThread</span><code>{{ plan.sourceExplorerThreadId }}</code></div><div class="source-row"><span>Artifact hash</span><code>sha256:9f3e…b812</code></div></section>
-      <div class="drawer-actions"><el-button v-if="canDiscard" type="danger" plain @click="emit('discard')">Discard plan</el-button><el-button @click="emit('update:modelValue', false)">Keep editing</el-button><el-button v-if="canConfirm" type="primary" @click="emit('confirm')">Confirm plan <Right /></el-button><el-button v-else-if="canEnqueue" type="primary" @click="emit('enqueue')">Enqueue plan <Right /></el-button><div v-else class="locked-action"><Lock :size="14" /> {{ plan.status === 'QUEUED' ? 'Already dispatched' : plan.status === 'DISCARDED' ? 'Discarded · No further actions' : 'Read only' }}</div></div>
+      <div class="drawer-actions"><el-button v-if="canDiscard" type="danger" plain @click="emit('discard')">Discard plan</el-button><el-button @click="emit('update:modelValue', false)">Keep editing</el-button><el-button v-if="canConfirm" type="primary" @click="emit('confirm')">Confirm plan <Right /></el-button><div v-else class="locked-action"><Lock :size="14" /> {{ plan.status === 'DISCARDED' ? 'Discarded · No further actions' : 'Read only' }}</div></div>
     </div>
   </el-drawer>
 </template>

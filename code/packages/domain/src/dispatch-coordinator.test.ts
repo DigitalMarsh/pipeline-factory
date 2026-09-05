@@ -13,7 +13,7 @@ const coordinatorModule = domain as unknown as {
     globalConcurrency?: number;
     verify?: (run: domain.Run, revision: domain.PlanRevisionV2) => Promise<domain.VerificationRun>;
   }) => {
-    enqueue(planId: string): Promise<{ plan: domain.CandidatePlan; state: domain.PlanDispatchState }>;
+    dispatch(planId: string): Promise<{ plan: domain.CandidatePlan; state: domain.PlanDispatchState }>;
     wake(): Promise<domain.PlanDispatchState[]>;
     state(planId: string): domain.PlanDispatchState | undefined;
   };
@@ -35,14 +35,35 @@ function createPlan(store: domain.PipelineStore, plans: PlanService, title: stri
   return plans.get(plan.id);
 }
 
+async function dispatch(coordinator: InstanceType<typeof coordinatorModule.PlanDispatchCoordinator>, plans: PlanService, planId: string) {
+  plans.enqueue(planId);
+  return coordinator.dispatch(planId);
+}
+
 describe("PlanDispatchCoordinator", () => {
-  it("dispatches an enqueued Plan automatically and keeps repeated wake idempotent", async () => {
+  it("does not schedule an Enqueued plan until an explicit dispatch request", async () => {
+    const store = new InMemoryPipelineStore();
+    const plans = new PlanService(store);
+    const plan = createPlan(store, plans, "Manual dispatch gate");
+    const coordinator = new coordinatorModule.PlanDispatchCoordinator({ store, plans, scheduler: schedulerFor(store) });
+
+    plans.enqueue(plan.id);
+    await coordinator.wake();
+    expect(store.listRuns()).toHaveLength(0);
+    expect(coordinator.state(plan.id)).toBeUndefined();
+
+    const dispatched = await coordinator.dispatch(plan.id);
+    expect(dispatched.plan.status).toBe("IN_PROGRESS");
+    expect(dispatched.state).toMatchObject({ planId: plan.id, status: "RUNNING", waitReason: null });
+  });
+
+  it("dispatches an explicitly started Plan automatically and keeps repeated wake idempotent", async () => {
     const store = new InMemoryPipelineStore();
     const plans = new PlanService(store);
     const plan = createPlan(store, plans, "Automatic dispatch");
     const coordinator = new coordinatorModule.PlanDispatchCoordinator({ store, plans, scheduler: schedulerFor(store) });
 
-    const result = await coordinator.enqueue(plan.id);
+    const result = await dispatch(coordinator, plans, plan.id);
 
     expect(result.plan.status).toBe("IN_PROGRESS");
     expect(result.state).toMatchObject({ planId: plan.id, status: "RUNNING", waitReason: null });
@@ -57,7 +78,7 @@ describe("PlanDispatchCoordinator", () => {
     const dependent = createPlan(store, plans, "Dependent", [dependency.id]);
     const coordinator = new coordinatorModule.PlanDispatchCoordinator({ store, plans, scheduler: schedulerFor(store) });
 
-    const waiting = await coordinator.enqueue(dependent.id);
+    const waiting = await dispatch(coordinator, plans, dependent.id);
     expect(waiting.state).toMatchObject({ status: "WAITING", waitReason: "WAITING_DEPENDENCY" });
     expect(store.listRuns()).toHaveLength(0);
 
@@ -73,8 +94,8 @@ describe("PlanDispatchCoordinator", () => {
     const second = createPlan(store, plans, "Second");
     const coordinator = new coordinatorModule.PlanDispatchCoordinator({ store, plans, scheduler: schedulerFor(store, 1), globalConcurrency: 1 });
 
-    await coordinator.enqueue(first.id);
-    const waiting = await coordinator.enqueue(second.id);
+    await dispatch(coordinator, plans, first.id);
+    const waiting = await dispatch(coordinator, plans, second.id);
     expect(waiting.state.waitReason).toBe("WAITING_GLOBAL_CAPACITY");
 
     const firstRun = store.listRuns()[0];
@@ -92,8 +113,8 @@ describe("PlanDispatchCoordinator", () => {
     const second = createPlan(store, plans, "Project second");
     const coordinator = new coordinatorModule.PlanDispatchCoordinator({ store, plans, scheduler: schedulerFor(store) });
 
-    await coordinator.enqueue(first.id);
-    const waiting = await coordinator.enqueue(second.id);
+    await dispatch(coordinator, plans, first.id);
+    const waiting = await dispatch(coordinator, plans, second.id);
     expect(waiting.state).toMatchObject({ status: "WAITING", waitReason: "WAITING_PROJECT_CAPACITY" });
 
     const firstRun = store.listRuns()[0]!;
@@ -110,7 +131,7 @@ describe("PlanDispatchCoordinator", () => {
       const plans = new PlanService(firstStore);
       const plan = createPlan(firstStore, plans, "Persist dispatch");
       const coordinator = new coordinatorModule.PlanDispatchCoordinator({ store: firstStore, plans, scheduler: schedulerFor(firstStore, 0), globalConcurrency: 0 });
-      const result = await coordinator.enqueue(plan.id);
+      const result = await dispatch(coordinator, plans, plan.id);
       expect(result.state.waitReason).toBe("WAITING_GLOBAL_CAPACITY");
       firstStore.close();
 
@@ -136,7 +157,7 @@ describe("PlanDispatchCoordinator", () => {
       },
     });
 
-    const result = await coordinator.enqueue(plan.id);
+    const result = await dispatch(coordinator, plans, plan.id);
     const run = store.getRun(result.state.runId!);
     store.saveRun({ ...run!, status: "READY_FOR_VERIFY" });
     store.appendEvent({ type: "run.executor.event", aggregateId: run!.id, payload: { action: "executor_completed" } });
@@ -150,7 +171,7 @@ describe("PlanDispatchCoordinator", () => {
     const plans = new PlanService(store);
     const plan = createPlan(store, plans, "Recovery attention");
     const coordinator = new coordinatorModule.PlanDispatchCoordinator({ store, plans, scheduler: schedulerFor(store) });
-    const dispatched = await coordinator.enqueue(plan.id);
+    const dispatched = await dispatch(coordinator, plans, plan.id);
 
     store.saveRun({ ...store.getRun(dispatched.state.runId!)!, status: "RECOVERING" });
     await coordinator.wake();

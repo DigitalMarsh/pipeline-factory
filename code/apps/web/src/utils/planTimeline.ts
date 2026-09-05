@@ -31,6 +31,8 @@ function statusLabel(status: string): string {
   return ({
     DRAFT: "Candidate",
     READY: "Confirmed",
+    ENQUEUED: "Enqueued",
+    DISPATCHED: "Dispatched",
     QUEUED: "Queued",
     IN_PROGRESS: "Running",
     VERIFYING: "Verifying",

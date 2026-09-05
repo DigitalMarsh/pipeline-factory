@@ -4,6 +4,8 @@ export type StatusVisual = { label: string; tone: "neutral" | "info" | "warning"
 const STATUS_VISUALS: Record<string, StatusVisual> = {
   DRAFT: { label: "Draft", tone: "neutral" },
   READY: { label: "Ready", tone: "info" },
+  ENQUEUED: { label: "Enqueued", tone: "warning" },
+  DISPATCHED: { label: "Dispatched", tone: "info" },
   QUEUED: { label: "Queued", tone: "warning" },
   WAITING: { label: "Waiting", tone: "warning" },
   WAITING_DEPENDENCY: { label: "Waiting · dependency", tone: "warning" },

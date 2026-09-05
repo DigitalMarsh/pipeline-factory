@@ -231,6 +231,7 @@ describe("ProjectService", () => {
     const plan = plans.createCandidatePlan({ projectId: "project-snapshot", sourceExplorerThreadId: "thread-snapshot", title: "Snapshot execution" });
     plans.confirm(plan.id, "local-user");
     plans.enqueue(plan.id);
+    plans.dispatch(plan.id);
     projects.update("project-snapshot", { repoRoot: "/repo/new-location", worktreeRoot: "/tmp/new-worktrees", expectedConfigVersion: 1 });
     const resolved: string[] = [];
     const scheduler = new Scheduler({

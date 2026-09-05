@@ -101,7 +101,7 @@ describe("Pipeline Factory v4 API", () => {
     expect(response.json()).toMatchObject({ code: "PROJECT_NOT_FOUND" });
   });
 
-  it("lists all dispatched plans for a Project across ExplorerThreads", async () => {
+  it("lists all Enqueued plans for a Project across ExplorerThreads", async () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);
     const project = projects.create({ id: "project-plans", name: "Plans", repoRoot: "/repo/plans", defaultBranch: "main", worktreeRoot: "/tmp/plans-worktrees" });
@@ -277,7 +277,7 @@ describe("Pipeline Factory v4 API", () => {
     expect(store.listAgentLoopSteps(loop.id).map((step) => step.stepType)).toEqual(["LOOP_SUSPENDED", "LOOP_RESUMED", "LOOP_COMPLETED"]);
   });
 
-  it("enforces confirm before enqueue and exposes the thread plan projection", async () => {
+  it("enforces confirm before enqueue and exposes the Enqueued thread plan projection", async () => {
     const store = new InMemoryPipelineStore();
     createTestProject(store);
     const app = createApp({ store, seed: false });
@@ -290,10 +290,70 @@ describe("Pipeline Factory v4 API", () => {
     const rejected = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/enqueue` });
     expect(rejected.statusCode).toBe(409);
     await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/confirm`, payload: { actorId: "user-1" } });
-    await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/enqueue` });
+    const enqueued = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/enqueue` });
+    expect(enqueued.json()).toMatchObject({ plan: { id: plan.id, status: "ENQUEUED", dispatchedAt: null }, dispatch: null });
+    expect(store.listRuns()).toEqual([]);
     const response = await app.inject({ method: "GET", url: "/api/v4/projects/project-1/plans" });
     expect(response.statusCode).toBe(200);
-    expect(response.json().items[0]).toMatchObject({ planId: plan.id, status: "QUEUED", createdAt: plan.createdAt, sourceTurnId: "assistant-1" });
+    expect(response.json().items[0]).toMatchObject({ planId: plan.id, status: "ENQUEUED", createdAt: plan.createdAt, sourceTurnId: "assistant-1", dispatchedAt: null });
+  });
+
+  it("keeps the Confirmed projection to READY plans while preserving Enqueued plans in the thread projection", async () => {
+    const store = new InMemoryPipelineStore();
+    createTestProject(store);
+    createTestProject(store, "project-2");
+    const plans = new PlanService(store);
+    plans.registerThread({ id: "confirmed-root", projectId: "project-1", parentThreadId: null });
+    plans.registerThread({ id: "confirmed-child", projectId: "project-1", parentThreadId: "confirmed-root" });
+    plans.registerThread({ id: "other-project-thread", projectId: "project-2", parentThreadId: null });
+
+    const ready = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "confirmed-root", title: "Ready confirmed plan" });
+    const queued = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "confirmed-child", title: "Queued confirmed plan" });
+    const draft = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "confirmed-child", title: "Still a draft" });
+    const discarded = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "confirmed-child", title: "Discarded plan" });
+    const otherProject = plans.createCandidatePlan({ projectId: "project-2", sourceExplorerThreadId: "other-project-thread", title: "Other project plan" });
+    plans.confirm(ready.id, "user-1");
+    plans.confirm(queued.id, "user-1");
+    plans.enqueue(queued.id);
+    plans.discard(discarded.id, "user-1");
+    plans.confirm(otherProject.id, "user-1");
+
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+
+    const confirmed = await app.inject({ method: "GET", url: "/api/v4/projects/project-1/explorers/confirmed-child/confirmed-plans" });
+    const dispatched = await app.inject({ method: "GET", url: "/api/v4/projects/project-1/explorers/confirmed-child/plans" });
+
+    expect(confirmed.statusCode).toBe(200);
+    expect(confirmed.json().items.map((item: { title: string }) => item.title)).toEqual(["Ready confirmed plan"]);
+    expect(confirmed.json().items.map((item: { status: string }) => item.status)).toEqual(["READY"]);
+    expect(confirmed.json().items.some((item: { planId: string }) => item.planId === draft.id)).toBe(false);
+    expect(confirmed.json().items.some((item: { planId: string }) => item.planId === discarded.id)).toBe(false);
+    expect(confirmed.json().items.some((item: { title: string }) => item.title === "Other project plan")).toBe(false);
+    expect(dispatched.statusCode).toBe(200);
+    expect(dispatched.json().items.map((item: { title: string }) => item.title)).toEqual(["Queued confirmed plan"]);
+  });
+
+  it("does not leak active and terminal plans into the Confirmed projection", async () => {
+    const store = new InMemoryPipelineStore();
+    createTestProject(store);
+    const plans = new PlanService(store);
+    plans.registerThread({ id: "confirmed-lifecycle-thread", projectId: "project-1", parentThreadId: null });
+    const active = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "confirmed-lifecycle-thread", title: "Active confirmed plan" });
+    const terminal = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "confirmed-lifecycle-thread", title: "Merged confirmed plan" });
+    plans.confirm(active.id, "user-1");
+    plans.confirm(terminal.id, "user-1");
+    const activeQueued = plans.enqueue(active.id);
+    const terminalQueued = plans.enqueue(terminal.id);
+    store.updatePlan({ ...activeQueued, status: "IN_PROGRESS", runId: "run-confirmed-active", lastEventAt: store.now() });
+    store.updatePlan({ ...terminalQueued, status: "MERGED", runId: "run-confirmed-terminal", lastEventAt: store.now() });
+
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+
+    const response = await app.inject({ method: "GET", url: "/api/v4/projects/project-1/explorers/confirmed-lifecycle-thread/confirmed-plans" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().items).toEqual([]);
   });
 
   it("discards a candidate through the API and hides it from candidate endpoints", async () => {
@@ -356,7 +416,7 @@ describe("Pipeline Factory v4 API", () => {
     expect(store.listTurns("thread-1")[1]).toMatchObject({ status: "FAILED", content: "模型调用失败：Codex turn failed" });
   });
 
-  it("starts a queued plan only through the injected Scheduler", async () => {
+  it("dispatches an Enqueued plan only through the injected Scheduler", async () => {
     const store = new InMemoryPipelineStore();
     createTestProject(store);
     const plans = new PlanService(store);
@@ -396,7 +456,7 @@ describe("Pipeline Factory v4 API", () => {
     expect(secondResponse.json()).toMatchObject({ run: null, dispatch: { planId: second.id, status: "WAITING", waitReason: "WAITING_GLOBAL_CAPACITY" } });
   });
 
-  it("automatically dispatches a plan from the v4 enqueue endpoint and exposes its dispatch state", async () => {
+  it("keeps an enqueued plan out of scheduler state until Start run", async () => {
     const store = new InMemoryPipelineStore();
     createTestProject(store);
     const plans = new PlanService(store);
@@ -411,8 +471,9 @@ describe("Pipeline Factory v4 API", () => {
     const fetched = await app.inject({ method: "GET", url: `/api/v4/plans/${plan.id}` });
 
     expect(enqueued.statusCode).toBe(200);
-    expect(enqueued.json()).toMatchObject({ plan: { id: plan.id, status: "IN_PROGRESS" }, state: { status: "RUNNING", waitReason: null } });
-    expect(fetched.json()).toMatchObject({ dispatch: { planId: plan.id, status: "RUNNING", runId: expect.any(String) } });
+    expect(enqueued.json()).toMatchObject({ plan: { id: plan.id, status: "ENQUEUED", dispatchedAt: null }, dispatch: null });
+    expect(fetched.json()).toMatchObject({ plan: { id: plan.id, status: "ENQUEUED" }, dispatch: null });
+    expect(store.listRuns()).toEqual([]);
   });
 
   it("creates and approves a ChangeProposal through the v4 API without switching the old Run revision", async () => {
@@ -434,7 +495,7 @@ describe("Pipeline Factory v4 API", () => {
 
     expect(created.statusCode).toBe(201);
     expect(approved.statusCode).toBe(200);
-    expect(approved.json()).toMatchObject({ revision: { revision: 2 }, run: { planRevision: 2 } });
+    expect(approved.json()).toMatchObject({ revision: { revision: 2 }, plan: { status: "ENQUEUED", dispatchedAt: null, runId: null }, run: null });
     expect(store.getRun(run.id)?.planRevision).toBe(1);
     expect(store.getRun(run.id)?.status).toBe("NEEDS_PLAN_CHANGE");
   });
@@ -674,6 +735,8 @@ describe("Pipeline Factory v4 API", () => {
     const v4Plan = await app.inject({ method: "GET", url: `/api/v4/plans/${plan.id}` });
     const confirmed = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/confirm`, payload: { actorId: "user-1" } });
     const enqueued = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/enqueue` });
+    expect(enqueued.json()).toMatchObject({ plan: { id: plan.id, status: "ENQUEUED", dispatchedAt: null }, dispatch: null });
+    expect(store.listRuns()).toHaveLength(0);
     const started = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/run` });
     const runId = started.json().run.id as string;
     const run = await app.inject({ method: "GET", url: `/api/v4/runs/${runId}` });
@@ -683,6 +746,7 @@ describe("Pipeline Factory v4 API", () => {
     expect(confirmed.statusCode).toBe(200);
     expect(enqueued.statusCode).toBe(200);
     expect(started.statusCode).toBe(200);
+    expect(started.json()).toMatchObject({ plan: { id: plan.id, dispatchedAt: expect.any(String) } });
     expect(run.statusCode).toBe(200);
     expect(run.json().run.id).toBe(runId);
   });

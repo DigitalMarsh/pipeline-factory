@@ -124,6 +124,18 @@ describe("Explorer context panel wiring", () => {
     expect(enqueueSource).toContain("plan: Plan | null = candidate.value");
     expect(enqueueSource).toContain("const id = plan.id ?? plan.planId");
   });
+
+  it("separates Enqueued from Dispatched and embeds Plan Center in the context rail", () => {
+    const enqueuedSection = explorerViewSource.match(/<section v-else-if="contextPanel === 'enqueued'"[\s\S]*?<\/section>/)?.[0] ?? "";
+
+    expect(explorerViewSource).toContain('key: "enqueued"');
+    expect(explorerViewSource).toContain('key: "plan-center"');
+    expect(enqueuedSection).toContain("plan.status === 'ENQUEUED'");
+    expect(enqueuedSection).toContain('@click="startPlanRun(plan)"');
+    expect(enqueuedSection).toContain("Start run");
+    expect(explorerViewSource).toContain('<PlanCenterPanel :project-id="projectId"');
+    expect(explorerViewSource).toContain("plan.dispatchedAt !== null");
+  });
 });
 
 describe("Explorer panel state independence", () => {

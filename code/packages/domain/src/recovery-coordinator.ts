@@ -106,7 +106,7 @@ function isTerminal(state: AgentLoop["state"]): boolean {
   return state === "BLOCKED" || state === "COMPLETED" || state === "FAILED" || state === "CANCELLED" || state === "NEEDS_RECONCILIATION";
 }
 
-const RECONCILIABLE_PLAN_STATUSES: ReadonlySet<PlanStatus> = new Set(["QUEUED", "IN_PROGRESS", "VERIFYING", "MERGE_READY"]);
+const RECONCILIABLE_PLAN_STATUSES: ReadonlySet<PlanStatus> = new Set(["DISPATCHED", "IN_PROGRESS", "VERIFYING", "MERGE_READY"]);
 
 function planStatusForRun(status: RunStatus): PlanStatus | null {
   if (status === "STARTING" || status === "IN_PROGRESS" || status === "RECOVERING") return "IN_PROGRESS";

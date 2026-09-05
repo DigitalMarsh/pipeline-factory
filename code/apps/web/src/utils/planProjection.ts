@@ -15,13 +15,13 @@ function planIdentity(plan: Plan): string {
   return plan.planId ?? plan.id ?? plan.title;
 }
 
-/** 规范化候选和已派发 Plan，保证当前候选不会同时出现在两个列表中。 */
+/** 规范化候选和生命周期 Plan，保证只有 DRAFT 能作为 Candidate 显示。 */
 export function normalizePlanProjection(thread: ExplorerThread, candidate: Plan | null, dispatched: Plan[]): PlanProjection {
-  const readyCandidate = candidate ?? dispatched.find((plan) => plan.status === "READY" && plan.queuedAt === null) ?? null;
-  const candidateId = readyCandidate ? planIdentity(readyCandidate) : null;
+  const draftCandidate = candidate?.status === "DRAFT" ? candidate : null;
+  const candidateId = draftCandidate ? planIdentity(draftCandidate) : null;
   return {
     thread,
-    candidate: readyCandidate,
+    candidate: draftCandidate,
     dispatched: dispatched.filter((plan) => planIdentity(plan) !== candidateId),
   };
 }

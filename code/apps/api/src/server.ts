@@ -716,6 +716,15 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     }
   });
 
+  app.get("/api/v4/projects/:projectId/explorers/:explorerId/confirmed-plans", async (request, reply) => {
+    const params = projectExplorerParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    const explorer = store.getThread(params.data.explorerId);
+    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
+    const confirmedPlans = plans.listThreadPlans(explorer.id).filter((plan) => plan.status === "READY");
+    return { items: decoratePlanRows(store, confirmedPlans) };
+  });
+
   app.get("/api/v4/projects/:projectId/explorers/:explorerId/candidate", async (request, reply) => {
     const params = projectExplorerParams.safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
@@ -859,7 +868,6 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     try {
       const plan = plans.get(params.data.planId);
       if (ensurePlanProject(plan.projectId, reply, true) === null) return;
-      if (dispatchCoordinator) return await dispatchCoordinator.enqueue(params.data.planId);
       return { plan: plans.enqueue(params.data.planId), dispatch: null };
     } catch (error) {
       return reply.code(409).send({ error: error instanceof Error ? error.message : "Plan cannot be enqueued" });
@@ -874,11 +882,12 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       const plan = plans.get(params.data.planId);
       if (ensurePlanProject(plan.projectId, reply, true) === null) return;
       if (dispatchCoordinator) {
-        const dispatched = await dispatchCoordinator.enqueue(plan.id);
-        return { run: dispatched.state.runId ? store.getRun(dispatched.state.runId) ?? null : null, dispatch: dispatched.state };
+        const dispatched = await dispatchCoordinator.dispatch(plan.id);
+        return { plan: dispatched.plan, run: dispatched.state.runId ? store.getRun(dispatched.state.runId) ?? null : null, dispatch: dispatched.state };
       }
       const project = store.getProject(plan.projectId);
-      return { run: await scheduler.start(plan.id, project?.settings.hooks ?? {}), dispatch: null };
+      const dispatchedPlan = plans.dispatch(plan.id);
+      return { plan: dispatchedPlan, run: await scheduler.start(plan.id, project?.settings.hooks ?? {}), dispatch: null };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Run cannot be started";
       return reply.code(409).send({ code: /concurrency limit/i.test(message) ? "PROJECT_CONCURRENCY_LIMIT" : /RUN_PREREQUISITES_UNSATISFIED/.test(message) ? "RUN_PREREQUISITES_UNSATISFIED" : "RUN_START_FAILED", error: message });
@@ -910,12 +919,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (!proposal) return reply.code(404).send({ error: "ChangeProposal not found" });
     try {
       const approved = await changeProposals.approve(params.data.proposalId, body.data.actorId);
-      const dispatch = dispatchCoordinator ? await dispatchCoordinator.enqueue(approved.plan.id) : undefined;
-      const dispatchedRun = dispatch?.state.runId
-        ? store.getRun(dispatch.state.runId) ?? null
-        : store.listRuns().filter((item) => item.planId === approved.plan.id && item.planRevision === approved.revision.revision).at(-1) ?? null;
-      const run = dispatchedRun ?? approved.run;
-      return { ...approved, plan: store.getPlan(approved.plan.id) ?? approved.plan, run };
+      return { ...approved, plan: store.getPlan(approved.plan.id) ?? approved.plan, run: null };
     } catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "ChangeProposal cannot be approved" }); }
   });
 
@@ -1138,6 +1142,7 @@ function workbenchSnapshot(store: PipelineStore, projects: ProjectService, proje
       providerItemId: plan.providerItemId,
       createdAt: plan.createdAt,
       queuedAt: plan.queuedAt,
+      dispatchedAt: plan.dispatchedAt ?? null,
       runId: plan.runId,
       lastEventAt: plan.lastEventAt,
       attentionReason: plan.attentionReason,

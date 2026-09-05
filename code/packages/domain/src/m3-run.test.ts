@@ -15,6 +15,7 @@ describe("Scheduler and ExecutionThread", () => {
     const plan = plans.createCandidatePlan({ projectId: "project-preflight", sourceExplorerThreadId: "thread-preflight", title: "Preflight" });
     plans.confirm(plan.id, "user-1");
     plans.enqueue(plan.id);
+    plans.dispatch(plan.id);
     let created = false;
     const scheduler = new Scheduler({
       store,
@@ -31,6 +32,7 @@ describe("Scheduler and ExecutionThread", () => {
     const plan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Run a plan" });
     planService.confirm(plan.id, "user-1");
     planService.enqueue(plan.id);
+    planService.dispatch(plan.id);
     const order: string[] = [];
     const scheduler = new Scheduler({
       store,
@@ -57,6 +59,7 @@ describe("Scheduler and ExecutionThread", () => {
     const plan = planService.createCandidatePlan({ projectId: "project-hooks", sourceExplorerThreadId: "thread-hooks", title: "Hook audit" });
     planService.confirm(plan.id, "user-1");
     planService.enqueue(plan.id);
+    planService.dispatch(plan.id);
     let calls = 0;
     const scheduler = new Scheduler({
       store,
@@ -79,6 +82,7 @@ describe("Scheduler and ExecutionThread", () => {
     const plan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Blocked run" });
     planService.confirm(plan.id, "user-1");
     planService.enqueue(plan.id);
+    planService.dispatch(plan.id);
     const scheduler = new Scheduler({
       store,
       workspace: { create: async () => ({ path: "/tmp/run-2", branch: "factory/run-2", baseCommit: "abc" }), remove: async () => undefined },
@@ -96,6 +100,7 @@ describe("Scheduler and ExecutionThread", () => {
     const plan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Cleanup run" });
     planService.confirm(plan.id, "user-1");
     planService.enqueue(plan.id);
+    planService.dispatch(plan.id);
     const order: string[] = [];
     const scheduler = new Scheduler({
       store,
@@ -123,6 +128,7 @@ describe("Scheduler and ExecutionThread", () => {
     const plan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Fresh run state" });
     planService.confirm(plan.id, "user-1");
     planService.enqueue(plan.id);
+    planService.dispatch(plan.id);
     const scheduler = new Scheduler({
       store,
       workspace: { create: async () => ({ path: "/tmp/run-4", branch: "factory/run-4", baseCommit: "abc" }), remove: async () => undefined },
@@ -142,6 +148,7 @@ describe("Scheduler and ExecutionThread", () => {
     const plan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Cancelled run race" });
     planService.confirm(plan.id, "user-1");
     planService.enqueue(plan.id);
+    planService.dispatch(plan.id);
     const scheduler = new Scheduler({
       store,
       workspace: { create: async () => ({ path: "/tmp/run-race", branch: "factory/run-race", baseCommit: "abc" }), remove: async () => undefined },
@@ -161,6 +168,7 @@ describe("Scheduler and ExecutionThread", () => {
     const firstPlan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "First plan" });
     planService.confirm(firstPlan.id, "user-1");
     planService.enqueue(firstPlan.id);
+    planService.dispatch(firstPlan.id);
     const scheduler = new Scheduler({
       store,
       globalConcurrency: 1,
@@ -173,6 +181,7 @@ describe("Scheduler and ExecutionThread", () => {
     const secondPlan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Second plan" });
     planService.confirm(secondPlan.id, "user-1");
     planService.enqueue(secondPlan.id);
+    planService.dispatch(secondPlan.id);
 
     await expect(scheduler.start(secondPlan.id)).resolves.toMatchObject({ status: "IN_PROGRESS" });
   });

@@ -111,6 +111,34 @@ describe("SQLite pipeline persistence", () => {
     reopened.close();
   });
 
+  it("migrates a legacy queued plan into the durable Dispatched stage", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pipeline-factory-legacy-dispatched-"));
+    tempDirectories.push(directory);
+    const databasePath = join(directory, "factory.sqlite");
+    const legacy = new DatabaseSync(databasePath);
+    legacy.exec(`CREATE TABLE candidate_plans (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      source_explorer_thread_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      revision INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      confirmed_by TEXT,
+      confirmed_at TEXT,
+      queued_at TEXT,
+      run_id TEXT,
+      last_event_at TEXT NOT NULL,
+      attention_reason TEXT
+    )`);
+    legacy.prepare("INSERT INTO candidate_plans (id, project_id, source_explorer_thread_id, title, revision, status, created_at, queued_at, last_event_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run("legacy-queued", "project-1", "thread-1", "Legacy queued", 1, "QUEUED", "2026-08-29T10:00:00.000Z", "2026-08-29T10:02:00.000Z", "2026-08-29T10:02:00.000Z");
+    legacy.close();
+
+    const reopened = new SqlitePipelineStore(databasePath);
+    expect(reopened.getPlan("legacy-queued")).toMatchObject({ status: "DISPATCHED", queuedAt: "2026-08-29T10:02:00.000Z", dispatchedAt: "2026-08-29T10:02:00.000Z" });
+    reopened.close();
+  });
+
   it("restores plans and append-only events after a service restart", () => {
     const directory = mkdtempSync(join(tmpdir(), "pipeline-factory-"));
     tempDirectories.push(directory);
@@ -124,7 +152,7 @@ describe("SQLite pipeline persistence", () => {
     firstStore.close();
 
     const reopened = new SqlitePipelineStore(databasePath);
-    expect(new PlanService(reopened).get(plan.id)).toMatchObject({ id: plan.id, status: "QUEUED", revision: 1 });
+    expect(new PlanService(reopened).get(plan.id)).toMatchObject({ id: plan.id, status: "ENQUEUED", revision: 1, dispatchedAt: null });
     expect(reopened.listEvents().map((event) => event.type)).toEqual(expect.arrayContaining(["plan.confirmed", "plan.enqueued"]));
     reopened.close();
   });

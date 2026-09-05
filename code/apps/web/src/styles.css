@@ -366,14 +366,17 @@ a { color: inherit; text-decoration: none; }
 .left-panel-create small { display: block; margin-top: 4px; color: #91adca; font-size: 9px; }
 .context-panel-shell { display: grid; grid-template-columns: minmax(0, 1fr) 68px; min-width: 0; min-height: 0; overflow: hidden; border-left: 1px solid #29364d; background: #101827; }
 .context-panel-shell .context-panel { min-width: 0; min-height: 0; padding: 25px 17px; background: #101827; color: #bac5d5; }
-.context-entry-rail { display: flex; min-height: 0; flex-direction: column; gap: 8px; padding: 18px 8px; border-left: 1px solid #29364d; background: #101a2b; }
+.context-entry-rail { display: flex; min-height: 0; flex-direction: column; gap: 7px; padding: 14px 8px; overflow-y: auto; border-left: 1px solid #29364d; background: #101a2b; }
 .context-entry-button { position: relative; display: flex; min-height: 64px; flex-direction: column; align-items: center; justify-content: center; gap: 5px; padding: 7px 3px 6px; border: 1px solid #293b58; border-radius: 8px; background: #16253d; color: #91a5c0; cursor: pointer; font: inherit; font-size: 9px; font-weight: 800; line-height: 1.1; text-align: center; transition: border-color .16s ease, background .16s ease, color .16s ease, box-shadow .16s ease; }
 .context-entry-button:hover, .context-entry-button:focus-visible { border-color: #4f86d7; background: #1b3559; color: #dcecff; outline: 0; }
 .context-entry-button.active { border-color: #4c9cf0; background: #24548b; box-shadow: inset 0 0 0 1px rgba(116, 204, 255, .25), 0 0 0 1px rgba(64, 135, 222, .2); color: #fff; }
 .context-entry-icon { display: grid; place-items: center; width: 26px; height: 26px; flex: 0 0 26px; border: 1px solid #355b8b; border-radius: 6px; background: #213d63; color: #75baf2; }
-.context-entry-button:nth-child(2) .context-entry-icon { color: #70d5a4; }
-.context-entry-button:nth-child(3) .context-entry-icon { color: #75baf2; }
-.context-entry-button:nth-child(4) .context-entry-icon { color: #f19aa0; }
+.context-entry-confirmed .context-entry-icon { color: #70d5a4; }
+.context-entry-enqueued .context-entry-icon { color: #f0c86e; }
+.context-entry-dispatched .context-entry-icon { color: #9ddcff; }
+.context-entry-active .context-entry-icon { color: #75baf2; }
+.context-entry-attention .context-entry-icon { color: #f19aa0; }
+.context-entry-plan-center .context-entry-icon { color: #c3b0ff; }
 .context-entry-label { max-width: 100%; min-width: 0; overflow-wrap: anywhere; }
 .context-entry-count { position: absolute; top: 4px; right: 4px; display: grid; place-items: center; min-width: 17px; height: 17px; padding: 0 3px; border: 1px solid #355b8b; border-radius: 9px; background: #213d63; color: #91a5c0; font-size: 9px; }
 .context-entry-button.active .context-entry-count { border-color: #9dc4f1; background: #4f91de; color: #fff; }
@@ -407,6 +410,7 @@ a { color: inherit; text-decoration: none; }
 .context-panel-shell .context-plan-row { border: 1px solid #293b58; background: #16253d; box-shadow: 0 2px 9px rgba(8, 18, 35, .2); }
 .context-panel-shell .context-plan-row:hover { border-color: #477dc8; background: #1b3559; box-shadow: 0 4px 13px rgba(8, 18, 35, .28); }
 .context-panel-shell .context-plan-row.active-run-row { border-color: #4b91df; background: #214b7a; }
+.context-panel-shell .context-plan-row.enqueued-plan-row { border-color: #806a36; background: #302a20; }
 .context-panel-shell .context-plan-row.attention-row { border-color: #8b5160; background: #3e2936; }
 .context-panel-shell .context-plan-row-meta { color: #8196b1; }
 .context-panel-shell .context-plan-row-meta code { color: #9ddcff; }

@@ -40,6 +40,7 @@ function createQueuedRun(saveRun = true) {
   } });
   plans.confirm(plan.id, "user-1");
   plans.enqueue(plan.id);
+  plans.dispatch(plan.id);
   const run = { id: "run-1", projectId: "project-1", planId: plan.id, planRevision: 1, status: "IN_PROGRESS" as const, branch: "factory/run-1", workspacePath: "/tmp/project", baseCommit: "abc", executionThreadId: "execution-thread-1", createdAt: store.now(), startedAt: store.now() };
   if (saveRun) {
     store.saveRun(run);

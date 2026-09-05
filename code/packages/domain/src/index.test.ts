@@ -12,6 +12,42 @@ import {
 } from "./index.js";
 
 describe("PlanService", () => {
+  it("puts a confirmed plan in the manual Enqueued stage without dispatching it", () => {
+    const store = new InMemoryPipelineStore();
+    const service = new PlanService(store);
+    const plan = service.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "thread-1",
+      title: "Wait for an explicit start",
+    });
+
+    service.confirm(plan.id, "user-1");
+    const enqueued = service.enqueue(plan.id);
+
+    expect(enqueued).toMatchObject({ status: "ENQUEUED", queuedAt: expect.any(String), dispatchedAt: null, runId: null });
+    expect(store.getDispatchState(plan.id)).toBeUndefined();
+    expect(store.listEvents().filter((event) => event.type === "plan.enqueued")).toHaveLength(1);
+  });
+
+  it("dispatches only an Enqueued plan and records the durable dispatched stage", () => {
+    const store = new InMemoryPipelineStore();
+    const service = new PlanService(store);
+    const plan = service.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "thread-1",
+      title: "Start only after enqueue",
+    });
+
+    service.confirm(plan.id, "user-1");
+    expect(() => service.dispatch(plan.id)).toThrow(/must be enqueued/i);
+    service.enqueue(plan.id);
+
+    const dispatched = service.dispatch(plan.id);
+    expect(dispatched).toMatchObject({ status: "DISPATCHED", dispatchedAt: expect.any(String), runId: null });
+    expect(service.dispatch(plan.id)).toMatchObject({ status: "DISPATCHED", dispatchedAt: dispatched.dispatchedAt });
+    expect(store.listEvents().filter((event) => event.type === "plan.dispatched")).toHaveLength(1);
+  });
+
   it("keeps confirm and enqueue as separate transitions", () => {
     const store = new InMemoryPipelineStore();
     const service = new PlanService(store);
@@ -23,8 +59,8 @@ describe("PlanService", () => {
 
     expect(() => service.enqueue(plan.id)).toThrow(/confirmed/i);
     expect(service.confirm(plan.id, "user-1").status).toBe("READY");
-    expect(service.enqueue(plan.id).status).toBe("QUEUED");
-    expect(service.enqueue(plan.id).status).toBe("QUEUED");
+    expect(service.enqueue(plan.id).status).toBe("ENQUEUED");
+    expect(service.enqueue(plan.id).status).toBe("ENQUEUED");
     expect(store.listEvents().filter((event) => event.type === "plan.enqueued")).toHaveLength(1);
   });
 
@@ -43,6 +79,23 @@ describe("PlanService", () => {
 
     expect(service.listThreadPlans("successor").map((item) => item.title)).toEqual(["Queued", "Confirmed"]);
     expect(service.listThreadPlans("successor").some((item) => item.planId === draft.id)).toBe(false);
+  });
+
+  it("lists an unqueued confirmed plan without sorting on a null queuedAt", () => {
+    const store = new InMemoryPipelineStore();
+    const service = new PlanService(store);
+    service.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
+    const confirmed = service.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Confirmed but not queued" });
+    const queued = service.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Already queued" });
+
+    service.confirm(confirmed.id, "user-1");
+    service.confirm(queued.id, "user-1");
+    service.enqueue(queued.id);
+
+    expect(service.listThreadPlans("thread-1")).toMatchObject([
+      { planId: queued.id, status: "ENQUEUED" },
+      { planId: confirmed.id, status: "READY", queuedAt: null },
+    ]);
   });
 
   it("discards only a draft plan and blocks every execution transition", () => {

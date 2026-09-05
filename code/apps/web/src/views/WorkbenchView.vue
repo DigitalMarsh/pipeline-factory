@@ -97,25 +97,27 @@ function selectPlan(plan: WorkbenchPlan) {
   void router.replace({ query: { ...route.query, plan: plan.planId } });
 }
 
-async function confirmPlan() {
+async function enqueuePlan() {
   const plan = selectedPlan.value;
-  if (!plan) return;
+  if (!plan || plan.status !== "READY") return;
   actionBusy.value = true;
-  try { await api.confirmPlan(plan.planId); await load(); ElMessage.success("Plan 已确认"); }
-  catch (caught) { ElMessage.error(caught instanceof Error ? caught.message : "Plan 确认失败"); }
+  try {
+    await api.enqueuePlan(plan.planId);
+    await load();
+    ElMessage.success("Plan 已进入 Enqueued 阶段");
+  } catch (caught) { ElMessage.error(caught instanceof Error ? caught.message : "Plan 入队失败"); }
   finally { actionBusy.value = false; }
 }
 
-async function enqueuePlan() {
+async function startPlanRun() {
   const plan = selectedPlan.value;
-  if (!plan) return;
+  if (!plan || plan.status !== "ENQUEUED") return;
   actionBusy.value = true;
   try {
-    const result = await api.enqueuePlan(plan.planId);
+    const result = await api.startPlanRun(plan.planId);
     await load();
-    if (result.plan.runId) await router.push("/projects/" + result.plan.projectId + "/runs/" + result.plan.runId);
-    else ElMessage.success("Plan 已进入调度队列");
-  } catch (caught) { ElMessage.error(caught instanceof Error ? caught.message : "Plan 入队失败"); }
+    ElMessage.success(result.dispatch?.waitReason ? `Plan 已派发，正在等待：${result.dispatch.waitReason}` : "Plan 已进入 Dispatched 阶段");
+  } catch (caught) { ElMessage.error(caught instanceof Error ? caught.message : "Start run 失败"); }
   finally { actionBusy.value = false; }
 }
 
@@ -184,10 +186,10 @@ onBeforeUnmount(() => { requestScope.invalidate(); closeEvents(); });
           <section class="inspector-section"><div class="inspector-section-heading"><span>03</span><strong>Scope & verification</strong></div><div class="inspector-scope-grid"><div><label>INCLUDE</label><code v-for="item in selectedPlan.contract.include" :key="item">{{ item }}</code></div><div><label>EXCLUDE</label><code v-for="item in selectedPlan.contract.exclude" :key="item">{{ item }}</code><span v-if="selectedPlan.contract.exclude.length === 0" class="scope-empty">None</span></div><div><label>VERIFY</label><code v-for="item in selectedPlan.contract.verificationCommandIds" :key="item">{{ item }}</code></div><div><label>BASE BRANCH</label><code>{{ selectedPlan.contract.baseBranch }}</code></div><div><label>BASE COMMIT</label><code>{{ selectedPlan.contract.baseCommit }}</code></div><div><label>REPAIR LIMIT</label><code>{{ selectedPlan.contract.maxRepairAttempts }}</code></div></div></section>
           <div v-if="selectedDispatch?.lastError" class="workbench-alert warning"><Warning :size="14" /><span>{{ selectedDispatch.lastError }}</span></div>
           <div class="inspector-actions">
-            <el-button v-if="selectedPlan.status === 'READY'" type="primary" :loading="actionBusy" @click="confirmPlan">Confirm plan <Check :size="14" /></el-button>
-            <el-button v-if="selectedPlan.status === 'READY'" type="primary" plain :loading="actionBusy" @click="enqueuePlan">Enqueue plan <ArrowRight :size="14" /></el-button>
+            <el-button v-if="selectedPlan.status === 'READY'" type="primary" :loading="actionBusy" @click="enqueuePlan">Enqueue plan <ArrowRight :size="14" /></el-button>
+            <el-button v-else-if="selectedPlan.status === 'ENQUEUED'" type="primary" :loading="actionBusy" @click="startPlanRun">Start run <ArrowRight :size="14" /></el-button>
             <el-button v-if="selectedRun" plain @click="openRun">Open Run <ArrowRight :size="14" /></el-button>
-            <span v-if="selectedPlan.status === 'QUEUED' && !selectedRun" class="action-note"><Clock :size="14" /> {{ currentStatus.label }}</span>
+            <span v-if="selectedPlan.status === 'DISPATCHED' && !selectedRun" class="action-note"><Clock :size="14" /> {{ currentStatus.label }}</span>
           </div>
         </div>
         <div v-else class="workbench-empty inspector-empty"><Document :size="35" /><strong>Select a Plan</strong><span>选择左侧历史项查看完整 Plan Inspector。</span></div>

@@ -51,6 +51,8 @@ export type PlanStatus =
   | "DESIGNED"
   | "PLANNED"
   | "READY"
+  | "ENQUEUED"
+  | "DISPATCHED"
   | "QUEUED"
   | "IN_PROGRESS"
   | "VERIFYING"
@@ -169,6 +171,7 @@ export type CandidatePlan = {
   confirmedBy: string | null;
   confirmedAt: string | null;
   queuedAt: string | null;
+  dispatchedAt?: string | null;
   runId: string | null;
   lastEventAt: string;
   attentionReason: string | null;
@@ -229,7 +232,8 @@ export type PlanIndexRow = {
   providerTurnId: string | null;
   providerItemId: string | null;
   createdAt: string;
-  queuedAt: string;
+  queuedAt: string | null;
+  dispatchedAt?: string | null;
   runId: string | null;
   lastEventAt: string;
   attentionReason: string | null;
@@ -249,6 +253,7 @@ export type PlanQueryProjection = {
   priority: number;
   createdAt: string;
   queuedAt: string | null;
+  dispatchedAt?: string | null;
   lastEventAt: string;
   runId: string | null;
   attentionReason: string | null;
@@ -285,6 +290,7 @@ function planQueryProjectionFor(plan: CandidatePlan): PlanQueryProjection {
     priority: plan.contract.priority ?? 0,
     createdAt: plan.createdAt,
     queuedAt: plan.queuedAt,
+    dispatchedAt: plan.dispatchedAt ?? null,
     lastEventAt: plan.lastEventAt,
     runId: plan.runId,
     attentionReason: plan.attentionReason,
@@ -345,6 +351,7 @@ export type DomainEvent = {
     | "plan.discarded"
     | "plan.confirmed"
     | "plan.enqueued"
+    | "plan.dispatched"
     | "plan.dispatch.state.changed"
     | "change.proposal.created"
     | "change.proposal.approved"
@@ -1096,6 +1103,7 @@ export class SqlitePipelineStore implements PipelineStore {
         confirmed_by TEXT,
         confirmed_at TEXT,
         queued_at TEXT,
+        dispatched_at TEXT,
         run_id TEXT,
         last_event_at TEXT NOT NULL,
         attention_reason TEXT,
@@ -1196,6 +1204,7 @@ export class SqlitePipelineStore implements PipelineStore {
         priority INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
         queued_at TEXT,
+        dispatched_at TEXT,
         last_event_at TEXT NOT NULL,
         run_id TEXT,
         attention_reason TEXT
@@ -1319,6 +1328,18 @@ export class SqlitePipelineStore implements PipelineStore {
     try { this.database.exec("ALTER TABLE candidate_plans ADD COLUMN provider_thread_id TEXT"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE candidate_plans ADD COLUMN provider_turn_id TEXT"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE candidate_plans ADD COLUMN provider_item_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE candidate_plans ADD COLUMN dispatched_at TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE plan_query_projection ADD COLUMN dispatched_at TEXT"); } catch { /* Existing databases already have the column. */ }
+    this.database.exec(`
+      UPDATE candidate_plans
+      SET dispatched_at = COALESCE(dispatched_at, queued_at)
+      WHERE dispatched_at IS NULL
+        AND queued_at IS NOT NULL
+        AND status IN ('QUEUED', 'DISPATCHED', 'IN_PROGRESS', 'VERIFYING', 'MERGE_READY', 'MERGED', 'BLOCKED', 'NEEDS_PLAN_CHANGE');
+      UPDATE candidate_plans
+      SET status = 'DISPATCHED'
+      WHERE status = 'QUEUED';
+    `);
     try { this.database.exec("ALTER TABLE domain_events ADD COLUMN sequence INTEGER"); } catch { /* Existing databases already have the column. */ }
     this.database.exec("UPDATE domain_events SET sequence = rowid WHERE sequence IS NULL");
     try { this.database.exec("CREATE UNIQUE INDEX IF NOT EXISTS domain_events_sequence_uq ON domain_events(sequence)"); } catch { /* Existing databases already have the index. */ }
@@ -1461,10 +1482,10 @@ export class SqlitePipelineStore implements PipelineStore {
 
   savePlan(plan: CandidatePlan): CandidatePlan {
     this.database.prepare(`
-      INSERT INTO candidate_plans (id, project_id, source_explorer_thread_id, source_turn_id, provider_thread_id, provider_turn_id, provider_item_id, title, revision, status, created_at, confirmed_by, confirmed_at, queued_at, run_id, last_event_at, attention_reason, contract_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, source_explorer_thread_id=excluded.source_explorer_thread_id, source_turn_id=excluded.source_turn_id, provider_thread_id=excluded.provider_thread_id, provider_turn_id=excluded.provider_turn_id, provider_item_id=excluded.provider_item_id, title=excluded.title, revision=excluded.revision, status=excluded.status, confirmed_by=excluded.confirmed_by, confirmed_at=excluded.confirmed_at, queued_at=excluded.queued_at, run_id=excluded.run_id, last_event_at=excluded.last_event_at, attention_reason=excluded.attention_reason, contract_json=excluded.contract_json
-    `).run(plan.id, plan.projectId, plan.sourceExplorerThreadId, plan.sourceTurnId, plan.providerThreadId, plan.providerTurnId, plan.providerItemId, plan.title, plan.revision, plan.status, plan.createdAt, plan.confirmedBy, plan.confirmedAt, plan.queuedAt, plan.runId, plan.lastEventAt, plan.attentionReason, JSON.stringify(plan.contract));
+      INSERT INTO candidate_plans (id, project_id, source_explorer_thread_id, source_turn_id, provider_thread_id, provider_turn_id, provider_item_id, title, revision, status, created_at, confirmed_by, confirmed_at, queued_at, dispatched_at, run_id, last_event_at, attention_reason, contract_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, source_explorer_thread_id=excluded.source_explorer_thread_id, source_turn_id=excluded.source_turn_id, provider_thread_id=excluded.provider_thread_id, provider_turn_id=excluded.provider_turn_id, provider_item_id=excluded.provider_item_id, title=excluded.title, revision=excluded.revision, status=excluded.status, confirmed_by=excluded.confirmed_by, confirmed_at=excluded.confirmed_at, queued_at=excluded.queued_at, dispatched_at=excluded.dispatched_at, run_id=excluded.run_id, last_event_at=excluded.last_event_at, attention_reason=excluded.attention_reason, contract_json=excluded.contract_json
+    `).run(plan.id, plan.projectId, plan.sourceExplorerThreadId, plan.sourceTurnId, plan.providerThreadId, plan.providerTurnId, plan.providerItemId, plan.title, plan.revision, plan.status, plan.createdAt, plan.confirmedBy, plan.confirmedAt, plan.queuedAt, plan.dispatchedAt ?? null, plan.runId, plan.lastEventAt, plan.attentionReason, JSON.stringify(plan.contract));
     if (this.getProject(plan.projectId) && this.getThread(plan.sourceExplorerThreadId)) this.savePlanQueryProjection(planQueryProjectionFor(plan));
     return this.getPlan(plan.id) as CandidatePlan;
   }
@@ -1581,7 +1602,7 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   savePlanQueryProjection(projection: PlanQueryProjection): PlanQueryProjection {
-    this.database.prepare("INSERT INTO plan_query_projection (plan_id, project_id, source_explorer_thread_id, source_turn_id, title, goal, revision, status, priority, created_at, queued_at, last_event_at, run_id, attention_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(plan_id) DO UPDATE SET project_id=excluded.project_id, source_explorer_thread_id=excluded.source_explorer_thread_id, source_turn_id=excluded.source_turn_id, title=excluded.title, goal=excluded.goal, revision=excluded.revision, status=excluded.status, priority=excluded.priority, created_at=excluded.created_at, queued_at=excluded.queued_at, last_event_at=excluded.last_event_at, run_id=excluded.run_id, attention_reason=excluded.attention_reason").run(projection.planId, projection.projectId, projection.sourceExplorerThreadId, projection.sourceTurnId, projection.title, projection.goal, projection.revision, projection.status, projection.priority, projection.createdAt, projection.queuedAt, projection.lastEventAt, projection.runId, projection.attentionReason);
+    this.database.prepare("INSERT INTO plan_query_projection (plan_id, project_id, source_explorer_thread_id, source_turn_id, title, goal, revision, status, priority, created_at, queued_at, dispatched_at, last_event_at, run_id, attention_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(plan_id) DO UPDATE SET project_id=excluded.project_id, source_explorer_thread_id=excluded.source_explorer_thread_id, source_turn_id=excluded.source_turn_id, title=excluded.title, goal=excluded.goal, revision=excluded.revision, status=excluded.status, priority=excluded.priority, created_at=excluded.created_at, queued_at=excluded.queued_at, dispatched_at=excluded.dispatched_at, last_event_at=excluded.last_event_at, run_id=excluded.run_id, attention_reason=excluded.attention_reason").run(projection.planId, projection.projectId, projection.sourceExplorerThreadId, projection.sourceTurnId, projection.title, projection.goal, projection.revision, projection.status, projection.priority, projection.createdAt, projection.queuedAt, projection.dispatchedAt ?? null, projection.lastEventAt, projection.runId, projection.attentionReason);
     return this.getPlanQueryProjection(projection.planId) as PlanQueryProjection;
   }
 
@@ -1838,6 +1859,7 @@ export class SqlitePipelineStore implements PipelineStore {
       priority: Number(row.priority),
       createdAt: String(row.created_at),
       queuedAt: row.queued_at === null || row.queued_at === undefined ? null : String(row.queued_at),
+      dispatchedAt: row.dispatched_at === null || row.dispatched_at === undefined ? null : String(row.dispatched_at),
       lastEventAt: String(row.last_event_at),
       runId: row.run_id === null || row.run_id === undefined ? null : String(row.run_id),
       attentionReason: row.attention_reason === null || row.attention_reason === undefined ? null : String(row.attention_reason),
@@ -1865,7 +1887,7 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   private planFromRow(row: SqliteRow): CandidatePlan {
-    return { id: String(row.id), projectId: String(row.project_id), sourceExplorerThreadId: String(row.source_explorer_thread_id), sourceTurnId: row.source_turn_id === null || row.source_turn_id === undefined ? null : String(row.source_turn_id), providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id), providerTurnId: row.provider_turn_id === null || row.provider_turn_id === undefined ? null : String(row.provider_turn_id), providerItemId: row.provider_item_id === null || row.provider_item_id === undefined ? null : String(row.provider_item_id), title: String(row.title), revision: Number(row.revision), status: String(row.status) as PlanStatus, createdAt: String(row.created_at), confirmedBy: row.confirmed_by === null ? null : String(row.confirmed_by), confirmedAt: row.confirmed_at === null ? null : String(row.confirmed_at), queuedAt: row.queued_at === null ? null : String(row.queued_at), runId: row.run_id === null ? null : String(row.run_id), lastEventAt: String(row.last_event_at), attentionReason: row.attention_reason === null ? null : String(row.attention_reason), contract: JSON.parse(String(row.contract_json ?? "{}")) as PlanContract };
+    return { id: String(row.id), projectId: String(row.project_id), sourceExplorerThreadId: String(row.source_explorer_thread_id), sourceTurnId: row.source_turn_id === null || row.source_turn_id === undefined ? null : String(row.source_turn_id), providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id), providerTurnId: row.provider_turn_id === null || row.provider_turn_id === undefined ? null : String(row.provider_turn_id), providerItemId: row.provider_item_id === null || row.provider_item_id === undefined ? null : String(row.provider_item_id), title: String(row.title), revision: Number(row.revision), status: String(row.status) as PlanStatus, createdAt: String(row.created_at), confirmedBy: row.confirmed_by === null ? null : String(row.confirmed_by), confirmedAt: row.confirmed_at === null ? null : String(row.confirmed_at), queuedAt: row.queued_at === null ? null : String(row.queued_at), dispatchedAt: row.dispatched_at === null || row.dispatched_at === undefined ? null : String(row.dispatched_at), runId: row.run_id === null ? null : String(row.run_id), lastEventAt: String(row.last_event_at), attentionReason: row.attention_reason === null ? null : String(row.attention_reason), contract: JSON.parse(String(row.contract_json ?? "{}")) as PlanContract };
   }
 
   private dispatchStateFromRow(row: SqliteRow): PlanDispatchState {
@@ -2027,6 +2049,7 @@ export class PlanService {
       confirmedBy: null,
       confirmedAt: null,
       queuedAt: null,
+      dispatchedAt: null,
       runId: null,
       lastEventAt: createdAt,
       attentionReason: null,
@@ -2057,7 +2080,7 @@ export class PlanService {
   /** 确认 Plan 并冻结当前 Project 配置，生成后续 Run 唯一使用的 Revision。 */
   confirm(planId: string, confirmedBy: string): CandidatePlan {
     const plan = this.get(planId);
-    if (plan.status === "READY" || plan.status === "QUEUED") return plan;
+    if (plan.status === "READY" || plan.status === "ENQUEUED" || plan.status === "DISPATCHED") return plan;
     if (plan.status !== "DRAFT" && plan.status !== "DESIGNED" && plan.status !== "PLANNED") {
       throw new Error(`Plan ${planId} cannot be confirmed from ${plan.status}`);
     }
@@ -2110,7 +2133,7 @@ export class PlanService {
     visit(plan.id);
   }
 
-  /** 执行 Plan Center 查询：只读已下发计划，并以 projection 提供稳定排序和游标。 */
+  /** 执行 Plan Center 查询：只读已 Enqueued 的计划，并以 projection 提供稳定排序和游标。 */
   query(query: PlanQuery): PlanQueryResult {
     if (!Number.isInteger(query.limit) || query.limit < 1 || query.limit > 100) throw new Error("Plan query limit must be between 1 and 100");
     const sourceIds = query.explorerThreadId ? this.explorerLineage(query.explorerThreadId, query.includeLineage !== false) : null;
@@ -2139,6 +2162,7 @@ export class PlanService {
           providerItemId: plan.providerItemId,
           createdAt: row.createdAt,
           queuedAt: row.queuedAt as string,
+          dispatchedAt: row.dispatchedAt ?? null,
           runId: row.runId,
           lastEventAt: row.lastEventAt,
           attentionReason: row.attentionReason,
@@ -2188,14 +2212,14 @@ export class PlanService {
     if (sort === "priority") {
       const priority = b.priority - a.priority;
       if (priority !== 0) return priority;
-      const queued = a.queuedAt.localeCompare(b.queuedAt);
+      const queued = (a.queuedAt ?? "").localeCompare(b.queuedAt ?? "");
       if (queued !== 0) return queued;
     } else if (sort === "status") {
       const status = a.status.localeCompare(b.status);
       if (status !== 0) return status;
     } else {
       const field = sort === "queued_at" ? "queuedAt" : "lastEventAt";
-      const time = b[field].localeCompare(a[field]);
+      const time = (b[field] ?? "").localeCompare(a[field] ?? "");
       if (time !== 0) return time;
     }
     return a.planId.localeCompare(b.planId);
@@ -2208,16 +2232,27 @@ export class PlanService {
     return value;
   }
 
-  /** 将已确认 Plan 放入队列；Enqueue 与 Confirm 分离，便于人工控制执行时机。 */
+  /** 将已确认 Plan 放入人工 Enqueued 阶段；只有显式派发才会唤醒 Scheduler。 */
   enqueue(planId: string): CandidatePlan {
     const plan = this.get(planId);
-    if (plan.status === "QUEUED" || plan.status === "IN_PROGRESS" || plan.status === "VERIFYING" || plan.status === "MERGE_READY" || plan.status === "MERGED") {
+    if (plan.status === "ENQUEUED" || plan.status === "DISPATCHED" || plan.status === "IN_PROGRESS" || plan.status === "VERIFYING" || plan.status === "MERGE_READY" || plan.status === "MERGED") {
       return plan;
     }
     if (plan.status !== "READY") throw new Error(`Plan ${planId} must be confirmed before enqueue`);
     const queuedAt = this.store.now();
-    const updated = this.store.updatePlan({ ...plan, status: "QUEUED", queuedAt, lastEventAt: queuedAt });
+    const updated = this.store.updatePlan({ ...plan, status: "ENQUEUED", queuedAt, dispatchedAt: null, lastEventAt: queuedAt });
     this.store.appendEvent({ type: "plan.enqueued", aggregateId: planId, payload: { queuedAt } });
+    return updated;
+  }
+
+  /** 将人工入队的 Plan 交给调度器；派发时间保留用于 Dispatched 历史投影。 */
+  dispatch(planId: string): CandidatePlan {
+    const plan = this.get(planId);
+    if (plan.status === "DISPATCHED" || plan.status === "IN_PROGRESS" || plan.status === "VERIFYING" || plan.status === "MERGE_READY" || plan.status === "MERGED") return plan;
+    if (plan.status !== "ENQUEUED") throw new Error(`Plan ${planId} must be enqueued before dispatch`);
+    const dispatchedAt = this.store.now();
+    const updated = this.store.updatePlan({ ...plan, status: "DISPATCHED", dispatchedAt, lastEventAt: dispatchedAt });
+    this.store.appendEvent({ type: "plan.dispatched", aggregateId: planId, payload: { dispatchedAt } });
     return updated;
   }
 
@@ -2257,13 +2292,14 @@ export class PlanService {
         providerTurnId: plan.providerTurnId,
         providerItemId: plan.providerItemId,
         createdAt: plan.createdAt,
-        queuedAt: plan.queuedAt as string,
+        queuedAt: plan.queuedAt,
+        dispatchedAt: plan.dispatchedAt ?? null,
         runId: plan.runId,
         lastEventAt: plan.lastEventAt,
         attentionReason: plan.attentionReason,
         priority: plan.contract.priority ?? 0,
       }))
-      .sort((a, b) => b.queuedAt.localeCompare(a.queuedAt));
+      .sort((a, b) => (b.queuedAt ?? "").localeCompare(a.queuedAt ?? "") || b.lastEventAt.localeCompare(a.lastEventAt) || b.planId.localeCompare(a.planId));
   }
 
   /** 按 Project 隔离返回 Plan，避免多个仓库之间出现跨项目数据串联。 */
@@ -2284,6 +2320,7 @@ export class PlanService {
         providerItemId: plan.providerItemId,
         createdAt: plan.createdAt,
         queuedAt: plan.queuedAt as string,
+        dispatchedAt: plan.dispatchedAt ?? null,
         runId: plan.runId,
         lastEventAt: plan.lastEventAt,
         attentionReason: plan.attentionReason,
@@ -2399,7 +2436,7 @@ export class ChangeProposalService {
     return proposal;
   }
 
-  async approve(proposalId: string, actorId: string, startRun?: (planId: string) => Promise<Run>): Promise<ApprovedChangeProposal> {
+  async approve(proposalId: string, actorId: string): Promise<ApprovedChangeProposal> {
     const proposal = this.store.getChangeProposal(proposalId);
     if (!proposal) throw new Error(`ChangeProposal ${proposalId} not found`);
     const plan = this.store.getPlan(proposal.planId);
@@ -2428,12 +2465,9 @@ export class ChangeProposalService {
     });
     this.store.saveRevision(revision);
     const approvedProposal = this.store.updateChangeProposal({ ...proposal, status: "APPROVED", decidedAt: confirmedAt, decidedBy: actorId, revision: revisionNumber });
-    const queuedPlan = this.store.updatePlan({ ...plan, revision: revisionNumber, contract: proposal.contract, status: "QUEUED", confirmedBy: actorId, confirmedAt, queuedAt: confirmedAt, runId: null, attentionReason: null, lastEventAt: confirmedAt });
+    const enqueuedPlan = this.store.updatePlan({ ...plan, revision: revisionNumber, contract: proposal.contract, status: "ENQUEUED", confirmedBy: actorId, confirmedAt, queuedAt: confirmedAt, dispatchedAt: null, runId: null, attentionReason: null, lastEventAt: confirmedAt });
     this.store.appendEvent({ type: "change.proposal.approved", aggregateId: proposal.id, payload: { actorId, revision: revisionNumber, planId: plan.id } });
-    let run: Run | null = null;
-    if (startRun) run = await startRun(queuedPlan.id);
-    const finalPlan = this.store.getPlan(queuedPlan.id) ?? queuedPlan;
-    return { proposal: approvedProposal, plan: finalPlan, revision, run };
+    return { proposal: approvedProposal, plan: enqueuedPlan, revision, run: null };
   }
 }
 
@@ -3346,7 +3380,7 @@ export class Scheduler {
     return { pause: executor.pause.bind(executor), resume: executor.resume.bind(executor), cancel: executor.cancel.bind(executor) };
   }
 
-  /** 为已排队 Plan 创建一次 Run；重复调用会复用同一未取消运行，保证启动幂等。 */
+  /** 为已派发 Plan 创建一次 Run；重复调用会复用同一未取消运行，保证启动幂等。 */
   async start(planId: string, hooks: { start?: HookDefinition | undefined; cleanup?: HookDefinition | undefined } = {}): Promise<Run> {
     const existing = this.options.store.listRuns().find((run) => run.planId === planId && run.status !== "CANCELLED" && run.status !== "NEEDS_PLAN_CHANGE" && run.status !== "BLOCKED");
     if (existing) {
@@ -3356,7 +3390,7 @@ export class Scheduler {
       return existing;
     }
     const plan = this.planService.get(planId);
-    if (plan.status !== "QUEUED") throw new Error(`Plan ${planId} must be queued before a run starts`);
+    if (plan.status !== "DISPATCHED") throw new Error(`Plan ${planId} must be dispatched before a run starts`);
     const revision = this.options.store.getRevision(plan.id, plan.revision);
     if (!revision) throw new Error(`Plan revision ${plan.id}@${plan.revision} is missing`);
     this.assertVerificationCommands(revision);

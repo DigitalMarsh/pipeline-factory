@@ -3,7 +3,7 @@
  *
  * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
  */
-export type PlanStatus = "DRAFT" | "DISCARDED" | "READY" | "QUEUED" | "IN_PROGRESS" | "VERIFYING" | "MERGE_READY" | "MERGED" | "BLOCKED" | "NEEDS_PLAN_CHANGE";
+export type PlanStatus = "DRAFT" | "DISCARDED" | "READY" | "ENQUEUED" | "DISPATCHED" | "QUEUED" | "IN_PROGRESS" | "VERIFYING" | "MERGE_READY" | "MERGED" | "BLOCKED" | "NEEDS_PLAN_CHANGE";
 export type PlanDispatchStatus = "QUEUED" | "WAITING" | "DISPATCHING" | "RUNNING" | "VERIFYING" | "NEEDS_REVIEW" | "BLOCKED" | "COMPLETED";
 export type PlanDispatchWaitReason = "WAITING_DEPENDENCY" | "WAITING_CONFLICT" | "WAITING_PROJECT_CAPACITY" | "WAITING_GLOBAL_CAPACITY" | "NEEDS_CONFIGURATION";
 export type PlanDispatchState = {
@@ -226,6 +226,7 @@ export type Plan = {
   providerItemId?: string | null;
   createdAt?: string;
   queuedAt: string | null;
+  dispatchedAt?: string | null;
   runId: string | null;
   lastEventAt: string;
   attentionReason: string | null;

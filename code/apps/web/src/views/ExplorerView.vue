@@ -24,6 +24,7 @@ import ExplorerInputDialog from "../components/ExplorerInputDialog.vue";
 import ProjectSettingsDialog from "../components/ProjectSettingsDialog.vue";
 import ProjectCreateDialog from "../components/ProjectCreateDialog.vue";
 import ExplorerRenameDialog from "../components/ExplorerRenameDialog.vue";
+import PlanCenterPanel from "../components/PlanCenterPanel.vue";
 import scrollToLatestIcon from "../assets/scroll-to-latest.png";
 import { normalizePlanProjection } from "../utils/planProjection";
 import { parsePlanProtocolDisplay } from "../utils/planProtocolDisplay";
@@ -48,6 +49,7 @@ const projectSettingsProjectId = ref<string | null>(null);
 const activity = ref<ExplorerActivityItem[]>([]);
 const candidate = ref<Plan | null>(null);
 const confirmedPlans = ref<Plan[]>([]);
+const enqueued = ref<Plan[]>([]);
 const dispatched = ref<Plan[]>([]);
 const turns = ref<ExplorerTurn[]>([]);
 const draft = ref("");
@@ -59,7 +61,7 @@ const renameError = ref<string | null>(null);
 const explorerPaused = ref(false);
 type LeftPanel = "projects" | "explorers";
 const leftPanel = ref<LeftPanel>("explorers");
-type ContextPanel = "candidate" | "confirmed" | "dispatched" | "active" | "attention";
+type ContextPanel = "candidate" | "confirmed" | "enqueued" | "dispatched" | "active" | "attention" | "plan-center";
 const contextPanel = ref<ContextPanel>("candidate");
 const candidateEmptyOpen = ref(false);
 const candidateTitle = ref("New Explorer plan");
@@ -98,27 +100,33 @@ type TimelineNavItem = { key: string; label: string; detail: string; target: str
 
 const candidateCount = computed(() => candidate.value ? 1 : 0);
 const confirmedCount = computed(() => confirmedPlans.value.length);
+const enqueuedCount = computed(() => enqueued.value.length);
 const dispatchedCount = computed(() => dispatched.value.length);
 const activeRunCount = computed(() => dispatched.value.filter((plan) => plan.status === "IN_PROGRESS" || plan.status === "VERIFYING").length);
-const needsAttentionCount = computed(() => dispatched.value.filter((plan) => plan.status === "BLOCKED" || Boolean(plan.attentionReason)).length);
+const needsAttentionCount = computed(() => dispatched.value.filter((plan) => plan.status === "BLOCKED" || plan.status === "NEEDS_PLAN_CHANGE" || Boolean(plan.attentionReason)).length);
 const activePlans = computed(() => dispatched.value.filter((plan) => plan.status === "IN_PROGRESS" || plan.status === "VERIFYING"));
-const attentionPlans = computed(() => dispatched.value.filter((plan) => plan.status === "BLOCKED" || Boolean(plan.attentionReason)));
-const contextPanelTitle = computed(() => ({ candidate: "Plan candidates", confirmed: "Confirmed plans", dispatched: "Dispatched plans", active: "Active runs", attention: "Needs attention" } as const)[contextPanel.value]);
-const contextPanelEyebrow = computed(() => ({ candidate: "PLAN CANDIDATES", confirmed: "CONFIRMED PLANS", dispatched: "DISPATCHED PLANS", active: "ACTIVE RUNS", attention: "NEEDS ATTENTION" } as const)[contextPanel.value]);
+const attentionPlans = computed(() => dispatched.value.filter((plan) => plan.status === "BLOCKED" || plan.status === "NEEDS_PLAN_CHANGE" || Boolean(plan.attentionReason)));
+const planCenterCount = ref(0);
+const contextPanelTitle = computed(() => ({ candidate: "Plan candidates", confirmed: "Confirmed plans", enqueued: "Enqueued plans", dispatched: "Dispatched plans", active: "Active runs", attention: "Needs attention", "plan-center": "Plan Center" } as const)[contextPanel.value]);
+const contextPanelEyebrow = computed(() => ({ candidate: "PLAN CANDIDATES", confirmed: "CONFIRMED PLANS", enqueued: "ENQUEUED PLANS", dispatched: "DISPATCHED PLANS", active: "ACTIVE RUNS", attention: "NEEDS ATTENTION", "plan-center": "PROJECT PLAN CENTER" } as const)[contextPanel.value]);
 const contextPanelDescription = computed(() => ({
   candidate: "Shape and review the next execution contract for this ExplorerThread.",
-  confirmed: "All plans confirmed from this ExplorerThread, including plans waiting to be dispatched.",
-  dispatched: "Confirmed plans dispatched from this thread, with their current execution state.",
+  confirmed: "Confirmed plans are frozen and ready for a separate Enqueue decision.",
+  enqueued: "Enqueued plans wait for an explicit Start run action before the Scheduler is woken.",
+  dispatched: "Plans already sent to the Scheduler, including historical, active, and attention states.",
   active: "Runs currently moving through execution or verification for this thread.",
   attention: "Plans that need a decision or intervention before execution can continue.",
+  "plan-center": "Search and control every Enqueued-or-later plan in this Project without leaving Explorer.",
 } as const)[contextPanel.value]);
-const contextPanelCount = computed(() => contextPanel.value === "candidate" ? candidateCount.value : contextPanel.value === "confirmed" ? confirmedCount.value : contextPanel.value === "dispatched" ? dispatchedCount.value : contextPanel.value === "active" ? activeRunCount.value : needsAttentionCount.value);
+const contextPanelCount = computed(() => contextPanel.value === "candidate" ? candidateCount.value : contextPanel.value === "confirmed" ? confirmedCount.value : contextPanel.value === "enqueued" ? enqueuedCount.value : contextPanel.value === "dispatched" ? dispatchedCount.value : contextPanel.value === "active" ? activeRunCount.value : contextPanel.value === "attention" ? needsAttentionCount.value : planCenterCount.value);
 const contextMenuItems = computed(() => [
   { key: "candidate" as ContextPanel, label: "Plan candidates", railLabel: "Candidate", entryClass: "context-entry-candidate", count: candidateCount.value, icon: Promotion },
   { key: "confirmed" as ContextPanel, label: "Confirmed plans", railLabel: "Confirmed", entryClass: "context-entry-confirmed", count: confirmedCount.value, icon: Check },
+  { key: "enqueued" as ContextPanel, label: "Enqueued plans", railLabel: "Enqueued", entryClass: "context-entry-enqueued", count: enqueuedCount.value, icon: ArrowDown },
   { key: "dispatched" as ContextPanel, label: "Dispatched plans", railLabel: "Dispatched", entryClass: "context-entry-dispatched", count: dispatchedCount.value, icon: CircleCheck },
   { key: "active" as ContextPanel, label: "Active runs", railLabel: "Active", entryClass: "context-entry-active", count: activeRunCount.value, icon: Connection },
   { key: "attention" as ContextPanel, label: "Needs attention", railLabel: "Attention", entryClass: "context-entry-attention", count: needsAttentionCount.value, icon: Warning },
+  { key: "plan-center" as ContextPanel, label: "Plan Center", railLabel: "Plan Center", entryClass: "context-entry-plan-center", count: planCenterCount.value, icon: View },
 ]);
 const inputCardRequest = computed(() => pendingInput.value ?? recoveryInput.value);
 const contextUsage = computed(() => formatContextUsage(turns.value));
@@ -141,7 +149,7 @@ const messageTimelineItems = computed<TimelineNavItem[]>(() => timelineItems.val
 }));
 const allPlans = computed<Plan[]>(() => {
   const unique = new Map<string, Plan>();
-  for (const plan of [candidate.value, ...confirmedPlans.value, ...dispatched.value]) if (plan) unique.set(planIdentity(plan), plan);
+  for (const plan of [candidate.value, ...confirmedPlans.value, ...enqueued.value, ...dispatched.value]) if (plan) unique.set(planIdentity(plan), plan);
   return [...unique.values()];
 });
 const planTimelineItems = computed(() => buildPlanTimelineItems(allPlans.value, visibleActivity.value));
@@ -273,7 +281,9 @@ function resetThreadState() {
   thread.value = null;
   candidate.value = null;
   confirmedPlans.value = [];
+  enqueued.value = [];
   dispatched.value = [];
+  planCenterCount.value = 0;
   turns.value = [];
   activity.value = [];
   inputRequests.value = [];
@@ -337,13 +347,18 @@ async function refreshPlanProjection(): Promise<void> {
     ]);
     if (!isCurrentProjectScope(requestProjectId, requestToken) || requestVersion !== planProjectionVersion || thread.value?.id !== explorerId) return;
     const projection = normalizePlanProjection(explorerResponse.explorer, candidateResponse?.plan ?? null, plansResponse.items);
-    thread.value = projection.thread;
-    candidate.value = projection.candidate;
-    confirmedPlans.value = confirmedResponse?.items ?? [];
-    dispatched.value = projection.dispatched;
+    applyPlanProjection(projection, confirmedResponse?.items ?? []);
   } catch {
     // 事件流追赶期间保留上一次投影，避免切换或重连时页面短暂清空。
   }
+}
+
+function applyPlanProjection(projection: ReturnType<typeof normalizePlanProjection>, confirmed: Plan[]): void {
+  thread.value = projection.thread;
+  candidate.value = projection.candidate;
+  confirmedPlans.value = confirmed.filter((plan) => plan.status === "READY");
+  enqueued.value = projection.dispatched.filter((plan) => plan.status === "ENQUEUED");
+  dispatched.value = projection.dispatched.filter((plan) => plan.dispatchedAt !== null && plan.dispatchedAt !== undefined);
 }
 
 function formatTurnTime(value: string): string {
@@ -464,7 +479,7 @@ function selectContextPanel(selection: ContextPanel) {
 
 function syncPanelStateFromRoute() {
   const routeContextPanel = route.query.contextPanel;
-  if (routeContextPanel === "candidate" || routeContextPanel === "confirmed" || routeContextPanel === "dispatched" || routeContextPanel === "active" || routeContextPanel === "attention") contextPanel.value = routeContextPanel;
+  if (routeContextPanel === "candidate" || routeContextPanel === "confirmed" || routeContextPanel === "enqueued" || routeContextPanel === "dispatched" || routeContextPanel === "active" || routeContextPanel === "attention" || routeContextPanel === "plan-center") contextPanel.value = routeContextPanel;
 }
 
 function panelStateQuery() {
@@ -679,10 +694,7 @@ async function loadExplorerDetails(selected: ExplorerThread, requestProjectId: s
     ]);
     if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
     const projection = normalizePlanProjection(selected, candidateResponse?.plan ?? null, plansResponse.items);
-    thread.value = projection.thread;
-    candidate.value = projection.candidate;
-    confirmedPlans.value = confirmedResponse?.items ?? [];
-    dispatched.value = projection.dispatched;
+    applyPlanProjection(projection, confirmedResponse?.items ?? []);
     turns.value = turnsResponse.items;
     explorerEventSequence = turnsResponse.lastEventSequence ?? null;
     const activityResponse = await api.explorerActivity(requestProjectId, selected.id);
@@ -956,7 +968,9 @@ async function confirmPlan() {
   const id = candidate.value.id ?? candidate.value.planId!;
   busy.value = true;
   try {
-    candidate.value = (await api.confirmPlan(id)).plan;
+    await api.confirmPlan(id);
+    candidate.value = null;
+    drawerOpen.value = false;
     await refreshPlanProjection();
     if (contextPanel.value === "candidate") contextPanel.value = "confirmed";
   } catch (caught) { error.value = caught instanceof Error ? `Confirm plan 失败：${caught.message}` : "Confirm plan 失败"; } finally { busy.value = false; }
@@ -968,17 +982,36 @@ async function enqueuePlan(plan: Plan | null = candidate.value) {
   if (!id) return;
   busy.value = true;
   try {
-    const queuedPlan = (await api.enqueuePlan(id)).plan;
-    dispatched.value = [queuedPlan, ...dispatched.value];
+    const enqueuedPlan = (await api.enqueuePlan(id)).plan;
+    enqueued.value = [enqueuedPlan, ...enqueued.value.filter((item) => planIdentity(item) !== planIdentity(enqueuedPlan))];
     candidate.value = null;
     drawerOpen.value = false;
     await refreshPlanProjection();
-    contextPanel.value = "dispatched";
-    ElMessage.success("Plan 已进入调度队列");
+    contextPanel.value = "enqueued";
+    ElMessage.success("Plan 已进入 Enqueued 阶段");
   } catch (caught) {
     error.value = caught instanceof Error ? `Enqueue plan 失败：${caught.message}` : "Enqueue plan 失败";
+  } finally {
+    busy.value = false;
   }
-  busy.value = false;
+}
+
+async function startPlanRun(plan: Plan): Promise<void> {
+  const id = plan.id ?? plan.planId;
+  if (!id || plan.status !== "ENQUEUED" || busy.value) return;
+  busy.value = true;
+  error.value = null;
+  try {
+    const result = await api.startPlanRun(id);
+    await refreshPlanProjection();
+    contextPanel.value = "dispatched";
+    ElMessage.success(result.dispatch?.waitReason ? `Plan 已派发，正在等待：${result.dispatch.waitReason}` : "Plan 已进入 Dispatched 阶段");
+  } catch (caught) {
+    error.value = caught instanceof Error ? `Start run 失败：${caught.message}` : "Start run 失败";
+    ElMessage.error(error.value);
+  } finally {
+    busy.value = false;
+  }
 }
 
 async function discardPlan() {
@@ -1006,7 +1039,7 @@ async function discardPlan() {
   }
 }
 
-function statusLabel(status: string) { return ({ DRAFT: "Candidate", DISCARDED: "Discarded", READY: "Confirmed", QUEUED: "Queued", IN_PROGRESS: "Running", VERIFYING: "Verifying", MERGE_READY: "Ready for review", MERGED: "Merged", NEEDS_PLAN_CHANGE: "Plan change required", BLOCKED: "Blocked" } as Record<string, string>)[status] ?? status; }
+function statusLabel(status: string) { return ({ DRAFT: "Candidate", DISCARDED: "Discarded", READY: "Confirmed", ENQUEUED: "Enqueued", DISPATCHED: "Dispatched", QUEUED: "Queued", IN_PROGRESS: "Running", VERIFYING: "Verifying", MERGE_READY: "Ready for review", MERGED: "Merged", NEEDS_PLAN_CHANGE: "Plan change required", BLOCKED: "Blocked" } as Record<string, string>)[status] ?? status; }
 function reloadExplorer() {
   closeEvents();
   requestScope.invalidate();
@@ -1112,12 +1145,30 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
       <div class="context-panel">
       <div class="context-header"><div><div class="eyebrow">THREAD CONTEXT</div><h2>{{ contextPanelTitle }}</h2></div><el-button text circle aria-label="Refresh" @click="refreshThread"><Refresh :size="16" /></el-button></div>
       <div class="context-panel-scroll">
-        <div class="context-panel-intro"><span class="context-panel-intro-icon"><Promotion v-if="contextPanel === 'candidate'" :size="17" /><Check v-else-if="contextPanel === 'confirmed'" :size="17" /><CircleCheck v-else-if="contextPanel === 'dispatched'" :size="17" /><Connection v-else-if="contextPanel === 'active'" :size="17" /><Warning v-else :size="17" /></span><div><div class="eyebrow">{{ contextPanelEyebrow }} <span class="context-panel-count">{{ contextPanelCount }}</span></div><p>{{ contextPanelDescription }}</p></div></div>
-        <section v-if="contextPanel === 'candidate'" class="context-panel-content" aria-labelledby="candidate-panel-title"><div id="candidate-panel-title" class="context-section-title">PLAN CANDIDATE <span>{{ candidateCount }}</span></div><article v-if="candidate" class="context-plan-card"><div class="context-plan-card-head"><div class="mini-plan-title"><span class="mini-icon"><Promotion :size="16" /></span><div><strong>{{ candidate.title }}</strong><small>Revision {{ candidate.revision }}</small></div></div><el-tag size="small" type="warning" effect="light">{{ statusLabel(candidate.status) }}</el-tag></div><div class="context-plan-goal"><span>GOAL</span><p>{{ candidate.contract?.goal ?? candidate.goal ?? 'A complete, reviewable execution contract generated from this ExplorerThread.' }}</p></div><div class="candidate-stats context-plan-stats"><div><span>Tasks</span><strong>{{ candidate.contract?.tasks.length ?? candidate.tasks?.length ?? 0 }}</strong></div><div><span>Scope</span><strong>{{ candidate.contract?.include.length ?? candidate.include?.length ?? 0 }}</strong></div><div><span>Checks</span><strong>{{ candidate.contract?.verificationCommandIds.length ?? candidate.verificationCommands?.length ?? 0 }}</strong></div><div><span>Merge</span><strong class="risk-low">Human review</strong></div></div><div class="candidate-actions"><el-button @click="drawerOpen = true">View full plan <Right :size="15" /></el-button><el-button v-if="candidate.status === 'DRAFT'" type="primary" :loading="busy" @click="confirmPlan">Confirm plan <Check :size="15" /></el-button><el-button v-else-if="candidate.status === 'READY'" type="primary" :loading="busy" @click="enqueuePlan">Enqueue plan <ArrowDown :size="15" /></el-button></div></article><div v-else class="context-empty"><CircleCheck :size="24" /><p>No candidate plan</p><small>Use this panel to create a reviewable plan from the current ExplorerThread.</small><el-button plain @click="candidateEmptyOpen = true">Create candidate plan <Right :size="14" /></el-button></div></section>
-        <section v-else-if="contextPanel === 'confirmed'" class="context-panel-content" aria-labelledby="confirmed-panel-title"><div id="confirmed-panel-title" class="context-section-title">CONFIRMED PLANS <span>{{ confirmedCount }}</span></div><div v-if="confirmedPlans.length" class="context-plan-list" role="list"><article v-for="plan in confirmedPlans" :key="plan.planId ?? plan.id ?? plan.title" class="context-plan-row confirmed-plan-row" role="listitem"><div class="context-plan-row-head"><div class="mini-plan-title"><span class="mini-icon success"><Check :size="16" /></span><div><strong>{{ plan.title }}</strong><small>{{ plan.planId ?? plan.id }} · Revision {{ plan.revision }}</small></div></div><el-tag size="small" :type="plan.status === 'MERGED' ? 'success' : plan.status === 'BLOCKED' ? 'danger' : plan.status === 'IN_PROGRESS' || plan.status === 'VERIFYING' ? 'primary' : 'success'" effect="light">{{ statusLabel(plan.status) }}</el-tag></div><div class="context-plan-row-meta"><span>Source thread</span><code>{{ plan.sourceExplorerThreadId }}</code></div><div class="context-plan-row-meta"><span>Run</span><RouterLink v-if="planRunPath(plan)" :to="planRunPath(plan)!" class="context-plan-link">{{ plan.runId }} <Right :size="13" /></RouterLink><span v-else class="context-plan-muted">{{ plan.status === 'READY' ? 'Ready to enqueue' : 'Waiting for run' }}</span></div><div class="context-plan-row-footer"><span class="event-time">Last event {{ planEventTime(plan.lastEventAt) }}</span><el-button v-if="plan.status === 'READY'" size="small" type="primary" :loading="busy" @click="enqueuePlan(plan)">Enqueue plan <ArrowDown :size="14" /></el-button><span v-else class="context-plan-muted">Confirmed plan</span></div></article></div><div v-else class="context-empty"><Check :size="24" /><p>No confirmed plans</p><small>Plans appear here after you confirm them. Enqueue remains a separate step.</small></div></section>
-        <section v-else-if="contextPanel === 'dispatched'" class="context-panel-content" aria-labelledby="dispatched-panel-title"><div id="dispatched-panel-title" class="context-section-title">DISPATCHED PLANS <span>{{ dispatchedCount }}</span></div><div v-if="dispatched.length" class="context-plan-list" role="list"><article v-for="plan in dispatched" :key="plan.planId ?? plan.id ?? plan.title" class="context-plan-row" role="listitem"><div class="context-plan-row-head"><div class="mini-plan-title"><span class="mini-icon success"><CircleCheck :size="16" /></span><div><strong>{{ plan.title }}</strong><small>{{ plan.planId ?? plan.id }} · Revision {{ plan.revision }}</small></div></div><el-tag size="small" :type="plan.status === 'MERGED' ? 'success' : plan.status === 'BLOCKED' ? 'danger' : plan.status === 'IN_PROGRESS' || plan.status === 'VERIFYING' ? 'primary' : 'warning'" effect="light">{{ statusLabel(plan.status) }}</el-tag></div><div class="context-plan-row-meta"><span>Source thread</span><code>{{ plan.sourceExplorerThreadId }}</code></div><div class="context-plan-row-meta"><span>Run</span><RouterLink v-if="planRunPath(plan)" :to="planRunPath(plan)!" class="context-plan-link">{{ plan.runId }} <Right :size="13" /></RouterLink><span v-else class="context-plan-muted">Waiting for run</span></div><div class="context-plan-row-footer"><span class="event-time">Last event {{ planEventTime(plan.lastEventAt) }}</span><RouterLink :to="planRunPath(plan) ?? projectPathForModule('execute', projectId)" class="context-plan-link">{{ planRunPath(plan) ? 'View run' : 'Open Plan Center' }} <Right :size="13" /></RouterLink></div></article></div><div v-else class="context-empty"><CircleCheck :size="24" /><p>No plans dispatched from this thread yet.</p><small>Confirmed plans will appear here and remain queryable even when the model is offline.</small><RouterLink :to="projectPathForModule('execute', projectId)" class="context-plan-link">Open Plan Center <Right :size="14" /></RouterLink></div></section>
-        <section v-else-if="contextPanel === 'active'" class="context-panel-content" aria-labelledby="active-runs-panel-title"><div id="active-runs-panel-title" class="context-section-title">ACTIVE RUNS <span>{{ activeRunCount }}</span></div><div v-if="activePlans.length" class="context-plan-list" role="list"><article v-for="plan in activePlans" :key="plan.planId ?? plan.id ?? plan.title" class="context-plan-row active-run-row" role="listitem"><div class="context-plan-row-head"><div class="mini-plan-title"><span class="mini-icon"><Connection :size="16" /></span><div><strong>{{ plan.title }}</strong><small>{{ plan.planId ?? plan.id }} · Revision {{ plan.revision }}</small></div></div><el-tag size="small" type="primary" effect="light">{{ statusLabel(plan.status) }}</el-tag></div><div class="context-plan-row-meta"><span>Run</span><RouterLink v-if="planRunPath(plan)" :to="planRunPath(plan)!" class="context-plan-link">{{ plan.runId }} <Right :size="13" /></RouterLink><span v-else class="context-plan-muted">Run is being scheduled</span></div><div class="context-plan-row-footer"><span class="event-time">Last event {{ planEventTime(plan.lastEventAt) }}</span><RouterLink v-if="planRunPath(plan)" :to="planRunPath(plan)!" class="context-plan-link">Open run <Right :size="13" /></RouterLink></div></article></div><div v-else class="context-empty"><Connection :size="24" /><p>No active runs</p><small>Queued, verifying and running plans will appear here when execution starts.</small><RouterLink :to="projectPathForModule('execute', projectId)" class="context-plan-link">View all plans <Right :size="14" /></RouterLink></div></section>
-        <section v-else-if="contextPanel === 'attention'" class="context-panel-content" aria-labelledby="attention-panel-title"><div id="attention-panel-title" class="context-section-title">NEEDS ATTENTION <span>{{ needsAttentionCount }}</span></div><div v-if="attentionPlans.length" class="context-plan-list" role="list"><article v-for="plan in attentionPlans" :key="plan.planId ?? plan.id ?? plan.title" class="context-plan-row attention-row" role="listitem"><div class="context-plan-row-head"><div class="mini-plan-title"><span class="mini-icon warning"><Warning :size="16" /></span><div><strong>{{ plan.title }}</strong><small>{{ plan.planId ?? plan.id }} · Revision {{ plan.revision }}</small></div></div><el-tag size="small" type="danger" effect="light">{{ statusLabel(plan.status) }}</el-tag></div><div class="context-plan-row-meta"><span>Reason</span><span class="context-attention-reason">{{ plan.attentionReason ?? 'This plan requires review before execution can continue.' }}</span></div><div class="context-plan-row-footer"><span class="event-time">Last event {{ planEventTime(plan.lastEventAt) }}</span><RouterLink :to="planRunPath(plan) ?? projectPathForModule('execute', projectId)" class="context-plan-link">{{ planRunPath(plan) ? 'Open run' : 'Open Plan Center' }} <Right :size="13" /></RouterLink></div></article></div><div v-else class="context-empty"><Warning :size="24" /><p>No items need attention</p><small>Blocked plans and plans with an explicit attention reason will appear here.</small><RouterLink :to="projectPathForModule('execute', projectId)" class="context-plan-link">View all plans <Right :size="14" /></RouterLink></div></section>
+        <div class="context-panel-intro"><span class="context-panel-intro-icon"><Promotion v-if="contextPanel === 'candidate'" :size="17" /><Check v-else-if="contextPanel === 'confirmed'" :size="17" /><ArrowDown v-else-if="contextPanel === 'enqueued'" :size="17" /><CircleCheck v-else-if="contextPanel === 'dispatched'" :size="17" /><Connection v-else-if="contextPanel === 'active'" :size="17" /><View v-else-if="contextPanel === 'plan-center'" :size="17" /><Warning v-else :size="17" /></span><div><div class="eyebrow">{{ contextPanelEyebrow }} <span class="context-panel-count">{{ contextPanelCount }}</span></div><p>{{ contextPanelDescription }}</p></div></div>
+        <section v-if="contextPanel === 'candidate'" class="context-panel-content" aria-labelledby="candidate-panel-title">
+          <div id="candidate-panel-title" class="context-section-title">PLAN CANDIDATE <span>{{ candidateCount }}</span></div>
+          <article v-if="candidate" class="context-plan-card"><div class="context-plan-card-head"><div class="mini-plan-title"><span class="mini-icon"><Promotion :size="16" /></span><div><strong>{{ candidate.title }}</strong><small>Revision {{ candidate.revision }}</small></div></div><el-tag size="small" type="warning" effect="light">{{ statusLabel(candidate.status) }}</el-tag></div><div class="context-plan-goal"><span>GOAL</span><p>{{ candidate.contract?.goal ?? candidate.goal ?? 'A complete, reviewable execution contract generated from this ExplorerThread.' }}</p></div><div class="candidate-actions"><el-button @click="drawerOpen = true">View full plan <Right :size="15" /></el-button><el-button v-if="candidate.status === 'DRAFT'" type="primary" :loading="busy" @click="confirmPlan">Confirm plan <Check :size="15" /></el-button></div></article>
+          <div v-else class="context-empty"><CircleCheck :size="24" /><p>No candidate plan</p><small>Use this panel to create a reviewable plan from the current ExplorerThread.</small><el-button plain @click="candidateEmptyOpen = true">Create candidate plan <Right :size="14" /></el-button></div>
+        </section>
+        <section v-else-if="contextPanel === 'confirmed'" class="context-panel-content" aria-labelledby="confirmed-panel-title">
+          <div id="confirmed-panel-title" class="context-section-title">CONFIRMED PLANS <span>{{ confirmedCount }}</span></div>
+          <div v-if="confirmedPlans.length" class="context-plan-list" role="list"><article v-for="plan in confirmedPlans" :key="plan.planId ?? plan.id ?? plan.title" class="context-plan-row confirmed-plan-row" role="listitem"><div class="context-plan-row-head"><div class="mini-plan-title"><span class="mini-icon success"><Check :size="16" /></span><div><strong>{{ plan.title }}</strong><small>{{ plan.planId ?? plan.id }} · Revision {{ plan.revision }}</small></div></div><el-tag size="small" type="success" effect="light">{{ statusLabel(plan.status) }}</el-tag></div><div class="context-plan-row-meta"><span>Source thread</span><code>{{ plan.sourceExplorerThreadId }}</code></div><div class="context-plan-row-meta"><span>Run</span><span class="context-plan-muted">Ready to enqueue</span></div><div class="context-plan-row-footer"><span class="event-time">Last event {{ planEventTime(plan.lastEventAt) }}</span><el-button v-if="plan.status === 'READY'" size="small" type="primary" :loading="busy" @click="enqueuePlan(plan)">Enqueue plan <ArrowDown :size="14" /></el-button></div></article></div>
+          <div v-else class="context-empty"><Check :size="24" /><p>No confirmed plans</p><small>Plans appear here after you confirm them. Enqueue remains a separate step.</small></div>
+        </section>
+        <section v-else-if="contextPanel === 'enqueued'" class="context-panel-content" aria-labelledby="enqueued-panel-title">
+          <div id="enqueued-panel-title" class="context-section-title">ENQUEUED PLANS <span>{{ enqueuedCount }}</span></div>
+          <div v-if="enqueued.length" class="context-plan-list" role="list"><article v-for="plan in enqueued" :key="plan.planId ?? plan.id ?? plan.title" class="context-plan-row enqueued-plan-row" role="listitem"><div class="context-plan-row-head"><div class="mini-plan-title"><span class="mini-icon"><ArrowDown :size="16" /></span><div><strong>{{ plan.title }}</strong><small>{{ plan.planId ?? plan.id }} · Revision {{ plan.revision }}</small></div></div><el-tag size="small" type="warning" effect="light">{{ statusLabel(plan.status) }}</el-tag></div><div class="context-plan-row-meta"><span>Source thread</span><code>{{ plan.sourceExplorerThreadId }}</code></div><div class="context-plan-row-meta"><span>Run</span><span class="context-plan-muted">Ready for manual start</span></div><div class="context-plan-row-footer"><span class="event-time">Enqueued {{ planEventTime(plan.queuedAt ?? plan.lastEventAt) }}</span><el-button v-if="plan.status === 'ENQUEUED'" size="small" type="primary" :loading="busy" @click="startPlanRun(plan)">Start run <Right :size="14" /></el-button></div></article></div>
+          <div v-else class="context-empty"><ArrowDown :size="24" /><p>No enqueued plans</p><small>Use Enqueue in Confirmed, then explicitly Start run here.</small></div>
+        </section>
+        <section v-else-if="contextPanel === 'dispatched'" class="context-panel-content" aria-labelledby="dispatched-panel-title">
+          <div id="dispatched-panel-title" class="context-section-title">DISPATCHED PLANS <span>{{ dispatchedCount }}</span></div>
+          <div v-if="dispatched.length" class="context-plan-list" role="list"><article v-for="plan in dispatched" :key="plan.planId ?? plan.id ?? plan.title" class="context-plan-row" role="listitem"><div class="context-plan-row-head"><div class="mini-plan-title"><span class="mini-icon success"><CircleCheck :size="16" /></span><div><strong>{{ plan.title }}</strong><small>{{ plan.planId ?? plan.id }} · Revision {{ plan.revision }}</small></div></div><el-tag size="small" :type="plan.status === 'MERGED' ? 'success' : plan.status === 'BLOCKED' || plan.status === 'NEEDS_PLAN_CHANGE' ? 'danger' : plan.status === 'IN_PROGRESS' || plan.status === 'VERIFYING' ? 'primary' : 'warning'" effect="light">{{ statusLabel(plan.status) }}</el-tag></div><div class="context-plan-row-meta"><span>Run</span><RouterLink v-if="planRunPath(plan)" :to="planRunPath(plan)!" class="context-plan-link">{{ plan.runId }} <Right :size="13" /></RouterLink><span v-else class="context-plan-muted">{{ plan.dispatch?.waitReason ?? 'Waiting for scheduler' }}</span></div><div class="context-plan-row-meta"><span>State</span><span class="context-plan-muted">{{ plan.status === 'DISPATCHED' ? 'Waiting for run' : statusLabel(plan.status) }}</span></div><div class="context-plan-row-footer"><span class="event-time">Dispatched {{ planEventTime(plan.dispatchedAt ?? plan.lastEventAt) }}</span><RouterLink v-if="planRunPath(plan)" :to="planRunPath(plan)!" class="context-plan-link">View run <Right :size="13" /></RouterLink></div></article></div>
+          <div v-else class="context-empty"><CircleCheck :size="24" /><p>No plans dispatched from this thread yet.</p><small>Start run moves an Enqueued plan here and retains its execution history.</small><el-button text @click="contextPanel = 'enqueued'">View Enqueued <Right :size="14" /></el-button></div>
+        </section>
+        <section v-else-if="contextPanel === 'active'" class="context-panel-content" aria-labelledby="active-runs-panel-title"><div id="active-runs-panel-title" class="context-section-title">ACTIVE RUNS <span>{{ activeRunCount }}</span></div><div v-if="activePlans.length" class="context-plan-list" role="list"><article v-for="plan in activePlans" :key="plan.planId ?? plan.id ?? plan.title" class="context-plan-row active-run-row" role="listitem"><div class="context-plan-row-head"><div class="mini-plan-title"><span class="mini-icon"><Connection :size="16" /></span><div><strong>{{ plan.title }}</strong><small>{{ plan.planId ?? plan.id }} · Revision {{ plan.revision }}</small></div></div><el-tag size="small" type="primary" effect="light">{{ statusLabel(plan.status) }}</el-tag></div><div class="context-plan-row-meta"><span>Run</span><RouterLink v-if="planRunPath(plan)" :to="planRunPath(plan)!" class="context-plan-link">{{ plan.runId }} <Right :size="13" /></RouterLink><span v-else class="context-plan-muted">Run is being scheduled</span></div><div class="context-plan-row-footer"><span class="event-time">Last event {{ planEventTime(plan.lastEventAt) }}</span><RouterLink v-if="planRunPath(plan)" :to="planRunPath(plan)!" class="context-plan-link">Open run <Right :size="13" /></RouterLink></div></article></div><div v-else class="context-empty"><Connection :size="24" /><p>No active runs</p><small>Running and verifying dispatched plans appear here.</small></div></section>
+        <section v-else-if="contextPanel === 'attention'" class="context-panel-content" aria-labelledby="attention-panel-title"><div id="attention-panel-title" class="context-section-title">NEEDS ATTENTION <span>{{ needsAttentionCount }}</span></div><div v-if="attentionPlans.length" class="context-plan-list" role="list"><article v-for="plan in attentionPlans" :key="plan.planId ?? plan.id ?? plan.title" class="context-plan-row attention-row" role="listitem"><div class="context-plan-row-head"><div class="mini-plan-title"><span class="mini-icon warning"><Warning :size="16" /></span><div><strong>{{ plan.title }}</strong><small>{{ plan.planId ?? plan.id }} · Revision {{ plan.revision }}</small></div></div><el-tag size="small" type="danger" effect="light">{{ statusLabel(plan.status) }}</el-tag></div><div class="context-plan-row-meta"><span>Reason</span><span class="context-attention-reason">{{ plan.attentionReason ?? 'This plan requires review before execution can continue.' }}</span></div><div class="context-plan-row-footer"><span class="event-time">Last event {{ planEventTime(plan.lastEventAt) }}</span><RouterLink v-if="planRunPath(plan)" :to="planRunPath(plan)!" class="context-plan-link">Open run <Right :size="13" /></RouterLink></div></article></div><div v-else class="context-empty"><Warning :size="24" /><p>No items need attention</p><small>Blocked, terminated, and plan-change-required dispatched plans appear here.</small></div></section>
+        <section v-else-if="contextPanel === 'plan-center'" class="context-panel-content" aria-label="Plan Center"><PlanCenterPanel :project-id="projectId" @plans-changed="refreshPlanProjection" @count="planCenterCount = $event" /></section>
       </div>
       </div>
       <nav class="context-entry-rail" role="tablist" aria-label="Thread context sections">
@@ -1128,7 +1179,7 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
         </button>
       </nav>
     </aside>
-    <PlanDetailDrawer v-model="drawerOpen" :plan="candidate" @confirm="confirmPlan" @discard="discardPlan" @enqueue="enqueuePlan" />
+    <PlanDetailDrawer v-model="drawerOpen" :plan="candidate" @confirm="confirmPlan" @discard="discardPlan" />
     <ExplorerInputDialog ref="inputDialog" v-model="inputDialogOpen" :request="pendingInput" @submit="submitInput" @cancel="cancelInput" @progress="updateInputProgress" />
     <ProjectCreateDialog v-model="projectCreateOpen" @project-created="handleProjectCreated" />
     <ProjectSettingsDialog :model-value="projectSettingsOpen" :project-id="projectSettingsProjectId" @update:model-value="closeProjectSettings" @saved="handleProjectSettingsSaved" />

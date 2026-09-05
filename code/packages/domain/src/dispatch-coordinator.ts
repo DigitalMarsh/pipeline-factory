@@ -69,16 +69,21 @@ export class PlanDispatchCoordinator {
     });
   }
 
-  /** 将 Confirm 后的 Plan 放入自动调度队列，并立即尝试派发。 */
-  async enqueue(planId: string): Promise<{ plan: CandidatePlan; state: PlanDispatchState }> {
-    const plan = this.options.plans.enqueue(planId);
+  /** 保留 Enqueue API 的幂等入口，但不创建调度状态或唤醒 Scheduler。 */
+  async enqueue(planId: string): Promise<{ plan: CandidatePlan; state: PlanDispatchState | null }> {
+    return { plan: this.options.plans.enqueue(planId), state: null };
+  }
+
+  /** 将 Enqueued Plan 交给自动调度器，并立即尝试创建 Run。 */
+  async dispatch(planId: string): Promise<{ plan: CandidatePlan; state: PlanDispatchState }> {
+    const plan = this.options.plans.dispatch(planId);
     const existing = this.options.store.getDispatchState(plan.id);
     if (!existing || existing.status === "BLOCKED" || existing.status === "COMPLETED") {
       this.saveState(this.newQueuedState(plan));
     }
     await this.wake();
     const settled = this.state(plan.id);
-    if (this.options.store.getPlan(plan.id)?.status === "QUEUED" && !settled?.runId) await this.wake();
+    if (this.options.store.getPlan(plan.id)?.status === "DISPATCHED" && !settled?.runId) await this.wake();
     return { plan: this.options.store.getPlan(plan.id) ?? plan, state: this.state(plan.id) as PlanDispatchState };
   }
 
@@ -107,7 +112,7 @@ export class PlanDispatchCoordinator {
 
     const queuedPlans = this.options.store
       .listPlans()
-      .filter((plan) => plan.status === "QUEUED")
+      .filter((plan) => plan.status === "DISPATCHED")
       .sort((a, b) => (b.contract.priority ?? 0) - (a.contract.priority ?? 0) || (a.queuedAt ?? a.createdAt).localeCompare(b.queuedAt ?? b.createdAt) || a.id.localeCompare(b.id));
 
     for (const plan of queuedPlans) {
@@ -121,7 +126,7 @@ export class PlanDispatchCoordinator {
   private reconcileStoredPlans(): void {
     for (const plan of this.options.store.listPlans()) {
       const state = this.state(plan.id);
-      if (plan.status === "QUEUED" && !state) this.saveState(this.newQueuedState(plan));
+      if (plan.status === "DISPATCHED" && !state) this.saveState(this.newQueuedState(plan));
       if (plan.status === "MERGED" && state?.status !== "COMPLETED") this.saveState(this.stateForPlan(state ?? this.newQueuedState(plan), "COMPLETED", null, null));
       if (plan.status === "BLOCKED" && state?.status !== "BLOCKED") this.saveState(this.stateForPlan(state ?? this.newQueuedState(plan), "BLOCKED", null, plan.attentionReason));
     }
@@ -269,7 +274,7 @@ export class PlanDispatchCoordinator {
   }
 
   private newQueuedState(plan: CandidatePlan): PlanDispatchState {
-    const queuedAt = plan.queuedAt ?? plan.createdAt;
+    const queuedAt = plan.dispatchedAt ?? plan.queuedAt ?? plan.createdAt;
     return { planId: plan.id, projectId: plan.projectId, status: "QUEUED", waitReason: null, queuedAt, runId: plan.runId, attempt: 0, updatedAt: this.options.store.now(), lastError: null };
   }
 
