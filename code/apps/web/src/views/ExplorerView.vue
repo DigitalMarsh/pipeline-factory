@@ -63,6 +63,8 @@ const loading = ref(true);
 const error = ref<string | null>(null);
 const busy = ref(false);
 const creatingExplorer = ref(false);
+const showArchivedExplorers = ref(false);
+const explorerActionId = ref<string | null>(null);
 const projectActionId = ref<string | null>(null);
 const sendingTurn = ref(false);
 const showScrollToLatest = ref(false);
@@ -243,6 +245,7 @@ function resetThreadState() {
 function resetProjectState(nextProjectId = projectId.value) {
   project.value = projects.value.find((item) => item.id === nextProjectId) ?? null;
   explorers.value = [];
+  showArchivedExplorers.value = false;
   resetThreadState();
 }
 
@@ -530,6 +533,39 @@ async function selectExplorer(explorerId: string) {
     try { project.value = (await api.selectProjectExplorer(projectId.value, explorerId)).project; } catch { /* Keep navigation available for legacy API instances. */ }
   }
   await router.push({ path: route.path, query: { explorerId, ...panelStateQuery() }, hash: "" });
+}
+
+async function toggleExplorerArchive(explorerId: string) {
+  if (explorerActionId.value) return;
+  const selected = explorers.value.find((item) => item.id === explorerId);
+  if (!selected) return;
+  if (selected.state !== "ARCHIVED" && selected.id === thread.value?.id) {
+    ElMessage.warning("当前线程不能归档，请先切换到其他线程");
+    return;
+  }
+  explorerActionId.value = explorerId;
+  error.value = null;
+  try {
+    if (selected.state === "ARCHIVED") {
+      const response = await api.activateExplorer(projectId.value, explorerId);
+      explorers.value = explorers.value.map((item) => item.id === explorerId ? response.explorer : item);
+      if (thread.value?.id === explorerId) thread.value = response.explorer;
+      else await selectExplorer(explorerId);
+      ElMessage.success("线程已恢复");
+      return;
+    }
+    await ElMessageBox.confirm("归档后线程历史仍可查看，但不能继续创建新的 Explorer Turn。", `归档 ${selected.title}？`, { type: "warning", confirmButtonText: "归档线程", cancelButtonText: "取消" });
+    const response = await api.archiveExplorer(projectId.value, explorerId);
+    explorers.value = explorers.value.map((item) => item.id === explorerId ? response.explorer : item);
+    ElMessage.success("线程已归档");
+  } catch (caught) {
+    if (caught === "cancel" || caught === "close") return;
+    const message = caught instanceof Error ? caught.message : "线程状态更新失败";
+    error.value = message;
+    ElMessage.error(message);
+  } finally {
+    explorerActionId.value = null;
+  }
 }
 
 async function refreshActivity() {
@@ -890,7 +926,7 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
 
 <template>
   <div class="console-layout">
-    <ThreadRail :panel="leftPanel" :thread="thread" :project="project" :projects="projects" :explorers="explorers" :creating-explorer="creatingExplorer" :project-action-id="projectActionId" @select-panel="leftPanel = $event" @create-explorer="createExplorer" @create-project="openProjectCreateDialog" @select-project="switchProject" @open-project="switchProject" @open-project-settings="openProjectSettingsDialog" @archive-project="toggleProjectArchive" @select-explorer="selectExplorer" />
+    <ThreadRail :panel="leftPanel" :thread="thread" :project="project" :projects="projects" :explorers="explorers" :show-archived="showArchivedExplorers" :explorer-action-id="explorerActionId" :creating-explorer="creatingExplorer" :project-action-id="projectActionId" @select-panel="leftPanel = $event" @create-explorer="createExplorer" @create-project="openProjectCreateDialog" @select-project="switchProject" @open-project="switchProject" @open-project-settings="openProjectSettingsDialog" @archive-project="toggleProjectArchive" @select-explorer="selectExplorer" @toggle-show-archived="showArchivedExplorers = $event" @archive-explorer="toggleExplorerArchive" />
     <section class="conversation-column">
       <div class="conversation-header"><div><div class="eyebrow"><span class="mode-dot" /> PLAN MODE · READ ONLY</div><h1>{{ explorerDisplayTitle(thread) }}</h1><p>Shape the work before anything changes in the repository.</p></div><div class="conversation-tools"><el-button circle plain :aria-label="explorerPaused ? 'Resume' : 'Pause'" @click="toggleExplorerPause"><VideoPlay v-if="explorerPaused" :size="16" /><VideoPause v-else :size="16" /></el-button><el-popover v-model:visible="moreOpen" placement="bottom-end" :width="250" trigger="click"><template #reference><el-button circle plain aria-label="More"><MoreFilled :size="16" /></el-button></template><div class="thread-more-menu"><div class="eyebrow">THREAD ACTIONS</div><p>Manage read-only exploration without changing the repository.</p><el-button text @click="setPolicyOpen(true); moreOpen = false">View policy</el-button><el-button text @click="moreOpen = false; refreshThread()">Refresh thread</el-button></div></el-popover></div></div>
       <div v-if="agentLoop" class="agent-loop-strip" role="status"><div class="agent-loop-summary"><span class="eyebrow">EXPLORER PROVIDER TURN LOOP</span><strong>{{ agentLoopLabel }}</strong></div><span class="agent-loop-budget">Provider Turns {{ agentLoop.stepCount }} / {{ agentLoop.maxSteps }} · Activities {{ agentLoop.diagnostics?.providerActivityCount ?? 0 }}</span><div v-if="agentLoopGateLabel || agentLoopTerminalLabel || agentLoopCompletionLabel" class="agent-loop-status"><span v-if="agentLoopGateLabel" class="agent-loop-diagnostic">{{ agentLoopGateLabel }}</span><span v-if="agentLoopTerminalLabel" class="agent-loop-terminal">{{ agentLoopTerminalLabel }}</span><span v-if="agentLoopCompletionLabel" class="agent-loop-complete">{{ agentLoopCompletionLabel }}</span></div><el-button v-if="agentLoop.state === 'RUNNING' || agentLoop.state === 'PAUSED'" class="agent-loop-action" size="small" plain @click="toggleExplorerPause">{{ agentLoop.state === 'PAUSED' ? 'Resume loop' : 'Pause loop' }}</el-button></div>

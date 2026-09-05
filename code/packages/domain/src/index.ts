@@ -2332,6 +2332,8 @@ export class ExplorerService {
   archive(explorerId: string): ExplorerThread {
     const explorer = this.get(explorerId);
     if (explorer.state === "ARCHIVED") return explorer;
+    const project = this.store.getProject(explorer.projectId);
+    if (project?.currentExplorerThreadId === explorerId) throw new Error("Current Explorer cannot be archived");
     const archived = this.store.updateThread({ ...explorer, state: "ARCHIVED", lastActivityAt: this.store.now() });
     this.store.appendEvent({ type: "explorer.archived", aggregateId: explorerId, payload: { explorerId } });
     return archived;
@@ -2915,6 +2917,7 @@ export class ExplorerThreadService {
     if (!thread) throw new Error(`ExplorerThread ${input.threadId} not found`);
     const prior = this.store.getIdempotency("explorer-turn", input.clientTurnId);
     if (prior) return prior as unknown as { user: ExplorerTurn; assistant: ExplorerTurn; eventsUrl: string; loopId: string };
+    if (thread.state === "ARCHIVED") throw new Error(`ExplorerThread ${input.threadId} is archived`);
     if ([...this.jobs.keys()].includes(input.threadId) || this.store.listTurns(input.threadId).some((turn) => turn.status === "RUNNING" || turn.status === "WAITING_FOR_INPUT")) {
       throw new Error(`ExplorerThread ${input.threadId} already has an active turn`);
     }

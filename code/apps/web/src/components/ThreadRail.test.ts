@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import ThreadRail from "./ThreadRail.vue";
 import type { ExplorerThread, Project } from "../types";
 
-function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplorer = false, projectActionId: string | null = null) {
+function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplorer = false, projectActionId: string | null = null, includeArchived = false, showArchived = false) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   let createExplorerCount = 0;
@@ -12,6 +12,7 @@ function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplor
   let selectedPanel: "projects" | "explorers" | null = null;
   let selectedProjectId: string | null = null;
   let selectedExplorerId: string | null = null;
+  let archivedExplorerId: string | null = null;
   const openedProjectIds: string[] = [];
   const settingsProjectIds: string[] = [];
   const archivedProjectIds: string[] = [];
@@ -24,16 +25,19 @@ function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplor
   const explorers = [
     { id: "explorer-1", projectId: "project-1", title: "Current exploration", state: "ACTIVE", contextMode: "FRESH", messageCount: 2, lastActivityAt: "2026-09-02T14:00:00.000Z" },
     { id: "explorer-2", projectId: "project-1", title: "Second exploration", state: "COMPLETED", contextMode: "FRESH", messageCount: 4, lastActivityAt: "2026-09-01T14:00:00.000Z" },
+    ...(includeArchived ? [{ id: "explorer-3", projectId: "project-1", title: "Archived exploration", state: "ARCHIVED", contextMode: "FRESH", messageCount: 1, lastActivityAt: "2026-08-31T14:00:00.000Z" }] : []),
   ] as unknown as ExplorerThread[];
   const app = createApp(defineComponent({
     setup() {
       const activePanel = ref(panel);
+      const archivedVisible = ref(showArchived);
       return () => h(ThreadRail, {
         panel: activePanel.value,
         thread,
         project,
         projects,
         explorers,
+        showArchived: archivedVisible.value,
         creatingExplorer,
         projectActionId,
         onCreateExplorer: () => { createExplorerCount += 1; },
@@ -41,6 +45,8 @@ function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplor
         onSelectPanel: (value: "projects" | "explorers") => { selectedPanel = value; activePanel.value = value; },
         onSelectProject: (projectId: string) => { selectedProjectId = projectId; },
         onSelectExplorer: (explorerId: string) => { selectedExplorerId = explorerId; },
+        onToggleShowArchived: (value: boolean) => { archivedVisible.value = value; },
+        onArchiveExplorer: (explorerId: string) => { archivedExplorerId = explorerId; },
         onOpenProject: (projectId: string) => { openedProjectIds.push(projectId); },
         onOpenProjectSettings: (projectId: string) => { settingsProjectIds.push(projectId); },
         onArchiveProject: (projectId: string) => { archivedProjectIds.push(projectId); },
@@ -56,6 +62,7 @@ function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplor
     getSelectedPanel: () => selectedPanel,
     getSelectedProjectId: () => selectedProjectId,
     getSelectedExplorerId: () => selectedExplorerId,
+    getArchivedExplorerId: () => archivedExplorerId,
     getOpenedProjectIds: () => openedProjectIds,
     getSettingsProjectIds: () => settingsProjectIds,
     getArchivedProjectIds: () => archivedProjectIds,
@@ -163,6 +170,47 @@ describe("ThreadRail left workspace navigation", () => {
     expect(explorerRows).toHaveLength(2);
     expect(explorerRows.map((row) => row.textContent)).toEqual(expect.arrayContaining([expect.stringContaining("Current exploration"), expect.stringContaining("Second exploration")]));
     expect(currentThread?.classList.contains("active")).toBe(true);
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  it("hides archived Explorers by default and toggles them into the list", async () => {
+    const mounted = mountRail("explorers", false, null, true);
+    const toggle = mounted.host.querySelector<HTMLButtonElement>("[data-explorer-filter=archived]");
+
+    expect(toggle?.getAttribute("aria-pressed")).toBe("false");
+    expect(mounted.host.querySelector('[data-explorer-id="explorer-3"]')).toBeNull();
+
+    toggle?.click();
+    await nextTick();
+
+    expect(toggle?.getAttribute("aria-pressed")).toBe("true");
+    expect(mounted.host.querySelector('[data-explorer-id="explorer-3"]')).not.toBeNull();
+
+    toggle?.click();
+    await nextTick();
+    expect(toggle?.getAttribute("aria-pressed")).toBe("false");
+    expect(mounted.host.querySelector('[data-explorer-id="explorer-3"]')).toBeNull();
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  it("disables archiving the current Explorer and emits row archive actions", async () => {
+    const mounted = mountRail("explorers", false, null, true, true);
+    const currentArchive = mounted.host.querySelector<HTMLButtonElement>('[data-explorer-id="explorer-1"] [data-explorer-action="archive"]');
+    const otherArchive = mounted.host.querySelector<HTMLButtonElement>('[data-explorer-id="explorer-2"] [data-explorer-action="archive"]');
+    const archivedActivate = mounted.host.querySelector<HTMLButtonElement>('[data-explorer-id="explorer-3"] [data-explorer-action="activate"]');
+
+    expect(currentArchive?.disabled).toBe(true);
+    expect(currentArchive?.getAttribute("aria-label")).toContain("当前线程");
+    otherArchive?.click();
+    archivedActivate?.click();
+    await nextTick();
+
+    expect(mounted.getArchivedExplorerId()).toBe("explorer-3");
+    expect(mounted.getSelectedExplorerId()).toBeNull();
 
     mounted.app.unmount();
     mounted.host.remove();

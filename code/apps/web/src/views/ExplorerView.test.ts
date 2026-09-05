@@ -23,9 +23,13 @@ describe("Explorer project selector wiring", () => {
     expect(explorerViewSource).toContain(":panel=\"leftPanel\"");
     expect(explorerViewSource).toContain(":projects=\"projects\"");
     expect(explorerViewSource).toContain(":explorers=\"explorers\"");
+    expect(explorerViewSource).toContain(":show-archived=\"showArchivedExplorers\"");
+    expect(explorerViewSource).toContain(":explorer-action-id=\"explorerActionId\"");
     expect(explorerViewSource).toContain("@select-panel=\"leftPanel = $event\"");
     expect(explorerViewSource).toContain("@select-project=\"switchProject\"");
     expect(explorerViewSource).toContain("@select-explorer=\"selectExplorer\"");
+    expect(explorerViewSource).toContain("@toggle-show-archived=\"showArchivedExplorers = $event\"");
+    expect(explorerViewSource).toContain("@archive-explorer=\"toggleExplorerArchive\"");
     expect(explorerViewSource).toContain("@create-explorer=\"createExplorer\"");
     expect(explorerViewSource).toContain("@create-project=\"openProjectCreateDialog\"");
     expect(explorerViewSource).toContain("projectPathForModule(\"explore\", selectedProjectId)");
@@ -161,6 +165,13 @@ describe("Explorer thread switching", () => {
   it("keeps message navigation keys unique when a turn has multiple assistant activities", () => {
     expect(explorerViewSource).toContain("key: `message:${item.activity.id}`");
     expect(explorerViewSource).toContain("activeTimelineKey === item.target");
+  });
+
+  it("resets archived-thread visibility when switching projects", () => {
+    expect(explorerViewSource).toContain('const showArchivedExplorers = ref(false)');
+    expect(explorerViewSource).toContain('const explorerActionId = ref<string | null>(null)');
+    const resetSource = explorerViewSource.match(/function resetProjectState\(nextProjectId = projectId\.value\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(resetSource).toContain("showArchivedExplorers.value = false");
   });
 });
 

@@ -4,11 +4,12 @@
 -->
 <script setup lang="ts">
 import { ArrowRight, Connection, FolderOpened, Plus, Setting } from "@element-plus/icons-vue";
+import { computed } from "vue";
 import type { ExplorerThread, Project } from "../types";
 
 type LeftPanel = "projects" | "explorers";
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   panel: LeftPanel;
   thread: ExplorerThread | null;
   project?: Project | null;
@@ -16,7 +17,12 @@ const props = defineProps<{
   explorers: ExplorerThread[];
   creatingExplorer?: boolean;
   projectActionId?: string | null;
-}>();
+  showArchived?: boolean;
+  explorerActionId?: string | null;
+}>(), {
+  showArchived: false,
+  explorerActionId: null,
+});
 const emit = defineEmits<{
   "select-panel": [panel: LeftPanel];
   "select-project": [projectId: string];
@@ -24,6 +30,8 @@ const emit = defineEmits<{
   "open-project-settings": [projectId: string];
   "archive-project": [projectId: string];
   "select-explorer": [explorerId: string];
+  "toggle-show-archived": [value: boolean];
+  "archive-explorer": [explorerId: string];
   "create-explorer": [];
   "create-project": [];
 }>();
@@ -39,6 +47,17 @@ function projectStatusLabel(status: Project["status"]): string {
 
 function explorerStatusLabel(state: ExplorerThread["state"]): string {
   return state === "ACTIVE" ? "Active" : state === "ARCHIVED" ? "Archived" : "Completed";
+}
+
+const visibleExplorers = computed(() => props.showArchived ? props.explorers : props.explorers.filter((explorer) => explorer.state !== "ARCHIVED"));
+
+function explorerArchiveLabel(explorer: ExplorerThread): string {
+  return explorer.state === "ARCHIVED" ? "Activate" : "Archive";
+}
+
+function explorerArchiveAriaLabel(explorer: ExplorerThread): string {
+  if (explorer.state !== "ARCHIVED" && explorer.id === props.thread?.id) return `${explorer.title}: 当前线程不能归档`;
+  return `${explorerArchiveLabel(explorer)} ${explorer.title}`;
 }
 </script>
 
@@ -148,20 +167,51 @@ function explorerStatusLabel(state: ExplorerThread["state"]): string {
           <span><strong>新建 Explorer</strong><small>从全新上下文开始</small></span>
         </button>
 
-        <div class="left-list-label">EXPLORER THREADS</div>
-        <button
-          v-for="availableExplorer in props.explorers"
+        <div class="left-list-label-row">
+          <div class="left-list-label">EXPLORER THREADS</div>
+          <button
+            class="explorer-archive-toggle"
+            type="button"
+            data-explorer-filter="archived"
+            :aria-pressed="props.showArchived"
+            :aria-label="props.showArchived ? '隐藏归档线程' : '显示归档线程'"
+            @click="emit('toggle-show-archived', !props.showArchived)"
+          >
+            {{ props.showArchived ? "隐藏归档" : "显示归档" }}
+          </button>
+        </div>
+        <article
+          v-for="availableExplorer in visibleExplorers"
           :key="availableExplorer.id"
-          class="explorer-list-item"
+          class="explorer-list-row"
           :class="{ active: availableExplorer.id === props.thread?.id }"
-          type="button"
           :data-explorer-id="availableExplorer.id"
-          @click="emit('select-explorer', availableExplorer.id)"
         >
-          <span class="left-list-icon"><Connection :size="15" /></span>
-          <span class="left-list-copy"><strong>{{ availableExplorer.title }}</strong><small>{{ availableExplorer.messageCount }} messages · {{ availableExplorer.id }}</small></span>
-          <span :class="['left-list-status', { archived: availableExplorer.state === 'ARCHIVED' }]">{{ explorerStatusLabel(availableExplorer.state) }}</span>
-        </button>
+          <button
+            class="explorer-list-item"
+            :class="{ active: availableExplorer.id === props.thread?.id }"
+            type="button"
+            :data-explorer-id="availableExplorer.id"
+            @click="emit('select-explorer', availableExplorer.id)"
+          >
+            <span class="left-list-icon"><Connection :size="15" /></span>
+            <span class="left-list-copy"><strong>{{ availableExplorer.title }}</strong><small>{{ availableExplorer.messageCount }} messages · {{ availableExplorer.id }}</small></span>
+            <span :class="['left-list-status', { archived: availableExplorer.state === 'ARCHIVED' }]">{{ explorerStatusLabel(availableExplorer.state) }}</span>
+          </button>
+          <div class="explorer-list-actions">
+            <button
+              type="button"
+              :class="['explorer-list-action', { archived: availableExplorer.state === 'ARCHIVED' }]"
+              :data-explorer-action="availableExplorer.state === 'ARCHIVED' ? 'activate' : 'archive'"
+              :disabled="props.explorerActionId === availableExplorer.id || (availableExplorer.state !== 'ARCHIVED' && availableExplorer.id === props.thread?.id)"
+              :aria-busy="props.explorerActionId === availableExplorer.id ? 'true' : undefined"
+              :aria-label="explorerArchiveAriaLabel(availableExplorer)"
+              @click.stop="emit('archive-explorer', availableExplorer.id)"
+            >
+              {{ explorerArchiveLabel(availableExplorer) }}
+            </button>
+          </div>
+        </article>
       </div>
     </section>
   </aside>

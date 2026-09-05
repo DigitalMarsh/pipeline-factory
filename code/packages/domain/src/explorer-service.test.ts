@@ -4,7 +4,7 @@
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  */
 import { describe, expect, it } from "vitest";
-import { ExplorerService, InMemoryPipelineStore, PlanService, ProjectService } from "./index.js";
+import { ExplorerService, ExplorerThreadService, InMemoryPipelineStore, PlanService, ProjectService, StubModelGateway } from "./index.js";
 
 describe("ExplorerService", () => {
   it("creates a fresh business Explorer without inheriting old turns or plans", () => {
@@ -52,5 +52,26 @@ describe("ExplorerService", () => {
     expect(archived.state).toBe("ARCHIVED");
     expect(store.listTurns(explorer.id)[0]?.content).toBe("keep this");
     expect(explorers.get(explorer.id).state).toBe("ARCHIVED");
+  });
+
+  it("rejects archiving the Project's current Explorer", () => {
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    projects.create({ id: "project-1", name: "Project", repoRoot: "/repo/project", defaultBranch: "main", worktreeRoot: "/tmp/project-worktrees" });
+    const explorers = new ExplorerService(store);
+    const explorer = explorers.create({ projectId: "project-1", title: "Current Explorer" });
+
+    expect(() => explorers.archive(explorer.id)).toThrow("Current Explorer cannot be archived");
+    expect(store.getThread(explorer.id)?.state).toBe("ACTIVE");
+  });
+
+  it("rejects new turns for an archived Explorer", async () => {
+    const store = new InMemoryPipelineStore();
+    const explorer = new ExplorerService(store).create({ projectId: "project-1", title: "Archived Explorer" });
+    store.updateThread({ ...explorer, state: "ARCHIVED" });
+    const service = new ExplorerThreadService(store, new StubModelGateway({ explorer: { model: "explorer" }, executor: { model: "executor" } }));
+
+    await expect(service.startTurn({ threadId: explorer.id, content: "继续探索", clientTurnId: "archived-turn" })).rejects.toThrow("ExplorerThread " + explorer.id + " is archived");
+    expect(store.listTurns(explorer.id)).toEqual([]);
   });
 });

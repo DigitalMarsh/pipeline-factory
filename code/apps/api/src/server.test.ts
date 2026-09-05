@@ -593,6 +593,7 @@ describe("Pipeline Factory v4 API", () => {
     expect(fresh).toMatchObject({ projectId: "project-1", title: "Fresh requirement", contextMode: "FRESH", providerThreadId: null });
     expect(store.listTurns(fresh.id)).toEqual([]);
     expect(store.getThread("old-explorer")?.state).toBe("ACTIVE");
+    new PlanService(store).registerThread({ id: "replacement-explorer", projectId: "project-1", parentThreadId: null });
 
     const listed = await app.inject({ method: "GET", url: "/api/v4/projects/project-1/explorers" });
     expect(listed.statusCode).toBe(200);
@@ -601,6 +602,27 @@ describe("Pipeline Factory v4 API", () => {
     expect(archived.statusCode).toBe(200);
     expect(archived.json().explorer.state).toBe("ARCHIVED");
     expect(store.listTurns(fresh.id)).toEqual([]);
+  });
+
+  it("rejects archiving the current Explorer and starting turns on archived Explorers", async () => {
+    const store = new InMemoryPipelineStore();
+    createTestProject(store);
+    const plans = new PlanService(store);
+    const archived = plans.registerThread({ id: "archived-explorer", projectId: "project-1", parentThreadId: null });
+    store.updateThread({ ...archived, state: "ARCHIVED" });
+    const current = plans.registerThread({ id: "current-explorer", projectId: "project-1", parentThreadId: null });
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+
+    const archiveCurrent = await app.inject({ method: "POST", url: `/api/v4/projects/project-1/explorers/${current.id}/archive` });
+    const startArchived = await app.inject({ method: "POST", url: "/api/v4/projects/project-1/explorer-thread/turns", payload: { threadId: archived.id, content: "继续探索", clientTurnId: "archived-turn" } });
+
+    expect(archiveCurrent.statusCode).toBe(409);
+    expect(archiveCurrent.json()).toMatchObject({ code: "EXPLORER_ARCHIVE_NOT_ALLOWED" });
+    expect(startArchived.statusCode).toBe(409);
+    expect(startArchived.json().error).toContain("archived");
+    expect(store.getThread(current.id)?.state).toBe("ACTIVE");
+    expect(store.listTurns(archived.id)).toEqual([]);
   });
 
   it("creates an Explorer with a timestamp placeholder and locks manual renames", async () => {

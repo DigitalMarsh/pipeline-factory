@@ -625,7 +625,12 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     const explorer = store.getThread(params.data.explorerId);
     if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
-    return { explorer: explorers.archive(explorer.id) };
+    try {
+      return { explorer: explorers.archive(explorer.id) };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return reply.code(409).send({ code: "EXPLORER_ARCHIVE_NOT_ALLOWED", error: message });
+    }
   });
 
   app.post("/api/v4/projects/:projectId/explorers/:explorerId/activate", async (request, reply) => {

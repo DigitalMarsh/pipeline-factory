@@ -344,7 +344,19 @@ a { color: inherit; text-decoration: none; }
 .left-list-copy small { display: block; overflow: hidden; margin-top: 4px; color: #8196b1; font-size: 9px; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
 .left-list-status { flex: 0 0 auto; padding-top: 2px; color: #70d5a4; font-size: 9px; font-weight: 700; }
 .left-list-status.archived { color: #9ca9bc; }
-.left-list-label { margin: 9px 5px 1px; color: #7186a7; font-size: 9px; font-weight: 800; letter-spacing: .12em; }
+.left-list-label-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 9px 5px 1px; }
+.left-list-label { color: #7186a7; font-size: 9px; font-weight: 800; letter-spacing: .12em; }
+.explorer-archive-toggle { flex: 0 0 auto; padding: 3px 5px; border: 1px solid #31557e; border-radius: 4px; background: transparent; color: #8fc5f0; cursor: pointer; font: inherit; font-size: 8px; line-height: 1.2; }
+.explorer-archive-toggle:hover, .explorer-archive-toggle:focus-visible { border-color: #5ca9e5; background: #193758; color: #dcecff; outline: 0; }
+.explorer-archive-toggle[aria-pressed="true"] { border-color: #4c9cf0; background: #24548b; color: #fff; }
+.explorer-list-row { overflow: hidden; border: 1px solid transparent; border-radius: 8px; }
+.explorer-list-row.active { border-color: #4b91df; box-shadow: inset 0 0 0 1px rgba(113, 200, 255, .16); }
+.explorer-list-row .explorer-list-item { border-radius: 8px 8px 0 0; }
+.explorer-list-actions { display: flex; justify-content: flex-end; padding: 0 8px 6px; background: #16253d; }
+.explorer-list-action { padding: 1px 3px; border: 0; background: transparent; color: #8198b6; cursor: pointer; font: inherit; font-size: 8px; }
+.explorer-list-action:hover, .explorer-list-action:focus-visible { color: #dcecff; outline: 0; }
+.explorer-list-action.archived { color: #9ddcff; }
+.explorer-list-action:disabled { color: #526b8e; cursor: not-allowed; }
 .left-panel-manage { min-height: 34px; margin-top: 3px; padding: 7px 9px; border: 1px solid #31557e; border-radius: 6px; background: transparent; color: #8fc5f0; cursor: pointer; font: inherit; font-size: 10px; text-align: left; }
 .left-panel-manage:hover, .left-panel-manage:focus-visible { border-color: #5ca9e5; background: #193758; color: #dcecff; outline: 0; }
 .left-panel-create { display: flex; min-width: 0; align-items: center; gap: 8px; width: 100%; min-height: 48px; padding: 8px; border: 1px solid #355b8b; border-radius: 8px; outline: 0; background: #1d3e67; color: #dcecff; cursor: pointer; font: inherit; text-align: left; transition: border-color .16s ease, background .16s ease, color .16s ease; }
