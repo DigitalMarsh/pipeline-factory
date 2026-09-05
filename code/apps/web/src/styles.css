@@ -306,6 +306,17 @@ a { color: inherit; text-decoration: none; }
 .left-panel-header .eyebrow { color: #7186a7; }
 .left-panel-header strong { display: block; margin-top: 6px; overflow: hidden; color: #edf3ff; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
 .left-panel-header small { display: block; margin-top: 5px; overflow: hidden; color: #8093ae; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.project-context-card { display: flex; min-width: 0; align-items: flex-start; gap: 10px; width: 100%; padding: 10px 8px 9px; border: 1px solid #293b58; border-radius: 8px; outline: 0; background: #16253d; color: #edf3ff; cursor: pointer; font: inherit; text-align: left; transition: border-color .16s ease, background .16s ease, box-shadow .16s ease; }
+.project-context-card:hover, .project-context-card:focus-visible { border-color: #5ca9e5; background: #1b3559; box-shadow: 0 0 0 1px rgba(92, 169, 229, .16); }
+.project-context-copy { min-width: 0; flex: 1 1 auto; }
+.project-context-card .eyebrow { display: block; margin: 0; }
+.project-context-card strong { margin-top: 6px; color: #f2f7ff; font-size: 20px; line-height: 1.2; letter-spacing: -.025em; }
+.project-context-summary { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; margin-top: 7px; color: #91adca; font-size: 10px; line-height: 1.3; }
+.project-context-status { display: inline-flex; align-items: center; gap: 4px; color: #70d5a4; font-weight: 700; }
+.project-context-status.archived { color: #9ca9bc; }
+.project-context-status i { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.project-context-card small { display: block; margin-top: 7px; color: #8196b1; font-size: 10px; line-height: 1.3; }
+.project-context-arrow { margin-top: 5px; flex: 0 0 auto; color: #8fc5f0; }
 .left-panel-scroll { min-height: 0; flex: 1 1 auto; overflow-y: auto; padding: 15px 1px 2px; scrollbar-width: thin; }
 .project-list, .explorer-list { display: flex; flex-direction: column; gap: 8px; }
 .project-list-row { overflow: hidden; border: 1px solid #293b58; border-radius: 8px; background: #16253d; }

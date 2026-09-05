@@ -29,8 +29,8 @@ const emit = defineEmits<{
 }>();
 
 const panelEntries: { key: LeftPanel; label: string }[] = [
-  { key: "projects", label: "项目" },
   { key: "explorers", label: "探索" },
+  { key: "projects", label: "项目" },
 ];
 
 function projectStatusLabel(status: Project["status"]): string {
@@ -64,9 +64,31 @@ function explorerStatusLabel(state: ExplorerThread["state"]): string {
 
     <section class="left-panel">
       <header class="left-panel-header">
-        <div class="eyebrow">{{ props.panel === "projects" ? "PROJECTS" : "EXPLORER THREADS" }}</div>
-        <strong>{{ props.panel === "projects" ? `${props.projects.length} projects` : `${props.explorers.length} explorations` }}</strong>
-        <small>{{ props.project?.name ?? props.thread?.projectId ?? "Local workspace" }}</small>
+        <button
+          v-if="props.panel === 'explorers'"
+          class="project-context-card"
+          type="button"
+          :aria-label="`切换项目：${props.project?.name ?? props.thread?.projectId ?? 'Local workspace'}`"
+          @click="emit('select-panel', 'projects')"
+        >
+          <span class="project-context-copy">
+            <span class="eyebrow">CURRENT PROJECT</span>
+            <strong>{{ props.project?.name ?? props.thread?.projectId ?? "Local workspace" }}</strong>
+            <span class="project-context-summary">
+              <span>{{ props.explorers.length }} explorations</span>
+              <span v-if="props.project" :class="['project-context-status', { archived: props.project.status === 'ARCHIVED' }]">
+                <i /> {{ projectStatusLabel(props.project.status) }}
+              </span>
+            </span>
+            <small v-if="props.project?.repoRoot">{{ props.project.repoRoot }}</small>
+          </span>
+          <ArrowRight class="project-context-arrow" :size="16" aria-hidden="true" />
+        </button>
+        <template v-else>
+          <div class="eyebrow">PROJECTS</div>
+          <strong>{{ props.projects.length }} projects</strong>
+          <small>{{ props.project?.name ?? props.thread?.projectId ?? "Local workspace" }}</small>
+        </template>
       </header>
 
       <div v-if="props.panel === 'projects'" class="left-panel-scroll project-list">

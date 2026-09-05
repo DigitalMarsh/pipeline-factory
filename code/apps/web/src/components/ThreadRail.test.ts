@@ -68,10 +68,30 @@ describe("ThreadRail left workspace navigation", () => {
     const entries = [...mounted.host.querySelectorAll<HTMLButtonElement>("button[data-left-panel]")];
 
     expect(entries).toHaveLength(2);
-    expect(entries.map((entry) => entry.textContent?.trim())).toEqual(["项目", "探索"]);
-    expect(entries[0]?.getAttribute("aria-selected")).toBe("false");
-    expect(entries[1]?.getAttribute("aria-selected")).toBe("true");
+    expect(entries.map((entry) => entry.textContent?.trim())).toEqual(["探索", "项目"]);
+    expect(entries[0]?.getAttribute("aria-selected")).toBe("true");
+    expect(entries[1]?.getAttribute("aria-selected")).toBe("false");
     expect(mounted.host.querySelector(".explorer-list")).not.toBeNull();
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  it("shows the current project context and opens the project panel when selected", async () => {
+    const mounted = mountRail();
+    const contextCard = mounted.host.querySelector<HTMLButtonElement>("button.project-context-card");
+
+    expect(contextCard).not.toBeNull();
+    expect(contextCard?.textContent).toContain("Project 1");
+    expect(contextCard?.textContent).toContain("2 explorations");
+    expect(contextCard?.textContent).toContain("/tmp/project-1");
+    expect(contextCard?.textContent).toContain("Active");
+
+    contextCard?.click();
+    await nextTick();
+
+    expect(mounted.getSelectedPanel()).toBe("projects");
+    expect(mounted.host.querySelector(".project-list")).not.toBeNull();
 
     mounted.app.unmount();
     mounted.host.remove();
