@@ -4,7 +4,7 @@
 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { ArrowDown, ArrowUp, Check, CircleCheck, Connection, InfoFilled, MoreFilled, Promotion, Refresh, Right, VideoPause, VideoPlay, Warning } from "@element-plus/icons-vue";
+import { ArrowDown, ArrowUp, Check, CircleCheck, Connection, EditPen, InfoFilled, MoreFilled, Promotion, Refresh, Right, VideoPause, VideoPlay, View, Warning } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 import { api } from "../api";
@@ -23,6 +23,7 @@ import { createSseReplayGate } from "../utils/sseReplayGate";
 import ExplorerInputDialog from "../components/ExplorerInputDialog.vue";
 import ProjectSettingsDialog from "../components/ProjectSettingsDialog.vue";
 import ProjectCreateDialog from "../components/ProjectCreateDialog.vue";
+import ExplorerRenameDialog from "../components/ExplorerRenameDialog.vue";
 import scrollToLatestIcon from "../assets/scroll-to-latest.png";
 import { normalizePlanProjection } from "../utils/planProjection";
 import { parsePlanProtocolDisplay } from "../utils/planProtocolDisplay";
@@ -46,21 +47,26 @@ const projectSettingsOpen = ref(false);
 const projectSettingsProjectId = ref<string | null>(null);
 const activity = ref<ExplorerActivityItem[]>([]);
 const candidate = ref<Plan | null>(null);
+const confirmedPlans = ref<Plan[]>([]);
 const dispatched = ref<Plan[]>([]);
 const turns = ref<ExplorerTurn[]>([]);
 const draft = ref("");
 const drawerOpen = ref(false);
 const policyOpen = ref(false);
-const moreOpen = ref(false);
+const renameDialogOpen = ref(false);
+const renameSaving = ref(false);
+const renameError = ref<string | null>(null);
 const explorerPaused = ref(false);
 type LeftPanel = "projects" | "explorers";
 const leftPanel = ref<LeftPanel>("explorers");
-type ContextPanel = "candidate" | "dispatched" | "active" | "attention";
+type ContextPanel = "candidate" | "confirmed" | "dispatched" | "active" | "attention";
 const contextPanel = ref<ContextPanel>("candidate");
 const candidateEmptyOpen = ref(false);
 const candidateTitle = ref("New Explorer plan");
 const loading = ref(true);
 const error = ref<string | null>(null);
+const explorerLoading = ref(true);
+const explorerError = ref<string | null>(null);
 const busy = ref(false);
 const creatingExplorer = ref(false);
 const showArchivedExplorers = ref(false);
@@ -91,25 +97,28 @@ let activeRequestToken = 0;
 type TimelineNavItem = { key: string; label: string; detail: string; target: string };
 
 const candidateCount = computed(() => candidate.value ? 1 : 0);
+const confirmedCount = computed(() => confirmedPlans.value.length);
 const dispatchedCount = computed(() => dispatched.value.length);
 const activeRunCount = computed(() => dispatched.value.filter((plan) => plan.status === "IN_PROGRESS" || plan.status === "VERIFYING").length);
 const needsAttentionCount = computed(() => dispatched.value.filter((plan) => plan.status === "BLOCKED" || Boolean(plan.attentionReason)).length);
 const activePlans = computed(() => dispatched.value.filter((plan) => plan.status === "IN_PROGRESS" || plan.status === "VERIFYING"));
 const attentionPlans = computed(() => dispatched.value.filter((plan) => plan.status === "BLOCKED" || Boolean(plan.attentionReason)));
-const contextPanelTitle = computed(() => ({ candidate: "Plan candidates", dispatched: "Dispatched plans", active: "Active runs", attention: "Needs attention" } as const)[contextPanel.value]);
-const contextPanelEyebrow = computed(() => ({ candidate: "PLAN CANDIDATES", dispatched: "DISPATCHED PLANS", active: "ACTIVE RUNS", attention: "NEEDS ATTENTION" } as const)[contextPanel.value]);
+const contextPanelTitle = computed(() => ({ candidate: "Plan candidates", confirmed: "Confirmed plans", dispatched: "Dispatched plans", active: "Active runs", attention: "Needs attention" } as const)[contextPanel.value]);
+const contextPanelEyebrow = computed(() => ({ candidate: "PLAN CANDIDATES", confirmed: "CONFIRMED PLANS", dispatched: "DISPATCHED PLANS", active: "ACTIVE RUNS", attention: "NEEDS ATTENTION" } as const)[contextPanel.value]);
 const contextPanelDescription = computed(() => ({
   candidate: "Shape and review the next execution contract for this ExplorerThread.",
+  confirmed: "All plans confirmed from this ExplorerThread, including plans waiting to be dispatched.",
   dispatched: "Confirmed plans dispatched from this thread, with their current execution state.",
   active: "Runs currently moving through execution or verification for this thread.",
   attention: "Plans that need a decision or intervention before execution can continue.",
 } as const)[contextPanel.value]);
-const contextPanelCount = computed(() => contextPanel.value === "candidate" ? candidateCount.value : contextPanel.value === "dispatched" ? dispatchedCount.value : contextPanel.value === "active" ? activeRunCount.value : needsAttentionCount.value);
+const contextPanelCount = computed(() => contextPanel.value === "candidate" ? candidateCount.value : contextPanel.value === "confirmed" ? confirmedCount.value : contextPanel.value === "dispatched" ? dispatchedCount.value : contextPanel.value === "active" ? activeRunCount.value : needsAttentionCount.value);
 const contextMenuItems = computed(() => [
-  { key: "candidate" as ContextPanel, label: "Plan candidates", count: candidateCount.value, icon: Promotion },
-  { key: "dispatched" as ContextPanel, label: "Dispatched plans", count: dispatchedCount.value, icon: CircleCheck },
-  { key: "active" as ContextPanel, label: "Active runs", count: activeRunCount.value, icon: Connection },
-  { key: "attention" as ContextPanel, label: "Needs attention", count: needsAttentionCount.value, icon: Warning },
+  { key: "candidate" as ContextPanel, label: "Plan candidates", railLabel: "Candidate", entryClass: "context-entry-candidate", count: candidateCount.value, icon: Promotion },
+  { key: "confirmed" as ContextPanel, label: "Confirmed plans", railLabel: "Confirmed", entryClass: "context-entry-confirmed", count: confirmedCount.value, icon: Check },
+  { key: "dispatched" as ContextPanel, label: "Dispatched plans", railLabel: "Dispatched", entryClass: "context-entry-dispatched", count: dispatchedCount.value, icon: CircleCheck },
+  { key: "active" as ContextPanel, label: "Active runs", railLabel: "Active", entryClass: "context-entry-active", count: activeRunCount.value, icon: Connection },
+  { key: "attention" as ContextPanel, label: "Needs attention", railLabel: "Attention", entryClass: "context-entry-attention", count: needsAttentionCount.value, icon: Warning },
 ]);
 const inputCardRequest = computed(() => pendingInput.value ?? recoveryInput.value);
 const contextUsage = computed(() => formatContextUsage(turns.value));
@@ -132,7 +141,7 @@ const messageTimelineItems = computed<TimelineNavItem[]>(() => timelineItems.val
 }));
 const allPlans = computed<Plan[]>(() => {
   const unique = new Map<string, Plan>();
-  for (const plan of [candidate.value, ...dispatched.value]) if (plan) unique.set(planIdentity(plan), plan);
+  for (const plan of [candidate.value, ...confirmedPlans.value, ...dispatched.value]) if (plan) unique.set(planIdentity(plan), plan);
   return [...unique.values()];
 });
 const planTimelineItems = computed(() => buildPlanTimelineItems(allPlans.value, visibleActivity.value));
@@ -140,6 +149,49 @@ const syntheticPlanItems = computed(() => planTimelineItems.value.filter((item) 
 
 function setPolicyOpen(value: boolean) {
   policyOpen.value = value ? openPolicyPanel(policyOpen.value) : closePolicyPanel(policyOpen.value);
+}
+
+type ThreadActionCommand = "rename" | "policy" | "refresh";
+
+function openRenameDialog() {
+  if (!thread.value) return;
+  renameError.value = null;
+  renameDialogOpen.value = true;
+}
+
+function handleThreadAction(command: ThreadActionCommand) {
+  if (command === "rename") {
+    openRenameDialog();
+    return;
+  }
+  if (command === "policy") {
+    setPolicyOpen(true);
+    return;
+  }
+  void refreshThread();
+}
+
+async function renameThread(title: string) {
+  const currentThread = thread.value;
+  const requestProjectId = projectId.value;
+  if (!currentThread || !requestProjectId || renameSaving.value) return;
+  const requestThreadId = currentThread.id;
+  renameSaving.value = true;
+  renameError.value = null;
+  try {
+    const response = await api.renameExplorer(requestProjectId, requestThreadId, title);
+    if (!isCurrentProjectScope(requestProjectId) || thread.value?.id !== requestThreadId) return;
+    thread.value = response.explorer;
+    explorers.value = explorers.value.map((item) => item.id === requestThreadId ? response.explorer : item);
+    renameDialogOpen.value = false;
+    ElMessage.success("Thread renamed");
+  } catch (caught) {
+    if (!isCurrentProjectScope(requestProjectId) || thread.value?.id !== requestThreadId) return;
+    renameError.value = caught instanceof Error ? caught.message : "Thread rename failed";
+    ElMessage.error(renameError.value);
+  } finally {
+    if (isCurrentProjectScope(requestProjectId) && thread.value?.id === requestThreadId) renameSaving.value = false;
+  }
 }
 
 async function toggleExplorerPause() {
@@ -220,6 +272,7 @@ function isCurrentProjectScope(requestProjectId: string, requestToken = activeRe
 function resetThreadState() {
   thread.value = null;
   candidate.value = null;
+  confirmedPlans.value = [];
   dispatched.value = [];
   turns.value = [];
   activity.value = [];
@@ -232,7 +285,9 @@ function resetThreadState() {
   planProjectionVersion += 1;
   drawerOpen.value = false;
   policyOpen.value = false;
-  moreOpen.value = false;
+  renameDialogOpen.value = false;
+  renameError.value = null;
+  renameSaving.value = false;
   inputDialogOpen.value = false;
   explorerPaused.value = false;
   activeTimelineKey.value = "";
@@ -274,15 +329,17 @@ async function refreshPlanProjection(): Promise<void> {
   const requestToken = activeRequestToken;
   const requestVersion = ++planProjectionVersion;
   try {
-    const [explorerResponse, plansResponse, candidateResponse] = await Promise.all([
+    const [explorerResponse, plansResponse, confirmedResponse, candidateResponse] = await Promise.all([
       api.explorer(requestProjectId, explorerId),
       api.explorerPlans(requestProjectId, explorerId),
+      optional(() => api.explorerConfirmedPlans(requestProjectId, explorerId)),
       optional(() => api.explorerCandidate(requestProjectId, explorerId)),
     ]);
     if (!isCurrentProjectScope(requestProjectId, requestToken) || requestVersion !== planProjectionVersion || thread.value?.id !== explorerId) return;
     const projection = normalizePlanProjection(explorerResponse.explorer, candidateResponse?.plan ?? null, plansResponse.items);
     thread.value = projection.thread;
     candidate.value = projection.candidate;
+    confirmedPlans.value = confirmedResponse?.items ?? [];
     dispatched.value = projection.dispatched;
   } catch {
     // 事件流追赶期间保留上一次投影，避免切换或重连时页面短暂清空。
@@ -395,6 +452,7 @@ function jumpToLatest() {
 
 function syncHashPanel(hash: string) {
   if (hash === "#candidate") contextPanel.value = "candidate";
+  if (hash === "#confirmed") contextPanel.value = "confirmed";
   if (hash === "#attention") contextPanel.value = "attention";
   if (hash === "#candidate" && candidate.value) drawerOpen.value = true;
   if (hash === "#candidate" && !candidate.value) candidateEmptyOpen.value = true;
@@ -405,14 +463,19 @@ function selectContextPanel(selection: ContextPanel) {
 }
 
 function syncPanelStateFromRoute() {
-  const routeLeftPanel = route.query.leftPanel;
-  if (routeLeftPanel === "projects" || routeLeftPanel === "explorers") leftPanel.value = routeLeftPanel;
   const routeContextPanel = route.query.contextPanel;
-  if (routeContextPanel === "candidate" || routeContextPanel === "dispatched" || routeContextPanel === "active" || routeContextPanel === "attention") contextPanel.value = routeContextPanel;
+  if (routeContextPanel === "candidate" || routeContextPanel === "confirmed" || routeContextPanel === "dispatched" || routeContextPanel === "active" || routeContextPanel === "attention") contextPanel.value = routeContextPanel;
 }
 
 function panelStateQuery() {
-  return { leftPanel: leftPanel.value, contextPanel: contextPanel.value };
+  return { contextPanel: contextPanel.value };
+}
+
+function explorerRouteQuery(explorerId?: string) {
+  const query = { ...route.query };
+  delete query.leftPanel;
+  if (explorerId) query.explorerId = explorerId;
+  return { ...query, ...panelStateQuery() };
 }
 
 function planEventTime(value: string): string {
@@ -450,24 +513,35 @@ async function createCandidate() {
 
 async function createExplorer() {
   if (creatingExplorer.value) return;
+  const requestProjectId = projectId.value;
   creatingExplorer.value = true;
   closeEvents();
   requestScope.invalidate();
   resetThreadState();
   try {
-    const created = await api.createExplorer(projectId.value);
+    const created = await api.createExplorer(requestProjectId);
+    if (projectId.value !== requestProjectId) return;
     explorers.value = [created.explorer, ...explorers.value.filter((item) => item.id !== created.explorer.id)];
-    try { project.value = (await api.selectProjectExplorer(projectId.value, created.explorer.id)).project; } catch { /* Legacy API instances may not have a Project registry yet. */ }
-    await router.push({ path: route.path, query: { explorerId: created.explorer.id, ...panelStateQuery() }, hash: "" });
+    explorerError.value = null;
+    thread.value = created.explorer;
+    try { project.value = (await api.selectProjectExplorer(requestProjectId, created.explorer.id)).project; } catch { /* Legacy API instances may not have a Project registry yet. */ }
+    await router.push({ path: route.path, query: explorerRouteQuery(created.explorer.id), hash: "" });
+    const requestToken = requestScope.begin(requestProjectId);
+    activeRequestToken = requestToken;
+    loading.value = true;
+    error.value = null;
+    const loaded = await loadExplorerDetails(created.explorer, requestProjectId, requestToken);
+    if (loaded && mounted.value) connectEvents();
   } catch (caught) {
     ElMessage.error(caught instanceof Error ? `新建 Explorer 失败：${caught.message}` : "新建 Explorer 失败");
   } finally {
+    if (projectId.value === requestProjectId) loading.value = false;
     creatingExplorer.value = false;
   }
 }
 
 function switchProject(selectedProjectId: string) {
-  void router.push({ path: projectPathForModule("explore", selectedProjectId), query: panelStateQuery() });
+  void router.push({ path: projectPathForModule("explore", selectedProjectId), query: { contextPanel: contextPanel.value } });
 }
 
 function openProjectCreateDialog() {
@@ -477,7 +551,7 @@ function openProjectCreateDialog() {
 async function handleProjectCreated(createdProject: Project) {
   projectCreateOpen.value = false;
   projects.value = [createdProject, ...projects.value.filter((item) => item.id !== createdProject.id)];
-  await router.push({ path: projectPathForModule("explore", createdProject.id), query: panelStateQuery(), hash: "" });
+  await router.push({ path: projectPathForModule("explore", createdProject.id), query: { contextPanel: contextPanel.value }, hash: "" });
 }
 
 function openProjectSettingsDialog(selectedProjectId: string) {
@@ -532,7 +606,7 @@ async function selectExplorer(explorerId: string) {
   if (selected?.state !== "ARCHIVED") {
     try { project.value = (await api.selectProjectExplorer(projectId.value, explorerId)).project; } catch { /* Keep navigation available for legacy API instances. */ }
   }
-  await router.push({ path: route.path, query: { explorerId, ...panelStateQuery() }, hash: "" });
+  await router.push({ path: route.path, query: explorerRouteQuery(explorerId), hash: "" });
 }
 
 async function toggleExplorerArchive(explorerId: string) {
@@ -595,41 +669,19 @@ async function loadRateLimits() {
   }
 }
 
-/** 以当前路由参数重新加载 Project、Thread、Plan 和事件游标，是切换项目后的唯一入口。 */
-async function load(): Promise<boolean> {
-  const requestProjectId = projectId.value;
-  const requestToken = requestScope.begin(requestProjectId);
-  activeRequestToken = requestToken;
-  loading.value = true;
-  error.value = null;
+async function loadExplorerDetails(selected: ExplorerThread, requestProjectId: string, requestToken: number): Promise<boolean> {
   try {
-    const [healthResponse, projectListResponse, projectResponse, explorerResponse] = await Promise.all([optional(() => api.health()), optional(() => api.projects()), api.project(requestProjectId), api.explorers(requestProjectId)]);
-    if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
-    projects.value = projectListResponse?.items ?? [];
-    project.value = projectResponse.project;
-    if (healthResponse?.model) explorerModel.value = healthResponse.model;
-    explorers.value = explorerResponse.items;
-    const routeExplorerId = typeof route.query.explorerId === "string" ? route.query.explorerId : null;
-    let selected = routeExplorerId ? explorerResponse.items.find((item) => item.id === routeExplorerId) : undefined;
-    if (!routeExplorerId && projectResponse.project.currentExplorerThreadId) selected = explorerResponse.items.find((item) => item.id === projectResponse.project.currentExplorerThreadId);
-    if (!routeExplorerId && thread.value) selected = explorerResponse.items.find((item) => item.id === thread.value?.id);
-    if (!selected) selected = explorerResponse.items.find((item) => item.state !== "ARCHIVED" && item.contextMode === "FRESH" && item.messageCount === 0);
-    if (!selected) {
-      selected = (await api.createExplorer(requestProjectId)).explorer;
-      if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
-      explorers.value = [selected, ...explorers.value];
-      project.value = (await api.selectProjectExplorer(requestProjectId, selected.id)).project;
-      if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
-    }
-    const [plansResponse, turnsResponse, candidateResponse] = await Promise.all([
+    const [plansResponse, turnsResponse, confirmedResponse, candidateResponse] = await Promise.all([
       api.explorerPlans(requestProjectId, selected.id),
       api.getExplorerTurns(requestProjectId, selected.id),
-      optional(() => api.explorerCandidate(requestProjectId, selected!.id)),
+      optional(() => api.explorerConfirmedPlans(requestProjectId, selected.id)),
+      optional(() => api.explorerCandidate(requestProjectId, selected.id)),
     ]);
     if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
     const projection = normalizePlanProjection(selected, candidateResponse?.plan ?? null, plansResponse.items);
     thread.value = projection.thread;
     candidate.value = projection.candidate;
+    confirmedPlans.value = confirmedResponse?.items ?? [];
     dispatched.value = projection.dispatched;
     turns.value = turnsResponse.items;
     explorerEventSequence = turnsResponse.lastEventSequence ?? null;
@@ -654,20 +706,64 @@ async function load(): Promise<boolean> {
     return true;
   } catch (caught) {
     if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
+    error.value = caught instanceof Error ? caught.message : "Explorer 详情加载失败";
+    return false;
+  }
+}
+
+async function loadExplorerDirectory(requestProjectId: string, requestToken: number): Promise<boolean> {
+  const [healthResponse, projectListResponse, projectResponse, explorerResponse] = await Promise.all([optional(() => api.health()), optional(() => api.projects()), api.project(requestProjectId), api.explorers(requestProjectId)]);
+  if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
+  projects.value = projectListResponse?.items ?? [];
+  project.value = projectResponse.project;
+  if (healthResponse?.model) explorerModel.value = healthResponse.model;
+  explorers.value = explorerResponse.items;
+  explorerError.value = null;
+
+  const routeExplorerId = typeof route.query.explorerId === "string" ? route.query.explorerId : null;
+  let selected = routeExplorerId ? explorerResponse.items.find((item) => item.id === routeExplorerId) : undefined;
+  if (!routeExplorerId && projectResponse.project.currentExplorerThreadId) selected = explorerResponse.items.find((item) => item.id === projectResponse.project.currentExplorerThreadId);
+  if (!routeExplorerId && thread.value) selected = explorerResponse.items.find((item) => item.id === thread.value?.id);
+  if (!selected) selected = explorerResponse.items.find((item) => item.state !== "ARCHIVED" && item.contextMode === "FRESH" && item.messageCount === 0);
+  if (!selected) {
+    selected = (await api.createExplorer(requestProjectId)).explorer;
+    if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
+    explorers.value = [selected, ...explorers.value.filter((item) => item.id !== selected?.id)];
+    try { project.value = (await api.selectProjectExplorer(requestProjectId, selected.id)).project; } catch { /* Keep the directory usable for legacy API instances. */ }
+    if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
+  }
+  if (!selected) return false;
+  thread.value = selected;
+  const loaded = await loadExplorerDetails(selected, requestProjectId, requestToken);
+  if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
+  if (typeof route.query.explorerId !== "string" || route.query.explorerId !== selected.id) {
+    await router.replace({ path: route.path, query: explorerRouteQuery(selected.id), hash: route.hash });
+  }
+  return loaded;
+}
+
+/** 先加载 Project/Explorer 目录，再加载当前线程详情，避免详情失败清空已成功的目录。 */
+async function load(): Promise<boolean> {
+  const requestProjectId = projectId.value;
+  const requestToken = requestScope.begin(requestProjectId);
+  activeRequestToken = requestToken;
+  loading.value = true;
+  explorerLoading.value = true;
+  error.value = null;
+  explorerError.value = null;
+  try {
+    return await loadExplorerDirectory(requestProjectId, requestToken);
+  } catch (caught) {
+    if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
     project.value = projects.value.find((item) => item.id === requestProjectId) ?? null;
-    explorers.value = [];
-    candidate.value = null;
-    dispatched.value = [];
-    turns.value = [];
-    activity.value = [];
-    inputRequests.value = [];
-    pendingInput.value = null;
-    recoveryInput.value = null;
-    inputProgress.value = null;
-    error.value = caught instanceof Error ? caught.message : "Project 加载失败";
+    explorerError.value = caught instanceof Error ? caught.message : "Explorer 线程列表加载失败";
+    error.value = explorerError.value;
     return false;
   } finally {
-    if (isCurrentProjectScope(requestProjectId, requestToken)) loading.value = false;
+    if (isCurrentProjectScope(requestProjectId, requestToken)) {
+      loading.value = false;
+      explorerLoading.value = false;
+    }
   }
 }
 
@@ -859,12 +955,17 @@ async function confirmPlan() {
   if (!candidate.value || !candidate.value.id && !candidate.value.planId || busy.value) return;
   const id = candidate.value.id ?? candidate.value.planId!;
   busy.value = true;
-  try { candidate.value = (await api.confirmPlan(id)).plan; await refreshPlanProjection(); } catch (caught) { error.value = caught instanceof Error ? `Confirm plan 失败：${caught.message}` : "Confirm plan 失败"; } finally { busy.value = false; }
+  try {
+    candidate.value = (await api.confirmPlan(id)).plan;
+    await refreshPlanProjection();
+    if (contextPanel.value === "candidate") contextPanel.value = "confirmed";
+  } catch (caught) { error.value = caught instanceof Error ? `Confirm plan 失败：${caught.message}` : "Confirm plan 失败"; } finally { busy.value = false; }
 }
 
-async function enqueuePlan() {
-  if (!candidate.value || candidate.value.status !== "READY" || busy.value) return;
-  const id = candidate.value.id ?? candidate.value.planId!;
+async function enqueuePlan(plan: Plan | null = candidate.value) {
+  if (!plan || plan.status !== "READY" || busy.value) return;
+  const id = plan.id ?? plan.planId;
+  if (!id) return;
   busy.value = true;
   try {
     const queuedPlan = (await api.enqueuePlan(id)).plan;
@@ -872,6 +973,8 @@ async function enqueuePlan() {
     candidate.value = null;
     drawerOpen.value = false;
     await refreshPlanProjection();
+    contextPanel.value = "dispatched";
+    ElMessage.success("Plan 已进入调度队列");
   } catch (caught) {
     error.value = caught instanceof Error ? `Enqueue plan 失败：${caught.message}` : "Enqueue plan 失败";
   }
@@ -910,6 +1013,26 @@ function reloadExplorer() {
   resetThreadState();
   void load().then((loaded) => { if (loaded && mounted.value) connectEvents(); });
 }
+async function reloadSelectedExplorer() {
+  const requestProjectId = projectId.value;
+  const routeExplorerId = typeof route.query.explorerId === "string" ? route.query.explorerId : null;
+  const selected = routeExplorerId ? explorers.value.find((item) => item.id === routeExplorerId) : null;
+  if (!selected) {
+    reloadExplorer();
+    return;
+  }
+  closeEvents();
+  requestScope.invalidate();
+  resetThreadState();
+  thread.value = selected;
+  const requestToken = requestScope.begin(requestProjectId);
+  activeRequestToken = requestToken;
+  loading.value = true;
+  error.value = null;
+  const loaded = await loadExplorerDetails(selected, requestProjectId, requestToken);
+  if (loaded && mounted.value) connectEvents();
+  if (isCurrentProjectScope(requestProjectId, requestToken)) loading.value = false;
+}
 watch(() => route.hash, syncHashPanel);
 watch(candidate, () => syncHashPanel(route.hash));
 watch(projectId, (next, previous) => {
@@ -919,16 +1042,19 @@ watch(projectId, (next, previous) => {
   resetProjectState(next);
   void load().then((loaded) => { if (loaded && mounted.value) connectEvents(); });
 });
-watch(() => route.query.explorerId, () => { if (mounted.value) reloadExplorer(); });
+watch(() => route.query.explorerId, (routeExplorerId, previousExplorerId) => {
+  if (!mounted.value || routeExplorerId === previousExplorerId || routeExplorerId === thread.value?.id) return;
+  void reloadSelectedExplorer();
+});
 onMounted(() => { mounted.value = true; syncPanelStateFromRoute(); void load().then((loaded) => { if (loaded) connectEvents(); }); syncHashPanel(route.hash); });
 onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeEvents(); });
 </script>
 
 <template>
   <div class="console-layout">
-    <ThreadRail :panel="leftPanel" :thread="thread" :project="project" :projects="projects" :explorers="explorers" :show-archived="showArchivedExplorers" :explorer-action-id="explorerActionId" :creating-explorer="creatingExplorer" :project-action-id="projectActionId" @select-panel="leftPanel = $event" @create-explorer="createExplorer" @create-project="openProjectCreateDialog" @select-project="switchProject" @open-project="switchProject" @open-project-settings="openProjectSettingsDialog" @archive-project="toggleProjectArchive" @select-explorer="selectExplorer" @toggle-show-archived="showArchivedExplorers = $event" @archive-explorer="toggleExplorerArchive" />
+    <ThreadRail :panel="leftPanel" :thread="thread" :project="project" :projects="projects" :explorers="explorers" :show-archived="showArchivedExplorers" :explorer-action-id="explorerActionId" :explorer-loading="explorerLoading" :explorer-error="explorerError" :creating-explorer="creatingExplorer" :project-action-id="projectActionId" @select-panel="leftPanel = $event" @create-explorer="createExplorer" @create-project="openProjectCreateDialog" @select-project="switchProject" @open-project="switchProject" @open-project-settings="openProjectSettingsDialog" @archive-project="toggleProjectArchive" @select-explorer="selectExplorer" @toggle-show-archived="showArchivedExplorers = $event" @archive-explorer="toggleExplorerArchive" />
     <section class="conversation-column">
-      <div class="conversation-header"><div><div class="eyebrow"><span class="mode-dot" /> PLAN MODE · READ ONLY</div><h1>{{ explorerDisplayTitle(thread) }}</h1><p>Shape the work before anything changes in the repository.</p></div><div class="conversation-tools"><el-button circle plain :aria-label="explorerPaused ? 'Resume' : 'Pause'" @click="toggleExplorerPause"><VideoPlay v-if="explorerPaused" :size="16" /><VideoPause v-else :size="16" /></el-button><el-popover v-model:visible="moreOpen" placement="bottom-end" :width="250" trigger="click"><template #reference><el-button circle plain aria-label="More"><MoreFilled :size="16" /></el-button></template><div class="thread-more-menu"><div class="eyebrow">THREAD ACTIONS</div><p>Manage read-only exploration without changing the repository.</p><el-button text @click="setPolicyOpen(true); moreOpen = false">View policy</el-button><el-button text @click="moreOpen = false; refreshThread()">Refresh thread</el-button></div></el-popover></div></div>
+      <div class="conversation-header"><div><div class="eyebrow"><span class="mode-dot" /> PLAN MODE · READ ONLY</div><h1>{{ explorerDisplayTitle(thread) }}</h1><p>Shape the work before anything changes in the repository.</p></div><div class="conversation-tools"><el-button circle plain :aria-label="explorerPaused ? 'Resume' : 'Pause'" @click="toggleExplorerPause"><VideoPlay v-if="explorerPaused" :size="16" /><VideoPause v-else :size="16" /></el-button><el-dropdown placement="bottom-end" popper-class="thread-action-popper" :disabled="!thread" @command="handleThreadAction"><el-button circle plain aria-label="Thread actions" title="Thread actions"><MoreFilled :size="16" /></el-button><template #dropdown><el-dropdown-menu class="thread-action-menu"><li class="thread-action-menu-heading" role="presentation">THREAD ACTIONS</li><el-dropdown-item command="rename"><span class="thread-action-menu-item"><EditPen :size="16" /><span>Rename thread</span></span></el-dropdown-item><el-dropdown-item command="policy"><span class="thread-action-menu-item"><View :size="16" /><span>View policy</span></span></el-dropdown-item><el-dropdown-item command="refresh"><span class="thread-action-menu-item"><Refresh :size="16" /><span>Refresh thread</span></span></el-dropdown-item></el-dropdown-menu></template></el-dropdown></div></div>
       <div v-if="agentLoop" class="agent-loop-strip" role="status"><div class="agent-loop-summary"><span class="eyebrow">EXPLORER PROVIDER TURN LOOP</span><strong>{{ agentLoopLabel }}</strong></div><span class="agent-loop-budget">Provider Turns {{ agentLoop.stepCount }} / {{ agentLoop.maxSteps }} · Activities {{ agentLoop.diagnostics?.providerActivityCount ?? 0 }}</span><div v-if="agentLoopGateLabel || agentLoopTerminalLabel || agentLoopCompletionLabel" class="agent-loop-status"><span v-if="agentLoopGateLabel" class="agent-loop-diagnostic">{{ agentLoopGateLabel }}</span><span v-if="agentLoopTerminalLabel" class="agent-loop-terminal">{{ agentLoopTerminalLabel }}</span><span v-if="agentLoopCompletionLabel" class="agent-loop-complete">{{ agentLoopCompletionLabel }}</span></div><el-button v-if="agentLoop.state === 'RUNNING' || agentLoop.state === 'PAUSED'" class="agent-loop-action" size="small" plain @click="toggleExplorerPause">{{ agentLoop.state === 'PAUSED' ? 'Resume loop' : 'Pause loop' }}</el-button></div>
       <div v-if="explorationProgress.status === 'INCOMPLETE' && explorationProgress.lastAssessedTurnId" class="exploration-progress exploration-progress-incomplete" role="status"><Refresh :size="15" /><div><strong>方案仍在探索中</strong><span>本轮结束不代表设计完成，Explorer 正在继续确认：{{ explorationProgress.missing.join('、') }}</span></div></div>
       <div v-else-if="explorationProgress.status === 'READY'" class="exploration-progress exploration-progress-ready" role="status"><CircleCheck :size="15" /><div><strong>完整设计方案已生成</strong><span>请在生成它的 assistant 消息内查看完整契约，确认后再下发执行。</span></div></div>
@@ -986,17 +1112,18 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
       <div class="context-panel">
       <div class="context-header"><div><div class="eyebrow">THREAD CONTEXT</div><h2>{{ contextPanelTitle }}</h2></div><el-button text circle aria-label="Refresh" @click="refreshThread"><Refresh :size="16" /></el-button></div>
       <div class="context-panel-scroll">
-        <div class="context-panel-intro"><span class="context-panel-intro-icon"><Promotion v-if="contextPanel === 'candidate'" :size="17" /><CircleCheck v-else-if="contextPanel === 'dispatched'" :size="17" /><Connection v-else-if="contextPanel === 'active'" :size="17" /><Warning v-else :size="17" /></span><div><div class="eyebrow">{{ contextPanelEyebrow }} <span class="context-panel-count">{{ contextPanelCount }}</span></div><p>{{ contextPanelDescription }}</p></div></div>
+        <div class="context-panel-intro"><span class="context-panel-intro-icon"><Promotion v-if="contextPanel === 'candidate'" :size="17" /><Check v-else-if="contextPanel === 'confirmed'" :size="17" /><CircleCheck v-else-if="contextPanel === 'dispatched'" :size="17" /><Connection v-else-if="contextPanel === 'active'" :size="17" /><Warning v-else :size="17" /></span><div><div class="eyebrow">{{ contextPanelEyebrow }} <span class="context-panel-count">{{ contextPanelCount }}</span></div><p>{{ contextPanelDescription }}</p></div></div>
         <section v-if="contextPanel === 'candidate'" class="context-panel-content" aria-labelledby="candidate-panel-title"><div id="candidate-panel-title" class="context-section-title">PLAN CANDIDATE <span>{{ candidateCount }}</span></div><article v-if="candidate" class="context-plan-card"><div class="context-plan-card-head"><div class="mini-plan-title"><span class="mini-icon"><Promotion :size="16" /></span><div><strong>{{ candidate.title }}</strong><small>Revision {{ candidate.revision }}</small></div></div><el-tag size="small" type="warning" effect="light">{{ statusLabel(candidate.status) }}</el-tag></div><div class="context-plan-goal"><span>GOAL</span><p>{{ candidate.contract?.goal ?? candidate.goal ?? 'A complete, reviewable execution contract generated from this ExplorerThread.' }}</p></div><div class="candidate-stats context-plan-stats"><div><span>Tasks</span><strong>{{ candidate.contract?.tasks.length ?? candidate.tasks?.length ?? 0 }}</strong></div><div><span>Scope</span><strong>{{ candidate.contract?.include.length ?? candidate.include?.length ?? 0 }}</strong></div><div><span>Checks</span><strong>{{ candidate.contract?.verificationCommandIds.length ?? candidate.verificationCommands?.length ?? 0 }}</strong></div><div><span>Merge</span><strong class="risk-low">Human review</strong></div></div><div class="candidate-actions"><el-button @click="drawerOpen = true">View full plan <Right :size="15" /></el-button><el-button v-if="candidate.status === 'DRAFT'" type="primary" :loading="busy" @click="confirmPlan">Confirm plan <Check :size="15" /></el-button><el-button v-else-if="candidate.status === 'READY'" type="primary" :loading="busy" @click="enqueuePlan">Enqueue plan <ArrowDown :size="15" /></el-button></div></article><div v-else class="context-empty"><CircleCheck :size="24" /><p>No candidate plan</p><small>Use this panel to create a reviewable plan from the current ExplorerThread.</small><el-button plain @click="candidateEmptyOpen = true">Create candidate plan <Right :size="14" /></el-button></div></section>
+        <section v-else-if="contextPanel === 'confirmed'" class="context-panel-content" aria-labelledby="confirmed-panel-title"><div id="confirmed-panel-title" class="context-section-title">CONFIRMED PLANS <span>{{ confirmedCount }}</span></div><div v-if="confirmedPlans.length" class="context-plan-list" role="list"><article v-for="plan in confirmedPlans" :key="plan.planId ?? plan.id ?? plan.title" class="context-plan-row confirmed-plan-row" role="listitem"><div class="context-plan-row-head"><div class="mini-plan-title"><span class="mini-icon success"><Check :size="16" /></span><div><strong>{{ plan.title }}</strong><small>{{ plan.planId ?? plan.id }} · Revision {{ plan.revision }}</small></div></div><el-tag size="small" :type="plan.status === 'MERGED' ? 'success' : plan.status === 'BLOCKED' ? 'danger' : plan.status === 'IN_PROGRESS' || plan.status === 'VERIFYING' ? 'primary' : 'success'" effect="light">{{ statusLabel(plan.status) }}</el-tag></div><div class="context-plan-row-meta"><span>Source thread</span><code>{{ plan.sourceExplorerThreadId }}</code></div><div class="context-plan-row-meta"><span>Run</span><RouterLink v-if="planRunPath(plan)" :to="planRunPath(plan)!" class="context-plan-link">{{ plan.runId }} <Right :size="13" /></RouterLink><span v-else class="context-plan-muted">{{ plan.status === 'READY' ? 'Ready to enqueue' : 'Waiting for run' }}</span></div><div class="context-plan-row-footer"><span class="event-time">Last event {{ planEventTime(plan.lastEventAt) }}</span><el-button v-if="plan.status === 'READY'" size="small" type="primary" :loading="busy" @click="enqueuePlan(plan)">Enqueue plan <ArrowDown :size="14" /></el-button><span v-else class="context-plan-muted">Confirmed plan</span></div></article></div><div v-else class="context-empty"><Check :size="24" /><p>No confirmed plans</p><small>Plans appear here after you confirm them. Enqueue remains a separate step.</small></div></section>
         <section v-else-if="contextPanel === 'dispatched'" class="context-panel-content" aria-labelledby="dispatched-panel-title"><div id="dispatched-panel-title" class="context-section-title">DISPATCHED PLANS <span>{{ dispatchedCount }}</span></div><div v-if="dispatched.length" class="context-plan-list" role="list"><article v-for="plan in dispatched" :key="plan.planId ?? plan.id ?? plan.title" class="context-plan-row" role="listitem"><div class="context-plan-row-head"><div class="mini-plan-title"><span class="mini-icon success"><CircleCheck :size="16" /></span><div><strong>{{ plan.title }}</strong><small>{{ plan.planId ?? plan.id }} · Revision {{ plan.revision }}</small></div></div><el-tag size="small" :type="plan.status === 'MERGED' ? 'success' : plan.status === 'BLOCKED' ? 'danger' : plan.status === 'IN_PROGRESS' || plan.status === 'VERIFYING' ? 'primary' : 'warning'" effect="light">{{ statusLabel(plan.status) }}</el-tag></div><div class="context-plan-row-meta"><span>Source thread</span><code>{{ plan.sourceExplorerThreadId }}</code></div><div class="context-plan-row-meta"><span>Run</span><RouterLink v-if="planRunPath(plan)" :to="planRunPath(plan)!" class="context-plan-link">{{ plan.runId }} <Right :size="13" /></RouterLink><span v-else class="context-plan-muted">Waiting for run</span></div><div class="context-plan-row-footer"><span class="event-time">Last event {{ planEventTime(plan.lastEventAt) }}</span><RouterLink :to="planRunPath(plan) ?? projectPathForModule('execute', projectId)" class="context-plan-link">{{ planRunPath(plan) ? 'View run' : 'Open Plan Center' }} <Right :size="13" /></RouterLink></div></article></div><div v-else class="context-empty"><CircleCheck :size="24" /><p>No plans dispatched from this thread yet.</p><small>Confirmed plans will appear here and remain queryable even when the model is offline.</small><RouterLink :to="projectPathForModule('execute', projectId)" class="context-plan-link">Open Plan Center <Right :size="14" /></RouterLink></div></section>
         <section v-else-if="contextPanel === 'active'" class="context-panel-content" aria-labelledby="active-runs-panel-title"><div id="active-runs-panel-title" class="context-section-title">ACTIVE RUNS <span>{{ activeRunCount }}</span></div><div v-if="activePlans.length" class="context-plan-list" role="list"><article v-for="plan in activePlans" :key="plan.planId ?? plan.id ?? plan.title" class="context-plan-row active-run-row" role="listitem"><div class="context-plan-row-head"><div class="mini-plan-title"><span class="mini-icon"><Connection :size="16" /></span><div><strong>{{ plan.title }}</strong><small>{{ plan.planId ?? plan.id }} · Revision {{ plan.revision }}</small></div></div><el-tag size="small" type="primary" effect="light">{{ statusLabel(plan.status) }}</el-tag></div><div class="context-plan-row-meta"><span>Run</span><RouterLink v-if="planRunPath(plan)" :to="planRunPath(plan)!" class="context-plan-link">{{ plan.runId }} <Right :size="13" /></RouterLink><span v-else class="context-plan-muted">Run is being scheduled</span></div><div class="context-plan-row-footer"><span class="event-time">Last event {{ planEventTime(plan.lastEventAt) }}</span><RouterLink v-if="planRunPath(plan)" :to="planRunPath(plan)!" class="context-plan-link">Open run <Right :size="13" /></RouterLink></div></article></div><div v-else class="context-empty"><Connection :size="24" /><p>No active runs</p><small>Queued, verifying and running plans will appear here when execution starts.</small><RouterLink :to="projectPathForModule('execute', projectId)" class="context-plan-link">View all plans <Right :size="14" /></RouterLink></div></section>
         <section v-else-if="contextPanel === 'attention'" class="context-panel-content" aria-labelledby="attention-panel-title"><div id="attention-panel-title" class="context-section-title">NEEDS ATTENTION <span>{{ needsAttentionCount }}</span></div><div v-if="attentionPlans.length" class="context-plan-list" role="list"><article v-for="plan in attentionPlans" :key="plan.planId ?? plan.id ?? plan.title" class="context-plan-row attention-row" role="listitem"><div class="context-plan-row-head"><div class="mini-plan-title"><span class="mini-icon warning"><Warning :size="16" /></span><div><strong>{{ plan.title }}</strong><small>{{ plan.planId ?? plan.id }} · Revision {{ plan.revision }}</small></div></div><el-tag size="small" type="danger" effect="light">{{ statusLabel(plan.status) }}</el-tag></div><div class="context-plan-row-meta"><span>Reason</span><span class="context-attention-reason">{{ plan.attentionReason ?? 'This plan requires review before execution can continue.' }}</span></div><div class="context-plan-row-footer"><span class="event-time">Last event {{ planEventTime(plan.lastEventAt) }}</span><RouterLink :to="planRunPath(plan) ?? projectPathForModule('execute', projectId)" class="context-plan-link">{{ planRunPath(plan) ? 'Open run' : 'Open Plan Center' }} <Right :size="13" /></RouterLink></div></article></div><div v-else class="context-empty"><Warning :size="24" /><p>No items need attention</p><small>Blocked plans and plans with an explicit attention reason will appear here.</small><RouterLink :to="projectPathForModule('execute', projectId)" class="context-plan-link">View all plans <Right :size="14" /></RouterLink></div></section>
       </div>
       </div>
       <nav class="context-entry-rail" role="tablist" aria-label="Thread context sections">
-        <button v-for="item in contextMenuItems" :key="item.key" type="button" :class="['context-entry-button', { active: contextPanel === item.key }]" role="tab" :data-context="item.key" :aria-pressed="contextPanel === item.key" :aria-selected="contextPanel === item.key" :aria-label="item.label" @click="selectContextPanel(item.key)">
+        <button v-for="item in contextMenuItems" :key="item.key" type="button" :class="['context-entry-button', item.entryClass, { active: contextPanel === item.key }]" role="tab" :data-context="item.key" :aria-pressed="contextPanel === item.key" :aria-selected="contextPanel === item.key" :aria-label="item.label" @click="selectContextPanel(item.key)">
           <span class="context-entry-icon"><component :is="item.icon" :size="17" /></span>
-          <span class="context-entry-label">{{ item.key === 'candidate' ? 'Candidate' : item.key === 'dispatched' ? 'Dispatched' : item.key === 'active' ? 'Active' : 'Attention' }}</span>
+          <span class="context-entry-label">{{ item.railLabel }}</span>
           <span class="context-entry-count">{{ item.count }}</span>
         </button>
       </nav>
@@ -1005,6 +1132,7 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
     <ExplorerInputDialog ref="inputDialog" v-model="inputDialogOpen" :request="pendingInput" @submit="submitInput" @cancel="cancelInput" @progress="updateInputProgress" />
     <ProjectCreateDialog v-model="projectCreateOpen" @project-created="handleProjectCreated" />
     <ProjectSettingsDialog :model-value="projectSettingsOpen" :project-id="projectSettingsProjectId" @update:model-value="closeProjectSettings" @saved="handleProjectSettingsSaved" />
+    <ExplorerRenameDialog v-model="renameDialogOpen" :initial-title="thread?.title ?? ''" :saving="renameSaving" :error="renameError" @submit="renameThread" />
     <ExplorerPolicyDrawer :model-value="policyOpen" @update:model-value="setPolicyOpen" />
     <el-drawer :model-value="candidateEmptyOpen" direction="rtl" size="min(430px, 92vw)" :with-header="false" @update:model-value="setCandidateEmptyOpen">
       <div class="global-drawer-shell">

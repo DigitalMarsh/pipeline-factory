@@ -7,13 +7,27 @@ const explorerStylesSource = readFileSync(fileURLToPath(new URL("../styles.css",
 const threadRailSource = readFileSync(fileURLToPath(new URL("../components/ThreadRail.vue", import.meta.url)), "utf8");
 const projectCatalogSource = readFileSync(fileURLToPath(new URL("./ProjectCatalogView.vue", import.meta.url)), "utf8");
 
-describe("Explorer policy notice surface", () => {
-  it("does not render the redundant policy banner", () => {
+describe("Explorer thread actions", () => {
+  it("uses a real dropdown menu with rename, policy and refresh actions", () => {
     expect(explorerViewSource).not.toContain("thread-banner");
     expect(explorerViewSource).not.toContain("showThreadBanner");
     expect(explorerViewSource).not.toContain("dismissThreadBanner");
-    expect(explorerViewSource).toContain("Manage read-only exploration without changing the repository.");
+    expect(explorerViewSource).toContain("<el-dropdown");
+    expect(explorerViewSource).toContain('popper-class="thread-action-popper"');
+    expect(explorerViewSource).toContain('command="rename"');
+    expect(explorerViewSource).toContain('command="policy"');
+    expect(explorerViewSource).toContain('command="refresh"');
+    expect(explorerViewSource).toContain("ExplorerRenameDialog");
+    expect(explorerViewSource).toContain("api.renameExplorer");
+    expect(explorerViewSource).not.toContain("Manage read-only exploration without changing the repository.");
+    expect(explorerViewSource).not.toContain("thread-more-menu");
     expect(explorerViewSource).toContain("View policy");
+  });
+
+  it("provides focused styling hooks for the dropdown action rows", () => {
+    expect(explorerStylesSource).toContain(".thread-action-popper");
+    expect(explorerStylesSource).toContain(".thread-action-menu-item");
+    expect(explorerStylesSource).toContain("focus-visible");
   });
 });
 
@@ -56,6 +70,7 @@ describe("Explorer context panel wiring", () => {
     expect(explorerViewSource).not.toContain("context-panel-nav");
     expect(explorerViewSource).toContain("data-context");
     expect(explorerViewSource).toContain('key: "candidate"');
+    expect(explorerViewSource).toContain('key: "confirmed"');
     expect(explorerViewSource).toContain('key: "dispatched"');
     expect(explorerViewSource).toContain('key: "active"');
     expect(explorerViewSource).toContain('key: "attention"');
@@ -65,9 +80,13 @@ describe("Explorer context panel wiring", () => {
     expect(explorerViewSource).toContain("selectContextPanel");
     expect(explorerViewSource).toContain("context-panel-content");
     expect(explorerViewSource).toContain("PLAN CANDIDATE");
+    expect(explorerViewSource).toContain("CONFIRMED PLANS");
     expect(explorerViewSource).toContain("DISPATCHED PLANS");
     expect(explorerViewSource).toContain("ACTIVE RUNS");
     expect(explorerViewSource).toContain("NEEDS ATTENTION");
+    expect(explorerViewSource).toContain("confirmedPlans");
+    expect(explorerViewSource).toContain("api.explorerConfirmedPlans");
+    expect(explorerViewSource).toContain("contextPanel === 'confirmed'");
     expect(explorerViewSource).not.toContain(":context-selection=\"contextPanel\"");
     expect(explorerViewSource).not.toContain("@select-context=\"selectContextPanel\"");
   });
@@ -89,6 +108,22 @@ describe("Explorer context panel wiring", () => {
   it("keeps the right entry rail beside the content instead of inside its column", () => {
     expect(explorerViewSource).toMatch(/<div class="context-panel">[\s\S]*?<div class="context-panel-scroll">[\s\S]*?<\/div>\s*<\/div>\s*<nav class="context-entry-rail"/);
   });
+
+  it("uses a semantic style hook for the confirmed entry", () => {
+    expect(explorerViewSource).toContain("context-entry-confirmed");
+    expect(explorerStylesSource).toContain(".context-entry-confirmed .context-entry-icon");
+  });
+
+  it("exposes enqueue action for READY plans in the confirmed panel", () => {
+    const confirmedSection = explorerViewSource.match(/<section v-else-if="contextPanel === 'confirmed'"[\s\S]*?<\/section>/)?.[0] ?? "";
+    const enqueueSource = explorerViewSource.match(/async function enqueuePlan[\s\S]*?\n\}/)?.[0] ?? "";
+
+    expect(confirmedSection).toContain("plan.status === 'READY'");
+    expect(confirmedSection).toContain('@click="enqueuePlan(plan)"');
+    expect(confirmedSection).toContain("Enqueue plan");
+    expect(enqueueSource).toContain("plan: Plan | null = candidate.value");
+    expect(enqueueSource).toContain("const id = plan.id ?? plan.planId");
+  });
 });
 
 describe("Explorer panel state independence", () => {
@@ -96,14 +131,22 @@ describe("Explorer panel state independence", () => {
     expect(explorerViewSource).toContain('type LeftPanel = "projects" | "explorers"');
     expect(explorerViewSource).toContain('const leftPanel = ref<LeftPanel>("explorers")');
     expect(explorerViewSource).toContain('const contextPanel = ref<ContextPanel>("candidate")');
+    expect(explorerViewSource).toContain('const confirmedPlans = ref<Plan[]>([])');
     expect(explorerViewSource).toContain("function syncPanelStateFromRoute()");
     expect(explorerViewSource).toContain("function panelStateQuery()");
-    expect(explorerViewSource).toContain("query: panelStateQuery()");
+    expect(explorerViewSource).toContain("function explorerRouteQuery");
     expect(explorerViewSource).toContain("...panelStateQuery()");
 
     const resetSource = explorerViewSource.match(/function resetProjectState\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
     expect(resetSource).not.toContain("leftPanel.value");
     expect(resetSource).not.toContain('contextPanel.value = "candidate"');
+  });
+
+  it("keeps Explorer as the refresh default and removes left-panel persistence from navigation", () => {
+    expect(explorerViewSource).toContain('const leftPanel = ref<LeftPanel>("explorers")');
+    expect(explorerViewSource).toContain("function explorerRouteQuery");
+    expect(explorerViewSource).not.toContain("const routeLeftPanel = route.query.leftPanel");
+    expect(explorerViewSource).toMatch(/function panelStateQuery\(\) \{[\s\S]*?return \{ contextPanel: contextPanel\.value \};/);
   });
 });
 
@@ -139,17 +182,18 @@ describe("Explorer context panel dark theme", () => {
 
   it("keeps dark-theme interaction states and semantic entry colors", () => {
     expect(explorerStylesSource).toMatch(/\.context-entry-button:hover, \.context-entry-button:focus-visible \{[^}]*border-color: #4f86d7;[^}]*background: #1b3559;[^}]*color: #dcecff;/);
-    expect(explorerStylesSource).toContain(".context-entry-button:nth-child(2) .context-entry-icon { color: #70d5a4; }");
-    expect(explorerStylesSource).toContain(".context-entry-button:nth-child(3) .context-entry-icon { color: #75baf2; }");
-    expect(explorerStylesSource).toContain(".context-entry-button:nth-child(4) .context-entry-icon { color: #f19aa0; }");
+    expect(explorerStylesSource).toContain(".context-entry-confirmed .context-entry-icon { color: #70d5a4; }");
+    expect(explorerStylesSource).toContain(".context-entry-dispatched .context-entry-icon { color: #9ddcff; }");
+    expect(explorerStylesSource).toContain(".context-entry-active .context-entry-icon { color: #75baf2; }");
+    expect(explorerStylesSource).toContain(".context-entry-attention .context-entry-icon { color: #f19aa0; }");
   });
 });
 
 describe("Explorer thread switching", () => {
   it("reloads the current conversation when the selected thread changes", () => {
     expect(explorerViewSource).toContain("async function selectExplorer(explorerId: string)");
-    expect(explorerViewSource).toContain("query: { explorerId, ...panelStateQuery() }, hash: \"\" });");
-    expect(explorerViewSource).toContain("watch(() => route.query.explorerId, () => { if (mounted.value) reloadExplorer(); });");
+    expect(explorerViewSource).toContain("query: explorerRouteQuery(explorerId), hash: \"\" });");
+    expect(explorerViewSource).toContain("void reloadSelectedExplorer();");
     expect(explorerViewSource).toContain("api.getExplorerTurns(requestProjectId, selected.id)");
   });
 
@@ -172,6 +216,38 @@ describe("Explorer thread switching", () => {
     expect(explorerViewSource).toContain('const explorerActionId = ref<string | null>(null)');
     const resetSource = explorerViewSource.match(/function resetProjectState\(nextProjectId = projectId\.value\) \{[\s\S]*?\n\}/)?.[0] ?? "";
     expect(resetSource).toContain("showArchivedExplorers.value = false");
+  });
+
+  it("keeps the directory visible when a selected thread projection fails", () => {
+    expect(explorerViewSource).toContain("const explorerLoading = ref(true)");
+    expect(explorerViewSource).toContain("const explorerError = ref<string | null>(null)");
+    expect(explorerViewSource).toContain("async function loadExplorerDetails");
+    expect(explorerViewSource).toContain("async function loadExplorerDirectory");
+    const loadCatch = explorerViewSource.match(/async function loadExplorerDirectory[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(loadCatch).not.toContain("explorers.value = []");
+  });
+
+  it("loads route-selected threads without reloading the whole directory", () => {
+    expect(explorerViewSource).toContain("loadExplorerDetails");
+    expect(explorerViewSource).toContain("watch(() => route.query.explorerId");
+    expect(explorerViewSource).toContain("routeExplorerId === thread.value?.id");
+    expect(explorerViewSource).not.toContain("watch(() => route.query.explorerId, () => { if (mounted.value) reloadExplorer(); });");
+  });
+
+  it("keeps thread loading compatible with API instances without confirmed-plan projection", () => {
+    const detailSource = explorerViewSource.match(/async function loadExplorerDetails[\s\S]*?\n\}/)?.[0] ?? "";
+    const refreshSource = explorerViewSource.match(/async function refreshPlanProjection[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(detailSource).toContain("optional(() => api.explorerConfirmedPlans(requestProjectId, selected.id))");
+    expect(detailSource).toContain("confirmedResponse?.items ?? []");
+    expect(refreshSource).toContain("optional(() => api.explorerConfirmedPlans(requestProjectId, explorerId))");
+    expect(refreshSource).toContain("confirmedResponse?.items ?? []");
+  });
+
+  it("wires directory state into ThreadRail and creates a selected thread", () => {
+    expect(explorerViewSource).toContain(":explorer-loading=\"explorerLoading\"");
+    expect(explorerViewSource).toContain(":explorer-error=\"explorerError\"");
+    expect(explorerViewSource).toContain("explorers.value = [created.explorer");
+    expect(explorerViewSource).toContain("thread.value = created.explorer");
   });
 });
 
