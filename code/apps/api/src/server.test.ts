@@ -378,6 +378,20 @@ describe("Pipeline Factory v4 API", () => {
     expect(store.listRuns()).toEqual([]);
   });
 
+  it("does not expose an API for manually creating a CandidatePlan", async () => {
+    const store = new InMemoryPipelineStore();
+    createTestProject(store);
+    const plans = new PlanService(store);
+    plans.registerThread({ id: "manual-candidate-thread", projectId: "project-1", parentThreadId: null });
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+
+    const response = await app.inject({ method: "POST", url: "/api/v4/projects/project-1/explorers/manual-candidate-thread/candidate", payload: { title: "Manual plan" } });
+
+    expect(response.statusCode).toBe(404);
+    expect(store.listPlans()).toEqual([]);
+  });
+
   it("accepts ExplorerThread turns through the asynchronous v4 API", async () => {
     const store = new InMemoryPipelineStore();
     createTestProject(store);
@@ -431,6 +445,35 @@ describe("Pipeline Factory v4 API", () => {
     const response = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/run` });
     expect(response.statusCode).toBe(200);
     expect(response.json().run).toMatchObject({ planId: plan.id, status: "IN_PROGRESS" });
+  });
+
+  it("creates a new confirmed revision after configuration blocks dispatch", async () => {
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    const project = projects.create({ id: "project-configuration", name: "Configuration", repoRoot: "/repo/project-configuration", defaultBranch: "main", worktreeRoot: "/tmp/project-configuration-worktrees", settings: { commands: [] } });
+    const plans = new PlanService(store, projects);
+    plans.registerThread({ id: "configuration-thread", projectId: project.id, parentThreadId: null });
+    const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "configuration-thread", title: "Recover configuration" });
+    plans.confirm(plan.id, "user-1");
+    plans.enqueue(plan.id);
+    const scheduler = new Scheduler({ store, workspace: { create: async ({ runId }) => ({ path: `/tmp/${runId}`, branch: `factory/${runId}`, baseCommit: "abc" }), remove: async () => undefined }, hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })) });
+    const app = createApp({ store, scheduler, seed: false });
+    apps.push(app);
+
+    const dispatched = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/run` });
+    expect(dispatched.json()).toMatchObject({ run: null, dispatch: { status: "WAITING", waitReason: "NEEDS_CONFIGURATION" } });
+    const unresolved = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/revise-configuration`, payload: { actorId: "reviewer" } });
+    expect(unresolved.statusCode).toBe(409);
+    expect(unresolved.json()).toMatchObject({ code: "PLAN_CONFIGURATION_REVISION_FAILED", error: "RUN_PREREQUISITES_UNSATISFIED: missing registered commands: project.test, project.typecheck" });
+    const configured = projects.update(project.id, { expectedConfigVersion: project.configVersion, settings: { ...project.settings, commands: [{ commandId: "project.test", argv: ["true"] }, { commandId: "project.typecheck", argv: ["true"] }] } });
+
+    const revised = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/revise-configuration`, payload: { actorId: "reviewer" } });
+
+    expect(revised.statusCode, JSON.stringify(revised.json())).toBe(200);
+    expect(revised.json()).toMatchObject({ plan: { id: plan.id, revision: 2, status: "READY", queuedAt: null, dispatchedAt: null, runId: null } });
+    expect(store.getRevision(plan.id, 1)?.projectConfigVersion).toBe(project.configVersion);
+    expect(store.getRevision(plan.id, 2)?.projectConfigVersion).toBe(configured.configVersion);
+    expect(store.getDispatchState(plan.id)).toBeUndefined();
   });
 
   it("routes direct Run requests through the coordinator and returns WAITING when capacity is full", async () => {

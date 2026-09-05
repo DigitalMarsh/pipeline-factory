@@ -87,6 +87,21 @@ export class PlanDispatchCoordinator {
     return { plan: this.options.store.getPlan(plan.id) ?? plan, state: this.state(plan.id) as PlanDispatchState };
   }
 
+  /**
+   * 配置阻塞的派发只能基于当前 Project 配置创建新 Revision，不能改写旧的快照。
+   * 清除的是可重建的调度投影，原状态变化事件保留作审计。
+   */
+  reviseConfiguration(planId: string, actorId: string): CandidatePlan {
+    const plan = this.options.plans.get(planId);
+    const state = this.options.store.getDispatchState(planId);
+    if (plan.status !== "DISPATCHED" || plan.runId !== null || state?.status !== "WAITING" || state.waitReason !== "NEEDS_CONFIGURATION") {
+      throw new Error(`Plan ${planId} is not waiting for configuration`);
+    }
+    const revised = this.options.plans.reviseConfiguration(planId, actorId);
+    this.options.store.deleteDispatchState(planId);
+    return revised;
+  }
+
   /** 对所有 Project 的排队项执行一次稳定顺序的调度扫描。 */
   wake(): Promise<PlanDispatchState[]> {
     if (this.wakePromise) return this.wakePromise;

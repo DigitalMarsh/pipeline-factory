@@ -4,12 +4,12 @@ import { computed, onMounted, ref, watch } from "vue";
 import { ArrowRight, CircleCheck, Clock, Document, Refresh, Search, Warning } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { api } from "../api";
-import type { Plan } from "../types";
+import type { Plan, Project } from "../types";
 import { canTerminateRun } from "../utils/runControls";
 import { parseMissingRunCommands } from "../utils/runPrerequisites";
 
-const props = defineProps<{ projectId: string }>();
-const emit = defineEmits<{ (event: "plans-changed"): void; (event: "count", value: number): void }>();
+const props = defineProps<{ projectId: string; project: Project | null }>();
+const emit = defineEmits<{ (event: "plans-changed"): void; (event: "configuration-revised"): void; (event: "configure-commands", projectId: string): void; (event: "count", value: number): void }>();
 const plans = ref<Plan[]>([]);
 const search = ref("");
 const status = ref("all");
@@ -40,6 +40,18 @@ function formatTime(value: string): string {
 
 function canTerminate(plan: Plan): boolean {
   return Boolean(plan.runId) && canTerminateRun(plan.status);
+}
+
+function configurationBlockedCommands(plan: Plan): string[] {
+  if (plan.dispatch?.waitReason !== "NEEDS_CONFIGURATION") return [];
+  return parseMissingRunCommands(plan.dispatch.lastError ?? "");
+}
+
+function canCreateConfigurationRevision(plan: Plan): boolean {
+  const missingCommands = configurationBlockedCommands(plan);
+  if (!missingCommands.length || !props.project) return false;
+  const registered = new Set(props.project.settings.commands.map((command) => command.commandId));
+  return missingCommands.every((commandId) => registered.has(commandId));
 }
 
 async function load(): Promise<void> {
@@ -100,7 +112,25 @@ async function terminateRun(plan: Plan): Promise<void> {
   }
 }
 
+async function reviseConfiguration(plan: Plan): Promise<void> {
+  const planId = plan.planId ?? plan.id;
+  if (!planId || plan.status !== "DISPATCHED" || plan.runId || plan.dispatch?.status !== "WAITING" || plan.dispatch.waitReason !== "NEEDS_CONFIGURATION" || !canCreateConfigurationRevision(plan) || actionPlanId.value) return;
+  actionPlanId.value = planId;
+  try {
+    await api.revisePlanConfiguration(planId);
+    await load();
+    emit("plans-changed");
+    emit("configuration-revised");
+    ElMessage.success("已基于当前配置创建新 Revision，请重新 Enqueue 并 Start run");
+  } catch (caught) {
+    ElMessage.error(caught instanceof Error ? caught.message : "Create updated revision 失败");
+  } finally {
+    actionPlanId.value = null;
+  }
+}
+
 watch(() => props.projectId, () => { void load(); });
+watch(() => props.project?.configVersion, () => { void load(); });
 onMounted(() => { void load(); });
 </script>
 
@@ -124,9 +154,10 @@ onMounted(() => { void load(); });
       <article v-for="plan in filtered" :key="plan.planId ?? plan.id ?? plan.title" class="plan-center-card">
         <div class="plan-center-card-head"><span class="mini-icon"><Document :size="15" /></span><div><strong>{{ plan.title }}</strong><small>{{ plan.planId ?? plan.id }} · Rev {{ plan.revision }}</small></div><el-tag size="small" :type="tagType(plan)" effect="light">{{ label(plan.status) }}</el-tag></div>
         <div class="plan-center-card-meta"><span>Source</span><code>{{ plan.sourceExplorerThreadId }}</code></div>
-        <div class="plan-center-card-meta"><span>Run</span><RouterLink v-if="plan.runId" :to="`/projects/${projectId}/runs/${plan.runId}`">{{ plan.runId }} <ArrowRight :size="12" /></RouterLink><span v-else>{{ plan.status === "ENQUEUED" ? "Ready to start" : plan.dispatch?.waitReason ?? "—" }}</span></div>
+        <div class="plan-center-card-meta"><span>Run</span><RouterLink v-if="plan.runId" :to="`/projects/${projectId}/runs/${plan.runId}`">{{ plan.runId }} <ArrowRight :size="12" /></RouterLink><span v-else>{{ plan.status === "ENQUEUED" ? "Ready to start" : plan.dispatch?.waitReason === "NEEDS_CONFIGURATION" ? "Needs configuration" : plan.dispatch?.waitReason ?? "—" }}</span></div>
+        <div v-if="plan.dispatch?.waitReason === 'NEEDS_CONFIGURATION'" class="plan-center-notice"><Warning :size="13" />Missing verification commands: {{ configurationBlockedCommands(plan).join(', ') }}</div>
         <div v-if="plan.attentionReason" class="plan-center-attention"><Warning :size="13" />{{ plan.attentionReason }}</div>
-        <footer><span><Clock :size="12" />{{ formatTime(plan.lastEventAt) }}</span><el-button v-if="plan.status === 'ENQUEUED'" size="small" type="primary" :loading="actionPlanId === (plan.planId ?? plan.id)" @click="startRun(plan)">Start run <ArrowRight :size="13" /></el-button><el-button v-else-if="canTerminate(plan)" size="small" type="danger" plain :loading="actionPlanId === plan.runId" @click="terminateRun(plan)">Terminate</el-button></footer>
+        <footer><span><Clock :size="12" />{{ formatTime(plan.lastEventAt) }}</span><div class="plan-center-actions"><template v-if="plan.dispatch?.waitReason === 'NEEDS_CONFIGURATION'"><el-button size="small" plain @click="emit('configure-commands', plan.projectId)">Configure verification commands</el-button><el-button v-if="canCreateConfigurationRevision(plan)" size="small" type="primary" :loading="actionPlanId === (plan.planId ?? plan.id)" @click="reviseConfiguration(plan)">Create updated revision</el-button></template><el-button v-else-if="plan.status === 'ENQUEUED'" size="small" type="primary" :loading="actionPlanId === (plan.planId ?? plan.id)" @click="startRun(plan)">Start run <ArrowRight :size="13" /></el-button><el-button v-else-if="canTerminate(plan)" size="small" type="danger" plain :loading="actionPlanId === plan.runId" @click="terminateRun(plan)">Terminate</el-button></div></footer>
       </article>
       <div v-if="!loading && filtered.length === 0" class="context-empty"><CircleCheck :size="24" /><p>No project plans</p><small>Enqueued and later plans across this Project appear here.</small></div>
     </div>
@@ -134,5 +165,5 @@ onMounted(() => { void load(); });
 </template>
 
 <style scoped>
-.plan-center-panel { display: grid; gap: 12px; min-width: 0; }.plan-center-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) 100px auto; gap: 7px; align-items: center; }.plan-center-search { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 0 8px; border: 1px solid #334764; border-radius: 6px; background: #13223a; color: #8fa5c3; }.plan-center-search input { width: 100%; min-width: 0; height: 29px; border: 0; outline: 0; background: transparent; color: #e8f1ff; font-size: 11px; }.plan-center-search input::placeholder { color: #7185a3; }.plan-center-toolbar :deep(.el-select__wrapper) { min-height: 30px; border: 1px solid #334764; background: #13223a; box-shadow: none; }.plan-center-toolbar :deep(.el-select__selected-item), .plan-center-toolbar :deep(.el-select__placeholder) { color: #bdd0ea; font-size: 10px; }.plan-center-toolbar :deep(.el-button) { color: #9fc8ff; }.plan-center-notice { display: flex; align-items: flex-start; gap: 6px; padding: 8px; border: 1px solid #765d38; border-radius: 6px; background: #2d2730; color: #f0cf8e; font-size: 10px; line-height: 1.45; }.plan-center-list { display: grid; gap: 8px; min-height: 110px; }.plan-center-card { display: grid; gap: 8px; padding: 10px; border: 1px solid #2d4260; border-radius: 8px; background: #14233a; }.plan-center-card-head { display: grid; grid-template-columns: 27px minmax(0, 1fr) auto; gap: 7px; align-items: center; }.plan-center-card-head .mini-icon { display: grid; place-items: center; width: 27px; height: 27px; border-radius: 6px; background: #234970; color: #9bd6ff; }.plan-center-card-head div { min-width: 0; }.plan-center-card-head strong, .plan-center-card-head small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.plan-center-card-head strong { color: #eff6ff; font-size: 12px; }.plan-center-card-head small { margin-top: 3px; color: #90a6c4; font: 9px ui-monospace, monospace; }.plan-center-card-meta { display: grid; grid-template-columns: 54px minmax(0, 1fr); gap: 8px; color: #a5b8d0; font-size: 10px; }.plan-center-card-meta > span:first-child { color: #7188a8; }.plan-center-card-meta code, .plan-center-card-meta a, .plan-center-card-meta > span:last-child { overflow: hidden; color: #b9dfff; text-overflow: ellipsis; white-space: nowrap; }.plan-center-card-meta a { display: inline-flex; align-items: center; gap: 2px; }.plan-center-attention { display: flex; gap: 5px; color: #f0b3b7; font-size: 10px; line-height: 1.4; }.plan-center-card footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 8px; border-top: 1px solid #293c58; color: #8ea4c0; font-size: 9px; }.plan-center-card footer > span { display: inline-flex; align-items: center; gap: 4px; }.plan-center-card footer :deep(.el-button) { font-size: 10px; }
+.plan-center-panel { display: grid; gap: 12px; min-width: 0; }.plan-center-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) 100px auto; gap: 7px; align-items: center; }.plan-center-search { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 0 8px; border: 1px solid #334764; border-radius: 6px; background: #13223a; color: #8fa5c3; }.plan-center-search input { width: 100%; min-width: 0; height: 29px; border: 0; outline: 0; background: transparent; color: #e8f1ff; font-size: 11px; }.plan-center-search input::placeholder { color: #7185a3; }.plan-center-toolbar :deep(.el-select__wrapper) { min-height: 30px; border: 1px solid #334764; background: #13223a; box-shadow: none; }.plan-center-toolbar :deep(.el-select__selected-item), .plan-center-toolbar :deep(.el-select__placeholder) { color: #bdd0ea; font-size: 10px; }.plan-center-toolbar :deep(.el-button) { color: #9fc8ff; }.plan-center-notice { display: flex; align-items: flex-start; gap: 6px; padding: 8px; border: 1px solid #765d38; border-radius: 6px; background: #2d2730; color: #f0cf8e; font-size: 10px; line-height: 1.45; }.plan-center-list { display: grid; gap: 8px; min-height: 110px; }.plan-center-card { display: grid; gap: 8px; padding: 10px; border: 1px solid #2d4260; border-radius: 8px; background: #14233a; }.plan-center-card-head { display: grid; grid-template-columns: 27px minmax(0, 1fr) auto; gap: 7px; align-items: center; }.plan-center-card-head .mini-icon { display: grid; place-items: center; width: 27px; height: 27px; border-radius: 6px; background: #234970; color: #9bd6ff; }.plan-center-card-head div { min-width: 0; }.plan-center-card-head strong, .plan-center-card-head small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.plan-center-card-head strong { color: #eff6ff; font-size: 12px; }.plan-center-card-head small { margin-top: 3px; color: #90a6c4; font: 9px ui-monospace, monospace; }.plan-center-card-meta { display: grid; grid-template-columns: 54px minmax(0, 1fr); gap: 8px; color: #a5b8d0; font-size: 10px; }.plan-center-card-meta > span:first-child { color: #7188a8; }.plan-center-card-meta code, .plan-center-card-meta a, .plan-center-card-meta > span:last-child { overflow: hidden; color: #b9dfff; text-overflow: ellipsis; white-space: nowrap; }.plan-center-card-meta a { display: inline-flex; align-items: center; gap: 2px; }.plan-center-attention { display: flex; gap: 5px; color: #f0b3b7; font-size: 10px; line-height: 1.4; }.plan-center-card footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 8px; border-top: 1px solid #293c58; color: #8ea4c0; font-size: 9px; }.plan-center-card footer > span { display: inline-flex; align-items: center; gap: 4px; }.plan-center-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }.plan-center-card footer :deep(.el-button) { font-size: 10px; }
 </style>

@@ -14,6 +14,7 @@ const coordinatorModule = domain as unknown as {
     verify?: (run: domain.Run, revision: domain.PlanRevisionV2) => Promise<domain.VerificationRun>;
   }) => {
     dispatch(planId: string): Promise<{ plan: domain.CandidatePlan; state: domain.PlanDispatchState }>;
+    reviseConfiguration(planId: string, actorId: string): domain.CandidatePlan;
     wake(): Promise<domain.PlanDispatchState[]>;
     state(planId: string): domain.PlanDispatchState | undefined;
   };
@@ -121,6 +122,30 @@ describe("PlanDispatchCoordinator", () => {
     store.saveRun({ ...firstRun, status: "MERGE_READY" });
     const resumed = (await coordinator.wake()).find((state) => state.planId === second.id);
     expect(resumed).toMatchObject({ status: "RUNNING", waitReason: null });
+  });
+
+  it("revises a configuration-blocked dispatch with the current Project snapshot", async () => {
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    const project = projects.create({ id: "project-1", name: "Project", repoRoot: "/repo/project-1", defaultBranch: "main", worktreeRoot: "/tmp/project-1-worktrees", settings: { commands: [] } });
+    const plans = new PlanService(store, projects);
+    const plan = createPlan(store, plans, "Configuration recovery");
+    const coordinator = new coordinatorModule.PlanDispatchCoordinator({ store, plans, scheduler: schedulerFor(store) });
+
+    const waiting = await dispatch(coordinator, plans, plan.id);
+    expect(waiting).toMatchObject({ plan: { status: "DISPATCHED", revision: 1, runId: null }, state: { status: "WAITING", waitReason: "NEEDS_CONFIGURATION" } });
+    const originalRevision = plans.getRevision(plan.id, 1);
+
+    expect(() => coordinator.reviseConfiguration(plan.id, "reviewer")).toThrow("RUN_PREREQUISITES_UNSATISFIED: missing registered commands: project.test, project.typecheck");
+    expect(plans.get(plan.id)).toMatchObject({ revision: 1, status: "DISPATCHED" });
+
+    projects.update(project.id, { expectedConfigVersion: project.configVersion, settings: { ...project.settings, commands: [{ commandId: "project.test", argv: ["true"] }, { commandId: "project.typecheck", argv: ["true"] }] } });
+    const revised = coordinator.reviseConfiguration(plan.id, "reviewer");
+
+    expect(revised).toMatchObject({ id: plan.id, revision: 2, status: "READY", queuedAt: null, dispatchedAt: null, runId: null, attentionReason: null });
+    expect(originalRevision.projectConfigSnapshot?.settings.commands).toEqual([]);
+    expect(plans.getRevision(plan.id, 2).projectConfigSnapshot?.settings.commands.map((command) => command.commandId)).toEqual(["project.test", "project.typecheck"]);
+    expect(store.getDispatchState(plan.id)).toBeUndefined();
   });
 
   it("persists PlanDispatchState across SQLite restart", async () => {

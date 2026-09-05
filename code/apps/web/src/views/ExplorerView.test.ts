@@ -6,6 +6,7 @@ const explorerViewSource = readFileSync(fileURLToPath(new URL("./ExplorerView.vu
 const explorerStylesSource = readFileSync(fileURLToPath(new URL("../styles.css", import.meta.url)), "utf8");
 const threadRailSource = readFileSync(fileURLToPath(new URL("../components/ThreadRail.vue", import.meta.url)), "utf8");
 const projectCatalogSource = readFileSync(fileURLToPath(new URL("./ProjectCatalogView.vue", import.meta.url)), "utf8");
+const planCenterSource = readFileSync(fileURLToPath(new URL("../components/PlanCenterPanel.vue", import.meta.url)), "utf8");
 
 describe("Explorer thread actions", () => {
   it("uses a real dropdown menu with rename, policy and refresh actions", () => {
@@ -145,6 +146,18 @@ describe("Explorer context panel wiring", () => {
     expect(explorerViewSource).toContain('<PlanCenterPanel :project-id="projectId"');
     expect(explorerViewSource).toContain("plan.dispatchedAt !== null");
   });
+
+  it("makes configuration-blocked dispatched plans recoverable", () => {
+    const dispatchedSection = explorerViewSource.match(/<section v-else-if="contextPanel === 'dispatched'"[\s\S]*?<\/section>/)?.[0] ?? "";
+
+    expect(dispatchedSection).toContain("NEEDS_CONFIGURATION");
+    expect(dispatchedSection).toContain("Configure verification commands");
+    expect(dispatchedSection).toContain("Create updated revision");
+    expect(explorerViewSource).toContain("api.revisePlanConfiguration");
+    expect(planCenterSource).toContain("NEEDS_CONFIGURATION");
+    expect(planCenterSource).toContain("Create updated revision");
+    expect(planCenterSource).toContain("Configure verification commands");
+  });
 });
 
 describe("Explorer panel state independence", () => {
@@ -172,6 +185,17 @@ describe("Explorer panel state independence", () => {
 });
 
 describe("Explorer candidate action layout", () => {
+  it("does not offer manual candidate creation when the thread has no candidate", () => {
+    const candidateSection = explorerViewSource.match(/<section v-if="contextPanel === 'candidate'"[\s\S]*?<\/section>/)?.[0] ?? "";
+
+    expect(candidateSection).toContain("No candidate plan");
+    expect(candidateSection).not.toContain("Create candidate plan");
+    expect(explorerViewSource).not.toContain("candidateEmptyOpen");
+    expect(explorerViewSource).not.toContain("candidateTitle");
+    expect(explorerViewSource).not.toContain("createCandidate");
+    expect(explorerViewSource).not.toContain("api.createExplorerCandidate");
+  });
+
   it("keeps right-panel plan actions on one equal-width row", () => {
     expect(explorerStylesSource).toMatch(/\.context-plan-card \.candidate-actions \{[^}]*flex-wrap: nowrap;/);
     expect(explorerStylesSource).toMatch(/\.context-plan-card \.candidate-actions \.el-button \{[^}]*flex: 1 1 0;[^}]*min-width: 0;[^}]*margin-left: 0;/);

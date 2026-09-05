@@ -6,6 +6,10 @@ describe("run prerequisites", () => {
     expect(parseMissingRunCommands("RUN_PREREQUISITES_UNSATISFIED: missing registered commands: project.test, project.typecheck")).toEqual(["project.test", "project.typecheck"]);
   });
 
+  it("extracts missing registered command ids from a scheduler waiting reason", () => {
+    expect(parseMissingRunCommands("Missing registered commands: project.test, project.typecheck")).toEqual(["project.test", "project.typecheck"]);
+  });
+
   it("ignores unrelated errors", () => {
     expect(parseMissingRunCommands("Run cannot be started")).toEqual([]);
   });

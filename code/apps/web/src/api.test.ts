@@ -19,6 +19,41 @@ describe("api request errors", () => {
     fetchSpy.mockRestore();
   });
 
+  it("loads confirmed plans for an Explorer through the dedicated projection", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ items: [{ planId: "plan-1", status: "READY" }] }), { status: 200 }));
+
+    await expect(api.explorerConfirmedPlans("project-1", "explorer-1")).resolves.toMatchObject({ items: [{ planId: "plan-1", status: "READY" }] });
+    expect(fetchSpy).toHaveBeenCalledWith("/api/v4/projects/project-1/explorers/explorer-1/confirmed-plans", { headers: {} });
+
+    fetchSpy.mockRestore();
+  });
+
+  it("renames an Explorer through the existing typed endpoint", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ explorer: { id: "explorer-1", title: "Renamed thread" } }), { status: 200 }));
+
+    await expect(api.renameExplorer("project-1", "explorer-1", "Renamed thread")).resolves.toMatchObject({ explorer: { title: "Renamed thread" } });
+    expect(fetchSpy).toHaveBeenCalledWith("/api/v4/projects/project-1/explorers/explorer-1/rename", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "Renamed thread" }),
+    });
+
+    fetchSpy.mockRestore();
+  });
+
+  it("creates a configuration revision through the Plan recovery endpoint", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ plan: { id: "plan-1", revision: 2, status: "READY" } }), { status: 200 }));
+
+    await expect(api.revisePlanConfiguration("plan-1")).resolves.toMatchObject({ plan: { revision: 2, status: "READY" } });
+    expect(fetchSpy).toHaveBeenCalledWith("/api/v4/plans/plan-1/revise-configuration", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ actorId: "local-user" }),
+    });
+
+    fetchSpy.mockRestore();
+  });
+
   it("preserves the HTTP status for a missing Run", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ error: "Run not found" }), { status: 404 }));
 

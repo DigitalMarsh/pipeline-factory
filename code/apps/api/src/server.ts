@@ -735,15 +735,6 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     return { plan: candidate };
   });
 
-  app.post("/api/v4/projects/:projectId/explorers/:explorerId/candidate", async (request, reply) => {
-    const params = projectExplorerParams.safeParse(request.params);
-    const body = z.object({ title: z.string().trim().min(1).max(200) }).safeParse(request.body ?? {});
-    if (!params.success || !body.success) return reply.code(400).send({ error: "Candidate plan title is required" });
-    const explorer = store.getThread(params.data.explorerId);
-    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
-    return reply.code(201).send({ plan: plans.createCandidatePlan({ projectId: explorer.projectId, sourceExplorerThreadId: explorer.id, title: body.data.title }) });
-  });
-
   app.post("/api/v4/projects/:projectId/explorer-thread/turns", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
     const body = v4TurnBody.safeParse(request.body ?? {});
@@ -871,6 +862,21 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       return { plan: plans.enqueue(params.data.planId), dispatch: null };
     } catch (error) {
       return reply.code(409).send({ error: error instanceof Error ? error.message : "Plan cannot be enqueued" });
+    }
+  });
+
+  app.post("/api/v4/plans/:planId/revise-configuration", async (request, reply) => {
+    const params = planIdParams.safeParse(request.params);
+    const body = actorBody.safeParse(request.body ?? {});
+    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid configuration revision request" });
+    if (!dispatchCoordinator) return reply.code(503).send({ error: "Scheduler is not configured for this API instance" });
+    try {
+      const plan = plans.get(params.data.planId);
+      if (ensurePlanProject(plan.projectId, reply, true) === null) return;
+      return { plan: dispatchCoordinator.reviseConfiguration(plan.id, body.data.actorId) };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Plan configuration cannot be revised";
+      return reply.code(409).send({ code: "PLAN_CONFIGURATION_REVISION_FAILED", error: message });
     }
   });
 

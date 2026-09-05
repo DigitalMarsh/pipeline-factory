@@ -352,6 +352,7 @@ export type DomainEvent = {
     | "plan.confirmed"
     | "plan.enqueued"
     | "plan.dispatched"
+    | "plan.configuration.revised"
     | "plan.dispatch.state.changed"
     | "change.proposal.created"
     | "change.proposal.approved"
@@ -585,6 +586,8 @@ export type PipelineStore = {
   listPlans(): CandidatePlan[];
   updatePlan(plan: CandidatePlan): CandidatePlan;
   saveDispatchState(state: PlanDispatchState): PlanDispatchState;
+  /** 删除当前调度投影；历史状态变更仍保留在领域事件中。 */
+  deleteDispatchState(planId: string): void;
   getDispatchState(planId: string): PlanDispatchState | undefined;
   listDispatchStates(projectId?: string): PlanDispatchState[];
   saveRevision(revision: PlanRevisionV2): PlanRevisionV2;
@@ -889,6 +892,10 @@ export class InMemoryPipelineStore implements PipelineStore {
   saveDispatchState(state: PlanDispatchState): PlanDispatchState {
     this.dispatchStates.set(state.planId, state);
     return state;
+  }
+
+  deleteDispatchState(planId: string): void {
+    this.dispatchStates.delete(planId);
   }
 
   getDispatchState(planId: string): PlanDispatchState | undefined {
@@ -1509,6 +1516,10 @@ export class SqlitePipelineStore implements PipelineStore {
       ON CONFLICT(plan_id) DO UPDATE SET project_id=excluded.project_id, status=excluded.status, wait_reason=excluded.wait_reason, queued_at=excluded.queued_at, run_id=excluded.run_id, attempt=excluded.attempt, updated_at=excluded.updated_at, last_error=excluded.last_error
     `).run(state.planId, state.projectId, state.status, state.waitReason, state.queuedAt, state.runId, state.attempt, state.updatedAt, state.lastError);
     return this.getDispatchState(state.planId) as PlanDispatchState;
+  }
+
+  deleteDispatchState(planId: string): void {
+    this.database.prepare("DELETE FROM plan_dispatch_states WHERE plan_id = ?").run(planId);
   }
 
   getDispatchState(planId: string): PlanDispatchState | undefined {
@@ -2253,6 +2264,57 @@ export class PlanService {
     const dispatchedAt = this.store.now();
     const updated = this.store.updatePlan({ ...plan, status: "DISPATCHED", dispatchedAt, lastEventAt: dispatchedAt });
     this.store.appendEvent({ type: "plan.dispatched", aggregateId: planId, payload: { dispatchedAt } });
+    return updated;
+  }
+
+  /**
+   * 使用当前 Project 配置冻结一份新 Revision，修复尚未创建 Run 的配置阻塞派发。
+   * 原 Revision 与原调度事件保持不变；新的 Revision 必须再次经过 Enqueue 与 Dispatch。
+   */
+  reviseConfiguration(planId: string, confirmedBy: string): CandidatePlan {
+    const plan = this.get(planId);
+    if (plan.status !== "DISPATCHED" || plan.runId !== null) {
+      throw new Error(`Plan ${planId} is not eligible for a configuration revision`);
+    }
+    validatePlanContract(plan.contract);
+    this.validatePlanDependencies(plan);
+    const project = this.store.getProject(plan.projectId);
+    if (!project) throw new Error(`Project ${plan.projectId} not found`);
+    const projectConfigSnapshot = this.projects.snapshot(project.id);
+    const registeredCommands = new Set(projectConfigSnapshot.settings.commands.map((command) => command.commandId));
+    const missingCommands = plan.contract.verificationCommandIds.filter((commandId) => !registeredCommands.has(commandId));
+    if (missingCommands.length) {
+      throw new Error(`RUN_PREREQUISITES_UNSATISFIED: missing registered commands: ${missingCommands.join(", ")}`);
+    }
+
+    const confirmedAt = this.store.now();
+    const revisionNumber = plan.revision + 1;
+    const revision = freezeRevision({
+      planId: plan.id,
+      revision: revisionNumber,
+      contract: plan.contract,
+      artifactHash: `sha256:${createHash("sha256").update(JSON.stringify({ contract: plan.contract, projectConfigSnapshot })).digest("hex")}`,
+      confirmedBy,
+      confirmedAt,
+      sourceExplorerThreadId: plan.sourceExplorerThreadId,
+      projectConfigVersion: projectConfigSnapshot.configVersion,
+      projectConfigHash: projectConfigSnapshot.configHash,
+      projectConfigSnapshot,
+    });
+    this.store.saveRevision(revision);
+    const updated = this.store.updatePlan({
+      ...plan,
+      revision: revisionNumber,
+      status: "READY",
+      confirmedBy,
+      confirmedAt,
+      queuedAt: null,
+      dispatchedAt: null,
+      runId: null,
+      attentionReason: null,
+      lastEventAt: confirmedAt,
+    });
+    this.store.appendEvent({ type: "plan.configuration.revised", aggregateId: planId, payload: { confirmedBy, fromRevision: plan.revision, revision: revisionNumber, projectConfigVersion: projectConfigSnapshot.configVersion, projectConfigHash: projectConfigSnapshot.configHash } });
     return updated;
   }
 
