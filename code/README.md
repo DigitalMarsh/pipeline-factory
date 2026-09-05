@@ -19,6 +19,7 @@
 ./stopApi.sh
 ./startWeb.sh
 ./stopWeb.sh
+./status.sh
 ```
 
 脚本会把 PID 和日志保存到项目根目录的 `.runtime/`，其中 API 日志为 `.runtime/api.log`，Web 日志为 `.runtime/web.log`。

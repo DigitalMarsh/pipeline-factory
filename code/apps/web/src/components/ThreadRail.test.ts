@@ -1,8 +1,13 @@
 // @vitest-environment jsdom
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createApp, defineComponent, h, nextTick, ref } from "vue";
 import { describe, expect, it } from "vitest";
 import ThreadRail from "./ThreadRail.vue";
 import type { ExplorerThread, Project } from "../types";
+
+const styles = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../styles.css"), "utf8");
 
 function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplorer = false, projectActionId: string | null = null, includeArchived = false, showArchived = false) {
   const host = document.createElement("div");
@@ -173,6 +178,10 @@ describe("ThreadRail left workspace navigation", () => {
 
     mounted.app.unmount();
     mounted.host.remove();
+  });
+
+  it("keeps Explorer rows from shrinking when the thread list overflows", () => {
+    expect(styles).toMatch(/\.explorer-list-row\s*\{[^}]*flex:\s*0 0 auto;/s);
   });
 
   it("hides archived Explorers by default and toggles them into the list", async () => {

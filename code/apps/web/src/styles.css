@@ -349,7 +349,7 @@ a { color: inherit; text-decoration: none; }
 .explorer-archive-toggle { flex: 0 0 auto; padding: 3px 5px; border: 1px solid #31557e; border-radius: 4px; background: transparent; color: #8fc5f0; cursor: pointer; font: inherit; font-size: 8px; line-height: 1.2; }
 .explorer-archive-toggle:hover, .explorer-archive-toggle:focus-visible { border-color: #5ca9e5; background: #193758; color: #dcecff; outline: 0; }
 .explorer-archive-toggle[aria-pressed="true"] { border-color: #4c9cf0; background: #24548b; color: #fff; }
-.explorer-list-row { overflow: hidden; border: 1px solid transparent; border-radius: 8px; }
+.explorer-list-row { flex: 0 0 auto; overflow: hidden; border: 1px solid transparent; border-radius: 8px; }
 .explorer-list-row.active { border-color: #4b91df; box-shadow: inset 0 0 0 1px rgba(113, 200, 255, .16); }
 .explorer-list-row .explorer-list-item { border-radius: 8px 8px 0 0; }
 .explorer-list-actions { display: flex; justify-content: flex-end; padding: 0 8px 6px; background: #16253d; }
