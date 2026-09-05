@@ -19,4 +19,13 @@ describe("global project selector", () => {
     expect(appSource).not.toContain('to="/workbench"');
     expect(appSource).not.toContain("topbar-workbench");
   });
+
+  it("binds the topbar status to a live API health check", () => {
+    expect(appSource).toContain("api.health()");
+    expect(appSource).toContain("setInterval");
+    expect(appSource).toContain("clearInterval");
+    expect(appSource).toContain("Refresh API health");
+    expect(appSource).not.toContain("<i /> Healthy</span>");
+    expect(appSource).not.toContain("Factory is healthy");
+  });
 });

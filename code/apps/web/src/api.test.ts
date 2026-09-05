@@ -7,6 +7,18 @@ import { describe, expect, it, vi } from "vitest";
 import { api } from "./api";
 
 describe("api request errors", () => {
+  it("loads the API health endpoint and preserves health request failures", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(JSON.stringify({ status: "ok", model: "gpt-5.6-luna" }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: "API unavailable" }), { status: 500 }));
+
+    await expect(api.health()).resolves.toEqual({ status: "ok", model: "gpt-5.6-luna" });
+    expect(fetchSpy).toHaveBeenNthCalledWith(1, "/health", { headers: {} });
+    await expect(api.health()).rejects.toMatchObject({ name: "ApiRequestError", status: 500, message: "API unavailable" });
+
+    fetchSpy.mockRestore();
+  });
+
   it("preserves the HTTP status for a missing Run", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ error: "Run not found" }), { status: 404 }));
 

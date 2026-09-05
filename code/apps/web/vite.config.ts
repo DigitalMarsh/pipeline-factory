@@ -14,6 +14,7 @@ const factoryConfig = JSON.parse(readFileSync(fileURLToPath(new URL("../../confi
 };
 const apiHost = factoryConfig.server?.host ?? "127.0.0.1";
 const apiPort = Number(process.env.PIPELINE_FACTORY_API_PORT ?? factoryConfig.server?.port ?? 4310);
+const apiTarget = `http://${apiHost}:${apiPort}`;
 
 export default defineConfig({
   plugins: [vue()],
@@ -23,6 +24,6 @@ export default defineConfig({
   server: {
     host: factoryConfig.web?.host ?? "127.0.0.1",
     port: factoryConfig.web?.port ?? 5173,
-    proxy: { "/api": `http://${apiHost}:${apiPort}` },
+    proxy: { "/api": apiTarget, "/health": apiTarget },
   },
 });

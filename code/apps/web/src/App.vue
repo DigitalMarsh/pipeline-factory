@@ -3,18 +3,47 @@
   维护提示：交互状态和数据流变化时，应同步更新组件边界说明。
 -->
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import { Bell, Help, Search } from "@element-plus/icons-vue";
+import { api } from "./api";
 import { projectModuleForPath } from "./utils/projectRoutes";
+import { apiHealthVisual, classifyApiHealth, type ApiHealthState } from "./utils/apiHealth";
 
 const helpOpen = ref(false);
 const notificationsOpen = ref(false);
+const apiHealthState = ref<ApiHealthState>("checking");
+const apiHealthInFlight = ref(false);
+let apiHealthTimer: ReturnType<typeof setInterval> | null = null;
+
+const apiHealth = computed(() => apiHealthVisual(apiHealthState.value));
+
+async function checkApiHealth(): Promise<void> {
+  if (apiHealthInFlight.value) return;
+  apiHealthInFlight.value = true;
+  apiHealthState.value = "checking";
+  try {
+    apiHealthState.value = classifyApiHealth(await api.health());
+  } catch {
+    apiHealthState.value = "unavailable";
+  } finally {
+    apiHealthInFlight.value = false;
+  }
+}
 
 function workspaceViewKey(viewRoute: { path: string; params: Record<string, unknown> }): string {
   const projectId = typeof viewRoute.params.projectId === "string" ? viewRoute.params.projectId : "catalog";
   const module = projectModuleForPath(viewRoute.path);
   return module === "explore" ? module : module ? `${module}:${projectId}` : viewRoute.path;
 }
+
+onMounted(() => {
+  void checkApiHealth();
+  apiHealthTimer = setInterval(() => { void checkApiHealth(); }, 15_000);
+});
+
+onUnmounted(() => {
+  if (apiHealthTimer !== null) clearInterval(apiHealthTimer);
+});
 
 </script>
 
@@ -24,7 +53,11 @@ function workspaceViewKey(viewRoute: { path: string; params: Record<string, unkn
       <div class="brand-mark"><span class="brand-dot" /> Pipeline Factory <small>v4</small></div>
       <div class="topbar-actions">
         <div class="global-search"><Search :size="15" /><span>Search plans, runs, threads</span><kbd>⌘ K</kbd></div>
-        <el-tooltip content="System healthy"><span class="system-health"><i /> Healthy</span></el-tooltip>
+        <el-tooltip :content="apiHealth.tooltip">
+          <button type="button" class="system-health" :class="`system-health-${apiHealth.tone}`" aria-label="Refresh API health" :aria-busy="apiHealthState === 'checking'" :disabled="apiHealthInFlight" @click="checkApiHealth">
+            <i /> {{ apiHealth.label }}
+          </button>
+        </el-tooltip>
         <el-button text circle aria-label="Help" @click="helpOpen = true"><Help :size="17" /></el-button>
         <el-button text circle aria-label="Notifications" @click="notificationsOpen = true"><Bell :size="17" /></el-button>
         <div class="avatar">LS</div>
@@ -44,7 +77,7 @@ function workspaceViewKey(viewRoute: { path: string; params: Record<string, unkn
     <el-drawer v-model="notificationsOpen" direction="rtl" size="min(430px, 92vw)" :with-header="false">
       <div class="global-drawer-shell">
         <div class="drawer-header"><div><div class="eyebrow">ACTIVITY CENTER</div><h2>Notifications</h2></div><el-button text circle aria-label="Close notifications" @click="notificationsOpen = false">×</el-button></div>
-        <div class="notification-item"><span class="notification-dot success" /><div><strong>Factory is healthy</strong><p>API and web workspace are available.</p><small>Now</small></div></div>
+        <div class="notification-item"><span class="notification-dot" :class="`notification-dot-${apiHealth.tone}`" /><div><strong>{{ apiHealth.label }}</strong><p>{{ apiHealth.tooltip }}</p><small>Live</small></div></div>
         <div class="notification-item"><span class="notification-dot" /><div><strong>Explorer policy active</strong><p>Write, shell, test and commit tools are disabled in Plan Mode.</p><small>Now</small></div></div>
         <div class="notification-empty">No additional notifications.</div>
       </div>
