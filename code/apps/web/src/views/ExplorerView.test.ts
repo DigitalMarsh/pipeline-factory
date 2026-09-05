@@ -62,6 +62,15 @@ describe("Explorer project selector wiring", () => {
 });
 
 describe("Explorer context panel wiring", () => {
+  it("keeps the current panel count in the compact context header", () => {
+    expect(explorerViewSource).toContain('class="context-header-title"');
+    expect(explorerViewSource).toContain('class="context-header-count"');
+    expect(explorerViewSource).toMatch(/class="context-header-count"[^>]*>\{\{ contextPanelCount \}\}/);
+    expect(explorerViewSource).not.toContain('class="context-panel-intro"');
+    expect(explorerStylesSource).toContain(".context-header-title");
+    expect(explorerStylesSource).toContain(".context-header-count");
+  });
+
   it("connects the right entry rail to an independent dynamic panel", () => {
     expect(explorerViewSource).toContain("contextPanel");
     expect(explorerViewSource).toContain("context-panel-shell");
