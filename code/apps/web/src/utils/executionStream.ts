@@ -20,6 +20,7 @@ export type ExecutionStreamItem = {
   status: "RUNNING" | "COMPLETED" | "WAITING" | "FAILED" | "INFO";
   occurredAt: string;
   sequence: number;
+  repetitionCount?: number;
 };
 
 /** 将 ExecutionThread journal 映射成类似 Explorer 对话的模型/活动消息流。 */
@@ -31,7 +32,19 @@ export function projectExecutionJournal(journal: ExecutionJournalEntry[], thread
   const flushModel = () => {
     if (!pendingModelText) return;
     const content = humanizeModelOutput(pendingModelText);
-    if (content) items.push({ id: `execution-model-${pendingModelSequence}`, kind: "model", role: "assistant", title: content.title, content: content.body, detail: "", status: "COMPLETED", occurredAt: pendingModelOccurredAt, sequence: pendingModelSequence });
+    if (content) {
+      const previousIndex = [...items].map((item) => item.kind).lastIndexOf("model");
+      const previous = previousIndex >= 0 ? items[previousIndex] : undefined;
+      const onlyTaskProgressBetween = previousIndex >= 0 && items.slice(previousIndex + 1).every((item) => item.kind === "activity" && item.title === "Task progress");
+      if (previous && onlyTaskProgressBetween && previous.title === "Executor report" && content.title === "Executor report" && sameReportProgress(previous.content, content.body)) {
+        previous.content = content.body;
+        previous.sequence = pendingModelSequence;
+        previous.occurredAt = pendingModelOccurredAt;
+        previous.repetitionCount = (previous.repetitionCount ?? 1) + 1;
+      } else {
+        items.push({ id: `execution-model-${pendingModelSequence}`, kind: "model", role: "assistant", title: content.title, content: content.body, detail: "", status: "COMPLETED", occurredAt: pendingModelOccurredAt, sequence: pendingModelSequence });
+      }
+    }
     pendingModelText = "";
   };
   for (const entry of journal) {
@@ -122,4 +135,9 @@ function humanizeModelOutput(content: string): { title: string; body: string } |
   } catch {
     return { title: "Executor", body: content.slice(0, start).trim() || "Execution report could not be parsed." };
   }
+}
+
+function sameReportProgress(previous: string, next: string): boolean {
+  const progress = (value: string) => value.match(/Completed (\d+) task\(s\) · (\d+) changed path\(s\)$/)?.slice(1).join(":") ?? null;
+  return progress(previous) !== null && progress(previous) === progress(next);
 }

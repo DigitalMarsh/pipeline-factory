@@ -64,6 +64,17 @@ describe("ExecutorAgent", () => {
     });
   });
 
+  it("accepts structured active and blocked task facts", () => {
+    expect(parseExecutorReport(`<pipeline-factory-execution-report>${JSON.stringify({
+      completedTaskIds: ["task-1"],
+      changedPaths: [],
+      report: "Task 1 completed; task 2 is blocked",
+      activeTaskId: "task-2",
+      blockedTaskId: "task-3",
+      blockedReason: "No Git remote",
+    })}</pipeline-factory-execution-report>`)).toMatchObject({ activeTaskId: "task-2", blockedTaskId: "task-3", blockedReason: "No Git remote" });
+  });
+
   it("checks the actual Git diff instead of trusting the model scope claim", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "pipeline-scope-"));
     try {
@@ -131,6 +142,7 @@ describe("ExecutorAgent", () => {
     expect(loop.state).toBe("COMPLETED");
     expect(store.getRun(run.id)?.status).toBe("READY_FOR_VERIFY");
     expect(store.getExecutionThread(run.executionThreadId)?.journal.map((entry) => entry.type)).toEqual(expect.arrayContaining(["MODEL_OUTPUT", "TASK_PROGRESS"]));
+    expect(store.getExecutionThread(run.executionThreadId)?.journal.some((entry) => entry.payload.action === "task-status" && entry.payload.completedTaskIds?.includes("task-1"))).toBe(true);
   });
 
   it("does not treat a model completion message as task completion", async () => {

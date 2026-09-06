@@ -269,7 +269,7 @@ async function confirmMerged() {
           <article v-for="item in executionMessages" :key="item.id" :data-sequence="item.sequence" :class="['execution-message', `execution-message-${item.kind}`, { failed: item.status === 'FAILED', waiting: item.status === 'WAITING', running: item.status === 'RUNNING' }]">
             <div class="execution-message-avatar">{{ item.role === 'user' ? 'LS' : item.kind === 'model' ? 'EX' : '·' }}</div>
             <div class="execution-message-body">
-              <div class="execution-message-meta"><strong>{{ item.title }}</strong><span v-if="item.status !== 'INFO'" class="agent-chip">{{ item.status }}</span><span>{{ new Date(item.occurredAt).toLocaleTimeString('zh-CN') }}</span></div>
+              <div class="execution-message-meta"><strong>{{ item.title }}</strong><span v-if="item.status !== 'INFO'" class="agent-chip">{{ item.status }}</span><span v-if="item.repetitionCount && item.repetitionCount > 1">×{{ item.repetitionCount }} updates</span><span>{{ new Date(item.occurredAt).toLocaleTimeString('zh-CN') }}</span></div>
               <p v-if="item.kind === 'model' || item.kind === 'guidance'" :aria-live="item.status === 'RUNNING' ? 'polite' : undefined">{{ item.content }}<span v-if="item.status === 'RUNNING'" class="processing-dots" aria-hidden="true"><i /><i /><i /></span></p>
               <p v-else class="execution-activity-detail">{{ item.detail }}</p>
             </div>
