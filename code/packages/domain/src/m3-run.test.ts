@@ -4,7 +4,7 @@
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  */
 import { describe, expect, it } from "vitest";
-import { InMemoryPipelineStore, LifecycleHookRunner, LocalGitWorktreeAdapter, PlanService, ProjectService, Scheduler } from "./index.js";
+import { InMemoryPipelineStore, LifecycleHookRunner, LocalGitWorktreeAdapter, PlanService, ProjectService, Scheduler, type RunBranchNameGenerator } from "./index.js";
 
 describe("Scheduler and ExecutionThread", () => {
   it("fails before creating a worktree when frozen verification commands are not registered", async () => {
@@ -51,6 +51,54 @@ describe("Scheduler and ExecutionThread", () => {
       type: "TASK_PROGRESS",
       payload: { action: "legacy_plan_revision" },
     });
+  });
+
+  it("uses the generated readable branch for the Run and Worktree", async () => {
+    const store = new InMemoryPipelineStore();
+    const planService = new PlanService(store);
+    const plan = planService.createCandidatePlan({ projectId: "project-branch-name", sourceExplorerThreadId: "thread-branch-name", title: "Vue introduction" });
+    planService.confirm(plan.id, "user-1");
+    planService.enqueue(plan.id);
+    planService.dispatch(plan.id);
+    let workspaceInput: { runId: string; branch: string } | undefined;
+    const branchNameGenerator: RunBranchNameGenerator = { generate: async () => "vue-intro" };
+    const scheduler = new Scheduler({
+      store,
+      branchNameGenerator,
+      workspace: {
+        create: async (input) => {
+          workspaceInput = { runId: input.runId, branch: input.branch };
+          return { path: `/tmp/${input.branch.split("/").at(-1)}`, branch: input.branch, baseCommit: input.baseCommit };
+        },
+        remove: async () => undefined,
+      },
+      hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
+    });
+
+    const run = await scheduler.start(plan.id);
+
+    expect(run.branch).toMatch(/^factory\/\d{8}-vue-intro$/);
+    expect(workspaceInput).toMatchObject({ runId: run.id, branch: run.branch });
+    expect(run.workspacePath).toBe(`/tmp/${run.branch.split("/").at(-1)}`);
+  });
+
+  it("falls back to change when branch summary generation fails", async () => {
+    const store = new InMemoryPipelineStore();
+    const planService = new PlanService(store);
+    const plan = planService.createCandidatePlan({ projectId: "project-branch-fallback", sourceExplorerThreadId: "thread-branch-fallback", title: "中文需求" });
+    planService.confirm(plan.id, "user-1");
+    planService.enqueue(plan.id);
+    planService.dispatch(plan.id);
+    const scheduler = new Scheduler({
+      store,
+      branchNameGenerator: { generate: async () => { throw new Error("model unavailable"); } },
+      workspace: { create: async (input) => ({ path: `/tmp/${input.runId}`, branch: input.branch, baseCommit: input.baseCommit }), remove: async () => undefined },
+      hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
+    });
+
+    const run = await scheduler.start(plan.id);
+
+    expect(run.branch).toMatch(/^factory\/\d{8}-change$/);
   });
 
   it("persists every bounded lifecycle hook attempt", async () => {
@@ -117,9 +165,9 @@ describe("Scheduler and ExecutionThread", () => {
   it("validates the base commit before creating a real Git worktree", async () => {
     const commands: string[][] = [];
     const adapter = new LocalGitWorktreeAdapter({ projectRoot: "/repo", worktreeRoot: "/worktrees", runGit: async (args) => { commands.push(args); return { exitCode: 0, stdout: "abc", stderr: "" }; } });
-    await adapter.create({ projectId: "project-1", runId: "run-1", branch: "factory/run-1", baseCommit: "abc" });
-    await adapter.remove({ path: "/worktrees/run-1", branch: "factory/run-1", baseCommit: "abc" });
-    expect(commands).toEqual([["rev-parse", "--verify", "abc"], ["worktree", "add", "-b", "factory/run-1", "/worktrees/run-1", "abc"], ["worktree", "remove", "--force", "/worktrees/run-1"]]);
+    await adapter.create({ projectId: "project-1", runId: "run-1", branch: "factory/20260906-vue-intro", baseCommit: "abc" });
+    await adapter.remove({ path: "/worktrees/20260906-vue-intro", branch: "factory/20260906-vue-intro", baseCommit: "abc" });
+    expect(commands).toEqual([["rev-parse", "--verify", "abc"], ["worktree", "add", "-b", "factory/20260906-vue-intro", "/worktrees/20260906-vue-intro", "abc"], ["worktree", "remove", "--force", "/worktrees/20260906-vue-intro"]]);
   });
 
   it("uses the persisted run status after verification changes it", async () => {

@@ -20,6 +20,7 @@ import {
   ModelExplorerTitleGenerator,
   LifecycleHookRunner,
   LocalGitWorktreeAdapter,
+  ModelRunBranchNameGenerator,
   OpenAIModelGateway,
   CodexAppServerGateway,
   RegisteredCommandExecutor,
@@ -1414,6 +1415,7 @@ function createDefaultScheduler(store: PipelineStore, config: FactoryConfig, mod
   return new Scheduler({
     store,
     globalConcurrency: config.runtime.globalConcurrency,
+    branchNameGenerator: new ModelRunBranchNameGenerator(model),
     workspace: new LocalGitWorktreeAdapter({ projectRoot: config.project.root, worktreeRoot: config.storage.worktreeRoot }),
     hooks: new LifecycleHookRunner(commands.execute.bind(commands), { cleanupCwd: config.project.root }),
     workspaceFactory: (snapshot) => new LocalGitWorktreeAdapter({ projectRoot: snapshot.repoRoot, worktreeRoot: snapshot.worktreeRoot }),

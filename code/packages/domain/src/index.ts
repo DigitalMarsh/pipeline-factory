@@ -10,6 +10,7 @@ import { BuiltinToolExecutor, type BuiltinToolContext, type BuiltinToolExecutorO
 import { AgentLoopEngine } from "./agent-loop.js";
 import { PlanCompletenessGate } from "./termination-gates.js";
 import { composeExplorerTitle, ModelExplorerTitleGenerator, normalizeExplorerTitle, placeholderExplorerTitle, type ExplorerTitleGenerator, type ExplorerTitleSource, type ExplorerTitleStatus } from "./explorer-title.js";
+import { allocateRunBranchLeaf, composeRunBranchLeaf, ModelRunBranchNameGenerator, normalizeRunBranchSlug, runBranchName, type RunBranchNameGenerator } from "./run-branch.js";
 import { EXECUTION_SLOT_RUN_STATUSES, ProjectService } from "./project.js";
 import type { Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings } from "./project.js";
 import type { PlanDispatchState } from "./dispatch-coordinator.js";
@@ -27,6 +28,8 @@ export { assertSafeProjectRelativeGlob, parseGeneratedPlanSpecV2, resolvePlanCon
 export type { GeneratedPlanSpecV2, GitBaseline, PlanArtifactMode, PlanValidationIssue, PlanValidationIssueCode, ResolvedPlanContractV2 } from "./plan-v2.js";
 export { composeExplorerTitle, explorerTimestamp, ModelExplorerTitleGenerator, normalizeExplorerTitle, placeholderExplorerTitle } from "./explorer-title.js";
 export type { ExplorerTitleGenerator, ExplorerTitleSource, ExplorerTitleStatus } from "./explorer-title.js";
+export { allocateRunBranchLeaf, composeRunBranchLeaf, ModelRunBranchNameGenerator, normalizeRunBranchSlug, runBranchDate, runBranchName } from "./run-branch.js";
+export type { RunBranchNameGenerator, RunBranchNameInput } from "./run-branch.js";
 
 export type { AgentLoop, AgentLoopDiagnostics, AgentLoopInput, AgentLoopMode, AgentLoopResult, AgentLoopState, AgentLoopStep, AgentLoopStepInput, AgentLoopStepStatus, AgentLoopRunner, AgentStepType, GateContext, GateDecision, TerminationGate } from "./agent-loop.js";
 export { AgentLoopEngine } from "./agent-loop.js";
@@ -3836,7 +3839,9 @@ export class LocalGitWorktreeAdapter implements WorkspaceAdapter {
   }
 
   async create(input: { projectId: string; runId: string; branch: string; baseCommit: string }): Promise<Workspace> {
-    const path = resolve(this.options.worktreeRoot, input.runId);
+    const branchLeaf = input.branch.slice(input.branch.lastIndexOf("/") + 1);
+    const workspaceName = /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(branchLeaf) ? branchLeaf : input.runId;
+    const path = resolve(this.options.worktreeRoot, workspaceName);
     const verified = await this.runGit(["rev-parse", "--verify", input.baseCommit], this.options.projectRoot);
     if (verified.exitCode !== 0) throw new Error(`Base commit ${input.baseCommit} could not be verified`);
     const created = await this.runGit(["worktree", "add", "-b", input.branch, path, input.baseCommit], this.options.projectRoot);
@@ -3863,6 +3868,7 @@ export type SchedulerOptions = {
   globalConcurrency?: number;
   workspaceFactory?: (snapshot: ProjectExecutionSnapshot) => WorkspaceAdapter;
   hookRunnerFactory?: (snapshot: ProjectExecutionSnapshot) => LifecycleHookRunner;
+  branchNameGenerator?: RunBranchNameGenerator;
   executor?: {
     start(run: Run, revision: PlanRevisionV2): Promise<AgentLoop>;
     pause?: AgentLoopRunner["pause"];
@@ -3913,8 +3919,10 @@ export class Scheduler {
     this.assertConcurrency(plan.projectId, revision);
     const createdAt = this.options.store.now();
     const runId = this.options.store.nextId("run");
+    const baseBranchLeaf = await this.runBranchLeaf(plan, revision, createdAt);
+    const branchLeaf = allocateRunBranchLeaf(baseBranchLeaf, this.options.store.listRuns().map((run) => run.branch));
     const thread: ExecutionThread = { id: this.options.store.nextId("execution-thread"), runId, state: "ACTIVE", journal: [] };
-    const run: Run = { id: runId, projectId: plan.projectId, planId: plan.id, planRevision: revision.revision, status: "STARTING", branch: `factory/${runId}`, workspacePath: null, baseCommit: revision.contract.baseCommit, executionThreadId: thread.id, createdAt, startedAt: null };
+    const run: Run = { id: runId, projectId: plan.projectId, planId: plan.id, planRevision: revision.revision, status: "STARTING", branch: runBranchName(branchLeaf), workspacePath: null, baseCommit: revision.contract.baseCommit, executionThreadId: thread.id, createdAt, startedAt: null };
     this.runs.set(run.id, run);
     this.threads.set(thread.id, thread);
     this.options.store.saveRun(run);
@@ -3959,6 +3967,18 @@ export class Scheduler {
       }
     }
     return run;
+  }
+
+  private async runBranchLeaf(plan: CandidatePlan, revision: PlanRevisionV2, createdAt: string): Promise<string> {
+    let summary = normalizeRunBranchSlug(plan.title) ?? "change";
+    if (this.options.branchNameGenerator) {
+      try {
+        summary = await this.options.branchNameGenerator.generate({ createdAt, planTitle: plan.title, goal: revision.contract.goal });
+      } catch {
+        summary = "change";
+      }
+    }
+    return composeRunBranchLeaf(createdAt, summary);
   }
 
   /** 完成或取消 Run，按同一 Revision 执行 Worktree 清理和 Cleanup Hook。 */
