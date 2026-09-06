@@ -38,6 +38,10 @@ function formatTime(value: string): string {
   return new Date(value).toLocaleString("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
+function sourceThreadPath(plan: Plan): string {
+  return `/projects/${encodeURIComponent(plan.projectId)}/explorer?explorerId=${encodeURIComponent(plan.sourceExplorerThreadId)}&contextPanel=plan-center`;
+}
+
 function canTerminate(plan: Plan): boolean {
   return Boolean(plan.runId) && canTerminateRun(plan.status);
 }
@@ -153,7 +157,7 @@ onMounted(() => { void load(); });
     <div v-loading="loading" class="plan-center-list">
       <article v-for="plan in filtered" :key="plan.planId ?? plan.id ?? plan.title" class="plan-center-card">
         <div class="plan-center-card-head"><span class="mini-icon"><Document :size="15" /></span><div><strong>{{ plan.title }}</strong><small>{{ plan.planId ?? plan.id }} · Rev {{ plan.revision }}</small></div><el-tag size="small" :type="tagType(plan)" effect="light">{{ label(plan.status) }}</el-tag></div>
-        <div class="plan-center-card-meta"><span>Source</span><code>{{ plan.sourceExplorerThreadId }}</code></div>
+        <div class="plan-center-card-meta"><span>Source</span><RouterLink :to="sourceThreadPath(plan)" :aria-label="`Open source Explorer thread ${plan.sourceExplorerThreadId}`">{{ plan.sourceExplorerThreadId }} <ArrowRight :size="12" /></RouterLink></div>
         <div class="plan-center-card-meta"><span>Run</span><RouterLink v-if="plan.runId" :to="`/projects/${projectId}/runs/${plan.runId}`">{{ plan.runId }} <ArrowRight :size="12" /></RouterLink><span v-else>{{ plan.status === "ENQUEUED" ? "Ready to start" : plan.dispatch?.waitReason === "NEEDS_CONFIGURATION" ? "Needs configuration" : plan.dispatch?.waitReason ?? "—" }}</span></div>
         <div v-if="plan.dispatch?.waitReason === 'NEEDS_CONFIGURATION'" class="plan-center-notice"><Warning :size="13" />Missing verification commands: {{ configurationBlockedCommands(plan).join(', ') }}</div>
         <div v-if="plan.attentionReason" class="plan-center-attention"><Warning :size="13" />{{ plan.attentionReason }}</div>

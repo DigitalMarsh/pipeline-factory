@@ -23,7 +23,7 @@ const ElButtonStub = defineComponent({
 const ElSelectStub = defineComponent({ setup(_, { slots }) { return () => h("div", slots.default?.()); } });
 const ElOptionStub = defineComponent({ setup(_, { slots }) { return () => h("div", slots.default?.()); } });
 const ElTagStub = defineComponent({ setup(_, { slots }) { return () => h("span", slots.default?.()); } });
-const RouterLinkStub = defineComponent({ setup(_, { slots }) { return () => h("a", slots.default?.()); } });
+const RouterLinkStub = defineComponent({ setup(_, { attrs, slots }) { return () => h("a", { ...attrs }, slots.default?.()); } });
 
 function project(): Project {
   return {
@@ -37,11 +37,11 @@ function plan(): Plan {
   return { id: "plan-1", title: "Viewable plan", revision: 2, status: "DISPATCHED", projectId: "project-1", sourceExplorerThreadId: "explorer-1", queuedAt: "2026-09-05T00:00:00.000Z", dispatchedAt: "2026-09-05T00:01:00.000Z", runId: null, lastEventAt: "2026-09-05T00:01:00.000Z", attentionReason: null };
 }
 
-function mountPanel() {
+function mountPanel(inputPlan = plan()) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const viewed: Plan[] = [];
-  const app = createApp(PlanCenterPanel, { projectId: "project-1", project: project(), onViewPlan: (value: Plan) => viewed.push(value) });
+  const app = createApp(PlanCenterPanel, { projectId: inputPlan.projectId, project: project(), onViewPlan: (value: Plan) => viewed.push(value) });
   app.component("ElButton", ElButtonStub);
   app.component("ElSelect", ElSelectStub);
   app.component("ElOption", ElOptionStub);
@@ -64,6 +64,21 @@ describe("PlanCenterPanel", () => {
     viewButton?.click();
 
     expect(mounted.viewed).toEqual([expected]);
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  it("renders the Source thread as an encoded Explorer link", async () => {
+    const expected = { ...plan(), projectId: "project/1", sourceExplorerThreadId: "explorer/source 1" };
+    vi.mocked(api.plans).mockResolvedValue({ items: [expected], nextCursor: null });
+    const mounted = mountPanel(expected);
+    await nextTick();
+    await nextTick();
+
+    const sourceLink = mounted.host.querySelector<HTMLAnchorElement>('[aria-label="Open source Explorer thread explorer/source 1"]');
+    expect(sourceLink).not.toBeNull();
+    expect(sourceLink?.getAttribute("to")).toBe("/projects/project%2F1/explorer?explorerId=explorer%2Fsource%201&contextPanel=plan-center");
+
     mounted.app.unmount();
     mounted.host.remove();
   });
