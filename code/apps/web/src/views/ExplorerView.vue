@@ -8,7 +8,7 @@ import { ArrowDown, ArrowUp, Check, CircleCheck, Connection, EditPen, InfoFilled
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 import { api } from "../api";
-import type { AgentLoop, CodexRateLimitsStatus, ExplorerActivityItem, ExplorerInputRequest, ExplorerThread, ExplorerTurn, Plan, Project, Run } from "../types";
+import type { AgentLoop, CodexRateLimitsStatus, ExplorerActivityItem, ExplorerInputRequest, ExplorerThread, ExplorerTurn, Plan, PlanRevisionDraft, Project, Run } from "../types";
 import PlanDetailDrawer from "../components/PlanDetailDrawer.vue";
 import ExplorerPolicyDrawer from "../components/ExplorerPolicyDrawer.vue";
 import ThreadRail from "../components/ThreadRail.vue";
@@ -49,6 +49,7 @@ const projectSettingsOpen = ref(false);
 const projectSettingsProjectId = ref<string | null>(null);
 const activity = ref<ExplorerActivityItem[]>([]);
 const candidate = ref<Plan | null>(null);
+const revisionDraft = ref<PlanRevisionDraft | null>(null);
 const confirmedPlans = ref<Plan[]>([]);
 const enqueued = ref<Plan[]>([]);
 const dispatched = ref<Plan[]>([]);
@@ -57,6 +58,7 @@ const turns = ref<ExplorerTurn[]>([]);
 const draft = ref("");
 const drawerOpen = ref(false);
 const detailPlan = ref<Plan | null>(null);
+const detailRevisions = ref<number[]>([]);
 const detailLoadError = ref<string | null>(null);
 const policyOpen = ref(false);
 const renameDialogOpen = ref(false);
@@ -274,6 +276,7 @@ function isCurrentProjectScope(requestProjectId: string, requestToken = activeRe
 function resetThreadState() {
   thread.value = null;
   candidate.value = null;
+  revisionDraft.value = null;
   confirmedPlans.value = [];
   enqueued.value = [];
   dispatched.value = [];
@@ -289,6 +292,7 @@ function resetThreadState() {
   planProjectionVersion += 1;
   drawerOpen.value = false;
   detailPlan.value = null;
+  detailRevisions.value = [];
   policyOpen.value = false;
   renameDialogOpen.value = false;
   renameError.value = null;
@@ -335,23 +339,48 @@ async function refreshPlanProjection(): Promise<void> {
   const requestToken = activeRequestToken;
   const requestVersion = ++planProjectionVersion;
   try {
-    const [explorerResponse, plansResponse, confirmedResponse, candidateResponse] = await Promise.all([
+    const [explorerResponse, plansResponse, confirmedResponse, candidateResponse, revisionDraftResponse] = await Promise.all([
       api.explorer(requestProjectId, explorerId),
       api.explorerPlans(requestProjectId, explorerId),
       optional(() => api.explorerConfirmedPlans(requestProjectId, explorerId)),
       optional(() => api.explorerCandidate(requestProjectId, explorerId)),
+      optional(() => api.explorerRevisionDraft(requestProjectId, explorerId)),
     ]);
     if (!isCurrentProjectScope(requestProjectId, requestToken) || requestVersion !== planProjectionVersion || thread.value?.id !== explorerId) return;
     const projection = normalizePlanProjection(explorerResponse.explorer, candidateResponse?.plan ?? null, plansResponse.items);
-    applyPlanProjection(projection, confirmedResponse?.items ?? []);
+    applyPlanProjection(projection, confirmedResponse?.items ?? [], revisionDraftResponse?.draft ?? null);
   } catch {
     // 事件流追赶期间保留上一次投影，避免切换或重连时页面短暂清空。
   }
 }
 
-function applyPlanProjection(projection: ReturnType<typeof normalizePlanProjection>, confirmed: Plan[]): void {
+function planFromRevisionDraft(item: PlanRevisionDraft): Plan {
+  return {
+    id: item.planId,
+    planId: item.planId,
+    title: item.title,
+    revision: item.targetRevision,
+    status: "DRAFT",
+    projectId: item.projectId,
+    sourceExplorerThreadId: item.sourceExplorerThreadId,
+    sourceTurnId: item.sourceTurnId,
+    providerThreadId: item.providerThreadId,
+    providerTurnId: item.providerTurnId,
+    providerItemId: item.providerItemId,
+    ...(item.contract ? { contract: item.contract } : {}),
+    ...(item.resolvedContract ? { resolvedContract: item.resolvedContract } : {}),
+    queuedAt: null,
+    dispatchedAt: null,
+    runId: null,
+    lastEventAt: item.updatedAt,
+    attentionReason: item.status === "BASE_CHANGED" ? "The default branch changed; rebase this draft before confirming." : null,
+  };
+}
+
+function applyPlanProjection(projection: ReturnType<typeof normalizePlanProjection>, confirmed: Plan[], activeRevisionDraft: PlanRevisionDraft | null = null): void {
   thread.value = projection.thread;
-  candidate.value = projection.candidate;
+  revisionDraft.value = activeRevisionDraft;
+  candidate.value = activeRevisionDraft ? planFromRevisionDraft(activeRevisionDraft) : projection.candidate;
   confirmedPlans.value = confirmed.filter((plan) => plan.status === "READY");
   enqueued.value = projection.dispatched.filter((plan) => plan.status === "ENQUEUED");
   dispatched.value = projection.dispatched.filter((plan) => plan.dispatchedAt !== null && plan.dispatchedAt !== undefined);
@@ -467,17 +496,65 @@ async function openPlanDetail(plan: Plan): Promise<void> {
   const requestedProjectId = projectId.value;
   const requestToken = activeRequestToken;
   detailPlan.value = null;
+  detailRevisions.value = [];
   detailLoadError.value = null;
   drawerOpen.value = true;
+  if (revisionDraft.value && planId === revisionDraft.value.planId && plan.revision === revisionDraft.value.targetRevision) {
+    try {
+      const history = await api.planRevisions(planId);
+      if (projectId.value !== requestedProjectId || activeRequestToken !== requestToken) return;
+      detailRevisions.value = history.items.map((item) => item.revision);
+    } catch {
+      // The current mutable draft remains usable even if historical metadata is temporarily unavailable.
+    }
+    detailPlan.value = planFromRevisionDraft(revisionDraft.value);
+    return;
+  }
   try {
-    const response = await api.getPlan(planId);
+    const [response, history] = await Promise.all([api.getPlan(planId), api.planRevisions(planId)]);
     if (projectId.value !== requestedProjectId || activeRequestToken !== requestToken) return;
     const resolvedContract = response.revision?.resolvedContract ?? response.plan.resolvedContract;
     detailPlan.value = { ...response.plan, dispatch: response.dispatch, ...(resolvedContract ? { resolvedContract } : {}) };
+    detailRevisions.value = history.items.map((item) => item.revision);
   } catch (caught) {
     if (projectId.value !== requestedProjectId || activeRequestToken !== requestToken) return;
     detailLoadError.value = caught instanceof Error ? `无法加载完整 Plan：${caught.message}` : "无法加载完整 Plan";
   }
+}
+
+async function selectPlanRevision(revisionNumber: number): Promise<void> {
+  const current = detailPlan.value;
+  const planId = current?.id ?? current?.planId;
+  if (!current || !planId || current.revision === revisionNumber) return;
+  try {
+    const response = await api.getPlanRevision(planId, revisionNumber);
+    detailPlan.value = { ...current, revision: response.revision.revision, status: "READY", ...(response.revision.contract ? { contract: response.revision.contract } : {}), ...(response.revision.resolvedContract ? { resolvedContract: response.revision.resolvedContract } : {}) };
+  } catch (caught) { detailLoadError.value = caught instanceof Error ? `无法加载 V${revisionNumber}：${caught.message}` : `无法加载 V${revisionNumber}`; }
+}
+
+/** 从任何 Plan 详情回到其原始 Explorer；清理确认由服务端强制，前端只负责明确告知不可逆后果。 */
+async function keepEditingPlan(plan: Plan): Promise<void> {
+  const planId = plan.id ?? plan.planId;
+  if (!planId || busy.value) return;
+  busy.value = true;
+  try {
+    let result;
+    try {
+      result = await api.createRevisionDraft(planId, plan.revision, { explorerThreadId: plan.sourceExplorerThreadId, discardUnmergedRun: false, clientRequestId: `keep-editing-${planId}-${plan.revision}` });
+    } catch (caught) {
+      if (!(caught instanceof Error) || !caught.message.includes("UNMERGED_RUN_CONFIRMATION_REQUIRED")) throw caught;
+      await ElMessageBox.confirm("This revision has an unmerged Run. Continuing will terminate its Executor, remove its worktree, and run cleanup hooks. The Run, ExecutionThread, and audit journal are retained permanently.", "Discard unmerged execution", { type: "warning", confirmButtonText: "Clean up and edit V" + String(plan.revision + 1), cancelButtonText: "Cancel" });
+      result = await api.createRevisionDraft(planId, plan.revision, { explorerThreadId: plan.sourceExplorerThreadId, discardUnmergedRun: true, clientRequestId: `keep-editing-cleanup-${planId}-${plan.revision}` });
+    }
+    drawerOpen.value = false;
+    await router.push({ path: `/projects/${projectId.value}/explorer`, query: { ...route.query, explorerId: result.explorerThread.id } });
+    await nextTick();
+    if (timeline.value) scrollTimelineToLatest(timeline.value);
+    (document.querySelector(".composer textarea") as HTMLTextAreaElement | null)?.focus();
+    ElMessage.success(`Editing ${planId} · V${plan.revision} → V${result.draft.targetRevision}`);
+  } catch (caught) {
+    if (caught !== "cancel") ElMessage.error(caught instanceof Error ? caught.message : "Keep editing failed");
+  } finally { busy.value = false; }
 }
 
 function selectContextPanel(selection: ContextPanel) {
@@ -505,7 +582,8 @@ function planEventTime(value: string): string {
 }
 
 function planRunPath(plan: Plan): string | null {
-  return plan.runId ? `/projects/${encodeURIComponent(projectId.value)}/runs/${encodeURIComponent(plan.runId)}` : null;
+  const runId = plan.runId ?? plan.dispatch?.runId;
+  return runId ? `/projects/${encodeURIComponent(projectId.value)}/runs/${encodeURIComponent(runId)}` : null;
 }
 
 async function createExplorer() {
@@ -669,15 +747,16 @@ async function loadRateLimits() {
 
 async function loadExplorerDetails(selected: ExplorerThread, requestProjectId: string, requestToken: number): Promise<boolean> {
   try {
-    const [plansResponse, turnsResponse, confirmedResponse, candidateResponse] = await Promise.all([
+    const [plansResponse, turnsResponse, confirmedResponse, candidateResponse, revisionDraftResponse] = await Promise.all([
       api.explorerPlans(requestProjectId, selected.id),
       api.getExplorerTurns(requestProjectId, selected.id),
       optional(() => api.explorerConfirmedPlans(requestProjectId, selected.id)),
       optional(() => api.explorerCandidate(requestProjectId, selected.id)),
+      optional(() => api.explorerRevisionDraft(requestProjectId, selected.id)),
     ]);
     if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
     const projection = normalizePlanProjection(selected, candidateResponse?.plan ?? null, plansResponse.items);
-    applyPlanProjection(projection, confirmedResponse?.items ?? []);
+    applyPlanProjection(projection, confirmedResponse?.items ?? [], revisionDraftResponse?.draft ?? null);
     turns.value = turnsResponse.items;
     explorerEventSequence = turnsResponse.lastEventSequence ?? null;
     const activityResponse = await api.explorerActivity(requestProjectId, selected.id);
@@ -950,6 +1029,23 @@ function closeEvents() { eventSource?.close(); loopEventSource?.close(); eventSo
 async function confirmPlan() {
   if (!candidate.value || !candidate.value.id && !candidate.value.planId || busy.value) return;
   const id = candidate.value.id ?? candidate.value.planId!;
+  const activeDraft = revisionDraft.value;
+  if (activeDraft && activeDraft.planId === id) {
+    if (activeDraft.status !== "READY_TO_CONFIRM") {
+      ElMessage.info(activeDraft.status === "BASE_CHANGED" ? "Default branch changed. Rebase the revision draft before confirmation." : "Continue exploring until this revision draft is ready to confirm.");
+      return;
+    }
+    busy.value = true;
+    try {
+      await api.confirmRevisionDraft(id, activeDraft.draftId);
+      drawerOpen.value = false;
+      await refreshPlanProjection();
+      contextPanel.value = "confirmed";
+      ElMessage.success(`Revision ${activeDraft.targetRevision} confirmed`);
+    } catch (caught) { error.value = caught instanceof Error ? `Confirm revision failed: ${caught.message}` : "Confirm revision failed"; }
+    finally { busy.value = false; }
+    return;
+  }
   busy.value = true;
   try {
     await api.confirmPlan(id);
@@ -966,7 +1062,7 @@ async function enqueuePlan(plan: Plan | null = candidate.value) {
   if (!id) return;
   busy.value = true;
   try {
-    const enqueuedPlan = (await api.enqueuePlan(id)).plan;
+    const enqueuedPlan = (await (plan.revision > 1 ? api.enqueuePlanRevision(id, plan.revision) : api.enqueuePlan(id))).plan;
     enqueued.value = [enqueuedPlan, ...enqueued.value.filter((item) => planIdentity(item) !== planIdentity(enqueuedPlan))];
     candidate.value = null;
     drawerOpen.value = false;
@@ -986,7 +1082,7 @@ async function startPlanRun(plan: Plan): Promise<void> {
   busy.value = true;
   error.value = null;
   try {
-    const result = await api.startPlanRun(id);
+    const result = await (plan.revision > 1 ? api.startPlanRevisionRun(id, plan.revision) : api.startPlanRun(id));
     await refreshPlanProjection();
     contextPanel.value = "dispatched";
     ElMessage.success(result.dispatch?.waitReason ? `Plan 已派发，正在等待：${result.dispatch.waitReason}` : "Plan 已进入 Dispatched 阶段");
@@ -1037,6 +1133,21 @@ async function discardPlan() {
   if (!candidate.value || candidate.value.status !== "DRAFT" || busy.value) return;
   const id = candidate.value.id ?? candidate.value.planId;
   if (!id) return;
+  const activeDraft = revisionDraft.value;
+  if (activeDraft && activeDraft.planId === id) {
+    try {
+      await ElMessageBox.confirm(`Discard revision V${activeDraft.targetRevision}? The confirmed V${activeDraft.basedOnRevision} remains unchanged.`, "Discard revision draft", { confirmButtonText: "Discard revision", cancelButtonText: "Keep editing", type: "warning" });
+    } catch { return; }
+    busy.value = true;
+    try {
+      await api.discardRevisionDraft(id, activeDraft.draftId);
+      drawerOpen.value = false;
+      await refreshPlanProjection();
+      ElMessage.success(`Revision ${activeDraft.targetRevision} discarded`);
+    } catch (caught) { error.value = caught instanceof Error ? `Discard revision failed: ${caught.message}` : "Discard revision failed"; }
+    finally { busy.value = false; }
+    return;
+  }
   try {
     await ElMessageBox.confirm(`Discard “${candidate.value.title}”? This Plan will be kept as Discarded and cannot be confirmed, enqueued, or started.`, "Discard plan", { confirmButtonText: "Discard plan", cancelButtonText: "Keep editing", type: "warning" });
   } catch {
@@ -1106,7 +1217,7 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
   <div class="console-layout">
     <ThreadRail :panel="leftPanel" :thread="thread" :project="project" :projects="projects" :explorers="explorers" :show-archived="showArchivedExplorers" :explorer-action-id="explorerActionId" :explorer-loading="explorerLoading" :explorer-error="explorerError" :creating-explorer="creatingExplorer" :project-action-id="projectActionId" @select-panel="leftPanel = $event" @create-explorer="createExplorer" @create-project="openProjectCreateDialog" @select-project="switchProject" @open-project="switchProject" @open-project-settings="openProjectSettingsDialog" @archive-project="toggleProjectArchive" @select-explorer="selectExplorer" @toggle-show-archived="showArchivedExplorers = $event" @archive-explorer="toggleExplorerArchive" />
     <section class="conversation-column">
-      <div class="conversation-header"><div><div class="eyebrow"><span class="mode-dot" /> PLAN MODE · READ ONLY</div><h1>{{ explorerDisplayTitle(thread) }}</h1><p>Shape the work before anything changes in the repository.</p></div><div class="conversation-tools"><el-button circle plain :aria-label="explorerPaused ? 'Resume' : 'Pause'" @click="toggleExplorerPause"><VideoPlay v-if="explorerPaused" :size="16" /><VideoPause v-else :size="16" /></el-button><el-dropdown placement="bottom-end" popper-class="thread-action-popper" :disabled="!thread" @command="handleThreadAction"><el-button circle plain aria-label="Thread actions" title="Thread actions"><MoreFilled :size="16" /></el-button><template #dropdown><el-dropdown-menu class="thread-action-menu"><li class="thread-action-menu-heading" role="presentation">THREAD ACTIONS</li><el-dropdown-item command="rename"><span class="thread-action-menu-item"><EditPen :size="16" /><span>Rename thread</span></span></el-dropdown-item><el-dropdown-item command="policy"><span class="thread-action-menu-item"><View :size="16" /><span>View policy</span></span></el-dropdown-item><el-dropdown-item command="refresh"><span class="thread-action-menu-item"><Refresh :size="16" /><span>Refresh thread</span></span></el-dropdown-item></el-dropdown-menu></template></el-dropdown></div></div>
+      <div class="conversation-header"><div><div class="eyebrow"><span class="mode-dot" /> PLAN MODE · READ ONLY</div><h1>{{ explorerDisplayTitle(thread) }}</h1><p>Shape the work before anything changes in the repository.</p><p v-if="revisionDraft" class="revision-draft-banner" role="status">Editing {{ revisionDraft.planId }} · V{{ revisionDraft.basedOnRevision }} → V{{ revisionDraft.targetRevision }} · {{ revisionDraft.status === 'READY_TO_CONFIRM' ? 'Ready to confirm' : revisionDraft.status === 'BASE_CHANGED' ? 'Base changed' : 'Continue editing' }}</p></div><div class="conversation-tools"><el-button circle plain :aria-label="explorerPaused ? 'Resume' : 'Pause'" @click="toggleExplorerPause"><VideoPlay v-if="explorerPaused" :size="16" /><VideoPause v-else :size="16" /></el-button><el-dropdown placement="bottom-end" popper-class="thread-action-popper" :disabled="!thread" @command="handleThreadAction"><el-button circle plain aria-label="Thread actions" title="Thread actions"><MoreFilled :size="16" /></el-button><template #dropdown><el-dropdown-menu class="thread-action-menu"><li class="thread-action-menu-heading" role="presentation">THREAD ACTIONS</li><el-dropdown-item command="rename"><span class="thread-action-menu-item"><EditPen :size="16" /><span>Rename thread</span></span></el-dropdown-item><el-dropdown-item command="policy"><span class="thread-action-menu-item"><View :size="16" /><span>View policy</span></span></el-dropdown-item><el-dropdown-item command="refresh"><span class="thread-action-menu-item"><Refresh :size="16" /><span>Refresh thread</span></span></el-dropdown-item></el-dropdown-menu></template></el-dropdown></div></div>
       <div v-if="agentLoop" class="agent-loop-strip" role="status"><div class="agent-loop-summary"><span class="eyebrow">EXPLORER PROVIDER TURN LOOP</span><strong>{{ agentLoopLabel }}</strong></div><span class="agent-loop-budget">Provider Turns {{ agentLoop.stepCount }} / {{ agentLoop.maxSteps }} · Activities {{ agentLoop.diagnostics?.providerActivityCount ?? 0 }}</span><div v-if="agentLoopGateLabel || agentLoopTerminalLabel || agentLoopCompletionLabel" class="agent-loop-status"><span v-if="agentLoopGateLabel" class="agent-loop-diagnostic">{{ agentLoopGateLabel }}</span><span v-if="agentLoopTerminalLabel" class="agent-loop-terminal">{{ agentLoopTerminalLabel }}</span><span v-if="agentLoopCompletionLabel" class="agent-loop-complete">{{ agentLoopCompletionLabel }}</span></div><el-button v-if="agentLoop.state === 'RUNNING' || agentLoop.state === 'PAUSED'" class="agent-loop-action" size="small" plain @click="toggleExplorerPause">{{ agentLoop.state === 'PAUSED' ? 'Resume loop' : 'Pause loop' }}</el-button></div>
       <div v-if="explorationProgress.status === 'INCOMPLETE' && explorationProgress.lastAssessedTurnId" class="exploration-progress exploration-progress-incomplete" role="status"><Refresh :size="15" /><div><strong>方案仍在探索中</strong><span>本轮结束不代表设计完成，Explorer 正在继续确认：{{ explorationProgress.missing.join('、') }}</span></div></div>
       <div v-else-if="explorationProgress.status === 'READY'" class="exploration-progress exploration-progress-ready" role="status"><CircleCheck :size="15" /><div><strong>完整设计方案已生成</strong><span>请在生成它的 assistant 消息内查看完整契约，确认后再下发执行。</span></div></div>
@@ -1166,7 +1277,7 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
       <div class="context-panel-scroll">
         <section v-if="contextPanel === 'candidate'" class="context-panel-content" aria-labelledby="candidate-panel-title">
           <div id="candidate-panel-title" class="context-section-title">PLAN CANDIDATE <span>{{ candidateCount }}</span></div>
-          <article v-if="candidate" class="context-plan-card"><div class="context-plan-card-head"><div class="mini-plan-title"><span class="mini-icon"><Promotion :size="16" /></span><div><strong>{{ candidate.title }}</strong><small>Revision {{ candidate.revision }}</small></div></div><el-tag size="small" type="warning" effect="light">{{ statusLabel(candidate.status) }}</el-tag></div><div class="context-plan-goal"><span>GOAL</span><p>{{ candidate.contract?.goal ?? candidate.goal ?? 'A complete, reviewable execution contract generated from this ExplorerThread.' }}</p></div><div class="candidate-actions"><el-button @click="openPlanDetail(candidate)">View full plan <Right :size="15" /></el-button><el-button v-if="candidate.status === 'DRAFT'" type="primary" :loading="busy" @click="confirmPlan">Confirm plan <Check :size="15" /></el-button></div></article>
+          <article v-if="candidate" class="context-plan-card"><div class="context-plan-card-head"><div class="mini-plan-title"><span class="mini-icon"><Promotion :size="16" /></span><div><strong>{{ candidate.title }}</strong><small>Revision {{ candidate.revision }}</small></div></div><el-tag size="small" type="warning" effect="light">{{ revisionDraft ? revisionDraft.status : statusLabel(candidate.status) }}</el-tag></div><div class="context-plan-goal"><span>GOAL</span><p>{{ candidate.contract?.goal ?? candidate.goal ?? 'A complete, reviewable execution contract generated from this ExplorerThread.' }}</p></div><div class="candidate-actions"><el-button @click="openPlanDetail(candidate)">View full plan <Right :size="15" /></el-button><el-button v-if="!revisionDraft && candidate.status === 'DRAFT'" type="primary" :loading="busy" @click="confirmPlan">Confirm plan <Check :size="15" /></el-button><el-button v-else-if="revisionDraft?.status === 'READY_TO_CONFIRM'" type="primary" :loading="busy" @click="confirmPlan">Confirm V{{ revisionDraft.targetRevision }} <Check :size="15" /></el-button><span v-else-if="revisionDraft" class="confirmed-note">{{ revisionDraft.status === 'BASE_CHANGED' ? 'Rebase required before confirmation' : 'Continue exploring to complete this revision' }}</span></div></article>
           <div v-else class="context-empty"><CircleCheck :size="24" /><p>No candidate plan</p><small>Continue exploring. A reviewable candidate appears here when this ExplorerThread produces a plan.</small></div>
         </section>
         <section v-else-if="contextPanel === 'confirmed'" class="context-panel-content" aria-labelledby="confirmed-panel-title">
@@ -1197,7 +1308,7 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
         </button>
       </nav>
     </aside>
-    <PlanDetailDrawer v-model="drawerOpen" :plan="detailPlan" :error="detailLoadError" @confirm="confirmPlan" @discard="discardPlan" />
+  <PlanDetailDrawer v-model="drawerOpen" :plan="detailPlan" :error="detailLoadError" :revisions="detailRevisions" :revision-draft-status="revisionDraft?.status ?? null" @confirm="confirmPlan" @discard="discardPlan" @keep-editing="keepEditingPlan" @select-revision="selectPlanRevision" />
     <ExplorerInputDialog ref="inputDialog" v-model="inputDialogOpen" :request="pendingInput" @submit="submitInput" @cancel="cancelInput" @progress="updateInputProgress" />
     <ProjectCreateDialog v-model="projectCreateOpen" @project-created="handleProjectCreated" />
     <ProjectSettingsDialog :model-value="projectSettingsOpen" :project-id="projectSettingsProjectId" @update:model-value="closeProjectSettings" @saved="handleProjectSettingsSaved" />

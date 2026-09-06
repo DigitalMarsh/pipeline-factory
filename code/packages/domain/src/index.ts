@@ -118,6 +118,8 @@ export type ExplorerThread = {
   summaryRef: string | null;
   lastActivityAt: string;
   exploration: PlanExploration;
+  /** 当前正在此 Explorer 中编辑的修订草稿；确认或丢弃后清空。 */
+  activeRevisionDraftId: string | null;
 };
 
 /** Explorer 的用户/模型消息事实；sequence 用于稳定回放和定位 Plan 卡片。 */
@@ -225,10 +227,53 @@ export type PlanRevisionV2 = Readonly<{
   confirmedBy: string;
   confirmedAt: string;
   sourceExplorerThreadId: string;
+  sourceTurnId?: string | null;
+  providerThreadId?: string | null;
+  providerTurnId?: string | null;
+  providerItemId?: string | null;
+  /** 旧数据无法补齐快照时只允许浏览，不能作为新执行来源。 */
+  provenance?: "CURRENT" | "LEGACY";
   projectConfigVersion?: number;
   projectConfigHash?: string;
   projectConfigSnapshot?: ProjectExecutionSnapshot;
 }>;
+
+/** 已确认 Revision 之间唯一可写的工作副本。Draft 永不直接成为 Executor 契约。 */
+export type PlanRevisionDraftStatus = "EDITING" | "READY_TO_CONFIRM" | "CONFIRMED" | "DISCARDED" | "BASE_CHANGED";
+export type PlanRevisionDraft = Readonly<{
+  draftId: string;
+  planId: string;
+  projectId: string;
+  basedOnRevision: number;
+  targetRevision: number;
+  status: PlanRevisionDraftStatus;
+  title: string;
+  contract: Readonly<PlanContract>;
+  generatedSpec?: GeneratedPlanSpecV2;
+  resolvedContract?: ResolvedPlanContractV2;
+  sourceExplorerThreadId: string;
+  sourceTurnId: string | null;
+  providerThreadId: string | null;
+  providerTurnId: string | null;
+  providerItemId: string | null;
+  baseBranch: string;
+  baseCommit: string;
+  createdAt: string;
+  updatedAt: string;
+  confirmedAt: string | null;
+}>;
+
+/** 用复合 PlanRef 表示的版本生命周期投影；不能用 latest 隐式替代 revision。 */
+export type RevisionLifecycleProjection = {
+  planId: string;
+  revision: number;
+  projectId: string;
+  title: string;
+  status: PlanStatus | PlanRevisionDraftStatus | "LEGACY";
+  sourceExplorerThreadId: string;
+  runId: string | null;
+  lastEventAt: string;
+};
 
 /** Plan Center 和 Explorer Plans 导航使用的轻量索引行。 */
 export type PlanIndexRow = {
@@ -364,6 +409,10 @@ export type DomainEvent = {
     | "plan.enqueued"
     | "plan.dispatched"
     | "plan.configuration.revised"
+    | "plan.revision.draft.created"
+    | "plan.revision.draft.ready"
+    | "plan.revision.draft.discarded"
+    | "plan.revision.confirmed"
     | "plan.dispatch.state.changed"
     | "change.proposal.created"
     | "change.proposal.approved"
@@ -432,6 +481,14 @@ export type CreateCandidatePlanInput = {
   providerThreadId?: string | null | undefined;
   providerTurnId?: string | null | undefined;
   providerItemId?: string | null | undefined;
+};
+
+export type CreateRevisionDraftInput = {
+  planId: string;
+  fromRevision: number;
+  explorerThreadId: string;
+  discardUnmergedRun: boolean;
+  clientRequestId: string;
 };
 
 /** 注册已有 Provider 关联的本地 ExplorerThread。 */
@@ -604,6 +661,13 @@ export type PipelineStore = {
   listDispatchStates(projectId?: string): PlanDispatchState[];
   saveRevision(revision: PlanRevisionV2): PlanRevisionV2;
   getRevision(planId: string, revision: number): PlanRevisionV2 | undefined;
+  listRevisions(planId: string): PlanRevisionV2[];
+  saveRevisionDraft(draft: PlanRevisionDraft): PlanRevisionDraft;
+  getRevisionDraft(draftId: string): PlanRevisionDraft | undefined;
+  listRevisionDrafts(planId?: string): PlanRevisionDraft[];
+  updateRevisionDraft(draft: PlanRevisionDraft): PlanRevisionDraft;
+  saveRevisionLifecycleProjection(projection: RevisionLifecycleProjection): RevisionLifecycleProjection;
+  listRevisionLifecycleProjections(projectId?: string, planId?: string): RevisionLifecycleProjection[];
   saveChangeProposal(proposal: ChangeProposal): ChangeProposal;
   getChangeProposal(id: string): ChangeProposal | undefined;
   listChangeProposals(runId?: string): ChangeProposal[];
@@ -786,6 +850,8 @@ export class InMemoryPipelineStore implements PipelineStore {
   private readonly plans = new Map<string, CandidatePlan>();
   private readonly dispatchStates = new Map<string, PlanDispatchState>();
   private readonly revisions = new Map<string, PlanRevisionV2>();
+  private readonly revisionDrafts = new Map<string, PlanRevisionDraft>();
+  private readonly revisionLifecycleProjections = new Map<string, RevisionLifecycleProjection>();
   private readonly changeProposals = new Map<string, ChangeProposal>();
   private readonly runs = new Map<string, Run>();
   private readonly executionThreads = new Map<string, ExecutionThread>();
@@ -832,6 +898,7 @@ export class InMemoryPipelineStore implements PipelineStore {
       summaryRef: null,
       lastActivityAt: this.now(),
       exploration: defaultPlanExploration(),
+      activeRevisionDraftId: null,
     };
     this.threads.set(thread.id, thread);
     return thread;
@@ -942,6 +1009,29 @@ export class InMemoryPipelineStore implements PipelineStore {
 
   getRevision(planId: string, revision: number): PlanRevisionV2 | undefined {
     return this.revisions.get(`${planId}:${revision}`);
+  }
+  listRevisions(planId: string): PlanRevisionV2[] {
+    return [...this.revisions.values()].filter((item) => item.planId === planId).sort((a, b) => a.revision - b.revision);
+  }
+  saveRevisionDraft(draft: PlanRevisionDraft): PlanRevisionDraft {
+    const active = this.listRevisionDrafts(draft.planId).find((item) => (item.status === "EDITING" || item.status === "READY_TO_CONFIRM" || item.status === "BASE_CHANGED") && item.draftId !== draft.draftId);
+    if (active) throw new Error(`Plan ${draft.planId} already has active RevisionDraft ${active.draftId}`);
+    this.revisionDrafts.set(draft.draftId, draft);
+    return draft;
+  }
+  getRevisionDraft(draftId: string): PlanRevisionDraft | undefined { return this.revisionDrafts.get(draftId); }
+  listRevisionDrafts(planId?: string): PlanRevisionDraft[] { return [...this.revisionDrafts.values()].filter((item) => !planId || item.planId === planId).sort((a, b) => a.targetRevision - b.targetRevision || a.createdAt.localeCompare(b.createdAt)); }
+  updateRevisionDraft(draft: PlanRevisionDraft): PlanRevisionDraft {
+    if (!this.revisionDrafts.has(draft.draftId)) throw new Error(`RevisionDraft ${draft.draftId} does not exist`);
+    this.revisionDrafts.set(draft.draftId, draft);
+    return draft;
+  }
+  saveRevisionLifecycleProjection(projection: RevisionLifecycleProjection): RevisionLifecycleProjection {
+    this.revisionLifecycleProjections.set(`${projection.planId}:${projection.revision}`, projection);
+    return projection;
+  }
+  listRevisionLifecycleProjections(projectId?: string, planId?: string): RevisionLifecycleProjection[] {
+    return [...this.revisionLifecycleProjections.values()].filter((item) => (!projectId || item.projectId === projectId) && (!planId || item.planId === planId)).sort((a, b) => a.planId.localeCompare(b.planId) || a.revision - b.revision);
   }
 
   saveChangeProposal(proposal: ChangeProposal): ChangeProposal {
@@ -1110,7 +1200,8 @@ export class SqlitePipelineStore implements PipelineStore {
         exploration_missing_json TEXT NOT NULL DEFAULT '[]',
         exploration_completed_json TEXT NOT NULL DEFAULT '[]',
         candidate_plan_id TEXT,
-        last_assessed_turn_id TEXT
+        last_assessed_turn_id TEXT,
+        active_revision_draft_id TEXT
       );
       CREATE TABLE IF NOT EXISTS explorer_turns (
         id TEXT PRIMARY KEY,
@@ -1168,6 +1259,43 @@ export class SqlitePipelineStore implements PipelineStore {
         project_config_hash TEXT,
         project_config_snapshot_json TEXT,
         resolved_contract_json TEXT,
+        PRIMARY KEY (plan_id, revision)
+      );
+      CREATE TABLE IF NOT EXISTS plan_revision_drafts (
+        draft_id TEXT PRIMARY KEY,
+        plan_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        based_on_revision INTEGER NOT NULL,
+        target_revision INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        title TEXT NOT NULL,
+        contract_json TEXT NOT NULL,
+        generated_spec_json TEXT,
+        resolved_contract_json TEXT,
+        source_explorer_thread_id TEXT NOT NULL,
+        source_turn_id TEXT,
+        provider_thread_id TEXT,
+        provider_turn_id TEXT,
+        provider_item_id TEXT,
+        base_branch TEXT NOT NULL,
+        base_commit TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        confirmed_at TEXT,
+        UNIQUE(plan_id, target_revision)
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS plan_revision_drafts_active_uq
+        ON plan_revision_drafts(plan_id)
+        WHERE status IN ('EDITING', 'READY_TO_CONFIRM', 'BASE_CHANGED');
+      CREATE TABLE IF NOT EXISTS revision_lifecycle_projection (
+        plan_id TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        project_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL,
+        source_explorer_thread_id TEXT NOT NULL,
+        run_id TEXT,
+        last_event_at TEXT NOT NULL,
         PRIMARY KEY (plan_id, revision)
       );
       CREATE TABLE IF NOT EXISTS change_proposals (
@@ -1356,6 +1484,7 @@ export class SqlitePipelineStore implements PipelineStore {
     try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN exploration_completed_json TEXT NOT NULL DEFAULT '[]'"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN candidate_plan_id TEXT"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN last_assessed_turn_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN active_revision_draft_id TEXT"); } catch { /* Existing databases already have the column. */ }
     this.database.prepare("UPDATE explorer_threads SET exploration_missing_json = ? WHERE exploration_status = 'INCOMPLETE' AND last_assessed_turn_id IS NULL AND exploration_missing_json IN ('[]', '')").run(JSON.stringify(REQUIRED_PLAN_AREAS));
     try { this.database.exec("ALTER TABLE explorer_turns ADD COLUMN status TEXT NOT NULL DEFAULT 'COMPLETED'"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE explorer_turns ADD COLUMN error TEXT"); } catch { /* Existing databases already have the column. */ }
@@ -1387,6 +1516,12 @@ export class SqlitePipelineStore implements PipelineStore {
     try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN project_config_version INTEGER"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN project_config_hash TEXT"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN project_config_snapshot_json TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN source_turn_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN provider_thread_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN provider_turn_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN provider_item_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN provenance TEXT NOT NULL DEFAULT 'LEGACY'"); } catch { /* Existing databases already have the column. */ }
+    this.backfillLegacyRevisionHistory();
     this.backfillLegacyVerificationRuns();
     this.backfillPlanQueryProjection();
   }
@@ -1458,12 +1593,13 @@ export class SqlitePipelineStore implements PipelineStore {
       summaryRef: null,
       lastActivityAt: this.now(),
       exploration: defaultPlanExploration(),
+      activeRevisionDraftId: null,
     };
     this.database.prepare(`
-      INSERT INTO explorer_threads (id, project_id, title, created_at, title_source, title_status, context_mode, origin_thread_id, parent_thread_id, provider_thread_id, state, message_count, summary_ref, last_activity_at, exploration_status, exploration_missing_json, exploration_completed_json, candidate_plan_id, last_assessed_turn_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO explorer_threads (id, project_id, title, created_at, title_source, title_status, context_mode, origin_thread_id, parent_thread_id, provider_thread_id, state, message_count, summary_ref, last_activity_at, exploration_status, exploration_missing_json, exploration_completed_json, candidate_plan_id, last_assessed_turn_id, active_revision_draft_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, title=excluded.title, created_at=excluded.created_at, title_source=excluded.title_source, title_status=excluded.title_status, context_mode=excluded.context_mode, origin_thread_id=excluded.origin_thread_id, parent_thread_id=excluded.parent_thread_id
-    `).run(thread.id, thread.projectId, thread.title, thread.createdAt, thread.titleSource, thread.titleStatus, thread.contextMode, thread.originThreadId, thread.parentThreadId, thread.providerThreadId, thread.state, thread.messageCount, thread.summaryRef, thread.lastActivityAt, thread.exploration.status, JSON.stringify(thread.exploration.missing), JSON.stringify(thread.exploration.completed), thread.exploration.candidatePlanId, thread.exploration.lastAssessedTurnId);
+    `).run(thread.id, thread.projectId, thread.title, thread.createdAt, thread.titleSource, thread.titleStatus, thread.contextMode, thread.originThreadId, thread.parentThreadId, thread.providerThreadId, thread.state, thread.messageCount, thread.summaryRef, thread.lastActivityAt, thread.exploration.status, JSON.stringify(thread.exploration.missing), JSON.stringify(thread.exploration.completed), thread.exploration.candidatePlanId, thread.exploration.lastAssessedTurnId, thread.activeRevisionDraftId);
     return this.getThread(thread.id) as ExplorerThread;
   }
 
@@ -1478,7 +1614,7 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   updateThread(thread: ExplorerThread): ExplorerThread {
-    this.database.prepare("UPDATE explorer_threads SET title = ?, created_at = ?, title_source = ?, title_status = ?, context_mode = ?, origin_thread_id = ?, provider_thread_id = ?, state = ?, message_count = ?, summary_ref = ?, last_activity_at = ?, exploration_status = ?, exploration_missing_json = ?, exploration_completed_json = ?, candidate_plan_id = ?, last_assessed_turn_id = ? WHERE id = ?").run(thread.title, thread.createdAt, thread.titleSource, thread.titleStatus, thread.contextMode, thread.originThreadId, thread.providerThreadId, thread.state, thread.messageCount, thread.summaryRef, thread.lastActivityAt, thread.exploration.status, JSON.stringify(thread.exploration.missing), JSON.stringify(thread.exploration.completed), thread.exploration.candidatePlanId, thread.exploration.lastAssessedTurnId, thread.id);
+    this.database.prepare("UPDATE explorer_threads SET title = ?, created_at = ?, title_source = ?, title_status = ?, context_mode = ?, origin_thread_id = ?, provider_thread_id = ?, state = ?, message_count = ?, summary_ref = ?, last_activity_at = ?, exploration_status = ?, exploration_missing_json = ?, exploration_completed_json = ?, candidate_plan_id = ?, last_assessed_turn_id = ?, active_revision_draft_id = ? WHERE id = ?").run(thread.title, thread.createdAt, thread.titleSource, thread.titleStatus, thread.contextMode, thread.originThreadId, thread.providerThreadId, thread.state, thread.messageCount, thread.summaryRef, thread.lastActivityAt, thread.exploration.status, JSON.stringify(thread.exploration.missing), JSON.stringify(thread.exploration.completed), thread.exploration.candidatePlanId, thread.exploration.lastAssessedTurnId, thread.activeRevisionDraftId, thread.id);
     return this.getThread(thread.id) as ExplorerThread;
   }
 
@@ -1566,14 +1702,46 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   saveRevision(revision: PlanRevisionV2): PlanRevisionV2 {
-    this.database.prepare("INSERT OR IGNORE INTO plan_revisions (plan_id, revision, contract_json, artifact_hash, confirmed_by, confirmed_at, source_explorer_thread_id, project_config_version, project_config_hash, project_config_snapshot_json, resolved_contract_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(revision.planId, revision.revision, JSON.stringify(revision.contract), revision.artifactHash, revision.confirmedBy, revision.confirmedAt, revision.sourceExplorerThreadId, revision.projectConfigVersion ?? null, revision.projectConfigHash ?? null, revision.projectConfigSnapshot ? JSON.stringify(revision.projectConfigSnapshot) : null, revision.resolvedContract ? JSON.stringify(revision.resolvedContract) : null);
+    this.database.prepare("INSERT OR IGNORE INTO plan_revisions (plan_id, revision, contract_json, artifact_hash, confirmed_by, confirmed_at, source_explorer_thread_id, project_config_version, project_config_hash, project_config_snapshot_json, resolved_contract_json, source_turn_id, provider_thread_id, provider_turn_id, provider_item_id, provenance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(revision.planId, revision.revision, JSON.stringify(revision.contract), revision.artifactHash, revision.confirmedBy, revision.confirmedAt, revision.sourceExplorerThreadId, revision.projectConfigVersion ?? null, revision.projectConfigHash ?? null, revision.projectConfigSnapshot ? JSON.stringify(revision.projectConfigSnapshot) : null, revision.resolvedContract ? JSON.stringify(revision.resolvedContract) : null, revision.sourceTurnId ?? null, revision.providerThreadId ?? null, revision.providerTurnId ?? null, revision.providerItemId ?? null, revision.provenance ?? "CURRENT");
     return this.getRevision(revision.planId, revision.revision) as PlanRevisionV2;
   }
 
   getRevision(planId: string, revision: number): PlanRevisionV2 | undefined {
     const row = this.database.prepare("SELECT * FROM plan_revisions WHERE plan_id = ? AND revision = ?").get(planId, revision) as SqliteRow | undefined;
     if (!row) return undefined;
-    return freezeRevision({ planId: String(row.plan_id), revision: Number(row.revision), contract: JSON.parse(String(row.contract_json)) as PlanContract, ...(row.resolved_contract_json ? { resolvedContract: JSON.parse(String(row.resolved_contract_json)) as ResolvedPlanContractV2 } : {}), artifactHash: String(row.artifact_hash), confirmedBy: String(row.confirmed_by), confirmedAt: String(row.confirmed_at), sourceExplorerThreadId: String(row.source_explorer_thread_id), ...(row.project_config_version === null || row.project_config_version === undefined ? {} : { projectConfigVersion: Number(row.project_config_version) }), ...(row.project_config_hash === null || row.project_config_hash === undefined ? {} : { projectConfigHash: String(row.project_config_hash) }), ...(row.project_config_snapshot_json === null || row.project_config_snapshot_json === undefined ? {} : { projectConfigSnapshot: JSON.parse(String(row.project_config_snapshot_json)) as ProjectExecutionSnapshot }) });
+    return freezeRevision({ planId: String(row.plan_id), revision: Number(row.revision), contract: JSON.parse(String(row.contract_json)) as PlanContract, ...(row.resolved_contract_json ? { resolvedContract: JSON.parse(String(row.resolved_contract_json)) as ResolvedPlanContractV2 } : {}), artifactHash: String(row.artifact_hash), confirmedBy: String(row.confirmed_by), confirmedAt: String(row.confirmed_at), sourceExplorerThreadId: String(row.source_explorer_thread_id), sourceTurnId: row.source_turn_id === null || row.source_turn_id === undefined ? null : String(row.source_turn_id), providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id), providerTurnId: row.provider_turn_id === null || row.provider_turn_id === undefined ? null : String(row.provider_turn_id), providerItemId: row.provider_item_id === null || row.provider_item_id === undefined ? null : String(row.provider_item_id), provenance: row.provenance === "CURRENT" ? "CURRENT" : "LEGACY", ...(row.project_config_version === null || row.project_config_version === undefined ? {} : { projectConfigVersion: Number(row.project_config_version) }), ...(row.project_config_hash === null || row.project_config_hash === undefined ? {} : { projectConfigHash: String(row.project_config_hash) }), ...(row.project_config_snapshot_json === null || row.project_config_snapshot_json === undefined ? {} : { projectConfigSnapshot: JSON.parse(String(row.project_config_snapshot_json)) as ProjectExecutionSnapshot }) });
+  }
+
+  listRevisions(planId: string): PlanRevisionV2[] {
+    const rows = this.database.prepare("SELECT revision FROM plan_revisions WHERE plan_id = ? ORDER BY revision ASC").all(planId) as unknown as SqliteRow[];
+    return rows.map((row) => this.getRevision(planId, Number(row.revision))!).filter(Boolean);
+  }
+
+  saveRevisionDraft(draft: PlanRevisionDraft): PlanRevisionDraft {
+    this.database.prepare("INSERT INTO plan_revision_drafts (draft_id, plan_id, project_id, based_on_revision, target_revision, status, title, contract_json, generated_spec_json, resolved_contract_json, source_explorer_thread_id, source_turn_id, provider_thread_id, provider_turn_id, provider_item_id, base_branch, base_commit, created_at, updated_at, confirmed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(draft.draftId, draft.planId, draft.projectId, draft.basedOnRevision, draft.targetRevision, draft.status, draft.title, JSON.stringify(draft.contract), draft.generatedSpec ? JSON.stringify(draft.generatedSpec) : null, draft.resolvedContract ? JSON.stringify(draft.resolvedContract) : null, draft.sourceExplorerThreadId, draft.sourceTurnId, draft.providerThreadId, draft.providerTurnId, draft.providerItemId, draft.baseBranch, draft.baseCommit, draft.createdAt, draft.updatedAt, draft.confirmedAt);
+    return this.getRevisionDraft(draft.draftId)!;
+  }
+  getRevisionDraft(draftId: string): PlanRevisionDraft | undefined {
+    const row = this.database.prepare("SELECT * FROM plan_revision_drafts WHERE draft_id = ?").get(draftId) as SqliteRow | undefined;
+    return row ? this.revisionDraftFromRow(row) : undefined;
+  }
+  listRevisionDrafts(planId?: string): PlanRevisionDraft[] {
+    const rows = this.database.prepare(`SELECT * FROM plan_revision_drafts ${planId ? "WHERE plan_id = ?" : ""} ORDER BY target_revision ASC, created_at ASC`).all(...(planId ? [planId] : [])) as unknown as SqliteRow[];
+    return rows.map((row) => this.revisionDraftFromRow(row));
+  }
+  updateRevisionDraft(draft: PlanRevisionDraft): PlanRevisionDraft {
+    this.database.prepare("UPDATE plan_revision_drafts SET status = ?, title = ?, contract_json = ?, generated_spec_json = ?, resolved_contract_json = ?, source_explorer_thread_id = ?, source_turn_id = ?, provider_thread_id = ?, provider_turn_id = ?, provider_item_id = ?, base_branch = ?, base_commit = ?, updated_at = ?, confirmed_at = ? WHERE draft_id = ?").run(draft.status, draft.title, JSON.stringify(draft.contract), draft.generatedSpec ? JSON.stringify(draft.generatedSpec) : null, draft.resolvedContract ? JSON.stringify(draft.resolvedContract) : null, draft.sourceExplorerThreadId, draft.sourceTurnId, draft.providerThreadId, draft.providerTurnId, draft.providerItemId, draft.baseBranch, draft.baseCommit, draft.updatedAt, draft.confirmedAt, draft.draftId);
+    return this.getRevisionDraft(draft.draftId)!;
+  }
+  saveRevisionLifecycleProjection(projection: RevisionLifecycleProjection): RevisionLifecycleProjection {
+    this.database.prepare("INSERT INTO revision_lifecycle_projection (plan_id, revision, project_id, title, status, source_explorer_thread_id, run_id, last_event_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(plan_id, revision) DO UPDATE SET project_id=excluded.project_id, title=excluded.title, status=excluded.status, source_explorer_thread_id=excluded.source_explorer_thread_id, run_id=excluded.run_id, last_event_at=excluded.last_event_at").run(projection.planId, projection.revision, projection.projectId, projection.title, projection.status, projection.sourceExplorerThreadId, projection.runId, projection.lastEventAt);
+    return projection;
+  }
+  listRevisionLifecycleProjections(projectId?: string, planId?: string): RevisionLifecycleProjection[] {
+    const clauses = [projectId ? "project_id = ?" : "", planId ? "plan_id = ?" : ""].filter(Boolean);
+    const values = [projectId, planId].filter((value): value is string => Boolean(value));
+    const rows = this.database.prepare(`SELECT * FROM revision_lifecycle_projection ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""} ORDER BY plan_id ASC, revision ASC`).all(...values) as unknown as SqliteRow[];
+    return rows.map((row) => ({ planId: String(row.plan_id), revision: Number(row.revision), projectId: String(row.project_id), title: String(row.title), status: String(row.status) as RevisionLifecycleProjection["status"], sourceExplorerThreadId: String(row.source_explorer_thread_id), runId: row.run_id === null ? null : String(row.run_id), lastEventAt: String(row.last_event_at) }));
   }
 
   saveChangeProposal(proposal: ChangeProposal): ChangeProposal {
@@ -1844,7 +2012,7 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   private threadFromRow(row: SqliteRow): ExplorerThread {
-    return { id: String(row.id), projectId: String(row.project_id), title: String(row.title ?? "New Explorer"), createdAt: String(row.created_at ?? row.last_activity_at), titleSource: String(row.title_source ?? "AUTO") as ExplorerTitleSource, titleStatus: String(row.title_status ?? "PLACEHOLDER") as ExplorerTitleStatus, contextMode: String(row.context_mode ?? "FRESH") as ExplorerThread["contextMode"], originThreadId: row.origin_thread_id === null || row.origin_thread_id === undefined ? null : String(row.origin_thread_id), parentThreadId: row.parent_thread_id === null ? null : String(row.parent_thread_id), providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id), state: String(row.state) as ExplorerThreadState, messageCount: Number(row.message_count), summaryRef: row.summary_ref === null ? null : String(row.summary_ref), lastActivityAt: String(row.last_activity_at), exploration: { status: String(row.exploration_status ?? "INCOMPLETE") as PlanExplorationStatus, missing: parseStringArray(row.exploration_missing_json, [...REQUIRED_PLAN_AREAS]), completed: parseStringArray(row.exploration_completed_json, []), candidatePlanId: row.candidate_plan_id === null || row.candidate_plan_id === undefined ? null : String(row.candidate_plan_id), lastAssessedTurnId: row.last_assessed_turn_id === null || row.last_assessed_turn_id === undefined ? null : String(row.last_assessed_turn_id) } };
+    return { id: String(row.id), projectId: String(row.project_id), title: String(row.title ?? "New Explorer"), createdAt: String(row.created_at ?? row.last_activity_at), titleSource: String(row.title_source ?? "AUTO") as ExplorerTitleSource, titleStatus: String(row.title_status ?? "PLACEHOLDER") as ExplorerTitleStatus, contextMode: String(row.context_mode ?? "FRESH") as ExplorerThread["contextMode"], originThreadId: row.origin_thread_id === null || row.origin_thread_id === undefined ? null : String(row.origin_thread_id), parentThreadId: row.parent_thread_id === null ? null : String(row.parent_thread_id), providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id), state: String(row.state) as ExplorerThreadState, messageCount: Number(row.message_count), summaryRef: row.summary_ref === null ? null : String(row.summary_ref), lastActivityAt: String(row.last_activity_at), exploration: { status: String(row.exploration_status ?? "INCOMPLETE") as PlanExplorationStatus, missing: parseStringArray(row.exploration_missing_json, [...REQUIRED_PLAN_AREAS]), completed: parseStringArray(row.exploration_completed_json, []), candidatePlanId: row.candidate_plan_id === null || row.candidate_plan_id === undefined ? null : String(row.candidate_plan_id), lastAssessedTurnId: row.last_assessed_turn_id === null || row.last_assessed_turn_id === undefined ? null : String(row.last_assessed_turn_id) }, activeRevisionDraftId: row.active_revision_draft_id === null || row.active_revision_draft_id === undefined ? null : String(row.active_revision_draft_id) };
   }
 
   private inputRequestFromRow(row: SqliteRow): ExplorerInputRequest {
@@ -1910,9 +2078,33 @@ export class SqlitePipelineStore implements PipelineStore {
     };
   }
 
+  private revisionDraftFromRow(row: SqliteRow): PlanRevisionDraft {
+    return Object.freeze({
+      draftId: String(row.draft_id), planId: String(row.plan_id), projectId: String(row.project_id), basedOnRevision: Number(row.based_on_revision), targetRevision: Number(row.target_revision), status: String(row.status) as PlanRevisionDraftStatus,
+      title: String(row.title), contract: JSON.parse(String(row.contract_json)) as PlanContract,
+      ...(row.generated_spec_json ? { generatedSpec: JSON.parse(String(row.generated_spec_json)) as GeneratedPlanSpecV2 } : {}),
+      ...(row.resolved_contract_json ? { resolvedContract: JSON.parse(String(row.resolved_contract_json)) as ResolvedPlanContractV2 } : {}),
+      sourceExplorerThreadId: String(row.source_explorer_thread_id), sourceTurnId: row.source_turn_id === null ? null : String(row.source_turn_id), providerThreadId: row.provider_thread_id === null ? null : String(row.provider_thread_id), providerTurnId: row.provider_turn_id === null ? null : String(row.provider_turn_id), providerItemId: row.provider_item_id === null ? null : String(row.provider_item_id),
+      baseBranch: String(row.base_branch), baseCommit: String(row.base_commit), createdAt: String(row.created_at), updatedAt: String(row.updated_at), confirmedAt: row.confirmed_at === null ? null : String(row.confirmed_at),
+    });
+  }
+
   private backfillPlanQueryProjection(): void {
     for (const plan of this.listPlans()) {
       if (this.getProject(plan.projectId) && this.getThread(plan.sourceExplorerThreadId)) this.savePlanQueryProjection(planQueryProjectionFor(plan));
+    }
+  }
+
+  /** 将旧 candidate 聚合回填为只读 Revision；缺少当时快照的一律标记 LEGACY。 */
+  private backfillLegacyRevisionHistory(): void {
+    const insertRevision = this.database.prepare("INSERT OR IGNORE INTO plan_revisions (plan_id, revision, contract_json, artifact_hash, confirmed_by, confirmed_at, source_explorer_thread_id, source_turn_id, provider_thread_id, provider_turn_id, provider_item_id, provenance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'LEGACY')");
+    const insertProjection = this.database.prepare("INSERT OR IGNORE INTO revision_lifecycle_projection (plan_id, revision, project_id, title, status, source_explorer_thread_id, run_id, last_event_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+    for (const plan of this.listPlans()) {
+      if (!["READY", "ENQUEUED", "DISPATCHED", "QUEUED", "IN_PROGRESS", "VERIFYING", "MERGE_READY", "MERGED", "BLOCKED", "NEEDS_PLAN_CHANGE"].includes(plan.status)) continue;
+      const confirmedAt = plan.confirmedAt ?? plan.createdAt;
+      const artifactHash = `sha256:${createHash("sha256").update(JSON.stringify(plan.contract)).digest("hex")}`;
+      insertRevision.run(plan.id, plan.revision, JSON.stringify(plan.contract), artifactHash, plan.confirmedBy ?? "legacy", confirmedAt, plan.sourceExplorerThreadId, plan.sourceTurnId, plan.providerThreadId, plan.providerTurnId, plan.providerItemId);
+      insertProjection.run(plan.id, plan.revision, plan.projectId, plan.title, "LEGACY", plan.sourceExplorerThreadId, plan.runId, plan.lastEventAt);
     }
   }
 
@@ -2152,6 +2344,110 @@ export class PlanService {
     if (!plan) throw new Error(`Plan ${planId} not found`);
     return plan;
   }
+
+  /**
+   * 创建或复用同一 Plan 的下一版草稿。此入口只建立可编辑 Draft，绝不创建不可变 Revision。
+   * Run/worktree 的实际终止和清理由 API 协调器先完成；这里拒绝任何未确认清理的历史执行。
+   */
+  createRevisionDraft(input: CreateRevisionDraftInput): PlanRevisionDraft {
+    const cached = this.store.getIdempotency("revision-draft", input.clientRequestId);
+    if (cached) return cached as unknown as PlanRevisionDraft;
+    const plan = this.get(input.planId);
+    const thread = this.store.getThread(input.explorerThreadId);
+    if (!thread || thread.projectId !== plan.projectId) throw new Error("EXPLORER_THREAD_PROJECT_MISMATCH");
+    if (input.fromRevision > plan.revision || input.fromRevision < 1 || !this.store.getRevision(plan.id, input.fromRevision)) throw new Error("REVISION_NOT_FOUND");
+    const active = this.store.listRevisionDrafts(plan.id).find((draft) => draft.status === "EDITING" || draft.status === "READY_TO_CONFIRM" || draft.status === "BASE_CHANGED");
+    if (active) {
+      this.store.saveIdempotency("revision-draft", input.clientRequestId, active as unknown as Record<string, unknown>);
+      return active;
+    }
+    const unmergedRuns = this.store.listRuns().filter((run) => run.planId === plan.id && run.planRevision === input.fromRevision && !this.store.findMergeRequestByRun(run.id)?.mergedAt && (run.workspacePath !== null || !["CANCELLED", "STALE"].includes(run.status)));
+    if (unmergedRuns.length && !input.discardUnmergedRun) throw new Error("UNMERGED_RUN_CONFIRMATION_REQUIRED");
+    const source = this.store.getRevision(plan.id, input.fromRevision)!;
+    const project = this.store.getProject(plan.projectId);
+    if (!project) throw new Error(`Project ${plan.projectId} not found`);
+    const baseline = verifiedProjectBaseline(project);
+    const now = this.store.now();
+    const draft: PlanRevisionDraft = Object.freeze({
+      draftId: this.store.nextId("revision-draft"), planId: plan.id, projectId: plan.projectId,
+      basedOnRevision: input.fromRevision, targetRevision: plan.revision + 1, status: "EDITING",
+      // A revision draft is rebased on the current verified default branch.  Carrying a
+      // historical contract's base commit here can otherwise create an unstartable Run.
+      title: plan.title, contract: { ...source.contract, baseBranch: baseline.baseBranch, baseCommit: baseline.baseCommit }, ...(source.resolvedContract ? { resolvedContract: source.resolvedContract } : {}),
+      sourceExplorerThreadId: thread.id, sourceTurnId: source.sourceTurnId ?? null, providerThreadId: source.providerThreadId ?? null, providerTurnId: source.providerTurnId ?? null, providerItemId: source.providerItemId ?? null,
+      baseBranch: baseline.baseBranch, baseCommit: baseline.baseCommit, createdAt: now, updatedAt: now, confirmedAt: null,
+    });
+    const saved = this.store.saveRevisionDraft(draft);
+    if (thread.state === "ARCHIVED") this.store.updateThread({ ...thread, state: "ACTIVE", activeRevisionDraftId: saved.draftId, lastActivityAt: now });
+    else this.store.updateThread({ ...thread, activeRevisionDraftId: saved.draftId, lastActivityAt: now });
+    this.store.saveRevisionLifecycleProjection({ planId: plan.id, revision: saved.targetRevision, projectId: plan.projectId, title: saved.title, status: saved.status, sourceExplorerThreadId: thread.id, runId: null, lastEventAt: now });
+    this.store.appendEvent({ type: "plan.revision.draft.created", aggregateId: plan.id, payload: { draftId: saved.draftId, fromRevision: input.fromRevision, targetRevision: saved.targetRevision, explorerThreadId: thread.id, discardUnmergedRun: input.discardUnmergedRun } });
+    this.store.saveIdempotency("revision-draft", input.clientRequestId, saved as unknown as Record<string, unknown>);
+    return saved;
+  }
+
+  /** READY 只更新同一个 Draft；不会为同一业务计划创建新的 planId。 */
+  updateRevisionDraftFromExplorer(draftId: string, artifact: PlanArtifact, source: { sourceTurnId: string; providerThreadId: string | null; providerTurnId: string | null; providerItemId: string | null }): PlanRevisionDraft {
+    const draft = this.store.getRevisionDraft(draftId);
+    if (!draft) throw new Error(`RevisionDraft ${draftId} not found`);
+    if (draft.status !== "EDITING" && draft.status !== "READY_TO_CONFIRM" && draft.status !== "BASE_CHANGED") throw new Error(`RevisionDraft ${draftId} is not editable`);
+    const project = this.store.getProject(draft.projectId);
+    if (!project) throw new Error(`Project ${draft.projectId} not found`);
+    const baseline = verifiedProjectBaseline(project);
+    const generatedSpec = artifact.generatedSpec ? parseGeneratedPlanSpecV2(artifact.generatedSpec) : undefined;
+    const resolvedContract = generatedSpec ? resolvePlanContractV2(generatedSpec, this.projects.snapshot(project.id), baseline) : undefined;
+    const contract = resolvedContract ? executionContractFromResolvedV2(resolvedContract) : artifact.contract ?? draft.contract;
+    const updated: PlanRevisionDraft = Object.freeze({ ...draft, title: artifact.title, contract, ...(generatedSpec ? { generatedSpec } : {}), ...(resolvedContract ? { resolvedContract } : {}), sourceExplorerThreadId: draft.sourceExplorerThreadId, ...source, baseBranch: baseline.baseBranch, baseCommit: baseline.baseCommit, status: "READY_TO_CONFIRM", updatedAt: this.store.now() });
+    const saved = this.store.updateRevisionDraft(updated);
+    this.store.saveRevisionLifecycleProjection({ planId: saved.planId, revision: saved.targetRevision, projectId: saved.projectId, title: saved.title, status: saved.status, sourceExplorerThreadId: saved.sourceExplorerThreadId, runId: null, lastEventAt: saved.updatedAt });
+    this.store.appendEvent({ type: "plan.revision.draft.ready", aggregateId: saved.planId, payload: { draftId: saved.draftId, targetRevision: saved.targetRevision, sourceTurnId: source.sourceTurnId } });
+    return saved;
+  }
+
+  confirmRevisionDraft(draftId: string, confirmedBy: string): CandidatePlan {
+    const draft = this.store.getRevisionDraft(draftId);
+    if (!draft) throw new Error("REVISION_DRAFT_NOT_FOUND");
+    if (draft.status === "CONFIRMED") return this.get(draft.planId);
+    if (draft.status !== "READY_TO_CONFIRM") throw new Error(`RevisionDraft ${draftId} cannot be confirmed from ${draft.status}`);
+    const plan = this.get(draft.planId);
+    if (plan.revision + 1 !== draft.targetRevision) throw new Error("REVISION_NOT_LATEST");
+    const project = this.store.getProject(draft.projectId);
+    if (!project) throw new Error(`Project ${draft.projectId} not found`);
+    const baseline = verifiedProjectBaseline(project);
+    if (baseline.baseCommit !== draft.baseCommit || baseline.baseBranch !== draft.baseBranch) {
+      const changed = this.store.updateRevisionDraft(Object.freeze({ ...draft, status: "BASE_CHANGED", updatedAt: this.store.now() }));
+      this.store.saveRevisionLifecycleProjection({ planId: changed.planId, revision: changed.targetRevision, projectId: changed.projectId, title: changed.title, status: changed.status, sourceExplorerThreadId: changed.sourceExplorerThreadId, runId: null, lastEventAt: changed.updatedAt });
+      throw new Error("BASE_CHANGED");
+    }
+    validatePlanContract(draft.contract);
+    const snapshot = this.projects.snapshot(project.id);
+    const confirmedAt = this.store.now();
+    const revision = freezeRevision({ planId: plan.id, revision: draft.targetRevision, contract: draft.contract, ...(draft.resolvedContract ? { resolvedContract: draft.resolvedContract } : {}), artifactHash: `sha256:${createHash("sha256").update(JSON.stringify({ contract: draft.contract, projectConfigSnapshot: snapshot })).digest("hex")}`, confirmedBy, confirmedAt, sourceExplorerThreadId: draft.sourceExplorerThreadId, sourceTurnId: draft.sourceTurnId, providerThreadId: draft.providerThreadId, providerTurnId: draft.providerTurnId, providerItemId: draft.providerItemId, provenance: "CURRENT", projectConfigVersion: snapshot.configVersion, projectConfigHash: snapshot.configHash, projectConfigSnapshot: snapshot });
+    this.store.saveRevision(revision);
+    const updatedPlan = this.store.updatePlan({ ...plan, title: draft.title, revision: draft.targetRevision, status: "READY", contract: draft.contract, ...(draft.generatedSpec ? { generatedSpec: draft.generatedSpec } : {}), ...(draft.resolvedContract ? { resolvedContract: draft.resolvedContract } : {}), sourceExplorerThreadId: draft.sourceExplorerThreadId, sourceTurnId: draft.sourceTurnId, providerThreadId: draft.providerThreadId, providerTurnId: draft.providerTurnId, providerItemId: draft.providerItemId, confirmedBy, confirmedAt, queuedAt: null, dispatchedAt: null, runId: null, attentionReason: null, lastEventAt: confirmedAt });
+    this.store.updateRevisionDraft(Object.freeze({ ...draft, status: "CONFIRMED", confirmedAt, updatedAt: confirmedAt }));
+    const thread = this.store.getThread(draft.sourceExplorerThreadId);
+    if (thread?.activeRevisionDraftId === draftId) this.store.updateThread({ ...thread, activeRevisionDraftId: null, lastActivityAt: confirmedAt });
+    this.store.saveRevisionLifecycleProjection({ planId: plan.id, revision: draft.targetRevision, projectId: plan.projectId, title: draft.title, status: "READY", sourceExplorerThreadId: draft.sourceExplorerThreadId, runId: null, lastEventAt: confirmedAt });
+    this.store.appendEvent({ type: "plan.revision.confirmed", aggregateId: plan.id, payload: { draftId, revision: draft.targetRevision, confirmedBy } });
+    return updatedPlan;
+  }
+
+  discardRevisionDraft(draftId: string, actorId: string): PlanRevisionDraft {
+    const draft = this.store.getRevisionDraft(draftId);
+    if (!draft) throw new Error("REVISION_DRAFT_NOT_FOUND");
+    if (draft.status === "DISCARDED") return draft;
+    if (draft.status === "CONFIRMED") throw new Error("REVISION_DRAFT_CONFIRMED");
+    const now = this.store.now();
+    const saved = this.store.updateRevisionDraft(Object.freeze({ ...draft, status: "DISCARDED", updatedAt: now }));
+    const thread = this.store.getThread(saved.sourceExplorerThreadId);
+    if (thread?.activeRevisionDraftId === saved.draftId) this.store.updateThread({ ...thread, activeRevisionDraftId: null, lastActivityAt: now });
+    this.store.saveRevisionLifecycleProjection({ planId: saved.planId, revision: saved.targetRevision, projectId: saved.projectId, title: saved.title, status: saved.status, sourceExplorerThreadId: saved.sourceExplorerThreadId, runId: null, lastEventAt: now });
+    this.store.appendEvent({ type: "plan.revision.draft.discarded", aggregateId: saved.planId, payload: { draftId, actorId } });
+    return saved;
+  }
+
+  listRevisions(planId: string): PlanRevisionV2[] { this.get(planId); return this.store.listRevisions(planId); }
 
   /** 丢弃仍处于 DRAFT 的候选计划；记录审计事件且不生成后续执行事实。 */
   discard(planId: string, actorId: string): CandidatePlan {
@@ -3346,10 +3642,17 @@ export class ExplorerThreadService {
     this.store.updateThread({ ...thread, exploration: { ...thread.exploration, status: assessment.status, missing: assessment.missing, completed: assessment.completed, lastAssessedTurnId: assistantId }, lastActivityAt: this.store.now() });
     this.publish(this.store.appendEvent({ type: assessment.status === "READY" ? "explorer.plan.ready" : "explorer.plan.incomplete", aggregateId: threadId, payload: { turnId: assistantId, missing: assessment.missing, completed: assessment.completed } }));
     if (assessment.status === "READY" && assessment.artifact) {
-      const existing = this.store.listPlans().find((plan) => plan.sourceExplorerThreadId === threadId && plan.status === "DRAFT");
       const source = this.planSource(assistantId);
-      const plan = existing ? this.store.updatePlan({ ...existing, ...source }) : this.plans.createCandidatePlan({ projectId: thread.projectId, sourceExplorerThreadId: threadId, title: assessment.artifact.title, ...(assessment.artifact.generatedSpec ? { generatedSpec: assessment.artifact.generatedSpec } : { contract: assessment.artifact.contract }), ...source });
-      this.store.updateThread({ ...this.store.getThread(threadId)!, exploration: { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], candidatePlanId: plan.id, lastAssessedTurnId: assistantId }, lastActivityAt: this.store.now() });
+      const activeDraftId = thread.activeRevisionDraftId;
+      if (activeDraftId) {
+        this.plans.updateRevisionDraftFromExplorer(activeDraftId, assessment.artifact, source);
+        this.store.updateThread({ ...this.store.getThread(threadId)!, exploration: { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], candidatePlanId: this.store.getRevisionDraft(activeDraftId)?.planId ?? null, lastAssessedTurnId: assistantId }, lastActivityAt: this.store.now() });
+      } else {
+        const existing = this.store.listPlans().find((plan) => plan.sourceExplorerThreadId === threadId && plan.status === "DRAFT");
+        // 对同一初始草稿的多次 READY 覆盖完整合同和来源，而不只更新 source 指针。
+        const plan = existing ? this.store.updatePlan({ ...existing, title: assessment.artifact.title, ...(assessment.artifact.generatedSpec ? { generatedSpec: assessment.artifact.generatedSpec } : { contract: assessment.artifact.contract ?? existing.contract }), ...source, lastEventAt: this.store.now() }) : this.plans.createCandidatePlan({ projectId: thread.projectId, sourceExplorerThreadId: threadId, title: assessment.artifact.title, ...(assessment.artifact.generatedSpec ? { generatedSpec: assessment.artifact.generatedSpec } : { contract: assessment.artifact.contract }), ...source });
+        this.store.updateThread({ ...this.store.getThread(threadId)!, exploration: { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], candidatePlanId: plan.id, lastAssessedTurnId: assistantId }, lastActivityAt: this.store.now() });
+      }
     }
     this.store.updateTurn({ ...current, status: "COMPLETED", content: stripPlanProtocol(current.content) });
     this.publish(this.store.appendEvent({ type: "explorer.turn.completed", aggregateId: threadId, payload: { assistantTurnId: assistantId, planReady: assessment.status === "READY" } }));

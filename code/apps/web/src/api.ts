@@ -3,7 +3,7 @@
  *
  * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
  */
-import type { AgentLoop, AgentLoopStep, CodexRateLimitsStatus, ExecutionThread, ExplorerActivityItem, ExplorerInputRequest, ExplorerThread, ExplorerTurn, MergeRequest, Plan, PlanDetail, PlanDispatchState, Project, ProjectCatalogItem, ProjectSummary, Run, ToolCall, VerificationRun, WorkbenchSnapshot, WorkbenchEvent } from "./types";
+import type { AgentLoop, AgentLoopStep, CodexRateLimitsStatus, ExecutionThread, ExplorerActivityItem, ExplorerInputRequest, ExplorerThread, ExplorerTurn, MergeRequest, Plan, PlanDetail, PlanDispatchState, PlanRevisionDraft, Project, ProjectCatalogItem, ProjectSummary, Run, ToolCall, VerificationRun, WorkbenchSnapshot, WorkbenchEvent } from "./types";
 
 export class ApiRequestError extends Error {
   constructor(message: string, readonly status: number) {
@@ -51,6 +51,7 @@ export const api = {
   explorerPlans: (projectId: string, explorerId: string, query = "") => request<{ items: Plan[]; nextCursor: string | null }>(`/api/v4/projects/${projectId}/explorers/${encodeURIComponent(explorerId)}/plans${query}`),
   explorerConfirmedPlans: (projectId: string, explorerId: string) => request<{ items: Plan[] }>(`/api/v4/projects/${projectId}/explorers/${encodeURIComponent(explorerId)}/confirmed-plans`),
   explorerCandidate: (projectId: string, explorerId: string) => request<{ plan: Plan }>(`/api/v4/projects/${projectId}/explorers/${encodeURIComponent(explorerId)}/candidate`),
+  explorerRevisionDraft: (projectId: string, explorerId: string) => request<{ draft: PlanRevisionDraft }>(`/api/v4/projects/${projectId}/explorers/${encodeURIComponent(explorerId)}/revision-draft`),
   startExplorerTurn: (projectId: string, threadId: string, content: string, clientTurnId: string) => request<{ turn: { user: ExplorerTurn; assistant: ExplorerTurn }; eventsUrl: string; loopId: string; state: string }>(`/api/v4/projects/${projectId}/explorer-thread/turns`, { method: "POST", body: JSON.stringify({ threadId, content, clientTurnId }) }),
   getExplorerTurns: (projectId: string, threadId: string) => request<{ items: ExplorerTurn[]; lastEventSequence: number }>(`/api/v4/projects/${projectId}/explorer-thread/turns?threadId=${encodeURIComponent(threadId)}`),
   explorerAgentLoops: (projectId: string, threadId: string) => request<{ items: AgentLoop[] }>(`/api/v4/projects/${projectId}/explorer-thread/agent-loops?threadId=${encodeURIComponent(threadId)}`),
@@ -67,11 +68,18 @@ export const api = {
   cancelAgentLoop: (loopId: string, reason = "user_requested") => request<{ loop: AgentLoop }>(`/api/v4/agent-loops/${encodeURIComponent(loopId)}/cancel`, { method: "POST", body: JSON.stringify({ reason }) }),
   plans: (projectId: string, query = "") => request<{ items: Plan[]; nextCursor: string | null }>(`/api/v4/projects/${projectId}/plans${query}`),
   getPlan: (planId: string) => request<PlanDetail>(`/api/v4/plans/${planId}`),
+  getPlanRevision: (planId: string, revision: number) => request<{ planId: string; revision: { revision: number; contract: Plan["contract"]; resolvedContract?: Plan["resolvedContract"] }; runs: Run[] }>(`/api/v4/plans/${encodeURIComponent(planId)}/revisions/${revision}`),
+  planRevisions: (planId: string) => request<{ plan: Plan; items: Array<{ planId: string; revision: number; confirmedAt: string; artifactHash: string }>; drafts: PlanRevisionDraft[]; lifecycle: Array<{ planId: string; revision: number; status: string; runId: string | null }> }>(`/api/v4/plans/${encodeURIComponent(planId)}/revisions`),
+  createRevisionDraft: (planId: string, fromRevision: number, input: { explorerThreadId: string; discardUnmergedRun: boolean; clientRequestId: string }) => request<{ draft: PlanRevisionDraft; explorerThread: ExplorerThread }>(`/api/v4/plans/${encodeURIComponent(planId)}/revisions/${fromRevision}/drafts`, { method: "POST", body: JSON.stringify({ fromRevision, ...input }) }),
+  confirmRevisionDraft: (planId: string, draftId: string) => request<{ plan: Plan }>(`/api/v4/plans/${encodeURIComponent(planId)}/revision-drafts/${encodeURIComponent(draftId)}/confirm`, { method: "POST", body: JSON.stringify({ actorId: "local-user" }) }),
+  discardRevisionDraft: (planId: string, draftId: string) => request<{ draft: PlanRevisionDraft }>(`/api/v4/plans/${encodeURIComponent(planId)}/revision-drafts/${encodeURIComponent(draftId)}/discard`, { method: "POST", body: JSON.stringify({ actorId: "local-user" }) }),
   confirmPlan: (planId: string) => request<{ plan: Plan }>(`/api/v4/plans/${planId}/confirm`, { method: "POST", body: JSON.stringify({ actorId: "local-user" }) }),
   discardPlan: (planId: string) => request<{ plan: Plan }>(`/api/v4/plans/${planId}/discard`, { method: "POST", body: JSON.stringify({ actorId: "local-user" }) }),
   enqueuePlan: (planId: string) => request<{ plan: Plan }>(`/api/v4/plans/${planId}/enqueue`, { method: "POST" }),
+  enqueuePlanRevision: (planId: string, revision: number) => request<{ plan: Plan }>(`/api/v4/plans/${encodeURIComponent(planId)}/revisions/${revision}/enqueue`, { method: "POST" }),
   revisePlanConfiguration: (planId: string) => request<{ plan: Plan }>(`/api/v4/plans/${planId}/revise-configuration`, { method: "POST", body: JSON.stringify({ actorId: "local-user" }) }),
   startPlanRun: (planId: string) => request<{ plan: Plan; run: Run | null; dispatch: PlanDispatchState | null }>(`/api/v4/plans/${planId}/run`, { method: "POST" }),
+  startPlanRevisionRun: (planId: string, revision: number) => request<{ plan: Plan; run: Run | null; dispatch: PlanDispatchState | null }>(`/api/v4/plans/${encodeURIComponent(planId)}/revisions/${revision}/run`, { method: "POST" }),
   getRun: (runId: string) => request<{ run: Run; executionThread: ExecutionThread | null; verification: VerificationRun | null; mergeRequest: MergeRequest | null }>(`/api/v4/runs/${encodeURIComponent(runId)}`),
   getExecutionThread: (threadId: string) => request<{ thread: ExecutionThread }>(`/api/v4/execution-threads/${threadId}`),
   cancelRun: (runId: string, reason = "user_requested") => request<{ run: Run }>(`/api/v4/runs/${runId}/cancel`, { method: "POST", body: JSON.stringify({ reason }) }),

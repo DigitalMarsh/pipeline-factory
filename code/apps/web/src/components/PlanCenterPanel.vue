@@ -80,7 +80,7 @@ async function startRun(plan: Plan): Promise<void> {
   actionPlanId.value = planId;
   missingRunCommands.value = [];
   try {
-    const response = await api.startPlanRun(planId);
+    const response = await (plan.revision > 1 ? api.startPlanRevisionRun(planId, plan.revision) : api.startPlanRun(planId));
     await load();
     emit("plans-changed");
     ElMessage.success(response.dispatch?.waitReason ? `Plan 已派发，正在等待：${response.dispatch.waitReason}` : "Plan 已派发到调度器");

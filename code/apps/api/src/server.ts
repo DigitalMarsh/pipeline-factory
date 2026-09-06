@@ -58,6 +58,8 @@ import type { FactoryConfig } from "./config.js";
 const execFileAsync = promisify(execFile);
 
 const planIdParams = z.object({ planId: z.string().min(1) });
+const planRevisionParams = z.object({ planId: z.string().min(1), revision: z.coerce.number().int().positive() });
+const revisionDraftParams = z.object({ planId: z.string().min(1), draftId: z.string().min(1) });
 const projectThreadParams = z.object({ projectId: z.string().min(1) });
 const projectExplorerParams = z.object({ projectId: z.string().min(1), explorerId: z.string().min(1) });
 const explorerCreateBody = z.object({ title: z.string().trim().min(1).max(200).optional(), originThreadId: z.string().min(1).optional() });
@@ -80,6 +82,7 @@ const workbenchQuery = z.object({
   format: z.enum(["json", "sse"]).default("json"),
 });
 const actorBody = z.object({ actorId: z.string().min(1).default("local-user") });
+const revisionDraftBody = z.object({ fromRevision: z.number().int().positive(), explorerThreadId: z.string().min(1), discardUnmergedRun: z.boolean(), clientRequestId: z.string().min(1).max(200) });
 const v4TurnBody = z.object({ threadId: z.string().min(1), content: z.string().trim().min(1).max(20_000), clientTurnId: z.string().min(1).max(200) });
 const v4AnswerBody = z.object({ clientRequestId: z.string().min(1).max(200), answers: z.record(z.object({ answers: z.array(z.string().max(20_000)).min(1) })), actorId: z.string().min(1).default("local-user") });
 const v4ThreadQuery = z.object({ threadId: z.string().min(1).optional(), afterSequence: z.coerce.number().int().nonnegative().optional() });
@@ -735,6 +738,20 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     return { plan: candidate };
   });
 
+  /** RevisionDraft is deliberately separate from a candidate Plan: it is mutable until confirmation. */
+  app.get("/api/v4/projects/:projectId/explorers/:explorerId/revision-draft", async (request, reply) => {
+    const params = projectExplorerParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    const explorer = store.getThread(params.data.explorerId);
+    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
+    if (!explorer.activeRevisionDraftId) return reply.code(404).send({ code: "REVISION_DRAFT_NOT_FOUND", error: "No active revision draft" });
+    const draft = store.getRevisionDraft(explorer.activeRevisionDraftId);
+    if (!draft || draft.projectId !== explorer.projectId || !["EDITING", "READY_TO_CONFIRM", "BASE_CHANGED"].includes(draft.status)) {
+      return reply.code(404).send({ code: "REVISION_DRAFT_NOT_FOUND", error: "No active revision draft" });
+    }
+    return { draft };
+  });
+
   app.post("/api/v4/projects/:projectId/explorer-thread/turns", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
     const body = v4TurnBody.safeParse(request.body ?? {});
@@ -812,6 +829,114 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     request.raw.once("close", cleanup);
   });
 
+  app.get("/api/v4/plans/:planId/revisions", async (request, reply) => {
+    const params = planIdParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    try {
+      const plan = plans.get(params.data.planId);
+      if (ensurePlanProject(plan.projectId, reply) === null) return;
+      return { plan, items: plans.listRevisions(plan.id), drafts: store.listRevisionDrafts(plan.id), lifecycle: store.listRevisionLifecycleProjections(plan.projectId, plan.id) };
+    } catch { return reply.code(404).send({ code: "PLAN_NOT_FOUND", error: "Plan not found" }); }
+  });
+
+  app.get("/api/v4/plans/:planId/revisions/:revision", async (request, reply) => {
+    const params = planRevisionParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    try {
+      const plan = plans.get(params.data.planId);
+      if (ensurePlanProject(plan.projectId, reply) === null) return;
+      const revision = plans.getRevision(plan.id, params.data.revision);
+      return { planId: plan.id, revision, runs: store.listRuns().filter((run) => run.planId === plan.id && run.planRevision === revision.revision) };
+    } catch { return reply.code(404).send({ code: "REVISION_NOT_FOUND", error: "Plan revision not found" }); }
+  });
+
+  app.post("/api/v4/plans/:planId/revisions/:revision/drafts", async (request, reply) => {
+    const params = planRevisionParams.safeParse(request.params);
+    const body = revisionDraftBody.safeParse(request.body ?? {});
+    if (!params.success || !body.success || body.data.fromRevision !== params.data.revision) return reply.code(400).send({ error: "Invalid revision draft request" });
+    try {
+      const plan = plans.get(params.data.planId);
+      if (ensurePlanProject(plan.projectId, reply, true) === null) return;
+      const thread = store.getThread(body.data.explorerThreadId);
+      if (!thread || thread.projectId !== plan.projectId) return reply.code(404).send({ code: "EXPLORER_THREAD_PROJECT_MISMATCH", error: "ExplorerThread does not belong to Plan Project" });
+      const unmerged = store.listRuns().filter((run) => run.planId === plan.id && run.planRevision === params.data.revision && !store.findMergeRequestByRun(run.id)?.mergedAt && (run.workspacePath !== null || !["CANCELLED", "STALE"].includes(run.status)));
+      if (unmerged.length && !body.data.discardUnmergedRun) return reply.code(409).send({ code: "UNMERGED_RUN_CONFIRMATION_REQUIRED", error: "Revision has an unmerged Run/worktree; explicit discardUnmergedRun is required", runs: unmerged.map((run) => run.id) });
+      if (unmerged.length) {
+        if (!scheduler) return reply.code(503).send({ code: "CLEANUP_UNAVAILABLE", error: "Scheduler is required to clean an unmerged Run" });
+        for (const run of unmerged) {
+          for (const loop of store.listAgentLoops(run.executionThreadId)) if (loop.state === "RUNNING" || loop.state === "WAITING_FOR_INPUT" || loop.state === "PAUSED") await loopController.cancel(loop.id, "revision_superseded");
+          await scheduler.finish(run.id, "cancelled", {}, "revision_superseded");
+          if (store.listHookExecutions(run.id).some((hook) => hook.hookType === "cleanup" && hook.status === "failed")) return reply.code(409).send({ code: "CLEANUP_FAILED", error: "Cleanup hook failed; RevisionDraft was not created", runId: run.id });
+        }
+      }
+      const draft = plans.createRevisionDraft({ ...body.data, planId: plan.id, explorerThreadId: thread.id });
+      return reply.code(201).send({ draft, explorerThread: store.getThread(thread.id) });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return reply.code(message === "UNMERGED_RUN_CONFIRMATION_REQUIRED" ? 409 : 422).send({ code: message, error: message });
+    }
+  });
+
+  app.get("/api/v4/plans/:planId/revision-drafts/:draftId", async (request, reply) => {
+    const params = revisionDraftParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    const draft = store.getRevisionDraft(params.data.draftId);
+    if (!draft || draft.planId !== params.data.planId) return reply.code(404).send({ code: "REVISION_DRAFT_NOT_FOUND", error: "RevisionDraft not found" });
+    if (ensurePlanProject(draft.projectId, reply) === null) return;
+    return { draft };
+  });
+
+  app.post("/api/v4/plans/:planId/revision-drafts/:draftId/confirm", async (request, reply) => {
+    const params = revisionDraftParams.safeParse(request.params);
+    const body = actorBody.safeParse(request.body ?? {});
+    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid revision confirmation" });
+    const draft = store.getRevisionDraft(params.data.draftId);
+    if (!draft || draft.planId !== params.data.planId) return reply.code(404).send({ code: "REVISION_DRAFT_NOT_FOUND", error: "RevisionDraft not found" });
+    if (ensurePlanProject(draft.projectId, reply, true) === null) return;
+    try { return { plan: plans.confirmRevisionDraft(draft.draftId, body.data.actorId) }; }
+    catch (error) { const message = error instanceof Error ? error.message : String(error); return reply.code(409).send({ code: message, error: message }); }
+  });
+
+  app.post("/api/v4/plans/:planId/revision-drafts/:draftId/discard", async (request, reply) => {
+    const params = revisionDraftParams.safeParse(request.params);
+    const body = actorBody.safeParse(request.body ?? {});
+    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid revision discard" });
+    const draft = store.getRevisionDraft(params.data.draftId);
+    if (!draft || draft.planId !== params.data.planId) return reply.code(404).send({ code: "REVISION_DRAFT_NOT_FOUND", error: "RevisionDraft not found" });
+    if (ensurePlanProject(draft.projectId, reply, true) === null) return;
+    try { return { draft: plans.discardRevisionDraft(draft.draftId, body.data.actorId) }; }
+    catch (error) { const message = error instanceof Error ? error.message : String(error); return reply.code(409).send({ code: message, error: message }); }
+  });
+
+  app.post("/api/v4/plans/:planId/revisions/:revision/enqueue", async (request, reply) => {
+    const params = planRevisionParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    try {
+      const plan = plans.get(params.data.planId);
+      if (ensurePlanProject(plan.projectId, reply, true) === null) return;
+      if (plan.revision !== params.data.revision) return reply.code(409).send({ code: "REVISION_NOT_LATEST", error: "Only the latest revision can be enqueued" });
+      return { plan: plans.enqueue(plan.id), dispatch: null };
+    } catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "Plan cannot be enqueued" }); }
+  });
+
+  app.post("/api/v4/plans/:planId/revisions/:revision/run", async (request, reply) => {
+    const params = planRevisionParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    if (!scheduler) return reply.code(503).send({ error: "Scheduler is not configured for this API instance" });
+    try {
+      const plan = plans.get(params.data.planId);
+      if (ensurePlanProject(plan.projectId, reply, true) === null) return;
+      if (plan.revision !== params.data.revision) return reply.code(409).send({ code: "REVISION_NOT_LATEST", error: "Only the latest revision can be dispatched" });
+      if (dispatchCoordinator) {
+        const dispatched = await dispatchCoordinator.dispatch(plan.id);
+        return { plan: dispatched.plan, run: dispatched.state.runId ? store.getRun(dispatched.state.runId) ?? null : null, dispatch: dispatched.state };
+      }
+      const project = store.getProject(plan.projectId);
+      const dispatchedPlan = plans.dispatch(plan.id);
+      return { plan: dispatchedPlan, run: await scheduler.start(plan.id, project?.settings.hooks ?? {}), dispatch: null };
+    } catch (error) { const message = error instanceof Error ? error.message : String(error); return reply.code(409).send({ code: "RUN_START_FAILED", error: message }); }
+  });
+
   app.get("/api/v4/plans/:planId", async (request, reply) => {
     const params = planIdParams.safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
@@ -859,6 +984,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     try {
       const plan = plans.get(params.data.planId);
       if (ensurePlanProject(plan.projectId, reply, true) === null) return;
+      if (plan.revision > 1) return reply.code(409).send({ code: "REVISION_REQUIRED", error: "Use the revision-specific enqueue endpoint" });
       return { plan: plans.enqueue(params.data.planId), dispatch: null };
     } catch (error) {
       return reply.code(409).send({ error: error instanceof Error ? error.message : "Plan cannot be enqueued" });
@@ -887,6 +1013,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     try {
       const plan = plans.get(params.data.planId);
       if (ensurePlanProject(plan.projectId, reply, true) === null) return;
+      if (plan.revision > 1) return reply.code(409).send({ code: "REVISION_REQUIRED", error: "Use the revision-specific run endpoint" });
       if (dispatchCoordinator) {
         const dispatched = await dispatchCoordinator.dispatch(plan.id);
         return { plan: dispatched.plan, run: dispatched.state.runId ? store.getRun(dispatched.state.runId) ?? null : null, dispatch: dispatched.state };
