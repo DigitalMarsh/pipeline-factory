@@ -98,6 +98,7 @@ export type ExplorerThread = {
     status: "INCOMPLETE" | "READY";
     missing: string[];
     completed: string[];
+    diagnostics: Array<{ path: string; code: "REQUIRED" | "INVALID" | "FORBIDDEN" | "MODE_CONFLICT" | "DUPLICATE"; area: string; message: string }>;
     candidatePlanId: string | null;
     lastAssessedTurnId: string | null;
   };
@@ -214,6 +215,14 @@ export type PlanTask = {
   dependencies: string[];
 };
 
+export type ExecutionTaskStatus = "PENDING" | "IN_PROGRESS" | "DONE" | "BLOCKED";
+export type ExecutionTask = PlanTask & {
+  id: string;
+  status: ExecutionTaskStatus;
+  evidenceSequence: number | null;
+  blockedReason: string | null;
+};
+
 export type Plan = {
   planId?: string;
   id?: string;
@@ -257,15 +266,18 @@ export type Plan = {
     maxRepairAttempts: number;
     mergeStrategy: string;
     requireHumanMerge: boolean;
+    artifactMode?: "CONVERSATION" | "REPOSITORY_FILE";
+    artifactPath?: string;
     dependsOnPlanIds?: string[];
   };
   resolvedContract?: ResolvedPlanContract;
+  generatedSpec?: { artifact: { mode: "CONVERSATION" | "REPOSITORY_FILE"; path?: string }; objective?: { audience?: string[] }; design?: { technicalConstraints: string[]; dataSecurity: string[]; failureHandling: string[] }; conflicts?: string[] };
   dispatch?: PlanDispatchState | null;
 };
 
 export type PlanDetail = { plan: Plan; revision: { artifactHash: string; resolvedContract?: ResolvedPlanContract } | null; projectSnapshot: { repoRoot: string; configVersion: number; configHash: string } | null; dispatch: PlanDispatchState | null };
 export type PlanRevisionDraft = { draftId: string; planId: string; projectId: string; basedOnRevision: number; targetRevision: number; status: "EDITING" | "READY_TO_CONFIRM" | "CONFIRMED" | "DISCARDED" | "BASE_CHANGED"; title: string; contract: Plan["contract"]; resolvedContract?: ResolvedPlanContract; sourceExplorerThreadId: string; sourceTurnId: string | null; providerThreadId: string | null; providerTurnId: string | null; providerItemId: string | null; baseBranch: string; baseCommit: string; createdAt: string; updatedAt: string; confirmedAt: string | null };
-export type ResolvedPlanContract = { schemaVersion: 2; objective: { goal: string; acceptanceCriteria: string[]; outOfScope: string[] }; repository: { projectId: string; name: string; repoRoot: string; baseBranch: string; baseCommit: string; configVersion: number; configHash: string }; scope: { includePaths: string[]; excludePaths: string[] }; tasks: PlanTask[]; dependencies: string[]; execution: { executorModelRole: string; toolPolicy: string; maxRepairAttempts: number }; verification: { mode: "PROJECT_DEFAULT" | "NONE"; commandIds: string[] }; merge: { strategy: string; requireHumanMerge: true } };
+export type ResolvedPlanContract = { schemaVersion: 2; artifact?: { mode: "CONVERSATION" | "REPOSITORY_FILE"; path?: string }; objective: { goal: string; audience?: string[]; acceptanceCriteria: string[]; outOfScope: string[] }; design?: { technicalConstraints: string[]; dataSecurity: string[]; failureHandling: string[] }; conflicts?: string[]; repository: { projectId: string; name: string; repoRoot: string; baseBranch: string; baseCommit: string; configVersion: number; configHash: string }; scope: { includePaths: string[]; excludePaths: string[] }; tasks: PlanTask[]; dependencies: string[]; execution: { executorModelRole: string; toolPolicy: string; maxRepairAttempts: number }; verification: { mode: "PROJECT_DEFAULT" | "NONE"; commandIds: string[] }; merge: { strategy: string; requireHumanMerge: true } };
 
 /** Execution Run 的页面投影，关联冻结 Revision、Worktree 和 Executor Loop。 */
 export type Run = {

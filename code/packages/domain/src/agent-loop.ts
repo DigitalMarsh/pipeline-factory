@@ -171,10 +171,10 @@ export type AgentLoopResult = {
 
 /** 终止门禁的明确决策；blocked 与 complete 都会结束当前 Loop。 */
 export type GateDecision =
-  | { action: "continue"; reason: string; continuationPrompt?: string }
-  | { action: "suspend"; reason: string }
-  | { action: "complete"; reason: string }
-  | { action: "blocked"; reason: string };
+  | { action: "continue"; reason: string; continuationPrompt?: string; diagnostics?: unknown[] | undefined }
+  | { action: "suspend"; reason: string; diagnostics?: unknown[] | undefined }
+  | { action: "complete"; reason: string; diagnostics?: unknown[] | undefined }
+  | { action: "blocked"; reason: string; diagnostics?: unknown[] | undefined };
 
 /** 门禁可见的模型输出和执行事实，不直接暴露 Store 给策略实现。 */
 export type GateContext = {
@@ -475,7 +475,7 @@ export class AgentLoopEngine implements AgentLoopRunner {
         this.fail(initial.id, error instanceof Error ? error.message : String(error));
         return;
       }
-      this.appendStep(loop, "GATE_CHECKED", decision.action === "blocked" ? "FAILED" : "COMPLETED", { action: decision.action, reason: decision.reason, ...(decision.action === "continue" && decision.continuationPrompt ? { continuationPrompt: decision.continuationPrompt } : {}) });
+      this.appendStep(loop, "GATE_CHECKED", decision.action === "blocked" ? "FAILED" : "COMPLETED", { action: decision.action, reason: decision.reason, ...(decision.diagnostics?.length ? { diagnostics: decision.diagnostics } : {}), ...(decision.action === "continue" && decision.continuationPrompt ? { continuationPrompt: decision.continuationPrompt } : {}) });
       this.emit(loop, "agent.gate.checked", decision);
       if (decision.action === "complete") { this.complete(initial.id, decision.reason); return; }
       if (decision.action === "blocked") { this.block(initial.id, decision.reason); return; }

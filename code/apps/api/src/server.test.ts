@@ -22,6 +22,19 @@ afterEach(async () => {
 });
 
 describe("Pipeline Factory v4 API", () => {
+  it("publishes the Explorer plan requirements used by the prompt and UI", async () => {
+    const app = createApp({ store: new InMemoryPipelineStore(), seed: false });
+    apps.push(app);
+    const response = await app.inject({ method: "GET", url: "/api/v4/explorer-plan-requirements" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().requirements).toMatchObject({
+      schemaVersion: 2,
+      requirementsVersion: 1,
+      areas: expect.arrayContaining([expect.objectContaining({ label: "目标与用户范围" })]),
+      artifactModes: expect.arrayContaining([expect.objectContaining({ mode: "CONVERSATION", executable: false }), expect.objectContaining({ mode: "REPOSITORY_FILE", executable: true })]),
+    });
+  });
+
   it("lists Project configuration and summary data", async () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);

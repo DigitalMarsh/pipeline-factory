@@ -1,13 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { InMemoryPipelineStore, VerificationService, parseGeneratedPlanSpecV2, resolvePlanContractV2, type PlanRevisionV2, type ProjectExecutionSnapshot, type Run } from "./index.js";
+import { InMemoryPipelineStore, VerificationService, parseGeneratedPlanSpecV2, resolvePlanContractV2, validateGeneratedPlanSpecV2, type PlanRevisionV2, type ProjectExecutionSnapshot, type Run } from "./index.js";
 
 const spec = {
   schemaVersion: 2 as const,
   title: "ProjectTest documentation update",
-  objective: { goal: "Document the selected feature", acceptanceCriteria: ["The guide is updated"], outOfScope: ["No runtime changes"] },
+  artifact: { mode: "REPOSITORY_FILE" as const, path: "docs/vue-usage.md" },
+  objective: { goal: "Document the selected feature", audience: ["Vue developers"], acceptanceCriteria: ["The guide is updated"], outOfScope: ["No runtime changes"] },
+  design: { technicalConstraints: ["Use Markdown"], dataSecurity: ["No personal data"], failureHandling: ["Keep existing docs when validation fails"] },
   scope: { includePaths: ["docs/vue-usage.md"], excludePaths: ["dist/**"] },
   tasks: [{ id: "docs", title: "Update guide", dependencies: [], status: "READY" as const }],
-  execution: {}, verification: { mode: "PROJECT_DEFAULT" as const }, merge: {},
+  dependencies: [], conflicts: [], execution: {}, verification: { mode: "PROJECT_DEFAULT" as const }, merge: { strategy: "manual" as const, requireHumanMerge: true as const },
 };
 
 function snapshot(defaultVerificationCommandIds: string[] = []): ProjectExecutionSnapshot {
@@ -18,13 +20,20 @@ describe("Plan V2 resolution", () => {
   it("derives Project verification order and never accepts model command ids", () => {
     const contract = resolvePlanContractV2(spec, snapshot(["project.test"]), { baseBranch: "main", baseCommit: "a".repeat(40) });
     expect(contract).toMatchObject({ schemaVersion: 2, repository: { projectId: "project-test", configVersion: 3 }, scope: { includePaths: ["docs/vue-usage.md"] }, verification: { mode: "PROJECT_DEFAULT", commandIds: ["project.test"] } });
-    expect(() => parseGeneratedPlanSpecV2({ ...spec, verificationCommandIds: ["docs.file-and-section-check"] })).toThrow(/may not set/i);
+    expect(() => parseGeneratedPlanSpecV2({ ...spec, verificationCommandIds: ["docs.file-and-section-check"] })).toThrow(/只能由 Factory/i);
   });
 
   it("rejects absolute and traversal scopes and resolves an empty Project set to NONE", () => {
-    expect(() => parseGeneratedPlanSpecV2({ ...spec, scope: { includePaths: ["/tmp/escape"], excludePaths: [] } })).toThrow(/project-root-relative/i);
-    expect(() => parseGeneratedPlanSpecV2({ ...spec, scope: { includePaths: ["../escape"], excludePaths: [] } })).toThrow(/project-root-relative/i);
+    expect(() => parseGeneratedPlanSpecV2({ ...spec, scope: { includePaths: ["/tmp/escape"], excludePaths: [] } })).toThrow(/项目根相对路径/i);
+    expect(() => parseGeneratedPlanSpecV2({ ...spec, scope: { includePaths: ["../escape"], excludePaths: [] } })).toThrow(/项目根相对路径/i);
     expect(resolvePlanContractV2(spec, snapshot(), { baseBranch: "main", baseCommit: "b".repeat(40) }).verification).toEqual({ mode: "NONE", commandIds: [] });
+  });
+
+  it("collects every invalid field and supports review-only conversation artifacts", () => {
+    const issues = validateGeneratedPlanSpecV2({ ...spec, artifact: { mode: "REPOSITORY_FILE" }, scope: { includePaths: [], excludePaths: [] }, objective: { ...spec.objective, audience: [] }, design: { ...spec.design, dataSecurity: [] } });
+    expect(issues.map((item) => item.path)).toEqual(expect.arrayContaining(["artifact.path", "scope.includePaths", "objective.audience", "design.dataSecurity"]));
+    expect(parseGeneratedPlanSpecV2({ ...spec, artifact: { mode: "CONVERSATION" }, scope: { includePaths: [], excludePaths: [] }, verification: { mode: "NONE" } })).toMatchObject({ artifact: { mode: "CONVERSATION" }, scope: { includePaths: [] } });
+    expect(validateGeneratedPlanSpecV2({ ...spec, artifact: { mode: "CONVERSATION" }, scope: { includePaths: ["docs/vue-usage.md"], excludePaths: [] }, verification: { mode: "PROJECT_DEFAULT" } }).map((item) => item.path)).toEqual(expect.arrayContaining(["scope.includePaths", "verification.mode"]));
   });
 
   it("records empty default verification as SKIPPED and allows review", async () => {

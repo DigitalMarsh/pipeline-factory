@@ -1,11 +1,12 @@
 import { ApiRequestError } from "../api";
 
-export type RunLoadStage = "run" | "agent-loop";
+export type RunLoadStage = "run" | "agent-loop" | "plan-revision";
 
 export function describeRunLoadError(error: unknown, stage: RunLoadStage): string {
   if (stage === "run" && error instanceof ApiRequestError && error.status === 404) return "Run 不存在，请从 Runs 列表重新打开";
   if (isApiUnavailableError(error)) return "API 未连接，请启动 API 服务后重试";
   if (stage === "agent-loop") return "Run 已加载，但 Agent Loop 详情暂时不可用";
+  if (stage === "plan-revision") return "Run 已加载，但冻结 Plan 任务暂时不可用";
   return error instanceof Error && error.message ? `加载 Run 失败：${error.message}` : "加载 Run 失败，请稍后重试";
 }
 

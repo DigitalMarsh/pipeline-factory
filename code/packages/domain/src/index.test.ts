@@ -64,6 +64,16 @@ describe("PlanService", () => {
     expect(store.listEvents().filter((event) => event.type === "plan.enqueued")).toHaveLength(1);
   });
 
+  it("keeps conversation artifacts reviewable but rejects every execution entry", () => {
+    const store = new InMemoryPipelineStore();
+    const service = new PlanService(store);
+    const created = service.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Conversation plan" });
+    store.updatePlan({ ...created, contract: { ...created.contract, artifactMode: "CONVERSATION" } });
+    expect(service.confirm(created.id, "user-1").status).toBe("READY");
+    expect(() => service.enqueue(created.id)).toThrow("CONVERSATION_ARTIFACT_NOT_EXECUTABLE");
+    expect(() => service.dispatch(created.id)).toThrow("CONVERSATION_ARTIFACT_NOT_EXECUTABLE");
+  });
+
   it("queries only dispatched plans across the thread lineage", () => {
     const store = new InMemoryPipelineStore();
     const service = new PlanService(store);

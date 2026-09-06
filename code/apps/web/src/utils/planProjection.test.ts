@@ -21,7 +21,7 @@ const explorer: ExplorerThread = {
   messageCount: 2,
   summaryRef: null,
   lastActivityAt: "2026-08-29T10:00:00.000Z",
-  exploration: { status: "READY", missing: [], completed: [], candidatePlanId: "plan-1", lastAssessedTurnId: "turn-1" },
+  exploration: { status: "READY", missing: [], completed: [], diagnostics: [], candidatePlanId: "plan-1", lastAssessedTurnId: "turn-1" },
 };
 
 const plan = (id: string, status: Plan["status"]): Plan => ({

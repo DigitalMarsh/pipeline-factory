@@ -12,6 +12,15 @@ describe("PlanCompletenessGate", () => {
     expect(decision).toMatchObject({ action: "continue", reason: expect.stringContaining("完整"), continuationPrompt: expect.stringContaining("验收标准与验证命令") });
   });
 
+  it("returns field diagnostics instead of the former generic V2 failure", () => {
+    const artifact = JSON.stringify({ schemaVersion: 2, title: "Broken", artifact: { mode: "REPOSITORY_FILE" }, objective: {}, design: {}, scope: { includePaths: [], excludePaths: [] }, tasks: [], dependencies: [], conflicts: [], execution: {}, verification: { mode: "PROJECT_DEFAULT" }, merge: { strategy: "manual", requireHumanMerge: true } });
+    const content = `<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>${artifact}</pipeline-factory-plan><pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>${artifact}</pipeline-factory-plan>`;
+    const decision = new PlanCompletenessGate().evaluate({ content });
+    expect(decision).toMatchObject({ action: "continue", diagnostics: expect.arrayContaining([expect.objectContaining({ path: "artifact.path" }), expect.objectContaining({ code: "DUPLICATE" })]) });
+    if (decision.action !== "continue") throw new Error("expected continuation");
+    expect(decision.continuationPrompt).toContain("artifact.path");
+  });
+
   it("completes only when the explicit READY artifact is valid", () => {
     const decision = new PlanCompletenessGate().evaluate({
       content: `<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>${JSON.stringify({

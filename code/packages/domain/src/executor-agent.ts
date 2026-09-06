@@ -19,6 +19,10 @@ export type ExecutorReport = {
   completedTaskIds: string[];
   changedPaths: string[];
   report: string;
+  /** 可选的结构化任务事实，用于执行页展示，不参与验证安全结论。 */
+  activeTaskId?: string;
+  blockedTaskId?: string;
+  blockedReason?: string;
 };
 
 export type WorkspaceScopeInspection = {
@@ -200,7 +204,7 @@ export class ExecutorAgent {
       `Work only inside the approved include scope: ${revision.contract.include.join(", ")}.`,
       `Never modify excluded or protected paths: ${revision.contract.exclude.join(", ")}.`,
       "Do not claim completion in prose. End with <pipeline-factory-execution-report> JSON </pipeline-factory-execution-report>.",
-      "The JSON must contain completedTaskIds, changedPaths (or legacy pathsWithinScope array), and a non-empty report.",
+      "The JSON must contain completedTaskIds, changedPaths (or legacy pathsWithinScope array), and a non-empty report. When a task is currently being worked on or blocked, also include activeTaskId or blockedTaskId with blockedReason.",
       `Approved Plan contract:\n${JSON.stringify(executionContract, null, 2)}`,
     ].join(" ");
   }
@@ -209,7 +213,23 @@ export class ExecutorAgent {
   private handleEvent(run: Run, event: AgentLoopEvent, openToolCalls: Set<string>): void {
     if (!this.store.getExecutionThread(run.executionThreadId)) return;
     const payload = event.payload;
-    if (event.type === "agent.step.started" || event.type === "agent.model.completed" || event.type === "agent.context.compacted") this.append(run.executionThreadId, "TASK_PROGRESS", { event: event.type, ...payload });
+    if (event.type === "agent.step.started" || event.type === "agent.model.completed" || event.type === "agent.context.compacted") {
+      this.append(run.executionThreadId, "TASK_PROGRESS", { event: event.type, ...payload });
+      if (event.type === "agent.model.completed") {
+        const thread = this.store.getExecutionThread(run.executionThreadId);
+        const latestOutput = thread ? thread.journal.filter((entry) => entry.type === "MODEL_OUTPUT").map((entry) => String(entry.payload.text ?? "")).join("") : "";
+        const report = parseExecutorReport(latestOutput);
+        if (report) {
+          this.append(run.executionThreadId, "TASK_PROGRESS", {
+            action: "task-status",
+            completedTaskIds: report.completedTaskIds,
+            ...(report.activeTaskId ? { activeTaskId: report.activeTaskId } : {}),
+            ...(report.blockedTaskId ? { blockedTaskId: report.blockedTaskId } : {}),
+            ...(report.blockedReason ? { blockedReason: report.blockedReason } : {}),
+          });
+        }
+      }
+    }
     if (event.type === "agent.model.text.delta") this.append(run.executionThreadId, "MODEL_OUTPUT", { text: payload.text });
     if (event.type === "agent.tool.requested" && typeof payload.callId === "string" && payload.delegatedToProvider !== true) {
       openToolCalls.add(payload.callId);
@@ -278,12 +298,15 @@ function parseExecutorReportDetailed(content: string): { report: ExecutorReport 
   const end = content.indexOf(REPORT_END, jsonStart);
   if (end < 0) return { report: null, error: "EXECUTION_REPORT_INCOMPLETE" };
   try {
-    const value = JSON.parse(content.slice(jsonStart, end).trim()) as { completedTaskIds?: unknown; changedPaths?: unknown; pathsWithinScope?: unknown; report?: unknown };
+    const value = JSON.parse(content.slice(jsonStart, end).trim()) as { completedTaskIds?: unknown; changedPaths?: unknown; pathsWithinScope?: unknown; report?: unknown; activeTaskId?: unknown; blockedTaskId?: unknown; blockedReason?: unknown };
     if (!Array.isArray(value.completedTaskIds) || !value.completedTaskIds.every((taskId) => typeof taskId === "string")) return { report: null, error: "EXECUTION_REPORT_FIELD_INVALID: completedTaskIds" };
     const changedPaths = Array.isArray(value.changedPaths) ? value.changedPaths : value.pathsWithinScope;
     if (!Array.isArray(changedPaths) || !changedPaths.every((path) => typeof path === "string")) return { report: null, error: "EXECUTION_REPORT_FIELD_INVALID: changedPaths" };
     if (typeof value.report !== "string") return { report: null, error: "EXECUTION_REPORT_FIELD_INVALID: report" };
-    return { report: { completedTaskIds: value.completedTaskIds, changedPaths, report: value.report } };
+    if (value.activeTaskId !== undefined && typeof value.activeTaskId !== "string") return { report: null, error: "EXECUTION_REPORT_FIELD_INVALID: activeTaskId" };
+    if (value.blockedTaskId !== undefined && typeof value.blockedTaskId !== "string") return { report: null, error: "EXECUTION_REPORT_FIELD_INVALID: blockedTaskId" };
+    if (value.blockedReason !== undefined && typeof value.blockedReason !== "string") return { report: null, error: "EXECUTION_REPORT_FIELD_INVALID: blockedReason" };
+    return { report: { completedTaskIds: value.completedTaskIds, changedPaths, report: value.report, ...(value.activeTaskId === undefined ? {} : { activeTaskId: value.activeTaskId }), ...(value.blockedTaskId === undefined ? {} : { blockedTaskId: value.blockedTaskId }), ...(value.blockedReason === undefined ? {} : { blockedReason: value.blockedReason }) } };
   } catch {
     return { report: null, error: "EXECUTION_REPORT_INVALID_JSON" };
   }

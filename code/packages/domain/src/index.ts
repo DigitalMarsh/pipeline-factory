@@ -14,8 +14,8 @@ import { EXECUTION_SLOT_RUN_STATUSES, ProjectService } from "./project.js";
 import type { Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings } from "./project.js";
 import type { PlanDispatchState } from "./dispatch-coordinator.js";
 import { redactAuditPayload, redactAuditText } from "./redaction.js";
-import { parseGeneratedPlanSpecV2, resolvePlanContractV2 } from "./plan-v2.js";
-import type { GeneratedPlanSpecV2, ResolvedPlanContractV2 } from "./plan-v2.js";
+import { GeneratedPlanSpecV2ValidationError, parseGeneratedPlanSpecV2, resolvePlanContractV2, validateGeneratedPlanSpecV2 } from "./plan-v2.js";
+import type { GeneratedPlanSpecV2, PlanValidationIssue, ResolvedPlanContractV2 } from "./plan-v2.js";
 export { EXECUTION_SLOT_RUN_STATUSES, ProjectService } from "./project.js";
 export { redactAuditPayload, redactAuditText } from "./redaction.js";
 export type { CreateProjectInput, Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings, ProjectSettingsInput, ProjectStatus, ProjectSummary, UpdateProjectInput } from "./project.js";
@@ -23,8 +23,8 @@ export { PlanDispatchCoordinator } from "./dispatch-coordinator.js";
 export type { PlanDispatchCoordinatorOptions, PlanDispatchState, PlanDispatchStatus, PlanDispatchWaitReason } from "./dispatch-coordinator.js";
 export { projectExplorerActivity } from "./explorer-activity.js";
 export type { ExplorerActivityInput, ExplorerActivityItem, ExplorerActivityKind } from "./explorer-activity.js";
-export { assertSafeProjectRelativeGlob, parseGeneratedPlanSpecV2, resolvePlanContractV2 } from "./plan-v2.js";
-export type { GeneratedPlanSpecV2, GitBaseline, ResolvedPlanContractV2 } from "./plan-v2.js";
+export { assertSafeProjectRelativeGlob, parseGeneratedPlanSpecV2, resolvePlanContractV2, validateGeneratedPlanSpecV2 } from "./plan-v2.js";
+export type { GeneratedPlanSpecV2, GitBaseline, PlanArtifactMode, PlanValidationIssue, PlanValidationIssueCode, ResolvedPlanContractV2 } from "./plan-v2.js";
 export { composeExplorerTitle, explorerTimestamp, ModelExplorerTitleGenerator, normalizeExplorerTitle, placeholderExplorerTitle } from "./explorer-title.js";
 export type { ExplorerTitleGenerator, ExplorerTitleSource, ExplorerTitleStatus } from "./explorer-title.js";
 
@@ -76,6 +76,7 @@ export type PlanExploration = {
   status: PlanExplorationStatus;
   missing: string[];
   completed: string[];
+  diagnostics: PlanValidationIssue[];
   candidatePlanId: string | null;
   lastAssessedTurnId: string | null;
 };
@@ -91,15 +92,37 @@ export const REQUIRED_PLAN_AREAS = [
   "合并策略与人工确认",
 ] as const;
 
+export type ExplorerPlanRequirement = { key: string; label: string; requiredFields: string[]; optionalFields: string[]; factoryOwnedFields?: string[] | undefined };
+export const EXPLORER_PLAN_REQUIREMENTS = {
+  requirementsVersion: 1,
+  schemaVersion: 2,
+  areas: [
+    { key: "objective", label: "目标与用户范围", requiredFields: ["title", "objective.goal", "objective.audience"], optionalFields: [] },
+    { key: "scope", label: "功能范围与排除项", requiredFields: ["objective.outOfScope", "scope.includePaths", "scope.excludePaths"], optionalFields: [] },
+    { key: "design", label: "技术方案与关键约束", requiredFields: ["design.technicalConstraints"], optionalFields: [] },
+    { key: "safety", label: "数据、安全与异常处理", requiredFields: ["design.dataSecurity", "design.failureHandling"], optionalFields: [] },
+    { key: "verification", label: "验收标准与验证命令", requiredFields: ["objective.acceptanceCriteria", "verification.mode"], optionalFields: [] },
+    { key: "delivery", label: "实施任务、依赖与冲突", requiredFields: ["tasks", "dependencies", "conflicts", "execution"], optionalFields: ["execution.executorModelRole", "execution.toolPolicy", "execution.maxRepairAttempts"] },
+    { key: "merge", label: "合并策略与人工确认", requiredFields: ["merge.strategy", "merge.requireHumanMerge"], optionalFields: [] },
+  ] satisfies ExplorerPlanRequirement[],
+  artifactModes: [
+    { mode: "CONVERSATION", label: "对话产物", includePaths: "EMPTY", verificationMode: "NONE", executable: false },
+    { mode: "REPOSITORY_FILE", label: "仓库文件", includePaths: "NON_EMPTY", verificationMode: "PROJECT_DEFAULT_OR_NONE", executable: true },
+  ] as const,
+  factoryOwnedFields: ["repository", "baseBranch", "baseCommit", "configVersion", "configHash", "verification.commandIds", "verificationCommandIds"],
+} as const;
+
 /** 注入 Explorer 的职责和 machine-readable Plan 协议；变更需同步协议解析器。 */
 export const EXPLORER_PLAN_INSTRUCTIONS = `
 你是 Pipeline Factory 的 Plan Explorer。你的职责是围绕用户需求持续探索，直到形成可执行的完整设计方案；一次普通 turn 结束不代表探索完成。
-先分析目标、用户范围、功能边界、技术方案、数据与安全、异常处理、验收标准、实施任务、依赖、冲突、验证和合并策略。把当前所有互不依赖且需要用户决策的问题合并到一次原生 item/tool/requestUserInput 请求中；不要在普通文本中把问题伪装成选择题。收到答案后重新检查仍未决的关键项，仍有缺口就继续提问或继续探索。
+先分析目标、用户范围、功能边界、技术方案、数据与安全、异常处理、验收标准、实施任务、依赖、冲突、验证和合并策略。把当前所有互不依赖且需要用户决策的问题合并到一次原生 item/tool/requestUserInput 请求中；不要在普通文本中把问题伪装成选择题。若用户没有明确产物模式，必须询问 CONVERSATION（仅对话审阅）或 REPOSITORY_FILE（写入仓库文件），不得自行假设。
+完整方案的模型必填字段为：title；artifact.mode（REPOSITORY_FILE 时 artifact.path 必填）；objective.goal、objective.audience、objective.acceptanceCriteria、objective.outOfScope；design.technicalConstraints、design.dataSecurity、design.failureHandling；scope.includePaths、scope.excludePaths；tasks、dependencies、conflicts、execution、verification.mode、merge.strategy、merge.requireHumanMerge。outOfScope、excludePaths、dependencies、conflicts、task.dependencies 可以为空数组；技术/安全/异常/受众/验收必须显式给出至少一项，“无新增约束”也必须写明。execution 内的 executorModelRole、toolPolicy、maxRepairAttempts 可省略，由 Factory 使用默认值。
+REPOSITORY_FILE：artifact.path 必须是项目根相对路径或 glob，且必须包含在 scope.includePaths 中，scope.includePaths 至少一项。CONVERSATION：artifact.path 不得出现，scope.includePaths 必须为 []，verification.mode 必须为 NONE；它仍会生成可审阅 CandidatePlan，但不能入队或执行。
+模型不得填写 repository、baseBranch、baseCommit、configVersion、configHash、commandIds 或 verificationCommandIds；这些字段只能由 Factory 基于当前 Project 与 Git 基线解析。范围不能填绝对路径、.. 或概念性描述。
 只有所有关键项都已确认，才能输出完整方案。完整方案必须在普通说明之后追加以下机器可校验协议块，JSON 必须是严格 JSON，不要使用 Markdown 代码围栏：
 <pipeline-factory-plan-status>READY</pipeline-factory-plan-status>
-<pipeline-factory-plan>{"schemaVersion":2,"title":"...","objective":{"goal":"...","acceptanceCriteria":["..."],"outOfScope":["..."]},"scope":{"includePaths":["src/**"],"excludePaths":["dist/**"]},"tasks":[{"id":"task-1","title":"...","dependencies":[],"status":"READY"}],"dependencies":[],"execution":{"executorModelRole":"executor","toolPolicy":"executor-scoped-write","maxRepairAttempts":2},"verification":{"mode":"PROJECT_DEFAULT"},"merge":{"strategy":"manual","requireHumanMerge":true}}</pipeline-factory-plan>
-模型不得填写 repository、baseBranch、baseCommit、configVersion、configHash、commandIds 或 verificationCommandIds；这些字段只能由 Factory 基于当前 Project 与 Git 基线解析。范围仅可填项目根相对路径或 glob，不能填绝对路径、.. 或概念性描述。
-不要在缺少关键决策时输出 READY；不要把“已记录某个选择”当作完整方案。`;
+<pipeline-factory-plan>{"schemaVersion":2,"title":"...","artifact":{"mode":"REPOSITORY_FILE","path":"docs/guide.md"},"objective":{"goal":"...","audience":["..."],"acceptanceCriteria":["..."],"outOfScope":[]},"design":{"technicalConstraints":["..."],"dataSecurity":["..."],"failureHandling":["..."]},"scope":{"includePaths":["docs/guide.md"],"excludePaths":[]},"tasks":[{"id":"task-1","title":"...","dependencies":[],"status":"READY"}],"dependencies":[],"conflicts":[],"execution":{},"verification":{"mode":"PROJECT_DEFAULT"},"merge":{"strategy":"manual","requireHumanMerge":true}}</pipeline-factory-plan>
+不要在缺少关键决策时输出 READY；不要把“已记录某个选择”当作完整方案。收到字段级校验错误后，逐项修复；不得原样重复未通过的 READY 协议块。`;
 
 /** Factory 内部的长期 Explorer 工作区，与外部 Provider Thread 标识分离。 */
 export type ExplorerThread = {
@@ -160,6 +183,9 @@ export type PlanContract = {
   maxRepairAttempts: number;
   mergeStrategy: "manual" | "fast-forward" | "squash";
   requireHumanMerge: boolean;
+  /** Conversation plans are reviewable but never executable. Undefined keeps historical contracts compatible. */
+  artifactMode?: "CONVERSATION" | "REPOSITORY_FILE";
+  artifactPath?: string;
   dependsOnPlanIds?: string[];
   priority?: number;
 };
@@ -714,7 +740,7 @@ export type PipelineStore = {
 const DEFAULT_HOOK_TIMEOUT_MS = 120_000;
 
 function defaultPlanExploration(): PlanExploration {
-  return { status: "INCOMPLETE", missing: [...REQUIRED_PLAN_AREAS], completed: [], candidatePlanId: null, lastAssessedTurnId: null };
+  return { status: "INCOMPLETE", missing: [...REQUIRED_PLAN_AREAS], completed: [], diagnostics: [], candidatePlanId: null, lastAssessedTurnId: null };
 }
 
 export type PlanArtifact = { title: string; contract?: PlanContract; generatedSpec?: GeneratedPlanSpecV2 };
@@ -722,13 +748,14 @@ export type PlanCompletionAssessment = {
   status: PlanExplorationStatus;
   missing: string[];
   completed: string[];
+  diagnostics: PlanValidationIssue[];
   artifact: PlanArtifact | null;
 };
 
 /** 解析模型协议块并检查 Plan 是否具备可执行的完整契约。 */
 export function assessPlanCompletion(content: string): PlanCompletionAssessment {
   const candidates = planProtocolCandidates(content);
-  if (candidates.length === 0) return { status: "INCOMPLETE", missing: [...REQUIRED_PLAN_AREAS], completed: [], artifact: null };
+  if (candidates.length === 0) return { status: "INCOMPLETE", missing: [...REQUIRED_PLAN_AREAS], completed: [], diagnostics: [], artifact: null };
 
   let sawReadyCandidate = false;
   let latestIncomplete: PlanCompletionAssessment | null = null;
@@ -739,10 +766,15 @@ export function assessPlanCompletion(content: string): PlanCompletionAssessment 
     if (assessment.status === "READY") return assessment;
     latestIncomplete ??= assessment;
   }
-  if (latestIncomplete) return latestIncomplete;
+  if (latestIncomplete) {
+    const latest = [...candidates].reverse().find((candidate) => candidate.status === "READY");
+    const repeats = latest ? candidates.filter((candidate) => candidate.status === "READY" && candidate.artifactText === latest.artifactText).length : 0;
+    if (repeats > 1) return { ...latestIncomplete, diagnostics: [...latestIncomplete.diagnostics, { path: "$", code: "DUPLICATE", area: "完整执行契约", message: "本轮已重复输出相同的未通过 READY 协议块；请按字段诊断修改后再提交。" }] };
+    return latestIncomplete;
+  }
   return sawReadyCandidate
-    ? { status: "INCOMPLETE", missing: ["完整执行契约"], completed: [], artifact: null }
-    : { status: "INCOMPLETE", missing: [...REQUIRED_PLAN_AREAS], completed: [], artifact: null };
+    ? { status: "INCOMPLETE", missing: ["完整执行契约"], completed: [], diagnostics: [{ path: "$", code: "INVALID", area: "完整执行契约", message: "READY 协议块不完整。" }], artifact: null }
+    : { status: "INCOMPLETE", missing: [...REQUIRED_PLAN_AREAS], completed: [], diagnostics: [], artifact: null };
 }
 
 function planProtocolCandidates(content: string): Array<{ status: string; artifactText: string }> {
@@ -759,16 +791,18 @@ function planProtocolCandidates(content: string): Array<{ status: string; artifa
 
 function assessPlanArtifact(artifactText: string): PlanCompletionAssessment {
   let parsed: unknown;
-  try { parsed = JSON.parse(artifactText); } catch { return { status: "INCOMPLETE", missing: ["完整执行契约"], completed: [], artifact: null }; }
-  if (!isRecord(parsed)) return { status: "INCOMPLETE", missing: ["完整执行契约"], completed: [], artifact: null };
+  try { parsed = JSON.parse(artifactText); } catch { return { status: "INCOMPLETE", missing: ["完整执行契约"], completed: [], diagnostics: [{ path: "$", code: "INVALID", area: "完整执行契约", message: "必须是严格 JSON，不能使用代码围栏或残缺 JSON。" }], artifact: null }; }
+  if (!isRecord(parsed)) return { status: "INCOMPLETE", missing: ["完整执行契约"], completed: [], diagnostics: [{ path: "$", code: "INVALID", area: "完整执行契约", message: "必须是 JSON 对象。" }], artifact: null };
   // V2 is intentionally a generated spec: Factory adds project identity, Git
   // baseline and default verification commands only after this boundary.
   if (parsed.schemaVersion === 2) {
     try {
       const generatedSpec = parseGeneratedPlanSpecV2(parsed);
-      return { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], artifact: { title: generatedSpec.title, generatedSpec } };
-    } catch {
-      return { status: "INCOMPLETE", missing: ["V2 执行方案（模型不得填写仓库基线或验证命令）"], completed: [], artifact: null };
+      return { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], diagnostics: [], artifact: { title: generatedSpec.title, generatedSpec } };
+    } catch (error) {
+      const diagnostics = error instanceof GeneratedPlanSpecV2ValidationError ? error.issues : validateGeneratedPlanSpecV2(parsed);
+      const missing = [...new Set(diagnostics.map((item) => item.area))];
+      return { status: "INCOMPLETE", missing: missing.length ? missing : ["完整执行契约"], completed: REQUIRED_PLAN_AREAS.filter((area) => !missing.includes(area)), diagnostics, artifact: null };
     }
   }
   const missing: string[] = [];
@@ -791,9 +825,9 @@ function assessPlanArtifact(artifactText: string): PlanCompletionAssessment {
     try { validatePlanContract(contract as PlanContract); } catch { missing.push("实施任务、依赖与冲突"); }
   }
   const uniqueMissing = [...new Set(missing)];
-  if (uniqueMissing.length > 0) return { status: "INCOMPLETE", missing: uniqueMissing, completed: REQUIRED_PLAN_AREAS.filter((area) => !uniqueMissing.includes(area)), artifact: null };
+  if (uniqueMissing.length > 0) return { status: "INCOMPLETE", missing: uniqueMissing, completed: REQUIRED_PLAN_AREAS.filter((area) => !uniqueMissing.includes(area)), diagnostics: uniqueMissing.map((area) => ({ path: "$", code: "REQUIRED" as const, area, message: "历史 V1 合同缺少必填字段。" })), artifact: null };
   // Flat artifacts are history-only. New Explorer instructions only emit V2.
-  return { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], artifact: { title, contract: { ...(contract as PlanContract), schemaVersion: 1 } } };
+  return { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], diagnostics: [], artifact: { title, contract: { ...(contract as PlanContract), schemaVersion: 1 } } };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -822,6 +856,19 @@ function isNonEmptyStringArray(value: unknown): value is string[] {
 function parseStringArray(value: unknown, fallback: string[]): string[] {
   if (typeof value !== "string") return [...fallback];
   try { const parsed: unknown = JSON.parse(value); return isStringArray(parsed) ? parsed : [...fallback]; } catch { return [...fallback]; }
+}
+
+function parsePlanValidationIssues(value: unknown): PlanValidationIssue[] {
+  try {
+    const parsed = JSON.parse(String(value ?? "[]"));
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is PlanValidationIssue => isRecord(item)
+      && typeof item.path === "string"
+      && typeof item.code === "string"
+      && typeof item.area === "string"
+      && typeof item.message === "string")
+      .map((item) => ({ path: item.path, code: item.code as PlanValidationIssue["code"], area: item.area, message: item.message }));
+  } catch { return []; }
 }
 
 const LEGACY_AUTO_TITLES = new Set(["New Explorer", "Previous exploration", "ExplorerThread"]);
@@ -1199,6 +1246,7 @@ export class SqlitePipelineStore implements PipelineStore {
         exploration_status TEXT NOT NULL DEFAULT 'INCOMPLETE',
         exploration_missing_json TEXT NOT NULL DEFAULT '[]',
         exploration_completed_json TEXT NOT NULL DEFAULT '[]',
+        exploration_diagnostics_json TEXT NOT NULL DEFAULT '[]',
         candidate_plan_id TEXT,
         last_assessed_turn_id TEXT,
         active_revision_draft_id TEXT
@@ -1482,6 +1530,7 @@ export class SqlitePipelineStore implements PipelineStore {
     try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN exploration_status TEXT NOT NULL DEFAULT 'INCOMPLETE'"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN exploration_missing_json TEXT NOT NULL DEFAULT '[]'"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN exploration_completed_json TEXT NOT NULL DEFAULT '[]'"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN exploration_diagnostics_json TEXT NOT NULL DEFAULT '[]'"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN candidate_plan_id TEXT"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN last_assessed_turn_id TEXT"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN active_revision_draft_id TEXT"); } catch { /* Existing databases already have the column. */ }
@@ -1596,10 +1645,10 @@ export class SqlitePipelineStore implements PipelineStore {
       activeRevisionDraftId: null,
     };
     this.database.prepare(`
-      INSERT INTO explorer_threads (id, project_id, title, created_at, title_source, title_status, context_mode, origin_thread_id, parent_thread_id, provider_thread_id, state, message_count, summary_ref, last_activity_at, exploration_status, exploration_missing_json, exploration_completed_json, candidate_plan_id, last_assessed_turn_id, active_revision_draft_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO explorer_threads (id, project_id, title, created_at, title_source, title_status, context_mode, origin_thread_id, parent_thread_id, provider_thread_id, state, message_count, summary_ref, last_activity_at, exploration_status, exploration_missing_json, exploration_completed_json, exploration_diagnostics_json, candidate_plan_id, last_assessed_turn_id, active_revision_draft_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, title=excluded.title, created_at=excluded.created_at, title_source=excluded.title_source, title_status=excluded.title_status, context_mode=excluded.context_mode, origin_thread_id=excluded.origin_thread_id, parent_thread_id=excluded.parent_thread_id
-    `).run(thread.id, thread.projectId, thread.title, thread.createdAt, thread.titleSource, thread.titleStatus, thread.contextMode, thread.originThreadId, thread.parentThreadId, thread.providerThreadId, thread.state, thread.messageCount, thread.summaryRef, thread.lastActivityAt, thread.exploration.status, JSON.stringify(thread.exploration.missing), JSON.stringify(thread.exploration.completed), thread.exploration.candidatePlanId, thread.exploration.lastAssessedTurnId, thread.activeRevisionDraftId);
+    `).run(thread.id, thread.projectId, thread.title, thread.createdAt, thread.titleSource, thread.titleStatus, thread.contextMode, thread.originThreadId, thread.parentThreadId, thread.providerThreadId, thread.state, thread.messageCount, thread.summaryRef, thread.lastActivityAt, thread.exploration.status, JSON.stringify(thread.exploration.missing), JSON.stringify(thread.exploration.completed), JSON.stringify(thread.exploration.diagnostics), thread.exploration.candidatePlanId, thread.exploration.lastAssessedTurnId, thread.activeRevisionDraftId);
     return this.getThread(thread.id) as ExplorerThread;
   }
 
@@ -1614,7 +1663,7 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   updateThread(thread: ExplorerThread): ExplorerThread {
-    this.database.prepare("UPDATE explorer_threads SET title = ?, created_at = ?, title_source = ?, title_status = ?, context_mode = ?, origin_thread_id = ?, provider_thread_id = ?, state = ?, message_count = ?, summary_ref = ?, last_activity_at = ?, exploration_status = ?, exploration_missing_json = ?, exploration_completed_json = ?, candidate_plan_id = ?, last_assessed_turn_id = ?, active_revision_draft_id = ? WHERE id = ?").run(thread.title, thread.createdAt, thread.titleSource, thread.titleStatus, thread.contextMode, thread.originThreadId, thread.providerThreadId, thread.state, thread.messageCount, thread.summaryRef, thread.lastActivityAt, thread.exploration.status, JSON.stringify(thread.exploration.missing), JSON.stringify(thread.exploration.completed), thread.exploration.candidatePlanId, thread.exploration.lastAssessedTurnId, thread.activeRevisionDraftId, thread.id);
+    this.database.prepare("UPDATE explorer_threads SET title = ?, created_at = ?, title_source = ?, title_status = ?, context_mode = ?, origin_thread_id = ?, provider_thread_id = ?, state = ?, message_count = ?, summary_ref = ?, last_activity_at = ?, exploration_status = ?, exploration_missing_json = ?, exploration_completed_json = ?, exploration_diagnostics_json = ?, candidate_plan_id = ?, last_assessed_turn_id = ?, active_revision_draft_id = ? WHERE id = ?").run(thread.title, thread.createdAt, thread.titleSource, thread.titleStatus, thread.contextMode, thread.originThreadId, thread.providerThreadId, thread.state, thread.messageCount, thread.summaryRef, thread.lastActivityAt, thread.exploration.status, JSON.stringify(thread.exploration.missing), JSON.stringify(thread.exploration.completed), JSON.stringify(thread.exploration.diagnostics), thread.exploration.candidatePlanId, thread.exploration.lastAssessedTurnId, thread.activeRevisionDraftId, thread.id);
     return this.getThread(thread.id) as ExplorerThread;
   }
 
@@ -2012,7 +2061,7 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   private threadFromRow(row: SqliteRow): ExplorerThread {
-    return { id: String(row.id), projectId: String(row.project_id), title: String(row.title ?? "New Explorer"), createdAt: String(row.created_at ?? row.last_activity_at), titleSource: String(row.title_source ?? "AUTO") as ExplorerTitleSource, titleStatus: String(row.title_status ?? "PLACEHOLDER") as ExplorerTitleStatus, contextMode: String(row.context_mode ?? "FRESH") as ExplorerThread["contextMode"], originThreadId: row.origin_thread_id === null || row.origin_thread_id === undefined ? null : String(row.origin_thread_id), parentThreadId: row.parent_thread_id === null ? null : String(row.parent_thread_id), providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id), state: String(row.state) as ExplorerThreadState, messageCount: Number(row.message_count), summaryRef: row.summary_ref === null ? null : String(row.summary_ref), lastActivityAt: String(row.last_activity_at), exploration: { status: String(row.exploration_status ?? "INCOMPLETE") as PlanExplorationStatus, missing: parseStringArray(row.exploration_missing_json, [...REQUIRED_PLAN_AREAS]), completed: parseStringArray(row.exploration_completed_json, []), candidatePlanId: row.candidate_plan_id === null || row.candidate_plan_id === undefined ? null : String(row.candidate_plan_id), lastAssessedTurnId: row.last_assessed_turn_id === null || row.last_assessed_turn_id === undefined ? null : String(row.last_assessed_turn_id) }, activeRevisionDraftId: row.active_revision_draft_id === null || row.active_revision_draft_id === undefined ? null : String(row.active_revision_draft_id) };
+    return { id: String(row.id), projectId: String(row.project_id), title: String(row.title ?? "New Explorer"), createdAt: String(row.created_at ?? row.last_activity_at), titleSource: String(row.title_source ?? "AUTO") as ExplorerTitleSource, titleStatus: String(row.title_status ?? "PLACEHOLDER") as ExplorerTitleStatus, contextMode: String(row.context_mode ?? "FRESH") as ExplorerThread["contextMode"], originThreadId: row.origin_thread_id === null || row.origin_thread_id === undefined ? null : String(row.origin_thread_id), parentThreadId: row.parent_thread_id === null ? null : String(row.parent_thread_id), providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id), state: String(row.state) as ExplorerThreadState, messageCount: Number(row.message_count), summaryRef: row.summary_ref === null ? null : String(row.summary_ref), lastActivityAt: String(row.last_activity_at), exploration: { status: String(row.exploration_status ?? "INCOMPLETE") as PlanExplorationStatus, missing: parseStringArray(row.exploration_missing_json, [...REQUIRED_PLAN_AREAS]), completed: parseStringArray(row.exploration_completed_json, []), diagnostics: parsePlanValidationIssues(row.exploration_diagnostics_json), candidatePlanId: row.candidate_plan_id === null || row.candidate_plan_id === undefined ? null : String(row.candidate_plan_id), lastAssessedTurnId: row.last_assessed_turn_id === null || row.last_assessed_turn_id === undefined ? null : String(row.last_assessed_turn_id) }, activeRevisionDraftId: row.active_revision_draft_id === null || row.active_revision_draft_id === undefined ? null : String(row.active_revision_draft_id) };
   }
 
   private inputRequestFromRow(row: SqliteRow): ExplorerInputRequest {
@@ -2201,13 +2250,15 @@ function executionContractFromResolvedV2(contract: ResolvedPlanContractV2): Plan
     baseBranch: contract.repository.baseBranch,
     baseCommit: contract.repository.baseCommit,
     tasks: contract.tasks,
-    conflictKeys: [],
+    conflictKeys: contract.conflicts,
     executorModelRole: contract.execution.executorModelRole,
     toolPolicy: contract.execution.toolPolicy,
     verificationCommandIds: contract.verification.commandIds,
     maxRepairAttempts: contract.execution.maxRepairAttempts,
     mergeStrategy: contract.merge.strategy,
     requireHumanMerge: true,
+    artifactMode: contract.artifact.mode,
+    ...(contract.artifact.path ? { artifactPath: contract.artifact.path } : {}),
     dependsOnPlanIds: contract.dependencies,
     priority: 0,
   };
@@ -2625,6 +2676,7 @@ export class PlanService {
   enqueue(planId: string): CandidatePlan {
     const plan = this.get(planId);
     if (plan.contract.schemaVersion === 1) throw new Error(`Legacy V1 Plan ${planId} is read-only and cannot be enqueued`);
+    if (plan.contract.artifactMode === "CONVERSATION") throw new Error("CONVERSATION_ARTIFACT_NOT_EXECUTABLE");
     if (plan.status === "ENQUEUED" || plan.status === "DISPATCHED" || plan.status === "IN_PROGRESS" || plan.status === "VERIFYING" || plan.status === "MERGE_READY" || plan.status === "MERGED") {
       return plan;
     }
@@ -2639,6 +2691,7 @@ export class PlanService {
   dispatch(planId: string): CandidatePlan {
     const plan = this.get(planId);
     if (plan.contract.schemaVersion === 1) throw new Error(`Legacy V1 Plan ${planId} is read-only and cannot be dispatched`);
+    if (plan.contract.artifactMode === "CONVERSATION") throw new Error("CONVERSATION_ARTIFACT_NOT_EXECUTABLE");
     if (plan.status === "DISPATCHED" || plan.status === "IN_PROGRESS" || plan.status === "VERIFYING" || plan.status === "MERGE_READY" || plan.status === "MERGED") return plan;
     if (plan.status !== "ENQUEUED") throw new Error(`Plan ${planId} must be enqueued before dispatch`);
     const dispatchedAt = this.store.now();
@@ -3639,19 +3692,19 @@ export class ExplorerThreadService {
     const thread = this.store.getThread(threadId);
     if (!current || !thread) return;
     const assessment = assessPlanCompletion(current.content);
-    this.store.updateThread({ ...thread, exploration: { ...thread.exploration, status: assessment.status, missing: assessment.missing, completed: assessment.completed, lastAssessedTurnId: assistantId }, lastActivityAt: this.store.now() });
-    this.publish(this.store.appendEvent({ type: assessment.status === "READY" ? "explorer.plan.ready" : "explorer.plan.incomplete", aggregateId: threadId, payload: { turnId: assistantId, missing: assessment.missing, completed: assessment.completed } }));
+    this.store.updateThread({ ...thread, exploration: { ...thread.exploration, status: assessment.status, missing: assessment.missing, completed: assessment.completed, diagnostics: assessment.diagnostics, lastAssessedTurnId: assistantId }, lastActivityAt: this.store.now() });
+    this.publish(this.store.appendEvent({ type: assessment.status === "READY" ? "explorer.plan.ready" : "explorer.plan.incomplete", aggregateId: threadId, payload: { turnId: assistantId, missing: assessment.missing, completed: assessment.completed, diagnostics: assessment.diagnostics } }));
     if (assessment.status === "READY" && assessment.artifact) {
       const source = this.planSource(assistantId);
       const activeDraftId = thread.activeRevisionDraftId;
       if (activeDraftId) {
         this.plans.updateRevisionDraftFromExplorer(activeDraftId, assessment.artifact, source);
-        this.store.updateThread({ ...this.store.getThread(threadId)!, exploration: { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], candidatePlanId: this.store.getRevisionDraft(activeDraftId)?.planId ?? null, lastAssessedTurnId: assistantId }, lastActivityAt: this.store.now() });
+        this.store.updateThread({ ...this.store.getThread(threadId)!, exploration: { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], diagnostics: [], candidatePlanId: this.store.getRevisionDraft(activeDraftId)?.planId ?? null, lastAssessedTurnId: assistantId }, lastActivityAt: this.store.now() });
       } else {
         const existing = this.store.listPlans().find((plan) => plan.sourceExplorerThreadId === threadId && plan.status === "DRAFT");
         // 对同一初始草稿的多次 READY 覆盖完整合同和来源，而不只更新 source 指针。
         const plan = existing ? this.store.updatePlan({ ...existing, title: assessment.artifact.title, ...(assessment.artifact.generatedSpec ? { generatedSpec: assessment.artifact.generatedSpec } : { contract: assessment.artifact.contract ?? existing.contract }), ...source, lastEventAt: this.store.now() }) : this.plans.createCandidatePlan({ projectId: thread.projectId, sourceExplorerThreadId: threadId, title: assessment.artifact.title, ...(assessment.artifact.generatedSpec ? { generatedSpec: assessment.artifact.generatedSpec } : { contract: assessment.artifact.contract }), ...source });
-        this.store.updateThread({ ...this.store.getThread(threadId)!, exploration: { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], candidatePlanId: plan.id, lastAssessedTurnId: assistantId }, lastActivityAt: this.store.now() });
+        this.store.updateThread({ ...this.store.getThread(threadId)!, exploration: { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], diagnostics: [], candidatePlanId: plan.id, lastAssessedTurnId: assistantId }, lastActivityAt: this.store.now() });
       }
     }
     this.store.updateTurn({ ...current, status: "COMPLETED", content: stripPlanProtocol(current.content) });

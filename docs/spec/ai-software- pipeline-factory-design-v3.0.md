@@ -811,18 +811,18 @@ READY
   └─ 允许用户 View full plan → Confirm plan → Enqueue plan
 ```
 
-完整性门禁至少检查目标、范围、技术约束、数据与安全、验收与验证、任务与依赖、冲突键、Executor ToolPolicy、修复上限以及合并策略。模型必须使用原生 `item/tool/requestUserInput` 承载需要用户决定的问题，并把当前可同时确认的问题合并到一个请求中；普通文本中的“请选择”不参与门禁，也不会触发弹窗。
+完整性门禁至少检查目标与受众、范围、技术约束、数据与安全、异常处理、验收与验证、任务与依赖、冲突、Executor ToolPolicy、修复上限以及合并策略。模型必须使用原生 `item/tool/requestUserInput` 承载需要用户决定的问题，并把当前可同时确认的问题合并到一个请求中；普通文本中的“请选择”不参与门禁，也不会触发弹窗。Explorer 启动时同时取得 `GET /api/v4/explorer-plan-requirements` 的要求清单并显示在主内容区，提示词与页面清单共享相同的字段语义。
 
-模型回合返回普通说明但没有完整协议块时，Factory 使用内部 `continuationPrompt` 在同一个本地 Explorer Turn 中继续调用同一 Provider Thread，不新增用户可见的伪消息。结构化问题到达时仍暂停该本地 Turn，答案提交后继续原 Provider Turn；原 Provider Turn 完成后再执行完整性门禁。达到 `runtime.maxAutoContinuationTurns` 后，Turn 可以正常结束，但线程明确保持 `INCOMPLETE`，CandidatePlan 不生成，用户可以继续发送补充说明。
+模型回合返回普通说明但没有完整协议块时，Factory 使用内部 `continuationPrompt` 在同一个本地 Explorer Turn 中继续调用同一 Provider Thread，不新增用户可见的伪消息。若 READY JSON 不通过校验，续探索提示必须列出全部 `PlanValidationIssue`（字段路径、错误类别、设计区域和修复说明），不得把所有 V2 错误折叠成泛化文案，也不得原样重复未通过的协议块。结构化问题到达时仍暂停该本地 Turn，答案提交后继续原 Provider Turn；原 Provider Turn 完成后再执行完整性门禁。步骤预算仍由 `model.loop.maxSteps` 控制，不因字段诊断新增提前终止阈值。
 
 完整协议块格式如下，协议标记不会展示在用户消息正文中：
 
 ```text
 <pipeline-factory-plan-status>READY</pipeline-factory-plan-status>
-<pipeline-factory-plan>{严格 JSON 的完整 PlanContract 与 title}</pipeline-factory-plan>
+<pipeline-factory-plan>{"schemaVersion":2,"title":"...","artifact":{"mode":"REPOSITORY_FILE","path":"docs/guide.md"},"objective":{"goal":"...","audience":["..."],"acceptanceCriteria":["..."],"outOfScope":[]},"design":{"technicalConstraints":["..."],"dataSecurity":["..."],"failureHandling":["..."]},"scope":{"includePaths":["docs/guide.md"],"excludePaths":[]},"tasks":[{"id":"task-1","title":"...","dependencies":[]}],"dependencies":[],"conflicts":[],"execution":{},"verification":{"mode":"PROJECT_DEFAULT"},"merge":{"strategy":"manual","requireHumanMerge":true}}</pipeline-factory-plan>
 ```
 
-只有协议状态为 `READY` 且契约所有字段通过校验时，线程才转为 `READY` 并创建 CandidatePlan。CandidatePlan 保存模型生成的契约，而不是使用占位默认值；Confirm 与 Enqueue 仍是两个独立的人工边界。
+只有协议状态为 `READY` 且契约所有字段通过校验时，线程才转为 `READY` 并创建 CandidatePlan。`REPOSITORY_FILE` 的 `artifact.path` 必须为仓库相对路径并包含在非空的 `scope.includePaths` 内；`CONVERSATION` 的 `scope.includePaths` 必须为空、验证模式必须为 `NONE`。两种模式都可 Confirm，但对话产物仅供审阅，服务端和页面均禁止 Enqueue、Dispatch 和 Start Run。CandidatePlan 保存模型生成的契约，而不是使用占位默认值；Confirm 与 Enqueue 仍是两个独立的人工边界。
 
 ## 15. Agent Loop 一体化运行时
 

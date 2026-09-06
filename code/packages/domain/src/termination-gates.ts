@@ -12,10 +12,12 @@ export class PlanCompletenessGate implements TerminationGate {
     const assessment = assessPlanCompletion(context.content ?? "");
     if (assessment.status === "READY") return { action: "complete", reason: "PLAN_READY" };
     const missing = assessment.missing.length > 0 ? assessment.missing.join("、") : "所有仍未明确的关键决策";
+    const diagnostics = assessment.diagnostics.map((item) => `- ${item.path}：${item.message}`).join("\n");
     return {
       action: "continue",
       reason: `PLAN_INCOMPLETE:完整方案缺少${assessment.missing.join(",")}`,
-      continuationPrompt: `继续完善当前需求的完整设计方案。当前仍缺少：${missing}。请先检查这些缺口；如果需要用户决策，请使用原生 item/tool/requestUserInput 一次询问当前可同时确认的问题。只有全部缺口解决后，才输出完整的 pipeline-factory-plan READY 协议块。`,
+      diagnostics: assessment.diagnostics,
+      continuationPrompt: `继续完善当前需求的完整设计方案。当前仍缺少：${missing}。\n字段级校验结果：\n${diagnostics || "- 尚未输出 READY 协议块。"}\n请逐项修复，不要原样重复未通过的 READY 协议块；如果需要用户决策，请使用原生 item/tool/requestUserInput 一次询问当前可同时确认的问题。只有全部缺口解决后，才输出完整的 pipeline-factory-plan READY 协议块。`,
     };
   }
 }

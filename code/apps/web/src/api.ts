@@ -41,6 +41,7 @@ export const api = {
   workbenchEvents: (projectId: string, afterSequence?: number) => request<{ items: WorkbenchEvent[]; cursor: number }>(`/api/v4/workbench/events?projectId=${encodeURIComponent(projectId)}&afterSequence=${afterSequence ?? 0}`),
   agentLoopTools: (loopId: string) => request<{ items: ToolCall[] }>("/api/v4/agent-loops/" + encodeURIComponent(loopId) + "/tools"),
   codexRateLimits: () => request<{ rateLimits: CodexRateLimitsStatus }>("/api/v4/codex/rate-limits"),
+  explorerPlanRequirements: () => request<{ requirements: { requirementsVersion: number; schemaVersion: number; areas: Array<{ key: string; label: string; requiredFields: string[]; optionalFields: string[]; factoryOwnedFields?: string[] }>; artifactModes: Array<{ mode: "CONVERSATION" | "REPOSITORY_FILE"; label: string; includePaths: string; verificationMode: string; executable: boolean }>; factoryOwnedFields: string[] } }>("/api/v4/explorer-plan-requirements"),
   explorers: (projectId: string) => request<{ items: ExplorerThread[] }>(`/api/v4/projects/${projectId}/explorers`),
   createExplorer: (projectId: string, title?: string, originThreadId?: string) => request<{ explorer: ExplorerThread }>(`/api/v4/projects/${projectId}/explorers`, { method: "POST", body: JSON.stringify({ ...(title ? { title } : {}), ...(originThreadId ? { originThreadId } : {}) }) }),
   explorer: (projectId: string, explorerId: string) => request<{ explorer: ExplorerThread }>(`/api/v4/projects/${projectId}/explorers/${encodeURIComponent(explorerId)}`),

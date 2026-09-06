@@ -25,26 +25,32 @@ export type ExecutionStreamItem = {
 /** 将 ExecutionThread journal 映射成类似 Explorer 对话的模型/活动消息流。 */
 export function projectExecutionJournal(journal: ExecutionJournalEntry[], threadState: string = "ACTIVE"): ExecutionStreamItem[] {
   const items: ExecutionStreamItem[] = [];
+  let pendingModelText = "";
+  let pendingModelSequence = 0;
+  let pendingModelOccurredAt = "";
+  const flushModel = () => {
+    if (!pendingModelText) return;
+    const content = humanizeModelOutput(pendingModelText);
+    if (content) items.push({ id: `execution-model-${pendingModelSequence}`, kind: "model", role: "assistant", title: content.title, content: content.body, detail: "", status: "COMPLETED", occurredAt: pendingModelOccurredAt, sequence: pendingModelSequence });
+    pendingModelText = "";
+  };
   for (const entry of journal) {
     if (entry.type === "MODEL_OUTPUT") {
       const text = typeof entry.payload.text === "string" ? entry.payload.text : "";
-      const previous = items.at(-1);
-      if (previous?.kind === "model" && previous.sequence < entry.sequence) {
-        previous.content += text;
-        previous.sequence = entry.sequence;
-        previous.occurredAt = entry.occurredAt;
-      } else {
-        items.push({ id: `execution-model-${entry.sequence}`, kind: "model", role: "assistant", title: "Executor", content: text, detail: "", status: "COMPLETED", occurredAt: entry.occurredAt, sequence: entry.sequence });
-      }
-      if (threadState === "ACTIVE" && journal.at(-1)?.sequence === entry.sequence) {
-        const current = items.at(-1);
-        if (current) current.status = "RUNNING";
-      }
+      pendingModelText += text;
+      pendingModelSequence = entry.sequence;
+      pendingModelOccurredAt = entry.occurredAt;
       continue;
     }
 
+    flushModel();
     const projected = projectExecutionActivity(entry);
     if (projected) items.push(projected);
+  }
+  flushModel();
+  if (threadState === "ACTIVE") {
+    const current = items.at(-1);
+    if (current?.kind === "model") current.status = "RUNNING";
   }
   return items;
 }
@@ -73,9 +79,13 @@ function projectExecutionActivity(entry: ExecutionJournalEntry): ExecutionStream
     const state = String(payload.state ?? "");
     if (state === "BLOCKED") return activity(entry, "Run blocked", String(payload.reason ?? "Unknown blocking reason"), "FAILED");
     if (state === "CANCELLED") return activity(entry, "Run cancelled", String(payload.reason ?? "Cancelled"), "FAILED");
-    if (event === "agent.context.compacted") return activity(entry, "Context compacted", `Message count ${String(payload.messageCount ?? "—")}`, "COMPLETED");
-    if (event === "agent.model.completed") return activity(entry, "Model step completed", `Step ${String(payload.step ?? "—")}`, "COMPLETED");
-    if (event === "agent.step.started") return activity(entry, "Model step started", `Step ${String(payload.step ?? "—")}`, "RUNNING");
+    if (payload.action === "task-status") {
+      const completed = Array.isArray(payload.completedTaskIds) ? payload.completedTaskIds.filter((id): id is string => typeof id === "string") : [];
+      const detail = `${completed.length} task(s) completed${typeof payload.activeTaskId === "string" ? ` · active ${payload.activeTaskId}` : ""}${typeof payload.blockedTaskId === "string" ? ` · blocked ${payload.blockedTaskId}` : ""}`;
+      return activity(entry, "Task progress", detail, typeof payload.blockedTaskId === "string" ? "FAILED" : typeof payload.activeTaskId === "string" ? "RUNNING" : "COMPLETED");
+    }
+    // High-frequency loop bookkeeping remains available in Diagnostics, not the primary conversation.
+    if (event === "agent.context.compacted" || event === "agent.model.completed" || event === "agent.step.started") return null;
     if (event === "agent.gate.checked") return activity(entry, "Execution gate checked", `${String(payload.action ?? "unknown")} · ${String(payload.reason ?? "")}`.trim(), payload.action === "blocked" ? "FAILED" : "INFO");
     if (event === "agent.loop.created" || payload.action === "executor_loop_created") return activity(entry, "Executor started", String(payload.loopId ?? ""), "RUNNING");
     if (payload.action === "legacy_plan_revision") return activity(entry, "Legacy Plan revision", String(payload.reason ?? "Using legacy runtime settings"), "INFO");
@@ -93,4 +103,23 @@ function activity(entry: ExecutionJournalEntry, title: string, detail: string, s
 function formatPayloadDetail(payload: Record<string, unknown>): string {
   const values = Object.entries(payload).filter(([, value]) => value !== null && value !== undefined).map(([key, value]) => `${key}: ${typeof value === "string" ? value : JSON.stringify(value)}`);
   return values.join(" · ");
+}
+
+function humanizeModelOutput(content: string): { title: string; body: string } | null {
+  const startMarker = "<pipeline-factory-execution-report>";
+  const endMarker = "</pipeline-factory-execution-report>";
+  const start = content.lastIndexOf(startMarker);
+  if (start < 0) return { title: "Executor", body: content };
+  const jsonStart = start + startMarker.length;
+  const end = content.indexOf(endMarker, jsonStart);
+  if (end < 0) return { title: "Executor", body: content };
+  try {
+    const report = JSON.parse(content.slice(jsonStart, end).trim()) as { completedTaskIds?: unknown; changedPaths?: unknown; report?: unknown };
+    const completed = Array.isArray(report.completedTaskIds) ? report.completedTaskIds.filter((id): id is string => typeof id === "string") : [];
+    const changedPaths = Array.isArray(report.changedPaths) ? report.changedPaths.filter((path): path is string => typeof path === "string") : [];
+    const summary = typeof report.report === "string" ? report.report : "Execution report recorded.";
+    return { title: "Executor report", body: `${summary}\n\nCompleted ${completed.length} task(s) · ${changedPaths.length} changed path(s)` };
+  } catch {
+    return { title: "Executor", body: content.slice(0, start).trim() || "Execution report could not be parsed." };
+  }
 }

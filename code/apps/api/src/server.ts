@@ -36,6 +36,7 @@ import {
   ChangeProposalService,
   VerificationService,
   PlanDispatchCoordinator,
+  EXPLORER_PLAN_REQUIREMENTS,
   mapCodexRateLimits,
   type PipelineStore,
   type HookDefinition,
@@ -608,6 +609,8 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       return reply.code(409).send({ error: error instanceof Error ? error.message : "Explorer cannot be created" });
     }
   });
+
+  app.get("/api/v4/explorer-plan-requirements", async () => ({ requirements: EXPLORER_PLAN_REQUIREMENTS }));
 
   app.get("/api/v4/projects/:projectId/explorers", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
@@ -1244,6 +1247,7 @@ function findProjectThread(store: PipelineStore, projectId: string, threadId?: s
 function decoratePlanRows(store: PipelineStore, rows: Array<{ planId: string; revision: number; projectId: string }>) {
   return rows.map((row) => {
     const revision = store.getRevision(row.planId, row.revision);
+    const plan = store.getPlan(row.planId);
     const snapshot = revision?.projectConfigSnapshot;
     const project = store.getProject(row.projectId);
     return {
@@ -1252,6 +1256,8 @@ function decoratePlanRows(store: PipelineStore, rows: Array<{ planId: string; re
       projectConfigHash: revision?.projectConfigHash ?? null,
       projectConfigStatus: !snapshot ? "LEGACY" : project && snapshot.configVersion === project.configVersion && snapshot.configHash === project.configHash ? "CURRENT" : "CHANGED",
       dispatch: store.getDispatchState(row.planId) ?? null,
+      ...(plan?.generatedSpec ? { generatedSpec: plan.generatedSpec } : {}),
+      ...(plan?.resolvedContract ? { resolvedContract: plan.resolvedContract } : {}),
     };
   });
 }
