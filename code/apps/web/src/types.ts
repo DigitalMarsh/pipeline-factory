@@ -319,12 +319,31 @@ export type MergeRequest = {
   detectedTargetCommit?: string | null;
 };
 
+export type ModelUsage = {
+  inputTokens: number | null;
+  outputTokens: number | null;
+  reasoningTokens: number | null;
+  totalTokens: number | null;
+};
+
+export type ExecutionTelemetry = {
+  model: string | null;
+  reasoningEffort: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  durationMs: number | null;
+  usage: ModelUsage | null;
+  usageSource: "provider" | "not-recorded";
+  usageScope: "turn" | "total" | null;
+};
+
 /** Run 的可审计 journal 容器，也是执行对话的事实来源。 */
 export type ExecutionThread = {
   id: string;
   runId: string;
   state: string;
   journal: Array<{ sequence: number; type: string; occurredAt: string; payload: Record<string, unknown> }>;
+  telemetry?: ExecutionTelemetry | null;
 };
 
 /** Run SSE 单条事件；sequence 用于去重和 Last-Event-ID 回放。 */
@@ -332,6 +351,7 @@ export type RunJournalEvent = {
   runId: string;
   runStatus: string | null;
   threadState: string | null;
+  threadTelemetry?: ExecutionTelemetry | null;
   sequence: number;
   type: string;
   occurredAt: string;

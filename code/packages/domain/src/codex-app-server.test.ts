@@ -181,6 +181,27 @@ describe("CodexAppServerGateway", () => {
     ]);
   });
 
+  it("maps nested Codex App Server token usage notifications", async () => {
+    const calls: Array<{ method: string; params: unknown }> = [];
+    const gateway = new CodexAppServerGateway({
+      roles: { explorer: { model: "explorer-model" }, executor: { model: "executor-model" } },
+      sessionFactory: createSessionFactory([
+        { method: "thread/tokenUsage/updated", params: { threadId: "codex-thread-1", tokenUsage: { total: { inputTokens: 240, outputTokens: 80, reasoningOutputTokens: 25, totalTokens: 320 } } } },
+        { method: "turn/completed", params: { turn: { id: "turn-usage", status: "completed", usage: { input_tokens: 12, output_tokens: 5, total_tokens: 17 } } } },
+      ], calls),
+    });
+
+    const events = [];
+    for await (const event of gateway.stream({ role: "executor", conversationId: "executor-usage", messages: [{ role: "user", content: "execute" }] })) events.push(event);
+
+    expect(events).toEqual([
+      { type: "thread.started", threadId: "codex-thread-1" },
+      { type: "model.usage", usage: { inputTokens: 240, outputTokens: 80, reasoningTokens: 25, totalTokens: 320 }, scope: "total", providerThreadId: "codex-thread-1" },
+      { type: "model.usage", usage: { inputTokens: 12, outputTokens: 5, reasoningTokens: null, totalTokens: 17 }, scope: "turn", providerThreadId: "codex-thread-1", providerTurnId: "turn-usage" },
+      { type: "turn.completed" },
+    ]);
+  });
+
   it("interrupts the existing provider session when the loop id differs from the Explorer id", async () => {
     const calls: Array<{ method: string; params: unknown }> = [];
     let factoryCalls = 0;

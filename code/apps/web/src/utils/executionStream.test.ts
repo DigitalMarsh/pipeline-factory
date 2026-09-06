@@ -48,6 +48,7 @@ describe("projectExecutionJournal", () => {
       { sequence: 1, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:00.000Z", payload: { event: "agent.step.started", step: 1 } },
       { sequence: 2, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:01.000Z", payload: { event: "agent.model.completed", step: 1 } },
       { sequence: 3, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:02.000Z", payload: { event: "agent.context.compacted", messageCount: 4 } },
+      { sequence: 4, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:03.000Z", payload: { event: "continue" } },
     ], "ACTIVE");
 
     expect(items).toEqual([]);
@@ -55,9 +56,15 @@ describe("projectExecutionJournal", () => {
 
   it("folds repeated reports with unchanged task progress into one card", () => {
     const report = (text: string, sequence: number) => ({ sequence, type: "MODEL_OUTPUT", occurredAt: `2026-08-30T07:00:0${sequence}.000Z`, payload: { text: `<pipeline-factory-execution-report>${JSON.stringify({ completedTaskIds: ["task-1"], changedPaths: [], report: text })}</pipeline-factory-execution-report>` } });
-    const items = projectExecutionJournal([report("第一轮完成", 1), { sequence: 2, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:02.000Z", payload: { action: "task-status", completedTaskIds: ["task-1"] } }, report("没有新的可执行内容", 3), { sequence: 4, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:04.000Z", payload: { action: "task-status", completedTaskIds: ["task-1"] } }], "BLOCKED");
+    const items = projectExecutionJournal([report("第一轮完成", 1), { sequence: 2, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:02.000Z", payload: { action: "task-status", completedTaskIds: ["task-1"] } }, { sequence: 2.5, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:02.500Z", payload: { event: "agent.model.completed", step: 1 } }, report("没有新的可执行内容", 3), { sequence: 4, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:04.000Z", payload: { action: "task-status", completedTaskIds: ["task-1"] } }], "BLOCKED");
 
     expect(items.filter((item) => item.title === "Executor report")).toHaveLength(1);
     expect(items.find((item) => item.title === "Executor report")?.repetitionCount).toBe(2);
+  });
+
+  it("does not leak an incomplete report protocol into the conversation", () => {
+    const items = projectExecutionJournal([{ sequence: 1, type: "MODEL_OUTPUT", occurredAt: "2026-08-30T07:00:00.000Z", payload: { text: "<pipeline-factory-execution-report>{\"completedTaskIds\":[\"task-1\"]" } }], "ACTIVE");
+
+    expect(items[0]).toMatchObject({ title: "Executor report", content: "Execution report is still streaming." });
   });
 });

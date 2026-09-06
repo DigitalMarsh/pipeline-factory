@@ -128,6 +128,7 @@ describe("ExecutorAgent", () => {
       capabilities: () => ({ supportsStructuredUserInput: false, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
       async *stream(request: ModelRequest): AsyncIterable<ModelEvent> {
         expect(request.role).toBe("executor");
+        yield { type: "model.usage", usage: { inputTokens: 100, outputTokens: 40, reasoningTokens: 12, totalTokens: 140 }, scope: "turn" };
         yield { type: "text.delta", text: executionReport(plan.contract.tasks[0]!.id) };
         yield { type: "turn.completed" };
       },
@@ -141,8 +142,12 @@ describe("ExecutorAgent", () => {
 
     expect(loop.state).toBe("COMPLETED");
     expect(store.getRun(run.id)?.status).toBe("READY_FOR_VERIFY");
+    expect(store.getExecutionThread(run.executionThreadId)?.telemetry).toMatchObject({ model: "gpt-5.6-luna", reasoningEffort: null, usage: { inputTokens: 100, outputTokens: 40, reasoningTokens: 12, totalTokens: 140 }, usageSource: "provider" });
+    expect(store.getExecutionThread(run.executionThreadId)?.telemetry?.durationMs).toEqual(expect.any(Number));
     expect(store.getExecutionThread(run.executionThreadId)?.journal.map((entry) => entry.type)).toEqual(expect.arrayContaining(["MODEL_OUTPUT", "TASK_PROGRESS"]));
-    expect(store.getExecutionThread(run.executionThreadId)?.journal.some((entry) => entry.payload.action === "task-status" && entry.payload.completedTaskIds?.includes("task-1"))).toBe(true);
+    const taskStatus = store.getExecutionThread(run.executionThreadId)?.journal.find((entry) => entry.payload.action === "task-status");
+    const completedTaskIds = taskStatus?.payload.completedTaskIds;
+    expect(Array.isArray(completedTaskIds) && completedTaskIds.includes("task-1")).toBe(true);
   });
 
   it("does not treat a model completion message as task completion", async () => {

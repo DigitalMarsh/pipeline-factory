@@ -4,7 +4,7 @@
  * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { EXPLORER_PLAN_INSTRUCTIONS, type ModelCapabilities, type ModelEvent, type ModelGateway, type ModelMessage, type ModelRequest, type ModelRole, type ModelRoleConfig } from "./index.js";
+import { EXPLORER_PLAN_INSTRUCTIONS, normalizeModelUsage, type ModelCapabilities, type ModelEvent, type ModelGateway, type ModelMessage, type ModelRequest, type ModelRole, type ModelRoleConfig } from "./index.js";
 import { mapCodexRateLimits, type CodexRateLimitsResponse, type MappedCodexRateLimits } from "./codex-rate-limits.js";
 
 type JsonObject = Record<string, unknown>;
@@ -447,12 +447,13 @@ export class CodexAppServerGateway implements ModelGateway {
       })) {
         const eventTurnId = getEventTurnId(event.params);
         const mapped = mapCodexEvent(event, { providerThreadId, ...(eventTurnId ? { providerTurnId: eventTurnId } : {}) });
-        if (mapped) {
-          if (mapped.type === "turn.input_required") {
+        const mappedEvents = mapped ? Array.isArray(mapped) ? mapped : [mapped] : [];
+        for (const mappedEvent of mappedEvents) {
+          if (mappedEvent.type === "turn.input_required") {
             if (event.id === undefined) throw new Error("Codex App Server input request did not include a JSON-RPC id");
             this.pendingInputSessions.set(String(event.id), session);
           }
-          yield mapped;
+          yield mappedEvent;
         }
       }
     } catch (error) {
@@ -495,7 +496,11 @@ export class CodexAppServerGateway implements ModelGateway {
 }
 
 /** 把外部通知转换成内部统一 ModelEvent；未知通知安全忽略而不伪造模型输出。 */
-function mapCodexEvent(event: CodexAppServerEvent, source: { providerThreadId?: string; providerTurnId?: string } = {}): ModelEvent | null {
+function mapCodexEvent(event: CodexAppServerEvent, source: { providerThreadId?: string; providerTurnId?: string } = {}): ModelEvent | ModelEvent[] | null {
+  if (event.method.includes("tokenUsage") || event.method.includes("token_usage") || event.method === "thread/tokenUsage/updated" || event.method === "thread/usage/updated") {
+    const usage = extractCodexUsage(event.params);
+    return usage ? [{ type: "model.usage", usage, scope: "total", ...(source.providerThreadId ? { providerThreadId: source.providerThreadId } : {}), ...(source.providerTurnId ? { providerTurnId: source.providerTurnId } : {}) }] : null;
+  }
   if (event.method === "item/agentMessage/delta") {
     const text = getString(event.params, "delta");
     if (text === undefined) return null;
@@ -542,13 +547,16 @@ function mapCodexEvent(event: CodexAppServerEvent, source: { providerThreadId?: 
   }
   if (event.method !== "turn/completed") return null;
   const turn = getObject(event.params, "turn");
+  const usage = extractCodexUsage(turn) ?? extractCodexUsage(event.params);
+  const usageEvent = usage ? { type: "model.usage" as const, usage, scope: "turn" as const, ...(source.providerThreadId ? { providerThreadId: source.providerThreadId } : {}), ...(source.providerTurnId ? { providerTurnId: source.providerTurnId } : {}) } : null;
   const status = getString(turn, "status");
-  if (status === "interrupted") return { type: "turn.cancelled" };
+  if (status === "interrupted") return usageEvent ? [usageEvent, { type: "turn.cancelled" }] : { type: "turn.cancelled" };
   if (status === "failed") {
     const turnError = getObject(turn, "error");
-    return { type: "turn.failed", error: getString(turnError, "message") ?? "Codex turn failed" };
+    const failed = { type: "turn.failed" as const, error: getString(turnError, "message") ?? "Codex turn failed" };
+    return usageEvent ? [usageEvent, failed] : failed;
   }
-  return { type: "turn.completed" };
+  return usageEvent ? [usageEvent, { type: "turn.completed" }] : { type: "turn.completed" };
 }
 
 function latestUserMessage(messages: ModelMessage[]): string {
@@ -573,6 +581,19 @@ function getString(value: unknown, key: string): string | undefined {
 
 function getEventTurnId(params: JsonObject): string | undefined {
   return getString(params, "turnId") ?? getString(getObject(params, "turn"), "id");
+}
+
+function extractCodexUsage(value: unknown): ReturnType<typeof normalizeModelUsage> {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as JsonObject;
+  const usage = candidate.usage ?? candidate.tokenUsage ?? candidate.token_usage ?? getObject(candidate, "response").usage ?? getObject(candidate, "turn").usage;
+  const direct = normalizeModelUsage(usage);
+  if (direct) return direct;
+  if (usage && typeof usage === "object") {
+    const nested = usage as JsonObject;
+    return normalizeModelUsage(nested.total) ?? normalizeModelUsage(nested.last) ?? normalizeModelUsage(nested.current);
+  }
+  return normalizeModelUsage(candidate);
 }
 
 function createAbortError(): Error {

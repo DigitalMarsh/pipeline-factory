@@ -10,6 +10,7 @@ import { useRoute, useRouter } from "vue-router";
 import { api } from "../api";
 import type { AgentLoopStep, ExecutionTask, ExecutionThread, MergeRequest, PlanTask, Run, RunJournalEvent, ToolCall, VerificationRun } from "../types";
 import { projectExecutionJournal, type ExecutionJournalEntry, type ExecutionStreamItem } from "../utils/executionStream";
+import { formatExecutionDuration, formatTokenSummary, telemetryModel, telemetryReasoning, usageDetailRows } from "../utils/executionTelemetry";
 import { executionTaskStatusLabel, executionTaskStatusType, executionTaskSummary, projectExecutionTasks, verificationSummary } from "../utils/executionTasks";
 import { canPauseRun, canTerminateRun } from "../utils/runControls";
 import { describeRunLoadError } from "../utils/runLoadError";
@@ -40,8 +41,10 @@ const runStreamConnected = ref(false);
 const executionStepsExpanded = ref(true);
 const diagnosticsOpen = ref(false);
 const selectedTaskId = ref<string | null>(null);
+const telemetryNow = ref(Date.now());
 let runEventSource: EventSource | null = null;
 let runEventSequence = 0;
+let telemetryTimer: ReturnType<typeof setInterval> | null = null;
 // ExecutionThread journal 是持久化事实，conversation projection 只负责把事实转换为可读消息。
 // sequence 同时作为 SSE 游标，重连时从最后一条已接受的事件继续回放。
 const loopStatusLabel = computed(() => ({ CREATED: "Created", RUNNING: "Running", WAITING_FOR_INPUT: "Waiting for input", PAUSED: "Paused", RECOVERING: "Recovery required", BLOCKED: "Blocked", COMPLETED: "Completed", FAILED: "Failed", CANCELLED: "Cancelled", NEEDS_RECONCILIATION: "Needs reconciliation" } as Record<string, string>)[executorLoop.value?.state ?? ""] ?? "No loop");
@@ -57,6 +60,17 @@ const executionBlockReason = computed(() => {
 const executionTasks = computed<ExecutionTask[]>(() => projectExecutionTasks(planTasks.value, thread.value?.journal ?? [], run.value?.status ?? ""));
 const executionTaskCounts = computed(() => executionTaskSummary(executionTasks.value));
 const verificationStatusSummary = computed(() => verificationSummary(verification.value));
+const executionTelemetry = computed(() => thread.value?.telemetry ?? null);
+const executionDuration = computed(() => formatExecutionDuration(executionTelemetry.value, telemetryNow.value));
+const executionTokenSummary = computed(() => formatTokenSummary(executionTelemetry.value?.usage));
+const executionTelemetryModel = computed(() => telemetryModel(executionTelemetry.value));
+const executionTelemetryReasoning = computed(() => telemetryReasoning(executionTelemetry.value));
+const executionUsageRows = computed(() => usageDetailRows(executionTelemetry.value?.usage));
+
+function pendingDependencyCount(task: ExecutionTask): number {
+  const completedIds = new Set(executionTasks.value.filter((candidate) => candidate.status === "DONE").map((candidate) => candidate.id));
+  return task.dependencies.filter((dependency) => !completedIds.has(dependency)).length;
+}
 
 /** 用服务端 journal 重建执行对话，并更新 SSE 回放游标。 */
 function setExecutionThread(next: ExecutionThread | null): void {
@@ -95,16 +109,23 @@ function focusExecutionTask(task: ExecutionTask): void {
 
 /** 接收单条 Run SSE；重复 sequence 直接忽略，避免重连导致消息重复。 */
 function appendRunJournalEvent(event: RunJournalEvent): void {
-  if (!thread.value || event.sequence <= runEventSequence) return;
+  const currentThread = thread.value;
+  if (!currentThread || event.sequence <= runEventSequence) return;
   const shouldFollow = isAtExecutionLatest();
   const entry: ExecutionJournalEntry = { sequence: event.sequence, type: event.type, occurredAt: event.occurredAt, payload: event.payload };
-  thread.value = { ...thread.value, state: event.threadState ?? thread.value.state, journal: [...thread.value.journal, entry] };
+  const nextThread: ExecutionThread = { ...currentThread, state: event.threadState ?? currentThread.state, journal: [...currentThread.journal, entry], ...(event.threadTelemetry === undefined ? {} : { telemetry: event.threadTelemetry }) };
+  thread.value = nextThread;
   runEventSequence = event.sequence;
   if (event.runStatus && run.value) run.value = { ...run.value, status: event.runStatus };
-  executionMessages.value = projectExecutionJournal(thread.value.journal, thread.value.state);
+  executionMessages.value = projectExecutionJournal(nextThread.journal, nextThread.state);
   if (event.runStatus && ["BLOCKED", "CANCELLED", "MERGE_READY", "MERGED"].includes(event.runStatus)) closeRunEvents();
   if (shouldFollow) scrollExecutionToLatest();
   else showScrollToLatest.value = true;
+}
+
+function applyStreamTelemetry(event: { threadTelemetry?: ExecutionThread["telemetry"] }): void {
+  if (!thread.value || event.threadTelemetry === undefined) return;
+  thread.value = { ...thread.value, telemetry: event.threadTelemetry };
 }
 
 /** 仅为仍可能产生事实的 Run 建立 SSE；终态 Run 依赖已加载的持久化 journal。 */
@@ -113,7 +134,8 @@ function connectRunEvents(): void {
   runEventSource?.close();
   runEventSource = new EventSource(api.runEventsUrl(run.value.id, runEventSequence));
   runEventSource.addEventListener("open", () => { runStreamConnected.value = true; });
-  runEventSource.addEventListener("stream.ready", () => { runStreamConnected.value = true; });
+  runEventSource.addEventListener("stream.ready", (raw) => { runStreamConnected.value = true; try { applyStreamTelemetry(JSON.parse((raw as MessageEvent).data) as { threadTelemetry?: ExecutionThread["telemetry"] }); } catch { /* Initial GET remains the source of truth. */ } });
+  runEventSource.addEventListener("telemetry.updated", (raw) => { try { applyStreamTelemetry(JSON.parse((raw as MessageEvent).data) as { threadTelemetry?: ExecutionThread["telemetry"] }); } catch { /* The next poll or reconnect will recover the latest snapshot. */ } });
   runEventSource.addEventListener("journal.entry", (raw) => {
     try { appendRunJournalEvent(JSON.parse((raw as MessageEvent).data) as RunJournalEvent); }
     catch { /* The next reconnect will replay from the last accepted sequence. */ }
@@ -239,8 +261,8 @@ async function confirmMerged() {
   finally { actionBusy.value = false; }
 }
   watch([projectId, () => route.params.runId], () => { closeRunEvents(); void load().then(() => { if (run.value) connectRunEvents(); }); });
-  onMounted(async () => { await load(); connectRunEvents(); scrollExecutionToLatest(); });
-  onBeforeUnmount(() => { requestScope.invalidate(); closeRunEvents(); });
+  onMounted(async () => { telemetryTimer = setInterval(() => { if (executionTelemetry.value?.completedAt === null || executionTelemetry.value?.durationMs === null) telemetryNow.value = Date.now(); }, 1000); await load(); connectRunEvents(); scrollExecutionToLatest(); });
+  onBeforeUnmount(() => { requestScope.invalidate(); closeRunEvents(); if (telemetryTimer) clearInterval(telemetryTimer); });
 </script>
 
 <template>
@@ -250,6 +272,15 @@ async function confirmMerged() {
     <template v-if="run">
       <div class="detail-heading"><div><div class="eyebrow">RUN · {{ run.id }}</div><h1>Execution run</h1><p>Plan <code>{{ run.planId }}</code> · Revision {{ run.planRevision }} · <code>{{ run.branch }}</code></p></div><el-tag :type="displayedRunStatus === 'BLOCKED' ? 'danger' : displayedRunStatus === 'MERGE_READY' ? 'warning' : displayedRunStatus === 'MERGED' ? 'success' : 'warning'" effect="light">{{ label(displayedRunStatus) }}</el-tag></div>
       <div class="run-facts"><div><span>WORKSPACE</span><code>{{ run.workspacePath ?? "Not created" }}</code></div><div><span>BASE COMMIT</span><code>{{ run.baseCommit }}</code></div><div><span>THREAD</span><code>{{ run.executionThreadId }}</code></div><div><span>STARTED</span><strong>{{ run.startedAt ? new Date(run.startedAt).toLocaleString('zh-CN') : "—" }}</strong></div></div>
+      <section class="execution-telemetry-panel" aria-labelledby="execution-telemetry-heading">
+        <div class="execution-telemetry-heading"><div><div class="eyebrow">EXECUTION TELEMETRY</div><h2 id="execution-telemetry-heading">执行遥测</h2></div><span class="telemetry-source">{{ executionTelemetry?.usageSource === 'provider' ? 'Provider 精确值' : 'Token 未记录' }}</span></div>
+        <div class="execution-telemetry-grid">
+          <div class="execution-telemetry-card"><span>MODEL</span><strong>{{ executionTelemetryModel }}</strong><small>实际生效模型</small></div>
+          <div class="execution-telemetry-card"><span>REASONING</span><strong>{{ executionTelemetryReasoning }}</strong><small>冻结的推理等级</small></div>
+          <div class="execution-telemetry-card"><span>TOKENS USED</span><strong>{{ executionTokenSummary }}</strong><small>{{ executionTelemetry?.usageSource === 'provider' ? '输入 / 输出 / 推理 / 总量可在诊断中查看' : 'Provider 未返回精确 usage' }}</small></div>
+          <div class="execution-telemetry-card"><span>EXECUTION TIME</span><strong>{{ executionDuration }}</strong><small>{{ executorLoop?.state === 'RUNNING' || executorLoop?.state === 'PAUSED' ? '实时 wall-clock' : 'Executor Loop wall-clock' }}</small></div>
+        </div>
+      </section>
       <section v-if="executionTasks.length" class="execution-steps-panel" aria-labelledby="execution-steps-heading">
         <div class="execution-steps-heading">
           <div>
@@ -263,13 +294,13 @@ async function confirmMerged() {
         <div v-show="executionStepsExpanded" class="execution-task-list">
           <button v-for="task in executionTasks" :key="task.id" type="button" :class="['execution-task', `execution-task-${task.status.toLowerCase()}`, { selected: selectedTaskId === task.id }]" :aria-label="`${task.title}, ${executionTaskStatusLabel(task.status)}`" @click="focusExecutionTask(task)">
             <span class="execution-task-marker"><CircleCheck v-if="task.status === 'DONE'" :size="14" /><Warning v-else-if="task.status === 'BLOCKED'" :size="14" /><span v-else-if="task.status === 'IN_PROGRESS'" class="execution-task-pulse" /><span v-else class="execution-task-number">{{ executionTasks.indexOf(task) + 1 }}</span></span>
-            <span class="execution-task-copy"><strong>{{ task.title }}</strong><small v-if="task.status === 'BLOCKED' && task.blockedReason">{{ task.blockedReason }}</small><small v-else-if="task.dependencies.length && task.status === 'PENDING'">Waiting for {{ task.dependencies.length }} prerequisite(s)</small></span>
+            <span class="execution-task-copy"><strong>{{ task.title }}</strong><small v-if="task.status === 'BLOCKED' && task.blockedReason">{{ task.blockedReason }}</small><small v-else-if="task.status === 'PENDING' && pendingDependencyCount(task)">Waiting for {{ pendingDependencyCount(task) }} prerequisite(s)</small><small v-else-if="task.status === 'PENDING'">Not reached yet</small></span>
             <el-tag size="small" effect="light" :type="executionTaskStatusType(task.status)">{{ executionTaskStatusLabel(task.status) }}</el-tag>
           </button>
         </div>
         <div v-if="verificationStatusSummary" class="execution-steps-evidence"><span class="execution-evidence-dot" :class="{ failed: verification?.status === 'FAILED' || verification?.status === 'BLOCKED' }" /> {{ verificationStatusSummary }}</div>
       </section>
-      <section v-if="executorLoop" class="agent-loop-detail"><div><div class="eyebrow">EXECUTOR AGENT LOOP</div><h2>{{ loopStatusLabel }}</h2><p>Provider-controlled · {{ executorLoop.mode }} · {{ executorLoop.stepCount }} / {{ executorLoop.maxSteps }} loop steps</p><div v-if="executorSteps.length" class="loop-step-list"><span v-for="step in executorSteps.slice(-4)" :key="`${step.loopId}-${step.sequence}`" class="loop-step"><strong>#{{ step.sequence }}</strong> {{ step.stepType }}</span></div></div><div class="loop-detail-actions"><el-button v-if="executorLoop.state === 'RUNNING'" size="small" @click="controlExecutorLoop('pause')"><VideoPause :size="14" /> Pause loop</el-button><el-button v-if="executorLoop.state === 'PAUSED'" size="small" @click="controlExecutorLoop('resume')"><VideoPlay :size="14" /> Resume loop</el-button><el-button v-if="['RUNNING', 'PAUSED', 'RECOVERING', 'WAITING_FOR_INPUT'].includes(executorLoop.state)" size="small" type="danger" plain @click="controlExecutorLoop('cancel')">Cancel loop</el-button></div></section>
+      <section v-if="executorLoop" class="agent-loop-detail"><div><div class="eyebrow">EXECUTOR AGENT LOOP</div><h2>{{ loopStatusLabel }}</h2><p>{{ executorLoop.mode }} · {{ executorLoop.stepCount }} / {{ executorLoop.maxSteps }} loop steps</p><div v-if="executorSteps.length" class="loop-step-list"><span v-for="step in executorSteps.slice(-4)" :key="`${step.loopId}-${step.sequence}`" class="loop-step"><strong>#{{ step.sequence }}</strong> {{ step.stepType }}</span></div></div><div class="loop-detail-actions"><el-button v-if="executorLoop.state === 'RUNNING'" size="small" @click="controlExecutorLoop('pause')"><VideoPause :size="14" /> Pause loop</el-button><el-button v-if="executorLoop.state === 'PAUSED'" size="small" @click="controlExecutorLoop('resume')"><VideoPlay :size="14" /> Resume loop</el-button><el-button v-if="['RUNNING', 'PAUSED', 'RECOVERING', 'WAITING_FOR_INPUT'].includes(executorLoop.state)" size="small" type="danger" plain @click="controlExecutorLoop('cancel')">Cancel loop</el-button></div></section>
       <div v-if="run.status === 'BLOCKED' && executionBlockReason" class="run-blocked-notice" role="alert"><Warning :size="16" /><div><strong>Why execution stopped</strong><span>{{ executionBlockReason }}</span></div></div>
       <section class="execution-conversation-panel">
         <div class="journal-heading"><div><div class="eyebrow">EXECUTION CONVERSATION</div><h2>What the Executor is doing</h2></div><div class="execution-stream-status" role="status"><i :class="{ connected: runStreamConnected }" /> {{ executionStatusLabel }}</div></div>
@@ -299,6 +330,7 @@ async function confirmMerged() {
     </template>
     <el-drawer v-model="diagnosticsOpen" title="Execution diagnostics" size="min(760px, 92vw)">
       <div class="diagnostic-drawer-summary"><span>{{ thread?.journal.length ?? 0 }} journal entries</span><span>{{ toolCalls.length }} tool calls</span><span>{{ executorLoop?.stepCount ?? 0 }} loop steps</span></div>
+      <section class="diagnostic-section telemetry-diagnostic-section"><div class="journal-heading"><div><div class="eyebrow">EXECUTION TELEMETRY</div><h2>Provider usage detail</h2></div><span>{{ executionTelemetry?.usageSource === 'provider' ? 'Provider exact' : '未记录' }}</span></div><p class="telemetry-diagnostic-note">来源：{{ executionTelemetry?.usageSource === 'provider' ? 'Provider 返回的精确 usage，未做本地估算。' : 'Provider 未返回精确 usage；历史 Run 不补算 token。' }}</p><div class="telemetry-detail-grid"><div v-for="row in executionUsageRows" :key="row.label"><span>{{ row.label }}</span><strong>{{ row.value }}</strong></div></div><div class="telemetry-diagnostic-meta"><span>模型 <code>{{ executionTelemetryModel }}</code></span><span>推理等级 <code>{{ executionTelemetryReasoning }}</code></span><span>耗时 <code>{{ executionDuration }}</code></span></div></section>
       <section class="diagnostic-section"><div class="journal-heading"><div><div class="eyebrow">EXECUTION JOURNAL</div><h2>What happened</h2></div></div><div v-if="thread?.journal.length" class="journal-list"><div v-for="entry in thread.journal" :key="entry.sequence" class="journal-entry"><div class="journal-icon" :class="{ success: entry.type.includes('COMPLETED') || entry.type === 'COMMIT', warning: entry.type.includes('FAILED') }"><CircleCheck v-if="entry.type.includes('COMPLETED') || entry.type === 'COMMIT'" :size="15" /><Warning v-else-if="entry.type.includes('FAILED')" :size="15" /><Clock v-else :size="15" /></div><div><div class="journal-meta"><strong>{{ entry.type }}</strong><span>#{{ entry.sequence }}</span><span>{{ new Date(entry.occurredAt).toLocaleTimeString('zh-CN') }}</span></div><p>{{ JSON.stringify(entry.payload) }}</p></div></div></div><div v-else class="empty-state"><Document :size="28" /><h3>No journal entries</h3><p>The execution thread has not recorded activity yet.</p></div></section>
       <section v-if="toolCalls.length" class="diagnostic-section"><div class="journal-heading"><div><div class="eyebrow">TOOL CALLS</div><h2>Audited tool activity</h2></div><span>{{ toolCalls.length }} calls</span></div><div class="journal-list"><div v-for="tool in toolCalls" :key="tool.callId" class="journal-entry"><div class="journal-icon" :class="{ success: tool.status === 'SUCCEEDED', warning: tool.status === 'FAILED' || tool.status === 'DENIED' || tool.status === 'UNKNOWN' || tool.status === 'NEEDS_RECONCILIATION' }"><CircleCheck v-if="tool.status === 'SUCCEEDED'" :size="15" /><Warning v-else-if="tool.status === 'FAILED' || tool.status === 'DENIED' || tool.status === 'UNKNOWN' || tool.status === 'NEEDS_RECONCILIATION'" :size="15" /><Clock v-else :size="15" /></div><div><div class="journal-meta"><strong>{{ tool.tool }}</strong><span>{{ tool.status }}</span><span>{{ new Date(tool.startedAt).toLocaleTimeString('zh-CN') }}</span></div><p>{{ tool.result ? JSON.stringify(tool.result) : 'No result yet' }}</p></div></div></div></section>
     </el-drawer>

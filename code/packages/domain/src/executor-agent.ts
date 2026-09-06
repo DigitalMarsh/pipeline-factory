@@ -7,7 +7,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { AgentLoopEngine, type AgentLoop, type AgentLoopEvent, type AgentLoopMode, type GateContext } from "./agent-loop.js";
 import { TaskProgressGate } from "./termination-gates.js";
-import type { ModelGateway, PipelineStore, PlanRevisionV2, Run } from "./index.js";
+import { mergeModelUsage, normalizeModelUsage, type ExecutionTelemetry, type ModelGateway, type ModelRoleConfig, type PipelineStore, type PlanRevisionV2, type Run } from "./index.js";
 import type { ToolRuntime } from "./tool-runtime.js";
 
 const REPORT_START = "<pipeline-factory-execution-report>";
@@ -67,8 +67,8 @@ export class ExecutorAgent {
   /** 异步启动 Executor Loop；RunDetail 可通过 AgentLoop/SSE 观察实时进度。 */
   async start(run: Run, revision: PlanRevisionV2): Promise<AgentLoop> {
     this.assertRunnable(run, revision);
-    const projectConfig = revision.projectConfigSnapshot?.settings.models.executor;
-    const mode = projectConfig?.loopMode ?? this.options.mode ?? this.model.configFor("executor").loopMode ?? "provider-controlled";
+    const projectConfig = this.executorModelConfig(revision);
+    const mode = projectConfig.loopMode ?? this.options.mode ?? "provider-controlled";
     const maxDurationMs = revision.projectConfigSnapshot?.settings.concurrency.executionTimeoutMs ?? this.options.maxDurationMs;
     this.assertCapabilities(mode);
     const openToolCalls = new Set<string>();
@@ -91,7 +91,7 @@ export class ExecutorAgent {
       ...(toolRuntime ? { toolRuntime } : {}),
       modelRequest: {
         conversationId: run.id,
-        ...(projectConfig ? { modelConfig: projectConfig } : {}),
+        modelConfig: projectConfig,
         ...(run.workspacePath ? { cwd: run.workspacePath } : {}),
         messages: [
           { role: "system", content: this.systemInstructions(revision) },
@@ -107,8 +107,8 @@ export class ExecutorAgent {
   /** 同步运行 Executor Loop，完成后同步 Run 的终态映射。 */
   async run(run: Run, revision: PlanRevisionV2): Promise<AgentLoop> {
     this.assertRunnable(run, revision);
-    const projectConfig = revision.projectConfigSnapshot?.settings.models.executor;
-    const mode = projectConfig?.loopMode ?? this.options.mode ?? this.model.configFor("executor").loopMode ?? "provider-controlled";
+    const projectConfig = this.executorModelConfig(revision);
+    const mode = projectConfig.loopMode ?? this.options.mode ?? "provider-controlled";
     const maxDurationMs = revision.projectConfigSnapshot?.settings.concurrency.executionTimeoutMs ?? this.options.maxDurationMs;
     this.assertCapabilities(mode);
     const openToolCalls = new Set<string>();
@@ -127,7 +127,7 @@ export class ExecutorAgent {
       ...(toolRuntime ? { toolRuntime } : {}),
       modelRequest: {
         conversationId: run.id,
-        ...(projectConfig ? { modelConfig: projectConfig } : {}),
+        modelConfig: projectConfig,
         ...(run.workspacePath ? { cwd: run.workspacePath } : {}),
         messages: [
           { role: "system", content: this.systemInstructions(revision) },
@@ -157,6 +157,11 @@ export class ExecutorAgent {
     const capabilities = this.model.capabilities?.("executor");
     if (mode === "factory-controlled" && (!capabilities?.supportsToolCalls || !capabilities.supportedLoopModes.includes(mode))) throw new Error("MODEL_CAPABILITY_UNAVAILABLE");
     if (mode === "provider-controlled" && capabilities && !capabilities.supportedLoopModes.includes(mode)) throw new Error("MODEL_CAPABILITY_UNAVAILABLE");
+  }
+
+  /** 在 Loop 创建前复制快照配置；后续 Project 配置变化不会影响本次 Run。 */
+  private executorModelConfig(revision: PlanRevisionV2): ModelRoleConfig {
+    return { ...this.model.configFor("executor"), ...(revision.projectConfigSnapshot?.settings.models.executor ?? {}) };
   }
 
   private async progressContext(run: Run, revision: PlanRevisionV2, content: string, openToolCalls: Set<string>): Promise<Pick<GateContext, "allTasksComplete" | "changedPaths" | "pathsWithinScope" | "reportReady" | "hasOpenToolCalls" | "hasPendingChangeProposal" | "reportError" | "scopeError">> {
@@ -213,6 +218,33 @@ export class ExecutorAgent {
   private handleEvent(run: Run, event: AgentLoopEvent, openToolCalls: Set<string>): void {
     if (!this.store.getExecutionThread(run.executionThreadId)) return;
     const payload = event.payload;
+    if (event.type === "agent.loop.started") {
+      this.updateTelemetry(run.executionThreadId, {
+        model: typeof payload.model === "string" ? payload.model : null,
+        reasoningEffort: typeof payload.reasoningEffort === "string" ? payload.reasoningEffort : null,
+        startedAt: typeof payload.startedAt === "string" ? payload.startedAt : this.store.now(),
+      });
+    }
+    if (event.type === "agent.model.usage") {
+      const usage = normalizeModelUsage(payload);
+      if (usage) {
+        const thread = this.store.getExecutionThread(run.executionThreadId);
+        const current = thread?.telemetry;
+        const scope = payload.scope === "total" ? "total" : "turn";
+        this.updateTelemetry(run.executionThreadId, {
+          usage: mergeModelUsage(current?.usage ?? null, usage, scope),
+          usageSource: "provider",
+          usageScope: current?.usageScope === "total" || scope === "total" ? "total" : "turn",
+        });
+      }
+    }
+    if (event.type === "agent.loop.completed" || event.type === "agent.loop.failed" || event.type === "agent.loop.cancelled" || event.type === "agent.loop.recovery_required") {
+      const thread = this.store.getExecutionThread(run.executionThreadId);
+      const startedAt = thread?.telemetry?.startedAt ?? null;
+      const completedAt = typeof payload.completedAt === "string" ? payload.completedAt : this.store.now();
+      const durationMs = typeof payload.durationMs === "number" ? payload.durationMs : startedAt ? Math.max(0, Date.parse(completedAt) - Date.parse(startedAt)) : null;
+      this.updateTelemetry(run.executionThreadId, { completedAt, durationMs });
+    }
     if (event.type === "agent.step.started" || event.type === "agent.model.completed" || event.type === "agent.context.compacted") {
       this.append(run.executionThreadId, "TASK_PROGRESS", { event: event.type, ...payload });
       if (event.type === "agent.model.completed") {
@@ -283,6 +315,13 @@ export class ExecutorAgent {
     const entry = { sequence: thread.journal.length + 1, type, occurredAt: this.store.now(), payload };
     this.store.saveExecutionThread({ ...thread, journal: [...thread.journal, entry] });
     this.store.appendEvent({ type: "run.executor.event", aggregateId: thread.runId, payload: { executionThreadId: thread.id, type, ...payload } });
+  }
+
+  private updateTelemetry(threadId: string, update: Partial<ExecutionTelemetry>): void {
+    const thread = this.store.getExecutionThread(threadId);
+    if (!thread) return;
+    const current: ExecutionTelemetry = thread.telemetry ?? { model: null, reasoningEffort: null, startedAt: null, completedAt: null, durationMs: null, usage: null, usageSource: "not-recorded", usageScope: null };
+    this.store.saveExecutionThread({ ...thread, telemetry: { ...current, ...update } });
   }
 }
 

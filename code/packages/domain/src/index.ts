@@ -1381,7 +1381,8 @@ export class SqlitePipelineStore implements PipelineStore {
         id TEXT PRIMARY KEY,
         run_id TEXT NOT NULL,
         state TEXT NOT NULL,
-        journal_json TEXT NOT NULL
+        journal_json TEXT NOT NULL,
+        telemetry_json TEXT
       );
       CREATE TABLE IF NOT EXISTS execution_journal (
         execution_thread_id TEXT NOT NULL REFERENCES execution_threads(id),
@@ -1565,6 +1566,7 @@ export class SqlitePipelineStore implements PipelineStore {
       WHERE status = 'QUEUED';
     `);
     try { this.database.exec("ALTER TABLE domain_events ADD COLUMN sequence INTEGER"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE execution_threads ADD COLUMN telemetry_json TEXT"); } catch { /* Existing databases already have the column. */ }
     this.database.exec("UPDATE domain_events SET sequence = rowid WHERE sequence IS NULL");
     try { this.database.exec("CREATE UNIQUE INDEX IF NOT EXISTS domain_events_sequence_uq ON domain_events(sequence)"); } catch { /* Existing databases already have the index. */ }
     try { this.database.exec("ALTER TABLE change_proposals ADD COLUMN revision INTEGER"); } catch { /* Existing databases already have the column. */ }
@@ -1836,7 +1838,7 @@ export class SqlitePipelineStore implements PipelineStore {
 
   saveExecutionThread(thread: ExecutionThread): ExecutionThread {
     const safe = { ...thread, journal: thread.journal.map((entry) => ({ ...entry, payload: redactAuditPayload(entry.payload) })) };
-    this.database.prepare("INSERT INTO execution_threads (id, run_id, state, journal_json) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET state=excluded.state").run(safe.id, safe.runId, safe.state, JSON.stringify(safe.journal));
+    this.database.prepare("INSERT INTO execution_threads (id, run_id, state, journal_json, telemetry_json) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET state=excluded.state, journal_json=excluded.journal_json, telemetry_json=excluded.telemetry_json").run(safe.id, safe.runId, safe.state, JSON.stringify(safe.journal), safe.telemetry ? JSON.stringify(safe.telemetry) : null);
     for (const entry of safe.journal) {
       this.database.prepare("INSERT OR IGNORE INTO execution_journal (execution_thread_id, run_id, sequence, type, occurred_at, payload_json) VALUES (?, ?, ?, ?, ?, ?)").run(safe.id, safe.runId, entry.sequence, entry.type, entry.occurredAt, JSON.stringify(entry.payload));
     }
@@ -2004,7 +2006,8 @@ export class SqlitePipelineStore implements PipelineStore {
     const journal = journalRows.length > 0
       ? journalRows.map((entry) => ({ sequence: Number(entry.sequence), type: String(entry.type) as JournalEntryType, occurredAt: String(entry.occurred_at), payload: JSON.parse(String(entry.payload_json)) as Record<string, unknown> }))
       : JSON.parse(String(row.journal_json)) as ExecutionJournalEntry[];
-    return { id: String(row.id), runId: String(row.run_id), state: String(row.state) as ExecutionThreadState, journal };
+    const telemetry = typeof row.telemetry_json === "string" && row.telemetry_json.length > 0 ? JSON.parse(row.telemetry_json) as ExecutionTelemetry : null;
+    return { id: String(row.id), runId: String(row.run_id), state: String(row.state) as ExecutionThreadState, journal, telemetry };
   }
 
   appendEvent(event: Omit<DomainEvent, "id" | "occurredAt" | "sequence">): DomainEvent {
@@ -3277,6 +3280,62 @@ export type ModelToolDefinition = {
 };
 /** Provider 会话中的规范化消息。 */
 export type ModelMessage = { role: "system" | "user" | "assistant" | "tool"; content: string; toolCallId?: string };
+/** Provider 返回的精确 token 用量；null 表示 Provider 没有返回对应字段。 */
+export type ModelUsage = {
+  inputTokens: number | null;
+  outputTokens: number | null;
+  reasoningTokens: number | null;
+  totalTokens: number | null;
+};
+export type ModelUsageScope = "turn" | "total";
+
+/** 执行线程的持久化遥测；不对缺失的 Provider usage 做本地估算。 */
+export type ExecutionTelemetry = {
+  model: string | null;
+  reasoningEffort: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  durationMs: number | null;
+  usage: ModelUsage | null;
+  usageSource: "provider" | "not-recorded";
+  usageScope: ModelUsageScope | null;
+};
+
+const usageField = (value: unknown): number | null => typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+
+/** 兼容 OpenAI snake_case、App Server camelCase 及其嵌套 reasoning 字段。 */
+export function normalizeModelUsage(value: unknown): ModelUsage | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const candidate = value as Record<string, unknown>;
+  const outputDetails = candidate.output_tokens_details && typeof candidate.output_tokens_details === "object" ? candidate.output_tokens_details as Record<string, unknown> : {};
+  const outputDetailsCamel = candidate.outputTokensDetails && typeof candidate.outputTokensDetails === "object" ? candidate.outputTokensDetails as Record<string, unknown> : {};
+  const usage: ModelUsage = {
+    inputTokens: usageField(candidate.input_tokens ?? candidate.inputTokens),
+    outputTokens: usageField(candidate.output_tokens ?? candidate.outputTokens),
+    reasoningTokens: usageField(candidate.reasoning_tokens ?? candidate.reasoningTokens ?? candidate.reasoning_output_tokens ?? candidate.reasoningOutputTokens ?? outputDetails.reasoning_tokens ?? outputDetailsCamel.reasoningTokens),
+    totalTokens: usageField(candidate.total_tokens ?? candidate.totalTokens),
+  };
+  return Object.values(usage).some((item) => item !== null) ? usage : null;
+}
+
+/** 聚合多个 Provider turn；total scope 使用 Provider 的累计值而不是重复相加。 */
+export function mergeModelUsage(previous: ModelUsage | null, incoming: ModelUsage, scope: ModelUsageScope): ModelUsage {
+  if (scope === "total") {
+    return {
+      inputTokens: incoming.inputTokens ?? previous?.inputTokens ?? null,
+      outputTokens: incoming.outputTokens ?? previous?.outputTokens ?? null,
+      reasoningTokens: incoming.reasoningTokens ?? previous?.reasoningTokens ?? null,
+      totalTokens: incoming.totalTokens ?? previous?.totalTokens ?? null,
+    };
+  }
+  const add = (before: number | null | undefined, after: number | null): number | null => before === null || before === undefined ? after : after === null ? before : before + after;
+  return {
+    inputTokens: add(previous?.inputTokens, incoming.inputTokens),
+    outputTokens: add(previous?.outputTokens, incoming.outputTokens),
+    reasoningTokens: add(previous?.reasoningTokens, incoming.reasoningTokens),
+    totalTokens: add(previous?.totalTokens, incoming.totalTokens),
+  };
+}
 /** 一次 Explorer/Executor 模型调用的完整上下文。 */
 export type ModelRequest = {
   role: ModelRole;
@@ -3295,6 +3354,7 @@ export type ModelEvent =
   | { type: "thread.started"; threadId: string }
   | { type: "text.delta"; text: string; providerThreadId?: string | undefined; providerTurnId?: string | undefined; providerItemId?: string | undefined }
   | { type: "provider.activity"; phase: "started" | "completed"; itemId: string; itemType: string; title: string | null; summary: string | null; providerThreadId?: string | undefined; providerTurnId?: string | undefined; providerItemId?: string | undefined }
+  | { type: "model.usage"; usage: ModelUsage; scope: ModelUsageScope; providerThreadId?: string | undefined; providerTurnId?: string | undefined }
   | { type: "tool.call"; call: ToolCall }
   | { type: "turn.input_required"; request: ModelInputRequest }
   | { type: "turn.completed" }
@@ -3339,7 +3399,7 @@ export class StubModelGateway implements ModelGateway {
 }
 
 /** 非流式模型调用的规范化结果。 */
-export type ModelResult = { text: string; requestId: string | null; model: string };
+export type ModelResult = { text: string; requestId: string | null; model: string; usage: ModelUsage | null };
 /** OpenAI Responses API 的最小响应端口，便于测试替换 fetch。 */
 export type ModelFetchResponse = { ok: boolean; status: number; json(): Promise<unknown> };
 /** 可注入的 HTTP 调用函数，避免 Domain 直接绑定全局 fetch。 */
@@ -3378,13 +3438,14 @@ export class OpenAIModelGateway implements ModelGateway {
     const response = await this.fetchFn(this.baseUrl, { method: "POST", headers: { authorization: `Bearer ${this.options.apiKey}`, "content-type": "application/json" }, body: JSON.stringify(body), signal: request.signal });
     if (!response.ok) throw new Error(`OpenAI Responses API failed with status ${response.status}`);
     const payload = await response.json() as Record<string, unknown>;
-    return { text: typeof payload.output_text === "string" ? payload.output_text : extractResponseText(payload), requestId: typeof payload.id === "string" ? payload.id : null, model: config.model };
+    return { text: typeof payload.output_text === "string" ? payload.output_text : extractResponseText(payload), requestId: typeof payload.id === "string" ? payload.id : null, model: config.model, usage: normalizeModelUsage(payload.usage) };
   }
 
   async *stream(request: ModelRequest): AsyncIterable<ModelEvent> {
     if (request.signal?.aborted) { yield { type: "turn.cancelled" }; return; }
     try {
       const result = await this.complete(request);
+      if (result.usage) yield { type: "model.usage", usage: result.usage, scope: "turn", ...(request.providerThreadId ? { providerThreadId: request.providerThreadId } : {}) };
       yield { type: "text.delta", text: result.text };
       yield { type: "turn.completed" };
     } catch (error) {
@@ -3800,6 +3861,7 @@ export type ExecutionThread = {
   runId: string;
   state: ExecutionThreadState;
   journal: ExecutionJournalEntry[];
+  telemetry?: ExecutionTelemetry | null;
 };
 
 /** 运行实例；projectId、planRevision 和 workspacePath 共同确定执行边界。 */

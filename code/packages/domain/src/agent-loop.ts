@@ -23,6 +23,7 @@ export type AgentLoopState =
 export type AgentStepType =
   | "MODEL_STARTED"
   | "MODEL_TEXT_DELTA"
+  | "MODEL_USAGE"
   | "PROVIDER_ACTIVITY"
   | "MODEL_COMPLETED"
   | "TOOL_REQUESTED"
@@ -314,9 +315,10 @@ export class AgentLoopEngine implements AgentLoopRunner {
     pending?.fail(new Error("AgentLoop input was cancelled"));
     if (loop.providerThreadId && loop.providerTurnId) await this.model.cancel({ conversationId: loop.id, providerThreadId: loop.providerThreadId, providerTurnId: loop.providerTurnId }).catch(() => undefined);
     const cancelled = { ...this.get(loopId), state: "CANCELLED" as const, completedAt: this.store.now(), checkpointJson: JSON.stringify({ reason }) };
+    const durationMs = cancelled.startedAt ? Math.max(0, Date.now() - Date.parse(cancelled.startedAt)) : null;
     this.store.updateAgentLoop(cancelled);
-    this.appendStep(cancelled, "LOOP_COMPLETED", "CANCELLED", { reason });
-    this.emit(cancelled, "agent.loop.cancelled", { reason });
+    this.appendStep(cancelled, "LOOP_COMPLETED", "CANCELLED", { reason, completedAt: cancelled.completedAt, durationMs });
+    this.emit(cancelled, "agent.loop.cancelled", { reason, completedAt: cancelled.completedAt, durationMs });
     this.resolveWaiter(cancelled);
     this.controllers.delete(loopId);
     this.callbacks.delete(loopId);
@@ -352,7 +354,8 @@ export class AgentLoopEngine implements AgentLoopRunner {
     let loop: AgentLoop = { ...initial, state: "RUNNING", startedAt: this.store.now() };
     this.store.updateAgentLoop(loop);
     this.appendStep(loop, "LOOP_RESUMED", "RUNNING", { role: input.role, mode: input.mode });
-    this.emit(loop, "agent.loop.started", { role: input.role, mode: input.mode });
+    const effectiveModelConfig = { ...this.model.configFor(input.role), ...(input.modelRequest.modelConfig ?? {}) };
+    this.emit(loop, "agent.loop.started", { role: input.role, mode: input.mode, model: effectiveModelConfig.model, reasoningEffort: effectiveModelConfig.reasoningEffort ?? null, startedAt: loop.startedAt });
     const messages: ModelMessage[] = [...input.modelRequest.messages];
     let fullText = "";
     let continuationPrompt: string | undefined;
@@ -409,6 +412,12 @@ export class AgentLoopEngine implements AgentLoopRunner {
             this.store.updateAgentLoop(loop);
             this.appendStep(loop, "PROVIDER_ACTIVITY", event.phase === "completed" ? "COMPLETED" : "RUNNING", { phase: event.phase, itemId: event.itemId, itemType: event.itemType, title: event.title, summary: event.summary, providerItemId: event.providerItemId ?? event.itemId, providerControlled: true });
             this.emit(loop, "agent.provider.activity", { phase: event.phase, itemId: event.itemId, itemType: event.itemType, title: event.title, summary: event.summary, ...(event.providerThreadId ? { providerThreadId: event.providerThreadId } : {}), ...(event.providerTurnId ? { providerTurnId: event.providerTurnId } : {}), ...(event.providerItemId ? { providerItemId: event.providerItemId } : {}) });
+          }
+          if (event.type === "model.usage") {
+            loop = { ...loop, ...(event.providerThreadId ? { providerThreadId: event.providerThreadId } : {}), ...(event.providerTurnId ? { providerTurnId: event.providerTurnId } : {}) };
+            this.store.updateAgentLoop(loop);
+            this.appendStep(loop, "MODEL_USAGE", "COMPLETED", { ...event.usage, scope: event.scope });
+            this.emit(loop, "agent.model.usage", { ...event.usage, scope: event.scope, ...(event.providerThreadId ? { providerThreadId: event.providerThreadId } : {}), ...(event.providerTurnId ? { providerTurnId: event.providerTurnId } : {}) });
           }
           if (event.type === "tool.call") {
             progress = true;
@@ -543,21 +552,23 @@ export class AgentLoopEngine implements AgentLoopRunner {
   }
 
   private clearDeadline(loopId: string): void { const timer = this.deadlineTimers.get(loopId); if (timer) clearTimeout(timer); this.deadlineTimers.delete(loopId); }
-  private complete(loopId: string, reason: string): void { this.clearDeadline(loopId); const loop = { ...this.get(loopId), state: "COMPLETED" as const, completedAt: this.store.now() }; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_COMPLETED", "COMPLETED", { reason }); this.emit(loop, "agent.loop.completed", { reason }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); }
-  private block(loopId: string, reason: string): void { this.clearDeadline(loopId); const loop = { ...this.get(loopId), state: "BLOCKED" as const, completedAt: this.store.now(), checkpointJson: JSON.stringify({ reason }) }; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_FAILED", "FAILED", { reason }); this.emit(loop, "agent.loop.failed", { reason }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); }
+  private complete(loopId: string, reason: string): void { this.clearDeadline(loopId); const completedAt = this.store.now(); const loop = { ...this.get(loopId), state: "COMPLETED" as const, completedAt }; const durationMs = loop.startedAt ? Math.max(0, Date.now() - Date.parse(loop.startedAt)) : null; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_COMPLETED", "COMPLETED", { reason, completedAt, durationMs }); this.emit(loop, "agent.loop.completed", { reason, completedAt, durationMs }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); }
+  private block(loopId: string, reason: string): void { this.clearDeadline(loopId); const completedAt = this.store.now(); const loop = { ...this.get(loopId), state: "BLOCKED" as const, completedAt, checkpointJson: JSON.stringify({ reason }) }; const durationMs = loop.startedAt ? Math.max(0, Date.now() - Date.parse(loop.startedAt)) : null; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_FAILED", "FAILED", { reason, completedAt, durationMs }); this.emit(loop, "agent.loop.failed", { reason, completedAt, durationMs }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); }
   private fail(loopId: string, error: string): void {
     this.clearDeadline(loopId);
     const code = diagnosticCode(error);
     const persistedError = code === "DATABASE_BUSY" ? code : error;
-    const loop = { ...this.get(loopId), state: "FAILED" as const, completedAt: this.store.now(), checkpointJson: JSON.stringify({ error: persistedError, detail: error }) };
+    const completedAt = this.store.now();
+    const loop = { ...this.get(loopId), state: "FAILED" as const, completedAt, checkpointJson: JSON.stringify({ error: persistedError, detail: error }) };
+    const durationMs = loop.startedAt ? Math.max(0, Date.now() - Date.parse(loop.startedAt)) : null;
     this.store.updateAgentLoop(loop);
-    this.appendStep(loop, "LOOP_FAILED", "FAILED", { error: persistedError });
-    this.emit(loop, "agent.loop.failed", { error: persistedError });
+    this.appendStep(loop, "LOOP_FAILED", "FAILED", { error: persistedError, completedAt, durationMs });
+    this.emit(loop, "agent.loop.failed", { error: persistedError, completedAt, durationMs });
     this.resolveWaiter(loop);
     this.controllers.delete(loopId);
     this.callbacks.delete(loopId);
   }
-  private needsReconciliation(loopId: string, reason: string): void { this.clearDeadline(loopId); const loop = { ...this.get(loopId), state: "NEEDS_RECONCILIATION" as const, completedAt: this.store.now(), checkpointJson: JSON.stringify({ reason }) }; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_FAILED", "NEEDS_RECONCILIATION", { reason }); this.emit(loop, "agent.loop.recovery_required", { reason }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); }
+  private needsReconciliation(loopId: string, reason: string): void { this.clearDeadline(loopId); const completedAt = this.store.now(); const loop = { ...this.get(loopId), state: "NEEDS_RECONCILIATION" as const, completedAt, checkpointJson: JSON.stringify({ reason }) }; const durationMs = loop.startedAt ? Math.max(0, Date.now() - Date.parse(loop.startedAt)) : null; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_FAILED", "NEEDS_RECONCILIATION", { reason, completedAt, durationMs }); this.emit(loop, "agent.loop.recovery_required", { reason, completedAt, durationMs }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); }
 }
 
 function isTerminal(state: AgentLoopState): boolean {

@@ -35,8 +35,12 @@ export function projectExecutionJournal(journal: ExecutionJournalEntry[], thread
     if (content) {
       const previousIndex = [...items].map((item) => item.kind).lastIndexOf("model");
       const previous = previousIndex >= 0 ? items[previousIndex] : undefined;
-      const onlyTaskProgressBetween = previousIndex >= 0 && items.slice(previousIndex + 1).every((item) => item.kind === "activity" && item.title === "Task progress");
-      if (previous && onlyTaskProgressBetween && previous.title === "Executor report" && content.title === "Executor report" && sameReportProgress(previous.content, content.body)) {
+      // A report can be followed by several persisted loop-bookkeeping entries before
+      // the next report is emitted. Those entries are intentionally rendered as small
+      // activity cards, but they should not split an unchanged report into a long list
+      // of visually identical messages.
+      const onlyNonSemanticActivityBetween = previousIndex >= 0 && items.slice(previousIndex + 1).every((item) => item.kind === "activity" && ["Task progress", "Execution activity"].includes(item.title));
+      if (previous && onlyNonSemanticActivityBetween && previous.title === "Executor report" && content.title === "Executor report" && sameReportProgress(previous.content, content.body)) {
         previous.content = content.body;
         previous.sequence = pendingModelSequence;
         previous.occurredAt = pendingModelOccurredAt;
@@ -98,6 +102,7 @@ function projectExecutionActivity(entry: ExecutionJournalEntry): ExecutionStream
       return activity(entry, "Task progress", detail, typeof payload.blockedTaskId === "string" ? "FAILED" : typeof payload.activeTaskId === "string" ? "RUNNING" : "COMPLETED");
     }
     // High-frequency loop bookkeeping remains available in Diagnostics, not the primary conversation.
+    if (event === "continue") return null;
     if (event === "agent.context.compacted" || event === "agent.model.completed" || event === "agent.step.started") return null;
     if (event === "agent.gate.checked") return activity(entry, "Execution gate checked", `${String(payload.action ?? "unknown")} · ${String(payload.reason ?? "")}`.trim(), payload.action === "blocked" ? "FAILED" : "INFO");
     if (event === "agent.loop.created" || payload.action === "executor_loop_created") return activity(entry, "Executor started", String(payload.loopId ?? ""), "RUNNING");
@@ -125,7 +130,7 @@ function humanizeModelOutput(content: string): { title: string; body: string } |
   if (start < 0) return { title: "Executor", body: content };
   const jsonStart = start + startMarker.length;
   const end = content.indexOf(endMarker, jsonStart);
-  if (end < 0) return { title: "Executor", body: content };
+  if (end < 0) return { title: "Executor report", body: content.slice(0, start).trim() || "Execution report is still streaming." };
   try {
     const report = JSON.parse(content.slice(jsonStart, end).trim()) as { completedTaskIds?: unknown; changedPaths?: unknown; report?: unknown };
     const completed = Array.isArray(report.completedTaskIds) ? report.completedTaskIds.filter((id): id is string => typeof id === "string") : [];
@@ -133,7 +138,7 @@ function humanizeModelOutput(content: string): { title: string; body: string } |
     const summary = typeof report.report === "string" ? report.report : "Execution report recorded.";
     return { title: "Executor report", body: `${summary}\n\nCompleted ${completed.length} task(s) · ${changedPaths.length} changed path(s)` };
   } catch {
-    return { title: "Executor", body: content.slice(0, start).trim() || "Execution report could not be parsed." };
+    return { title: "Executor report", body: content.slice(0, start).trim() || "Execution report could not be parsed." };
   }
 }
 

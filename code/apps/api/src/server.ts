@@ -49,6 +49,8 @@ import {
   type AgentLoop,
   type AgentLoopDiagnostics,
   type AgentLoopRunner,
+  type ExecutionThread,
+  type ExecutionTelemetry,
   type PlanContract,
   type ProjectSettingsInput,
   type ProjectExecutionSnapshot,
@@ -538,16 +540,24 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     const raw = reply.raw;
     raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive", "access-control-allow-origin": "*" });
     let cursor = afterSequence;
+    let lastTelemetryKey: string | null = null;
     const send = () => {
       const currentRun = store.getRun(run.id);
       const currentThread = currentRun ? store.getExecutionThread(currentRun.executionThreadId) : undefined;
-      for (const entry of currentThread?.journal.filter((item) => item.sequence > cursor) ?? []) {
+      const projectedThread = currentRun && currentThread ? projectRunThreadTelemetry(store, currentRun, currentThread) : currentThread;
+      const newEntries = projectedThread?.journal.filter((item) => item.sequence > cursor) ?? [];
+      for (const entry of newEntries) {
         cursor = entry.sequence;
-        raw.write(`id: ${entry.sequence}\nevent: journal.entry\ndata: ${JSON.stringify({ runId: run.id, runStatus: currentRun?.status ?? null, threadState: currentThread?.state ?? null, ...entry })}\n\n`);
+        raw.write(`id: ${entry.sequence}\nevent: journal.entry\ndata: ${JSON.stringify({ runId: run.id, runStatus: currentRun?.status ?? null, threadState: projectedThread?.state ?? null, threadTelemetry: projectedThread?.telemetry ?? null, ...entry })}\n\n`);
       }
+      const telemetry = projectedThread?.telemetry ?? null;
+      const telemetryKey = JSON.stringify(telemetry);
+      if (telemetryKey !== lastTelemetryKey && newEntries.length === 0 && lastTelemetryKey !== null) raw.write(`event: telemetry.updated\ndata: ${JSON.stringify({ runId: run.id, threadTelemetry: telemetry })}\n\n`);
+      lastTelemetryKey = telemetryKey;
+      return telemetry;
     };
-    send();
-    raw.write(`id: ${cursor}\nevent: stream.ready\ndata: ${JSON.stringify({ afterSequence: cursor })}\n\n`);
+    const initialTelemetry = send();
+    raw.write(`id: ${cursor}\nevent: stream.ready\ndata: ${JSON.stringify({ afterSequence: cursor, threadTelemetry: initialTelemetry })}\n\n`);
     const poll = setInterval(send, 250);
     const heartbeat = setInterval(() => raw.write(`: heartbeat ${Date.now()}\n\n`), 15_000);
     const cleanup = () => { clearInterval(poll); clearInterval(heartbeat); };
@@ -1104,7 +1114,8 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (!scheduler) return reply.code(503).send({ error: "Scheduler is not configured for this API instance" });
     try {
       const run = scheduler.pause(params.data.runId);
-      return { run, thread: scheduler.thread(run.executionThreadId) };
+      const thread = scheduler.thread(run.executionThreadId);
+      return { run, thread: projectRunThreadTelemetry(store, run, thread) };
     } catch (error) {
       return reply.code(409).send({ error: error instanceof Error ? error.message : "Run cannot be paused" });
     }
@@ -1116,7 +1127,8 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (!scheduler) return reply.code(503).send({ error: "Scheduler is not configured for this API instance" });
     try {
       const run = scheduler.resume(params.data.runId);
-      return { run, thread: scheduler.thread(run.executionThreadId) };
+      const thread = scheduler.thread(run.executionThreadId);
+      return { run, thread: projectRunThreadTelemetry(store, run, thread) };
     } catch (error) {
       return reply.code(409).send({ error: error instanceof Error ? error.message : "Run cannot be resumed" });
     }
@@ -1127,7 +1139,11 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     const body = guidanceBody.safeParse(request.body ?? {});
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid user guidance" });
     if (!scheduler) return reply.code(503).send({ error: "Scheduler is not configured for this API instance" });
-    try { return { thread: scheduler.addGuidance(params.data.runId, body.data.content) }; }
+    try {
+      const thread = scheduler.addGuidance(params.data.runId, body.data.content);
+      const run = store.getRun(params.data.runId);
+      return { thread: run ? projectRunThreadTelemetry(store, run, thread) : thread };
+    }
     catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "Guidance cannot be added" }); }
   });
 
@@ -1242,7 +1258,8 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     const run = store.getRun(params.data.runId);
     if (!run) return reply.code(404).send({ error: "Run not found" });
-    return { run: { ...run, agentLoops: store.listAgentLoops(run.id) }, executionThread: store.getExecutionThread(run.executionThreadId) ?? null, verification: store.getVerificationRun(run.id) ?? null, mergeRequest: merger.findByRun(run.id) ?? null };
+    const executionThread = store.getExecutionThread(run.executionThreadId);
+    return { run: { ...run, agentLoops: store.listAgentLoops(run.id) }, executionThread: executionThread ? projectRunThreadTelemetry(store, run, executionThread) : null, verification: store.getVerificationRun(run.id) ?? null, mergeRequest: merger.findByRun(run.id) ?? null };
   });
 
   app.get("/api/v4/execution-threads/:threadId", async (request, reply) => {
@@ -1250,10 +1267,33 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     const thread = store.getExecutionThread(params.data.threadId);
     if (!thread) return reply.code(404).send({ error: "ExecutionThread not found" });
-    return { thread };
+    const run = store.getRun(thread.runId);
+    return { thread: run ? projectRunThreadTelemetry(store, run, thread) : thread };
   });
 
   return app;
+}
+
+/** 为没有 telemetry_json 的历史 Run 提供只读投影；不会回写旧数据或估算 token。 */
+function projectRunThreadTelemetry(store: PipelineStore, run: { id: string; planId: string; planRevision: number }, thread: ExecutionThread): ExecutionThread {
+  const revision = store.getRevision(run.planId, run.planRevision);
+  const loop = store.listAgentLoops(run.id).find((item) => item.role === "executor");
+  const executorConfig = revision?.projectConfigSnapshot?.settings.models.executor;
+  const existing = thread.telemetry;
+  const startedAt = existing?.startedAt ?? loop?.startedAt ?? null;
+  const completedAt = existing?.completedAt ?? loop?.completedAt ?? null;
+  const durationMs = existing?.durationMs ?? (startedAt && completedAt ? Math.max(0, Date.parse(completedAt) - Date.parse(startedAt)) : null);
+  const telemetry: ExecutionTelemetry = {
+    model: existing?.model ?? executorConfig?.model ?? null,
+    reasoningEffort: existing?.reasoningEffort ?? executorConfig?.reasoningEffort ?? null,
+    startedAt,
+    completedAt,
+    durationMs,
+    usage: existing?.usage ?? null,
+    usageSource: existing?.usageSource ?? "not-recorded",
+    usageScope: existing?.usageScope ?? null,
+  };
+  return { ...thread, telemetry };
 }
 
 /** 在指定 Project 内解析 Thread；不允许用相同 Thread ID 跨 Project 访问数据。 */

@@ -8,7 +8,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { InMemoryPipelineStore, LifecycleHookRunner, MergeService, PlanService, ProjectService, Scheduler, type AgentLoop, type ModelGateway, type VerificationCommandExecutor } from "@pipeline-factory/domain";
+import { InMemoryPipelineStore, LifecycleHookRunner, MergeService, PlanService, ProjectService, Scheduler, type AgentLoop, type ExecutionTelemetry, type ModelGateway, type VerificationCommandExecutor } from "@pipeline-factory/domain";
 import { createApp } from "./server.js";
 
 const apps: Array<Awaited<ReturnType<typeof createApp>>> = [];
@@ -239,6 +239,20 @@ describe("Pipeline Factory v4 API", () => {
 
     expect(replayedFromLastEventId.statusCode).toBe(200);
     expect(replayedFromLastEventId.json().items).toEqual([{ sequence: 2, type: "MODEL_OUTPUT", occurredAt: expect.any(String), payload: { text: "正在执行" } }]);
+  });
+
+  it("returns persisted Run execution telemetry", async () => {
+    const store = new InMemoryPipelineStore();
+    const telemetry: ExecutionTelemetry = { model: "gpt-5.6-luna", reasoningEffort: "medium", startedAt: "2026-09-06T12:00:00.000Z", completedAt: "2026-09-06T12:00:03.000Z", durationMs: 3000, usage: { inputTokens: 100, outputTokens: 40, reasoningTokens: 10, totalTokens: 140 }, usageSource: "provider", usageScope: "turn" };
+    store.saveRun({ id: "run-telemetry", projectId: "project-1", planId: "plan-1", planRevision: 1, status: "READY_FOR_VERIFY", branch: "factory/run-telemetry", workspacePath: "/tmp/run-telemetry", baseCommit: "abc", executionThreadId: "execution-telemetry", createdAt: store.now(), startedAt: telemetry.startedAt });
+    store.saveExecutionThread({ id: "execution-telemetry", runId: "run-telemetry", state: "COMPLETED", journal: [], telemetry });
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+
+    const response = await app.inject({ method: "GET", url: "/api/v4/runs/run-telemetry" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().executionThread.telemetry).toEqual(telemetry);
   });
 
   it("maps terminal database errors to safe Agent Loop diagnostics", async () => {
