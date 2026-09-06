@@ -28,6 +28,15 @@ describe("api request errors", () => {
     fetchSpy.mockRestore();
   });
 
+  it("reconciles external merges through the project-scoped endpoint", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ projectId: "project-1", checkedAt: "2026-09-06T00:00:00.000Z", items: [] }), { status: 200 }));
+
+    await expect(api.reconcileProjectMerges("project-1")).resolves.toMatchObject({ projectId: "project-1", items: [] });
+    expect(fetchSpy).toHaveBeenCalledWith("/api/v4/projects/project-1/merge-reconciliation", { method: "POST", headers: {} });
+
+    fetchSpy.mockRestore();
+  });
+
   it("renames an Explorer through the existing typed endpoint", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ explorer: { id: "explorer-1", title: "Renamed thread" } }), { status: 200 }));
 

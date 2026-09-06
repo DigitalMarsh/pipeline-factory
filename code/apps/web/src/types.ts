@@ -273,9 +273,10 @@ export type Plan = {
   resolvedContract?: ResolvedPlanContract;
   generatedSpec?: { artifact: { mode: "CONVERSATION" | "REPOSITORY_FILE"; path?: string }; objective?: { audience?: string[] }; design?: { technicalConstraints: string[]; dataSecurity: string[]; failureHandling: string[] }; conflicts?: string[] };
   dispatch?: PlanDispatchState | null;
+  mergeRequest?: MergeRequest | null;
 };
 
-export type PlanDetail = { plan: Plan; revision: { artifactHash: string; resolvedContract?: ResolvedPlanContract } | null; projectSnapshot: { repoRoot: string; configVersion: number; configHash: string } | null; dispatch: PlanDispatchState | null };
+export type PlanDetail = { plan: Plan; revision: { artifactHash: string; resolvedContract?: ResolvedPlanContract } | null; projectSnapshot: { repoRoot: string; configVersion: number; configHash: string } | null; dispatch: PlanDispatchState | null; mergeRequest: MergeRequest | null };
 export type PlanRevisionDraft = { draftId: string; planId: string; projectId: string; basedOnRevision: number; targetRevision: number; status: "EDITING" | "READY_TO_CONFIRM" | "CONFIRMED" | "DISCARDED" | "BASE_CHANGED"; title: string; contract: Plan["contract"]; resolvedContract?: ResolvedPlanContract; sourceExplorerThreadId: string; sourceTurnId: string | null; providerThreadId: string | null; providerTurnId: string | null; providerItemId: string | null; baseBranch: string; baseCommit: string; createdAt: string; updatedAt: string; confirmedAt: string | null };
 export type ResolvedPlanContract = { schemaVersion: 2; artifact?: { mode: "CONVERSATION" | "REPOSITORY_FILE"; path?: string }; objective: { goal: string; audience?: string[]; acceptanceCriteria: string[]; outOfScope: string[] }; design?: { technicalConstraints: string[]; dataSecurity: string[]; failureHandling: string[] }; conflicts?: string[]; repository: { projectId: string; name: string; repoRoot: string; baseBranch: string; baseCommit: string; configVersion: number; configHash: string }; scope: { includePaths: string[]; excludePaths: string[] }; tasks: PlanTask[]; dependencies: string[]; execution: { executorModelRole: string; toolPolicy: string; maxRepairAttempts: number }; verification: { mode: "PROJECT_DEFAULT" | "NONE"; commandIds: string[] }; merge: { strategy: string; requireHumanMerge: true } };
 
@@ -315,6 +316,7 @@ export type MergeRequest = {
   humanConfirmationRequired: true;
   createdAt: string;
   mergedAt: string | null;
+  detectedTargetCommit?: string | null;
 };
 
 /** Run 的可审计 journal 容器，也是执行对话的事实来源。 */

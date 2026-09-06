@@ -8,6 +8,7 @@ import type { Plan, Project } from "../types";
 vi.mock("../api", () => ({
   api: {
     plans: vi.fn(),
+    reconcileProjectMerges: vi.fn(),
     startPlanRun: vi.fn(),
     cancelRun: vi.fn(),
     revisePlanConfiguration: vi.fn(),
@@ -55,8 +56,11 @@ function mountPanel(inputPlan = plan()) {
 describe("PlanCenterPanel", () => {
   it("emits the selected plan when View full plan is clicked", async () => {
     const expected = plan();
+    vi.mocked(api.reconcileProjectMerges).mockResolvedValue({ projectId: "project-1", checkedAt: new Date().toISOString(), items: [] });
     vi.mocked(api.plans).mockResolvedValue({ items: [expected], nextCursor: null });
     const mounted = mountPanel();
+    await nextTick();
+    await nextTick();
     await nextTick();
     await nextTick();
 
@@ -64,6 +68,7 @@ describe("PlanCenterPanel", () => {
     viewButton?.click();
 
     expect(mounted.viewed).toEqual([expected]);
+    expect(api.reconcileProjectMerges).toHaveBeenCalledWith("project-1");
     mounted.app.unmount();
     mounted.host.remove();
   });
@@ -72,6 +77,8 @@ describe("PlanCenterPanel", () => {
     const expected = { ...plan(), projectId: "project/1", sourceExplorerThreadId: "explorer/source 1" };
     vi.mocked(api.plans).mockResolvedValue({ items: [expected], nextCursor: null });
     const mounted = mountPanel(expected);
+    await nextTick();
+    await nextTick();
     await nextTick();
     await nextTick();
 

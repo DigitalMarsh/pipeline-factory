@@ -671,6 +671,17 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     return { items, lastEventSequence: store.getLastEventSequence(explorer.id) };
   });
 
+  app.post("/api/v4/projects/:projectId/merge-reconciliation", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    if (!store.getProject(params.data.projectId)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
+    try {
+      return merger.reconcileProject(params.data.projectId);
+    } catch (error) {
+      return reply.code(409).send({ code: "MERGE_RECONCILIATION_FAILED", error: error instanceof Error ? error.message : "Merge reconciliation failed" });
+    }
+  });
+
   app.get("/api/v4/projects/:projectId/plans", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
     const query = threadPlanQuery.safeParse(request.query ?? {});
@@ -947,7 +958,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       const plan = plans.get(params.data.planId);
       if (ensurePlanProject(plan.projectId, reply) === null) return;
       const revision = store.getRevision(plan.id, plan.revision);
-      return { plan, revision: revision ?? null, projectSnapshot: revision?.projectConfigSnapshot ?? null, dispatch: dispatchCoordinator?.state(plan.id) ?? store.getDispatchState(plan.id) ?? null };
+      return { plan, revision: revision ?? null, projectSnapshot: revision?.projectConfigSnapshot ?? null, dispatch: dispatchCoordinator?.state(plan.id) ?? store.getDispatchState(plan.id) ?? null, mergeRequest: plan.runId ? merger.findByRun(plan.runId) ?? null : null };
     } catch {
       return reply.code(404).send({ error: "Plan not found" });
     }
@@ -1183,7 +1194,13 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     const params = z.object({ mergeRequestId: z.string().min(1) }).safeParse(request.params);
     const body = targetCommitBody.safeParse(request.body ?? {});
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid merge confirmation" });
-    try { return { mergeRequest: merger.confirmMerged(params.data.mergeRequestId, body.data.targetCommit) }; }
+    try {
+      const mergeRequest = merger.confirmMerged(params.data.mergeRequestId, body.data.targetCommit);
+      // MergeService owns the durable Plan transition; wake the coordinator before
+      // responding so the UI never observes a stale NEEDS_REVIEW dispatch projection.
+      if (dispatchCoordinator) await dispatchCoordinator.wake();
+      return { mergeRequest };
+    }
     catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "MergeRequest cannot be confirmed" }); }
   });
 
@@ -1256,6 +1273,7 @@ function decoratePlanRows(store: PipelineStore, rows: Array<{ planId: string; re
       projectConfigHash: revision?.projectConfigHash ?? null,
       projectConfigStatus: !snapshot ? "LEGACY" : project && snapshot.configVersion === project.configVersion && snapshot.configHash === project.configHash ? "CURRENT" : "CHANGED",
       dispatch: store.getDispatchState(row.planId) ?? null,
+      mergeRequest: plan?.runId ? store.findMergeRequestByRun(plan.runId) ?? null : null,
       ...(plan?.generatedSpec ? { generatedSpec: plan.generatedSpec } : {}),
       ...(plan?.resolvedContract ? { resolvedContract: plan.resolvedContract } : {}),
     };

@@ -8,7 +8,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { InMemoryPipelineStore, LifecycleHookRunner, PlanService, ProjectService, Scheduler, type AgentLoop, type ModelGateway, type VerificationCommandExecutor } from "@pipeline-factory/domain";
+import { InMemoryPipelineStore, LifecycleHookRunner, MergeService, PlanService, ProjectService, Scheduler, type AgentLoop, type ModelGateway, type VerificationCommandExecutor } from "@pipeline-factory/domain";
 import { createApp } from "./server.js";
 
 const apps: Array<Awaited<ReturnType<typeof createApp>>> = [];
@@ -585,6 +585,44 @@ describe("Pipeline Factory v4 API", () => {
     const merged = await app.inject({ method: "POST", url: `/api/v4/merge-requests/${mergeRequestId}/confirm-merged`, payload: { targetCommit: "abc123" } });
     expect(merged.statusCode).toBe(200);
     expect(merged.json().mergeRequest.status).toBe("MERGED");
+    expect(store.getPlan(plan.id)?.status).toBe("MERGED");
+    expect(store.getDispatchState(plan.id)?.status).toBe("COMPLETED");
+  });
+
+  it("reconciles externally merged runs within the requested project", async () => {
+    const store = new InMemoryPipelineStore();
+    createTestProject(store);
+    const plans = new PlanService(store);
+    plans.registerThread({ id: "thread-reconcile", projectId: "project-1", parentThreadId: null });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-reconcile", title: "Reconcile from API" });
+    const configuredPlan = store.updatePlan({ ...plan, contract: { ...plan.contract, baseBranch: "main", baseCommit: "base" } });
+    plans.confirm(configuredPlan.id, "user-1");
+    const run = { id: "run-reconcile", projectId: "project-1", planId: plan.id, planRevision: 1, status: "MERGE_READY", branch: "factory/run-reconcile", workspacePath: "/workspace/run-reconcile", baseCommit: "base", executionThreadId: "thread-run-reconcile", createdAt: new Date().toISOString(), startedAt: new Date().toISOString() } as const;
+    store.saveRun(run);
+    store.updatePlan({ ...store.getPlan(plan.id)!, status: "MERGE_READY", runId: run.id, queuedAt: new Date().toISOString() });
+    store.saveVerificationRun({ id: "verification-reconcile", runId: run.id, status: "PASSED", repairAttempts: 0, commandResults: [], completedAt: new Date().toISOString() });
+    const mergeService = new MergeService(store, { git: {
+      commitExists: (_repoRoot, commit) => ["source", "target"].includes(commit),
+      resolveCommit: (_repoRoot, ref) => ref === "HEAD" ? "source" : ref === "main" ? "target" : null,
+      isAncestor: (_repoRoot, source, target) => source === "source" && target === "target",
+      branchContains: () => true,
+    } });
+    const app = createApp({ store, mergeService, seed: false });
+    apps.push(app);
+
+    const reconciled = await app.inject({ method: "POST", url: "/api/v4/projects/project-1/merge-reconciliation" });
+    expect(reconciled.statusCode).toBe(200);
+    expect(reconciled.json().items[0]).toMatchObject({ runId: run.id, planId: plan.id, outcome: "DETECTED", targetCommit: "target", mergeRequest: { status: "OPEN", detectedTargetCommit: "target" } });
+
+    const listed = await app.inject({ method: "GET", url: "/api/v4/projects/project-1/plans" });
+    expect(listed.json().items[0]).toMatchObject({ mergeRequest: { status: "OPEN", detectedTargetCommit: "target" } });
+    const details = await app.inject({ method: "GET", url: `/api/v4/plans/${plan.id}` });
+    expect(details.json()).toMatchObject({ mergeRequest: { status: "OPEN", detectedTargetCommit: "target" } });
+
+    const requestId = reconciled.json().items[0].mergeRequest.id as string;
+    const confirmed = await app.inject({ method: "POST", url: `/api/v4/merge-requests/${requestId}/confirm-merged`, payload: { targetCommit: "target" } });
+    expect(confirmed.statusCode).toBe(200);
+    expect(confirmed.json().mergeRequest.status).toBe("MERGED");
     expect(store.getPlan(plan.id)?.status).toBe("MERGED");
   });
 

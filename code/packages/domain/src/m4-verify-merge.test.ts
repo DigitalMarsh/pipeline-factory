@@ -66,6 +66,7 @@ describe("Verifier and MergeService", () => {
     const verification = { id: "verification-1", runId: run.id, status: "PASSED" as const, repairAttempts: 0, commandResults: [], completedAt: new Date().toISOString() };
     const merge = new MergeService(store, { git: {
       commitExists: (_repoRoot, commit) => commit === "source" || commit === "target",
+      resolveCommit: (_repoRoot, ref) => ref === "main" ? "target" : null,
       isAncestor: (_repoRoot, source, target) => source === "source" && target === "target",
       branchContains: () => true,
     } });
@@ -183,5 +184,74 @@ describe("Verifier and MergeService", () => {
     const reopenedService = new MergeService(store);
     expect(reopenedService.findByRun(run.id)).toEqual(request);
     expect(reopenedService.confirmMerged(request.id, "def456").status).toBe("MERGED");
+  });
+
+  it("reconciles an externally merged run without changing Plan status", () => {
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    projects.create({ id: "project-1", name: "Project", repoRoot: "/repo/project", defaultBranch: "main", worktreeRoot: "/tmp/project-worktrees" });
+    const plans = new PlanService(store, projects);
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Reconcile external merge" });
+    const configuredPlan = store.updatePlan({ ...plan, contract: { ...plan.contract, baseBranch: "main", baseCommit: "base" } });
+    plans.confirm(configuredPlan.id, "user-1");
+    const run = makeRun(plan.id);
+    run.status = "MERGE_READY";
+    store.saveRun(run);
+    store.updatePlan({ ...store.getPlan(plan.id)!, status: "MERGE_READY", runId: run.id });
+    store.saveVerificationRun({ id: "verification-1", runId: run.id, status: "PASSED", repairAttempts: 0, commandResults: [], completedAt: new Date().toISOString() });
+    const merge = new MergeService(store, { git: {
+      commitExists: (_repoRoot, commit) => commit === "source" || commit === "target",
+      resolveCommit: (_repoRoot, ref) => ref === "HEAD" ? "source" : ref === "main" ? "target" : null,
+      isAncestor: (_repoRoot, source, target) => source === "source" && target === "target",
+      branchContains: () => true,
+    } });
+
+    const first = merge.reconcileProject(projects.get("project-1").id);
+    expect(first.items[0]).toMatchObject({ outcome: "DETECTED", sourceCommit: "source", targetCommit: "target" });
+    expect(first.items[0]?.mergeRequest).toMatchObject({ status: "OPEN", detectedTargetCommit: "target" });
+    expect(store.getPlan(plan.id)?.status).toBe("MERGE_READY");
+
+    const second = merge.reconcileProject("project-1");
+    expect(second.items[0]).toMatchObject({ outcome: "ALREADY_OPEN" });
+    expect(store.listMergeRequests()).toHaveLength(1);
+    expect(store.listEvents({ aggregateId: first.items[0]!.mergeRequest!.id }).filter((event) => event.type === "merge.detected")).toHaveLength(1);
+
+    merge.confirmMerged(first.items[0]!.mergeRequest!.id, "target");
+    const afterConfirmation = merge.reconcileProject("project-1");
+    expect(afterConfirmation.items[0]).toMatchObject({ outcome: "ALREADY_MERGED", mergeRequest: { status: "MERGED" } });
+  });
+
+  it("persists detected target commits across SQLite reopen", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pipeline-factory-merge-reconcile-"));
+    const databasePath = join(directory, "factory.sqlite");
+    try {
+      const firstStore = new SqlitePipelineStore(databasePath);
+      const projects = new ProjectService(firstStore);
+      projects.create({ id: "project-1", name: "Project", repoRoot: "/repo/project", defaultBranch: "main", worktreeRoot: "/tmp/project-worktrees" });
+      const plans = new PlanService(firstStore, projects);
+      const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Persist detected merge" });
+      const configuredPlan = firstStore.updatePlan({ ...plan, contract: { ...plan.contract, baseBranch: "main", baseCommit: "base" } });
+      plans.confirm(configuredPlan.id, "user-1");
+      const run = makeRun(plan.id);
+      run.status = "MERGE_READY";
+      firstStore.saveRun(run);
+      firstStore.updatePlan({ ...firstStore.getPlan(plan.id)!, status: "MERGE_READY", runId: run.id });
+      firstStore.saveVerificationRun({ id: "verification-1", runId: run.id, status: "PASSED", repairAttempts: 0, commandResults: [], completedAt: new Date().toISOString() });
+      const merge = new MergeService(firstStore, { git: {
+        commitExists: (_repoRoot, commit) => commit === "source" || commit === "target",
+        resolveCommit: (_repoRoot, ref) => ref === "HEAD" ? "source" : ref === "main" ? "target" : null,
+        isAncestor: (_repoRoot, source, target) => source === "source" && target === "target",
+        branchContains: () => true,
+      } });
+      const request = merge.reconcileProject("project-1").items[0]?.mergeRequest;
+      expect(request).toMatchObject({ detectedTargetCommit: "target" });
+      firstStore.close();
+
+      const reopened = new SqlitePipelineStore(databasePath);
+      expect(reopened.getMergeRequest(request!.id)).toMatchObject({ detectedTargetCommit: "target", status: "OPEN" });
+      reopened.close();
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });

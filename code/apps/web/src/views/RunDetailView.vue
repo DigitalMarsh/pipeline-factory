@@ -46,6 +46,7 @@ let runEventSequence = 0;
 // sequence 同时作为 SSE 游标，重连时从最后一条已接受的事件继续回放。
 const loopStatusLabel = computed(() => ({ CREATED: "Created", RUNNING: "Running", WAITING_FOR_INPUT: "Waiting for input", PAUSED: "Paused", RECOVERING: "Recovery required", BLOCKED: "Blocked", COMPLETED: "Completed", FAILED: "Failed", CANCELLED: "Cancelled", NEEDS_RECONCILIATION: "Needs reconciliation" } as Record<string, string>)[executorLoop.value?.state ?? ""] ?? "No loop");
 const executionStatusLabel = computed(() => runStreamConnected.value ? "Live" : ["IN_PROGRESS", "STARTING"].includes(run.value?.status ?? "") ? "Reconnecting" : "Saved");
+const displayedRunStatus = computed(() => mergeRequest.value?.status === "MERGED" ? "MERGED" : run.value?.status ?? "");
 const executionBlockReason = computed(() => {
   for (const entry of [...(thread.value?.journal ?? [])].reverse()) {
     const reason = entry.payload.reason ?? entry.payload.error;
@@ -133,6 +134,12 @@ async function load() {
   loading.value = true;
   error.value = null;
   try {
+    try {
+      const report = await api.reconcileProjectMerges(requestProjectId);
+      const diagnostic = report.items.find((item) => item.runId === requestRunId && item.reason);
+      if (diagnostic?.reason) ElMessage.warning(`Merge 状态检测：${diagnostic.reason}`);
+    }
+    catch (caught) { ElMessage.warning(`Merge 状态检测失败，已展示最近保存的状态：${caught instanceof Error ? caught.message : "暂不可用"}`); }
     const response = await api.getRun(requestRunId);
     if (!requestScope.isCurrent(requestToken, `${requestProjectId}:${requestRunId}`)) return;
     run.value = response.run;
@@ -156,8 +163,10 @@ async function load() {
         toolCalls.value = toolsResponse.items;
       } catch (caught) { error.value = describeRunLoadError(caught, "agent-loop"); }
     }
-    if (!sourceCommit.value) sourceCommit.value = response.run.baseCommit;
-    if (!targetCommit.value) targetCommit.value = response.run.baseCommit;
+    sourceCommit.value = response.mergeRequest?.sourceCommit ?? response.run.baseCommit;
+    // Reconciliation is the source of truth for the confirmation input. Reset it
+    // on every load so switching runs or refreshing cannot retain another run's SHA.
+    targetCommit.value = response.mergeRequest?.detectedTargetCommit ?? response.run.baseCommit;
   } catch (caught) {
     if (requestScope.isCurrent(requestToken, `${requestProjectId}:${requestRunId}`)) error.value = describeRunLoadError(caught, "run");
   }
@@ -239,7 +248,7 @@ async function confirmMerged() {
     <div class="detail-top"><el-button text @click="router.push(`/projects/${String(route.params.projectId)}/plans`)"><ArrowLeft :size="15" /> Back</el-button><span class="eyebrow">EXECUTION THREAD</span></div>
     <div v-if="error" class="demo-notice"><Warning :size="14" /> {{ error }}</div>
     <template v-if="run">
-      <div class="detail-heading"><div><div class="eyebrow">RUN · {{ run.id }}</div><h1>Execution run</h1><p>Plan <code>{{ run.planId }}</code> · Revision {{ run.planRevision }} · <code>{{ run.branch }}</code></p></div><el-tag :type="run.status === 'BLOCKED' ? 'danger' : run.status === 'MERGE_READY' || run.status === 'MERGED' ? 'success' : 'warning'" effect="light">{{ label(run.status) }}</el-tag></div>
+      <div class="detail-heading"><div><div class="eyebrow">RUN · {{ run.id }}</div><h1>Execution run</h1><p>Plan <code>{{ run.planId }}</code> · Revision {{ run.planRevision }} · <code>{{ run.branch }}</code></p></div><el-tag :type="displayedRunStatus === 'BLOCKED' ? 'danger' : displayedRunStatus === 'MERGE_READY' ? 'warning' : displayedRunStatus === 'MERGED' ? 'success' : 'warning'" effect="light">{{ label(displayedRunStatus) }}</el-tag></div>
       <div class="run-facts"><div><span>WORKSPACE</span><code>{{ run.workspacePath ?? "Not created" }}</code></div><div><span>BASE COMMIT</span><code>{{ run.baseCommit }}</code></div><div><span>THREAD</span><code>{{ run.executionThreadId }}</code></div><div><span>STARTED</span><strong>{{ run.startedAt ? new Date(run.startedAt).toLocaleString('zh-CN') : "—" }}</strong></div></div>
       <section v-if="executionTasks.length" class="execution-steps-panel" aria-labelledby="execution-steps-heading">
         <div class="execution-steps-heading">
@@ -285,7 +294,7 @@ async function confirmMerged() {
         <div v-if="run.status === 'IN_PROGRESS' || run.status === 'READY_FOR_VERIFY'" class="guidance-row"><el-input v-model="guidance" size="small" aria-label="User guidance" placeholder="Add in-scope guidance to the execution thread…" @keyup.enter="sendGuidance" /><el-button size="small" :disabled="!guidance.trim()" :loading="actionBusy" @click="sendGuidance">Add guidance</el-button></div>
       </section>
       <section v-if="verification || run.status === 'MERGE_READY'" class="evidence-card"><div class="evidence-heading"><div><div class="eyebrow">VERIFICATION RUN</div><h2>Deterministic checks</h2></div><el-tag :type="verification?.status === 'PASSED' ? 'success' : 'danger'" effect="light">{{ verification?.status ?? 'Not recorded' }}</el-tag></div><div v-if="verification" class="verification-summary"><span>{{ verification.commandResults.length }} command(s)</span><span>Repair attempts {{ verification.repairAttempts }}</span><span>{{ new Date(verification.completedAt).toLocaleString('zh-CN') }}</span></div><div v-if="verification?.commandResults.length" class="command-results"><div v-for="command in verification.commandResults" :key="command.commandId" class="command-result"><code>{{ command.commandId }}</code><span :class="command.result.exitCode === 0 ? 'result-pass' : 'result-fail'">exit {{ command.result.exitCode }}</span></div></div><div v-if="run.status === 'MERGE_READY' && !mergeRequest" class="review-form"><el-input v-model="sourceCommit" size="small" aria-label="Reviewed source commit" placeholder="Reviewed source commit" /><el-button type="primary" size="small" :loading="actionBusy" @click="createReview">Create review</el-button></div></section>
-      <section v-if="mergeRequest" class="evidence-card merge-card"><div class="evidence-heading"><div><div class="eyebrow">MERGE REQUEST · {{ mergeRequest.id }}</div><h2>Human merge confirmation</h2></div><el-tag :type="mergeRequest.status === 'MERGED' ? 'success' : 'warning'" effect="light">{{ mergeRequest.status }}</el-tag></div><div class="verification-summary"><span>Source <code>{{ mergeRequest.sourceCommit }}</code></span><span>Target <code>{{ mergeRequest.targetBranch }}</code></span></div><div v-if="mergeRequest.status === 'OPEN'" class="review-form"><el-input v-model="targetCommit" size="small" aria-label="Target commit" placeholder="Actual target commit after manual merge" /><el-button type="primary" size="small" :loading="actionBusy" @click="confirmMerged">Confirm merged</el-button></div></section>
+      <section v-if="mergeRequest" class="evidence-card merge-card"><div class="evidence-heading"><div><div class="eyebrow">MERGE REQUEST · {{ mergeRequest.id }}</div><h2>Human merge confirmation</h2></div><el-tag :type="mergeRequest.status === 'MERGED' ? 'success' : 'warning'" effect="light">{{ mergeRequest.status }}</el-tag></div><div class="verification-summary"><span>Source <code>{{ mergeRequest.sourceCommit }}</code></span><span>Target <code>{{ mergeRequest.targetBranch }}</code></span><span v-if="mergeRequest.detectedTargetCommit">Detected <code>{{ mergeRequest.detectedTargetCommit }}</code></span></div><p v-if="mergeRequest.status === 'OPEN' && mergeRequest.detectedTargetCommit" class="merge-detected-banner"><strong>Merge detected</strong> · 已检测到目标分支包含 source commit；请确认后将 Plan 更新为 MERGED。</p><div v-if="mergeRequest.status === 'OPEN'" class="review-form"><el-input v-model="targetCommit" size="small" aria-label="Target commit" placeholder="Actual target commit after manual merge" /><el-button type="primary" size="small" :loading="actionBusy" @click="confirmMerged">Confirm merged</el-button></div></section>
       <section class="diagnostics-teaser"><div><div class="eyebrow">EXECUTION DIAGNOSTICS</div><h2>Audit trail</h2><p>{{ thread?.journal.length ?? 0 }} journal entries · {{ toolCalls.length }} tool calls · raw payloads available on demand</p></div><el-button size="small" @click="diagnosticsOpen = true">Open diagnostics</el-button></section>
     </template>
     <el-drawer v-model="diagnosticsOpen" title="Execution diagnostics" size="min(760px, 92vw)">

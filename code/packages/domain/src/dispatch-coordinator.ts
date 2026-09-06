@@ -257,7 +257,7 @@ export class PlanDispatchCoordinator {
         return;
       }
       case "MERGE_READY":
-        this.saveState(this.stateForRun(current, run, "NEEDS_REVIEW", null));
+        this.saveState(this.stateForRun(current, run, plan?.status === "MERGED" ? "COMPLETED" : "NEEDS_REVIEW", null));
         return;
       case "BLOCKED":
       case "NEEDS_PLAN_CHANGE":

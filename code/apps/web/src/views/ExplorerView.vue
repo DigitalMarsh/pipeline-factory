@@ -529,10 +529,16 @@ async function openPlanDetail(plan: Plan): Promise<void> {
     return;
   }
   try {
+    try {
+      const report = await api.reconcileProjectMerges(requestedProjectId);
+      const diagnostic = plan.runId ? report.items.find((item) => item.runId === plan.runId && item.reason) : undefined;
+      if (diagnostic?.reason) ElMessage.warning(`Merge 状态检测：${diagnostic.reason}`);
+    }
+    catch (caught) { ElMessage.warning(`Merge 状态检测失败，已展示最近保存的状态：${caught instanceof Error ? caught.message : "暂不可用"}`); }
     const [response, history] = await Promise.all([api.getPlan(planId), api.planRevisions(planId)]);
     if (projectId.value !== requestedProjectId || activeRequestToken !== requestToken) return;
     const resolvedContract = response.revision?.resolvedContract ?? response.plan.resolvedContract;
-    detailPlan.value = { ...response.plan, dispatch: response.dispatch, ...(resolvedContract ? { resolvedContract } : {}) };
+    detailPlan.value = { ...response.plan, dispatch: response.dispatch, mergeRequest: response.mergeRequest, ...(resolvedContract ? { resolvedContract } : {}) };
     detailRevisions.value = history.items.map((item) => item.revision);
   } catch (caught) {
     if (projectId.value !== requestedProjectId || activeRequestToken !== requestToken) return;
