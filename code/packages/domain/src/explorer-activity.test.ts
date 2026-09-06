@@ -7,6 +7,17 @@ import { describe, expect, it } from "vitest";
 import { projectExplorerActivity } from "./explorer-activity.js";
 
 describe("Explorer activity projection", () => {
+  it("marks a text-bearing assistant activity completed when its turn is completed", () => {
+    const items = projectExplorerActivity({
+      turns: [{ id: "assistant-1", threadId: "explorer-1", role: "assistant", content: "", status: "COMPLETED", createdAt: "2026-08-29T10:00:00.000Z", sequence: 1 }],
+      loops: [{ id: "loop-1", ownerType: "explorer-turn", ownerId: "assistant-1", role: "explorer", mode: "provider-controlled", state: "COMPLETED", stepCount: 1, maxSteps: 40, startedAt: "2026-08-29T10:00:00.000Z", completedAt: "2026-08-29T10:00:02.000Z", providerThreadId: null, providerTurnId: null, checkpointJson: null }],
+      steps: [{ loopId: "loop-1", sequence: 1, stepType: "MODEL_TEXT_DELTA", status: "COMPLETED", callId: null, providerThreadId: null, providerTurnId: null, payload: { text: "完成的回复" }, occurredAt: "2026-08-29T10:00:01.000Z" }],
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "ASSISTANT_MESSAGE", summary: "完成的回复", status: "COMPLETED" });
+  });
+
   it("renders loop steps in chronological order and groups contiguous model deltas", () => {
     const items = projectExplorerActivity({
       turns: [
@@ -63,6 +74,25 @@ describe("Explorer activity projection", () => {
     expect(items[0]?.summary).not.toContain("pipeline-factory-plan");
     expect(items[0]?.summary).not.toContain("acceptanceCriteria");
     expect(items[0]?.details).toMatchObject({ planProtocol: true, status: "READY", title: "Personal information manager", taskCount: 1, verificationCount: 1 });
+  });
+
+  it("keeps the final plan text provider item ID when one turn has multiple assistant message segments", () => {
+    const artifact = { title: "Provider-bound plan", goal: "Bind the exact generated message" };
+    const rawProtocol = `<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>${JSON.stringify(artifact)}</pipeline-factory-plan>`;
+    const items = projectExplorerActivity({
+      turns: [{ id: "assistant-1", threadId: "explorer-1", role: "assistant", content: "", status: "COMPLETED", createdAt: "2026-08-29T10:00:00.000Z", sequence: 1 }],
+      loops: [{ id: "loop-1", ownerType: "explorer-turn", ownerId: "assistant-1", role: "explorer", mode: "provider-controlled", state: "COMPLETED", stepCount: 3, maxSteps: 40, startedAt: "2026-08-29T10:00:00.000Z", completedAt: "2026-08-29T10:00:03.000Z", providerThreadId: null, providerTurnId: null, checkpointJson: null }],
+      steps: [
+        { loopId: "loop-1", sequence: 1, stepType: "MODEL_TEXT_DELTA", status: "COMPLETED", callId: null, providerThreadId: null, providerTurnId: null, payload: { text: "先分析一下。", providerItemId: "item-analysis" }, occurredAt: "2026-08-29T10:00:01.000Z" },
+        { loopId: "loop-1", sequence: 2, stepType: "TOOL_COMPLETED", status: "COMPLETED", callId: "call-1", providerThreadId: null, providerTurnId: null, payload: {}, occurredAt: "2026-08-29T10:00:02.000Z" },
+        { loopId: "loop-1", sequence: 3, stepType: "MODEL_TEXT_DELTA", status: "COMPLETED", callId: null, providerThreadId: null, providerTurnId: null, payload: { text: rawProtocol, providerItemId: "item-plan" }, occurredAt: "2026-08-29T10:00:03.000Z" },
+      ],
+    });
+
+    const assistantMessages = items.filter((item) => item.kind === "ASSISTANT_MESSAGE");
+    expect(assistantMessages).toHaveLength(2);
+    expect(assistantMessages[0]?.details).toMatchObject({ providerItemId: "item-analysis" });
+    expect(assistantMessages[1]?.details).toMatchObject({ planProtocol: true, status: "READY", providerItemId: "item-plan" });
   });
 
   it("renders the latest parseable READY protocol instead of an earlier invalid block", () => {

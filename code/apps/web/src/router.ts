@@ -11,12 +11,24 @@ import ProjectSettingsView from "./views/ProjectSettingsView.vue";
 import ProjectExecuteView from "./views/WorkbenchView.vue";
 import ProjectCreateView from "./views/ProjectCreateView.vue";
 import { api } from "./api";
+import { LAST_PROJECT_STORAGE_KEY, readLastProjectId, rememberProjectId, selectDefaultProjectId } from "./routerDefaults";
+export { LAST_PROJECT_STORAGE_KEY, selectDefaultProjectId } from "./routerDefaults";
+
+async function resolveRootRoute(): Promise<string> {
+  try {
+    const projects = (await api.projects()).items;
+    const projectId = selectDefaultProjectId(projects, readLastProjectId());
+    return projectId ? `/projects/${encodeURIComponent(projectId)}/explorer` : "/projects";
+  } catch {
+    return "/projects";
+  }
+}
 
 /** 页面路由以 Project 为隔离边界，未知 Project 由页面加载错误引导回 Catalog。 */
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: "/", redirect: "/projects" },
+    { path: "/", component: ProjectCatalogView },
     { path: "/projects", component: ProjectCatalogView },
     { path: "/projects/new", component: ProjectCreateView },
     { path: "/projects/:projectId/execute", component: ProjectExecuteView },
@@ -29,11 +41,14 @@ export const router = createRouter({
 });
 
 router.beforeEach(async (to) => {
+  if (to.path === "/") return resolveRootRoute();
   const projectId = typeof to.params.projectId === "string" ? to.params.projectId : null;
   if (!projectId) return true;
   try {
     const projects = (await api.projects()).items;
-    return projects.some((project) => project.id === projectId) ? true : "/projects";
+    if (!projects.some((project) => project.id === projectId)) return "/projects";
+    rememberProjectId(projectId);
+    return true;
   } catch {
     return true;
   }

@@ -33,7 +33,8 @@ export type ProjectSettings = {
     maxAutoContinuationTurns: number;
     maxRepairAttempts: number;
   };
-  commands: Array<{ commandId: string; argv: string[]; environment?: Record<string, string> }>;
+  commands: Array<{ commandId: string; category?: "verification" | "lifecycle" | "executor-tool" | "unclassified"; description?: string; enabled?: boolean; argv: string[]; environment?: Record<string, string>; timeoutMs?: number }>;
+  defaultVerificationCommandIds?: string[];
   hooks: {
     start?: { commandId: string; enabled?: boolean; timeoutMs?: number; maxAttempts?: number };
     cleanup?: { commandId: string; enabled?: boolean; timeoutMs?: number; maxAttempts?: number };
@@ -257,8 +258,12 @@ export type Plan = {
     requireHumanMerge: boolean;
     dependsOnPlanIds?: string[];
   };
+  resolvedContract?: ResolvedPlanContract;
   dispatch?: PlanDispatchState | null;
 };
+
+export type PlanDetail = { plan: Plan; revision: { artifactHash: string; resolvedContract?: ResolvedPlanContract } | null; projectSnapshot: { repoRoot: string; configVersion: number; configHash: string } | null; dispatch: PlanDispatchState | null };
+export type ResolvedPlanContract = { schemaVersion: 2; objective: { goal: string; acceptanceCriteria: string[]; outOfScope: string[] }; repository: { projectId: string; name: string; repoRoot: string; baseBranch: string; baseCommit: string; configVersion: number; configHash: string }; scope: { includePaths: string[]; excludePaths: string[] }; tasks: PlanTask[]; dependencies: string[]; execution: { executorModelRole: string; toolPolicy: string; maxRepairAttempts: number }; verification: { mode: "PROJECT_DEFAULT" | "NONE"; commandIds: string[] }; merge: { strategy: string; requireHumanMerge: true } };
 
 /** Execution Run 的页面投影，关联冻结 Revision、Worktree 和 Executor Loop。 */
 export type Run = {
@@ -279,9 +284,10 @@ export type Run = {
 export type VerificationRun = {
   id: string;
   runId: string;
-  status: "PASSED" | "FAILED" | "BLOCKED";
+  status: "PASSED" | "SKIPPED" | "FAILED" | "BLOCKED";
   repairAttempts: number;
   commandResults: Array<{ commandId: string; result: { exitCode: number | null; stdout: string; stderr: string } }>;
+  reason?: "NO_PROJECT_VERIFICATION_COMMANDS";
   completedAt: string;
 };
 

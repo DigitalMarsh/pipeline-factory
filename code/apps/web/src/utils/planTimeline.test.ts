@@ -5,10 +5,10 @@
  */
 import { describe, expect, it } from "vitest";
 import type { ExplorerActivityItem, Plan } from "../types";
-import { findPlanForActivity, getPlanTimelineTarget, planTimelineItems } from "./planTimeline";
+import { findPlanForActivity, getPlanTimelineTarget, planActivityBindings, planTimelineItems } from "./planTimeline";
 
-const activity = (turnId: string, title: string, occurredAt = "2026-08-29T10:00:00.000Z"): ExplorerActivityItem => ({
-  id: `activity-${turnId}`,
+const activity = (turnId: string, title: string, occurredAt = "2026-08-29T10:00:00.000Z", providerItemId?: string): ExplorerActivityItem => ({
+  id: `activity-${turnId}-${providerItemId ?? occurredAt}`,
   explorerId: "explorer-1",
   turnId,
   sequence: 1,
@@ -16,7 +16,7 @@ const activity = (turnId: string, title: string, occurredAt = "2026-08-29T10:00:
   status: "COMPLETED",
   title: "Plan Explorer",
   summary: "方案已整理完成。",
-  details: { planProtocol: true, status: "READY", title },
+  details: { planProtocol: true, status: "READY", title, ...(providerItemId ? { providerItemId } : {}) },
   occurredAt,
 });
 
@@ -37,27 +37,40 @@ const plan = (id: string, sourceTurnId: string | null, createdAt = "2026-08-29T1
 
 describe("plan timeline bindings", () => {
   it("binds a generated plan to its source assistant turn", () => {
-    const generated = activity("turn-2", "Personal information manager");
-    const candidate = plan("plan-1", "turn-2");
+    const generated = activity("turn-2", "Personal information manager", undefined, "item-plan-1");
+    const candidate = { ...plan("plan-1", "turn-2"), providerItemId: "item-plan-1" };
 
     expect(findPlanForActivity(generated, [candidate])).toBe(candidate);
     expect(getPlanTimelineTarget(candidate, [generated])).toBe("plan-generated-plan-1");
   });
 
-  it("uses a unique title match for legacy plans without a source turn", () => {
+  it("keeps plans without a source turn detached from assistant messages", () => {
     const generated = activity("turn-2", "Personal information manager");
     const legacy = plan("plan-1", null);
 
-    expect(findPlanForActivity(generated, [legacy])).toBe(legacy);
-    expect(getPlanTimelineTarget(legacy, [generated])).toBe("plan-generated-plan-1");
+    expect(findPlanForActivity(generated, [legacy])).toBeNull();
+    expect(getPlanTimelineTarget(legacy, [generated])).toBe("plan-created-plan-1");
   });
 
-  it("does not guess an anchor when legacy title matching is ambiguous", () => {
-    const generated = activity("turn-2", "Personal information manager");
-    const sameTitle = [plan("plan-1", null), plan("plan-2", null)];
+  it("binds one plan to the final matching provider item within a shared source turn", () => {
+    const first = activity("turn-2", "Personal information manager", "2026-08-29T10:00:00.000Z", "item-draft");
+    const final = activity("turn-2", "Personal information manager", "2026-08-29T10:01:00.000Z", "item-plan-1");
+    const candidate = { ...plan("plan-1", "turn-2"), providerItemId: "item-plan-1" };
+    const bindings = planActivityBindings([candidate], [first, final]);
 
-    expect(findPlanForActivity(generated, sameTitle)).toBeNull();
-    expect(getPlanTimelineTarget(sameTitle[0]!, [generated], sameTitle)).toBe("plan-created-plan-1");
+    expect(bindings.size).toBe(1);
+    expect(findPlanForActivity(first, [candidate], [first, final])).toBeNull();
+    expect(findPlanForActivity(final, [candidate], [first, final])).toBe(candidate);
+    expect(getPlanTimelineTarget(candidate, [first, final])).toBe("plan-generated-plan-1");
+  });
+
+  it("falls back to the final matching READY message when older plans lack provider item IDs", () => {
+    const first = activity("turn-2", "Personal information manager", "2026-08-29T10:00:00.000Z");
+    const final = activity("turn-2", "Personal information manager", "2026-08-29T10:01:00.000Z");
+    const candidate = plan("plan-1", "turn-2");
+
+    expect(findPlanForActivity(first, [candidate], [first, final])).toBeNull();
+    expect(findPlanForActivity(final, [candidate], [first, final])).toBe(candidate);
   });
 
   it("sorts Plans rail items by stable generation time while retaining status", () => {

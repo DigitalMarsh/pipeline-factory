@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { ExplorerActivityItem, ExplorerInputRequest } from "../types";
-import { buildExplorerTimeline, explorerTimelineTarget } from "./explorerTimeline";
+import { buildExplorerMessageTimeline, buildExplorerTimeline, explorerTimelineTarget } from "./explorerTimeline";
 
 const activity = (id: string, kind: ExplorerActivityItem["kind"], occurredAt: string): ExplorerActivityItem => ({
   id,
@@ -66,5 +66,62 @@ describe("Explorer timeline projection", () => {
     const assistant = activity("assistant-turn", "ASSISTANT_MESSAGE", "2026-09-01T10:03:00.000Z");
 
     expect(explorerTimelineTarget(assistant, 4)).toBe("message-assistant-turn");
+  });
+
+  it("gives assistant activities in the same provider turn distinct message targets", () => {
+    const first = { ...activity("assistant-activity-1", "ASSISTANT_MESSAGE", "2026-09-01T10:03:00.000Z"), turnId: "provider-turn-1" };
+    const second = { ...activity("assistant-activity-2", "ASSISTANT_MESSAGE", "2026-09-01T10:04:00.000Z"), turnId: "provider-turn-1" };
+
+    expect(explorerTimelineTarget(first, 4)).toBe("message-assistant-activity-1");
+    expect(explorerTimelineTarget(second, 5)).toBe("message-assistant-activity-2");
+  });
+
+  it("projects messages and an answered structured input as chronological message, question, and answer entries", () => {
+    const items = buildExplorerMessageTimeline(
+      [
+        activity("turn-1", "USER_MESSAGE", "2026-09-01T10:00:00.000Z"),
+        activity("turn-3", "ASSISTANT_MESSAGE", "2026-09-01T10:03:00.000Z"),
+      ],
+      [inputRequest("input-2", "2026-09-01T10:02:00.000Z")],
+    );
+
+    expect(items.map((item) => [item.label, item.occurredAt])).toEqual([
+      ["消息", "2026-09-01T10:00:00.000Z"],
+      ["提问", "2026-09-01T10:02:00.000Z"],
+      ["消息", "2026-09-01T10:03:00.000Z"],
+      ["回答", "2026-09-01T10:04:00.000Z"],
+    ]);
+    expect(items.filter((item) => item.label === "提问" || item.label === "回答").map((item) => item.target)).toEqual(["input-request-input-2", "input-request-input-2"]);
+  });
+
+  it("keeps an unanswered structured input as a question only", () => {
+    const items = buildExplorerMessageTimeline([], [inputRequest("input-2", "2026-09-01T10:02:00.000Z", "OPEN")]);
+
+    expect(items.map((item) => item.label)).toEqual(["提问"]);
+  });
+
+  it("inserts detached historical plans at their creation time instead of appending them", () => {
+    const plan = {
+      id: "plan-1",
+      title: "Historical plan",
+      revision: 1,
+      status: "DRAFT" as const,
+      projectId: "project-1",
+      sourceExplorerThreadId: "explorer-1",
+      sourceTurnId: null,
+      createdAt: "2026-09-01T10:02:00.000Z",
+      queuedAt: null,
+      runId: null,
+      lastEventAt: "2026-09-01T10:02:00.000Z",
+      attentionReason: null,
+    };
+    const items = buildExplorerTimeline(
+      [activity("first", "USER_MESSAGE", "2026-09-01T10:01:00.000Z"), activity("last", "ASSISTANT_MESSAGE", "2026-09-01T10:03:00.000Z")],
+      [],
+      [plan],
+    );
+
+    expect(items.map((item) => item.kind)).toEqual(["activity", "plan", "activity"]);
+    expect(items[1]).toMatchObject({ kind: "plan", plan: { id: "plan-1" } });
   });
 });

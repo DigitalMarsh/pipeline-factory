@@ -819,7 +819,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       const plan = plans.get(params.data.planId);
       if (ensurePlanProject(plan.projectId, reply) === null) return;
       const revision = store.getRevision(plan.id, plan.revision);
-      return { plan, revision: revision ?? null, dispatch: dispatchCoordinator?.state(plan.id) ?? store.getDispatchState(plan.id) ?? null };
+      return { plan, revision: revision ?? null, projectSnapshot: revision?.projectConfigSnapshot ?? null, dispatch: dispatchCoordinator?.state(plan.id) ?? store.getDispatchState(plan.id) ?? null };
     } catch {
       return reply.code(404).send({ error: "Plan not found" });
     }
@@ -1330,8 +1330,8 @@ function createDefaultVerificationExecutor(store: PipelineStore, config: Factory
   };
 }
 
-function readCommandDefinitions(config: FactoryConfig): Array<{ commandId: string; argv: readonly [string, ...string[]]; environment?: Readonly<Record<string, string>> | undefined }> {
-  return config.project.commands.flatMap((command) => command.argv.length > 0 ? [{ commandId: command.commandId, argv: [command.argv[0]!, ...command.argv.slice(1)] as readonly [string, ...string[]], environment: command.environment }] : []);
+function readCommandDefinitions(config: FactoryConfig): Array<{ commandId: string; category: "verification"; enabled: true; argv: readonly [string, ...string[]]; environment?: Readonly<Record<string, string>> | undefined }> {
+  return config.project.commands.flatMap((command) => command.argv.length > 0 ? [{ commandId: command.commandId, category: "verification" as const, enabled: true as const, argv: [command.argv[0]!, ...command.argv.slice(1)] as readonly [string, ...string[]], environment: command.environment }] : []);
 }
 
 function createModelGateway(config: FactoryConfig): ModelGateway {

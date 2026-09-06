@@ -8,6 +8,7 @@ import {
   ExplorerService,
   ExplorerThreadService,
   InMemoryPipelineStore,
+  ProjectService,
   type ExplorerTitleGenerator,
   type ModelEvent,
   type ModelGateway,
@@ -32,12 +33,36 @@ async function waitFor(predicate: () => boolean): Promise<void> {
   expect(predicate()).toBe(true);
 }
 
+function createProject(store: InMemoryPipelineStore, id: string, shortName: string): void {
+  new ProjectService(store).create({
+    id,
+    name: `Project ${id}`,
+    shortName,
+    repoRoot: `/workspace/${id}`,
+    defaultBranch: "main",
+    worktreeRoot: `/workspace/${id}/.worktrees`,
+  });
+}
+
 describe("Explorer title rules", () => {
   it("formats the creation timestamp and model title into the visible name", () => {
     const createdAt = "2026-08-29T05:45:15.000Z";
 
     expect(placeholderExplorerTitle(createdAt)).toBe("探索-20260829-13:45:15");
+    expect(placeholderExplorerTitle(createdAt, "P1")).toBe("P1-20260829-13:45:15");
     expect(composeExplorerTitle(createdAt, "订单取消流程优化")).toBe("20260829-13:45:15-订单取消流程优化");
+  });
+
+  it("uses each new Explorer project's short name for its placeholder", () => {
+    const store = new InMemoryPipelineStore();
+    createProject(store, "project-1", "P1");
+    createProject(store, "project-2", "P2");
+
+    const first = new ExplorerService(store).create({ projectId: "project-1", createdAt: "2026-09-05T01:19:20.000Z" });
+    const second = new ExplorerService(store).create({ projectId: "project-2", createdAt: "2026-09-05T01:19:20.000Z" });
+
+    expect(first.title).toBe("P1-20260905-09:19:20");
+    expect(second.title).toBe("P2-20260905-09:19:20");
   });
 
   it("normalizes a model response into a short single-line title", () => {
@@ -68,13 +93,14 @@ describe("Explorer title rules", () => {
 
   it("keeps the placeholder when title generation fails without failing exploration", async () => {
     const store = new InMemoryPipelineStore();
+    createProject(store, "project-1", "P1");
     const explorer = new ExplorerService(store).create({ projectId: "project-1", createdAt: "2026-08-29T05:45:15.000Z" });
     const titleGenerator: ExplorerTitleGenerator = { generate: async () => { throw new Error("title unavailable"); } };
     const service = new ExplorerThreadService(store, model(), { titleGenerator });
 
     await service.startTurn({ threadId: explorer.id, content: "请分析登录问题", clientTurnId: "turn-1" });
     await waitFor(() => store.getThread(explorer.id)?.titleStatus === "FAILED");
-    expect(store.getThread(explorer.id)).toMatchObject({ title: "探索-20260829-13:45:15", titleSource: "AUTO" });
+    expect(store.getThread(explorer.id)).toMatchObject({ title: "P1-20260829-13:45:15", titleSource: "AUTO" });
   });
 
   it("does not overwrite a manual rename while model generation is pending", async () => {
@@ -98,6 +124,7 @@ describe("Explorer title rules", () => {
     const oldDefault = new ExplorerService(store).create({ projectId: "project-1", createdAt: "2026-08-28T05:45:15.000Z" });
     store.saveTurn({ id: "old-user", threadId: oldDefault.id, role: "user", content: "请增加个人信息管理", status: "COMPLETED", createdAt: "2026-08-28T05:46:00.000Z", sequence: 1 });
     const empty = new ExplorerService(store).create({ projectId: "project-1", createdAt: "2026-08-28T05:47:15.000Z" });
+    createProject(store, "project-1", "P1");
     const custom = new ExplorerService(store).create({ projectId: "project-1", title: "我保留的名称", createdAt: "2026-08-28T05:48:15.000Z" });
     store.saveTurn({ id: "custom-user", threadId: custom.id, role: "user", content: "不应覆盖", status: "COMPLETED", createdAt: "2026-08-28T05:49:00.000Z", sequence: 1 });
     const titleGenerator: ExplorerTitleGenerator = { generate: async ({ content }) => content === "请增加个人信息管理" ? "个人信息管理" : "不应被使用" };

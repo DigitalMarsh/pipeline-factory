@@ -3,8 +3,8 @@
   维护提示：左侧入口只切换左侧内容，右侧执行上下文由 ExplorerView 独立管理。
 -->
 <script setup lang="ts">
-import { ArrowRight, Connection, FolderOpened, Plus, Setting } from "@element-plus/icons-vue";
-import { computed } from "vue";
+import { ArrowDown, ArrowRight, Connection, FolderOpened, Plus, Setting } from "@element-plus/icons-vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import type { ExplorerThread, Project } from "../types";
 
 type LeftPanel = "projects" | "explorers";
@@ -19,9 +19,13 @@ const props = withDefaults(defineProps<{
   projectActionId?: string | null;
   showArchived?: boolean;
   explorerActionId?: string | null;
+  explorerLoading?: boolean;
+  explorerError?: string | null;
 }>(), {
   showArchived: false,
   explorerActionId: null,
+  explorerLoading: false,
+  explorerError: null,
 });
 const emit = defineEmits<{
   "select-panel": [panel: LeftPanel];
@@ -40,6 +44,41 @@ const panelEntries: { key: LeftPanel; label: string }[] = [
   { key: "explorers", label: "探索" },
   { key: "projects", label: "项目" },
 ];
+const projectSwitcherOpen = ref(false);
+const projectSwitcherRef = ref<HTMLElement | null>(null);
+
+function closeProjectSwitcher() {
+  projectSwitcherOpen.value = false;
+}
+
+function toggleProjectSwitcher() {
+  projectSwitcherOpen.value = !projectSwitcherOpen.value;
+}
+
+function selectInlineProject(projectId: string) {
+  if (projectId === props.project?.id) return;
+  closeProjectSwitcher();
+  emit("select-project", projectId);
+}
+
+function closeProjectSwitcherOnPointerDown(event: PointerEvent) {
+  if (!projectSwitcherOpen.value || !(event.target instanceof Node) || projectSwitcherRef.value?.contains(event.target)) return;
+  closeProjectSwitcher();
+}
+
+function closeProjectSwitcherOnKeydown(event: KeyboardEvent) {
+  if (event.key === "Escape") closeProjectSwitcher();
+}
+
+onMounted(() => {
+  document.addEventListener("pointerdown", closeProjectSwitcherOnPointerDown);
+  document.addEventListener("keydown", closeProjectSwitcherOnKeydown);
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener("pointerdown", closeProjectSwitcherOnPointerDown);
+  document.removeEventListener("keydown", closeProjectSwitcherOnKeydown);
+});
 
 function projectStatusLabel(status: Project["status"]): string {
   return status === "ACTIVE" ? "Active" : "Archived";
@@ -83,26 +122,47 @@ function explorerArchiveAriaLabel(explorer: ExplorerThread): string {
 
     <section class="left-panel">
       <header class="left-panel-header">
-        <button
-          v-if="props.panel === 'explorers'"
-          class="project-context-card"
-          type="button"
-          :aria-label="`切换项目：${props.project?.name ?? props.thread?.projectId ?? 'Local workspace'}`"
-          @click="emit('select-panel', 'projects')"
-        >
-          <span class="project-context-copy">
-            <span class="eyebrow">CURRENT PROJECT</span>
-            <strong>{{ props.project?.name ?? props.thread?.projectId ?? "Local workspace" }}</strong>
-            <span class="project-context-summary">
-              <span>{{ props.explorers.length }} explorations</span>
-              <span v-if="props.project" :class="['project-context-status', { archived: props.project.status === 'ARCHIVED' }]">
-                <i /> {{ projectStatusLabel(props.project.status) }}
+        <div v-if="props.panel === 'explorers'" ref="projectSwitcherRef" class="project-context-switcher">
+          <button
+            class="project-context-card"
+            type="button"
+            :aria-label="`切换项目：${props.project?.name ?? props.thread?.projectId ?? 'Local workspace'}`"
+            aria-haspopup="listbox"
+            :aria-expanded="projectSwitcherOpen"
+            aria-controls="inline-project-switcher"
+            @click="toggleProjectSwitcher"
+          >
+            <span class="project-context-copy">
+              <span class="eyebrow">CURRENT PROJECT</span>
+              <strong>{{ props.project?.name ?? props.thread?.projectId ?? "Local workspace" }}</strong>
+              <span class="project-context-summary">
+                <span>{{ props.explorers.length }} explorations</span>
+                <span v-if="props.project" :class="['project-context-status', { archived: props.project.status === 'ARCHIVED' }]">
+                  <i /> {{ projectStatusLabel(props.project.status) }}
+                </span>
               </span>
+              <small v-if="props.project?.repoRoot">{{ props.project.repoRoot }}</small>
             </span>
-            <small v-if="props.project?.repoRoot">{{ props.project.repoRoot }}</small>
-          </span>
-          <ArrowRight class="project-context-arrow" :size="16" aria-hidden="true" />
-        </button>
+            <ArrowDown :class="['project-context-arrow', { open: projectSwitcherOpen }]" :size="16" aria-hidden="true" />
+          </button>
+          <div v-if="projectSwitcherOpen" id="inline-project-switcher" class="inline-project-switcher" data-inline-project-switcher role="listbox" aria-label="选择项目">
+            <button
+              v-for="availableProject in props.projects"
+              :key="availableProject.id"
+              class="inline-project-option"
+              :class="{ selected: availableProject.id === props.project?.id }"
+              type="button"
+              :data-inline-project-id="availableProject.id"
+              :aria-selected="availableProject.id === props.project?.id"
+              :disabled="availableProject.id === props.project?.id"
+              @click="selectInlineProject(availableProject.id)"
+            >
+              <span class="left-list-icon"><FolderOpened :size="15" /></span>
+              <span class="inline-project-option-copy"><strong>{{ availableProject.name }}</strong><small>{{ availableProject.repoRoot }}</small></span>
+              <span :class="['left-list-status', { archived: availableProject.status === 'ARCHIVED' }]">{{ projectStatusLabel(availableProject.status) }}</span>
+            </button>
+          </div>
+        </div>
         <template v-else>
           <div class="eyebrow">PROJECTS</div>
           <strong>{{ props.projects.length }} projects</strong>
@@ -179,6 +239,16 @@ function explorerArchiveAriaLabel(explorer: ExplorerThread): string {
           >
             {{ props.showArchived ? "隐藏归档" : "显示归档" }}
           </button>
+        </div>
+        <div v-if="props.explorerLoading" class="explorer-list-state" data-explorer-list-state="loading" role="status" aria-live="polite">
+          正在加载 Explorer 线程…
+        </div>
+        <div v-else-if="props.explorerError" class="explorer-list-state explorer-list-state-error" data-explorer-list-state="error" role="alert">
+          {{ props.explorerError }}
+        </div>
+        <div v-else-if="!visibleExplorers.length" class="explorer-list-state" data-explorer-list-state="empty">
+          <strong>暂无 Explorer 线程</strong>
+          <span>点击上方按钮开始一次全新的探索。</span>
         </div>
         <article
           v-for="availableExplorer in visibleExplorers"

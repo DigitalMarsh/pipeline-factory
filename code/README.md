@@ -79,6 +79,14 @@ GET/PUT  /api/v4/projects/:projectId/settings/hooks
 GET      /api/v4/execution-threads/:threadId
 ```
 
+## Plan V2 与项目验证
+
+新 Explorer 只能产出 `GeneratedPlanSpecV2`（`schemaVersion: 2`）。模型可以声明目标、范围、任务、验证模式和合并意图，但不能提供项目 ID、仓库路径、Git branch/commit、配置版本/哈希或任何命令 ID。Factory 在候选生成时用已绑定 Project、真实 Git 基线和冻结的 Project 配置解析为 `ResolvedPlanContractV2`；绝对路径、`..` 路径穿越和概念性 scope 会被拒绝。Project 配置在 Confirm 前变化会使 Candidate 过期，已 Confirm 的 Revision 始终使用冻结快照。
+
+Project Commands 分为 `verification`、`lifecycle` 和 `executor-tool`。每条命令都有受控 argv、说明、enabled、环境与默认超时；`defaultVerificationCommandIds` 是 Project 管理员维护的有序集合，模型不能选择或发明其中任何 ID。集合为空时 V2 解析为 `verification.mode=NONE`：Verifier 持久化 `SKIPPED / NO_PROJECT_VERIFICATION_COMMANDS`，随后进入 `MERGE_READY`，界面会明确显示“未配置自动验证”，不会显示为通过。旧 flat V1 artifact 仅保留为历史记录，不能由 V2 Explorer 流程重新执行。
+
+Plan 列表接口只返回轻量 Summary；`GET /api/v4/plans/:planId` 返回 Plan、冻结 Revision、Project 快照和调度状态。Web 的 Full Plan 抽屉始终按 ID 获取该详情，加载失败会显示错误而不是呈现演示性 scope、命令或 artifact hash。
+
 SSE 使用数据库事件序列和 `Last-Event-ID` 回放。Explorer 首次加载 turns 时取得当前事件游标，再从该游标订阅 SSE，避免重复回放历史消息；断线重连仍按 `Last-Event-ID` 补发遗漏事件。App Server 重启或答案响应不确定时，输入请求进入 `RECOVERY_REQUIRED`，Factory 不自动重复提交。敏感答案只在内存中传给 App Server，持久化的仅是题目状态和答案数量摘要；普通 assistant 文本中的“请选择”不会触发弹窗。
 
 可选后端也在配置文件中声明：`stub`，或 `openai-responses`（需要在配置文件的 `model.openai.apiKey` 提供密钥）。

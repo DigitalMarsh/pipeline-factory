@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const explorerViewSource = readFileSync(fileURLToPath(new URL("./ExplorerView.vue", import.meta.url)), "utf8");
 const explorerStylesSource = readFileSync(fileURLToPath(new URL("../styles.css", import.meta.url)), "utf8");
+const explorerTimelineSource = readFileSync(fileURLToPath(new URL("../utils/explorerTimeline.ts", import.meta.url)), "utf8");
 const threadRailSource = readFileSync(fileURLToPath(new URL("../components/ThreadRail.vue", import.meta.url)), "utf8");
 const projectCatalogSource = readFileSync(fileURLToPath(new URL("./ProjectCatalogView.vue", import.meta.url)), "utf8");
 const planCenterSource = readFileSync(fileURLToPath(new URL("../components/PlanCenterPanel.vue", import.meta.url)), "utf8");
@@ -158,6 +159,34 @@ describe("Explorer context panel wiring", () => {
     expect(planCenterSource).toContain("Create updated revision");
     expect(planCenterSource).toContain("Configure verification commands");
   });
+
+  it("uses the project-wide run projection for Active runs, including STARTING", () => {
+    const activeSection = explorerViewSource.match(/<section v-else-if="contextPanel === 'active'"[\s\S]*?<\/section>/)?.[0] ?? "";
+
+    expect(explorerViewSource).toContain("const projectRuns = ref<Run[]>([])");
+    expect(explorerViewSource).toContain("api.projectRuns(requestProjectId)");
+    expect(explorerViewSource).toContain('["STARTING", "IN_PROGRESS", "VERIFYING"].includes(run.status)');
+    expect(activeSection).toContain('v-for="run in activeRuns"');
+    expect(activeSection).toContain("Run {{ run.id }}");
+    expect(activeSection).toContain('`/projects/${run.projectId}/runs/${run.id}`');
+    expect(activeSection).toContain("Starting, running, and verifying runs across this project appear here.");
+  });
+
+  it("opens the same full-plan drawer from every context stage", () => {
+    expect(explorerViewSource).toContain("const detailPlan = ref<Plan | null>(null)");
+    expect(explorerViewSource).toContain("function openPlanDetail(plan: Plan)");
+    expect(explorerViewSource).toContain('<PlanDetailDrawer v-model="drawerOpen" :plan="detailPlan"');
+    expect(explorerViewSource).toContain('@click="openPlanDetail(candidate)"');
+
+    for (const panel of ["confirmed", "enqueued", "dispatched", "attention"]) {
+      const section = explorerViewSource.match(new RegExp(`<section v-else-if="contextPanel === '${panel}'"[\\s\\S]*?<\\/section>`))?.[0] ?? "";
+      expect(section).toContain('@click="openPlanDetail(plan)"');
+      expect(section).toContain("View full plan");
+    }
+
+    expect(planCenterSource).toContain("emit('view-plan', plan)");
+    expect(planCenterSource).toContain("View full plan");
+  });
 });
 
 describe("Explorer panel state independence", () => {
@@ -214,6 +243,29 @@ describe("Explorer rail layout", () => {
   });
 });
 
+describe("Explorer message timeline", () => {
+  it("uses one-line neutral time and type labels while retaining existing targets", () => {
+    expect(explorerViewSource).toContain("const messageTimelineItems = computed<TimelineNavItem[]>(() => buildExplorerMessageTimeline");
+    expect(explorerTimelineSource).toContain('label: "消息"');
+    expect(explorerTimelineSource).toContain('label: "提问"');
+    expect(explorerTimelineSource).toContain('label: "回答"');
+    expect(explorerTimelineSource).not.toContain('label: "You"');
+    expect(explorerTimelineSource).not.toContain('label: "Plan Explorer"');
+    expect(explorerViewSource).toContain("{{ item.detail }} - {{ item.label }}");
+    expect(explorerViewSource).toContain('@click="jumpToTimelineTarget(item.target, item.activationKey)"');
+    expect(explorerStylesSource).toContain(".timeline-rail-messages .timeline-rail-item { align-items: center; min-height: 32px; padding-top: 5px; padding-bottom: 5px; }");
+    expect(explorerStylesSource).toContain(".timeline-rail-messages .timeline-rail-copy { display: inline-flex;");
+  });
+
+  it("renders each bound plan only in its generating assistant message and inserts detached plans into the shared timeline", () => {
+    expect(explorerViewSource).toContain("const planBindings = computed(() => buildPlanActivityBindings");
+    expect(explorerViewSource).toContain("buildExplorerTimeline(visibleActivity.value, inputRequests.value, detachedPlans.value)");
+    expect(explorerViewSource).toContain("v-else-if=\"item.kind === 'plan'\"");
+    expect(explorerViewSource).not.toContain("syntheticPlanItems");
+    expect(explorerViewSource).not.toContain("v-for=\"item in syntheticPlanItems\"");
+  });
+});
+
 describe("Explorer context panel dark theme", () => {
   it("uses the left navigation palette across the right panel surfaces", () => {
     expect(explorerStylesSource).toMatch(/\.context-panel-shell \{[^}]*background: #101827;/);
@@ -252,7 +304,7 @@ describe("Explorer thread switching", () => {
   });
 
   it("keeps message navigation keys unique when a turn has multiple assistant activities", () => {
-    expect(explorerViewSource).toContain("key: `message:${item.activity.id}`");
+    expect(explorerTimelineSource).toContain("key: `message:${item.activity.id}`");
     expect(explorerViewSource).toContain("activeTimelineKey === item.target");
   });
 
