@@ -64,8 +64,8 @@ export function explorerTimestamp(createdAt: string): string {
 }
 
 /** 生成尚未完成自动命名时使用的占位标题。 */
-export function placeholderExplorerTitle(createdAt: string): string {
-  return `探索-${explorerTimestamp(createdAt)}`;
+export function placeholderExplorerTitle(createdAt: string, projectShortName = "探索"): string {
+  return `${projectShortName.trim() || "探索"}-${explorerTimestamp(createdAt)}`;
 }
 
 /** 组合时间片段和模型标题，保证导航栏始终有可读名称。 */

@@ -9,7 +9,7 @@ import type { ExplorerThread, Project } from "../types";
 
 const styles = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../styles.css"), "utf8");
 
-function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplorer = false, projectActionId: string | null = null, includeArchived = false, showArchived = false) {
+function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplorer = false, projectActionId: string | null = null, includeArchived = false, showArchived = false, explorerLoading = false, explorerError: string | null = null, explorerItems?: ExplorerThread[]) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   let createExplorerCount = 0;
@@ -27,7 +27,7 @@ function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplor
     { id: "project-1", name: "Project 1", repoRoot: "/tmp/project-1", status: "ACTIVE" },
     { id: "project-2", name: "Project 2", repoRoot: "/tmp/project-2", status: "ARCHIVED" },
   ] as unknown as Project[];
-  const explorers = [
+  const explorers = explorerItems ?? [
     { id: "explorer-1", projectId: "project-1", title: "Current exploration", state: "ACTIVE", contextMode: "FRESH", messageCount: 2, lastActivityAt: "2026-09-02T14:00:00.000Z" },
     { id: "explorer-2", projectId: "project-1", title: "Second exploration", state: "COMPLETED", contextMode: "FRESH", messageCount: 4, lastActivityAt: "2026-09-01T14:00:00.000Z" },
     ...(includeArchived ? [{ id: "explorer-3", projectId: "project-1", title: "Archived exploration", state: "ARCHIVED", contextMode: "FRESH", messageCount: 1, lastActivityAt: "2026-08-31T14:00:00.000Z" }] : []),
@@ -43,6 +43,8 @@ function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplor
         projects,
         explorers,
         showArchived: archivedVisible.value,
+        explorerLoading,
+        explorerError,
         creatingExplorer,
         projectActionId,
         onCreateExplorer: () => { createExplorerCount += 1; },
@@ -89,7 +91,7 @@ describe("ThreadRail left workspace navigation", () => {
     mounted.host.remove();
   });
 
-  it("shows the current project context and opens the project panel when selected", async () => {
+  it("opens the inline project switcher without leaving the Explorer panel", async () => {
     const mounted = mountRail();
     const contextCard = mounted.host.querySelector<HTMLButtonElement>("button.project-context-card");
 
@@ -98,12 +100,58 @@ describe("ThreadRail left workspace navigation", () => {
     expect(contextCard?.textContent).toContain("2 explorations");
     expect(contextCard?.textContent).toContain("/tmp/project-1");
     expect(contextCard?.textContent).toContain("Active");
+    expect(contextCard?.getAttribute("aria-expanded")).toBe("false");
 
     contextCard?.click();
     await nextTick();
 
-    expect(mounted.getSelectedPanel()).toBe("projects");
-    expect(mounted.host.querySelector(".project-list")).not.toBeNull();
+    expect(mounted.getSelectedPanel()).toBeNull();
+    expect(contextCard?.getAttribute("aria-expanded")).toBe("true");
+    expect(mounted.host.querySelector("[data-inline-project-switcher]")).not.toBeNull();
+    expect(mounted.host.querySelectorAll("[data-inline-project-id]")).toHaveLength(2);
+    expect(mounted.host.querySelector<HTMLButtonElement>('[data-inline-project-id="project-1"]')?.disabled).toBe(true);
+    expect(mounted.host.querySelector(".explorer-list")).not.toBeNull();
+    expect(mounted.host.querySelector(".project-list")).toBeNull();
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  it("emits a selected inline project and closes the switcher", async () => {
+    const mounted = mountRail();
+    const contextCard = mounted.host.querySelector<HTMLButtonElement>("button.project-context-card");
+
+    contextCard?.click();
+    await nextTick();
+    mounted.host.querySelector<HTMLButtonElement>('[data-inline-project-id="project-2"]')?.click();
+    await nextTick();
+
+    expect(mounted.getSelectedProjectId()).toBe("project-2");
+    expect(mounted.getSelectedPanel()).toBeNull();
+    expect(contextCard?.getAttribute("aria-expanded")).toBe("false");
+    expect(mounted.host.querySelector("[data-inline-project-switcher]")).toBeNull();
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  it("closes the inline project switcher on Escape and outside pointer events", async () => {
+    const mounted = mountRail();
+    const contextCard = mounted.host.querySelector<HTMLButtonElement>("button.project-context-card");
+
+    contextCard?.click();
+    await nextTick();
+    expect(mounted.host.querySelector("[data-inline-project-switcher]")).not.toBeNull();
+    contextCard?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await nextTick();
+    expect(mounted.host.querySelector("[data-inline-project-switcher]")).toBeNull();
+
+    contextCard?.click();
+    await nextTick();
+    expect(mounted.host.querySelector("[data-inline-project-switcher]")).not.toBeNull();
+    document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true }));
+    await nextTick();
+    expect(mounted.host.querySelector("[data-inline-project-switcher]")).toBeNull();
 
     mounted.app.unmount();
     mounted.host.remove();
@@ -245,6 +293,35 @@ describe("ThreadRail left workspace navigation", () => {
 
     expect(createButton?.disabled).toBe(true);
     expect(createButton?.getAttribute("aria-busy")).toBe("true");
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  it("shows an explicit loading state for the Explorer directory", () => {
+    const mounted = mountRail("explorers", false, null, false, false, true);
+
+    expect(mounted.host.querySelector("[data-explorer-list-state=loading]")?.textContent).toContain("加载 Explorer 线程");
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  it("shows an actionable empty state after the Explorer directory finishes loading", () => {
+    const mounted = mountRail("explorers", false, null, false, false, false, null, []);
+
+    expect(mounted.host.querySelector("[data-explorer-list-state=empty]")?.textContent).toContain("暂无 Explorer 线程");
+    expect(mounted.host.querySelector("button.left-panel-create")).not.toBeNull();
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  it("shows an explicit error state without hiding the existing directory", () => {
+    const mounted = mountRail("explorers", false, null, false, false, false, "线程列表加载失败");
+
+    expect(mounted.host.querySelector("[data-explorer-list-state=error]")?.textContent).toContain("线程列表加载失败");
+    expect(mounted.host.querySelector('[data-explorer-id="explorer-1"]')).not.toBeNull();
 
     mounted.app.unmount();
     mounted.host.remove();

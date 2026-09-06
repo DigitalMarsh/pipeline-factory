@@ -71,9 +71,10 @@ function stripPlanProtocol(content: string): string {
     .trim();
 }
 
-function formatPlanActivity(content: string): PlanActivityDisplay {
+function formatPlanActivity(content: string, providerItemId: string | null = null): PlanActivityDisplay {
+  const withProviderItem = (details: Record<string, unknown> | null): Record<string, unknown> | null => providerItemId ? { ...(details ?? {}), providerItemId } : details;
   const hasProtocol = STATUS_OPEN_TAG.test(content) || PLAN_OPEN_TAG.test(content);
-  if (!hasProtocol) return { summary: content, details: null };
+  if (!hasProtocol) return { summary: content, details: withProviderItem(null) };
 
   const prose = stripPlanProtocol(content);
   const candidates = planProtocolCandidates(content);
@@ -83,7 +84,7 @@ function formatPlanActivity(content: string): PlanActivityDisplay {
     const parsed = parsePlanArtifact(displayable.artifactText)!;
     return {
       summary: [prose, `完整执行方案已生成：${parsed.title}`].filter(Boolean).join(" "),
-      details: {
+      details: withProviderItem({
         planProtocol: true,
         status: "READY",
         title: parsed.title,
@@ -93,14 +94,14 @@ function formatPlanActivity(content: string): PlanActivityDisplay {
         taskCount: countArray(parsed, "tasks"),
         acceptanceCount: countArray(parsed, "acceptanceCriteria"),
         verificationCount: countArray(parsed, "verificationCommandIds"),
-      },
+      }),
     };
   }
   if (latest?.status !== "READY" || !latest.artifactText) {
-    return { summary: [prose, "正在整理结构化计划…"].filter(Boolean).join(" "), details: { planProtocol: true, status: "GENERATING" } };
+    return { summary: [prose, "正在整理结构化计划…"].filter(Boolean).join(" "), details: withProviderItem({ planProtocol: true, status: "GENERATING" }) };
   }
 
-  return { summary: [prose, "结构化计划校验失败，请继续完善。"].filter(Boolean).join(" "), details: { planProtocol: true, status: "INVALID" } };
+  return { summary: [prose, "结构化计划校验失败，请继续完善。"].filter(Boolean).join(" "), details: withProviderItem({ planProtocol: true, status: "INVALID" }) };
 }
 
 function planProtocolCandidates(content: string): Array<{ status: string; artifactText: string }> {
@@ -147,14 +148,16 @@ export function projectExplorerActivity(input: ExplorerActivityInput): ExplorerA
       const payload = step.payload;
       if (step.stepType === "MODEL_TEXT_DELTA") {
         const text = typeof payload.text === "string" ? payload.text : "";
+        const providerItemId = typeof payload.providerItemId === "string" ? payload.providerItemId : null;
         assistantText += text;
         assistantSequence = step.sequence;
         const previous = result.at(-1);
         if (previous?.kind === "ASSISTANT_MESSAGE" && previous.turnId === turn.id) {
           previous.summary += text;
+          if (providerItemId) previous.details = { ...(previous.details ?? {}), providerItemId };
           continue;
         }
-        append({ explorerId: turn.threadId, turnId: turn.id, kind: "ASSISTANT_MESSAGE", status: "RUNNING", title: "Plan Explorer", summary: text, details: null, occurredAt: step.occurredAt }, step.sequence);
+        append({ explorerId: turn.threadId, turnId: turn.id, kind: "ASSISTANT_MESSAGE", status: assistantActivityStatus(turn.status), title: "Plan Explorer", summary: text, details: providerItemId ? { providerItemId } : null, occurredAt: step.occurredAt }, step.sequence);
         continue;
       }
       if (step.stepType === "PROVIDER_ACTIVITY") {
@@ -167,7 +170,8 @@ export function projectExplorerActivity(input: ExplorerActivityInput): ExplorerA
     }
     for (const item of result) {
       if (item.turnId !== turn.id || item.kind !== "ASSISTANT_MESSAGE") continue;
-      const display = formatPlanActivity(item.summary);
+      const providerItemId = typeof item.details?.providerItemId === "string" ? item.details.providerItemId : null;
+      const display = formatPlanActivity(item.summary, providerItemId);
       item.summary = display.summary;
       item.details = display.details;
     }
@@ -183,6 +187,13 @@ export function projectExplorerActivity(input: ExplorerActivityInput): ExplorerA
   return result
     .sort((a, b) => a.occurredAt.localeCompare(b.occurredAt) || a.order - b.order)
     .map(({ order: _order, ...item }, index) => ({ ...item, sequence: index + 1 }));
+}
+
+function assistantActivityStatus(status: ExplorerTurn["status"]): ExplorerActivityItem["status"] {
+  if (status === "FAILED") return "FAILED";
+  if (status === "WAITING_FOR_INPUT") return "WAITING";
+  if (status === "COMPLETED" || status === "CANCELLED") return "COMPLETED";
+  return "RUNNING";
 }
 
 function activityFromStep(turn: ExplorerTurn, step: AgentLoopStep): Omit<ExplorerActivityItem, "id" | "sequence"> | null {

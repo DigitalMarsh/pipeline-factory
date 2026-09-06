@@ -745,6 +745,10 @@ function threadTitleMetadata(title: string | undefined, createdAt: string): { ti
   return { title: normalized, titleSource: "MANUAL", titleStatus: "GENERATED" };
 }
 
+function projectPlaceholderExplorerTitle(store: PipelineStore, thread: ExplorerThread): string {
+  return placeholderExplorerTitle(thread.createdAt, store.getProject(thread.projectId)?.shortName);
+}
+
 function stripPlanProtocol(content: string): string {
   return content
     .replace(/<pipeline-factory-plan-status>[\s\S]*?<\/pipeline-factory-plan-status>/gi, "")
@@ -2400,7 +2404,7 @@ export class ExplorerService {
   create(input: CreateExplorerInput): ExplorerThread {
     const origin = input.originThreadId ? this.store.getThread(input.originThreadId) : undefined;
     if (input.originThreadId && (!origin || origin.projectId !== input.projectId)) throw new Error("Origin Explorer does not belong to this project");
-    const thread = this.store.saveThread({
+    let thread = this.store.saveThread({
       id: this.store.nextId("explorer"),
       projectId: input.projectId,
       parentThreadId: null,
@@ -2409,6 +2413,9 @@ export class ExplorerService {
       originThreadId: origin?.id ?? null,
       createdAt: input.createdAt,
     });
+    if (thread.titleSource === "AUTO" && thread.titleStatus === "PLACEHOLDER") {
+      thread = this.store.updateThread({ ...thread, title: projectPlaceholderExplorerTitle(this.store, thread) });
+    }
     this.store.appendEvent({ type: "explorer.created", aggregateId: thread.id, payload: { projectId: thread.projectId, contextMode: thread.contextMode, originThreadId: thread.originThreadId } });
     if (origin) this.store.appendEvent({ type: "explorer.continued", aggregateId: thread.id, payload: { originThreadId: origin.id } });
     selectCurrentExplorer(this.store, thread);
@@ -3049,11 +3056,7 @@ export class ExplorerThreadService {
     await Promise.all(this.store.listThreads().map(async (thread) => {
       if (thread.titleSource !== "AUTO" || thread.titleStatus !== "PLACEHOLDER") return;
       const firstUser = this.store.listTurns(thread.id).find((turn) => turn.role === "user" && turn.content.trim());
-      if (!firstUser) {
-        const placeholder = placeholderExplorerTitle(thread.createdAt);
-        if (thread.title !== placeholder) this.store.updateThread({ ...thread, title: placeholder });
-        return;
-      }
+      if (!firstUser) return;
       this.store.updateThread({ ...thread, titleStatus: "GENERATING" });
       await this.generateTitle(thread.id, firstUser.content);
     }));
@@ -3080,7 +3083,7 @@ export class ExplorerThreadService {
       this.publish(this.store.appendEvent({ type: "explorer.title.updated", aggregateId: threadId, payload: { explorerId: threadId, title: updated.title, titleStatus: updated.titleStatus } }));
     } catch {
       const thread = this.store.getThread(threadId);
-      if (thread?.titleSource === "AUTO" && thread.titleStatus === "GENERATING") this.store.updateThread({ ...thread, title: placeholderExplorerTitle(thread.createdAt), titleStatus: "FAILED" });
+      if (thread?.titleSource === "AUTO" && thread.titleStatus === "GENERATING") this.store.updateThread({ ...thread, title: projectPlaceholderExplorerTitle(this.store, thread), titleStatus: "FAILED" });
     }
   }
 
@@ -3284,7 +3287,8 @@ export class ExplorerThreadService {
   private planSource(assistantId: string): { sourceTurnId: string; providerThreadId: string | null; providerTurnId: string | null; providerItemId: string | null } {
     const loop = this.store.listAgentLoops(assistantId).at(-1);
     const steps = loop ? this.store.listAgentLoopSteps(loop.id) : [];
-    const latestProviderStep = [...steps].reverse().find((step) => typeof step.payload.providerItemId === "string" || typeof step.payload.itemId === "string");
+    const latestTextStep = [...steps].reverse().find((step) => step.stepType === "MODEL_TEXT_DELTA" && typeof step.payload.providerItemId === "string");
+    const latestProviderStep = latestTextStep ?? [...steps].reverse().find((step) => typeof step.payload.providerItemId === "string" || typeof step.payload.itemId === "string");
     const providerThreadId = loop?.providerThreadId ?? [...steps].reverse().find((step) => step.providerThreadId)?.providerThreadId ?? null;
     const providerTurnId = loop?.providerTurnId ?? [...steps].reverse().find((step) => step.providerTurnId)?.providerTurnId ?? null;
     const providerItemId = typeof latestProviderStep?.payload.providerItemId === "string"
