@@ -57,6 +57,7 @@ const turns = ref<ExplorerTurn[]>([]);
 const draft = ref("");
 const drawerOpen = ref(false);
 const detailPlan = ref<Plan | null>(null);
+const detailLoadError = ref<string | null>(null);
 const policyOpen = ref(false);
 const renameDialogOpen = ref(false);
 const renameSaving = ref(false);
@@ -460,9 +461,23 @@ function syncHashPanel(hash: string) {
   if (hash === "#candidate" && candidate.value) openPlanDetail(candidate.value);
 }
 
-function openPlanDetail(plan: Plan): void {
-  detailPlan.value = plan;
+async function openPlanDetail(plan: Plan): Promise<void> {
+  const planId = plan.id ?? plan.planId;
+  if (!planId) return;
+  const requestedProjectId = projectId.value;
+  const requestToken = activeRequestToken;
+  detailPlan.value = null;
+  detailLoadError.value = null;
   drawerOpen.value = true;
+  try {
+    const response = await api.getPlan(planId);
+    if (projectId.value !== requestedProjectId || activeRequestToken !== requestToken) return;
+    const resolvedContract = response.revision?.resolvedContract ?? response.plan.resolvedContract;
+    detailPlan.value = { ...response.plan, dispatch: response.dispatch, ...(resolvedContract ? { resolvedContract } : {}) };
+  } catch (caught) {
+    if (projectId.value !== requestedProjectId || activeRequestToken !== requestToken) return;
+    detailLoadError.value = caught instanceof Error ? `无法加载完整 Plan：${caught.message}` : "无法加载完整 Plan";
+  }
 }
 
 function selectContextPanel(selection: ContextPanel) {
@@ -1126,7 +1141,7 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
             </div>
             <el-button v-if="pendingInput?.id === item.request.id" type="primary" plain @click="openInputRequest">回答</el-button>
           </article>
-          <article v-else-if="item.kind === 'plan'" :id="detachedPlanAnchorId(item.plan)" :data-nav-key="planAnchorKey(item.plan)" class="inline-plan-card plan-created-event"><div class="candidate-head"><div class="candidate-icon"><Promotion :size="19" /></div><div><div class="eyebrow">PLAN CREATED · REVISION {{ item.plan.revision }}</div><h2>{{ item.plan.title }}</h2></div><el-tag type="warning" effect="light">{{ statusLabel(item.plan.status) }}</el-tag></div><p class="candidate-summary">{{ item.plan.contract?.goal ?? item.plan.goal ?? 'A complete, reviewable execution contract generated from this ExplorerThread.' }}</p><div class="candidate-actions"><el-button v-if="isCandidatePlan(item.plan)" @click="openPlanDetail(item.plan)">View full plan <Right :size="15" /></el-button><el-button v-if="isCandidatePlan(item.plan) && item.plan.status === 'DRAFT'" type="primary" :loading="busy" @click="confirmPlan">Confirm plan <Check :size="15" /></el-button><el-button v-else-if="isCandidatePlan(item.plan) && item.plan.status === 'READY'" type="primary" :loading="busy" @click="enqueuePlan">Enqueue plan <ArrowDown :size="15" /></el-button><span v-else class="confirmed-note"><CircleCheck :size="15" /> {{ statusLabel(item.plan.status) }}</span></div></article>
+          <article v-else-if="item.kind === 'plan'" :id="detachedPlanAnchorId(item.plan)" :data-nav-key="planAnchorKey(item.plan)" class="inline-plan-card plan-created-event"><div class="candidate-head"><div class="candidate-icon"><Promotion :size="19" /></div><div><div class="eyebrow">PLAN CREATED · REVISION {{ item.plan.revision }}</div><h2>{{ item.plan.title }}</h2></div><el-tag type="warning" effect="light">{{ statusLabel(item.plan.status) }}</el-tag></div><p class="candidate-summary">{{ item.plan.resolvedContract?.objective.goal ?? item.plan.contract?.goal ?? item.plan.goal ?? 'A complete, reviewable execution contract generated from this ExplorerThread.' }}</p><div class="candidate-actions"><el-button v-if="isCandidatePlan(item.plan)" @click="openPlanDetail(item.plan)">View full plan <Right :size="15" /></el-button><el-button v-if="isCandidatePlan(item.plan) && item.plan.status === 'DRAFT'" type="primary" :loading="busy" @click="confirmPlan">Confirm plan <Check :size="15" /></el-button><el-button v-else-if="isCandidatePlan(item.plan) && item.plan.status === 'READY'" type="primary" :loading="busy" @click="enqueuePlan">Enqueue plan <ArrowDown :size="15" /></el-button><span v-else class="confirmed-note"><CircleCheck :size="15" /> {{ statusLabel(item.plan.status) }}</span></div></article>
           <article v-else-if="item.activity.kind === 'USER_MESSAGE' || item.activity.kind === 'ASSISTANT_MESSAGE'" :id="activityTarget(item.activity, index)" :data-nav-key="activityTarget(item.activity, index)" :class="['message-card', item.activity.kind === 'USER_MESSAGE' ? 'user-message' : 'assistant-message', item.activity.status === 'FAILED' ? 'failed-message' : '', item.activity.status === 'RUNNING' ? 'processing-message' : '']">
             <div :class="['message-avatar', item.activity.kind === 'USER_MESSAGE' ? 'user-avatar' : 'agent-avatar']">{{ item.activity.kind === 'USER_MESSAGE' ? 'LS' : '' }}<span v-if="item.activity.kind === 'ASSISTANT_MESSAGE'" :class="['brand-dot', { 'brand-dot-processing': item.activity.status === 'RUNNING' }]" /></div>
             <div class="message-body"><div class="message-meta"><strong>{{ item.activity.title }}</strong><span v-if="item.activity.kind === 'ASSISTANT_MESSAGE'" :class="['agent-chip', { 'processing-chip': item.activity.status === 'RUNNING' }]">{{ item.activity.status === 'RUNNING' ? 'Running' : item.activity.status === 'FAILED' ? 'Failed' : 'Read only' }}</span><span>{{ formatTurnTime(item.activity.occurredAt) }}</span></div><p :aria-live="item.activity.status === 'RUNNING' ? 'polite' : undefined">{{ item.activity.kind === 'ASSISTANT_MESSAGE' ? readableAssistantText(item.activity.summary) : item.activity.summary }}<span v-if="item.activity.status === 'RUNNING'" class="processing-dots" aria-hidden="true"><i /><i /><i /></span></p><div v-if="planForActivity(item.activity)" :id="planAnchorId(planForActivity(item.activity))" :data-nav-key="planAnchorKey(planForActivity(item.activity))" class="inline-plan-card"><div class="candidate-head"><div class="candidate-icon"><Promotion :size="19" /></div><div><div class="eyebrow">CANDIDATE PLAN · REVISION {{ planForActivity(item.activity)?.revision }}</div><h2>{{ planForActivity(item.activity)?.title }}</h2></div><el-tag type="warning" effect="light">{{ statusLabel(planForActivity(item.activity)?.status ?? 'DRAFT') }}</el-tag></div><p class="candidate-summary">{{ planForActivity(item.activity)?.contract?.goal ?? planForActivity(item.activity)?.goal ?? 'A complete, reviewable execution contract generated from this ExplorerThread.' }}</p><div class="candidate-stats"><div><span>Tasks</span><strong>{{ planForActivity(item.activity)?.contract?.tasks.length ?? planForActivity(item.activity)?.tasks?.length ?? 0 }}</strong></div><div><span>Scope entries</span><strong>{{ planForActivity(item.activity)?.contract?.include.length ?? planForActivity(item.activity)?.include?.length ?? 0 }}</strong></div><div><span>Verification</span><strong>{{ planForActivity(item.activity)?.contract?.verificationCommandIds.length ?? planForActivity(item.activity)?.verificationCommands?.length ?? 0 }} checks</strong></div><div><span>Merge</span><strong class="risk-low">Human review</strong></div></div><div class="candidate-actions"><el-button v-if="isCandidatePlan(planForActivity(item.activity))" @click="openPlanDetail(planForActivity(item.activity)!)">View full plan <Right :size="15" /></el-button><el-button v-if="isCandidatePlan(planForActivity(item.activity)) && planForActivity(item.activity)?.status === 'DRAFT'" type="primary" :loading="busy" @click="confirmPlan">Confirm plan <Check :size="15" /></el-button><el-button v-else-if="isCandidatePlan(planForActivity(item.activity)) && planForActivity(item.activity)?.status === 'READY'" type="primary" :loading="busy" @click="enqueuePlan">Enqueue plan <ArrowDown :size="15" /></el-button><span v-else class="confirmed-note"><CircleCheck :size="15" /> {{ statusLabel(planForActivity(item.activity)?.status ?? 'DRAFT') }}</span></div></div></div>
@@ -1182,7 +1197,7 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
         </button>
       </nav>
     </aside>
-    <PlanDetailDrawer v-model="drawerOpen" :plan="detailPlan" @confirm="confirmPlan" @discard="discardPlan" />
+    <PlanDetailDrawer v-model="drawerOpen" :plan="detailPlan" :error="detailLoadError" @confirm="confirmPlan" @discard="discardPlan" />
     <ExplorerInputDialog ref="inputDialog" v-model="inputDialogOpen" :request="pendingInput" @submit="submitInput" @cancel="cancelInput" @progress="updateInputProgress" />
     <ProjectCreateDialog v-model="projectCreateOpen" @project-created="handleProjectCreated" />
     <ProjectSettingsDialog :model-value="projectSettingsOpen" :project-id="projectSettingsProjectId" @update:model-value="closeProjectSettings" @saved="handleProjectSettingsSaved" />

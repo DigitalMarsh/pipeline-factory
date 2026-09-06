@@ -27,6 +27,8 @@ export type ProjectSettings = {
     maxRepairAttempts: number;
   };
   commands: RegisteredCommandDefinition[];
+  /** Ordered Factory-owned verification set. Models cannot select individual command ids. */
+  defaultVerificationCommandIds: string[];
   hooks: {
     start?: HookDefinition;
     cleanup?: HookDefinition;
@@ -46,6 +48,7 @@ export type ProjectSettings = {
 export type ProjectSettingsInput = {
   concurrency?: Partial<ProjectSettings["concurrency"]>;
   commands?: RegisteredCommandDefinition[];
+  defaultVerificationCommandIds?: string[];
   hooks?: ProjectSettings["hooks"];
   models?: {
     explorer?: Partial<ModelRoleConfig> & Pick<ModelRoleConfig, "model">;
@@ -145,6 +148,7 @@ export const DEFAULT_PROJECT_SETTINGS: ProjectSettings = {
     maxRepairAttempts: 2,
   },
   commands: [],
+  defaultVerificationCommandIds: [],
   hooks: {},
   models: {
     explorer: { model: "gpt-5.6-luna", mode: "plan", temperature: 0.1, loopMode: "provider-controlled" },
@@ -193,12 +197,25 @@ function validateProjectSettings(settings: ProjectSettings): void {
   assertFiniteInteger(settings.concurrency.maxRepairAttempts, "concurrency.maxRepairAttempts", 0);
 
   if (!Array.isArray(settings.commands)) throw new Error("commands must be an array");
+  const commandIds = new Set<string>();
   for (const command of settings.commands) {
     if (!isRecord(command) || typeof command.commandId !== "string" || command.commandId.trim() === "") throw new Error("commandId must be a non-empty string");
+    if (commandIds.has(command.commandId)) throw new Error(`Duplicate commandId ${command.commandId}`);
+    commandIds.add(command.commandId);
+    if (!["verification", "lifecycle", "executor-tool", "unclassified"].includes(command.category ?? "unclassified")) throw new Error(`command ${command.commandId}.category is invalid`);
+    if (command.enabled !== undefined && typeof command.enabled !== "boolean") throw new Error(`command ${command.commandId}.enabled must be a boolean`);
+    if (command.description !== undefined && (typeof command.description !== "string" || !command.description.trim())) throw new Error(`command ${command.commandId}.description must be a non-empty string`);
+    if (command.timeoutMs !== undefined) assertFiniteInteger(command.timeoutMs, `command ${command.commandId}.timeoutMs`, 1);
     assertStringArray(command.argv, `command ${command.commandId}.argv`, false);
     if (command.environment !== undefined) {
       if (!isRecord(command.environment) || Object.entries(command.environment).some(([key, value]) => !key.trim() || typeof value !== "string")) throw new Error(`command ${command.commandId}.environment must contain string values`);
     }
+  }
+  assertStringArray(settings.defaultVerificationCommandIds, "defaultVerificationCommandIds");
+  if (new Set(settings.defaultVerificationCommandIds).size !== settings.defaultVerificationCommandIds.length) throw new Error("defaultVerificationCommandIds must not contain duplicates");
+  for (const commandId of settings.defaultVerificationCommandIds) {
+    const command = settings.commands.find((item) => item.commandId === commandId);
+    if (!command || command.category !== "verification" || command.enabled === false) throw new Error(`default verification command ${commandId} must be an enabled verification command`);
   }
 
   if (!isRecord(settings.hooks)) throw new Error("hooks must be an object");
@@ -207,6 +224,8 @@ function validateProjectSettings(settings: ProjectSettings): void {
     if (hook.enabled !== undefined && typeof hook.enabled !== "boolean") throw new Error(`${name}.enabled must be a boolean`);
     if (hook.timeoutMs !== undefined) assertFiniteInteger(hook.timeoutMs, `${name}.timeoutMs`, 1);
     if (hook.maxAttempts !== undefined) assertFiniteInteger(hook.maxAttempts, `${name}.maxAttempts`, 1);
+    const command = settings.commands.find((item) => item.commandId === hook.commandId);
+    if (!command || command.category !== "lifecycle" || command.enabled === false) throw new Error(`${name}.commandId must reference an enabled lifecycle command`);
   }
 
   for (const role of ["explorer", "executor"] as const) {
@@ -227,12 +246,14 @@ export function normalizeProjectSettings(input?: ProjectSettingsInput, base: Pro
   if (!isRecord(value)) throw new Error("settings must be an object");
   if (value.concurrency !== undefined && !isRecord(value.concurrency)) throw new Error("concurrency must be an object");
   if (value.commands !== undefined && !Array.isArray(value.commands)) throw new Error("commands must be an array");
+  if (value.defaultVerificationCommandIds !== undefined && !Array.isArray(value.defaultVerificationCommandIds)) throw new Error("defaultVerificationCommandIds must be an array");
   if (value.hooks !== undefined && !isRecord(value.hooks)) throw new Error("hooks must be an object");
   if (value.models !== undefined && !isRecord(value.models)) throw new Error("models must be an object");
   if (value.toolPolicy !== undefined && !isRecord(value.toolPolicy)) throw new Error("toolPolicy must be an object");
   const settings: ProjectSettings = {
     concurrency: { ...base.concurrency, ...value.concurrency },
-    commands: value.commands ? value.commands.map((command) => ({ ...command, argv: [...command.argv] as [string, ...string[]], ...(command.environment ? { environment: { ...command.environment } } : {}) })) : clone(base.commands),
+    commands: value.commands ? value.commands.map((command) => ({ ...command, category: command.category ?? "unclassified", enabled: command.enabled ?? false, argv: [...command.argv] as [string, ...string[]], ...(command.environment ? { environment: { ...command.environment } } : {}) })) : clone(base.commands).map((command) => ({ ...command, category: command.category ?? "unclassified", enabled: command.enabled ?? false })),
+    defaultVerificationCommandIds: value.defaultVerificationCommandIds ? [...value.defaultVerificationCommandIds] : [...base.defaultVerificationCommandIds],
     hooks: { ...base.hooks, ...value.hooks },
     models: {
       explorer: { ...base.models.explorer, ...value.models?.explorer },

@@ -738,7 +738,7 @@ describe("Pipeline Factory v4 API", () => {
     const created = await app.inject({ method: "POST", url: "/api/v4/projects/project-1/explorers" });
     expect(created.statusCode).toBe(201);
     const explorer = created.json().explorer;
-    expect(explorer.title).toMatch(/^探索-\d{8}-\d{2}:\d{2}:\d{2}$/);
+    expect(explorer.title).toMatch(/^project-1-\d{8}-\d{2}:\d{2}:\d{2}$/);
     expect(explorer).toMatchObject({ titleSource: "AUTO", titleStatus: "PLACEHOLDER" });
 
     const renamed = await app.inject({ method: "POST", url: `/api/v4/projects/project-1/explorers/${explorer.id}/rename`, payload: { title: "人工名称" } });

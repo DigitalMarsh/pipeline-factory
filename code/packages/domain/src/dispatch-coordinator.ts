@@ -181,7 +181,7 @@ export class PlanDispatchCoordinator {
   }
 
   private evaluateWait(plan: CandidatePlan, revision: PlanRevisionV2): WaitEvaluation | undefined {
-    const dependencies = revision.contract.dependsOnPlanIds ?? [];
+    const dependencies = revision.resolvedContract?.dependencies ?? revision.contract.dependsOnPlanIds ?? [];
     const incompleteDependency = dependencies
       .map((id) => this.options.store.getPlan(id))
       .find((dependency) => !dependency || dependency.projectId !== plan.projectId || dependency.status !== "MERGED");
@@ -192,8 +192,8 @@ export class PlanDispatchCoordinator {
 
     const snapshot = revision.projectConfigSnapshot;
     if (snapshot) {
-      const registeredCommands = new Set(snapshot.settings.commands.map((command) => command.commandId));
-      const missingCommands = revision.contract.verificationCommandIds.filter((commandId) => !registeredCommands.has(commandId));
+      const registeredCommands = new Set((revision.resolvedContract ? snapshot.settings.commands.filter((command) => command.category === "verification" && command.enabled !== false) : snapshot.settings.commands).map((command) => command.commandId));
+      const missingCommands = (revision.resolvedContract?.verification.commandIds ?? revision.contract.verificationCommandIds).filter((commandId) => !registeredCommands.has(commandId));
       if (missingCommands.length > 0) return { reason: "NEEDS_CONFIGURATION", message: `Missing registered commands: ${missingCommands.join(", ")}` };
     }
 
