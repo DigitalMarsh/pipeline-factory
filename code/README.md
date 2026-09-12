@@ -58,10 +58,12 @@ API 默认监听 `http://127.0.0.1:4310`，前端默认监听 `http://127.0.0.1:
 ```json
 "args": ["app-server", "--stdio", "--enable", "default_mode_request_user_input"],
 "roles": {
-  "explorer": { "model": "gpt-5.6-luna", "mode": "plan", "temperature": 0.1 },
-  "executor": { "model": "gpt-5.6-luna", "mode": "default", "temperature": 0 }
+  "explorer": { "model": "deepseek-v4-flash", "mode": "plan", "temperature": 0.1 },
+  "executor": { "model": "deepseek-v4-flash", "mode": "default", "temperature": 0 }
 }
 ```
+
+`roles.*.model` 必须匹配所配 provider 支持的模型名称：默认示例使用本机 Codex CLI 的 provider 模型（如已切到 DeepSeek 时用 `deepseek-v4-flash` / `deepseek-v4-pro`）。传入 provider 不认识的模型名时，回合会在 Provider 侧直接失败。
 
 v4 的 `POST /api/v4/projects/:projectId/explorer-thread/turns` 会立即返回 `202`，用户消息和 assistant `RUNNING` 占位先进入时间线；随后通过 `/events` SSE 接收文本增量、`turn.input_required`、完成和取消事件。选择答案通过 `/input-requests/:requestId/answer` 回传到同一个 Provider Turn。Explorer 不会把一次 `turn.completed` 直接当作设计完成：模型回合结束后会经过计划完整性门禁，缺少关键项时自动发起内部续探索，只有收到并校验 `pipeline-factory-plan` 完整契约后才自动生成 CandidatePlan。
 

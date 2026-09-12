@@ -26,7 +26,7 @@ const activeTab = ref("general");
 const form = reactive({
   name: "", shortName: "", repoRoot: "", defaultBranch: "", worktreeRoot: "", configVersion: 0,
   maxParallelRuns: 2, defaultTimeoutMs: 120000, executionTimeoutMs: 1800000, maxRepairAttempts: 2,
-  explorerModel: "gpt-5.6-luna", explorerReasoning: "", executorModel: "gpt-5.6-luna", executorReasoning: "",
+  explorerModel: "deepseek-v4-flash", explorerReasoning: "", executorModel: "deepseek-v4-flash", executorReasoning: "",
   allowedMcpTools: "", allowedPluginTools: "", computerUseEnabled: false,
   startEnabled: false, startCommandId: "", startTimeoutMs: 120000, startMaxAttempts: 1, cleanupEnabled: false, cleanupCommandId: "", cleanupTimeoutMs: 120000, cleanupMaxAttempts: 1,
   commands: [] as CommandForm[], defaultVerificationCommandIds: [] as string[],

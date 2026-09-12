@@ -151,8 +151,8 @@ export const DEFAULT_PROJECT_SETTINGS: ProjectSettings = {
   defaultVerificationCommandIds: [],
   hooks: {},
   models: {
-    explorer: { model: "gpt-5.6-luna", mode: "plan", temperature: 0.1, loopMode: "provider-controlled" },
-    executor: { model: "gpt-5.6-luna", mode: "default", temperature: 0, loopMode: "provider-controlled" },
+    explorer: { model: "deepseek-v4-flash", mode: "plan", temperature: 0.1, loopMode: "provider-controlled" },
+    executor: { model: "deepseek-v4-flash", mode: "default", temperature: 0, loopMode: "provider-controlled" },
   },
   toolPolicy: {
     allowedMcpTools: [],
@@ -304,6 +304,9 @@ function hasActiveRun(store: PipelineStore, projectId: string): boolean {
   return store.listRuns().some((run) => run.projectId === projectId && EXECUTION_SLOT_RUN_STATUSES.has(run.status));
 }
 
+/** 历史 Codex 家族模型 slug；这些模型不在 DeepSeek provider 的支持列表中。 */
+const LEGACY_MODEL_SLUG_PATTERN = /^gpt-5\.6/;
+
 /**
  * 管理 Project 的生命周期、配置版本和执行快照。
  * 所有高风险路径或运行策略变更都会递增 configVersion，并为历史 Plan 保留旧快照。
@@ -379,6 +382,28 @@ export class ProjectService {
       .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt))[0];
     if (!current) return project;
     return this.store.updateProject({ ...project, currentExplorerThreadId: current.id, updatedAt: this.store.now() });
+  }
+
+  /**
+   * 一次性把历史 Codex 模型 slug 迁移到当前 provider 支持的模型。
+   * 只替换 model 字段并保留角色其余设置；有活动 Run 的 Project 跳过，等待下次启动重试。
+   */
+  migrateLegacyModels(models: { explorer: string; executor: string }): Project[] {
+    const migrated: Project[] = [];
+    for (const project of this.list("ACTIVE")) {
+      const replacements: ProjectSettingsInput["models"] = {};
+      for (const role of ["explorer", "executor"] as const) {
+        const currentModel = project.settings.models[role].model;
+        if (!LEGACY_MODEL_SLUG_PATTERN.test(currentModel)) continue;
+        const replacement = models[role].trim();
+        if (!replacement || replacement === currentModel) continue;
+        replacements[role] = { model: replacement };
+      }
+      if (!replacements.explorer && !replacements.executor) continue;
+      if (hasActiveRun(this.store, project.id)) continue;
+      migrated.push(this.update(project.id, { settings: { models: replacements }, expectedConfigVersion: project.configVersion }));
+    }
+    return migrated;
   }
 
   /** 读取 Project；未知 ID 明确失败，禁止回退到默认 Project。 */

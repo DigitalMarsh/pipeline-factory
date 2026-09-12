@@ -425,3 +425,24 @@ describe("Explorer header actions", () => {
     expect(explorerViewSource).not.toContain('aria-label="新建 Explorer"');
   });
 });
+
+describe("Explorer composer availability", () => {
+  it("keeps the composer editable while a turn is running and only locks the send button", () => {
+    expect(explorerViewSource).toContain(`<textarea v-model="draft" :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || explorerPaused"`);
+    expect(explorerViewSource).not.toContain(`<textarea v-model="draft" :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || explorerPaused || busy"`);
+    expect(explorerViewSource).toContain(`:disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || !draft.trim() || explorerPaused || busy"`);
+  });
+
+  it("explains why the send button is unavailable while the current turn is running", () => {
+    expect(explorerViewSource).toContain(`:title="busy ? '当前回合执行中，完成后可发送' : 'Send message'"`);
+    expect(explorerViewSource).toContain(`if (!content || busy.value || !thread.value || thread.value.state === "ARCHIVED"`);
+  });
+});
+
+describe("Explorer markdown rendering", () => {
+  it("renders message bodies through the shared Markdown component", () => {
+    expect(explorerViewSource).toContain('import MarkdownMessage from "../components/MarkdownMessage.vue"');
+    expect(explorerViewSource).toContain(`<MarkdownMessage :source="item.activity.kind === 'ASSISTANT_MESSAGE' ? readableAssistantText(item.activity.summary) : item.activity.summary" :streaming="item.activity.status === 'RUNNING'" />`);
+    expect(explorerViewSource).not.toContain(`: item.activity.summary }}<span v-if="item.activity.status === 'RUNNING'" class="processing-dots"`);
+  });
+});

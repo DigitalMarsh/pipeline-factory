@@ -238,6 +238,11 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
         },
       },
     });
+    // 历史 Project 可能仍保存着 Codex 模型 slug；这里统一迁移到当前 provider 支持的模型。
+    projects.migrateLegacyModels({
+      explorer: options.config.model.roles.explorer.model,
+      executor: options.config.model.roles.executor.model,
+    });
   }
 
   const app = Fastify({ logger: false });

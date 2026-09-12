@@ -8,6 +8,7 @@ import { ArrowLeft, Check, CircleCheck, Clock, Document, VideoPause, VideoPlay, 
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 import { api } from "../api";
+import MarkdownMessage from "../components/MarkdownMessage.vue";
 import type { AgentLoopStep, ExecutionTask, ExecutionThread, MergeRequest, PlanTask, Run, RunJournalEvent, ToolCall, VerificationRun } from "../types";
 import { projectExecutionJournal, type ExecutionJournalEntry, type ExecutionStreamItem } from "../utils/executionStream";
 import { formatExecutionDuration, formatTokenSummary, telemetryModel, telemetryReasoning, usageDetailRows } from "../utils/executionTelemetry";
@@ -310,7 +311,7 @@ async function confirmMerged() {
             <div class="execution-message-avatar">{{ item.role === 'user' ? 'LS' : item.kind === 'model' ? 'EX' : '·' }}</div>
             <div class="execution-message-body">
               <div class="execution-message-meta"><strong>{{ item.title }}</strong><span v-if="item.status !== 'INFO'" class="agent-chip">{{ item.status }}</span><span v-if="item.repetitionCount && item.repetitionCount > 1">×{{ item.repetitionCount }} updates</span><span>{{ new Date(item.occurredAt).toLocaleTimeString('zh-CN') }}</span></div>
-              <p v-if="item.kind === 'model' || item.kind === 'guidance'" :aria-live="item.status === 'RUNNING' ? 'polite' : undefined">{{ item.content }}<span v-if="item.status === 'RUNNING'" class="processing-dots" aria-hidden="true"><i /><i /><i /></span></p>
+              <MarkdownMessage v-if="item.kind === 'model' || item.kind === 'guidance'" :source="item.content" :streaming="item.status === 'RUNNING'" />
               <p v-else class="execution-activity-detail">{{ item.detail }}</p>
             </div>
           </article>

@@ -57,7 +57,7 @@ describe("Factory configuration", () => {
     expect(() => loadFactoryConfig(configPath)).toThrow(/Invalid Factory configuration/);
   });
 
-  it("defaults Explorer and Executor to the Codex 5.6 Luna model", () => {
+  it("defaults Explorer and Executor to the configured DeepSeek model", () => {
     const directory = mkdtempSync(join(tmpdir(), "pipeline-factory-config-"));
     directories.push(directory);
     const configPath = join(directory, "defaults.json");
@@ -65,8 +65,8 @@ describe("Factory configuration", () => {
 
     const config = loadFactoryConfig(configPath);
 
-    expect(config.model.roles.explorer.model).toBe("gpt-5.6-luna");
-    expect(config.model.roles.executor.model).toBe("gpt-5.6-luna");
+    expect(config.model.roles.explorer.model).toBe("deepseek-v4-flash");
+    expect(config.model.roles.executor.model).toBe("deepseek-v4-flash");
     expect(config.runtime.executionTimeoutMs).toBe(1_800_000);
     expect(config.runtime.maxAutoContinuationTurns).toBe(4);
   });

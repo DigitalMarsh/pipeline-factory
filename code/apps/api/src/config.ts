@@ -87,8 +87,8 @@ const configSchema = z.object({
       baseUrl: z.string().url().optional(),
     }).optional(),
     roles: z.object({
-      explorer: roleSchema.default({ model: "gpt-5.6-luna", temperature: 0.1 }),
-      executor: roleSchema.default({ model: "gpt-5.6-luna", temperature: 0 }),
+      explorer: roleSchema.default({ model: "deepseek-v4-flash", temperature: 0.1 }),
+      executor: roleSchema.default({ model: "deepseek-v4-flash", temperature: 0 }),
     }).default({}),
     loop: z.object({
       maxSteps: z.number().int().positive().default(40),

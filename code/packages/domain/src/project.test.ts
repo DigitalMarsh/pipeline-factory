@@ -254,3 +254,75 @@ describe("ProjectService", () => {
     expect(resolved).toEqual(["workspace:/repo/snapshot:/tmp/snapshot-worktrees", "hooks:/repo/snapshot"]);
   });
 });
+
+describe("ProjectService legacy model migration", () => {
+  const legacySettings = {
+    models: {
+      explorer: { model: "gpt-5.6-luna" },
+      executor: { model: "gpt-5.6-luna" },
+    },
+  };
+  const deepseekModels = { explorer: "deepseek-v4-flash", executor: "deepseek-v4-flash" };
+
+  function createLegacyProject(store: InMemoryPipelineStore, projects: ProjectService, id = "project-legacy") {
+    return projects.create({ id, name: "Legacy", repoRoot: `/repo/${id}`, defaultBranch: "main", worktreeRoot: `/tmp/${id}-worktrees`, settings: legacySettings });
+  }
+
+  it("replaces legacy Codex model slugs once and records a new config revision", () => {
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    const before = createLegacyProject(store, projects);
+
+    expect(projects.migrateLegacyModels(deepseekModels).map((project) => project.id)).toEqual(["project-legacy"]);
+
+    const after = store.getProject("project-legacy")!;
+    expect(after.settings.models.explorer).toMatchObject({ model: "deepseek-v4-flash", mode: "plan", loopMode: "provider-controlled" });
+    expect(after.settings.models.executor).toMatchObject({ model: "deepseek-v4-flash", mode: "default", loopMode: "provider-controlled" });
+    expect(after.configVersion).toBe(before.configVersion + 1);
+    expect(after.configHash).not.toBe(before.configHash);
+    expect(store.listProjectConfigRevisions("project-legacy").map((revision) => revision.version)).toEqual([1, 2]);
+    expect(store.listEvents({ aggregateId: "project-legacy" }).some((event) => event.type === "project.config.updated")).toBe(true);
+
+    expect(projects.migrateLegacyModels(deepseekModels)).toEqual([]);
+    expect(store.getProject("project-legacy")!.configVersion).toBe(after.configVersion);
+  });
+
+  it("leaves projects that already use a supported model and archived projects untouched", () => {
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    const current = projects.create({ id: "project-current", name: "Current", repoRoot: "/repo/current", defaultBranch: "main", worktreeRoot: "/tmp/current-worktrees" });
+    const archived = createLegacyProject(store, projects, "project-archived");
+    projects.archive("project-archived");
+
+    expect(projects.migrateLegacyModels(deepseekModels)).toEqual([]);
+    expect(store.getProject("project-current")!.configVersion).toBe(current.configVersion);
+    expect(store.getProject("project-archived")!.settings).toEqual(archived.settings);
+  });
+
+  it("skips projects with active runs so the migration can retry later", () => {
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    createLegacyProject(store, projects);
+    const run = store.saveRun({
+      id: "run-1",
+      projectId: "project-legacy",
+      planId: "plan-1",
+      planRevision: 1,
+      status: "IN_PROGRESS",
+      branch: "factory/run-1",
+      workspacePath: "/tmp/project-legacy-worktrees/run-1",
+      baseCommit: "abc",
+      executionThreadId: "execution-1",
+      createdAt: store.now(),
+      startedAt: store.now(),
+    });
+
+    expect(projects.migrateLegacyModels(deepseekModels)).toEqual([]);
+    expect(store.getProject("project-legacy")!.settings.models.explorer.model).toBe("gpt-5.6-luna");
+
+    store.saveRun({ ...run, status: "MERGE_READY" });
+
+    expect(projects.migrateLegacyModels(deepseekModels).map((project) => project.id)).toEqual(["project-legacy"]);
+    expect(store.getProject("project-legacy")!.settings.models.executor.model).toBe("deepseek-v4-flash");
+  });
+});

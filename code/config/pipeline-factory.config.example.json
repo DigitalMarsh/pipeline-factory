@@ -40,13 +40,13 @@
     },
     "roles": {
       "explorer": {
-        "model": "gpt-5.6-luna",
+        "model": "deepseek-v4-flash",
         "mode": "plan",
         "temperature": 0.1,
         "loopMode": "provider-controlled"
       },
       "executor": {
-        "model": "gpt-5.6-luna",
+        "model": "deepseek-v4-flash",
         "mode": "default",
         "temperature": 0,
         "loopMode": "provider-controlled"
