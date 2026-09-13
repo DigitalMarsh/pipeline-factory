@@ -209,7 +209,7 @@ export class ExecutorAgent {
       `Work only inside the approved include scope: ${revision.contract.include.join(", ")}.`,
       `Never modify excluded or protected paths: ${revision.contract.exclude.join(", ")}.`,
       "Do not claim completion in prose. End with <pipeline-factory-execution-report> JSON </pipeline-factory-execution-report>.",
-      "The JSON must contain completedTaskIds, changedPaths (or legacy pathsWithinScope array), and a non-empty report. When a task is currently being worked on or blocked, also include activeTaskId or blockedTaskId with blockedReason.",
+      "The JSON must contain completedTaskIds, changedPaths (or legacy pathsWithinScope array), and a non-empty report. Optional fields must be omitted entirely when they do not apply - never send null. When a task is currently being worked on or blocked, also include activeTaskId or blockedTaskId with blockedReason.",
       `Approved Plan contract:\n${JSON.stringify(executionContract, null, 2)}`,
     ].join(" ");
   }
@@ -330,6 +330,17 @@ export function parseExecutorReport(content: string): ExecutorReport | null {
   return parseExecutorReportDetailed(content).report;
 }
 
+/**
+ * 读取可选字符串字段：缺失、null 与空串一律视为未提供，其他类型仍判非法。
+ * 模型经常把用不到的可选字段写成 null，若不归一化会让完成门禁永远无法通过。
+ */
+function optionalReportField(value: unknown, field: string): { ok: true; value: string | undefined } | { ok: false; error: string } {
+  if (value === undefined || value === null) return { ok: true, value: undefined };
+  if (typeof value !== "string") return { ok: false, error: `EXECUTION_REPORT_FIELD_INVALID: ${field}` };
+  const trimmed = value.trim();
+  return { ok: true, value: trimmed === "" ? undefined : trimmed };
+}
+
 function parseExecutorReportDetailed(content: string): { report: ExecutorReport | null; error?: string } {
   const start = content.lastIndexOf(REPORT_START);
   if (start < 0) return { report: null, error: "EXECUTION_REPORT_MISSING" };
@@ -342,10 +353,13 @@ function parseExecutorReportDetailed(content: string): { report: ExecutorReport 
     const changedPaths = Array.isArray(value.changedPaths) ? value.changedPaths : value.pathsWithinScope;
     if (!Array.isArray(changedPaths) || !changedPaths.every((path) => typeof path === "string")) return { report: null, error: "EXECUTION_REPORT_FIELD_INVALID: changedPaths" };
     if (typeof value.report !== "string") return { report: null, error: "EXECUTION_REPORT_FIELD_INVALID: report" };
-    if (value.activeTaskId !== undefined && typeof value.activeTaskId !== "string") return { report: null, error: "EXECUTION_REPORT_FIELD_INVALID: activeTaskId" };
-    if (value.blockedTaskId !== undefined && typeof value.blockedTaskId !== "string") return { report: null, error: "EXECUTION_REPORT_FIELD_INVALID: blockedTaskId" };
-    if (value.blockedReason !== undefined && typeof value.blockedReason !== "string") return { report: null, error: "EXECUTION_REPORT_FIELD_INVALID: blockedReason" };
-    return { report: { completedTaskIds: value.completedTaskIds, changedPaths, report: value.report, ...(value.activeTaskId === undefined ? {} : { activeTaskId: value.activeTaskId }), ...(value.blockedTaskId === undefined ? {} : { blockedTaskId: value.blockedTaskId }), ...(value.blockedReason === undefined ? {} : { blockedReason: value.blockedReason }) } };
+    const activeTaskId = optionalReportField(value.activeTaskId, "activeTaskId");
+    if (!activeTaskId.ok) return { report: null, error: activeTaskId.error };
+    const blockedTaskId = optionalReportField(value.blockedTaskId, "blockedTaskId");
+    if (!blockedTaskId.ok) return { report: null, error: blockedTaskId.error };
+    const blockedReason = optionalReportField(value.blockedReason, "blockedReason");
+    if (!blockedReason.ok) return { report: null, error: blockedReason.error };
+    return { report: { completedTaskIds: value.completedTaskIds, changedPaths, report: value.report, ...(activeTaskId.value === undefined ? {} : { activeTaskId: activeTaskId.value }), ...(blockedTaskId.value === undefined ? {} : { blockedTaskId: blockedTaskId.value }), ...(blockedReason.value === undefined ? {} : { blockedReason: blockedReason.value }) } };
   } catch {
     return { report: null, error: "EXECUTION_REPORT_INVALID_JSON" };
   }

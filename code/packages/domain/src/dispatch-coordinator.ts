@@ -57,14 +57,33 @@ type WaitEvaluation = {
   message: string;
 };
 
+/** 高频流式事件的合并窗口：窗口内的所有 token 事件只触发一次全量扫描。 */
+const WAKE_COALESCE_MS = 250;
+
+/**
+ * 流式事件只影响展示进度，不需要逐条做全量 reconcile。
+ * agent.* 全部按流式处理，run.executor.event 只合并 MODEL_OUTPUT 这类逐 token 事件。
+ */
+function isStreamingEvent(event: DomainEvent): boolean {
+  if (event.type.startsWith("agent.")) return true;
+  if (event.type !== "run.executor.event") return false;
+  const payload = event.payload as { type?: unknown } | null;
+  return typeof payload === "object" && payload !== null && payload.type === "MODEL_OUTPUT";
+}
+
 export class PlanDispatchCoordinator {
   private readonly unsubscribe: (() => void) | undefined;
   private wakePromise: Promise<PlanDispatchState[]> | null = null;
   private readonly verifyingRuns = new Set<string>();
+  private wakeTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly options: PlanDispatchCoordinatorOptions) {
     this.unsubscribe = options.store.subscribeEvents?.((event) => {
       if (event.type === "plan.dispatch.state.changed") return;
+      if (isStreamingEvent(event)) {
+        this.scheduleWake();
+        return;
+      }
       void this.handleEvent(event);
     });
   }
@@ -118,7 +137,23 @@ export class PlanDispatchCoordinator {
   }
 
   dispose(): void {
+    if (this.wakeTimer !== null) {
+      clearTimeout(this.wakeTimer);
+      this.wakeTimer = null;
+    }
     this.unsubscribe?.();
+  }
+
+  /** 合并高频事件的唤醒：窗口内只保留一次待执行的全量扫描。 */
+  private scheduleWake(): void {
+    if (this.wakeTimer !== null) return;
+    const timer = setTimeout(() => {
+      this.wakeTimer = null;
+      void this.wake();
+    }, WAKE_COALESCE_MS);
+    // 待处理的合并唤醒不应该阻止进程退出。
+    (timer as unknown as { unref?: () => void }).unref?.();
+    this.wakeTimer = timer;
   }
 
   private async performWake(): Promise<PlanDispatchState[]> {
@@ -301,7 +336,10 @@ export class PlanDispatchCoordinator {
     return { ...state, status, waitReason, runId: run.id, attempt: Math.max(state.attempt, 1), updatedAt: this.options.store.now(), lastError };
   }
 
+  /** 只有状态真正变化才写库并广播，避免流式事件把同一状态反复写成事件风暴。 */
   private saveState(state: PlanDispatchState): void {
+    const current = this.options.store.getDispatchState(state.planId);
+    if (current && current.status === state.status && current.waitReason === state.waitReason && current.runId === state.runId && current.attempt === state.attempt && current.lastError === state.lastError && current.queuedAt === state.queuedAt) return;
     const saved = this.options.store.saveDispatchState(state);
     this.options.store.appendEvent({ type: "plan.dispatch.state.changed", aggregateId: state.planId, payload: saved });
   }

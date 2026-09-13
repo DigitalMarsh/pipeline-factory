@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import * as domain from "./index.js";
 import { InMemoryPipelineStore, LifecycleHookRunner, PlanService, ProjectService, Scheduler, SqlitePipelineStore } from "./index.js";
 
@@ -17,6 +17,7 @@ const coordinatorModule = domain as unknown as {
     reviseConfiguration(planId: string, actorId: string): domain.CandidatePlan;
     wake(): Promise<domain.PlanDispatchState[]>;
     state(planId: string): domain.PlanDispatchState | undefined;
+    dispose(): void;
   };
 };
 
@@ -202,6 +203,49 @@ describe("PlanDispatchCoordinator", () => {
     await coordinator.wake();
 
     expect(coordinator.state(plan.id)).toMatchObject({ status: "BLOCKED", lastError: expect.stringContaining("recovery") });
+  });
+
+  it("does not rewrite dispatch state or events when a wake changes nothing", async () => {
+    const store = new InMemoryPipelineStore();
+    const plans = new PlanService(store);
+    const plan = createPlan(store, plans, "Idempotent wake");
+    const coordinator = new coordinatorModule.PlanDispatchCoordinator({ store, plans, scheduler: schedulerFor(store) });
+    await dispatch(coordinator, plans, plan.id);
+    const countStateEvents = () => store.listEvents({ aggregateId: plan.id }).filter((event) => event.type === "plan.dispatch.state.changed").length;
+    const before = countStateEvents();
+
+    await coordinator.wake();
+    await coordinator.wake();
+
+    expect(coordinator.state(plan.id)).toMatchObject({ status: "RUNNING" });
+    expect(countStateEvents()).toBe(before);
+    coordinator.dispose();
+  });
+
+  it("coalesces streaming deltas into a single wake", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = new InMemoryPipelineStore();
+      const plans = new PlanService(store);
+      const plan = createPlan(store, plans, "Streaming coalesce");
+      const coordinator = new coordinatorModule.PlanDispatchCoordinator({ store, plans, scheduler: schedulerFor(store) });
+      const dispatched = await dispatch(coordinator, plans, plan.id);
+      const countStateEvents = () => store.listEvents({ aggregateId: plan.id }).filter((event) => event.type === "plan.dispatch.state.changed").length;
+      const before = countStateEvents();
+
+      // 窗口内既有真实状态变化、又有大量 token 事件，只应合并成一次状态写入。
+      store.saveRun({ ...store.getRun(dispatched.state.runId!)!, status: "BLOCKED" });
+      for (let index = 0; index < 50; index += 1) store.appendEvent({ type: "agent.model.text.delta", aggregateId: "agent-loop-1", payload: { text: "token" } });
+      expect(countStateEvents()).toBe(before);
+
+      await vi.advanceTimersByTimeAsync(400);
+
+      expect(countStateEvents()).toBe(before + 1);
+      expect(coordinator.state(plan.id)).toMatchObject({ status: "BLOCKED" });
+      coordinator.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

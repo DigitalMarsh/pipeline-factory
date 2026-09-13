@@ -75,6 +75,30 @@ describe("ExecutorAgent", () => {
     })}</pipeline-factory-execution-report>`)).toMatchObject({ activeTaskId: "task-2", blockedTaskId: "task-3", blockedReason: "No Git remote" });
   });
 
+  it("treats null optional task facts as absent instead of failing the report", () => {
+    expect(parseExecutorReport(`<pipeline-factory-execution-report>${JSON.stringify({
+      completedTaskIds: ["task-1", "task-2"],
+      changedPaths: ["docs/pear-introduction.md"],
+      report: "All tasks completed",
+      activeTaskId: null,
+      blockedTaskId: null,
+      blockedReason: null,
+    })}</pipeline-factory-execution-report>`)).toEqual({
+      completedTaskIds: ["task-1", "task-2"],
+      changedPaths: ["docs/pear-introduction.md"],
+      report: "All tasks completed",
+    });
+  });
+
+  it("still rejects optional task facts of the wrong type", () => {
+    expect(parseExecutorReport(`<pipeline-factory-execution-report>${JSON.stringify({
+      completedTaskIds: ["task-1"],
+      changedPaths: [],
+      report: "Done",
+      activeTaskId: 42,
+    })}</pipeline-factory-execution-report>`)).toBeNull();
+  });
+
   it("checks the actual Git diff instead of trusting the model scope claim", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "pipeline-scope-"));
     try {
