@@ -6,11 +6,12 @@ const explorerViewSource = readFileSync(fileURLToPath(new URL("./ExplorerView.vu
 const explorerStylesSource = readFileSync(fileURLToPath(new URL("../styles.css", import.meta.url)), "utf8");
 const explorerTimelineSource = readFileSync(fileURLToPath(new URL("../utils/explorerTimeline.ts", import.meta.url)), "utf8");
 const threadRailSource = readFileSync(fileURLToPath(new URL("../components/ThreadRail.vue", import.meta.url)), "utf8");
+const explorerHeaderStatusSource = readFileSync(fileURLToPath(new URL("../components/ExplorerHeaderStatus.vue", import.meta.url)), "utf8");
 const projectCatalogSource = readFileSync(fileURLToPath(new URL("./ProjectCatalogView.vue", import.meta.url)), "utf8");
 const planCenterSource = readFileSync(fileURLToPath(new URL("../components/PlanCenterPanel.vue", import.meta.url)), "utf8");
 
 describe("Explorer thread actions", () => {
-  it("uses a real dropdown menu with rename, policy and refresh actions", () => {
+  it("uses a real dropdown menu with pause, rename, policy and refresh actions", () => {
     expect(explorerViewSource).not.toContain("thread-banner");
     expect(explorerViewSource).not.toContain("showThreadBanner");
     expect(explorerViewSource).not.toContain("dismissThreadBanner");
@@ -19,11 +20,19 @@ describe("Explorer thread actions", () => {
     expect(explorerViewSource).toContain('command="rename"');
     expect(explorerViewSource).toContain('command="policy"');
     expect(explorerViewSource).toContain('command="refresh"');
+    expect(explorerViewSource).toContain('command="toggle-pause"');
+    expect(explorerViewSource).toContain('if (command === "toggle-pause")');
+    expect(explorerViewSource).toContain('explorerPaused ? "恢复循环" : "暂停循环"');
+    expect(explorerViewSource).toContain("线程操作");
+    expect(explorerViewSource).toContain("重命名线程");
+    expect(explorerViewSource).toContain("查看策略");
+    expect(explorerViewSource).toContain("刷新线程");
+    expect(explorerViewSource).not.toContain(":aria-label=\"explorerPaused ? 'Resume' : 'Pause'\"");
     expect(explorerViewSource).toContain("ExplorerRenameDialog");
     expect(explorerViewSource).toContain("api.renameExplorer");
     expect(explorerViewSource).not.toContain("Manage read-only exploration without changing the repository.");
     expect(explorerViewSource).not.toContain("thread-more-menu");
-    expect(explorerViewSource).toContain("View policy");
+    expect(explorerViewSource).toContain("查看策略");
   });
 
   it("provides focused styling hooks for the dropdown action rows", () => {
@@ -41,7 +50,10 @@ describe("Explorer project selector wiring", () => {
     expect(explorerViewSource).toContain(":explorers=\"explorers\"");
     expect(explorerViewSource).toContain(":show-archived=\"showArchivedExplorers\"");
     expect(explorerViewSource).toContain(":explorer-action-id=\"explorerActionId\"");
+    expect(explorerViewSource).toContain(":plan-center-active=\"contextPanel === 'plan-center'\"");
+    expect(explorerViewSource).toContain(":plan-center-count=\"planCenterCount\"");
     expect(explorerViewSource).toContain("@select-panel=\"leftPanel = $event\"");
+    expect(explorerViewSource).toContain("@select-plan-center=\"selectContextPanel('plan-center')\"");
     expect(explorerViewSource).toContain("@select-project=\"switchProject\"");
     expect(explorerViewSource).toContain("@select-explorer=\"selectExplorer\"");
     expect(explorerViewSource).toContain("@toggle-show-archived=\"showArchivedExplorers = $event\"");
@@ -67,10 +79,13 @@ describe("Explorer context panel wiring", () => {
   it("keeps the current panel count in the compact context header", () => {
     expect(explorerViewSource).toContain('class="context-header-title"');
     expect(explorerViewSource).toContain('class="context-header-count"');
+    expect(explorerViewSource).toContain('id="context-panel-title"');
     expect(explorerViewSource).toMatch(/class="context-header-count"[^>]*>\{\{ contextPanelCount \}\}/);
     expect(explorerViewSource).not.toContain('class="context-panel-intro"');
+    expect(explorerViewSource).not.toContain('class="context-section-title"');
     expect(explorerStylesSource).toContain(".context-header-title");
     expect(explorerStylesSource).toContain(".context-header-count");
+    expect(explorerStylesSource).not.toContain(".context-section-title");
   });
 
   it("connects the right entry rail to an independent dynamic panel", () => {
@@ -86,15 +101,16 @@ describe("Explorer context panel wiring", () => {
     expect(explorerViewSource).toContain('key: "active"');
     expect(explorerViewSource).toContain('key: "attention"');
     expect(explorerViewSource).toContain("needsAttentionCount");
-    expect(explorerViewSource).toContain("Needs attention");
+    expect(explorerViewSource).toContain("待处理事项");
     expect(explorerViewSource).toContain("contextPanel === 'attention'");
     expect(explorerViewSource).toContain("selectContextPanel");
     expect(explorerViewSource).toContain("context-panel-content");
-    expect(explorerViewSource).toContain("PLAN CANDIDATE");
-    expect(explorerViewSource).toContain("CONFIRMED PLANS");
-    expect(explorerViewSource).toContain("DISPATCHED PLANS");
-    expect(explorerViewSource).toContain("ACTIVE RUNS");
-    expect(explorerViewSource).toContain("NEEDS ATTENTION");
+    expect(explorerViewSource).toContain('aria-labelledby="context-panel-title"');
+    expect(explorerViewSource).toContain("候选方案");
+    expect(explorerViewSource).toContain("已确认方案");
+    expect(explorerViewSource).toContain("已派发方案");
+    expect(explorerViewSource).toContain("运行中任务");
+    expect(explorerViewSource).toContain("待处理事项");
     expect(explorerViewSource).toContain("confirmedPlans");
     expect(explorerViewSource).toContain("api.explorerConfirmedPlans");
     expect(explorerViewSource).toContain("contextPanel === 'confirmed'");
@@ -107,6 +123,32 @@ describe("Explorer context panel wiring", () => {
     expect(explorerViewSource).toContain("context-entry-count");
     expect(explorerViewSource).not.toContain("context-entry-copy");
     expect(explorerViewSource).not.toContain("{{ item.description }}");
+  });
+
+  it("uses Chinese labels for the right context menu and corresponding titles", () => {
+    const contextMenuSource = explorerViewSource.match(/const contextMenuItems = computed\(\(\) => \[[\s\S]*?\n\]\);/)?.[0] ?? "";
+
+    expect(contextMenuSource).toContain('label: "候选方案", railLabel: "候选"');
+    expect(contextMenuSource).toContain('label: "已确认方案", railLabel: "已确认"');
+    expect(contextMenuSource).toContain('label: "已入队方案", railLabel: "已入队"');
+    expect(contextMenuSource).toContain('label: "已派发方案", railLabel: "已派发"');
+    expect(contextMenuSource).toContain('label: "运行中任务", railLabel: "运行中"');
+    expect(contextMenuSource).toContain('label: "待处理事项", railLabel: "待处理"');
+    expect(contextMenuSource).not.toContain('label: "Plan candidates"');
+    expect(contextMenuSource).not.toContain('label: "Confirmed plans"');
+    expect(contextMenuSource).not.toContain('label: "Enqueued plans"');
+    expect(contextMenuSource).not.toContain('label: "Dispatched plans"');
+    expect(contextMenuSource).not.toContain('label: "Active runs"');
+    expect(contextMenuSource).not.toContain('label: "Needs attention"');
+    expect(explorerViewSource).not.toContain('<div class="eyebrow">线程上下文</div>');
+    expect(explorerViewSource).toContain('<div class="context-header-title-row">');
+    expect(explorerViewSource).toContain('aria-label="Refresh"');
+    expect(explorerViewSource).toContain('aria-label="上下文分区"');
+    expect(explorerViewSource).not.toContain('aria-label="线程上下文分区"');
+    expect(explorerStylesSource).toMatch(/\.context-panel-shell \.context-panel \{[^}]*padding: 12px 17px 16px;/);
+    expect(explorerStylesSource).toMatch(/\.context-panel-shell \.context-header \{[^}]*align-items: center;[^}]*padding: 0 5px 10px;/);
+    expect(explorerStylesSource).toContain('.context-panel-shell .context-header-title-row { margin-top: 0; }');
+    expect(explorerStylesSource).toContain('.context-panel-shell .context-panel-content { padding-top: 12px; }');
   });
 
   it("renders the context choices as a vertical entry rail", () => {
@@ -136,15 +178,17 @@ describe("Explorer context panel wiring", () => {
     expect(enqueueSource).toContain("const id = plan.id ?? plan.planId");
   });
 
-  it("separates Enqueued from Dispatched and embeds Plan Center in the context rail", () => {
+  it("separates Enqueued from Dispatched and moves the Plan Center entry to the primary rail", () => {
     const enqueuedSection = explorerViewSource.match(/<section v-else-if="contextPanel === 'enqueued'"[\s\S]*?<\/section>/)?.[0] ?? "";
+    const contextMenuSource = explorerViewSource.match(/const contextMenuItems = computed\(\(\) => \[[\s\S]*?\n\]\);/)?.[0] ?? "";
 
     expect(explorerViewSource).toContain('key: "enqueued"');
-    expect(explorerViewSource).toContain('key: "plan-center"');
+    expect(contextMenuSource).not.toContain('key: "plan-center"');
     expect(enqueuedSection).toContain("plan.status === 'ENQUEUED'");
     expect(enqueuedSection).toContain('@click="startPlanRun(plan)"');
     expect(enqueuedSection).toContain("Start run");
     expect(explorerViewSource).toContain('<PlanCenterPanel :project-id="projectId"');
+    expect(explorerViewSource).toContain("contextPanel === 'plan-center'");
     expect(explorerViewSource).toContain("plan.dispatchedAt !== null");
   });
 
@@ -243,18 +287,34 @@ describe("Explorer rail layout", () => {
   });
 });
 
-describe("Explorer message timeline", () => {
-  it("uses one-line neutral time and type labels while retaining existing targets", () => {
-    expect(explorerViewSource).toContain("const messageTimelineItems = computed<TimelineNavItem[]>(() => buildExplorerMessageTimeline");
-    expect(explorerTimelineSource).toContain('label: "消息"');
-    expect(explorerTimelineSource).toContain('label: "提问"');
-    expect(explorerTimelineSource).toContain('label: "回答"');
-    expect(explorerTimelineSource).not.toContain('label: "You"');
-    expect(explorerTimelineSource).not.toContain('label: "Plan Explorer"');
-    expect(explorerViewSource).toContain("{{ item.detail }} - {{ item.label }}");
+describe("Explorer inline message presentation", () => {
+  it("restores a narrow marker rail while keeping expandable user summaries", () => {
+    expect(explorerViewSource).toContain('class="timeline-rail timeline-rail-messages"');
+    expect(explorerViewSource).toContain("const messageTimelineItems = computed");
+    expect(explorerViewSource).toContain("buildExplorerMessageTimeline");
+    expect(explorerViewSource).toContain('class="timeline-message-index"');
+    expect(explorerViewSource).toContain('class="timeline-message-index-marker"');
+    expect(explorerViewSource).toContain(':aria-current="activeTimelineKey === item.activationKey || activeTimelineKey === item.target ? \'location\' : undefined"');
+    expect(explorerViewSource).toContain(':title="`${item.detail} · ${item.label}`"');
     expect(explorerViewSource).toContain('@click="jumpToTimelineTarget(item.target, item.activationKey)"');
-    expect(explorerStylesSource).toContain(".timeline-rail-messages .timeline-rail-item { align-items: center; min-height: 32px; padding-top: 5px; padding-bottom: 5px; }");
-    expect(explorerStylesSource).toContain(".timeline-rail-messages .timeline-rail-copy { display: inline-flex;");
+    expect(explorerViewSource).not.toContain(">MESSAGES</span>");
+    expect(explorerStylesSource).toMatch(/\.timeline-stage \{[^}]*position: relative;/);
+    expect(explorerStylesSource).toMatch(/\.timeline-rail-messages \{[^}]*position: absolute;[^}]*width: 32px;[^}]*background: transparent;[^}]*pointer-events: none;/);
+    expect(explorerStylesSource).toContain(".timeline-message-index-item { display: flex;");
+    expect(explorerStylesSource).toContain("pointer-events: auto;");
+    expect(explorerStylesSource).toContain(".timeline-message-index-item:focus-visible");
+    expect(explorerStylesSource).toContain(".timeline-message-index-item.active .timeline-message-index-marker");
+    expect(explorerViewSource).toContain('class="user-message-summary"');
+    expect(explorerViewSource).toContain(':aria-expanded="isUserMessageExpanded(item.activity.id)"');
+    expect(explorerViewSource).toContain('@click="toggleUserMessage(item.activity.id)"');
+    expect(explorerViewSource).toContain('class="user-message-summary-preview"');
+    expect(explorerViewSource).toContain('class="user-message-content"');
+    expect(explorerStylesSource).toContain(".user-message-summary:focus-visible");
+  });
+
+  it("centers the latest-message prompt within the chat timeline", () => {
+    expect(explorerViewSource).toContain('class="scroll-to-latest"');
+    expect(explorerStylesSource).toMatch(/\.scroll-to-latest \{[^}]*left: 50%;[^}]*right: auto;[^}]*transform: translateX\(-50%\);/);
   });
 
   it("renders each bound plan only in its generating assistant message and inserts detached plans into the shared timeline", () => {
@@ -305,7 +365,8 @@ describe("Explorer thread switching", () => {
 
   it("keeps message navigation keys unique when a turn has multiple assistant activities", () => {
     expect(explorerTimelineSource).toContain("key: `message:${item.activity.id}`");
-    expect(explorerViewSource).toContain("activeTimelineKey === item.target");
+    expect(explorerViewSource).toContain(':id="activityTarget(item.activity, index)"');
+    expect(explorerViewSource).toContain(':data-nav-key="activityTarget(item.activity, index)"');
   });
 
   it("resets archived-thread visibility when switching projects", () => {
@@ -395,14 +456,49 @@ describe("Project catalog project creation wiring", () => {
 });
 
 describe("Explorer provider loop layout", () => {
-  it("places long diagnostics in a flexible second row", () => {
-    expect(explorerViewSource).toContain('<div class="agent-loop-summary">');
-    expect(explorerViewSource).toContain('class="agent-loop-status"');
-    expect(explorerViewSource).toContain('class="agent-loop-action"');
+  it("moves the provider loop into the compact header status details without changing its controls", () => {
+    expect(explorerViewSource).toContain("<ExplorerHeaderStatus");
+    expect(explorerViewSource).toContain(":agent-loop=\"agentLoop\"");
+    expect(explorerViewSource).toContain("@toggle-pause=\"toggleExplorerPause\"");
+    expect(explorerHeaderStatusSource).toContain('<div class="agent-loop-summary">');
+    expect(explorerHeaderStatusSource).toContain('class="agent-loop-status"');
+    expect(explorerHeaderStatusSource).toContain('class="agent-loop-action"');
     expect(explorerStylesSource).toContain(".agent-loop-strip { display: grid;");
     expect(explorerStylesSource).toContain("grid-template-columns: minmax(0, 1fr) auto;");
     expect(explorerStylesSource).toContain(".agent-loop-status {");
     expect(explorerStylesSource).toContain("overflow-wrap: anywhere;");
+  });
+});
+
+describe("Explorer header status layout", () => {
+  it("renders three compact status cards with independent floating detail surfaces", () => {
+    expect(explorerHeaderStatusSource).toContain("REQUIREMENTS");
+    expect(explorerHeaderStatusSource).toContain("PROVIDER LOOP");
+    expect(explorerHeaderStatusSource).toContain("EXPLORATION");
+    expect((explorerHeaderStatusSource.match(/trigger="click"/g) ?? [])).toHaveLength(3);
+    expect(explorerHeaderStatusSource).toContain('data-status-card="requirements"');
+    expect(explorerHeaderStatusSource).toContain('data-status-card="provider-loop"');
+    expect(explorerHeaderStatusSource).toContain('data-status-card="exploration"');
+    expect(explorerHeaderStatusSource).toContain('aria-controls="explorer-header-requirements-details"');
+    expect(explorerHeaderStatusSource).toContain('aria-controls="explorer-header-provider-loop-details"');
+    expect(explorerHeaderStatusSource).toContain('aria-controls="explorer-header-exploration-details"');
+    expect(explorerHeaderStatusSource).toContain('popper-class="explorer-header-status-popper"');
+    expect(explorerHeaderStatusSource).toContain('initially-expanded');
+    expect(explorerHeaderStatusSource).toContain('watch(() => props.threadId');
+  });
+
+  it("keeps the title compact and leaves transient notices outside the moved status group", () => {
+    expect(explorerViewSource).toContain('class="conversation-header-copy"');
+    expect(explorerViewSource).toContain(':title="explorerDisplayTitle(thread)"');
+    expect(explorerViewSource).toContain("{{ explorerDisplayTitle(thread) }}");
+    expect(explorerViewSource).not.toContain("PLAN MODE · READ ONLY");
+    expect(explorerViewSource).not.toContain("Shape the work before anything changes in the repository.");
+    expect(explorerViewSource).not.toContain('<ExplorerPlanRequirements v-if=');
+    expect(explorerViewSource).toContain('class="demo-notice pause-notice"');
+    expect(explorerViewSource).toContain('class="demo-notice"');
+    expect(explorerStylesSource).toContain(".conversation-header-copy h1");
+    expect(explorerStylesSource).toContain(".explorer-header-status-trigger { display: grid;");
+    expect(explorerStylesSource).toContain(".explorer-header-status-popper");
   });
 });
 
@@ -442,7 +538,8 @@ describe("Explorer composer availability", () => {
 describe("Explorer markdown rendering", () => {
   it("renders message bodies through the shared Markdown component", () => {
     expect(explorerViewSource).toContain('import MarkdownMessage from "../components/MarkdownMessage.vue"');
-    expect(explorerViewSource).toContain(`<MarkdownMessage :source="item.activity.kind === 'ASSISTANT_MESSAGE' ? readableAssistantText(item.activity.summary) : item.activity.summary" :streaming="item.activity.status === 'RUNNING'" />`);
+    expect(explorerViewSource).toContain('<MarkdownMessage :source="item.activity.summary" />');
+    expect(explorerViewSource).toContain('<MarkdownMessage :source="readableAssistantText(item.activity.summary)" :streaming="item.activity.status === \'RUNNING\'" />');
     expect(explorerViewSource).not.toContain(`: item.activity.summary }}<span v-if="item.activity.status === 'RUNNING'" class="processing-dots"`);
   });
 });

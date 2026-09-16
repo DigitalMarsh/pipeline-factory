@@ -70,7 +70,7 @@ onUnmounted(() => {
         <div class="drawer-header"><div><div class="eyebrow">PIPELINE FACTORY · HELP</div><h2>How this workspace works</h2></div><el-button text circle aria-label="Close help" @click="helpOpen = false">×</el-button></div>
         <div class="help-card"><strong>Explore first</strong><p>Use the ExplorerThread to inspect the repository and shape a CandidatePlan. Explorer remains read only until you confirm and enqueue the plan.</p></div>
         <div class="help-card"><strong>Follow execution</strong><p>Each dispatched plan gets its own Run and ExecutionThread. Pause, guide, verify and review the run from its detail page.</p></div>
-        <div class="help-card"><strong>Need assistance?</strong><p>Use the project settings page to review lifecycle hooks and the Plan Center to find every dispatched plan.</p></div>
+        <div class="help-card"><strong>Need assistance?</strong><p>Use the project settings page to review lifecycle hooks and use 计划中心 to find every dispatched plan.</p></div>
       </div>
     </el-drawer>
 

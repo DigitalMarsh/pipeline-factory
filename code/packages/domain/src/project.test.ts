@@ -258,32 +258,32 @@ describe("ProjectService", () => {
 describe("ProjectService legacy model migration", () => {
   const legacySettings = {
     models: {
-      explorer: { model: "gpt-5.6-luna" },
-      executor: { model: "gpt-5.6-luna" },
+      explorer: { model: "deepseek-v4-flash" },
+      executor: { model: "deepseek-v4-flash" },
     },
   };
-  const deepseekModels = { explorer: "deepseek-v4-flash", executor: "deepseek-v4-flash" };
+  const codexModels = { explorer: "gpt-5.6-luna", executor: "gpt-5.6-luna" };
 
   function createLegacyProject(store: InMemoryPipelineStore, projects: ProjectService, id = "project-legacy") {
     return projects.create({ id, name: "Legacy", repoRoot: `/repo/${id}`, defaultBranch: "main", worktreeRoot: `/tmp/${id}-worktrees`, settings: legacySettings });
   }
 
-  it("replaces legacy Codex model slugs once and records a new config revision", () => {
+  it("replaces legacy DeepSeek model slugs once and records a new config revision", () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);
     const before = createLegacyProject(store, projects);
 
-    expect(projects.migrateLegacyModels(deepseekModels).map((project) => project.id)).toEqual(["project-legacy"]);
+    expect(projects.migrateLegacyModels(codexModels).map((project) => project.id)).toEqual(["project-legacy"]);
 
     const after = store.getProject("project-legacy")!;
-    expect(after.settings.models.explorer).toMatchObject({ model: "deepseek-v4-flash", mode: "plan", loopMode: "provider-controlled" });
-    expect(after.settings.models.executor).toMatchObject({ model: "deepseek-v4-flash", mode: "default", loopMode: "provider-controlled" });
+    expect(after.settings.models.explorer).toMatchObject({ model: "gpt-5.6-luna", mode: "plan", loopMode: "provider-controlled" });
+    expect(after.settings.models.executor).toMatchObject({ model: "gpt-5.6-luna", mode: "default", loopMode: "provider-controlled" });
     expect(after.configVersion).toBe(before.configVersion + 1);
     expect(after.configHash).not.toBe(before.configHash);
     expect(store.listProjectConfigRevisions("project-legacy").map((revision) => revision.version)).toEqual([1, 2]);
     expect(store.listEvents({ aggregateId: "project-legacy" }).some((event) => event.type === "project.config.updated")).toBe(true);
 
-    expect(projects.migrateLegacyModels(deepseekModels)).toEqual([]);
+    expect(projects.migrateLegacyModels(codexModels)).toEqual([]);
     expect(store.getProject("project-legacy")!.configVersion).toBe(after.configVersion);
   });
 
@@ -294,7 +294,7 @@ describe("ProjectService legacy model migration", () => {
     const archived = createLegacyProject(store, projects, "project-archived");
     projects.archive("project-archived");
 
-    expect(projects.migrateLegacyModels(deepseekModels)).toEqual([]);
+    expect(projects.migrateLegacyModels(codexModels)).toEqual([]);
     expect(store.getProject("project-current")!.configVersion).toBe(current.configVersion);
     expect(store.getProject("project-archived")!.settings).toEqual(archived.settings);
   });
@@ -317,12 +317,12 @@ describe("ProjectService legacy model migration", () => {
       startedAt: store.now(),
     });
 
-    expect(projects.migrateLegacyModels(deepseekModels)).toEqual([]);
-    expect(store.getProject("project-legacy")!.settings.models.explorer.model).toBe("gpt-5.6-luna");
+    expect(projects.migrateLegacyModels(codexModels)).toEqual([]);
+    expect(store.getProject("project-legacy")!.settings.models.explorer.model).toBe("deepseek-v4-flash");
 
     store.saveRun({ ...run, status: "MERGE_READY" });
 
-    expect(projects.migrateLegacyModels(deepseekModels).map((project) => project.id)).toEqual(["project-legacy"]);
-    expect(store.getProject("project-legacy")!.settings.models.executor.model).toBe("deepseek-v4-flash");
+    expect(projects.migrateLegacyModels(codexModels).map((project) => project.id)).toEqual(["project-legacy"]);
+    expect(store.getProject("project-legacy")!.settings.models.executor.model).toBe("gpt-5.6-luna");
   });
 });

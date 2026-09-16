@@ -1,9 +1,9 @@
 <!--
   模块职责：展示 Project 和 ExplorerThread 导航。
-  维护提示：左侧入口只切换左侧内容，右侧执行上下文由 ExplorerView 独立管理。
+  维护提示：探索/项目入口切换左侧内容，Plan Center 入口由 ExplorerView 代理到右侧上下文面板。
 -->
 <script setup lang="ts">
-import { ArrowDown, ArrowRight, Connection, FolderOpened, Plus, Setting } from "@element-plus/icons-vue";
+import { ArrowDown, ArrowRight, Connection, FolderOpened, Plus, Setting, View } from "@element-plus/icons-vue";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import type { ExplorerThread, Project } from "../types";
 
@@ -21,14 +21,19 @@ const props = withDefaults(defineProps<{
   explorerActionId?: string | null;
   explorerLoading?: boolean;
   explorerError?: string | null;
+  planCenterActive?: boolean;
+  planCenterCount?: number;
 }>(), {
   showArchived: false,
   explorerActionId: null,
   explorerLoading: false,
   explorerError: null,
+  planCenterActive: false,
+  planCenterCount: 0,
 });
 const emit = defineEmits<{
   "select-panel": [panel: LeftPanel];
+  "select-plan-center": [];
   "select-project": [projectId: string];
   "open-project": [projectId: string];
   "open-project-settings": [projectId: string];
@@ -118,6 +123,20 @@ function explorerArchiveAriaLabel(explorer: ExplorerThread): string {
         <Connection v-else :size="17" />
         <span>{{ entry.label }}</span>
       </button>
+      <button
+        class="left-entry-button left-entry-button-plan-center"
+        type="button"
+        data-left-context="plan-center"
+        role="tab"
+        aria-label="计划中心"
+        :aria-selected="props.planCenterActive"
+        :class="{ active: props.planCenterActive }"
+        @click="emit('select-plan-center')"
+      >
+        <View :size="17" />
+        <span>计划中心</span>
+        <span class="left-entry-count">{{ props.planCenterCount }}</span>
+      </button>
     </nav>
 
     <section class="left-panel">
@@ -133,15 +152,15 @@ function explorerArchiveAriaLabel(explorer: ExplorerThread): string {
             @click="toggleProjectSwitcher"
           >
             <span class="project-context-copy">
-              <span class="eyebrow">CURRENT PROJECT</span>
-              <strong>{{ props.project?.name ?? props.thread?.projectId ?? "Local workspace" }}</strong>
-              <span class="project-context-summary">
-                <span>{{ props.explorers.length }} explorations</span>
-                <span v-if="props.project" :class="['project-context-status', { archived: props.project.status === 'ARCHIVED' }]">
-                  <i /> {{ projectStatusLabel(props.project.status) }}
-                </span>
+              <span class="project-context-title-row">
+                <strong class="project-context-name">{{ props.project?.name ?? props.thread?.projectId ?? "Local workspace" }}</strong>
               </span>
-              <small v-if="props.project?.repoRoot">{{ props.project.repoRoot }}</small>
+              <span class="project-context-summary project-context-meta-row">
+                <span class="project-context-count">{{ props.explorers.length }} explorations</span>
+              </span>
+            </span>
+            <span v-if="props.project" :class="['project-context-status', { archived: props.project.status === 'ARCHIVED' }]">
+              <i /> {{ projectStatusLabel(props.project.status) }}
             </span>
             <ArrowDown :class="['project-context-arrow', { open: projectSwitcherOpen }]" :size="16" aria-hidden="true" />
           </button>

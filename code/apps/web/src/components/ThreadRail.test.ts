@@ -9,12 +9,13 @@ import type { ExplorerThread, Project } from "../types";
 
 const styles = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../styles.css"), "utf8");
 
-function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplorer = false, projectActionId: string | null = null, includeArchived = false, showArchived = false, explorerLoading = false, explorerError: string | null = null, explorerItems?: ExplorerThread[]) {
+function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplorer = false, projectActionId: string | null = null, includeArchived = false, showArchived = false, explorerLoading = false, explorerError: string | null = null, explorerItems?: ExplorerThread[], planCenterActive = false, planCenterCount = 2) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   let createExplorerCount = 0;
   let createProjectCount = 0;
   let selectedPanel: "projects" | "explorers" | null = null;
+  let selectedPlanCenter = false;
   let selectedProjectId: string | null = null;
   let selectedExplorerId: string | null = null;
   let archivedExplorerId: string | null = null;
@@ -47,9 +48,12 @@ function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplor
         explorerError,
         creatingExplorer,
         projectActionId,
+        planCenterActive,
+        planCenterCount,
         onCreateExplorer: () => { createExplorerCount += 1; },
         onCreateProject: () => { createProjectCount += 1; },
         onSelectPanel: (value: "projects" | "explorers") => { selectedPanel = value; activePanel.value = value; },
+        onSelectPlanCenter: () => { selectedPlanCenter = true; },
         onSelectProject: (projectId: string) => { selectedProjectId = projectId; },
         onSelectExplorer: (explorerId: string) => { selectedExplorerId = explorerId; },
         onToggleShowArchived: (value: boolean) => { archivedVisible.value = value; },
@@ -67,6 +71,7 @@ function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplor
     getCreateExplorerCount: () => createExplorerCount,
     getCreateProjectCount: () => createProjectCount,
     getSelectedPanel: () => selectedPanel,
+    getSelectedPlanCenter: () => selectedPlanCenter,
     getSelectedProjectId: () => selectedProjectId,
     getSelectedExplorerId: () => selectedExplorerId,
     getArchivedExplorerId: () => archivedExplorerId,
@@ -77,14 +82,17 @@ function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplor
 }
 
 describe("ThreadRail left workspace navigation", () => {
-  it("renders exactly the Projects and Explorers entry buttons", () => {
+  it("renders Explorers, Projects, and the plan center entry button", () => {
     const mounted = mountRail();
-    const entries = [...mounted.host.querySelectorAll<HTMLButtonElement>("button[data-left-panel]")];
+    const entries = [...mounted.host.querySelectorAll<HTMLButtonElement>("button.left-entry-button")];
 
-    expect(entries).toHaveLength(2);
-    expect(entries.map((entry) => entry.textContent?.trim())).toEqual(["探索", "项目"]);
+    expect(entries).toHaveLength(3);
+    expect(entries.map((entry) => entry.textContent?.trim())).toEqual(["探索", "项目", "计划中心2"]);
     expect(entries[0]?.getAttribute("aria-selected")).toBe("true");
     expect(entries[1]?.getAttribute("aria-selected")).toBe("false");
+    expect(entries[2]?.getAttribute("aria-selected")).toBe("false");
+    expect(entries[2]?.getAttribute("data-left-context")).toBe("plan-center");
+    expect(entries[2]?.getAttribute("aria-label")).toBe("计划中心");
     expect(mounted.host.querySelector(".explorer-list")).not.toBeNull();
 
     mounted.app.unmount();
@@ -97,9 +105,16 @@ describe("ThreadRail left workspace navigation", () => {
 
     expect(contextCard).not.toBeNull();
     expect(contextCard?.textContent).toContain("Project 1");
+    expect(contextCard?.textContent).not.toContain("CURRENT PROJECT");
     expect(contextCard?.textContent).toContain("2 explorations");
-    expect(contextCard?.textContent).toContain("/tmp/project-1");
     expect(contextCard?.textContent).toContain("Active");
+    const titleRow = contextCard?.querySelector<HTMLElement>(".project-context-title-row");
+    const metaRow = contextCard?.querySelector<HTMLElement>(".project-context-meta-row");
+    expect(titleRow?.querySelector(".project-context-name")?.textContent).toContain("Project 1");
+    expect(contextCard?.querySelector(".project-context-status")?.textContent).toContain("Active");
+    expect(metaRow?.querySelector(".project-context-count")?.textContent).toContain("2 explorations");
+    expect(metaRow?.querySelectorAll("*")).toHaveLength(1);
+    expect(contextCard?.querySelector(".project-context-path")).toBeNull();
     expect(contextCard?.getAttribute("aria-expanded")).toBe("false");
 
     contextCard?.click();
@@ -115,6 +130,17 @@ describe("ThreadRail left workspace navigation", () => {
 
     mounted.app.unmount();
     mounted.host.remove();
+  });
+
+  it("uses compact styling for the project context card", () => {
+    expect(styles).toContain(".project-context-title-row { display: flex; min-width: 0; align-items: center; width: 100%;");
+    expect(styles).toContain(".project-context-name { display: block; min-width: 0; flex: 1 1 auto; margin-top: 0; overflow: hidden;");
+    expect(styles).not.toContain(".project-context-path");
+    expect(styles).toContain(".project-context-summary { display: flex; min-width: 0; align-items: center; margin-top: 0;");
+    expect(styles).toContain(".project-context-card { display: flex; min-width: 0; align-items: center; gap: 8px;");
+    expect(styles).toContain(".project-context-status { display: inline-flex; align-self: center; align-items: center;");
+    expect(styles).toContain(".left-panel-header { flex: 0 0 auto; min-width: 0; padding: 0 5px 8px;");
+    expect(styles).toContain(".left-panel-scroll { min-height: 0; flex: 1 1 auto; overflow-y: auto; padding: 8px 1px 2px;");
   });
 
   it("emits a selected inline project and closes the switcher", async () => {
@@ -356,15 +382,20 @@ describe("ThreadRail left workspace navigation", () => {
     mounted.host.remove();
   });
 
-  it("keeps context navigation out of the left rail", () => {
+  it("moves only Plan Center into the left rail", async () => {
     const mounted = mountRail();
 
     expect(mounted.host.querySelector(".rail-nav")).toBeNull();
     expect(mounted.host.querySelectorAll("button[data-context]")).toHaveLength(0);
+    expect(mounted.host.querySelector<HTMLButtonElement>('button[data-left-context="plan-center"]')).not.toBeNull();
     expect(mounted.host.textContent).not.toContain("Plan candidates");
     expect(mounted.host.textContent).not.toContain("Dispatched plans");
     expect(mounted.host.textContent).not.toContain("Active runs");
     expect(mounted.host.textContent).not.toContain("Needs attention");
+
+    mounted.host.querySelector<HTMLButtonElement>('button[data-left-context="plan-center"]')?.click();
+    await nextTick();
+    expect(mounted.getSelectedPlanCenter()).toBe(true);
 
     mounted.app.unmount();
     mounted.host.remove();

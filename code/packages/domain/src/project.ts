@@ -151,8 +151,8 @@ export const DEFAULT_PROJECT_SETTINGS: ProjectSettings = {
   defaultVerificationCommandIds: [],
   hooks: {},
   models: {
-    explorer: { model: "deepseek-v4-flash", mode: "plan", temperature: 0.1, loopMode: "provider-controlled" },
-    executor: { model: "deepseek-v4-flash", mode: "default", temperature: 0, loopMode: "provider-controlled" },
+    explorer: { model: "gpt-5.6-luna", mode: "plan", temperature: 0.1, loopMode: "provider-controlled" },
+    executor: { model: "gpt-5.6-luna", mode: "default", temperature: 0, loopMode: "provider-controlled" },
   },
   toolPolicy: {
     allowedMcpTools: [],
@@ -304,8 +304,8 @@ function hasActiveRun(store: PipelineStore, projectId: string): boolean {
   return store.listRuns().some((run) => run.projectId === projectId && EXECUTION_SLOT_RUN_STATUSES.has(run.status));
 }
 
-/** 历史 Codex 家族模型 slug；这些模型不在 DeepSeek provider 的支持列表中。 */
-const LEGACY_MODEL_SLUG_PATTERN = /^gpt-5\.6/;
+/** 历史 DeepSeek 默认模型 slug；仅迁移 Factory 之前写入的默认值。 */
+const LEGACY_DEEPSEEK_MODEL_SLUG = "deepseek-v4-flash";
 
 /**
  * 管理 Project 的生命周期、配置版本和执行快照。
@@ -385,7 +385,7 @@ export class ProjectService {
   }
 
   /**
-   * 一次性把历史 Codex 模型 slug 迁移到当前 provider 支持的模型。
+   * 一次性把历史 DeepSeek 默认模型 slug 迁移到当前 provider 支持的模型。
    * 只替换 model 字段并保留角色其余设置；有活动 Run 的 Project 跳过，等待下次启动重试。
    */
   migrateLegacyModels(models: { explorer: string; executor: string }): Project[] {
@@ -394,7 +394,7 @@ export class ProjectService {
       const replacements: ProjectSettingsInput["models"] = {};
       for (const role of ["explorer", "executor"] as const) {
         const currentModel = project.settings.models[role].model;
-        if (!LEGACY_MODEL_SLUG_PATTERN.test(currentModel)) continue;
+        if (currentModel !== LEGACY_DEEPSEEK_MODEL_SLUG) continue;
         const replacement = models[role].trim();
         if (!replacement || replacement === currentModel) continue;
         replacements[role] = { model: replacement };

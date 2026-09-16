@@ -80,7 +80,7 @@ async function load(): Promise<void> {
     if (props.projectId !== requestedProjectId) return;
     plans.value = [];
     emit("count", 0);
-    error.value = caught instanceof Error ? caught.message : "Plan Center 加载失败";
+    error.value = caught instanceof Error ? caught.message : "计划中心加载失败";
   } finally {
     if (props.projectId === requestedProjectId) loading.value = false;
   }
@@ -147,7 +147,7 @@ onMounted(() => { void load(); });
 </script>
 
 <template>
-  <section class="plan-center-panel" aria-label="Plan Center">
+  <section class="plan-center-panel" aria-label="计划中心">
     <div class="plan-center-toolbar">
       <label class="plan-center-search"><Search :size="14" /><input v-model="search" aria-label="Search project plans" placeholder="Search plans" /></label>
       <el-select v-model="status" size="small" aria-label="Filter plan status">
@@ -160,7 +160,7 @@ onMounted(() => { void load(); });
         <el-option label="Merged" value="MERGED" />
         <el-option label="Blocked" value="BLOCKED" />
       </el-select>
-      <el-button text circle aria-label="Refresh Plan Center" @click="load"><Refresh :size="15" /></el-button>
+      <el-button text circle aria-label="刷新计划中心" @click="load"><Refresh :size="15" /></el-button>
     </div>
     <div v-if="error" class="plan-center-notice"><Warning :size="14" />{{ error }}</div>
     <div v-if="reconciliationError" class="plan-center-notice"><Warning :size="14" />Merge 状态检测失败，已展示最近保存的状态：{{ reconciliationError }}</div>

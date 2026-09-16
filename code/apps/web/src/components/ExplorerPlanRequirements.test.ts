@@ -17,13 +17,13 @@ const requirements: Requirement[] = [
 
 const completed = requirements.map((requirement) => requirement.label);
 
-function mountRequirements(initialDiagnostics: Issue[] = []) {
+function mountRequirements(initialDiagnostics: Issue[] = [], initiallyExpanded = false) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const diagnostics = ref(initialDiagnostics);
   const app = createApp(defineComponent({
     setup() {
-      return () => h(ExplorerPlanRequirements, { requirements, completed, diagnostics: diagnostics.value });
+      return () => h(ExplorerPlanRequirements, { requirements, completed, diagnostics: diagnostics.value, initiallyExpanded });
     },
   }));
   app.mount(host);
@@ -68,6 +68,16 @@ describe("ExplorerPlanRequirements", () => {
     button.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await nextTick();
     expect(button.getAttribute("aria-expanded")).toBe("false");
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  it("can start expanded when embedded in the header status detail popover", () => {
+    const mounted = mountRequirements([], true);
+
+    expect(toggle(mounted.host).getAttribute("aria-expanded")).toBe("true");
+    expect(details(mounted.host).getAttribute("style") ?? "").not.toContain("display: none");
 
     mounted.app.unmount();
     mounted.host.remove();
