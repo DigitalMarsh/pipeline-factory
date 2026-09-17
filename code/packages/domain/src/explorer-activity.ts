@@ -25,6 +25,7 @@ export type ExplorerActivityKind =
 export type ExplorerActivityItem = {
   id: string;
   explorerId: string;
+  explorerPlanId?: string;
   turnId: string;
   sequence: number;
   kind: ExplorerActivityKind;
@@ -136,7 +137,7 @@ export function projectExplorerActivity(input: ExplorerActivityInput): ExplorerA
   // Turn 是对话主序列，Loop Step 只补充模型推理、工具和门禁活动；最终序号按发生时间重新归一化。
   for (const turn of [...input.turns].sort((a, b) => a.sequence - b.sequence)) {
     if (turn.role === "user") {
-      append({ explorerId: turn.threadId, turnId: turn.id, kind: "USER_MESSAGE", status: "COMPLETED", title: "You", summary: turn.content, details: null, occurredAt: turn.createdAt }, turn.sequence);
+      append({ explorerId: turn.threadId, ...(turn.explorerPlanId ? { explorerPlanId: turn.explorerPlanId } : {}), turnId: turn.id, kind: "USER_MESSAGE", status: "COMPLETED", title: "You", summary: turn.content, details: null, occurredAt: turn.createdAt }, turn.sequence);
       continue;
     }
 
@@ -157,7 +158,7 @@ export function projectExplorerActivity(input: ExplorerActivityInput): ExplorerA
           if (providerItemId) previous.details = { ...(previous.details ?? {}), providerItemId };
           continue;
         }
-        append({ explorerId: turn.threadId, turnId: turn.id, kind: "ASSISTANT_MESSAGE", status: assistantActivityStatus(turn.status), title: "Plan Explorer", summary: text, details: providerItemId ? { providerItemId } : null, occurredAt: step.occurredAt }, step.sequence);
+        append({ explorerId: turn.threadId, ...(turn.explorerPlanId ? { explorerPlanId: turn.explorerPlanId } : {}), turnId: turn.id, kind: "ASSISTANT_MESSAGE", status: assistantActivityStatus(turn.status), title: "Plan Explorer", summary: text, details: providerItemId ? { providerItemId } : null, occurredAt: step.occurredAt }, step.sequence);
         continue;
       }
       if (step.stepType === "PROVIDER_ACTIVITY") {
@@ -177,10 +178,10 @@ export function projectExplorerActivity(input: ExplorerActivityInput): ExplorerA
     }
     if (!assistantText && turn.content.trim()) {
       const display = formatPlanActivity(turn.content);
-      append({ explorerId: turn.threadId, turnId: turn.id, kind: "ASSISTANT_MESSAGE", status: turn.status === "FAILED" ? "FAILED" : "COMPLETED", title: "Plan Explorer", summary: display.summary, details: turn.error ? { error: turn.error, ...(display.details ?? {}) } : display.details, occurredAt: turn.createdAt }, assistantSequence);
+      append({ explorerId: turn.threadId, ...(turn.explorerPlanId ? { explorerPlanId: turn.explorerPlanId } : {}), turnId: turn.id, kind: "ASSISTANT_MESSAGE", status: turn.status === "FAILED" ? "FAILED" : "COMPLETED", title: "Plan Explorer", summary: display.summary, details: turn.error ? { error: turn.error, ...(display.details ?? {}) } : display.details, occurredAt: turn.createdAt }, assistantSequence);
     }
     if (!steps.length && !turn.content.trim()) {
-      append({ explorerId: turn.threadId, turnId: turn.id, kind: "TURN_STATUS", status: turn.status === "WAITING_FOR_INPUT" ? "WAITING" : turn.status === "FAILED" ? "FAILED" : "RUNNING", title: "Plan Explorer", summary: turn.status === "WAITING_FOR_INPUT" ? "Waiting for input" : "Plan Explorer is processing", details: turn.error ? { error: turn.error } : null, occurredAt: turn.createdAt }, turn.sequence);
+      append({ explorerId: turn.threadId, ...(turn.explorerPlanId ? { explorerPlanId: turn.explorerPlanId } : {}), turnId: turn.id, kind: "TURN_STATUS", status: turn.status === "WAITING_FOR_INPUT" || turn.status === "QUEUED" ? "WAITING" : turn.status === "FAILED" ? "FAILED" : "RUNNING", title: "Plan Explorer", summary: turn.status === "WAITING_FOR_INPUT" ? "Waiting for input" : turn.status === "QUEUED" ? "Plan Explorer is queued" : "Plan Explorer is processing", details: turn.error ? { error: turn.error } : null, occurredAt: turn.createdAt }, turn.sequence);
     }
   }
 
@@ -191,14 +192,14 @@ export function projectExplorerActivity(input: ExplorerActivityInput): ExplorerA
 
 function assistantActivityStatus(status: ExplorerTurn["status"]): ExplorerActivityItem["status"] {
   if (status === "FAILED") return "FAILED";
-  if (status === "WAITING_FOR_INPUT") return "WAITING";
+  if (status === "WAITING_FOR_INPUT" || status === "QUEUED") return "WAITING";
   if (status === "COMPLETED" || status === "CANCELLED") return "COMPLETED";
   return "RUNNING";
 }
 
 function activityFromStep(turn: ExplorerTurn, step: AgentLoopStep): Omit<ExplorerActivityItem, "id" | "sequence"> | null {
   const payload = step.payload;
-  const base = { explorerId: turn.threadId, turnId: turn.id, occurredAt: step.occurredAt };
+  const base = { explorerId: turn.threadId, ...(turn.explorerPlanId ? { explorerPlanId: turn.explorerPlanId } : {}), turnId: turn.id, occurredAt: step.occurredAt };
   if (step.stepType === "PROVIDER_ACTIVITY") {
     const itemType = typeof payload.itemType === "string" ? payload.itemType : "provider-item";
     const phase = payload.phase === "completed" ? "completed" : "started";

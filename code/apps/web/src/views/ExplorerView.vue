@@ -4,11 +4,11 @@
 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { ArrowDown, ArrowUp, Check, CircleCheck, Connection, EditPen, InfoFilled, MoreFilled, Promotion, Refresh, Right, VideoPause, VideoPlay, View, Warning } from "@element-plus/icons-vue";
+import { ArrowDown, ArrowUp, Check, CircleCheck, Connection, EditPen, InfoFilled, MoreFilled, Plus, Promotion, Refresh, Right, VideoPause, VideoPlay, View, Warning } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 import { api } from "../api";
-import type { AgentLoop, CodexRateLimitsStatus, ExplorerActivityItem, ExplorerInputRequest, ExplorerThread, ExplorerTurn, Plan, PlanRevisionDraft, Project, Run } from "../types";
+import type { AgentLoop, CodexRateLimitsStatus, ExplorerActivityItem, ExplorerInputRequest, ExplorerPlan, ExplorerThread, ExplorerTurn, Plan, PlanRevisionDraft, Project, Run } from "../types";
 import PlanDetailDrawer from "../components/PlanDetailDrawer.vue";
 import ExplorerPolicyDrawer from "../components/ExplorerPolicyDrawer.vue";
 import ThreadRail from "../components/ThreadRail.vue";
@@ -30,10 +30,12 @@ import ExplorerHeaderStatus from "../components/ExplorerHeaderStatus.vue";
 import scrollToLatestIcon from "../assets/scroll-to-latest.png";
 import { normalizePlanProjection } from "../utils/planProjection";
 import { parsePlanProtocolDisplay } from "../utils/planProtocolDisplay";
-import { planActivityBindings as buildPlanActivityBindings, planIdentity, planTimelineItems as buildPlanTimelineItems } from "../utils/planTimeline";
+import { planActivityBindings as buildPlanActivityBindings, planIdentity } from "../utils/planTimeline";
+import { buildTaskTree, taskDisplayTitle, taskRuntimeLabel } from "../utils/taskTree";
+import type { TaskTreeItem } from "../utils/taskTree";
 import { inputAnswerLabels, resolveQuestionAnswers } from "../utils/explorerInput";
 import { createProjectRequestScope, projectPathForModule } from "../utils/projectRoutes";
-import { buildExplorerMessageTimeline, buildExplorerTimeline, explorerTimelineTarget } from "../utils/explorerTimeline";
+import { buildExplorerTimeline, explorerTimelineTarget } from "../utils/explorerTimeline";
 import { formatAgentLoopCompletion, formatAgentLoopGate, formatAgentLoopTerminal } from "../utils/agentLoopPresentation";
 import { summarizeUserMessage } from "../utils/messageSummary";
 import { parseMissingRunCommands } from "../utils/runPrerequisites";
@@ -47,6 +49,8 @@ const project = ref<Project | null>(null);
 const projects = ref<Project[]>([]);
 const thread = ref<ExplorerThread | null>(null);
 const explorers = ref<ExplorerThread[]>([]);
+const explorerPlans = ref<ExplorerPlan[]>([]);
+const activeExplorerPlanId = ref<string | null>(null);
 const projectCreateOpen = ref(false);
 const projectSettingsOpen = ref(false);
 const projectSettingsProjectId = ref<string | null>(null);
@@ -144,27 +148,39 @@ const agentLoopLabel = computed(() => ({ CREATED: "Created", RUNNING: "Running",
 const agentLoopGateLabel = computed(() => formatAgentLoopGate(agentLoop.value?.diagnostics));
 const agentLoopTerminalLabel = computed(() => formatAgentLoopTerminal(agentLoop.value?.diagnostics));
 const agentLoopCompletionLabel = computed(() => agentLoop.value ? formatAgentLoopCompletion(agentLoop.value) : null);
-const explorationProgress = computed(() => thread.value?.exploration ?? { status: "INCOMPLETE" as const, missing: [], completed: [], diagnostics: [], candidatePlanId: null, lastAssessedTurnId: null });
+const activeExplorerPlan = computed(() => {
+  const requested = activeExplorerPlanId.value ?? thread.value?.activeExplorerPlanId ?? explorerPlans.value[0]?.id;
+  return explorerPlans.value.find((plan) => plan.id === requested) ?? explorerPlans.value[0] ?? null;
+});
+const explorationProgress = computed(() => activeExplorerPlan.value?.exploration ?? thread.value?.exploration ?? { status: "INCOMPLETE" as const, missing: [], completed: [], diagnostics: [], candidatePlanId: null, lastAssessedTurnId: null });
 const activeTimelineKey = ref("");
 const activePlanKey = ref("");
 const expandedUserMessageIds = ref<Set<string>>(new Set());
-const visibleActivity = computed(() => activity.value.length ? activity.value : turns.value.map((turn) => ({ id: `fallback-${turn.id}`, explorerId: turn.threadId, turnId: turn.id, sequence: turn.sequence, kind: turn.role === "user" ? "USER_MESSAGE" : "ASSISTANT_MESSAGE", status: turn.status === "FAILED" ? "FAILED" : turn.status === "RUNNING" ? "RUNNING" : turn.status === "WAITING_FOR_INPUT" ? "WAITING" : "COMPLETED", title: turn.role === "user" ? "You" : "Plan Explorer", summary: turn.role === "assistant" ? readableAssistantText(turnContent(turn)) : turnContent(turn), details: turn.error ? { error: turn.error } : null, occurredAt: turn.createdAt })) as ExplorerActivityItem[]);
+const expandedTaskIds = ref<Set<string>>(new Set());
+function belongsToActivePlan(planId: string | null | undefined): boolean {
+  const activeId = activeExplorerPlan.value?.id;
+  if (!activeId) return true;
+  return (planId ?? explorerPlans.value[0]?.id) === activeId;
+}
+const visibleTurns = computed(() => turns.value.filter((turn) => belongsToActivePlan(turn.explorerPlanId)));
+const visibleActivity = computed(() => (activity.value.length ? activity.value : visibleTurns.value.map((turn) => ({ id: `fallback-${turn.id}`, explorerId: turn.threadId, turnId: turn.id, sequence: turn.sequence, kind: turn.role === "user" ? "USER_MESSAGE" : "ASSISTANT_MESSAGE", status: turn.status === "FAILED" ? "FAILED" : turn.status === "RUNNING" ? "RUNNING" : turn.status === "WAITING_FOR_INPUT" || turn.status === "QUEUED" ? "WAITING" : "COMPLETED", title: turn.role === "user" ? "You" : "Plan Explorer", summary: turn.role === "assistant" ? readableAssistantText(turnContent(turn)) : turnContent(turn), details: turn.error ? { error: turn.error } : null, occurredAt: turn.createdAt, explorerPlanId: turn.explorerPlanId })) as ExplorerActivityItem[]).filter((item) => belongsToActivePlan(item.explorerPlanId)));
+const visibleInputRequests = computed(() => inputRequests.value.filter((item) => belongsToActivePlan(item.explorerPlanId)));
+const activePlanBusy = computed(() => visibleTurns.value.some((turn) => turn.status === "RUNNING" || turn.status === "WAITING_FOR_INPUT" || turn.status === "QUEUED"));
 const allPlans = computed<Plan[]>(() => {
   const unique = new Map<string, Plan>();
   for (const plan of [candidate.value, ...confirmedPlans.value, ...enqueued.value, ...dispatched.value]) if (plan) unique.set(planIdentity(plan), plan);
   return [...unique.values()];
 });
 const planBindings = computed(() => buildPlanActivityBindings(allPlans.value, visibleActivity.value));
-const detachedPlans = computed(() => allPlans.value.filter((plan) => ![...planBindings.value.values()].some((bound) => planIdentity(bound) === planIdentity(plan))));
+const detachedPlans = computed(() => allPlans.value.filter((plan) => belongsToActivePlan(plan.explorerPlanId) && ![...planBindings.value.values()].some((bound) => planIdentity(bound) === planIdentity(plan))));
 const timelineItems = computed(() => buildExplorerTimeline(visibleActivity.value, inputRequests.value, detachedPlans.value));
-const messageTimelineItems = computed(() => buildExplorerMessageTimeline(visibleActivity.value, inputRequests.value).map((item) => ({ ...item, detail: formatTurnTime(item.occurredAt) })));
-const planTimelineItems = computed(() => buildPlanTimelineItems(allPlans.value, visibleActivity.value, planBindings.value));
+const taskTreeItems = computed(() => buildTaskTree(explorerPlans.value, allPlans.value, visibleActivity.value));
 
 function setPolicyOpen(value: boolean) {
   policyOpen.value = value ? openPolicyPanel(policyOpen.value) : closePolicyPanel(policyOpen.value);
 }
 
-type ThreadActionCommand = "toggle-pause" | "rename" | "policy" | "refresh";
+type ThreadActionCommand = "toggle-pause" | "rename" | "policy" | "refresh" | "new-task";
 
 function openRenameDialog() {
   if (!thread.value) return;
@@ -173,6 +189,10 @@ function openRenameDialog() {
 }
 
 function handleThreadAction(command: ThreadActionCommand) {
+  if (command === "new-task") {
+    void createExplorerPlan();
+    return;
+  }
   if (command === "toggle-pause") {
     void toggleExplorerPause();
     return;
@@ -279,6 +299,10 @@ function detachedPlanAnchorId(plan: Plan): string {
   return `plan-created-${planIdentity(plan)}`;
 }
 
+function explorerPlanAnchorId(explorerPlanId: string): string {
+  return `explorer-plan-${explorerPlanId}`;
+}
+
 function isCandidatePlan(plan: Plan | null): boolean {
   return Boolean(plan && candidate.value && planIdentity(plan) === planIdentity(candidate.value));
 }
@@ -298,11 +322,11 @@ function planActivityCount(item: ExplorerActivityItem, key: string): number {
 }
 
 function setInputRequests(items: ExplorerInputRequest[]) {
-  const nextPending = items.find((item) => item.status === "OPEN") ?? null;
+  const nextPending = items.find((item) => belongsToActivePlan(item.explorerPlanId) && item.status === "OPEN") ?? null;
   if (nextPending?.id !== pendingInput.value?.id) inputProgress.value = null;
   inputRequests.value = items;
   pendingInput.value = nextPending;
-  recoveryInput.value = items.find((item) => item.status === "RECOVERY_REQUIRED") ?? null;
+  recoveryInput.value = items.find((item) => belongsToActivePlan(item.explorerPlanId) && item.status === "RECOVERY_REQUIRED") ?? null;
 }
 
 function isCurrentProjectScope(requestProjectId: string, requestToken = activeRequestToken): boolean {
@@ -311,6 +335,8 @@ function isCurrentProjectScope(requestProjectId: string, requestToken = activeRe
 
 function resetThreadState() {
   thread.value = null;
+  explorerPlans.value = [];
+  activeExplorerPlanId.value = null;
   candidate.value = null;
   revisionDraft.value = null;
   confirmedPlans.value = [];
@@ -338,6 +364,7 @@ function resetThreadState() {
   activeTimelineKey.value = "";
   activePlanKey.value = "";
   expandedUserMessageIds.value = new Set();
+  expandedTaskIds.value = new Set();
   busy.value = false;
   sendingTurn.value = false;
 }
@@ -376,19 +403,42 @@ async function refreshPlanProjection(): Promise<void> {
   const requestToken = activeRequestToken;
   const requestVersion = ++planProjectionVersion;
   try {
-    const [explorerResponse, plansResponse, confirmedResponse, candidateResponse, revisionDraftResponse] = await Promise.all([
+    const [explorerResponse, planGroupsResponse, plansResponse, confirmedResponse, candidateResponse, revisionDraftResponse] = await Promise.all([
       api.explorer(requestProjectId, explorerId),
+      api.explorerPlanGroups(requestProjectId, explorerId),
       api.explorerPlans(requestProjectId, explorerId),
       optional(() => api.explorerConfirmedPlans(requestProjectId, explorerId)),
       optional(() => api.explorerCandidate(requestProjectId, explorerId)),
       optional(() => api.explorerRevisionDraft(requestProjectId, explorerId)),
     ]);
     if (!isCurrentProjectScope(requestProjectId, requestToken) || requestVersion !== planProjectionVersion || thread.value?.id !== explorerId) return;
+    explorerPlans.value = planGroupsResponse.items;
+    const routePlanId = typeof route.query.explorerPlanId === "string" ? route.query.explorerPlanId : null;
+    activeExplorerPlanId.value = explorerPlans.value.some((plan) => plan.id === routePlanId) ? routePlanId : explorerPlans.value.some((plan) => plan.id === explorerResponse.explorer.activeExplorerPlanId) ? explorerResponse.explorer.activeExplorerPlanId ?? null : explorerPlans.value[0]?.id ?? null;
     const projection = normalizePlanProjection(explorerResponse.explorer, candidateResponse?.plan ?? null, plansResponse.items);
     applyPlanProjection(projection, confirmedResponse?.items ?? [], revisionDraftResponse?.draft ?? null);
+    await loadActivePlanWorkspace(explorerId, activeExplorerPlanId.value, requestProjectId, requestToken);
   } catch {
     // 事件流追赶期间保留上一次投影，避免切换或重连时页面短暂清空。
   }
+}
+
+async function loadActivePlanWorkspace(explorerId: string, explorerPlanId: string | null, requestProjectId: string, requestToken: number): Promise<boolean> {
+  if (!explorerPlanId) return true;
+  const workspace = await api.explorerPlanWorkspace(requestProjectId, explorerId, explorerPlanId);
+  if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== explorerId) return false;
+  turns.value = workspace.turns;
+  activity.value = workspace.activity;
+  setInputRequests(workspace.inputRequests);
+  candidate.value = workspace.candidate;
+  revisionDraft.value = workspace.revisionDraft;
+  agentLoop.value = [...workspace.loops].sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? ""))[0] ?? null;
+  const activeTurn = turns.value.some((turn) => turn.status === "RUNNING" || turn.status === "WAITING_FOR_INPUT" || turn.status === "QUEUED");
+  busy.value = activeTurn;
+  sendingTurn.value = activeTurn;
+  explorerEventSequence = Math.max(explorerEventSequence ?? 0, workspace.lastEventSequence ?? 0);
+  inputDialogOpen.value = Boolean(pendingInput.value?.isBlocking);
+  return true;
 }
 
 function planFromRevisionDraft(item: PlanRevisionDraft): Plan {
@@ -400,6 +450,7 @@ function planFromRevisionDraft(item: PlanRevisionDraft): Plan {
     status: "DRAFT",
     projectId: item.projectId,
     sourceExplorerThreadId: item.sourceExplorerThreadId,
+    ...(item.explorerPlanId ? { explorerPlanId: item.explorerPlanId } : activeExplorerPlanId.value ? { explorerPlanId: activeExplorerPlanId.value } : {}),
     sourceTurnId: item.sourceTurnId,
     providerThreadId: item.providerThreadId,
     providerTurnId: item.providerTurnId,
@@ -613,10 +664,12 @@ function panelStateQuery() {
   return { contextPanel: contextPanel.value };
 }
 
-function explorerRouteQuery(explorerId?: string) {
+function explorerRouteQuery(explorerId?: string, explorerPlanId?: string | null) {
   const query = { ...route.query };
   delete query.leftPanel;
   if (explorerId) query.explorerId = explorerId;
+  if (explorerPlanId) query.explorerPlanId = explorerPlanId;
+  else if (explorerPlanId === null || explorerId) delete query.explorerPlanId;
   return { ...query, ...panelStateQuery() };
 }
 
@@ -728,6 +781,54 @@ async function selectExplorer(explorerId: string) {
   await router.push({ path: route.path, query: explorerRouteQuery(explorerId), hash: "" });
 }
 
+async function selectExplorerPlan(explorerPlanId: string, shouldScroll = true): Promise<void> {
+  const currentThread = thread.value;
+  const selectedPlan = explorerPlans.value.find((plan) => plan.id === explorerPlanId);
+  if (!currentThread || !selectedPlan || selectedPlan.explorerThreadId !== currentThread.id) return;
+  const requestProjectId = projectId.value;
+  const requestToken = activeRequestToken;
+  activeExplorerPlanId.value = selectedPlan.id;
+  thread.value = { ...currentThread, activeExplorerPlanId: selectedPlan.id };
+  try {
+    const activation = await api.activateExplorerPlan(requestProjectId, currentThread.id, selectedPlan.id);
+    thread.value = activation.explorer;
+    explorers.value = explorers.value.map((item) => item.id === currentThread.id ? activation.explorer : item);
+    await router.replace({ path: route.path, query: explorerRouteQuery(currentThread.id, selectedPlan.id), hash: route.hash });
+    await loadActivePlanWorkspace(currentThread.id, selectedPlan.id, requestProjectId, requestToken);
+    if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== currentThread.id) return;
+    if (shouldScroll) {
+      await nextTick();
+      jumpToTimelineTarget(explorerPlanAnchorId(selectedPlan.id), `explorer-plan-${selectedPlan.id}`);
+      const composer = document.querySelector<HTMLTextAreaElement>(".composer textarea");
+      composer?.focus();
+    }
+  } catch (caught) {
+    ElMessage.error(caught instanceof Error ? `Task 工作区加载失败：${caught.message}` : "Task 工作区加载失败");
+  }
+}
+
+async function createExplorerPlan(): Promise<void> {
+  const currentThread = thread.value;
+  if (!currentThread || currentThread.state === "ARCHIVED") return;
+  try {
+    const response = await api.createExplorerPlan(projectId.value, currentThread.id);
+    explorerPlans.value = [...explorerPlans.value, response.explorerPlan].sort((a, b) => a.ordinal - b.ordinal);
+    thread.value = response.explorer;
+    await selectExplorerPlan(response.explorerPlan.id, false);
+    await nextTick();
+    document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus();
+    ElMessage.success(`${taskDisplayTitle(response.explorerPlan)} 已创建`);
+  } catch (caught) {
+    ElMessage.error(caught instanceof Error ? `新建 Task 失败：${caught.message}` : "新建 Task 失败");
+  }
+}
+
+function selectPlanFromCard(plan: Plan, event?: MouseEvent): void {
+  const target = event?.target as HTMLElement | null;
+  if (target?.closest("button, a, .el-button")) return;
+  if (plan.explorerPlanId) void selectExplorerPlan(plan.explorerPlanId);
+}
+
 async function toggleExplorerArchive(explorerId: string) {
   if (explorerActionId.value) return;
   const selected = explorers.value.find((item) => item.id === explorerId);
@@ -767,7 +868,7 @@ async function refreshActivity() {
   const requestThreadId = thread.value.id;
   const requestToken = activeRequestToken;
   try {
-    const response = await api.explorerActivity(requestProjectId, requestThreadId);
+    const response = await api.explorerActivity(requestProjectId, requestThreadId, activeExplorerPlan.value?.id);
     if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== requestThreadId) return;
     activity.value = response.items;
     explorerEventSequence = Math.max(explorerEventSequence ?? 0, response.lastEventSequence ?? 0);
@@ -790,34 +891,23 @@ async function loadRateLimits() {
 
 async function loadExplorerDetails(selected: ExplorerThread, requestProjectId: string, requestToken: number): Promise<boolean> {
   try {
-    const [plansResponse, turnsResponse, confirmedResponse, candidateResponse, revisionDraftResponse] = await Promise.all([
+    const [planGroupsResponse, plansResponse, confirmedResponse, candidateResponse, revisionDraftResponse] = await Promise.all([
+      api.explorerPlanGroups(requestProjectId, selected.id),
       api.explorerPlans(requestProjectId, selected.id),
-      api.getExplorerTurns(requestProjectId, selected.id),
       optional(() => api.explorerConfirmedPlans(requestProjectId, selected.id)),
       optional(() => api.explorerCandidate(requestProjectId, selected.id)),
       optional(() => api.explorerRevisionDraft(requestProjectId, selected.id)),
     ]);
     if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
+    explorerPlans.value = planGroupsResponse.items;
+    const routePlanId = typeof route.query.explorerPlanId === "string" ? route.query.explorerPlanId : null;
+    activeExplorerPlanId.value = explorerPlans.value.some((plan) => plan.id === routePlanId) ? routePlanId : explorerPlans.value.some((plan) => plan.id === selected.activeExplorerPlanId) ? selected.activeExplorerPlanId ?? null : explorerPlans.value[0]?.id ?? null;
     const projection = normalizePlanProjection(selected, candidateResponse?.plan ?? null, plansResponse.items);
     applyPlanProjection(projection, confirmedResponse?.items ?? [], revisionDraftResponse?.draft ?? null);
-    turns.value = turnsResponse.items;
-    explorerEventSequence = turnsResponse.lastEventSequence ?? null;
-    const activityResponse = await api.explorerActivity(requestProjectId, selected.id);
-    if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
-    activity.value = activityResponse.items;
-    explorerEventSequence = Math.max(explorerEventSequence ?? 0, activityResponse.lastEventSequence ?? 0);
-    const loopResponse = await api.explorerAgentLoops(requestProjectId, selected.id);
-    if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
-    agentLoop.value = [...loopResponse.items].sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? ""))[0] ?? null;
+    const workspaceLoaded = await loadActivePlanWorkspace(selected.id, activeExplorerPlanId.value, requestProjectId, requestToken);
+    if (!workspaceLoaded) return false;
     if (eventSource) connectLoopEvents();
     explorerPaused.value = agentLoop.value?.state === "PAUSED";
-    const activeTurn = turns.value.some((turn) => turn.status === "RUNNING" || turn.status === "WAITING_FOR_INPUT");
-    busy.value = activeTurn;
-    sendingTurn.value = activeTurn;
-    const inputResponse = await api.inputRequests(requestProjectId, selected.id);
-    if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
-    setInputRequests(inputResponse.items);
-    inputDialogOpen.value = Boolean(pendingInput.value?.isBlocking);
     await nextTick();
     updateTimelineScrollState();
     return true;
@@ -855,8 +945,8 @@ async function loadExplorerDirectory(requestProjectId: string, requestToken: num
   thread.value = selected;
   const loaded = await loadExplorerDetails(selected, requestProjectId, requestToken);
   if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
-  if (typeof route.query.explorerId !== "string" || route.query.explorerId !== selected.id) {
-    await router.replace({ path: route.path, query: explorerRouteQuery(selected.id), hash: route.hash });
+  if (typeof route.query.explorerId !== "string" || route.query.explorerId !== selected.id || route.query.explorerPlanId !== activeExplorerPlanId.value) {
+    await router.replace({ path: route.path, query: explorerRouteQuery(selected.id, activeExplorerPlanId.value), hash: route.hash });
   }
   return loaded;
 }
@@ -889,11 +979,12 @@ async function load(): Promise<boolean> {
 /** 先乐观写入用户消息，再由 v4 API/SSE 补齐 Provider 输出和 Plan 活动。 */
 async function sendTurn() {
   const content = draft.value.trim();
-  if (!content || busy.value || !thread.value || thread.value.state === "ARCHIVED" || project.value?.status === "ARCHIVED") return;
+  if (!content || activePlanBusy.value || !thread.value || thread.value.state === "ARCHIVED" || project.value?.status === "ARCHIVED") return;
   const requestProjectId = projectId.value;
   const requestThreadId = thread.value.id;
   const requestToken = activeRequestToken;
   const now = new Date().toISOString();
+  const currentPlanId = activeExplorerPlan.value?.id ?? thread.value.activeExplorerPlanId ?? undefined;
   const optimisticUser = createOptimisticUserTurn({
     id: `local-user-${Date.now()}`,
     threadId: thread.value.id,
@@ -901,21 +992,24 @@ async function sendTurn() {
     createdAt: now,
     sequence: turns.value.length + 1,
   });
+  if (currentPlanId) optimisticUser.explorerPlanId = currentPlanId;
   turns.value = [...turns.value, optimisticUser];
-  const optimisticAssistant: ExplorerActivityItem = { id: `local-assistant-activity-${Date.now()}`, explorerId: optimisticUser.threadId, turnId: `local-assistant-turn-${Date.now()}`, sequence: optimisticUser.sequence + 1, kind: "ASSISTANT_MESSAGE", status: "RUNNING", title: "Plan Explorer", summary: "Plan Explorer 正在处理…", details: null, occurredAt: new Date().toISOString() };
-  activity.value = [...activity.value, { id: `local-user-activity-${optimisticUser.id}`, explorerId: optimisticUser.threadId, turnId: optimisticUser.id, sequence: optimisticUser.sequence, kind: "USER_MESSAGE", status: "COMPLETED", title: "You", summary: content, details: null, occurredAt: now }, optimisticAssistant];
+  const optimisticAssistant: ExplorerActivityItem = { id: `local-assistant-activity-${Date.now()}`, explorerId: optimisticUser.threadId, turnId: `local-assistant-turn-${Date.now()}`, sequence: optimisticUser.sequence + 1, kind: "ASSISTANT_MESSAGE", status: "RUNNING", title: "Plan Explorer", summary: "Plan Explorer 正在处理…", details: null, occurredAt: new Date().toISOString(), explorerPlanId: currentPlanId };
+  activity.value = [...activity.value, { id: `local-user-activity-${optimisticUser.id}`, explorerId: optimisticUser.threadId, turnId: optimisticUser.id, sequence: optimisticUser.sequence, kind: "USER_MESSAGE", status: "COMPLETED", title: "You", summary: content, details: null, occurredAt: now, explorerPlanId: currentPlanId }, optimisticAssistant];
   draft.value = "";
   busy.value = true;
   sendingTurn.value = true;
   await nextTick();
   if (timeline.value) scrollTimelineToLatest(timeline.value);
   try {
-    const response = await api.startExplorerTurn(requestProjectId, requestThreadId, content, `client-turn-${Date.now()}`);
+    const response = await api.startExplorerTurn(requestProjectId, requestThreadId, content, `client-turn-${Date.now()}`, currentPlanId);
     if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== requestThreadId) return;
-    const loopResponse = await api.agentLoop(response.loopId);
-    if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== requestThreadId) return;
-    agentLoop.value = loopResponse.loop;
-    connectLoopEvents();
+    if (response.loopId) {
+      const loopResponse = await api.agentLoop(response.loopId);
+      if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== requestThreadId) return;
+      agentLoop.value = loopResponse.loop;
+      connectLoopEvents();
+    }
     turns.value = settleOptimisticTurn(turns.value, optimisticUser.id, response.turn);
     await refreshActivity();
     if (thread.value) thread.value = { ...thread.value, messageCount: thread.value.messageCount + 2, lastActivityAt: response.turn.assistant.createdAt };
@@ -923,7 +1017,7 @@ async function sendTurn() {
   } catch (caught) {
     if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== requestThreadId) return;
     const message = caught instanceof Error ? caught.message : "API 未连接";
-    turns.value = [...turns.value, { id: `local-assistant-${Date.now()}`, threadId: optimisticUser.threadId, role: "assistant", content: `消息已发送，但模型回复失败：${message}`, status: "FAILED", error: message, createdAt: new Date().toISOString(), sequence: optimisticUser.sequence + 1 }];
+    turns.value = [...turns.value, { id: `local-assistant-${Date.now()}`, threadId: optimisticUser.threadId, role: "assistant", content: `消息已发送，但模型回复失败：${message}`, status: "FAILED", error: message, createdAt: new Date().toISOString(), sequence: optimisticUser.sequence + 1, explorerPlanId: currentPlanId }];
     sendingTurn.value = false;
     busy.value = false;
   } finally { if (!sendingTurn.value) busy.value = false; await nextTick(); if (timeline.value) scrollTimelineToLatest(timeline.value); }
@@ -985,15 +1079,15 @@ async function refreshTurnsAfterEvent() {
   const requestProjectId = projectId.value;
   const requestThreadId = thread.value.id;
   const requestToken = activeRequestToken;
-  const response = await api.getExplorerTurns(requestProjectId, requestThreadId);
+  const response = await api.getExplorerTurns(requestProjectId, requestThreadId, activeExplorerPlan.value?.id);
   if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== requestThreadId) return;
   turns.value = response.items;
   await refreshActivity();
   await refreshPlanProjection();
-  const inputResponse = await api.inputRequests(requestProjectId, requestThreadId);
+  const inputResponse = await api.inputRequests(requestProjectId, requestThreadId, undefined, activeExplorerPlan.value?.id);
   if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== requestThreadId) return;
   setInputRequests(inputResponse.items);
-  const activeTurn = response.items.some((turn) => turn.status === "RUNNING" || turn.status === "WAITING_FOR_INPUT");
+  const activeTurn = response.items.some((turn) => turn.status === "RUNNING" || turn.status === "WAITING_FOR_INPUT" || turn.status === "QUEUED");
   if (!pendingInput.value) { inputDialogOpen.value = false; busy.value = activeTurn; sendingTurn.value = activeTurn; }
   await nextTick();
   if (timeline.value) scrollTimelineToLatest(timeline.value);
@@ -1021,16 +1115,18 @@ function connectEvents() {
     const current = turns.value.find((turn) => turn.id === payload.turnId);
     if (current) mergeTurn({ ...current, content: current.content + payload.text, status: "RUNNING" });
     void refreshActivity();
+    void refreshPlanProjection();
   });
   eventSource.addEventListener("turn.input_required", async (raw) => {
     if (!isConnectionCurrent() || !replayGate.accept("turn.input_required")) return;
     const payload = JSON.parse((raw as MessageEvent).data) as { requestId: string };
-    const response = await api.inputRequests(connectionProjectId, connectionThreadId);
+    const response = await api.inputRequests(connectionProjectId, connectionThreadId, undefined, activeExplorerPlan.value?.id);
     if (!isConnectionCurrent()) return;
     setInputRequests(response.items);
     pendingInput.value = response.items.find((item) => item.id === payload.requestId) ?? null;
     recoveryInput.value = null;
     inputDialogOpen.value = Boolean(pendingInput.value?.isBlocking);
+    void refreshPlanProjection();
   });
   eventSource.addEventListener("title.updated", (raw) => {
     if (!isConnectionCurrent() || !replayGate.accept("title.updated")) return;
@@ -1039,7 +1135,8 @@ function connectEvents() {
     thread.value = { ...thread.value, title: payload.title, titleStatus: payload.titleStatus };
     explorers.value = explorers.value.map((item) => item.id === payload.explorerId ? { ...item, title: payload.title, titleStatus: payload.titleStatus } : item);
   });
-  for (const eventName of ["turn.completed", "turn.failed", "turn.cancelled", "turn.input.resolved", "explorer.plan.ready"]) eventSource.addEventListener(eventName, () => { if (!isConnectionCurrent() || !replayGate.accept(eventName)) return; void refreshTurnsAfterEvent(); });
+  for (const eventName of ["turn.accepted", "turn.started", "turn.completed", "turn.failed", "turn.cancelled", "turn.input.resolved", "plan.ready"]) eventSource.addEventListener(eventName, () => { if (!isConnectionCurrent() || !replayGate.accept(eventName)) return; void refreshTurnsAfterEvent(); });
+  for (const eventName of ["plan.created", "plan.renamed"]) eventSource.addEventListener(eventName, () => { if (!isConnectionCurrent() || !replayGate.accept(eventName)) return; void refreshPlanProjection(); });
   eventSource.addEventListener("thread.state.changed", () => { if (!isConnectionCurrent() || !replayGate.accept("thread.state.changed")) return; closeEvents(); void load().then((loaded) => { if (loaded) connectEvents(); }); });
   connectLoopEvents();
 }
@@ -1214,6 +1311,24 @@ async function discardPlan() {
 }
 
 function statusLabel(status: string) { return ({ DRAFT: "Candidate", DISCARDED: "Discarded", READY: "Confirmed", ENQUEUED: "Enqueued", DISPATCHED: "Dispatched", QUEUED: "Queued", STARTING: "Starting", IN_PROGRESS: "Running", VERIFYING: "Verifying", MERGE_READY: "Ready for review", MERGED: "Merged", NEEDS_PLAN_CHANGE: "Plan change required", BLOCKED: "Blocked" } as Record<string, string>)[status] ?? status; }
+function isTaskExpanded(taskId: string): boolean {
+  return expandedTaskIds.value.has(taskId);
+}
+
+function toggleTaskExpanded(taskId: string): void {
+  const next = new Set(expandedTaskIds.value);
+  if (next.has(taskId)) next.delete(taskId);
+  else next.add(taskId);
+  expandedTaskIds.value = next;
+}
+
+async function selectPlanTreeItem(item: TaskTreeItem): Promise<void> {
+  if (activeExplorerPlan.value?.id !== item.task.id) await selectExplorerPlan(item.task.id, false);
+  await nextTick();
+  const current = taskTreeItems.value.find((candidate) => candidate.task.id === item.task.id);
+  if (current?.planTarget) jumpToTimelineTarget(current.planTarget, current.planKey ?? "");
+}
+
 function reloadExplorer() {
   closeEvents();
   requestScope.invalidate();
@@ -1252,6 +1367,10 @@ watch(projectId, (next, previous) => {
 watch(() => route.query.explorerId, (routeExplorerId, previousExplorerId) => {
   if (!mounted.value || routeExplorerId === previousExplorerId || routeExplorerId === thread.value?.id) return;
   void reloadSelectedExplorer();
+});
+watch(() => route.query.explorerPlanId, (routePlanId, previousPlanId) => {
+  if (!mounted.value || routePlanId === previousPlanId || !thread.value || typeof routePlanId !== "string" || routePlanId === activeExplorerPlan.value?.id) return;
+  void selectExplorerPlan(routePlanId, true);
 });
 onMounted(() => { mounted.value = true; syncPanelStateFromRoute(); void load().then((loaded) => { if (loaded) connectEvents(); }); syncHashPanel(route.hash); });
 onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeEvents(); });
@@ -1295,6 +1414,7 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
                     </span>
                   </el-dropdown-item>
                   <el-dropdown-item command="rename"><span class="thread-action-menu-item"><EditPen :size="16" /><span>重命名线程</span></span></el-dropdown-item>
+                  <el-dropdown-item command="new-task"><span class="thread-action-menu-item"><Plus :size="16" /><span>新建 Task</span></span></el-dropdown-item>
                   <el-dropdown-item command="policy"><span class="thread-action-menu-item"><View :size="16" /><span>查看策略</span></span></el-dropdown-item>
                   <el-dropdown-item command="refresh"><span class="thread-action-menu-item"><Refresh :size="16" /><span>刷新线程</span></span></el-dropdown-item>
                 </el-dropdown-menu>
@@ -1306,27 +1426,35 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
       <div v-if="explorerPaused" class="demo-notice pause-notice"><VideoPause :size="14" /> ExplorerThread is paused. New turns are disabled until you resume the thread.<el-button text @click="toggleExplorerPause">Resume</el-button></div>
       <div v-if="error" class="demo-notice"><Refresh :size="14" /> {{ error }} <el-button text @click="load">Retry</el-button></div>
       <div class="timeline-stage">
-      <aside class="timeline-rail timeline-rail-messages" aria-label="Message timeline">
-        <nav class="timeline-message-index" aria-label="Message index">
-          <button
-            v-for="item in messageTimelineItems"
-            :key="item.key"
-            type="button"
-            class="timeline-message-index-item"
-            :class="{ active: activeTimelineKey === item.activationKey || activeTimelineKey === item.target }"
-            :aria-current="activeTimelineKey === item.activationKey || activeTimelineKey === item.target ? 'location' : undefined"
-            :aria-label="`${item.detail} · ${item.label}`"
-            :title="`${item.detail} · ${item.label}`"
-            @click="jumpToTimelineTarget(item.target, item.activationKey)"
-          >
-            <span class="timeline-message-index-marker" aria-hidden="true" />
-          </button>
+      <aside class="task-tree-rail" aria-label="Task tree">
+        <nav class="task-tree" aria-label="Task and Plan navigation">
+          <div v-for="item in taskTreeItems" :key="item.task.id" class="task-tree-node">
+            <div :class="['task-tree-task-row', { active: item.task.id === activeExplorerPlan?.id }]">
+              <button class="task-tree-toggle" type="button" :aria-expanded="isTaskExpanded(item.task.id)" :aria-label="`${isTaskExpanded(item.task.id) ? '折叠' : '展开'} ${taskDisplayTitle(item.task)}`" @click="toggleTaskExpanded(item.task.id)">
+                <ArrowDown v-if="isTaskExpanded(item.task.id)" :size="13" />
+                <Right v-else :size="13" />
+              </button>
+              <button class="task-tree-task-button" type="button" :aria-current="item.task.id === activeExplorerPlan?.id ? 'page' : undefined" @click="selectExplorerPlan(item.task.id)">
+                <span class="task-tree-task-title"><strong>{{ taskDisplayTitle(item.task) }}</strong><em>{{ taskRuntimeLabel(item.task) }}</em></span>
+                <small>{{ item.task.latestUserMessageSummary ?? '尚未开始探索' }}</small>
+              </button>
+            </div>
+            <div v-show="isTaskExpanded(item.task.id)" class="task-tree-children">
+              <button v-if="item.plan" class="task-tree-plan-button" type="button" :aria-label="`定位 ${item.plan.title}`" @click="selectPlanTreeItem(item)">
+                <span class="task-tree-plan-branch" aria-hidden="true" />
+                <span class="task-tree-plan-copy"><strong>{{ item.plan.title }}</strong><small>Revision {{ item.plan.revision }} · {{ statusLabel(item.plan.status) }}</small></span>
+              </button>
+              <span v-else class="task-tree-plan-empty"><span class="task-tree-plan-branch" aria-hidden="true" />等待生成 Plan</span>
+            </div>
+          </div>
         </nav>
       </aside>
       <div class="timeline-shell">
       <div ref="timeline" class="timeline" v-loading="loading" @scroll="updateTimelineScrollState">
-        <div class="timeline-day">{{ turns.length ? 'EXPLORER ACTIVITY' : 'NEW EXPLORATION' }}</div>
-        <div v-if="!visibleActivity.length && !inputRequests.length && !candidate && !dispatched.length" class="timeline-empty"><Connection :size="24" /><strong>开始一次全新的需求探索</strong><span>在下方输入需求。当前 Explorer 与历史记录完全隔离。</span></div>
+        <div :id="activeExplorerPlan ? explorerPlanAnchorId(activeExplorerPlan.id) : undefined" :data-nav-key="activeExplorerPlan ? `explorer-plan-${activeExplorerPlan.id}` : undefined" class="explorer-plan-anchor" aria-hidden="true" />
+        <div v-if="activeExplorerPlan" class="active-plan-banner"><span class="eyebrow">TASK {{ activeExplorerPlan.ordinal }}</span><strong>{{ taskDisplayTitle(activeExplorerPlan) }}</strong><small>{{ activeExplorerPlan.latestUserMessageSummary ?? '尚未开始探索' }}</small></div>
+        <div class="timeline-day">{{ visibleTurns.length ? 'EXPLORER ACTIVITY' : 'NEW EXPLORATION' }}</div>
+        <div v-if="!visibleActivity.length && !visibleInputRequests.length && !candidate && !detachedPlans.length" class="timeline-empty"><Connection :size="24" /><strong>{{ activeExplorerPlan ? taskDisplayTitle(activeExplorerPlan) : '开始一次全新的需求探索' }}</strong><span>当前 Task 还没有消息；切换 Task 不会删除其他分区内容。</span></div>
         <template v-for="(item, index) in timelineItems" :key="item.key">
           <article v-if="item.kind === 'input'" :id="inputRequestTarget(item.request)" :data-nav-key="`input:${item.request.id}`" :class="['input-request-card', 'timeline-input-request', { recovery: item.request.status === 'RECOVERY_REQUIRED', answered: item.request.status === 'ANSWERED' || item.request.status === 'AUTO_RESOLVED', cancelled: item.request.status === 'CANCELLED' }]">
             <div class="input-request-card-icon"><Check v-if="item.request.status === 'ANSWERED' || item.request.status === 'AUTO_RESOLVED'" :size="16" /><Warning v-else-if="item.request.status === 'RECOVERY_REQUIRED' || item.request.status === 'CANCELLED'" :size="16" /><InfoFilled v-else :size="16" /></div>
@@ -1378,15 +1506,9 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
           </article>
           <article v-else :id="activityTarget(item.activity, index)" class="loop-activity-card" :class="{ waiting: item.activity.status === 'WAITING', failed: item.activity.status === 'FAILED' }"><div class="loop-activity-icon"><InfoFilled v-if="activityIconKind(item.activity.kind) === 'info'" :size="14" /><Check v-else-if="activityIconKind(item.activity.kind) === 'success'" :size="14" /><Warning v-else :size="14" /></div><div class="loop-activity-copy"><div class="loop-activity-meta"><strong>{{ activityKindLabel(item.activity.kind) }}</strong><span>{{ formatTurnTime(item.activity.occurredAt) }}</span><span class="agent-chip">{{ activityStatusLabel(item.activity) }}</span></div><p>{{ item.activity.summary }}</p><code v-if="typeof item.activity.details?.tool === 'string'">{{ item.activity.details.tool }}</code></div></article>
         </template>
-        <div v-if="!inputCardRequest" class="timeline-marker"><span>THREAD READY FOR YOUR NEXT TURN</span></div>
       </div>
       <button v-if="showScrollToLatest" class="scroll-to-latest" type="button" aria-label="Scroll to latest message" title="Scroll to latest message" @click="jumpToLatest"><img class="scroll-to-latest-image" :src="scrollToLatestIcon" alt="" /></button>
       </div>
-      <aside class="timeline-rail timeline-rail-plans" aria-label="Plan timeline">
-        <div class="timeline-rail-heading"><span>PLANS</span><strong>{{ planTimelineItems.length }}</strong></div>
-        <button v-for="item in planTimelineItems" :key="item.key" type="button" :class="['timeline-rail-item', { active: activePlanKey === item.key }]" :aria-current="activePlanKey === item.key ? 'location' : undefined" @click="jumpToTimelineTarget(item.target, item.key)"><span class="timeline-rail-marker"><i /></span><span class="timeline-rail-copy"><strong>{{ item.label }}</strong><small>{{ item.detail }}</small></span></button>
-        <div v-if="!planTimelineItems.length" class="timeline-rail-empty">No generated plans yet.</div>
-      </aside>
       </div>
       <div class="composer"><div class="composer-input"><textarea v-model="draft" :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || explorerPaused" aria-label="Explorer message" placeholder="继续探索，或提出修改…" @keydown="handleComposerKeydown" /><span class="composer-mode">Plan Mode</span></div><div class="composer-footer"><div class="composer-metadata" aria-label="模型与上下文信息"><span class="composer-fact"><small>MODEL</small><strong>{{ explorerModel }}</strong></span><span class="composer-fact"><small>CONTEXT</small><strong>{{ contextUsage }}</strong><em>estimated</em></span><el-popover v-model:visible="statusOpen" placement="top-end" :width="330" trigger="click" @show="void loadRateLimits()"><template #reference><button class="composer-status-trigger" type="button" aria-label="Status" :aria-expanded="statusOpen"><i aria-hidden="true" /><span>STATUS</span><InfoFilled :size="12" /></button></template><div class="codex-status-popover" role="dialog" aria-label="Codex usage status"><div class="codex-status-title"><InfoFilled :size="14" /><strong>状态</strong><button type="button" aria-label="关闭" @click="statusOpen = false">关闭</button></div><div class="codex-status-row"><span>模型：</span><strong>{{ explorerModel }}</strong></div><div class="codex-status-row"><span>会话/对话串：</span><code :title="thread?.id ?? 'no-thread'">{{ conversationId }}</code></div><div class="codex-status-row"><span>背景信息：</span><strong>{{ contextUsage }}</strong><em>estimated</em></div><div class="codex-status-row"><span>5 小时限额：</span><strong>{{ rateLimits.fiveHour.remaining }}</strong><small>{{ rateLimits.fiveHour.reset }}</small></div><div class="codex-status-row"><span>7 天限额：</span><strong>{{ rateLimits.sevenDay.remaining }}</strong><small>{{ rateLimits.sevenDay.reset }}</small></div><p class="codex-status-note">{{ rateLimitNote }}</p></div></el-popover></div><span v-if="sendingTurn" class="composer-status" role="status" aria-live="polite">Message sent · waiting for Plan Explorer…</span><el-button class="composer-send" type="primary" circle :loading="busy" :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || !draft.trim() || explorerPaused || busy" aria-label="Send message" :title="busy ? '当前回合执行中，完成后可发送' : 'Send message'" @click="sendTurn"><ArrowUp :size="18" /></el-button></div></div>
     </section>
@@ -1395,23 +1517,23 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
       <div class="context-header"><div class="context-header-title"><div class="context-header-title-row"><h2 id="context-panel-title">{{ contextPanelTitle }}</h2><span class="context-header-count" :aria-label="`${contextPanelTitle}: ${contextPanelCount}`">{{ contextPanelCount }}</span></div></div><el-button text circle aria-label="Refresh" @click="refreshThread"><Refresh :size="16" /></el-button></div>
       <div class="context-panel-scroll">
         <section v-if="contextPanel === 'candidate'" class="context-panel-content" aria-labelledby="context-panel-title">
-          <article v-if="candidate" class="context-plan-card"><div class="context-plan-card-head"><div class="mini-plan-title"><span class="mini-icon"><Promotion :size="16" /></span><div><strong>{{ candidate.title }}</strong><small>Revision {{ candidate.revision }}<template v-if="isConversationPlan(candidate)"> · Conversation review only</template></small></div></div><el-tag size="small" type="warning" effect="light">{{ revisionDraft ? revisionDraft.status : statusLabel(candidate.status) }}</el-tag></div><div class="context-plan-goal"><span>GOAL</span><p>{{ candidate.contract?.goal ?? candidate.goal ?? 'A complete, reviewable execution contract generated from this ExplorerThread.' }}</p></div><div class="candidate-actions"><el-button @click="openPlanDetail(candidate)">View full plan <Right :size="15" /></el-button><el-button v-if="!revisionDraft && candidate.status === 'DRAFT'" type="primary" :loading="busy" @click="confirmPlan">Confirm plan <Check :size="15" /></el-button><el-button v-else-if="revisionDraft?.status === 'READY_TO_CONFIRM'" type="primary" :loading="busy" @click="confirmPlan">Confirm V{{ revisionDraft.targetRevision }} <Check :size="15" /></el-button><span v-else-if="revisionDraft" class="confirmed-note">{{ revisionDraft.status === 'BASE_CHANGED' ? 'Rebase required before confirmation' : 'Continue exploring to complete this revision' }}</span></div></article>
+          <article v-if="candidate" class="context-plan-card context-plan-card-clickable" @click="selectPlanFromCard(candidate, $event)"><div class="context-plan-card-head"><div class="mini-plan-title"><span class="mini-icon"><Promotion :size="16" /></span><div><strong>{{ candidate.title }}</strong><small>Revision {{ candidate.revision }}<template v-if="isConversationPlan(candidate)"> · Conversation review only</template></small></div></div><el-tag size="small" type="warning" effect="light">{{ revisionDraft ? revisionDraft.status : statusLabel(candidate.status) }}</el-tag></div><div class="context-plan-goal"><span>GOAL</span><p>{{ candidate.contract?.goal ?? candidate.goal ?? 'A complete, reviewable execution contract generated from this ExplorerThread.' }}</p></div><div class="candidate-actions"><el-button @click.stop="openPlanDetail(candidate)">View full plan <Right :size="15" /></el-button><el-button v-if="!revisionDraft && candidate.status === 'DRAFT'" type="primary" :loading="busy" @click.stop="confirmPlan">Confirm plan <Check :size="15" /></el-button><el-button v-else-if="revisionDraft?.status === 'READY_TO_CONFIRM'" type="primary" :loading="busy" @click.stop="confirmPlan">Confirm V{{ revisionDraft.targetRevision }} <Check :size="15" /></el-button><span v-else-if="revisionDraft" class="confirmed-note">{{ revisionDraft.status === 'BASE_CHANGED' ? 'Rebase required before confirmation' : 'Continue exploring to complete this revision' }}</span></div></article>
           <div v-else class="context-empty"><CircleCheck :size="24" /><p>No candidate plan</p><small>Continue exploring. A reviewable candidate appears here when this ExplorerThread produces a plan.</small></div>
         </section>
         <section v-else-if="contextPanel === 'confirmed'" class="context-panel-content" aria-labelledby="context-panel-title">
-          <div v-if="confirmedPlans.length" class="context-plan-list" role="list"><article v-for="plan in confirmedPlans" :key="plan.planId ?? plan.id ?? plan.title" class="context-plan-row confirmed-plan-row" role="listitem"><div class="context-plan-row-head"><div class="mini-plan-title"><span class="mini-icon success"><Check :size="16" /></span><div><strong>{{ plan.title }}</strong><small>{{ plan.planId ?? plan.id }} · Revision {{ plan.revision }}</small></div></div><el-tag size="small" type="success" effect="light">{{ statusLabel(plan.status) }}</el-tag></div><div class="context-plan-row-meta"><span>Source thread</span><code>{{ plan.sourceExplorerThreadId }}</code></div><div class="context-plan-row-meta"><span>Run</span><span class="context-plan-muted">{{ isConversationPlan(plan) ? 'Conversation artifact · review only' : 'Ready to enqueue' }}</span></div><div class="context-plan-row-footer"><span class="event-time">Last event {{ planEventTime(plan.lastEventAt) }}</span><div class="context-plan-actions"><el-button size="small" plain @click="openPlanDetail(plan)">View full plan</el-button><el-button v-if="plan.status === 'READY' && !isConversationPlan(plan)" size="small" type="primary" :loading="busy" @click="enqueuePlan(plan)">Enqueue plan <ArrowDown :size="14" /></el-button></div></div></article></div>
+          <div v-if="confirmedPlans.length" class="context-plan-list" role="list"><article v-for="plan in confirmedPlans" :key="plan.planId ?? plan.id ?? plan.title" class="context-plan-row confirmed-plan-row context-plan-row-clickable" role="listitem" @click="selectPlanFromCard(plan, $event)"><div class="context-plan-row-head"><div class="mini-plan-title"><span class="mini-icon success"><Check :size="16" /></span><div><strong>{{ plan.title }}</strong><small>{{ plan.planId ?? plan.id }} · Revision {{ plan.revision }}</small></div></div><el-tag size="small" type="success" effect="light">{{ statusLabel(plan.status) }}</el-tag></div><div class="context-plan-row-meta"><span>Source thread</span><code>{{ plan.sourceExplorerThreadId }}</code></div><div class="context-plan-row-meta"><span>Run</span><span class="context-plan-muted">{{ isConversationPlan(plan) ? 'Conversation artifact · review only' : 'Ready to enqueue' }}</span></div><div class="context-plan-row-footer"><span class="event-time">Last event {{ planEventTime(plan.lastEventAt) }}</span><div class="context-plan-actions"><el-button size="small" plain @click.stop="openPlanDetail(plan)">View full plan</el-button><el-button v-if="plan.status === 'READY' && !isConversationPlan(plan)" size="small" type="primary" :loading="busy" @click.stop="enqueuePlan(plan)">Enqueue plan <ArrowDown :size="14" /></el-button></div></div></article></div>
           <div v-else class="context-empty"><Check :size="24" /><p>No confirmed plans</p><small>Plans appear here after you confirm them. Enqueue remains a separate step.</small></div>
         </section>
         <section v-else-if="contextPanel === 'enqueued'" class="context-panel-content" aria-labelledby="context-panel-title">
-          <div v-if="enqueued.length" class="context-plan-list" role="list"><article v-for="plan in enqueued" :key="plan.planId ?? plan.id ?? plan.title" class="context-plan-row enqueued-plan-row" role="listitem"><div class="context-plan-row-head"><div class="mini-plan-title"><span class="mini-icon"><ArrowDown :size="16" /></span><div><strong>{{ plan.title }}</strong><small>{{ plan.planId ?? plan.id }} · Revision {{ plan.revision }}</small></div></div><el-tag size="small" type="warning" effect="light">{{ statusLabel(plan.status) }}</el-tag></div><div class="context-plan-row-meta"><span>Source thread</span><code>{{ plan.sourceExplorerThreadId }}</code></div><div class="context-plan-row-meta"><span>Run</span><span class="context-plan-muted">Ready for manual start</span></div><div class="context-plan-row-footer"><span class="event-time">Enqueued {{ planEventTime(plan.queuedAt ?? plan.lastEventAt) }}</span><div class="context-plan-actions"><el-button size="small" plain @click="openPlanDetail(plan)">View full plan</el-button><el-button v-if="plan.status === 'ENQUEUED'" size="small" type="primary" :loading="busy" @click="startPlanRun(plan)">Start run <Right :size="14" /></el-button></div></div></article></div>
+          <div v-if="enqueued.length" class="context-plan-list" role="list"><article v-for="plan in enqueued" :key="plan.planId ?? plan.id ?? plan.title" class="context-plan-row enqueued-plan-row context-plan-row-clickable" role="listitem" @click="selectPlanFromCard(plan, $event)"><div class="context-plan-row-head"><div class="mini-plan-title"><span class="mini-icon"><ArrowDown :size="16" /></span><div><strong>{{ plan.title }}</strong><small>{{ plan.planId ?? plan.id }} · Revision {{ plan.revision }}</small></div></div><el-tag size="small" type="warning" effect="light">{{ statusLabel(plan.status) }}</el-tag></div><div class="context-plan-row-meta"><span>Source thread</span><code>{{ plan.sourceExplorerThreadId }}</code></div><div class="context-plan-row-meta"><span>Run</span><span class="context-plan-muted">Ready for manual start</span></div><div class="context-plan-row-footer"><span class="event-time">Enqueued {{ planEventTime(plan.queuedAt ?? plan.lastEventAt) }}</span><div class="context-plan-actions"><el-button size="small" plain @click.stop="openPlanDetail(plan)">View full plan</el-button><el-button v-if="plan.status === 'ENQUEUED'" size="small" type="primary" :loading="busy" @click.stop="startPlanRun(plan)">Start run <Right :size="14" /></el-button></div></div></article></div>
           <div v-else class="context-empty"><ArrowDown :size="24" /><p>No enqueued plans</p><small>Use Enqueue in Confirmed, then explicitly Start run here.</small></div>
         </section>
         <section v-else-if="contextPanel === 'dispatched'" class="context-panel-content" aria-labelledby="context-panel-title">
-          <div v-if="dispatched.length" class="context-plan-list" role="list"><article v-for="plan in dispatched" :key="plan.planId ?? plan.id ?? plan.title" class="context-plan-row" role="listitem"><div class="context-plan-row-head"><div class="mini-plan-title"><span class="mini-icon success"><CircleCheck :size="16" /></span><div><strong>{{ plan.title }}</strong><small>{{ plan.planId ?? plan.id }} · Revision {{ plan.revision }}</small></div></div><el-tag size="small" :type="plan.status === 'MERGED' ? 'success' : plan.status === 'BLOCKED' || plan.status === 'NEEDS_PLAN_CHANGE' ? 'danger' : plan.status === 'IN_PROGRESS' || plan.status === 'VERIFYING' ? 'primary' : 'warning'" effect="light">{{ statusLabel(plan.status) }}</el-tag></div><div class="context-plan-row-meta"><span>Run</span><RouterLink v-if="planRunPath(plan)" :to="planRunPath(plan)!" class="context-plan-link">{{ plan.runId }} <Right :size="13" /></RouterLink><span v-else class="context-plan-muted">{{ plan.dispatch?.waitReason === 'NEEDS_CONFIGURATION' ? 'Needs configuration' : plan.dispatch?.waitReason ?? 'Waiting for scheduler' }}</span></div><div v-if="plan.dispatch?.waitReason === 'NEEDS_CONFIGURATION'" class="context-configuration-notice">Missing verification commands: {{ configurationBlockedCommands(plan).join(', ') }}</div><div class="context-plan-row-meta"><span>State</span><span class="context-plan-muted">{{ plan.status === 'DISPATCHED' ? 'Waiting for run' : statusLabel(plan.status) }}</span></div><div class="context-plan-row-footer"><span class="event-time">Dispatched {{ planEventTime(plan.dispatchedAt ?? plan.lastEventAt) }}</span><div class="context-plan-actions"><el-button size="small" plain @click="openPlanDetail(plan)">View full plan</el-button><template v-if="plan.dispatch?.waitReason === 'NEEDS_CONFIGURATION'"><el-button size="small" plain @click="openProjectSettingsDialog(plan.projectId)">Configure verification commands</el-button><el-button v-if="canCreateConfigurationRevision(plan)" size="small" type="primary" :loading="busy" @click="revisePlanConfiguration(plan)">Create updated revision</el-button></template><RouterLink v-else-if="planRunPath(plan)" :to="planRunPath(plan)!" class="context-plan-link">View run <Right :size="13" /></RouterLink></div></div></article></div>
+          <div v-if="dispatched.length" class="context-plan-list" role="list"><article v-for="plan in dispatched" :key="plan.planId ?? plan.id ?? plan.title" class="context-plan-row context-plan-row-clickable" role="listitem" @click="selectPlanFromCard(plan, $event)"><div class="context-plan-row-head"><div class="mini-plan-title"><span class="mini-icon success"><CircleCheck :size="16" /></span><div><strong>{{ plan.title }}</strong><small>{{ plan.planId ?? plan.id }} · Revision {{ plan.revision }}</small></div></div><el-tag size="small" :type="plan.status === 'MERGED' ? 'success' : plan.status === 'BLOCKED' || plan.status === 'NEEDS_PLAN_CHANGE' ? 'danger' : plan.status === 'IN_PROGRESS' || plan.status === 'VERIFYING' ? 'primary' : 'warning'" effect="light">{{ statusLabel(plan.status) }}</el-tag></div><div class="context-plan-row-meta"><span>Run</span><RouterLink v-if="planRunPath(plan)" :to="planRunPath(plan)!" class="context-plan-link" @click.stop>{{ plan.runId }} <Right :size="13" /></RouterLink><span v-else class="context-plan-muted">{{ plan.dispatch?.waitReason === 'NEEDS_CONFIGURATION' ? 'Needs configuration' : plan.dispatch?.waitReason ?? 'Waiting for scheduler' }}</span></div><div v-if="plan.dispatch?.waitReason === 'NEEDS_CONFIGURATION'" class="context-configuration-notice">Missing verification commands: {{ configurationBlockedCommands(plan).join(', ') }}</div><div class="context-plan-row-meta"><span>State</span><span class="context-plan-muted">{{ plan.status === 'DISPATCHED' ? 'Waiting for run' : statusLabel(plan.status) }}</span></div><div class="context-plan-row-footer"><span class="event-time">Dispatched {{ planEventTime(plan.dispatchedAt ?? plan.lastEventAt) }}</span><div class="context-plan-actions"><el-button size="small" plain @click.stop="openPlanDetail(plan)">View full plan</el-button><template v-if="plan.dispatch?.waitReason === 'NEEDS_CONFIGURATION'"><el-button size="small" plain @click.stop="openProjectSettingsDialog(plan.projectId)">Configure verification commands</el-button><el-button v-if="canCreateConfigurationRevision(plan)" size="small" type="primary" :loading="busy" @click.stop="revisePlanConfiguration(plan)">Create updated revision</el-button></template><RouterLink v-else-if="planRunPath(plan)" :to="planRunPath(plan)!" class="context-plan-link" @click.stop>View run <Right :size="13" /></RouterLink></div></div></article></div>
           <div v-else class="context-empty"><CircleCheck :size="24" /><p>No plans dispatched from this thread yet.</p><small>Start run moves an Enqueued plan here and retains its execution history.</small><el-button text @click="contextPanel = 'enqueued'">View Enqueued <Right :size="14" /></el-button></div>
         </section>
         <section v-else-if="contextPanel === 'active'" class="context-panel-content" aria-labelledby="context-panel-title"><div v-if="activeRuns.length" class="context-plan-list" role="list"><article v-for="run in activeRuns" :key="run.id" class="context-plan-row active-run-row" role="listitem"><div class="context-plan-row-head"><div class="mini-plan-title"><span class="mini-icon"><Connection :size="16" /></span><div><strong>Run {{ run.id }}</strong><small>Plan {{ run.planId }} · Revision {{ run.planRevision }}</small></div></div><el-tag size="small" type="primary" effect="light">{{ statusLabel(run.status) }}</el-tag></div><div class="context-plan-row-meta"><span>State</span><span class="context-plan-muted">{{ statusLabel(run.status) }}</span></div><div class="context-plan-row-footer"><span class="event-time">{{ run.startedAt ? `Started ${planEventTime(run.startedAt)}` : `Created ${planEventTime(run.createdAt)}` }}</span><RouterLink :to="`/projects/${run.projectId}/runs/${run.id}`" class="context-plan-link">Open run <Right :size="13" /></RouterLink></div></article></div><div v-else class="context-empty"><Connection :size="24" /><p>No active runs</p><small>Starting, running, and verifying runs across this project appear here.</small></div></section>
-        <section v-else-if="contextPanel === 'attention'" class="context-panel-content" aria-labelledby="context-panel-title"><div v-if="attentionPlans.length" class="context-plan-list" role="list"><article v-for="plan in attentionPlans" :key="plan.planId ?? plan.id ?? plan.title" class="context-plan-row attention-row" role="listitem"><div class="context-plan-row-head"><div class="mini-plan-title"><span class="mini-icon warning"><Warning :size="16" /></span><div><strong>{{ plan.title }}</strong><small>{{ plan.planId ?? plan.id }} · Revision {{ plan.revision }}</small></div></div><el-tag size="small" type="danger" effect="light">{{ statusLabel(plan.status) }}</el-tag></div><div class="context-plan-row-meta"><span>Reason</span><span class="context-attention-reason">{{ plan.attentionReason ?? 'This plan requires review before execution can continue.' }}</span></div><div class="context-plan-row-footer"><span class="event-time">Last event {{ planEventTime(plan.lastEventAt) }}</span><div class="context-plan-actions"><el-button size="small" plain @click="openPlanDetail(plan)">View full plan</el-button><RouterLink v-if="planRunPath(plan)" :to="planRunPath(plan)!" class="context-plan-link">Open run <Right :size="13" /></RouterLink></div></div></article></div><div v-else class="context-empty"><Warning :size="24" /><p>No items need attention</p><small>Blocked, terminated, and plan-change-required dispatched plans appear here.</small></div></section>
+         <section v-else-if="contextPanel === 'attention'" class="context-panel-content" aria-labelledby="context-panel-title"><div v-if="attentionPlans.length" class="context-plan-list" role="list"><article v-for="plan in attentionPlans" :key="plan.planId ?? plan.id ?? plan.title" class="context-plan-row attention-row" role="listitem" @click="selectPlanFromCard(plan, $event)"><div class="context-plan-row-head"><div class="mini-plan-title"><span class="mini-icon warning"><Warning :size="16" /></span><div><strong>{{ plan.title }}</strong><small>{{ plan.planId ?? plan.id }} · Revision {{ plan.revision }}</small></div></div><el-tag size="small" type="danger" effect="light">{{ statusLabel(plan.status) }}</el-tag></div><div class="context-plan-row-meta"><span>Reason</span><span class="context-attention-reason">{{ plan.attentionReason ?? 'This plan requires review before execution can continue.' }}</span></div><div class="context-plan-row-footer"><span class="event-time">Last event {{ planEventTime(plan.lastEventAt) }}</span><div class="context-plan-actions"><el-button size="small" plain @click.stop="openPlanDetail(plan)">View full plan</el-button><RouterLink v-if="planRunPath(plan)" :to="planRunPath(plan)!" class="context-plan-link">Open run <Right :size="13" /></RouterLink></div></div></article></div><div v-else class="context-empty"><Warning :size="24" /><p>No items need attention</p><small>Blocked, terminated, and plan-change-required dispatched plans appear here.</small></div></section>
         <section v-else-if="contextPanel === 'plan-center'" class="context-panel-content" aria-label="计划中心"><PlanCenterPanel :project-id="projectId" :project="project" @plans-changed="refreshPlanProjection" @configuration-revised="handlePlanCenterConfigurationRevised" @configure-commands="openProjectSettingsDialog" @view-plan="openPlanDetail" @count="planCenterCount = $event" /></section>
       </div>
       </div>

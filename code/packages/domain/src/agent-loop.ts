@@ -334,7 +334,7 @@ export class AgentLoopEngine implements AgentLoopRunner {
 
   private create(input: AgentLoopInput): AgentLoop {
     if (input.id && this.store.getAgentLoop(input.id)) throw new Error(`AgentLoop ${input.id} already exists`);
-    const loop: AgentLoop = { id: input.id ?? this.store.nextId("agent-loop"), ownerType: input.ownerType, ownerId: input.ownerId, role: input.role, mode: input.mode, state: "CREATED", stepCount: 0, maxSteps: input.maxSteps || this.options.defaultMaxSteps, startedAt: null, completedAt: null, providerThreadId: null, providerTurnId: null, checkpointJson: null };
+    const loop: AgentLoop = { id: input.id ?? this.store.nextId("agent-loop"), ownerType: input.ownerType, ownerId: input.ownerId, role: input.role, mode: input.mode, state: "CREATED", stepCount: 0, maxSteps: input.maxSteps || this.options.defaultMaxSteps, startedAt: null, completedAt: null, providerThreadId: input.modelRequest.providerThreadId ?? null, providerTurnId: null, checkpointJson: null };
     this.store.saveAgentLoop(loop);
     return loop;
   }

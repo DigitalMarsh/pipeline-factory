@@ -434,6 +434,32 @@ describe("Pipeline Factory v4 API", () => {
     expect(turns.json().items).toHaveLength(2);
   });
 
+  it("supports ExplorerPlan CRUD, scoped workspaces, and Plan ownership validation", async () => {
+    const store = new InMemoryPipelineStore();
+    createTestProject(store, "project-1");
+    createTestProject(store, "project-2");
+    const plans = new PlanService(store);
+    plans.registerThread({ id: "thread-plans", projectId: "project-1", parentThreadId: null });
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+
+    const initial = await app.inject({ method: "GET", url: "/api/v4/projects/project-1/explorers/thread-plans/explorer-plans" });
+    expect(initial.statusCode).toBe(200);
+    expect(initial.json().items).toMatchObject([{ ordinal: 1, title: "Plan 1 / 待探索", messageCount: 0 }]);
+    const created = await app.inject({ method: "POST", url: "/api/v4/projects/project-1/explorers/thread-plans/explorer-plans" });
+    expect(created.statusCode).toBe(201);
+    const plan2 = created.json().explorerPlan;
+    expect(plan2).toMatchObject({ ordinal: 2, title: "Plan 2 / 待探索", explorerThreadId: "thread-plans" });
+
+    const workspace = await app.inject({ method: "GET", url: `/api/v4/projects/project-1/explorers/thread-plans/explorer-plans/${plan2.id}/workspace` });
+    expect(workspace.statusCode).toBe(200);
+    expect(workspace.json()).toMatchObject({ explorerPlan: { id: plan2.id }, turns: [], activity: [], inputRequests: [], candidate: null });
+    const crossProject = await app.inject({ method: "GET", url: `/api/v4/projects/project-2/explorers/thread-plans/explorer-plans/${plan2.id}/workspace` });
+    expect(crossProject.statusCode).toBe(404);
+    const invalidTurnPlan = await app.inject({ method: "POST", url: "/api/v4/projects/project-1/explorer-thread/turns", payload: { threadId: "thread-plans", explorerPlanId: "missing-plan", content: "invalid", clientTurnId: "invalid-plan-turn" } });
+    expect(invalidTurnPlan.statusCode).toBe(409);
+  });
+
   it("returns an observable model failure instead of a successful blank assistant turn", async () => {
     const store = new InMemoryPipelineStore();
     const model: ModelGateway = {

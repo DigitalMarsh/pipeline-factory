@@ -94,6 +94,8 @@ export type ExplorerThread = {
   summaryRef: string | null;
   lastActivityAt: string;
   activeRevisionDraftId?: string | null;
+  activeExplorerPlanId?: string | null;
+  contextSummary?: ExplorerThreadContextSummary | null;
   exploration: {
     status: "INCOMPLETE" | "READY";
     missing: string[];
@@ -102,6 +104,45 @@ export type ExplorerThread = {
     candidatePlanId: string | null;
     lastAssessedTurnId: string | null;
   };
+};
+
+export type ExplorerThreadContextSummary = {
+  version: 1;
+  updatedAt: string;
+  completedPlans: Array<{
+    explorerPlanId: string;
+    title: string;
+    status: "INCOMPLETE" | "READY";
+    goal: string | null;
+    keyConstraints: string[];
+    latestUserMessageSummary: string | null;
+  }>;
+  openPlanIds: string[];
+};
+
+export type ExplorerPlan = {
+  id: string;
+  explorerThreadId: string;
+  projectId: string;
+  ordinal: number;
+  title: string;
+  titleSource: "AUTO" | "MANUAL";
+  titleStatus: "PLACEHOLDER" | "GENERATING" | "GENERATED" | "FAILED";
+  messageCount: number;
+  latestUserMessageSummary: string | null;
+  exploration: {
+    status: "INCOMPLETE" | "READY";
+    missing: string[];
+    completed: string[];
+    diagnostics: Array<{ path: string; code: "REQUIRED" | "INVALID" | "FORBIDDEN" | "MODE_CONFLICT" | "DUPLICATE"; area: string; message: string }>;
+    candidatePlanId: string | null;
+    lastAssessedTurnId: string | null;
+  };
+  candidatePlanId: string | null;
+  lastAssessedTurnId: string | null;
+  createdAt: string;
+  lastActivityAt: string;
+  runtimeStatus?: "QUEUED" | "RUNNING" | "WAITING_FOR_INPUT" | "COMPLETED" | "FAILED" | "CANCELLED";
 };
 
 export type CodexRateLimitValue = {
@@ -129,6 +170,7 @@ export type ExplorerActivityItem = {
   summary: string;
   details: Record<string, unknown> | null;
   occurredAt: string;
+  explorerPlanId?: string | undefined;
 };
 
 export type ExplorerTurn = {
@@ -140,6 +182,7 @@ export type ExplorerTurn = {
   error?: string;
   createdAt: string;
   sequence: number;
+  explorerPlanId?: string | undefined;
 };
 
 export type ModelInputQuestion = {
@@ -168,6 +211,7 @@ export type ExplorerInputRequest = {
   answeredAt: string | null;
   answeredBy: string | null;
   redactedAnswerSummary: Record<string, unknown> | null;
+  explorerPlanId?: string | undefined;
 };
 
 export type ExplorerRealtimeEvent = {
@@ -231,6 +275,7 @@ export type Plan = {
   status: PlanStatus;
   projectId: string;
   sourceExplorerThreadId: string;
+  explorerPlanId?: string | undefined;
   sourceTurnId?: string | null;
   providerThreadId?: string | null;
   providerTurnId?: string | null;
@@ -277,7 +322,7 @@ export type Plan = {
 };
 
 export type PlanDetail = { plan: Plan; revision: { artifactHash: string; resolvedContract?: ResolvedPlanContract } | null; projectSnapshot: { repoRoot: string; configVersion: number; configHash: string } | null; dispatch: PlanDispatchState | null; mergeRequest: MergeRequest | null };
-export type PlanRevisionDraft = { draftId: string; planId: string; projectId: string; basedOnRevision: number; targetRevision: number; status: "EDITING" | "READY_TO_CONFIRM" | "CONFIRMED" | "DISCARDED" | "BASE_CHANGED"; title: string; contract: Plan["contract"]; resolvedContract?: ResolvedPlanContract; sourceExplorerThreadId: string; sourceTurnId: string | null; providerThreadId: string | null; providerTurnId: string | null; providerItemId: string | null; baseBranch: string; baseCommit: string; createdAt: string; updatedAt: string; confirmedAt: string | null };
+export type PlanRevisionDraft = { draftId: string; planId: string; projectId: string; basedOnRevision: number; targetRevision: number; status: "EDITING" | "READY_TO_CONFIRM" | "CONFIRMED" | "DISCARDED" | "BASE_CHANGED"; title: string; contract: Plan["contract"]; resolvedContract?: ResolvedPlanContract; sourceExplorerThreadId: string; sourceTurnId: string | null; explorerPlanId?: string | undefined; providerThreadId: string | null; providerTurnId: string | null; providerItemId: string | null; baseBranch: string; baseCommit: string; createdAt: string; updatedAt: string; confirmedAt: string | null };
 export type ResolvedPlanContract = { schemaVersion: 2; artifact?: { mode: "CONVERSATION" | "REPOSITORY_FILE"; path?: string }; objective: { goal: string; audience?: string[]; acceptanceCriteria: string[]; outOfScope: string[] }; design?: { technicalConstraints: string[]; dataSecurity: string[]; failureHandling: string[] }; conflicts?: string[]; repository: { projectId: string; name: string; repoRoot: string; baseBranch: string; baseCommit: string; configVersion: number; configHash: string }; scope: { includePaths: string[]; excludePaths: string[] }; tasks: PlanTask[]; dependencies: string[]; execution: { executorModelRole: string; toolPolicy: string; maxRepairAttempts: number }; verification: { mode: "PROJECT_DEFAULT" | "NONE"; commandIds: string[] }; merge: { strategy: string; requireHumanMerge: true } };
 
 /** Execution Run 的页面投影，关联冻结 Revision、Worktree 和 Executor Loop。 */

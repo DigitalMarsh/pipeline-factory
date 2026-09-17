@@ -66,9 +66,10 @@ const planRevisionParams = z.object({ planId: z.string().min(1), revision: z.coe
 const revisionDraftParams = z.object({ planId: z.string().min(1), draftId: z.string().min(1) });
 const projectThreadParams = z.object({ projectId: z.string().min(1) });
 const projectExplorerParams = z.object({ projectId: z.string().min(1), explorerId: z.string().min(1) });
+const projectExplorerPlanParams = z.object({ projectId: z.string().min(1), explorerId: z.string().min(1), explorerPlanId: z.string().min(1) });
 const explorerCreateBody = z.object({ title: z.string().trim().min(1).max(200).optional(), originThreadId: z.string().min(1).optional() });
 const explorerRenameBody = z.object({ title: z.string().trim().min(1).max(200) });
-const explorerActivityQuery = z.object({ afterSequence: z.coerce.number().int().nonnegative().optional() });
+const explorerActivityQuery = z.object({ explorerPlanId: z.string().min(1).optional(), afterSequence: z.coerce.number().int().nonnegative().optional() });
 const threadPlanQuery = z.object({
   explorerThreadId: z.string().min(1).optional(),
   includeLineage: z.preprocess((value) => value === "false" ? false : value === "true" ? true : value, z.boolean().default(true)),
@@ -87,11 +88,11 @@ const workbenchQuery = z.object({
 });
 const actorBody = z.object({ actorId: z.string().min(1).default("local-user") });
 const revisionDraftBody = z.object({ fromRevision: z.number().int().positive(), explorerThreadId: z.string().min(1), discardUnmergedRun: z.boolean(), clientRequestId: z.string().min(1).max(200) });
-const v4TurnBody = z.object({ threadId: z.string().min(1), content: z.string().trim().min(1).max(20_000), clientTurnId: z.string().min(1).max(200) });
+const v4TurnBody = z.object({ threadId: z.string().min(1), explorerPlanId: z.string().min(1).optional(), content: z.string().trim().min(1).max(20_000), clientTurnId: z.string().min(1).max(200) });
 const v4AnswerBody = z.object({ clientRequestId: z.string().min(1).max(200), answers: z.record(z.object({ answers: z.array(z.string().max(20_000)).min(1) })), actorId: z.string().min(1).default("local-user") });
-const v4ThreadQuery = z.object({ threadId: z.string().min(1).optional(), afterSequence: z.coerce.number().int().nonnegative().optional() });
+const v4ThreadQuery = z.object({ threadId: z.string().min(1).optional(), explorerPlanId: z.string().min(1).optional(), afterSequence: z.coerce.number().int().nonnegative().optional() });
 const loopEventsQuery = z.object({ format: z.enum(["json", "sse"]).optional(), afterSequence: z.coerce.number().int().nonnegative().optional() });
-const v4InputQuery = z.object({ threadId: z.string().min(1).optional(), status: z.enum(["OPEN", "SUBMITTING", "ANSWERED", "CANCELLED", "AUTO_RESOLVED", "RECOVERY_REQUIRED"]).optional() });
+const v4InputQuery = z.object({ threadId: z.string().min(1).optional(), explorerPlanId: z.string().min(1).optional(), status: z.enum(["OPEN", "SUBMITTING", "ANSWERED", "CANCELLED", "AUTO_RESOLVED", "RECOVERY_REQUIRED"]).optional() });
 const hookBody = z.object({
   start: z
     .object({ commandId: z.string().min(1), enabled: z.boolean().optional(), timeoutMs: z.number().int().positive().optional(), maxAttempts: z.number().int().min(1).max(5).optional() })
@@ -173,6 +174,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     titleGenerator: new ModelExplorerTitleGenerator(model),
   });
   void explorer.backfillTitles();
+  void explorer.recoverQueuedTurns();
   const scheduler = options.scheduler ?? (options.config ? createDefaultScheduler(store, options.config, model, mcpRegistry, pluginRegistry, options.computerUse) : undefined);
   const globalConcurrency = options.config?.runtime.globalConcurrency ?? scheduler?.globalConcurrency();
   const dispatchCoordinator = scheduler ? new PlanDispatchCoordinator({
@@ -610,7 +612,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid Agent Loop query" });
     const thread = findProjectThread(store, params.data.projectId, query.data.threadId);
     if (!thread) return reply.code(404).send({ error: "ExplorerThread not found" });
-    const turnIds = new Set(store.listTurns(thread.id).map((turn) => turn.id));
+    const turnIds = new Set(store.listTurns(thread.id).filter((turn) => !query.data.explorerPlanId || turn.explorerPlanId === query.data.explorerPlanId).map((turn) => turn.id));
     return { items: store.listAgentLoops().filter((loop) => loop.ownerType === "explorer-turn" && turnIds.has(loop.ownerId)).map((loop) => projectAgentLoopResponse(store, loop)) };
   });
 
@@ -640,6 +642,73 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     const explorer = store.getThread(params.data.explorerId);
     if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
     return { explorer };
+  });
+
+  app.get("/api/v4/projects/:projectId/explorers/:explorerId/explorer-plans", async (request, reply) => {
+    const params = projectExplorerParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    const explorer = store.getThread(params.data.explorerId);
+    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
+    return { items: explorers.listPlans(explorer.id) };
+  });
+
+  app.post("/api/v4/projects/:projectId/explorers/:explorerId/explorer-plans", async (request, reply) => {
+    const params = projectExplorerParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    const explorer = store.getThread(params.data.explorerId);
+    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
+    try {
+      const explorerPlan = explorers.createPlan(explorer.id);
+      return reply.code(201).send({ explorerPlan, explorer: store.getThread(explorer.id) });
+    } catch (error) {
+      return reply.code(409).send({ error: error instanceof Error ? error.message : "ExplorerPlan cannot be created" });
+    }
+  });
+
+  app.get("/api/v4/projects/:projectId/explorers/:explorerId/explorer-plans/:explorerPlanId/workspace", async (request, reply) => {
+    const params = projectExplorerPlanParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    const explorer = store.getThread(params.data.explorerId);
+    const explorerPlan = store.getExplorerPlan(params.data.explorerPlanId);
+    if (!explorer || explorer.projectId !== params.data.projectId || !explorerPlan || explorerPlan.explorerThreadId !== explorer.id || explorerPlan.projectId !== explorer.projectId) {
+      return reply.code(404).send({ error: "ExplorerPlan not found" });
+    }
+    const turns = store.listTurns(explorer.id).filter((turn) => turn.explorerPlanId === explorerPlan.id);
+    const turnIds = new Set(turns.map((turn) => turn.id));
+    const loops = store.listAgentLoops().filter((loop) => loop.ownerType === "explorer-turn" && turnIds.has(loop.ownerId));
+    const loopIds = new Set(loops.map((loop) => loop.id));
+    const steps = loops.flatMap((loop) => store.listAgentLoopSteps(loop.id)).filter((step) => loopIds.has(step.loopId));
+    const activity = projectExplorerActivity({ turns, loops, steps });
+    const candidate = store.listPlans().filter((plan) => plan.sourceExplorerThreadId === explorer.id && plan.explorerPlanId === explorerPlan.id && plan.status === "DRAFT" && plan.queuedAt === null).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] ?? null;
+    const draft = explorer.activeRevisionDraftId ? store.getRevisionDraft(explorer.activeRevisionDraftId) : undefined;
+    const revisionDraft = draft && draft.explorerPlanId === explorerPlan.id && ["EDITING", "READY_TO_CONFIRM", "BASE_CHANGED"].includes(draft.status) ? draft : null;
+    return { explorerPlan, turns, activity, inputRequests: store.listInputRequests(explorer.id).filter((item) => item.explorerPlanId === explorerPlan.id), candidate, revisionDraft, loops: loops.map((loop) => projectAgentLoopResponse(store, loop)), lastEventSequence: store.getLastEventSequence(explorer.id) };
+  });
+
+  app.post("/api/v4/projects/:projectId/explorers/:explorerId/explorer-plans/:explorerPlanId/rename", async (request, reply) => {
+    const params = projectExplorerPlanParams.safeParse(request.params);
+    const body = explorerRenameBody.safeParse(request.body ?? {});
+    if (!params.success || !body.success) return reply.code(400).send({ error: "ExplorerPlan title is required" });
+    const explorer = store.getThread(params.data.explorerId);
+    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
+    try {
+      return { explorerPlan: explorers.renamePlan(explorer.id, params.data.explorerPlanId, body.data.title) };
+    } catch (error) {
+      return reply.code(409).send({ error: error instanceof Error ? error.message : "ExplorerPlan cannot be renamed" });
+    }
+  });
+
+  app.post("/api/v4/projects/:projectId/explorers/:explorerId/explorer-plans/:explorerPlanId/activate", async (request, reply) => {
+    const params = projectExplorerPlanParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    const explorer = store.getThread(params.data.explorerId);
+    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
+    try {
+      const explorerPlan = explorers.activatePlan(explorer.id, params.data.explorerPlanId);
+      return { explorerPlan, explorer: store.getThread(explorer.id) };
+    } catch (error) {
+      return reply.code(404).send({ error: error instanceof Error ? error.message : "ExplorerPlan not found" });
+    }
   });
 
   app.post("/api/v4/projects/:projectId/explorers/:explorerId/archive", async (request, reply) => {
@@ -678,12 +747,16 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid Explorer activity query" });
     const explorer = store.getThread(params.data.explorerId);
     if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
+    if (query.data.explorerPlanId) {
+      const explorerPlan = store.getExplorerPlan(query.data.explorerPlanId);
+      if (!explorerPlan || explorerPlan.explorerThreadId !== explorer.id) return reply.code(404).send({ error: "ExplorerPlan not found" });
+    }
     const turns = store.listTurns(explorer.id);
     const turnIds = new Set(turns.map((turn) => turn.id));
     const loops = store.listAgentLoops().filter((loop) => loop.ownerType === "explorer-turn" && turnIds.has(loop.ownerId));
     const loopIds = new Set(loops.map((loop) => loop.id));
     const steps = loops.flatMap((loop) => store.listAgentLoopSteps(loop.id)).filter((step) => loopIds.has(step.loopId));
-    const items = projectExplorerActivity({ turns, loops, steps }).filter((item) => !query.data.afterSequence || item.sequence > query.data.afterSequence);
+    const items = projectExplorerActivity({ turns, loops, steps }).filter((item) => !query.data.explorerPlanId || item.explorerPlanId === query.data.explorerPlanId).filter((item) => !query.data.afterSequence || item.sequence > query.data.afterSequence);
     return { items, lastEventSequence: store.getLastEventSequence(explorer.id) };
   });
 
@@ -789,7 +862,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     const thread = findProjectThread(store, params.data.projectId, body.data.threadId);
     if (!thread) return reply.code(404).send({ error: "ExplorerThread not found" });
     try {
-      const accepted = await explorer.startTurn(body.data);
+      const accepted = await explorer.startTurn({ threadId: body.data.threadId, content: body.data.content, clientTurnId: body.data.clientTurnId, ...(body.data.explorerPlanId ? { explorerPlanId: body.data.explorerPlanId } : {}) });
       return reply.code(202).send({ turn: { user: accepted.user, assistant: accepted.assistant }, eventsUrl: accepted.eventsUrl, loopId: accepted.loopId, state: accepted.assistant.status });
     } catch (error) {
       return reply.code(409).send({ error: error instanceof Error ? error.message : "ExplorerThread turn cannot be started" });
@@ -802,7 +875,11 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid v4 turn query" });
     const thread = findProjectThread(store, params.data.projectId, query.data.threadId);
     if (!thread) return reply.code(404).send({ error: "ExplorerThread not found" });
-    return { items: store.listTurns(thread.id), lastEventSequence: store.getLastEventSequence(thread.id) };
+    if (query.data.explorerPlanId) {
+      const explorerPlan = store.getExplorerPlan(query.data.explorerPlanId);
+      if (!explorerPlan || explorerPlan.explorerThreadId !== thread.id) return reply.code(404).send({ error: "ExplorerPlan not found" });
+    }
+    return { items: store.listTurns(thread.id).filter((turn) => !query.data.explorerPlanId || turn.explorerPlanId === query.data.explorerPlanId), lastEventSequence: store.getLastEventSequence(thread.id) };
   });
 
   app.get("/api/v4/projects/:projectId/explorer-thread/input-requests", async (request, reply) => {
@@ -811,7 +888,11 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid v4 input request query" });
     const thread = findProjectThread(store, params.data.projectId, query.data.threadId);
     if (!thread) return reply.code(404).send({ error: "ExplorerThread not found" });
-    return { items: store.listInputRequests(thread.id, query.data.status) };
+    if (query.data.explorerPlanId) {
+      const explorerPlan = store.getExplorerPlan(query.data.explorerPlanId);
+      if (!explorerPlan || explorerPlan.explorerThreadId !== thread.id) return reply.code(404).send({ error: "ExplorerPlan not found" });
+    }
+    return { items: store.listInputRequests(thread.id, query.data.status).filter((item) => !query.data.explorerPlanId || item.explorerPlanId === query.data.explorerPlanId) };
   });
 
   app.post("/api/v4/projects/:projectId/explorer-thread/input-requests/:requestId/answer", async (request, reply) => {

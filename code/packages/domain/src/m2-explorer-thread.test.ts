@@ -4,9 +4,67 @@
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  */
 import { describe, expect, it } from "vitest";
-import { ExplorerThreadService, InMemoryPipelineStore, StubModelGateway, assessPlanCompletion, type ExplorerInputRequest, type ModelEvent, type ModelGateway, type ModelRequest } from "./index.js";
+import { ExplorerService, ExplorerThreadService, InMemoryPipelineStore, StubModelGateway, assessPlanCompletion, type ExplorerInputRequest, type ModelEvent, type ModelGateway, type ModelRequest } from "./index.js";
+
+async function waitUntil(check: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 100 && !check(); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 1));
+  expect(check()).toBe(true);
+}
 
 describe("ExplorerThread", () => {
+  it("creates Plan 1 by default and keeps later Plans in the same ExplorerThread", () => {
+    const store = new InMemoryPipelineStore();
+    const explorer = new ExplorerService(store).create({ projectId: "project-1" });
+    const service = new ExplorerService(store);
+    const first = service.listPlans(explorer.id);
+    const second = service.createPlan(explorer.id);
+
+    expect(first).toHaveLength(1);
+    expect(first[0]).toMatchObject({ ordinal: 1, title: "Plan 1 / 待探索", explorerThreadId: explorer.id, projectId: "project-1", messageCount: 0 });
+    expect(second).toMatchObject({ ordinal: 2, title: "Plan 2 / 待探索", explorerThreadId: explorer.id, messageCount: 0 });
+    expect(service.listPlans(explorer.id).map((plan) => plan.ordinal)).toEqual([1, 2]);
+    expect(store.getThread(explorer.id)).toMatchObject({ activeExplorerPlanId: second.id, contextSummary: { openPlanIds: [first[0]?.id, second.id] } });
+  });
+
+  it("queues Plan turns FIFO while reusing one Provider thread and separates turn ownership", async () => {
+    const store = new InMemoryPipelineStore();
+    const explorer = new ExplorerService(store).create({ projectId: "project-1" });
+    const plan1 = new ExplorerService(store).listPlans(explorer.id)[0]!;
+    const plan2 = new ExplorerService(store).createPlan(explorer.id);
+    const requests: ModelRequest[] = [];
+    let releaseFirst!: () => void;
+    const firstPaused = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const model: ModelGateway = {
+      configFor: () => ({ model: "gpt-5.6-luna" }),
+      async *stream(request) {
+        requests.push(request);
+        if (requests.length === 1) {
+          yield { type: "thread.started", threadId: "provider-shared" };
+          await firstPaused;
+        }
+        yield { type: "text.delta", text: requests.length === 1 ? "Plan 1 response" : "Plan 2 response", providerThreadId: "provider-shared", providerTurnId: `provider-turn-${requests.length}`, providerItemId: `provider-item-${requests.length}` };
+        yield { type: "turn.completed" };
+      },
+      async answerUserInput() { return undefined; },
+      async cancel() { return undefined; },
+    };
+    const service = new ExplorerThreadService(store, model, { maxSteps: 2 });
+    const firstTurn = await service.startTurn({ threadId: explorer.id, explorerPlanId: plan1.id, content: "Plan 1 request", clientTurnId: "client-plan-1" });
+    await waitUntil(() => requests.length === 1);
+    const queued = await service.startTurn({ threadId: explorer.id, explorerPlanId: plan2.id, content: "Plan 2 request", clientTurnId: "client-plan-2" });
+
+    expect(queued.assistant).toMatchObject({ status: "QUEUED", explorerPlanId: plan2.id });
+    expect(store.listTurns(explorer.id).filter((turn) => turn.explorerPlanId === plan1.id)).toHaveLength(2);
+    expect(store.listTurns(explorer.id).filter((turn) => turn.explorerPlanId === plan2.id)).toHaveLength(2);
+    releaseFirst();
+    await waitUntil(() => requests.some((request) => request.continuationPrompt?.includes("Explorer Plan 2") === true));
+    const plan2Request = requests.find((request) => request.continuationPrompt?.includes("Explorer Plan 2"));
+    expect(requests[0]).toMatchObject({ conversationId: explorer.id });
+    expect(plan2Request).toMatchObject({ conversationId: explorer.id, providerThreadId: "provider-shared" });
+    await waitUntil(() => store.listTurns(explorer.id).find((turn) => turn.id === queued.assistant.id)?.status === "COMPLETED");
+    expect(store.listTurns(explorer.id).find((turn) => turn.id === firstTurn.assistant.id)).toMatchObject({ status: "COMPLETED", explorerPlanId: plan1.id });
+  });
+
   it("requires the explicit complete-plan protocol before marking exploration ready", () => {
     expect(assessPlanCompletion("已记录方案 B，但还需要确认验证方式。")).toMatchObject({ status: "INCOMPLETE", artifact: null });
     expect(assessPlanCompletion("<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>{bad json}</pipeline-factory-plan>")).toMatchObject({ status: "INCOMPLETE", missing: ["完整执行契约"] });

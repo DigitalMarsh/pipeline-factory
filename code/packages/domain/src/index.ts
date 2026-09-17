@@ -142,10 +142,46 @@ export type ExplorerThread = {
   state: ExplorerThreadState;
   messageCount: number;
   summaryRef: string | null;
+  activeExplorerPlanId: string | null;
+  contextSummary: ExplorerThreadContextSummary | null;
   lastActivityAt: string;
   exploration: PlanExploration;
   /** 当前正在此 Explorer 中编辑的修订草稿；确认或丢弃后清空。 */
   activeRevisionDraftId: string | null;
+};
+
+/** 一个 ExplorerThread 下的独立 Plan 对话分区；不拥有独立 Provider 会话。 */
+export type ExplorerPlan = {
+  id: string;
+  explorerThreadId: string;
+  projectId: string;
+  ordinal: number;
+  title: string;
+  titleSource: ExplorerTitleSource;
+  titleStatus: ExplorerTitleStatus;
+  messageCount: number;
+  latestUserMessageSummary: string | null;
+  exploration: PlanExploration;
+  candidatePlanId: string | null;
+  lastAssessedTurnId: string | null;
+  createdAt: string;
+  lastActivityAt: string;
+  runtimeStatus?: ExplorerTurn["status"];
+};
+
+/** Factory 生成的线程级跨 Plan 上下文摘要；不包含敏感答案或仓库基线。 */
+export type ExplorerThreadContextSummary = {
+  version: 1;
+  updatedAt: string;
+  completedPlans: Array<{
+    explorerPlanId: string;
+    title: string;
+    status: PlanExplorationStatus;
+    goal: string | null;
+    keyConstraints: string[];
+    latestUserMessageSummary: string | null;
+  }>;
+  openPlanIds: string[];
 };
 
 /** Explorer 的用户/模型消息事实；sequence 用于稳定回放和定位 Plan 卡片。 */
@@ -158,6 +194,8 @@ export type ExplorerTurn = {
   error?: string;
   createdAt: string;
   sequence: number;
+  /** 新数据必填；缺失表示需要按旧线程回填到 Plan 1。 */
+  explorerPlanId?: string;
 };
 
 /** Plan 中可独立追踪的任务及其依赖状态。 */
@@ -198,6 +236,7 @@ export type CandidatePlan = {
   id: string;
   projectId: string;
   sourceExplorerThreadId: string;
+  explorerPlanId?: string;
   sourceTurnId: string | null;
   providerThreadId: string | null;
   providerTurnId: string | null;
@@ -256,6 +295,7 @@ export type PlanRevisionV2 = Readonly<{
   confirmedBy: string;
   confirmedAt: string;
   sourceExplorerThreadId: string;
+  explorerPlanId?: string;
   sourceTurnId?: string | null;
   providerThreadId?: string | null;
   providerTurnId?: string | null;
@@ -281,6 +321,7 @@ export type PlanRevisionDraft = Readonly<{
   generatedSpec?: GeneratedPlanSpecV2;
   resolvedContract?: ResolvedPlanContractV2;
   sourceExplorerThreadId: string;
+  explorerPlanId?: string;
   sourceTurnId: string | null;
   providerThreadId: string | null;
   providerTurnId: string | null;
@@ -312,6 +353,7 @@ export type PlanIndexRow = {
   status: PlanStatus;
   projectId: string;
   sourceExplorerThreadId: string;
+  explorerPlanId?: string;
   sourceTurnId: string | null;
   providerThreadId: string | null;
   providerTurnId: string | null;
@@ -422,7 +464,10 @@ export type DomainEvent = {
     | "explorer.archived"
     | "explorer.activated"
     | "explorer.continued"
+    | "explorer.plan.created"
+    | "explorer.plan.renamed"
     | "explorer.turn.accepted"
+    | "explorer.turn.started"
     | "explorer.turn.text.delta"
     | "explorer.turn.input_required"
     | "explorer.turn.input.resolved"
@@ -504,6 +549,7 @@ export type DomainEvent = {
 export type CreateCandidatePlanInput = {
   projectId: string;
   sourceExplorerThreadId: string;
+  explorerPlanId?: string | undefined;
   title: string;
   contract?: PlanContract | undefined;
   generatedSpec?: GeneratedPlanSpecV2 | undefined;
@@ -608,6 +654,7 @@ export type ExplorerInputRequestStatus = "OPEN" | "SUBMITTING" | "ANSWERED" | "C
 export type ExplorerInputRequest = {
   id: string;
   threadId: string;
+  explorerPlanId?: string;
   localTurnId: string;
   providerRequestId: string | number;
   providerThreadId: string;
@@ -667,6 +714,10 @@ export type PipelineStore = {
   getThread(id: string): ExplorerThread | undefined;
   listThreads(): ExplorerThread[];
   updateThread(thread: ExplorerThread): ExplorerThread;
+  saveExplorerPlan(plan: ExplorerPlan): ExplorerPlan;
+  getExplorerPlan(id: string): ExplorerPlan | undefined;
+  listExplorerPlans(threadId?: string): ExplorerPlan[];
+  updateExplorerPlan(plan: ExplorerPlan): ExplorerPlan;
   saveProject(project: Project): Project;
   getProject(projectId: string): Project | undefined;
   listProjects(): Project[];
@@ -745,6 +796,29 @@ const DEFAULT_HOOK_TIMEOUT_MS = 120_000;
 
 function defaultPlanExploration(): PlanExploration {
   return { status: "INCOMPLETE", missing: [...REQUIRED_PLAN_AREAS], completed: [], diagnostics: [], candidatePlanId: null, lastAssessedTurnId: null };
+}
+
+function defaultExplorerPlan(thread: Pick<ExplorerThread, "id" | "projectId" | "createdAt">, id: string, ordinal: number, now: string): ExplorerPlan {
+  return {
+    id,
+    explorerThreadId: thread.id,
+    projectId: thread.projectId,
+    ordinal,
+    title: `Plan ${ordinal} / 待探索`,
+    titleSource: "AUTO",
+    titleStatus: "PLACEHOLDER",
+    messageCount: 0,
+    latestUserMessageSummary: null,
+    exploration: defaultPlanExploration(),
+    candidatePlanId: null,
+    lastAssessedTurnId: null,
+    createdAt: thread.createdAt,
+    lastActivityAt: now,
+  };
+}
+
+function defaultThreadContextSummary(now: string): ExplorerThreadContextSummary {
+  return { version: 1, updatedAt: now, completedPlans: [], openPlanIds: [] };
 }
 
 export type PlanArtifact = { title: string; contract?: PlanContract; generatedSpec?: GeneratedPlanSpecV2 };
@@ -862,6 +936,17 @@ function parseStringArray(value: unknown, fallback: string[]): string[] {
   try { const parsed: unknown = JSON.parse(value); return isStringArray(parsed) ? parsed : [...fallback]; } catch { return [...fallback]; }
 }
 
+function parseThreadContextSummary(value: unknown, fallbackTime: string): ExplorerThreadContextSummary {
+  if (typeof value !== "string") return defaultThreadContextSummary(fallbackTime);
+  try {
+    const parsed = JSON.parse(value) as Partial<ExplorerThreadContextSummary>;
+    if (parsed.version !== 1 || !Array.isArray(parsed.completedPlans) || !Array.isArray(parsed.openPlanIds)) return defaultThreadContextSummary(fallbackTime);
+    return { version: 1, updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : fallbackTime, completedPlans: parsed.completedPlans as ExplorerThreadContextSummary["completedPlans"], openPlanIds: parsed.openPlanIds.filter((id): id is string => typeof id === "string") };
+  } catch {
+    return defaultThreadContextSummary(fallbackTime);
+  }
+}
+
 function parsePlanValidationIssues(value: unknown): PlanValidationIssue[] {
   try {
     const parsed = JSON.parse(String(value ?? "[]"));
@@ -894,10 +979,16 @@ function stripPlanProtocol(content: string): string {
     .trim();
 }
 
+function summarizeExplorerMessage(content: string): string {
+  const normalized = content.replace(/\s+/g, " ").trim();
+  return normalized.length > 180 ? `${normalized.slice(0, 177)}…` : normalized;
+}
+
 /** 用于测试和轻量集成的内存 Store，不改变领域服务的持久化接口。 */
 export class InMemoryPipelineStore implements PipelineStore {
   private readonly projects = new Map<string, Project>();
   private readonly projectConfigRevisions = new Map<string, ProjectConfigRevision[]>();
+  private readonly explorerPlans = new Map<string, ExplorerPlan>();
   private readonly plans = new Map<string, CandidatePlan>();
   private readonly dispatchStates = new Map<string, PlanDispatchState>();
   private readonly revisions = new Map<string, PlanRevisionV2>();
@@ -947,12 +1038,18 @@ export class InMemoryPipelineStore implements PipelineStore {
       state: "ACTIVE",
       messageCount: 0,
       summaryRef: null,
+      activeExplorerPlanId: null,
+      contextSummary: defaultThreadContextSummary(this.now()),
       lastActivityAt: this.now(),
       exploration: defaultPlanExploration(),
       activeRevisionDraftId: null,
     };
     this.threads.set(thread.id, thread);
-    return thread;
+    const plan = defaultExplorerPlan(thread, this.nextId("explorer-plan"), 1, thread.lastActivityAt);
+    this.explorerPlans.set(plan.id, plan);
+    const updated = { ...thread, activeExplorerPlanId: plan.id, contextSummary: { ...thread.contextSummary!, openPlanIds: [plan.id] } };
+    this.threads.set(thread.id, updated);
+    return updated;
   }
 
   getThread(id: string): ExplorerThread | undefined {
@@ -964,6 +1061,14 @@ export class InMemoryPipelineStore implements PipelineStore {
   }
 
   updateThread(thread: ExplorerThread): ExplorerThread { this.threads.set(thread.id, thread); return thread; }
+  saveExplorerPlan(plan: ExplorerPlan): ExplorerPlan { this.explorerPlans.set(plan.id, plan); return plan; }
+  getExplorerPlan(id: string): ExplorerPlan | undefined { return this.explorerPlans.get(id); }
+  listExplorerPlans(threadId?: string): ExplorerPlan[] { return [...this.explorerPlans.values()].filter((plan) => !threadId || plan.explorerThreadId === threadId).sort((a, b) => a.ordinal - b.ordinal || a.createdAt.localeCompare(b.createdAt)); }
+  updateExplorerPlan(plan: ExplorerPlan): ExplorerPlan {
+    if (!this.explorerPlans.has(plan.id)) throw new Error(`ExplorerPlan ${plan.id} does not exist`);
+    this.explorerPlans.set(plan.id, plan);
+    return plan;
+  }
   saveProject(project: Project): Project { this.projects.set(project.id, project); return project; }
   getProject(projectId: string): Project | undefined { return this.projects.get(projectId); }
   listProjects(): Project[] { return [...this.projects.values()]; }
@@ -1246,6 +1351,8 @@ export class SqlitePipelineStore implements PipelineStore {
         state TEXT NOT NULL,
         message_count INTEGER NOT NULL,
         summary_ref TEXT,
+        active_explorer_plan_id TEXT,
+        context_summary_json TEXT,
         last_activity_at TEXT NOT NULL,
         exploration_status TEXT NOT NULL DEFAULT 'INCOMPLETE',
         exploration_missing_json TEXT NOT NULL DEFAULT '[]',
@@ -1255,6 +1362,28 @@ export class SqlitePipelineStore implements PipelineStore {
         last_assessed_turn_id TEXT,
         active_revision_draft_id TEXT
       );
+      CREATE TABLE IF NOT EXISTS explorer_plans (
+        id TEXT PRIMARY KEY,
+        explorer_thread_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        ordinal INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        title_source TEXT NOT NULL DEFAULT 'AUTO',
+        title_status TEXT NOT NULL DEFAULT 'PLACEHOLDER',
+        message_count INTEGER NOT NULL DEFAULT 0,
+        latest_user_message_summary TEXT,
+        exploration_status TEXT NOT NULL DEFAULT 'INCOMPLETE',
+        exploration_missing_json TEXT NOT NULL DEFAULT '[]',
+        exploration_completed_json TEXT NOT NULL DEFAULT '[]',
+        exploration_diagnostics_json TEXT NOT NULL DEFAULT '[]',
+        candidate_plan_id TEXT,
+        last_assessed_turn_id TEXT,
+        runtime_status TEXT,
+        created_at TEXT NOT NULL,
+        last_activity_at TEXT NOT NULL,
+        UNIQUE(explorer_thread_id, ordinal)
+      );
+      CREATE INDEX IF NOT EXISTS explorer_plans_thread_idx ON explorer_plans(explorer_thread_id, ordinal);
       CREATE TABLE IF NOT EXISTS explorer_turns (
         id TEXT PRIMARY KEY,
         thread_id TEXT NOT NULL,
@@ -1263,12 +1392,14 @@ export class SqlitePipelineStore implements PipelineStore {
         status TEXT NOT NULL DEFAULT 'COMPLETED',
         error TEXT,
         created_at TEXT NOT NULL,
-        sequence INTEGER NOT NULL
+        sequence INTEGER NOT NULL,
+        explorer_plan_id TEXT
       );
       CREATE TABLE IF NOT EXISTS candidate_plans (
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL,
         source_explorer_thread_id TEXT NOT NULL,
+        explorer_plan_id TEXT,
         source_turn_id TEXT,
         provider_thread_id TEXT,
         provider_turn_id TEXT,
@@ -1307,6 +1438,7 @@ export class SqlitePipelineStore implements PipelineStore {
         confirmed_by TEXT NOT NULL,
         confirmed_at TEXT NOT NULL,
         source_explorer_thread_id TEXT NOT NULL,
+        explorer_plan_id TEXT,
         project_config_version INTEGER,
         project_config_hash TEXT,
         project_config_snapshot_json TEXT,
@@ -1325,6 +1457,7 @@ export class SqlitePipelineStore implements PipelineStore {
         generated_spec_json TEXT,
         resolved_contract_json TEXT,
         source_explorer_thread_id TEXT NOT NULL,
+        explorer_plan_id TEXT,
         source_turn_id TEXT,
         provider_thread_id TEXT,
         provider_turn_id TEXT,
@@ -1498,6 +1631,7 @@ export class SqlitePipelineStore implements PipelineStore {
       CREATE TABLE IF NOT EXISTS explorer_input_requests (
         id TEXT PRIMARY KEY,
         thread_id TEXT NOT NULL,
+        explorer_plan_id TEXT,
         local_turn_id TEXT NOT NULL,
         provider_request_id TEXT NOT NULL,
         provider_thread_id TEXT NOT NULL,
@@ -1540,9 +1674,17 @@ export class SqlitePipelineStore implements PipelineStore {
     try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN candidate_plan_id TEXT"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN last_assessed_turn_id TEXT"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN active_revision_draft_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN active_explorer_plan_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN context_summary_json TEXT"); } catch { /* Existing databases already have the column. */ }
     this.database.prepare("UPDATE explorer_threads SET exploration_missing_json = ? WHERE exploration_status = 'INCOMPLETE' AND last_assessed_turn_id IS NULL AND exploration_missing_json IN ('[]', '')").run(JSON.stringify(REQUIRED_PLAN_AREAS));
     try { this.database.exec("ALTER TABLE explorer_turns ADD COLUMN status TEXT NOT NULL DEFAULT 'COMPLETED'"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE explorer_turns ADD COLUMN error TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_turns ADD COLUMN explorer_plan_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE candidate_plans ADD COLUMN explorer_plan_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_input_requests ADD COLUMN explorer_plan_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN explorer_plan_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE plan_revision_drafts ADD COLUMN explorer_plan_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_plans ADD COLUMN runtime_status TEXT"); } catch { /* Existing databases already have the column. */ }
     this.database.exec("UPDATE explorer_turns SET status = 'FAILED', error = COALESCE(error, '历史记录未包含模型文本') WHERE role = 'assistant' AND trim(content) = '' AND status = 'COMPLETED'");
     try { this.database.exec("ALTER TABLE candidate_plans ADD COLUMN contract_json TEXT NOT NULL DEFAULT '{}'"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE candidate_plans ADD COLUMN generated_spec_json TEXT"); } catch { /* Existing databases already have the column. */ }
@@ -1578,6 +1720,7 @@ export class SqlitePipelineStore implements PipelineStore {
     try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN provider_turn_id TEXT"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN provider_item_id TEXT"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN provenance TEXT NOT NULL DEFAULT 'LEGACY'"); } catch { /* Existing databases already have the column. */ }
+    this.backfillExplorerPlans();
     this.backfillLegacyRevisionHistory();
     this.backfillLegacyVerificationRuns();
     this.backfillPlanQueryProjection();
@@ -1648,15 +1791,18 @@ export class SqlitePipelineStore implements PipelineStore {
       state: "ACTIVE",
       messageCount: 0,
       summaryRef: null,
+      activeExplorerPlanId: null,
+      contextSummary: defaultThreadContextSummary(this.now()),
       lastActivityAt: this.now(),
       exploration: defaultPlanExploration(),
       activeRevisionDraftId: null,
     };
     this.database.prepare(`
-      INSERT INTO explorer_threads (id, project_id, title, created_at, title_source, title_status, context_mode, origin_thread_id, parent_thread_id, provider_thread_id, state, message_count, summary_ref, last_activity_at, exploration_status, exploration_missing_json, exploration_completed_json, exploration_diagnostics_json, candidate_plan_id, last_assessed_turn_id, active_revision_draft_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO explorer_threads (id, project_id, title, created_at, title_source, title_status, context_mode, origin_thread_id, parent_thread_id, provider_thread_id, state, message_count, summary_ref, active_explorer_plan_id, context_summary_json, last_activity_at, exploration_status, exploration_missing_json, exploration_completed_json, exploration_diagnostics_json, candidate_plan_id, last_assessed_turn_id, active_revision_draft_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, title=excluded.title, created_at=excluded.created_at, title_source=excluded.title_source, title_status=excluded.title_status, context_mode=excluded.context_mode, origin_thread_id=excluded.origin_thread_id, parent_thread_id=excluded.parent_thread_id
-    `).run(thread.id, thread.projectId, thread.title, thread.createdAt, thread.titleSource, thread.titleStatus, thread.contextMode, thread.originThreadId, thread.parentThreadId, thread.providerThreadId, thread.state, thread.messageCount, thread.summaryRef, thread.lastActivityAt, thread.exploration.status, JSON.stringify(thread.exploration.missing), JSON.stringify(thread.exploration.completed), JSON.stringify(thread.exploration.diagnostics), thread.exploration.candidatePlanId, thread.exploration.lastAssessedTurnId, thread.activeRevisionDraftId);
+    `).run(thread.id, thread.projectId, thread.title, thread.createdAt, thread.titleSource, thread.titleStatus, thread.contextMode, thread.originThreadId, thread.parentThreadId, thread.providerThreadId, thread.state, thread.messageCount, thread.summaryRef, thread.activeExplorerPlanId, thread.contextSummary ? JSON.stringify(thread.contextSummary) : null, thread.lastActivityAt, thread.exploration.status, JSON.stringify(thread.exploration.missing), JSON.stringify(thread.exploration.completed), JSON.stringify(thread.exploration.diagnostics), thread.exploration.candidatePlanId, thread.exploration.lastAssessedTurnId, thread.activeRevisionDraftId);
+    this.ensureExplorerPlansForThread(thread.id);
     return this.getThread(thread.id) as ExplorerThread;
   }
 
@@ -1671,12 +1817,36 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   updateThread(thread: ExplorerThread): ExplorerThread {
-    this.database.prepare("UPDATE explorer_threads SET title = ?, created_at = ?, title_source = ?, title_status = ?, context_mode = ?, origin_thread_id = ?, provider_thread_id = ?, state = ?, message_count = ?, summary_ref = ?, last_activity_at = ?, exploration_status = ?, exploration_missing_json = ?, exploration_completed_json = ?, exploration_diagnostics_json = ?, candidate_plan_id = ?, last_assessed_turn_id = ?, active_revision_draft_id = ? WHERE id = ?").run(thread.title, thread.createdAt, thread.titleSource, thread.titleStatus, thread.contextMode, thread.originThreadId, thread.providerThreadId, thread.state, thread.messageCount, thread.summaryRef, thread.lastActivityAt, thread.exploration.status, JSON.stringify(thread.exploration.missing), JSON.stringify(thread.exploration.completed), JSON.stringify(thread.exploration.diagnostics), thread.exploration.candidatePlanId, thread.exploration.lastAssessedTurnId, thread.activeRevisionDraftId, thread.id);
+    this.database.prepare("UPDATE explorer_threads SET title = ?, created_at = ?, title_source = ?, title_status = ?, context_mode = ?, origin_thread_id = ?, provider_thread_id = ?, state = ?, message_count = ?, summary_ref = ?, active_explorer_plan_id = ?, context_summary_json = ?, last_activity_at = ?, exploration_status = ?, exploration_missing_json = ?, exploration_completed_json = ?, exploration_diagnostics_json = ?, candidate_plan_id = ?, last_assessed_turn_id = ?, active_revision_draft_id = ? WHERE id = ?").run(thread.title, thread.createdAt, thread.titleSource, thread.titleStatus, thread.contextMode, thread.originThreadId, thread.providerThreadId, thread.state, thread.messageCount, thread.summaryRef, thread.activeExplorerPlanId, thread.contextSummary ? JSON.stringify(thread.contextSummary) : null, thread.lastActivityAt, thread.exploration.status, JSON.stringify(thread.exploration.missing), JSON.stringify(thread.exploration.completed), JSON.stringify(thread.exploration.diagnostics), thread.exploration.candidatePlanId, thread.exploration.lastAssessedTurnId, thread.activeRevisionDraftId, thread.id);
     return this.getThread(thread.id) as ExplorerThread;
   }
 
+  saveExplorerPlan(plan: ExplorerPlan): ExplorerPlan {
+    this.database.prepare(`
+      INSERT INTO explorer_plans (id, explorer_thread_id, project_id, ordinal, title, title_source, title_status, message_count, latest_user_message_summary, exploration_status, exploration_missing_json, exploration_completed_json, exploration_diagnostics_json, candidate_plan_id, last_assessed_turn_id, runtime_status, created_at, last_activity_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET title=excluded.title, title_source=excluded.title_source, title_status=excluded.title_status, message_count=excluded.message_count, latest_user_message_summary=excluded.latest_user_message_summary, exploration_status=excluded.exploration_status, exploration_missing_json=excluded.exploration_missing_json, exploration_completed_json=excluded.exploration_completed_json, exploration_diagnostics_json=excluded.exploration_diagnostics_json, candidate_plan_id=excluded.candidate_plan_id, last_assessed_turn_id=excluded.last_assessed_turn_id, runtime_status=excluded.runtime_status, last_activity_at=excluded.last_activity_at
+    `).run(plan.id, plan.explorerThreadId, plan.projectId, plan.ordinal, plan.title, plan.titleSource, plan.titleStatus, plan.messageCount, plan.latestUserMessageSummary, plan.exploration.status, JSON.stringify(plan.exploration.missing), JSON.stringify(plan.exploration.completed), JSON.stringify(plan.exploration.diagnostics), plan.candidatePlanId, plan.lastAssessedTurnId, plan.runtimeStatus ?? null, plan.createdAt, plan.lastActivityAt);
+    return this.getExplorerPlan(plan.id) as ExplorerPlan;
+  }
+
+  getExplorerPlan(id: string): ExplorerPlan | undefined {
+    const row = this.database.prepare("SELECT * FROM explorer_plans WHERE id = ?").get(id) as SqliteRow | undefined;
+    return row ? this.explorerPlanFromRow(row) : undefined;
+  }
+
+  listExplorerPlans(threadId?: string): ExplorerPlan[] {
+    const rows = this.database.prepare(`SELECT * FROM explorer_plans ${threadId ? "WHERE explorer_thread_id = ?" : ""} ORDER BY ordinal ASC, created_at ASC`).all(...(threadId ? [threadId] : [])) as unknown as SqliteRow[];
+    return rows.map((row) => this.explorerPlanFromRow(row));
+  }
+
+  updateExplorerPlan(plan: ExplorerPlan): ExplorerPlan {
+    if (!this.getExplorerPlan(plan.id)) throw new Error(`ExplorerPlan ${plan.id} does not exist`);
+    return this.saveExplorerPlan(plan);
+  }
+
   saveTurn(turn: ExplorerTurn): ExplorerTurn {
-    this.database.prepare("INSERT INTO explorer_turns (id, thread_id, role, content, status, error, created_at, sequence) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(turn.id, turn.threadId, turn.role, turn.content, turn.status ?? "COMPLETED", turn.error ?? null, turn.createdAt, turn.sequence);
+    this.database.prepare("INSERT INTO explorer_turns (id, thread_id, role, content, status, error, created_at, sequence, explorer_plan_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(turn.id, turn.threadId, turn.role, turn.content, turn.status ?? "COMPLETED", turn.error ?? null, turn.createdAt, turn.sequence, turn.explorerPlanId ?? null);
     return turn;
   }
 
@@ -1687,14 +1857,14 @@ export class SqlitePipelineStore implements PipelineStore {
 
   listTurns(threadId: string): ExplorerTurn[] {
     const rows = this.database.prepare("SELECT * FROM explorer_turns WHERE thread_id = ? ORDER BY sequence ASC").all(threadId) as unknown as SqliteRow[];
-    return rows.map((row) => ({ id: String(row.id), threadId: String(row.thread_id), role: String(row.role) as ExplorerTurn["role"], content: String(row.content), status: String(row.status ?? "COMPLETED") as NonNullable<ExplorerTurn["status"]>, ...(row.error ? { error: String(row.error) } : {}), createdAt: String(row.created_at), sequence: Number(row.sequence) }));
+    return rows.map((row) => ({ id: String(row.id), threadId: String(row.thread_id), role: String(row.role) as ExplorerTurn["role"], content: String(row.content), status: String(row.status ?? "COMPLETED") as NonNullable<ExplorerTurn["status"]>, ...(row.error ? { error: String(row.error) } : {}), createdAt: String(row.created_at), sequence: Number(row.sequence), ...(row.explorer_plan_id ? { explorerPlanId: String(row.explorer_plan_id) } : {}) }));
   }
 
   saveInputRequest(request: ExplorerInputRequest): ExplorerInputRequest {
     const existing = this.database.prepare("SELECT * FROM explorer_input_requests WHERE provider_thread_id = ? AND provider_turn_id = ? AND provider_request_id = ?").get(request.providerThreadId, request.providerTurnId, String(request.providerRequestId)) as SqliteRow | undefined;
     if (existing) return this.inputRequestFromRow(existing);
     if (request.isBlocking && this.database.prepare("SELECT 1 FROM explorer_input_requests WHERE thread_id = ? AND is_blocking = 1 AND status = 'OPEN' LIMIT 1").get(request.threadId)) throw new Error(`ExplorerThread ${request.threadId} already has an open blocking input request`);
-    this.database.prepare("INSERT INTO explorer_input_requests (id, thread_id, local_turn_id, provider_request_id, provider_thread_id, provider_turn_id, item_id, questions_json, is_blocking, auto_resolution_ms, status, created_at, answered_at, answered_by, redacted_answer_summary_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(request.id, request.threadId, request.localTurnId, String(request.providerRequestId), request.providerThreadId, request.providerTurnId, request.itemId, JSON.stringify(request.questions), request.isBlocking ? 1 : 0, request.autoResolutionMs, request.status, request.createdAt, request.answeredAt, request.answeredBy, request.redactedAnswerSummary ? JSON.stringify(request.redactedAnswerSummary) : null);
+    this.database.prepare("INSERT INTO explorer_input_requests (id, thread_id, explorer_plan_id, local_turn_id, provider_request_id, provider_thread_id, provider_turn_id, item_id, questions_json, is_blocking, auto_resolution_ms, status, created_at, answered_at, answered_by, redacted_answer_summary_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(request.id, request.threadId, request.explorerPlanId ?? null, request.localTurnId, String(request.providerRequestId), request.providerThreadId, request.providerTurnId, request.itemId, JSON.stringify(request.questions), request.isBlocking ? 1 : 0, request.autoResolutionMs, request.status, request.createdAt, request.answeredAt, request.answeredBy, request.redactedAnswerSummary ? JSON.stringify(request.redactedAnswerSummary) : null);
     return this.getInputRequest(request.id) as ExplorerInputRequest;
   }
 
@@ -1715,10 +1885,10 @@ export class SqlitePipelineStore implements PipelineStore {
 
   savePlan(plan: CandidatePlan): CandidatePlan {
     this.database.prepare(`
-      INSERT INTO candidate_plans (id, project_id, source_explorer_thread_id, source_turn_id, provider_thread_id, provider_turn_id, provider_item_id, title, revision, status, created_at, confirmed_by, confirmed_at, queued_at, dispatched_at, run_id, last_event_at, attention_reason, contract_json, generated_spec_json, resolved_contract_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, source_explorer_thread_id=excluded.source_explorer_thread_id, source_turn_id=excluded.source_turn_id, provider_thread_id=excluded.provider_thread_id, provider_turn_id=excluded.provider_turn_id, provider_item_id=excluded.provider_item_id, title=excluded.title, revision=excluded.revision, status=excluded.status, confirmed_by=excluded.confirmed_by, confirmed_at=excluded.confirmed_at, queued_at=excluded.queued_at, dispatched_at=excluded.dispatched_at, run_id=excluded.run_id, last_event_at=excluded.last_event_at, attention_reason=excluded.attention_reason, contract_json=excluded.contract_json, generated_spec_json=excluded.generated_spec_json, resolved_contract_json=excluded.resolved_contract_json
-    `).run(plan.id, plan.projectId, plan.sourceExplorerThreadId, plan.sourceTurnId, plan.providerThreadId, plan.providerTurnId, plan.providerItemId, plan.title, plan.revision, plan.status, plan.createdAt, plan.confirmedBy, plan.confirmedAt, plan.queuedAt, plan.dispatchedAt ?? null, plan.runId, plan.lastEventAt, plan.attentionReason, JSON.stringify(plan.contract), plan.generatedSpec ? JSON.stringify(plan.generatedSpec) : null, plan.resolvedContract ? JSON.stringify(plan.resolvedContract) : null);
+      INSERT INTO candidate_plans (id, project_id, source_explorer_thread_id, explorer_plan_id, source_turn_id, provider_thread_id, provider_turn_id, provider_item_id, title, revision, status, created_at, confirmed_by, confirmed_at, queued_at, dispatched_at, run_id, last_event_at, attention_reason, contract_json, generated_spec_json, resolved_contract_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, source_explorer_thread_id=excluded.source_explorer_thread_id, explorer_plan_id=excluded.explorer_plan_id, source_turn_id=excluded.source_turn_id, provider_thread_id=excluded.provider_thread_id, provider_turn_id=excluded.provider_turn_id, provider_item_id=excluded.provider_item_id, title=excluded.title, revision=excluded.revision, status=excluded.status, confirmed_by=excluded.confirmed_by, confirmed_at=excluded.confirmed_at, queued_at=excluded.queued_at, dispatched_at=excluded.dispatched_at, run_id=excluded.run_id, last_event_at=excluded.last_event_at, attention_reason=excluded.attention_reason, contract_json=excluded.contract_json, generated_spec_json=excluded.generated_spec_json, resolved_contract_json=excluded.resolved_contract_json
+    `).run(plan.id, plan.projectId, plan.sourceExplorerThreadId, plan.explorerPlanId ?? null, plan.sourceTurnId, plan.providerThreadId, plan.providerTurnId, plan.providerItemId, plan.title, plan.revision, plan.status, plan.createdAt, plan.confirmedBy, plan.confirmedAt, plan.queuedAt, plan.dispatchedAt ?? null, plan.runId, plan.lastEventAt, plan.attentionReason, JSON.stringify(plan.contract), plan.generatedSpec ? JSON.stringify(plan.generatedSpec) : null, plan.resolvedContract ? JSON.stringify(plan.resolvedContract) : null);
     if (this.getProject(plan.projectId) && this.getThread(plan.sourceExplorerThreadId)) this.savePlanQueryProjection(planQueryProjectionFor(plan));
     return this.getPlan(plan.id) as CandidatePlan;
   }
@@ -1759,14 +1929,14 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   saveRevision(revision: PlanRevisionV2): PlanRevisionV2 {
-    this.database.prepare("INSERT OR IGNORE INTO plan_revisions (plan_id, revision, contract_json, artifact_hash, confirmed_by, confirmed_at, source_explorer_thread_id, project_config_version, project_config_hash, project_config_snapshot_json, resolved_contract_json, source_turn_id, provider_thread_id, provider_turn_id, provider_item_id, provenance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(revision.planId, revision.revision, JSON.stringify(revision.contract), revision.artifactHash, revision.confirmedBy, revision.confirmedAt, revision.sourceExplorerThreadId, revision.projectConfigVersion ?? null, revision.projectConfigHash ?? null, revision.projectConfigSnapshot ? JSON.stringify(revision.projectConfigSnapshot) : null, revision.resolvedContract ? JSON.stringify(revision.resolvedContract) : null, revision.sourceTurnId ?? null, revision.providerThreadId ?? null, revision.providerTurnId ?? null, revision.providerItemId ?? null, revision.provenance ?? "CURRENT");
+    this.database.prepare("INSERT OR IGNORE INTO plan_revisions (plan_id, revision, contract_json, artifact_hash, confirmed_by, confirmed_at, source_explorer_thread_id, explorer_plan_id, project_config_version, project_config_hash, project_config_snapshot_json, resolved_contract_json, source_turn_id, provider_thread_id, provider_turn_id, provider_item_id, provenance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(revision.planId, revision.revision, JSON.stringify(revision.contract), revision.artifactHash, revision.confirmedBy, revision.confirmedAt, revision.sourceExplorerThreadId, revision.explorerPlanId ?? null, revision.projectConfigVersion ?? null, revision.projectConfigHash ?? null, revision.projectConfigSnapshot ? JSON.stringify(revision.projectConfigSnapshot) : null, revision.resolvedContract ? JSON.stringify(revision.resolvedContract) : null, revision.sourceTurnId ?? null, revision.providerThreadId ?? null, revision.providerTurnId ?? null, revision.providerItemId ?? null, revision.provenance ?? "CURRENT");
     return this.getRevision(revision.planId, revision.revision) as PlanRevisionV2;
   }
 
   getRevision(planId: string, revision: number): PlanRevisionV2 | undefined {
     const row = this.database.prepare("SELECT * FROM plan_revisions WHERE plan_id = ? AND revision = ?").get(planId, revision) as SqliteRow | undefined;
     if (!row) return undefined;
-    return freezeRevision({ planId: String(row.plan_id), revision: Number(row.revision), contract: JSON.parse(String(row.contract_json)) as PlanContract, ...(row.resolved_contract_json ? { resolvedContract: JSON.parse(String(row.resolved_contract_json)) as ResolvedPlanContractV2 } : {}), artifactHash: String(row.artifact_hash), confirmedBy: String(row.confirmed_by), confirmedAt: String(row.confirmed_at), sourceExplorerThreadId: String(row.source_explorer_thread_id), sourceTurnId: row.source_turn_id === null || row.source_turn_id === undefined ? null : String(row.source_turn_id), providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id), providerTurnId: row.provider_turn_id === null || row.provider_turn_id === undefined ? null : String(row.provider_turn_id), providerItemId: row.provider_item_id === null || row.provider_item_id === undefined ? null : String(row.provider_item_id), provenance: row.provenance === "CURRENT" ? "CURRENT" : "LEGACY", ...(row.project_config_version === null || row.project_config_version === undefined ? {} : { projectConfigVersion: Number(row.project_config_version) }), ...(row.project_config_hash === null || row.project_config_hash === undefined ? {} : { projectConfigHash: String(row.project_config_hash) }), ...(row.project_config_snapshot_json === null || row.project_config_snapshot_json === undefined ? {} : { projectConfigSnapshot: JSON.parse(String(row.project_config_snapshot_json)) as ProjectExecutionSnapshot }) });
+    return freezeRevision({ planId: String(row.plan_id), revision: Number(row.revision), contract: JSON.parse(String(row.contract_json)) as PlanContract, ...(row.resolved_contract_json ? { resolvedContract: JSON.parse(String(row.resolved_contract_json)) as ResolvedPlanContractV2 } : {}), artifactHash: String(row.artifact_hash), confirmedBy: String(row.confirmed_by), confirmedAt: String(row.confirmed_at), sourceExplorerThreadId: String(row.source_explorer_thread_id), ...(row.explorer_plan_id === null || row.explorer_plan_id === undefined ? {} : { explorerPlanId: String(row.explorer_plan_id) }), sourceTurnId: row.source_turn_id === null || row.source_turn_id === undefined ? null : String(row.source_turn_id), providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id), providerTurnId: row.provider_turn_id === null || row.provider_turn_id === undefined ? null : String(row.provider_turn_id), providerItemId: row.provider_item_id === null || row.provider_item_id === undefined ? null : String(row.provider_item_id), provenance: row.provenance === "CURRENT" ? "CURRENT" : "LEGACY", ...(row.project_config_version === null || row.project_config_version === undefined ? {} : { projectConfigVersion: Number(row.project_config_version) }), ...(row.project_config_hash === null || row.project_config_hash === undefined ? {} : { projectConfigHash: String(row.project_config_hash) }), ...(row.project_config_snapshot_json === null || row.project_config_snapshot_json === undefined ? {} : { projectConfigSnapshot: JSON.parse(String(row.project_config_snapshot_json)) as ProjectExecutionSnapshot }) });
   }
 
   listRevisions(planId: string): PlanRevisionV2[] {
@@ -1775,7 +1945,7 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   saveRevisionDraft(draft: PlanRevisionDraft): PlanRevisionDraft {
-    this.database.prepare("INSERT INTO plan_revision_drafts (draft_id, plan_id, project_id, based_on_revision, target_revision, status, title, contract_json, generated_spec_json, resolved_contract_json, source_explorer_thread_id, source_turn_id, provider_thread_id, provider_turn_id, provider_item_id, base_branch, base_commit, created_at, updated_at, confirmed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(draft.draftId, draft.planId, draft.projectId, draft.basedOnRevision, draft.targetRevision, draft.status, draft.title, JSON.stringify(draft.contract), draft.generatedSpec ? JSON.stringify(draft.generatedSpec) : null, draft.resolvedContract ? JSON.stringify(draft.resolvedContract) : null, draft.sourceExplorerThreadId, draft.sourceTurnId, draft.providerThreadId, draft.providerTurnId, draft.providerItemId, draft.baseBranch, draft.baseCommit, draft.createdAt, draft.updatedAt, draft.confirmedAt);
+    this.database.prepare("INSERT INTO plan_revision_drafts (draft_id, plan_id, project_id, based_on_revision, target_revision, status, title, contract_json, generated_spec_json, resolved_contract_json, source_explorer_thread_id, explorer_plan_id, source_turn_id, provider_thread_id, provider_turn_id, provider_item_id, base_branch, base_commit, created_at, updated_at, confirmed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(draft.draftId, draft.planId, draft.projectId, draft.basedOnRevision, draft.targetRevision, draft.status, draft.title, JSON.stringify(draft.contract), draft.generatedSpec ? JSON.stringify(draft.generatedSpec) : null, draft.resolvedContract ? JSON.stringify(draft.resolvedContract) : null, draft.sourceExplorerThreadId, draft.explorerPlanId ?? null, draft.sourceTurnId, draft.providerThreadId, draft.providerTurnId, draft.providerItemId, draft.baseBranch, draft.baseCommit, draft.createdAt, draft.updatedAt, draft.confirmedAt);
     return this.getRevisionDraft(draft.draftId)!;
   }
   getRevisionDraft(draftId: string): PlanRevisionDraft | undefined {
@@ -1787,7 +1957,7 @@ export class SqlitePipelineStore implements PipelineStore {
     return rows.map((row) => this.revisionDraftFromRow(row));
   }
   updateRevisionDraft(draft: PlanRevisionDraft): PlanRevisionDraft {
-    this.database.prepare("UPDATE plan_revision_drafts SET status = ?, title = ?, contract_json = ?, generated_spec_json = ?, resolved_contract_json = ?, source_explorer_thread_id = ?, source_turn_id = ?, provider_thread_id = ?, provider_turn_id = ?, provider_item_id = ?, base_branch = ?, base_commit = ?, updated_at = ?, confirmed_at = ? WHERE draft_id = ?").run(draft.status, draft.title, JSON.stringify(draft.contract), draft.generatedSpec ? JSON.stringify(draft.generatedSpec) : null, draft.resolvedContract ? JSON.stringify(draft.resolvedContract) : null, draft.sourceExplorerThreadId, draft.sourceTurnId, draft.providerThreadId, draft.providerTurnId, draft.providerItemId, draft.baseBranch, draft.baseCommit, draft.updatedAt, draft.confirmedAt, draft.draftId);
+    this.database.prepare("UPDATE plan_revision_drafts SET status = ?, title = ?, contract_json = ?, generated_spec_json = ?, resolved_contract_json = ?, source_explorer_thread_id = ?, explorer_plan_id = ?, source_turn_id = ?, provider_thread_id = ?, provider_turn_id = ?, provider_item_id = ?, base_branch = ?, base_commit = ?, updated_at = ?, confirmed_at = ? WHERE draft_id = ?").run(draft.status, draft.title, JSON.stringify(draft.contract), draft.generatedSpec ? JSON.stringify(draft.generatedSpec) : null, draft.resolvedContract ? JSON.stringify(draft.resolvedContract) : null, draft.sourceExplorerThreadId, draft.explorerPlanId ?? null, draft.sourceTurnId, draft.providerThreadId, draft.providerTurnId, draft.providerItemId, draft.baseBranch, draft.baseCommit, draft.updatedAt, draft.confirmedAt, draft.draftId);
     return this.getRevisionDraft(draft.draftId)!;
   }
   saveRevisionLifecycleProjection(projection: RevisionLifecycleProjection): RevisionLifecycleProjection {
@@ -2070,12 +2240,36 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   private threadFromRow(row: SqliteRow): ExplorerThread {
-    return { id: String(row.id), projectId: String(row.project_id), title: String(row.title ?? "New Explorer"), createdAt: String(row.created_at ?? row.last_activity_at), titleSource: String(row.title_source ?? "AUTO") as ExplorerTitleSource, titleStatus: String(row.title_status ?? "PLACEHOLDER") as ExplorerTitleStatus, contextMode: String(row.context_mode ?? "FRESH") as ExplorerThread["contextMode"], originThreadId: row.origin_thread_id === null || row.origin_thread_id === undefined ? null : String(row.origin_thread_id), parentThreadId: row.parent_thread_id === null ? null : String(row.parent_thread_id), providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id), state: String(row.state) as ExplorerThreadState, messageCount: Number(row.message_count), summaryRef: row.summary_ref === null ? null : String(row.summary_ref), lastActivityAt: String(row.last_activity_at), exploration: { status: String(row.exploration_status ?? "INCOMPLETE") as PlanExplorationStatus, missing: parseStringArray(row.exploration_missing_json, [...REQUIRED_PLAN_AREAS]), completed: parseStringArray(row.exploration_completed_json, []), diagnostics: parsePlanValidationIssues(row.exploration_diagnostics_json), candidatePlanId: row.candidate_plan_id === null || row.candidate_plan_id === undefined ? null : String(row.candidate_plan_id), lastAssessedTurnId: row.last_assessed_turn_id === null || row.last_assessed_turn_id === undefined ? null : String(row.last_assessed_turn_id) }, activeRevisionDraftId: row.active_revision_draft_id === null || row.active_revision_draft_id === undefined ? null : String(row.active_revision_draft_id) };
+    const lastActivityAt = String(row.last_activity_at);
+    return {
+      id: String(row.id), projectId: String(row.project_id), title: String(row.title ?? "New Explorer"), createdAt: String(row.created_at ?? lastActivityAt),
+      titleSource: String(row.title_source ?? "AUTO") as ExplorerTitleSource, titleStatus: String(row.title_status ?? "PLACEHOLDER") as ExplorerTitleStatus,
+      contextMode: String(row.context_mode ?? "FRESH") as ExplorerThread["contextMode"],
+      originThreadId: row.origin_thread_id === null || row.origin_thread_id === undefined ? null : String(row.origin_thread_id),
+      parentThreadId: row.parent_thread_id === null ? null : String(row.parent_thread_id),
+      providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id),
+      state: String(row.state) as ExplorerThreadState, messageCount: Number(row.message_count),
+      summaryRef: row.summary_ref === null ? null : String(row.summary_ref),
+      activeExplorerPlanId: row.active_explorer_plan_id === null || row.active_explorer_plan_id === undefined ? null : String(row.active_explorer_plan_id),
+      contextSummary: parseThreadContextSummary(row.context_summary_json, lastActivityAt), lastActivityAt,
+      exploration: { status: String(row.exploration_status ?? "INCOMPLETE") as PlanExplorationStatus, missing: parseStringArray(row.exploration_missing_json, [...REQUIRED_PLAN_AREAS]), completed: parseStringArray(row.exploration_completed_json, []), diagnostics: parsePlanValidationIssues(row.exploration_diagnostics_json), candidatePlanId: row.candidate_plan_id === null || row.candidate_plan_id === undefined ? null : String(row.candidate_plan_id), lastAssessedTurnId: row.last_assessed_turn_id === null || row.last_assessed_turn_id === undefined ? null : String(row.last_assessed_turn_id) },
+      activeRevisionDraftId: row.active_revision_draft_id === null || row.active_revision_draft_id === undefined ? null : String(row.active_revision_draft_id),
+    };
+  }
+
+  private explorerPlanFromRow(row: SqliteRow): ExplorerPlan {
+    return {
+      id: String(row.id), explorerThreadId: String(row.explorer_thread_id), projectId: String(row.project_id), ordinal: Number(row.ordinal),
+      title: String(row.title), titleSource: String(row.title_source ?? "AUTO") as ExplorerTitleSource, titleStatus: String(row.title_status ?? "PLACEHOLDER") as ExplorerTitleStatus,
+      messageCount: Number(row.message_count ?? 0), latestUserMessageSummary: row.latest_user_message_summary === null || row.latest_user_message_summary === undefined ? null : String(row.latest_user_message_summary),
+      exploration: { status: String(row.exploration_status ?? "INCOMPLETE") as PlanExplorationStatus, missing: parseStringArray(row.exploration_missing_json, [...REQUIRED_PLAN_AREAS]), completed: parseStringArray(row.exploration_completed_json, []), diagnostics: parsePlanValidationIssues(row.exploration_diagnostics_json), candidatePlanId: row.candidate_plan_id === null || row.candidate_plan_id === undefined ? null : String(row.candidate_plan_id), lastAssessedTurnId: row.last_assessed_turn_id === null || row.last_assessed_turn_id === undefined ? null : String(row.last_assessed_turn_id) },
+      candidatePlanId: row.candidate_plan_id === null || row.candidate_plan_id === undefined ? null : String(row.candidate_plan_id), lastAssessedTurnId: row.last_assessed_turn_id === null || row.last_assessed_turn_id === undefined ? null : String(row.last_assessed_turn_id), ...(row.runtime_status === null || row.runtime_status === undefined ? {} : { runtimeStatus: String(row.runtime_status) as NonNullable<ExplorerTurn["status"]> }), createdAt: String(row.created_at), lastActivityAt: String(row.last_activity_at),
+    };
   }
 
   private inputRequestFromRow(row: SqliteRow): ExplorerInputRequest {
     return {
-      id: String(row.id), threadId: String(row.thread_id), localTurnId: String(row.local_turn_id),
+      id: String(row.id), threadId: String(row.thread_id), ...(row.explorer_plan_id ? { explorerPlanId: String(row.explorer_plan_id) } : {}), localTurnId: String(row.local_turn_id),
       providerRequestId: parseRequestId(String(row.provider_request_id)), providerThreadId: String(row.provider_thread_id), providerTurnId: String(row.provider_turn_id), itemId: String(row.item_id),
       questions: JSON.parse(String(row.questions_json)) as ModelInputQuestion[], isBlocking: Number(row.is_blocking) === 1, autoResolutionMs: row.auto_resolution_ms === null ? null : Number(row.auto_resolution_ms), status: String(row.status) as ExplorerInputRequestStatus,
       createdAt: String(row.created_at), answeredAt: row.answered_at === null ? null : String(row.answered_at), answeredBy: row.answered_by === null ? null : String(row.answered_by), redactedAnswerSummary: row.redacted_answer_summary_json === null ? null : JSON.parse(String(row.redacted_answer_summary_json)) as Record<string, unknown>,
@@ -2142,9 +2336,64 @@ export class SqlitePipelineStore implements PipelineStore {
       title: String(row.title), contract: JSON.parse(String(row.contract_json)) as PlanContract,
       ...(row.generated_spec_json ? { generatedSpec: JSON.parse(String(row.generated_spec_json)) as GeneratedPlanSpecV2 } : {}),
       ...(row.resolved_contract_json ? { resolvedContract: JSON.parse(String(row.resolved_contract_json)) as ResolvedPlanContractV2 } : {}),
-      sourceExplorerThreadId: String(row.source_explorer_thread_id), sourceTurnId: row.source_turn_id === null ? null : String(row.source_turn_id), providerThreadId: row.provider_thread_id === null ? null : String(row.provider_thread_id), providerTurnId: row.provider_turn_id === null ? null : String(row.provider_turn_id), providerItemId: row.provider_item_id === null ? null : String(row.provider_item_id),
+      sourceExplorerThreadId: String(row.source_explorer_thread_id), ...(row.explorer_plan_id === null || row.explorer_plan_id === undefined ? {} : { explorerPlanId: String(row.explorer_plan_id) }), sourceTurnId: row.source_turn_id === null ? null : String(row.source_turn_id), providerThreadId: row.provider_thread_id === null ? null : String(row.provider_thread_id), providerTurnId: row.provider_turn_id === null ? null : String(row.provider_turn_id), providerItemId: row.provider_item_id === null ? null : String(row.provider_item_id),
       baseBranch: String(row.base_branch), baseCommit: String(row.base_commit), createdAt: String(row.created_at), updatedAt: String(row.updated_at), confirmedAt: row.confirmed_at === null ? null : String(row.confirmed_at),
     });
+  }
+
+  /** 为新旧线程确保至少存在一个 Plan，并把历史事实归入默认 Plan。 */
+  private ensureExplorerPlansForThread(threadId: string): void {
+    const thread = this.getThread(threadId);
+    if (!thread) return;
+    let plans = this.listExplorerPlans(threadId);
+    if (plans.length === 0) {
+      const plan = defaultExplorerPlan(thread, this.nextId("explorer-plan"), 1, thread.lastActivityAt);
+      this.saveExplorerPlan(plan);
+      plans = [plan];
+    }
+    const activePlan = plans.find((plan) => plan.id === thread.activeExplorerPlanId) ?? plans[0];
+    if (!activePlan) return;
+    for (const turn of this.listTurns(threadId)) {
+      if (!turn.explorerPlanId) this.database.prepare("UPDATE explorer_turns SET explorer_plan_id = ? WHERE id = ?").run(activePlan.id, turn.id);
+    }
+    for (const plan of this.listPlans().filter((item) => item.sourceExplorerThreadId === threadId)) {
+      if (plan.explorerPlanId) continue;
+      const owner = plan.sourceTurnId ? this.listTurns(threadId).find((turn) => turn.id === plan.sourceTurnId) : undefined;
+      this.database.prepare("UPDATE candidate_plans SET explorer_plan_id = ? WHERE id = ?").run(owner?.explorerPlanId ?? activePlan.id, plan.id);
+    }
+    for (const request of this.listInputRequests(threadId)) {
+      if (!request.explorerPlanId) this.database.prepare("UPDATE explorer_input_requests SET explorer_plan_id = ? WHERE id = ?").run(activePlan.id, request.id);
+    }
+    const current = this.getThread(threadId)!;
+    const associatedPlans = this.listPlans().filter((plan) => plan.sourceExplorerThreadId === threadId);
+    for (const plan of plans) {
+      const planTurns = this.listTurns(threadId).filter((turn) => turn.explorerPlanId === plan.id);
+      const latestUser = [...planTurns].reverse().find((turn) => turn.role === "user");
+      const latestAssistant = [...planTurns].reverse().find((turn) => turn.role === "assistant");
+      const associatedCandidate = associatedPlans.filter((item) => item.explorerPlanId === plan.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+      const legacyProjection = plans.length === 1 && plan.id === activePlan.id && planTurns.length > 0 ? current.exploration : plan.exploration;
+      this.saveExplorerPlan({
+        ...plan,
+        messageCount: planTurns.length || plan.messageCount,
+        latestUserMessageSummary: latestUser ? summarizeExplorerMessage(latestUser.content) : plan.latestUserMessageSummary,
+        exploration: legacyProjection,
+        candidatePlanId: associatedCandidate?.id ?? plan.candidatePlanId ?? legacyProjection.candidatePlanId,
+        lastAssessedTurnId: legacyProjection.lastAssessedTurnId ?? plan.lastAssessedTurnId,
+        ...(latestAssistant?.status ? { runtimeStatus: latestAssistant.status } : {}),
+      });
+    }
+    const refreshedPlans = this.listExplorerPlans(threadId);
+    const contextSummary = current.contextSummary ?? defaultThreadContextSummary(current.lastActivityAt);
+    const completedPlans = refreshedPlans.filter((plan) => plan.exploration.status === "READY").map((plan) => {
+      const candidate = plan.candidatePlanId ? this.getPlan(plan.candidatePlanId) : undefined;
+      return { explorerPlanId: plan.id, title: plan.title, status: plan.exploration.status, goal: candidate?.contract.goal ?? null, keyConstraints: [...(candidate?.generatedSpec?.design?.technicalConstraints ?? [])], latestUserMessageSummary: plan.latestUserMessageSummary };
+    });
+    const updatedSummary = { ...contextSummary, completedPlans, openPlanIds: refreshedPlans.filter((plan) => plan.exploration.status !== "READY").map((plan) => plan.id) };
+    this.database.prepare("UPDATE explorer_threads SET active_explorer_plan_id = ?, context_summary_json = ? WHERE id = ?").run(activePlan.id, JSON.stringify(updatedSummary), threadId);
+  }
+
+  private backfillExplorerPlans(): void {
+    for (const thread of this.listThreads()) this.ensureExplorerPlansForThread(thread.id);
   }
 
   private backfillPlanQueryProjection(): void {
@@ -2182,7 +2431,7 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   private planFromRow(row: SqliteRow): CandidatePlan {
-    return { id: String(row.id), projectId: String(row.project_id), sourceExplorerThreadId: String(row.source_explorer_thread_id), sourceTurnId: row.source_turn_id === null || row.source_turn_id === undefined ? null : String(row.source_turn_id), providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id), providerTurnId: row.provider_turn_id === null || row.provider_turn_id === undefined ? null : String(row.provider_turn_id), providerItemId: row.provider_item_id === null || row.provider_item_id === undefined ? null : String(row.provider_item_id), title: String(row.title), revision: Number(row.revision), status: String(row.status) as PlanStatus, createdAt: String(row.created_at), confirmedBy: row.confirmed_by === null ? null : String(row.confirmed_by), confirmedAt: row.confirmed_at === null ? null : String(row.confirmed_at), queuedAt: row.queued_at === null ? null : String(row.queued_at), dispatchedAt: row.dispatched_at === null || row.dispatched_at === undefined ? null : String(row.dispatched_at), runId: row.run_id === null ? null : String(row.run_id), lastEventAt: String(row.last_event_at), attentionReason: row.attention_reason === null ? null : String(row.attention_reason), contract: JSON.parse(String(row.contract_json ?? "{}")) as PlanContract, ...(row.generated_spec_json ? { generatedSpec: JSON.parse(String(row.generated_spec_json)) as GeneratedPlanSpecV2 } : {}), ...(row.resolved_contract_json ? { resolvedContract: JSON.parse(String(row.resolved_contract_json)) as ResolvedPlanContractV2 } : {}) };
+    return { id: String(row.id), projectId: String(row.project_id), sourceExplorerThreadId: String(row.source_explorer_thread_id), ...(row.explorer_plan_id ? { explorerPlanId: String(row.explorer_plan_id) } : {}), sourceTurnId: row.source_turn_id === null || row.source_turn_id === undefined ? null : String(row.source_turn_id), providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id), providerTurnId: row.provider_turn_id === null || row.provider_turn_id === undefined ? null : String(row.provider_turn_id), providerItemId: row.provider_item_id === null || row.provider_item_id === undefined ? null : String(row.provider_item_id), title: String(row.title), revision: Number(row.revision), status: String(row.status) as PlanStatus, createdAt: String(row.created_at), confirmedBy: row.confirmed_by === null ? null : String(row.confirmed_by), confirmedAt: row.confirmed_at === null ? null : String(row.confirmed_at), queuedAt: row.queued_at === null ? null : String(row.queued_at), dispatchedAt: row.dispatched_at === null || row.dispatched_at === undefined ? null : String(row.dispatched_at), runId: row.run_id === null ? null : String(row.run_id), lastEventAt: String(row.last_event_at), attentionReason: row.attention_reason === null ? null : String(row.attention_reason), contract: JSON.parse(String(row.contract_json ?? "{}")) as PlanContract, ...(row.generated_spec_json ? { generatedSpec: JSON.parse(String(row.generated_spec_json)) as GeneratedPlanSpecV2 } : {}), ...(row.resolved_contract_json ? { resolvedContract: JSON.parse(String(row.resolved_contract_json)) as ResolvedPlanContractV2 } : {}) };
   }
 
   private dispatchStateFromRow(row: SqliteRow): PlanDispatchState {
@@ -2352,7 +2601,7 @@ export class PlanService {
     this.store.appendEvent({
       type: "explorer.thread.created",
       aggregateId: thread.id,
-      payload: { projectId: thread.projectId, parentThreadId: thread.parentThreadId },
+      payload: { projectId: thread.projectId, parentThreadId: thread.parentThreadId, explorerPlanId: thread.activeExplorerPlanId, turnId: null, loopId: null },
     });
     return thread;
   }
@@ -2375,6 +2624,7 @@ export class PlanService {
       id: this.store.nextId("plan"),
       projectId: input.projectId,
       sourceExplorerThreadId: input.sourceExplorerThreadId,
+      ...(input.explorerPlanId ? { explorerPlanId: input.explorerPlanId } : {}),
       sourceTurnId: input.sourceTurnId ?? null,
       providerThreadId: input.providerThreadId ?? null,
       providerTurnId: input.providerTurnId ?? null,
@@ -2395,7 +2645,7 @@ export class PlanService {
       ...(resolvedContract ? { resolvedContract } : {}),
     };
     this.store.savePlan(plan);
-    this.store.appendEvent({ type: "plan.candidate.created", aggregateId: plan.id, payload: { title: plan.title, sourceTurnId: plan.sourceTurnId, providerThreadId: plan.providerThreadId, providerTurnId: plan.providerTurnId, providerItemId: plan.providerItemId } });
+    this.store.appendEvent({ type: "plan.candidate.created", aggregateId: plan.id, payload: { title: plan.title, explorerPlanId: plan.explorerPlanId ?? null, sourceTurnId: plan.sourceTurnId, providerThreadId: plan.providerThreadId, providerTurnId: plan.providerTurnId, providerItemId: plan.providerItemId } });
     return plan;
   }
 
@@ -2435,7 +2685,7 @@ export class PlanService {
       // A revision draft is rebased on the current verified default branch.  Carrying a
       // historical contract's base commit here can otherwise create an unstartable Run.
       title: plan.title, contract: { ...source.contract, baseBranch: baseline.baseBranch, baseCommit: baseline.baseCommit }, ...(source.resolvedContract ? { resolvedContract: source.resolvedContract } : {}),
-      sourceExplorerThreadId: thread.id, sourceTurnId: source.sourceTurnId ?? null, providerThreadId: source.providerThreadId ?? null, providerTurnId: source.providerTurnId ?? null, providerItemId: source.providerItemId ?? null,
+      sourceExplorerThreadId: thread.id, ...(plan.explorerPlanId ? { explorerPlanId: plan.explorerPlanId } : {}), sourceTurnId: source.sourceTurnId ?? null, providerThreadId: source.providerThreadId ?? null, providerTurnId: source.providerTurnId ?? null, providerItemId: source.providerItemId ?? null,
       baseBranch: baseline.baseBranch, baseCommit: baseline.baseCommit, createdAt: now, updatedAt: now, confirmedAt: null,
     });
     const saved = this.store.saveRevisionDraft(draft);
@@ -2483,7 +2733,7 @@ export class PlanService {
     validatePlanContract(draft.contract);
     const snapshot = this.projects.snapshot(project.id);
     const confirmedAt = this.store.now();
-    const revision = freezeRevision({ planId: plan.id, revision: draft.targetRevision, contract: draft.contract, ...(draft.resolvedContract ? { resolvedContract: draft.resolvedContract } : {}), artifactHash: `sha256:${createHash("sha256").update(JSON.stringify({ contract: draft.contract, projectConfigSnapshot: snapshot })).digest("hex")}`, confirmedBy, confirmedAt, sourceExplorerThreadId: draft.sourceExplorerThreadId, sourceTurnId: draft.sourceTurnId, providerThreadId: draft.providerThreadId, providerTurnId: draft.providerTurnId, providerItemId: draft.providerItemId, provenance: "CURRENT", projectConfigVersion: snapshot.configVersion, projectConfigHash: snapshot.configHash, projectConfigSnapshot: snapshot });
+    const revision = freezeRevision({ planId: plan.id, revision: draft.targetRevision, contract: draft.contract, ...(draft.resolvedContract ? { resolvedContract: draft.resolvedContract } : {}), artifactHash: `sha256:${createHash("sha256").update(JSON.stringify({ contract: draft.contract, projectConfigSnapshot: snapshot })).digest("hex")}`, confirmedBy, confirmedAt, sourceExplorerThreadId: draft.sourceExplorerThreadId, ...(draft.explorerPlanId ? { explorerPlanId: draft.explorerPlanId } : {}), sourceTurnId: draft.sourceTurnId, providerThreadId: draft.providerThreadId, providerTurnId: draft.providerTurnId, providerItemId: draft.providerItemId, provenance: "CURRENT", projectConfigVersion: snapshot.configVersion, projectConfigHash: snapshot.configHash, projectConfigSnapshot: snapshot });
     this.store.saveRevision(revision);
     const updatedPlan = this.store.updatePlan({ ...plan, title: draft.title, revision: draft.targetRevision, status: "READY", contract: draft.contract, ...(draft.generatedSpec ? { generatedSpec: draft.generatedSpec } : {}), ...(draft.resolvedContract ? { resolvedContract: draft.resolvedContract } : {}), sourceExplorerThreadId: draft.sourceExplorerThreadId, sourceTurnId: draft.sourceTurnId, providerThreadId: draft.providerThreadId, providerTurnId: draft.providerTurnId, providerItemId: draft.providerItemId, confirmedBy, confirmedAt, queuedAt: null, dispatchedAt: null, runId: null, attentionReason: null, lastEventAt: confirmedAt });
     this.store.updateRevisionDraft(Object.freeze({ ...draft, status: "CONFIRMED", confirmedAt, updatedAt: confirmedAt }));
@@ -2547,6 +2797,7 @@ export class PlanService {
       confirmedBy,
       confirmedAt,
       sourceExplorerThreadId: plan.sourceExplorerThreadId,
+      ...(plan.explorerPlanId ? { explorerPlanId: plan.explorerPlanId } : {}),
       ...(projectConfigSnapshot ? { projectConfigVersion: projectConfigSnapshot.configVersion, projectConfigHash: projectConfigSnapshot.configHash, projectConfigSnapshot } : {}),
     });
     this.store.saveRevision(revision);
@@ -2740,6 +2991,7 @@ export class PlanService {
       confirmedBy,
       confirmedAt,
       sourceExplorerThreadId: plan.sourceExplorerThreadId,
+      ...(plan.explorerPlanId ? { explorerPlanId: plan.explorerPlanId } : {}),
       projectConfigVersion: projectConfigSnapshot.configVersion,
       projectConfigHash: projectConfigSnapshot.configHash,
       projectConfigSnapshot,
@@ -2792,6 +3044,7 @@ export class PlanService {
         status: plan.status,
         projectId: plan.projectId,
         sourceExplorerThreadId: plan.sourceExplorerThreadId,
+        ...(plan.explorerPlanId ? { explorerPlanId: plan.explorerPlanId } : {}),
         sourceTurnId: plan.sourceTurnId,
         providerThreadId: plan.providerThreadId,
         providerTurnId: plan.providerTurnId,
@@ -2819,6 +3072,7 @@ export class PlanService {
         status: plan.status,
         projectId: plan.projectId,
         sourceExplorerThreadId: plan.sourceExplorerThreadId,
+        ...(plan.explorerPlanId ? { explorerPlanId: plan.explorerPlanId } : {}),
         sourceTurnId: plan.sourceTurnId,
         providerThreadId: plan.providerThreadId,
         providerTurnId: plan.providerTurnId,
@@ -2855,8 +3109,8 @@ export class ExplorerService {
     if (thread.titleSource === "AUTO" && thread.titleStatus === "PLACEHOLDER") {
       thread = this.store.updateThread({ ...thread, title: projectPlaceholderExplorerTitle(this.store, thread) });
     }
-    this.store.appendEvent({ type: "explorer.created", aggregateId: thread.id, payload: { projectId: thread.projectId, contextMode: thread.contextMode, originThreadId: thread.originThreadId } });
-    if (origin) this.store.appendEvent({ type: "explorer.continued", aggregateId: thread.id, payload: { originThreadId: origin.id } });
+    this.store.appendEvent({ type: "explorer.created", aggregateId: thread.id, payload: { projectId: thread.projectId, contextMode: thread.contextMode, originThreadId: thread.originThreadId, explorerPlanId: thread.activeExplorerPlanId, turnId: null, loopId: null } });
+    if (origin) this.store.appendEvent({ type: "explorer.continued", aggregateId: thread.id, payload: { originThreadId: origin.id, explorerPlanId: thread.activeExplorerPlanId, turnId: null, loopId: null } });
     selectCurrentExplorer(this.store, thread);
     return thread;
   }
@@ -2866,6 +3120,52 @@ export class ExplorerService {
     const explorer = this.store.getThread(explorerId);
     if (!explorer) throw new Error(`Explorer ${explorerId} not found`);
     return explorer;
+  }
+
+  /** 返回线程下按创建顺序排列的 Plan 分区，并保证旧线程已有默认 Plan。 */
+  listPlans(explorerId: string): ExplorerPlan[] {
+    const explorer = this.get(explorerId);
+    let plans = this.store.listExplorerPlans(explorer.id);
+    if (!plans.length) {
+      const created = this.createPlan(explorer.id);
+      plans = [created];
+    }
+    return plans;
+  }
+
+  /** 创建空 Plan 分区；不启动 Provider，也不复制旧消息。 */
+  createPlan(explorerId: string): ExplorerPlan {
+    const explorer = this.get(explorerId);
+    if (explorer.state === "ARCHIVED") throw new Error(`ExplorerThread ${explorerId} is archived`);
+    const plans = this.store.listExplorerPlans(explorer.id);
+    const createdAt = this.store.now();
+    const plan = defaultExplorerPlan(explorer, this.store.nextId("explorer-plan"), (plans.at(-1)?.ordinal ?? 0) + 1, createdAt);
+    this.store.saveExplorerPlan(plan);
+    const contextSummary = explorer.contextSummary ?? defaultThreadContextSummary(createdAt);
+    const updatedThread = this.store.updateThread({ ...explorer, activeExplorerPlanId: plan.id, contextSummary: { ...contextSummary, updatedAt: createdAt, openPlanIds: [...new Set([...contextSummary.openPlanIds, plan.id])] }, lastActivityAt: createdAt });
+    this.store.appendEvent({ type: "explorer.plan.created", aggregateId: explorer.id, payload: { explorerId: explorer.id, explorerPlanId: plan.id, turnId: null, loopId: null, ordinal: plan.ordinal } });
+    void updatedThread;
+    return plan;
+  }
+
+  /** 切换当前 Plan；只更新线程的活动投影，不修改 Provider 会话。 */
+  activatePlan(explorerId: string, explorerPlanId: string): ExplorerPlan {
+    const explorer = this.get(explorerId);
+    const plan = this.store.getExplorerPlan(explorerPlanId);
+    if (!plan || plan.explorerThreadId !== explorer.id || plan.projectId !== explorer.projectId) throw new Error("ExplorerPlan does not belong to this ExplorerThread");
+    this.store.updateThread({ ...explorer, activeExplorerPlanId: plan.id, lastActivityAt: this.store.now() });
+    return plan;
+  }
+
+  renamePlan(explorerId: string, explorerPlanId: string, title: string): ExplorerPlan {
+    const explorer = this.get(explorerId);
+    const plan = this.store.getExplorerPlan(explorerPlanId);
+    if (!plan || plan.explorerThreadId !== explorer.id) throw new Error("ExplorerPlan does not belong to this ExplorerThread");
+    const normalized = title.trim();
+    if (!normalized) throw new Error("ExplorerPlan title cannot be empty");
+    const updated = this.store.updateExplorerPlan({ ...plan, title: normalized, titleSource: "MANUAL", titleStatus: "GENERATED", lastActivityAt: this.store.now() });
+    this.store.appendEvent({ type: "explorer.plan.renamed", aggregateId: explorer.id, payload: { explorerId: explorer.id, explorerPlanId: plan.id, turnId: null, loopId: null, title: normalized } });
+    return updated;
   }
 
   /** 只列出指定 Project 的线程，按最近活动倒序。 */
@@ -2880,7 +3180,7 @@ export class ExplorerService {
     const project = this.store.getProject(explorer.projectId);
     if (project?.currentExplorerThreadId === explorerId) throw new Error("Current Explorer cannot be archived");
     const archived = this.store.updateThread({ ...explorer, state: "ARCHIVED", lastActivityAt: this.store.now() });
-    this.store.appendEvent({ type: "explorer.archived", aggregateId: explorerId, payload: { explorerId } });
+    this.store.appendEvent({ type: "explorer.archived", aggregateId: explorerId, payload: { explorerId, explorerPlanId: explorer.activeExplorerPlanId, turnId: null, loopId: null } });
     return archived;
   }
 
@@ -2889,7 +3189,7 @@ export class ExplorerService {
     const explorer = this.get(explorerId);
     if (explorer.state === "ACTIVE") return explorer;
     const active = this.store.updateThread({ ...explorer, state: "ACTIVE", lastActivityAt: this.store.now() });
-    this.store.appendEvent({ type: "explorer.activated", aggregateId: explorerId, payload: { explorerId } });
+    this.store.appendEvent({ type: "explorer.activated", aggregateId: explorerId, payload: { explorerId, explorerPlanId: active.activeExplorerPlanId, turnId: null, loopId: null } });
     selectCurrentExplorer(this.store, active);
     return active;
   }
@@ -2969,6 +3269,7 @@ export class ChangeProposalService {
       confirmedBy: actorId,
       confirmedAt,
       sourceExplorerThreadId: plan.sourceExplorerThreadId,
+      ...(plan.explorerPlanId ? { explorerPlanId: plan.explorerPlanId } : {}),
       ...(projectConfigSnapshot ? { projectConfigVersion: projectConfigSnapshot.configVersion, projectConfigHash: projectConfigSnapshot.configHash, projectConfigSnapshot } : {}),
     });
     this.store.saveRevision(revision);
@@ -3477,7 +3778,8 @@ function extractResponseText(payload: Record<string, unknown>): string {
  * 模型回合结束后必须通过 Plan completeness gate，才会创建 CandidatePlan；普通文本完成不会越过门禁。
  */
 export class ExplorerThreadService {
-  private readonly jobs = new Map<string, { userId: string; assistantId: string; loopId?: string | undefined; providerThreadId: string | null; providerTurnId: string | null; resolveInput?: (() => void) | undefined; cancelled: boolean }>();
+  private readonly jobs = new Map<string, { userId: string; assistantId: string; explorerPlanId: string; loopId?: string | undefined; providerThreadId: string | null; providerTurnId: string | null; resolveInput?: (() => void) | undefined; cancelled: boolean }>();
+  private readonly queuedTurns = new Map<string, string[]>();
   private readonly agentLoops: AgentLoopEngine;
   private readonly listeners = new Map<string, Set<(event: DomainEvent) => void>>();
   private readonly plans: PlanService;
@@ -3509,6 +3811,7 @@ export class ExplorerThreadService {
           const turn = store.listTurns(thread.id).find((item) => item.id === request.localTurnId);
           if (turn && (turn.status === "RUNNING" || turn.status === "WAITING_FOR_INPUT")) {
             store.updateTurn({ ...turn, status: "FAILED", error: "STRUCTURED_INPUT_RECOVERY_REQUIRED", content: turn.content || "模型回合中断，需要恢复结构化输入" });
+            if (turn.explorerPlanId) this.updatePlanRuntimeStatus(thread.id, turn.explorerPlanId, "FAILED");
             recoveredTurnIds.add(turn.id);
           }
           if (thread.state === "WAITING_FOR_INPUT") store.updateThread({ ...thread, state: "ACTIVE", lastActivityAt: store.now() });
@@ -3517,45 +3820,124 @@ export class ExplorerThreadService {
       for (const turn of store.listTurns(thread.id)) {
         if (recoveredTurnIds.has(turn.id) || (turn.status !== "RUNNING" && turn.status !== "WAITING_FOR_INPUT")) continue;
         store.updateTurn({ ...turn, status: "FAILED", error: "EXPLORER_TURN_RECOVERY_REQUIRED", content: turn.content || "模型回合中断，需要重新开始探索" });
+        if (turn.explorerPlanId) this.updatePlanRuntimeStatus(thread.id, turn.explorerPlanId, "FAILED");
         if (thread.state === "WAITING_FOR_INPUT") store.updateThread({ ...thread, state: "ACTIVE", lastActivityAt: store.now() });
       }
     }
+    for (const thread of store.listThreads()) {
+      const queued = store.listTurns(thread.id).filter((turn) => turn.role === "assistant" && turn.status === "QUEUED").map((turn) => turn.id);
+      if (queued.length) this.queuedTurns.set(thread.id, queued);
+    }
   }
 
-  async startTurn(input: { threadId: string; content: string; clientTurnId: string }): Promise<{ user: ExplorerTurn; assistant: ExplorerTurn; eventsUrl: string; loopId: string }> {
+  async recoverQueuedTurns(): Promise<void> {
+    for (const threadId of this.queuedTurns.keys()) await this.startNextQueuedTurn(threadId);
+  }
+
+  async startTurn(input: { threadId: string; explorerPlanId?: string; content: string; clientTurnId: string }): Promise<{ user: ExplorerTurn; assistant: ExplorerTurn; eventsUrl: string; loopId: string | null }> {
     const thread = this.store.getThread(input.threadId);
     if (!thread) throw new Error(`ExplorerThread ${input.threadId} not found`);
     const prior = this.store.getIdempotency("explorer-turn", input.clientTurnId);
-    if (prior) return prior as unknown as { user: ExplorerTurn; assistant: ExplorerTurn; eventsUrl: string; loopId: string };
+    if (prior) return prior as unknown as { user: ExplorerTurn; assistant: ExplorerTurn; eventsUrl: string; loopId: string | null };
     if (thread.state === "ARCHIVED") throw new Error(`ExplorerThread ${input.threadId} is archived`);
-    if ([...this.jobs.keys()].includes(input.threadId) || this.store.listTurns(input.threadId).some((turn) => turn.status === "RUNNING" || turn.status === "WAITING_FOR_INPUT")) {
-      throw new Error(`ExplorerThread ${input.threadId} already has an active turn`);
-    }
+    const plan = this.resolveExplorerPlan(thread, input.explorerPlanId);
     const turns = this.store.listTurns(input.threadId);
-    const user: ExplorerTurn = { id: this.store.nextId("turn"), threadId: input.threadId, role: "user", content: input.content, status: "COMPLETED", createdAt: this.store.now(), sequence: turns.length + 1 };
-    const assistant: ExplorerTurn = { id: this.store.nextId("turn"), threadId: input.threadId, role: "assistant", content: "", status: "RUNNING", createdAt: this.store.now(), sequence: turns.length + 2 };
+    const hasActiveJob = this.jobs.has(input.threadId) || this.store.listTurns(input.threadId).some((turn) => turn.status === "RUNNING" || turn.status === "WAITING_FOR_INPUT");
+    const user: ExplorerTurn = { id: this.store.nextId("turn"), threadId: input.threadId, role: "user", content: input.content, status: "COMPLETED", createdAt: this.store.now(), sequence: turns.length + 1, explorerPlanId: plan.id };
+    const assistant: ExplorerTurn = { id: this.store.nextId("turn"), threadId: input.threadId, role: "assistant", content: "", status: hasActiveJob ? "QUEUED" : "RUNNING", createdAt: this.store.now(), sequence: turns.length + 2, explorerPlanId: plan.id };
     this.store.saveTurn(user);
     this.store.saveTurn(assistant);
-    this.store.updateThread({ ...thread, messageCount: thread.messageCount + 2, lastActivityAt: assistant.createdAt });
+    this.store.updateThread({ ...thread, activeExplorerPlanId: plan.id, messageCount: thread.messageCount + 2, lastActivityAt: assistant.createdAt });
+    this.store.updateExplorerPlan({ ...plan, messageCount: plan.messageCount + 2, latestUserMessageSummary: summarizeExplorerMessage(input.content), runtimeStatus: assistant.status, lastActivityAt: assistant.createdAt });
     this.scheduleTitleGeneration(thread.id, input.content);
     const accepted = { user, assistant, eventsUrl: `/api/v4/projects/${thread.projectId}/explorer-thread/events?threadId=${encodeURIComponent(thread.id)}` };
-    this.publish(this.store.appendEvent({ type: "explorer.turn.accepted", aggregateId: input.threadId, payload: { turnId: assistant.id, userTurnId: user.id } }));
-    const job: { userId: string; assistantId: string; loopId?: string; providerThreadId: string | null; providerTurnId: string | null; resolveInput?: (() => void) | undefined; cancelled: boolean } = { userId: user.id, assistantId: assistant.id, providerThreadId: thread.providerThreadId, providerTurnId: null, cancelled: false };
-    this.jobs.set(input.threadId, job);
+    this.publish(this.store.appendEvent({ type: "explorer.turn.accepted", aggregateId: input.threadId, payload: { turnId: assistant.id, userTurnId: user.id, explorerPlanId: plan.id, loopId: null, state: assistant.status } }));
+    if (hasActiveJob) {
+      const queue = this.queuedTurns.get(thread.id) ?? [];
+      queue.push(assistant.id);
+      this.queuedTurns.set(thread.id, queue);
+      const acceptedWithQueue = { ...accepted, loopId: null };
+      this.store.saveIdempotency("explorer-turn", input.clientTurnId, acceptedWithQueue as unknown as Record<string, unknown>);
+      return acceptedWithQueue;
+    }
+    const loop = await this.startQueuedTurn(thread.id, assistant.id);
+    const acceptedWithLoop = { ...accepted, loopId: loop.id };
+    this.store.saveIdempotency("explorer-turn", input.clientTurnId, acceptedWithLoop as unknown as Record<string, unknown>);
+    return acceptedWithLoop;
+  }
+
+  private async startQueuedTurn(threadId: string, assistantId: string): Promise<AgentLoop> {
+    const thread = this.store.getThread(threadId);
+    const assistant = this.store.listTurns(threadId).find((turn) => turn.id === assistantId && turn.role === "assistant");
+    if (!thread || !assistant) throw new Error(`Explorer turn ${assistantId} not found`);
+    const plan = this.resolveExplorerPlan(thread, assistant.explorerPlanId);
+    if (assistant.status === "QUEUED") this.store.updateTurn({ ...assistant, status: "RUNNING" });
+    const job: { userId: string; assistantId: string; explorerPlanId: string; loopId?: string; providerThreadId: string | null; providerTurnId: string | null; resolveInput?: (() => void) | undefined; cancelled: boolean } = { userId: this.store.listTurns(threadId).find((turn) => turn.role === "user" && turn.sequence < assistant.sequence && turn.explorerPlanId === plan.id)?.id ?? "", assistantId, explorerPlanId: plan.id, providerThreadId: thread.providerThreadId, providerTurnId: null, cancelled: false };
+    this.jobs.set(threadId, job);
+    const user = this.store.listTurns(threadId).find((turn) => turn.id === job.userId);
+    const planBoundary = this.planBoundary(thread, plan, user?.content ?? "");
     const loop = await this.agentLoops.start({
       ownerType: "explorer-turn",
       ownerId: assistant.id,
       role: "explorer",
       mode: this.modelConfigForProject?.(thread.projectId)?.loopMode ?? "provider-controlled",
       maxSteps: this.loopMaxSteps,
-      modelRequest: { messages: this.store.listTurns(thread.id).filter((turn) => turn.id !== assistant.id).map((turn) => ({ role: turn.role, content: turn.content })), conversationId: thread.id, ...(thread.providerThreadId ? { providerThreadId: thread.providerThreadId } : {}), ...(this.cwdForProject?.(thread.projectId) ? { cwd: this.cwdForProject(thread.projectId) } : {}), ...(this.modelConfigForProject?.(thread.projectId) ? { modelConfig: this.modelConfigForProject(thread.projectId) } : {}) },
+      modelRequest: { messages: this.store.listTurns(thread.id).filter((turn) => turn.id !== assistant.id && !(turn.role === "assistant" && turn.status === "QUEUED")).map((turn) => ({ role: turn.role, content: turn.content })), conversationId: thread.id, continuationPrompt: planBoundary, ...(thread.providerThreadId ? { providerThreadId: thread.providerThreadId } : {}), ...(this.cwdForProject?.(thread.projectId) ? { cwd: this.cwdForProject(thread.projectId) } : {}), ...(this.modelConfigForProject?.(thread.projectId) ? { modelConfig: this.modelConfigForProject(thread.projectId) } : {}) },
       gate: new PlanCompletenessGate(),
       onEvent: (event) => this.handleExplorerLoopEvent(thread.id, assistant.id, event),
     });
     job.loopId = loop.id;
-    const acceptedWithLoop = { ...accepted, loopId: loop.id };
-    this.store.saveIdempotency("explorer-turn", input.clientTurnId, acceptedWithLoop as unknown as Record<string, unknown>);
-    return acceptedWithLoop;
+    this.updatePlanRuntimeStatus(threadId, plan.id, "RUNNING");
+    this.publish(this.store.appendEvent({ type: "explorer.turn.started", aggregateId: threadId, payload: { turnId: assistantId, explorerPlanId: plan.id, loopId: loop.id } }));
+    return loop;
+  }
+
+  private async startNextQueuedTurn(threadId: string): Promise<void> {
+    if (this.jobs.has(threadId)) return;
+    const queue = this.queuedTurns.get(threadId) ?? [];
+    let assistantId: string | undefined;
+    while (queue.length > 0 && !assistantId) {
+      const candidateId = queue.shift();
+      const candidate = candidateId ? this.store.listTurns(threadId).find((turn) => turn.id === candidateId) : undefined;
+      if (candidate?.role === "assistant" && candidate.status === "QUEUED") assistantId = candidate.id;
+    }
+    if (queue.length === 0) this.queuedTurns.delete(threadId);
+    else this.queuedTurns.set(threadId, queue);
+    if (!assistantId) return;
+    try {
+      await this.startQueuedTurn(threadId, assistantId);
+    } catch (error) {
+      const current = this.store.listTurns(threadId).find((turn) => turn.id === assistantId);
+      if (current) this.store.updateTurn({ ...current, status: "FAILED", error: error instanceof Error ? error.message : String(error), content: "模型调用未能启动" });
+      if (current?.explorerPlanId) this.updatePlanRuntimeStatus(threadId, current.explorerPlanId, "FAILED");
+      this.publish(this.store.appendEvent({ type: "explorer.turn.failed", aggregateId: threadId, payload: { assistantTurnId: assistantId, turnId: assistantId, explorerPlanId: current?.explorerPlanId ?? null, loopId: null, error: error instanceof Error ? error.message : String(error) } }));
+      await this.startNextQueuedTurn(threadId);
+    }
+  }
+
+  private updatePlanRuntimeStatus(threadId: string, explorerPlanId: string, runtimeStatus: NonNullable<ExplorerTurn["status"]>): void {
+    const plan = this.store.getExplorerPlan(explorerPlanId);
+    if (!plan || plan.explorerThreadId !== threadId) return;
+    this.store.updateExplorerPlan({ ...plan, runtimeStatus, lastActivityAt: this.store.now() });
+  }
+
+  private resolveExplorerPlan(thread: ExplorerThread, explorerPlanId?: string): ExplorerPlan {
+    const selected = explorerPlanId ? this.store.getExplorerPlan(explorerPlanId) : this.store.getExplorerPlan(thread.activeExplorerPlanId ?? "");
+    if (explorerPlanId && (!selected || selected.explorerThreadId !== thread.id || selected.projectId !== thread.projectId)) throw new Error("ExplorerPlan does not belong to this ExplorerThread");
+    if (selected && selected.explorerThreadId === thread.id && selected.projectId === thread.projectId) return selected;
+    const first = this.store.listExplorerPlans(thread.id)[0];
+    if (first) return first;
+    const createdAt = this.store.now();
+    const created = defaultExplorerPlan(thread, this.store.nextId("explorer-plan"), 1, createdAt);
+    this.store.saveExplorerPlan(created);
+    this.store.updateThread({ ...thread, activeExplorerPlanId: created.id, contextSummary: { ...(thread.contextSummary ?? defaultThreadContextSummary(createdAt)), openPlanIds: [created.id] } });
+    return created;
+  }
+
+  private planBoundary(thread: ExplorerThread, plan: ExplorerPlan, content: string): string {
+    const firstPlanTurn = this.store.listTurns(thread.id).filter((turn) => turn.explorerPlanId === plan.id && turn.role === "user").length <= 1;
+    const summary = thread.contextSummary ? JSON.stringify(thread.contextSummary) : "{}";
+    return `[Explorer Plan ${plan.ordinal}: ${plan.title}]\n${firstPlanTurn ? `Thread summary: ${summary}\n` : ""}Only continue the current Explorer Plan. Keep artifacts and decisions scoped to this Plan while retaining the shared ExplorerThread context.\nUser message:\n${content}`;
   }
 
   async backfillTitles(): Promise<void> {
@@ -3587,7 +3969,7 @@ export class ExplorerThreadService {
       const thread = this.store.getThread(threadId);
       if (!thread || thread.titleSource !== "AUTO" || thread.titleStatus !== "GENERATING") return;
       const updated = this.store.updateThread({ ...thread, title: composeExplorerTitle(thread.createdAt, generated), titleStatus: "GENERATED" });
-      this.publish(this.store.appendEvent({ type: "explorer.title.updated", aggregateId: threadId, payload: { explorerId: threadId, title: updated.title, titleStatus: updated.titleStatus } }));
+      this.publish(this.store.appendEvent({ type: "explorer.title.updated", aggregateId: threadId, payload: { explorerId: threadId, explorerPlanId: updated.activeExplorerPlanId, turnId: null, loopId: null, title: updated.title, titleStatus: updated.titleStatus } }));
     } catch {
       const thread = this.store.getThread(threadId);
       if (thread?.titleSource === "AUTO" && thread.titleStatus === "GENERATING") this.store.updateThread({ ...thread, title: projectPlaceholderExplorerTitle(this.store, thread), titleStatus: "FAILED" });
@@ -3615,7 +3997,7 @@ export class ExplorerThreadService {
     } catch (error) {
       const recovery = { ...request, status: "RECOVERY_REQUIRED" as const };
       this.store.updateInputRequest(recovery);
-      this.publish(this.store.appendEvent({ type: "explorer.turn.failed", aggregateId: input.threadId, payload: { inputRequestId: request.id, recoveryRequired: true, error: error instanceof Error ? error.message : String(error) } }));
+      this.publish(this.store.appendEvent({ type: "explorer.turn.failed", aggregateId: input.threadId, payload: { inputRequestId: request.id, turnId: request.localTurnId, explorerPlanId: request.explorerPlanId ?? null, loopId: job.loopId ?? null, recoveryRequired: true, error: error instanceof Error ? error.message : String(error) } }));
       throw new Error(`Structured input response is uncertain; recovery is required: ${error instanceof Error ? error.message : String(error)}`);
     }
     const answered: ExplorerInputRequest = {
@@ -3629,12 +4011,14 @@ export class ExplorerThreadService {
       })),
     };
     this.store.updateInputRequest(answered);
-    const assistant = this.currentAssistant(input.threadId);
+    const assistant = this.store.listTurns(input.threadId).find((turn) => turn.id === request.localTurnId && turn.role === "assistant");
+    if (!assistant) throw new Error("Assistant turn for input request not found");
     this.store.updateTurn({ ...assistant, status: "RUNNING" });
+    if (assistant.explorerPlanId) this.updatePlanRuntimeStatus(input.threadId, assistant.explorerPlanId, "RUNNING");
     const thread = this.store.getThread(input.threadId);
     if (thread) this.store.updateThread({ ...thread, state: "ACTIVE", lastActivityAt: this.store.now() });
-    this.publish(this.store.appendEvent({ type: "explorer.turn.input.resolved", aggregateId: input.threadId, payload: { inputRequestId: request.id, actorId: input.actorId, answerCounts: answered.redactedAnswerSummary } }));
-    const result = { request: answered, turn: this.currentAssistant(input.threadId) };
+    this.publish(this.store.appendEvent({ type: "explorer.turn.input.resolved", aggregateId: input.threadId, payload: { inputRequestId: request.id, turnId: request.localTurnId, explorerPlanId: request.explorerPlanId ?? null, loopId: job.loopId ?? null, actorId: input.actorId, answerCounts: answered.redactedAnswerSummary } }));
+    const result = { request: answered, turn: { ...assistant, status: "RUNNING" as const } };
     this.store.saveIdempotency("input-answer", input.clientRequestId, result as unknown as Record<string, unknown>);
     return result;
   }
@@ -3642,17 +4026,28 @@ export class ExplorerThreadService {
   async cancelTurn(input: { threadId: string; turnId: string; reason: string }): Promise<ExplorerTurn> {
     const job = this.jobs.get(input.threadId);
     const assistant = this.store.listTurns(input.threadId).find((turn) => turn.id === input.turnId && turn.role === "assistant");
-    if (!job || !assistant) throw new Error("Active Explorer turn not found");
+    if (!assistant) throw new Error("Active Explorer turn not found");
+    if (!job || job.assistantId !== assistant.id) {
+      const queue = this.queuedTurns.get(input.threadId) ?? [];
+      if (assistant.status !== "QUEUED" || !queue.includes(assistant.id)) throw new Error("Active Explorer turn not found");
+      this.queuedTurns.set(input.threadId, queue.filter((id) => id !== assistant.id));
+      const cancelledQueued = { ...assistant, status: "CANCELLED" as const, content: "本轮已取消", error: input.reason };
+      this.store.updateTurn(cancelledQueued);
+      if (assistant.explorerPlanId) this.updatePlanRuntimeStatus(input.threadId, assistant.explorerPlanId, "CANCELLED");
+      this.publish(this.store.appendEvent({ type: "explorer.turn.cancelled", aggregateId: input.threadId, payload: { turnId: input.turnId, explorerPlanId: assistant.explorerPlanId ?? null, loopId: null, reason: input.reason } }));
+      return cancelledQueued;
+    }
     job.cancelled = true;
     if (job.loopId) await this.agentLoops.cancel(job.loopId, input.reason);
     else if (job.providerThreadId) await this.model.cancel({ conversationId: input.threadId, providerThreadId: job.providerThreadId, ...(job.providerTurnId ? { providerTurnId: job.providerTurnId } : {}) });
-    for (const request of this.store.listInputRequests(input.threadId, "OPEN")) this.store.updateInputRequest({ ...request, status: "CANCELLED", answeredAt: this.store.now(), answeredBy: "cancelled" });
+    for (const request of this.store.listInputRequests(input.threadId, "OPEN")) if (request.localTurnId === assistant.id) this.store.updateInputRequest({ ...request, status: "CANCELLED", answeredAt: this.store.now(), answeredBy: "cancelled" });
     job.resolveInput?.();
     const cancelled: ExplorerTurn = { ...assistant, status: "CANCELLED", content: "本轮已取消", error: input.reason };
     this.store.updateTurn(cancelled);
     const thread = this.store.getThread(input.threadId);
     if (thread) this.store.updateThread({ ...thread, state: "ACTIVE", lastActivityAt: this.store.now() });
-    this.publish(this.store.appendEvent({ type: "explorer.turn.cancelled", aggregateId: input.threadId, payload: { turnId: input.turnId, reason: input.reason } }));
+    if (assistant.explorerPlanId) this.updatePlanRuntimeStatus(input.threadId, assistant.explorerPlanId, "CANCELLED");
+    this.publish(this.store.appendEvent({ type: "explorer.turn.cancelled", aggregateId: input.threadId, payload: { turnId: input.turnId, explorerPlanId: assistant.explorerPlanId ?? null, loopId: job.loopId ?? null, reason: input.reason } }));
     return cancelled;
   }
 
@@ -3677,7 +4072,8 @@ export class ExplorerThreadService {
     const paused = await this.agentLoops.pause(loopId, reason);
     const turn = this.store.listTurns(threadId).find((item) => item.id === turnId);
     if (turn && turn.status === "RUNNING") this.store.updateTurn({ ...turn, status: "QUEUED" });
-    this.publish(this.store.appendEvent({ type: "explorer.thread.state.changed", aggregateId: threadId, payload: { state: "PAUSED", loopId, turnId, reason } }));
+    const pausedTurn = this.store.listTurns(threadId).find((turn) => turn.id === turnId);
+    this.publish(this.store.appendEvent({ type: "explorer.thread.state.changed", aggregateId: threadId, payload: { state: "PAUSED", loopId, turnId, explorerPlanId: pausedTurn?.explorerPlanId ?? null, reason } }));
     return paused;
   }
 
@@ -3722,8 +4118,14 @@ export class ExplorerThreadService {
       if (!text) return;
       const current = this.store.listTurns(threadId).find((turn) => turn.id === assistantId);
       if (!current) return;
+      const providerThreadId = typeof event.payload.providerThreadId === "string" ? event.payload.providerThreadId : null;
+      if (providerThreadId) {
+        const currentThread = this.store.getThread(threadId);
+        if (currentThread && currentThread.providerThreadId !== providerThreadId) this.store.updateThread({ ...currentThread, providerThreadId, lastActivityAt: this.store.now() });
+      }
       this.store.updateTurn({ ...current, content: current.content + text, status: "RUNNING" });
-      this.publish(this.store.appendEvent({ type: "explorer.turn.text.delta", aggregateId: threadId, payload: { turnId: assistantId, text } }));
+      this.updatePlanRuntimeStatus(threadId, job.explorerPlanId, "RUNNING");
+      this.publish(this.store.appendEvent({ type: "explorer.turn.text.delta", aggregateId: threadId, payload: { turnId: assistantId, explorerPlanId: job.explorerPlanId, loopId: job.loopId ?? null, text } }));
       return;
     }
     if (event.type === "agent.input.required") {
@@ -3731,13 +4133,14 @@ export class ExplorerThreadService {
       if (!request) return;
       job.providerThreadId = request.threadId;
       job.providerTurnId = request.turnId;
-      const inputRequest: ExplorerInputRequest = { id: this.store.nextId("input"), threadId, localTurnId: assistantId, providerRequestId: request.requestId, providerThreadId: request.threadId, providerTurnId: request.turnId, itemId: request.itemId, questions: request.questions, isBlocking: request.isBlocking, autoResolutionMs: request.autoResolutionMs, status: "OPEN", createdAt: this.store.now(), answeredAt: null, answeredBy: null, redactedAnswerSummary: null };
+      const inputRequest: ExplorerInputRequest = { id: this.store.nextId("input"), threadId, explorerPlanId: job.explorerPlanId, localTurnId: assistantId, providerRequestId: request.requestId, providerThreadId: request.threadId, providerTurnId: request.turnId, itemId: request.itemId, questions: request.questions, isBlocking: request.isBlocking, autoResolutionMs: request.autoResolutionMs, status: "OPEN", createdAt: this.store.now(), answeredAt: null, answeredBy: null, redactedAnswerSummary: null };
       const saved = this.store.saveInputRequest(inputRequest);
       const currentThread = this.store.getThread(threadId);
       if (currentThread) this.store.updateThread({ ...currentThread, state: "WAITING_FOR_INPUT", lastActivityAt: this.store.now() });
       const currentTurn = this.store.listTurns(threadId).find((turn) => turn.id === assistantId);
       if (currentTurn) this.store.updateTurn({ ...currentTurn, status: "WAITING_FOR_INPUT" });
-      this.publish(this.store.appendEvent({ type: "explorer.turn.input_required", aggregateId: threadId, payload: { requestId: saved.id, threadId, localTurnId: assistantId, providerRequestId: saved.providerRequestId, providerThreadId: saved.providerThreadId, providerTurnId: saved.providerTurnId, itemId: saved.itemId, questions: saved.questions, isBlocking: saved.isBlocking, autoResolutionMs: saved.autoResolutionMs } }));
+      this.updatePlanRuntimeStatus(threadId, job.explorerPlanId, "WAITING_FOR_INPUT");
+      this.publish(this.store.appendEvent({ type: "explorer.turn.input_required", aggregateId: threadId, payload: { requestId: saved.id, threadId, turnId: assistantId, explorerPlanId: job.explorerPlanId, loopId: job.loopId ?? null, localTurnId: assistantId, providerRequestId: saved.providerRequestId, providerThreadId: saved.providerThreadId, providerTurnId: saved.providerTurnId, itemId: saved.itemId, questions: saved.questions, isBlocking: saved.isBlocking, autoResolutionMs: saved.autoResolutionMs } }));
       return;
     }
     if (event.type === "agent.loop.completed") {
@@ -3745,10 +4148,11 @@ export class ExplorerThreadService {
       return;
     }
     if (event.type === "agent.loop.cancelled") {
-      for (const request of this.store.listInputRequests(threadId)) if (request.status === "OPEN" || request.status === "SUBMITTING") this.store.updateInputRequest({ ...request, status: "CANCELLED", answeredAt: this.store.now(), answeredBy: "cancelled" });
+      for (const request of this.store.listInputRequests(threadId)) if (request.localTurnId === assistantId && (request.status === "OPEN" || request.status === "SUBMITTING")) this.store.updateInputRequest({ ...request, status: "CANCELLED", answeredAt: this.store.now(), answeredBy: "cancelled" });
       const current = this.store.listTurns(threadId).find((turn) => turn.id === assistantId);
       if (current && current.status !== "CANCELLED") this.store.updateTurn({ ...current, status: "CANCELLED", content: current.content || "本轮已取消" });
-      this.publish(this.store.appendEvent({ type: "explorer.turn.cancelled", aggregateId: threadId, payload: { turnId: assistantId, reason: event.payload.reason } }));
+      this.updatePlanRuntimeStatus(threadId, job.explorerPlanId, "CANCELLED");
+      this.publish(this.store.appendEvent({ type: "explorer.turn.cancelled", aggregateId: threadId, payload: { turnId: assistantId, explorerPlanId: job.explorerPlanId, loopId: job.loopId ?? null, reason: event.payload.reason } }));
       this.finishExplorerJob(threadId);
       return;
     }
@@ -3759,24 +4163,34 @@ export class ExplorerThreadService {
     const current = this.store.listTurns(threadId).find((turn) => turn.id === assistantId);
     const thread = this.store.getThread(threadId);
     if (!current || !thread) return;
+    const explorerPlan = this.resolveExplorerPlan(thread, current.explorerPlanId);
     const assessment = assessPlanCompletion(current.content);
-    this.store.updateThread({ ...thread, exploration: { ...thread.exploration, status: assessment.status, missing: assessment.missing, completed: assessment.completed, diagnostics: assessment.diagnostics, lastAssessedTurnId: assistantId }, lastActivityAt: this.store.now() });
-    this.publish(this.store.appendEvent({ type: assessment.status === "READY" ? "explorer.plan.ready" : "explorer.plan.incomplete", aggregateId: threadId, payload: { turnId: assistantId, missing: assessment.missing, completed: assessment.completed, diagnostics: assessment.diagnostics } }));
+    const updatedPlan = this.store.updateExplorerPlan({ ...explorerPlan, exploration: { ...explorerPlan.exploration, status: assessment.status, missing: assessment.missing, completed: assessment.completed, diagnostics: assessment.diagnostics, lastAssessedTurnId: assistantId }, lastAssessedTurnId: assistantId, runtimeStatus: "COMPLETED", lastActivityAt: this.store.now() });
+    const mirror = { status: assessment.status, missing: assessment.missing, completed: assessment.completed, diagnostics: assessment.diagnostics, candidatePlanId: explorerPlan.candidatePlanId, lastAssessedTurnId: assistantId };
+    this.updateThreadContextSummary(threadId, updatedPlan, assessment.artifact?.contract?.goal ?? assessment.artifact?.generatedSpec?.objective?.goal ?? null);
+    const currentThread = this.store.getThread(threadId) ?? thread;
+    this.store.updateThread({ ...currentThread, ...(currentThread.activeExplorerPlanId === explorerPlan.id ? { exploration: mirror } : {}), lastActivityAt: this.store.now() });
+    this.publish(this.store.appendEvent({ type: assessment.status === "READY" ? "explorer.plan.ready" : "explorer.plan.incomplete", aggregateId: threadId, payload: { turnId: assistantId, explorerPlanId: explorerPlan.id, missing: assessment.missing, completed: assessment.completed, diagnostics: assessment.diagnostics } }));
     if (assessment.status === "READY" && assessment.artifact) {
       const source = this.planSource(assistantId);
-      const activeDraftId = thread.activeRevisionDraftId;
+      const activeDraftId = thread.activeRevisionDraftId && (this.store.getRevisionDraft(thread.activeRevisionDraftId)?.explorerPlanId === undefined || this.store.getRevisionDraft(thread.activeRevisionDraftId)?.explorerPlanId === explorerPlan.id) ? thread.activeRevisionDraftId : null;
       if (activeDraftId) {
         this.plans.updateRevisionDraftFromExplorer(activeDraftId, assessment.artifact, source);
-        this.store.updateThread({ ...this.store.getThread(threadId)!, exploration: { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], diagnostics: [], candidatePlanId: this.store.getRevisionDraft(activeDraftId)?.planId ?? null, lastAssessedTurnId: assistantId }, lastActivityAt: this.store.now() });
+        const revisedPlan = this.store.getRevisionDraft(activeDraftId)?.planId ?? null;
+        const planAfterDraft = this.store.getExplorerPlan(explorerPlan.id);
+        if (planAfterDraft) this.store.updateExplorerPlan({ ...planAfterDraft, exploration: { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], diagnostics: [], candidatePlanId: revisedPlan, lastAssessedTurnId: assistantId }, candidatePlanId: revisedPlan, lastAssessedTurnId: assistantId, lastActivityAt: this.store.now() });
       } else {
-        const existing = this.store.listPlans().find((plan) => plan.sourceExplorerThreadId === threadId && plan.status === "DRAFT");
+        const existing = this.store.listPlans().find((plan) => plan.sourceExplorerThreadId === threadId && plan.explorerPlanId === explorerPlan.id && plan.status === "DRAFT");
         // 对同一初始草稿的多次 READY 覆盖完整合同和来源，而不只更新 source 指针。
-        const plan = existing ? this.store.updatePlan({ ...existing, title: assessment.artifact.title, ...(assessment.artifact.generatedSpec ? { generatedSpec: assessment.artifact.generatedSpec } : { contract: assessment.artifact.contract ?? existing.contract }), ...source, lastEventAt: this.store.now() }) : this.plans.createCandidatePlan({ projectId: thread.projectId, sourceExplorerThreadId: threadId, title: assessment.artifact.title, ...(assessment.artifact.generatedSpec ? { generatedSpec: assessment.artifact.generatedSpec } : { contract: assessment.artifact.contract }), ...source });
-        this.store.updateThread({ ...this.store.getThread(threadId)!, exploration: { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], diagnostics: [], candidatePlanId: plan.id, lastAssessedTurnId: assistantId }, lastActivityAt: this.store.now() });
+        const plan = existing ? this.store.updatePlan({ ...existing, title: assessment.artifact.title, ...(assessment.artifact.generatedSpec ? { generatedSpec: assessment.artifact.generatedSpec } : { contract: assessment.artifact.contract ?? existing.contract }), ...source, lastEventAt: this.store.now() }) : this.plans.createCandidatePlan({ projectId: thread.projectId, sourceExplorerThreadId: threadId, explorerPlanId: explorerPlan.id, title: assessment.artifact.title, ...(assessment.artifact.generatedSpec ? { generatedSpec: assessment.artifact.generatedSpec } : { contract: assessment.artifact.contract }), ...source });
+        const planAfterCandidate = this.store.updateExplorerPlan({ ...this.store.getExplorerPlan(explorerPlan.id)!, exploration: { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], diagnostics: [], candidatePlanId: plan.id, lastAssessedTurnId: assistantId }, candidatePlanId: plan.id, lastAssessedTurnId: assistantId, lastActivityAt: this.store.now() });
+        this.updateThreadContextSummary(threadId, planAfterCandidate, plan.contract.goal ?? null);
+        const latestThread = this.store.getThread(threadId)!;
+        if (latestThread.activeExplorerPlanId === explorerPlan.id) this.store.updateThread({ ...latestThread, exploration: planAfterCandidate.exploration, lastActivityAt: this.store.now() });
       }
     }
     this.store.updateTurn({ ...current, status: "COMPLETED", content: stripPlanProtocol(current.content) });
-    this.publish(this.store.appendEvent({ type: "explorer.turn.completed", aggregateId: threadId, payload: { assistantTurnId: assistantId, planReady: assessment.status === "READY" } }));
+    this.publish(this.store.appendEvent({ type: "explorer.turn.completed", aggregateId: threadId, payload: { assistantTurnId: assistantId, turnId: assistantId, explorerPlanId: explorerPlan.id, loopId: this.jobs.get(threadId)?.loopId ?? null, planReady: assessment.status === "READY" } }));
     this.finishExplorerJob(threadId);
   }
 
@@ -3785,10 +4199,12 @@ export class ExplorerThreadService {
       this.finalizeExplorerLoop(threadId, assistantId);
       return;
     }
-    for (const request of this.store.listInputRequests(threadId)) if (request.status === "OPEN" || request.status === "SUBMITTING") this.store.updateInputRequest({ ...request, status: "RECOVERY_REQUIRED" });
+    for (const request of this.store.listInputRequests(threadId)) if (request.localTurnId === assistantId && (request.status === "OPEN" || request.status === "SUBMITTING")) this.store.updateInputRequest({ ...request, status: "RECOVERY_REQUIRED" });
     const current = this.store.listTurns(threadId).find((turn) => turn.id === assistantId);
+    const job = this.jobs.get(threadId);
     if (current && current.status !== "CANCELLED") this.store.updateTurn({ ...current, status: "FAILED", error, content: current.content || `模型调用失败：${error}` });
-    this.publish(this.store.appendEvent({ type: "explorer.turn.failed", aggregateId: threadId, payload: { assistantTurnId: assistantId, error } }));
+    if (job) this.updatePlanRuntimeStatus(threadId, job.explorerPlanId, "FAILED");
+    this.publish(this.store.appendEvent({ type: "explorer.turn.failed", aggregateId: threadId, payload: { assistantTurnId: assistantId, turnId: assistantId, explorerPlanId: job?.explorerPlanId ?? current?.explorerPlanId ?? null, loopId: job?.loopId ?? null, error } }));
     this.finishExplorerJob(threadId);
   }
 
@@ -3796,6 +4212,21 @@ export class ExplorerThreadService {
     const thread = this.store.getThread(threadId);
     if (thread && thread.state !== "ARCHIVED") this.store.updateThread({ ...thread, state: "ACTIVE", lastActivityAt: this.store.now() });
     this.jobs.delete(threadId);
+    void this.startNextQueuedTurn(threadId);
+  }
+
+  private updateThreadContextSummary(threadId: string, changedPlan: ExplorerPlan, goal: string | null): void {
+    const thread = this.store.getThread(threadId);
+    if (!thread) return;
+    const plans = this.store.listExplorerPlans(threadId).map((plan) => plan.id === changedPlan.id ? changedPlan : plan);
+    const completedPlans = plans.filter((plan) => plan.exploration.status === "READY").map((plan) => {
+      const candidate = plan.candidatePlanId ? this.store.getPlan(plan.candidatePlanId) : undefined;
+      const resolvedGoal = goal && plan.id === changedPlan.id ? goal : candidate?.contract.goal ?? null;
+      const keyConstraints = candidate?.generatedSpec?.design.technicalConstraints ?? [];
+      return { explorerPlanId: plan.id, title: plan.title, status: plan.exploration.status, goal: resolvedGoal, keyConstraints: [...keyConstraints], latestUserMessageSummary: plan.latestUserMessageSummary };
+    });
+    const contextSummary: ExplorerThreadContextSummary = { version: 1, updatedAt: this.store.now(), completedPlans, openPlanIds: plans.filter((plan) => plan.exploration.status !== "READY").map((plan) => plan.id) };
+    this.store.updateThread({ ...thread, contextSummary });
   }
 
   private planSource(assistantId: string): { sourceTurnId: string; providerThreadId: string | null; providerTurnId: string | null; providerItemId: string | null } {

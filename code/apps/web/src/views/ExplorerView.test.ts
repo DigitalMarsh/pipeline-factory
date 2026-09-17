@@ -172,7 +172,7 @@ describe("Explorer context panel wiring", () => {
     const enqueueSource = explorerViewSource.match(/async function enqueuePlan[\s\S]*?\n\}/)?.[0] ?? "";
 
     expect(confirmedSection).toContain("plan.status === 'READY'");
-    expect(confirmedSection).toContain('@click="enqueuePlan(plan)"');
+    expect(confirmedSection).toContain('@click.stop="enqueuePlan(plan)"');
     expect(confirmedSection).toContain("Enqueue plan");
     expect(enqueueSource).toContain("plan: Plan | null = candidate.value");
     expect(enqueueSource).toContain("const id = plan.id ?? plan.planId");
@@ -185,7 +185,7 @@ describe("Explorer context panel wiring", () => {
     expect(explorerViewSource).toContain('key: "enqueued"');
     expect(contextMenuSource).not.toContain('key: "plan-center"');
     expect(enqueuedSection).toContain("plan.status === 'ENQUEUED'");
-    expect(enqueuedSection).toContain('@click="startPlanRun(plan)"');
+    expect(enqueuedSection).toContain('@click.stop="startPlanRun(plan)"');
     expect(enqueuedSection).toContain("Start run");
     expect(explorerViewSource).toContain('<PlanCenterPanel :project-id="projectId"');
     expect(explorerViewSource).toContain("contextPanel === 'plan-center'");
@@ -220,11 +220,11 @@ describe("Explorer context panel wiring", () => {
     expect(explorerViewSource).toContain("const detailPlan = ref<Plan | null>(null)");
     expect(explorerViewSource).toContain("function openPlanDetail(plan: Plan)");
     expect(explorerViewSource).toContain('<PlanDetailDrawer v-model="drawerOpen" :plan="detailPlan"');
-    expect(explorerViewSource).toContain('@click="openPlanDetail(candidate)"');
+    expect(explorerViewSource).toContain('@click.stop="openPlanDetail(candidate)"');
 
     for (const panel of ["confirmed", "enqueued", "dispatched", "attention"]) {
       const section = explorerViewSource.match(new RegExp(`<section v-else-if="contextPanel === '${panel}'"[\\s\\S]*?<\\/section>`))?.[0] ?? "";
-      expect(section).toContain('@click="openPlanDetail(plan)"');
+      expect(section).toContain('@click.stop="openPlanDetail(plan)"');
       expect(section).toContain("View full plan");
     }
 
@@ -288,22 +288,19 @@ describe("Explorer rail layout", () => {
 });
 
 describe("Explorer inline message presentation", () => {
-  it("restores a narrow marker rail while keeping expandable user summaries", () => {
-    expect(explorerViewSource).toContain('class="timeline-rail timeline-rail-messages"');
-    expect(explorerViewSource).toContain("const messageTimelineItems = computed");
-    expect(explorerViewSource).toContain("buildExplorerMessageTimeline");
-    expect(explorerViewSource).toContain('class="timeline-message-index"');
-    expect(explorerViewSource).toContain('class="timeline-message-index-marker"');
-    expect(explorerViewSource).toContain(':aria-current="activeTimelineKey === item.activationKey || activeTimelineKey === item.target ? \'location\' : undefined"');
-    expect(explorerViewSource).toContain(':title="`${item.detail} · ${item.label}`"');
-    expect(explorerViewSource).toContain('@click="jumpToTimelineTarget(item.target, item.activationKey)"');
+  it("renders a Task tree in the chat rail while keeping expandable user summaries", () => {
+    expect(explorerViewSource).toContain('class="task-tree-rail"');
+    expect(explorerViewSource).toContain("const taskTreeItems = computed");
+    expect(explorerViewSource).toContain('aria-label="Task tree"');
+    expect(explorerViewSource).toContain('aria-label="Task and Plan navigation"');
+    expect(explorerViewSource).toContain('class="task-tree-toggle"');
+    expect(explorerViewSource).toContain('class="task-tree-plan-button"');
+    expect(explorerViewSource).toContain("@click=\"selectPlanTreeItem(item)\"");
     expect(explorerViewSource).not.toContain(">MESSAGES</span>");
     expect(explorerStylesSource).toMatch(/\.timeline-stage \{[^}]*position: relative;/);
-    expect(explorerStylesSource).toMatch(/\.timeline-rail-messages \{[^}]*position: absolute;[^}]*width: 32px;[^}]*background: transparent;[^}]*pointer-events: none;/);
-    expect(explorerStylesSource).toContain(".timeline-message-index-item { display: flex;");
-    expect(explorerStylesSource).toContain("pointer-events: auto;");
-    expect(explorerStylesSource).toContain(".timeline-message-index-item:focus-visible");
-    expect(explorerStylesSource).toContain(".timeline-message-index-item.active .timeline-message-index-marker");
+    expect(explorerStylesSource).toContain(".task-tree-rail { width: 224px;");
+    expect(explorerStylesSource).toContain(".task-tree-toggle:focus-visible");
+    expect(explorerStylesSource).toContain(".task-tree-plan-button:focus-visible");
     expect(explorerViewSource).toContain('class="user-message-summary"');
     expect(explorerViewSource).toContain(':aria-expanded="isUserMessageExpanded(item.activity.id)"');
     expect(explorerViewSource).toContain('@click="toggleUserMessage(item.activity.id)"');
@@ -323,6 +320,28 @@ describe("Explorer inline message presentation", () => {
     expect(explorerViewSource).toContain("v-else-if=\"item.kind === 'plan'\"");
     expect(explorerViewSource).not.toContain("syntheticPlanItems");
     expect(explorerViewSource).not.toContain("v-for=\"item in syntheticPlanItems\"");
+  });
+
+  it("renders one accessible Task node per ExplorerPlan and restores it from the route", () => {
+    expect(explorerViewSource).toContain("const explorerPlans = ref<ExplorerPlan[]>([])");
+    expect(explorerViewSource).toContain("const activeExplorerPlanId = ref<string | null>(null)");
+    expect(explorerViewSource).toContain("api.explorerPlanGroups(requestProjectId, selected.id)");
+    expect(explorerViewSource).toContain("api.createExplorerPlan(projectId.value, currentThread.id)");
+    expect(explorerViewSource).toContain("api.explorerPlanWorkspace");
+    expect(explorerViewSource).toContain("route.query.explorerPlanId");
+    expect(explorerViewSource).toContain('aria-label="Task tree"');
+    expect(explorerViewSource).toContain('class="task-tree-task-button"');
+    expect(explorerViewSource).toContain("taskDisplayTitle(item.task)");
+    expect(explorerViewSource).toContain("taskRuntimeLabel(item.task)");
+    expect(explorerViewSource).toContain("selectPlanTreeItem(item)");
+    expect(explorerViewSource).toContain("@click=\"selectPlanFromCard(plan, $event)\"");
+    expect(explorerViewSource).toContain('command="new-task"');
+    expect(explorerViewSource).toContain("新建 Task");
+    expect(explorerViewSource).not.toContain('command="new-plan"');
+    expect(explorerViewSource).not.toContain("新建 Plan");
+    expect(explorerViewSource).not.toContain('aria-label="Plan timeline"');
+    expect(explorerViewSource).not.toContain("EXPLORER PLANS");
+    expect(explorerStylesSource).not.toContain(".timeline-rail-plans");
   });
 });
 
@@ -351,7 +370,7 @@ describe("Explorer thread switching", () => {
     expect(explorerViewSource).toContain("async function selectExplorer(explorerId: string)");
     expect(explorerViewSource).toContain("query: explorerRouteQuery(explorerId), hash: \"\" });");
     expect(explorerViewSource).toContain("void reloadSelectedExplorer();");
-    expect(explorerViewSource).toContain("api.getExplorerTurns(requestProjectId, selected.id)");
+    expect(explorerViewSource).toContain("api.explorerPlanWorkspace(requestProjectId, explorerId, explorerPlanId)");
   });
 
   it("separates Explorer creation from turn busy state and clears stale thread data", () => {
@@ -531,7 +550,7 @@ describe("Explorer composer availability", () => {
 
   it("explains why the send button is unavailable while the current turn is running", () => {
     expect(explorerViewSource).toContain(`:title="busy ? '当前回合执行中，完成后可发送' : 'Send message'"`);
-    expect(explorerViewSource).toContain(`if (!content || busy.value || !thread.value || thread.value.state === "ARCHIVED"`);
+    expect(explorerViewSource).toContain(`if (!content || activePlanBusy.value || !thread.value || thread.value.state === "ARCHIVED"`);
   });
 });
 
