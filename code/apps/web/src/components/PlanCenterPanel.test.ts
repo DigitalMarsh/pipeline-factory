@@ -89,4 +89,31 @@ describe("PlanCenterPanel", () => {
     mounted.app.unmount();
     mounted.host.remove();
   });
+
+  it("emits an inline Run request instead of linking to the standalone Run page", async () => {
+    const expected = { ...plan(), runId: "run-1", explorerPlanId: "explorer-plan-1" };
+    vi.mocked(api.plans).mockResolvedValue({ items: [expected], nextCursor: null });
+    const opened: Plan[] = [];
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const app = createApp(PlanCenterPanel, { projectId: expected.projectId, project: project(), onOpenRun: (value: Plan) => opened.push(value) });
+    app.component("ElButton", ElButtonStub);
+    app.component("ElSelect", ElSelectStub);
+    app.component("ElOption", ElOptionStub);
+    app.component("ElTag", ElTagStub);
+    app.component("RouterLink", RouterLinkStub);
+    app.directive("loading", {});
+    app.mount(host);
+    await nextTick();
+    await nextTick();
+    await nextTick();
+    await nextTick();
+
+    const runButton = [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("run-1"));
+    runButton?.click();
+
+    expect(opened).toEqual([expected]);
+    app.unmount();
+    host.remove();
+  });
 });

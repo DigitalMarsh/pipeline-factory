@@ -122,7 +122,11 @@ async function startPlanRun() {
 }
 
 function openRun() {
-  if (selectedRun.value) void router.push("/projects/" + selectedRun.value.projectId + "/runs/" + selectedRun.value.id);
+  const run = selectedRun.value;
+  const plan = selectedPlan.value;
+  if (!run || !plan) return;
+  const query = new URLSearchParams({ explorerId: plan.sourceExplorerThreadId, explorerPlanId: plan.explorerPlanId ?? plan.planId, contextPanel: "plan-center", runId: run.id });
+  void router.push(`/projects/${encodeURIComponent(run.projectId)}/explorer?${query.toString()}`);
 }
 
 function relativeTime(value: string | null | undefined) {

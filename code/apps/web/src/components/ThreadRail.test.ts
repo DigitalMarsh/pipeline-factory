@@ -6,6 +6,7 @@ import { createApp, defineComponent, h, nextTick, ref } from "vue";
 import { describe, expect, it } from "vitest";
 import ThreadRail from "./ThreadRail.vue";
 import type { ExplorerThread, Project } from "../types";
+import type { TaskTreeItem } from "../utils/taskTree";
 
 const styles = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../styles.css"), "utf8");
 
@@ -18,6 +19,10 @@ function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplor
   let selectedPlanCenter = false;
   let selectedProjectId: string | null = null;
   let selectedExplorerId: string | null = null;
+  let selectedExplorerPlanId: string | null = null;
+  let toggledTaskId: string | null = null;
+  let selectedPlanTreeItem: TaskTreeItem | null = null;
+  let threadAction: string | null = null;
   let archivedExplorerId: string | null = null;
   const openedProjectIds: string[] = [];
   const settingsProjectIds: string[] = [];
@@ -33,6 +38,20 @@ function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplor
     { id: "explorer-2", projectId: "project-1", title: "Second exploration", state: "COMPLETED", contextMode: "FRESH", messageCount: 4, lastActivityAt: "2026-09-01T14:00:00.000Z" },
     ...(includeArchived ? [{ id: "explorer-3", projectId: "project-1", title: "Archived exploration", state: "ARCHIVED", contextMode: "FRESH", messageCount: 1, lastActivityAt: "2026-08-31T14:00:00.000Z" }] : []),
   ] as unknown as ExplorerThread[];
+  const taskTreeItems = [
+    {
+      task: { id: "task-1", ordinal: 1, title: "Plan 1 / 待探索", latestUserMessageSummary: "写一份苹果的简介", runtimeStatus: "COMPLETED" },
+      plan: { id: "plan-1", title: "Apple overview", revision: 1, status: "DRAFT" },
+      planKey: "plan-plan-1",
+      planTarget: "plan:plan-1",
+    },
+    {
+      task: { id: "task-2", ordinal: 2, title: "Task 2 / 待探索", latestUserMessageSummary: "写一份香蕉的简介", runtimeStatus: "QUEUED" },
+      plan: { id: "plan-2", title: "Banana overview", revision: 1, status: "DRAFT" },
+      planKey: "plan-plan-2",
+      planTarget: "plan:plan-2",
+    },
+  ] as unknown as TaskTreeItem[];
   const app = createApp(defineComponent({
     setup() {
       const activePanel = ref(panel);
@@ -50,12 +69,20 @@ function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplor
         projectActionId,
         planCenterActive,
         planCenterCount,
+        taskTreeItems,
+        activeExplorerPlanId: "task-1",
+        expandedTaskIds: ["task-1", "task-2"],
+        explorerPaused: false,
         onCreateExplorer: () => { createExplorerCount += 1; },
         onCreateProject: () => { createProjectCount += 1; },
         onSelectPanel: (value: "projects" | "explorers") => { selectedPanel = value; activePanel.value = value; },
         onSelectPlanCenter: () => { selectedPlanCenter = true; },
         onSelectProject: (projectId: string) => { selectedProjectId = projectId; },
         onSelectExplorer: (explorerId: string) => { selectedExplorerId = explorerId; },
+        onSelectExplorerPlan: (explorerPlanId: string) => { selectedExplorerPlanId = explorerPlanId; },
+        onToggleTaskExpanded: (taskId: string) => { toggledTaskId = taskId; },
+        onSelectPlanTreeItem: (item: TaskTreeItem) => { selectedPlanTreeItem = item; },
+        onThreadAction: (command: string) => { threadAction = command; },
         onToggleShowArchived: (value: boolean) => { archivedVisible.value = value; },
         onArchiveExplorer: (explorerId: string) => { archivedExplorerId = explorerId; },
         onOpenProject: (projectId: string) => { openedProjectIds.push(projectId); },
@@ -74,6 +101,10 @@ function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplor
     getSelectedPlanCenter: () => selectedPlanCenter,
     getSelectedProjectId: () => selectedProjectId,
     getSelectedExplorerId: () => selectedExplorerId,
+    getSelectedExplorerPlanId: () => selectedExplorerPlanId,
+    getToggledTaskId: () => toggledTaskId,
+    getSelectedPlanTreeItem: () => selectedPlanTreeItem,
+    getThreadAction: () => threadAction,
     getArchivedExplorerId: () => archivedExplorerId,
     getOpenedProjectIds: () => openedProjectIds,
     getSettingsProjectIds: () => settingsProjectIds,
@@ -249,6 +280,46 @@ describe("ThreadRail left workspace navigation", () => {
     expect(explorerRows).toHaveLength(2);
     expect(explorerRows.map((row) => row.textContent)).toEqual(expect.arrayContaining([expect.stringContaining("Current exploration"), expect.stringContaining("Second exploration")]));
     expect(currentThread?.classList.contains("active")).toBe(true);
+    expect(currentThread?.getAttribute("aria-current")).toBe("page");
+    expect(currentThread?.getAttribute("aria-expanded")).toBe("true");
+    expect(mounted.host.querySelector<HTMLButtonElement>('button[data-explorer-id="explorer-2"]')?.getAttribute("aria-expanded")).toBe("false");
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  it("renders the active Explorer as an expanded Task and Plan tree while collapsing other threads", async () => {
+    const mounted = mountRail();
+    const activeRow = mounted.host.querySelector<HTMLElement>('[data-explorer-id="explorer-1"]');
+    const inactiveRow = mounted.host.querySelector<HTMLElement>('[data-explorer-id="explorer-2"]');
+
+    expect(activeRow?.querySelector(".explorer-thread-tree")).not.toBeNull();
+    expect(activeRow?.querySelectorAll(".task-tree-node")).toHaveLength(2);
+    expect(activeRow?.querySelectorAll(".task-tree-plan-button")).toHaveLength(2);
+    expect(activeRow?.querySelector(".task-tree-plan-button")?.textContent).toContain("Apple overview");
+    expect(activeRow?.querySelectorAll(".task-tree-plan-button")[1]?.textContent).toContain("Banana overview");
+    expect(inactiveRow?.querySelector(".explorer-thread-tree")).toBeNull();
+    expect(activeRow?.querySelector<HTMLButtonElement>(".task-tree-task-button")?.getAttribute("aria-current")).toBe("page");
+
+    activeRow?.querySelectorAll<HTMLButtonElement>(".task-tree-task-button")[1]?.click();
+    activeRow?.querySelectorAll<HTMLButtonElement>(".task-tree-plan-button")[1]?.click();
+    await nextTick();
+
+    expect(mounted.getSelectedExplorerPlanId()).toBe("task-2");
+    expect(mounted.getToggledTaskId()).toBeNull();
+    expect(mounted.getSelectedPlanTreeItem()?.planKey).toBe("plan-plan-2");
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  it("exposes thread actions beside the active thread row", () => {
+    const mounted = mountRail();
+    const activeRow = mounted.host.querySelector<HTMLElement>('[data-explorer-id="explorer-1"]');
+
+    expect(activeRow?.querySelector(".explorer-thread-row-actions")).not.toBeNull();
+    expect(activeRow?.querySelector<HTMLButtonElement>('[aria-label="线程操作"]')).not.toBeNull();
+    expect(styles).toContain(".explorer-thread-row-actions");
 
     mounted.app.unmount();
     mounted.host.remove();

@@ -15,24 +15,25 @@ describe("Explorer thread actions", () => {
     expect(explorerViewSource).not.toContain("thread-banner");
     expect(explorerViewSource).not.toContain("showThreadBanner");
     expect(explorerViewSource).not.toContain("dismissThreadBanner");
-    expect(explorerViewSource).toContain("<el-dropdown");
-    expect(explorerViewSource).toContain('popper-class="thread-action-popper"');
-    expect(explorerViewSource).toContain('command="rename"');
-    expect(explorerViewSource).toContain('command="policy"');
-    expect(explorerViewSource).toContain('command="refresh"');
-    expect(explorerViewSource).toContain('command="toggle-pause"');
+    expect(threadRailSource).toContain("<el-dropdown");
+    expect(threadRailSource).toContain('popper-class="thread-action-popper"');
+    expect(threadRailSource).toContain('command="rename"');
+    expect(threadRailSource).toContain('command="policy"');
+    expect(threadRailSource).toContain('command="refresh"');
+    expect(threadRailSource).toContain('command="toggle-pause"');
+    expect(threadRailSource).toContain('command="new-task"');
+    expect(explorerViewSource).not.toContain("<el-dropdown");
+    expect(explorerViewSource).not.toContain('class="conversation-tools"');
     expect(explorerViewSource).toContain('if (command === "toggle-pause")');
-    expect(explorerViewSource).toContain('explorerPaused ? "恢复循环" : "暂停循环"');
-    expect(explorerViewSource).toContain("线程操作");
-    expect(explorerViewSource).toContain("重命名线程");
-    expect(explorerViewSource).toContain("查看策略");
-    expect(explorerViewSource).toContain("刷新线程");
-    expect(explorerViewSource).not.toContain(":aria-label=\"explorerPaused ? 'Resume' : 'Pause'\"");
+    expect(threadRailSource).toContain('props.explorerPaused ? "恢复循环" : "暂停循环"');
+    expect(threadRailSource).toContain("线程操作");
+    expect(threadRailSource).toContain("重命名线程");
+    expect(threadRailSource).toContain("查看策略");
+    expect(threadRailSource).toContain("刷新线程");
     expect(explorerViewSource).toContain("ExplorerRenameDialog");
     expect(explorerViewSource).toContain("api.renameExplorer");
     expect(explorerViewSource).not.toContain("Manage read-only exploration without changing the repository.");
     expect(explorerViewSource).not.toContain("thread-more-menu");
-    expect(explorerViewSource).toContain("查看策略");
   });
 
   it("provides focused styling hooks for the dropdown action rows", () => {
@@ -52,6 +53,13 @@ describe("Explorer project selector wiring", () => {
     expect(explorerViewSource).toContain(":explorer-action-id=\"explorerActionId\"");
     expect(explorerViewSource).toContain(":plan-center-active=\"contextPanel === 'plan-center'\"");
     expect(explorerViewSource).toContain(":plan-center-count=\"planCenterCount\"");
+    expect(explorerViewSource).toContain(":task-tree-items=\"taskTreeItems\"");
+    expect(explorerViewSource).toContain(":active-explorer-plan-id=\"activeExplorerPlan?.id ?? null\"");
+    expect(explorerViewSource).toContain(":expanded-task-ids=\"[...expandedTaskIds]\"");
+    expect(explorerViewSource).toContain("@select-explorer-plan=\"selectExplorerPlan($event)\"");
+    expect(explorerViewSource).toContain("@toggle-task-expanded=\"toggleTaskExpanded\"");
+    expect(explorerViewSource).toContain("@select-plan-tree-item=\"selectPlanTreeItem\"");
+    expect(explorerViewSource).toContain("@thread-action=\"handleThreadAction\"");
     expect(explorerViewSource).toContain("@select-panel=\"leftPanel = $event\"");
     expect(explorerViewSource).toContain("@select-plan-center=\"selectContextPanel('plan-center')\"");
     expect(explorerViewSource).toContain("@select-project=\"switchProject\"");
@@ -76,6 +84,16 @@ describe("Explorer project selector wiring", () => {
 });
 
 describe("Explorer context panel wiring", () => {
+  it("opens Run inside the selected Task conversation without replacing the Explorer shell", () => {
+    expect(explorerViewSource).toContain('import RunDetailView from "./RunDetailView.vue"');
+    expect(explorerViewSource).toContain('const activeRunId = computed(() => typeof route.query.runId === "string" ? route.query.runId : null)');
+    expect(explorerViewSource).toContain('<RunDetailView v-if="activeRunId"');
+    expect(explorerViewSource).toContain('@close="closeRunView"');
+    expect(explorerViewSource).toContain('contextPanel === \'plan-center\'');
+    expect(explorerViewSource).toContain('@open-run="openPlanRun"');
+    expect(explorerViewSource).toContain('delete query.runId');
+  });
+
   it("keeps the current panel count in the compact context header", () => {
     expect(explorerViewSource).toContain('class="context-header-title"');
     expect(explorerViewSource).toContain('class="context-header-count"');
@@ -212,7 +230,7 @@ describe("Explorer context panel wiring", () => {
     expect(explorerViewSource).toContain('["STARTING", "IN_PROGRESS", "VERIFYING"].includes(run.status)');
     expect(activeSection).toContain('v-for="run in activeRuns"');
     expect(activeSection).toContain("Run {{ run.id }}");
-    expect(activeSection).toContain('`/projects/${run.projectId}/runs/${run.id}`');
+    expect(activeSection).toContain('void openProjectRun(run)');
     expect(activeSection).toContain("Starting, running, and verifying runs across this project appear here.");
   });
 
@@ -289,16 +307,17 @@ describe("Explorer rail layout", () => {
 
 describe("Explorer inline message presentation", () => {
   it("renders a Task tree in the chat rail while keeping expandable user summaries", () => {
-    expect(explorerViewSource).toContain('class="task-tree-rail"');
+    expect(threadRailSource).toContain('class="explorer-thread-tree"');
     expect(explorerViewSource).toContain("const taskTreeItems = computed");
-    expect(explorerViewSource).toContain('aria-label="Task tree"');
-    expect(explorerViewSource).toContain('aria-label="Task and Plan navigation"');
-    expect(explorerViewSource).toContain('class="task-tree-toggle"');
-    expect(explorerViewSource).toContain('class="task-tree-plan-button"');
-    expect(explorerViewSource).toContain("@click=\"selectPlanTreeItem(item)\"");
+    expect(threadRailSource).toContain('aria-label="Task and Plan navigation"');
+    expect(threadRailSource).toContain('class="task-tree-toggle"');
+    expect(threadRailSource).toContain('class="task-tree-plan-button"');
+    expect(threadRailSource).toContain("emit('select-plan-tree-item', item)");
+    expect(threadRailSource).toContain("item.task.candidatePlanId ? 'Plan 加载失败' : '等待生成 Plan'");
+    expect(explorerViewSource).not.toContain('class="task-tree-rail"');
     expect(explorerViewSource).not.toContain(">MESSAGES</span>");
     expect(explorerStylesSource).toMatch(/\.timeline-stage \{[^}]*position: relative;/);
-    expect(explorerStylesSource).toContain(".task-tree-rail { width: 224px;");
+    expect(explorerStylesSource).toContain(".explorer-thread-tree { min-width: 0;");
     expect(explorerStylesSource).toContain(".task-tree-toggle:focus-visible");
     expect(explorerStylesSource).toContain(".task-tree-plan-button:focus-visible");
     expect(explorerViewSource).toContain('class="user-message-summary"');
@@ -326,16 +345,20 @@ describe("Explorer inline message presentation", () => {
     expect(explorerViewSource).toContain("const explorerPlans = ref<ExplorerPlan[]>([])");
     expect(explorerViewSource).toContain("const activeExplorerPlanId = ref<string | null>(null)");
     expect(explorerViewSource).toContain("api.explorerPlanGroups(requestProjectId, selected.id)");
+    expect(explorerViewSource).toContain("const taskTreePlans = ref<Plan[]>([])");
+    expect(explorerViewSource).toContain("loadTaskTreePlans");
+    expect(explorerViewSource).toContain("api.getPlan(planId)");
+    expect(explorerViewSource).toContain("candidatePlanId");
+    expect(explorerViewSource).toContain("taskTreePlans.value");
     expect(explorerViewSource).toContain("api.createExplorerPlan(projectId.value, currentThread.id)");
     expect(explorerViewSource).toContain("api.explorerPlanWorkspace");
     expect(explorerViewSource).toContain("route.query.explorerPlanId");
-    expect(explorerViewSource).toContain('aria-label="Task tree"');
-    expect(explorerViewSource).toContain('class="task-tree-task-button"');
-    expect(explorerViewSource).toContain("taskDisplayTitle(item.task)");
-    expect(explorerViewSource).toContain("taskRuntimeLabel(item.task)");
-    expect(explorerViewSource).toContain("selectPlanTreeItem(item)");
+    expect(threadRailSource).toContain('class="task-tree-task-button"');
+    expect(threadRailSource).toContain("taskDisplayTitle(item.task)");
+    expect(threadRailSource).toContain("taskRuntimeLabel(item.task)");
+    expect(threadRailSource).toContain("emit('select-plan-tree-item', item)");
     expect(explorerViewSource).toContain("@click=\"selectPlanFromCard(plan, $event)\"");
-    expect(explorerViewSource).toContain('command="new-task"');
+    expect(threadRailSource).toContain('command="new-task"');
     expect(explorerViewSource).toContain("新建 Task");
     expect(explorerViewSource).not.toContain('command="new-plan"');
     expect(explorerViewSource).not.toContain("新建 Plan");

@@ -69,6 +69,20 @@ describe("task tree", () => {
     expect(items[0]!.plan?.explorerPlanId).toBe("task-1");
   });
 
+  it("uses the Task candidatePlanId to attach a generated DRAFT Plan", () => {
+    const taskWithCandidate = { ...task("task-1", 1), candidatePlanId: "plan-draft" };
+    const items = buildTaskTree([taskWithCandidate], [plan("plan-draft", "", "turn-1")], [generatedActivity]);
+
+    expect(items[0]!.plan?.id).toBe("plan-draft");
+    expect(items[0]!.plan?.status).toBe("DRAFT");
+  });
+
+  it("does not attach a Plan with another Task candidatePlanId", () => {
+    const items = buildTaskTree([{ ...task("task-1", 1), candidatePlanId: "plan-1" }], [plan("plan-other", "", "turn-1")], []);
+
+    expect(items[0]!.plan).toBeNull();
+  });
+
   it("uses Task terminology only for placeholder display titles", () => {
     expect(taskDisplayTitle(task("task-1", 1))).toBe("Task 1 / 待探索");
     expect(taskDisplayTitle(task("task-2", 2, "Write onboarding plan"))).toBe("Write onboarding plan");

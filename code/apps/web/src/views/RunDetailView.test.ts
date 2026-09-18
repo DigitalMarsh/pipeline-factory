@@ -19,4 +19,17 @@ describe("Run detail execution conversation", () => {
   it("keeps execution activity details as plain text", () => {
     expect(runDetailSource).toContain('class="execution-activity-detail"');
   });
+
+  it("supports embedding the complete Run surface inside an Explorer conversation", () => {
+    expect(runDetailSource).toContain("defineProps<{ embedded?: boolean; projectId?: string; runId?: string }>");
+    expect(runDetailSource).toContain("defineEmits<{ (event: \"close\"): void }>");
+    expect(runDetailSource).toContain("detail-page-embedded");
+    expect(runDetailSource).toContain("@click=\"closeView\"");
+  });
+
+  it("retains the execution evidence, controls, verification and diagnostics sections", () => {
+    for (const marker of ["execution-telemetry-panel", "execution-steps-panel", "agent-loop-detail", "execution-conversation-panel", "run-actions", "evidence-card", "diagnostics-teaser"]) {
+      expect(runDetailSource).toContain(marker);
+    }
+  });
 });

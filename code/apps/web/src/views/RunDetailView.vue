@@ -19,7 +19,11 @@ import { createProjectRequestScope } from "../utils/projectRoutes";
 
 const route = useRoute();
 const router = useRouter();
-const projectId = computed(() => String(route.params.projectId ?? ""));
+const props = withDefaults(defineProps<{ embedded?: boolean; projectId?: string; runId?: string }>(), { embedded: false });
+const emit = defineEmits<{ (event: "close"): void }>();
+const embedded = computed(() => props.embedded);
+const projectId = computed(() => props.projectId ?? String(route.params.projectId ?? ""));
+const runId = computed(() => props.runId ?? String(route.params.runId ?? ""));
 const requestScope = createProjectRequestScope();
 const run = ref<Run | null>(null);
 const thread = ref<ExecutionThread | null>(null);
@@ -151,7 +155,7 @@ function closeRunEvents(): void {
   runStreamConnected.value = false;
 }
 async function load() {
-  const requestRunId = String(route.params.runId ?? "");
+  const requestRunId = runId.value;
   const requestProjectId = projectId.value;
   const requestToken = requestScope.begin(`${requestProjectId}:${requestRunId}`);
   loading.value = true;
@@ -228,9 +232,17 @@ async function terminateRun() {
   try {
     await api.cancelRun(run.value.id, "user_requested");
     ElMessage.success("Run 已终止");
-    await router.push(`/projects/${String(route.params.projectId)}/plans`);
+    if (embedded.value) await load();
+    else await router.push(`/projects/${projectId.value}/plans`);
   } catch (caught) { notifyError(caught); }
   finally { actionBusy.value = false; }
+}
+function closeView(): void {
+  if (embedded.value) {
+    emit("close");
+    return;
+  }
+  void router.push({ path: `/projects/${projectId.value}/explorer`, query: { explorerId: route.query.explorerId, explorerPlanId: route.query.explorerPlanId, contextPanel: "plan-center" } });
 }
 async function sendGuidance() {
   if (!run.value || !guidance.value.trim() || actionBusy.value) return;
@@ -261,14 +273,14 @@ async function confirmMerged() {
   catch (caught) { notifyError(caught); }
   finally { actionBusy.value = false; }
 }
-  watch([projectId, () => route.params.runId], () => { closeRunEvents(); void load().then(() => { if (run.value) connectRunEvents(); }); });
+  watch([projectId, runId], () => { closeRunEvents(); void load().then(() => { if (run.value) connectRunEvents(); }); });
   onMounted(async () => { telemetryTimer = setInterval(() => { if (executionTelemetry.value?.completedAt === null || executionTelemetry.value?.durationMs === null) telemetryNow.value = Date.now(); }, 1000); await load(); connectRunEvents(); scrollExecutionToLatest(); });
   onBeforeUnmount(() => { requestScope.invalidate(); closeRunEvents(); if (telemetryTimer) clearInterval(telemetryTimer); });
 </script>
 
 <template>
-  <div class="detail-page" v-loading="loading">
-    <div class="detail-top"><el-button text @click="router.push(`/projects/${String(route.params.projectId)}/plans`)"><ArrowLeft :size="15" /> Back</el-button><span class="eyebrow">EXECUTION THREAD</span></div>
+  <div :class="['detail-page', { 'detail-page-embedded': embedded }]" v-loading="loading">
+    <div class="detail-top"><el-button text @click="closeView"><ArrowLeft :size="15" /> {{ embedded ? 'Back to Task' : 'Back' }}</el-button><span class="eyebrow">EXECUTION THREAD</span></div>
     <div v-if="error" class="demo-notice"><Warning :size="14" /> {{ error }}</div>
     <template v-if="run">
       <div class="detail-heading"><div><div class="eyebrow">RUN · {{ run.id }}</div><h1>Execution run</h1><p>Plan <code>{{ run.planId }}</code> · Revision {{ run.planRevision }} · <code>{{ run.branch }}</code></p></div><el-tag :type="displayedRunStatus === 'BLOCKED' ? 'danger' : displayedRunStatus === 'MERGE_READY' ? 'warning' : displayedRunStatus === 'MERGED' ? 'success' : 'warning'" effect="light">{{ label(displayedRunStatus) }}</el-tag></div>

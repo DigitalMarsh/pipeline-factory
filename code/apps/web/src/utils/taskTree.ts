@@ -30,18 +30,20 @@ export function taskRuntimeLabel(task: ExplorerPlan): string {
 
 /**
  * 每个 Task 只挂一个当前 Plan。候选/生命周期投影可能重复出现同一 Plan，先按
- * planIdentity 去重，再按 explorerPlanId 归属；没有明确归属的 Plan 不会被猜测挂载。
+ * planIdentity 去重，再按 explorerPlanId 或 Task 已持久化的 candidatePlanId 归属；没有明确归属的 Plan 不会被猜测挂载。
  */
 export function buildTaskTree(tasks: ExplorerPlan[], plans: Plan[], activities: ExplorerActivityItem[]): TaskTreeItem[] {
+  const candidatePlanIds = new Set(tasks.map((task) => task.candidatePlanId).filter((planId): planId is string => Boolean(planId)));
   const uniquePlans = new Map<string, Plan>();
   for (const plan of plans) {
-    if (plan.explorerPlanId) uniquePlans.set(planIdentity(plan), plan);
+    const identity = planIdentity(plan);
+    if (plan.explorerPlanId || candidatePlanIds.has(identity)) uniquePlans.set(identity, plan);
   }
 
   return [...tasks]
     .sort((left, right) => left.ordinal - right.ordinal)
     .map((task) => {
-      const plan = [...uniquePlans.values()].find((candidate) => candidate.explorerPlanId === task.id) ?? null;
+      const plan = [...uniquePlans.values()].find((candidate) => candidate.explorerPlanId === task.id || (task.candidatePlanId !== null && planIdentity(candidate) === task.candidatePlanId)) ?? null;
       return {
         task,
         plan,
