@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatExecutionDuration, formatTokenSummary, liveDurationMs, telemetryReasoning, usageDetailRows } from "./executionTelemetry";
+import { formatExecutionDuration, formatProviderContextUsage, formatTokenSummary, liveDurationMs, telemetryReasoning, usageDetailRows } from "./executionTelemetry";
 
 describe("execution telemetry formatting", () => {
   it("formats exact token totals and keeps missing usage explicit", () => {
@@ -11,6 +11,11 @@ describe("execution telemetry formatting", () => {
       { label: "推理 token", value: "3" },
       { label: "总 token", value: "15" },
     ]);
+  });
+
+  it("formats Provider input tokens as execution Context without estimating missing values", () => {
+    expect(formatProviderContextUsage(1_234)).toBe("1,234 tokens");
+    expect(formatProviderContextUsage(null)).toBe("未记录");
   });
 
   it("formats completed and live wall-clock duration", () => {

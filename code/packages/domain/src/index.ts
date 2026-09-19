@@ -68,6 +68,25 @@ export type PlanStatus =
   | "BLOCKED"
   | "NEEDS_PLAN_CHANGE";
 
+export type PlanLifecycleStatus = PlanStatus | "NEEDS_CONFIGURATION";
+
+/** 当前 Plan Revision 的统一生命周期时间线投影。时间未知时保持 null，不用 lastEventAt 猜测。 */
+export type PlanLifecycleEntry = {
+  status: PlanLifecycleStatus;
+  occurredAt: string | null;
+  revision: number;
+  current: boolean;
+  reason?: string | null;
+  runId?: string | null;
+  executionThreadId?: string | null;
+};
+
+export type ExecutionThreadSummary = {
+  id: string;
+  runId: string;
+  state: string;
+} | null;
+
 /** ExplorerThread 的工作状态；ARCHIVED 只禁止新写入，不删除历史。 */
 export type ExplorerThreadState = "ACTIVE" | "WAITING_FOR_INPUT" | "COMPRESSED" | "ARCHIVED";
 
@@ -460,6 +479,7 @@ export type DomainEvent = {
     | "project.explorer.selected"
     | "explorer.thread.created"
     | "explorer.created"
+    | "explorer.deleted"
     | "explorer.title.updated"
     | "explorer.archived"
     | "explorer.activated"
@@ -478,6 +498,7 @@ export type DomainEvent = {
     | "explorer.plan.incomplete"
     | "explorer.plan.ready"
     | "plan.candidate.created"
+    | "plan.status.changed"
     | "plan.discarded"
     | "plan.confirmed"
     | "plan.enqueued"
@@ -543,6 +564,26 @@ export type DomainEvent = {
   aggregateId: string;
   occurredAt: string;
   payload: Record<string, unknown>;
+};
+
+/** ExplorerThread 删除所需的完整业务关联集合；物理删除由 Store 统一执行。 */
+export type ExplorerDeletionInput = {
+  projectId: string;
+  explorerId: string;
+  explorerPlanIds: string[];
+  turnIds: string[];
+  planIds: string[];
+  runIds: string[];
+  executionThreadIds: string[];
+  agentLoopIds: string[];
+  inputRequestIds: string[];
+  replacementExplorerId: string;
+};
+
+export type ExplorerDeletionSummary = {
+  taskCount: number;
+  planCount: number;
+  runCount: number;
 };
 
 /** 从 Explorer turn 创建 CandidatePlan 的最小输入。 */
@@ -786,6 +827,7 @@ export type PipelineStore = {
   subscribeEvents?(listener: (event: DomainEvent) => void): () => void;
   listEvents(options?: { afterSequence?: number; aggregateId?: string }): DomainEvent[];
   getLastEventSequence(aggregateId?: string): number;
+  deleteExplorerCascade(input: ExplorerDeletionInput): ExplorerDeletionSummary;
   getIdempotency(scope: string, key: string): Record<string, unknown> | undefined;
   saveIdempotency(scope: string, key: string, result: Record<string, unknown>): void;
   /** Optional store-level transaction used for startup recovery atomicity. */
@@ -970,6 +1012,13 @@ function threadTitleMetadata(title: string | undefined, createdAt: string): { ti
 
 function projectPlaceholderExplorerTitle(store: PipelineStore, thread: ExplorerThread): string {
   return placeholderExplorerTitle(thread.createdAt, store.getProject(thread.projectId)?.shortName);
+}
+
+function containsAnyString(value: unknown, ids: ReadonlySet<string>): boolean {
+  if (typeof value === "string") return ids.has(value);
+  if (Array.isArray(value)) return value.some((item) => containsAnyString(item, ids));
+  if (isRecord(value)) return Object.values(value).some((item) => containsAnyString(item, ids));
+  return false;
 }
 
 function stripPlanProtocol(content: string): string {
@@ -1286,11 +1335,55 @@ export class InMemoryPipelineStore implements PipelineStore {
     return this.events.filter((event) => !aggregateId || event.aggregateId === aggregateId).at(-1)?.sequence ?? 0;
   }
 
+  deleteExplorerCascade(input: ExplorerDeletionInput): ExplorerDeletionSummary {
+    const project = this.projects.get(input.projectId);
+    const replacement = this.threads.get(input.replacementExplorerId);
+    if (!project || !replacement || replacement.projectId !== input.projectId || replacement.id === input.explorerId) throw new Error("Explorer deletion replacement is invalid");
+    if (project.currentExplorerThreadId === input.explorerId) this.projects.set(input.projectId, { ...project, currentExplorerThreadId: replacement.id, updatedAt: this.now() });
+
+    const explorerPlanIds = new Set(input.explorerPlanIds);
+    const planIds = new Set(input.planIds);
+    const runIds = new Set(input.runIds);
+    const executionThreadIds = new Set(input.executionThreadIds);
+    const agentLoopIds = new Set(input.agentLoopIds);
+    const deletedIds = new Set([input.explorerId, ...explorerPlanIds, ...input.turnIds, ...planIds, ...runIds, ...executionThreadIds, ...agentLoopIds, ...input.inputRequestIds]);
+
+    for (const [key, proposal] of this.changeProposals) if (runIds.has(proposal.runId) || planIds.has(proposal.planId)) this.changeProposals.delete(key);
+    for (const key of [...this.dispatchStates.keys()]) if (planIds.has(key)) this.dispatchStates.delete(key);
+    for (const key of [...this.revisions.keys()]) if (planIds.has(key.split(":")[0] ?? "")) this.revisions.delete(key);
+    for (const [key, draft] of this.revisionDrafts) if (planIds.has(draft.planId) || draft.sourceExplorerThreadId === input.explorerId) this.revisionDrafts.delete(key);
+    for (const [key, projection] of this.revisionLifecycleProjections) if (planIds.has(projection.planId) || projection.sourceExplorerThreadId === input.explorerId) this.revisionLifecycleProjections.delete(key);
+    for (const [key, projection] of this.planQueryProjections) if (planIds.has(projection.planId) || projection.sourceExplorerThreadId === input.explorerId) this.planQueryProjections.delete(key);
+    for (const [key, execution] of this.hookExecutions) if (runIds.has(execution.runId)) this.hookExecutions.delete(key);
+    for (const [key, verification] of this.verificationRuns) if (runIds.has(verification.runId)) this.verificationRuns.delete(key);
+    for (const [key, request] of this.mergeRequests) if (runIds.has(request.runId) || planIds.has(request.planId)) this.mergeRequests.delete(key);
+    for (const runId of runIds) this.runs.delete(runId);
+    for (const executionThreadId of executionThreadIds) this.executionThreads.delete(executionThreadId);
+    for (const call of [...this.toolCalls.values()]) if (agentLoopIds.has(call.loopId)) this.toolCalls.delete(call.callId);
+    for (const loopId of agentLoopIds) {
+      this.agentLoopSteps.delete(loopId);
+      this.agentLoops.delete(loopId);
+    }
+    for (const [id, request] of this.inputRequests) if (request.threadId === input.explorerId || input.inputRequestIds.includes(id)) this.inputRequests.delete(id);
+    for (const [threadId] of this.turns) if (threadId === input.explorerId) this.turns.delete(threadId);
+    for (const planId of planIds) this.plans.delete(planId);
+    for (const [id, plan] of this.plans) if (plan.sourceExplorerThreadId === input.explorerId) this.plans.delete(id);
+    for (const [id, plan] of this.explorerPlans) if (explorerPlanIds.has(id) || plan.explorerThreadId === input.explorerId) this.explorerPlans.delete(id);
+    this.threads.delete(input.explorerId);
+    for (const [key, result] of this.idempotency) if (containsAnyString(result, deletedIds)) this.idempotency.delete(key);
+    return { taskCount: input.explorerPlanIds.length, planCount: input.planIds.length, runCount: input.runIds.length };
+  }
+
   getIdempotency(scope: string, key: string): Record<string, unknown> | undefined { return this.idempotency.get(`${scope}:${key}`); }
   saveIdempotency(scope: string, key: string, result: Record<string, unknown>): void { this.idempotency.set(`${scope}:${key}`, result); }
 }
 
 type SqliteRow = Record<string, unknown>;
+
+function sqlIn(column: string, values: readonly string[]): { clause: string; values: string[] } | null {
+  if (values.length === 0) return null;
+  return { clause: `${column} IN (${values.map(() => "?").join(", ")})`, values: [...values] };
+}
 
 function parseRequestId(value: string): string | number {
   return /^-?\d+$/.test(value) ? Number(value) : value;
@@ -1720,6 +1813,7 @@ export class SqlitePipelineStore implements PipelineStore {
     try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN provider_turn_id TEXT"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN provider_item_id TEXT"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN provenance TEXT NOT NULL DEFAULT 'LEGACY'"); } catch { /* Existing databases already have the column. */ }
+    this.repairUnconfirmedProgressedPlans();
     this.backfillExplorerPlans();
     this.backfillLegacyRevisionHistory();
     this.backfillLegacyVerificationRuns();
@@ -2209,6 +2303,60 @@ export class SqlitePipelineStore implements PipelineStore {
     return Number(row.last_sequence ?? 0);
   }
 
+  deleteExplorerCascade(input: ExplorerDeletionInput): ExplorerDeletionSummary {
+    const project = this.getProject(input.projectId);
+    const replacement = this.getThread(input.replacementExplorerId);
+    if (!project || !replacement || replacement.projectId !== input.projectId || replacement.id === input.explorerId) throw new Error("Explorer deletion replacement is invalid");
+    if (project.currentExplorerThreadId === input.explorerId) this.database.prepare("UPDATE factory_projects SET current_explorer_thread_id = ?, updated_at = ? WHERE id = ?").run(replacement.id, this.now(), input.projectId);
+
+    const explorerPlanIds = sqlIn("id", input.explorerPlanIds);
+    const planIds = sqlIn("plan_id", input.planIds);
+    const planEntityIds = sqlIn("id", input.planIds);
+    const runIds = sqlIn("run_id", input.runIds);
+    const runEntityIds = sqlIn("id", input.runIds);
+    const loopIds = sqlIn("loop_id", input.agentLoopIds);
+    const loopEntityIds = sqlIn("id", input.agentLoopIds);
+    const executionThreadEntityIds = sqlIn("id", input.executionThreadIds);
+
+    if (runIds) {
+      this.database.prepare(`DELETE FROM execution_journal WHERE ${runIds.clause}`).run(...runIds.values);
+      this.database.prepare(`DELETE FROM hook_executions WHERE ${runIds.clause}`).run(...runIds.values);
+      this.database.prepare(`DELETE FROM verification_runs WHERE ${runIds.clause}`).run(...runIds.values);
+      this.database.prepare(`DELETE FROM merge_requests WHERE ${runIds.clause}`).run(...runIds.values);
+    }
+    if (loopIds) {
+      this.database.prepare(`DELETE FROM agent_loop_steps WHERE ${loopIds.clause}`).run(...loopIds.values);
+      this.database.prepare(`DELETE FROM tool_calls WHERE ${loopIds.clause}`).run(...loopIds.values);
+      if (loopEntityIds) this.database.prepare(`DELETE FROM agent_loops WHERE ${loopEntityIds.clause}`).run(...loopEntityIds.values);
+    }
+    if (executionThreadEntityIds) this.database.prepare(`DELETE FROM execution_threads WHERE ${executionThreadEntityIds.clause}`).run(...executionThreadEntityIds.values);
+    if (runEntityIds) this.database.prepare(`DELETE FROM runs WHERE ${runEntityIds.clause}`).run(...runEntityIds.values);
+    if (planIds) {
+      this.database.prepare(`DELETE FROM change_proposals WHERE ${planIds.clause}`).run(...planIds.values);
+      this.database.prepare(`DELETE FROM plan_dispatch_states WHERE ${planIds.clause}`).run(...planIds.values);
+      this.database.prepare(`DELETE FROM plan_revisions WHERE ${planIds.clause}`).run(...planIds.values);
+      this.database.prepare(`DELETE FROM plan_revision_drafts WHERE ${planIds.clause}`).run(...planIds.values);
+      this.database.prepare(`DELETE FROM revision_lifecycle_projection WHERE ${planIds.clause}`).run(...planIds.values);
+      this.database.prepare(`DELETE FROM plan_query_projection WHERE ${planIds.clause}`).run(...planIds.values);
+      if (planEntityIds) this.database.prepare(`DELETE FROM candidate_plans WHERE ${planEntityIds.clause}`).run(...planEntityIds.values);
+    }
+    if (explorerPlanIds) this.database.prepare(`DELETE FROM explorer_plans WHERE ${explorerPlanIds.clause}`).run(...explorerPlanIds.values);
+    const inputRequestIds = sqlIn("id", input.inputRequestIds);
+    if (inputRequestIds) this.database.prepare(`DELETE FROM explorer_input_requests WHERE thread_id = ? OR ${inputRequestIds.clause}`).run(input.explorerId, ...inputRequestIds.values);
+    else this.database.prepare("DELETE FROM explorer_input_requests WHERE thread_id = ?").run(input.explorerId);
+    this.database.prepare("DELETE FROM explorer_turns WHERE thread_id = ?").run(input.explorerId);
+
+    const deletedIds = new Set([input.explorerId, ...input.explorerPlanIds, ...input.turnIds, ...input.planIds, ...input.runIds, ...input.executionThreadIds, ...input.agentLoopIds, ...input.inputRequestIds]);
+    const idempotencyRows = this.database.prepare("SELECT scope, key, result_json FROM idempotency_keys").all() as unknown as SqliteRow[];
+    for (const row of idempotencyRows) {
+      let result: unknown;
+      try { result = JSON.parse(String(row.result_json)); } catch { continue; }
+      if (containsAnyString(result, deletedIds)) this.database.prepare("DELETE FROM idempotency_keys WHERE scope = ? AND key = ?").run(String(row.scope), String(row.key));
+    }
+    this.database.prepare("DELETE FROM explorer_threads WHERE id = ? AND project_id = ?").run(input.explorerId, input.projectId);
+    return { taskCount: input.explorerPlanIds.length, planCount: input.planIds.length, runCount: input.runIds.length };
+  }
+
   getIdempotency(scope: string, key: string): Record<string, unknown> | undefined {
     const row = this.database.prepare("SELECT result_json FROM idempotency_keys WHERE scope = ? AND key = ?").get(scope, key) as SqliteRow | undefined;
     return row ? JSON.parse(String(row.result_json)) as Record<string, unknown> : undefined;
@@ -2394,6 +2542,23 @@ export class SqlitePipelineStore implements PipelineStore {
 
   private backfillExplorerPlans(): void {
     for (const thread of this.listThreads()) this.ensureExplorerPlansForThread(thread.id);
+  }
+
+  /**
+   * 旧版本可能只保存了 queued/dispatched 事实，没有保存确认事实。
+   * 这类记录不能继续被当作可执行 Plan，保留历史时间但转入 BLOCKED，等待重新确认。
+   */
+  private repairUnconfirmedProgressedPlans(): void {
+    const rows = this.database.prepare("SELECT * FROM candidate_plans WHERE confirmed_at IS NULL AND status IN (?, ?, ?, ?, ?, ?, ?, ?)").all("READY", "QUEUED", "ENQUEUED", "DISPATCHED", "IN_PROGRESS", "VERIFYING", "MERGE_READY", "MERGED") as unknown as SqliteRow[];
+    const hasConfirmationEvent = this.database.prepare("SELECT 1 AS present FROM domain_events WHERE aggregate_id = ? AND type IN (?, ?, ?) LIMIT 1");
+    for (const row of rows) {
+      const planId = String(row.id);
+      if (hasConfirmationEvent.get(planId, "plan.confirmed", "plan.revision.confirmed", "plan.configuration.revised")) continue;
+      const plan = this.planFromRow(row);
+      const reason = "Plan lifecycle is invalid: it reached a later state without a confirmation record.";
+      const repairedAt = this.now();
+      updatePlanStatus(this, plan, { status: "BLOCKED", attentionReason: reason, lastEventAt: repairedAt }, reason);
+    }
   }
 
   private backfillPlanQueryProjection(): void {
@@ -2587,6 +2752,31 @@ function freezeRevision(revision: PlanRevisionV2): PlanRevisionV2 {
  * 负责 ExplorerThread、CandidatePlan、Confirm、Enqueue 和 Revision 的业务边界。
  * CandidatePlan 的状态变化始终先写事实，再追加领域事件，避免 UI 投影领先于持久化状态。
  */
+/** 统一记录 Plan 状态变更；领域语义事件仍由各业务服务分别保留。 */
+export function updatePlanStatus(
+  store: PipelineStore,
+  plan: CandidatePlan,
+  updates: Partial<CandidatePlan>,
+  reason?: string | null,
+): CandidatePlan {
+  const updated = store.updatePlan({ ...plan, ...updates });
+  if (updated.status !== plan.status) {
+    store.appendEvent({
+      type: "plan.status.changed",
+      aggregateId: plan.id,
+      payload: {
+        planId: plan.id,
+        fromStatus: plan.status,
+        toStatus: updated.status,
+        revision: updated.revision,
+        runId: updated.runId,
+        reason: reason ?? updated.attentionReason ?? null,
+      },
+    });
+  }
+  return updated;
+}
+
 export class PlanService {
   private readonly projects: ProjectService;
 
@@ -2645,7 +2835,7 @@ export class PlanService {
       ...(resolvedContract ? { resolvedContract } : {}),
     };
     this.store.savePlan(plan);
-    this.store.appendEvent({ type: "plan.candidate.created", aggregateId: plan.id, payload: { title: plan.title, explorerPlanId: plan.explorerPlanId ?? null, sourceTurnId: plan.sourceTurnId, providerThreadId: plan.providerThreadId, providerTurnId: plan.providerTurnId, providerItemId: plan.providerItemId } });
+    this.store.appendEvent({ type: "plan.candidate.created", aggregateId: plan.id, payload: { title: plan.title, revision: plan.revision, explorerPlanId: plan.explorerPlanId ?? null, sourceTurnId: plan.sourceTurnId, providerThreadId: plan.providerThreadId, providerTurnId: plan.providerTurnId, providerItemId: plan.providerItemId } });
     return plan;
   }
 
@@ -2735,7 +2925,7 @@ export class PlanService {
     const confirmedAt = this.store.now();
     const revision = freezeRevision({ planId: plan.id, revision: draft.targetRevision, contract: draft.contract, ...(draft.resolvedContract ? { resolvedContract: draft.resolvedContract } : {}), artifactHash: `sha256:${createHash("sha256").update(JSON.stringify({ contract: draft.contract, projectConfigSnapshot: snapshot })).digest("hex")}`, confirmedBy, confirmedAt, sourceExplorerThreadId: draft.sourceExplorerThreadId, ...(draft.explorerPlanId ? { explorerPlanId: draft.explorerPlanId } : {}), sourceTurnId: draft.sourceTurnId, providerThreadId: draft.providerThreadId, providerTurnId: draft.providerTurnId, providerItemId: draft.providerItemId, provenance: "CURRENT", projectConfigVersion: snapshot.configVersion, projectConfigHash: snapshot.configHash, projectConfigSnapshot: snapshot });
     this.store.saveRevision(revision);
-    const updatedPlan = this.store.updatePlan({ ...plan, title: draft.title, revision: draft.targetRevision, status: "READY", contract: draft.contract, ...(draft.generatedSpec ? { generatedSpec: draft.generatedSpec } : {}), ...(draft.resolvedContract ? { resolvedContract: draft.resolvedContract } : {}), sourceExplorerThreadId: draft.sourceExplorerThreadId, sourceTurnId: draft.sourceTurnId, providerThreadId: draft.providerThreadId, providerTurnId: draft.providerTurnId, providerItemId: draft.providerItemId, confirmedBy, confirmedAt, queuedAt: null, dispatchedAt: null, runId: null, attentionReason: null, lastEventAt: confirmedAt });
+    const updatedPlan = updatePlanStatus(this.store, plan, { title: draft.title, revision: draft.targetRevision, status: "READY", contract: draft.contract, ...(draft.generatedSpec ? { generatedSpec: draft.generatedSpec } : {}), ...(draft.resolvedContract ? { resolvedContract: draft.resolvedContract } : {}), sourceExplorerThreadId: draft.sourceExplorerThreadId, sourceTurnId: draft.sourceTurnId, providerThreadId: draft.providerThreadId, providerTurnId: draft.providerTurnId, providerItemId: draft.providerItemId, confirmedBy, confirmedAt, queuedAt: null, dispatchedAt: null, runId: null, attentionReason: null, lastEventAt: confirmedAt });
     this.store.updateRevisionDraft(Object.freeze({ ...draft, status: "CONFIRMED", confirmedAt, updatedAt: confirmedAt }));
     const thread = this.store.getThread(draft.sourceExplorerThreadId);
     if (thread?.activeRevisionDraftId === draftId) this.store.updateThread({ ...thread, activeRevisionDraftId: null, lastActivityAt: confirmedAt });
@@ -2765,7 +2955,7 @@ export class PlanService {
     const plan = this.get(planId);
     if (plan.status !== "DRAFT") throw new Error(`Plan ${planId} cannot be discarded from ${plan.status}`);
     const discardedAt = this.store.now();
-    const updated = this.store.updatePlan({ ...plan, status: "DISCARDED", lastEventAt: discardedAt });
+    const updated = updatePlanStatus(this.store, plan, { status: "DISCARDED", lastEventAt: discardedAt });
     this.store.appendEvent({ type: "plan.discarded", aggregateId: planId, payload: { actorId } });
     return updated;
   }
@@ -2801,8 +2991,8 @@ export class PlanService {
       ...(projectConfigSnapshot ? { projectConfigVersion: projectConfigSnapshot.configVersion, projectConfigHash: projectConfigSnapshot.configHash, projectConfigSnapshot } : {}),
     });
     this.store.saveRevision(revision);
-    const updated = this.store.updatePlan({ ...plan, status: "READY", confirmedBy, confirmedAt, lastEventAt: confirmedAt });
-    this.store.appendEvent({ type: "plan.confirmed", aggregateId: planId, payload: { confirmedBy } });
+    const updated = updatePlanStatus(this.store, plan, { status: "READY", confirmedBy, confirmedAt, lastEventAt: confirmedAt });
+    this.store.appendEvent({ type: "plan.confirmed", aggregateId: planId, payload: { confirmedBy, revision: plan.revision } });
     return updated;
   }
 
@@ -2943,8 +3133,8 @@ export class PlanService {
     }
     if (plan.status !== "READY") throw new Error(`Plan ${planId} must be confirmed before enqueue`);
     const queuedAt = this.store.now();
-    const updated = this.store.updatePlan({ ...plan, status: "ENQUEUED", queuedAt, dispatchedAt: null, lastEventAt: queuedAt });
-    this.store.appendEvent({ type: "plan.enqueued", aggregateId: planId, payload: { queuedAt } });
+    const updated = updatePlanStatus(this.store, plan, { status: "ENQUEUED", queuedAt, dispatchedAt: null, lastEventAt: queuedAt });
+    this.store.appendEvent({ type: "plan.enqueued", aggregateId: planId, payload: { queuedAt, revision: plan.revision } });
     return updated;
   }
 
@@ -2956,8 +3146,8 @@ export class PlanService {
     if (plan.status === "DISPATCHED" || plan.status === "IN_PROGRESS" || plan.status === "VERIFYING" || plan.status === "MERGE_READY" || plan.status === "MERGED") return plan;
     if (plan.status !== "ENQUEUED") throw new Error(`Plan ${planId} must be enqueued before dispatch`);
     const dispatchedAt = this.store.now();
-    const updated = this.store.updatePlan({ ...plan, status: "DISPATCHED", dispatchedAt, lastEventAt: dispatchedAt });
-    this.store.appendEvent({ type: "plan.dispatched", aggregateId: planId, payload: { dispatchedAt } });
+    const updated = updatePlanStatus(this.store, plan, { status: "DISPATCHED", dispatchedAt, lastEventAt: dispatchedAt });
+    this.store.appendEvent({ type: "plan.dispatched", aggregateId: planId, payload: { dispatchedAt, revision: plan.revision } });
     return updated;
   }
 
@@ -2997,8 +3187,7 @@ export class PlanService {
       projectConfigSnapshot,
     });
     this.store.saveRevision(revision);
-    const updated = this.store.updatePlan({
-      ...plan,
+    const updated = updatePlanStatus(this.store, plan, {
       revision: revisionNumber,
       status: "READY",
       confirmedBy,
@@ -3088,6 +3277,17 @@ export class PlanService {
       .sort((a, b) => b.lastEventAt.localeCompare(a.lastEventAt));
   }
 }
+
+export class ExplorerDeleteBlockedError extends Error {
+  readonly code = "EXPLORER_DELETE_BLOCKED" as const;
+
+  constructor(readonly activeRunIds: string[], readonly activeLoopIds: string[]) {
+    super("ExplorerThread has active execution work; pause or cancel it before deleting the thread");
+    this.name = "ExplorerDeleteBlockedError";
+  }
+}
+
+const EXPLORER_DELETE_ACTIVE_RUN_STATUSES = new Set(["QUEUED", "STARTING", "IN_PROGRESS", "READY_FOR_VERIFY", "VERIFYING", "RECOVERING"]);
 
 /** 管理 ExplorerThread 的创建、继承、归档、激活和标题修改。 */
 export class ExplorerService {
@@ -3201,6 +3401,55 @@ export class ExplorerService {
     if (!normalized) throw new Error("Explorer title cannot be empty");
     return this.store.updateThread({ ...explorer, title: normalized, titleSource: "MANUAL", titleStatus: "GENERATED", lastActivityAt: this.store.now() });
   }
+
+  /** 删除线程及其全部业务投影；审计事件保留，已结束 Run 的 worktree 不做文件系统清理。 */
+  delete(explorerId: string): { replacementExplorer: ExplorerThread; project: Project; deleted: ExplorerDeletionSummary } {
+    const explorer = this.get(explorerId);
+    const project = this.store.getProject(explorer.projectId);
+    if (!project) throw new Error(`Project ${explorer.projectId} not found`);
+    const explorerPlans = this.store.listExplorerPlans(explorer.id);
+    const explorerPlanIds = explorerPlans.map((plan) => plan.id);
+    const explorerPlanIdSet = new Set(explorerPlanIds);
+    const turns = this.store.listTurns(explorer.id);
+    const turnIds = turns.map((turn) => turn.id);
+    const turnIdSet = new Set(turnIds);
+    const plans = this.store.listPlans().filter((plan) => plan.sourceExplorerThreadId === explorer.id || (plan.explorerPlanId ? explorerPlanIdSet.has(plan.explorerPlanId) : false));
+    const planIds = plans.map((plan) => plan.id);
+    const planIdSet = new Set(planIds);
+    const runs = this.store.listRuns().filter((run) => planIdSet.has(run.planId));
+    const runIds = runs.map((run) => run.id);
+    const runIdSet = new Set(runIds);
+    const loops = this.store.listAgentLoops().filter((loop) => (loop.ownerType === "explorer-turn" && turnIdSet.has(loop.ownerId)) || (loop.ownerType === "run" && runIdSet.has(loop.ownerId)));
+    const activeLoopStates = new Set(["CREATED", "RUNNING", "WAITING_FOR_INPUT", "PAUSED", "RECOVERING"]);
+    const activeRunIds = runs.filter((run) => EXPLORER_DELETE_ACTIVE_RUN_STATUSES.has(run.status)).map((run) => run.id);
+    const activeLoopIds = loops.filter((loop) => activeLoopStates.has(loop.state)).map((loop) => loop.id);
+    if (activeRunIds.length || activeLoopIds.length) throw new ExplorerDeleteBlockedError(activeRunIds, activeLoopIds);
+
+    const replacementCandidate = this.store.listThreads()
+      .filter((thread) => thread.projectId === explorer.projectId && thread.id !== explorer.id && thread.state !== "ARCHIVED")
+      .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt))[0];
+    const input: Omit<ExplorerDeletionInput, "replacementExplorerId"> = {
+      projectId: explorer.projectId,
+      explorerId: explorer.id,
+      explorerPlanIds,
+      turnIds,
+      planIds,
+      runIds,
+      executionThreadIds: runs.map((run) => run.executionThreadId),
+      agentLoopIds: loops.map((loop) => loop.id),
+      inputRequestIds: this.store.listInputRequests(explorer.id).map((request) => request.id),
+    };
+
+    const remove = () => {
+      const replacementExplorer = replacementCandidate ?? this.create({ projectId: explorer.projectId });
+      const deleted = this.store.deleteExplorerCascade({ ...input, replacementExplorerId: replacementExplorer.id });
+      this.store.appendEvent({ type: "explorer.deleted", aggregateId: explorer.id, payload: { projectId: explorer.projectId, explorerId: explorer.id, replacementExplorerId: replacementExplorer.id, taskCount: deleted.taskCount, planCount: deleted.planCount, runCount: deleted.runCount } });
+      const savedProject = this.store.getProject(explorer.projectId);
+      if (!savedProject) throw new Error(`Project ${explorer.projectId} not found after Explorer deletion`);
+      return { replacementExplorer: this.store.getThread(replacementExplorer.id) as ExplorerThread, project: savedProject, deleted };
+    };
+    return this.store.runInTransaction ? this.store.runInTransaction(remove) : remove();
+  }
 }
 
 export type CreateChangeProposalInput = {
@@ -3239,8 +3488,8 @@ export class ChangeProposalService {
     };
     this.store.saveChangeProposal(proposal);
     this.store.saveRun({ ...run, status: "NEEDS_PLAN_CHANGE" });
-    this.store.updatePlan({ ...plan, status: "NEEDS_PLAN_CHANGE", attentionReason: input.reason, lastEventAt: proposal.createdAt });
-    this.store.appendEvent({ type: "change.proposal.created", aggregateId: proposal.id, payload: { runId: run.id, planId: plan.id, reason: input.reason, requestedChanges: input.requestedChanges } });
+    updatePlanStatus(this.store, plan, { status: "NEEDS_PLAN_CHANGE", attentionReason: input.reason, lastEventAt: proposal.createdAt }, input.reason);
+    this.store.appendEvent({ type: "change.proposal.created", aggregateId: proposal.id, payload: { runId: run.id, planId: plan.id, revision: plan.revision, reason: input.reason, requestedChanges: input.requestedChanges } });
     return proposal;
   }
 
@@ -3274,7 +3523,7 @@ export class ChangeProposalService {
     });
     this.store.saveRevision(revision);
     const approvedProposal = this.store.updateChangeProposal({ ...proposal, status: "APPROVED", decidedAt: confirmedAt, decidedBy: actorId, revision: revisionNumber });
-    const enqueuedPlan = this.store.updatePlan({ ...plan, revision: revisionNumber, contract: proposal.contract, status: "ENQUEUED", confirmedBy: actorId, confirmedAt, queuedAt: confirmedAt, dispatchedAt: null, runId: null, attentionReason: null, lastEventAt: confirmedAt });
+    const enqueuedPlan = updatePlanStatus(this.store, plan, { revision: revisionNumber, contract: proposal.contract, status: "ENQUEUED", confirmedBy: actorId, confirmedAt, queuedAt: confirmedAt, dispatchedAt: null, runId: null, attentionReason: null, lastEventAt: confirmedAt });
     this.store.appendEvent({ type: "change.proposal.approved", aggregateId: proposal.id, payload: { actorId, revision: revisionNumber, planId: plan.id } });
     return { proposal: approvedProposal, plan: enqueuedPlan, revision, run: null };
   }
@@ -4435,7 +4684,7 @@ export class Scheduler {
       thread.state = "BLOCKED";
       this.setThreadState(thread.id, "BLOCKED");
       this.append(thread.id, "HOOK_FAILED", { hook: "start", stderr: startResult.result?.stderr ?? "" });
-      this.options.store.updatePlan({ ...plan, runId, status: "BLOCKED", attentionReason: "start hook failed", lastEventAt: this.options.store.now() });
+      updatePlanStatus(this.options.store, plan, { runId, status: "BLOCKED", attentionReason: "start hook failed", lastEventAt: this.options.store.now() }, "start hook failed");
       this.options.store.saveRun(run);
       return run;
     }
@@ -4443,7 +4692,7 @@ export class Scheduler {
     run.startedAt = this.options.store.now();
     this.append(thread.id, startResult.status === "skipped" ? "HOOK_SKIPPED" : "HOOK_COMPLETED", { hook: "start" });
     if (!revision.projectConfigSnapshot) this.append(thread.id, "TASK_PROGRESS", { action: "legacy_plan_revision", reason: "Project configuration snapshot unavailable; using legacy/global runtime settings" });
-    this.options.store.updatePlan({ ...plan, runId, status: "IN_PROGRESS", lastEventAt: run.startedAt });
+    updatePlanStatus(this.options.store, plan, { runId, status: "IN_PROGRESS", lastEventAt: run.startedAt });
     this.options.store.saveRun(run);
     if (this.options.executor) {
       try {
@@ -4455,7 +4704,7 @@ export class Scheduler {
         this.setThreadState(thread.id, "BLOCKED");
         const reason = error instanceof Error ? error.message : String(error);
         this.append(thread.id, "RECOVERY", { action: "executor_loop_start_failed", reason });
-        this.options.store.updatePlan({ ...plan, runId, status: "BLOCKED", attentionReason: reason, lastEventAt: this.options.store.now() });
+        updatePlanStatus(this.options.store, plan, { runId, status: "BLOCKED", attentionReason: reason, lastEventAt: this.options.store.now() }, reason);
         this.options.store.saveRun(run);
       }
     }
@@ -4481,7 +4730,7 @@ export class Scheduler {
       if (exitReason === "cancelled") {
         const plan = this.options.store.getPlan(run.planId);
         if (plan && plan.status !== "BLOCKED" && plan.status !== "MERGED") {
-          this.options.store.updatePlan({ ...plan, status: "BLOCKED", attentionReason: `Run cancelled: ${cancellationReason}`, lastEventAt: this.options.store.now() });
+          updatePlanStatus(this.options.store, plan, { status: "BLOCKED", attentionReason: `Run cancelled: ${cancellationReason}`, lastEventAt: this.options.store.now() }, `Run cancelled: ${cancellationReason}`);
         }
       }
       return run;
@@ -4506,7 +4755,7 @@ export class Scheduler {
     this.options.store.saveRun(run);
     if (exitReason === "cancelled") {
       const plan = this.options.store.getPlan(run.planId);
-      if (plan) this.options.store.updatePlan({ ...plan, status: "BLOCKED", attentionReason: `Run cancelled: ${cancellationReason}`, lastEventAt: this.options.store.now() });
+      if (plan) updatePlanStatus(this.options.store, plan, { status: "BLOCKED", attentionReason: `Run cancelled: ${cancellationReason}`, lastEventAt: this.options.store.now() }, `Run cancelled: ${cancellationReason}`);
     }
     return run;
   }
@@ -4644,6 +4893,10 @@ export class VerificationService {
     if (run.status !== "IN_PROGRESS" && run.status !== "READY_FOR_VERIFY") throw new Error(`Run ${run.id} cannot be verified from ${run.status}`);
     run.status = "VERIFYING";
     this.store?.saveRun(run);
+    const verifyingPlan = this.store?.getPlan(run.planId);
+    if (this.store && verifyingPlan && verifyingPlan.runId === run.id) {
+      updatePlanStatus(this.store, verifyingPlan, { status: "VERIFYING", lastEventAt: this.store.now() });
+    }
     const v2Commands = revision.resolvedContract?.verification.commandIds;
     const commandIds = v2Commands ?? revision.contract.verificationCommandIds;
     if (revision.resolvedContract?.verification.mode === "NONE" || commandIds.length === 0) {
@@ -4691,18 +4944,17 @@ export class VerificationService {
     this.store.saveRun(run);
     const plan = this.store.getPlan(run.planId);
     if (plan && plan.runId === run.id) {
-      this.store.updatePlan({
-        ...plan,
+      updatePlanStatus(this.store, plan, {
         status: verification.status === "PASSED" || verification.status === "SKIPPED" ? "MERGE_READY" : "BLOCKED",
         attentionReason: verification.status === "PASSED" || verification.status === "SKIPPED" ? null : "Verification failed",
         lastEventAt: verification.completedAt,
-      });
+      }, verification.status === "PASSED" || verification.status === "SKIPPED" ? null : "Verification failed");
     }
     const thread = this.store.getExecutionThread(run.executionThreadId);
     if (thread) {
       this.store.appendExecutionJournal({ executionThreadId: thread.id, runId: thread.runId, type: "VERIFICATION", occurredAt: verification.completedAt, payload: verification });
     }
-    this.store.appendEvent({ type: "verification.completed", aggregateId: run.id, payload: verification });
+    this.store.appendEvent({ type: "verification.completed", aggregateId: run.id, payload: { ...verification, planId: run.planId, revision: run.planRevision } });
   }
 }
 
@@ -4835,8 +5087,8 @@ export class MergeService {
     }
     const merged = { ...request, status: "MERGED" as const, mergedAt: new Date().toISOString() };
     this.store.updateMergeRequest(merged);
-    if (plan) this.store.updatePlan({ ...plan, status: "MERGED", lastEventAt: merged.mergedAt ?? plan.lastEventAt });
-    this.store.appendEvent({ type: "merge.confirmed", aggregateId: requestId, payload: { targetCommit, planId: request.planId } });
+    if (plan) updatePlanStatus(this.store, plan, { status: "MERGED", lastEventAt: merged.mergedAt ?? plan.lastEventAt });
+    this.store.appendEvent({ type: "merge.confirmed", aggregateId: requestId, payload: { targetCommit, planId: request.planId, revision: plan?.revision ?? null } });
     return merged;
   }
 

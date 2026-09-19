@@ -135,7 +135,8 @@ describe("SQLite pipeline persistence", () => {
     legacy.close();
 
     const reopened = new SqlitePipelineStore(databasePath);
-    expect(reopened.getPlan("legacy-queued")).toMatchObject({ status: "DISPATCHED", queuedAt: "2026-08-29T10:02:00.000Z", dispatchedAt: "2026-08-29T10:02:00.000Z" });
+    expect(reopened.getPlan("legacy-queued")).toMatchObject({ status: "BLOCKED", queuedAt: "2026-08-29T10:02:00.000Z", dispatchedAt: "2026-08-29T10:02:00.000Z", attentionReason: expect.stringMatching(/confirmation record/i) });
+    expect(reopened.listEvents().at(-1)).toMatchObject({ type: "plan.status.changed", aggregateId: "legacy-queued", payload: { fromStatus: "DISPATCHED", toStatus: "BLOCKED" } });
     reopened.close();
   });
 

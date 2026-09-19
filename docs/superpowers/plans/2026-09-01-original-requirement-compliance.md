@@ -10,6 +10,13 @@
 
 **Spec:** `docs/spec/ai-software- pipeline-factory-design-v3.0.md` and `docs/superpowers/plans/2026-08-30-ui-completeness.md`.
 
+## Current implementation status (2026-09-19)
+
+- Task 1–4 的领域、API、持久化、恢复、Hook、验证、合并请求和脱敏能力已在当前代码及测试中落地；不要仅依据下方历史执行步骤的未勾选状态判断实现缺口。
+- Task 5 的响应式页面能力已有较多实现，但完整浏览器矩阵、Console/API unavailable、键盘焦点和窄屏验收仍未闭环。
+- 当前自动化基线：88 个测试文件、526 个测试通过；domain/API/web typecheck、build 和 `git diff --check` 已通过。
+- 最新 Explorer Tree 视觉要求还包括 Tree 分支连接线；该项需以浏览器截图验证，而不是仅依赖组件存在性测试。
+
 ## Global Constraints
 
 - Keep the existing Project boundary and never fall back to an implicit default Project.

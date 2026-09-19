@@ -4,9 +4,34 @@
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  */
 import { describe, expect, it } from "vitest";
-import { projectExecutionJournal } from "./executionStream";
+import { projectExecutionJournal, type ExecutionPlanSnapshot } from "./executionStream";
 
 describe("projectExecutionJournal", () => {
+  const plan: ExecutionPlanSnapshot = {
+    planId: "plan-1",
+    revision: 2,
+    occurredAt: "2026-08-30T06:59:59.000Z",
+    goal: "完成中文介绍文档",
+    acceptanceCriteria: ["正文完整"],
+    includePaths: ["docs/guide.md"],
+    excludePaths: ["src/protected.ts"],
+    tasks: [{ id: "task-1", title: "创建文档", status: "READY", dependencies: [] }],
+    verificationCommandIds: ["markdown-check"],
+  };
+
+  it("prepends the frozen Plan snapshot without changing journal order", () => {
+    const items = projectExecutionJournal([
+      { sequence: 1, type: "RUN_CREATED", occurredAt: "2026-08-30T07:00:00.000Z", payload: { planId: "plan-1", revision: 2 } },
+      { sequence: 2, type: "MODEL_OUTPUT", occurredAt: "2026-08-30T07:00:01.000Z", payload: { text: "开始执行" } },
+      { sequence: 3, type: "USER_GUIDANCE", occurredAt: "2026-08-30T07:00:02.000Z", payload: { content: "保持范围不变" } },
+    ], "COMPLETED", plan);
+
+    expect(items[0]).toMatchObject({ kind: "plan", title: "Plan received", sequence: 0, plan });
+    expect(items.slice(1).map((item) => item.sequence)).toEqual([1, 2, 3]);
+    expect(items[1]).toMatchObject({ kind: "activity", title: "Run created" });
+    expect(items[3]).toMatchObject({ kind: "guidance", content: "保持范围不变" });
+  });
+
   it("merges model deltas and keeps user guidance and execution activity readable", () => {
     const items = projectExecutionJournal([
       { sequence: 1, type: "RUN_CREATED", occurredAt: "2026-08-30T07:00:00.000Z", payload: { planId: "plan-1", revision: 1 } },

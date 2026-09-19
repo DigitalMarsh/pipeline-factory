@@ -114,6 +114,66 @@ describe("Pipeline Factory v4 API", () => {
     expect(response.json()).toMatchObject({ code: "PROJECT_NOT_FOUND" });
   });
 
+  it("deletes an Explorer and returns the replacement thread", async () => {
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    const project = projects.create({ id: "project-delete-api", name: "Delete API", repoRoot: "/repo/delete-api", defaultBranch: "main", worktreeRoot: "/tmp/delete-api-worktrees" });
+    const plans = new PlanService(store, projects);
+    plans.registerThread({ id: "delete-thread", projectId: project.id, parentThreadId: null });
+    plans.registerThread({ id: "replacement-thread", projectId: project.id, parentThreadId: null });
+    plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "delete-thread", title: "Deleted plan" });
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+
+    const response = await app.inject({ method: "DELETE", url: `/api/v4/projects/${project.id}/explorers/delete-thread` });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ deletedExplorerId: "delete-thread", replacementExplorer: { id: "replacement-thread" }, project: { currentExplorerThreadId: "replacement-thread" }, deleted: { taskCount: 1, planCount: 1, runCount: 0 } });
+    expect(store.getThread("delete-thread")).toBeUndefined();
+    expect(store.listEvents({ aggregateId: "delete-thread" }).some((event) => event.type === "explorer.deleted")).toBe(true);
+
+    const replacementId = response.json().replacementExplorer.id as string;
+    const replacementPlans = await app.inject({ method: "GET", url: `/api/v4/projects/${project.id}/explorers/${replacementId}/explorer-plans` });
+    expect(replacementPlans.statusCode).toBe(200);
+    const replacementPlanId = replacementPlans.json().items[0].id as string;
+    const replacementWorkspace = await app.inject({ method: "GET", url: `/api/v4/projects/${project.id}/explorers/${replacementId}/explorer-plans/${replacementPlanId}/workspace` });
+    expect(replacementWorkspace.statusCode).toBe(200);
+  });
+
+  it("rejects deleting an Explorer that has an active Run", async () => {
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    const project = projects.create({ id: "project-delete-active", name: "Delete Active", repoRoot: "/repo/delete-active", defaultBranch: "main", worktreeRoot: "/tmp/delete-active-worktrees" });
+    const plans = new PlanService(store, projects);
+    plans.registerThread({ id: "active-delete-thread", projectId: project.id, parentThreadId: null });
+    const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "active-delete-thread", title: "Active plan" });
+    store.saveRun({ id: "active-delete-run", projectId: project.id, planId: plan.id, planRevision: 1, status: "IN_PROGRESS", branch: "factory/active-delete-run", workspacePath: "/tmp/active-delete-worktree", baseCommit: "HEAD", executionThreadId: "active-delete-execution", createdAt: store.now(), startedAt: store.now() });
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+
+    const response = await app.inject({ method: "DELETE", url: `/api/v4/projects/${project.id}/explorers/active-delete-thread` });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: "EXPLORER_DELETE_BLOCKED", activeRunIds: ["active-delete-run"] });
+    expect(store.getThread("active-delete-thread")).toBeDefined();
+  });
+
+  it("does not allow deleting an Explorer through another Project", async () => {
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    const project = projects.create({ id: "project-delete-owner", name: "Owner", repoRoot: "/repo/delete-owner", defaultBranch: "main", worktreeRoot: "/tmp/delete-owner-worktrees" });
+    const otherProject = projects.create({ id: "project-delete-other", name: "Other", repoRoot: "/repo/delete-other", defaultBranch: "main", worktreeRoot: "/tmp/delete-other-worktrees" });
+    const plans = new PlanService(store, projects);
+    plans.registerThread({ id: "owned-delete-thread", projectId: project.id, parentThreadId: null });
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+
+    const response = await app.inject({ method: "DELETE", url: `/api/v4/projects/${otherProject.id}/explorers/owned-delete-thread` });
+
+    expect(response.statusCode).toBe(404);
+    expect(store.getThread("owned-delete-thread")).toBeDefined();
+  });
+
   it("lists all Enqueued plans for a Project across ExplorerThreads", async () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);
@@ -383,6 +443,30 @@ describe("Pipeline Factory v4 API", () => {
     expect(response.json().items).toEqual([]);
   });
 
+  it("does not project downstream lifecycle states when confirmation evidence is missing", async () => {
+    const store = new InMemoryPipelineStore();
+    createTestProject(store);
+    const plans = new PlanService(store);
+    plans.registerThread({ id: "invalid-lifecycle-thread", projectId: "project-1", parentThreadId: null });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "invalid-lifecycle-thread", title: "Invalid lifecycle" });
+    store.updatePlan({
+      ...plan,
+      status: "MERGE_READY",
+      confirmedAt: null,
+      queuedAt: "2026-09-19T01:02:00.000Z",
+      dispatchedAt: "2026-09-19T01:03:00.000Z",
+      lastEventAt: "2026-09-19T01:03:00.000Z",
+    });
+
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+    const response = await app.inject({ method: "GET", url: `/api/v4/plans/${plan.id}` });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().plan.lifecycle.map((entry: { status: string }) => entry.status)).toEqual(["DRAFT", "BLOCKED"]);
+    expect(response.json().plan.lifecycle.at(-1)).toMatchObject({ status: "BLOCKED", current: true, occurredAt: null });
+  });
+
   it("discards a candidate through the API and hides it from candidate endpoints", async () => {
     const store = new InMemoryPipelineStore();
     createTestProject(store);
@@ -451,9 +535,29 @@ describe("Pipeline Factory v4 API", () => {
     const plan2 = created.json().explorerPlan;
     expect(plan2).toMatchObject({ ordinal: 2, title: "Plan 2 / 待探索", explorerThreadId: "thread-plans" });
 
+    const plan1 = initial.json().items[0];
+    plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-plans", explorerPlanId: plan1.id, title: "Task 1 candidate" });
+    plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-plans", explorerPlanId: plan2.id, title: "Task 2 candidate" });
+    store.saveTurn({ id: "task-1-user", threadId: "thread-plans", role: "user", content: "Task 1 message", status: "COMPLETED", createdAt: "2026-09-19T10:00:00.000Z", sequence: 1, explorerPlanId: plan1.id });
+    store.saveTurn({ id: "task-1-assistant", threadId: "thread-plans", role: "assistant", content: "Task 1 reply", status: "COMPLETED", createdAt: "2026-09-19T10:00:01.000Z", sequence: 2, explorerPlanId: plan1.id });
+    store.saveTurn({ id: "task-2-user", threadId: "thread-plans", role: "user", content: "Task 2 message", status: "COMPLETED", createdAt: "2026-09-19T10:01:00.000Z", sequence: 3, explorerPlanId: plan2.id });
+    store.saveTurn({ id: "task-2-assistant", threadId: "thread-plans", role: "assistant", content: "Task 2 reply", status: "COMPLETED", createdAt: "2026-09-19T10:01:01.000Z", sequence: 4, explorerPlanId: plan2.id });
+    const activatePlan1 = await app.inject({ method: "POST", url: `/api/v4/projects/project-1/explorers/thread-plans/explorer-plans/${plan1.id}/activate` });
+    expect(activatePlan1.statusCode).toBe(200);
+
+    const activeCandidate = await app.inject({ method: "GET", url: "/api/v4/projects/project-1/explorers/thread-plans/candidate" });
+    const task1Candidate = await app.inject({ method: "GET", url: `/api/v4/projects/project-1/explorers/thread-plans/candidate?explorerPlanId=${plan1.id}` });
+    const task2Candidate = await app.inject({ method: "GET", url: `/api/v4/projects/project-1/explorers/thread-plans/candidate?explorerPlanId=${plan2.id}` });
+    expect(activeCandidate.statusCode).toBe(200);
+    expect(activeCandidate.json().plan).toMatchObject({ title: "Task 1 candidate", explorerPlanId: plan1.id });
+    expect(task1Candidate.json().plan).toMatchObject({ title: "Task 1 candidate", explorerPlanId: plan1.id });
+    expect(task2Candidate.json().plan).toMatchObject({ title: "Task 2 candidate", explorerPlanId: plan2.id });
+
     const workspace = await app.inject({ method: "GET", url: `/api/v4/projects/project-1/explorers/thread-plans/explorer-plans/${plan2.id}/workspace` });
     expect(workspace.statusCode).toBe(200);
-    expect(workspace.json()).toMatchObject({ explorerPlan: { id: plan2.id }, turns: [], activity: [], inputRequests: [], candidate: null });
+    expect(workspace.json()).toMatchObject({ explorerPlan: { id: plan2.id }, inputRequests: [], candidate: { title: "Task 2 candidate", explorerPlanId: plan2.id } });
+    expect(workspace.json().turns.map((turn: { id: string }) => turn.id)).toEqual(["task-2-user", "task-2-assistant"]);
+    expect(workspace.json().activity.every((item: { explorerPlanId?: string }) => item.explorerPlanId === plan2.id)).toBe(true);
     const crossProject = await app.inject({ method: "GET", url: `/api/v4/projects/project-2/explorers/thread-plans/explorer-plans/${plan2.id}/workspace` });
     expect(crossProject.statusCode).toBe(404);
     const invalidTurnPlan = await app.inject({ method: "POST", url: "/api/v4/projects/project-1/explorer-thread/turns", payload: { threadId: "thread-plans", explorerPlanId: "missing-plan", content: "invalid", clientTurnId: "invalid-plan-turn" } });

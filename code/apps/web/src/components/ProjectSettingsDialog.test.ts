@@ -29,6 +29,7 @@ const ElButtonStub = defineComponent({
 
 const ElTagStub = defineComponent({ setup(_, { slots }) { return () => h("span", slots.default?.()); } });
 const ElSwitchStub = defineComponent({ props: { modelValue: Boolean, disabled: Boolean }, setup() { return () => h("input", { type: "checkbox" }); } });
+const ElCheckboxStub = defineComponent({ props: { modelValue: Boolean, label: String, disabled: Boolean }, setup(props) { return () => h("label", [h("input", { type: "checkbox", checked: props.modelValue, disabled: props.disabled }), props.label]); } });
 
 function project(): Project {
   return {
@@ -70,6 +71,7 @@ function mountDialog() {
   app.component("ElButton", ElButtonStub);
   app.component("ElTag", ElTagStub);
   app.component("ElSwitch", ElSwitchStub);
+  app.component("ElCheckbox", ElCheckboxStub);
   app.directive("loading", {});
   app.mount(host);
   return { app, host, updates, saved };

@@ -28,6 +28,15 @@ describe("api request errors", () => {
     fetchSpy.mockRestore();
   });
 
+  it("loads a Candidate plan scoped to the active Explorer Task", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ plan: { id: "plan-1", explorerPlanId: "task-1", status: "DRAFT" } }), { status: 200 }));
+
+    await expect(api.explorerCandidate("project-1", "explorer-1", "task-1")).resolves.toMatchObject({ plan: { explorerPlanId: "task-1" } });
+    expect(fetchSpy).toHaveBeenCalledWith("/api/v4/projects/project-1/explorers/explorer-1/candidate?explorerPlanId=task-1", { headers: {} });
+
+    fetchSpy.mockRestore();
+  });
+
   it("reconciles external merges through the project-scoped endpoint", async () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ projectId: "project-1", checkedAt: "2026-09-06T00:00:00.000Z", items: [] }), { status: 200 }));
 
@@ -46,6 +55,15 @@ describe("api request errors", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ title: "Renamed thread" }),
     });
+
+    fetchSpy.mockRestore();
+  });
+
+  it("deletes an Explorer through the project-scoped DELETE endpoint", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ deletedExplorerId: "explorer-1", replacementExplorer: { id: "explorer-2" }, project: { id: "project-1" }, deleted: { taskCount: 1, planCount: 2, runCount: 0 } }), { status: 200 }));
+
+    await expect(api.deleteExplorer("project/1", "explorer/1")).resolves.toMatchObject({ deletedExplorerId: "explorer-1", deleted: { planCount: 2 } });
+    expect(fetchSpy).toHaveBeenCalledWith("/api/v4/projects/project%2F1/explorers/explorer%2F1", { method: "DELETE", headers: {} });
 
     fetchSpy.mockRestore();
   });

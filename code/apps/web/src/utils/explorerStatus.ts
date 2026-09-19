@@ -10,13 +10,12 @@ export function formatContextUsage(turns: Array<Pick<{ content: string }, "conte
   return tokens >= 1_000 ? `~${(tokens / 1_000).toFixed(1)}k tokens` : `~${tokens} tokens`;
 }
 
-/** 截断长 Provider ID，保留足够前缀用于诊断并避免破坏导航布局。 */
-export function formatConversationId(value: string): string {
-  return value.length > 28 ? `${value.slice(0, 28)}…` : value;
-}
-
 /** 将可选的限流遥测转换为明确的可用/不可用文案。 */
 export function formatRateLimit(limit: { remainingPercent: number; resetAt: string } | null): { remaining: string; reset: string } {
   if (!limit) return { remaining: "Unavailable", reset: "Not provided" };
-  return { remaining: `剩余 ${limit.remainingPercent}%`, reset: `重置时间: ${limit.resetAt}` };
+  const resetMatch = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/.exec(limit.resetAt);
+  const reset = resetMatch
+    ? `${resetMatch[2]}-${resetMatch[3]} ${resetMatch[4]}:${resetMatch[5]}`
+    : "Not provided";
+  return { remaining: `剩余 ${limit.remainingPercent}%`, reset: `重置时间: ${reset}` };
 }

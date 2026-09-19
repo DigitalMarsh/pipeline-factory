@@ -97,7 +97,7 @@ function mountStatus(status = run.status) {
   app.component("el-popover", ElPopoverStub);
   app.component("el-button", ElButtonStub);
   app.component("el-tag", ElTagStub);
-  app.component("el-input", defineComponent({ props: { modelValue: String }, emits: ["update:modelValue"], setup(props, { emit }) { return () => h("input", { value: props.modelValue, onInput: (event: Event) => emit("update:modelValue", (event.target as HTMLInputElement).value) }); } }));
+  app.component("el-input", defineComponent({ props: { modelValue: String, size: String }, emits: ["update:modelValue"], setup(props, { emit }) { return () => h("input", { value: props.modelValue, onInput: (event: Event) => emit("update:modelValue", (event.target as HTMLInputElement).value) }); } }));
   app.mount(host);
   return { app, host, emitted };
 }

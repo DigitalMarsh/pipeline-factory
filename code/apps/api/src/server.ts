@@ -16,6 +16,7 @@ import {
   SqlitePipelineStore,
   Scheduler,
   ExplorerService,
+  ExplorerDeleteBlockedError,
   ExplorerThreadService,
   ModelExplorerTitleGenerator,
   LifecycleHookRunner,
@@ -40,6 +41,9 @@ import {
   EXPLORER_PLAN_REQUIREMENTS,
   mapCodexRateLimits,
   type PipelineStore,
+  type CandidatePlan,
+  type PlanLifecycleEntry,
+  type PlanLifecycleStatus,
   type HookDefinition,
   type PlanStatus,
   type VerificationCommandExecutor,
@@ -70,6 +74,7 @@ const projectExplorerPlanParams = z.object({ projectId: z.string().min(1), explo
 const explorerCreateBody = z.object({ title: z.string().trim().min(1).max(200).optional(), originThreadId: z.string().min(1).optional() });
 const explorerRenameBody = z.object({ title: z.string().trim().min(1).max(200) });
 const explorerActivityQuery = z.object({ explorerPlanId: z.string().min(1).optional(), afterSequence: z.coerce.number().int().nonnegative().optional() });
+const explorerCandidateQuery = z.object({ explorerPlanId: z.string().min(1).optional() });
 const threadPlanQuery = z.object({
   explorerThreadId: z.string().min(1).optional(),
   includeLineage: z.preprocess((value) => value === "false" ? false : value === "true" ? true : value, z.boolean().default(true)),
@@ -682,7 +687,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     const candidate = store.listPlans().filter((plan) => plan.sourceExplorerThreadId === explorer.id && plan.explorerPlanId === explorerPlan.id && plan.status === "DRAFT" && plan.queuedAt === null).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] ?? null;
     const draft = explorer.activeRevisionDraftId ? store.getRevisionDraft(explorer.activeRevisionDraftId) : undefined;
     const revisionDraft = draft && draft.explorerPlanId === explorerPlan.id && ["EDITING", "READY_TO_CONFIRM", "BASE_CHANGED"].includes(draft.status) ? draft : null;
-    return { explorerPlan, turns, activity, inputRequests: store.listInputRequests(explorer.id).filter((item) => item.explorerPlanId === explorerPlan.id), candidate, revisionDraft, loops: loops.map((loop) => projectAgentLoopResponse(store, loop)), lastEventSequence: store.getLastEventSequence(explorer.id) };
+    return { explorerPlan, turns, activity, inputRequests: store.listInputRequests(explorer.id).filter((item) => item.explorerPlanId === explorerPlan.id), candidate: candidate ? { ...candidate, ...planProjection(store, candidate) } : null, revisionDraft, loops: loops.map((loop) => projectAgentLoopResponse(store, loop)), lastEventSequence: store.getLastEventSequence(explorer.id) };
   });
 
   app.post("/api/v4/projects/:projectId/explorers/:explorerId/explorer-plans/:explorerPlanId/rename", async (request, reply) => {
@@ -739,6 +744,22 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     const explorer = store.getThread(params.data.explorerId);
     if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
     return { explorer: explorers.rename(explorer.id, body.data.title) };
+  });
+
+  app.delete("/api/v4/projects/:projectId/explorers/:explorerId", async (request, reply) => {
+    const params = projectExplorerParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    const explorer = store.getThread(params.data.explorerId);
+    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
+    try {
+      const result = explorers.delete(explorer.id);
+      return { deletedExplorerId: explorer.id, replacementExplorer: result.replacementExplorer, project: result.project, deleted: result.deleted };
+    } catch (error) {
+      if (error instanceof ExplorerDeleteBlockedError) {
+        return reply.code(409).send({ code: error.code, error: error.message, message: error.message, activeRunIds: error.activeRunIds, activeLoopIds: error.activeLoopIds });
+      }
+      return reply.code(409).send({ code: "EXPLORER_DELETE_FAILED", error: error instanceof Error ? error.message : "Explorer cannot be deleted" });
+    }
   });
 
   app.get("/api/v4/projects/:projectId/explorers/:explorerId/activity", async (request, reply) => {
@@ -833,12 +854,18 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
 
   app.get("/api/v4/projects/:projectId/explorers/:explorerId/candidate", async (request, reply) => {
     const params = projectExplorerParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    const query = explorerCandidateQuery.safeParse(request.query ?? {});
+    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid Explorer candidate query" });
     const explorer = store.getThread(params.data.explorerId);
     if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
-    const candidate = store.listPlans().filter((plan) => plan.sourceExplorerThreadId === explorer.id && plan.status === "DRAFT" && plan.queuedAt === null).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+    const explorerPlanId = query.data.explorerPlanId ?? explorer.activeExplorerPlanId;
+    if (explorerPlanId) {
+      const explorerPlan = store.getExplorerPlan(explorerPlanId);
+      if (!explorerPlan || explorerPlan.explorerThreadId !== explorer.id) return reply.code(404).send({ error: "ExplorerPlan not found" });
+    }
+    const candidate = store.listPlans().filter((plan) => plan.sourceExplorerThreadId === explorer.id && (!explorerPlanId || plan.explorerPlanId === explorerPlanId) && plan.status === "DRAFT" && plan.queuedAt === null).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
     if (!candidate) return reply.code(404).send({ error: "Candidate plan not found" });
-    return { plan: candidate };
+    return { plan: { ...candidate, ...planProjection(store, candidate) } };
   });
 
   /** RevisionDraft is deliberately separate from a candidate Plan: it is mutable until confirmation. */
@@ -946,7 +973,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     try {
       const plan = plans.get(params.data.planId);
       if (ensurePlanProject(plan.projectId, reply) === null) return;
-      return { plan, items: plans.listRevisions(plan.id), drafts: store.listRevisionDrafts(plan.id), lifecycle: store.listRevisionLifecycleProjections(plan.projectId, plan.id) };
+      return { plan: { ...plan, ...planProjection(store, plan) }, items: plans.listRevisions(plan.id), drafts: store.listRevisionDrafts(plan.id), lifecycle: store.listRevisionLifecycleProjections(plan.projectId, plan.id) };
     } catch { return reply.code(404).send({ code: "PLAN_NOT_FOUND", error: "Plan not found" }); }
   });
 
@@ -957,7 +984,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       const plan = plans.get(params.data.planId);
       if (ensurePlanProject(plan.projectId, reply) === null) return;
       const revision = plans.getRevision(plan.id, params.data.revision);
-      return { planId: plan.id, revision, runs: store.listRuns().filter((run) => run.planId === plan.id && run.planRevision === revision.revision) };
+      return { plan: { ...plan, ...planProjection(store, plan) }, planId: plan.id, revision, runs: store.listRuns().filter((run) => run.planId === plan.id && run.planRevision === revision.revision) };
     } catch { return reply.code(404).send({ code: "REVISION_NOT_FOUND", error: "Plan revision not found" }); }
   });
 
@@ -1055,7 +1082,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       const plan = plans.get(params.data.planId);
       if (ensurePlanProject(plan.projectId, reply) === null) return;
       const revision = store.getRevision(plan.id, plan.revision);
-      return { plan, revision: revision ?? null, projectSnapshot: revision?.projectConfigSnapshot ?? null, dispatch: dispatchCoordinator?.state(plan.id) ?? store.getDispatchState(plan.id) ?? null, mergeRequest: plan.runId ? merger.findByRun(plan.runId) ?? null : null };
+      return { plan: { ...plan, ...planProjection(store, plan) }, revision: revision ?? null, projectSnapshot: revision?.projectConfigSnapshot ?? null, dispatch: dispatchCoordinator?.state(plan.id) ?? store.getDispatchState(plan.id) ?? null, mergeRequest: plan.runId ? merger.findByRun(plan.runId) ?? null : null };
     } catch {
       return reply.code(404).send({ error: "Plan not found" });
     }
@@ -1387,6 +1414,102 @@ function findProjectThread(store: PipelineStore, projectId: string, threadId?: s
   return store.listThreads().find((thread) => thread.projectId === projectId && (threadId ? thread.id === threadId : thread.parentThreadId === null));
 }
 
+const PLAN_LIFECYCLE_ORDER: Array<PlanLifecycleStatus> = ["DRAFT", "READY", "ENQUEUED", "DISPATCHED", "IN_PROGRESS", "VERIFYING", "MERGE_READY", "MERGED"];
+const PLAN_LIFECYCLE_NORMALIZED = new Set<PlanLifecycleStatus>(PLAN_LIFECYCLE_ORDER);
+const PLAN_LIFECYCLE_PROGRESS_STATUSES = new Set<PlanLifecycleStatus>(["READY", "ENQUEUED", "DISPATCHED", "IN_PROGRESS", "VERIFYING", "MERGE_READY", "MERGED", "BLOCKED", "NEEDS_PLAN_CHANGE", "NEEDS_CONFIGURATION"]);
+const UNCONFIRMED_LIFECYCLE_REASON = "Plan lifecycle is invalid: it reached a later state without a confirmation record.";
+
+function normalizedLifecycleStatus(value: unknown): PlanLifecycleStatus | null {
+  if (value === "QUEUED") return "ENQUEUED";
+  if (typeof value !== "string") return null;
+  if (PLAN_LIFECYCLE_NORMALIZED.has(value as PlanLifecycleStatus)) return value as PlanLifecycleStatus;
+  if (["BLOCKED", "NEEDS_PLAN_CHANGE", "NEEDS_CONFIGURATION"].includes(value)) return value as PlanLifecycleStatus;
+  return null;
+}
+
+function buildPlanLifecycle(store: PipelineStore, plan: CandidatePlan, revision = plan.revision): PlanLifecycleEntry[] {
+  const run = plan.runId ? store.getRun(plan.runId) : undefined;
+  const dispatch = store.getDispatchState(plan.id);
+  const currentStatus = dispatch?.waitReason === "NEEDS_CONFIGURATION" ? "NEEDS_CONFIGURATION" : normalizedLifecycleStatus(plan.status);
+  const entries = new Map<PlanLifecycleStatus, PlanLifecycleEntry>();
+  const eventPlanId = (payload: Record<string, unknown>) => typeof payload.planId === "string" ? payload.planId : null;
+  const eventRevision = (payload: Record<string, unknown>) => typeof payload.revision === "number" ? payload.revision : null;
+  const relevant = store.listEvents({ afterSequence: 0 }).filter((event) => event.aggregateId === plan.id || event.aggregateId === run?.id || eventPlanId(event.payload) === plan.id);
+  const add = (status: PlanLifecycleStatus, occurredAt: string | null, options: { reason?: string | null; runId?: string | null; eventRevision?: number | null } = {}) => {
+    if (options.eventRevision !== null && options.eventRevision !== undefined && options.eventRevision !== revision) return;
+    const existing = entries.get(status);
+    if (existing && existing.occurredAt && occurredAt && existing.occurredAt <= occurredAt) return;
+    entries.set(status, { status, occurredAt, revision, current: status === currentStatus, ...(options.reason !== undefined ? { reason: options.reason } : {}), ...(options.runId !== undefined ? { runId: options.runId } : {}), ...(run ? { executionThreadId: run.executionThreadId } : {}) });
+  };
+
+  add("DRAFT", plan.createdAt);
+  if (plan.confirmedAt) add("READY", plan.confirmedAt);
+  if (plan.queuedAt) add("ENQUEUED", plan.queuedAt);
+  if (plan.dispatchedAt) add("DISPATCHED", plan.dispatchedAt);
+  if (run?.startedAt) add("IN_PROGRESS", run.startedAt, { runId: run.id });
+
+  for (const event of relevant) {
+    const payload = event.payload;
+    const eventRev = eventRevision(payload);
+    const matchingEventRevision = eventRev ?? (revision === 1 ? null : -1);
+    if (event.type === "plan.candidate.created") add("DRAFT", event.occurredAt, { eventRevision: matchingEventRevision });
+    if (event.type === "plan.status.changed") {
+      const status = normalizedLifecycleStatus(payload.toStatus);
+      if (status) add(status, event.occurredAt, { reason: typeof payload.reason === "string" ? payload.reason : null, runId: typeof payload.runId === "string" ? payload.runId : null, eventRevision: eventRev });
+    }
+    if (event.type === "plan.confirmed" || event.type === "plan.revision.confirmed" || event.type === "plan.configuration.revised") add("READY", event.occurredAt, { eventRevision: matchingEventRevision });
+    if (event.type === "plan.enqueued") add("ENQUEUED", typeof payload.queuedAt === "string" ? payload.queuedAt : event.occurredAt, { eventRevision: matchingEventRevision });
+    if (event.type === "plan.dispatched") add("DISPATCHED", typeof payload.dispatchedAt === "string" ? payload.dispatchedAt : event.occurredAt, { eventRevision: matchingEventRevision });
+    if (event.type === "verification.completed") {
+      const verificationStatus = payload.status;
+      add(verificationStatus === "PASSED" || verificationStatus === "SKIPPED" ? "MERGE_READY" : "BLOCKED", typeof payload.completedAt === "string" ? payload.completedAt : event.occurredAt, { reason: verificationStatus === "PASSED" || verificationStatus === "SKIPPED" ? null : "Verification failed", runId: run?.id ?? null, eventRevision: matchingEventRevision });
+    }
+    if (event.type === "change.proposal.created") add("NEEDS_PLAN_CHANGE", event.occurredAt, { reason: typeof payload.reason === "string" ? payload.reason : null, runId: typeof payload.runId === "string" ? payload.runId : null, eventRevision: matchingEventRevision });
+    if (event.type === "merge.confirmed") add("MERGED", event.occurredAt, { runId: run?.id ?? null, eventRevision: matchingEventRevision });
+    if (event.type === "plan.dispatch.state.changed" && payload.waitReason === "NEEDS_CONFIGURATION") add("NEEDS_CONFIGURATION", typeof payload.updatedAt === "string" ? payload.updatedAt : event.occurredAt, { reason: typeof payload.lastError === "string" ? payload.lastError : "Needs configuration", runId: typeof payload.runId === "string" ? payload.runId : null, eventRevision: eventRev });
+  }
+
+  if (dispatch?.waitReason === "NEEDS_CONFIGURATION") add("NEEDS_CONFIGURATION", dispatch.updatedAt ?? null, { reason: dispatch.lastError ?? "Needs configuration", runId: dispatch.runId });
+  let lifecycleCurrentStatus = currentStatus;
+  const hasConfirmation = entries.has("READY");
+  const progressedWithoutConfirmation = !hasConfirmation && (
+    [...entries.keys()].some((status) => status !== "DRAFT")
+    || (currentStatus !== null && PLAN_LIFECYCLE_PROGRESS_STATUSES.has(currentStatus))
+  );
+  if (progressedWithoutConfirmation) {
+    const draft = entries.get("DRAFT") ?? { status: "DRAFT" as const, occurredAt: plan.createdAt, revision, current: false };
+    const existingBlocked = entries.get("BLOCKED");
+    entries.clear();
+    entries.set("DRAFT", { ...draft, current: false });
+    entries.set("BLOCKED", {
+      ...(existingBlocked ?? { status: "BLOCKED" as const, occurredAt: null, revision, current: true }),
+      current: true,
+      reason: existingBlocked?.reason ?? plan.attentionReason ?? UNCONFIRMED_LIFECYCLE_REASON,
+      ...(existingBlocked?.runId === undefined && plan.runId ? { runId: plan.runId } : {}),
+      ...(existingBlocked?.executionThreadId === undefined && run ? { executionThreadId: run.executionThreadId } : {}),
+    });
+    lifecycleCurrentStatus = "BLOCKED";
+  }
+  return [...entries.values()]
+    .sort((a, b) => {
+      const aOrder = PLAN_LIFECYCLE_ORDER.indexOf(a.status);
+      const bOrder = PLAN_LIFECYCLE_ORDER.indexOf(b.status);
+      return (aOrder < 0 ? PLAN_LIFECYCLE_ORDER.length : aOrder) - (bOrder < 0 ? PLAN_LIFECYCLE_ORDER.length : bOrder);
+    })
+    .map((entry) => ({ ...entry, current: entry.status === lifecycleCurrentStatus, ...(entry.runId === undefined && run ? { runId: run.id } : {}) }));
+}
+
+function planExecutionThread(store: PipelineStore, plan: CandidatePlan) {
+  const run = plan.runId ? store.getRun(plan.runId) : undefined;
+  if (!run) return null;
+  const thread = store.getExecutionThread(run.executionThreadId);
+  return { id: run.executionThreadId, runId: run.id, state: thread?.state ?? run.status };
+}
+
+function planProjection(store: PipelineStore, plan: CandidatePlan) {
+  return { confirmedAt: plan.confirmedAt ?? null, lifecycle: buildPlanLifecycle(store, plan), executionThread: planExecutionThread(store, plan) };
+}
+
 /** 将 PlanRevision 的快照版本与当前 Project 对比，供 Plan Center 显示 CURRENT/CHANGED/LEGACY。 */
 function decoratePlanRows(store: PipelineStore, rows: Array<{ planId: string; revision: number; projectId: string }>) {
   return rows.map((row) => {
@@ -1396,6 +1519,7 @@ function decoratePlanRows(store: PipelineStore, rows: Array<{ planId: string; re
     const project = store.getProject(row.projectId);
     return {
       ...row,
+      ...(plan ? planProjection(store, plan) : { confirmedAt: null, lifecycle: [], executionThread: null }),
       projectConfigVersion: revision?.projectConfigVersion ?? null,
       projectConfigHash: revision?.projectConfigHash ?? null,
       projectConfigStatus: !snapshot ? "LEGACY" : project && snapshot.configVersion === project.configVersion && snapshot.configHash === project.configHash ? "CURRENT" : "CHANGED",
@@ -1432,6 +1556,7 @@ function workbenchSnapshot(store: PipelineStore, projects: ProjectService, proje
       attentionReason: plan.attentionReason,
       contract: plan.contract,
       dispatch: store.getDispatchState(plan.id) ?? null,
+      ...planProjection(store, plan),
     }));
   const runs = store.listRuns().filter((run) => run.projectId === projectId).map((run) => ({
     ...run,

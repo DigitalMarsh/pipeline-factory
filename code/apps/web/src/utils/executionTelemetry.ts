@@ -8,6 +8,13 @@ export function formatTokenSummary(usage: ModelUsage | null | undefined): string
   return usage?.totalTokens === null || usage?.totalTokens === undefined ? "未记录" : `${formatTokenCount(usage.totalTokens)} tokens`;
 }
 
+/** Provider 返回的 input token 作为执行线程当前 Context；缺失时不做前端估算。 */
+export function formatProviderContextUsage(inputTokens: number | null | undefined): string {
+  return typeof inputTokens === "number" && Number.isFinite(inputTokens) && inputTokens >= 0
+    ? `${formatTokenCount(inputTokens)} tokens`
+    : "未记录";
+}
+
 export function formatDurationMs(durationMs: number | null | undefined): string {
   if (typeof durationMs !== "number" || !Number.isFinite(durationMs) || durationMs < 0) return "未记录";
   const totalSeconds = Math.floor(durationMs / 1000);

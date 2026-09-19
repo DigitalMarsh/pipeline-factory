@@ -3,7 +3,7 @@
  *
  * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
  */
-import type { AgentLoop, PipelineStore, PlanStatus, RunStatus } from "./index.js";
+import { updatePlanStatus, type AgentLoop, type PipelineStore, type PlanStatus, type RunStatus } from "./index.js";
 
 /** 启动恢复协调器，把未完成 Loop、未知工具副作用和 Run/Plan 投影恢复到可诊断状态。 */
 export class RecoveryCoordinator {
@@ -97,7 +97,7 @@ export class RecoveryCoordinator {
       const attentionReason = targetStatus === "BLOCKED"
         ? plan.attentionReason ?? (run.status === "CANCELLED" ? "Run cancelled: startup reconciliation" : "Run is blocked")
         : null;
-      this.store.updatePlan({ ...plan, status: targetStatus, attentionReason, lastEventAt: this.store.now() });
+      updatePlanStatus(this.store, plan, { status: targetStatus, attentionReason, lastEventAt: this.store.now() }, attentionReason);
     }
   }
 }

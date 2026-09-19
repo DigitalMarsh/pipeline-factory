@@ -3,12 +3,14 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createApp, defineComponent, h, nextTick, ref } from "vue";
+import { ElButton, ElDropdown, ElDropdownItem, ElDropdownMenu, ElTree } from "element-plus";
 import { describe, expect, it } from "vitest";
 import ThreadRail from "./ThreadRail.vue";
 import type { ExplorerThread, Project } from "../types";
 import type { TaskTreeItem } from "../utils/taskTree";
 
 const styles = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../styles.css"), "utf8");
+const source = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "./ThreadRail.vue"), "utf8");
 
 function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplorer = false, projectActionId: string | null = null, includeArchived = false, showArchived = false, explorerLoading = false, explorerError: string | null = null, explorerItems?: ExplorerThread[], planCenterActive = false, planCenterCount = 2) {
   const host = document.createElement("div");
@@ -20,7 +22,6 @@ function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplor
   let selectedProjectId: string | null = null;
   let selectedExplorerId: string | null = null;
   let selectedExplorerPlanId: string | null = null;
-  let toggledTaskId: string | null = null;
   let selectedPlanTreeItem: TaskTreeItem | null = null;
   let threadAction: string | null = null;
   let archivedExplorerId: string | null = null;
@@ -71,7 +72,6 @@ function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplor
         planCenterCount,
         taskTreeItems,
         activeExplorerPlanId: "task-1",
-        expandedTaskIds: ["task-1", "task-2"],
         explorerPaused: false,
         onCreateExplorer: () => { createExplorerCount += 1; },
         onCreateProject: () => { createProjectCount += 1; },
@@ -80,7 +80,6 @@ function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplor
         onSelectProject: (projectId: string) => { selectedProjectId = projectId; },
         onSelectExplorer: (explorerId: string) => { selectedExplorerId = explorerId; },
         onSelectExplorerPlan: (explorerPlanId: string) => { selectedExplorerPlanId = explorerPlanId; },
-        onToggleTaskExpanded: (taskId: string) => { toggledTaskId = taskId; },
         onSelectPlanTreeItem: (item: TaskTreeItem) => { selectedPlanTreeItem = item; },
         onThreadAction: (command: string) => { threadAction = command; },
         onToggleShowArchived: (value: boolean) => { archivedVisible.value = value; },
@@ -91,6 +90,11 @@ function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplor
       });
     },
   }));
+  app.component("el-tree", ElTree);
+  app.component("el-button", ElButton);
+  app.component("el-dropdown", ElDropdown);
+  app.component("el-dropdown-item", ElDropdownItem);
+  app.component("el-dropdown-menu", ElDropdownMenu);
   app.mount(host);
   return {
     app,
@@ -102,7 +106,6 @@ function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplor
     getSelectedProjectId: () => selectedProjectId,
     getSelectedExplorerId: () => selectedExplorerId,
     getSelectedExplorerPlanId: () => selectedExplorerPlanId,
-    getToggledTaskId: () => toggledTaskId,
     getSelectedPlanTreeItem: () => selectedPlanTreeItem,
     getThreadAction: () => threadAction,
     getArchivedExplorerId: () => archivedExplorerId,
@@ -279,6 +282,10 @@ describe("ThreadRail left workspace navigation", () => {
     expect(mounted.host.querySelector("[aria-label=\"Open Explorer history\"]")).toBeNull();
     expect(explorerRows).toHaveLength(2);
     expect(explorerRows.map((row) => row.textContent)).toEqual(expect.arrayContaining([expect.stringContaining("Current exploration"), expect.stringContaining("Second exploration")]));
+    expect(currentThread?.querySelector(".explorer-list-item .left-list-icon")).toBeNull();
+    expect(currentThread?.querySelector(".explorer-list-item small")).toBeNull();
+    expect(currentThread?.querySelector(".explorer-list-item")?.textContent ?? "").not.toContain("messages");
+    expect(currentThread?.querySelector(".explorer-list-item")?.textContent ?? "").not.toContain("explorer-1");
     expect(currentThread?.classList.contains("active")).toBe(true);
     expect(currentThread?.getAttribute("aria-current")).toBe("page");
     expect(currentThread?.getAttribute("aria-expanded")).toBe("true");
@@ -288,25 +295,34 @@ describe("ThreadRail left workspace navigation", () => {
     mounted.host.remove();
   });
 
-  it("renders the active Explorer as an expanded Task and Plan tree while collapsing other threads", async () => {
+  it("renders the active Explorer as a lightweight always-visible Task and Plan tree", async () => {
     const mounted = mountRail();
     const activeRow = mounted.host.querySelector<HTMLElement>('[data-explorer-id="explorer-1"]');
     const inactiveRow = mounted.host.querySelector<HTMLElement>('[data-explorer-id="explorer-2"]');
 
     expect(activeRow?.querySelector(".explorer-thread-tree")).not.toBeNull();
-    expect(activeRow?.querySelectorAll(".task-tree-node")).toHaveLength(2);
-    expect(activeRow?.querySelectorAll(".task-tree-plan-button")).toHaveLength(2);
-    expect(activeRow?.querySelector(".task-tree-plan-button")?.textContent).toContain("Apple overview");
-    expect(activeRow?.querySelectorAll(".task-tree-plan-button")[1]?.textContent).toContain("Banana overview");
+    expect(activeRow?.querySelector(".el-tree")).not.toBeNull();
+    expect(activeRow?.querySelectorAll(".el-tree-node")).toHaveLength(5);
+    expect(activeRow?.querySelectorAll(".explorer-tree-task-row")).toHaveLength(2);
+    expect(activeRow?.querySelectorAll(".explorer-tree-plan-button")).toHaveLength(2);
+    expect(activeRow?.querySelector(".explorer-tree-plan-button")?.textContent).toContain("Apple overview");
+    expect(activeRow?.querySelectorAll(".explorer-tree-plan-button")[1]?.textContent).toContain("Banana overview");
+    expect(source).toContain("<el-tree");
+    expect(source).toContain(":default-expand-all=\"true\"");
+    expect(source).toContain(":expand-on-click-node=\"false\"");
+    expect(styles).toContain(".explorer-thread-tree .el-tree-node__expand-icon { display: none; }");
+    expect(styles).toContain(".explorer-thread-tree > .el-tree-node > .el-tree-node__children::before");
+    expect(styles).toContain(".explorer-thread-tree > .el-tree-node > .el-tree-node__children > .el-tree-node::after");
+    expect(styles).toContain(".explorer-thread-tree > .el-tree-node > .el-tree-node__children > .el-tree-node > .el-tree-node__children::before");
+    expect(styles).toContain(".thread-rail .explorer-tree-task-row.active { border-left-color:");
     expect(inactiveRow?.querySelector(".explorer-thread-tree")).toBeNull();
-    expect(activeRow?.querySelector<HTMLButtonElement>(".task-tree-task-button")?.getAttribute("aria-current")).toBe("page");
+    expect(activeRow?.querySelector<HTMLButtonElement>(".explorer-tree-task-button")?.getAttribute("aria-current")).toBe("page");
 
-    activeRow?.querySelectorAll<HTMLButtonElement>(".task-tree-task-button")[1]?.click();
-    activeRow?.querySelectorAll<HTMLButtonElement>(".task-tree-plan-button")[1]?.click();
+    activeRow?.querySelectorAll<HTMLButtonElement>(".explorer-tree-task-button")[1]?.click();
+    activeRow?.querySelectorAll<HTMLButtonElement>(".explorer-tree-plan-button")[1]?.click();
     await nextTick();
 
     expect(mounted.getSelectedExplorerPlanId()).toBe("task-2");
-    expect(mounted.getToggledTaskId()).toBeNull();
     expect(mounted.getSelectedPlanTreeItem()?.planKey).toBe("plan-plan-2");
 
     mounted.app.unmount();
@@ -323,6 +339,13 @@ describe("ThreadRail left workspace navigation", () => {
 
     mounted.app.unmount();
     mounted.host.remove();
+  });
+
+  it("keeps delete as a dangerous current-thread dropdown action", () => {
+    expect(source).toContain('command="delete"');
+    expect(source).toContain("thread-action-danger");
+    expect(source).toContain("删除线程");
+    expect(styles).toContain(".thread-action-danger");
   });
 
   it("keeps Explorer rows from shrinking when the thread list overflows", () => {

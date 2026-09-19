@@ -35,6 +35,15 @@ describe("ChangeProposalService", () => {
     expect(approved.run).toBeNull();
     expect(store.listRuns()).toHaveLength(1);
     expect(store.getRun(run.id)?.planRevision).toBe(1);
+
+    expect(store.listEvents({ afterSequence: 0 }).filter((event) => event.type === "plan.status.changed").map((event) => event.payload)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ fromStatus: "DRAFT", toStatus: "READY", revision: 1 }),
+      expect.objectContaining({ fromStatus: "READY", toStatus: "ENQUEUED", revision: 1 }),
+      expect.objectContaining({ fromStatus: "ENQUEUED", toStatus: "DISPATCHED", revision: 1 }),
+      expect.objectContaining({ fromStatus: "DISPATCHED", toStatus: "IN_PROGRESS", revision: 1 }),
+      expect.objectContaining({ fromStatus: "IN_PROGRESS", toStatus: "NEEDS_PLAN_CHANGE", reason: "The acceptance scope includes documentation" }),
+      expect.objectContaining({ fromStatus: "NEEDS_PLAN_CHANGE", toStatus: "ENQUEUED", revision: 2 }),
+    ]));
   });
 
   it("does not mutate an approved proposal or create a second run on retry", async () => {

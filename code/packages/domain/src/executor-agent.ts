@@ -7,7 +7,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { AgentLoopEngine, type AgentLoop, type AgentLoopEvent, type AgentLoopMode, type GateContext } from "./agent-loop.js";
 import { TaskProgressGate } from "./termination-gates.js";
-import { mergeModelUsage, normalizeModelUsage, type ExecutionTelemetry, type ModelGateway, type ModelRoleConfig, type PipelineStore, type PlanRevisionV2, type Run } from "./index.js";
+import { mergeModelUsage, normalizeModelUsage, updatePlanStatus, type ExecutionTelemetry, type ModelGateway, type ModelRoleConfig, type PipelineStore, type PlanRevisionV2, type Run } from "./index.js";
 import type { ToolRuntime } from "./tool-runtime.js";
 
 const REPORT_START = "<pipeline-factory-execution-report>";
@@ -305,7 +305,8 @@ export class ExecutorAgent {
     if (thread) this.store.saveExecutionThread({ ...thread, state: status === "READY_FOR_VERIFY" ? "COMPLETED" : status === "BLOCKED" ? "BLOCKED" : "CANCELLED" });
     const plan = this.store.getPlan(run.planId);
     if (plan?.runId === run.id) {
-      this.store.updatePlan({ ...plan, ...(status === "BLOCKED" ? { status: "BLOCKED", attentionReason: reason ?? "Executor loop blocked" } : {}), lastEventAt: this.store.now() });
+      if (status === "BLOCKED") updatePlanStatus(this.store, plan, { status: "BLOCKED", attentionReason: reason ?? "Executor loop blocked", lastEventAt: this.store.now() }, reason ?? "Executor loop blocked");
+      else this.store.updatePlan({ ...plan, lastEventAt: this.store.now() });
     }
   }
 

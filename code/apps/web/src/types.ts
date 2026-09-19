@@ -4,6 +4,17 @@
  * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
  */
 export type PlanStatus = "DRAFT" | "DISCARDED" | "READY" | "ENQUEUED" | "DISPATCHED" | "QUEUED" | "IN_PROGRESS" | "VERIFYING" | "MERGE_READY" | "MERGED" | "BLOCKED" | "NEEDS_PLAN_CHANGE";
+export type PlanLifecycleStatus = PlanStatus | "NEEDS_CONFIGURATION";
+export type PlanLifecycleEntry = {
+  status: PlanLifecycleStatus;
+  occurredAt: string | null;
+  revision: number;
+  current: boolean;
+  reason?: string | null;
+  runId?: string | null;
+  executionThreadId?: string | null;
+};
+export type ExecutionThreadSummary = { id: string; runId: string; state: string } | null;
 export type PlanDispatchStatus = "QUEUED" | "WAITING" | "DISPATCHING" | "RUNNING" | "VERIFYING" | "NEEDS_REVIEW" | "BLOCKED" | "COMPLETED";
 export type PlanDispatchWaitReason = "WAITING_DEPENDENCY" | "WAITING_CONFLICT" | "WAITING_PROJECT_CAPACITY" | "WAITING_GLOBAL_CAPACITY" | "NEEDS_CONFIGURATION";
 export type PlanDispatchState = {
@@ -281,11 +292,14 @@ export type Plan = {
   providerTurnId?: string | null;
   providerItemId?: string | null;
   createdAt?: string;
+  confirmedAt?: string | null;
   queuedAt: string | null;
   dispatchedAt?: string | null;
   runId: string | null;
   lastEventAt: string;
   attentionReason: string | null;
+  lifecycle?: PlanLifecycleEntry[];
+  executionThread?: ExecutionThreadSummary;
   projectConfigVersion?: number | null;
   projectConfigHash?: string | null;
   projectConfigStatus?: "CURRENT" | "CHANGED" | "LEGACY";

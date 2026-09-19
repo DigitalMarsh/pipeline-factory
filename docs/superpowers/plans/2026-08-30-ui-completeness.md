@@ -10,6 +10,12 @@
 
 **Spec:** Confirmed in chat on 2026-08-30; this plan is the scoped execution contract for the full UI button and flow audit.
 
+## Current implementation status (2026-09-19)
+
+- Task 1 的项目路由保护已实现并有 `projectRoutes` 测试；Explorer/Task/Plan 导航、Plan Center 和主要空状态已有代码覆盖。
+- 当前剩余工作是 Task 2–3 的真实浏览器验收：桌面、平板、窄屏布局，完整控制流，Console 警告/API unavailable、键盘焦点和恢复状态。
+- 自动化基线已更新为 88 个测试文件、526 个测试通过；不能将自动化通过替代为浏览器矩阵完成。
+
 ## Global Constraints
 
 - Preserve existing modified files unless a reproduced defect directly overlaps them.

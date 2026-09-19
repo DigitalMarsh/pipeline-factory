@@ -3,6 +3,8 @@
  *
  * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
  */
+import type { PlanTask } from "../types";
+
 export type ExecutionJournalEntry = {
   sequence: number;
   type: string;
@@ -10,9 +12,21 @@ export type ExecutionJournalEntry = {
   payload: Record<string, unknown>;
 };
 
+export type ExecutionPlanSnapshot = {
+  planId: string;
+  revision: number;
+  occurredAt: string;
+  goal: string;
+  acceptanceCriteria: string[];
+  includePaths: string[];
+  excludePaths: string[];
+  tasks: PlanTask[];
+  verificationCommandIds: string[];
+};
+
 export type ExecutionStreamItem = {
   id: string;
-  kind: "model" | "guidance" | "activity";
+  kind: "plan" | "model" | "guidance" | "activity";
   role: "assistant" | "user" | "system";
   title: string;
   content: string;
@@ -21,11 +35,12 @@ export type ExecutionStreamItem = {
   occurredAt: string;
   sequence: number;
   repetitionCount?: number;
+  plan?: ExecutionPlanSnapshot;
 };
 
 /** 将 ExecutionThread journal 映射成类似 Explorer 对话的模型/活动消息流。 */
-export function projectExecutionJournal(journal: ExecutionJournalEntry[], threadState: string = "ACTIVE"): ExecutionStreamItem[] {
-  const items: ExecutionStreamItem[] = [];
+export function projectExecutionJournal(journal: ExecutionJournalEntry[], threadState: string = "ACTIVE", plan?: ExecutionPlanSnapshot): ExecutionStreamItem[] {
+  const items: ExecutionStreamItem[] = plan ? [planMessage(plan)] : [];
   let pendingModelText = "";
   let pendingModelSequence = 0;
   let pendingModelOccurredAt = "";
@@ -70,6 +85,21 @@ export function projectExecutionJournal(journal: ExecutionJournalEntry[], thread
     if (current?.kind === "model") current.status = "RUNNING";
   }
   return items;
+}
+
+function planMessage(plan: ExecutionPlanSnapshot): ExecutionStreamItem {
+  return {
+    id: `execution-plan-${plan.planId}-${plan.revision}`,
+    kind: "plan",
+    role: "assistant",
+    title: "Plan received",
+    content: plan.goal,
+    detail: "",
+    status: "COMPLETED",
+    occurredAt: plan.occurredAt,
+    sequence: 0,
+    plan,
+  };
 }
 
 function projectExecutionActivity(entry: ExecutionJournalEntry): ExecutionStreamItem | null {
