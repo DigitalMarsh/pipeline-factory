@@ -4,16 +4,18 @@
 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { ArrowLeft, Check, CircleCheck, Clock, Document, VideoPause, VideoPlay, Warning } from "@element-plus/icons-vue";
+import { ArrowLeft, CircleCheck, Clock, Document, Warning } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
+import ExecutionHeaderStatus from "../components/ExecutionHeaderStatus.vue";
+import PlanDetailDrawer from "../components/PlanDetailDrawer.vue";
 import { api } from "../api";
 import MarkdownMessage from "../components/MarkdownMessage.vue";
-import type { AgentLoopStep, ExecutionTask, ExecutionThread, MergeRequest, PlanTask, Run, RunJournalEvent, ToolCall, VerificationRun } from "../types";
+import type { AgentLoopStep, ExecutionTask, ExecutionThread, MergeRequest, Plan, PlanTask, Run, RunJournalEvent, ToolCall, VerificationRun } from "../types";
 import { projectExecutionJournal, type ExecutionJournalEntry, type ExecutionStreamItem } from "../utils/executionStream";
 import { formatExecutionDuration, formatTokenSummary, telemetryModel, telemetryReasoning, usageDetailRows } from "../utils/executionTelemetry";
-import { executionTaskStatusLabel, executionTaskStatusType, executionTaskSummary, projectExecutionTasks, verificationSummary } from "../utils/executionTasks";
-import { canPauseRun, canTerminateRun } from "../utils/runControls";
+import { executionTaskSummary, projectExecutionTasks } from "../utils/executionTasks";
+import { canTerminateRun } from "../utils/runControls";
 import { describeRunLoadError } from "../utils/runLoadError";
 import { createProjectRequestScope } from "../utils/projectRoutes";
 
@@ -43,18 +45,21 @@ const executionMessages = ref<ExecutionStreamItem[]>([]);
 const executionTimeline = ref<HTMLElement | null>(null);
 const showScrollToLatest = ref(false);
 const runStreamConnected = ref(false);
-const executionStepsExpanded = ref(true);
 const diagnosticsOpen = ref(false);
+const planDetailOpen = ref(false);
+const planDetail = ref<Plan | null>(null);
+const planDetailRevisions = ref<number[]>([]);
+const planDetailError = ref<string | null>(null);
 const selectedTaskId = ref<string | null>(null);
 const telemetryNow = ref(Date.now());
 let runEventSource: EventSource | null = null;
 let runEventSequence = 0;
 let telemetryTimer: ReturnType<typeof setInterval> | null = null;
+let planDetailRequestToken = 0;
 // ExecutionThread journal 是持久化事实，conversation projection 只负责把事实转换为可读消息。
 // sequence 同时作为 SSE 游标，重连时从最后一条已接受的事件继续回放。
 const loopStatusLabel = computed(() => ({ CREATED: "Created", RUNNING: "Running", WAITING_FOR_INPUT: "Waiting for input", PAUSED: "Paused", RECOVERING: "Recovery required", BLOCKED: "Blocked", COMPLETED: "Completed", FAILED: "Failed", CANCELLED: "Cancelled", NEEDS_RECONCILIATION: "Needs reconciliation" } as Record<string, string>)[executorLoop.value?.state ?? ""] ?? "No loop");
 const executionStatusLabel = computed(() => runStreamConnected.value ? "Live" : ["IN_PROGRESS", "STARTING"].includes(run.value?.status ?? "") ? "Reconnecting" : "Saved");
-const displayedRunStatus = computed(() => mergeRequest.value?.status === "MERGED" ? "MERGED" : run.value?.status ?? "");
 const executionBlockReason = computed(() => {
   for (const entry of [...(thread.value?.journal ?? [])].reverse()) {
     const reason = entry.payload.reason ?? entry.payload.error;
@@ -64,18 +69,12 @@ const executionBlockReason = computed(() => {
 });
 const executionTasks = computed<ExecutionTask[]>(() => projectExecutionTasks(planTasks.value, thread.value?.journal ?? [], run.value?.status ?? ""));
 const executionTaskCounts = computed(() => executionTaskSummary(executionTasks.value));
-const verificationStatusSummary = computed(() => verificationSummary(verification.value));
 const executionTelemetry = computed(() => thread.value?.telemetry ?? null);
 const executionDuration = computed(() => formatExecutionDuration(executionTelemetry.value, telemetryNow.value));
 const executionTokenSummary = computed(() => formatTokenSummary(executionTelemetry.value?.usage));
 const executionTelemetryModel = computed(() => telemetryModel(executionTelemetry.value));
 const executionTelemetryReasoning = computed(() => telemetryReasoning(executionTelemetry.value));
 const executionUsageRows = computed(() => usageDetailRows(executionTelemetry.value?.usage));
-
-function pendingDependencyCount(task: ExecutionTask): number {
-  const completedIds = new Set(executionTasks.value.filter((candidate) => candidate.status === "DONE").map((candidate) => candidate.id));
-  return task.dependencies.filter((dependency) => !completedIds.has(dependency)).length;
-}
 
 /** 用服务端 journal 重建执行对话，并更新 SSE 回放游标。 */
 function setExecutionThread(next: ExecutionThread | null): void {
@@ -110,6 +109,67 @@ function focusExecutionTask(task: ExecutionTask): void {
     const target = executionTimeline.value?.querySelector<HTMLElement>(`[data-sequence="${task.evidenceSequence}"]`);
     target?.scrollIntoView({ behavior: "smooth", block: "center" });
   });
+}
+
+function resetPlanDetail(): void {
+  planDetailRequestToken += 1;
+  planDetailOpen.value = false;
+  planDetail.value = null;
+  planDetailRevisions.value = [];
+  planDetailError.value = null;
+}
+
+async function openPlanDetail(): Promise<void> {
+  const currentRun = run.value;
+  if (!currentRun) return;
+  const requestToken = ++planDetailRequestToken;
+  planDetailOpen.value = true;
+  planDetail.value = null;
+  planDetailRevisions.value = [];
+  planDetailError.value = null;
+  try {
+    const [detailResponse, historyResponse, revisionResponse] = await Promise.all([
+      api.getPlan(currentRun.planId),
+      api.planRevisions(currentRun.planId),
+      api.getPlanRevision(currentRun.planId, currentRun.planRevision),
+    ]);
+    if (requestToken !== planDetailRequestToken) return;
+    const resolvedContract = revisionResponse.revision.resolvedContract ?? detailResponse.revision?.resolvedContract ?? detailResponse.plan.resolvedContract;
+    const contract = revisionResponse.revision.contract ?? detailResponse.plan.contract;
+    const revisions = historyResponse.items.map((item) => item.revision);
+    planDetailRevisions.value = Array.from(new Set([...revisions, currentRun.planRevision])).sort((left, right) => left - right);
+    planDetail.value = {
+      ...detailResponse.plan,
+      revision: revisionResponse.revision.revision,
+      ...(contract ? { contract } : {}),
+      ...(resolvedContract ? { resolvedContract } : {}),
+      dispatch: detailResponse.dispatch,
+      mergeRequest: detailResponse.mergeRequest ?? mergeRequest.value,
+      runId: currentRun.id,
+    };
+  } catch (caught) {
+    if (requestToken !== planDetailRequestToken) return;
+    planDetailError.value = caught instanceof Error ? `无法加载完整 Plan：${caught.message}` : "无法加载完整 Plan";
+  }
+}
+
+async function selectPlanRevision(revisionNumber: number): Promise<void> {
+  const currentPlan = planDetail.value;
+  const planId = currentPlan?.id ?? currentPlan?.planId;
+  if (!currentPlan || !planId || currentPlan.revision === revisionNumber) return;
+  try {
+    const response = await api.getPlanRevision(planId, revisionNumber);
+    if (!planDetailOpen.value || planDetail.value !== currentPlan) return;
+    planDetail.value = {
+      ...currentPlan,
+      revision: response.revision.revision,
+      ...(response.revision.contract ? { contract: response.revision.contract } : {}),
+      ...(response.revision.resolvedContract ? { resolvedContract: response.revision.resolvedContract } : {}),
+    };
+    planDetailError.value = null;
+  } catch (caught) {
+    planDetailError.value = caught instanceof Error ? `无法加载 V${revisionNumber}：${caught.message}` : `无法加载 V${revisionNumber}`;
+  }
 }
 
 /** 接收单条 Run SSE；重复 sequence 直接忽略，避免重连导致消息重复。 */
@@ -199,7 +259,6 @@ async function load() {
   }
   finally { if (requestScope.isCurrent(requestToken, `${requestProjectId}:${requestRunId}`)) loading.value = false; }
 }
-function label(status: string) { return ({ STARTING: "Starting", IN_PROGRESS: "Running", READY_FOR_VERIFY: "Ready for verification", VERIFYING: "Verifying", MERGE_READY: "Ready for review", MERGED: "Merged", NEEDS_PLAN_CHANGE: "Plan change required", RECOVERING: "Recovering", BLOCKED: "Blocked", CANCELLED: "Cancelled" } as Record<string, string>)[status] ?? status; }
 function notifyError(caught: unknown) { error.value = caught instanceof Error ? caught.message : "操作失败，请稍后重试"; }
 async function controlExecutorLoop(action: "pause" | "resume" | "cancel") {
   if (!executorLoop.value || actionBusy.value) return;
@@ -273,47 +332,67 @@ async function confirmMerged() {
   catch (caught) { notifyError(caught); }
   finally { actionBusy.value = false; }
 }
-  watch([projectId, runId], () => { closeRunEvents(); void load().then(() => { if (run.value) connectRunEvents(); }); });
+type RunControlAction = "terminate" | "pause" | "resume" | "verify";
+type LoopControlAction = "pause" | "resume" | "cancel";
+async function handleRunAction(action: RunControlAction): Promise<void> {
+  if (action === "terminate") await terminateRun();
+  if (action === "pause" || action === "resume") await togglePause();
+  if (action === "verify") await verifyRun();
+}
+async function handleLoopAction(action: LoopControlAction): Promise<void> {
+  await controlExecutorLoop(action);
+}
+function updateSourceCommit(value: string): void {
+  sourceCommit.value = value;
+}
+function updateTargetCommit(value: string): void {
+  targetCommit.value = value;
+}
+watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load().then(() => { if (run.value) connectRunEvents(); }); });
   onMounted(async () => { telemetryTimer = setInterval(() => { if (executionTelemetry.value?.completedAt === null || executionTelemetry.value?.durationMs === null) telemetryNow.value = Date.now(); }, 1000); await load(); connectRunEvents(); scrollExecutionToLatest(); });
   onBeforeUnmount(() => { requestScope.invalidate(); closeRunEvents(); if (telemetryTimer) clearInterval(telemetryTimer); });
 </script>
 
 <template>
   <div :class="['detail-page', { 'detail-page-embedded': embedded }]" v-loading="loading">
-    <div class="detail-top"><el-button text @click="closeView"><ArrowLeft :size="15" /> {{ embedded ? 'Back to Task' : 'Back' }}</el-button><span class="eyebrow">EXECUTION THREAD</span></div>
+    <div v-if="!embedded" class="detail-top"><el-button text @click="closeView"><ArrowLeft :size="15" /> Back</el-button></div>
     <div v-if="error" class="demo-notice"><Warning :size="14" /> {{ error }}</div>
     <template v-if="run">
-      <div class="detail-heading"><div><div class="eyebrow">RUN · {{ run.id }}</div><h1>Execution run</h1><p>Plan <code>{{ run.planId }}</code> · Revision {{ run.planRevision }} · <code>{{ run.branch }}</code></p></div><el-tag :type="displayedRunStatus === 'BLOCKED' ? 'danger' : displayedRunStatus === 'MERGE_READY' ? 'warning' : displayedRunStatus === 'MERGED' ? 'success' : 'warning'" effect="light">{{ label(displayedRunStatus) }}</el-tag></div>
-      <div class="run-facts"><div><span>WORKSPACE</span><code>{{ run.workspacePath ?? "Not created" }}</code></div><div><span>BASE COMMIT</span><code>{{ run.baseCommit }}</code></div><div><span>THREAD</span><code>{{ run.executionThreadId }}</code></div><div><span>STARTED</span><strong>{{ run.startedAt ? new Date(run.startedAt).toLocaleString('zh-CN') : "—" }}</strong></div></div>
-      <section class="execution-telemetry-panel" aria-labelledby="execution-telemetry-heading">
-        <div class="execution-telemetry-heading"><div><div class="eyebrow">EXECUTION TELEMETRY</div><h2 id="execution-telemetry-heading">执行遥测</h2></div><span class="telemetry-source">{{ executionTelemetry?.usageSource === 'provider' ? 'Provider 精确值' : 'Token 未记录' }}</span></div>
-        <div class="execution-telemetry-grid">
-          <div class="execution-telemetry-card"><span>MODEL</span><strong>{{ executionTelemetryModel }}</strong><small>实际生效模型</small></div>
-          <div class="execution-telemetry-card"><span>REASONING</span><strong>{{ executionTelemetryReasoning }}</strong><small>冻结的推理等级</small></div>
-          <div class="execution-telemetry-card"><span>TOKENS USED</span><strong>{{ executionTokenSummary }}</strong><small>{{ executionTelemetry?.usageSource === 'provider' ? '输入 / 输出 / 推理 / 总量可在诊断中查看' : 'Provider 未返回精确 usage' }}</small></div>
-          <div class="execution-telemetry-card"><span>EXECUTION TIME</span><strong>{{ executionDuration }}</strong><small>{{ executorLoop?.state === 'RUNNING' || executorLoop?.state === 'PAUSED' ? '实时 wall-clock' : 'Executor Loop wall-clock' }}</small></div>
+      <div class="detail-heading">
+        <div class="detail-heading-title">
+          <h1>Execution run</h1>
         </div>
-      </section>
-      <section v-if="executionTasks.length" class="execution-steps-panel" aria-labelledby="execution-steps-heading">
-        <div class="execution-steps-heading">
-          <div>
-            <div class="eyebrow">EXECUTION STEPS</div>
-            <h2 id="execution-steps-heading">Plan progress</h2>
-            <p>{{ executionTaskCounts.completed }} of {{ executionTaskCounts.total }} tasks completed<span v-if="executionTaskCounts.blocked"> · {{ executionTaskCounts.blocked }} blocked</span></p>
-          </div>
-          <el-button text size="small" :aria-expanded="executionStepsExpanded" @click="executionStepsExpanded = !executionStepsExpanded">{{ executionStepsExpanded ? 'Collapse' : 'Expand' }}</el-button>
+        <div class="detail-heading-plan">
+          <p class="execution-plan-link-row"><span>Plan</span><button type="button" class="execution-plan-link" :aria-label="`查看 Plan ${run.planId} Revision ${run.planRevision} 详情`" @click="openPlanDetail"><code>{{ run.planId }}</code><span>· Revision {{ run.planRevision }}</span></button></p>
         </div>
-        <div v-show="executionStepsExpanded" class="execution-progress-track" aria-hidden="true"><span :style="{ width: `${executionTaskCounts.total ? Math.round((executionTaskCounts.completed / executionTaskCounts.total) * 100) : 0}%` }" /></div>
-        <div v-show="executionStepsExpanded" class="execution-task-list">
-          <button v-for="task in executionTasks" :key="task.id" type="button" :class="['execution-task', `execution-task-${task.status.toLowerCase()}`, { selected: selectedTaskId === task.id }]" :aria-label="`${task.title}, ${executionTaskStatusLabel(task.status)}`" @click="focusExecutionTask(task)">
-            <span class="execution-task-marker"><CircleCheck v-if="task.status === 'DONE'" :size="14" /><Warning v-else-if="task.status === 'BLOCKED'" :size="14" /><span v-else-if="task.status === 'IN_PROGRESS'" class="execution-task-pulse" /><span v-else class="execution-task-number">{{ executionTasks.indexOf(task) + 1 }}</span></span>
-            <span class="execution-task-copy"><strong>{{ task.title }}</strong><small v-if="task.status === 'BLOCKED' && task.blockedReason">{{ task.blockedReason }}</small><small v-else-if="task.status === 'PENDING' && pendingDependencyCount(task)">Waiting for {{ pendingDependencyCount(task) }} prerequisite(s)</small><small v-else-if="task.status === 'PENDING'">Not reached yet</small></span>
-            <el-tag size="small" effect="light" :type="executionTaskStatusType(task.status)">{{ executionTaskStatusLabel(task.status) }}</el-tag>
-          </button>
-        </div>
-        <div v-if="verificationStatusSummary" class="execution-steps-evidence"><span class="execution-evidence-dot" :class="{ failed: verification?.status === 'FAILED' || verification?.status === 'BLOCKED' }" /> {{ verificationStatusSummary }}</div>
-      </section>
-      <section v-if="executorLoop" class="agent-loop-detail"><div><div class="eyebrow">EXECUTOR AGENT LOOP</div><h2>{{ loopStatusLabel }}</h2><p>{{ executorLoop.mode }} · {{ executorLoop.stepCount }} / {{ executorLoop.maxSteps }} loop steps</p><div v-if="executorSteps.length" class="loop-step-list"><span v-for="step in executorSteps.slice(-4)" :key="`${step.loopId}-${step.sequence}`" class="loop-step"><strong>#{{ step.sequence }}</strong> {{ step.stepType }}</span></div></div><div class="loop-detail-actions"><el-button v-if="executorLoop.state === 'RUNNING'" size="small" @click="controlExecutorLoop('pause')"><VideoPause :size="14" /> Pause loop</el-button><el-button v-if="executorLoop.state === 'PAUSED'" size="small" @click="controlExecutorLoop('resume')"><VideoPlay :size="14" /> Resume loop</el-button><el-button v-if="['RUNNING', 'PAUSED', 'RECOVERING', 'WAITING_FOR_INPUT'].includes(executorLoop.state)" size="small" type="danger" plain @click="controlExecutorLoop('cancel')">Cancel loop</el-button></div></section>
+        <ExecutionHeaderStatus
+          :run="run"
+          :thread-state="thread?.state ?? ''"
+          :telemetry="executionTelemetry"
+          :telemetry-now="telemetryNow"
+          :tasks="executionTasks"
+          :task-counts="executionTaskCounts"
+          :selected-task-id="selectedTaskId"
+          :executor-loop="executorLoop"
+          :executor-steps="executorSteps"
+          :loop-status-label="loopStatusLabel"
+          :verification="verification"
+          :merge-request="mergeRequest"
+          :action-busy="actionBusy"
+          :source-commit="sourceCommit"
+          :target-commit="targetCommit"
+          :diagnostics-count="{ journal: thread?.journal.length ?? 0, tools: toolCalls.length, steps: executorSteps.length }"
+          @focus-task="focusExecutionTask"
+          @run-action="handleRunAction"
+          @loop-action="handleLoopAction"
+          @create-review="createReview"
+          @confirm-merged="confirmMerged"
+          @open-plan="openPlanDetail"
+          @open-diagnostics="diagnosticsOpen = true"
+          @update:source-commit="updateSourceCommit"
+          @update:target-commit="updateTargetCommit"
+        />
+      </div>
       <div v-if="run.status === 'BLOCKED' && executionBlockReason" class="run-blocked-notice" role="alert"><Warning :size="16" /><div><strong>Why execution stopped</strong><span>{{ executionBlockReason }}</span></div></div>
       <section class="execution-conversation-panel">
         <div class="journal-heading"><div><div class="eyebrow">EXECUTION CONVERSATION</div><h2>What the Executor is doing</h2></div><div class="execution-stream-status" role="status"><i :class="{ connected: runStreamConnected }" /> {{ executionStatusLabel }}</div></div>
@@ -329,17 +408,8 @@ async function confirmMerged() {
           </article>
         </div>
         <el-button v-if="showScrollToLatest" class="execution-scroll-latest" size="small" @click="scrollExecutionToLatest">Jump to latest</el-button>
+        <div v-if="run.status === 'IN_PROGRESS' || run.status === 'READY_FOR_VERIFY'" class="guidance-row execution-guidance-row"><el-input v-model="guidance" size="small" aria-label="User guidance" placeholder="Add in-scope guidance to the execution thread…" @keyup.enter="sendGuidance" /><el-button size="small" :disabled="!guidance.trim()" :loading="actionBusy" @click="sendGuidance">Add guidance</el-button></div>
       </section>
-      <section class="run-actions">
-        <div class="action-toolbar">
-          <div><div class="eyebrow">RUN CONTROL</div><h2>Execution controls</h2><p>Controls append facts to the ExecutionThread; they do not change the confirmed PlanRevision.</p></div>
-          <div class="action-buttons"><el-button v-if="canTerminateRun(run.status)" type="danger" plain :loading="actionBusy" @click="terminateRun">Terminate run</el-button><el-button v-if="canPauseRun(run.status, thread?.state ?? '')" :loading="actionBusy" @click="togglePause"><VideoPlay v-if="thread?.state === 'PAUSED'" :size="14" /><VideoPause v-else :size="14" /> {{ thread?.state === 'PAUSED' ? 'Resume' : 'Pause' }}</el-button><el-button v-if="run.status === 'IN_PROGRESS' || run.status === 'READY_FOR_VERIFY'" type="primary" :loading="actionBusy" @click="verifyRun"><Check :size="14" /> Run verification</el-button></div>
-        </div>
-        <div v-if="run.status === 'IN_PROGRESS' || run.status === 'READY_FOR_VERIFY'" class="guidance-row"><el-input v-model="guidance" size="small" aria-label="User guidance" placeholder="Add in-scope guidance to the execution thread…" @keyup.enter="sendGuidance" /><el-button size="small" :disabled="!guidance.trim()" :loading="actionBusy" @click="sendGuidance">Add guidance</el-button></div>
-      </section>
-      <section v-if="verification || run.status === 'MERGE_READY'" class="evidence-card"><div class="evidence-heading"><div><div class="eyebrow">VERIFICATION RUN</div><h2>Deterministic checks</h2></div><el-tag :type="verification?.status === 'PASSED' ? 'success' : 'danger'" effect="light">{{ verification?.status ?? 'Not recorded' }}</el-tag></div><div v-if="verification" class="verification-summary"><span>{{ verification.commandResults.length }} command(s)</span><span>Repair attempts {{ verification.repairAttempts }}</span><span>{{ new Date(verification.completedAt).toLocaleString('zh-CN') }}</span></div><div v-if="verification?.commandResults.length" class="command-results"><div v-for="command in verification.commandResults" :key="command.commandId" class="command-result"><code>{{ command.commandId }}</code><span :class="command.result.exitCode === 0 ? 'result-pass' : 'result-fail'">exit {{ command.result.exitCode }}</span></div></div><div v-if="run.status === 'MERGE_READY' && !mergeRequest" class="review-form"><el-input v-model="sourceCommit" size="small" aria-label="Reviewed source commit" placeholder="Reviewed source commit" /><el-button type="primary" size="small" :loading="actionBusy" @click="createReview">Create review</el-button></div></section>
-      <section v-if="mergeRequest" class="evidence-card merge-card"><div class="evidence-heading"><div><div class="eyebrow">MERGE REQUEST · {{ mergeRequest.id }}</div><h2>Human merge confirmation</h2></div><el-tag :type="mergeRequest.status === 'MERGED' ? 'success' : 'warning'" effect="light">{{ mergeRequest.status }}</el-tag></div><div class="verification-summary"><span>Source <code>{{ mergeRequest.sourceCommit }}</code></span><span>Target <code>{{ mergeRequest.targetBranch }}</code></span><span v-if="mergeRequest.detectedTargetCommit">Detected <code>{{ mergeRequest.detectedTargetCommit }}</code></span></div><p v-if="mergeRequest.status === 'OPEN' && mergeRequest.detectedTargetCommit" class="merge-detected-banner"><strong>Merge detected</strong> · 已检测到目标分支包含 source commit；请确认后将 Plan 更新为 MERGED。</p><div v-if="mergeRequest.status === 'OPEN'" class="review-form"><el-input v-model="targetCommit" size="small" aria-label="Target commit" placeholder="Actual target commit after manual merge" /><el-button type="primary" size="small" :loading="actionBusy" @click="confirmMerged">Confirm merged</el-button></div></section>
-      <section class="diagnostics-teaser"><div><div class="eyebrow">EXECUTION DIAGNOSTICS</div><h2>Audit trail</h2><p>{{ thread?.journal.length ?? 0 }} journal entries · {{ toolCalls.length }} tool calls · raw payloads available on demand</p></div><el-button size="small" @click="diagnosticsOpen = true">Open diagnostics</el-button></section>
     </template>
     <el-drawer v-model="diagnosticsOpen" title="Execution diagnostics" size="min(760px, 92vw)">
       <div class="diagnostic-drawer-summary"><span>{{ thread?.journal.length ?? 0 }} journal entries</span><span>{{ toolCalls.length }} tool calls</span><span>{{ executorLoop?.stepCount ?? 0 }} loop steps</span></div>
@@ -347,5 +417,6 @@ async function confirmMerged() {
       <section class="diagnostic-section"><div class="journal-heading"><div><div class="eyebrow">EXECUTION JOURNAL</div><h2>What happened</h2></div></div><div v-if="thread?.journal.length" class="journal-list"><div v-for="entry in thread.journal" :key="entry.sequence" class="journal-entry"><div class="journal-icon" :class="{ success: entry.type.includes('COMPLETED') || entry.type === 'COMMIT', warning: entry.type.includes('FAILED') }"><CircleCheck v-if="entry.type.includes('COMPLETED') || entry.type === 'COMMIT'" :size="15" /><Warning v-else-if="entry.type.includes('FAILED')" :size="15" /><Clock v-else :size="15" /></div><div><div class="journal-meta"><strong>{{ entry.type }}</strong><span>#{{ entry.sequence }}</span><span>{{ new Date(entry.occurredAt).toLocaleTimeString('zh-CN') }}</span></div><p>{{ JSON.stringify(entry.payload) }}</p></div></div></div><div v-else class="empty-state"><Document :size="28" /><h3>No journal entries</h3><p>The execution thread has not recorded activity yet.</p></div></section>
       <section v-if="toolCalls.length" class="diagnostic-section"><div class="journal-heading"><div><div class="eyebrow">TOOL CALLS</div><h2>Audited tool activity</h2></div><span>{{ toolCalls.length }} calls</span></div><div class="journal-list"><div v-for="tool in toolCalls" :key="tool.callId" class="journal-entry"><div class="journal-icon" :class="{ success: tool.status === 'SUCCEEDED', warning: tool.status === 'FAILED' || tool.status === 'DENIED' || tool.status === 'UNKNOWN' || tool.status === 'NEEDS_RECONCILIATION' }"><CircleCheck v-if="tool.status === 'SUCCEEDED'" :size="15" /><Warning v-else-if="tool.status === 'FAILED' || tool.status === 'DENIED' || tool.status === 'UNKNOWN' || tool.status === 'NEEDS_RECONCILIATION'" :size="15" /><Clock v-else :size="15" /></div><div><div class="journal-meta"><strong>{{ tool.tool }}</strong><span>{{ tool.status }}</span><span>{{ new Date(tool.startedAt).toLocaleTimeString('zh-CN') }}</span></div><p>{{ tool.result ? JSON.stringify(tool.result) : 'No result yet' }}</p></div></div></div></section>
     </el-drawer>
+    <PlanDetailDrawer v-model="planDetailOpen" :plan="planDetail" :error="planDetailError" :revisions="planDetailRevisions" :read-only="true" @select-revision="selectPlanRevision" />
   </div>
 </template>

@@ -4,7 +4,7 @@
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  */
 import { describe, expect, it } from "vitest";
-import { canPauseRun, canTerminateRun } from "./runControls";
+import { canPauseRun, canTerminateRun, hasRunControlActions } from "./runControls";
 
 describe("run controls", () => {
   it.each([
@@ -23,5 +23,16 @@ describe("run controls", () => {
 
   it.each(["MERGE_READY", "BLOCKED", "CANCELLED"])("does not allow termination for %s", (runStatus) => {
     expect(canTerminateRun(runStatus)).toBe(false);
+  });
+
+  it.each([
+    ["IN_PROGRESS", "ACTIVE", true],
+    ["IN_PROGRESS", "PAUSED", true],
+    ["READY_FOR_VERIFY", "ACTIVE", true],
+    ["MERGE_READY", "ACTIVE", false],
+    ["MERGED", "ACTIVE", false],
+    ["BLOCKED", "BLOCKED", false],
+  ])("reports whether Run Control has an executable action (%s/%s)", (runStatus, threadState, expected) => {
+    expect(hasRunControlActions(runStatus, threadState)).toBe(expected);
   });
 });

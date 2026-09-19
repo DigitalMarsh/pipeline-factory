@@ -1,5 +1,5 @@
 <!--
-  模块职责：展示 Plan 全量执行契约并承载编辑、确认和丢弃操作。
+  模块职责：展示 Plan 全量执行契约，并按调用场景承载或隐藏编辑、确认和丢弃操作。
   维护提示：交互状态和数据流变化时，应同步更新组件边界说明。
 -->
 <script setup lang="ts">
@@ -8,7 +8,7 @@ import { Close, DocumentChecked, Lock, Right } from "@element-plus/icons-vue";
 import type { Plan, PlanTask } from "../types";
 import { canDiscardPlan } from "../utils/planControls";
 
-const props = defineProps<{ modelValue: boolean; plan: Plan | null; error?: string | null; revisions?: number[]; revisionDraftStatus?: "EDITING" | "READY_TO_CONFIRM" | "CONFIRMED" | "DISCARDED" | "BASE_CHANGED" | null }>();
+const props = defineProps<{ modelValue: boolean; plan: Plan | null; error?: string | null; revisions?: number[]; revisionDraftStatus?: "EDITING" | "READY_TO_CONFIRM" | "CONFIRMED" | "DISCARDED" | "BASE_CHANGED" | null; readOnly?: boolean }>();
 const emit = defineEmits<{ "update:modelValue": [value: boolean]; confirm: []; discard: []; "keep-editing": [plan: Plan]; "select-revision": [revision: number] }>();
 const planId = computed(() => props.plan?.planId ?? props.plan?.id ?? "—");
 const canConfirm = computed(() => props.plan?.status === "DRAFT" && (!props.revisionDraftStatus || props.revisionDraftStatus === "READY_TO_CONFIRM"));
@@ -41,12 +41,15 @@ const mergeRequest = computed(() => props.plan?.mergeRequest ?? null);
       <section v-if="mergeRequest?.status === 'OPEN' && mergeRequest.detectedTargetCommit" class="contract-section merge-detected-section"><div class="section-heading"><span>03B</span><strong>Merge detection</strong><el-tag size="small" type="warning" effect="light">待人工确认</el-tag></div><p class="merge-detected-copy">已检测到目标分支包含此 Run 的 source commit。Plan 会在人工确认前保持 MERGE_READY。</p><div class="policy-grid"><div><label>SOURCE COMMIT</label><code>{{ mergeRequest.sourceCommit }}</code></div><div><label>TARGET</label><code>{{ mergeRequest.targetBranch }} · {{ mergeRequest.detectedTargetCommit }}</code></div></div><RouterLink v-if="plan.runId" class="merge-detected-link" :to="runPath(plan)">Open run to confirm</RouterLink></section>
       <section class="contract-section"><div class="section-heading"><span>04</span><strong>Execution policy</strong></div><div class="policy-grid"><div><label>FROZEN PROJECT</label><strong>{{ resolved?.repository.repoRoot ?? 'Legacy Plan' }} · config v{{ resolved?.repository.configVersion ?? '—' }}</strong></div><div><label>BASE</label><strong>{{ resolved?.repository.baseBranch ?? contract?.baseBranch }} · {{ resolved?.repository.baseCommit ?? contract?.baseCommit }}</strong></div><div><label>VERIFICATION</label><strong>{{ resolved?.verification.mode === 'NONE' ? '未配置自动验证（将记录为 SKIPPED）' : (resolved?.verification.commandIds ?? contract?.verificationCommandIds ?? plan.verificationCommands ?? []).join(' · ') }}</strong></div><div><label>REPAIR LIMIT</label><strong>{{ resolved?.execution.maxRepairAttempts ?? contract?.maxRepairAttempts }} attempts</strong></div></div></section>
       <section class="contract-section source-section"><div class="section-heading"><span>05</span><strong>Source evidence</strong></div><div class="source-row"><span>ExplorerThread</span><code>{{ plan.sourceExplorerThreadId }}</code></div><div class="source-row"><span>Contract</span><code>{{ resolved ? 'Resolved V2' : 'Legacy V1 · read only' }}</code></div></section>
-      <div class="drawer-actions"><el-button v-if="canDiscard" type="danger" plain @click="emit('discard')">Discard plan</el-button><el-button v-if="!revisionDraftStatus && plan.status !== 'DISCARDED'" @click="emit('keep-editing', plan)">Keep editing V{{ plan.revision + 1 }}</el-button><el-button v-if="canConfirm" type="primary" @click="emit('confirm')">Confirm V{{ plan.revision }} <Right /></el-button><div v-else class="locked-action"><Lock :size="14" /> {{ revisionDraftStatus === 'EDITING' ? 'Revision draft is still being edited' : revisionDraftStatus === 'BASE_CHANGED' ? 'Default branch changed · rebase required' : plan.status === 'DISCARDED' ? 'Discarded · No further actions' : 'Historical contract is read only' }}</div></div>
+      <div v-if="readOnly" class="drawer-readonly-note" role="status"><Lock :size="14" /><span>执行线程使用此冻结 Revision；Plan 生命周期操作已在此处隐藏。</span></div>
+      <div v-else class="drawer-actions"><el-button v-if="canDiscard" type="danger" plain @click="emit('discard')">Discard plan</el-button><el-button v-if="!revisionDraftStatus && plan.status !== 'DISCARDED'" @click="emit('keep-editing', plan)">Keep editing V{{ plan.revision + 1 }}</el-button><el-button v-if="canConfirm" type="primary" @click="emit('confirm')">Confirm V{{ plan.revision }} <Right /></el-button><div v-else class="locked-action"><Lock :size="14" /> {{ revisionDraftStatus === 'EDITING' ? 'Revision draft is still being edited' : revisionDraftStatus === 'BASE_CHANGED' ? 'Default branch changed · rebase required' : plan.status === 'DISCARDED' ? 'Discarded · No further actions' : 'Historical contract is read only' }}</div></div>
     </div><div v-else-if="props.error" class="drawer-shell"><div class="settings-error">{{ props.error }}</div></div><div v-else class="drawer-shell"><p>正在加载完整 Plan…</p></div>
   </el-drawer>
 </template>
 
 <style scoped>
+.drawer-readonly-note { display: flex; align-items: flex-start; gap: 8px; margin-top: 15px; padding: 11px 12px; border: 1px solid #dfe7f2; border-radius: 7px; background: #f7faff; color: #6c7f9b; font-size: 10px; line-height: 1.5; }
+.drawer-readonly-note svg { flex: 0 0 auto; margin-top: 1px; color: #7c96bd; }
 .merge-detected-section { padding: 14px; border: 1px solid #f0dfb7; border-radius: 7px; background: #fffaf0; }
 .merge-detected-section .section-heading { margin-bottom: 8px; }
 .merge-detected-copy { margin: 0 0 12px; color: #7c6a4b; font-size: 10px; line-height: 1.6; }
