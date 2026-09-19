@@ -4,20 +4,22 @@
 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { ArrowLeft, CircleCheck, Clock, Document, Warning } from "@element-plus/icons-vue";
+import { ArrowLeft, ArrowUp, CircleCheck, Clock, Document, Warning } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 import ExecutionHeaderStatus from "../components/ExecutionHeaderStatus.vue";
 import PlanDetailDrawer from "../components/PlanDetailDrawer.vue";
+import ProviderUsageFooter from "../components/ProviderUsageFooter.vue";
 import { api } from "../api";
 import MarkdownMessage from "../components/MarkdownMessage.vue";
 import type { AgentLoopStep, ExecutionTask, ExecutionThread, MergeRequest, Plan, PlanTask, Run, RunJournalEvent, ToolCall, VerificationRun } from "../types";
-import { projectExecutionJournal, type ExecutionJournalEntry, type ExecutionStreamItem } from "../utils/executionStream";
-import { formatExecutionDuration, formatTokenSummary, telemetryModel, telemetryReasoning, usageDetailRows } from "../utils/executionTelemetry";
+import { projectExecutionJournal, type ExecutionJournalEntry, type ExecutionPlanSnapshot, type ExecutionStreamItem } from "../utils/executionStream";
+import { formatExecutionDuration, formatProviderContextUsage, formatTokenSummary, telemetryModel, telemetryReasoning, usageDetailRows } from "../utils/executionTelemetry";
 import { executionTaskSummary, projectExecutionTasks } from "../utils/executionTasks";
 import { canTerminateRun } from "../utils/runControls";
 import { describeRunLoadError } from "../utils/runLoadError";
 import { createProjectRequestScope } from "../utils/projectRoutes";
+import { shouldSubmitComposer } from "../utils/composerKeyboard";
 
 const route = useRoute();
 const router = useRouter();
@@ -34,7 +36,8 @@ const mergeRequest = ref<MergeRequest | null>(null);
 const loading = ref(true);
 const error = ref<string | null>(null);
 const actionBusy = ref(false);
-const guidance = ref("");
+const executionDraft = ref("");
+const sendingExecutionMessage = ref(false);
 const sourceCommit = ref("");
 const targetCommit = ref("");
 const executorLoop = computed(() => run.value?.agentLoops?.find((loop) => loop.role === "executor") ?? null);
@@ -50,6 +53,8 @@ const planDetailOpen = ref(false);
 const planDetail = ref<Plan | null>(null);
 const planDetailRevisions = ref<number[]>([]);
 const planDetailError = ref<string | null>(null);
+const executionPlan = ref<ExecutionPlanSnapshot | null>(null);
+const planMessageExpanded = ref(false);
 const selectedTaskId = ref<string | null>(null);
 const telemetryNow = ref(Date.now());
 let runEventSource: EventSource | null = null;
@@ -73,15 +78,38 @@ const executionTelemetry = computed(() => thread.value?.telemetry ?? null);
 const executionDuration = computed(() => formatExecutionDuration(executionTelemetry.value, telemetryNow.value));
 const executionTokenSummary = computed(() => formatTokenSummary(executionTelemetry.value?.usage));
 const executionTelemetryModel = computed(() => telemetryModel(executionTelemetry.value));
+const executionContextUsage = computed(() => formatProviderContextUsage(executionTelemetry.value?.usage?.inputTokens));
 const executionTelemetryReasoning = computed(() => telemetryReasoning(executionTelemetry.value));
 const executionUsageRows = computed(() => usageDetailRows(executionTelemetry.value?.usage));
+const canSendExecutionMessage = computed(() => Boolean(thread.value && !["CANCELLED", "COMPLETED"].includes(thread.value.state)));
+
+function rebuildExecutionMessages(): void {
+  const currentThread = thread.value;
+  executionMessages.value = projectExecutionJournal(currentThread?.journal ?? [], currentThread?.state ?? run.value?.status ?? "ACTIVE", executionPlan.value ?? undefined);
+}
+
+function executionPlanSnapshot(runValue: Run, revision: { contract: Plan["contract"]; resolvedContract?: Plan["resolvedContract"] }): ExecutionPlanSnapshot {
+  const resolved = revision.resolvedContract;
+  const contract = revision.contract;
+  return {
+    planId: runValue.planId,
+    revision: runValue.planRevision,
+    occurredAt: runValue.createdAt,
+    goal: resolved?.objective.goal ?? contract?.goal ?? "Execution plan received.",
+    acceptanceCriteria: resolved?.objective.acceptanceCriteria ?? contract?.acceptanceCriteria ?? [],
+    includePaths: resolved?.scope.includePaths ?? contract?.include ?? [],
+    excludePaths: resolved?.scope.excludePaths ?? contract?.exclude ?? [],
+    tasks: resolved?.tasks ?? contract?.tasks ?? [],
+    verificationCommandIds: resolved?.verification.commandIds ?? contract?.verificationCommandIds ?? [],
+  };
+}
 
 /** 用服务端 journal 重建执行对话，并更新 SSE 回放游标。 */
 function setExecutionThread(next: ExecutionThread | null): void {
   thread.value = next;
   const journal = next?.journal ?? [];
   runEventSequence = Math.max(runEventSequence, ...journal.map((entry) => entry.sequence), 0);
-  executionMessages.value = projectExecutionJournal(journal, next?.state ?? run.value?.status ?? "ACTIVE");
+  rebuildExecutionMessages();
 }
 
 function isAtExecutionLatest(): boolean {
@@ -182,7 +210,7 @@ function appendRunJournalEvent(event: RunJournalEvent): void {
   thread.value = nextThread;
   runEventSequence = event.sequence;
   if (event.runStatus && run.value) run.value = { ...run.value, status: event.runStatus };
-  executionMessages.value = projectExecutionJournal(nextThread.journal, nextThread.state);
+  rebuildExecutionMessages();
   if (event.runStatus && ["BLOCKED", "CANCELLED", "MERGE_READY", "MERGED"].includes(event.runStatus)) closeRunEvents();
   if (shouldFollow) scrollExecutionToLatest();
   else showScrollToLatest.value = true;
@@ -220,6 +248,13 @@ async function load() {
   const requestToken = requestScope.begin(`${requestProjectId}:${requestRunId}`);
   loading.value = true;
   error.value = null;
+  executionDraft.value = "";
+  sendingExecutionMessage.value = false;
+  executionPlan.value = null;
+  executionMessages.value = [];
+  planTasks.value = [];
+  selectedTaskId.value = null;
+  planMessageExpanded.value = false;
   try {
     try {
       const report = await api.reconcileProjectMerges(requestProjectId);
@@ -233,11 +268,12 @@ async function load() {
     setExecutionThread(response.executionThread);
     verification.value = response.verification;
     mergeRequest.value = response.mergeRequest;
-    planTasks.value = [];
     try {
       const revisionResponse = await api.getPlanRevision(response.run.planId, response.run.planRevision);
       if (!requestScope.isCurrent(requestToken, `${requestProjectId}:${requestRunId}`)) return;
-      planTasks.value = revisionResponse.revision.resolvedContract?.tasks ?? revisionResponse.revision.contract?.tasks ?? [];
+      executionPlan.value = executionPlanSnapshot(response.run, revisionResponse.revision);
+      planTasks.value = executionPlan.value.tasks;
+      rebuildExecutionMessages();
     } catch (caught) { error.value = describeRunLoadError(caught, "plan-revision"); }
     const loopId = response.run.agentLoops?.[0]?.id;
     executorSteps.value = [];
@@ -303,12 +339,19 @@ function closeView(): void {
   }
   void router.push({ path: `/projects/${projectId.value}/explorer`, query: { explorerId: route.query.explorerId, explorerPlanId: route.query.explorerPlanId, contextPanel: "plan-center" } });
 }
-async function sendGuidance() {
-  if (!run.value || !guidance.value.trim() || actionBusy.value) return;
+async function sendExecutionMessage() {
+  const content = executionDraft.value.trim();
+  if (!run.value || !canSendExecutionMessage.value || !content || actionBusy.value) return;
   actionBusy.value = true;
-  try { setExecutionThread((await api.addRunGuidance(run.value.id, guidance.value.trim())).thread); guidance.value = ""; ElMessage.success("已写入执行线程"); }
+  sendingExecutionMessage.value = true;
+  try { setExecutionThread((await api.addRunGuidance(run.value.id, content)).thread); executionDraft.value = ""; ElMessage.success("已发送到执行线程"); }
   catch (caught) { notifyError(caught); }
-  finally { actionBusy.value = false; }
+  finally { actionBusy.value = false; sendingExecutionMessage.value = false; }
+}
+function handleExecutionComposerKeydown(event: KeyboardEvent): void {
+  if (!shouldSubmitComposer(event)) return;
+  event.preventDefault();
+  void sendExecutionMessage();
 }
 /** 触发脱离模型会话的确定性验证，结果落入 VerificationRun 后再更新页面。 */
 async function verifyRun() {
@@ -354,7 +397,7 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
 </script>
 
 <template>
-  <div :class="['detail-page', { 'detail-page-embedded': embedded }]" v-loading="loading">
+  <div :class="['detail-page', 'run-detail-page', { 'detail-page-embedded': embedded }]" v-loading="loading">
     <div v-if="!embedded" class="detail-top"><el-button text @click="closeView"><ArrowLeft :size="15" /> Back</el-button></div>
     <div v-if="error" class="demo-notice"><Warning :size="14" /> {{ error }}</div>
     <template v-if="run">
@@ -396,19 +439,43 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
       <div v-if="run.status === 'BLOCKED' && executionBlockReason" class="run-blocked-notice" role="alert"><Warning :size="16" /><div><strong>Why execution stopped</strong><span>{{ executionBlockReason }}</span></div></div>
       <section class="execution-conversation-panel">
         <div class="journal-heading"><div><div class="eyebrow">EXECUTION CONVERSATION</div><h2>What the Executor is doing</h2></div><div class="execution-stream-status" role="status"><i :class="{ connected: runStreamConnected }" /> {{ executionStatusLabel }}</div></div>
-        <div ref="executionTimeline" class="execution-conversation" @scroll="updateExecutionScrollState">
+        <div class="execution-conversation-stage">
+          <div ref="executionTimeline" class="execution-conversation" @scroll="updateExecutionScrollState">
           <div v-if="!executionMessages.length" class="empty-state"><Document :size="28" /><h3>Waiting for executor activity</h3><p>The execution conversation will appear here when the Run starts.</p></div>
           <article v-for="item in executionMessages" :key="item.id" :data-sequence="item.sequence" :class="['execution-message', `execution-message-${item.kind}`, { failed: item.status === 'FAILED', waiting: item.status === 'WAITING', running: item.status === 'RUNNING' }]">
-            <div class="execution-message-avatar">{{ item.role === 'user' ? 'LS' : item.kind === 'model' ? 'EX' : '·' }}</div>
+            <div class="execution-message-avatar">{{ item.role === 'user' ? 'LS' : item.kind === 'plan' ? 'PL' : item.kind === 'model' ? 'EX' : '·' }}</div>
             <div class="execution-message-body">
               <div class="execution-message-meta"><strong>{{ item.title }}</strong><span v-if="item.status !== 'INFO'" class="agent-chip">{{ item.status }}</span><span v-if="item.repetitionCount && item.repetitionCount > 1">×{{ item.repetitionCount }} updates</span><span>{{ new Date(item.occurredAt).toLocaleTimeString('zh-CN') }}</span></div>
-              <MarkdownMessage v-if="item.kind === 'model' || item.kind === 'guidance'" :source="item.content" :streaming="item.status === 'RUNNING'" />
+              <template v-if="item.kind === 'plan' && item.plan">
+                <div class="execution-plan-message">
+                  <div class="execution-plan-message-summary"><MarkdownMessage :source="item.plan.goal" /></div>
+                  <button :id="`execution-plan-toggle-${item.id}`" class="execution-plan-toggle" type="button" :aria-expanded="planMessageExpanded" :aria-controls="`execution-plan-details-${item.id}`" @click="planMessageExpanded = !planMessageExpanded">{{ planMessageExpanded ? '收起 Plan 摘要' : '展开 Plan 摘要' }}</button>
+                  <div v-if="planMessageExpanded" :id="`execution-plan-details-${item.id}`" class="execution-plan-message-details">
+                    <div class="execution-plan-message-stats"><span><strong>{{ item.plan.tasks.length }}</strong> tasks</span><span><strong>{{ item.plan.acceptanceCriteria.length }}</strong> acceptance criteria</span><span><strong>{{ item.plan.verificationCommandIds.length }}</strong> verification commands</span></div>
+                    <div v-if="item.plan.tasks.length" class="execution-plan-message-section"><span class="execution-plan-message-label">TASKS</span><ul><li v-for="task in item.plan.tasks" :key="task.id ?? task.title">{{ task.title }}</li></ul></div>
+                    <div class="execution-plan-message-scope"><div><span class="execution-plan-message-label">INCLUDE</span><code v-for="path in item.plan.includePaths" :key="`include-${path}`">{{ path }}</code><small v-if="!item.plan.includePaths.length">No include paths</small></div><div><span class="execution-plan-message-label">EXCLUDE</span><code v-for="path in item.plan.excludePaths" :key="`exclude-${path}`">{{ path }}</code><small v-if="!item.plan.excludePaths.length">No exclude paths</small></div></div>
+                  </div>
+                  <div class="execution-plan-message-actions"><el-button text size="small" @click="openPlanDetail">View full plan</el-button></div>
+                </div>
+              </template>
+              <MarkdownMessage v-else-if="item.kind === 'model' || item.kind === 'guidance'" :source="item.content" :streaming="item.status === 'RUNNING'" />
               <p v-else class="execution-activity-detail">{{ item.detail }}</p>
             </div>
           </article>
+          </div>
+          <el-button v-if="showScrollToLatest" class="execution-scroll-latest" size="small" @click="scrollExecutionToLatest">Jump to latest</el-button>
         </div>
-        <el-button v-if="showScrollToLatest" class="execution-scroll-latest" size="small" @click="scrollExecutionToLatest">Jump to latest</el-button>
-        <div v-if="run.status === 'IN_PROGRESS' || run.status === 'READY_FOR_VERIFY'" class="guidance-row execution-guidance-row"><el-input v-model="guidance" size="small" aria-label="User guidance" placeholder="Add in-scope guidance to the execution thread…" @keyup.enter="sendGuidance" /><el-button size="small" :disabled="!guidance.trim()" :loading="actionBusy" @click="sendGuidance">Add guidance</el-button></div>
+        <div class="composer execution-composer">
+          <div class="composer-input">
+            <textarea v-model="executionDraft" aria-label="Execution thread message" placeholder="与执行线程沟通，或提出修改…" :disabled="actionBusy || !canSendExecutionMessage" @keydown="handleExecutionComposerKeydown" />
+            <span class="composer-mode">Run Mode</span>
+          </div>
+          <div class="composer-footer">
+            <ProviderUsageFooter :model="executionTelemetryModel" :context="executionContextUsage" context-note="provider exact" />
+            <span v-if="sendingExecutionMessage" class="composer-status" role="status" aria-live="polite">Message sent · waiting for Executor…</span>
+            <el-button class="composer-send" type="primary" circle :loading="sendingExecutionMessage" :disabled="!executionDraft.trim() || !canSendExecutionMessage || actionBusy" aria-label="Send message" :title="actionBusy ? '正在发送消息' : 'Send message'" @click="sendExecutionMessage"><ArrowUp :size="18" /></el-button>
+          </div>
+        </div>
       </section>
     </template>
     <el-drawer v-model="diagnosticsOpen" title="Execution diagnostics" size="min(760px, 92vw)">

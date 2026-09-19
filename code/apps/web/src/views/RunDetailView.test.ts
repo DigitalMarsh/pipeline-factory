@@ -12,7 +12,7 @@ const runDetailSource = readFileSync(fileURLToPath(new URL("./RunDetailView.vue"
 describe("Run detail execution conversation", () => {
   it("renders executor model and guidance text through the shared Markdown component", () => {
     expect(runDetailSource).toContain('import MarkdownMessage from "../components/MarkdownMessage.vue"');
-    expect(runDetailSource).toContain("<MarkdownMessage v-if=\"item.kind === 'model' || item.kind === 'guidance'\" :source=\"item.content\" :streaming=\"item.status === 'RUNNING'\" />");
+    expect(runDetailSource).toContain("<MarkdownMessage v-else-if=\"item.kind === 'model' || item.kind === 'guidance'\" :source=\"item.content\" :streaming=\"item.status === 'RUNNING'\" />");
     expect(runDetailSource).not.toContain("{{ item.content }}<span v-if=\"item.status === 'RUNNING'\"");
   });
 
@@ -47,6 +47,13 @@ describe("Run detail execution conversation", () => {
     expect(runDetailSource).toContain('class="execution-conversation-panel"');
   });
 
+  it("renders the shared Provider footer with execution telemetry Context", () => {
+    expect(runDetailSource).toContain('import ProviderUsageFooter from "../components/ProviderUsageFooter.vue"');
+    expect(runDetailSource).toContain('formatProviderContextUsage');
+    expect(runDetailSource).toContain('const executionContextUsage = computed(() => formatProviderContextUsage(executionTelemetry.value?.usage?.inputTokens));');
+    expect(runDetailSource).toContain('<ProviderUsageFooter :model="executionTelemetryModel" :context="executionContextUsage" context-note="provider exact" />');
+  });
+
   it("keeps the execution title focused and opens the current Plan revision read only", () => {
     expect(runDetailSource).toContain('import PlanDetailDrawer from "../components/PlanDetailDrawer.vue"');
     expect(runDetailSource).toContain('class="execution-plan-link"');
@@ -72,5 +79,33 @@ describe("Run detail execution conversation", () => {
     expect(runDetailSource).toContain("<h1>Execution run</h1>");
     expect(runDetailSource).toContain('class="execution-plan-link"');
     expect(runDetailSource).not.toContain('class="detail-heading-copy"');
+  });
+
+  it("projects the frozen Plan Revision as the first conversation message", () => {
+    expect(runDetailSource).toContain('type ExecutionPlanSnapshot');
+    expect(runDetailSource).toContain('executionPlan.value = executionPlanSnapshot(response.run, revisionResponse.revision)');
+    expect(runDetailSource).toContain('projectExecutionJournal(currentThread?.journal ?? [], currentThread?.state ?? run.value?.status ?? "ACTIVE", executionPlan.value ?? undefined)');
+    expect(runDetailSource).toContain('class="execution-plan-message"');
+    expect(runDetailSource).toContain('class="execution-plan-toggle"');
+    expect(runDetailSource).toContain('View full plan');
+  });
+
+  it("uses a persistent Explorer-style composer for execution messages", () => {
+    expect(runDetailSource).toContain('import { shouldSubmitComposer } from "../utils/composerKeyboard"');
+    expect(runDetailSource).toContain('const executionDraft = ref("")');
+    expect(runDetailSource).toContain('const canSendExecutionMessage = computed(() => Boolean(thread.value && !["CANCELLED", "COMPLETED"].includes(thread.value.state)))');
+    expect(runDetailSource).toContain('class="execution-conversation-stage"');
+    expect(runDetailSource).toContain('class="composer execution-composer"');
+    expect(runDetailSource).toContain('placeholder="与执行线程沟通，或提出修改…"');
+    expect(runDetailSource).toContain('<span class="composer-mode">Run Mode</span>');
+    expect(runDetailSource).toContain('@keydown="handleExecutionComposerKeydown"');
+    expect(runDetailSource).toContain('function handleExecutionComposerKeydown(event: KeyboardEvent): void');
+    expect(runDetailSource).toContain('class="composer-send"');
+    expect(runDetailSource).toContain('aria-label="Send message"');
+    expect(runDetailSource).toContain('<ProviderUsageFooter :model="executionTelemetryModel" :context="executionContextUsage" context-note="provider exact" />');
+    expect(runDetailSource).not.toContain("guidanceComposerOpen");
+    expect(runDetailSource).not.toContain('class="execution-guidance-shell"');
+    expect(runDetailSource).not.toContain("Add guidance");
+    expect(runDetailSource).not.toContain("Guidance is read-only");
   });
 });
