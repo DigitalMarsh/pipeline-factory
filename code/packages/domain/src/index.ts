@@ -486,6 +486,7 @@ export type DomainEvent = {
     | "explorer.continued"
     | "explorer.plan.created"
     | "explorer.plan.renamed"
+    | "explorer.plan.selected"
     | "explorer.turn.accepted"
     | "explorer.turn.started"
     | "explorer.turn.text.delta"
@@ -498,6 +499,7 @@ export type DomainEvent = {
     | "explorer.plan.incomplete"
     | "explorer.plan.ready"
     | "plan.candidate.created"
+    | "plan.candidate.revised"
     | "plan.status.changed"
     | "plan.discarded"
     | "plan.confirmed"
@@ -776,6 +778,8 @@ export type PipelineStore = {
   getPlan(id: string): CandidatePlan | undefined;
   listPlans(): CandidatePlan[];
   updatePlan(plan: CandidatePlan): CandidatePlan;
+  saveCandidateVersion(plan: CandidatePlan): CandidatePlan;
+  listCandidateVersions(planId: string): CandidatePlan[];
   saveDispatchState(state: PlanDispatchState): PlanDispatchState;
   /** 删除当前调度投影；历史状态变更仍保留在领域事件中。 */
   deleteDispatchState(planId: string): void;
@@ -1039,6 +1043,7 @@ export class InMemoryPipelineStore implements PipelineStore {
   private readonly projectConfigRevisions = new Map<string, ProjectConfigRevision[]>();
   private readonly explorerPlans = new Map<string, ExplorerPlan>();
   private readonly plans = new Map<string, CandidatePlan>();
+  private readonly candidateVersions = new Map<string, CandidatePlan>();
   private readonly dispatchStates = new Map<string, PlanDispatchState>();
   private readonly revisions = new Map<string, PlanRevisionV2>();
   private readonly revisionDrafts = new Map<string, PlanRevisionDraft>();
@@ -1186,6 +1191,16 @@ export class InMemoryPipelineStore implements PipelineStore {
     this.plans.set(plan.id, plan);
     if (this.getProject(plan.projectId) && this.getThread(plan.sourceExplorerThreadId)) this.savePlanQueryProjection(planQueryProjectionFor(plan));
     return plan;
+  }
+
+  saveCandidateVersion(plan: CandidatePlan): CandidatePlan {
+    const key = `${plan.id}:${plan.revision}`;
+    if (!this.candidateVersions.has(key)) this.candidateVersions.set(key, structuredClone(plan));
+    return this.candidateVersions.get(key)!;
+  }
+
+  listCandidateVersions(planId: string): CandidatePlan[] {
+    return [...this.candidateVersions.values()].filter((plan) => plan.id === planId).sort((a, b) => a.revision - b.revision);
   }
 
   saveDispatchState(state: PlanDispatchState): PlanDispatchState {
@@ -1522,6 +1537,12 @@ export class SqlitePipelineStore implements PipelineStore {
         attempt INTEGER NOT NULL,
         updated_at TEXT NOT NULL,
         last_error TEXT
+      );
+      CREATE TABLE IF NOT EXISTS candidate_plan_versions (
+        plan_id TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        plan_json TEXT NOT NULL,
+        PRIMARY KEY (plan_id, revision)
       );
       CREATE TABLE IF NOT EXISTS plan_revisions (
         plan_id TEXT NOT NULL,
@@ -1999,6 +2020,16 @@ export class SqlitePipelineStore implements PipelineStore {
 
   updatePlan(plan: CandidatePlan): CandidatePlan { return this.savePlan(plan); }
 
+  saveCandidateVersion(plan: CandidatePlan): CandidatePlan {
+    this.database.prepare("INSERT OR IGNORE INTO candidate_plan_versions (plan_id, revision, plan_json) VALUES (?, ?, ?)").run(plan.id, plan.revision, JSON.stringify(plan));
+    return this.listCandidateVersions(plan.id).find((item) => item.revision === plan.revision)!;
+  }
+
+  listCandidateVersions(planId: string): CandidatePlan[] {
+    const rows = this.database.prepare("SELECT plan_json FROM candidate_plan_versions WHERE plan_id = ? ORDER BY revision ASC").all(planId) as unknown as SqliteRow[];
+    return rows.map((row) => JSON.parse(String(row.plan_json)) as CandidatePlan);
+  }
+
   saveDispatchState(state: PlanDispatchState): PlanDispatchState {
     this.database.prepare(`
       INSERT INTO plan_dispatch_states (plan_id, project_id, status, wait_reason, queued_at, run_id, attempt, updated_at, last_error)
@@ -2336,6 +2367,7 @@ export class SqlitePipelineStore implements PipelineStore {
       this.database.prepare(`DELETE FROM plan_dispatch_states WHERE ${planIds.clause}`).run(...planIds.values);
       this.database.prepare(`DELETE FROM plan_revisions WHERE ${planIds.clause}`).run(...planIds.values);
       this.database.prepare(`DELETE FROM plan_revision_drafts WHERE ${planIds.clause}`).run(...planIds.values);
+      this.database.prepare(`DELETE FROM candidate_plan_versions WHERE ${planIds.clause}`).run(...planIds.values);
       this.database.prepare(`DELETE FROM revision_lifecycle_projection WHERE ${planIds.clause}`).run(...planIds.values);
       this.database.prepare(`DELETE FROM plan_query_projection WHERE ${planIds.clause}`).run(...planIds.values);
       if (planEntityIds) this.database.prepare(`DELETE FROM candidate_plans WHERE ${planEntityIds.clause}`).run(...planEntityIds.values);
@@ -2835,8 +2867,30 @@ export class PlanService {
       ...(resolvedContract ? { resolvedContract } : {}),
     };
     this.store.savePlan(plan);
+    this.store.saveCandidateVersion(plan);
     this.store.appendEvent({ type: "plan.candidate.created", aggregateId: plan.id, payload: { title: plan.title, revision: plan.revision, explorerPlanId: plan.explorerPlanId ?? null, sourceTurnId: plan.sourceTurnId, providerThreadId: plan.providerThreadId, providerTurnId: plan.providerTurnId, providerItemId: plan.providerItemId } });
     return plan;
+  }
+
+  /** 每次重新生成 READY 产物都保存不可变的候选版本，确认只能使用最新版。 */
+  reviseCandidate(planId: string, artifact: PlanArtifact, source: { sourceTurnId: string; providerThreadId: string | null; providerTurnId: string | null; providerItemId: string | null }): CandidatePlan {
+    const plan = this.get(planId);
+    if (plan.status !== "DRAFT") throw new Error("Only an unconfirmed Plan can be edited");
+    const project = this.store.getProject(plan.projectId);
+    if (!project) throw new Error(`Project ${plan.projectId} not found`);
+    const generatedSpec = artifact.generatedSpec ? parseGeneratedPlanSpecV2(artifact.generatedSpec) : undefined;
+    const resolvedContract = generatedSpec ? resolvePlanContractV2(generatedSpec, this.projects.snapshot(project.id), verifiedProjectBaseline(project)) : undefined;
+    const revision = Math.max(plan.revision, ...this.store.listCandidateVersions(plan.id).map((item) => item.revision)) + 1;
+    const updated = this.store.updatePlan({
+      ...plan, title: artifact.title, revision,
+      contract: resolvedContract ? executionContractFromResolvedV2(resolvedContract) : artifact.contract ?? plan.contract,
+      ...(generatedSpec ? { generatedSpec } : {}),
+      ...(resolvedContract ? { resolvedContract } : {}),
+      ...source, lastEventAt: this.store.now(),
+    });
+    this.store.saveCandidateVersion(updated);
+    this.store.appendEvent({ type: "plan.candidate.revised", aggregateId: plan.id, payload: { revision, sourceTurnId: source.sourceTurnId } });
+    return updated;
   }
 
   /** 读取 Plan；未知 id 直接失败，调用方不得回退到默认 Project。 */
@@ -2844,6 +2898,19 @@ export class PlanService {
     const plan = this.store.getPlan(planId);
     if (!plan) throw new Error(`Plan ${planId} not found`);
     return plan;
+  }
+
+  /** 在一个需求对话内切换待编辑的独立 Plan；null 表示下一次 READY 新建 Plan。 */
+  selectCandidate(explorerPlanId: string, planId: string | null): ExplorerPlan {
+    const requirement = this.store.getExplorerPlan(explorerPlanId);
+    if (!requirement) throw new Error("Requirement not found");
+    if (planId) {
+      const plan = this.get(planId);
+      if (plan.explorerPlanId !== requirement.id || plan.sourceExplorerThreadId !== requirement.explorerThreadId || plan.status !== "DRAFT") throw new Error("Plan is not an editable candidate for this requirement");
+    }
+    const updated = this.store.updateExplorerPlan({ ...requirement, candidatePlanId: planId, exploration: { ...requirement.exploration, candidatePlanId: planId }, lastActivityAt: this.store.now() });
+    this.store.appendEvent({ type: "explorer.plan.selected", aggregateId: requirement.explorerThreadId, payload: { explorerPlanId, planId } });
+    return updated;
   }
 
   /**
@@ -3307,7 +3374,7 @@ export class ExplorerService {
       createdAt: input.createdAt,
     });
     if (thread.titleSource === "AUTO" && thread.titleStatus === "PLACEHOLDER") {
-      thread = this.store.updateThread({ ...thread, title: projectPlaceholderExplorerTitle(this.store, thread) });
+      thread = this.store.updateThread({ ...thread, title: projectPlaceholderExplorerTitle(this.store, thread), titleStatus: "GENERATED" });
     }
     this.store.appendEvent({ type: "explorer.created", aggregateId: thread.id, payload: { projectId: thread.projectId, contextMode: thread.contextMode, originThreadId: thread.originThreadId, explorerPlanId: thread.activeExplorerPlanId, turnId: null, loopId: null } });
     if (origin) this.store.appendEvent({ type: "explorer.continued", aggregateId: thread.id, payload: { originThreadId: origin.id, explorerPlanId: thread.activeExplorerPlanId, turnId: null, loopId: null } });
@@ -4429,9 +4496,8 @@ export class ExplorerThreadService {
         const planAfterDraft = this.store.getExplorerPlan(explorerPlan.id);
         if (planAfterDraft) this.store.updateExplorerPlan({ ...planAfterDraft, exploration: { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], diagnostics: [], candidatePlanId: revisedPlan, lastAssessedTurnId: assistantId }, candidatePlanId: revisedPlan, lastAssessedTurnId: assistantId, lastActivityAt: this.store.now() });
       } else {
-        const existing = this.store.listPlans().find((plan) => plan.sourceExplorerThreadId === threadId && plan.explorerPlanId === explorerPlan.id && plan.status === "DRAFT");
-        // 对同一初始草稿的多次 READY 覆盖完整合同和来源，而不只更新 source 指针。
-        const plan = existing ? this.store.updatePlan({ ...existing, title: assessment.artifact.title, ...(assessment.artifact.generatedSpec ? { generatedSpec: assessment.artifact.generatedSpec } : { contract: assessment.artifact.contract ?? existing.contract }), ...source, lastEventAt: this.store.now() }) : this.plans.createCandidatePlan({ projectId: thread.projectId, sourceExplorerThreadId: threadId, explorerPlanId: explorerPlan.id, title: assessment.artifact.title, ...(assessment.artifact.generatedSpec ? { generatedSpec: assessment.artifact.generatedSpec } : { contract: assessment.artifact.contract }), ...source });
+        const existing = explorerPlan.candidatePlanId ? this.store.getPlan(explorerPlan.candidatePlanId) : undefined;
+        const plan = existing?.status === "DRAFT" ? this.plans.reviseCandidate(existing.id, assessment.artifact, source) : this.plans.createCandidatePlan({ projectId: thread.projectId, sourceExplorerThreadId: threadId, explorerPlanId: explorerPlan.id, title: assessment.artifact.title, ...(assessment.artifact.generatedSpec ? { generatedSpec: assessment.artifact.generatedSpec } : { contract: assessment.artifact.contract }), ...source });
         const planAfterCandidate = this.store.updateExplorerPlan({ ...this.store.getExplorerPlan(explorerPlan.id)!, exploration: { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], diagnostics: [], candidatePlanId: plan.id, lastAssessedTurnId: assistantId }, candidatePlanId: plan.id, lastAssessedTurnId: assistantId, lastActivityAt: this.store.now() });
         this.updateThreadContextSummary(threadId, planAfterCandidate, plan.contract.goal ?? null);
         const latestThread = this.store.getThread(threadId)!;

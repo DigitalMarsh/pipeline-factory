@@ -684,7 +684,8 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     const loopIds = new Set(loops.map((loop) => loop.id));
     const steps = loops.flatMap((loop) => store.listAgentLoopSteps(loop.id)).filter((step) => loopIds.has(step.loopId));
     const activity = projectExplorerActivity({ turns, loops, steps });
-    const candidate = store.listPlans().filter((plan) => plan.sourceExplorerThreadId === explorer.id && plan.explorerPlanId === explorerPlan.id && plan.status === "DRAFT" && plan.queuedAt === null).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0] ?? null;
+    const selectedCandidate = explorerPlan.candidatePlanId ? store.getPlan(explorerPlan.candidatePlanId) : undefined;
+    const candidate = selectedCandidate?.status === "DRAFT" ? selectedCandidate : null;
     const draft = explorer.activeRevisionDraftId ? store.getRevisionDraft(explorer.activeRevisionDraftId) : undefined;
     const revisionDraft = draft && draft.explorerPlanId === explorerPlan.id && ["EDITING", "READY_TO_CONFIRM", "BASE_CHANGED"].includes(draft.status) ? draft : null;
     return { explorerPlan, turns, activity, inputRequests: store.listInputRequests(explorer.id).filter((item) => item.explorerPlanId === explorerPlan.id), candidate: candidate ? { ...candidate, ...planProjection(store, candidate) } : null, revisionDraft, loops: loops.map((loop) => projectAgentLoopResponse(store, loop)), lastEventSequence: store.getLastEventSequence(explorer.id) };
