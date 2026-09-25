@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import * as domain from "./index.js";
-import { InMemoryPipelineStore, LifecycleHookRunner, PlanService, ProjectService, Scheduler, SqlitePipelineStore } from "./index.js";
+import { InMemoryPipelineStore, LifecycleHookRunner, PlanService, ProjectService, Scheduler, SqlitePipelineStore, resolvePlanContractV2 } from "./index.js";
 
 const coordinatorModule = domain as unknown as {
   PlanDispatchCoordinator: new (options: {
@@ -88,6 +88,41 @@ describe("PlanDispatchCoordinator", () => {
     store.updatePlan({ ...dependency, status: "MERGED" });
     const resumed = (await coordinator.wake()).find((state) => state.planId === dependent.id);
     expect(resumed).toMatchObject({ status: "RUNNING", waitReason: null });
+  });
+
+  it("does not treat V2 natural-language prerequisites as Plan dependencies during dispatch", async () => {
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    const project = projects.create({ id: "project-1", name: "Project", repoRoot: "/repo/project-1", defaultBranch: "main", worktreeRoot: "/tmp/project-1-worktrees", settings: { commands: [] } });
+    const plans = new PlanService(store, projects);
+    const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "thread-1", title: "Prerequisite-bearing plan" });
+    const generatedSpec = {
+      schemaVersion: 2 as const,
+      title: "Prerequisite-bearing plan",
+      artifact: { mode: "REPOSITORY_FILE" as const, path: "src/example.ts" },
+      objective: { goal: "Implement the feature", audience: ["Developers"], acceptanceCriteria: ["Feature works"], outOfScope: [] },
+      design: { technicalConstraints: ["Use TypeScript"], dataSecurity: ["Do not expose secrets"], failureHandling: ["Surface errors clearly"] },
+      scope: { includePaths: ["src/example.ts"], excludePaths: [] },
+      tasks: [{ id: "task-1", title: "Implement the feature", dependencies: [], status: "READY" as const }],
+      dependencies: ["Node.js 22 or compatible version", "pnpm"],
+      conflicts: [], execution: {}, verification: { mode: "NONE" as const }, merge: { strategy: "manual" as const, requireHumanMerge: true as const },
+    };
+    const resolvedContract = resolvePlanContractV2(generatedSpec, projects.snapshot(project.id), { baseBranch: "main", baseCommit: "a".repeat(40) });
+    store.updatePlan({
+      ...plan,
+      contract: { ...plan.contract, artifactMode: "REPOSITORY_FILE", dependsOnPlanIds: [] },
+      generatedSpec,
+      resolvedContract,
+    });
+    const coordinator = new coordinatorModule.PlanDispatchCoordinator({ store, plans, scheduler: schedulerFor(store) });
+
+    try {
+      const result = await coordinator.confirmAndDispatch(plan.id, plan.revision, "user-1");
+      expect(result.state).toMatchObject({ status: "RUNNING", waitReason: null });
+      expect(result.run).not.toBeNull();
+    } finally {
+      coordinator.dispose();
+    }
   });
 
   it("starts Runs without applying a global concurrency cap", async () => {

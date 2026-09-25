@@ -335,7 +335,7 @@ export class PlanDispatchCoordinator {
   }
 
   private evaluateWait(plan: CandidatePlan, revision: PlanRevisionV2): WaitEvaluation | undefined {
-    const dependencies = revision.resolvedContract?.dependencies ?? revision.contract.dependsOnPlanIds ?? [];
+    const dependencies = revision.contract.dependsOnPlanIds ?? [];
     const incompleteDependency = dependencies
       .map((id) => this.options.store.getPlan(id))
       .find((dependency) => !dependency || dependency.projectId !== plan.projectId || dependency.status !== "MERGED");

@@ -1,5 +1,16 @@
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { InMemoryPipelineStore, VerificationService, parseGeneratedPlanSpecV2, resolvePlanContractV2, validateGeneratedPlanSpecV2, type PlanRevisionV2, type ProjectExecutionSnapshot, type Run } from "./index.js";
+import { InMemoryPipelineStore, PlanService, ProjectService, VerificationService, parseGeneratedPlanSpecV2, resolvePlanContractV2, validateGeneratedPlanSpecV2, type PlanRevisionV2, type ProjectExecutionSnapshot, type Run } from "./index.js";
+
+function repository(): string {
+  const root = mkdtempSync(join(tmpdir(), "pipeline-plan-dependencies-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: root, stdio: "ignore" });
+  execFileSync("git", ["-c", "user.name=Pipeline Test", "-c", "user.email=pipeline@test", "commit", "--allow-empty", "-m", "init"], { cwd: root, stdio: "ignore" });
+  return root;
+}
 
 const spec = {
   schemaVersion: 2 as const,
@@ -21,6 +32,37 @@ describe("Plan V2 resolution", () => {
     const contract = resolvePlanContractV2(spec, snapshot(["project.test"]), { baseBranch: "main", baseCommit: "a".repeat(40) });
     expect(contract).toMatchObject({ schemaVersion: 2, repository: { projectId: "project-test", configVersion: 3 }, scope: { includePaths: ["docs/vue-usage.md"] }, verification: { mode: "PROJECT_DEFAULT", commandIds: ["project.test"] } });
     expect(() => parseGeneratedPlanSpecV2({ ...spec, verificationCommandIds: ["docs.file-and-section-check"] })).toThrow(/只能由 Factory/i);
+  });
+
+  it("keeps natural-language prerequisites as technical constraints and repairs old draft projections on confirmation", () => {
+    const root = repository();
+    try {
+      const store = new InMemoryPipelineStore();
+      const projects = new ProjectService(store);
+      const project = projects.create({ id: "project-prerequisites", name: "Prerequisites", repoRoot: root, defaultBranch: "main", worktreeRoot: join(root, "worktrees") });
+      const plans = new PlanService(store, projects);
+      const generatedSpec = { ...spec, dependencies: ["Node.js 22 or compatible version", "pnpm"] };
+      const candidate = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "explorer-prerequisites", title: generatedSpec.title, generatedSpec });
+
+      expect(candidate.contract.dependsOnPlanIds).toEqual([]);
+      expect(candidate.resolvedContract?.dependencies).toEqual(generatedSpec.dependencies);
+      expect(candidate.resolvedContract?.design.technicalConstraints).toEqual(expect.arrayContaining(generatedSpec.dependencies));
+
+      const oldResolvedContract = candidate.resolvedContract!;
+      store.updatePlan({
+        ...candidate,
+        contract: { ...candidate.contract, dependsOnPlanIds: generatedSpec.dependencies },
+        resolvedContract: { ...oldResolvedContract, design: { ...oldResolvedContract.design, technicalConstraints: spec.design.technicalConstraints } },
+      });
+
+      const confirmed = plans.confirm(candidate.id, "user-1");
+      const revision = plans.getRevision(candidate.id, 1);
+      expect(confirmed).toMatchObject({ status: "READY", contract: { dependsOnPlanIds: [] } });
+      expect(revision.contract.dependsOnPlanIds).toEqual([]);
+      expect(revision.resolvedContract?.design.technicalConstraints).toEqual(expect.arrayContaining(generatedSpec.dependencies));
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("rejects absolute and traversal scopes and resolves an empty Project set to NONE", () => {

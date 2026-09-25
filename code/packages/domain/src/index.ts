@@ -138,7 +138,7 @@ export const EXPLORER_PLAN_REQUIREMENTS = {
 export const EXPLORER_PLAN_INSTRUCTIONS = `
 你是 Pipeline Factory 的 Plan Explorer。你的职责是围绕用户需求持续探索，直到形成可执行的完整设计方案；一次普通 turn 结束不代表探索完成。
 先分析目标、用户范围、功能边界、技术方案、数据与安全、异常处理、验收标准、实施任务、依赖、冲突、验证和合并策略。把当前所有互不依赖且需要用户决策的问题合并到一次原生 item/tool/requestUserInput 请求中；不要在普通文本中把问题伪装成选择题。若用户没有明确产物模式，必须询问 CONVERSATION（仅对话审阅）或 REPOSITORY_FILE（写入仓库文件），不得自行假设。
-完整方案的模型必填字段为：title；artifact.mode（REPOSITORY_FILE 时 artifact.path 必填）；objective.goal、objective.audience、objective.acceptanceCriteria、objective.outOfScope；design.technicalConstraints、design.dataSecurity、design.failureHandling；scope.includePaths、scope.excludePaths；tasks、dependencies、conflicts、execution、verification.mode、merge.strategy、merge.requireHumanMerge。outOfScope、excludePaths、dependencies、conflicts、task.dependencies 可以为空数组；技术/安全/异常/受众/验收必须显式给出至少一项，“无新增约束”也必须写明。execution 内的 executorModelRole、toolPolicy、maxRepairAttempts 可省略，由 Factory 使用默认值。
+完整方案的模型必填字段为：title；artifact.mode（REPOSITORY_FILE 时 artifact.path 必填）；objective.goal、objective.audience、objective.acceptanceCriteria、objective.outOfScope；design.technicalConstraints、design.dataSecurity、design.failureHandling；scope.includePaths、scope.excludePaths；tasks、dependencies、conflicts、execution、verification.mode、merge.strategy、merge.requireHumanMerge。outOfScope、excludePaths、dependencies、conflicts、task.dependencies 可以为空数组；dependencies 表示自然语言执行前置条件（如 Node.js 版本、包管理器），不是 CandidatePlan ID；应将其内容同时纳入 design.technicalConstraints。技术/安全/异常/受众/验收必须显式给出至少一项，“无新增约束”也必须写明。execution 内的 executorModelRole、toolPolicy、maxRepairAttempts 可省略，由 Factory 使用默认值。
 REPOSITORY_FILE：artifact.path 必须是项目根相对路径或 glob，且必须包含在 scope.includePaths 中，scope.includePaths 至少一项。CONVERSATION：artifact.path 不得出现，scope.includePaths 必须为 []，verification.mode 必须为 NONE；它仍会生成可审阅 CandidatePlan，但不能入队或执行。
 模型不得填写 repository、baseBranch、baseCommit、configVersion、configHash、commandIds 或 verificationCommandIds；这些字段只能由 Factory 基于当前 Project 与 Git 基线解析。范围不能填绝对路径、.. 或概念性描述。
 只有所有关键项都已确认，才能输出完整方案。完整方案必须在普通说明之后追加以下机器可校验协议块，JSON 必须是严格 JSON，不要使用 Markdown 代码围栏：
@@ -252,6 +252,7 @@ export type PlanContract = {
   /** Conversation plans are reviewable but never executable. Undefined keeps historical contracts compatible. */
   artifactMode?: "CONVERSATION" | "REPOSITORY_FILE";
   artifactPath?: string;
+  /** IDs of other CandidatePlans in this Project; descriptive prerequisites belong in the V2 plan constraints. */
   dependsOnPlanIds?: string[];
   priority?: number;
 };
@@ -2754,7 +2755,7 @@ function executionContractFromResolvedV2(contract: ResolvedPlanContractV2): Plan
     requireHumanMerge: true,
     artifactMode: contract.artifact.mode,
     ...(contract.artifact.path ? { artifactPath: contract.artifact.path } : {}),
-    dependsOnPlanIds: contract.dependencies,
+    dependsOnPlanIds: [],
     priority: 0,
   };
 }
@@ -3071,7 +3072,7 @@ export class PlanService {
 
   /** 确认 Plan 并冻结当前 Project 配置，生成后续 Run 唯一使用的 Revision。 */
   confirm(planId: string, confirmedBy: string, expectedRevision?: number): CandidatePlan {
-    const plan = this.get(planId);
+    let plan = this.get(planId);
     if (expectedRevision !== undefined && plan.revision !== expectedRevision) throw new Error("REVISION_NOT_LATEST");
     if (plan.status === "READY" || plan.status === "ENQUEUED" || plan.status === "DISPATCHED") return plan;
     if (plan.status !== "DRAFT" && plan.status !== "DESIGNED" && plan.status !== "PLANNED") {
@@ -3082,6 +3083,23 @@ export class PlanService {
       const project = this.store.getProject(plan.projectId);
       if (!project || project.id !== plan.resolvedContract.repository.projectId) throw new Error(`Plan ${planId} is bound to an invalid Project`);
       if (project.configVersion !== plan.resolvedContract.repository.configVersion || project.configHash !== plan.resolvedContract.repository.configHash) throw new Error(`Plan ${planId} is stale because Project configuration changed; regenerate it`);
+    }
+    if (plan.generatedSpec && plan.resolvedContract) {
+      const prerequisites = [...new Set([...plan.generatedSpec.dependencies, ...plan.resolvedContract.dependencies])];
+      const prerequisiteSet = new Set(prerequisites);
+      const currentPlanDependencies = plan.contract.dependsOnPlanIds ?? [];
+      const dependsOnPlanIds = currentPlanDependencies.filter((dependencyId) => !prerequisiteSet.has(dependencyId));
+      const currentTechnicalConstraints = plan.resolvedContract.design.technicalConstraints;
+      const technicalConstraints = [...new Set([...currentTechnicalConstraints, ...prerequisites])];
+      const dependenciesChanged = dependsOnPlanIds.length !== currentPlanDependencies.length;
+      const constraintsChanged = technicalConstraints.length !== currentTechnicalConstraints.length || technicalConstraints.some((constraint, index) => constraint !== currentTechnicalConstraints[index]);
+      if (dependenciesChanged || constraintsChanged) {
+        plan = this.store.updatePlan({
+          ...plan,
+          contract: { ...plan.contract, dependsOnPlanIds },
+          resolvedContract: { ...plan.resolvedContract, design: { ...plan.resolvedContract.design, technicalConstraints } },
+        });
+      }
     }
     validatePlanContract(plan.contract);
     this.validatePlanDependencies(plan);

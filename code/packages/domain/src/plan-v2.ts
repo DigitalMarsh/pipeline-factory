@@ -17,6 +17,7 @@ export type GeneratedPlanSpecV2 = {
   design: { technicalConstraints: string[]; dataSecurity: string[]; failureHandling: string[] };
   scope: { includePaths: string[]; excludePaths: string[] };
   tasks: Array<{ id: string; title: string; dependencies: string[]; status?: "PENDING" | "READY" | "DONE" }>;
+  /** Human-readable execution prerequisites; these are not CandidatePlan IDs. */
   dependencies: string[];
   conflicts: string[];
   execution: { executorModelRole?: string | undefined; toolPolicy?: string | undefined; maxRepairAttempts?: number | undefined };
@@ -33,6 +34,7 @@ export type ResolvedPlanContractV2 = {
   repository: { projectId: string; name: string; repoRoot: string; baseBranch: string; baseCommit: string; configVersion: number; configHash: string };
   scope: GeneratedPlanSpecV2["scope"];
   tasks: Array<{ id: string; title: string; dependencies: string[]; status: "PENDING" | "READY" | "DONE" }>;
+  /** Human-readable execution prerequisites; these are not CandidatePlan IDs. */
   dependencies: string[];
   execution: { executorModelRole: string; toolPolicy: string; maxRepairAttempts: number };
   verification: { mode: "PROJECT_DEFAULT" | "NONE"; commandIds: string[] };
@@ -210,5 +212,6 @@ export function resolvePlanContractV2(specValue: unknown, project: ProjectExecut
   const enabledVerification = new Map(project.settings.commands.filter((command) => command.category === "verification" && command.enabled !== false).map((command) => [command.commandId, command]));
   if (defaults.some((id) => !enabledVerification.has(id))) throw new Error("Project default verification commands are invalid");
   const mode = spec.verification.mode === "NONE" || defaults.length === 0 ? "NONE" : "PROJECT_DEFAULT";
-  return { schemaVersion: 2, artifact: spec.artifact, objective: spec.objective, design: spec.design, conflicts: spec.conflicts, repository: { projectId: project.projectId, name: project.name, repoRoot: project.repoRoot, baseBranch: baseline.baseBranch, baseCommit: baseline.baseCommit, configVersion: project.configVersion, configHash: project.configHash }, scope: spec.scope, tasks: spec.tasks.map((task) => ({ ...task, status: task.status ?? "READY" })), dependencies: spec.dependencies, execution: { executorModelRole: spec.execution.executorModelRole?.trim() || "executor", toolPolicy: spec.execution.toolPolicy?.trim() || "executor-scoped-write", maxRepairAttempts: Number.isInteger(spec.execution.maxRepairAttempts) && spec.execution.maxRepairAttempts! >= 0 ? spec.execution.maxRepairAttempts! : project.settings.concurrency.maxRepairAttempts }, verification: { mode, commandIds: mode === "PROJECT_DEFAULT" ? [...defaults] : [] }, merge: { strategy: spec.merge.strategy, requireHumanMerge: true } };
+  const technicalConstraints = [...new Set([...spec.design.technicalConstraints, ...spec.dependencies])];
+  return { schemaVersion: 2, artifact: spec.artifact, objective: spec.objective, design: { ...spec.design, technicalConstraints }, conflicts: spec.conflicts, repository: { projectId: project.projectId, name: project.name, repoRoot: project.repoRoot, baseBranch: baseline.baseBranch, baseCommit: baseline.baseCommit, configVersion: project.configVersion, configHash: project.configHash }, scope: spec.scope, tasks: spec.tasks.map((task) => ({ ...task, status: task.status ?? "READY" })), dependencies: spec.dependencies, execution: { executorModelRole: spec.execution.executorModelRole?.trim() || "executor", toolPolicy: spec.execution.toolPolicy?.trim() || "executor-scoped-write", maxRepairAttempts: Number.isInteger(spec.execution.maxRepairAttempts) && spec.execution.maxRepairAttempts! >= 0 ? spec.execution.maxRepairAttempts! : project.settings.concurrency.maxRepairAttempts }, verification: { mode, commandIds: mode === "PROJECT_DEFAULT" ? [...defaults] : [] }, merge: { strategy: spec.merge.strategy, requireHumanMerge: true } };
 }
