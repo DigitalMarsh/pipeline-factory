@@ -21,7 +21,7 @@ export { EXECUTION_SLOT_RUN_STATUSES, ProjectService } from "./project.js";
 export { redactAuditPayload, redactAuditText } from "./redaction.js";
 export type { CreateProjectInput, Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings, ProjectSettingsInput, ProjectStatus, ProjectSummary, UpdateProjectInput } from "./project.js";
 export { PlanDispatchCoordinator } from "./dispatch-coordinator.js";
-export type { PlanDispatchCoordinatorOptions, PlanDispatchState, PlanDispatchStatus, PlanDispatchWaitReason } from "./dispatch-coordinator.js";
+export type { PlanDispatchCoordinatorOptions, PlanDispatchPhase, PlanDispatchState, PlanDispatchStatus, PlanDispatchWaitReason } from "./dispatch-coordinator.js";
 export { projectExplorerActivity } from "./explorer-activity.js";
 export type { ExplorerActivityInput, ExplorerActivityItem, ExplorerActivityKind } from "./explorer-activity.js";
 export { assertSafeProjectRelativeGlob, parseGeneratedPlanSpecV2, resolvePlanContractV2, validateGeneratedPlanSpecV2 } from "./plan-v2.js";
@@ -182,6 +182,8 @@ export type ExplorerPlan = {
   latestUserMessageSummary: string | null;
   exploration: PlanExploration;
   candidatePlanId: string | null;
+  /** Explicit null selection means the next READY output starts a new independent Plan. */
+  newPlanRequested?: boolean;
   lastAssessedTurnId: string | null;
   createdAt: string;
   lastActivityAt: string;
@@ -486,6 +488,7 @@ export type DomainEvent = {
     | "explorer.continued"
     | "explorer.plan.created"
     | "explorer.plan.renamed"
+    | "explorer.plan.selected"
     | "explorer.turn.accepted"
     | "explorer.turn.started"
     | "explorer.turn.text.delta"
@@ -498,6 +501,7 @@ export type DomainEvent = {
     | "explorer.plan.incomplete"
     | "explorer.plan.ready"
     | "plan.candidate.created"
+    | "plan.candidate.revised"
     | "plan.status.changed"
     | "plan.discarded"
     | "plan.confirmed"
@@ -776,6 +780,8 @@ export type PipelineStore = {
   getPlan(id: string): CandidatePlan | undefined;
   listPlans(): CandidatePlan[];
   updatePlan(plan: CandidatePlan): CandidatePlan;
+  saveCandidateVersion(plan: CandidatePlan): CandidatePlan;
+  listCandidateVersions(planId: string): CandidatePlan[];
   saveDispatchState(state: PlanDispatchState): PlanDispatchState;
   /** 删除当前调度投影；历史状态变更仍保留在领域事件中。 */
   deleteDispatchState(planId: string): void;
@@ -853,6 +859,7 @@ function defaultExplorerPlan(thread: Pick<ExplorerThread, "id" | "projectId" | "
     latestUserMessageSummary: null,
     exploration: defaultPlanExploration(),
     candidatePlanId: null,
+    newPlanRequested: false,
     lastAssessedTurnId: null,
     createdAt: thread.createdAt,
     lastActivityAt: now,
@@ -1039,6 +1046,7 @@ export class InMemoryPipelineStore implements PipelineStore {
   private readonly projectConfigRevisions = new Map<string, ProjectConfigRevision[]>();
   private readonly explorerPlans = new Map<string, ExplorerPlan>();
   private readonly plans = new Map<string, CandidatePlan>();
+  private readonly candidateVersions = new Map<string, CandidatePlan>();
   private readonly dispatchStates = new Map<string, PlanDispatchState>();
   private readonly revisions = new Map<string, PlanRevisionV2>();
   private readonly revisionDrafts = new Map<string, PlanRevisionDraft>();
@@ -1186,6 +1194,16 @@ export class InMemoryPipelineStore implements PipelineStore {
     this.plans.set(plan.id, plan);
     if (this.getProject(plan.projectId) && this.getThread(plan.sourceExplorerThreadId)) this.savePlanQueryProjection(planQueryProjectionFor(plan));
     return plan;
+  }
+
+  saveCandidateVersion(plan: CandidatePlan): CandidatePlan {
+    const key = `${plan.id}:${plan.revision}`;
+    if (!this.candidateVersions.has(key)) this.candidateVersions.set(key, structuredClone(plan));
+    return this.candidateVersions.get(key)!;
+  }
+
+  listCandidateVersions(planId: string): CandidatePlan[] {
+    return [...this.candidateVersions.values()].filter((plan) => plan.id === planId).sort((a, b) => a.revision - b.revision);
   }
 
   saveDispatchState(state: PlanDispatchState): PlanDispatchState {
@@ -1470,6 +1488,7 @@ export class SqlitePipelineStore implements PipelineStore {
         exploration_completed_json TEXT NOT NULL DEFAULT '[]',
         exploration_diagnostics_json TEXT NOT NULL DEFAULT '[]',
         candidate_plan_id TEXT,
+        new_plan_requested INTEGER NOT NULL DEFAULT 0,
         last_assessed_turn_id TEXT,
         runtime_status TEXT,
         created_at TEXT NOT NULL,
@@ -1514,6 +1533,7 @@ export class SqlitePipelineStore implements PipelineStore {
       );
       CREATE TABLE IF NOT EXISTS plan_dispatch_states (
         plan_id TEXT PRIMARY KEY,
+        revision INTEGER,
         project_id TEXT NOT NULL,
         status TEXT NOT NULL,
         wait_reason TEXT,
@@ -1521,7 +1541,16 @@ export class SqlitePipelineStore implements PipelineStore {
         run_id TEXT,
         attempt INTEGER NOT NULL,
         updated_at TEXT NOT NULL,
-        last_error TEXT
+        last_error TEXT,
+        phase TEXT,
+        automatic INTEGER NOT NULL DEFAULT 0,
+        confirmed_by TEXT
+      );
+      CREATE TABLE IF NOT EXISTS candidate_plan_versions (
+        plan_id TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        plan_json TEXT NOT NULL,
+        PRIMARY KEY (plan_id, revision)
       );
       CREATE TABLE IF NOT EXISTS plan_revisions (
         plan_id TEXT NOT NULL,
@@ -1778,6 +1807,7 @@ export class SqlitePipelineStore implements PipelineStore {
     try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN explorer_plan_id TEXT"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE plan_revision_drafts ADD COLUMN explorer_plan_id TEXT"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE explorer_plans ADD COLUMN runtime_status TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_plans ADD COLUMN new_plan_requested INTEGER NOT NULL DEFAULT 0"); } catch { /* Existing databases already have the column. */ }
     this.database.exec("UPDATE explorer_turns SET status = 'FAILED', error = COALESCE(error, '历史记录未包含模型文本') WHERE role = 'assistant' AND trim(content) = '' AND status = 'COMPLETED'");
     try { this.database.exec("ALTER TABLE candidate_plans ADD COLUMN contract_json TEXT NOT NULL DEFAULT '{}'"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE candidate_plans ADD COLUMN generated_spec_json TEXT"); } catch { /* Existing databases already have the column. */ }
@@ -1789,6 +1819,10 @@ export class SqlitePipelineStore implements PipelineStore {
     try { this.database.exec("ALTER TABLE candidate_plans ADD COLUMN dispatched_at TEXT"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN resolved_contract_json TEXT"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE plan_query_projection ADD COLUMN dispatched_at TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE plan_dispatch_states ADD COLUMN phase TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE plan_dispatch_states ADD COLUMN automatic INTEGER NOT NULL DEFAULT 0"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE plan_dispatch_states ADD COLUMN confirmed_by TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE plan_dispatch_states ADD COLUMN revision INTEGER"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE merge_requests ADD COLUMN detected_target_commit TEXT"); } catch { /* Existing databases already have the column. */ }
     this.database.exec(`
       UPDATE candidate_plans
@@ -1816,6 +1850,7 @@ export class SqlitePipelineStore implements PipelineStore {
     this.repairUnconfirmedProgressedPlans();
     this.backfillExplorerPlans();
     this.backfillLegacyRevisionHistory();
+    this.backfillCandidateVersions();
     this.backfillLegacyVerificationRuns();
     this.backfillPlanQueryProjection();
   }
@@ -1917,10 +1952,10 @@ export class SqlitePipelineStore implements PipelineStore {
 
   saveExplorerPlan(plan: ExplorerPlan): ExplorerPlan {
     this.database.prepare(`
-      INSERT INTO explorer_plans (id, explorer_thread_id, project_id, ordinal, title, title_source, title_status, message_count, latest_user_message_summary, exploration_status, exploration_missing_json, exploration_completed_json, exploration_diagnostics_json, candidate_plan_id, last_assessed_turn_id, runtime_status, created_at, last_activity_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET title=excluded.title, title_source=excluded.title_source, title_status=excluded.title_status, message_count=excluded.message_count, latest_user_message_summary=excluded.latest_user_message_summary, exploration_status=excluded.exploration_status, exploration_missing_json=excluded.exploration_missing_json, exploration_completed_json=excluded.exploration_completed_json, exploration_diagnostics_json=excluded.exploration_diagnostics_json, candidate_plan_id=excluded.candidate_plan_id, last_assessed_turn_id=excluded.last_assessed_turn_id, runtime_status=excluded.runtime_status, last_activity_at=excluded.last_activity_at
-    `).run(plan.id, plan.explorerThreadId, plan.projectId, plan.ordinal, plan.title, plan.titleSource, plan.titleStatus, plan.messageCount, plan.latestUserMessageSummary, plan.exploration.status, JSON.stringify(plan.exploration.missing), JSON.stringify(plan.exploration.completed), JSON.stringify(plan.exploration.diagnostics), plan.candidatePlanId, plan.lastAssessedTurnId, plan.runtimeStatus ?? null, plan.createdAt, plan.lastActivityAt);
+      INSERT INTO explorer_plans (id, explorer_thread_id, project_id, ordinal, title, title_source, title_status, message_count, latest_user_message_summary, exploration_status, exploration_missing_json, exploration_completed_json, exploration_diagnostics_json, candidate_plan_id, new_plan_requested, last_assessed_turn_id, runtime_status, created_at, last_activity_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET title=excluded.title, title_source=excluded.title_source, title_status=excluded.title_status, message_count=excluded.message_count, latest_user_message_summary=excluded.latest_user_message_summary, exploration_status=excluded.exploration_status, exploration_missing_json=excluded.exploration_missing_json, exploration_completed_json=excluded.exploration_completed_json, exploration_diagnostics_json=excluded.exploration_diagnostics_json, candidate_plan_id=excluded.candidate_plan_id, new_plan_requested=excluded.new_plan_requested, last_assessed_turn_id=excluded.last_assessed_turn_id, runtime_status=excluded.runtime_status, last_activity_at=excluded.last_activity_at
+    `).run(plan.id, plan.explorerThreadId, plan.projectId, plan.ordinal, plan.title, plan.titleSource, plan.titleStatus, plan.messageCount, plan.latestUserMessageSummary, plan.exploration.status, JSON.stringify(plan.exploration.missing), JSON.stringify(plan.exploration.completed), JSON.stringify(plan.exploration.diagnostics), plan.candidatePlanId, plan.newPlanRequested ? 1 : 0, plan.lastAssessedTurnId, plan.runtimeStatus ?? null, plan.createdAt, plan.lastActivityAt);
     return this.getExplorerPlan(plan.id) as ExplorerPlan;
   }
 
@@ -1999,12 +2034,22 @@ export class SqlitePipelineStore implements PipelineStore {
 
   updatePlan(plan: CandidatePlan): CandidatePlan { return this.savePlan(plan); }
 
+  saveCandidateVersion(plan: CandidatePlan): CandidatePlan {
+    this.database.prepare("INSERT OR IGNORE INTO candidate_plan_versions (plan_id, revision, plan_json) VALUES (?, ?, ?)").run(plan.id, plan.revision, JSON.stringify(plan));
+    return this.listCandidateVersions(plan.id).find((item) => item.revision === plan.revision)!;
+  }
+
+  listCandidateVersions(planId: string): CandidatePlan[] {
+    const rows = this.database.prepare("SELECT plan_json FROM candidate_plan_versions WHERE plan_id = ? ORDER BY revision ASC").all(planId) as unknown as SqliteRow[];
+    return rows.map((row) => JSON.parse(String(row.plan_json)) as CandidatePlan);
+  }
+
   saveDispatchState(state: PlanDispatchState): PlanDispatchState {
     this.database.prepare(`
-      INSERT INTO plan_dispatch_states (plan_id, project_id, status, wait_reason, queued_at, run_id, attempt, updated_at, last_error)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(plan_id) DO UPDATE SET project_id=excluded.project_id, status=excluded.status, wait_reason=excluded.wait_reason, queued_at=excluded.queued_at, run_id=excluded.run_id, attempt=excluded.attempt, updated_at=excluded.updated_at, last_error=excluded.last_error
-    `).run(state.planId, state.projectId, state.status, state.waitReason, state.queuedAt, state.runId, state.attempt, state.updatedAt, state.lastError);
+      INSERT INTO plan_dispatch_states (plan_id, revision, project_id, status, wait_reason, queued_at, run_id, attempt, updated_at, last_error, phase, automatic, confirmed_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(plan_id) DO UPDATE SET revision=excluded.revision, project_id=excluded.project_id, status=excluded.status, wait_reason=excluded.wait_reason, queued_at=excluded.queued_at, run_id=excluded.run_id, attempt=excluded.attempt, updated_at=excluded.updated_at, last_error=excluded.last_error, phase=excluded.phase, automatic=excluded.automatic, confirmed_by=excluded.confirmed_by
+    `).run(state.planId, state.revision ?? null, state.projectId, state.status, state.waitReason, state.queuedAt, state.runId, state.attempt, state.updatedAt, state.lastError, state.phase ?? null, state.automatic ? 1 : 0, state.confirmedBy ?? null);
     return this.getDispatchState(state.planId) as PlanDispatchState;
   }
 
@@ -2336,6 +2381,7 @@ export class SqlitePipelineStore implements PipelineStore {
       this.database.prepare(`DELETE FROM plan_dispatch_states WHERE ${planIds.clause}`).run(...planIds.values);
       this.database.prepare(`DELETE FROM plan_revisions WHERE ${planIds.clause}`).run(...planIds.values);
       this.database.prepare(`DELETE FROM plan_revision_drafts WHERE ${planIds.clause}`).run(...planIds.values);
+      this.database.prepare(`DELETE FROM candidate_plan_versions WHERE ${planIds.clause}`).run(...planIds.values);
       this.database.prepare(`DELETE FROM revision_lifecycle_projection WHERE ${planIds.clause}`).run(...planIds.values);
       this.database.prepare(`DELETE FROM plan_query_projection WHERE ${planIds.clause}`).run(...planIds.values);
       if (planEntityIds) this.database.prepare(`DELETE FROM candidate_plans WHERE ${planEntityIds.clause}`).run(...planEntityIds.values);
@@ -2411,6 +2457,7 @@ export class SqlitePipelineStore implements PipelineStore {
       title: String(row.title), titleSource: String(row.title_source ?? "AUTO") as ExplorerTitleSource, titleStatus: String(row.title_status ?? "PLACEHOLDER") as ExplorerTitleStatus,
       messageCount: Number(row.message_count ?? 0), latestUserMessageSummary: row.latest_user_message_summary === null || row.latest_user_message_summary === undefined ? null : String(row.latest_user_message_summary),
       exploration: { status: String(row.exploration_status ?? "INCOMPLETE") as PlanExplorationStatus, missing: parseStringArray(row.exploration_missing_json, [...REQUIRED_PLAN_AREAS]), completed: parseStringArray(row.exploration_completed_json, []), diagnostics: parsePlanValidationIssues(row.exploration_diagnostics_json), candidatePlanId: row.candidate_plan_id === null || row.candidate_plan_id === undefined ? null : String(row.candidate_plan_id), lastAssessedTurnId: row.last_assessed_turn_id === null || row.last_assessed_turn_id === undefined ? null : String(row.last_assessed_turn_id) },
+      newPlanRequested: Number(row.new_plan_requested ?? 0) === 1,
       candidatePlanId: row.candidate_plan_id === null || row.candidate_plan_id === undefined ? null : String(row.candidate_plan_id), lastAssessedTurnId: row.last_assessed_turn_id === null || row.last_assessed_turn_id === undefined ? null : String(row.last_assessed_turn_id), ...(row.runtime_status === null || row.runtime_status === undefined ? {} : { runtimeStatus: String(row.runtime_status) as NonNullable<ExplorerTurn["status"]> }), createdAt: String(row.created_at), lastActivityAt: String(row.last_activity_at),
     };
   }
@@ -2518,14 +2565,16 @@ export class SqlitePipelineStore implements PipelineStore {
       const planTurns = this.listTurns(threadId).filter((turn) => turn.explorerPlanId === plan.id);
       const latestUser = [...planTurns].reverse().find((turn) => turn.role === "user");
       const latestAssistant = [...planTurns].reverse().find((turn) => turn.role === "assistant");
-      const associatedCandidate = associatedPlans.filter((item) => item.explorerPlanId === plan.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+      const associatedCandidate = associatedPlans.filter((item) => item.explorerPlanId === plan.id && item.status === "DRAFT").sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
       const legacyProjection = plans.length === 1 && plan.id === activePlan.id && planTurns.length > 0 ? current.exploration : plan.exploration;
+      const selectedCandidateId = plan.newPlanRequested ? null : plan.candidatePlanId ?? associatedCandidate?.id ?? legacyProjection.candidatePlanId;
       this.saveExplorerPlan({
         ...plan,
         messageCount: planTurns.length || plan.messageCount,
         latestUserMessageSummary: latestUser ? summarizeExplorerMessage(latestUser.content) : plan.latestUserMessageSummary,
-        exploration: legacyProjection,
-        candidatePlanId: associatedCandidate?.id ?? plan.candidatePlanId ?? legacyProjection.candidatePlanId,
+        exploration: { ...legacyProjection, candidatePlanId: selectedCandidateId },
+        candidatePlanId: selectedCandidateId,
+        newPlanRequested: Boolean(plan.newPlanRequested),
         lastAssessedTurnId: legacyProjection.lastAssessedTurnId ?? plan.lastAssessedTurnId,
         ...(latestAssistant?.status ? { runtimeStatus: latestAssistant.status } : {}),
       });
@@ -2567,6 +2616,13 @@ export class SqlitePipelineStore implements PipelineStore {
     }
   }
 
+  /** 历史未确认内容被覆盖时只剩当前快照；保留它为可查看版本，不伪造丢失的旧内容。 */
+  private backfillCandidateVersions(): void {
+    for (const plan of this.listPlans()) {
+      if (plan.status === "DRAFT") this.saveCandidateVersion(plan);
+    }
+  }
+
   /** 将旧 candidate 聚合回填为只读 Revision；缺少当时快照的一律标记 LEGACY。 */
   private backfillLegacyRevisionHistory(): void {
     const insertRevision = this.database.prepare("INSERT OR IGNORE INTO plan_revisions (plan_id, revision, contract_json, artifact_hash, confirmed_by, confirmed_at, source_explorer_thread_id, source_turn_id, provider_thread_id, provider_turn_id, provider_item_id, provenance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'LEGACY')");
@@ -2602,6 +2658,7 @@ export class SqlitePipelineStore implements PipelineStore {
   private dispatchStateFromRow(row: SqliteRow): PlanDispatchState {
     return {
       planId: String(row.plan_id),
+      ...(row.revision === null || row.revision === undefined ? {} : { revision: Number(row.revision) }),
       projectId: String(row.project_id),
       status: String(row.status) as PlanDispatchState["status"],
       waitReason: row.wait_reason === null || row.wait_reason === undefined ? null : String(row.wait_reason) as PlanDispatchState["waitReason"],
@@ -2610,6 +2667,9 @@ export class SqlitePipelineStore implements PipelineStore {
       attempt: Number(row.attempt),
       updatedAt: String(row.updated_at),
       lastError: row.last_error === null || row.last_error === undefined ? null : String(row.last_error),
+      ...(row.phase ? { phase: String(row.phase) as NonNullable<PlanDispatchState["phase"]> } : {}),
+      automatic: Number(row.automatic ?? 0) === 1,
+      confirmedBy: row.confirmed_by === null || row.confirmed_by === undefined ? null : String(row.confirmed_by),
     };
   }
 
@@ -2835,8 +2895,33 @@ export class PlanService {
       ...(resolvedContract ? { resolvedContract } : {}),
     };
     this.store.savePlan(plan);
+    this.store.saveCandidateVersion(plan);
     this.store.appendEvent({ type: "plan.candidate.created", aggregateId: plan.id, payload: { title: plan.title, revision: plan.revision, explorerPlanId: plan.explorerPlanId ?? null, sourceTurnId: plan.sourceTurnId, providerThreadId: plan.providerThreadId, providerTurnId: plan.providerTurnId, providerItemId: plan.providerItemId } });
     return plan;
+  }
+
+  /** 每次重新生成 READY 产物都保存不可变的候选版本，确认只能使用最新版。 */
+  reviseCandidate(planId: string, artifact: PlanArtifact, source: { sourceTurnId: string; providerThreadId: string | null; providerTurnId: string | null; providerItemId: string | null }): CandidatePlan {
+    const plan = this.get(planId);
+    if (plan.status !== "DRAFT") throw new Error("Only an unconfirmed Plan can be edited");
+    const project = this.store.getProject(plan.projectId);
+    if (!project) throw new Error(`Project ${plan.projectId} not found`);
+    const generatedSpec = artifact.generatedSpec ? parseGeneratedPlanSpecV2(artifact.generatedSpec) : undefined;
+    const resolvedContract = generatedSpec ? resolvePlanContractV2(generatedSpec, this.projects.snapshot(project.id), verifiedProjectBaseline(project)) : undefined;
+    const revision = Math.max(plan.revision, ...this.store.listCandidateVersions(plan.id).map((item) => item.revision)) + 1;
+    const planWithoutGeneratedSpec = { ...plan };
+    delete planWithoutGeneratedSpec.generatedSpec;
+    delete planWithoutGeneratedSpec.resolvedContract;
+    const updated = this.store.updatePlan({
+      ...planWithoutGeneratedSpec, title: artifact.title, revision,
+      contract: resolvedContract ? executionContractFromResolvedV2(resolvedContract) : artifact.contract ?? plan.contract,
+      ...(generatedSpec ? { generatedSpec } : {}),
+      ...(resolvedContract ? { resolvedContract } : {}),
+      ...source, lastEventAt: this.store.now(),
+    });
+    this.store.saveCandidateVersion(updated);
+    this.store.appendEvent({ type: "plan.candidate.revised", aggregateId: plan.id, payload: { revision, sourceTurnId: source.sourceTurnId } });
+    return updated;
   }
 
   /** 读取 Plan；未知 id 直接失败，调用方不得回退到默认 Project。 */
@@ -2844,6 +2929,19 @@ export class PlanService {
     const plan = this.store.getPlan(planId);
     if (!plan) throw new Error(`Plan ${planId} not found`);
     return plan;
+  }
+
+  /** 在一个需求对话内切换待编辑的独立 Plan；null 表示下一次 READY 新建 Plan。 */
+  selectCandidate(explorerPlanId: string, planId: string | null): ExplorerPlan {
+    const requirement = this.store.getExplorerPlan(explorerPlanId);
+    if (!requirement) throw new Error("Requirement not found");
+    if (planId) {
+      const plan = this.get(planId);
+      if (plan.projectId !== requirement.projectId || plan.explorerPlanId !== requirement.id || plan.sourceExplorerThreadId !== requirement.explorerThreadId || plan.status !== "DRAFT") throw new Error("Plan is not an editable candidate for this requirement");
+    }
+    const updated = this.store.updateExplorerPlan({ ...requirement, candidatePlanId: planId, newPlanRequested: planId === null, exploration: { ...requirement.exploration, candidatePlanId: planId }, lastActivityAt: this.store.now() });
+    this.store.appendEvent({ type: "explorer.plan.selected", aggregateId: requirement.explorerThreadId, payload: { explorerPlanId, planId } });
+    return updated;
   }
 
   /**
@@ -2961,8 +3059,9 @@ export class PlanService {
   }
 
   /** 确认 Plan 并冻结当前 Project 配置，生成后续 Run 唯一使用的 Revision。 */
-  confirm(planId: string, confirmedBy: string): CandidatePlan {
+  confirm(planId: string, confirmedBy: string, expectedRevision?: number): CandidatePlan {
     const plan = this.get(planId);
+    if (expectedRevision !== undefined && plan.revision !== expectedRevision) throw new Error("REVISION_NOT_LATEST");
     if (plan.status === "READY" || plan.status === "ENQUEUED" || plan.status === "DISPATCHED") return plan;
     if (plan.status !== "DRAFT" && plan.status !== "DESIGNED" && plan.status !== "PLANNED") {
       throw new Error(`Plan ${planId} cannot be confirmed from ${plan.status}`);
@@ -3276,6 +3375,27 @@ export class PlanService {
       }))
       .sort((a, b) => b.lastEventAt.localeCompare(a.lastEventAt));
   }
+
+  /** 当前探索线程中跨所有需求分区的完整 Plan 集合。 */
+  listExplorerThreadPlans(threadId: string): CandidatePlan[] {
+    return this.store.listPlans()
+      .filter((plan) => plan.sourceExplorerThreadId === threadId)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  }
+
+  /** 项目 Plan 中心只列尚未确认的 Candidate。 */
+  listProjectPlanCandidates(projectId: string): CandidatePlan[] {
+    return this.store.listPlans()
+      .filter((plan) => plan.projectId === projectId && plan.status === "DRAFT" && plan.confirmedAt === null)
+      .sort((a, b) => b.lastEventAt.localeCompare(a.lastEventAt) || a.id.localeCompare(b.id));
+  }
+
+  /** 项目任务中心只列已确认 Plan；合并状态仍由人工确认接口推进。 */
+  listProjectTasks(projectId: string): CandidatePlan[] {
+    return this.store.listPlans()
+      .filter((plan) => plan.projectId === projectId && !["DRAFT", "DISCARDED"].includes(plan.status))
+      .sort((a, b) => b.lastEventAt.localeCompare(a.lastEventAt) || a.id.localeCompare(b.id));
+  }
 }
 
 export class ExplorerDeleteBlockedError extends Error {
@@ -3307,7 +3427,7 @@ export class ExplorerService {
       createdAt: input.createdAt,
     });
     if (thread.titleSource === "AUTO" && thread.titleStatus === "PLACEHOLDER") {
-      thread = this.store.updateThread({ ...thread, title: projectPlaceholderExplorerTitle(this.store, thread) });
+      thread = this.store.updateThread({ ...thread, title: projectPlaceholderExplorerTitle(this.store, thread), titleStatus: "GENERATED" });
     }
     this.store.appendEvent({ type: "explorer.created", aggregateId: thread.id, payload: { projectId: thread.projectId, contextMode: thread.contextMode, originThreadId: thread.originThreadId, explorerPlanId: thread.activeExplorerPlanId, turnId: null, loopId: null } });
     if (origin) this.store.appendEvent({ type: "explorer.continued", aggregateId: thread.id, payload: { originThreadId: origin.id, explorerPlanId: thread.activeExplorerPlanId, turnId: null, loopId: null } });
@@ -4427,12 +4547,11 @@ export class ExplorerThreadService {
         this.plans.updateRevisionDraftFromExplorer(activeDraftId, assessment.artifact, source);
         const revisedPlan = this.store.getRevisionDraft(activeDraftId)?.planId ?? null;
         const planAfterDraft = this.store.getExplorerPlan(explorerPlan.id);
-        if (planAfterDraft) this.store.updateExplorerPlan({ ...planAfterDraft, exploration: { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], diagnostics: [], candidatePlanId: revisedPlan, lastAssessedTurnId: assistantId }, candidatePlanId: revisedPlan, lastAssessedTurnId: assistantId, lastActivityAt: this.store.now() });
+        if (planAfterDraft) this.store.updateExplorerPlan({ ...planAfterDraft, exploration: { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], diagnostics: [], candidatePlanId: revisedPlan, lastAssessedTurnId: assistantId }, candidatePlanId: revisedPlan, newPlanRequested: false, lastAssessedTurnId: assistantId, lastActivityAt: this.store.now() });
       } else {
-        const existing = this.store.listPlans().find((plan) => plan.sourceExplorerThreadId === threadId && plan.explorerPlanId === explorerPlan.id && plan.status === "DRAFT");
-        // 对同一初始草稿的多次 READY 覆盖完整合同和来源，而不只更新 source 指针。
-        const plan = existing ? this.store.updatePlan({ ...existing, title: assessment.artifact.title, ...(assessment.artifact.generatedSpec ? { generatedSpec: assessment.artifact.generatedSpec } : { contract: assessment.artifact.contract ?? existing.contract }), ...source, lastEventAt: this.store.now() }) : this.plans.createCandidatePlan({ projectId: thread.projectId, sourceExplorerThreadId: threadId, explorerPlanId: explorerPlan.id, title: assessment.artifact.title, ...(assessment.artifact.generatedSpec ? { generatedSpec: assessment.artifact.generatedSpec } : { contract: assessment.artifact.contract }), ...source });
-        const planAfterCandidate = this.store.updateExplorerPlan({ ...this.store.getExplorerPlan(explorerPlan.id)!, exploration: { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], diagnostics: [], candidatePlanId: plan.id, lastAssessedTurnId: assistantId }, candidatePlanId: plan.id, lastAssessedTurnId: assistantId, lastActivityAt: this.store.now() });
+        const existing = explorerPlan.candidatePlanId ? this.store.getPlan(explorerPlan.candidatePlanId) : undefined;
+        const plan = existing?.status === "DRAFT" ? this.plans.reviseCandidate(existing.id, assessment.artifact, source) : this.plans.createCandidatePlan({ projectId: thread.projectId, sourceExplorerThreadId: threadId, explorerPlanId: explorerPlan.id, title: assessment.artifact.title, ...(assessment.artifact.generatedSpec ? { generatedSpec: assessment.artifact.generatedSpec } : { contract: assessment.artifact.contract }), ...source });
+        const planAfterCandidate = this.store.updateExplorerPlan({ ...this.store.getExplorerPlan(explorerPlan.id)!, exploration: { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], diagnostics: [], candidatePlanId: plan.id, lastAssessedTurnId: assistantId }, candidatePlanId: plan.id, newPlanRequested: false, lastAssessedTurnId: assistantId, lastActivityAt: this.store.now() });
         this.updateThreadContextSummary(threadId, planAfterCandidate, plan.contract.goal ?? null);
         const latestThread = this.store.getThread(threadId)!;
         if (latestThread.activeExplorerPlanId === explorerPlan.id) this.store.updateThread({ ...latestThread, exploration: planAfterCandidate.exploration, lastActivityAt: this.store.now() });
@@ -4632,9 +4751,9 @@ export class Scheduler {
     this.planService = new PlanService(options.store);
   }
 
-  /** 返回 Runtime 全局并发上限，供自动调度协调器复用同一限制。 */
+  /** @deprecated Capacity limits are ignored; this remains for old configuration readers. */
   globalConcurrency(): number | undefined {
-    return this.options.globalConcurrency;
+    return undefined;
   }
 
   /** 暴露 Executor Loop 的控制端口，供 API 的暂停、恢复和终止按钮调用。 */
@@ -4644,47 +4763,54 @@ export class Scheduler {
     return { pause: executor.pause.bind(executor), resume: executor.resume.bind(executor), cancel: executor.cancel.bind(executor) };
   }
 
-  /** 为已派发 Plan 创建一次 Run；重复调用会复用同一未取消运行，保证启动幂等。 */
+  /** 每个不可变 Plan Revision 最多创建一个 Run；失败重试复用原 Run 和 ExecutionThread。 */
   async start(planId: string, hooks: { start?: HookDefinition | undefined; cleanup?: HookDefinition | undefined } = {}): Promise<Run> {
-    const existing = this.options.store.listRuns().find((run) => run.planId === planId && run.status !== "CANCELLED" && run.status !== "NEEDS_PLAN_CHANGE" && run.status !== "BLOCKED");
+    const plan = this.planService.get(planId);
+    const existing = this.options.store.listRuns().find((run) => run.planId === planId && run.planRevision === plan.revision);
     if (existing) {
       this.runs.set(existing.id, existing);
       const savedThread = this.options.store.getExecutionThread(existing.executionThreadId);
       if (savedThread) this.threads.set(savedThread.id, savedThread);
       return existing;
     }
-    const plan = this.planService.get(planId);
     if (plan.status !== "DISPATCHED") throw new Error(`Plan ${planId} must be dispatched before a run starts`);
     const revision = this.options.store.getRevision(plan.id, plan.revision);
     if (!revision) throw new Error(`Plan revision ${plan.id}@${plan.revision} is missing`);
     this.assertVerificationCommands(revision);
-    this.assertConcurrency(plan.projectId, revision);
     const createdAt = this.options.store.now();
-    const runId = this.options.store.nextId("run");
     const baseBranchLeaf = await this.runBranchLeaf(plan, revision, createdAt);
-    const branchLeaf = allocateRunBranchLeaf(baseBranchLeaf, this.options.store.listRuns().map((run) => run.branch));
-    const thread: ExecutionThread = { id: this.options.store.nextId("execution-thread"), runId, state: "ACTIVE", journal: [] };
-    const run: Run = { id: runId, projectId: plan.projectId, planId: plan.id, planRevision: revision.revision, status: "STARTING", branch: runBranchName(branchLeaf), workspacePath: null, baseCommit: revision.contract.baseCommit, executionThreadId: thread.id, createdAt, startedAt: null };
+    const createOrReuse = (): { run: Run; thread: ExecutionThread; created: boolean } => {
+      const raced = this.options.store.listRuns().find((run) => run.planId === planId && run.planRevision === revision.revision);
+      if (raced) return { run: raced, thread: this.options.store.getExecutionThread(raced.executionThreadId) ?? { id: raced.executionThreadId, runId: raced.id, state: "ACTIVE", journal: [] }, created: false };
+      const branchLeaf = allocateRunBranchLeaf(baseBranchLeaf, this.options.store.listRuns().map((run) => run.branch));
+      const runId = this.options.store.nextId("run");
+      const thread: ExecutionThread = { id: this.options.store.nextId("execution-thread"), runId, state: "ACTIVE", journal: [] };
+      const run: Run = { id: runId, projectId: plan.projectId, planId: plan.id, planRevision: revision.revision, status: "STARTING", branch: runBranchName(branchLeaf), workspacePath: null, baseCommit: revision.contract.baseCommit, executionThreadId: thread.id, createdAt, startedAt: null };
+      this.options.store.saveRun(run);
+      this.options.store.saveExecutionThread(thread);
+      this.append(thread.id, "RUN_CREATED", { planId: plan.id, revision: revision.revision });
+      return { run, thread, created: true };
+    };
+    const record = this.options.store.runInTransaction ? this.options.store.runInTransaction(createOrReuse) : createOrReuse();
+    const { run, thread } = record;
     this.runs.set(run.id, run);
     this.threads.set(thread.id, thread);
-    this.options.store.saveRun(run);
-    this.options.store.saveExecutionThread(thread);
-    this.append(thread.id, "RUN_CREATED", { planId: plan.id, revision: revision.revision });
+    if (!record.created) return run;
     const workspaceAdapter = this.workspaceAdapterFor(revision);
     const hookRunner = this.hookRunnerFor(revision);
     const executionHooks = revision.projectConfigSnapshot?.settings.hooks ?? hooks;
     // Worktree、Start Hook 和 Executor 按顺序执行：任何前置阶段失败都阻止模型写入，
     // 同时把 BLOCKED 事实写回 Plan 和 ExecutionThread，便于 UI 显示可诊断原因。
-    const workspace = await workspaceAdapter.create({ projectId: plan.projectId, runId, branch: run.branch, baseCommit: run.baseCommit });
+    const workspace = await workspaceAdapter.create({ projectId: plan.projectId, runId: run.id, branch: run.branch, baseCommit: run.baseCommit });
     run.workspacePath = workspace.path;
-    const startResult = await hookRunner.runStart(executionHooks.start, { projectId: plan.projectId, runId, workspacePath: workspace.path, branch: workspace.branch, baseCommit: workspace.baseCommit, exitReason: "running" });
+    const startResult = await hookRunner.runStart(executionHooks.start, { projectId: plan.projectId, runId: run.id, workspacePath: workspace.path, branch: workspace.branch, baseCommit: workspace.baseCommit, exitReason: "running" });
     this.recordHookExecutions(run.id, startResult);
     if (startResult.status === "failed") {
       run.status = "BLOCKED";
       thread.state = "BLOCKED";
       this.setThreadState(thread.id, "BLOCKED");
       this.append(thread.id, "HOOK_FAILED", { hook: "start", stderr: startResult.result?.stderr ?? "" });
-      updatePlanStatus(this.options.store, plan, { runId, status: "BLOCKED", attentionReason: "start hook failed", lastEventAt: this.options.store.now() }, "start hook failed");
+      updatePlanStatus(this.options.store, plan, { runId: run.id, status: "BLOCKED", attentionReason: "start hook failed", lastEventAt: this.options.store.now() }, "start hook failed");
       this.options.store.saveRun(run);
       return run;
     }
@@ -4692,7 +4818,7 @@ export class Scheduler {
     run.startedAt = this.options.store.now();
     this.append(thread.id, startResult.status === "skipped" ? "HOOK_SKIPPED" : "HOOK_COMPLETED", { hook: "start" });
     if (!revision.projectConfigSnapshot) this.append(thread.id, "TASK_PROGRESS", { action: "legacy_plan_revision", reason: "Project configuration snapshot unavailable; using legacy/global runtime settings" });
-    updatePlanStatus(this.options.store, plan, { runId, status: "IN_PROGRESS", lastEventAt: run.startedAt });
+    updatePlanStatus(this.options.store, plan, { runId: run.id, status: "IN_PROGRESS", lastEventAt: run.startedAt });
     this.options.store.saveRun(run);
     if (this.options.executor) {
       try {
@@ -4704,7 +4830,7 @@ export class Scheduler {
         this.setThreadState(thread.id, "BLOCKED");
         const reason = error instanceof Error ? error.message : String(error);
         this.append(thread.id, "RECOVERY", { action: "executor_loop_start_failed", reason });
-        updatePlanStatus(this.options.store, plan, { runId, status: "BLOCKED", attentionReason: reason, lastEventAt: this.options.store.now() }, reason);
+        updatePlanStatus(this.options.store, plan, { runId: run.id, status: "BLOCKED", attentionReason: reason, lastEventAt: this.options.store.now() }, reason);
         this.options.store.saveRun(run);
       }
     }
@@ -4768,14 +4894,6 @@ export class Scheduler {
   private hookRunnerFor(revision: PlanRevisionV2 | undefined): LifecycleHookRunner {
     const snapshot = revision?.projectConfigSnapshot;
     return snapshot && this.options.hookRunnerFactory ? this.options.hookRunnerFactory(snapshot) : this.options.hooks;
-  }
-
-  /** 先按 Project 快照限制并发，再按 Runtime 全局上限限制所有 Project 的总槽位。 */
-  private assertConcurrency(projectId: string, revision: PlanRevisionV2): void {
-    const activeRuns = this.options.store.listRuns().filter((run) => EXECUTION_SLOT_RUN_STATUSES.has(run.status));
-    const projectLimit = revision.projectConfigSnapshot?.settings.concurrency.maxParallelRuns;
-    if (projectLimit !== undefined && activeRuns.filter((run) => run.projectId === projectId).length >= projectLimit) throw new Error(`Project ${projectId} concurrency limit reached (${projectLimit})`);
-    if (this.options.globalConcurrency !== undefined && activeRuns.length >= this.options.globalConcurrency) throw new Error(`Global concurrency limit reached (${this.options.globalConcurrency})`);
   }
 
   /** 暂停活动 Run；暂停事实写入 ExecutionThread，便于恢复和审计。 */

@@ -103,6 +103,7 @@ a { color: inherit; text-decoration: none; }
 .context-plan-card .candidate-actions { flex-wrap: nowrap; }
 .context-plan-card .candidate-actions .el-button { flex: 1 1 0; min-width: 0; margin-left: 0; justify-content: center; }
 .context-plan-list { display: grid; gap: 10px; margin-top: 11px; }
+.thread-plan-entry { display: grid; gap: 5px; min-width: 0; }.thread-plan-requirement { overflow: hidden; padding: 0 3px; color: #8fa6c4; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
 .context-plan-row { padding: 13px; border: 1px solid #dfe7f2; border-radius: 8px; background: #fff; box-shadow: 0 2px 9px rgba(52, 83, 133, .04); }
 .context-plan-row:hover { border-color: #b8caf0; box-shadow: 0 4px 13px rgba(52, 83, 133, .08); }
 .context-plan-row.active-run-row { border-color: #cfddf8; background: #fbfdff; }

@@ -19,6 +19,7 @@ export type PlanDispatchStatus = "QUEUED" | "WAITING" | "DISPATCHING" | "RUNNING
 export type PlanDispatchWaitReason = "WAITING_DEPENDENCY" | "WAITING_CONFLICT" | "WAITING_PROJECT_CAPACITY" | "WAITING_GLOBAL_CAPACITY" | "NEEDS_CONFIGURATION";
 export type PlanDispatchState = {
   planId: string;
+  revision?: number;
   projectId: string;
   status: PlanDispatchStatus;
   waitReason: PlanDispatchWaitReason | null;
@@ -27,6 +28,9 @@ export type PlanDispatchState = {
   attempt: number;
   updatedAt: string;
   lastError: string | null;
+  phase?: "VALIDATING" | "VALIDATION_FAILED" | "FROZEN" | "ENQUEUING" | "ENQUEUE_FAILED" | "ENQUEUED" | "DISPATCHING" | "DISPATCH_FAILED" | "DISPATCHED" | "STARTING_RUN" | "RUN_STARTED" | "WAITING" | "RUN_START_FAILED" | "NEEDS_REVIEW" | "ATTENTION" | "COMPLETED";
+  automatic?: boolean;
+  confirmedBy?: string | null;
 };
 
 export type AgentLoopDiagnostics = {

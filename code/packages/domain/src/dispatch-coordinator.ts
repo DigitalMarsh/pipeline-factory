@@ -32,8 +32,27 @@ export type PlanDispatchWaitReason =
   | "WAITING_GLOBAL_CAPACITY"
   | "NEEDS_CONFIGURATION";
 
+export type PlanDispatchPhase =
+  | "VALIDATING"
+  | "VALIDATION_FAILED"
+  | "FROZEN"
+  | "ENQUEUING"
+  | "ENQUEUE_FAILED"
+  | "ENQUEUED"
+  | "DISPATCHING"
+  | "DISPATCH_FAILED"
+  | "DISPATCHED"
+  | "STARTING_RUN"
+  | "RUN_STARTED"
+  | "WAITING"
+  | "RUN_START_FAILED"
+  | "NEEDS_REVIEW"
+  | "ATTENTION"
+  | "COMPLETED";
+
 export type PlanDispatchState = Readonly<{
   planId: string;
+  revision?: number;
   projectId: string;
   status: PlanDispatchStatus;
   waitReason: PlanDispatchWaitReason | null;
@@ -42,6 +61,10 @@ export type PlanDispatchState = Readonly<{
   attempt: number;
   updatedAt: string;
   lastError: string | null;
+  /** 持久化的自动确认/派发阶段；旧的人工入队记录可能没有此字段。 */
+  phase?: PlanDispatchPhase;
+  automatic?: boolean;
+  confirmedBy?: string | null;
 }>;
 
 export type PlanDispatchCoordinatorOptions = {
@@ -75,6 +98,7 @@ export class PlanDispatchCoordinator {
   private readonly unsubscribe: (() => void) | undefined;
   private wakePromise: Promise<PlanDispatchState[]> | null = null;
   private readonly verifyingRuns = new Set<string>();
+  private readonly confirmingPlans = new Set<string>();
   private wakeTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly options: PlanDispatchCoordinatorOptions) {
@@ -98,12 +122,91 @@ export class PlanDispatchCoordinator {
     const plan = this.options.plans.dispatch(planId);
     const existing = this.options.store.getDispatchState(plan.id);
     if (!existing || existing.status === "BLOCKED" || existing.status === "COMPLETED") {
-      this.saveState(this.newQueuedState(plan));
+      this.saveState({ ...(existing ?? this.newQueuedState(plan)), ...this.newQueuedState(plan), ...(existing?.automatic ? { automatic: true, confirmedBy: existing.confirmedBy } : {}), phase: "DISPATCHED" });
     }
     await this.wake();
     const settled = this.state(plan.id);
     if (this.options.store.getPlan(plan.id)?.status === "DISPATCHED" && !settled?.runId) await this.wake();
     return { plan: this.options.store.getPlan(plan.id) ?? plan, state: this.state(plan.id) as PlanDispatchState };
+  }
+
+  /** Confirm、冻结、入队、派发和 Run 启动共用一个持久化、可重试的服务端入口。 */
+  async confirmAndDispatch(planId: string, revision: number, confirmedBy: string, wakeAfter = true): Promise<{ plan: CandidatePlan; run: Run | null; state: PlanDispatchState }> {
+    const plan = this.options.plans.get(planId);
+    if (plan.revision !== revision) throw new Error("REVISION_NOT_LATEST");
+    if (this.confirmingPlans.has(planId)) {
+      const current = this.options.store.getPlan(planId) ?? plan;
+      const state = this.state(planId) ?? this.newQueuedState(current);
+      return { plan: current, run: state.runId ? this.options.store.getRun(state.runId) ?? null : null, state };
+    }
+    const existingState = this.state(planId);
+    const existingRun = this.options.store.listRuns().find((run) => run.planId === planId && run.planRevision === revision);
+    const sameRevisionState = existingState?.revision === revision;
+    if (existingRun && existingState?.phase !== "RUN_START_FAILED") {
+      const recoveredState: PlanDispatchState = {
+        ...(sameRevisionState ? existingState! : this.newQueuedState(plan)),
+        revision,
+        automatic: true,
+        confirmedBy: existingState?.confirmedBy ?? confirmedBy,
+        runId: existingRun.id,
+      };
+      this.saveState(recoveredState);
+      await this.syncRun(existingRun);
+      return { plan: this.options.store.getPlan(planId) ?? plan, run: existingRun, state: this.state(planId) ?? recoveredState };
+    }
+
+    this.confirmingPlans.add(planId);
+    let state: PlanDispatchState = {
+      ...(sameRevisionState ? existingState! : this.newQueuedState(plan)),
+      revision,
+      automatic: true,
+      confirmedBy: sameRevisionState ? existingState?.confirmedBy ?? confirmedBy : confirmedBy,
+      runId: sameRevisionState ? existingState?.runId ?? null : null,
+      attempt: (existingState?.attempt ?? 0) + 1,
+      phase: "VALIDATING",
+      status: "QUEUED",
+      waitReason: null,
+      lastError: null,
+      updatedAt: this.options.store.now(),
+    };
+    this.saveState(state);
+    try {
+      let current = this.options.plans.get(planId);
+      if (["DRAFT", "DESIGNED", "PLANNED"].includes(current.status)) current = this.options.plans.confirm(planId, state.confirmedBy ?? confirmedBy, revision);
+      state = { ...state, phase: "FROZEN", updatedAt: this.options.store.now(), lastError: null };
+      this.saveState(state);
+
+      if (current.status === "READY") {
+        state = { ...state, phase: "ENQUEUING", updatedAt: this.options.store.now() };
+        this.saveState(state);
+        current = this.options.plans.enqueue(planId);
+      }
+      state = { ...state, phase: "ENQUEUED", updatedAt: this.options.store.now(), lastError: null };
+      this.saveState(state);
+
+      if (current.status === "ENQUEUED") {
+        state = { ...state, phase: "DISPATCHING", updatedAt: this.options.store.now() };
+        this.saveState(state);
+        current = this.options.plans.dispatch(planId);
+      }
+      state = { ...state, phase: "DISPATCHED", updatedAt: this.options.store.now(), lastError: null };
+      this.saveState(state);
+      if (wakeAfter) await this.wake();
+      const settledPlan = this.options.store.getPlan(planId) ?? current;
+      const settledState = this.state(planId) ?? state;
+      return { plan: settledPlan, run: settledState.runId ? this.options.store.getRun(settledState.runId) ?? null : null, state: settledState };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const phase: PlanDispatchPhase = state.phase === "VALIDATING" ? "VALIDATION_FAILED" : state.phase === "ENQUEUING" ? "ENQUEUE_FAILED" : state.phase === "DISPATCHING" ? "DISPATCH_FAILED" : "RUN_START_FAILED";
+      state = { ...state, phase, status: "BLOCKED", lastError: message, updatedAt: this.options.store.now() };
+      this.saveState(state);
+      const latest = this.options.store.getPlan(planId) ?? plan;
+      const run = this.options.store.listRuns().find((item) => item.planId === planId && item.planRevision === revision) ?? null;
+      if (run) state = { ...state, runId: run.id };
+      return { plan: latest, run, state };
+    } finally {
+      this.confirmingPlans.delete(planId);
+    }
   }
 
   /**
@@ -157,6 +260,7 @@ export class PlanDispatchCoordinator {
   }
 
   private async performWake(): Promise<PlanDispatchState[]> {
+    await this.resumeAutomaticIntents();
     this.reconcileStoredPlans();
     for (const run of this.options.store.listRuns()) await this.syncRun(run);
 
@@ -173,6 +277,20 @@ export class PlanDispatchCoordinator {
     return this.states();
   }
 
+  /** 恢复进程中断在确认、入队或派发边界的自动流程。 */
+  private async resumeAutomaticIntents(): Promise<void> {
+    const recoverable = new Set<PlanDispatchPhase>(["VALIDATING", "FROZEN", "ENQUEUING", "ENQUEUED", "DISPATCHING", "DISPATCHED", "STARTING_RUN", "RUN_START_FAILED"]);
+    for (const state of this.options.store.listDispatchStates()) {
+      if (!state.automatic || !state.phase || !recoverable.has(state.phase) || this.confirmingPlans.has(state.planId)) continue;
+      const plan = this.options.store.getPlan(state.planId);
+      if (!plan) continue;
+      if (state.revision !== undefined && state.revision !== plan.revision) continue;
+      const run = this.options.store.listRuns().find((item) => item.planId === state.planId && item.planRevision === plan.revision);
+      if (run && run.status !== "STARTING") continue;
+      await this.confirmAndDispatch(state.planId, plan.revision, state.confirmedBy ?? "local-user", false);
+    }
+  }
+
   private reconcileStoredPlans(): void {
     for (const plan of this.options.store.listPlans()) {
       const state = this.state(plan.id);
@@ -185,17 +303,17 @@ export class PlanDispatchCoordinator {
   private async dispatchOne(plan: CandidatePlan): Promise<void> {
     const revision = this.options.store.getRevision(plan.id, plan.revision);
     if (!revision) {
-      this.saveState(this.stateForPlan(this.state(plan.id) ?? this.newQueuedState(plan), "BLOCKED", null, `Plan revision ${plan.id}@${plan.revision} is missing`));
+      this.saveState({ ...this.stateForPlan(this.state(plan.id) ?? this.newQueuedState(plan), "BLOCKED", null, `Plan revision ${plan.id}@${plan.revision} is missing`), phase: "ATTENTION" });
       return;
     }
     const wait = this.evaluateWait(plan, revision);
     if (wait) {
-      this.saveState(this.stateForPlan(this.state(plan.id) ?? this.newQueuedState(plan), "WAITING", wait.reason, wait.message));
+      this.saveState({ ...this.stateForPlan(this.state(plan.id) ?? this.newQueuedState(plan), "WAITING", wait.reason, wait.message), phase: "WAITING" });
       return;
     }
 
     const current = this.state(plan.id) ?? this.newQueuedState(plan);
-    this.saveState({ ...current, status: "DISPATCHING", waitReason: null, updatedAt: this.options.store.now(), lastError: null });
+    this.saveState({ ...current, status: "DISPATCHING", phase: "STARTING_RUN", waitReason: null, updatedAt: this.options.store.now(), lastError: null });
     try {
       const run = await this.options.scheduler.start(plan.id, this.options.store.getProject(plan.projectId)?.settings.hooks ?? {});
       await this.syncRun(run);
@@ -208,9 +326,10 @@ export class PlanDispatchCoordinator {
           ? this.evaluateWait(refreshed, revision)
           : undefined;
       if (waitAfterFailure) {
-        this.saveState(this.stateForPlan(current, "WAITING", waitAfterFailure.reason, waitAfterFailure.message));
+        this.saveState({ ...this.stateForPlan(current, "WAITING", waitAfterFailure.reason, waitAfterFailure.message), phase: "WAITING" });
       } else {
-        this.saveState(this.stateForPlan(current, "BLOCKED", null, message));
+        const existingRun = this.options.store.listRuns().find((run) => run.planId === plan.id && run.planRevision === plan.revision);
+        this.saveState({ ...this.stateForPlan(current, "BLOCKED", null, message), phase: existingRun ? "ATTENTION" : "RUN_START_FAILED", ...(existingRun ? { runId: existingRun.id } : {}) });
       }
     }
   }
@@ -243,13 +362,6 @@ export class PlanDispatchCoordinator {
       if (conflictingRun) return { reason: "WAITING_CONFLICT", message: `Waiting for conflicting Run ${conflictingRun.id}` };
     }
 
-    const projectLimit = snapshot?.settings.concurrency.maxParallelRuns;
-    if (projectLimit !== undefined && activeRuns.filter((run) => run.projectId === plan.projectId).length >= projectLimit) {
-      return { reason: "WAITING_PROJECT_CAPACITY", message: `Project ${plan.projectId} capacity is full (${projectLimit})` };
-    }
-    if (this.options.globalConcurrency !== undefined && activeRuns.length >= this.options.globalConcurrency) {
-      return { reason: "WAITING_GLOBAL_CAPACITY", message: `Global capacity is full (${this.options.globalConcurrency})` };
-    }
     return undefined;
   }
 
@@ -261,22 +373,22 @@ export class PlanDispatchCoordinator {
     switch (run.status) {
       case "STARTING":
       case "IN_PROGRESS":
-        this.saveState(this.stateForRun(current, run, "RUNNING", null));
+        this.saveState({ ...this.stateForRun(current, run, "RUNNING", null), phase: "RUN_STARTED" });
         return;
       case "RECOVERING":
-        this.saveState(this.stateForRun(current, run, "BLOCKED", null, plan?.attentionReason ?? `Run ${run.id} requires recovery`));
+        this.saveState({ ...this.stateForRun(current, run, "BLOCKED", null, plan?.attentionReason ?? `Run ${run.id} requires recovery`), phase: "ATTENTION" });
         return;
       case "VERIFYING":
-        this.saveState(this.stateForRun(current, run, "VERIFYING", null));
+        this.saveState({ ...this.stateForRun(current, run, "VERIFYING", null), phase: "RUN_STARTED" });
         return;
       case "READY_FOR_VERIFY": {
         if (!this.options.verify) {
-          this.saveState(this.stateForRun(current, run, "NEEDS_REVIEW", null, "Verification executor is not configured"));
+          this.saveState({ ...this.stateForRun(current, run, "NEEDS_REVIEW", null, "Verification executor is not configured"), phase: "NEEDS_REVIEW" });
           return;
         }
         if (this.verifyingRuns.has(run.id)) return;
         this.verifyingRuns.add(run.id);
-        this.saveState(this.stateForRun(current, run, "VERIFYING", null));
+        this.saveState({ ...this.stateForRun(current, run, "VERIFYING", null), phase: "RUN_STARTED" });
         try {
           const revision = this.options.store.getRevision(run.planId, run.planRevision);
           if (!revision) throw new Error(`Plan revision ${run.planId}@${run.planRevision} is missing`);
@@ -285,23 +397,23 @@ export class PlanDispatchCoordinator {
           await this.syncRun(latest);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          this.saveState(this.stateForRun(current, run, "BLOCKED", null, message));
+          this.saveState({ ...this.stateForRun(current, run, "BLOCKED", null, message), phase: "ATTENTION" });
         } finally {
           this.verifyingRuns.delete(run.id);
         }
         return;
       }
       case "MERGE_READY":
-        this.saveState(this.stateForRun(current, run, plan?.status === "MERGED" ? "COMPLETED" : "NEEDS_REVIEW", null));
+        this.saveState({ ...this.stateForRun(current, run, plan?.status === "MERGED" ? "COMPLETED" : "NEEDS_REVIEW", null), phase: plan?.status === "MERGED" ? "COMPLETED" : "NEEDS_REVIEW" });
         return;
       case "BLOCKED":
       case "NEEDS_PLAN_CHANGE":
       case "STALE":
       case "CANCELLED":
-        this.saveState(this.stateForRun(current, run, "BLOCKED", null, plan?.attentionReason ?? `Run ${run.id} is ${run.status}`));
+        this.saveState({ ...this.stateForRun(current, run, "BLOCKED", null, plan?.attentionReason ?? `Run ${run.id} is ${run.status}`), phase: "ATTENTION" });
         return;
       default:
-        if (plan?.status === "MERGED") this.saveState(this.stateForRun(current, run, "COMPLETED", null));
+        if (plan?.status === "MERGED") this.saveState({ ...this.stateForRun(current, run, "COMPLETED", null), phase: "COMPLETED" });
     }
   }
 
@@ -325,7 +437,7 @@ export class PlanDispatchCoordinator {
 
   private newQueuedState(plan: CandidatePlan): PlanDispatchState {
     const queuedAt = plan.dispatchedAt ?? plan.queuedAt ?? plan.createdAt;
-    return { planId: plan.id, projectId: plan.projectId, status: "QUEUED", waitReason: null, queuedAt, runId: plan.runId, attempt: 0, updatedAt: this.options.store.now(), lastError: null };
+    return { planId: plan.id, revision: plan.revision, projectId: plan.projectId, status: "QUEUED", waitReason: null, queuedAt, runId: plan.runId, attempt: 0, updatedAt: this.options.store.now(), lastError: null };
   }
 
   private stateForPlan(state: PlanDispatchState, status: PlanDispatchStatus, waitReason: PlanDispatchWaitReason | null, lastError: string | null): PlanDispatchState {
@@ -339,7 +451,7 @@ export class PlanDispatchCoordinator {
   /** 只有状态真正变化才写库并广播，避免流式事件把同一状态反复写成事件风暴。 */
   private saveState(state: PlanDispatchState): void {
     const current = this.options.store.getDispatchState(state.planId);
-    if (current && current.status === state.status && current.waitReason === state.waitReason && current.runId === state.runId && current.attempt === state.attempt && current.lastError === state.lastError && current.queuedAt === state.queuedAt) return;
+    if (current && current.revision === state.revision && current.status === state.status && current.waitReason === state.waitReason && current.runId === state.runId && current.attempt === state.attempt && current.lastError === state.lastError && current.queuedAt === state.queuedAt && current.phase === state.phase && current.automatic === state.automatic && current.confirmedBy === state.confirmedBy) return;
     const saved = this.options.store.saveDispatchState(state);
     this.options.store.appendEvent({ type: "plan.dispatch.state.changed", aggregateId: state.planId, payload: saved });
   }

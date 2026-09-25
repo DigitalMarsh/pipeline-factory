@@ -7,7 +7,8 @@ import type { Plan, Project } from "../types";
 
 vi.mock("../api", () => ({
   api: {
-    plans: vi.fn(),
+    candidatePlans: vi.fn(),
+    projectTasks: vi.fn(),
     reconcileProjectMerges: vi.fn(),
     startPlanRun: vi.fn(),
     cancelRun: vi.fn(),
@@ -35,7 +36,7 @@ function project(): Project {
 }
 
 function plan(): Plan {
-  return { id: "plan-1", title: "Viewable plan", revision: 2, status: "DISPATCHED", projectId: "project-1", sourceExplorerThreadId: "explorer-1", queuedAt: "2026-09-05T00:00:00.000Z", dispatchedAt: "2026-09-05T00:01:00.000Z", runId: null, lastEventAt: "2026-09-05T00:01:00.000Z", attentionReason: null };
+  return { id: "plan-1", title: "Viewable plan", revision: 2, status: "DRAFT", projectId: "project-1", sourceExplorerThreadId: "explorer-1", queuedAt: null, dispatchedAt: null, runId: null, lastEventAt: "2026-09-05T00:01:00.000Z", attentionReason: null };
 }
 
 function mountPanel(inputPlan = plan()) {
@@ -57,7 +58,8 @@ describe("PlanCenterPanel", () => {
   it("emits the selected plan when View full plan is clicked", async () => {
     const expected = plan();
     vi.mocked(api.reconcileProjectMerges).mockResolvedValue({ projectId: "project-1", checkedAt: new Date().toISOString(), items: [] });
-    vi.mocked(api.plans).mockResolvedValue({ items: [expected], nextCursor: null });
+    vi.mocked(api.candidatePlans).mockResolvedValue({ items: [expected] });
+    vi.mocked(api.projectTasks).mockResolvedValue({ items: [] });
     const mounted = mountPanel();
     await nextTick();
     await nextTick();
@@ -75,7 +77,8 @@ describe("PlanCenterPanel", () => {
 
   it("renders the Source thread as an encoded Explorer link", async () => {
     const expected = { ...plan(), projectId: "project/1", sourceExplorerThreadId: "explorer/source 1" };
-    vi.mocked(api.plans).mockResolvedValue({ items: [expected], nextCursor: null });
+    vi.mocked(api.candidatePlans).mockResolvedValue({ items: [expected] });
+    vi.mocked(api.projectTasks).mockResolvedValue({ items: [] });
     const mounted = mountPanel(expected);
     await nextTick();
     await nextTick();
@@ -90,9 +93,10 @@ describe("PlanCenterPanel", () => {
     mounted.host.remove();
   });
 
-  it("emits an inline Run request instead of linking to the standalone Run page", async () => {
-    const expected = { ...plan(), runId: "run-1", explorerPlanId: "explorer-plan-1" };
-    vi.mocked(api.plans).mockResolvedValue({ items: [expected], nextCursor: null });
+  it("emits an inline Run request from the Project tasks tab", async () => {
+    const expected = { ...plan(), status: "IN_PROGRESS" as const, runId: "run-1", explorerPlanId: "explorer-plan-1" };
+    vi.mocked(api.candidatePlans).mockResolvedValue({ items: [] });
+    vi.mocked(api.projectTasks).mockResolvedValue({ items: [expected] });
     const opened: Plan[] = [];
     const host = document.createElement("div");
     document.body.appendChild(host);
@@ -107,6 +111,9 @@ describe("PlanCenterPanel", () => {
     await nextTick();
     await nextTick();
     await nextTick();
+    await nextTick();
+
+    [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("任务"))?.click();
     await nextTick();
 
     const runButton = [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("run-1"));

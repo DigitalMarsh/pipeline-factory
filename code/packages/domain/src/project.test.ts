@@ -210,16 +210,25 @@ describe("ProjectService", () => {
     const firstProjects = new ProjectService(firstStore);
     firstProjects.create({ id: "project-sqlite", name: "SQLite", shortName: "SQL", repoRoot: "/repo/sqlite", defaultBranch: "main", worktreeRoot: "/tmp/sqlite-worktrees" });
     firstProjects.update("project-sqlite", { name: "SQLite Updated", expectedConfigVersion: 1 });
+    const firstPlans = new PlanService(firstStore, firstProjects);
+    const thread = firstPlans.registerThread({ id: "sqlite-candidates", projectId: "project-sqlite", parentThreadId: null });
+    const requirement = firstStore.listExplorerPlans(thread.id)[0]!;
+    const candidate = firstPlans.createCandidatePlan({ projectId: "project-sqlite", sourceExplorerThreadId: thread.id, explorerPlanId: requirement.id, title: "Saved candidate" });
+    firstPlans.selectCandidate(requirement.id, null);
     firstStore.close();
 
     const reopened = new SqlitePipelineStore(databasePath);
     const project = reopened.getProject("project-sqlite");
     const history = reopened.listProjectConfigRevisions("project-sqlite");
+    const restoredRequirement = reopened.listExplorerPlans(thread.id)[0];
+    const candidateVersions = reopened.listCandidateVersions(candidate.id);
     reopened.close();
     rmSync(directory, { recursive: true, force: true });
 
     expect(project).toMatchObject({ id: "project-sqlite", name: "SQLite Updated", shortName: "SQL", configVersion: 2 });
     expect(history.map((item) => item.version)).toEqual([1, 2]);
+    expect(restoredRequirement).toMatchObject({ candidatePlanId: null, newPlanRequested: true });
+    expect(candidateVersions).toMatchObject([{ id: candidate.id, revision: 1, title: "Saved candidate", status: "DRAFT" }]);
   });
 
   it("runs confirmed plans with the immutable project snapshot adapters", async () => {
