@@ -181,12 +181,10 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
   void explorer.backfillTitles();
   void explorer.recoverQueuedTurns();
   const scheduler = options.scheduler ?? (options.config ? createDefaultScheduler(store, options.config, model, mcpRegistry, pluginRegistry, options.computerUse) : undefined);
-  const globalConcurrency = options.config?.runtime.globalConcurrency ?? scheduler?.globalConcurrency();
   const dispatchCoordinator = scheduler ? new PlanDispatchCoordinator({
     store,
     plans,
     scheduler,
-    ...(globalConcurrency === undefined ? {} : { globalConcurrency }),
     ...(verificationExecutor ? { verify: (run, revision) => verifier.verify(run, revision, verificationExecutor) } : {}),
   }) : undefined;
   if (dispatchCoordinator) void dispatchCoordinator.wake();
@@ -231,7 +229,6 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
         settings: {
         commands: options.config.project.commands.map((command) => ({ ...command, argv: command.argv as [string, ...string[]] })),
         concurrency: {
-          maxParallelRuns: options.config.runtime.projectConcurrency,
           defaultTimeoutMs: options.config.runtime.defaultTimeoutMs,
           executionTimeoutMs: options.config.runtime.executionTimeoutMs,
           maxAutoContinuationTurns: options.config.runtime.maxAutoContinuationTurns,
@@ -279,6 +276,14 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       return null;
     }
     return project;
+  };
+  const confirmPlanFlow = async (planId: string, revision: number, actorId: string) => {
+    if (dispatchCoordinator) {
+      const result = await dispatchCoordinator.confirmAndDispatch(planId, revision, actorId);
+      return { plan: result.plan, run: result.run, dispatch: result.state, confirmation: { stage: result.state.phase ?? result.state.status, attempt: result.state.attempt, retryable: !result.run && result.state.status !== "COMPLETED" } };
+    }
+    const plan = plans.confirm(planId, actorId, revision);
+    return { plan, run: null, dispatch: null, confirmation: { stage: "FROZEN", attempt: 1, retryable: true } };
   };
   app.addHook("onClose", async () => {
     dispatchCoordinator?.dispose();
@@ -685,7 +690,10 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     const steps = loops.flatMap((loop) => store.listAgentLoopSteps(loop.id)).filter((step) => loopIds.has(step.loopId));
     const activity = projectExplorerActivity({ turns, loops, steps });
     const selectedCandidate = explorerPlan.candidatePlanId ? store.getPlan(explorerPlan.candidatePlanId) : undefined;
-    const candidate = selectedCandidate?.status === "DRAFT" ? selectedCandidate : null;
+    const legacyCandidate = !explorerPlan.newPlanRequested && !explorerPlan.candidatePlanId
+      ? store.listPlans().filter((plan) => plan.projectId === explorer.projectId && plan.sourceExplorerThreadId === explorer.id && plan.explorerPlanId === explorerPlan.id && plan.status === "DRAFT").sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
+      : undefined;
+    const candidate = selectedCandidate?.status === "DRAFT" ? selectedCandidate : legacyCandidate ?? null;
     const draft = explorer.activeRevisionDraftId ? store.getRevisionDraft(explorer.activeRevisionDraftId) : undefined;
     const revisionDraft = draft && draft.explorerPlanId === explorerPlan.id && ["EDITING", "READY_TO_CONFIRM", "BASE_CHANGED"].includes(draft.status) ? draft : null;
     return { explorerPlan, turns, activity, inputRequests: store.listInputRequests(explorer.id).filter((item) => item.explorerPlanId === explorerPlan.id), candidate: candidate ? { ...candidate, ...planProjection(store, candidate) } : null, revisionDraft, loops: loops.map((loop) => projectAgentLoopResponse(store, loop)), lastEventSequence: store.getLastEventSequence(explorer.id) };
@@ -853,6 +861,39 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     return { items: decoratePlanRows(store, confirmedPlans) };
   });
 
+  app.get("/api/v4/projects/:projectId/explorers/:explorerId/all-plans", async (request, reply) => {
+    const params = projectExplorerParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    const explorer = store.getThread(params.data.explorerId);
+    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
+    return { items: plans.listExplorerThreadPlans(explorer.id).map((plan) => ({ ...plan, ...planProjection(store, plan), dispatch: store.getDispatchState(plan.id) ?? null })) };
+  });
+
+  app.get("/api/v4/projects/:projectId/candidate-plans", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    if (!store.getProject(params.data.projectId)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
+    return { items: plans.listProjectPlanCandidates(params.data.projectId).map((plan) => ({ ...plan, ...planProjection(store, plan), dispatch: store.getDispatchState(plan.id) ?? null })) };
+  });
+
+  app.get("/api/v4/projects/:projectId/tasks", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    if (!store.getProject(params.data.projectId)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
+    return { items: plans.listProjectTasks(params.data.projectId).map((plan) => ({ ...plan, ...planProjection(store, plan), dispatch: store.getDispatchState(plan.id) ?? null })) };
+  });
+
+  app.post("/api/v4/projects/:projectId/explorers/:explorerId/explorer-plans/:explorerPlanId/selected-plan", async (request, reply) => {
+    const params = projectExplorerPlanParams.safeParse(request.params);
+    const body = z.object({ planId: z.string().min(1).nullable() }).safeParse(request.body ?? {});
+    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid selected Plan" });
+    const explorer = store.getThread(params.data.explorerId);
+    const requirement = store.getExplorerPlan(params.data.explorerPlanId);
+    if (!explorer || explorer.projectId !== params.data.projectId || !requirement || requirement.explorerThreadId !== explorer.id || requirement.projectId !== explorer.projectId) return reply.code(404).send({ error: "ExplorerPlan not found" });
+    try { return { explorerPlan: plans.selectCandidate(requirement.id, body.data.planId) }; }
+    catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "Plan cannot be selected" }); }
+  });
+
   app.get("/api/v4/projects/:projectId/explorers/:explorerId/candidate", async (request, reply) => {
     const params = projectExplorerParams.safeParse(request.params);
     const query = explorerCandidateQuery.safeParse(request.query ?? {});
@@ -864,7 +905,12 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       const explorerPlan = store.getExplorerPlan(explorerPlanId);
       if (!explorerPlan || explorerPlan.explorerThreadId !== explorer.id) return reply.code(404).send({ error: "ExplorerPlan not found" });
     }
-    const candidate = store.listPlans().filter((plan) => plan.sourceExplorerThreadId === explorer.id && (!explorerPlanId || plan.explorerPlanId === explorerPlanId) && plan.status === "DRAFT" && plan.queuedAt === null).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+    const requirement = explorerPlanId ? store.getExplorerPlan(explorerPlanId) : explorer.activeExplorerPlanId ? store.getExplorerPlan(explorer.activeExplorerPlanId) : undefined;
+    const selected = requirement?.candidatePlanId ? store.getPlan(requirement.candidatePlanId) : undefined;
+    const legacyCandidate = requirement && !requirement.newPlanRequested && !requirement.candidatePlanId
+      ? store.listPlans().filter((plan) => plan.projectId === explorer.projectId && plan.sourceExplorerThreadId === explorer.id && plan.explorerPlanId === requirement.id && plan.status === "DRAFT").sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
+      : undefined;
+    const candidate = selected?.status === "DRAFT" && selected.sourceExplorerThreadId === explorer.id ? selected : legacyCandidate;
     if (!candidate) return reply.code(404).send({ error: "Candidate plan not found" });
     return { plan: { ...candidate, ...planProjection(store, candidate) } };
   });
@@ -978,6 +1024,29 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     } catch { return reply.code(404).send({ code: "PLAN_NOT_FOUND", error: "Plan not found" }); }
   });
 
+  app.get("/api/v4/plans/:planId/candidate-versions", async (request, reply) => {
+    const params = planIdParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    try {
+      const plan = plans.get(params.data.planId);
+      if (ensurePlanProject(plan.projectId, reply) === null) return;
+      const items = store.listCandidateVersions(plan.id).map((version) => ({ ...version, isLatest: version.revision === plan.revision, readOnly: version.revision !== plan.revision || plan.status !== "DRAFT" }));
+      return { planId: plan.id, latestRevision: plan.revision, items };
+    } catch { return reply.code(404).send({ code: "PLAN_NOT_FOUND", error: "Plan not found" }); }
+  });
+
+  app.get("/api/v4/plans/:planId/candidate-versions/:revision", async (request, reply) => {
+    const params = planRevisionParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    try {
+      const plan = plans.get(params.data.planId);
+      if (ensurePlanProject(plan.projectId, reply) === null) return;
+      const version = store.listCandidateVersions(plan.id).find((item) => item.revision === params.data.revision);
+      if (!version) return reply.code(404).send({ code: "CANDIDATE_VERSION_NOT_FOUND", error: "Candidate version not found" });
+      return { planId: plan.id, latestRevision: plan.revision, version, readOnly: version.revision !== plan.revision || plan.status !== "DRAFT" };
+    } catch { return reply.code(404).send({ code: "PLAN_NOT_FOUND", error: "Plan not found" }); }
+  });
+
   app.get("/api/v4/plans/:planId/revisions/:revision", async (request, reply) => {
     const params = planRevisionParams.safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
@@ -1032,7 +1101,10 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     const draft = store.getRevisionDraft(params.data.draftId);
     if (!draft || draft.planId !== params.data.planId) return reply.code(404).send({ code: "REVISION_DRAFT_NOT_FOUND", error: "RevisionDraft not found" });
     if (ensurePlanProject(draft.projectId, reply, true) === null) return;
-    try { return { plan: plans.confirmRevisionDraft(draft.draftId, body.data.actorId) }; }
+    try {
+      const plan = plans.confirmRevisionDraft(draft.draftId, body.data.actorId);
+      return await confirmPlanFlow(plan.id, plan.revision, body.data.actorId);
+    }
     catch (error) { const message = error instanceof Error ? error.message : String(error); return reply.code(409).send({ code: message, error: message }); }
   });
 
@@ -1089,16 +1161,34 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     }
   });
 
+  app.post("/api/v4/plans/:planId/revisions/:revision/confirm", async (request, reply) => {
+    const params = planRevisionParams.safeParse(request.params);
+    const body = actorBody.safeParse(request.body ?? {});
+    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid versioned confirmation request" });
+    try {
+      const plan = plans.get(params.data.planId);
+      if (ensurePlanProject(plan.projectId, reply, true) === null) return;
+      if (plan.revision !== params.data.revision) return reply.code(409).send({ code: "REVISION_NOT_LATEST", error: "Only the latest candidate version can be confirmed" });
+      return await confirmPlanFlow(plan.id, params.data.revision, body.data.actorId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Plan cannot be confirmed";
+      return reply.code(message === "REVISION_NOT_LATEST" ? 409 : 409).send({ code: message, error: message, stage: message.includes("not found") ? "VALIDATING" : "VALIDATION_FAILED" });
+    }
+  });
+
   app.post("/api/v4/plans/:planId/confirm", async (request, reply) => {
     const params = planIdParams.safeParse(request.params);
-    const body = actorBody.safeParse(request.body ?? {});
+    const body = z.object({ actorId: z.string().min(1).default("local-user"), revision: z.number().int().positive().optional() }).safeParse(request.body ?? {});
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid confirmation request" });
     try {
       const plan = plans.get(params.data.planId);
       if (ensurePlanProject(plan.projectId, reply, true) === null) return;
-      return { plan: plans.confirm(params.data.planId, body.data.actorId) };
+      const revision = body.data.revision ?? plan.revision;
+      if (plan.revision !== revision) return reply.code(409).send({ code: "REVISION_NOT_LATEST", error: "Only the latest candidate version can be confirmed" });
+      return await confirmPlanFlow(plan.id, revision, body.data.actorId);
     } catch (error) {
-      return reply.code(409).send({ error: error instanceof Error ? error.message : "Plan cannot be confirmed" });
+      const message = error instanceof Error ? error.message : "Plan cannot be confirmed";
+      return reply.code(409).send({ code: message, error: message, stage: "VALIDATION_FAILED" });
     }
   });
 
@@ -1162,7 +1252,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       return { plan: dispatchedPlan, run: await scheduler.start(plan.id, project?.settings.hooks ?? {}), dispatch: null };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Run cannot be started";
-      return reply.code(409).send({ code: /concurrency limit/i.test(message) ? "PROJECT_CONCURRENCY_LIMIT" : /RUN_PREREQUISITES_UNSATISFIED/.test(message) ? "RUN_PREREQUISITES_UNSATISFIED" : "RUN_START_FAILED", error: message });
+      return reply.code(409).send({ code: /RUN_PREREQUISITES_UNSATISFIED/.test(message) ? "RUN_PREREQUISITES_UNSATISFIED" : "RUN_START_FAILED", error: message });
     }
   });
 
@@ -1666,7 +1756,6 @@ function createDefaultScheduler(store: PipelineStore, config: FactoryConfig, mod
   const projectDefinitions = (snapshot: ProjectExecutionSnapshot) => [...snapshot.settings.commands];
   return new Scheduler({
     store,
-    globalConcurrency: config.runtime.globalConcurrency,
     branchNameGenerator: new ModelRunBranchNameGenerator(model),
     workspace: new LocalGitWorktreeAdapter({ projectRoot: config.project.root, worktreeRoot: config.storage.worktreeRoot }),
     hooks: new LifecycleHookRunner(commands.execute.bind(commands), { cleanupCwd: config.project.root }),

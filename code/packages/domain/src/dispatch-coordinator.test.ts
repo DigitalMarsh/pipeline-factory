@@ -14,6 +14,7 @@ const coordinatorModule = domain as unknown as {
     verify?: (run: domain.Run, revision: domain.PlanRevisionV2) => Promise<domain.VerificationRun>;
   }) => {
     dispatch(planId: string): Promise<{ plan: domain.CandidatePlan; state: domain.PlanDispatchState }>;
+    confirmAndDispatch(planId: string, revision: number, confirmedBy: string): Promise<{ plan: domain.CandidatePlan; run: domain.Run | null; state: domain.PlanDispatchState }>;
     reviseConfiguration(planId: string, actorId: string): domain.CandidatePlan;
     wake(): Promise<domain.PlanDispatchState[]>;
     state(planId: string): domain.PlanDispatchState | undefined;
@@ -89,7 +90,7 @@ describe("PlanDispatchCoordinator", () => {
     expect(resumed).toMatchObject({ status: "RUNNING", waitReason: null });
   });
 
-  it("uses a stable queuedAt then planId order and records global capacity waiting", async () => {
+  it("starts Runs without applying a global concurrency cap", async () => {
     const store = new InMemoryPipelineStore();
     const plans = new PlanService(store);
     const first = createPlan(store, plans, "First");
@@ -97,17 +98,12 @@ describe("PlanDispatchCoordinator", () => {
     const coordinator = new coordinatorModule.PlanDispatchCoordinator({ store, plans, scheduler: schedulerFor(store, 1), globalConcurrency: 1 });
 
     await dispatch(coordinator, plans, first.id);
-    const waiting = await dispatch(coordinator, plans, second.id);
-    expect(waiting.state.waitReason).toBe("WAITING_GLOBAL_CAPACITY");
-
-    const firstRun = store.listRuns()[0];
-    expect(firstRun).toBeDefined();
-    store.saveRun({ ...firstRun!, status: "MERGE_READY" });
-    const resumed = (await coordinator.wake()).find((state) => state.planId === second.id);
-    expect(resumed).toMatchObject({ status: "RUNNING", waitReason: null });
+    const started = await dispatch(coordinator, plans, second.id);
+    expect(started.state).toMatchObject({ status: "RUNNING", waitReason: null });
+    expect(store.listRuns()).toHaveLength(2);
   });
 
-  it("waits on the frozen Project concurrency limit before using another slot", async () => {
+  it("starts Runs without applying a Project concurrency cap", async () => {
     const store = new InMemoryPipelineStore();
     new ProjectService(store).create({ id: "project-1", name: "Project", repoRoot: "/repo/project-1", defaultBranch: "main", worktreeRoot: "/tmp/project-1-worktrees", settings: { concurrency: { maxParallelRuns: 1 }, commands: [{ commandId: "project.test", argv: ["true"] }, { commandId: "project.typecheck", argv: ["true"] }] } });
     const plans = new PlanService(store);
@@ -116,13 +112,9 @@ describe("PlanDispatchCoordinator", () => {
     const coordinator = new coordinatorModule.PlanDispatchCoordinator({ store, plans, scheduler: schedulerFor(store) });
 
     await dispatch(coordinator, plans, first.id);
-    const waiting = await dispatch(coordinator, plans, second.id);
-    expect(waiting.state).toMatchObject({ status: "WAITING", waitReason: "WAITING_PROJECT_CAPACITY" });
-
-    const firstRun = store.listRuns()[0]!;
-    store.saveRun({ ...firstRun, status: "MERGE_READY" });
-    const resumed = (await coordinator.wake()).find((state) => state.planId === second.id);
-    expect(resumed).toMatchObject({ status: "RUNNING", waitReason: null });
+    const started = await dispatch(coordinator, plans, second.id);
+    expect(started.state).toMatchObject({ status: "RUNNING", waitReason: null });
+    expect(store.listRuns()).toHaveLength(2);
   });
 
   it("revises a configuration-blocked dispatch with the current Project snapshot", async () => {
@@ -158,15 +150,33 @@ describe("PlanDispatchCoordinator", () => {
       const plan = createPlan(firstStore, plans, "Persist dispatch");
       const coordinator = new coordinatorModule.PlanDispatchCoordinator({ store: firstStore, plans, scheduler: schedulerFor(firstStore, 0), globalConcurrency: 0 });
       const result = await dispatch(coordinator, plans, plan.id);
-      expect(result.state.waitReason).toBe("WAITING_GLOBAL_CAPACITY");
+      expect(result.state).toMatchObject({ status: "RUNNING", phase: "RUN_STARTED" });
       firstStore.close();
 
       const reopened = new SqlitePipelineStore(databasePath);
-      expect(reopened.getDispatchState(plan.id)).toMatchObject({ planId: plan.id, status: "WAITING", waitReason: "WAITING_GLOBAL_CAPACITY" });
+      expect(reopened.getDispatchState(plan.id)).toMatchObject({ planId: plan.id, status: "RUNNING", phase: "RUN_STARTED" });
       reopened.close();
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
+  });
+
+  it("persists a failed confirmation phase and retries it without creating a second Run", async () => {
+    const store = new InMemoryPipelineStore();
+    const plans = new PlanService(store);
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Recoverable confirmation" });
+    store.updatePlan({ ...plan, contract: { ...plan.contract, goal: "" } });
+    const coordinator = new coordinatorModule.PlanDispatchCoordinator({ store, plans, scheduler: schedulerFor(store) });
+
+    const failed = await coordinator.confirmAndDispatch(plan.id, plan.revision, "user-1");
+    expect(failed).toMatchObject({ plan: { status: "DRAFT" }, run: null, state: { status: "BLOCKED", phase: "VALIDATION_FAILED", attempt: 1 } });
+
+    store.updatePlan({ ...plans.get(plan.id), contract: { ...plans.get(plan.id).contract, goal: "Valid goal" } });
+    const retried = await coordinator.confirmAndDispatch(plan.id, plan.revision, "user-1");
+    const repeated = await coordinator.confirmAndDispatch(plan.id, plan.revision, "user-1");
+    expect(retried).toMatchObject({ plan: { status: "IN_PROGRESS" }, run: { id: expect.any(String) }, state: { status: "RUNNING", phase: "RUN_STARTED", attempt: 2 } });
+    expect(repeated.run?.id).toBe(retried.run?.id);
+    expect(store.listRuns()).toHaveLength(1);
   });
 
   it("automatically verifies a Run that reaches READY_FOR_VERIFY", async () => {

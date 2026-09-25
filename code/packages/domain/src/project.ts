@@ -19,6 +19,7 @@ export type ProjectStatus = "ACTIVE" | "ARCHIVED";
 /** Project 的项目级运行策略；确认 Plan 时会深拷贝进不可变执行快照。 */
 export type ProjectSettings = {
   concurrency: {
+    /** @deprecated Kept for persisted configuration compatibility; Runs are no longer concurrency-limited. */
     maxParallelRuns: number;
     defaultTimeoutMs: number;
     executionTimeoutMs: number;

@@ -73,7 +73,7 @@ describe("Explorer title rules", () => {
     expect(normalizeExplorerTitle("   ")).toBeNull();
   });
 
-  it("generates a title after the first user message and persists it once", async () => {
+  it("keeps the generated timestamp title after the first message", async () => {
     const store = new InMemoryPipelineStore();
     const explorer = new ExplorerService(store).create({ projectId: "project-1", createdAt: "2026-08-29T05:45:15.000Z" });
     let calls = 0;
@@ -83,15 +83,15 @@ describe("Explorer title rules", () => {
     service.subscribeEvents(explorer.id, (event) => events.push(event.type));
 
     await service.startTurn({ threadId: explorer.id, content: "请优化订单取消流程", clientTurnId: "turn-1" });
-    await waitFor(() => store.getThread(explorer.id)?.titleStatus === "GENERATED");
-    expect(store.getThread(explorer.id)).toMatchObject({ title: "20260829-13:45:15-订单取消流程优化", titleSource: "AUTO" });
-    expect(events).toContain("explorer.title.updated");
+    await waitFor(() => store.listTurns(explorer.id).some((turn) => turn.role === "assistant" && turn.status === "COMPLETED"));
+    expect(store.getThread(explorer.id)).toMatchObject({ title: "探索-20260829-13:45:15", titleSource: "AUTO", titleStatus: "GENERATED" });
+    expect(events).not.toContain("explorer.title.updated");
 
     await service.backfillTitles();
-    expect(calls).toBe(1);
+    expect(calls).toBe(0);
   });
 
-  it("keeps the placeholder when title generation fails without failing exploration", async () => {
+  it("does not make first-turn exploration depend on title generation", async () => {
     const store = new InMemoryPipelineStore();
     createProject(store, "project-1", "P1");
     const explorer = new ExplorerService(store).create({ projectId: "project-1", createdAt: "2026-08-29T05:45:15.000Z" });
@@ -99,13 +99,14 @@ describe("Explorer title rules", () => {
     const service = new ExplorerThreadService(store, model(), { titleGenerator });
 
     await service.startTurn({ threadId: explorer.id, content: "请分析登录问题", clientTurnId: "turn-1" });
-    await waitFor(() => store.getThread(explorer.id)?.titleStatus === "FAILED");
-    expect(store.getThread(explorer.id)).toMatchObject({ title: "P1-20260829-13:45:15", titleSource: "AUTO" });
+    await waitFor(() => store.listTurns(explorer.id).some((turn) => turn.role === "assistant" && turn.status === "COMPLETED"));
+    expect(store.getThread(explorer.id)).toMatchObject({ title: "P1-20260829-13:45:15", titleSource: "AUTO", titleStatus: "GENERATED" });
   });
 
   it("does not overwrite a manual rename while model generation is pending", async () => {
     const store = new InMemoryPipelineStore();
     const explorer = new ExplorerService(store).create({ projectId: "project-1", createdAt: "2026-08-29T05:45:15.000Z" });
+    store.updateThread({ ...explorer, title: "探索-20260829-13:45:15", titleStatus: "PLACEHOLDER" });
     let resolveTitle!: (title: string) => void;
     const titleGenerator: ExplorerTitleGenerator = { generate: () => new Promise((resolve) => { resolveTitle = resolve; }) };
     const service = new ExplorerThreadService(store, model(), { titleGenerator });
@@ -121,7 +122,8 @@ describe("Explorer title rules", () => {
 
   it("backfills default historical titles while preserving custom titles", async () => {
     const store = new InMemoryPipelineStore();
-    const oldDefault = new ExplorerService(store).create({ projectId: "project-1", createdAt: "2026-08-28T05:45:15.000Z" });
+    const oldCreated = new ExplorerService(store).create({ projectId: "project-1", createdAt: "2026-08-28T05:45:15.000Z" });
+    const oldDefault = store.updateThread({ ...oldCreated, title: "探索-20260828-13:45:15", titleStatus: "PLACEHOLDER" });
     store.saveTurn({ id: "old-user", threadId: oldDefault.id, role: "user", content: "请增加个人信息管理", status: "COMPLETED", createdAt: "2026-08-28T05:46:00.000Z", sequence: 1 });
     const empty = new ExplorerService(store).create({ projectId: "project-1", createdAt: "2026-08-28T05:47:15.000Z" });
     createProject(store, "project-1", "P1");
@@ -134,7 +136,7 @@ describe("Explorer title rules", () => {
     await waitFor(() => store.getThread(oldDefault.id)?.titleStatus === "GENERATED");
 
     expect(store.getThread(oldDefault.id)?.title).toBe("20260828-13:45:15-个人信息管理");
-    expect(store.getThread(empty.id)).toMatchObject({ title: "探索-20260828-13:47:15", titleStatus: "PLACEHOLDER" });
+    expect(store.getThread(empty.id)).toMatchObject({ title: "探索-20260828-13:47:15", titleStatus: "GENERATED" });
     expect(store.getThread(custom.id)).toMatchObject({ title: "我保留的名称", titleSource: "MANUAL" });
   });
 });

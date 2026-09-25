@@ -89,7 +89,7 @@ onMounted(() => { void load(); });
         <code class="project-id">{{ project.id }}</code>
         <div class="project-path"><FolderOpened :size="14" /><span>{{ project.repoRoot }}</span></div>
         <div class="project-current"><ChatDotRound :size="13" /><span>Current Explorer</span><code :title="project.summary.currentExplorerThread ?? undefined">{{ project.summary.currentExplorerTitle ?? project.summary.currentExplorerThread ?? "Not selected" }}</code></div>
-        <div class="project-facts"><span><Connection :size="13" />{{ project.defaultBranch }}</span><span><VideoPlay :size="13" />{{ project.settings.concurrency.maxParallelRuns }} parallel</span><span><VideoPlay :size="13" />{{ project.summary.activeRunCount }} running</span></div>
+        <div class="project-facts"><span><Connection :size="13" />{{ project.defaultBranch }}</span><span><VideoPlay :size="13" />{{ project.summary.activeRunCount }} running</span></div>
         <div class="project-facts project-facts-secondary"><span><Warning :size="13" />{{ project.summary.needsAttentionCount }} attention</span><span><Clock :size="13" />{{ activityLabel(project.summary.lastActivityAt) }}</span></div>
         <div class="project-card-footer"><el-button text size="small" @click="openProject(project)">Open Explorer</el-button><el-button text size="small" @click="openSettings(project)"><Setting :size="13" /> Settings</el-button><el-button text size="small" @click="toggleArchive(project)">{{ project.status === 'ACTIVE' ? 'Archive' : 'Activate' }}</el-button></div>
       </article>

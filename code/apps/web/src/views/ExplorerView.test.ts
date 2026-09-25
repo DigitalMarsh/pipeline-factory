@@ -429,7 +429,7 @@ describe("Explorer inline message presentation", () => {
     expect(threadRailSource).toContain('command="new-task"');
     expect(explorerViewSource).toContain("新建 Task");
     expect(explorerViewSource).not.toContain('command="new-plan"');
-    expect(explorerViewSource).not.toContain("新建 Plan");
+    expect(explorerViewSource).toContain("新建 Plan");
     expect(explorerViewSource).not.toContain('aria-label="Plan timeline"');
     expect(explorerViewSource).not.toContain("EXPLORER PLANS");
     expect(explorerStylesSource).not.toContain(".timeline-rail-plans");

@@ -118,6 +118,7 @@ describe("ProjectSettingsDialog", () => {
     await nextTick();
 
     expect(mounted.host.textContent).toContain("Execution policy");
+    expect(mounted.host.textContent).not.toContain("Max parallel runs");
     expect(mounted.host.textContent).not.toContain("Project settings page");
 
     mounted.app.unmount();
