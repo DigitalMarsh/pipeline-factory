@@ -26,7 +26,7 @@ describe("ExplorerThread", () => {
     expect(store.getThread(explorer.id)).toMatchObject({ activeExplorerPlanId: second.id, contextSummary: { openPlanIds: [first[0]?.id, second.id] } });
   });
 
-  it("queues Plan turns FIFO while reusing one Provider thread and separates turn ownership", async () => {
+  it("queues turns while isolating each requirement's messages and Provider session", async () => {
     const store = new InMemoryPipelineStore();
     const explorer = new ExplorerService(store).create({ projectId: "project-1" });
     const plan1 = new ExplorerService(store).listPlans(explorer.id)[0]!;
@@ -37,18 +37,18 @@ describe("ExplorerThread", () => {
     const model: ModelGateway = {
       configFor: () => ({ model: "gpt-5.6-luna" }),
       async *stream(request) {
-        requests.push(request);
+        requests.push({ ...request, messages: request.messages.map((message) => ({ ...message })) });
         if (requests.length === 1) {
-          yield { type: "thread.started", threadId: "provider-shared" };
+          yield { type: "thread.started", threadId: `provider-${request.conversationId}` };
           await firstPaused;
-        }
-        yield { type: "text.delta", text: requests.length === 1 ? "Plan 1 response" : "Plan 2 response", providerThreadId: "provider-shared", providerTurnId: `provider-turn-${requests.length}`, providerItemId: `provider-item-${requests.length}` };
+        } else yield { type: "thread.started", threadId: `provider-${request.conversationId}` };
+        yield { type: "text.delta", text: request.conversationId === plan1.id ? "Requirement 1 response" : "Requirement 2 response", providerThreadId: `provider-${request.conversationId}`, providerTurnId: `provider-turn-${requests.length}`, providerItemId: `provider-item-${requests.length}` };
         yield { type: "turn.completed" };
       },
       async answerUserInput() { return undefined; },
       async cancel() { return undefined; },
     };
-    const service = new ExplorerThreadService(store, model, { maxSteps: 2 });
+    const service = new ExplorerThreadService(store, model, { maxSteps: 2, repositoryContextForProject: () => ({ key: "repository-v1", summary: "shared repository facts: apps/web, apps/api" }) });
     const firstTurn = await service.startTurn({ threadId: explorer.id, explorerPlanId: plan1.id, content: "Plan 1 request", clientTurnId: "client-plan-1" });
     await waitUntil(() => requests.length === 1);
     const queued = await service.startTurn({ threadId: explorer.id, explorerPlanId: plan2.id, content: "Plan 2 request", clientTurnId: "client-plan-2" });
@@ -57,12 +57,22 @@ describe("ExplorerThread", () => {
     expect(store.listTurns(explorer.id).filter((turn) => turn.explorerPlanId === plan1.id)).toHaveLength(2);
     expect(store.listTurns(explorer.id).filter((turn) => turn.explorerPlanId === plan2.id)).toHaveLength(2);
     releaseFirst();
-    await waitUntil(() => requests.some((request) => request.continuationPrompt?.includes("Explorer Plan 2") === true));
-    const plan2Request = requests.find((request) => request.continuationPrompt?.includes("Explorer Plan 2"));
-    expect(requests[0]).toMatchObject({ conversationId: explorer.id });
-    expect(plan2Request).toMatchObject({ conversationId: explorer.id, providerThreadId: "provider-shared" });
+    await waitUntil(() => requests.some((request) => request.continuationPrompt?.includes("需求 2") === true));
+    const plan2Request = requests.find((request) => request.continuationPrompt?.includes("需求 2"));
+    expect(requests[0]).toMatchObject({ conversationId: plan1.id });
+    expect(requests[0]?.messages.map((message) => message.content)).toEqual(["Plan 1 request"]);
+    expect(requests[0]?.continuationPrompt).toContain("shared repository facts");
+    expect(plan2Request).toMatchObject({ conversationId: plan2.id });
+    expect(plan2Request?.providerThreadId).toBeUndefined();
+    expect(plan2Request?.messages.map((message) => message.content)).toEqual(["Plan 2 request"]);
+    expect(plan2Request?.continuationPrompt).toContain("shared repository facts");
     await waitUntil(() => store.listTurns(explorer.id).find((turn) => turn.id === queued.assistant.id)?.status === "COMPLETED");
     expect(store.listTurns(explorer.id).find((turn) => turn.id === firstTurn.assistant.id)).toMatchObject({ status: "COMPLETED", explorerPlanId: plan1.id });
+    expect(store.getExplorerPlan(plan1.id)?.providerThreadId).toBe(`provider-${plan1.id}`);
+    expect(store.getExplorerPlan(plan2.id)?.providerThreadId).toBe(`provider-${plan2.id}`);
+    expect(store.getExplorerPlan(plan1.id)?.providerThreadId).not.toBe(store.getExplorerPlan(plan2.id)?.providerThreadId);
+    expect(store.getExplorerPlan(plan1.id)?.repositoryContextKey).toBe("repository-v1");
+    expect(store.getExplorerPlan(plan2.id)?.repositoryContextKey).toBe("repository-v1");
   });
 
   it("requires the explicit complete-plan protocol before marking exploration ready", () => {
@@ -129,7 +139,7 @@ describe("ExplorerThread", () => {
     };
 
     const service = new ExplorerThreadService(store, model, { maxAutoContinuationTurns: 2 });
-    const accepted = await service.startTurn({ threadId: "thread-1", content: "请为个人信息管理系统形成完整设计方案", clientTurnId: "client-turn-complete-plan" });
+    const accepted = await service.startTurn({ threadId: "thread-1", explorerPlanId: store.listExplorerPlans("thread-1")[0]!.id, content: "请为个人信息管理系统形成完整设计方案", clientTurnId: "client-turn-complete-plan" });
     for (let attempt = 0; attempt < 50 && store.listPlans().length === 0; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 1));
 
     expect(requests).toHaveLength(2);
@@ -156,7 +166,7 @@ describe("ExplorerThread", () => {
     };
 
     const service = new ExplorerThreadService(store, model, { maxSteps: 1 });
-    await service.startTurn({ threadId: "thread-1", content: "请继续设计", clientTurnId: "client-turn-incomplete-plan" });
+    await service.startTurn({ threadId: "thread-1", explorerPlanId: store.listExplorerPlans("thread-1")[0]!.id, content: "请继续设计", clientTurnId: "client-turn-incomplete-plan" });
     for (let attempt = 0; attempt < 50 && store.listTurns("thread-1")[1]?.status === "RUNNING"; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 1));
 
     expect(store.listPlans()).toHaveLength(0);
@@ -200,7 +210,7 @@ describe("ExplorerThread", () => {
     };
 
     const service = new ExplorerThreadService(store, model, { maxSteps: 1 });
-    const accepted = await service.startTurn({ threadId: "thread-1", content: "请继续", clientTurnId: "client-turn-1" });
+    const accepted = await service.startTurn({ threadId: "thread-1", explorerPlanId: store.listExplorerPlans("thread-1")[0]!.id, content: "请继续", clientTurnId: "client-turn-1" });
     expect(accepted.assistant.status).toBe("RUNNING");
     const request = await new Promise<ReturnType<typeof store.listInputRequests>[number]>((resolve) => {
       const timer = setInterval(() => {

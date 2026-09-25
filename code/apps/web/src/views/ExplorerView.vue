@@ -34,9 +34,8 @@ import scrollToLatestIcon from "../assets/scroll-to-latest.png";
 import { normalizePlanProjection } from "../utils/planProjection";
 import { parsePlanProtocolDisplay } from "../utils/planProtocolDisplay";
 import { planActivityBindings as buildPlanActivityBindings, planIdentity } from "../utils/planTimeline";
-import { buildTaskTree, taskDisplayTitle } from "../utils/taskTree";
+import { taskDisplayTitle } from "../utils/taskTree";
 import { isConfirmedPlanRevision, resolvePlanVersionHistory } from "../utils/planVersionHistory";
-import type { TaskTreeItem } from "../utils/taskTree";
 import { inputAnswerLabels, resolveQuestionAnswers } from "../utils/explorerInput";
 import { createProjectRequestScope, projectPathForModule } from "../utils/projectRoutes";
 import { buildExplorerTimeline, explorerTimelineTarget } from "../utils/explorerTimeline";
@@ -55,7 +54,6 @@ const projects = ref<Project[]>([]);
 const thread = ref<ExplorerThread | null>(null);
 const explorers = ref<ExplorerThread[]>([]);
 const explorerPlans = ref<ExplorerPlan[]>([]);
-const taskTreePlans = ref<Plan[]>([]);
 const threadPlans = ref<Plan[]>([]);
 const activeExplorerPlanId = ref<string | null>(null);
 const projectCreateOpen = ref(false);
@@ -83,6 +81,7 @@ const defaultPlanRequirements: ExplorerPlanRequirement[] = [
 const planRequirements = ref<ExplorerPlanRequirement[]>([]);
 const turns = ref<ExplorerTurn[]>([]);
 const draft = ref("");
+const requirementDrafts = new Map<string, string>();
 const drawerOpen = ref(false);
 const detailPlan = ref<Plan | null>(null);
 const detailRevisions = ref<number[]>([]);
@@ -205,17 +204,12 @@ const activePlans = computed<Plan[]>(() => activeRuns.value.map((run) => {
 const planBindings = computed(() => buildPlanActivityBindings(activeTaskPlans.value, visibleActivity.value));
 const detachedPlans = computed(() => activeTaskPlans.value.filter((plan) => ![...planBindings.value.values()].some((bound) => planIdentity(bound) === planIdentity(plan))));
 const timelineItems = computed(() => buildExplorerTimeline(visibleActivity.value, visibleInputRequests.value, detachedPlans.value));
-const taskTreeItems = computed(() => {
-  const uniquePlans = new Map<string, Plan>();
-  for (const plan of [...taskTreePlans.value, ...allPlans.value]) uniquePlans.set(planIdentity(plan), plan);
-  return buildTaskTree(explorerPlans.value, [...uniquePlans.values()], visibleActivity.value);
-});
 
 function setPolicyOpen(value: boolean) {
   policyOpen.value = value ? openPolicyPanel(policyOpen.value) : closePolicyPanel(policyOpen.value);
 }
 
-type ThreadActionCommand = "toggle-pause" | "rename" | "policy" | "refresh" | "new-task" | "delete";
+type ThreadActionCommand = "toggle-pause" | "rename" | "policy" | "refresh" | "new-requirement" | "delete";
 
 function openRenameDialog() {
   if (!thread.value) return;
@@ -228,7 +222,7 @@ function handleThreadAction(command: ThreadActionCommand) {
     void deleteCurrentThread();
     return;
   }
-  if (command === "new-task") {
+  if (command === "new-requirement") {
     void createExplorerPlan();
     return;
   }
@@ -424,7 +418,8 @@ function isCurrentProjectScope(requestProjectId: string, requestToken = activeRe
 function resetThreadState() {
   thread.value = null;
   explorerPlans.value = [];
-  taskTreePlans.value = [];
+  requirementDrafts.clear();
+  draft.value = "";
   threadPlans.value = [];
   activeExplorerPlanId.value = null;
   candidate.value = null;
@@ -488,18 +483,6 @@ function inputAnswerText(request: ExplorerInputRequest, question: ExplorerInputR
   return "尚未选择";
 }
 
-async function loadTaskTreePlans(requestProjectId: string, groups: ExplorerPlan[]): Promise<Plan[]> {
-  const planIds = [...new Set(groups.map((group) => group.candidatePlanId).filter((planId): planId is string => Boolean(planId)))];
-  const plans = await Promise.all(planIds.map(async (planId) => {
-    try {
-      return (await api.getPlan(planId)).plan;
-    } catch {
-      return null;
-    }
-  }));
-  return plans.filter((plan): plan is Plan => plan !== null && plan.projectId === requestProjectId);
-}
-
 async function refreshPlanProjection(): Promise<void> {
   const explorerId = thread.value?.id;
   if (!explorerId) return;
@@ -516,9 +499,6 @@ async function refreshPlanProjection(): Promise<void> {
     ]);
     if (!isCurrentProjectScope(requestProjectId, requestToken) || requestVersion !== planProjectionVersion || thread.value?.id !== explorerId) return;
     explorerPlans.value = planGroupsResponse.items;
-    const nextTaskTreePlans = await loadTaskTreePlans(requestProjectId, explorerPlans.value);
-    if (!isCurrentProjectScope(requestProjectId, requestToken) || requestVersion !== planProjectionVersion || thread.value?.id !== explorerId) return;
-    taskTreePlans.value = nextTaskTreePlans;
     threadPlans.value = threadPlansResponse.items;
     const routePlanId = typeof route.query.explorerPlanId === "string" ? route.query.explorerPlanId : null;
     activeExplorerPlanId.value = explorerPlans.value.some((plan) => plan.id === routePlanId) ? routePlanId : explorerPlans.value.some((plan) => plan.id === explorerResponse.explorer.activeExplorerPlanId) ? explorerResponse.explorer.activeExplorerPlanId ?? null : explorerPlans.value[0]?.id ?? null;
@@ -811,25 +791,6 @@ function syncPanelStateFromRoute() {
   if (routeContextPanel === "candidate" || routeContextPanel === "plans" || routeContextPanel === "confirmed" || routeContextPanel === "enqueued" || routeContextPanel === "dispatched" || routeContextPanel === "active" || routeContextPanel === "attention" || routeContextPanel === "plan-center") contextPanel.value = routeContextPanel;
 }
 
-async function startNewPlanForRequirement(): Promise<void> {
-  const currentThread = thread.value;
-  const requirement = activeExplorerPlan.value;
-  if (!currentThread || !requirement || currentThread.state === "ARCHIVED" || busy.value) return;
-  busy.value = true;
-  try {
-    await api.selectCandidatePlan(projectId.value, currentThread.id, requirement.id, null);
-    candidate.value = null;
-    revisionDraft.value = null;
-    await loadActivePlanWorkspace(currentThread.id, requirement.id, projectId.value, activeRequestToken);
-    contextPanel.value = "plans";
-    await nextTick();
-    document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus();
-    ElMessage.success(`${taskDisplayTitle(requirement)}：后续完整方案将创建为独立 Plan`);
-  } catch (caught) {
-    ElMessage.error(caught instanceof Error ? caught.message : "无法新建独立 Plan");
-  } finally { busy.value = false; }
-}
-
 function panelStateQuery() {
   return { contextPanel: contextPanel.value };
 }
@@ -995,6 +956,10 @@ async function selectExplorerPlan(explorerPlanId: string, shouldScroll = true): 
   const requestProjectId = projectId.value;
   const requestToken = activeRequestToken;
   const requestVersion = ++planProjectionVersion;
+  const previousPlanId = activeExplorerPlanId.value;
+  if (previousPlanId && previousPlanId !== selectedPlan.id) requirementDrafts.set(previousPlanId, draft.value);
+  if (previousPlanId !== selectedPlan.id) draft.value = requirementDrafts.get(selectedPlan.id) ?? "";
+  closeEvents();
   activeExplorerPlanId.value = selectedPlan.id;
   thread.value = { ...currentThread, activeExplorerPlanId: selectedPlan.id };
   try {
@@ -1004,10 +969,8 @@ async function selectExplorerPlan(explorerPlanId: string, shouldScroll = true): 
     explorers.value = explorers.value.map((item) => item.id === currentThread.id ? activation.explorer : item);
     try {
       const planGroupsResponse = await api.explorerPlanGroups(requestProjectId, currentThread.id);
-      const nextTaskTreePlans = await loadTaskTreePlans(requestProjectId, planGroupsResponse.items);
       if (!isCurrentProjectScope(requestProjectId, requestToken) || requestVersion !== planProjectionVersion || thread.value?.id !== currentThread.id) return;
       explorerPlans.value = planGroupsResponse.items;
-      taskTreePlans.value = nextTaskTreePlans;
     } catch {
       // Task workspace switching remains available when the background tree refresh is temporarily unavailable.
     }
@@ -1015,6 +978,7 @@ async function selectExplorerPlan(explorerPlanId: string, shouldScroll = true): 
     await router.replace({ path: route.path, query: explorerRouteQuery(currentThread.id, selectedPlan.id), hash: route.hash });
     await loadActivePlanWorkspace(currentThread.id, selectedPlan.id, requestProjectId, requestToken);
     if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== currentThread.id) return;
+    connectEvents();
     if (shouldScroll) {
       await nextTick();
       jumpToTimelineTarget(explorerPlanAnchorId(selectedPlan.id), `explorer-plan-${selectedPlan.id}`);
@@ -1022,7 +986,7 @@ async function selectExplorerPlan(explorerPlanId: string, shouldScroll = true): 
       composer?.focus();
     }
   } catch (caught) {
-    ElMessage.error(caught instanceof Error ? `Task 工作区加载失败：${caught.message}` : "Task 工作区加载失败");
+    ElMessage.error(caught instanceof Error ? `需求工作区加载失败：${caught.message}` : "需求工作区加载失败");
   }
 }
 
@@ -1038,7 +1002,23 @@ async function createExplorerPlan(): Promise<void> {
     document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus();
     ElMessage.success(`${taskDisplayTitle(response.explorerPlan)} 已创建`);
   } catch (caught) {
-    ElMessage.error(caught instanceof Error ? `新建 Task 失败：${caught.message}` : "新建 Task 失败");
+    ElMessage.error(caught instanceof Error ? `新建需求失败：${caught.message}` : "新建需求失败");
+  }
+}
+
+async function renameExplorerPlan(explorerPlanId: string): Promise<void> {
+  const currentThread = thread.value;
+  const current = explorerPlans.value.find((plan) => plan.id === explorerPlanId);
+  if (!currentThread || !current) return;
+  try {
+    const { value } = await ElMessageBox.prompt("输入需求名称", "重命名需求", { inputValue: current.title, confirmButtonText: "保存", cancelButtonText: "取消", inputValidator: (value) => Boolean(value.trim()) || "名称不能为空" });
+    const response = await api.renameExplorerPlan(projectId.value, currentThread.id, explorerPlanId, value.trim());
+    if (thread.value?.id !== currentThread.id) return;
+    explorerPlans.value = explorerPlans.value.map((plan) => plan.id === explorerPlanId ? response.explorerPlan : plan);
+    ElMessage.success("需求已重命名");
+  } catch (caught) {
+    if (caught === "cancel" || caught === "close") return;
+    ElMessage.error(caught instanceof Error ? `重命名需求失败：${caught.message}` : "重命名需求失败");
   }
 }
 
@@ -1049,7 +1029,8 @@ function selectPlanFromCard(plan: Plan, event?: MouseEvent): void {
 }
 
 function planRequirementLabel(plan: Plan): string {
-  return explorerPlans.value.find((item) => item.id === plan.explorerPlanId)?.title ?? "需求分区";
+  const requirement = explorerPlans.value.find((item) => item.id === plan.explorerPlanId);
+  return requirement ? taskDisplayTitle(requirement) : "需求分区";
 }
 
 async function toggleExplorerArchive(explorerId: string) {
@@ -1087,12 +1068,14 @@ async function toggleExplorerArchive(explorerId: string) {
 
 async function refreshActivity() {
   if (!thread.value) return;
+  const explorerPlanId = activeExplorerPlan.value?.id;
+  if (!explorerPlanId) return;
   const requestProjectId = projectId.value;
   const requestThreadId = thread.value.id;
   const requestToken = activeRequestToken;
   try {
-    const response = await api.explorerActivity(requestProjectId, requestThreadId, activeExplorerPlan.value?.id);
-    if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== requestThreadId) return;
+    const response = await api.explorerActivity(requestProjectId, requestThreadId, explorerPlanId);
+    if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== requestThreadId || activeExplorerPlan.value?.id !== explorerPlanId) return;
     activity.value = response.items;
     explorerEventSequence = Math.max(explorerEventSequence ?? 0, response.lastEventSequence ?? 0);
   } catch {
@@ -1110,9 +1093,6 @@ async function loadExplorerDetails(selected: ExplorerThread, requestProjectId: s
     ]);
     if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
     explorerPlans.value = planGroupsResponse.items;
-    const nextTaskTreePlans = await loadTaskTreePlans(requestProjectId, explorerPlans.value);
-    if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
-    taskTreePlans.value = nextTaskTreePlans;
     threadPlans.value = threadPlansResponse.items;
     const routePlanId = typeof route.query.explorerPlanId === "string" ? route.query.explorerPlanId : null;
     activeExplorerPlanId.value = explorerPlans.value.some((plan) => plan.id === routePlanId) ? routePlanId : explorerPlans.value.some((plan) => plan.id === selected.activeExplorerPlanId) ? selected.activeExplorerPlanId ?? null : explorerPlans.value[0]?.id ?? null;
@@ -1199,6 +1179,8 @@ async function sendTurn() {
   const requestToken = activeRequestToken;
   const now = new Date().toISOString();
   const currentPlanId = activeExplorerPlan.value?.id ?? thread.value.activeExplorerPlanId ?? undefined;
+  if (!currentPlanId) { ElMessage.error("请先选择一个需求再发送消息"); return; }
+  requirementDrafts.delete(currentPlanId);
   const optimisticUser = createOptimisticUserTurn({
     id: `local-user-${Date.now()}`,
     threadId: thread.value.id,
@@ -1206,7 +1188,7 @@ async function sendTurn() {
     createdAt: now,
     sequence: turns.value.length + 1,
   });
-  if (currentPlanId) optimisticUser.explorerPlanId = currentPlanId;
+  optimisticUser.explorerPlanId = currentPlanId;
   turns.value = [...turns.value, optimisticUser];
   const optimisticAssistant: ExplorerActivityItem = { id: `local-assistant-activity-${Date.now()}`, explorerId: optimisticUser.threadId, turnId: `local-assistant-turn-${Date.now()}`, sequence: optimisticUser.sequence + 1, kind: "ASSISTANT_MESSAGE", status: "RUNNING", title: "Plan Explorer", summary: "Plan Explorer 正在处理…", details: null, occurredAt: new Date().toISOString(), explorerPlanId: currentPlanId };
   activity.value = [...activity.value, { id: `local-user-activity-${optimisticUser.id}`, explorerId: optimisticUser.threadId, turnId: optimisticUser.id, sequence: optimisticUser.sequence, kind: "USER_MESSAGE", status: "COMPLETED", title: "You", summary: content, details: null, occurredAt: now, explorerPlanId: currentPlanId }, optimisticAssistant];
@@ -1290,16 +1272,18 @@ function mergeTurn(turn: ExplorerTurn) {
 
 async function refreshTurnsAfterEvent() {
   if (!thread.value) return;
+  const explorerPlanId = activeExplorerPlan.value?.id;
+  if (!explorerPlanId) return;
   const requestProjectId = projectId.value;
   const requestThreadId = thread.value.id;
   const requestToken = activeRequestToken;
-  const response = await api.getExplorerTurns(requestProjectId, requestThreadId, activeExplorerPlan.value?.id);
-  if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== requestThreadId) return;
+  const response = await api.getExplorerTurns(requestProjectId, requestThreadId, explorerPlanId);
+  if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== requestThreadId || activeExplorerPlan.value?.id !== explorerPlanId) return;
   turns.value = response.items;
   await refreshActivity();
   await refreshPlanProjection();
-  const inputResponse = await api.inputRequests(requestProjectId, requestThreadId, undefined, activeExplorerPlan.value?.id);
-  if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== requestThreadId) return;
+  const inputResponse = await api.inputRequests(requestProjectId, requestThreadId, explorerPlanId);
+  if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== requestThreadId || activeExplorerPlan.value?.id !== explorerPlanId) return;
   setInputRequests(inputResponse.items);
   const activeTurn = response.items.some((turn) => turn.status === "RUNNING" || turn.status === "WAITING_FOR_INPUT" || turn.status === "QUEUED");
   if (!pendingInput.value) { inputDialogOpen.value = false; busy.value = activeTurn; sendingTurn.value = activeTurn; }
@@ -1308,16 +1292,17 @@ async function refreshTurnsAfterEvent() {
 }
 
 function connectEvents() {
-  if (!thread.value || typeof EventSource === "undefined") return;
+  if (!thread.value || !activeExplorerPlan.value || typeof EventSource === "undefined") return;
   const connectionProjectId = projectId.value;
   const connectionThreadId = thread.value.id;
+  const connectionPlanId = activeExplorerPlan.value.id;
   const connectionToken = activeRequestToken;
-  const isConnectionCurrent = () => isCurrentProjectScope(connectionProjectId, connectionToken) && thread.value?.id === connectionThreadId;
+  const isConnectionCurrent = () => isCurrentProjectScope(connectionProjectId, connectionToken) && thread.value?.id === connectionThreadId && activeExplorerPlan.value?.id === connectionPlanId;
   eventSource?.close();
   loopEventSource?.close();
   const replayGate = createSseReplayGate();
   if (explorerEventSequence !== null) replayGate.markReady();
-  eventSource = new EventSource(api.explorerEventsUrl(connectionProjectId, connectionThreadId, explorerEventSequence ?? undefined));
+  eventSource = new EventSource(api.explorerEventsUrl(connectionProjectId, connectionThreadId, connectionPlanId, explorerEventSequence ?? undefined));
   eventSource.addEventListener("stream.ready", () => {
     if (!isConnectionCurrent()) return;
     replayGate.accept("stream.ready");
@@ -1334,7 +1319,7 @@ function connectEvents() {
   eventSource.addEventListener("turn.input_required", async (raw) => {
     if (!isConnectionCurrent() || !replayGate.accept("turn.input_required")) return;
     const payload = JSON.parse((raw as MessageEvent).data) as { requestId: string };
-    const response = await api.inputRequests(connectionProjectId, connectionThreadId, undefined, activeExplorerPlan.value?.id);
+    const response = await api.inputRequests(connectionProjectId, connectionThreadId, connectionPlanId);
     if (!isConnectionCurrent()) return;
     setInputRequests(response.items);
     pendingInput.value = response.items.find((item) => item.id === payload.requestId) ?? null;
@@ -1533,13 +1518,6 @@ async function discardPlan() {
 }
 
 function statusLabel(status: string) { return ({ DRAFT: "Candidate", DISCARDED: "Discarded", READY: "Confirmed", ENQUEUED: "Enqueued", DISPATCHED: "Dispatched", QUEUED: "Queued", STARTING: "Starting", IN_PROGRESS: "Running", VERIFYING: "Verifying", MERGE_READY: "Ready for review", MERGED: "Merged", NEEDS_PLAN_CHANGE: "Plan change required", BLOCKED: "Blocked" } as Record<string, string>)[status] ?? status; }
-async function selectPlanTreeItem(item: TaskTreeItem): Promise<void> {
-  if (activeRunId.value) await closeRunView();
-  if (activeExplorerPlan.value?.id !== item.task.id) await selectExplorerPlan(item.task.id, false);
-  await nextTick();
-  const current = taskTreeItems.value.find((candidate) => candidate.task.id === item.task.id);
-  if (current?.planTarget) jumpToTimelineTarget(current.planTarget, current.planKey ?? "");
-}
 
 function reloadExplorer() {
   closeEvents();
@@ -1608,7 +1586,7 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
       :project-action-id="projectActionId"
       :plan-center-active="contextPanel === 'plan-center'"
       :plan-center-count="planCenterCount"
-      :task-tree-items="taskTreeItems"
+      :requirements="explorerPlans"
       :active-explorer-plan-id="activeExplorerPlan?.id ?? null"
       :explorer-paused="explorerPaused"
       @select-panel="leftPanel = $event"
@@ -1623,7 +1601,7 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
       @toggle-show-archived="showArchivedExplorers = $event"
       @archive-explorer="toggleExplorerArchive"
       @select-explorer-plan="selectExplorerPlan($event)"
-      @select-plan-tree-item="selectPlanTreeItem"
+      @rename-explorer-plan="renameExplorerPlan"
       @thread-action="handleThreadAction"
     />
     <section class="conversation-column">
@@ -1656,9 +1634,9 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
       <div class="timeline-shell">
       <div ref="timeline" class="timeline" v-loading="loading" @scroll="updateTimelineScrollState">
         <div :id="activeExplorerPlan ? explorerPlanAnchorId(activeExplorerPlan.id) : undefined" :data-nav-key="activeExplorerPlan ? `explorer-plan-${activeExplorerPlan.id}` : undefined" class="explorer-plan-anchor" aria-hidden="true" />
-        <div v-if="activeExplorerPlan" class="active-plan-banner"><span class="eyebrow">TASK {{ activeExplorerPlan.ordinal }}</span><strong>{{ taskDisplayTitle(activeExplorerPlan) }}</strong><small>{{ activeExplorerPlan.latestUserMessageSummary ?? '尚未开始探索' }}</small></div>
+        <div v-if="activeExplorerPlan" class="active-plan-banner"><span class="eyebrow">需求 {{ activeExplorerPlan.ordinal }}</span><strong>{{ taskDisplayTitle(activeExplorerPlan) }}</strong><small>{{ activeExplorerPlan.latestUserMessageSummary ?? '尚未开始探索' }}</small></div>
         <div class="timeline-day">{{ visibleTurns.length ? 'EXPLORER ACTIVITY' : 'NEW EXPLORATION' }}</div>
-        <div v-if="!visibleActivity.length && !visibleInputRequests.length && !candidate && !detachedPlans.length" class="timeline-empty"><Connection :size="24" /><strong>{{ activeExplorerPlan ? taskDisplayTitle(activeExplorerPlan) : '开始一次全新的需求探索' }}</strong><span>当前 Task 还没有消息；切换 Task 不会删除其他分区内容。</span></div>
+        <div v-if="!visibleActivity.length && !visibleInputRequests.length && !candidate && !detachedPlans.length" class="timeline-empty"><Connection :size="24" /><strong>{{ activeExplorerPlan ? taskDisplayTitle(activeExplorerPlan) : '开始一次全新的需求探索' }}</strong><span>当前需求还没有消息；切换需求不会删除其他对话内容。</span></div>
         <template v-for="(item, index) in timelineItems" :key="item.key">
           <article v-if="item.kind === 'input'" :id="inputRequestTarget(item.request)" :data-nav-key="`input:${item.request.id}`" :class="['input-request-card', 'timeline-input-request', { recovery: item.request.status === 'RECOVERY_REQUIRED', answered: item.request.status === 'ANSWERED' || item.request.status === 'AUTO_RESOLVED', cancelled: item.request.status === 'CANCELLED' }]">
             <div class="input-request-card-icon"><Check v-if="item.request.status === 'ANSWERED' || item.request.status === 'AUTO_RESOLVED'" :size="16" /><Warning v-else-if="item.request.status === 'RECOVERY_REQUIRED' || item.request.status === 'CANCELLED'" :size="16" /><InfoFilled v-else :size="16" /></div>
@@ -1714,7 +1692,7 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
       <button v-if="showScrollToLatest" class="scroll-to-latest" type="button" aria-label="Scroll to latest message" title="Scroll to latest message" @click="jumpToLatest"><img class="scroll-to-latest-image" :src="scrollToLatestIcon" alt="" /></button>
       </div>
       </div>
-      <div v-if="!activeRunId" class="composer"><div class="composer-input"><textarea v-model="draft" :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || explorerPaused" aria-label="Explorer message" placeholder="继续探索，或提出修改…" @keydown="handleComposerKeydown" /><span class="composer-mode">Plan Mode</span></div><div class="composer-footer"><el-button size="small" plain :disabled="busy || Boolean(revisionDraft) || !activeExplorerPlan" :title="revisionDraft ? '请先完成当前 Plan Revision 编辑' : '在当前需求中开启一个独立 Plan'" @click="startNewPlanForRequirement">新建 Plan</el-button><ProviderUsageFooter :model="explorerModel" :context="contextUsage" context-note="estimated" /><span v-if="sendingTurn" class="composer-status" role="status" aria-live="polite">Message sent · waiting for Plan Explorer…</span><el-button class="composer-send" type="primary" circle :loading="busy" :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || !draft.trim() || explorerPaused || busy" aria-label="Send message" :title="busy ? '当前回合执行中，完成后可发送' : 'Send message'" @click="sendTurn"><ArrowUp :size="18" /></el-button></div></div>
+      <div v-if="!activeRunId" class="composer"><div class="composer-input"><textarea v-model="draft" :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || explorerPaused" aria-label="Explorer message" placeholder="继续探索，或提出修改…" @keydown="handleComposerKeydown" /><span class="composer-mode">Plan Mode</span></div><div class="composer-footer"><el-button size="small" plain :disabled="!thread || thread.state === 'ARCHIVED' || !activeExplorerPlan" title="在当前探索线程下新建一个独立需求" @click="createExplorerPlan">新建需求</el-button><ProviderUsageFooter :model="explorerModel" :context="contextUsage" context-note="estimated" /><span v-if="sendingTurn" class="composer-status" role="status" aria-live="polite">Message sent · waiting for Plan Explorer…</span><el-button class="composer-send" type="primary" circle :loading="busy" :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || !draft.trim() || explorerPaused || busy" aria-label="Send message" :title="busy ? '当前回合执行中，完成后可发送' : 'Send message'" @click="sendTurn"><ArrowUp :size="18" /></el-button></div></div>
     </section>
     <aside class="context-panel-shell">
       <div class="context-panel">

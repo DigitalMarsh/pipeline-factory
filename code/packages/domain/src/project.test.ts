@@ -198,7 +198,7 @@ describe("ProjectService", () => {
     };
     const explorer = new ExplorerThreadService(store, model, { cwdForProject: (projectId) => projects.get(projectId).repoRoot });
 
-    await explorer.startTurn({ threadId: "explorer-1", content: "Inspect the repository", clientTurnId: "turn-1" });
+    await explorer.startTurn({ threadId: "explorer-1", explorerPlanId: store.listExplorerPlans("explorer-1")[0]!.id, content: "Inspect the repository", clientTurnId: "turn-1" });
 
     expect(requestCwd).toBe("/repo/demo");
   });
@@ -215,6 +215,7 @@ describe("ProjectService", () => {
     const requirement = firstStore.listExplorerPlans(thread.id)[0]!;
     const candidate = firstPlans.createCandidatePlan({ projectId: "project-sqlite", sourceExplorerThreadId: thread.id, explorerPlanId: requirement.id, title: "Saved candidate" });
     firstPlans.selectCandidate(requirement.id, null);
+    firstStore.updateExplorerPlan({ ...firstStore.getExplorerPlan(requirement.id)!, providerThreadId: "provider-requirement-1", repositoryContextKey: "repository-v2" });
     firstStore.close();
 
     const reopened = new SqlitePipelineStore(databasePath);
@@ -227,7 +228,7 @@ describe("ProjectService", () => {
 
     expect(project).toMatchObject({ id: "project-sqlite", name: "SQLite Updated", shortName: "SQL", configVersion: 2 });
     expect(history.map((item) => item.version)).toEqual([1, 2]);
-    expect(restoredRequirement).toMatchObject({ candidatePlanId: null, newPlanRequested: true });
+    expect(restoredRequirement).toMatchObject({ candidatePlanId: null, newPlanRequested: true, providerThreadId: "provider-requirement-1", repositoryContextKey: "repository-v2" });
     expect(candidateVersions).toMatchObject([{ id: candidate.id, revision: 1, title: "Saved candidate", status: "DRAFT" }]);
   });
 

@@ -83,9 +83,10 @@ describe("task tree", () => {
     expect(items[0]!.plan).toBeNull();
   });
 
-  it("uses Task terminology only for placeholder display titles", () => {
-    expect(taskDisplayTitle(task("task-1", 1))).toBe("Task 1 / 待探索");
-    expect(taskDisplayTitle(task("task-2", 2, "Write onboarding plan"))).toBe("Write onboarding plan");
+  it("shows numbered requirement titles from the first message and preserves manual names", () => {
+    expect(taskDisplayTitle(task("task-1", 1))).toBe("需求1：待探索");
+    expect(taskDisplayTitle({ ...task("task-2", 2), latestUserMessageSummary: "写一份香蕉的简介" })).toBe("需求2：写一份香蕉的简介");
+    expect(taskDisplayTitle({ ...task("task-2", 2, "My manual name"), titleSource: "MANUAL" })).toBe("需求2：My manual name");
     expect(taskRuntimeLabel({ ...task("task-1", 1), runtimeStatus: "RUNNING" })).toBe("运行中");
   });
 });

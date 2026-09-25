@@ -5,16 +5,14 @@
 <script setup lang="ts">
 import { ArrowDown, ArrowRight, Connection, Delete, EditPen, FolderOpened, MoreFilled, Plus, Refresh, Setting, VideoPause, VideoPlay, View } from "@element-plus/icons-vue";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import type { ExplorerThread, Project } from "../types";
-import type { TaskTreeItem } from "../utils/taskTree";
+import type { ExplorerPlan, ExplorerThread, Project } from "../types";
 import { taskDisplayTitle, taskRuntimeLabel } from "../utils/taskTree";
 
 type LeftPanel = "projects" | "explorers";
-type ThreadActionCommand = "toggle-pause" | "rename" | "policy" | "refresh" | "new-task" | "delete";
+type ThreadActionCommand = "toggle-pause" | "rename" | "policy" | "refresh" | "new-requirement" | "delete";
 type ExplorerTreeNode =
   | { key: string; label: string; kind: "explorer"; explorer: ExplorerThread; children: ExplorerTreeNode[] }
-  | { key: string; label: string; kind: "task"; taskItem: TaskTreeItem; children: ExplorerTreeNode[] }
-  | { key: string; label: string; kind: "plan"; taskItem: TaskTreeItem; children: ExplorerTreeNode[] };
+  | { key: string; label: string; kind: "requirement"; requirement: ExplorerPlan; children: ExplorerTreeNode[] };
 
 const props = withDefaults(defineProps<{
   panel: LeftPanel;
@@ -30,7 +28,7 @@ const props = withDefaults(defineProps<{
   explorerError?: string | null;
   planCenterActive?: boolean;
   planCenterCount?: number;
-  taskTreeItems?: TaskTreeItem[];
+  requirements?: ExplorerPlan[];
   activeExplorerPlanId?: string | null;
   explorerPaused?: boolean;
 }>(), {
@@ -40,7 +38,7 @@ const props = withDefaults(defineProps<{
   explorerError: null,
   planCenterActive: false,
   planCenterCount: 0,
-  taskTreeItems: () => [],
+  requirements: () => [],
   activeExplorerPlanId: null,
   explorerPaused: false,
 });
@@ -57,7 +55,7 @@ const emit = defineEmits<{
   "create-explorer": [];
   "create-project": [];
   "select-explorer-plan": [explorerPlanId: string];
-  "select-plan-tree-item": [item: TaskTreeItem];
+  "rename-explorer-plan": [explorerPlanId: string];
   "thread-action": [command: ThreadActionCommand];
 }>();
 
@@ -120,10 +118,6 @@ function explorerArchiveAriaLabel(explorer: ExplorerThread): string {
   return `${explorerArchiveLabel(explorer)} ${explorer.title}`;
 }
 
-function planStatusLabel(status: string): string {
-  return ({ DRAFT: "Candidate", DISCARDED: "Discarded", READY: "Confirmed", ENQUEUED: "Enqueued", DISPATCHED: "Dispatched", QUEUED: "Queued", STARTING: "Starting", IN_PROGRESS: "Running", VERIFYING: "Verifying", MERGE_READY: "Ready for review", MERGED: "Merged", NEEDS_PLAN_CHANGE: "Plan change required", BLOCKED: "Blocked" } as Record<string, string>)[status] ?? status;
-}
-
 const explorerTreeProps = { children: "children", label: "label" };
 const explorerTreeData = computed<ExplorerTreeNode[]>(() => {
   const explorer = props.thread;
@@ -133,27 +127,20 @@ const explorerTreeData = computed<ExplorerTreeNode[]>(() => {
     label: explorer.title,
     kind: "explorer",
     explorer,
-    children: props.taskTreeItems.map((taskItem) => ({
-      key: `task:${taskItem.task.id}`,
-      label: taskDisplayTitle(taskItem.task),
-      kind: "task" as const,
-      taskItem,
-      children: [{
-        key: taskItem.planKey ?? `plan-placeholder:${taskItem.task.id}`,
-        label: taskItem.plan?.title ?? "等待生成 Plan",
-        kind: "plan" as const,
-        taskItem,
-        children: [],
-      }],
+    children: [...props.requirements].sort((a, b) => a.ordinal - b.ordinal).map((requirement) => ({
+      key: `requirement:${requirement.id}`,
+      label: taskDisplayTitle(requirement),
+      kind: "requirement" as const,
+      requirement,
+      children: [],
     })),
   }];
 });
-const activeExplorerTreeNodeKey = computed(() => props.activeExplorerPlanId ? `task:${props.activeExplorerPlanId}` : null);
+const activeExplorerTreeNodeKey = computed(() => props.activeExplorerPlanId ? `requirement:${props.activeExplorerPlanId}` : null);
 
 function handleExplorerTreeNodeClick(data: ExplorerTreeNode): void {
   if (data.kind === "explorer") emit("select-explorer", data.explorer.id);
-  else if (data.kind === "task") emit("select-explorer-plan", data.taskItem.task.id);
-  else if (data.taskItem.plan) emit("select-plan-tree-item", data.taskItem);
+  else emit("select-explorer-plan", data.requirement.id);
 }
 
 function emitThreadAction(command: string | number): void {
@@ -345,7 +332,7 @@ function emitThreadAction(command: string | number): void {
               :current-node-key="activeExplorerTreeNodeKey"
               :indent="16"
               empty-text=""
-              aria-label="Explorer Thread、Task 和 Plan 导航"
+              aria-label="探索线程与需求导航"
               @node-click="handleExplorerTreeNodeClick"
             >
               <template #default="{ data }">
@@ -377,7 +364,7 @@ function emitThreadAction(command: string | number): void {
                             </span>
                           </el-dropdown-item>
                           <el-dropdown-item command="rename"><span class="thread-action-menu-item"><EditPen :size="16" /><span>重命名线程</span></span></el-dropdown-item>
-                          <el-dropdown-item command="new-task"><span class="thread-action-menu-item"><Plus :size="16" /><span>新建 Task</span></span></el-dropdown-item>
+                          <el-dropdown-item command="new-requirement"><span class="thread-action-menu-item"><Plus :size="16" /><span>新建需求</span></span></el-dropdown-item>
                           <el-dropdown-item command="policy"><span class="thread-action-menu-item"><View :size="16" /><span>查看策略</span></span></el-dropdown-item>
                           <el-dropdown-item command="refresh"><span class="thread-action-menu-item"><Refresh :size="16" /><span>刷新线程</span></span></el-dropdown-item>
                           <el-dropdown-item command="delete" class="thread-action-danger"><span class="thread-action-menu-item"><Delete :size="16" /><span>删除线程</span></span></el-dropdown-item>
@@ -386,16 +373,13 @@ function emitThreadAction(command: string | number): void {
                     </el-dropdown>
                   </div>
                 </div>
-                <div v-else-if="data.kind === 'task'" :class="['explorer-tree-task-row', { active: data.taskItem.task.id === props.activeExplorerPlanId }]">
-                  <button class="explorer-tree-task-button" type="button" :aria-current="data.taskItem.task.id === props.activeExplorerPlanId ? 'page' : undefined" @click.stop="emit('select-explorer-plan', data.taskItem.task.id)">
-                    <span class="explorer-tree-task-title"><strong>{{ taskDisplayTitle(data.taskItem.task) }}</strong><em>{{ taskRuntimeLabel(data.taskItem.task) }}</em></span>
-                    <small>{{ data.taskItem.task.latestUserMessageSummary ?? '尚未开始探索' }}</small>
+                <div v-else :class="['explorer-tree-task-row', { active: data.requirement.id === props.activeExplorerPlanId }]">
+                  <button class="explorer-tree-task-button" type="button" :aria-current="data.requirement.id === props.activeExplorerPlanId ? 'page' : undefined" @click.stop="emit('select-explorer-plan', data.requirement.id)">
+                    <span class="explorer-tree-task-title"><strong>{{ taskDisplayTitle(data.requirement) }}</strong><em>{{ taskRuntimeLabel(data.requirement) }}</em></span>
+                    <small v-if="data.requirement.titleSource === 'MANUAL' || !data.requirement.latestUserMessageSummary">{{ data.requirement.latestUserMessageSummary ?? '尚未开始探索' }}</small>
                   </button>
+                  <button class="explorer-tree-rename" type="button" :aria-label="`重命名${taskDisplayTitle(data.requirement)}`" :title="`重命名${taskDisplayTitle(data.requirement)}`" @click.stop="emit('rename-explorer-plan', data.requirement.id)"><EditPen :size="12" /></button>
                 </div>
-                <button v-else-if="data.taskItem.plan" class="explorer-tree-plan-button" type="button" :aria-label="`定位 ${data.taskItem.plan.title}`" @click.stop="emit('select-plan-tree-item', data.taskItem)">
-                  <span class="explorer-tree-plan-copy"><strong>{{ data.taskItem.plan.title }}</strong><small>Revision {{ data.taskItem.plan.revision }} · {{ planStatusLabel(data.taskItem.plan.status) }}</small></span>
-                </button>
-                <span v-else class="explorer-tree-empty-plan">{{ data.taskItem.task.candidatePlanId ? 'Plan 加载失败' : '等待生成 Plan' }}</span>
               </template>
             </el-tree>
           </template>

@@ -13,8 +13,9 @@ export type TaskTreeItem = {
 };
 
 export function taskDisplayTitle(task: ExplorerPlan): string {
-  const placeholder = new RegExp(`^Plan ${task.ordinal}(?=$|\\s|/)`);
-  return placeholder.test(task.title) ? task.title.replace(placeholder, `Task ${task.ordinal}`) : task.title;
+  const legacyTitle = task.title.replace(new RegExp(`^(?:Plan|Task) ${task.ordinal}\\s*(?:[/：:]\\s*)?`), "").trim();
+  const label = task.titleSource === "MANUAL" ? (legacyTitle || task.title) : (task.latestUserMessageSummary || legacyTitle || "待探索");
+  return `需求${task.ordinal}：${label}`;
 }
 
 export function taskRuntimeLabel(task: ExplorerPlan): string {

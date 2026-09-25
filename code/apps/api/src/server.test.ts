@@ -510,11 +510,16 @@ describe("Pipeline Factory v4 API", () => {
     apps.push(app);
     const plans = new (await import("@pipeline-factory/domain")).PlanService(store);
     plans.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
+    const explorerPlanId = store.listExplorerPlans("thread-1")[0]!.id;
 
-    const sent = await app.inject({ method: "POST", url: "/api/v4/projects/project-1/explorer-thread/turns", payload: { threadId: "thread-1", content: "Explore the repository", clientTurnId: "client-1" } });
+    const missingContext = await app.inject({ method: "POST", url: "/api/v4/projects/project-1/explorer-thread/turns", payload: { threadId: "thread-1", content: "Explore the repository", clientTurnId: "missing-context" } });
+    expect(missingContext.statusCode).toBe(400);
+    const sent = await app.inject({ method: "POST", url: "/api/v4/projects/project-1/explorer-thread/turns", payload: { threadId: "thread-1", explorerPlanId, content: "Explore the repository", clientTurnId: "client-1" } });
     expect(sent.statusCode).toBe(202);
     expect(sent.json().turn.assistant.status).toBe("RUNNING");
-    const turns = await app.inject({ method: "GET", url: "/api/v4/projects/project-1/explorer-thread/turns?threadId=thread-1" });
+    const missingQueryContext = await app.inject({ method: "GET", url: "/api/v4/projects/project-1/explorer-thread/turns?threadId=thread-1" });
+    expect(missingQueryContext.statusCode).toBe(400);
+    const turns = await app.inject({ method: "GET", url: `/api/v4/projects/project-1/explorer-thread/turns?threadId=thread-1&explorerPlanId=${explorerPlanId}` });
     expect(turns.json().items).toHaveLength(2);
   });
 
@@ -536,6 +541,8 @@ describe("Pipeline Factory v4 API", () => {
     expect(plan2).toMatchObject({ ordinal: 2, title: "Plan 2 / 待探索", explorerThreadId: "thread-plans" });
 
     const plan1 = initial.json().items[0];
+    const otherThread = plans.registerThread({ id: "thread-other", projectId: "project-1", parentThreadId: null });
+    const otherThreadPlan = store.listExplorerPlans(otherThread.id)[0]!;
     plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-plans", explorerPlanId: plan1.id, title: "Task 1 candidate" });
     plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-plans", explorerPlanId: plan2.id, title: "Task 2 candidate" });
     store.saveTurn({ id: "task-1-user", threadId: "thread-plans", role: "user", content: "Task 1 message", status: "COMPLETED", createdAt: "2026-09-19T10:00:00.000Z", sequence: 1, explorerPlanId: plan1.id });
@@ -562,6 +569,24 @@ describe("Pipeline Factory v4 API", () => {
     expect(crossProject.statusCode).toBe(404);
     const invalidTurnPlan = await app.inject({ method: "POST", url: "/api/v4/projects/project-1/explorer-thread/turns", payload: { threadId: "thread-plans", explorerPlanId: "missing-plan", content: "invalid", clientTurnId: "invalid-plan-turn" } });
     expect(invalidTurnPlan.statusCode).toBe(409);
+    const crossThreadTurnPlan = await app.inject({ method: "POST", url: "/api/v4/projects/project-1/explorer-thread/turns", payload: { threadId: "thread-plans", explorerPlanId: otherThreadPlan.id, content: "invalid cross-thread requirement", clientTurnId: "cross-thread-plan-turn" } });
+    expect(crossThreadTurnPlan.statusCode).toBe(409);
+    const scopedTurns = await app.inject({ method: "GET", url: `/api/v4/projects/project-1/explorer-thread/turns?threadId=thread-plans&explorerPlanId=${plan2.id}` });
+    expect(scopedTurns.statusCode).toBe(200);
+    expect(scopedTurns.json().items.map((turn: { id: string }) => turn.id)).toEqual(["task-2-user", "task-2-assistant"]);
+    const crossThreadQuery = await app.inject({ method: "GET", url: `/api/v4/projects/project-1/explorer-thread/turns?threadId=thread-plans&explorerPlanId=${otherThreadPlan.id}` });
+    expect(crossThreadQuery.statusCode).toBe(404);
+    const scopedActivity = await app.inject({ method: "GET", url: `/api/v4/projects/project-1/explorers/thread-plans/activity?explorerPlanId=${plan2.id}` });
+    expect(scopedActivity.statusCode).toBe(200);
+    expect(scopedActivity.json().items.map((item: { turnId: string }) => item.turnId)).toEqual(["task-2-user", "task-2-assistant"]);
+    const missingActivityContext = await app.inject({ method: "GET", url: "/api/v4/projects/project-1/explorers/thread-plans/activity" });
+    const missingInputContext = await app.inject({ method: "GET", url: "/api/v4/projects/project-1/explorer-thread/input-requests?threadId=thread-plans" });
+    const missingLoopContext = await app.inject({ method: "GET", url: "/api/v4/projects/project-1/explorer-thread/agent-loops?threadId=thread-plans" });
+    const missingEventContext = await app.inject({ method: "GET", url: "/api/v4/projects/project-1/explorer-thread/events?threadId=thread-plans" });
+    expect(missingActivityContext.statusCode).toBe(400);
+    expect(missingInputContext.statusCode).toBe(400);
+    expect(missingLoopContext.statusCode).toBe(400);
+    expect(missingEventContext.statusCode).toBe(400);
   });
 
   it("returns an observable model failure instead of a successful blank assistant turn", async () => {
@@ -580,7 +605,8 @@ describe("Pipeline Factory v4 API", () => {
     createTestProject(store);
     plans.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
 
-    const response = await app.inject({ method: "POST", url: "/api/v4/projects/project-1/explorer-thread/turns", payload: { threadId: "thread-1", content: "hello", clientTurnId: "client-failure" } });
+    const explorerPlanId = store.listExplorerPlans("thread-1")[0]!.id;
+    const response = await app.inject({ method: "POST", url: "/api/v4/projects/project-1/explorer-thread/turns", payload: { threadId: "thread-1", explorerPlanId, content: "hello", clientTurnId: "client-failure" } });
 
     expect(response.statusCode).toBe(202);
     for (let attempt = 0; attempt < 50 && store.listTurns("thread-1")[1]?.status !== "FAILED"; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 1));
@@ -875,6 +901,7 @@ describe("Pipeline Factory v4 API", () => {
     const store = new InMemoryPipelineStore();
     createTestProject(store);
     store.saveThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
+    const explorerPlanId = store.listExplorerPlans("thread-1")[0]!.id;
     let streamCount = 0;
     const resumeOrder: string[] = [];
     const model: ModelGateway = {
@@ -902,10 +929,10 @@ describe("Pipeline Factory v4 API", () => {
     const app = createApp({ store, model, seed: false });
     apps.push(app);
     const plans = new (await import("@pipeline-factory/domain")).PlanService(store);
-    const accepted = await app.inject({ method: "POST", url: "/api/v4/projects/project-1/explorer-thread/turns", payload: { threadId: "thread-1", content: "继续探索", clientTurnId: "client-1" } });
+    const accepted = await app.inject({ method: "POST", url: "/api/v4/projects/project-1/explorer-thread/turns", payload: { threadId: "thread-1", explorerPlanId, content: "继续探索", clientTurnId: "client-1" } });
     expect(accepted.statusCode).toBe(202);
     expect(accepted.json().turn.assistant.status).toBe("RUNNING");
-    const turnsWithCursor = await app.inject({ method: "GET", url: "/api/v4/projects/project-1/explorer-thread/turns?threadId=thread-1" });
+    const turnsWithCursor = await app.inject({ method: "GET", url: `/api/v4/projects/project-1/explorer-thread/turns?threadId=thread-1&explorerPlanId=${explorerPlanId}` });
     expect(turnsWithCursor.statusCode).toBe(200);
     expect(turnsWithCursor.json().lastEventSequence).toEqual(expect.any(Number));
     let input = store.listInputRequests("thread-1", "OPEN")[0];
@@ -925,7 +952,7 @@ describe("Pipeline Factory v4 API", () => {
     expect(candidate.statusCode).toBe(200);
     expect(candidate.json().plan).toMatchObject({ title: "API generated plan", status: "DRAFT" });
     expect(store.getThread("thread-1")).toMatchObject({ exploration: { status: "READY" } });
-    const activity = await app.inject({ method: "GET", url: "/api/v4/projects/project-1/explorers/thread-1/activity" });
+    const activity = await app.inject({ method: "GET", url: `/api/v4/projects/project-1/explorers/thread-1/activity?explorerPlanId=${explorerPlanId}` });
     expect(activity.statusCode).toBe(200);
     expect(JSON.stringify(activity.json().items)).not.toContain("pipeline-factory-plan");
     expect(activity.json().items.some((item: { details?: { title?: string } | null }) => item.details?.title === "API generated plan")).toBe(true);
@@ -967,7 +994,7 @@ describe("Pipeline Factory v4 API", () => {
     apps.push(app);
 
     const archiveCurrent = await app.inject({ method: "POST", url: `/api/v4/projects/project-1/explorers/${current.id}/archive` });
-    const startArchived = await app.inject({ method: "POST", url: "/api/v4/projects/project-1/explorer-thread/turns", payload: { threadId: archived.id, content: "继续探索", clientTurnId: "archived-turn" } });
+    const startArchived = await app.inject({ method: "POST", url: "/api/v4/projects/project-1/explorer-thread/turns", payload: { threadId: archived.id, explorerPlanId: store.listExplorerPlans(archived.id)[0]!.id, content: "继续探索", clientTurnId: "archived-turn" } });
 
     expect(archiveCurrent.statusCode).toBe(409);
     expect(archiveCurrent.json()).toMatchObject({ code: "EXPLORER_ARCHIVE_NOT_ALLOWED" });
@@ -998,15 +1025,16 @@ describe("Pipeline Factory v4 API", () => {
     const store = new InMemoryPipelineStore();
     createTestProject(store);
     store.saveThread({ id: "explorer-1", projectId: "project-1", parentThreadId: null });
-    store.saveTurn({ id: "user-1", threadId: "explorer-1", role: "user", content: "hello", status: "COMPLETED", createdAt: "2026-08-29T10:00:00.000Z", sequence: 1 });
-    store.saveTurn({ id: "assistant-1", threadId: "explorer-1", role: "assistant", content: "hello", status: "COMPLETED", createdAt: "2026-08-29T10:00:01.000Z", sequence: 2 });
+    const explorerPlanId = store.listExplorerPlans("explorer-1")[0]!.id;
+    store.saveTurn({ id: "user-1", threadId: "explorer-1", role: "user", content: "hello", status: "COMPLETED", createdAt: "2026-08-29T10:00:00.000Z", sequence: 1, explorerPlanId });
+    store.saveTurn({ id: "assistant-1", threadId: "explorer-1", role: "assistant", content: "hello", status: "COMPLETED", createdAt: "2026-08-29T10:00:01.000Z", sequence: 2, explorerPlanId });
     store.saveAgentLoop({ id: "loop-1", ownerType: "explorer-turn", ownerId: "assistant-1", role: "explorer", mode: "provider-controlled", state: "COMPLETED", stepCount: 1, maxSteps: 40, startedAt: "2026-08-29T10:00:00.500Z", completedAt: "2026-08-29T10:00:02.000Z", providerThreadId: null, providerTurnId: null, checkpointJson: null });
     store.appendAgentLoopStep({ loopId: "loop-1", stepType: "MODEL_TEXT_DELTA", status: "COMPLETED", payload: { text: "hello" }, occurredAt: "2026-08-29T10:00:01.000Z" });
     store.appendAgentLoopStep({ loopId: "loop-1", stepType: "TOOL_REQUESTED", status: "RUNNING", callId: "call-1", payload: { tool: "read_file" }, occurredAt: "2026-08-29T10:00:01.100Z" });
     const app = createApp({ store, seed: false });
     apps.push(app);
 
-    const response = await app.inject({ method: "GET", url: "/api/v4/projects/project-1/explorers/explorer-1/activity" });
+    const response = await app.inject({ method: "GET", url: `/api/v4/projects/project-1/explorers/explorer-1/activity?explorerPlanId=${explorerPlanId}` });
 
     expect(response.statusCode).toBe(200);
     expect(response.json().items.map((item: { kind: string }) => item.kind)).toEqual(["USER_MESSAGE", "ASSISTANT_MESSAGE", "TOOL_STARTED"]);

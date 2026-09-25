@@ -169,7 +169,7 @@ export type ExplorerThread = {
   activeRevisionDraftId: string | null;
 };
 
-/** 一个 ExplorerThread 下的独立 Plan 对话分区；不拥有独立 Provider 会话。 */
+/** 一个 ExplorerThread 下的独立需求对话分区，拥有隔离的 Provider 会话。 */
 export type ExplorerPlan = {
   id: string;
   explorerThreadId: string;
@@ -182,6 +182,10 @@ export type ExplorerPlan = {
   latestUserMessageSummary: string | null;
   exploration: PlanExploration;
   candidatePlanId: string | null;
+  /** Provider conversation is isolated per requirement; null means not started yet. */
+  providerThreadId?: string | null;
+  /** Fingerprint of the project repository context last included in this requirement. */
+  repositoryContextKey?: string | null;
   /** Explicit null selection means the next READY output starts a new independent Plan. */
   newPlanRequested?: boolean;
   lastAssessedTurnId: string | null;
@@ -1489,6 +1493,8 @@ export class SqlitePipelineStore implements PipelineStore {
         exploration_diagnostics_json TEXT NOT NULL DEFAULT '[]',
         candidate_plan_id TEXT,
         new_plan_requested INTEGER NOT NULL DEFAULT 0,
+        provider_thread_id TEXT,
+        repository_context_key TEXT,
         last_assessed_turn_id TEXT,
         runtime_status TEXT,
         created_at TEXT NOT NULL,
@@ -1808,6 +1814,8 @@ export class SqlitePipelineStore implements PipelineStore {
     try { this.database.exec("ALTER TABLE plan_revision_drafts ADD COLUMN explorer_plan_id TEXT"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE explorer_plans ADD COLUMN runtime_status TEXT"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE explorer_plans ADD COLUMN new_plan_requested INTEGER NOT NULL DEFAULT 0"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_plans ADD COLUMN provider_thread_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_plans ADD COLUMN repository_context_key TEXT"); } catch { /* Existing databases already have the column. */ }
     this.database.exec("UPDATE explorer_turns SET status = 'FAILED', error = COALESCE(error, '历史记录未包含模型文本') WHERE role = 'assistant' AND trim(content) = '' AND status = 'COMPLETED'");
     try { this.database.exec("ALTER TABLE candidate_plans ADD COLUMN contract_json TEXT NOT NULL DEFAULT '{}'"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE candidate_plans ADD COLUMN generated_spec_json TEXT"); } catch { /* Existing databases already have the column. */ }
@@ -1952,10 +1960,10 @@ export class SqlitePipelineStore implements PipelineStore {
 
   saveExplorerPlan(plan: ExplorerPlan): ExplorerPlan {
     this.database.prepare(`
-      INSERT INTO explorer_plans (id, explorer_thread_id, project_id, ordinal, title, title_source, title_status, message_count, latest_user_message_summary, exploration_status, exploration_missing_json, exploration_completed_json, exploration_diagnostics_json, candidate_plan_id, new_plan_requested, last_assessed_turn_id, runtime_status, created_at, last_activity_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(id) DO UPDATE SET title=excluded.title, title_source=excluded.title_source, title_status=excluded.title_status, message_count=excluded.message_count, latest_user_message_summary=excluded.latest_user_message_summary, exploration_status=excluded.exploration_status, exploration_missing_json=excluded.exploration_missing_json, exploration_completed_json=excluded.exploration_completed_json, exploration_diagnostics_json=excluded.exploration_diagnostics_json, candidate_plan_id=excluded.candidate_plan_id, new_plan_requested=excluded.new_plan_requested, last_assessed_turn_id=excluded.last_assessed_turn_id, runtime_status=excluded.runtime_status, last_activity_at=excluded.last_activity_at
-    `).run(plan.id, plan.explorerThreadId, plan.projectId, plan.ordinal, plan.title, plan.titleSource, plan.titleStatus, plan.messageCount, plan.latestUserMessageSummary, plan.exploration.status, JSON.stringify(plan.exploration.missing), JSON.stringify(plan.exploration.completed), JSON.stringify(plan.exploration.diagnostics), plan.candidatePlanId, plan.newPlanRequested ? 1 : 0, plan.lastAssessedTurnId, plan.runtimeStatus ?? null, plan.createdAt, plan.lastActivityAt);
+      INSERT INTO explorer_plans (id, explorer_thread_id, project_id, ordinal, title, title_source, title_status, message_count, latest_user_message_summary, exploration_status, exploration_missing_json, exploration_completed_json, exploration_diagnostics_json, candidate_plan_id, new_plan_requested, provider_thread_id, repository_context_key, last_assessed_turn_id, runtime_status, created_at, last_activity_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET title=excluded.title, title_source=excluded.title_source, title_status=excluded.title_status, message_count=excluded.message_count, latest_user_message_summary=excluded.latest_user_message_summary, exploration_status=excluded.exploration_status, exploration_missing_json=excluded.exploration_missing_json, exploration_completed_json=excluded.exploration_completed_json, exploration_diagnostics_json=excluded.exploration_diagnostics_json, candidate_plan_id=excluded.candidate_plan_id, new_plan_requested=excluded.new_plan_requested, provider_thread_id=excluded.provider_thread_id, repository_context_key=excluded.repository_context_key, last_assessed_turn_id=excluded.last_assessed_turn_id, runtime_status=excluded.runtime_status, last_activity_at=excluded.last_activity_at
+    `).run(plan.id, plan.explorerThreadId, plan.projectId, plan.ordinal, plan.title, plan.titleSource, plan.titleStatus, plan.messageCount, plan.latestUserMessageSummary, plan.exploration.status, JSON.stringify(plan.exploration.missing), JSON.stringify(plan.exploration.completed), JSON.stringify(plan.exploration.diagnostics), plan.candidatePlanId, plan.newPlanRequested ? 1 : 0, plan.providerThreadId ?? null, plan.repositoryContextKey ?? null, plan.lastAssessedTurnId, plan.runtimeStatus ?? null, plan.createdAt, plan.lastActivityAt);
     return this.getExplorerPlan(plan.id) as ExplorerPlan;
   }
 
@@ -2458,6 +2466,8 @@ export class SqlitePipelineStore implements PipelineStore {
       messageCount: Number(row.message_count ?? 0), latestUserMessageSummary: row.latest_user_message_summary === null || row.latest_user_message_summary === undefined ? null : String(row.latest_user_message_summary),
       exploration: { status: String(row.exploration_status ?? "INCOMPLETE") as PlanExplorationStatus, missing: parseStringArray(row.exploration_missing_json, [...REQUIRED_PLAN_AREAS]), completed: parseStringArray(row.exploration_completed_json, []), diagnostics: parsePlanValidationIssues(row.exploration_diagnostics_json), candidatePlanId: row.candidate_plan_id === null || row.candidate_plan_id === undefined ? null : String(row.candidate_plan_id), lastAssessedTurnId: row.last_assessed_turn_id === null || row.last_assessed_turn_id === undefined ? null : String(row.last_assessed_turn_id) },
       newPlanRequested: Number(row.new_plan_requested ?? 0) === 1,
+      providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id),
+      repositoryContextKey: row.repository_context_key === null || row.repository_context_key === undefined ? null : String(row.repository_context_key),
       candidatePlanId: row.candidate_plan_id === null || row.candidate_plan_id === undefined ? null : String(row.candidate_plan_id), lastAssessedTurnId: row.last_assessed_turn_id === null || row.last_assessed_turn_id === undefined ? null : String(row.last_assessed_turn_id), ...(row.runtime_status === null || row.runtime_status === undefined ? {} : { runtimeStatus: String(row.runtime_status) as NonNullable<ExplorerTurn["status"]> }), createdAt: String(row.created_at), lastActivityAt: String(row.last_activity_at),
     };
   }
@@ -4156,11 +4166,13 @@ export class ExplorerThreadService {
   private readonly titleGenerator: ExplorerTitleGenerator | undefined;
   private readonly cwdForProject: ((projectId: string) => string | undefined) | undefined;
   private readonly modelConfigForProject: ((projectId: string) => ModelRoleConfig | undefined) | undefined;
+  private readonly repositoryContextForProject: ((projectId: string) => { key: string; summary: string } | undefined) | undefined;
 
-  constructor(private readonly store: PipelineStore, private readonly model: ModelGateway, options: { /** @deprecated retained for compatibility; Explorer uses the global model.loop.maxSteps. */ maxAutoContinuationTurns?: number | undefined; maxSteps?: number | undefined; maxDurationMs?: number | undefined; maxRepeatedToolCalls?: number | undefined; maxNoProgressSteps?: number | undefined; titleGenerator?: ExplorerTitleGenerator | undefined; cwdForProject?: ((projectId: string) => string | undefined) | undefined; modelConfigForProject?: ((projectId: string) => ModelRoleConfig | undefined) | undefined } = {}) {
+  constructor(private readonly store: PipelineStore, private readonly model: ModelGateway, options: { /** @deprecated retained for compatibility; Explorer uses the global model.loop.maxSteps. */ maxAutoContinuationTurns?: number | undefined; maxSteps?: number | undefined; maxDurationMs?: number | undefined; maxRepeatedToolCalls?: number | undefined; maxNoProgressSteps?: number | undefined; titleGenerator?: ExplorerTitleGenerator | undefined; cwdForProject?: ((projectId: string) => string | undefined) | undefined; modelConfigForProject?: ((projectId: string) => ModelRoleConfig | undefined) | undefined; repositoryContextForProject?: ((projectId: string) => { key: string; summary: string } | undefined) | undefined } = {}) {
     this.titleGenerator = options.titleGenerator;
     this.cwdForProject = options.cwdForProject;
     this.modelConfigForProject = options.modelConfigForProject;
+    this.repositoryContextForProject = options.repositoryContextForProject;
     this.plans = new PlanService(store);
     this.loopMaxSteps = options.maxSteps ?? 40;
     this.agentLoops = new AgentLoopEngine(store, model, undefined, {
@@ -4203,23 +4215,26 @@ export class ExplorerThreadService {
     for (const threadId of this.queuedTurns.keys()) await this.startNextQueuedTurn(threadId);
   }
 
-  async startTurn(input: { threadId: string; explorerPlanId?: string; content: string; clientTurnId: string }): Promise<{ user: ExplorerTurn; assistant: ExplorerTurn; eventsUrl: string; loopId: string | null }> {
+  async startTurn(input: { threadId: string; explorerPlanId: string; content: string; clientTurnId: string }): Promise<{ user: ExplorerTurn; assistant: ExplorerTurn; eventsUrl: string; loopId: string | null }> {
     const thread = this.store.getThread(input.threadId);
     if (!thread) throw new Error(`ExplorerThread ${input.threadId} not found`);
+    if (!input.explorerPlanId) throw new Error("explorerPlanId is required for every Explorer turn");
     const prior = this.store.getIdempotency("explorer-turn", input.clientTurnId);
     if (prior) return prior as unknown as { user: ExplorerTurn; assistant: ExplorerTurn; eventsUrl: string; loopId: string | null };
     if (thread.state === "ARCHIVED") throw new Error(`ExplorerThread ${input.threadId} is archived`);
     const plan = this.resolveExplorerPlan(thread, input.explorerPlanId);
     const turns = this.store.listTurns(input.threadId);
+    const firstRequirementMessage = turns.every((turn) => turn.explorerPlanId !== plan.id || turn.role !== "user");
     const hasActiveJob = this.jobs.has(input.threadId) || this.store.listTurns(input.threadId).some((turn) => turn.status === "RUNNING" || turn.status === "WAITING_FOR_INPUT");
     const user: ExplorerTurn = { id: this.store.nextId("turn"), threadId: input.threadId, role: "user", content: input.content, status: "COMPLETED", createdAt: this.store.now(), sequence: turns.length + 1, explorerPlanId: plan.id };
     const assistant: ExplorerTurn = { id: this.store.nextId("turn"), threadId: input.threadId, role: "assistant", content: "", status: hasActiveJob ? "QUEUED" : "RUNNING", createdAt: this.store.now(), sequence: turns.length + 2, explorerPlanId: plan.id };
     this.store.saveTurn(user);
     this.store.saveTurn(assistant);
     this.store.updateThread({ ...thread, activeExplorerPlanId: plan.id, messageCount: thread.messageCount + 2, lastActivityAt: assistant.createdAt });
-    this.store.updateExplorerPlan({ ...plan, messageCount: plan.messageCount + 2, latestUserMessageSummary: summarizeExplorerMessage(input.content), runtimeStatus: assistant.status, lastActivityAt: assistant.createdAt });
-    this.scheduleTitleGeneration(thread.id, input.content);
-    const accepted = { user, assistant, eventsUrl: `/api/v4/projects/${thread.projectId}/explorer-thread/events?threadId=${encodeURIComponent(thread.id)}` };
+    const firstSummary = summarizeExplorerMessage(input.content);
+    this.store.updateExplorerPlan({ ...plan, ...(firstRequirementMessage && plan.titleSource === "AUTO" ? { title: firstSummary || `Plan ${plan.ordinal} / 待探索`, titleStatus: firstSummary ? "GENERATED" : plan.titleStatus } : {}), messageCount: plan.messageCount + 2, latestUserMessageSummary: firstSummary, runtimeStatus: assistant.status, lastActivityAt: assistant.createdAt });
+    this.scheduleTitleGeneration(thread.id, input.content, plan.id);
+    const accepted = { user, assistant, eventsUrl: `/api/v4/projects/${thread.projectId}/explorer-thread/events?threadId=${encodeURIComponent(thread.id)}&explorerPlanId=${encodeURIComponent(plan.id)}` };
     this.publish(this.store.appendEvent({ type: "explorer.turn.accepted", aggregateId: input.threadId, payload: { turnId: assistant.id, userTurnId: user.id, explorerPlanId: plan.id, loopId: null, state: assistant.status } }));
     if (hasActiveJob) {
       const queue = this.queuedTurns.get(thread.id) ?? [];
@@ -4241,17 +4256,20 @@ export class ExplorerThreadService {
     if (!thread || !assistant) throw new Error(`Explorer turn ${assistantId} not found`);
     const plan = this.resolveExplorerPlan(thread, assistant.explorerPlanId);
     if (assistant.status === "QUEUED") this.store.updateTurn({ ...assistant, status: "RUNNING" });
-    const job: { userId: string; assistantId: string; explorerPlanId: string; loopId?: string; providerThreadId: string | null; providerTurnId: string | null; resolveInput?: (() => void) | undefined; cancelled: boolean } = { userId: this.store.listTurns(threadId).find((turn) => turn.role === "user" && turn.sequence < assistant.sequence && turn.explorerPlanId === plan.id)?.id ?? "", assistantId, explorerPlanId: plan.id, providerThreadId: thread.providerThreadId, providerTurnId: null, cancelled: false };
+    const job: { userId: string; assistantId: string; explorerPlanId: string; loopId?: string; providerThreadId: string | null; providerTurnId: string | null; resolveInput?: (() => void) | undefined; cancelled: boolean } = { userId: this.store.listTurns(threadId).find((turn) => turn.role === "user" && turn.sequence === assistant.sequence - 1 && turn.explorerPlanId === plan.id)?.id ?? "", assistantId, explorerPlanId: plan.id, providerThreadId: plan.providerThreadId ?? null, providerTurnId: null, cancelled: false };
     this.jobs.set(threadId, job);
     const user = this.store.listTurns(threadId).find((turn) => turn.id === job.userId);
-    const planBoundary = this.planBoundary(thread, plan, user?.content ?? "");
+    const repositoryContext = this.repositoryContextForProject?.(thread.projectId);
+    const repositoryContextChanged = Boolean(repositoryContext && plan.repositoryContextKey !== repositoryContext.key);
+    const latestPlan = repositoryContextChanged && repositoryContext ? this.store.updateExplorerPlan({ ...plan, repositoryContextKey: repositoryContext.key }) : plan;
+    const planBoundary = this.planBoundary(thread, latestPlan, user?.content ?? "", repositoryContextChanged ? repositoryContext?.summary : undefined);
     const loop = await this.agentLoops.start({
       ownerType: "explorer-turn",
       ownerId: assistant.id,
       role: "explorer",
       mode: this.modelConfigForProject?.(thread.projectId)?.loopMode ?? "provider-controlled",
       maxSteps: this.loopMaxSteps,
-      modelRequest: { messages: this.store.listTurns(thread.id).filter((turn) => turn.id !== assistant.id && !(turn.role === "assistant" && turn.status === "QUEUED")).map((turn) => ({ role: turn.role, content: turn.content })), conversationId: thread.id, continuationPrompt: planBoundary, ...(thread.providerThreadId ? { providerThreadId: thread.providerThreadId } : {}), ...(this.cwdForProject?.(thread.projectId) ? { cwd: this.cwdForProject(thread.projectId) } : {}), ...(this.modelConfigForProject?.(thread.projectId) ? { modelConfig: this.modelConfigForProject(thread.projectId) } : {}) },
+      modelRequest: { messages: this.store.listTurns(thread.id).filter((turn) => turn.explorerPlanId === plan.id && turn.sequence < assistant.sequence && !(turn.role === "assistant" && turn.status === "QUEUED")).map((turn) => ({ role: turn.role, content: turn.content })), conversationId: plan.id, continuationPrompt: planBoundary, ...(plan.providerThreadId ? { providerThreadId: plan.providerThreadId } : {}), ...(this.cwdForProject?.(thread.projectId) ? { cwd: this.cwdForProject(thread.projectId) } : {}), ...(this.modelConfigForProject?.(thread.projectId) ? { modelConfig: this.modelConfigForProject(thread.projectId) } : {}) },
       gate: new PlanCompletenessGate(),
       onEvent: (event) => this.handleExplorerLoopEvent(thread.id, assistant.id, event),
     });
@@ -4303,10 +4321,9 @@ export class ExplorerThreadService {
     return created;
   }
 
-  private planBoundary(thread: ExplorerThread, plan: ExplorerPlan, content: string): string {
-    const firstPlanTurn = this.store.listTurns(thread.id).filter((turn) => turn.explorerPlanId === plan.id && turn.role === "user").length <= 1;
-    const summary = thread.contextSummary ? JSON.stringify(thread.contextSummary) : "{}";
-    return `[Explorer Plan ${plan.ordinal}: ${plan.title}]\n${firstPlanTurn ? `Thread summary: ${summary}\n` : ""}Only continue the current Explorer Plan. Keep artifacts and decisions scoped to this Plan while retaining the shared ExplorerThread context.\nUser message:\n${content}`;
+  private planBoundary(_thread: ExplorerThread, plan: ExplorerPlan, content: string, repositorySummary?: string): string {
+    const firstPlanTurn = this.store.listTurns(plan.explorerThreadId).filter((turn) => turn.explorerPlanId === plan.id && turn.role === "user").length <= 1;
+    return `[需求 ${plan.ordinal}: ${plan.title}]\n${repositorySummary ? `Project repository index (versioned, shared across requirements):\n${repositorySummary}\n` : ""}${firstPlanTurn ? "This is an isolated requirement conversation. Do not infer decisions from sibling requirements.\n" : "Continue only the current requirement conversation.\n"}User message:\n${content}`;
   }
 
   async backfillTitles(): Promise<void> {
@@ -4316,20 +4333,20 @@ export class ExplorerThreadService {
       const firstUser = this.store.listTurns(thread.id).find((turn) => turn.role === "user" && turn.content.trim());
       if (!firstUser) return;
       this.store.updateThread({ ...thread, titleStatus: "GENERATING" });
-      await this.generateTitle(thread.id, firstUser.content);
+      await this.generateTitle(thread.id, firstUser.content, firstUser.explorerPlanId);
     }));
   }
 
-  private scheduleTitleGeneration(threadId: string, content: string): void {
+  private scheduleTitleGeneration(threadId: string, content: string, explorerPlanId: string): void {
     if (!this.titleGenerator || !content.trim()) return;
     const thread = this.store.getThread(threadId);
     if (!thread || thread.titleSource !== "AUTO" || thread.titleStatus !== "PLACEHOLDER") return;
     if (this.store.listTurns(threadId).filter((turn) => turn.role === "user" && turn.content.trim()).length !== 1) return;
     this.store.updateThread({ ...thread, titleStatus: "GENERATING" });
-    void this.generateTitle(threadId, content);
+    void this.generateTitle(threadId, content, explorerPlanId);
   }
 
-  private async generateTitle(threadId: string, content: string): Promise<void> {
+  private async generateTitle(threadId: string, content: string, explorerPlanId?: string): Promise<void> {
     const generator = this.titleGenerator;
     if (!generator) return;
     try {
@@ -4338,7 +4355,7 @@ export class ExplorerThreadService {
       const thread = this.store.getThread(threadId);
       if (!thread || thread.titleSource !== "AUTO" || thread.titleStatus !== "GENERATING") return;
       const updated = this.store.updateThread({ ...thread, title: composeExplorerTitle(thread.createdAt, generated), titleStatus: "GENERATED" });
-      this.publish(this.store.appendEvent({ type: "explorer.title.updated", aggregateId: threadId, payload: { explorerId: threadId, explorerPlanId: updated.activeExplorerPlanId, turnId: null, loopId: null, title: updated.title, titleStatus: updated.titleStatus } }));
+      this.publish(this.store.appendEvent({ type: "explorer.title.updated", aggregateId: threadId, payload: { explorerId: threadId, explorerPlanId: explorerPlanId ?? updated.activeExplorerPlanId, turnId: null, loopId: null, title: updated.title, titleStatus: updated.titleStatus } }));
     } catch {
       const thread = this.store.getThread(threadId);
       if (thread?.titleSource === "AUTO" && thread.titleStatus === "GENERATING") this.store.updateThread({ ...thread, title: projectPlaceholderExplorerTitle(this.store, thread), titleStatus: "FAILED" });
@@ -4477,8 +4494,8 @@ export class ExplorerThreadService {
       const providerThreadId = String(event.payload.threadId ?? "");
       if (providerThreadId) {
         job.providerThreadId = providerThreadId;
-        const thread = this.store.getThread(threadId);
-        if (thread) this.store.updateThread({ ...thread, providerThreadId, lastActivityAt: this.store.now() });
+        const plan = this.store.getExplorerPlan(job.explorerPlanId);
+        if (plan) this.store.updateExplorerPlan({ ...plan, providerThreadId, lastActivityAt: this.store.now() });
       }
       return;
     }
@@ -4489,8 +4506,8 @@ export class ExplorerThreadService {
       if (!current) return;
       const providerThreadId = typeof event.payload.providerThreadId === "string" ? event.payload.providerThreadId : null;
       if (providerThreadId) {
-        const currentThread = this.store.getThread(threadId);
-        if (currentThread && currentThread.providerThreadId !== providerThreadId) this.store.updateThread({ ...currentThread, providerThreadId, lastActivityAt: this.store.now() });
+        const currentPlan = this.store.getExplorerPlan(job.explorerPlanId);
+        if (currentPlan && currentPlan.providerThreadId !== providerThreadId) this.store.updateExplorerPlan({ ...currentPlan, providerThreadId, lastActivityAt: this.store.now() });
       }
       this.store.updateTurn({ ...current, content: current.content + text, status: "RUNNING" });
       this.updatePlanRuntimeStatus(threadId, job.explorerPlanId, "RUNNING");
@@ -4502,6 +4519,8 @@ export class ExplorerThreadService {
       if (!request) return;
       job.providerThreadId = request.threadId;
       job.providerTurnId = request.turnId;
+      const currentPlan = this.store.getExplorerPlan(job.explorerPlanId);
+      if (currentPlan && currentPlan.providerThreadId !== request.threadId) this.store.updateExplorerPlan({ ...currentPlan, providerThreadId: request.threadId, lastActivityAt: this.store.now() });
       const inputRequest: ExplorerInputRequest = { id: this.store.nextId("input"), threadId, explorerPlanId: job.explorerPlanId, localTurnId: assistantId, providerRequestId: request.requestId, providerThreadId: request.threadId, providerTurnId: request.turnId, itemId: request.itemId, questions: request.questions, isBlocking: request.isBlocking, autoResolutionMs: request.autoResolutionMs, status: "OPEN", createdAt: this.store.now(), answeredAt: null, answeredBy: null, redactedAnswerSummary: null };
       const saved = this.store.saveInputRequest(inputRequest);
       const currentThread = this.store.getThread(threadId);

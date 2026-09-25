@@ -82,9 +82,11 @@ describe("Explorer title rules", () => {
     const events: string[] = [];
     service.subscribeEvents(explorer.id, (event) => events.push(event.type));
 
-    await service.startTurn({ threadId: explorer.id, content: "请优化订单取消流程", clientTurnId: "turn-1" });
+    const explorerPlanId = store.listExplorerPlans(explorer.id)[0]!.id;
+    await service.startTurn({ threadId: explorer.id, explorerPlanId, content: "请优化订单取消流程", clientTurnId: "turn-1" });
     await waitFor(() => store.listTurns(explorer.id).some((turn) => turn.role === "assistant" && turn.status === "COMPLETED"));
     expect(store.getThread(explorer.id)).toMatchObject({ title: "探索-20260829-13:45:15", titleSource: "AUTO", titleStatus: "GENERATED" });
+    expect(store.getExplorerPlan(explorerPlanId)).toMatchObject({ title: "请优化订单取消流程", titleSource: "AUTO", latestUserMessageSummary: "请优化订单取消流程" });
     expect(events).not.toContain("explorer.title.updated");
 
     await service.backfillTitles();
@@ -98,7 +100,7 @@ describe("Explorer title rules", () => {
     const titleGenerator: ExplorerTitleGenerator = { generate: async () => { throw new Error("title unavailable"); } };
     const service = new ExplorerThreadService(store, model(), { titleGenerator });
 
-    await service.startTurn({ threadId: explorer.id, content: "请分析登录问题", clientTurnId: "turn-1" });
+    await service.startTurn({ threadId: explorer.id, explorerPlanId: store.listExplorerPlans(explorer.id)[0]!.id, content: "请分析登录问题", clientTurnId: "turn-1" });
     await waitFor(() => store.listTurns(explorer.id).some((turn) => turn.role === "assistant" && turn.status === "COMPLETED"));
     expect(store.getThread(explorer.id)).toMatchObject({ title: "P1-20260829-13:45:15", titleSource: "AUTO", titleStatus: "GENERATED" });
   });
@@ -111,7 +113,7 @@ describe("Explorer title rules", () => {
     const titleGenerator: ExplorerTitleGenerator = { generate: () => new Promise((resolve) => { resolveTitle = resolve; }) };
     const service = new ExplorerThreadService(store, model(), { titleGenerator });
 
-    await service.startTurn({ threadId: explorer.id, content: "请优化订单流程", clientTurnId: "turn-1" });
+    await service.startTurn({ threadId: explorer.id, explorerPlanId: store.listExplorerPlans(explorer.id)[0]!.id, content: "请优化订单流程", clientTurnId: "turn-1" });
     await waitFor(() => store.getThread(explorer.id)?.titleStatus === "GENERATING");
     new ExplorerService(store).rename(explorer.id, "我手动命名的探索");
     resolveTitle("订单流程优化");

@@ -71,7 +71,7 @@ describe("ExplorerService", () => {
     store.updateThread({ ...explorer, state: "ARCHIVED" });
     const service = new ExplorerThreadService(store, new StubModelGateway({ explorer: { model: "explorer" }, executor: { model: "executor" } }));
 
-    await expect(service.startTurn({ threadId: explorer.id, content: "继续探索", clientTurnId: "archived-turn" })).rejects.toThrow("ExplorerThread " + explorer.id + " is archived");
+    await expect(service.startTurn({ threadId: explorer.id, explorerPlanId: store.listExplorerPlans(explorer.id)[0]!.id, content: "继续探索", clientTurnId: "archived-turn" })).rejects.toThrow("ExplorerThread " + explorer.id + " is archived");
     expect(store.listTurns(explorer.id)).toEqual([]);
   });
 });

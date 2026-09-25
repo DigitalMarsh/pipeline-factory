@@ -6,8 +6,7 @@ import { createApp, defineComponent, h, nextTick, ref } from "vue";
 import { ElButton, ElDropdown, ElDropdownItem, ElDropdownMenu, ElTree } from "element-plus";
 import { describe, expect, it } from "vitest";
 import ThreadRail from "./ThreadRail.vue";
-import type { ExplorerThread, Project } from "../types";
-import type { TaskTreeItem } from "../utils/taskTree";
+import type { ExplorerPlan, ExplorerThread, Project } from "../types";
 
 const styles = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../styles.css"), "utf8");
 const source = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "./ThreadRail.vue"), "utf8");
@@ -22,7 +21,7 @@ function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplor
   let selectedProjectId: string | null = null;
   let selectedExplorerId: string | null = null;
   let selectedExplorerPlanId: string | null = null;
-  let selectedPlanTreeItem: TaskTreeItem | null = null;
+  let renamedExplorerPlanId: string | null = null;
   let threadAction: string | null = null;
   let archivedExplorerId: string | null = null;
   const openedProjectIds: string[] = [];
@@ -39,20 +38,10 @@ function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplor
     { id: "explorer-2", projectId: "project-1", title: "Second exploration", state: "COMPLETED", contextMode: "FRESH", messageCount: 4, lastActivityAt: "2026-09-01T14:00:00.000Z" },
     ...(includeArchived ? [{ id: "explorer-3", projectId: "project-1", title: "Archived exploration", state: "ARCHIVED", contextMode: "FRESH", messageCount: 1, lastActivityAt: "2026-08-31T14:00:00.000Z" }] : []),
   ] as unknown as ExplorerThread[];
-  const taskTreeItems = [
-    {
-      task: { id: "task-1", ordinal: 1, title: "Plan 1 / 待探索", latestUserMessageSummary: "写一份苹果的简介", runtimeStatus: "COMPLETED" },
-      plan: { id: "plan-1", title: "Apple overview", revision: 1, status: "DRAFT" },
-      planKey: "plan-plan-1",
-      planTarget: "plan:plan-1",
-    },
-    {
-      task: { id: "task-2", ordinal: 2, title: "Task 2 / 待探索", latestUserMessageSummary: "写一份香蕉的简介", runtimeStatus: "QUEUED" },
-      plan: { id: "plan-2", title: "Banana overview", revision: 1, status: "DRAFT" },
-      planKey: "plan-plan-2",
-      planTarget: "plan:plan-2",
-    },
-  ] as unknown as TaskTreeItem[];
+  const requirements = [
+    { id: "requirement-1", explorerThreadId: "explorer-1", projectId: "project-1", ordinal: 1, title: "Plan 1 / 待探索", titleSource: "AUTO", titleStatus: "PLACEHOLDER", latestUserMessageSummary: "写一份苹果的简介", runtimeStatus: "COMPLETED" },
+    { id: "requirement-2", explorerThreadId: "explorer-1", projectId: "project-1", ordinal: 2, title: "Plan 2 / 待探索", titleSource: "AUTO", titleStatus: "PLACEHOLDER", latestUserMessageSummary: "写一份香蕉的简介", runtimeStatus: "QUEUED" },
+  ] as unknown as ExplorerPlan[];
   const app = createApp(defineComponent({
     setup() {
       const activePanel = ref(panel);
@@ -70,8 +59,8 @@ function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplor
         projectActionId,
         planCenterActive,
         planCenterCount,
-        taskTreeItems,
-        activeExplorerPlanId: "task-1",
+        requirements,
+        activeExplorerPlanId: "requirement-1",
         explorerPaused: false,
         onCreateExplorer: () => { createExplorerCount += 1; },
         onCreateProject: () => { createProjectCount += 1; },
@@ -80,7 +69,7 @@ function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplor
         onSelectProject: (projectId: string) => { selectedProjectId = projectId; },
         onSelectExplorer: (explorerId: string) => { selectedExplorerId = explorerId; },
         onSelectExplorerPlan: (explorerPlanId: string) => { selectedExplorerPlanId = explorerPlanId; },
-        onSelectPlanTreeItem: (item: TaskTreeItem) => { selectedPlanTreeItem = item; },
+        onRenameExplorerPlan: (explorerPlanId: string) => { renamedExplorerPlanId = explorerPlanId; },
         onThreadAction: (command: string) => { threadAction = command; },
         onToggleShowArchived: (value: boolean) => { archivedVisible.value = value; },
         onArchiveExplorer: (explorerId: string) => { archivedExplorerId = explorerId; },
@@ -106,7 +95,7 @@ function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplor
     getSelectedProjectId: () => selectedProjectId,
     getSelectedExplorerId: () => selectedExplorerId,
     getSelectedExplorerPlanId: () => selectedExplorerPlanId,
-    getSelectedPlanTreeItem: () => selectedPlanTreeItem,
+    getRenamedExplorerPlanId: () => renamedExplorerPlanId,
     getThreadAction: () => threadAction,
     getArchivedExplorerId: () => archivedExplorerId,
     getOpenedProjectIds: () => openedProjectIds,
@@ -295,35 +284,36 @@ describe("ThreadRail left workspace navigation", () => {
     mounted.host.remove();
   });
 
-  it("renders the active Explorer as a lightweight always-visible Task and Plan tree", async () => {
+  it("renders only numbered requirements under the active Explorer and keeps the connector clear", async () => {
     const mounted = mountRail();
     const activeRow = mounted.host.querySelector<HTMLElement>('[data-explorer-id="explorer-1"]');
     const inactiveRow = mounted.host.querySelector<HTMLElement>('[data-explorer-id="explorer-2"]');
 
     expect(activeRow?.querySelector(".explorer-thread-tree")).not.toBeNull();
     expect(activeRow?.querySelector(".el-tree")).not.toBeNull();
-    expect(activeRow?.querySelectorAll(".el-tree-node")).toHaveLength(5);
+    expect(activeRow?.querySelectorAll(".el-tree-node")).toHaveLength(3);
     expect(activeRow?.querySelectorAll(".explorer-tree-task-row")).toHaveLength(2);
-    expect(activeRow?.querySelectorAll(".explorer-tree-plan-button")).toHaveLength(2);
-    expect(activeRow?.querySelector(".explorer-tree-plan-button")?.textContent).toContain("Apple overview");
-    expect(activeRow?.querySelectorAll(".explorer-tree-plan-button")[1]?.textContent).toContain("Banana overview");
+    expect(activeRow?.querySelectorAll(".explorer-tree-plan-button")).toHaveLength(0);
+    expect(activeRow?.textContent).toContain("需求1：写一份苹果的简介");
+    expect(activeRow?.textContent).toContain("需求2：写一份香蕉的简介");
     expect(source).toContain("<el-tree");
     expect(source).toContain(":default-expand-all=\"true\"");
     expect(source).toContain(":expand-on-click-node=\"false\"");
     expect(styles).toContain(".explorer-thread-tree .el-tree-node__expand-icon { display: none; }");
     expect(styles).toContain(".explorer-thread-tree > .el-tree-node > .el-tree-node__children::before");
     expect(styles).toContain(".explorer-thread-tree > .el-tree-node > .el-tree-node__children > .el-tree-node::after");
-    expect(styles).toContain(".explorer-thread-tree > .el-tree-node > .el-tree-node__children > .el-tree-node > .el-tree-node__children::before");
+    expect(styles).toContain(".explorer-thread-tree > .el-tree-node > .el-tree-node__children::before { position: absolute; top: 0; bottom: 20px;");
+    expect(styles).toContain(".explorer-thread-row-head { display: flex; box-sizing: border-box; min-width: 0; width: 100%;");
     expect(styles).toContain(".thread-rail .explorer-tree-task-row.active { border-left-color:");
     expect(inactiveRow?.querySelector(".explorer-thread-tree")).toBeNull();
     expect(activeRow?.querySelector<HTMLButtonElement>(".explorer-tree-task-button")?.getAttribute("aria-current")).toBe("page");
 
     activeRow?.querySelectorAll<HTMLButtonElement>(".explorer-tree-task-button")[1]?.click();
-    activeRow?.querySelectorAll<HTMLButtonElement>(".explorer-tree-plan-button")[1]?.click();
+    activeRow?.querySelector<HTMLButtonElement>('[aria-label="重命名需求2：写一份香蕉的简介"]')?.click();
     await nextTick();
 
-    expect(mounted.getSelectedExplorerPlanId()).toBe("task-2");
-    expect(mounted.getSelectedPlanTreeItem()?.planKey).toBe("plan-plan-2");
+    expect(mounted.getSelectedExplorerPlanId()).toBe("requirement-2");
+    expect(mounted.getRenamedExplorerPlanId()).toBe("requirement-2");
 
     mounted.app.unmount();
     mounted.host.remove();
