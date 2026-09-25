@@ -215,7 +215,7 @@ export type ExplorerTurn = {
   threadId: string;
   role: "user" | "assistant";
   content: string;
-  status?: "QUEUED" | "RUNNING" | "WAITING_FOR_INPUT" | "COMPLETED" | "FAILED" | "CANCELLED";
+  status?: "QUEUED" | "RUNNING" | "WAITING_FOR_INPUT" | "PAUSED" | "COMPLETED" | "FAILED" | "CANCELLED";
   error?: string;
   createdAt: string;
   sequence: number;
@@ -502,6 +502,7 @@ export type DomainEvent = {
     | "explorer.turn.failed"
     | "explorer.turn.cancelled"
     | "explorer.thread.state.changed"
+    | "explorer.requirement.status.changed"
     | "explorer.plan.incomplete"
     | "explorer.plan.ready"
     | "plan.candidate.created"
@@ -1163,7 +1164,7 @@ export class InMemoryPipelineStore implements PipelineStore {
   saveInputRequest(request: ExplorerInputRequest): ExplorerInputRequest {
     const existing = [...this.inputRequests.values()].find((item) => item.providerThreadId === request.providerThreadId && item.providerTurnId === request.providerTurnId && item.providerRequestId === request.providerRequestId);
     if (existing) return existing;
-    if (request.isBlocking && [...this.inputRequests.values()].some((item) => item.threadId === request.threadId && item.isBlocking && item.status === "OPEN")) throw new Error(`ExplorerThread ${request.threadId} already has an open blocking input request`);
+    if (request.isBlocking && [...this.inputRequests.values()].some((item) => item.localTurnId === request.localTurnId && item.isBlocking && item.status === "OPEN")) throw new Error(`Explorer turn ${request.localTurnId} already has an open blocking input request`);
     this.inputRequests.set(request.id, request);
     return request;
   }
@@ -2000,7 +2001,7 @@ export class SqlitePipelineStore implements PipelineStore {
   saveInputRequest(request: ExplorerInputRequest): ExplorerInputRequest {
     const existing = this.database.prepare("SELECT * FROM explorer_input_requests WHERE provider_thread_id = ? AND provider_turn_id = ? AND provider_request_id = ?").get(request.providerThreadId, request.providerTurnId, String(request.providerRequestId)) as SqliteRow | undefined;
     if (existing) return this.inputRequestFromRow(existing);
-    if (request.isBlocking && this.database.prepare("SELECT 1 FROM explorer_input_requests WHERE thread_id = ? AND is_blocking = 1 AND status = 'OPEN' LIMIT 1").get(request.threadId)) throw new Error(`ExplorerThread ${request.threadId} already has an open blocking input request`);
+    if (request.isBlocking && this.database.prepare("SELECT 1 FROM explorer_input_requests WHERE local_turn_id = ? AND is_blocking = 1 AND status = 'OPEN' LIMIT 1").get(request.localTurnId)) throw new Error(`Explorer turn ${request.localTurnId} already has an open blocking input request`);
     this.database.prepare("INSERT INTO explorer_input_requests (id, thread_id, explorer_plan_id, local_turn_id, provider_request_id, provider_thread_id, provider_turn_id, item_id, questions_json, is_blocking, auto_resolution_ms, status, created_at, answered_at, answered_by, redacted_answer_summary_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(request.id, request.threadId, request.explorerPlanId ?? null, request.localTurnId, String(request.providerRequestId), request.providerThreadId, request.providerTurnId, request.itemId, JSON.stringify(request.questions), request.isBlocking ? 1 : 0, request.autoResolutionMs, request.status, request.createdAt, request.answeredAt, request.answeredBy, request.redactedAnswerSummary ? JSON.stringify(request.redactedAnswerSummary) : null);
     return this.getInputRequest(request.id) as ExplorerInputRequest;
   }
@@ -4157,7 +4158,8 @@ function extractResponseText(payload: Record<string, unknown>): string {
  * 模型回合结束后必须通过 Plan completeness gate，才会创建 CandidatePlan；普通文本完成不会越过门禁。
  */
 export class ExplorerThreadService {
-  private readonly jobs = new Map<string, { userId: string; assistantId: string; explorerPlanId: string; loopId?: string | undefined; providerThreadId: string | null; providerTurnId: string | null; resolveInput?: (() => void) | undefined; cancelled: boolean }>();
+  private readonly jobs = new Map<string, { threadId: string; userId: string; assistantId: string; explorerPlanId: string; loopId?: string | undefined; providerThreadId: string | null; providerTurnId: string | null; resolveInput?: (() => void) | undefined; cancelled: boolean }>();
+  private readonly activeTurnByPlan = new Map<string, string>();
   private readonly queuedTurns = new Map<string, string[]>();
   private readonly agentLoops: AgentLoopEngine;
   private readonly listeners = new Map<string, Set<(event: DomainEvent) => void>>();
@@ -4190,29 +4192,35 @@ export class ExplorerThreadService {
         if (request.status === "OPEN" || request.status === "SUBMITTING" || request.status === "RECOVERY_REQUIRED") {
           if (request.status === "OPEN" || request.status === "SUBMITTING") store.updateInputRequest({ ...request, status: "RECOVERY_REQUIRED" });
           const turn = store.listTurns(thread.id).find((item) => item.id === request.localTurnId);
-          if (turn && (turn.status === "RUNNING" || turn.status === "WAITING_FOR_INPUT")) {
+          if (turn && (turn.status === "RUNNING" || turn.status === "WAITING_FOR_INPUT" || turn.status === "PAUSED")) {
             store.updateTurn({ ...turn, status: "FAILED", error: "STRUCTURED_INPUT_RECOVERY_REQUIRED", content: turn.content || "模型回合中断，需要恢复结构化输入" });
-            if (turn.explorerPlanId) this.updatePlanRuntimeStatus(thread.id, turn.explorerPlanId, "FAILED");
+            if (turn.explorerPlanId) this.updatePlanRuntimeStatus(thread.id, turn.explorerPlanId, "FAILED", turn.id);
             recoveredTurnIds.add(turn.id);
           }
-          if (thread.state === "WAITING_FOR_INPUT") store.updateThread({ ...thread, state: "ACTIVE", lastActivityAt: store.now() });
         }
       }
       for (const turn of store.listTurns(thread.id)) {
-        if (recoveredTurnIds.has(turn.id) || (turn.status !== "RUNNING" && turn.status !== "WAITING_FOR_INPUT")) continue;
+        if (recoveredTurnIds.has(turn.id) || (turn.status !== "RUNNING" && turn.status !== "WAITING_FOR_INPUT" && turn.status !== "PAUSED")) continue;
         store.updateTurn({ ...turn, status: "FAILED", error: "EXPLORER_TURN_RECOVERY_REQUIRED", content: turn.content || "模型回合中断，需要重新开始探索" });
-        if (turn.explorerPlanId) this.updatePlanRuntimeStatus(thread.id, turn.explorerPlanId, "FAILED");
-        if (thread.state === "WAITING_FOR_INPUT") store.updateThread({ ...thread, state: "ACTIVE", lastActivityAt: store.now() });
+        if (turn.explorerPlanId) this.updatePlanRuntimeStatus(thread.id, turn.explorerPlanId, "FAILED", turn.id);
       }
     }
     for (const thread of store.listThreads()) {
-      const queued = store.listTurns(thread.id).filter((turn) => turn.role === "assistant" && turn.status === "QUEUED").map((turn) => turn.id);
-      if (queued.length) this.queuedTurns.set(thread.id, queued);
+      if (thread.state === "WAITING_FOR_INPUT") store.updateThread({ ...thread, state: "ACTIVE", lastActivityAt: store.now() });
+    }
+    for (const thread of store.listThreads()) {
+      for (const turn of store.listTurns(thread.id).filter((item) => item.role === "assistant" && item.status === "QUEUED")) {
+        const planId = turn.explorerPlanId ?? store.listExplorerPlans(thread.id)[0]?.id;
+        if (!planId) continue;
+        const queue = this.queuedTurns.get(planId) ?? [];
+        queue.push(turn.id);
+        this.queuedTurns.set(planId, queue);
+      }
     }
   }
 
   async recoverQueuedTurns(): Promise<void> {
-    for (const threadId of this.queuedTurns.keys()) await this.startNextQueuedTurn(threadId);
+    await Promise.all([...this.queuedTurns.keys()].map((explorerPlanId) => this.startNextQueuedTurn(explorerPlanId)));
   }
 
   async startTurn(input: { threadId: string; explorerPlanId: string; content: string; clientTurnId: string }): Promise<{ user: ExplorerTurn; assistant: ExplorerTurn; eventsUrl: string; loopId: string | null }> {
@@ -4225,29 +4233,38 @@ export class ExplorerThreadService {
     const plan = this.resolveExplorerPlan(thread, input.explorerPlanId);
     const turns = this.store.listTurns(input.threadId);
     const firstRequirementMessage = turns.every((turn) => turn.explorerPlanId !== plan.id || turn.role !== "user");
-    const hasActiveJob = this.jobs.has(input.threadId) || this.store.listTurns(input.threadId).some((turn) => turn.status === "RUNNING" || turn.status === "WAITING_FOR_INPUT");
+    const hasActiveJob = this.activeTurnByPlan.has(plan.id) || this.store.listTurns(input.threadId).some((turn) => turn.explorerPlanId === plan.id && (turn.status === "RUNNING" || turn.status === "WAITING_FOR_INPUT" || turn.status === "PAUSED"));
     const user: ExplorerTurn = { id: this.store.nextId("turn"), threadId: input.threadId, role: "user", content: input.content, status: "COMPLETED", createdAt: this.store.now(), sequence: turns.length + 1, explorerPlanId: plan.id };
     const assistant: ExplorerTurn = { id: this.store.nextId("turn"), threadId: input.threadId, role: "assistant", content: "", status: hasActiveJob ? "QUEUED" : "RUNNING", createdAt: this.store.now(), sequence: turns.length + 2, explorerPlanId: plan.id };
     this.store.saveTurn(user);
     this.store.saveTurn(assistant);
     this.store.updateThread({ ...thread, activeExplorerPlanId: plan.id, messageCount: thread.messageCount + 2, lastActivityAt: assistant.createdAt });
     const firstSummary = summarizeExplorerMessage(input.content);
-    this.store.updateExplorerPlan({ ...plan, ...(firstRequirementMessage && plan.titleSource === "AUTO" ? { title: firstSummary || `Plan ${plan.ordinal} / 待探索`, titleStatus: firstSummary ? "GENERATED" : plan.titleStatus } : {}), messageCount: plan.messageCount + 2, latestUserMessageSummary: firstSummary, runtimeStatus: assistant.status, lastActivityAt: assistant.createdAt });
+    this.store.updateExplorerPlan({ ...plan, ...(firstRequirementMessage && plan.titleSource === "AUTO" ? { title: firstSummary || `Plan ${plan.ordinal} / 待探索`, titleStatus: firstSummary ? "GENERATED" : plan.titleStatus } : {}), messageCount: plan.messageCount + 2, latestUserMessageSummary: firstSummary, lastActivityAt: assistant.createdAt });
     this.scheduleTitleGeneration(thread.id, input.content, plan.id);
     const accepted = { user, assistant, eventsUrl: `/api/v4/projects/${thread.projectId}/explorer-thread/events?threadId=${encodeURIComponent(thread.id)}&explorerPlanId=${encodeURIComponent(plan.id)}` };
     this.publish(this.store.appendEvent({ type: "explorer.turn.accepted", aggregateId: input.threadId, payload: { turnId: assistant.id, userTurnId: user.id, explorerPlanId: plan.id, loopId: null, state: assistant.status } }));
     if (hasActiveJob) {
-      const queue = this.queuedTurns.get(thread.id) ?? [];
+      const queue = this.queuedTurns.get(plan.id) ?? [];
       queue.push(assistant.id);
-      this.queuedTurns.set(thread.id, queue);
+      this.queuedTurns.set(plan.id, queue);
       const acceptedWithQueue = { ...accepted, loopId: null };
       this.store.saveIdempotency("explorer-turn", input.clientTurnId, acceptedWithQueue as unknown as Record<string, unknown>);
       return acceptedWithQueue;
     }
-    const loop = await this.startQueuedTurn(thread.id, assistant.id);
-    const acceptedWithLoop = { ...accepted, loopId: loop.id };
-    this.store.saveIdempotency("explorer-turn", input.clientTurnId, acceptedWithLoop as unknown as Record<string, unknown>);
-    return acceptedWithLoop;
+    this.updatePlanRuntimeStatus(thread.id, plan.id, "RUNNING", assistant.id);
+    try {
+      const loop = await this.startQueuedTurn(thread.id, assistant.id);
+      const acceptedWithLoop = { ...accepted, loopId: loop.id };
+      this.store.saveIdempotency("explorer-turn", input.clientTurnId, acceptedWithLoop as unknown as Record<string, unknown>);
+      return acceptedWithLoop;
+    } catch (error) {
+      const failed = this.failTurnStart(thread.id, assistant.id, error);
+      const acceptedWithFailure = { ...accepted, assistant: failed ?? { ...assistant, status: "FAILED" as const }, loopId: null };
+      this.store.saveIdempotency("explorer-turn", input.clientTurnId, acceptedWithFailure as unknown as Record<string, unknown>);
+      void this.startNextQueuedTurn(plan.id);
+      return acceptedWithFailure;
+    }
   }
 
   private async startQueuedTurn(threadId: string, assistantId: string): Promise<AgentLoop> {
@@ -4256,8 +4273,9 @@ export class ExplorerThreadService {
     if (!thread || !assistant) throw new Error(`Explorer turn ${assistantId} not found`);
     const plan = this.resolveExplorerPlan(thread, assistant.explorerPlanId);
     if (assistant.status === "QUEUED") this.store.updateTurn({ ...assistant, status: "RUNNING" });
-    const job: { userId: string; assistantId: string; explorerPlanId: string; loopId?: string; providerThreadId: string | null; providerTurnId: string | null; resolveInput?: (() => void) | undefined; cancelled: boolean } = { userId: this.store.listTurns(threadId).find((turn) => turn.role === "user" && turn.sequence === assistant.sequence - 1 && turn.explorerPlanId === plan.id)?.id ?? "", assistantId, explorerPlanId: plan.id, providerThreadId: plan.providerThreadId ?? null, providerTurnId: null, cancelled: false };
-    this.jobs.set(threadId, job);
+    const job: { threadId: string; userId: string; assistantId: string; explorerPlanId: string; loopId?: string | undefined; providerThreadId: string | null; providerTurnId: string | null; resolveInput?: (() => void) | undefined; cancelled: boolean } = { threadId, userId: this.store.listTurns(threadId).find((turn) => turn.role === "user" && turn.sequence === assistant.sequence - 1 && turn.explorerPlanId === plan.id)?.id ?? "", assistantId, explorerPlanId: plan.id, providerThreadId: plan.providerThreadId ?? null, providerTurnId: null, cancelled: false };
+    this.jobs.set(assistantId, job);
+    this.activeTurnByPlan.set(plan.id, assistantId);
     const user = this.store.listTurns(threadId).find((turn) => turn.id === job.userId);
     const repositoryContext = this.repositoryContextForProject?.(thread.projectId);
     const repositoryContextChanged = Boolean(repositoryContext && plan.repositoryContextKey !== repositoryContext.key);
@@ -4274,38 +4292,67 @@ export class ExplorerThreadService {
       onEvent: (event) => this.handleExplorerLoopEvent(thread.id, assistant.id, event),
     });
     job.loopId = loop.id;
-    this.updatePlanRuntimeStatus(threadId, plan.id, "RUNNING");
+    this.updatePlanRuntimeStatus(threadId, plan.id, "RUNNING", assistantId);
     this.publish(this.store.appendEvent({ type: "explorer.turn.started", aggregateId: threadId, payload: { turnId: assistantId, explorerPlanId: plan.id, loopId: loop.id } }));
     return loop;
   }
 
-  private async startNextQueuedTurn(threadId: string): Promise<void> {
-    if (this.jobs.has(threadId)) return;
-    const queue = this.queuedTurns.get(threadId) ?? [];
+  private async startNextQueuedTurn(explorerPlanId: string): Promise<void> {
+    if (this.activeTurnByPlan.has(explorerPlanId)) return;
+    const queue = this.queuedTurns.get(explorerPlanId) ?? [];
     let assistantId: string | undefined;
+    let threadId: string | undefined;
     while (queue.length > 0 && !assistantId) {
       const candidateId = queue.shift();
-      const candidate = candidateId ? this.store.listTurns(threadId).find((turn) => turn.id === candidateId) : undefined;
-      if (candidate?.role === "assistant" && candidate.status === "QUEUED") assistantId = candidate.id;
+      const candidate = candidateId ? this.findTurn(candidateId) : undefined;
+      if (candidate?.turn.role === "assistant" && candidate.turn.status === "QUEUED" && candidate.turn.explorerPlanId === explorerPlanId) {
+        assistantId = candidate.turn.id;
+        threadId = candidate.threadId;
+      }
     }
-    if (queue.length === 0) this.queuedTurns.delete(threadId);
-    else this.queuedTurns.set(threadId, queue);
+    if (queue.length === 0) this.queuedTurns.delete(explorerPlanId);
+    else this.queuedTurns.set(explorerPlanId, queue);
     if (!assistantId) return;
     try {
-      await this.startQueuedTurn(threadId, assistantId);
+      await this.startQueuedTurn(threadId!, assistantId);
     } catch (error) {
-      const current = this.store.listTurns(threadId).find((turn) => turn.id === assistantId);
-      if (current) this.store.updateTurn({ ...current, status: "FAILED", error: error instanceof Error ? error.message : String(error), content: "模型调用未能启动" });
-      if (current?.explorerPlanId) this.updatePlanRuntimeStatus(threadId, current.explorerPlanId, "FAILED");
-      this.publish(this.store.appendEvent({ type: "explorer.turn.failed", aggregateId: threadId, payload: { assistantTurnId: assistantId, turnId: assistantId, explorerPlanId: current?.explorerPlanId ?? null, loopId: null, error: error instanceof Error ? error.message : String(error) } }));
-      await this.startNextQueuedTurn(threadId);
+      this.failTurnStart(threadId!, assistantId, error);
+      await this.startNextQueuedTurn(explorerPlanId);
     }
   }
 
-  private updatePlanRuntimeStatus(threadId: string, explorerPlanId: string, runtimeStatus: NonNullable<ExplorerTurn["status"]>): void {
+  private failTurnStart(threadId: string, assistantId: string, error: unknown): ExplorerTurn | undefined {
+    const current = this.store.listTurns(threadId).find((turn) => turn.id === assistantId && turn.role === "assistant");
+    const message = error instanceof Error ? error.message : String(error);
+    const failed = current && current.status !== "FAILED"
+      ? this.store.updateTurn({ ...current, status: "FAILED", error: message, content: current.content || "模型调用未能启动" })
+      : current;
+    const job = this.jobs.get(assistantId);
+    this.jobs.delete(assistantId);
+    const explorerPlanId = job?.explorerPlanId ?? current?.explorerPlanId;
+    if (explorerPlanId && this.activeTurnByPlan.get(explorerPlanId) === assistantId) this.activeTurnByPlan.delete(explorerPlanId);
+    if (explorerPlanId) this.updatePlanRuntimeStatus(threadId, explorerPlanId, "FAILED", assistantId);
+    if (current?.status !== "FAILED") {
+      this.publish(this.store.appendEvent({ type: "explorer.turn.failed", aggregateId: threadId, payload: { assistantTurnId: assistantId, turnId: assistantId, explorerPlanId: explorerPlanId ?? null, loopId: job?.loopId ?? null, error: message } }));
+    }
+    return failed;
+  }
+
+  private updatePlanRuntimeStatus(threadId: string, explorerPlanId: string, runtimeStatus: NonNullable<ExplorerTurn["status"]>, turnId?: string): void {
     const plan = this.store.getExplorerPlan(explorerPlanId);
     if (!plan || plan.explorerThreadId !== threadId) return;
+    const statusChanged = plan.runtimeStatus !== runtimeStatus;
     this.store.updateExplorerPlan({ ...plan, runtimeStatus, lastActivityAt: this.store.now() });
+    if (!statusChanged) return;
+    this.publish(this.store.appendEvent({ type: "explorer.requirement.status.changed", aggregateId: threadId, payload: { explorerPlanId, turnId: turnId ?? this.activeTurnByPlan.get(explorerPlanId) ?? null, status: runtimeStatus, occurredAt: this.store.now() } }));
+  }
+
+  private findTurn(turnId: string): { threadId: string; turn: ExplorerTurn } | undefined {
+    for (const thread of this.store.listThreads()) {
+      const turn = this.store.listTurns(thread.id).find((item) => item.id === turnId);
+      if (turn) return { threadId: thread.id, turn };
+    }
+    return undefined;
   }
 
   private resolveExplorerPlan(thread: ExplorerThread, explorerPlanId?: string): ExplorerPlan {
@@ -4369,13 +4416,15 @@ export class ExplorerThreadService {
     if (!request) throw new Error("Input request not found");
     if (request.threadId !== input.threadId) throw new Error("Input request does not belong to this ExplorerThread");
     if (request.status === "ANSWERED") {
-      const result = { request, turn: this.currentAssistant(input.threadId) };
+      const turn = this.store.listTurns(input.threadId).find((item) => item.id === request.localTurnId && item.role === "assistant");
+      if (!turn) throw new Error("Assistant turn for input request not found");
+      const result = { request, turn };
       this.store.saveIdempotency("input-answer", input.clientRequestId, result as unknown as Record<string, unknown>);
       return result;
     }
     if (request.status !== "OPEN") throw new Error(`Input request cannot be answered from ${request.status}`);
     validateInputAnswers(request.questions, input.answers);
-    const job = this.jobs.get(input.threadId);
+    const job = this.jobs.get(request.localTurnId);
     if (!job?.loopId || job.providerThreadId !== request.providerThreadId || job.providerTurnId !== request.providerTurnId) throw new Error("Input request requires recovery before it can be answered");
     this.store.updateInputRequest({ ...request, status: "SUBMITTING" });
     try {
@@ -4400,9 +4449,9 @@ export class ExplorerThreadService {
     const assistant = this.store.listTurns(input.threadId).find((turn) => turn.id === request.localTurnId && turn.role === "assistant");
     if (!assistant) throw new Error("Assistant turn for input request not found");
     this.store.updateTurn({ ...assistant, status: "RUNNING" });
-    if (assistant.explorerPlanId) this.updatePlanRuntimeStatus(input.threadId, assistant.explorerPlanId, "RUNNING");
+    if (assistant.explorerPlanId) this.updatePlanRuntimeStatus(input.threadId, assistant.explorerPlanId, "RUNNING", assistant.id);
     const thread = this.store.getThread(input.threadId);
-    if (thread) this.store.updateThread({ ...thread, state: "ACTIVE", lastActivityAt: this.store.now() });
+    if (thread) this.store.updateThread({ ...thread, lastActivityAt: this.store.now() });
     this.publish(this.store.appendEvent({ type: "explorer.turn.input.resolved", aggregateId: input.threadId, payload: { inputRequestId: request.id, turnId: request.localTurnId, explorerPlanId: request.explorerPlanId ?? null, loopId: job.loopId ?? null, actorId: input.actorId, answerCounts: answered.redactedAnswerSummary } }));
     const result = { request: answered, turn: { ...assistant, status: "RUNNING" as const } };
     this.store.saveIdempotency("input-answer", input.clientRequestId, result as unknown as Record<string, unknown>);
@@ -4410,29 +4459,30 @@ export class ExplorerThreadService {
   }
 
   async cancelTurn(input: { threadId: string; turnId: string; reason: string }): Promise<ExplorerTurn> {
-    const job = this.jobs.get(input.threadId);
     const assistant = this.store.listTurns(input.threadId).find((turn) => turn.id === input.turnId && turn.role === "assistant");
     if (!assistant) throw new Error("Active Explorer turn not found");
-    if (!job || job.assistantId !== assistant.id) {
-      const queue = this.queuedTurns.get(input.threadId) ?? [];
+    const job = this.jobs.get(assistant.id);
+    if (!job) {
+      const planId = assistant.explorerPlanId;
+      const queue = planId ? this.queuedTurns.get(planId) ?? [] : [];
       if (assistant.status !== "QUEUED" || !queue.includes(assistant.id)) throw new Error("Active Explorer turn not found");
-      this.queuedTurns.set(input.threadId, queue.filter((id) => id !== assistant.id));
+      this.queuedTurns.set(planId!, queue.filter((id) => id !== assistant.id));
       const cancelledQueued = { ...assistant, status: "CANCELLED" as const, content: "本轮已取消", error: input.reason };
       this.store.updateTurn(cancelledQueued);
-      if (assistant.explorerPlanId) this.updatePlanRuntimeStatus(input.threadId, assistant.explorerPlanId, "CANCELLED");
+      if (assistant.explorerPlanId && !this.activeTurnByPlan.has(assistant.explorerPlanId)) this.updatePlanRuntimeStatus(input.threadId, assistant.explorerPlanId, "CANCELLED", assistant.id);
       this.publish(this.store.appendEvent({ type: "explorer.turn.cancelled", aggregateId: input.threadId, payload: { turnId: input.turnId, explorerPlanId: assistant.explorerPlanId ?? null, loopId: null, reason: input.reason } }));
       return cancelledQueued;
     }
     job.cancelled = true;
     if (job.loopId) await this.agentLoops.cancel(job.loopId, input.reason);
-    else if (job.providerThreadId) await this.model.cancel({ conversationId: input.threadId, providerThreadId: job.providerThreadId, ...(job.providerTurnId ? { providerTurnId: job.providerTurnId } : {}) });
+    else if (job.providerThreadId) await this.model.cancel({ conversationId: job.explorerPlanId, providerThreadId: job.providerThreadId, ...(job.providerTurnId ? { providerTurnId: job.providerTurnId } : {}) });
     for (const request of this.store.listInputRequests(input.threadId, "OPEN")) if (request.localTurnId === assistant.id) this.store.updateInputRequest({ ...request, status: "CANCELLED", answeredAt: this.store.now(), answeredBy: "cancelled" });
     job.resolveInput?.();
     const cancelled: ExplorerTurn = { ...assistant, status: "CANCELLED", content: "本轮已取消", error: input.reason };
     this.store.updateTurn(cancelled);
     const thread = this.store.getThread(input.threadId);
-    if (thread) this.store.updateThread({ ...thread, state: "ACTIVE", lastActivityAt: this.store.now() });
-    if (assistant.explorerPlanId) this.updatePlanRuntimeStatus(input.threadId, assistant.explorerPlanId, "CANCELLED");
+    if (thread) this.store.updateThread({ ...thread, lastActivityAt: this.store.now() });
+    if (assistant.explorerPlanId) this.updatePlanRuntimeStatus(input.threadId, assistant.explorerPlanId, "CANCELLED", assistant.id);
     this.publish(this.store.appendEvent({ type: "explorer.turn.cancelled", aggregateId: input.threadId, payload: { turnId: input.turnId, explorerPlanId: assistant.explorerPlanId ?? null, loopId: job.loopId ?? null, reason: input.reason } }));
     return cancelled;
   }
@@ -4457,9 +4507,9 @@ export class ExplorerThreadService {
     const { threadId, turnId } = this.loopTurn(loopId);
     const paused = await this.agentLoops.pause(loopId, reason);
     const turn = this.store.listTurns(threadId).find((item) => item.id === turnId);
-    if (turn && turn.status === "RUNNING") this.store.updateTurn({ ...turn, status: "QUEUED" });
+    if (turn && turn.status === "RUNNING") this.store.updateTurn({ ...turn, status: "PAUSED" });
     const pausedTurn = this.store.listTurns(threadId).find((turn) => turn.id === turnId);
-    this.publish(this.store.appendEvent({ type: "explorer.thread.state.changed", aggregateId: threadId, payload: { state: "PAUSED", loopId, turnId, explorerPlanId: pausedTurn?.explorerPlanId ?? null, reason } }));
+    if (pausedTurn?.explorerPlanId) this.updatePlanRuntimeStatus(threadId, pausedTurn.explorerPlanId, "PAUSED", turnId);
     return paused;
   }
 
@@ -4467,9 +4517,10 @@ export class ExplorerThreadService {
     const { threadId, turnId } = this.loopTurn(loopId);
     const resumed = await this.agentLoops.resume(loopId);
     const turn = this.store.listTurns(threadId).find((item) => item.id === turnId);
-    if (turn && turn.status === "QUEUED") this.store.updateTurn({ ...turn, status: "RUNNING" });
+    if (turn && turn.status === "PAUSED") this.store.updateTurn({ ...turn, status: "RUNNING" });
+    if (turn?.explorerPlanId) this.updatePlanRuntimeStatus(threadId, turn.explorerPlanId, "RUNNING", turnId);
     const thread = this.store.getThread(threadId);
-    if (thread && thread.state !== "ARCHIVED") this.store.updateThread({ ...thread, state: "ACTIVE", lastActivityAt: this.store.now() });
+    if (thread && thread.state !== "ARCHIVED") this.store.updateThread({ ...thread, lastActivityAt: this.store.now() });
     return resumed;
   }
 
@@ -4488,7 +4539,7 @@ export class ExplorerThreadService {
   }
 
   private handleExplorerLoopEvent(threadId: string, assistantId: string, event: AgentLoopEvent): void {
-    const job = this.jobs.get(threadId);
+    const job = this.jobs.get(assistantId);
     if (!job) return;
     if (event.type === "agent.provider.thread.started") {
       const providerThreadId = String(event.payload.threadId ?? "");
@@ -4510,7 +4561,7 @@ export class ExplorerThreadService {
         if (currentPlan && currentPlan.providerThreadId !== providerThreadId) this.store.updateExplorerPlan({ ...currentPlan, providerThreadId, lastActivityAt: this.store.now() });
       }
       this.store.updateTurn({ ...current, content: current.content + text, status: "RUNNING" });
-      this.updatePlanRuntimeStatus(threadId, job.explorerPlanId, "RUNNING");
+      this.updatePlanRuntimeStatus(threadId, job.explorerPlanId, "RUNNING", assistantId);
       this.publish(this.store.appendEvent({ type: "explorer.turn.text.delta", aggregateId: threadId, payload: { turnId: assistantId, explorerPlanId: job.explorerPlanId, loopId: job.loopId ?? null, text } }));
       return;
     }
@@ -4524,10 +4575,10 @@ export class ExplorerThreadService {
       const inputRequest: ExplorerInputRequest = { id: this.store.nextId("input"), threadId, explorerPlanId: job.explorerPlanId, localTurnId: assistantId, providerRequestId: request.requestId, providerThreadId: request.threadId, providerTurnId: request.turnId, itemId: request.itemId, questions: request.questions, isBlocking: request.isBlocking, autoResolutionMs: request.autoResolutionMs, status: "OPEN", createdAt: this.store.now(), answeredAt: null, answeredBy: null, redactedAnswerSummary: null };
       const saved = this.store.saveInputRequest(inputRequest);
       const currentThread = this.store.getThread(threadId);
-      if (currentThread) this.store.updateThread({ ...currentThread, state: "WAITING_FOR_INPUT", lastActivityAt: this.store.now() });
+      if (currentThread) this.store.updateThread({ ...currentThread, lastActivityAt: this.store.now() });
       const currentTurn = this.store.listTurns(threadId).find((turn) => turn.id === assistantId);
       if (currentTurn) this.store.updateTurn({ ...currentTurn, status: "WAITING_FOR_INPUT" });
-      this.updatePlanRuntimeStatus(threadId, job.explorerPlanId, "WAITING_FOR_INPUT");
+      this.updatePlanRuntimeStatus(threadId, job.explorerPlanId, "WAITING_FOR_INPUT", assistantId);
       this.publish(this.store.appendEvent({ type: "explorer.turn.input_required", aggregateId: threadId, payload: { requestId: saved.id, threadId, turnId: assistantId, explorerPlanId: job.explorerPlanId, loopId: job.loopId ?? null, localTurnId: assistantId, providerRequestId: saved.providerRequestId, providerThreadId: saved.providerThreadId, providerTurnId: saved.providerTurnId, itemId: saved.itemId, questions: saved.questions, isBlocking: saved.isBlocking, autoResolutionMs: saved.autoResolutionMs } }));
       return;
     }
@@ -4539,9 +4590,9 @@ export class ExplorerThreadService {
       for (const request of this.store.listInputRequests(threadId)) if (request.localTurnId === assistantId && (request.status === "OPEN" || request.status === "SUBMITTING")) this.store.updateInputRequest({ ...request, status: "CANCELLED", answeredAt: this.store.now(), answeredBy: "cancelled" });
       const current = this.store.listTurns(threadId).find((turn) => turn.id === assistantId);
       if (current && current.status !== "CANCELLED") this.store.updateTurn({ ...current, status: "CANCELLED", content: current.content || "本轮已取消" });
-      this.updatePlanRuntimeStatus(threadId, job.explorerPlanId, "CANCELLED");
+      this.updatePlanRuntimeStatus(threadId, job.explorerPlanId, "CANCELLED", assistantId);
       this.publish(this.store.appendEvent({ type: "explorer.turn.cancelled", aggregateId: threadId, payload: { turnId: assistantId, explorerPlanId: job.explorerPlanId, loopId: job.loopId ?? null, reason: event.payload.reason } }));
-      this.finishExplorerJob(threadId);
+      this.finishExplorerJob(assistantId);
       return;
     }
     if (event.type === "agent.loop.failed") this.handleExplorerLoopFailure(threadId, assistantId, String(event.payload.error ?? event.payload.reason ?? "AgentLoop failed"));
@@ -4553,7 +4604,7 @@ export class ExplorerThreadService {
     if (!current || !thread) return;
     const explorerPlan = this.resolveExplorerPlan(thread, current.explorerPlanId);
     const assessment = assessPlanCompletion(current.content);
-    const updatedPlan = this.store.updateExplorerPlan({ ...explorerPlan, exploration: { ...explorerPlan.exploration, status: assessment.status, missing: assessment.missing, completed: assessment.completed, diagnostics: assessment.diagnostics, lastAssessedTurnId: assistantId }, lastAssessedTurnId: assistantId, runtimeStatus: "COMPLETED", lastActivityAt: this.store.now() });
+    const updatedPlan = this.store.updateExplorerPlan({ ...explorerPlan, exploration: { ...explorerPlan.exploration, status: assessment.status, missing: assessment.missing, completed: assessment.completed, diagnostics: assessment.diagnostics, lastAssessedTurnId: assistantId }, lastAssessedTurnId: assistantId, lastActivityAt: this.store.now() });
     const mirror = { status: assessment.status, missing: assessment.missing, completed: assessment.completed, diagnostics: assessment.diagnostics, candidatePlanId: explorerPlan.candidatePlanId, lastAssessedTurnId: assistantId };
     this.updateThreadContextSummary(threadId, updatedPlan, assessment.artifact?.contract?.goal ?? assessment.artifact?.generatedSpec?.objective?.goal ?? null);
     const currentThread = this.store.getThread(threadId) ?? thread;
@@ -4577,8 +4628,9 @@ export class ExplorerThreadService {
       }
     }
     this.store.updateTurn({ ...current, status: "COMPLETED", content: stripPlanProtocol(current.content) });
-    this.publish(this.store.appendEvent({ type: "explorer.turn.completed", aggregateId: threadId, payload: { assistantTurnId: assistantId, turnId: assistantId, explorerPlanId: explorerPlan.id, loopId: this.jobs.get(threadId)?.loopId ?? null, planReady: assessment.status === "READY" } }));
-    this.finishExplorerJob(threadId);
+    this.updatePlanRuntimeStatus(threadId, explorerPlan.id, "COMPLETED", assistantId);
+    this.publish(this.store.appendEvent({ type: "explorer.turn.completed", aggregateId: threadId, payload: { assistantTurnId: assistantId, turnId: assistantId, explorerPlanId: explorerPlan.id, loopId: this.jobs.get(assistantId)?.loopId ?? null, planReady: assessment.status === "READY" } }));
+    this.finishExplorerJob(assistantId);
   }
 
   private handleExplorerLoopFailure(threadId: string, assistantId: string, error: string): void {
@@ -4588,18 +4640,21 @@ export class ExplorerThreadService {
     }
     for (const request of this.store.listInputRequests(threadId)) if (request.localTurnId === assistantId && (request.status === "OPEN" || request.status === "SUBMITTING")) this.store.updateInputRequest({ ...request, status: "RECOVERY_REQUIRED" });
     const current = this.store.listTurns(threadId).find((turn) => turn.id === assistantId);
-    const job = this.jobs.get(threadId);
+    const job = this.jobs.get(assistantId);
     if (current && current.status !== "CANCELLED") this.store.updateTurn({ ...current, status: "FAILED", error, content: current.content || `模型调用失败：${error}` });
-    if (job) this.updatePlanRuntimeStatus(threadId, job.explorerPlanId, "FAILED");
+    if (job) this.updatePlanRuntimeStatus(threadId, job.explorerPlanId, "FAILED", assistantId);
     this.publish(this.store.appendEvent({ type: "explorer.turn.failed", aggregateId: threadId, payload: { assistantTurnId: assistantId, turnId: assistantId, explorerPlanId: job?.explorerPlanId ?? current?.explorerPlanId ?? null, loopId: job?.loopId ?? null, error } }));
-    this.finishExplorerJob(threadId);
+    this.finishExplorerJob(assistantId);
   }
 
-  private finishExplorerJob(threadId: string): void {
-    const thread = this.store.getThread(threadId);
-    if (thread && thread.state !== "ARCHIVED") this.store.updateThread({ ...thread, state: "ACTIVE", lastActivityAt: this.store.now() });
-    this.jobs.delete(threadId);
-    void this.startNextQueuedTurn(threadId);
+  private finishExplorerJob(assistantId: string): void {
+    const job = this.jobs.get(assistantId);
+    if (!job) return;
+    const thread = this.store.getThread(job.threadId);
+    if (thread && thread.state !== "ARCHIVED") this.store.updateThread({ ...thread, lastActivityAt: this.store.now() });
+    this.jobs.delete(assistantId);
+    if (this.activeTurnByPlan.get(job.explorerPlanId) === assistantId) this.activeTurnByPlan.delete(job.explorerPlanId);
+    void this.startNextQueuedTurn(job.explorerPlanId);
   }
 
   private updateThreadContextSummary(threadId: string, changedPlan: ExplorerPlan, goal: string | null): void {
@@ -4627,12 +4682,6 @@ export class ExplorerThreadService {
       ? latestProviderStep.payload.providerItemId
       : typeof latestProviderStep?.payload.itemId === "string" ? latestProviderStep.payload.itemId : null;
     return { sourceTurnId: assistantId, providerThreadId, providerTurnId, providerItemId };
-  }
-
-  private currentAssistant(threadId: string): ExplorerTurn {
-    const turn = [...this.store.listTurns(threadId)].reverse().find((item) => item.role === "assistant");
-    if (!turn) throw new Error(`Assistant turn for ${threadId} not found`);
-    return turn;
   }
 
   private publish(event: DomainEvent): void {

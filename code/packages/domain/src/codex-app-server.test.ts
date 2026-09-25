@@ -222,4 +222,74 @@ describe("CodexAppServerGateway", () => {
     expect(factoryCalls).toBe(1);
     expect(calls.at(-1)).toMatchObject({ method: "turn/interrupt", params: { threadId: "codex-thread-1", turnId: "turn-1" } });
   });
+
+  it("multiplexes concurrent requirement threads over one App Server session", async () => {
+    const calls: Array<{ method: string; params: unknown }> = [];
+    let factoryCalls = 0;
+    let threadCount = 0;
+    let releaseFirst!: () => void;
+    let releaseSecond!: () => void;
+    const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const secondGate = new Promise<void>((resolve) => { releaseSecond = resolve; });
+    const session: CodexAppServerSession = {
+      startThread: async () => `provider-thread-${++threadCount}`,
+      resumeThread: async (threadId) => { calls.push({ method: "thread/resume", params: { threadId } }); },
+      streamTurn: async function* (params) {
+        calls.push({ method: "turn/start", params });
+        if (params.threadId === "provider-thread-1") {
+          await firstGate;
+        } else {
+          yield {
+            id: "input-request-2",
+            method: "item/tool/requestUserInput",
+            params: {
+              threadId: params.threadId,
+              turnId: `turn-${params.threadId}`,
+              itemId: "input-item-2",
+              questions: [{ id: "q1", header: "Choice", question: "Pick one", isOther: false, isSecret: false, options: [{ label: "B", description: "Option B" }] }],
+              isBlocking: true,
+            },
+          };
+          await secondGate;
+        }
+        yield { method: "item/agentMessage/delta", params: { threadId: params.threadId, turnId: `turn-${params.threadId}`, delta: params.threadId } };
+        yield { method: "turn/completed", params: { turn: { id: `turn-${params.threadId}`, status: "completed" } } };
+      },
+      interrupt: async (threadId, turnId) => { calls.push({ method: "turn/interrupt", params: { threadId, turnId } }); },
+      respond: async () => undefined,
+      answerUserInput: async (requestId, response) => {
+        calls.push({ method: "input/answer", params: { requestId, response } });
+        if (requestId === "input-request-2") releaseSecond();
+      },
+      close: async () => undefined,
+    };
+    const gateway = new CodexAppServerGateway({
+      roles: { explorer: { model: "explorer-model" }, executor: { model: "executor-model" } },
+      sessionFactory: async () => { factoryCalls += 1; return session; },
+    });
+    const firstEvents: Array<{ type: string; text?: string | undefined; providerThreadId?: string | undefined }> = [];
+    const secondEvents: typeof firstEvents = [];
+    const consume = async (conversationId: string, events: typeof firstEvents) => {
+      for await (const event of gateway.stream({ role: "explorer", conversationId, messages: [{ role: "user", content: conversationId }] })) events.push(event);
+    };
+    const first = consume("requirement-1", firstEvents);
+    const second = consume("requirement-2", secondEvents);
+    for (let attempt = 0; attempt < 50 && calls.filter((call) => call.method === "turn/start").length < 2; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 1));
+
+    expect(factoryCalls).toBe(1);
+    expect(calls.filter((call) => call.method === "turn/start")).toHaveLength(2);
+    for (let attempt = 0; attempt < 50 && !secondEvents.some((event) => event.type === "turn.input_required"); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 1));
+    expect(secondEvents).toContainEqual(expect.objectContaining({ type: "turn.input_required", request: expect.objectContaining({ requestId: "input-request-2", threadId: "provider-thread-2", turnId: "turn-provider-thread-2" }) }));
+    await gateway.answerUserInput({ requestId: "input-request-2", answers: { q1: { answers: ["B"] } } });
+    await second;
+    releaseFirst();
+    await first;
+
+    expect(firstEvents).toContainEqual({ type: "text.delta", text: "provider-thread-1", providerThreadId: "provider-thread-1", providerTurnId: "turn-provider-thread-1" });
+    expect(secondEvents).toContainEqual({ type: "text.delta", text: "provider-thread-2", providerThreadId: "provider-thread-2", providerTurnId: "turn-provider-thread-2" });
+    expect(calls).toContainEqual({ method: "input/answer", params: { requestId: "input-request-2", response: { answers: { q1: { answers: ["B"] } } } } });
+    await gateway.cancel({ conversationId: "requirement-1", providerThreadId: "provider-thread-1", providerTurnId: "turn-provider-thread-1" });
+    expect(calls.at(-1)).toMatchObject({ method: "turn/interrupt", params: { threadId: "provider-thread-1", turnId: "turn-provider-thread-1" } });
+    await gateway.close();
+  });
 });

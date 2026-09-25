@@ -88,6 +88,50 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("routes interleaved notifications for concurrent provider threads to their own streams", async () => {
+    const stdin = new PassThrough();
+    const stdout = new PassThrough();
+    const stderr = new PassThrough();
+    const child = Object.assign(new EventEmitter(), { stdin, stdout, stderr, kill: () => true });
+    let threadNumber = 0;
+    let turnNumber = 0;
+    stdin.on("data", (chunk: Buffer) => {
+      const request = JSON.parse(chunk.toString()) as { id: string; method: string; params?: { threadId?: string } };
+      const respond = (result: unknown) => stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: request.id, result })}\n`);
+      if (request.method === "initialize") respond({});
+      if (request.method === "thread/start") respond({ thread: { id: `provider-thread-${++threadNumber}` } });
+      if (request.method === "turn/start") {
+        const threadId = request.params?.threadId ?? "";
+        const turnId = `provider-turn-${++turnNumber}`;
+        respond({ turn: { id: turnId, status: "inProgress" } });
+        setImmediate(() => {
+          stdout.write(`${JSON.stringify({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { threadId, turnId, delta: threadId } })}\n`);
+          stdout.write(`${JSON.stringify({ jsonrpc: "2.0", method: "turn/completed", params: { threadId, turn: { id: turnId, status: "completed" } } })}\n`);
+        });
+      }
+    });
+    const client = new CodexAppServerClient({ command: "codex", args: ["app-server"], cwd: "/tmp", startupTimeoutMs: 5000, requestTimeoutMs: 5000, clientName: "test", clientVersion: "1.0.0", spawnProcess: () => child as unknown as ReturnType<CodexSpawnProcess> });
+    const firstThread = await client.startThread({ model: "gpt-5", cwd: "/tmp/project", sandbox: "read-only", approvalPolicy: "never" });
+    const secondThread = await client.startThread({ model: "gpt-5", cwd: "/tmp/project", sandbox: "read-only", approvalPolicy: "never" });
+    const collect = async (threadId: string) => {
+      const events = [];
+      for await (const event of client.streamTurn({ threadId, input: [{ type: "text", text: threadId }], model: "gpt-5" })) events.push(event);
+      return events;
+    };
+
+    const [firstEvents, secondEvents] = await Promise.all([collect(firstThread), collect(secondThread)]);
+
+    expect(firstEvents).toEqual([
+      { method: "item/agentMessage/delta", params: { threadId: firstThread, turnId: "provider-turn-1", delta: firstThread } },
+      { method: "turn/completed", params: { threadId: firstThread, turn: { id: "provider-turn-1", status: "completed" } } },
+    ]);
+    expect(secondEvents).toEqual([
+      { method: "item/agentMessage/delta", params: { threadId: secondThread, turnId: "provider-turn-2", delta: secondThread } },
+      { method: "turn/completed", params: { threadId: secondThread, turn: { id: "provider-turn-2", status: "completed" } } },
+    ]);
+    await client.close();
+  });
+
   it("preserves a server request id and responds to item/tool/requestUserInput", async () => {
     const stdin = new PassThrough();
     const stdout = new PassThrough();

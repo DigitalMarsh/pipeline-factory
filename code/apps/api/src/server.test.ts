@@ -8,8 +8,8 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { InMemoryPipelineStore, LifecycleHookRunner, MergeService, PlanService, ProjectService, Scheduler, type AgentLoop, type ExecutionTelemetry, type ModelGateway, type VerificationCommandExecutor } from "@pipeline-factory/domain";
-import { createApp } from "./server.js";
+import { InMemoryPipelineStore, LifecycleHookRunner, MergeService, PlanService, ProjectService, Scheduler, type AgentLoop, type DomainEvent, type ExecutionTelemetry, type ModelGateway, type VerificationCommandExecutor } from "@pipeline-factory/domain";
+import { createApp, sanitizeExplorerRequirementStatusEvent } from "./server.js";
 
 const apps: Array<Awaited<ReturnType<typeof createApp>>> = [];
 
@@ -611,6 +611,32 @@ describe("Pipeline Factory v4 API", () => {
     expect(response.statusCode).toBe(202);
     for (let attempt = 0; attempt < 50 && store.listTurns("thread-1")[1]?.status !== "FAILED"; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 1));
     expect(store.listTurns("thread-1")[1]).toMatchObject({ status: "FAILED", content: "模型调用失败：Codex turn failed" });
+  });
+
+  it("projects only requirement status metadata and validates status-stream ownership", async () => {
+    const store = new InMemoryPipelineStore();
+    const project = createTestProject(store);
+    const plans = new PlanService(store);
+    const thread = plans.registerThread({ id: "status-stream-thread", projectId: project.id, parentThreadId: null });
+    const requirement = store.listExplorerPlans(thread.id)[0]!;
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+    const missingThread = await app.inject({ method: "GET", url: `/api/v4/projects/${project.id}/explorer-thread/requirement-status/events?threadId=missing-thread` });
+    expect(missingThread.statusCode).toBe(404);
+    const event: DomainEvent = {
+      id: "status-event-1",
+      sequence: 7,
+      type: "explorer.requirement.status.changed",
+      aggregateId: thread.id,
+      occurredAt: "2026-09-25T12:00:00.000Z",
+      payload: { explorerPlanId: requirement.id, turnId: "turn-1", status: "RUNNING", occurredAt: "2026-09-25T12:00:00.000Z", text: "SECRET-CONVERSATION-BODY", prompt: "private prompt" },
+    };
+    const projected = sanitizeExplorerRequirementStatusEvent(store, thread, event);
+    expect(projected).toEqual({ sequence: 7, payload: { explorerPlanId: requirement.id, turnId: "turn-1", status: "RUNNING", occurredAt: "2026-09-25T12:00:00.000Z" } });
+    expect(JSON.stringify(projected)).not.toContain("SECRET-CONVERSATION-BODY");
+    expect(JSON.stringify(projected)).not.toContain("private prompt");
+    expect(sanitizeExplorerRequirementStatusEvent(store, { ...thread, id: "another-thread" }, event)).toBeNull();
+    expect(sanitizeExplorerRequirementStatusEvent(store, thread, { ...event, type: "explorer.turn.text.delta" })).toBeNull();
   });
 
   it("dispatches an Enqueued plan only through the injected Scheduler", async () => {

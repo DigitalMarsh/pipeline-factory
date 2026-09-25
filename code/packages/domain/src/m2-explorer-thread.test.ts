@@ -26,47 +26,61 @@ describe("ExplorerThread", () => {
     expect(store.getThread(explorer.id)).toMatchObject({ activeExplorerPlanId: second.id, contextSummary: { openPlanIds: [first[0]?.id, second.id] } });
   });
 
-  it("queues turns while isolating each requirement's messages and Provider session", async () => {
+  it("runs separate requirements concurrently while keeping turns within each requirement serial", async () => {
     const store = new InMemoryPipelineStore();
     const explorer = new ExplorerService(store).create({ projectId: "project-1" });
     const plan1 = new ExplorerService(store).listPlans(explorer.id)[0]!;
     const plan2 = new ExplorerService(store).createPlan(explorer.id);
     const requests: ModelRequest[] = [];
-    let releaseFirst!: () => void;
-    const firstPaused = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    let releasePlan1!: () => void;
+    let releasePlan2!: () => void;
+    const plan1Paused = new Promise<void>((resolve) => { releasePlan1 = resolve; });
+    const plan2Paused = new Promise<void>((resolve) => { releasePlan2 = resolve; });
     const model: ModelGateway = {
       configFor: () => ({ model: "gpt-5.6-luna" }),
       async *stream(request) {
         requests.push({ ...request, messages: request.messages.map((message) => ({ ...message })) });
-        if (requests.length === 1) {
-          yield { type: "thread.started", threadId: `provider-${request.conversationId}` };
-          await firstPaused;
-        } else yield { type: "thread.started", threadId: `provider-${request.conversationId}` };
-        yield { type: "text.delta", text: request.conversationId === plan1.id ? "Requirement 1 response" : "Requirement 2 response", providerThreadId: `provider-${request.conversationId}`, providerTurnId: `provider-turn-${requests.length}`, providerItemId: `provider-item-${requests.length}` };
+        const requestNumber = requests.length;
+        yield { type: "thread.started", threadId: `provider-${request.conversationId}` };
+        if (request.continuationPrompt?.includes("Plan 1 first request")) await plan1Paused;
+        if (request.continuationPrompt?.includes("Plan 2 request")) await plan2Paused;
+        yield { type: "text.delta", text: `${request.conversationId} response ${requestNumber}`, providerThreadId: `provider-${request.conversationId}`, providerTurnId: `provider-turn-${requestNumber}`, providerItemId: `provider-item-${requestNumber}` };
         yield { type: "turn.completed" };
       },
       async answerUserInput() { return undefined; },
       async cancel() { return undefined; },
     };
-    const service = new ExplorerThreadService(store, model, { maxSteps: 2, repositoryContextForProject: () => ({ key: "repository-v1", summary: "shared repository facts: apps/web, apps/api" }) });
-    const firstTurn = await service.startTurn({ threadId: explorer.id, explorerPlanId: plan1.id, content: "Plan 1 request", clientTurnId: "client-plan-1" });
+    const service = new ExplorerThreadService(store, model, { maxSteps: 1, repositoryContextForProject: () => ({ key: "repository-v1", summary: "shared repository facts: apps/web, apps/api" }) });
+    const firstTurn = await service.startTurn({ threadId: explorer.id, explorerPlanId: plan1.id, content: "Plan 1 first request", clientTurnId: "client-plan-1" });
     await waitUntil(() => requests.length === 1);
-    const queued = await service.startTurn({ threadId: explorer.id, explorerPlanId: plan2.id, content: "Plan 2 request", clientTurnId: "client-plan-2" });
+    const samePlanQueued = await service.startTurn({ threadId: explorer.id, explorerPlanId: plan1.id, content: "Plan 1 follow-up", clientTurnId: "client-plan-1-follow-up" });
+    const concurrent = await service.startTurn({ threadId: explorer.id, explorerPlanId: plan2.id, content: "Plan 2 request", clientTurnId: "client-plan-2" });
 
-    expect(queued.assistant).toMatchObject({ status: "QUEUED", explorerPlanId: plan2.id });
-    expect(store.listTurns(explorer.id).filter((turn) => turn.explorerPlanId === plan1.id)).toHaveLength(2);
+    expect(samePlanQueued.assistant).toMatchObject({ status: "QUEUED", explorerPlanId: plan1.id });
+    expect(concurrent.assistant).toMatchObject({ status: "RUNNING", explorerPlanId: plan2.id });
+    await waitUntil(() => requests.length === 2);
+    expect(new Set(requests.map((request) => request.conversationId))).toEqual(new Set([plan1.id, plan2.id]));
+    expect(requests.some((request) => request.continuationPrompt?.includes("Plan 1 follow-up"))).toBe(false);
+    expect(store.listTurns(explorer.id).filter((turn) => turn.explorerPlanId === plan1.id)).toHaveLength(4);
     expect(store.listTurns(explorer.id).filter((turn) => turn.explorerPlanId === plan2.id)).toHaveLength(2);
-    releaseFirst();
-    await waitUntil(() => requests.some((request) => request.continuationPrompt?.includes("需求 2") === true));
-    const plan2Request = requests.find((request) => request.continuationPrompt?.includes("需求 2"));
+    releasePlan2();
+    await waitUntil(() => store.listTurns(explorer.id).find((turn) => turn.id === concurrent.assistant.id)?.status === "COMPLETED");
+    expect(store.listTurns(explorer.id).find((turn) => turn.id === firstTurn.assistant.id)?.status).toBe("RUNNING");
+    expect(requests).toHaveLength(2);
+    releasePlan1();
+    await waitUntil(() => requests.length === 3);
+    const plan2Request = requests.find((request) => request.continuationPrompt?.includes("Plan 2 request"));
+    const plan1FollowupRequest = requests.find((request) => request.continuationPrompt?.includes("Plan 1 follow-up"));
     expect(requests[0]).toMatchObject({ conversationId: plan1.id });
-    expect(requests[0]?.messages.map((message) => message.content)).toEqual(["Plan 1 request"]);
+    expect(requests[0]?.messages.map((message) => message.content)).toEqual(["Plan 1 first request"]);
     expect(requests[0]?.continuationPrompt).toContain("shared repository facts");
     expect(plan2Request).toMatchObject({ conversationId: plan2.id });
     expect(plan2Request?.providerThreadId).toBeUndefined();
     expect(plan2Request?.messages.map((message) => message.content)).toEqual(["Plan 2 request"]);
     expect(plan2Request?.continuationPrompt).toContain("shared repository facts");
-    await waitUntil(() => store.listTurns(explorer.id).find((turn) => turn.id === queued.assistant.id)?.status === "COMPLETED");
+    expect(plan1FollowupRequest).toMatchObject({ conversationId: plan1.id, providerThreadId: `provider-${plan1.id}` });
+    expect(plan1FollowupRequest?.messages.map((message) => message.content)).toEqual(["Plan 1 first request", expect.stringContaining("response"), "Plan 1 follow-up"]);
+    await waitUntil(() => store.listTurns(explorer.id).find((turn) => turn.id === samePlanQueued.assistant.id)?.status === "COMPLETED");
     expect(store.listTurns(explorer.id).find((turn) => turn.id === firstTurn.assistant.id)).toMatchObject({ status: "COMPLETED", explorerPlanId: plan1.id });
     expect(store.getExplorerPlan(plan1.id)?.providerThreadId).toBe(`provider-${plan1.id}`);
     expect(store.getExplorerPlan(plan2.id)?.providerThreadId).toBe(`provider-${plan2.id}`);
@@ -75,17 +89,192 @@ describe("ExplorerThread", () => {
     expect(store.getExplorerPlan(plan2.id)?.repositoryContextKey).toBe("repository-v1");
   });
 
+  it("cleans up a synchronous requirement start failure without blocking a sibling", async () => {
+    const store = new InMemoryPipelineStore();
+    const explorer = new ExplorerService(store).create({ projectId: "project-1" });
+    const plans = new ExplorerService(store);
+    const firstPlan = plans.listPlans(explorer.id)[0]!;
+    const secondPlan = plans.createPlan(explorer.id);
+    let shouldFail = true;
+    const service = new ExplorerThreadService(store, new StubModelGateway({ explorer: { model: "gpt-5.6-luna" }, executor: { model: "gpt-5.6-luna" } }), {
+      repositoryContextForProject: () => {
+        if (shouldFail) {
+          shouldFail = false;
+          throw new Error("Repository index unavailable");
+        }
+        return undefined;
+      },
+    });
+
+    const first = await service.startTurn({ threadId: explorer.id, explorerPlanId: firstPlan.id, content: "first requirement", clientTurnId: "sync-failure-first" });
+    const second = await service.startTurn({ threadId: explorer.id, explorerPlanId: secondPlan.id, content: "second requirement", clientTurnId: "sync-failure-second" });
+
+    expect(first.assistant).toMatchObject({ status: "FAILED", error: "Repository index unavailable" });
+    expect(second.assistant.status).toBe("RUNNING");
+    await waitUntil(() => store.listTurns(explorer.id).find((turn) => turn.id === second.assistant.id)?.status === "COMPLETED");
+    expect(store.getExplorerPlan(firstPlan.id)?.runtimeStatus).toBe("FAILED");
+    expect(store.getExplorerPlan(secondPlan.id)?.runtimeStatus).toBe("COMPLETED");
+  });
+
+  it("routes simultaneous structured input answers to the matching requirement turn", async () => {
+    const store = new InMemoryPipelineStore();
+    const explorer = new ExplorerService(store).create({ projectId: "project-1" });
+    const plan1 = store.listExplorerPlans(explorer.id)[0]!;
+    const plan2 = new ExplorerService(store).createPlan(explorer.id);
+    const resumeByRequestId = new Map<string, () => void>();
+    const answerCalls: string[] = [];
+    const readyResponse = `<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>${JSON.stringify({ title: "Input isolated plan", goal: "Complete a requirement after its own structured input", acceptanceCriteria: ["The selected requirement completes independently"], include: ["docs/input-plan.md"], exclude: [], baseBranch: "main", baseCommit: "HEAD", tasks: [{ id: "task-input", title: "Complete requirement", dependencies: [], status: "READY" }], conflictKeys: [], executorModelRole: "executor", toolPolicy: "executor-scoped-write", verificationCommandIds: [], maxRepairAttempts: 1, mergeStrategy: "manual", requireHumanMerge: true })}</pipeline-factory-plan>`;
+    const model: ModelGateway = {
+      configFor: () => ({ model: "gpt-5.6-luna" }),
+      async *stream(request) {
+        const inputId = `input-${request.conversationId}`;
+        const providerThreadId = `provider-${request.conversationId}`;
+        const inputAnswered = new Promise<void>((resolve) => { resumeByRequestId.set(inputId, resolve); });
+        yield { type: "thread.started", threadId: providerThreadId };
+        yield { type: "turn.input_required", request: { requestId: inputId, threadId: providerThreadId, turnId: `provider-turn-${request.conversationId}`, itemId: `item-${inputId}`, questions: [{ id: "q1", header: "方向", question: "请选择", isOther: false, isSecret: false, options: [{ label: "继续", description: "继续当前需求" }] }], isBlocking: true, autoResolutionMs: null } };
+        await inputAnswered;
+        yield { type: "text.delta", text: readyResponse };
+        yield { type: "turn.completed" };
+      },
+      async answerUserInput(input) {
+        answerCalls.push(String(input.requestId));
+        resumeByRequestId.get(String(input.requestId))?.();
+      },
+      async cancel() { return undefined; },
+    };
+    const service = new ExplorerThreadService(store, model, { maxSteps: 1 });
+    const first = await service.startTurn({ threadId: explorer.id, explorerPlanId: plan1.id, content: "question 1", clientTurnId: "input-client-1" });
+    const second = await service.startTurn({ threadId: explorer.id, explorerPlanId: plan2.id, content: "question 2", clientTurnId: "input-client-2" });
+    await waitUntil(() => store.listInputRequests(explorer.id, "OPEN").length === 2);
+    const requests = store.listInputRequests(explorer.id, "OPEN");
+    const firstRequest = requests.find((request) => request.explorerPlanId === plan1.id)!;
+    const secondRequest = requests.find((request) => request.explorerPlanId === plan2.id)!;
+
+    const answeredSecond = await service.answerInput({ threadId: explorer.id, requestId: secondRequest.id, answers: { q1: { answers: ["继续"] } }, clientRequestId: "input-answer-2", actorId: "local-user" });
+    expect(answeredSecond.turn.id).toBe(second.assistant.id);
+    await waitUntil(() => store.listTurns(explorer.id).find((turn) => turn.id === second.assistant.id)?.status === "COMPLETED");
+    expect(store.getInputRequest(firstRequest.id)?.status).toBe("OPEN");
+    expect(store.listTurns(explorer.id).find((turn) => turn.id === first.assistant.id)?.status).toBe("WAITING_FOR_INPUT");
+
+    const answeredFirst = await service.answerInput({ threadId: explorer.id, requestId: firstRequest.id, answers: { q1: { answers: ["继续"] } }, clientRequestId: "input-answer-1", actorId: "local-user" });
+    expect(answeredFirst.turn.id).toBe(first.assistant.id);
+    await waitUntil(() => store.listTurns(explorer.id).find((turn) => turn.id === first.assistant.id)?.status === "COMPLETED");
+    expect(answerCalls).toEqual([`input-${plan2.id}`, `input-${plan1.id}`]);
+  });
+
+  it("isolates cancellation and provider failure while a third requirement completes", async () => {
+    const store = new InMemoryPipelineStore();
+    const explorer = new ExplorerService(store).create({ projectId: "project-1" });
+    const [plan1] = store.listExplorerPlans(explorer.id);
+    const plan2 = new ExplorerService(store).createPlan(explorer.id);
+    const plan3 = new ExplorerService(store).createPlan(explorer.id);
+    let releaseCancellation!: () => void;
+    let releaseFailure!: () => void;
+    const cancellationGate = new Promise<void>((resolve) => { releaseCancellation = resolve; });
+    const failureGate = new Promise<void>((resolve) => { releaseFailure = resolve; });
+    const statusEvents: Array<{ payload: Record<string, unknown> }> = [];
+    const model: ModelGateway = {
+      configFor: () => ({ model: "gpt-5.6-luna" }),
+      async *stream(request) {
+        const conversationId = request.conversationId!;
+        if (conversationId === plan1!.id) {
+          yield { type: "thread.started", threadId: "provider-cancel-me" };
+          yield { type: "text.delta", text: "partial work", providerThreadId: "provider-cancel-me", providerTurnId: "turn-cancel-me" };
+          await cancellationGate;
+          return;
+        }
+        if (conversationId === plan2.id) {
+          yield { type: "thread.started", threadId: "provider-fail-me" };
+          await failureGate;
+          throw new Error("provider rejected this requirement");
+        }
+        yield { type: "thread.started", threadId: "provider-finish-me" };
+        yield { type: "text.delta", text: "independent completed response", providerThreadId: "provider-finish-me", providerTurnId: "turn-finish-me" };
+        yield { type: "turn.completed" };
+      },
+      async answerUserInput() { return undefined; },
+      async cancel() { releaseCancellation(); },
+    };
+    const service = new ExplorerThreadService(store, model, { maxSteps: 1 });
+    service.subscribeEvents(explorer.id, (event) => { if (event.type === "explorer.requirement.status.changed") statusEvents.push({ payload: event.payload }); });
+    const first = await service.startTurn({ threadId: explorer.id, explorerPlanId: plan1!.id, content: "cancel this", clientTurnId: "isolated-cancel-1" });
+    const second = await service.startTurn({ threadId: explorer.id, explorerPlanId: plan2.id, content: "fail this", clientTurnId: "isolated-fail-2" });
+    const third = await service.startTurn({ threadId: explorer.id, explorerPlanId: plan3.id, content: "finish this", clientTurnId: "isolated-finish-3" });
+    await waitUntil(() => store.listTurns(explorer.id).find((turn) => turn.id === third.assistant.id)?.status === "COMPLETED");
+    await waitUntil(() => store.listTurns(explorer.id).find((turn) => turn.id === first.assistant.id)?.content.includes("partial work") === true);
+    expect(store.listTurns(explorer.id).find((turn) => turn.id === first.assistant.id)?.status).toBe("RUNNING");
+    expect(store.listTurns(explorer.id).find((turn) => turn.id === second.assistant.id)?.status).toBe("RUNNING");
+
+    await service.cancelTurn({ threadId: explorer.id, turnId: first.assistant.id, reason: "user_cancelled" });
+    expect(store.listTurns(explorer.id).find((turn) => turn.id === first.assistant.id)).toMatchObject({ status: "CANCELLED", explorerPlanId: plan1!.id });
+    expect(store.listTurns(explorer.id).find((turn) => turn.id === second.assistant.id)?.status).toBe("RUNNING");
+    expect(store.listTurns(explorer.id).find((turn) => turn.id === third.assistant.id)?.status).toBe("COMPLETED");
+
+    releaseFailure();
+    await waitUntil(() => store.listTurns(explorer.id).find((turn) => turn.id === second.assistant.id)?.status === "FAILED");
+    expect(store.getExplorerPlan(plan1!.id)?.runtimeStatus).toBe("CANCELLED");
+    expect(store.getExplorerPlan(plan2.id)?.runtimeStatus).toBe("FAILED");
+    expect(store.getExplorerPlan(plan3.id)?.runtimeStatus).toBe("COMPLETED");
+    for (const event of statusEvents) {
+      expect(Object.keys(event.payload).sort()).toEqual(["explorerPlanId", "occurredAt", "status", "turnId"]);
+      expect(JSON.stringify(event.payload)).not.toContain("cancel this");
+      expect(JSON.stringify(event.payload)).not.toContain("independent completed response");
+    }
+  });
+
+  it("recovers queued turns concurrently by requirement while preserving each requirement's FIFO", async () => {
+    const store = new InMemoryPipelineStore();
+    const explorer = new ExplorerService(store).create({ projectId: "project-1" });
+    const plan1 = store.listExplorerPlans(explorer.id)[0]!;
+    const plan2 = new ExplorerService(store).createPlan(explorer.id);
+    const createdAt = store.now();
+    store.saveTurn({ id: "queued-user-1", threadId: explorer.id, role: "user", content: "first requirement turn", status: "COMPLETED", createdAt, sequence: 1, explorerPlanId: plan1.id });
+    store.saveTurn({ id: "queued-assistant-1", threadId: explorer.id, role: "assistant", content: "", status: "QUEUED", createdAt, sequence: 2, explorerPlanId: plan1.id });
+    store.saveTurn({ id: "queued-user-2", threadId: explorer.id, role: "user", content: "second requirement turn", status: "COMPLETED", createdAt, sequence: 3, explorerPlanId: plan1.id });
+    store.saveTurn({ id: "queued-assistant-2", threadId: explorer.id, role: "assistant", content: "", status: "QUEUED", createdAt, sequence: 4, explorerPlanId: plan1.id });
+    store.saveTurn({ id: "queued-user-3", threadId: explorer.id, role: "user", content: "parallel requirement turn", status: "COMPLETED", createdAt, sequence: 5, explorerPlanId: plan2.id });
+    store.saveTurn({ id: "queued-assistant-3", threadId: explorer.id, role: "assistant", content: "", status: "QUEUED", createdAt, sequence: 6, explorerPlanId: plan2.id });
+    const requests: ModelRequest[] = [];
+    let releasePlan1!: () => void;
+    let releasePlan2!: () => void;
+    const plan1Gate = new Promise<void>((resolve) => { releasePlan1 = resolve; });
+    const plan2Gate = new Promise<void>((resolve) => { releasePlan2 = resolve; });
+    const model: ModelGateway = {
+      configFor: () => ({ model: "gpt-5.6-luna" }),
+      async *stream(request) {
+        requests.push(request);
+        yield { type: "thread.started", threadId: `provider-${request.conversationId}` };
+        if (request.conversationId === plan1.id && request.messages.some((message) => message.content === "first requirement turn")) await plan1Gate;
+        if (request.conversationId === plan2.id) await plan2Gate;
+        yield { type: "text.delta", text: `recovered ${request.conversationId}` };
+        yield { type: "turn.completed" };
+      },
+      async answerUserInput() { return undefined; },
+      async cancel() { return undefined; },
+    };
+    const service = new ExplorerThreadService(store, model, { maxSteps: 1 });
+    await service.recoverQueuedTurns();
+    await waitUntil(() => requests.length === 2);
+    expect(requests.some((request) => request.conversationId === plan1.id && request.messages.some((message) => message.content === "second requirement turn"))).toBe(false);
+    expect(requests.some((request) => request.conversationId === plan2.id)).toBe(true);
+    releasePlan2();
+    releasePlan1();
+    await waitUntil(() => store.listTurns(explorer.id).filter((turn) => turn.role === "assistant").every((turn) => turn.status === "COMPLETED"));
+    expect(requests.find((request) => request.messages.some((message) => message.content === "second requirement turn"))?.conversationId).toBe(plan1.id);
+  });
+
   it("requires the explicit complete-plan protocol before marking exploration ready", () => {
     expect(assessPlanCompletion("已记录方案 B，但还需要确认验证方式。")).toMatchObject({ status: "INCOMPLETE", artifact: null });
     expect(assessPlanCompletion("<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>{bad json}</pipeline-factory-plan>")).toMatchObject({ status: "INCOMPLETE", missing: ["完整执行契约"] });
   });
 
-  it("allows only one open blocking input request per thread", () => {
+  it("allows concurrent blocking input requests across requirements but only one per turn", () => {
     const store = new InMemoryPipelineStore();
     store.saveThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
-    const request = (id: string): ExplorerInputRequest => ({ id, threadId: "thread-1", localTurnId: "turn-1", providerRequestId: id, providerThreadId: "provider-1", providerTurnId: "turn-1", itemId: id, questions: [{ id: "q1", header: "选择", question: "请选择", isOther: false, isSecret: false, options: [{ label: "A", description: "A" }] }], isBlocking: true, autoResolutionMs: null, status: "OPEN", createdAt: store.now(), answeredAt: null, answeredBy: null, redactedAnswerSummary: null });
-    store.saveInputRequest(request("input-1"));
-    expect(() => store.saveInputRequest(request("input-2"))).toThrow("open blocking input request");
+    const request = (id: string, localTurnId: string): ExplorerInputRequest => ({ id, threadId: "thread-1", localTurnId, providerRequestId: id, providerThreadId: `provider-${id}`, providerTurnId: `turn-${localTurnId}`, itemId: id, questions: [{ id: "q1", header: "选择", question: "请选择", isOther: false, isSecret: false, options: [{ label: "A", description: "A" }] }], isBlocking: true, autoResolutionMs: null, status: "OPEN", createdAt: store.now(), answeredAt: null, answeredBy: null, redactedAnswerSummary: null });
+    store.saveInputRequest(request("input-1", "turn-1"));
+    expect(store.saveInputRequest(request("input-2", "turn-2"))).toMatchObject({ id: "input-2" });
+    expect(() => store.saveInputRequest(request("input-3", "turn-1"))).toThrow("open blocking input request");
   });
 
   it("uses the latest valid READY protocol block instead of an earlier invalid block", () => {

@@ -42,6 +42,8 @@ import {
   mapCodexRateLimits,
   type PipelineStore,
   type CandidatePlan,
+  type DomainEvent,
+  type ExplorerThread,
   type PlanLifecycleEntry,
   type PlanLifecycleStatus,
   type HookDefinition,
@@ -65,6 +67,23 @@ import type { FactoryConfig } from "./config.js";
 import { RepositoryContextCache } from "./repository-context-cache.js";
 
 const execFileAsync = promisify(execFile);
+
+export function sanitizeExplorerRequirementStatusEvent(
+  store: Pick<PipelineStore, "getExplorerPlan">,
+  thread: Pick<ExplorerThread, "id" | "projectId">,
+  event: DomainEvent,
+): { sequence: number; payload: { explorerPlanId: string; turnId: string | null; status: string; occurredAt: string } } | null {
+  if (event.type !== "explorer.requirement.status.changed") return null;
+  const explorerPlanId = event.payload.explorerPlanId;
+  const turnId = event.payload.turnId;
+  const status = event.payload.status;
+  const occurredAt = event.payload.occurredAt;
+  const allowedStatuses = new Set(["QUEUED", "RUNNING", "WAITING_FOR_INPUT", "PAUSED", "COMPLETED", "FAILED", "CANCELLED"]);
+  if (typeof explorerPlanId !== "string" || (typeof turnId !== "string" && turnId !== null) || typeof status !== "string" || !allowedStatuses.has(status) || typeof occurredAt !== "string") return null;
+  const plan = store.getExplorerPlan(explorerPlanId);
+  if (!plan || plan.explorerThreadId !== thread.id || plan.projectId !== thread.projectId) return null;
+  return { sequence: event.sequence, payload: { explorerPlanId, turnId, status, occurredAt } };
+}
 
 const planIdParams = z.object({ planId: z.string().min(1) });
 const planRevisionParams = z.object({ planId: z.string().min(1), revision: z.coerce.number().int().positive() });
@@ -97,6 +116,7 @@ const revisionDraftBody = z.object({ fromRevision: z.number().int().positive(), 
 const v4TurnBody = z.object({ threadId: z.string().min(1), explorerPlanId: z.string().min(1), content: z.string().trim().min(1).max(20_000), clientTurnId: z.string().min(1).max(200) });
 const v4AnswerBody = z.object({ clientRequestId: z.string().min(1).max(200), answers: z.record(z.object({ answers: z.array(z.string().max(20_000)).min(1) })), actorId: z.string().min(1).default("local-user") });
 const v4ThreadQuery = z.object({ threadId: z.string().min(1).optional(), explorerPlanId: z.string().min(1), afterSequence: z.coerce.number().int().nonnegative().optional() });
+const v4ThreadStatusQuery = z.object({ threadId: z.string().min(1), afterSequence: z.coerce.number().int().nonnegative().optional() });
 const loopEventsQuery = z.object({ format: z.enum(["json", "sse"]).optional(), afterSequence: z.coerce.number().int().nonnegative().optional() });
 const v4InputQuery = z.object({ threadId: z.string().min(1).optional(), explorerPlanId: z.string().min(1), status: z.enum(["OPEN", "SUBMITTING", "ANSWERED", "CANCELLED", "AUTO_RESOLVED", "RECOVERY_REQUIRED"]).optional() });
 const hookBody = z.object({
@@ -1013,6 +1033,33 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     }, afterSequence);
     cursor = Math.max(cursor, store.getLastEventSequence(thread.id));
     raw.write(`id: ${cursor}\nevent: stream.ready\ndata: ${JSON.stringify({ afterSequence: cursor, explorerPlanId: explorerPlan.id })}\n\n`);
+    const heartbeat = setInterval(() => raw.write(`: heartbeat ${Date.now()}\n\n`), 15_000);
+    const cleanup = () => { clearInterval(heartbeat); unsubscribe(); };
+    request.raw.once("close", cleanup);
+  });
+
+  // Thread-level status stream contains only requirement/turn state metadata, never conversation content.
+  app.get("/api/v4/projects/:projectId/explorer-thread/requirement-status/events", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    const query = v4ThreadStatusQuery.safeParse(request.query);
+    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid requirement status event query" });
+    const thread = findProjectThread(store, params.data.projectId, query.data.threadId);
+    if (!thread) return reply.code(404).send({ error: "ExplorerThread not found" });
+    reply.hijack();
+    const raw = reply.raw;
+    raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive", "access-control-allow-origin": "*" });
+    const headerSequence = Number(request.headers["last-event-id"] ?? 0) || 0;
+    let cursor = Math.max(query.data.afterSequence ?? 0, headerSequence);
+    const afterSequence = cursor;
+    const send = (event: { sequence: number; type: string; payload: Record<string, unknown> }) => {
+      const projected = sanitizeExplorerRequirementStatusEvent(store, thread, event as DomainEvent);
+      if (!projected) return;
+      cursor = projected.sequence;
+      raw.write(`id: ${projected.sequence}\nevent: requirement.status\ndata: ${JSON.stringify(projected.payload)}\n\n`);
+    };
+    const unsubscribe = explorer.subscribeEvents(thread.id, send, afterSequence);
+    cursor = Math.max(cursor, store.getLastEventSequence(thread.id));
+    raw.write(`id: ${cursor}\nevent: stream.ready\ndata: ${JSON.stringify({ afterSequence: cursor })}\n\n`);
     const heartbeat = setInterval(() => raw.write(`: heartbeat ${Date.now()}\n\n`), 15_000);
     const cleanup = () => { clearInterval(heartbeat); unsubscribe(); };
     request.raw.once("close", cleanup);

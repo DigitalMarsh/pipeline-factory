@@ -124,4 +124,34 @@ describe("ProjectSettingsDialog", () => {
     mounted.app.unmount();
     mounted.host.remove();
   });
+
+  it("uses dropdowns for both model roles and reasoning effort", async () => {
+    vi.mocked(api.project).mockResolvedValue({ project: project(), summary: {} as never });
+    vi.mocked(api.updateProject).mockResolvedValue({ project: project() });
+    const mounted = mountDialog();
+    await nextTick();
+    await nextTick();
+
+    const modelsTab = [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Models & Tools"));
+    modelsTab?.click();
+    await nextTick();
+    const selects = mounted.host.querySelectorAll<HTMLSelectElement>(".settings-form-grid select");
+    expect(selects).toHaveLength(4);
+    expect([...selects[0]!.options].some((option) => option.value === "gpt-6-sol")).toBe(true);
+    expect([...selects[1]!.options].some((option) => option.value === "high")).toBe(true);
+
+    selects[0]!.value = "gpt-6-sol";
+    selects[0]!.dispatchEvent(new Event("change", { bubbles: true }));
+    selects[1]!.value = "high";
+    selects[1]!.dispatchEvent(new Event("change", { bubbles: true }));
+    await nextTick();
+    const save = [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Save Project configuration"));
+    save?.click();
+    await nextTick();
+    await nextTick();
+
+    expect(api.updateProject).toHaveBeenCalledWith("project-1", expect.objectContaining({ settings: expect.objectContaining({ models: expect.objectContaining({ explorer: expect.objectContaining({ model: "gpt-6-sol", reasoningEffort: "high" }) }) }) }));
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
 });

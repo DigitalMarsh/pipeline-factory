@@ -365,7 +365,8 @@ export type CodexAppServerGatewayOptions = {
 
 /** 将 Codex App Server 协议映射为 Domain ModelGateway，并保留 Provider activity 与输入请求。 */
 export class CodexAppServerGateway implements ModelGateway {
-  private readonly sessions = new Map<string, CodexAppServerSession>();
+  private session: CodexAppServerSession | null = null;
+  private sessionPromise: Promise<CodexAppServerSession> | null = null;
   private readonly resumedThreads = new Set<string>();
   private readonly sessionFactory: CodexAppServerSessionFactory;
   private readonly providerThreads = new Map<string, string>();
@@ -465,10 +466,11 @@ export class CodexAppServerGateway implements ModelGateway {
   async close(): Promise<void> {
     for (const unsubscribe of this.rateLimitUnsubscribers.values()) unsubscribe();
     this.rateLimitUnsubscribers.clear();
-    const sessions = [...new Set(this.sessions.values())];
-    this.sessions.clear();
+    const session = this.session ?? (this.sessionPromise ? await this.sessionPromise.catch(() => null) : null);
+    this.session = null;
+    this.sessionPromise = null;
     this.pendingInputSessions.clear();
-    await Promise.all(sessions.map((session) => session.close()));
+    await session?.close();
   }
 
   async answerUserInput(input: { requestId: string | number; answers: import("./index.js").ModelInputAnswers }): Promise<void> {
@@ -480,18 +482,23 @@ export class CodexAppServerGateway implements ModelGateway {
 
   async cancel(request: { conversationId: string; providerThreadId: string; providerTurnId?: string }): Promise<void> {
     if (!request.providerTurnId) return;
-    const mappedConversationId = [...this.providerThreads.entries()].find(([, providerThreadId]) => providerThreadId === request.providerThreadId)?.[0];
-    const session = this.sessions.get(request.conversationId) ?? (mappedConversationId ? this.sessions.get(mappedConversationId) : undefined);
-    if (!session) return;
+    if (!this.session && !this.sessionPromise) return;
+    const session = await this.getSession(request.conversationId);
     await session.interrupt(request.providerThreadId, request.providerTurnId);
   }
 
-  private async getSession(key: string): Promise<CodexAppServerSession> {
-    const existing = this.sessions.get(key);
-    if (existing) return existing;
-    const session = await this.sessionFactory();
-    this.sessions.set(key, session);
-    return session;
+  private async getSession(_key: string): Promise<CodexAppServerSession> {
+    if (this.session) return this.session;
+    if (!this.sessionPromise) {
+      this.sessionPromise = this.sessionFactory().then((session) => {
+        this.session = session;
+        return session;
+      }).catch((error: unknown) => {
+        this.sessionPromise = null;
+        throw error;
+      });
+    }
+    return this.sessionPromise;
   }
 }
 

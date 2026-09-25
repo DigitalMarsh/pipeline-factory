@@ -82,6 +82,7 @@ const planRequirements = ref<ExplorerPlanRequirement[]>([]);
 const turns = ref<ExplorerTurn[]>([]);
 const draft = ref("");
 const requirementDrafts = new Map<string, string>();
+const pendingSendPlanIds = ref<Set<string>>(new Set());
 const drawerOpen = ref(false);
 const detailPlan = ref<Plan | null>(null);
 const detailRevisions = ref<number[]>([]);
@@ -107,7 +108,6 @@ const creatingExplorer = ref(false);
 const showArchivedExplorers = ref(false);
 const explorerActionId = ref<string | null>(null);
 const projectActionId = ref<string | null>(null);
-const sendingTurn = ref(false);
 const showScrollToLatest = ref(false);
 const timeline = ref<HTMLElement | null>(null);
 const pendingInput = ref<ExplorerInputRequest | null>(null);
@@ -123,6 +123,8 @@ const mounted = ref(false);
 const requestScope = createProjectRequestScope();
 let eventSource: EventSource | null = null;
 let loopEventSource: EventSource | null = null;
+let requirementStatusEventSource: EventSource | null = null;
+let requirementStatusScope: { projectId: string; threadId: string } | null = null;
 let explorerEventSequence: number | null = null;
 let planProjectionVersion = 0;
 let activeRequestToken = 0;
@@ -171,7 +173,8 @@ function belongsToActivePlan(planId: string | null | undefined): boolean {
 const visibleTurns = computed(() => turns.value.filter((turn) => belongsToActivePlan(turn.explorerPlanId)));
 const visibleActivity = computed(() => (activity.value.length ? activity.value : visibleTurns.value.map((turn) => ({ id: `fallback-${turn.id}`, explorerId: turn.threadId, turnId: turn.id, sequence: turn.sequence, kind: turn.role === "user" ? "USER_MESSAGE" : "ASSISTANT_MESSAGE", status: turn.status === "FAILED" ? "FAILED" : turn.status === "RUNNING" ? "RUNNING" : turn.status === "WAITING_FOR_INPUT" || turn.status === "QUEUED" ? "WAITING" : "COMPLETED", title: turn.role === "user" ? "You" : "Plan Explorer", summary: turn.role === "assistant" ? readableAssistantText(turnContent(turn)) : turnContent(turn), details: turn.error ? { error: turn.error } : null, occurredAt: turn.createdAt, explorerPlanId: turn.explorerPlanId })) as ExplorerActivityItem[]).filter((item) => belongsToActivePlan(item.explorerPlanId)));
 const visibleInputRequests = computed(() => inputRequests.value.filter((item) => belongsToActivePlan(item.explorerPlanId)));
-const activePlanBusy = computed(() => visibleTurns.value.some((turn) => turn.status === "RUNNING" || turn.status === "WAITING_FOR_INPUT" || turn.status === "QUEUED"));
+const activePlanBusy = computed(() => visibleTurns.value.some((turn) => turn.status === "RUNNING" || turn.status === "WAITING_FOR_INPUT" || turn.status === "PAUSED" || turn.status === "QUEUED"));
+const sendingCurrentPlan = computed(() => Boolean(activeExplorerPlan.value && pendingSendPlanIds.value.has(activeExplorerPlan.value.id)));
 const allPlans = computed<Plan[]>(() => {
   const unique = new Map<string, Plan>();
   for (const plan of [candidate.value, ...confirmedPlans.value, ...enqueued.value, ...dispatched.value]) if (plan) unique.set(planIdentity(plan), plan);
@@ -416,6 +419,7 @@ function isCurrentProjectScope(requestProjectId: string, requestToken = activeRe
 }
 
 function resetThreadState() {
+  closeRequirementStatusEvents();
   thread.value = null;
   explorerPlans.value = [];
   requirementDrafts.clear();
@@ -453,7 +457,7 @@ function resetThreadState() {
   activePlanKey.value = "";
   expandedUserMessageIds.value = new Set();
   busy.value = false;
-  sendingTurn.value = false;
+  pendingSendPlanIds.value = new Set();
 }
 
 /** 项目切换时保留目录投影，清空旧线程数据，避免旧 SSE 或异步请求重新填充当前工作区。 */
@@ -501,7 +505,7 @@ async function refreshPlanProjection(): Promise<void> {
     explorerPlans.value = planGroupsResponse.items;
     threadPlans.value = threadPlansResponse.items;
     const routePlanId = typeof route.query.explorerPlanId === "string" ? route.query.explorerPlanId : null;
-    activeExplorerPlanId.value = explorerPlans.value.some((plan) => plan.id === routePlanId) ? routePlanId : explorerPlans.value.some((plan) => plan.id === explorerResponse.explorer.activeExplorerPlanId) ? explorerResponse.explorer.activeExplorerPlanId ?? null : explorerPlans.value[0]?.id ?? null;
+    activeExplorerPlanId.value = explorerPlans.value.some((plan) => plan.id === activeExplorerPlanId.value) ? activeExplorerPlanId.value : explorerPlans.value.some((plan) => plan.id === routePlanId) ? routePlanId : explorerPlans.value.some((plan) => plan.id === explorerResponse.explorer.activeExplorerPlanId) ? explorerResponse.explorer.activeExplorerPlanId ?? null : explorerPlans.value[0]?.id ?? null;
     const projection = normalizePlanProjection(explorerResponse.explorer, null, plansResponse.items);
     applyPlanProjection(projection, confirmedResponse?.items ?? [], null);
     await loadActivePlanWorkspace(explorerId, activeExplorerPlanId.value, requestProjectId, requestToken);
@@ -520,9 +524,7 @@ async function loadActivePlanWorkspace(explorerId: string, explorerPlanId: strin
   candidate.value = workspace.candidate;
   revisionDraft.value = workspace.revisionDraft;
   agentLoop.value = [...workspace.loops].sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? ""))[0] ?? null;
-  const activeTurn = turns.value.some((turn) => turn.status === "RUNNING" || turn.status === "WAITING_FOR_INPUT" || turn.status === "QUEUED");
-  busy.value = activeTurn;
-  sendingTurn.value = activeTurn;
+  explorerPaused.value = agentLoop.value?.state === "PAUSED";
   explorerEventSequence = Math.max(explorerEventSequence ?? 0, workspace.lastEventSequence ?? 0);
   inputDialogOpen.value = Boolean(pendingInput.value?.isBlocking);
   return true;
@@ -1173,7 +1175,7 @@ async function load(): Promise<boolean> {
 /** 先乐观写入用户消息，再由 v4 API/SSE 补齐 Provider 输出和 Plan 活动。 */
 async function sendTurn() {
   const content = draft.value.trim();
-  if (!content || activePlanBusy.value || !thread.value || thread.value.state === "ARCHIVED" || project.value?.status === "ARCHIVED") return;
+  if (!content || activePlanBusy.value || sendingCurrentPlan.value || busy.value || !thread.value || thread.value.state === "ARCHIVED" || project.value?.status === "ARCHIVED") return;
   const requestProjectId = projectId.value;
   const requestThreadId = thread.value.id;
   const requestToken = activeRequestToken;
@@ -1193,8 +1195,7 @@ async function sendTurn() {
   const optimisticAssistant: ExplorerActivityItem = { id: `local-assistant-activity-${Date.now()}`, explorerId: optimisticUser.threadId, turnId: `local-assistant-turn-${Date.now()}`, sequence: optimisticUser.sequence + 1, kind: "ASSISTANT_MESSAGE", status: "RUNNING", title: "Plan Explorer", summary: "Plan Explorer 正在处理…", details: null, occurredAt: new Date().toISOString(), explorerPlanId: currentPlanId };
   activity.value = [...activity.value, { id: `local-user-activity-${optimisticUser.id}`, explorerId: optimisticUser.threadId, turnId: optimisticUser.id, sequence: optimisticUser.sequence, kind: "USER_MESSAGE", status: "COMPLETED", title: "You", summary: content, details: null, occurredAt: now, explorerPlanId: currentPlanId }, optimisticAssistant];
   draft.value = "";
-  busy.value = true;
-  sendingTurn.value = true;
+  pendingSendPlanIds.value = new Set([...pendingSendPlanIds.value, currentPlanId]);
   await nextTick();
   if (timeline.value) scrollTimelineToLatest(timeline.value);
   try {
@@ -1214,9 +1215,13 @@ async function sendTurn() {
     if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== requestThreadId) return;
     const message = caught instanceof Error ? caught.message : "API 未连接";
     turns.value = [...turns.value, { id: `local-assistant-${Date.now()}`, threadId: optimisticUser.threadId, role: "assistant", content: `消息已发送，但模型回复失败：${message}`, status: "FAILED", error: message, createdAt: new Date().toISOString(), sequence: optimisticUser.sequence + 1, explorerPlanId: currentPlanId }];
-    sendingTurn.value = false;
-    busy.value = false;
-  } finally { if (!sendingTurn.value) busy.value = false; await nextTick(); if (timeline.value) scrollTimelineToLatest(timeline.value); }
+  } finally {
+    const pending = new Set(pendingSendPlanIds.value);
+    pending.delete(currentPlanId);
+    pendingSendPlanIds.value = pending;
+    await nextTick();
+    if (timeline.value) scrollTimelineToLatest(timeline.value);
+  }
 }
 
 function handleComposerKeydown(event: KeyboardEvent) {
@@ -1258,8 +1263,6 @@ async function cancelInput() {
     inputDialogOpen.value = false;
     pendingInput.value = null;
     inputProgress.value = null;
-    busy.value = false;
-    sendingTurn.value = false;
     ElMessage.info("本轮已取消");
   } catch (caught) { ElMessage.error(caught instanceof Error ? caught.message : "取消本轮失败"); }
 }
@@ -1285,14 +1288,14 @@ async function refreshTurnsAfterEvent() {
   const inputResponse = await api.inputRequests(requestProjectId, requestThreadId, explorerPlanId);
   if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== requestThreadId || activeExplorerPlan.value?.id !== explorerPlanId) return;
   setInputRequests(inputResponse.items);
-  const activeTurn = response.items.some((turn) => turn.status === "RUNNING" || turn.status === "WAITING_FOR_INPUT" || turn.status === "QUEUED");
-  if (!pendingInput.value) { inputDialogOpen.value = false; busy.value = activeTurn; sendingTurn.value = activeTurn; }
+  if (!pendingInput.value) inputDialogOpen.value = false;
   await nextTick();
   if (timeline.value) scrollTimelineToLatest(timeline.value);
 }
 
 function connectEvents() {
   if (!thread.value || !activeExplorerPlan.value || typeof EventSource === "undefined") return;
+  connectRequirementStatusEvents();
   const connectionProjectId = projectId.value;
   const connectionThreadId = thread.value.id;
   const connectionPlanId = activeExplorerPlan.value.id;
@@ -1340,6 +1343,24 @@ function connectEvents() {
   connectLoopEvents();
 }
 
+function connectRequirementStatusEvents() {
+  if (!thread.value || typeof EventSource === "undefined") return;
+  const connectionProjectId = projectId.value;
+  const connectionThreadId = thread.value.id;
+  if (requirementStatusEventSource && requirementStatusScope?.projectId === connectionProjectId && requirementStatusScope.threadId === connectionThreadId) return;
+  closeRequirementStatusEvents();
+  const connectionToken = activeRequestToken;
+  const source = new EventSource(api.explorerRequirementStatusEventsUrl(connectionProjectId, connectionThreadId, explorerEventSequence ?? undefined));
+  requirementStatusEventSource = source;
+  requirementStatusScope = { projectId: connectionProjectId, threadId: connectionThreadId };
+  source.addEventListener("requirement.status", (raw) => {
+    if (requirementStatusEventSource !== source || !isCurrentProjectScope(connectionProjectId, connectionToken) || thread.value?.id !== connectionThreadId) return;
+    const payload = JSON.parse((raw as MessageEvent).data) as { explorerPlanId: string; turnId: string | null; status: NonNullable<ExplorerPlan["runtimeStatus"]>; occurredAt: string };
+    if (!explorerPlans.value.some((plan) => plan.id === payload.explorerPlanId && plan.explorerThreadId === connectionThreadId)) return;
+    explorerPlans.value = explorerPlans.value.map((plan) => plan.id === payload.explorerPlanId ? { ...plan, runtimeStatus: payload.status, lastActivityAt: payload.occurredAt } : plan);
+  });
+}
+
 function connectLoopEvents() {
   if (!agentLoop.value || typeof EventSource === "undefined") return;
   const connectionProjectId = projectId.value;
@@ -1364,6 +1385,7 @@ function connectLoopEvents() {
   }
 }
 
+function closeRequirementStatusEvents() { requirementStatusEventSource?.close(); requirementStatusEventSource = null; requirementStatusScope = null; }
 function closeEvents() { eventSource?.close(); loopEventSource?.close(); eventSource = null; loopEventSource = null; }
 
 async function confirmPlan() {
@@ -1567,7 +1589,7 @@ watch(() => route.query.explorerPlanId, (routePlanId, previousPlanId) => {
   void selectExplorerPlan(routePlanId, true);
 });
 onMounted(() => { mounted.value = true; syncPanelStateFromRoute(); void load().then((loaded) => { if (loaded) connectEvents(); }); syncHashPanel(route.hash); });
-onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeEvents(); });
+onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeEvents(); closeRequirementStatusEvents(); });
 </script>
 
 <template>
@@ -1692,7 +1714,7 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
       <button v-if="showScrollToLatest" class="scroll-to-latest" type="button" aria-label="Scroll to latest message" title="Scroll to latest message" @click="jumpToLatest"><img class="scroll-to-latest-image" :src="scrollToLatestIcon" alt="" /></button>
       </div>
       </div>
-      <div v-if="!activeRunId" class="composer"><div class="composer-input"><textarea v-model="draft" :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || explorerPaused" aria-label="Explorer message" placeholder="继续探索，或提出修改…" @keydown="handleComposerKeydown" /><span class="composer-mode">Plan Mode</span></div><div class="composer-footer"><el-button size="small" plain :disabled="!thread || thread.state === 'ARCHIVED' || !activeExplorerPlan" title="在当前探索线程下新建一个独立需求" @click="createExplorerPlan">新建需求</el-button><ProviderUsageFooter :model="explorerModel" :context="contextUsage" context-note="estimated" /><span v-if="sendingTurn" class="composer-status" role="status" aria-live="polite">Message sent · waiting for Plan Explorer…</span><el-button class="composer-send" type="primary" circle :loading="busy" :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || !draft.trim() || explorerPaused || busy" aria-label="Send message" :title="busy ? '当前回合执行中，完成后可发送' : 'Send message'" @click="sendTurn"><ArrowUp :size="18" /></el-button></div></div>
+      <div v-if="!activeRunId" class="composer"><div class="composer-input"><textarea v-model="draft" :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || explorerPaused" aria-label="Explorer message" placeholder="继续探索，或提出修改…" @keydown="handleComposerKeydown" /><span class="composer-mode">Plan Mode</span></div><div class="composer-footer"><el-button size="small" plain :disabled="!thread || thread.state === 'ARCHIVED' || !activeExplorerPlan" title="在当前探索线程下新建一个独立需求" @click="createExplorerPlan">新建需求</el-button><ProviderUsageFooter :model="explorerModel" :context="contextUsage" context-note="estimated" /><span v-if="sendingCurrentPlan" class="composer-status" role="status" aria-live="polite">Message sent · waiting for Plan Explorer…</span><el-button class="composer-send" type="primary" circle :loading="activePlanBusy || sendingCurrentPlan" :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || !draft.trim() || explorerPaused || activePlanBusy || sendingCurrentPlan || busy" aria-label="Send message" :title="activePlanBusy ? '当前需求回合执行中，完成后可继续' : 'Send message'" @click="sendTurn"><ArrowUp :size="18" /></el-button></div></div>
     </section>
     <aside class="context-panel-shell">
       <div class="context-panel">

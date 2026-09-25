@@ -23,6 +23,7 @@ export function taskRuntimeLabel(task: ExplorerPlan): string {
     QUEUED: "排队中",
     RUNNING: "运行中",
     WAITING_FOR_INPUT: "等待输入",
+    PAUSED: "已暂停",
     COMPLETED: "已完成",
     FAILED: "失败",
     CANCELLED: "已取消",

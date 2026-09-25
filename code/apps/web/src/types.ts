@@ -157,7 +157,7 @@ export type ExplorerPlan = {
   lastAssessedTurnId: string | null;
   createdAt: string;
   lastActivityAt: string;
-  runtimeStatus?: "QUEUED" | "RUNNING" | "WAITING_FOR_INPUT" | "COMPLETED" | "FAILED" | "CANCELLED";
+  runtimeStatus?: "QUEUED" | "RUNNING" | "WAITING_FOR_INPUT" | "PAUSED" | "COMPLETED" | "FAILED" | "CANCELLED";
 };
 
 export type CodexRateLimitValue = {
@@ -193,7 +193,7 @@ export type ExplorerTurn = {
   threadId: string;
   role: "user" | "assistant";
   content: string;
-  status?: "QUEUED" | "RUNNING" | "WAITING_FOR_INPUT" | "COMPLETED" | "FAILED" | "CANCELLED";
+  status?: "QUEUED" | "RUNNING" | "WAITING_FOR_INPUT" | "PAUSED" | "COMPLETED" | "FAILED" | "CANCELLED";
   error?: string;
   createdAt: string;
   sequence: number;

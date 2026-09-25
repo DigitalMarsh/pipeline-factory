@@ -650,15 +650,16 @@ describe("Explorer header actions", () => {
 });
 
 describe("Explorer composer availability", () => {
-  it("keeps the composer editable while a turn is running and only locks the send button", () => {
+  it("keeps the composer editable and locks sending only for the active requirement", () => {
     expect(explorerViewSource).toContain(`<textarea v-model="draft" :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || explorerPaused"`);
     expect(explorerViewSource).not.toContain(`<textarea v-model="draft" :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || explorerPaused || busy"`);
-    expect(explorerViewSource).toContain(`:disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || !draft.trim() || explorerPaused || busy"`);
+    expect(explorerViewSource).toContain(`:loading="activePlanBusy || sendingCurrentPlan"`);
+    expect(explorerViewSource).toContain(`|| explorerPaused || activePlanBusy || sendingCurrentPlan || busy"`);
   });
 
-  it("explains why the send button is unavailable while the current turn is running", () => {
-    expect(explorerViewSource).toContain(`:title="busy ? '当前回合执行中，完成后可发送' : 'Send message'"`);
-    expect(explorerViewSource).toContain(`if (!content || activePlanBusy.value || !thread.value || thread.value.state === "ARCHIVED"`);
+  it("explains why the send button is unavailable while the selected requirement is running", () => {
+    expect(explorerViewSource).toContain(`:title="activePlanBusy ? '当前需求回合执行中，完成后可继续' : 'Send message'"`);
+    expect(explorerViewSource).toContain(`if (!content || activePlanBusy.value || sendingCurrentPlan.value || busy.value || !thread.value || thread.value.state === "ARCHIVED"`);
   });
 });
 
