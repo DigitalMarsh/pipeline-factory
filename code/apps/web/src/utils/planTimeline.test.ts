@@ -86,6 +86,16 @@ describe("plan timeline bindings", () => {
   });
 });
 
+describe("rail 条目的状态文案", () => {
+  /** 行为锁定：DISCARDED 必须在 rail 上与计划卡片显示同一句话，不能裸露枚举名。 */
+  it("已丢弃的 Plan 显示 Discarded，而不是 DISCARDED", () => {
+    const discarded = { ...plan("plan-3", "turn-3", "2026-08-29T10:03:00.000Z"), status: "DISCARDED" as const };
+    const time = (value: string) => new Date(value).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+
+    expect(planTimelineItems([discarded], []).map((item) => item.detail)).toEqual([`${time(discarded.createdAt!)} · Discarded · Rev 1`]);
+  });
+});
+
 describe("plan DOM 锚点", () => {
   it("有卡片与无卡片分别用 generated / created 前缀", () => {
     const bound = plan("plan-1", "turn-2");

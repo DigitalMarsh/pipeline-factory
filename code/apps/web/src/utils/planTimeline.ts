@@ -2,8 +2,12 @@
  * 模块职责：提供 Pipeline Factory Web 层的类型、请求或状态辅助能力。
  *
  * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
+ * 状态文案**不在这里**——它统一来自 `./planStatus`。本文件此前自带一份私有 `statusLabel`，
+ * 成员比共用那份少 `DISCARDED` / `STARTING`，导致同一个 `DISCARDED` 在 rail 上显示成
+ * `DISCARDED`、在计划卡片上显示成 `Discarded`。新增状态请改 `planStatus.ts`。
  */
 import type { ExplorerActivityItem, Plan } from "../types";
+import { planStatusLabel } from "./planStatus";
 
 export type PlanTimelineItem = {
   plan: Plan;
@@ -29,22 +33,6 @@ function providerItemId(activity: ExplorerActivityItem): string | null {
 
 function generationTime(plan: Plan): string {
   return plan.createdAt ?? plan.lastEventAt ?? plan.queuedAt ?? "";
-}
-
-function statusLabel(status: string): string {
-  return ({
-    DRAFT: "Candidate",
-    READY: "Confirmed",
-    ENQUEUED: "Enqueued",
-    DISPATCHED: "Dispatched",
-    QUEUED: "Queued",
-    IN_PROGRESS: "Running",
-    VERIFYING: "Verifying",
-    MERGE_READY: "Ready for review",
-    MERGED: "Merged",
-    NEEDS_PLAN_CHANGE: "Plan change required",
-    BLOCKED: "Blocked",
-  } as Record<string, string>)[status] ?? status;
 }
 
 function timeLabel(value: string): string {
@@ -117,7 +105,7 @@ export function planTimelineItems(plans: Plan[], activities: ExplorerActivityIte
       plan,
       key: `plan-${planIdentity(plan)}`,
       label: plan.title,
-      detail: `${timeLabel(generationTime(plan))} · ${statusLabel(plan.status)} · Rev ${plan.revision}`,
+      detail: `${timeLabel(generationTime(plan))} · ${planStatusLabel(plan.status)} · Rev ${plan.revision}`,
       target: getPlanTimelineTarget(plan, activities, [...unique.values()], bindings),
     }));
 }
