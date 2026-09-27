@@ -8,7 +8,7 @@ import { ArrowDown, ArrowUp, Check, CircleCheck, Close, Connection, Document, In
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 import { api } from "../api";
-import type { AgentLoop, ExplorerActivityItem, ExplorerInputRequest, ExplorerPlan, ExplorerThread, ExplorerTurn, Plan, PlanRevisionDraft, Project, Run } from "../types";
+import type { AgentLoop, ExplorerActivityItem, ExplorerPlan, ExplorerThread, ExplorerTurn, Plan, PlanRevisionDraft, Project, Run } from "../types";
 import PlanDetailContent from "../components/PlanDetailContent.vue";
 import ExplorerPolicyDrawer from "../components/ExplorerPolicyDrawer.vue";
 import ThreadRail from "../components/ThreadRail.vue";
@@ -38,19 +38,16 @@ import { readableAssistantText } from "../utils/planProtocolDisplay";
 import { detachedPlanAnchorId, planAnchorId, planAnchorKey, planForActivity as planForActivityIn, planIdentity } from "../utils/planTimeline";
 import { taskDisplayTitle } from "../utils/taskTree";
 import { isConfirmedPlanRevision, resolvePlanVersionHistory } from "../utils/planVersionHistory";
-import { inputAnswerDisplayLabels, inputAnswerDisplayText } from "../utils/explorerInput";
 import { projectPathForModule } from "../utils/projectRoutes";
 import { explorerTimelineTarget as activityTarget, explorerPlanAnchorId, inputRequestTarget } from "../utils/explorerTimeline";
-import { activityIconKind, activityKindLabel, activityStatusLabel, explorerDisplayTitle, formatTurnTime, inputStatusLabel as inputStatusText } from "../utils/explorerPresentation";
+import { activityIconKind, activityKindLabel, activityStatusLabel, explorerDisplayTitle, formatTurnTime } from "../utils/explorerPresentation";
 import { planStatusLabel as statusLabel } from "../utils/planStatus";
-import { belongsToExplorerPlan } from "../utils/explorerScope";
 
 import { formatAgentLoopCompletion, formatAgentLoopGate, formatAgentLoopTerminal } from "../utils/agentLoopPresentation";
 import { summarizeUserMessage as userMessageSummary } from "../utils/messageSummary";
 import { canCreateConfigurationRevision as canCreateConfigurationRevisionFor } from "../utils/runPrerequisites";
-import { clearExplorerInputProgressDraft, loadExplorerInputProgressDraft, saveExplorerInputProgressDraft } from "../utils/explorerInputProgressDraft";
-import type { ExplorerInputProgress, ExplorerInputProgressScope } from "../utils/explorerInputProgressDraft";
 
+import { useExplorerInputRequests, type ExplorerInputDialogHandle } from "../composables/useExplorerInputRequests";
 import { useExplorerSession } from "../composables/useExplorerSession";
 import { useExplorerTimeline } from "../composables/useExplorerTimeline";
 import { useTimelineScroll } from "../composables/useTimelineScroll";
@@ -124,15 +121,9 @@ const showArchivedExplorers = ref(false);
 const explorerActionId = ref<string | null>(null);
 const projectActionId = ref<string | null>(null);
 const timeline = ref<HTMLElement | null>(null);
-const pendingInput = ref<ExplorerInputRequest | null>(null);
-const recoveryInput = ref<ExplorerInputRequest | null>(null);
-const inputRequests = ref<ExplorerInputRequest[]>([]);
-const inputProgress = ref<ExplorerInputProgress | null>(null);
 const agentLoop = ref<AgentLoop | null>(null);
 const explorerModel = ref("gpt-5.6-luna");
-const inputDialogOpen = ref(false);
-const inputDialog = ref<{ onSubmitted: () => void; onFailed: (message: string) => void } | null>(null);
-const inputAnswerInFlight = ref<string | null>(null);
+const inputDialog = ref<ExplorerInputDialogHandle | null>(null);
 const mounted = ref(false);
 let eventSource: EventSource | null = null;
 let loopEventSource: EventSource | null = null;
@@ -173,7 +164,6 @@ const contextMenuItems = computed(() => [
   { key: "active" as ContextPanel, label: "运行中任务", railLabel: "运行中", entryClass: "context-entry-active", count: activeRunCount.value, icon: Connection },
   { key: "attention" as ContextPanel, label: "待处理事项", railLabel: "待处理", entryClass: "context-entry-attention", count: needsAttentionCount.value, icon: Warning },
 ]);
-const inputCardRequest = computed(() => pendingInput.value ?? inputRequests.value.find((item) => belongsToActivePlan(item.explorerPlanId) && item.status === "SUBMITTING") ?? recoveryInput.value);
 const contextUsage = computed(() => formatContextUsage(turns.value));
 const agentLoopLabel = computed(() => ({ CREATED: "Created", RUNNING: "Running", WAITING_FOR_INPUT: "Waiting for input", PAUSED: "Paused", RECOVERING: "Recovery required", BLOCKED: "Blocked", COMPLETED: "Completed", FAILED: "Failed", CANCELLED: "Cancelled", NEEDS_RECONCILIATION: "Needs reconciliation" } as Record<string, string>)[agentLoop.value?.state ?? ""] ?? "No active loop");
 const agentLoopGateLabel = computed(() => formatAgentLoopGate(agentLoop.value?.diagnostics));
@@ -183,6 +173,14 @@ const activeExplorerPlan = computed(() => {
   const requested = activeExplorerPlanId.value ?? thread.value?.activeExplorerPlanId ?? explorerPlans.value[0]?.id;
   return explorerPlans.value.find((plan) => plan.id === requested) ?? explorerPlans.value[0] ?? null;
 });
+/**
+ * 结构化输入请求（模型反问、答案提交、草稿进度）交给 composable。
+ * 传进去的是 `activeExplorerPlan` **解析后**的 id——原始 `activeExplorerPlanId` ref
+ * 还会回退到 thread / explorerPlans[0]，两条链路必须一致，否则会错位。
+ * `inputDialog` 的模板 ref 留在本文件——`ref="inputDialog"` 要求它是个顶层绑定。
+ */
+const { pendingInput, recoveryInput, inputRequests, inputProgress, inputDialogOpen, inputAnswerInFlight, inputCardRequest, setInputRequests, resetInputState, inputAnswerLabelsFor, inputAnswerText, inputStatusLabel, openInputRequest, updateInputProgress, submitInput, cancelInput } = useExplorerInputRequests({ projectId, thread, activeExplorerPlanId: computed(() => activeExplorerPlan.value?.id ?? null), inputDialog });
+
 const requirementRows = computed(() => projectExplorerRequirementRows(
   explorerPlans.value,
   [...threadPlans.value, ...(candidate.value ? [candidate.value] : [])],
@@ -193,9 +191,6 @@ const sharedDrawerTitle = computed(() => selectedRequirementRow.value?.title ?? 
 const taskPanelPlan = computed(() => selectedRequirementRow.value?.plan ?? null);
 const explorationProgress = computed(() => activeExplorerPlan.value?.exploration ?? thread.value?.exploration ?? { status: "INCOMPLETE" as const, missing: [], completed: [], diagnostics: [], candidatePlanId: null, lastAssessedTurnId: null });
 const expandedUserMessageIds = ref<Set<string>>(new Set());
-function belongsToActivePlan(planId: string | null | undefined): boolean {
-  return belongsToExplorerPlan(planId, activeExplorerPlan.value?.id ?? null);
-}
 const activePlanBusy = computed(() => visibleTurns.value.some((turn) => turn.status === "RUNNING" || turn.status === "WAITING_FOR_INPUT" || turn.status === "PAUSED" || turn.status === "QUEUED"));
 const activePlanWaitingForInput = computed(() => visibleTurns.value.some((turn) => turn.status === "WAITING_FOR_INPUT"));
 const sendingCurrentPlan = computed(() => Boolean(activeExplorerPlan.value && pendingSendPlanIds.value.has(activeExplorerPlan.value.id)));
@@ -383,33 +378,6 @@ function isCandidatePlan(plan: Plan | null): boolean {
   return isCandidatePlanFor(plan, candidate.value);
 }
 
-function inputProgressScope(): ExplorerInputProgressScope | null {
-  const currentThread = thread.value;
-  const explorerPlanId = activeExplorerPlan.value?.id;
-  if (!currentThread || !explorerPlanId) return null;
-  return { projectId: projectId.value, threadId: currentThread.id, explorerPlanId };
-}
-
-function setInputRequests(items: ExplorerInputRequest[]) {
-  const activeRequests = items.filter((item) => belongsToActivePlan(item.explorerPlanId));
-  const nextPending = activeRequests.find((item) => item.status === "OPEN") ?? null;
-  const nextRecovery = activeRequests.find((item) => item.status === "RECOVERY_REQUIRED") ?? null;
-  const draftRequest = nextPending ?? activeRequests.find((item) => item.status === "SUBMITTING") ?? nextRecovery;
-  const existingProgress = draftRequest && inputProgress.value?.requestId === draftRequest.id ? inputProgress.value : null;
-  const scope = inputProgressScope();
-  inputRequests.value = items;
-  pendingInput.value = nextPending;
-  recoveryInput.value = nextRecovery;
-  inputProgress.value = draftRequest && scope ? existingProgress ?? loadExplorerInputProgressDraft(scope, draftRequest) : null;
-  if (scope) {
-    for (const request of activeRequests) {
-      if (request.status === "ANSWERED" || request.status === "AUTO_RESOLVED" || request.status === "CANCELLED") {
-        clearExplorerInputProgressDraft(scope, request.id);
-      }
-    }
-  }
-}
-
 function resetThreadState() {
   closeRequirementStatusEvents();
   resetSessionState();
@@ -433,10 +401,7 @@ function resetThreadState() {
   enqueued.value = [];
   dispatched.value = [];
   planCenterCount.value = 0;
-  inputRequests.value = [];
-  pendingInput.value = null;
-  recoveryInput.value = null;
-  inputProgress.value = null;
+  resetInputState();
   agentLoop.value = null;
   explorerEventSequence = null;
   planProjectionVersion += 1;
@@ -450,8 +415,6 @@ function resetThreadState() {
   renameDialogOpen.value = false;
   renameError.value = null;
   renameSaving.value = false;
-  inputDialogOpen.value = false;
-  inputAnswerInFlight.value = null;
   explorerPaused.value = false;
   activeTimelineKey.value = "";
   activePlanKey.value = "";
@@ -467,19 +430,6 @@ function resetProjectState(nextProjectId = projectId.value) {
   projectRuns.value = [];
   showArchivedExplorers.value = false;
   resetThreadState();
-}
-
-/** 下面三个 wrapper 只负责把本地状态（草稿进度、在途标记）喂给 utils 里的纯函数。 */
-function inputAnswerLabelsFor(request: ExplorerInputRequest, question: ExplorerInputRequest["questions"][number]): string[] {
-  return inputAnswerDisplayLabels(request, question, inputProgress.value);
-}
-
-function inputAnswerText(request: ExplorerInputRequest, question: ExplorerInputRequest["questions"][number]): string {
-  return inputAnswerDisplayText(request, question, inputProgress.value, inputAnswerInFlight.value);
-}
-
-function inputStatusLabel(request: ExplorerInputRequest): string {
-  return inputStatusText(request, inputAnswerInFlight.value);
 }
 
 async function refreshPlanProjection(): Promise<void> {
@@ -1304,70 +1254,6 @@ function handleComposerKeydown(event: KeyboardEvent) {
   if (!shouldSubmitComposer(event)) return;
   event.preventDefault();
   void sendTurn();
-}
-
-async function openInputRequest() {
-  if (!pendingInput.value) return;
-  inputDialogOpen.value = true;
-}
-
-function updateInputProgress(progress: ExplorerInputProgress) {
-  if (pendingInput.value?.id !== progress.requestId) return;
-  inputProgress.value = progress;
-  const scope = inputProgressScope();
-  const request = inputRequests.value.find((item) => item.id === progress.requestId);
-  if (scope && request) saveExplorerInputProgressDraft(scope, request, progress);
-}
-
-/** 提交结构化选择；失败时保留对话框状态，允许用户修正或重试而不丢答案。 */
-async function submitInput(answers: Record<string, { answers: string[] }>) {
-  const request = pendingInput.value;
-  const currentThread = thread.value;
-  const explorerPlanId = activeExplorerPlan.value?.id;
-  if (!request || !currentThread || !explorerPlanId || inputAnswerInFlight.value === request.id) return;
-  const requestProjectId = projectId.value;
-  inputAnswerInFlight.value = request.id;
-  const submission = api.answerInput(requestProjectId, request.id, answers, `answer-${request.id}`);
-  // The API waits for the Provider to acknowledge the answer. Close the modal
-  // immediately and show its saved draft/status in the timeline while that runs.
-  inputDialog.value?.onSubmitted();
-  try {
-    const response = await submission;
-    if (thread.value?.id !== currentThread.id || activeExplorerPlan.value?.id !== explorerPlanId) return;
-    setInputRequests([...inputRequests.value.filter((item) => item.id !== response.request.id), response.request]);
-    inputProgress.value = null;
-    ElMessage.success("选择已提交，Plan Explorer 将继续当前回合");
-  } catch (caught) {
-    const message = caught instanceof Error ? caught.message : "提交选择失败，请重试";
-    if (thread.value?.id !== currentThread.id || activeExplorerPlan.value?.id !== explorerPlanId) return;
-    try {
-      const current = await api.inputRequests(requestProjectId, currentThread.id, explorerPlanId);
-      setInputRequests(current.items);
-    } catch {
-      // Keep the local draft and avoid inviting a duplicate submission when
-      // the server cannot confirm whether it accepted the first request.
-    }
-    if (pendingInput.value?.id === request.id) {
-      inputDialog.value?.onFailed(message);
-      inputDialogOpen.value = true;
-      ElMessage.error(`${message}，已保留本次选择`);
-    } else {
-      ElMessage.warning("提交状态尚未确认；页面会继续显示已保存的选择，请勿重复提交");
-    }
-  } finally {
-    if (inputAnswerInFlight.value === request.id) inputAnswerInFlight.value = null;
-  }
-}
-
-async function cancelInput() {
-  if (!pendingInput.value || !thread.value) return;
-  try {
-    await api.cancelExplorerTurn(projectId.value, thread.value.id, pendingInput.value.localTurnId, "user_cancelled");
-    inputDialogOpen.value = false;
-    pendingInput.value = null;
-    inputProgress.value = null;
-    ElMessage.info("本轮已取消");
-  } catch (caught) { ElMessage.error(caught instanceof Error ? caught.message : "取消本轮失败"); }
 }
 
 function mergeTurn(turn: ExplorerTurn) {

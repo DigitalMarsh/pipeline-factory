@@ -13,6 +13,9 @@ const explorerTimelineComposableSource = readFileSync(fileURLToPath(new URL("../
 // 视图现在说 `invalidateProjectScope()`，原子句 `requestScope.invalidate()` 跟着代码
 // 落到 composable 里。**两条都要断言**——只留视图那条，守卫就被削成"函数名还在"。
 const explorerSessionComposableSource = readFileSync(fileURLToPath(new URL("../composables/useExplorerSession.ts", import.meta.url)), "utf8");
+// 第三次出现同一类处置（P7-8）：输入请求整块搬进了 useExplorerInputRequests。
+// 规则同前——**正向断言搬到 composable，视图这一侧换成委托语句，两条都留**。
+const explorerInputRequestsComposableSource = readFileSync(fileURLToPath(new URL("../composables/useExplorerInputRequests.ts", import.meta.url)), "utf8");
 const explorerScopeSource = readFileSync(fileURLToPath(new URL("../utils/explorerScope.ts", import.meta.url)), "utf8");
 const threadRailSource = readFileSync(fileURLToPath(new URL("../components/ThreadRail.vue", import.meta.url)), "utf8");
 const explorerHeaderStatusSource = readFileSync(fileURLToPath(new URL("../components/ExplorerHeaderStatus.vue", import.meta.url)), "utf8");
@@ -257,7 +260,11 @@ describe("Explorer inline message presentation", () => {
   });
 
   it("does not infer missing Task ownership and scopes Candidate refreshes", () => {
-    expect(explorerViewSource).toContain('return belongsToExplorerPlan(planId, activeExplorerPlan.value?.id ?? null);');
+    // P7-8：归属判据随输入请求搬进 composable，**形参改名的部分是必要的**——
+    // composable 收的是"已解析"的需求 id，解析链（activeExplorerPlan → thread →
+    // explorerPlans[0]）留在视图。所以两侧各锁一条，缺任何一侧都盖不住回归。
+    expect(explorerInputRequestsComposableSource).toContain("return belongsToExplorerPlan(planId, deps.activeExplorerPlanId.value);");
+    expect(explorerViewSource).toContain("activeExplorerPlanId: computed(() => activeExplorerPlan.value?.id ?? null)");
     expect(explorerViewSource).not.toContain('(planId ?? explorerPlans.value[0]?.id) === activeId');
     expect(explorerViewSource).not.toContain('api.explorerCandidate(requestProjectId, explorerId, activeExplorerPlanId.value ?? undefined)');
     expect(explorerViewSource).not.toContain('api.explorerCandidate(requestProjectId, selected.id, selected.activeExplorerPlanId ?? undefined)');
@@ -316,6 +323,15 @@ describe("Explorer thread switching", () => {
     expect(resetSource).not.toContain("activity.value = []");
     expect(explorerSessionComposableSource).toContain("turns.value = [];");
     expect(explorerSessionComposableSource).toContain("activity.value = [];");
+    // P7-8 同一条处置：输入请求的四个清空赋值 + 两个对话框字段也搬走了。
+    // 正负两侧都断言——只断言"composable 里有"，抓不到"视图里还留了一半"。
+    expect(resetSource).toContain("resetInputState();");
+    expect(resetSource).not.toContain("inputRequests.value = []");
+    expect(resetSource).not.toContain("pendingInput.value = null");
+    expect(resetSource).not.toContain("inputDialogOpen.value = false");
+    expect(explorerInputRequestsComposableSource).toContain("inputRequests.value = [];");
+    expect(explorerInputRequestsComposableSource).toContain("pendingInput.value = null;");
+    expect(explorerInputRequestsComposableSource).toContain("inputDialogOpen.value = false;");
     expect(explorerViewSource).toContain(":creating-explorer=\"creatingExplorer\"");
   });
 
@@ -496,10 +512,17 @@ describe("Explorer composer availability", () => {
   });
 
   it("restores saved answers after refresh and explains submissions still awaiting provider confirmation", () => {
-    expect(explorerViewSource).toContain("loadExplorerInputProgressDraft(scope, draftRequest)");
-    expect(explorerViewSource).toContain("saveExplorerInputProgressDraft(scope, request, progress)");
-    expect(explorerViewSource).toContain("item.status === \"SUBMITTING\"");
+    // P7-8：三条语句随输入请求搬进 composable（字符串逐字未改），
+    // 视图这一侧换成"不再自己持有 + 已委托给谁"两条负/正断言。
+    expect(explorerInputRequestsComposableSource).toContain("loadExplorerInputProgressDraft(scope, draftRequest)");
+    expect(explorerInputRequestsComposableSource).toContain("saveExplorerInputProgressDraft(scope, request, progress)");
+    expect(explorerInputRequestsComposableSource).toContain("item.status === \"SUBMITTING\"");
+    expect(explorerViewSource).not.toContain("loadExplorerInputProgressDraft");
+    expect(explorerViewSource).not.toContain("saveExplorerInputProgressDraft");
+    expect(explorerViewSource).toContain("inputCardRequest, setInputRequests, resetInputState, inputAnswerLabelsFor, inputAnswerText, inputStatusLabel, openInputRequest, updateInputProgress, submitInput, cancelInput } = useExplorerInputRequests(");
+    // 这两条测的是**模板**里的用户可见文案，留在视图。
     expect(explorerViewSource).toContain("正在提交结构化答案，确认后本轮会继续");
+    expect(explorerViewSource).toContain("inputCardRequest?.status === 'SUBMITTING'");
   });
 });
 
