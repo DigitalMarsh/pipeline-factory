@@ -12,32 +12,56 @@
 
 ## 本地运行
 
-从项目根目录可以使用独立脚本管理两个服务；停止其中一个不会影响另一个：
-
-```bash
-./startApi.sh
-./stopApi.sh
-./startWeb.sh
-./stopWeb.sh
-./status.sh
-```
-
-脚本会把 PID 和日志保存到项目根目录的 `.runtime/`，其中 API 日志为 `.runtime/api.log`，Web 日志为 `.runtime/web.log`。
-
-也可以继续使用下面的手动启动命令：
+所有命令都从 `code/` 目录执行。安装依赖后，开发模式用一条命令并行启动 API 与 Vite：
 
 ```bash
 pnpm install
-pnpm --filter @pipeline-factory/domain build
-pnpm --filter @pipeline-factory/api dev -- --config ./config/pipeline-factory.config.json
-pnpm --filter @pipeline-factory/web dev
+pnpm dev
 ```
 
-API 默认监听 `http://127.0.0.1:4310`，前端默认监听 `http://127.0.0.1:5173`。API 的运行参数全部来自 `config/pipeline-factory.config.json`，也可以通过 `--config` 指定其他配置文件；不读取环境变量。
+开发模式仍是两个进程：API 默认监听 `http://127.0.0.1:4310`，Web/Vite 默认监听
+`http://127.0.0.1:5173`，Vite proxy 负责把 API 与 SSE 请求转发到 4310。也可以只启动或
+停止其中一个进程：
 
-`@pipeline-factory/api` 的 `dev` 命令会先自动构建 workspace domain 包，避免 API 加载旧的 `dist` 类型；如果看到 `EADDRINUSE 127.0.0.1:4310`，表示 API 已经在运行，不要重复启动同一实例。
+```bash
+node scripts/service.mjs start --mode dev --only api
+node scripts/service.mjs start --mode dev --only web
+node scripts/service.mjs stop --only api
+node scripts/service.mjs stop --only web
+node scripts/service.mjs status
+```
 
-复制 `config/pipeline-factory.config.example.json` 后，按受管项目修改 `project.root`、`storage`、固定命令和 `model` 配置：
+生产/单进程模式先构建，再由 API 在同一端口托管 Web 构建产物：
+
+```bash
+pnpm build
+pnpm start
+pnpm status
+pnpm stop
+```
+
+生产模式只启动 API 进程；当 `server.serveWeb` 为 `true` 时，`apps/api` 同时提供
+`apps/web/dist`，因此根路径、SPA 深链、`/api/v4/*` 与所有相对路径 SSE 都使用
+`http://127.0.0.1:4310`。`pnpm start` 会在构建产物缺失时提前失败，不会启动一个看似成功但
+打开页面为 404 的服务。停止与状态检查由 `scripts/service.mjs` 管理，PID 与日志保存在
+Git 根目录的 `.runtime/`（API 为 `.runtime/api.pid` / `.runtime/api.log`；开发 Web 为
+`.runtime/web.pid` / `.runtime/web.log`）。旧的根目录 `startApi.sh`、`startWeb.sh`、
+`stopApi.sh`、`stopWeb.sh`、`status.sh` 已删除，不能再作为运行入口。
+
+单进程托管的两个配置字段：
+
+- `server.serveWeb`：显式开关，示例配置默认为 `false`，生产配置通常设为 `true`；
+  不通过 `NODE_ENV` 或其他环境变量推断。
+- `server.webDistPath`：相对于配置文件目录解析，默认示例为 `../apps/web/dist`。
+  SPA 使用 `createWebHistory()`，所以将来如果修改 Vite 的 `base`，必须同步修改 API
+  静态托管的路径前缀；两者不一致会让资源 URL 与 MIME fallback 出错。
+
+复制 `config/pipeline-factory.config.example.json` 后，按受管项目修改 `project.root`、
+`storage`、固定命令和 `model` 配置。示例里的 `storage.databasePath` 是相对于
+`config/pipeline-factory.config.example.json` 的 `../var/pipeline-factory.sqlite`；当前活跃
+配置使用 `../pipeline-factory.sqlite`，即 `code/pipeline-factory.sqlite`。数据库与 WAL 文件
+已被 Git 忽略。不要为了整理目录直接移动正在运行的 SQLite 文件；如需改到 `var/`，先停服、
+备份数据库及 `-wal`，再修改配置并让 SQLite 重新打开目标路径。
 
 ```json
 {
@@ -50,6 +74,11 @@ API 默认监听 `http://127.0.0.1:4310`，前端默认监听 `http://127.0.0.1:
   }
 }
 ```
+
+API 的运行参数全部来自 `config/pipeline-factory.config.json`，也可以通过 `--config` 指定
+其他配置文件；不读取环境变量。`@pipeline-factory/api` 的 `dev` 命令会先自动构建
+workspace domain 包，避免 API 加载旧的 `dist` 类型；如果看到 `EADDRINUSE 127.0.0.1:4310`，
+表示 API 已经在运行，不要重复启动同一实例。
 
 默认配置通过 `codex app-server --stdio` 接入本机 Codex App Server。Codex 的登录态和认证由 Codex 自身管理，Factory 不读取或保存 API Key。Explorer 会以 `read-only`/`never approval` 创建线程；Executor 使用独立角色配置和受控工作区策略。
 
