@@ -4,6 +4,7 @@
  * command id, repository identity, branch, commit or Project configuration.
  */
 import type { ProjectExecutionSnapshot } from "../project/project.js";
+import { isRecord } from "../platform/guards.js";
 
 export type PlanArtifactMode = "CONVERSATION" | "REPOSITORY_FILE";
 export type PlanValidationIssueCode = "REQUIRED" | "INVALID" | "FORBIDDEN" | "MODE_CONFLICT" | "DUPLICATE";
@@ -48,10 +49,6 @@ export class GeneratedPlanSpecV2ValidationError extends Error {
     super(issues.map((item) => `${item.path}: ${item.message}`).join("; ") || "Generated Plan V2 is invalid");
     this.name = "GeneratedPlanSpecV2ValidationError";
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function issue(issues: PlanValidationIssue[], path: string, code: PlanValidationIssueCode, area: string, message: string): void {

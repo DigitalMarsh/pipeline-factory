@@ -5,6 +5,7 @@
  */
 import type { AgentLoop, AgentLoopStep } from "../agent/agent-loop.js";
 import type { ExplorerTurn } from "../index.js";
+import { isRecord } from "../platform/guards.js";
 
 /** Explorer 时间线中的消息、工具、Plan 和状态事件类型。 */
 export type ExplorerActivityKind =
@@ -54,10 +55,6 @@ const STATUS_TAG = /<pipeline-factory-plan-status>\s*([^<]+?)\s*<\/pipeline-fact
 const PLAN_TAG = /<pipeline-factory-plan>\s*([\s\S]*?)\s*<\/pipeline-factory-plan>/gi;
 const STATUS_OPEN_TAG = /<pipeline-factory-plan-status>/i;
 const PLAN_OPEN_TAG = /<pipeline-factory-plan>/i;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function countArray(record: Record<string, unknown>, key: string): number {
   return Array.isArray(record[key]) ? record[key].length : 0;

@@ -5,6 +5,8 @@
  */
 import { createHash } from "node:crypto";
 import { basename, isAbsolute, resolve } from "node:path";
+import { freezeDeep } from "../platform/freeze.js";
+import { isRecord } from "../platform/guards.js";
 import type {
   HookDefinition,
   ModelRoleConfig,
@@ -164,18 +166,6 @@ export const DEFAULT_PROJECT_SETTINGS: ProjectSettings = {
 
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
-}
-
-function freezeDeep<T>(value: T): T {
-  if (value && typeof value === "object" && !Object.isFrozen(value)) {
-    Object.freeze(value);
-    for (const child of Object.values(value as Record<string, unknown>)) freezeDeep(child);
-  }
-  return value;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function assertFiniteInteger(value: unknown, field: string, minimum: number): asserts value is number {
