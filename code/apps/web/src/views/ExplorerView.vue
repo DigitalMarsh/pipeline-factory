@@ -39,7 +39,7 @@ import { detachedPlanAnchorId, planAnchorId, planAnchorKey, planForActivity as p
 import { taskDisplayTitle } from "../utils/taskTree";
 import { isConfirmedPlanRevision, resolvePlanVersionHistory } from "../utils/planVersionHistory";
 import { inputAnswerDisplayLabels, inputAnswerDisplayText } from "../utils/explorerInput";
-import { createProjectRequestScope, projectPathForModule } from "../utils/projectRoutes";
+import { projectPathForModule } from "../utils/projectRoutes";
 import { explorerTimelineTarget as activityTarget, explorerPlanAnchorId, inputRequestTarget } from "../utils/explorerTimeline";
 import { activityIconKind, activityKindLabel, activityStatusLabel, explorerDisplayTitle, formatTurnTime, inputStatusLabel as inputStatusText } from "../utils/explorerPresentation";
 import { planStatusLabel as statusLabel } from "../utils/planStatus";
@@ -51,32 +51,33 @@ import { canCreateConfigurationRevision as canCreateConfigurationRevisionFor } f
 import { clearExplorerInputProgressDraft, loadExplorerInputProgressDraft, saveExplorerInputProgressDraft } from "../utils/explorerInputProgressDraft";
 import type { ExplorerInputProgress, ExplorerInputProgressScope } from "../utils/explorerInputProgressDraft";
 
+import { useExplorerSession } from "../composables/useExplorerSession";
 import { useExplorerTimeline } from "../composables/useExplorerTimeline";
 import { useTimelineScroll } from "../composables/useTimelineScroll";
 
 const route = useRoute();
 const router = useRouter();
-// 页面状态按 Project 当前 Explorer、候选 Plan、已派发 Plan 和消息流分层保存，
-// 避免切换 Project/Thread 时把旧项目的响应式数据留在当前视图。
 const projectId = computed(() => String(route.params.projectId ?? ""));
 const projectExecutionMode = computed(() => route.query.workspace === "project-execution");
-const project = ref<Project | null>(null);
-const projects = ref<Project[]>([]);
-const thread = ref<ExplorerThread | null>(null);
-const explorers = ref<ExplorerThread[]>([]);
+
+/**
+ * 会话状态（Project 目录 / 当前线程 / 消息流）与项目切换的请求令牌守卫交给 composable。
+ * `explorerPlans` / `threadPlans` / `candidate` 等需求投影状态仍留在这里，随后随
+ * `usePlanProjection` 一起搬走——`refreshPlanProjection` 是它们与会话状态的交汇点。
+ */
+const { project, projects, thread, explorers, turns, activity, projectRuns, projectScopeToken, beginProjectScope, invalidateProjectScope, isCurrentProjectScope, resetSessionState } = useExplorerSession({ projectId });
+
 const explorerPlans = ref<ExplorerPlan[]>([]);
 const threadPlans = ref<Plan[]>([]);
 const activeExplorerPlanId = ref<string | null>(null);
 const projectCreateOpen = ref(false);
 const projectSettingsOpen = ref(false);
 const projectSettingsProjectId = ref<string | null>(null);
-const activity = ref<ExplorerActivityItem[]>([]);
 const candidate = ref<Plan | null>(null);
 const revisionDraft = ref<PlanRevisionDraft | null>(null);
 const confirmedPlans = ref<Plan[]>([]);
 const enqueued = ref<Plan[]>([]);
 const dispatched = ref<Plan[]>([]);
-const projectRuns = ref<Run[]>([]);
 type ExplorerPlanRequirement = { key: string; label: string; requiredFields: string[]; optionalFields: string[]; factoryOwnedFields?: string[] };
 // Requirements must remain visible while an older API instance is restarting; the
 // API manifest replaces this fallback as soon as it is available.
@@ -90,7 +91,6 @@ const defaultPlanRequirements: ExplorerPlanRequirement[] = [
   { key: "execution", label: "执行与人工合并", requiredFields: ["artifact.mode", "merge.strategy", "merge.requireHumanMerge"], optionalFields: ["execution.executorModelRole", "execution.toolPolicy", "execution.maxRepairAttempts"] },
 ];
 const planRequirements = ref<ExplorerPlanRequirement[]>([]);
-const turns = ref<ExplorerTurn[]>([]);
 const draft = ref("");
 const requirementDrafts = new Map<string, string>();
 const pendingSendPlanIds = ref<Set<string>>(new Set());
@@ -134,7 +134,6 @@ const inputDialogOpen = ref(false);
 const inputDialog = ref<{ onSubmitted: () => void; onFailed: (message: string) => void } | null>(null);
 const inputAnswerInFlight = ref<string | null>(null);
 const mounted = ref(false);
-const requestScope = createProjectRequestScope();
 let eventSource: EventSource | null = null;
 let loopEventSource: EventSource | null = null;
 let requirementStatusEventSource: EventSource | null = null;
@@ -149,7 +148,6 @@ const AGENT_LOOP_IMMEDIATE_REFRESH_EVENTS = new Set(["agent.step.gate_checked", 
 let projectionRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 let loopRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 let detailRequestVersion = 0;
-let activeRequestToken = 0;
 // A delete already loads the replacement thread explicitly. Suppress the
 // route watcher for that one navigation so the old thread cannot race the
 // replacement load and overwrite the page-level error banner.
@@ -290,7 +288,7 @@ async function deleteCurrentThread(): Promise<void> {
     const response = await api.deleteExplorer(requestProjectId, requestThreadId);
     if (projectId.value !== requestProjectId) return;
     closeEvents();
-    requestScope.invalidate();
+    invalidateProjectScope();
     resetThreadState();
     project.value = response.project;
     explorers.value = [response.replacementExplorer, ...explorers.value.filter((item) => item.id !== response.deletedExplorerId && item.id !== response.replacementExplorer.id)];
@@ -412,14 +410,10 @@ function setInputRequests(items: ExplorerInputRequest[]) {
   }
 }
 
-function isCurrentProjectScope(requestProjectId: string, requestToken = activeRequestToken): boolean {
-  return requestScope.isCurrent(requestToken, requestProjectId) && projectId.value === requestProjectId;
-}
-
 function resetThreadState() {
   closeRequirementStatusEvents();
+  resetSessionState();
   detailRequestVersion += 1;
-  thread.value = null;
   drawerOpen.value = false;
   drawerTab.value = "explorer";
   detailPlan.value = null;
@@ -439,8 +433,6 @@ function resetThreadState() {
   enqueued.value = [];
   dispatched.value = [];
   planCenterCount.value = 0;
-  turns.value = [];
-  activity.value = [];
   inputRequests.value = [];
   pendingInput.value = null;
   recoveryInput.value = null;
@@ -494,7 +486,7 @@ async function refreshPlanProjection(): Promise<void> {
   const explorerId = thread.value?.id;
   if (!explorerId) return;
   const requestProjectId = projectId.value;
-  const requestToken = activeRequestToken;
+  const requestToken = projectScopeToken();
   const requestVersion = ++planProjectionVersion;
   try {
     const [explorerResponse, planGroupsResponse, plansResponse, confirmedResponse, threadPlansResponse] = await Promise.all([
@@ -557,9 +549,9 @@ async function openPlanDetail(plan: Plan): Promise<void> {
   const planId = plan.id ?? plan.planId;
   if (!planId) return;
   const requestedProjectId = projectId.value;
-  const requestToken = activeRequestToken;
+  const requestToken = projectScopeToken();
   const requestVersion = ++detailRequestVersion;
-  const isCurrentDetailRequest = () => requestVersion === detailRequestVersion && projectId.value === requestedProjectId && activeRequestToken === requestToken;
+  const isCurrentDetailRequest = () => requestVersion === detailRequestVersion && projectId.value === requestedProjectId && projectScopeToken() === requestToken;
   drawerTab.value = "plan";
   // Keep the already-loaded Explorer/Plan projection visible while the detail
   // endpoint enriches it with frozen revision and dispatch metadata.
@@ -592,11 +584,11 @@ async function openPlanDetail(plan: Plan): Promise<void> {
     // Merge reconciliation can take longer than the read-only Plan fetch. Keep it
     // in the background so a slow scheduler never leaves the shared drawer loading.
     void api.reconcileProjectMerges(requestedProjectId).then((report) => {
-      if (projectId.value !== requestedProjectId || activeRequestToken !== requestToken) return;
+      if (projectId.value !== requestedProjectId || projectScopeToken() !== requestToken) return;
       const diagnostic = plan.runId ? report.items.find((item) => item.runId === plan.runId && item.reason) : undefined;
       if (diagnostic?.reason) ElMessage.warning(`Merge 状态检测：${diagnostic.reason}`);
     }).catch((caught) => {
-      if (projectId.value === requestedProjectId && activeRequestToken === requestToken) {
+      if (projectId.value === requestedProjectId && projectScopeToken() === requestToken) {
         ElMessage.warning(`Merge 状态检测失败，已展示最近保存的状态：${caught instanceof Error ? caught.message : "暂不可用"}`);
       }
     });
@@ -772,7 +764,7 @@ async function createExplorer() {
   const requestProjectId = projectId.value;
   creatingExplorer.value = true;
   closeEvents();
-  requestScope.invalidate();
+  invalidateProjectScope();
   resetThreadState();
   try {
     const created = await api.createExplorer(requestProjectId);
@@ -782,8 +774,7 @@ async function createExplorer() {
     thread.value = created.explorer;
     try { project.value = (await api.selectProjectExplorer(requestProjectId, created.explorer.id)).project; } catch { /* Legacy API instances may not have a Project registry yet. */ }
     await router.push({ path: route.path, query: explorerRouteQuery(created.explorer.id), hash: "" });
-    const requestToken = requestScope.begin(requestProjectId);
-    activeRequestToken = requestToken;
+    const requestToken = beginProjectScope(requestProjectId);
     loading.value = true;
     error.value = null;
     const loaded = await loadExplorerDetails(created.explorer, requestProjectId, requestToken);
@@ -803,7 +794,7 @@ function switchProject(selectedProjectId: string) {
 function selectProjectExecution() {
   closeEvents();
   closeRequirementStatusEvents();
-  requestScope.invalidate();
+  invalidateProjectScope();
   resetThreadState();
   thread.value = null;
   const query: import("vue-router").LocationQueryRaw = { ...route.query, workspace: "project-execution" };
@@ -869,7 +860,7 @@ async function toggleProjectArchive(selectedProjectId: string) {
 async function selectExplorer(explorerId: string) {
   if (explorerId === thread.value?.id && !projectExecutionMode.value) return;
   closeEvents();
-  requestScope.invalidate();
+  invalidateProjectScope();
   resetThreadState();
   const selected = explorers.value.find((item) => item.id === explorerId);
   if (selected?.state !== "ARCHIVED") {
@@ -883,7 +874,7 @@ async function selectExplorerPlan(explorerPlanId: string, shouldScroll = true): 
   const selectedPlan = explorerPlans.value.find((plan) => plan.id === explorerPlanId);
   if (!currentThread || !selectedPlan || selectedPlan.explorerThreadId !== currentThread.id) return;
   const requestProjectId = projectId.value;
-  const requestToken = activeRequestToken;
+  const requestToken = projectScopeToken();
   const requestVersion = ++planProjectionVersion;
   const previousPlanId = activeExplorerPlanId.value;
   if (previousPlanId && previousPlanId !== selectedPlan.id) requirementDrafts.set(previousPlanId, draft.value);
@@ -1098,7 +1089,7 @@ async function refreshActivity() {
   if (!explorerPlanId) return;
   const requestProjectId = projectId.value;
   const requestThreadId = thread.value.id;
-  const requestToken = activeRequestToken;
+  const requestToken = projectScopeToken();
   try {
     const response = await api.explorerActivity(requestProjectId, requestThreadId, explorerPlanId);
     if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== requestThreadId || activeExplorerPlan.value?.id !== explorerPlanId) return;
@@ -1219,8 +1210,7 @@ async function loadExplorerDirectory(requestProjectId: string, requestToken: num
 /** 先加载 Project/Explorer 目录，再加载当前线程详情，避免详情失败清空已成功的目录。 */
 async function load(): Promise<boolean> {
   const requestProjectId = projectId.value;
-  const requestToken = requestScope.begin(requestProjectId);
-  activeRequestToken = requestToken;
+  const requestToken = beginProjectScope(requestProjectId);
   loading.value = true;
   explorerLoading.value = true;
   error.value = null;
@@ -1247,7 +1237,7 @@ async function sendTurn(): Promise<boolean> {
   if (!content || activePlanBusy.value || sendingCurrentPlan.value || busy.value || !thread.value || thread.value.state === "ARCHIVED" || project.value?.status === "ARCHIVED") return false;
   const requestProjectId = projectId.value;
   const requestThreadId = thread.value.id;
-  const requestToken = activeRequestToken;
+  const requestToken = projectScopeToken();
   const now = new Date().toISOString();
   const currentPlanId = activeExplorerPlan.value?.id ?? thread.value.activeExplorerPlanId ?? undefined;
   if (!currentPlanId) { ElMessage.error("请先选择一个需求再发送消息"); return false; }
@@ -1392,7 +1382,7 @@ async function refreshTurnsAfterEvent() {
   if (!explorerPlanId) return;
   const requestProjectId = projectId.value;
   const requestThreadId = thread.value.id;
-  const requestToken = activeRequestToken;
+  const requestToken = projectScopeToken();
   const response = await api.getExplorerTurns(requestProjectId, requestThreadId, explorerPlanId);
   if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== requestThreadId || activeExplorerPlan.value?.id !== explorerPlanId) return;
   turns.value = response.items;
@@ -1412,7 +1402,7 @@ function connectEvents() {
   const connectionProjectId = projectId.value;
   const connectionThreadId = thread.value.id;
   const connectionPlanId = activeExplorerPlan.value.id;
-  const connectionToken = activeRequestToken;
+  const connectionToken = projectScopeToken();
   const isConnectionCurrent = () => isCurrentProjectScope(connectionProjectId, connectionToken) && thread.value?.id === connectionThreadId && activeExplorerPlan.value?.id === connectionPlanId;
   eventSource?.close();
   loopEventSource?.close();
@@ -1461,7 +1451,7 @@ function connectRequirementStatusEvents() {
   const connectionThreadId = thread.value.id;
   if (requirementStatusEventSource && requirementStatusScope?.projectId === connectionProjectId && requirementStatusScope.threadId === connectionThreadId) return;
   closeRequirementStatusEvents();
-  const connectionToken = activeRequestToken;
+  const connectionToken = projectScopeToken();
   const source = new EventSource(api.explorerRequirementStatusEventsUrl(connectionProjectId, connectionThreadId, explorerEventSequence ?? undefined));
   requirementStatusEventSource = source;
   requirementStatusScope = { projectId: connectionProjectId, threadId: connectionThreadId };
@@ -1477,7 +1467,7 @@ function connectLoopEvents() {
   if (!agentLoop.value || typeof EventSource === "undefined") return;
   const connectionProjectId = projectId.value;
   const connectionThreadId = thread.value?.id;
-  const connectionToken = activeRequestToken;
+  const connectionToken = projectScopeToken();
   const loopId = agentLoop.value.id;
   loopEventSource?.close();
   const replayGate = createSseReplayGate();
@@ -1667,7 +1657,7 @@ async function discardPlan() {
 
 function reloadExplorer() {
   closeEvents();
-  requestScope.invalidate();
+  invalidateProjectScope();
   resetThreadState();
   void load().then((loaded) => { if (loaded && mounted.value) connectEvents(); });
 }
@@ -1680,11 +1670,10 @@ async function reloadSelectedExplorer() {
     return;
   }
   closeEvents();
-  requestScope.invalidate();
+  invalidateProjectScope();
   resetThreadState();
   thread.value = selected;
-  const requestToken = requestScope.begin(requestProjectId);
-  activeRequestToken = requestToken;
+  const requestToken = beginProjectScope(requestProjectId);
   loading.value = true;
   error.value = null;
   const loaded = await loadExplorerDetails(selected, requestProjectId, requestToken);
@@ -1696,7 +1685,7 @@ watch(candidate, () => syncHashPanel(route.hash));
 watch(projectId, (next, previous) => {
   if (!mounted.value || next === previous) return;
   closeEvents();
-  requestScope.invalidate();
+  invalidateProjectScope();
   resetProjectState(next);
   void load().then((loaded) => { if (loaded && mounted.value) connectEvents(); });
 });
@@ -1704,7 +1693,7 @@ watch(projectExecutionMode, (active, previous) => {
   if (!mounted.value || active === previous) return;
   closeEvents();
   closeRequirementStatusEvents();
-  requestScope.invalidate();
+  invalidateProjectScope();
   resetThreadState();
   if (active) {
     thread.value = null;
@@ -1736,7 +1725,7 @@ watch(() => route.query.requirementTab, (tab) => {
   drawerOpen.value = true;
 });
 onMounted(() => { mounted.value = true; syncPanelStateFromRoute(); void load().then((loaded) => { if (loaded) connectEvents(); }); syncHashPanel(route.hash); });
-onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeEvents(); closeRequirementStatusEvents(); });
+onBeforeUnmount(() => { mounted.value = false; invalidateProjectScope(); closeEvents(); closeRequirementStatusEvents(); });
 </script>
 
 <template>

@@ -9,6 +9,10 @@ const explorerTimelineSource = readFileSync(fileURLToPath(new URL("../utils/expl
 // **没有放宽**：正向断言改读新归属文件，负向断言（`syntheticPlanItems`）
 // 在新旧两个文件上都必须成立，否则守卫会悄悄失效。
 const explorerTimelineComposableSource = readFileSync(fileURLToPath(new URL("../composables/useExplorerTimeline.ts", import.meta.url)), "utf8");
+// 同理，P7 第二级把会话状态与请求令牌守卫搬进了 useExplorerSession：
+// 视图现在说 `invalidateProjectScope()`，原子句 `requestScope.invalidate()` 跟着代码
+// 落到 composable 里。**两条都要断言**——只留视图那条，守卫就被削成"函数名还在"。
+const explorerSessionComposableSource = readFileSync(fileURLToPath(new URL("../composables/useExplorerSession.ts", import.meta.url)), "utf8");
 const explorerScopeSource = readFileSync(fileURLToPath(new URL("../utils/explorerScope.ts", import.meta.url)), "utf8");
 const threadRailSource = readFileSync(fileURLToPath(new URL("../components/ThreadRail.vue", import.meta.url)), "utf8");
 const explorerHeaderStatusSource = readFileSync(fileURLToPath(new URL("../components/ExplorerHeaderStatus.vue", import.meta.url)), "utf8");
@@ -302,7 +306,16 @@ describe("Explorer thread switching", () => {
     expect(explorerViewSource).toContain("if (creatingExplorer.value) return;");
     expect(explorerViewSource).not.toContain("async function createExplorer() {\n  if (busy.value) return;");
     expect(explorerViewSource).toContain("function resetThreadState()");
-    expect(explorerViewSource).toContain("requestScope.invalidate();");
+    expect(explorerViewSource).toContain("invalidateProjectScope();");
+    expect(explorerSessionComposableSource).toContain("requestScope.invalidate();");
+    // 线程级字段的清空已经搬进 composable，视图这一侧必须真的委托过去，
+    // 而不是留着几个"看起来清过"的赋值。
+    const resetSource = explorerViewSource.match(/function resetThreadState\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(resetSource).toContain("resetSessionState();");
+    expect(resetSource).not.toContain("turns.value = []");
+    expect(resetSource).not.toContain("activity.value = []");
+    expect(explorerSessionComposableSource).toContain("turns.value = [];");
+    expect(explorerSessionComposableSource).toContain("activity.value = [];");
     expect(explorerViewSource).toContain(":creating-explorer=\"creatingExplorer\"");
   });
 
