@@ -34,15 +34,17 @@ import RunDetailView from "./RunDetailView.vue";
 import scrollToLatestIcon from "../assets/scroll-to-latest.png";
 import { normalizePlanProjection } from "../utils/planProjection";
 import { parsePlanProtocolDisplay } from "../utils/planProtocolDisplay";
-import { planActivityBindings as buildPlanActivityBindings, planIdentity } from "../utils/planTimeline";
+import { detachedPlanAnchorId, planActivityBindings as buildPlanActivityBindings, planAnchorId, planAnchorKey, planIdentity } from "../utils/planTimeline";
 import { taskDisplayTitle } from "../utils/taskTree";
 import { isConfirmedPlanRevision, resolvePlanVersionHistory } from "../utils/planVersionHistory";
 import { inputAnswerLabels, resolveQuestionAnswers } from "../utils/explorerInput";
 import { createProjectRequestScope, projectPathForModule } from "../utils/projectRoutes";
-import { buildExplorerTimeline, explorerTimelineTarget } from "../utils/explorerTimeline";
+import { buildExplorerTimeline, explorerTimelineTarget as activityTarget, explorerPlanAnchorId, inputRequestTarget } from "../utils/explorerTimeline";
+import { activityIconKind, activityKindLabel, activityStatusLabel, explorerDisplayTitle, formatTurnTime, inputStatusLabel as inputStatusText } from "../utils/explorerPresentation";
+import { planStatusLabel as statusLabel } from "../utils/planStatus";
 import { belongsToExplorerPlan } from "../utils/explorerScope";
 import { formatAgentLoopCompletion, formatAgentLoopGate, formatAgentLoopTerminal } from "../utils/agentLoopPresentation";
-import { summarizeUserMessage } from "../utils/messageSummary";
+import { summarizeUserMessage as userMessageSummary } from "../utils/messageSummary";
 import { parseMissingRunCommands } from "../utils/runPrerequisites";
 import { clearExplorerInputProgressDraft, loadExplorerInputProgressDraft, saveExplorerInputProgressDraft } from "../utils/explorerInputProgressDraft";
 import type { ExplorerInputProgress, ExplorerInputProgressScope } from "../utils/explorerInputProgressDraft";
@@ -380,33 +382,12 @@ function toggleUserMessage(activityId: string): void {
   expandedUserMessageIds.value = next;
 }
 
-function userMessageSummary(content: string) {
-  return summarizeUserMessage(content);
-}
-
 function planActivityDetails(item: ExplorerActivityItem): Record<string, unknown> | null {
   return item.kind === "ASSISTANT_MESSAGE" && item.details?.planProtocol === true && item.details.status === "READY" ? item.details : null;
 }
 
 function planForActivity(item: ExplorerActivityItem): Plan | null {
   return planBindings.value.get(item.id) ?? null;
-}
-
-/** 使用 Plan 身份而不是消息起始点作为锚点，保证右侧 Plans 点击后定位到聊天中的计划卡片。 */
-function planAnchorId(plan: Plan | null): string {
-  return plan ? `plan-generated-${planIdentity(plan)}` : "";
-}
-
-function planAnchorKey(plan: Plan | null): string {
-  return plan ? `plan-${planIdentity(plan)}` : "";
-}
-
-function detachedPlanAnchorId(plan: Plan): string {
-  return `plan-created-${planIdentity(plan)}`;
-}
-
-function explorerPlanAnchorId(explorerPlanId: string): string {
-  return `explorer-plan-${explorerPlanId}`;
 }
 
 function isCandidatePlan(plan: Plan | null): boolean {
@@ -534,6 +515,11 @@ function inputAnswerText(request: ExplorerInputRequest, question: ExplorerInputR
   return "尚未选择";
 }
 
+/** 委托给 `utils/explorerPresentation.ts` 的纯函数：组件只负责把本地在途标记喂进去。 */
+function inputStatusLabel(request: ExplorerInputRequest): string {
+  return inputStatusText(request, inputAnswerInFlight.value);
+}
+
 async function refreshPlanProjection(): Promise<void> {
   const explorerId = thread.value?.id;
   if (!explorerId) return;
@@ -608,62 +594,6 @@ function applyPlanProjection(projection: ReturnType<typeof normalizePlanProjecti
   confirmedPlans.value = confirmed.filter((plan) => plan.status === "READY");
   enqueued.value = projection.dispatched.filter((plan) => plan.status === "ENQUEUED");
   dispatched.value = projection.dispatched.filter((plan) => plan.dispatchedAt !== null && plan.dispatchedAt !== undefined);
-}
-
-function formatTurnTime(value: string): string {
-  return new Date(value).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
-}
-
-function inputRequestTarget(request: ExplorerInputRequest): string {
-  return `input-request-${request.id}`;
-}
-
-function inputStatusLabel(request: ExplorerInputRequest): string {
-  if (inputAnswerInFlight.value === request.id) return "Submitting";
-  return ({
-    OPEN: "Waiting for answer",
-    SUBMITTING: "Submitting",
-    ANSWERED: "Answered",
-    AUTO_RESOLVED: "Auto-resolved",
-    CANCELLED: "Cancelled",
-    RECOVERY_REQUIRED: "Recovery required",
-  } as Record<ExplorerInputRequest["status"], string>)[request.status];
-}
-
-function explorerDisplayTitle(item: ExplorerThread | null): string {
-  return item?.title || "探索线程";
-}
-
-function activityTarget(item: ExplorerActivityItem, index: number): string {
-  return explorerTimelineTarget(item, index);
-}
-
-function activityStatusLabel(item: ExplorerActivityItem): string {
-  if (item.status === "WAITING") return "Waiting";
-  if (item.status === "FAILED") return "Failed";
-  if (item.status === "RUNNING") return "Running";
-  return "Completed";
-}
-
-function activityKindLabel(kind: ExplorerActivityItem["kind"]): string {
-  return ({
-    REASONING_SUMMARY: "Reasoning",
-    INPUT_REQUIRED: "Input required",
-    INPUT_RESOLVED: "Input resolved",
-    TOOL_STARTED: "Tool started",
-    TOOL_COMPLETED: "Tool completed",
-    TOOL_DENIED: "Tool denied",
-    MCP_ACTIVITY: "MCP activity",
-    CONTEXT_COMPACTED: "Context checkpoint",
-    GATE_CHECKED: "Gate checked",
-    TURN_STATUS: "Turn status",
-  } as Partial<Record<ExplorerActivityItem["kind"], string>>)[kind] ?? kind;
-}
-
-function activityIconKind(kind: ExplorerActivityItem["kind"]): "info" | "success" | "warning" {
-  if (kind === "TOOL_DENIED" || kind === "GATE_CHECKED") return "warning";
-  if (kind === "TOOL_COMPLETED" || kind === "INPUT_RESOLVED") return "success";
-  return "info";
 }
 
 function jumpToTimelineTarget(targetId: string, key: string) {
@@ -1834,8 +1764,6 @@ async function discardPlan() {
     busy.value = false;
   }
 }
-
-function statusLabel(status: string) { return ({ DRAFT: "Candidate", DISCARDED: "Discarded", READY: "Confirmed", ENQUEUED: "Enqueued", DISPATCHED: "Dispatched", QUEUED: "Queued", STARTING: "Starting", IN_PROGRESS: "Running", VERIFYING: "Verifying", MERGE_READY: "Ready for review", MERGED: "Merged", NEEDS_PLAN_CHANGE: "Plan change required", BLOCKED: "Blocked" } as Record<string, string>)[status] ?? status; }
 
 function reloadExplorer() {
   closeEvents();

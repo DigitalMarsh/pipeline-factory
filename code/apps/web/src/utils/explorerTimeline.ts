@@ -29,6 +29,16 @@ export function explorerTimelineTarget(item: ExplorerActivityItem, index: number
   return `activity-${item.id}-${index}`;
 }
 
+/** 输入卡片的 DOM 锚点。单点定义在这里，`buildExplorerMessageTimeline` 与视图共用同一条规则。 */
+export function inputRequestTarget(request: Pick<ExplorerInputRequest, "id">): string {
+  return `input-request-${request.id}`;
+}
+
+/** Explorer Plan（需求）区块的 DOM 锚点。 */
+export function explorerPlanAnchorId(explorerPlanId: string): string {
+  return `explorer-plan-${explorerPlanId}`;
+}
+
 function timestamp(value: string): number {
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? Number.MAX_SAFE_INTEGER : parsed;
@@ -78,7 +88,7 @@ export function buildExplorerMessageTimeline(activities: ExplorerActivityItem[],
 
     if (item.kind === "plan") return;
 
-    const target = `input-request-${item.request.id}`;
+    const target = inputRequestTarget(item.request);
     const activationKey = `input:${item.request.id}`;
     entries.push({ key: `${activationKey}:question`, activationKey, label: "提问", occurredAt: item.request.createdAt, target, order: index * 2 });
     if (item.request.answeredAt && (item.request.status === "ANSWERED" || item.request.status === "AUTO_RESOLVED")) {

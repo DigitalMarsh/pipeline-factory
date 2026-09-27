@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { ExplorerActivityItem, Plan } from "../types";
-import { findPlanForActivity, getPlanTimelineTarget, planActivityBindings, planTimelineItems } from "./planTimeline";
+import { detachedPlanAnchorId, findPlanForActivity, getPlanTimelineTarget, planActivityBindings, planAnchorId, planAnchorKey, planTimelineItems } from "./planTimeline";
 
 const activity = (turnId: string, title: string, occurredAt = "2026-08-29T10:00:00.000Z", providerItemId?: string): ExplorerActivityItem => ({
   id: `activity-${turnId}-${providerItemId ?? occurredAt}`,
@@ -83,5 +83,34 @@ describe("plan timeline bindings", () => {
       `${time(first.createdAt!)} · Candidate · Rev 1`,
       `${time(second.createdAt!)} · Queued · Rev 1`,
     ]);
+  });
+});
+
+describe("plan DOM 锚点", () => {
+  it("有卡片与无卡片分别用 generated / created 前缀", () => {
+    const bound = plan("plan-1", "turn-2");
+
+    expect(planAnchorId(bound)).toBe("plan-generated-plan-1");
+    expect(detachedPlanAnchorId(bound)).toBe("plan-created-plan-1");
+  });
+
+  it("身份缺 planId 时退到 id", () => {
+    // 老数据只有 id，没有 planId；锚点必须仍然稳定，否则刷新后定位会丢。
+    const legacy = { ...plan("", "turn-2"), id: "plan-7" };
+
+    expect(planAnchorId(legacy)).toBe("plan-generated-plan-7");
+  });
+
+  it("没有 Plan 时锚点为字符串，调用方不必再判空", () => {
+    expect(planAnchorId(null)).toBe("");
+    expect(planAnchorKey(null)).toBe("");
+  });
+
+  it("导航 key 与 rail 条目的 key 同规则（点击后能对齐激活态）", () => {
+    const bound = plan("plan-1", "turn-2");
+    const entries = planTimelineItems([bound], []);
+
+    expect(entries[0]?.key).toBe(planAnchorKey(bound));
+    expect(planAnchorKey(bound)).toBe("plan-plan-1");
   });
 });

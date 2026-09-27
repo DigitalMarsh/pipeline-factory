@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { ExplorerActivityItem, ExplorerInputRequest } from "../types";
-import { buildExplorerMessageTimeline, buildExplorerTimeline, explorerTimelineTarget } from "./explorerTimeline";
+import { buildExplorerMessageTimeline, buildExplorerTimeline, explorerPlanAnchorId, explorerTimelineTarget, inputRequestTarget } from "./explorerTimeline";
 
 const activity = (id: string, kind: ExplorerActivityItem["kind"], occurredAt: string): ExplorerActivityItem => ({
   id,
@@ -123,5 +123,19 @@ describe("Explorer timeline projection", () => {
 
     expect(items.map((item) => item.kind)).toEqual(["activity", "plan", "activity"]);
     expect(items[1]).toMatchObject({ kind: "plan", plan: { id: "plan-1" } });
+  });
+});
+
+describe("Explorer 锚点 id", () => {
+  it("导航项里的输入锚点与视图共用同一条规则", () => {
+    const entries = buildExplorerMessageTimeline([], [inputRequest("input-2", "2026-09-01T10:02:00.000Z")]);
+
+    expect(entries[0]?.target).toBe(inputRequestTarget({ id: "input-2" }));
+    expect(inputRequestTarget({ id: "input-2" })).toBe("input-request-input-2");
+  });
+
+  it("需求区块锚点由 explorerPlanId 直接拼出", () => {
+    expect(explorerPlanAnchorId("explorer-plan-9")).toBe("explorer-plan-explorer-plan-9");
+    expect(explorerPlanAnchorId("")).toBe("explorer-plan-");
   });
 });
