@@ -69,6 +69,11 @@ import { openSseChannel } from "./http/sse.js";
 import { registerPlatformRoutes } from "./routes/platform.js";
 import { registerChangeProposalRoutes } from "./routes/change-proposals.js";
 import { registerWorkbenchRoutes } from "./routes/workbench.js";
+import { registerHookRoutes } from "./routes/hooks.js";
+import { registerAgentLoopRoutes } from "./routes/agent-loops.js";
+import { registerExecutionThreadRoutes } from "./routes/execution-threads.js";
+import { registerRunRoutes } from "./routes/runs.js";
+import { registerMergeRequestRoutes } from "./routes/merge-requests.js";
 import { actorBody, loopReasonBody, projectThreadParams } from "./schemas/common.js";
 import { projectCreateBody, projectSelectExplorerBody, projectUpdateBody, projectValidateBody } from "./schemas/projects.js";
 import { planIdParams, planRevisionParams, revisionDraftBody, revisionDraftParams, threadPlanQuery } from "./schemas/plans.js";
@@ -294,8 +299,21 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (!options.mcpRegistry) await mcpRegistry?.close();
   });
 
-  // 平台级路由（health / 额度 / MCP 与插件工具目录 / plan 需求清单）与 Project 无关，见 routes/platform.ts。
+  // ── 已抽出到 routes/ 的域 ──────────────────────────────────────────────────
+  // 注册顺序不影响匹配：97 条路由里没有通配符，Fastify 基数树对静态段与参数段按优先级匹配。
+  // 方案 P5 会把下面三个以回调注入的投影函数（workbenchSnapshot / createProjectEventScope /
+  // projectRunThreadTelemetry / projectAgentLoopResponse / loopDiagnostics / findProjectThread）
+  // 搬进 projections/，届时这里的 `x: (a) => f(store, a)` 壳会退化成普通 import。
+  // 平台级（health / 额度 / MCP 与插件工具目录 / plan 需求清单）与 Project 无关。
   registerPlatformRoutes(app, { model, mcpRegistry, pluginRegistry, config: options.config });
+  registerWorkbenchRoutes(app, { store, snapshot: (projectId) => workbenchSnapshot(store, projects, projectId), projectEventScope: (projectId) => createProjectEventScope(store, projectId) });
+  registerHookRoutes(app, { store, projects });
+  registerAgentLoopRoutes(app, { store, loopController, loopResponse: (loop) => projectAgentLoopResponse(store, loop), diagnostics: (loop) => loopDiagnostics(store, loop), findThread: (projectId, threadId) => findProjectThread(store, projectId, threadId) });
+  registerExecutionThreadRoutes(app, { store, projectExecution });
+  registerRunRoutes(app, { store, plans, merger, scheduler, verifier, verificationExecutor, loopController, threadTelemetry: (run, thread) => projectRunThreadTelemetry(store, run, thread) });
+  registerMergeRequestRoutes(app, { store, merger, dispatchCoordinator });
+  registerChangeProposalRoutes(app, { store, changeProposals });
+  // ── 仍在组合根的域（P4b 后续步继续搬）──
 
   // Project Catalog 和设置路由只负责 HTTP 输入/输出，具体版本、路径和归档规则由 ProjectService 决定。
   app.get("/api/v4/projects", async (request) => {
@@ -376,9 +394,6 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     return { summary: projects.summary(params.data.projectId) };
   });
 
-  // Workbench 快照与事件流见 routes/workbench.ts；两个投影函数暂时以回调注入（P5 再搬 projections/）。
-  registerWorkbenchRoutes(app, { store, snapshot: (projectId) => workbenchSnapshot(store, projects, projectId), projectEventScope: (projectId) => createProjectEventScope(store, projectId) });
-
   app.patch("/api/v4/projects/:projectId", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
     const body = projectUpdateBody.safeParse(request.body ?? {});
@@ -434,142 +449,9 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     catch (error) { const message = error instanceof Error ? error.message : String(error); return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: message }); }
   });
 
-  app.get("/api/v4/agent-loops/:loopId", async (request, reply) => {
-    const params = agentLoopParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: "Invalid Agent Loop id" });
-    const loop = store.getAgentLoop(params.data.loopId);
-    if (!loop) return reply.code(404).send({ error: "AgentLoop not found" });
-    return { loop: projectAgentLoopResponse(store, loop) };
-  });
-
-  app.get("/api/v4/agent-loops/:loopId/steps", async (request, reply) => {
-    const params = agentLoopParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: "Invalid Agent Loop id" });
-    if (!store.getAgentLoop(params.data.loopId)) return reply.code(404).send({ error: "AgentLoop not found" });
-    return { items: store.listAgentLoopSteps(params.data.loopId) };
-  });
-
-  app.get("/api/v4/agent-loops/:loopId/tools", async (request, reply) => {
-    const params = agentLoopParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: "Invalid Agent Loop id" });
-    if (!store.getAgentLoop(params.data.loopId)) return reply.code(404).send({ error: "AgentLoop not found" });
-    return { items: store.listToolCalls(params.data.loopId) };
-  });
-
   // Agent Loop SSE 面向诊断和控制页；非 SSE 请求仍返回 JSON，方便测试和故障排查。
-  app.get("/api/v4/agent-loops/:loopId/events", async (request, reply) => {
-    const params = agentLoopParams.safeParse(request.params);
-    const query = loopEventsQuery.safeParse(request.query);
-    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid Agent Loop event query" });
-    if (!store.getAgentLoop(params.data.loopId)) return reply.code(404).send({ error: "AgentLoop not found" });
-    const headerSequence = Number(request.headers["last-event-id"] ?? "0") || 0;
-    const afterSequence = Math.max(query.data.afterSequence ?? 0, headerSequence);
-    const acceptsSse = query.data.format === "sse" || (request.headers.accept ?? "").includes("text/event-stream");
-    if (!acceptsSse) {
-      const current = store.getAgentLoop(params.data.loopId)!;
-      return { items: store.listEvents({ aggregateId: params.data.loopId, afterSequence }), diagnostics: loopDiagnostics(store, current) };
-    }
-    let cursor = afterSequence;
-    const sse = openSseChannel(request, reply, { poll: () => send() });
-    const send = () => {
-      const events = store.listEvents({ aggregateId: params.data.loopId, afterSequence: cursor });
-      // 无新事件时不计算诊断：轮询在 Loop 静默期不应产生任何读取。
-      if (events.length === 0) return;
-      const current = store.getAgentLoop(params.data.loopId);
-      const diagnostics = current ? loopDiagnostics(store, current) : null;
-      for (const event of events) {
-        cursor = event.sequence;
-        sse.send(event.sequence, event.type, { loopId: params.data.loopId, sequence: event.sequence, ...event.payload, diagnostics });
-      }
-    };
-    send();
-    const readyLoop = store.getAgentLoop(params.data.loopId);
-    sse.ready(cursor, { afterSequence: cursor, diagnostics: readyLoop ? loopDiagnostics(store, readyLoop) : null });
-  });
 
   // Run SSE 只回放 ExecutionThread journal，并同时带上当前 Run/Thread 状态供 UI 更新按钮显隐。
-  app.get("/api/v4/runs/:runId/events", async (request, reply) => {
-    const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
-    const query = loopEventsQuery.safeParse(request.query);
-    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid Run event query" });
-    const run = store.getRun(params.data.runId);
-    if (!run) return reply.code(404).send({ error: "Run not found" });
-    const thread = store.getExecutionThread(run.executionThreadId);
-    if (!thread) return reply.code(404).send({ error: "ExecutionThread not found" });
-    const headerSequence = Number(request.headers["last-event-id"] ?? "0") || 0;
-    const afterSequence = Math.max(query.data.afterSequence ?? 0, headerSequence);
-    const acceptsSse = query.data.format === "sse" || (request.headers.accept ?? "").includes("text/event-stream");
-    if (!acceptsSse) return { items: thread.journal.filter((entry) => entry.sequence > afterSequence) };
-    let cursor = afterSequence;
-    let lastTelemetryKey: string | null = null;
-    const sse = openSseChannel(request, reply, { poll: () => send() });
-    const send = () => {
-      const currentRun = store.getRun(run.id);
-      const currentThread = currentRun ? store.getExecutionThread(currentRun.executionThreadId) : undefined;
-      const projectedThread = currentRun && currentThread ? projectRunThreadTelemetry(store, currentRun, currentThread) : currentThread;
-      const newEntries = projectedThread?.journal.filter((item) => item.sequence > cursor) ?? [];
-      for (const entry of newEntries) {
-        cursor = entry.sequence;
-        sse.send(entry.sequence, "journal.entry", { runId: run.id, runStatus: currentRun?.status ?? null, threadState: projectedThread?.state ?? null, threadTelemetry: projectedThread?.telemetry ?? null, ...entry });
-      }
-      const telemetry = projectedThread?.telemetry ?? null;
-      const telemetryKey = JSON.stringify(telemetry);
-      // telemetry.updated 不属于事件序列，所以 id 传 null（不写 id 行）：否则 Last-Event-ID 会被
-      // 推到一个并不存在的事件序号上，重连时按它回放会丢事件。
-      if (telemetryKey !== lastTelemetryKey && newEntries.length === 0 && lastTelemetryKey !== null) sse.send(null, "telemetry.updated", { runId: run.id, threadTelemetry: telemetry });
-      lastTelemetryKey = telemetryKey;
-      return telemetry;
-    };
-    const initialTelemetry = send();
-    sse.ready(cursor, { afterSequence: cursor, threadTelemetry: initialTelemetry });
-  });
-
-  app.post("/api/v4/agent-loops/:loopId/pause", async (request, reply) => {
-    const params = agentLoopParams.safeParse(request.params);
-    const body = loopReasonBody.safeParse(request.body ?? {});
-    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid pause request" });
-    const loop = store.getAgentLoop(params.data.loopId);
-    if (!loop) return reply.code(404).send({ error: "AgentLoop not found" });
-    try {
-      const paused = await loopController.pause(loop.id, body.data.reason);
-      return { loop: projectAgentLoopResponse(store, paused) };
-    } catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "AgentLoop cannot be paused" }); }
-  });
-
-  app.post("/api/v4/agent-loops/:loopId/resume", async (request, reply) => {
-    const params = agentLoopParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: "Invalid Agent Loop id" });
-    const loop = store.getAgentLoop(params.data.loopId);
-    if (!loop) return reply.code(404).send({ error: "AgentLoop not found" });
-    try {
-      const resumed = await loopController.resume(loop.id);
-      return { loop: projectAgentLoopResponse(store, resumed) };
-    } catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "AgentLoop cannot be resumed" }); }
-  });
-
-  app.post("/api/v4/agent-loops/:loopId/cancel", async (request, reply) => {
-    const params = agentLoopParams.safeParse(request.params);
-    const body = loopReasonBody.safeParse(request.body ?? {});
-    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid cancel request" });
-    const loop = store.getAgentLoop(params.data.loopId);
-    if (!loop) return reply.code(404).send({ error: "AgentLoop not found" });
-    try {
-      const cancelled = await loopController.cancel(loop.id, body.data.reason);
-      return { loop: projectAgentLoopResponse(store, cancelled) };
-    } catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "AgentLoop cannot be cancelled" }); }
-  });
-
-  app.get("/api/v4/projects/:projectId/explorer-thread/agent-loops", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    const query = v4ThreadQuery.safeParse(request.query);
-    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid Agent Loop query" });
-    const thread = findProjectThread(store, params.data.projectId, query.data.threadId);
-    if (!thread) return reply.code(404).send({ error: "ExplorerThread not found" });
-    const explorerPlan = store.getExplorerPlan(query.data.explorerPlanId);
-    if (!explorerPlan || explorerPlan.explorerThreadId !== thread.id || explorerPlan.projectId !== thread.projectId) return reply.code(404).send({ error: "ExplorerPlan not found" });
-    const turnIds = new Set(store.listTurns(thread.id).filter((turn) => turn.explorerPlanId === explorerPlan.id).map((turn) => turn.id));
-    return { items: store.listAgentLoops().filter((loop) => loop.ownerType === "explorer-turn" && turnIds.has(loop.ownerId)).map((loop) => projectAgentLoopResponse(store, loop)) };
-  });
 
   app.post("/api/v4/projects/:projectId/explorers", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
@@ -1218,269 +1100,6 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       const message = error instanceof Error ? error.message : "Run cannot be started";
       return reply.code(409).send({ code: /RUN_PREREQUISITES_UNSATISFIED/.test(message) ? "RUN_PREREQUISITES_UNSATISFIED" : "RUN_START_FAILED", error: message });
     }
-  });
-
-  // ChangeProposal 的 3 条路由见 routes/change-proposals.ts。
-  registerChangeProposalRoutes(app, { store, changeProposals });
-
-  app.post("/api/v4/runs/:runId/finish", async (request, reply) => {
-    const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
-    const body = z.object({ exitReason: z.string().min(1).default("completed") }).safeParse(request.body ?? {});
-    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid run completion request" });
-    if (!scheduler) return reply.code(503).send({ error: "Scheduler is not configured for this API instance" });
-    try {
-      const run = scheduler.run(params.data.runId);
-      return { run: await scheduler.finish(params.data.runId, body.data.exitReason, store.getProject(run.projectId)?.settings.hooks ?? {}) };
-    }
-    catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "Run cannot be finished" }); }
-  });
-
-  app.post("/api/v4/runs/:runId/cancel", async (request, reply) => {
-    const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
-    const body = loopReasonBody.safeParse(request.body ?? {});
-    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid run cancellation request" });
-    if (!scheduler) return reply.code(503).send({ error: "Scheduler is not configured for this API instance" });
-    try {
-      const run = scheduler.run(params.data.runId);
-      const cancellableStatuses = new Set(["STARTING", "IN_PROGRESS", "READY_FOR_VERIFY", "VERIFYING", "RECOVERING", "BLOCKED"]);
-      if (!cancellableStatuses.has(run.status)) throw new Error(`Run ${run.id} cannot be cancelled from ${run.status}`);
-      const cancellableLoopStates = new Set(["CREATED", "RUNNING", "WAITING_FOR_INPUT", "PAUSED", "RECOVERING"]);
-      for (const loop of store.listAgentLoops(run.id).filter((item) => cancellableLoopStates.has(item.state))) await loopController.cancel(loop.id, body.data.reason);
-      return { run: await scheduler.finish(run.id, "cancelled", store.getProject(run.projectId)?.settings.hooks ?? {}, body.data.reason) };
-    } catch (error) { return reply.code(409).send({ code: "RUN_CANCEL_FAILED", error: error instanceof Error ? error.message : "Run cannot be cancelled" }); }
-  });
-
-  app.post("/api/v4/runs/:runId/pause", async (request, reply) => {
-    const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    if (!scheduler) return reply.code(503).send({ error: "Scheduler is not configured for this API instance" });
-    try {
-      const run = scheduler.pause(params.data.runId);
-      const thread = scheduler.thread(run.executionThreadId);
-      return { run, thread: projectRunThreadTelemetry(store, run, thread) };
-    } catch (error) {
-      return reply.code(409).send({ error: error instanceof Error ? error.message : "Run cannot be paused" });
-    }
-  });
-
-  app.post("/api/v4/runs/:runId/resume", async (request, reply) => {
-    const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    if (!scheduler) return reply.code(503).send({ error: "Scheduler is not configured for this API instance" });
-    try {
-      const run = scheduler.resume(params.data.runId);
-      const thread = scheduler.thread(run.executionThreadId);
-      return { run, thread: projectRunThreadTelemetry(store, run, thread) };
-    } catch (error) {
-      return reply.code(409).send({ error: error instanceof Error ? error.message : "Run cannot be resumed" });
-    }
-  });
-
-  app.post("/api/v4/runs/:runId/guidance", async (request, reply) => {
-    const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
-    const body = guidanceBody.safeParse(request.body ?? {});
-    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid user guidance" });
-    if (!scheduler) return reply.code(503).send({ error: "Scheduler is not configured for this API instance" });
-    try {
-      const thread = scheduler.addGuidance(params.data.runId, body.data.content);
-      const run = store.getRun(params.data.runId);
-      return { thread: run ? projectRunThreadTelemetry(store, run, thread) : thread };
-    }
-    catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "Guidance cannot be added" }); }
-  });
-
-  app.post("/api/v4/runs/:runId/verify", async (request, reply) => {
-    const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    if (!verificationExecutor) return reply.code(503).send({ error: "Verification command executor is not configured" });
-    const run = store.getRun(params.data.runId);
-    if (!run) return reply.code(404).send({ error: "Run not found" });
-    const existing = store.getVerificationRun(run.id);
-    if (existing) return { verification: existing };
-    try {
-      const plan = plans.get(run.planId);
-      const revision = plans.getRevision(plan.id, run.planRevision);
-      const verification = await verifier.verify(run, revision, verificationExecutor);
-      return { verification };
-    } catch (error) {
-      return reply.code(409).send({ error: error instanceof Error ? error.message : "Run cannot be verified" });
-    }
-  });
-
-  app.get("/api/v4/runs/:runId/verification", async (request, reply) => {
-    const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    const run = store.getRun(params.data.runId);
-    if (!run) return reply.code(404).send({ error: "Run not found" });
-    const verification = store.getVerificationRun(run.id);
-    if (!verification) return reply.code(404).send({ error: "VerificationRun not found" });
-    return { verification };
-  });
-
-  app.post("/api/v4/runs/:runId/merge-request", async (request, reply) => {
-    const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
-    const body = sourceCommitBody.safeParse(request.body ?? {});
-    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid merge request" });
-    const run = store.getRun(params.data.runId);
-    if (!run) return reply.code(404).send({ error: "Run not found" });
-    const existing = merger.findByRun(run.id);
-    if (existing) return { mergeRequest: existing };
-    const verification = store.getVerificationRun(run.id);
-    if (!verification) return reply.code(409).send({ error: "A passed VerificationRun is required" });
-    try { return { mergeRequest: merger.createRequest(run, verification, body.data.sourceCommit) }; }
-    catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "MergeRequest cannot be created" }); }
-  });
-
-  app.get("/api/v4/runs/:runId/merge-request", async (request, reply) => {
-    const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    const run = store.getRun(params.data.runId);
-    if (!run) return reply.code(404).send({ error: "Run not found" });
-    const mergeRequest = merger.findByRun(run.id);
-    if (!mergeRequest) return reply.code(404).send({ error: "MergeRequest not found" });
-    return { mergeRequest };
-  });
-
-  app.get("/api/v4/merge-requests/:mergeRequestId", async (request, reply) => {
-    const params = z.object({ mergeRequestId: z.string().min(1) }).safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    const mergeRequest = merger.get(params.data.mergeRequestId);
-    if (!mergeRequest) return reply.code(404).send({ error: "MergeRequest not found" });
-    return { mergeRequest };
-  });
-
-  app.post("/api/v4/merge-requests/:mergeRequestId/confirm-merged", async (request, reply) => {
-    const params = z.object({ mergeRequestId: z.string().min(1) }).safeParse(request.params);
-    const body = targetCommitBody.safeParse(request.body ?? {});
-    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid merge confirmation" });
-    try {
-      const mergeRequest = merger.confirmMerged(params.data.mergeRequestId, body.data.targetCommit);
-      // MergeService owns the durable Plan transition; wake the coordinator before
-      // responding so the UI never observes a stale NEEDS_REVIEW dispatch projection.
-      if (dispatchCoordinator) await dispatchCoordinator.wake();
-      return { mergeRequest };
-    }
-    catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "MergeRequest cannot be confirmed" }); }
-  });
-
-  app.get("/api/v4/projects/:projectId/settings/hooks", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    return { projectId: params.data.projectId, lifecycle: store.getProject(params.data.projectId)?.settings.hooks ?? {} };
-  });
-
-  app.put("/api/v4/projects/:projectId/settings/hooks", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    const body = hookBody.safeParse(request.body ?? {});
-    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid hook configuration" });
-    const project = store.getProject(params.data.projectId);
-    if (project) {
-      const lifecycle = {
-        ...(body.data.start ? { start: { commandId: body.data.start.commandId, ...(body.data.start.enabled === undefined ? {} : { enabled: body.data.start.enabled }), ...(body.data.start.timeoutMs === undefined ? {} : { timeoutMs: body.data.start.timeoutMs }), ...(body.data.start.maxAttempts === undefined ? {} : { maxAttempts: body.data.start.maxAttempts }) } } : {}),
-        ...(body.data.cleanup ? { cleanup: { commandId: body.data.cleanup.commandId, ...(body.data.cleanup.enabled === undefined ? {} : { enabled: body.data.cleanup.enabled }), ...(body.data.cleanup.timeoutMs === undefined ? {} : { timeoutMs: body.data.cleanup.timeoutMs }), ...(body.data.cleanup.maxAttempts === undefined ? {} : { maxAttempts: body.data.cleanup.maxAttempts }) } } : {}),
-      };
-      try {
-        projects.update(params.data.projectId, { settings: { hooks: lifecycle } });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        return reply.code(/active runs/i.test(message) ? 409 : 422).send({ code: /active runs/i.test(message) ? "PROJECT_HAS_ACTIVE_RUNS" : "HOOK_SETTINGS_INVALID", error: message });
-      }
-    }
-    return { projectId: params.data.projectId, lifecycle: body.data };
-  });
-
-  app.get("/api/v4/projects/:projectId/execution-thread", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    try {
-      const snapshot = projectExecution.get(params.data.projectId);
-      return { ...snapshot, events: store.listEvents({ aggregateId: snapshot.thread.id }) };
-    } catch (error) {
-      return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: error instanceof Error ? error.message : "Project not found" });
-    }
-  });
-
-  app.patch("/api/v4/projects/:projectId/execution-thread/preferences", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    const body = projectExecutionPreferencesBody.safeParse(request.body ?? {});
-    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid project execution preferences" });
-    try {
-      return { thread: projectExecution.updatePreferences(params.data.projectId, body.data) };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Invalid project execution preferences";
-      const status = message === "PROJECT_NOT_FOUND" ? 404 : 422;
-      return reply.code(status).send({ code: message, error: message });
-    }
-  });
-
-  app.post("/api/v4/projects/:projectId/execution-thread/turns", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    const body = projectExecutionTurnBody.safeParse(request.body ?? {});
-    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid project execution turn" });
-    try {
-      return projectExecution.submit(params.data.projectId, body.data);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Project execution turn cannot be submitted";
-      const status = message === "PROJECT_NOT_FOUND" ? 404 : message === "PROJECT_ARCHIVED" ? 409 : 400;
-      return reply.code(status).send({ code: message, error: message });
-    }
-  });
-
-  app.post("/api/v4/projects/:projectId/execution-thread/turns/:messageId/cancel", async (request, reply) => {
-    const params = z.object({ projectId: z.string().min(1), messageId: z.string().min(1) }).safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: "Invalid project execution cancel request" });
-    try {
-      const message = await projectExecution.cancel(params.data.projectId, params.data.messageId);
-      return { message };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Project execution turn cannot be cancelled";
-      return reply.code(message === "PROJECT_NOT_FOUND" ? 404 : 409).send({ code: message, error: message });
-    }
-  });
-
-  app.get("/api/v4/projects/:projectId/execution-thread/events", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    const query = projectExecutionEventsQuery.safeParse(request.query ?? {});
-    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid project execution event query" });
-    let threadId: string;
-    try { threadId = projectExecution.get(params.data.projectId).thread.id; }
-    catch (error) { return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: error instanceof Error ? error.message : "Project not found" }); }
-    const headerSequence = Number(request.headers["last-event-id"] ?? "0") || 0;
-    let cursor = Math.max(query.data.afterSequence ?? 0, headerSequence);
-    const sse = openSseChannel(request, reply, { poll: () => send() });
-    const send = () => {
-      const events = store.listEvents({ aggregateId: threadId, afterSequence: cursor });
-      for (const event of events) {
-        cursor = event.sequence;
-        sse.send(event.sequence, "project.execution", { sequence: event.sequence, type: event.type, payload: event.payload });
-      }
-    };
-    send();
-    sse.ready(cursor, { afterSequence: cursor });
-  });
-
-  app.get("/api/v4/projects/:projectId/runs", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    return { items: store.listRuns().filter((run) => run.projectId === params.data.projectId) };
-  });
-
-  app.get("/api/v4/runs/:runId", async (request, reply) => {
-    const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    const run = store.getRun(params.data.runId);
-    if (!run) return reply.code(404).send({ error: "Run not found" });
-    const executionThread = store.getExecutionThread(run.executionThreadId);
-    return { run: { ...run, agentLoops: store.listAgentLoops(run.id) }, executionThread: executionThread ? projectRunThreadTelemetry(store, run, executionThread) : null, verification: store.getVerificationRun(run.id) ?? null, mergeRequest: merger.findByRun(run.id) ?? null };
-  });
-
-  app.get("/api/v4/execution-threads/:threadId", async (request, reply) => {
-    const params = z.object({ threadId: z.string().min(1) }).safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    const thread = store.getExecutionThread(params.data.threadId);
-    if (!thread) return reply.code(404).send({ error: "ExecutionThread not found" });
-    const run = store.getRun(thread.runId);
-    return { thread: run ? projectRunThreadTelemetry(store, run, thread) : thread };
   });
 
   // 静态托管必须最后注册：setNotFoundHandler 是全局兜底，且必须在 app 启动前设置
