@@ -31,6 +31,7 @@ const props = withDefaults(defineProps<{
   requirements?: ExplorerPlan[];
   activeExplorerPlanId?: string | null;
   explorerPaused?: boolean;
+  projectExecutionActive?: boolean;
 }>(), {
   showArchived: false,
   explorerActionId: null,
@@ -41,6 +42,7 @@ const props = withDefaults(defineProps<{
   requirements: () => [],
   activeExplorerPlanId: null,
   explorerPaused: false,
+  projectExecutionActive: false,
 });
 const emit = defineEmits<{
   "select-panel": [panel: LeftPanel];
@@ -50,6 +52,7 @@ const emit = defineEmits<{
   "open-project-settings": [projectId: string];
   "archive-project": [projectId: string];
   "select-explorer": [explorerId: string];
+  "select-project-execution": [];
   "toggle-show-archived": [value: boolean];
   "archive-explorer": [explorerId: string];
   "create-explorer": [];
@@ -278,6 +281,18 @@ function emitThreadAction(command: string | number): void {
 
       <div v-else class="left-panel-scroll explorer-list">
         <button
+          v-if="props.project"
+          :class="['left-panel-create', 'project-execution-entry', { active: props.projectExecutionActive }]"
+          type="button"
+          aria-label="项目执行线程"
+          :aria-current="props.projectExecutionActive ? 'page' : undefined"
+          data-project-execution-entry
+          @click="emit('select-project-execution')"
+        >
+          <span class="left-panel-create-icon"><Connection :size="16" /></span>
+          <span><strong>项目执行线程</strong><small>在项目目录中直接执行</small></span>
+        </button>
+        <button
           class="left-panel-create"
           type="button"
           aria-label="新建 Explorer"
@@ -416,3 +431,8 @@ function emitThreadAction(command: string | number): void {
     </section>
   </aside>
 </template>
+
+<style scoped>
+.project-execution-entry.active { border-color:#62b5ee; background:#28517f; box-shadow:inset 3px 0 #62b5ee,0 0 0 1px #62b5ee33; }
+.project-execution-entry.active .left-panel-create-icon { background:#3978b4; }
+</style>

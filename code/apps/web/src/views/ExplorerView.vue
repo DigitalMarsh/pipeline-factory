@@ -22,6 +22,7 @@ import { formatContextUsage } from "../utils/explorerStatus";
 import { createSseReplayGate } from "../utils/sseReplayGate";
 import ExplorerInputDialog from "../components/ExplorerInputDialog.vue";
 import MarkdownMessage from "../components/MarkdownMessage.vue";
+import ProjectExecutionThreadPanel from "../components/ProjectExecutionThreadPanel.vue";
 import ProjectSettingsDialog from "../components/ProjectSettingsDialog.vue";
 import ProjectCreateDialog from "../components/ProjectCreateDialog.vue";
 import ExplorerRenameDialog from "../components/ExplorerRenameDialog.vue";
@@ -49,6 +50,7 @@ const router = useRouter();
 // 页面状态按 Project 当前 Explorer、候选 Plan、已派发 Plan 和消息流分层保存，
 // 避免切换 Project/Thread 时把旧项目的响应式数据留在当前视图。
 const projectId = computed(() => String(route.params.projectId ?? ""));
+const projectExecutionMode = computed(() => route.query.workspace === "project-execution");
 const project = ref<Project | null>(null);
 const projects = ref<Project[]>([]);
 const thread = ref<ExplorerThread | null>(null);
@@ -800,6 +802,7 @@ function panelStateQuery() {
 function explorerRouteQuery(explorerId?: string, explorerPlanId?: string | null, preserveRun = false) {
   const query = { ...route.query };
   delete query.leftPanel;
+  delete query.workspace;
   if (!preserveRun) delete query.runId;
   if (explorerId) query.explorerId = explorerId;
   if (explorerPlanId) query.explorerPlanId = explorerPlanId;
@@ -882,7 +885,19 @@ async function createExplorer() {
 }
 
 function switchProject(selectedProjectId: string) {
-  void router.push({ path: projectPathForModule("explore", selectedProjectId), query: { contextPanel: contextPanel.value } });
+  void router.push({ path: projectPathForModule("explore", selectedProjectId), query: { contextPanel: contextPanel.value, ...(projectExecutionMode.value ? { workspace: "project-execution" } : {}) } });
+}
+
+function selectProjectExecution() {
+  closeEvents();
+  closeRequirementStatusEvents();
+  requestScope.invalidate();
+  resetThreadState();
+  thread.value = null;
+  const query: import("vue-router").LocationQueryRaw = { ...route.query, workspace: "project-execution" };
+  delete query.runId;
+  delete query.explorerPlanId;
+  void router.push({ path: route.path, query, hash: "" });
 }
 
 function openProjectCreateDialog() {
@@ -940,7 +955,7 @@ async function toggleProjectArchive(selectedProjectId: string) {
 }
 
 async function selectExplorer(explorerId: string) {
-  if (explorerId === thread.value?.id) return;
+  if (explorerId === thread.value?.id && !projectExecutionMode.value) return;
   closeEvents();
   requestScope.invalidate();
   resetThreadState();
@@ -1124,6 +1139,13 @@ async function loadExplorerDirectory(requestProjectId: string, requestToken: num
   projectRuns.value = projectRunsResponse.items;
   planRequirements.value = requirementsResponse?.requirements.areas ?? defaultPlanRequirements;
   explorerError.value = null;
+
+  // 固定执行线程只加载项目目录；没有 Explorer 时不能为进入执行模式而
+  // 隐式创建 Explorer/ExplorerPlan。
+  if (projectExecutionMode.value) {
+    thread.value = null;
+    return true;
+  }
 
   const routeExplorerId = typeof route.query.explorerId === "string" ? route.query.explorerId : null;
   let selected = routeExplorerId ? explorerResponse.items.find((item) => item.id === routeExplorerId) : undefined;
@@ -1576,6 +1598,19 @@ watch(projectId, (next, previous) => {
   resetProjectState(next);
   void load().then((loaded) => { if (loaded && mounted.value) connectEvents(); });
 });
+watch(projectExecutionMode, (active, previous) => {
+  if (!mounted.value || active === previous) return;
+  closeEvents();
+  closeRequirementStatusEvents();
+  requestScope.invalidate();
+  resetThreadState();
+  if (active) {
+    thread.value = null;
+    void load();
+  } else {
+    void reloadSelectedExplorer();
+  }
+});
 watch(() => route.query.explorerId, (routeExplorerId, previousExplorerId) => {
   if (!mounted.value || routeExplorerId === previousExplorerId || routeExplorerId === thread.value?.id) return;
   if (suppressNextExplorerRouteReload) {
@@ -1593,7 +1628,7 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
 </script>
 
 <template>
-  <div class="console-layout">
+  <div :class="['console-layout', { 'project-execution-mode': projectExecutionMode }]">
     <ThreadRail
       :panel="leftPanel"
       :thread="thread"
@@ -1611,6 +1646,7 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
       :requirements="explorerPlans"
       :active-explorer-plan-id="activeExplorerPlan?.id ?? null"
       :explorer-paused="explorerPaused"
+      :project-execution-active="projectExecutionMode"
       @select-panel="leftPanel = $event"
       @select-plan-center="selectContextPanel('plan-center')"
       @create-explorer="createExplorer"
@@ -1620,6 +1656,7 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
       @open-project-settings="openProjectSettingsDialog"
       @archive-project="toggleProjectArchive"
       @select-explorer="selectExplorer"
+      @select-project-execution="selectProjectExecution"
       @toggle-show-archived="showArchivedExplorers = $event"
       @archive-explorer="toggleExplorerArchive"
       @select-explorer-plan="selectExplorerPlan($event)"
@@ -1627,6 +1664,8 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
       @thread-action="handleThreadAction"
     />
     <section class="conversation-column">
+      <ProjectExecutionThreadPanel v-if="projectExecutionMode" :project-id="projectId" :project="project" />
+      <template v-else>
       <div v-if="!activeRunId" class="conversation-header">
         <div class="conversation-header-copy">
           <h1 :title="explorerDisplayTitle(thread)">{{ explorerDisplayTitle(thread) }}</h1>
@@ -1715,8 +1754,9 @@ onBeforeUnmount(() => { mounted.value = false; requestScope.invalidate(); closeE
       </div>
       </div>
       <div v-if="!activeRunId" class="composer"><div class="composer-input"><textarea v-model="draft" :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || explorerPaused" aria-label="Explorer message" placeholder="继续探索，或提出修改…" @keydown="handleComposerKeydown" /><span class="composer-mode">Plan Mode</span></div><div class="composer-footer"><el-button size="small" plain :disabled="!thread || thread.state === 'ARCHIVED' || !activeExplorerPlan" title="在当前探索线程下新建一个独立需求" @click="createExplorerPlan">新建需求</el-button><ProviderUsageFooter :model="explorerModel" :context="contextUsage" context-note="estimated" /><span v-if="sendingCurrentPlan" class="composer-status" role="status" aria-live="polite">Message sent · waiting for Plan Explorer…</span><el-button class="composer-send" type="primary" circle :loading="activePlanBusy || sendingCurrentPlan" :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || !draft.trim() || explorerPaused || activePlanBusy || sendingCurrentPlan || busy" aria-label="Send message" :title="activePlanBusy ? '当前需求回合执行中，完成后可继续' : 'Send message'" @click="sendTurn"><ArrowUp :size="18" /></el-button></div></div>
+      </template>
     </section>
-    <aside class="context-panel-shell">
+    <aside v-show="!projectExecutionMode" class="context-panel-shell">
       <div class="context-panel">
       <div class="context-header"><div class="context-header-title"><div class="context-header-title-row"><h2 id="context-panel-title">{{ contextPanelTitle }}</h2><span class="context-header-count" :aria-label="`${contextPanelTitle}: ${contextPanelCount}`">{{ contextPanelCount }}</span></div></div><el-button text circle aria-label="Refresh" @click="refreshThread"><Refresh :size="16" /></el-button></div>
       <div class="context-panel-scroll">

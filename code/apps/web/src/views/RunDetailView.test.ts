@@ -12,7 +12,8 @@ const runDetailSource = readFileSync(fileURLToPath(new URL("./RunDetailView.vue"
 describe("Run detail execution conversation", () => {
   it("renders executor model and guidance text through the shared Markdown component", () => {
     expect(runDetailSource).toContain('import MarkdownMessage from "../components/MarkdownMessage.vue"');
-    expect(runDetailSource).toContain("<MarkdownMessage v-else-if=\"item.kind === 'model' || item.kind === 'guidance'\" :source=\"item.content\" :streaming=\"item.status === 'RUNNING'\" />");
+    expect(runDetailSource).toContain('<template v-else-if="item.kind === \'model\' || item.kind === \'guidance\'">');
+    expect(runDetailSource).toContain('<MarkdownMessage :source="item.content" :streaming="item.status === \'RUNNING\'" />');
     expect(runDetailSource).not.toContain("{{ item.content }}<span v-if=\"item.status === 'RUNNING'\"");
   });
 
@@ -37,7 +38,7 @@ describe("Run detail execution conversation", () => {
     expect(runDetailSource).toContain('@focus-task="focusExecutionTask"');
     expect(runDetailSource).toContain('@run-action="handleRunAction"');
     expect(runDetailSource).toContain('@loop-action="handleLoopAction"');
-    expect(runDetailSource).toContain('@open-diagnostics="diagnosticsOpen = true"');
+    expect(runDetailSource).not.toContain("open-diagnostics");
     expect(runDetailSource).not.toContain('class="run-actions"');
     expect(runDetailSource).not.toContain('class="execution-telemetry-panel"');
     expect(runDetailSource).not.toContain('class="execution-steps-panel"');

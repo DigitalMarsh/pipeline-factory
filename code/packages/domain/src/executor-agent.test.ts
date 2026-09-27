@@ -3,13 +3,14 @@
  * 设计说明：fixture 只构造本测试需要的持久化事实，边界行为优先于实现细节。
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  */
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { ExecutorAgent, inspectWorkspaceScope, parseExecutorReport } from "./executor-agent.js";
+import { resolveExecutorWorkingDirectory } from "./executor-working-directory.js";
 import { InMemoryPipelineStore, LifecycleHookRunner, PlanService, Scheduler, ToolGateway, type AgentLoop, type ModelEvent, type ModelGateway, type ModelRequest } from "./index.js";
 import { DurableToolRuntime } from "./tool-runtime.js";
 
@@ -19,14 +20,23 @@ const executionReport = (taskId: string) => `<pipeline-factory-execution-report>
   report: "Task completed with verification-ready evidence",
 })}</pipeline-factory-execution-report>`;
 
-function createQueuedRun(saveRun = true) {
+const temporaryWorkspaces: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(temporaryWorkspaces.splice(0).map((workspace) => rm(workspace, { recursive: true, force: true })));
+});
+
+async function createQueuedRun(saveRun = true, include = ["src/**"], artifactPath?: string) {
+  const workspacePath = await mkdtemp(join(tmpdir(), "pipeline-executor-fixture-"));
+  temporaryWorkspaces.push(workspacePath);
   const store = new InMemoryPipelineStore();
   const plans = new PlanService(store);
   const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "explorer-1", title: "Executor plan", contract: {
     goal: "Implement the feature",
     acceptanceCriteria: ["The feature works"],
-    include: ["src"],
+    include,
     exclude: [".env"],
+    ...(artifactPath ? { artifactPath } : {}),
     baseBranch: "main",
     baseCommit: "abc",
     tasks: [{ id: "task-1", title: "Implement the feature", dependencies: [], status: "READY" }],
@@ -41,7 +51,7 @@ function createQueuedRun(saveRun = true) {
   plans.confirm(plan.id, "user-1");
   plans.enqueue(plan.id);
   plans.dispatch(plan.id);
-  const run = { id: "run-1", projectId: "project-1", planId: plan.id, planRevision: 1, status: "IN_PROGRESS" as const, branch: "factory/run-1", workspacePath: "/tmp/project", baseCommit: "abc", executionThreadId: "execution-thread-1", createdAt: store.now(), startedAt: store.now() };
+  const run = { id: "run-1", projectId: "project-1", planId: plan.id, planRevision: 1, status: "IN_PROGRESS" as const, branch: "factory/run-1", workspacePath, baseCommit: "abc", executionThreadId: "execution-thread-1", createdAt: store.now(), startedAt: store.now() };
   if (saveRun) {
     store.saveRun(run);
     store.saveExecutionThread({ id: run.executionThreadId, runId: run.id, state: "ACTIVE", journal: [] });
@@ -123,7 +133,7 @@ describe("ExecutorAgent", () => {
   });
 
   it("sends the complete approved Plan contract to the executor model", async () => {
-    const { store, plan, run } = createQueuedRun();
+    const { store, plan, run } = await createQueuedRun();
     let receivedMessages: ModelRequest["messages"] = [];
     const model: ModelGateway = {
       configFor: () => ({ model: "gpt-5.6-luna", loopMode: "provider-controlled" }),
@@ -145,8 +155,43 @@ describe("ExecutorAgent", () => {
     expect(systemMessage?.content).toContain('"id": "task-1"');
   });
 
+  it("uses the declared artifact directory when include scope spans multiple paths", async () => {
+    const include = ["code/personal-site/**", "docs/**"];
+    const artifactPath = "code/personal-site/**";
+    const { store, plan, run } = await createQueuedRun(true, include, artifactPath);
+    let requestCwd: string | undefined;
+    const model: ModelGateway = {
+      configFor: () => ({ model: "gpt-5.6-luna", loopMode: "provider-controlled" }),
+      capabilities: () => ({ supportsStructuredUserInput: false, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
+      async *stream(request: ModelRequest): AsyncIterable<ModelEvent> {
+        requestCwd = request.cwd;
+        yield { type: "text.delta", text: executionReport(plan.contract.tasks[0]!.id) };
+        yield { type: "turn.completed" };
+      },
+      async answerUserInput() { return undefined; },
+      async cancel() { return undefined; },
+    };
+
+    await new ExecutorAgent(store, model).run(run, plan);
+
+    const expectedCwd = await resolveExecutorWorkingDirectory(run.workspacePath!, include, artifactPath);
+    expect(requestCwd).toBe(expectedCwd);
+    expect(requestCwd).toMatch(/code\/personal-site$/);
+  });
+
+  it("rejects an included artifact directory that escapes through a symlink", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "pipeline-executor-symlink-"));
+    const outside = await mkdtemp(join(tmpdir(), "pipeline-executor-outside-"));
+    try {
+      await symlink(outside, join(workspace, "code"));
+      await expect(resolveExecutorWorkingDirectory(workspace, ["code/personal-site/**"])).rejects.toThrow("EXECUTOR_WORKING_DIRECTORY_SYMLINK_BLOCKED");
+    } finally {
+      await Promise.all([rm(workspace, { recursive: true, force: true }), rm(outside, { recursive: true, force: true })]);
+    }
+  });
+
   it("runs the executor loop and only becomes ready for verification after the task gate passes", async () => {
-    const { store, plan, run } = createQueuedRun();
+    const { store, plan, run } = await createQueuedRun();
     const model: ModelGateway = {
       configFor: () => ({ model: "gpt-5.6-luna", loopMode: "provider-controlled" }),
       capabilities: () => ({ supportsStructuredUserInput: false, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
@@ -175,7 +220,7 @@ describe("ExecutorAgent", () => {
   });
 
   it("does not treat a model completion message as task completion", async () => {
-    const { store, plan, run } = createQueuedRun();
+    const { store, plan, run } = await createQueuedRun();
     const model: ModelGateway = {
       configFor: () => ({ model: "gpt-5.6-luna", loopMode: "provider-controlled" }),
       capabilities: () => ({ supportsStructuredUserInput: false, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
@@ -193,7 +238,7 @@ describe("ExecutorAgent", () => {
   });
 
   it("projects a blocked executor loop onto its execution thread", async () => {
-    const { store, plan, run } = createQueuedRun();
+    const { store, plan, run } = await createQueuedRun();
     const model: ModelGateway = {
       configFor: () => ({ model: "gpt-5.6-luna", loopMode: "provider-controlled" }),
       capabilities: () => ({ supportsStructuredUserInput: false, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
@@ -208,7 +253,7 @@ describe("ExecutorAgent", () => {
   });
 
   it("injects a durable built-in ToolRuntime for Factory-controlled execution", async () => {
-    const { store, plan, run } = createQueuedRun();
+    const { store, plan, run } = await createQueuedRun();
     const workspace = await mkdtemp(join(tmpdir(), "pipeline-executor-"));
     run.workspacePath = workspace;
     store.saveRun(run);
@@ -242,7 +287,7 @@ describe("ExecutorAgent", () => {
   });
 
   it("starts the Executor Loop only after the workspace and start hook succeed", async () => {
-    const { store, plan } = createQueuedRun(false);
+    const { store, plan } = await createQueuedRun(false);
     const order: string[] = [];
     const scheduler = new Scheduler({
       store,

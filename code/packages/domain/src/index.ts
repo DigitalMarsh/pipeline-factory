@@ -11,6 +11,7 @@ import { AgentLoopEngine } from "./agent-loop.js";
 import { PlanCompletenessGate } from "./termination-gates.js";
 import { composeExplorerTitle, ModelExplorerTitleGenerator, normalizeExplorerTitle, placeholderExplorerTitle, type ExplorerTitleGenerator, type ExplorerTitleSource, type ExplorerTitleStatus } from "./explorer-title.js";
 import { allocateRunBranchLeaf, composeRunBranchLeaf, ModelRunBranchNameGenerator, normalizeRunBranchSlug, runBranchName, type RunBranchNameGenerator } from "./run-branch.js";
+import { snapshotProjectWorkingTree } from "./worktree-snapshot.js";
 import { EXECUTION_SLOT_RUN_STATUSES, ProjectService } from "./project.js";
 import type { Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings } from "./project.js";
 import type { PlanDispatchState } from "./dispatch-coordinator.js";
@@ -33,6 +34,8 @@ export type { RunBranchNameGenerator, RunBranchNameInput } from "./run-branch.js
 
 export type { AgentLoop, AgentLoopDiagnostics, AgentLoopInput, AgentLoopMode, AgentLoopResult, AgentLoopState, AgentLoopStep, AgentLoopStepInput, AgentLoopStepStatus, AgentLoopRunner, AgentStepType, GateContext, GateDecision, TerminationGate } from "./agent-loop.js";
 export { AgentLoopEngine } from "./agent-loop.js";
+export { PROJECT_EXECUTION_MODELS, PROJECT_EXECUTION_REASONING_EFFORTS, ProjectExecutionThreadService } from "./project-execution-thread.js";
+export type { ProjectExecutionThreadServiceOptions, ProjectExecutionThreadSnapshot } from "./project-execution-thread.js";
 export { projectAgentLoopDiagnostics } from "./agent-loop.js";
 export { PlanCompletenessGate, TaskProgressGate } from "./termination-gates.js";
 export { ExecutorAgent, inspectWorkspaceScope, parseExecutorReport } from "./executor-agent.js";
@@ -484,6 +487,15 @@ export type DomainEvent = {
     | "project.archived"
     | "project.activated"
     | "project.explorer.selected"
+    | "project.execution.thread.created"
+    | "project.execution.preferences.updated"
+    | "project.execution.turn.accepted"
+    | "project.execution.turn.started"
+    | "project.execution.turn.text.delta"
+    | "project.execution.turn.activity"
+    | "project.execution.turn.completed"
+    | "project.execution.turn.failed"
+    | "project.execution.turn.cancelled"
     | "explorer.thread.created"
     | "explorer.created"
     | "explorer.deleted"
@@ -574,6 +586,36 @@ export type DomainEvent = {
   aggregateId: string;
   occurredAt: string;
   payload: Record<string, unknown>;
+};
+
+/** 每个项目唯一的长期执行会话；空偏好字段表示跟随项目 Executor 默认值。 */
+export type ProjectExecutionThread = {
+  id: string;
+  projectId: string;
+  providerThreadId: string | null;
+  modelOverride: string | null;
+  reasoningEffortOverride: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ProjectExecutionTurnStatus = "QUEUED" | "RUNNING" | "WAITING_FOR_INPUT" | "COMPLETED" | "FAILED" | "CANCELLED" | "RECOVERY_REQUIRED";
+
+/** 执行会话中的一条有序消息；用户和助手消息共享 turnId。 */
+export type ProjectExecutionMessage = {
+  id: string;
+  threadId: string;
+  turnId: string;
+  clientTurnId: string | null;
+  role: "user" | "assistant";
+  content: string;
+  status: ProjectExecutionTurnStatus;
+  error: string | null;
+  createdAt: string;
+  sequence: number;
+  loopId: string | null;
+  model: string | null;
+  reasoningEffort: string | null;
 };
 
 /** ExplorerThread 删除所需的完整业务关联集合；物理删除由 Store 统一执行。 */
@@ -771,6 +813,13 @@ export type PipelineStore = {
   updateExplorerPlan(plan: ExplorerPlan): ExplorerPlan;
   saveProject(project: Project): Project;
   getProject(projectId: string): Project | undefined;
+  saveProjectExecutionThread(thread: ProjectExecutionThread): ProjectExecutionThread;
+  getProjectExecutionThread(projectId: string): ProjectExecutionThread | undefined;
+  updateProjectExecutionThread(thread: ProjectExecutionThread): ProjectExecutionThread;
+  saveProjectExecutionMessage(message: ProjectExecutionMessage): ProjectExecutionMessage;
+  getProjectExecutionMessageByClientTurnId(threadId: string, clientTurnId: string): ProjectExecutionMessage | undefined;
+  listProjectExecutionMessages(threadId: string): ProjectExecutionMessage[];
+  updateProjectExecutionMessage(message: ProjectExecutionMessage): ProjectExecutionMessage;
   listProjects(): Project[];
   updateProject(project: Project): Project;
   saveProjectConfigRevision(revision: ProjectConfigRevision): ProjectConfigRevision;
@@ -1049,6 +1098,8 @@ function summarizeExplorerMessage(content: string): string {
 /** 用于测试和轻量集成的内存 Store，不改变领域服务的持久化接口。 */
 export class InMemoryPipelineStore implements PipelineStore {
   private readonly projects = new Map<string, Project>();
+  private readonly projectExecutionThreads = new Map<string, ProjectExecutionThread>();
+  private readonly projectExecutionMessages = new Map<string, ProjectExecutionMessage[]>();
   private readonly projectConfigRevisions = new Map<string, ProjectConfigRevision[]>();
   private readonly explorerPlans = new Map<string, ExplorerPlan>();
   private readonly plans = new Map<string, CandidatePlan>();
@@ -1139,6 +1190,39 @@ export class InMemoryPipelineStore implements PipelineStore {
     if (!this.projects.has(project.id)) throw new Error(`Project ${project.id} does not exist`);
     this.projects.set(project.id, project);
     return project;
+  }
+  saveProjectExecutionThread(thread: ProjectExecutionThread): ProjectExecutionThread {
+    const existing = this.projectExecutionThreads.get(thread.projectId);
+    if (existing) return existing;
+    this.projectExecutionThreads.set(thread.projectId, thread);
+    return thread;
+  }
+  getProjectExecutionThread(projectId: string): ProjectExecutionThread | undefined { return this.projectExecutionThreads.get(projectId); }
+  updateProjectExecutionThread(thread: ProjectExecutionThread): ProjectExecutionThread {
+    if (!this.projectExecutionThreads.has(thread.projectId)) throw new Error(`Project execution thread for ${thread.projectId} does not exist`);
+    this.projectExecutionThreads.set(thread.projectId, thread);
+    return thread;
+  }
+  saveProjectExecutionMessage(message: ProjectExecutionMessage): ProjectExecutionMessage {
+    const rows = this.projectExecutionMessages.get(message.threadId) ?? [];
+    if (message.clientTurnId) {
+      const existing = rows.find((item) => item.role === "user" && item.clientTurnId === message.clientTurnId);
+      if (existing) return existing;
+    }
+    rows.push(message);
+    this.projectExecutionMessages.set(message.threadId, rows);
+    return message;
+  }
+  getProjectExecutionMessageByClientTurnId(threadId: string, clientTurnId: string): ProjectExecutionMessage | undefined {
+    return (this.projectExecutionMessages.get(threadId) ?? []).find((item) => item.role === "user" && item.clientTurnId === clientTurnId);
+  }
+  listProjectExecutionMessages(threadId: string): ProjectExecutionMessage[] { return [...(this.projectExecutionMessages.get(threadId) ?? [])].sort((a, b) => a.sequence - b.sequence); }
+  updateProjectExecutionMessage(message: ProjectExecutionMessage): ProjectExecutionMessage {
+    const rows = this.projectExecutionMessages.get(message.threadId) ?? [];
+    const index = rows.findIndex((item) => item.id === message.id);
+    if (index < 0) throw new Error(`Project execution message ${message.id} does not exist`);
+    rows[index] = message;
+    return message;
   }
   saveProjectConfigRevision(revision: ProjectConfigRevision): ProjectConfigRevision {
     const revisions = this.projectConfigRevisions.get(revision.projectId) ?? [];
@@ -1280,7 +1364,7 @@ export class InMemoryPipelineStore implements PipelineStore {
   getRun(runId: string): Run | undefined { return this.runs.get(runId); }
   listRuns(): Run[] { return [...this.runs.values()]; }
   saveExecutionThread(thread: ExecutionThread): ExecutionThread {
-    const safe = { ...thread, journal: thread.journal.map((entry) => ({ ...entry, payload: redactAuditPayload(entry.payload) })) };
+    const safe = { ...thread, journal: thread.journal.map((entry) => ({ ...entry, payload: redactAuditPayload(entry.payload) as ExecutionJournalPayload })) };
     this.executionThreads.set(thread.id, safe);
     return safe;
   }
@@ -1288,7 +1372,7 @@ export class InMemoryPipelineStore implements PipelineStore {
   appendExecutionJournal(input: { executionThreadId: string; runId: string; type: JournalEntryType; payload: Record<string, unknown>; occurredAt?: string }): ExecutionJournalEntry {
     const thread = this.executionThreads.get(input.executionThreadId);
     if (!thread || thread.runId !== input.runId) throw new Error(`ExecutionThread ${input.executionThreadId} does not belong to Run ${input.runId}`);
-    const entry: ExecutionJournalEntry = { sequence: thread.journal.length + 1, type: input.type, occurredAt: input.occurredAt ?? this.now(), payload: redactAuditPayload(input.payload) };
+    const entry: ExecutionJournalEntry = { sequence: thread.journal.length + 1, type: input.type, occurredAt: input.occurredAt ?? this.now(), payload: redactAuditPayload(input.payload) as ExecutionJournalPayload };
     this.executionThreads.set(thread.id, { ...thread, journal: [...thread.journal, entry] });
     return entry;
   }
@@ -1446,6 +1530,33 @@ export class SqlitePipelineStore implements PipelineStore {
         updated_at TEXT NOT NULL,
         archived_at TEXT
       );
+      CREATE TABLE IF NOT EXISTS project_execution_threads (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL UNIQUE REFERENCES factory_projects(id) ON DELETE CASCADE,
+        provider_thread_id TEXT,
+        model_override TEXT,
+        reasoning_effort_override TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS project_execution_messages (
+        id TEXT PRIMARY KEY,
+        thread_id TEXT NOT NULL REFERENCES project_execution_threads(id) ON DELETE CASCADE,
+        turn_id TEXT NOT NULL,
+        client_turn_id TEXT,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        status TEXT NOT NULL,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        loop_id TEXT,
+        model TEXT,
+        reasoning_effort TEXT,
+        UNIQUE(thread_id, sequence)
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS project_execution_client_turn_id ON project_execution_messages(thread_id, client_turn_id) WHERE client_turn_id IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS project_execution_messages_order ON project_execution_messages(thread_id, sequence);
       CREATE TABLE IF NOT EXISTS project_config_revisions (
         project_id TEXT NOT NULL,
         version INTEGER NOT NULL,
@@ -1905,6 +2016,42 @@ export class SqlitePipelineStore implements PipelineStore {
     return this.saveProject(project);
   }
 
+  saveProjectExecutionThread(thread: ProjectExecutionThread): ProjectExecutionThread {
+    this.database.prepare("INSERT OR IGNORE INTO project_execution_threads (id, project_id, provider_thread_id, model_override, reasoning_effort_override, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(thread.id, thread.projectId, thread.providerThreadId, thread.modelOverride, thread.reasoningEffortOverride, thread.createdAt, thread.updatedAt);
+    return this.getProjectExecutionThread(thread.projectId) as ProjectExecutionThread;
+  }
+
+  getProjectExecutionThread(projectId: string): ProjectExecutionThread | undefined {
+    const row = this.database.prepare("SELECT * FROM project_execution_threads WHERE project_id = ?").get(projectId) as SqliteRow | undefined;
+    return row ? { id: String(row.id), projectId: String(row.project_id), providerThreadId: row.provider_thread_id === null ? null : String(row.provider_thread_id), modelOverride: row.model_override === null ? null : String(row.model_override), reasoningEffortOverride: row.reasoning_effort_override === null ? null : String(row.reasoning_effort_override), createdAt: String(row.created_at), updatedAt: String(row.updated_at) } : undefined;
+  }
+
+  updateProjectExecutionThread(thread: ProjectExecutionThread): ProjectExecutionThread {
+    this.database.prepare("UPDATE project_execution_threads SET provider_thread_id = ?, model_override = ?, reasoning_effort_override = ?, updated_at = ? WHERE project_id = ?").run(thread.providerThreadId, thread.modelOverride, thread.reasoningEffortOverride, thread.updatedAt, thread.projectId);
+    return this.getProjectExecutionThread(thread.projectId) as ProjectExecutionThread;
+  }
+
+  saveProjectExecutionMessage(message: ProjectExecutionMessage): ProjectExecutionMessage {
+    this.database.prepare("INSERT OR IGNORE INTO project_execution_messages (id, thread_id, turn_id, client_turn_id, role, content, status, error, created_at, sequence, loop_id, model, reasoning_effort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(message.id, message.threadId, message.turnId, message.clientTurnId, message.role, message.content, message.status, message.error, message.createdAt, message.sequence, message.loopId, message.model, message.reasoningEffort);
+    if (message.clientTurnId) return this.getProjectExecutionMessageByClientTurnId(message.threadId, message.clientTurnId) as ProjectExecutionMessage;
+    return this.listProjectExecutionMessages(message.threadId).find((item) => item.id === message.id) as ProjectExecutionMessage;
+  }
+
+  getProjectExecutionMessageByClientTurnId(threadId: string, clientTurnId: string): ProjectExecutionMessage | undefined {
+    const row = this.database.prepare("SELECT * FROM project_execution_messages WHERE thread_id = ? AND client_turn_id = ? AND role = 'user'").get(threadId, clientTurnId) as SqliteRow | undefined;
+    return row ? this.projectExecutionMessageFromRow(row) : undefined;
+  }
+
+  listProjectExecutionMessages(threadId: string): ProjectExecutionMessage[] {
+    const rows = this.database.prepare("SELECT * FROM project_execution_messages WHERE thread_id = ? ORDER BY sequence ASC").all(threadId) as unknown as SqliteRow[];
+    return rows.map((row) => this.projectExecutionMessageFromRow(row));
+  }
+
+  updateProjectExecutionMessage(message: ProjectExecutionMessage): ProjectExecutionMessage {
+    this.database.prepare("UPDATE project_execution_messages SET content = ?, status = ?, error = ?, loop_id = ?, model = ?, reasoning_effort = ? WHERE id = ? AND thread_id = ?").run(message.content, message.status, message.error, message.loopId, message.model, message.reasoningEffort, message.id, message.threadId);
+    return this.listProjectExecutionMessages(message.threadId).find((item) => item.id === message.id) as ProjectExecutionMessage;
+  }
+
   saveProjectConfigRevision(revision: ProjectConfigRevision): ProjectConfigRevision {
     this.database.prepare("INSERT OR IGNORE INTO project_config_revisions (project_id, version, hash, snapshot_json, created_at) VALUES (?, ?, ?, ?, ?)").run(revision.projectId, revision.version, revision.hash, JSON.stringify(revision.snapshot), revision.createdAt);
     return this.listProjectConfigRevisions(revision.projectId).find((item) => item.version === revision.version) as ProjectConfigRevision;
@@ -2156,7 +2303,7 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   saveExecutionThread(thread: ExecutionThread): ExecutionThread {
-    const safe = { ...thread, journal: thread.journal.map((entry) => ({ ...entry, payload: redactAuditPayload(entry.payload) })) };
+    const safe = { ...thread, journal: thread.journal.map((entry) => ({ ...entry, payload: redactAuditPayload(entry.payload) as ExecutionJournalPayload })) };
     this.database.prepare("INSERT INTO execution_threads (id, run_id, state, journal_json, telemetry_json) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET state=excluded.state, journal_json=excluded.journal_json, telemetry_json=excluded.telemetry_json").run(safe.id, safe.runId, safe.state, JSON.stringify(safe.journal), safe.telemetry ? JSON.stringify(safe.telemetry) : null);
     for (const entry of safe.journal) {
       this.database.prepare("INSERT OR IGNORE INTO execution_journal (execution_thread_id, run_id, sequence, type, occurred_at, payload_json) VALUES (?, ?, ?, ?, ?, ?)").run(safe.id, safe.runId, entry.sequence, entry.type, entry.occurredAt, JSON.stringify(entry.payload));
@@ -2168,7 +2315,7 @@ export class SqlitePipelineStore implements PipelineStore {
     const thread = this.getExecutionThread(input.executionThreadId);
     if (!thread || thread.runId !== input.runId) throw new Error(`ExecutionThread ${input.executionThreadId} does not belong to Run ${input.runId}`);
     const sequence = Number((this.database.prepare("SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM execution_journal WHERE run_id = ?").get(input.runId) as SqliteRow).next_sequence);
-    const entry: ExecutionJournalEntry = { sequence, type: input.type, occurredAt: input.occurredAt ?? this.now(), payload: redactAuditPayload(input.payload) };
+    const entry: ExecutionJournalEntry = { sequence, type: input.type, occurredAt: input.occurredAt ?? this.now(), payload: redactAuditPayload(input.payload) as ExecutionJournalPayload };
     this.database.prepare("INSERT INTO execution_journal (execution_thread_id, run_id, sequence, type, occurred_at, payload_json) VALUES (?, ?, ?, ?, ?, ?)").run(input.executionThreadId, input.runId, entry.sequence, entry.type, entry.occurredAt, JSON.stringify(entry.payload));
     return entry;
   }
@@ -2323,7 +2470,7 @@ export class SqlitePipelineStore implements PipelineStore {
     if (!row) return undefined;
     const journalRows = this.database.prepare("SELECT sequence, type, occurred_at, payload_json FROM execution_journal WHERE execution_thread_id = ? ORDER BY sequence ASC").all(threadId) as unknown as SqliteRow[];
     const journal = journalRows.length > 0
-      ? journalRows.map((entry) => ({ sequence: Number(entry.sequence), type: String(entry.type) as JournalEntryType, occurredAt: String(entry.occurred_at), payload: JSON.parse(String(entry.payload_json)) as Record<string, unknown> }))
+      ? journalRows.map((entry) => ({ sequence: Number(entry.sequence), type: String(entry.type) as JournalEntryType, occurredAt: String(entry.occurred_at), payload: JSON.parse(String(entry.payload_json)) as ExecutionJournalPayload }))
       : JSON.parse(String(row.journal_json)) as ExecutionJournalEntry[];
     const telemetry = typeof row.telemetry_json === "string" && row.telemetry_json.length > 0 ? JSON.parse(row.telemetry_json) as ExecutionTelemetry : null;
     return { id: String(row.id), runId: String(row.run_id), state: String(row.state) as ExecutionThreadState, journal, telemetry };
@@ -2440,6 +2587,24 @@ export class SqlitePipelineStore implements PipelineStore {
       createdAt: String(row.created_at),
       updatedAt: String(row.updated_at),
       archivedAt: row.archived_at === null || row.archived_at === undefined ? null : String(row.archived_at),
+    };
+  }
+
+  private projectExecutionMessageFromRow(row: SqliteRow): ProjectExecutionMessage {
+    return {
+      id: String(row.id),
+      threadId: String(row.thread_id),
+      turnId: String(row.turn_id),
+      clientTurnId: row.client_turn_id === null ? null : String(row.client_turn_id),
+      role: String(row.role) as ProjectExecutionMessage["role"],
+      content: String(row.content),
+      status: String(row.status) as ProjectExecutionTurnStatus,
+      error: row.error === null ? null : String(row.error),
+      createdAt: String(row.created_at),
+      sequence: Number(row.sequence),
+      loopId: row.loop_id === null ? null : String(row.loop_id),
+      model: row.model === null ? null : String(row.model),
+      reasoningEffort: row.reasoning_effort === null ? null : String(row.reasoning_effort),
     };
   }
 
@@ -4052,7 +4217,7 @@ export type ModelRequest = {
 export type ModelEvent =
   | { type: "thread.started"; threadId: string }
   | { type: "text.delta"; text: string; providerThreadId?: string | undefined; providerTurnId?: string | undefined; providerItemId?: string | undefined }
-  | { type: "provider.activity"; phase: "started" | "completed"; itemId: string; itemType: string; title: string | null; summary: string | null; providerThreadId?: string | undefined; providerTurnId?: string | undefined; providerItemId?: string | undefined }
+  | { type: "provider.activity"; phase: "started" | "completed"; itemId: string; itemType: string; title: string | null; summary: string | null; toolName?: string | undefined; serverName?: string | undefined; status?: string | undefined; error?: string | undefined; providerThreadId?: string | undefined; providerTurnId?: string | undefined; providerItemId?: string | undefined }
   | { type: "model.usage"; usage: ModelUsage; scope: ModelUsageScope; providerThreadId?: string | undefined; providerTurnId?: string | undefined }
   | { type: "tool.call"; call: ToolCall }
   | { type: "turn.input_required"; request: ModelInputRequest }
@@ -4730,14 +4895,26 @@ export type RunStatus = "QUEUED" | "STARTING" | "IN_PROGRESS" | "READY_FOR_VERIF
 /** ExecutionThread 的展示状态，承载 Run 的实时模型输出和控制事实。 */
 export type ExecutionThreadState = "ACTIVE" | "PAUSED" | "BLOCKED" | "CANCELLED" | "COMPLETED";
 /** Run journal 中可回放的事件类别。 */
-export type JournalEntryType = "RUN_CREATED" | "HOOK_COMPLETED" | "HOOK_FAILED" | "HOOK_SKIPPED" | "MODEL_OUTPUT" | "TOOL_CALL" | "TASK_PROGRESS" | "USER_GUIDANCE" | "REPAIR" | "VERIFICATION" | "COMMIT" | "RECOVERY";
+export type JournalEntryType = "RUN_CREATED" | "HOOK_COMPLETED" | "HOOK_FAILED" | "HOOK_SKIPPED" | "MODEL_OUTPUT" | "PROVIDER_ACTIVITY" | "TOOL_CALL" | "TASK_PROGRESS" | "USER_GUIDANCE" | "REPAIR" | "VERIFICATION" | "COMMIT" | "RECOVERY";
 
-/** 一条 Execution journal 事实；payload 供详情页诊断而不是控制状态的唯一来源。 */
+/** 跨模型轮次、Plan 任务和 Provider 调用的稳定关联字段。 */
+export type ExecutionJournalCorrelation = {
+  taskId?: string;
+  modelStep?: number;
+  loopId?: string;
+  providerThreadId?: string;
+  providerTurnId?: string;
+  providerItemId?: string;
+  callId?: string;
+};
+export type ExecutionJournalPayload = Record<string, unknown> & ExecutionJournalCorrelation;
+
+/** 一条可回放的 Execution journal 事实；payload 用于会话呈现与断线恢复，不单独决定 Run 控制状态。 */
 export type ExecutionJournalEntry = {
   sequence: number;
   type: JournalEntryType;
   occurredAt: string;
-  payload: Record<string, unknown>;
+  payload: ExecutionJournalPayload;
 };
 
 /** Run 专属的执行消息流聚合。 */
@@ -4793,7 +4970,20 @@ export class LocalGitWorktreeAdapter implements WorkspaceAdapter {
     if (verified.exitCode !== 0) throw new Error(`Base commit ${input.baseCommit} could not be verified`);
     const created = await this.runGit(["worktree", "add", "-b", input.branch, path, input.baseCommit], this.options.projectRoot);
     if (created.exitCode !== 0) throw new Error(`Git worktree could not be created: ${created.stderr}`);
-    return { path, branch: input.branch, baseCommit: input.baseCommit };
+    try {
+      const baseCommit = await snapshotProjectWorkingTree({
+        projectRoot: this.options.projectRoot,
+        worktreeRoot: this.options.worktreeRoot,
+        workspacePath: path,
+        baseCommit: input.baseCommit,
+        runGit: this.runGit,
+      });
+      return { path, branch: input.branch, baseCommit };
+    } catch (error) {
+      await this.runGit(["worktree", "remove", "--force", path], this.options.projectRoot).catch(() => undefined);
+      await this.runGit(["branch", "-D", input.branch], this.options.projectRoot).catch(() => undefined);
+      throw new Error(`Git worktree baseline could not be created: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   async remove(workspace: Workspace): Promise<void> {
@@ -4804,7 +4994,7 @@ export class LocalGitWorktreeAdapter implements WorkspaceAdapter {
 
 function defaultGitCommand(args: string[], cwd: string): Promise<CommandResult> {
   return new Promise((resolveResult) => {
-    execFile("git", args, { cwd }, (error, stdout, stderr) => resolveResult({ exitCode: error ? 1 : 0, stdout: String(stdout), stderr: String(stderr) }));
+    execFile("git", args, { cwd, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => resolveResult({ exitCode: error ? 1 : 0, stdout: String(stdout), stderr: String(stderr) }));
   });
 }
 
@@ -4889,6 +5079,8 @@ export class Scheduler {
     // 同时把 BLOCKED 事实写回 Plan 和 ExecutionThread，便于 UI 显示可诊断原因。
     const workspace = await workspaceAdapter.create({ projectId: plan.projectId, runId: run.id, branch: run.branch, baseCommit: run.baseCommit });
     run.workspacePath = workspace.path;
+    run.baseCommit = workspace.baseCommit;
+    this.options.store.saveRun(run);
     const startResult = await hookRunner.runStart(executionHooks.start, { projectId: plan.projectId, runId: run.id, workspacePath: workspace.path, branch: workspace.branch, baseCommit: workspace.baseCommit, exitReason: "running" });
     this.recordHookExecutions(run.id, startResult);
     if (startResult.status === "failed") {
@@ -5010,9 +5202,10 @@ export class Scheduler {
     const run = this.run(runId);
     const thread = this.thread(run.executionThreadId);
     if (thread.state === "CANCELLED" || thread.state === "COMPLETED") throw new Error(`Run ${runId} is no longer accepting guidance`);
-    this.append(thread.id, "USER_GUIDANCE", { content, runId });
+    const taskId = this.recordedActiveTaskId(thread.journal);
+    this.append(thread.id, "USER_GUIDANCE", { content, runId, ...(taskId ? { taskId } : {}) });
     this.options.store.appendEvent({ type: "run.guidance.added", aggregateId: run.id, payload: { executionThreadId: thread.id } });
-    return thread;
+    return this.thread(thread.id);
   }
 
   /** 读取 Run 的 ExecutionThread。 */
@@ -5035,6 +5228,20 @@ export class Scheduler {
     const thread = this.options.store.getExecutionThread(threadId) ?? this.threads.get(threadId);
     if (!thread) return;
     this.options.store.appendExecutionJournal({ executionThreadId: thread.id, runId: thread.runId, type, payload });
+  }
+
+  private recordedActiveTaskId(journal: ExecutionJournalEntry[]): string | undefined {
+    let activeTaskId: string | undefined;
+    for (const entry of journal) {
+      if (entry.type !== "TASK_PROGRESS") continue;
+      if (entry.payload.action === "task-lifecycle") {
+        const taskId = typeof entry.payload.taskId === "string" ? entry.payload.taskId : undefined;
+        if (entry.payload.state === "IN_PROGRESS") activeTaskId = taskId;
+        else if (taskId && activeTaskId === taskId) activeTaskId = undefined;
+      }
+      if (entry.payload.action === "task-status") activeTaskId = typeof entry.payload.activeTaskId === "string" ? entry.payload.activeTaskId : undefined;
+    }
+    return activeTaskId;
   }
 
   private recordHookExecutions(runId: string, result: HookRunResult): void {

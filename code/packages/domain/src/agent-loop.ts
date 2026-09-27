@@ -43,7 +43,7 @@ export type AgentStepType =
 /** Loop 的持久化聚合；providerThreadId/providerTurnId 用于恢复和取消外部会话。 */
 export type AgentLoop = {
   id: string;
-  ownerType: "explorer-turn" | "run";
+  ownerType: "explorer-turn" | "project-execution-turn" | "run";
   ownerId: string;
   role: "explorer" | "executor";
   mode: AgentLoopMode;
@@ -95,6 +95,7 @@ const TERMINAL_DIAGNOSTIC_MESSAGES: Record<string, string> = {
   CANCELLED: "本轮已取消",
   MAX_STEPS_EXCEEDED: "已达到 Provider Turn 上限",
   MAX_DURATION_EXCEEDED: "已超过 Agent Loop 时间上限",
+  PROVIDER_COMMAND_TIMEOUT: "Provider 命令在规定时间内未完成",
   NO_PROGRESS: "连续多个 Provider Turn 没有产生有效进展",
   MODEL_CAPABILITY_UNAVAILABLE: "当前模型不支持此 Agent Loop 能力",
   REPEATED_TOOL_CALL: "检测到重复工具调用，已安全停止",
@@ -155,6 +156,8 @@ export type AgentLoopInput = {
   mode: AgentLoopMode;
   maxSteps: number;
   maxDurationMs?: number;
+  /** Delegated provider shell commands must finish within this duration. */
+  providerCommandTimeoutMs?: number;
   maxRepeatedToolCalls?: number;
   maxNoProgressSteps?: number;
   modelRequest: Omit<ModelRequest, "role">;
@@ -229,6 +232,7 @@ export class AgentLoopEngine implements AgentLoopRunner {
   }>();
   private readonly controllers = new Map<string, AbortController>();
   private readonly deadlineTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly providerCommandTimers = new Map<string, Map<string, ReturnType<typeof setTimeout>>>();
   private readonly callbacks = new Map<string, (event: AgentLoopEvent) => void>();
   private readonly options: Required<AgentLoopEngineOptions>;
 
@@ -310,6 +314,7 @@ export class AgentLoopEngine implements AgentLoopRunner {
     const loop = this.get(loopId);
     if (isTerminal(loop.state)) return loop;
     this.controllers.get(loopId)?.abort();
+    this.clearProviderCommandTimeouts(loopId);
     const pending = this.pendingInputs.get(loopId);
     pending?.reject(new Error("AgentLoop input was cancelled"));
     pending?.fail(new Error("AgentLoop input was cancelled"));
@@ -389,7 +394,7 @@ export class AgentLoopEngine implements AgentLoopRunner {
       loop = { ...loop, stepCount: loop.stepCount + 1 };
       this.store.updateAgentLoop(loop);
       this.appendStep(loop, "MODEL_STARTED", "RUNNING", { step: loop.stepCount });
-      this.emit(loop, "agent.step.started", { step: loop.stepCount });
+      this.emit(loop, "agent.step.started", { step: loop.stepCount, ...(loop.providerThreadId ? { providerThreadId: loop.providerThreadId } : {}), ...(loop.providerTurnId ? { providerTurnId: loop.providerTurnId } : {}) });
       let stepText = "";
       let progress = false;
       try {
@@ -410,8 +415,15 @@ export class AgentLoopEngine implements AgentLoopRunner {
             progress = true;
             loop = { ...loop, ...(event.providerThreadId ? { providerThreadId: event.providerThreadId } : {}), ...(event.providerTurnId ? { providerTurnId: event.providerTurnId } : {}) };
             this.store.updateAgentLoop(loop);
-            this.appendStep(loop, "PROVIDER_ACTIVITY", event.phase === "completed" ? "COMPLETED" : "RUNNING", { phase: event.phase, itemId: event.itemId, itemType: event.itemType, title: event.title, summary: event.summary, providerItemId: event.providerItemId ?? event.itemId, providerControlled: true });
-            this.emit(loop, "agent.provider.activity", { phase: event.phase, itemId: event.itemId, itemType: event.itemType, title: event.title, summary: event.summary, ...(event.providerThreadId ? { providerThreadId: event.providerThreadId } : {}), ...(event.providerTurnId ? { providerTurnId: event.providerTurnId } : {}), ...(event.providerItemId ? { providerItemId: event.providerItemId } : {}) });
+            if (event.itemType === "commandExecution") {
+              if (event.phase === "completed") this.clearProviderCommandTimeout(initial.id, event.itemId);
+              else if (input.providerCommandTimeoutMs !== undefined) this.startProviderCommandTimeout(initial.id, event.itemId, input.providerCommandTimeoutMs, input.modelRequest.cwd ?? process.cwd(), controller);
+            }
+            const commandContext = event.itemType === "commandExecution"
+              ? { cwd: input.modelRequest.cwd ?? process.cwd(), timeoutMs: input.providerCommandTimeoutMs ?? null }
+              : {};
+            this.appendStep(loop, "PROVIDER_ACTIVITY", event.phase === "completed" ? "COMPLETED" : "RUNNING", { phase: event.phase, itemId: event.itemId, itemType: event.itemType, title: event.title, summary: event.summary, ...commandContext, providerItemId: event.providerItemId ?? event.itemId, providerControlled: true });
+            this.emit(loop, "agent.provider.activity", { phase: event.phase, itemId: event.itemId, itemType: event.itemType, title: event.title, summary: event.summary, ...commandContext, ...(event.toolName ? { toolName: event.toolName } : {}), ...(event.serverName ? { serverName: event.serverName } : {}), ...(event.status ? { status: event.status } : {}), ...(event.error ? { error: event.error } : {}), ...(event.providerThreadId ? { providerThreadId: event.providerThreadId } : {}), ...(event.providerTurnId ? { providerTurnId: event.providerTurnId } : {}), ...(event.providerItemId ? { providerItemId: event.providerItemId } : {}) });
           }
           if (event.type === "model.usage") {
             loop = { ...loop, ...(event.providerThreadId ? { providerThreadId: event.providerThreadId } : {}), ...(event.providerTurnId ? { providerTurnId: event.providerTurnId } : {}) };
@@ -425,7 +437,7 @@ export class AgentLoopEngine implements AgentLoopRunner {
             const count = (repeatedCalls.get(signature) ?? 0) + 1;
             repeatedCalls.set(signature, count);
             this.appendStep(loop, "TOOL_REQUESTED", count > maxRepeatedToolCalls ? "FAILED" : "RUNNING", { callId: event.call.callId, tool: event.call.tool, delegatedToProvider: input.mode === "provider-controlled" });
-            this.emit(loop, "agent.tool.requested", { callId: event.call.callId, tool: event.call.tool, delegatedToProvider: input.mode === "provider-controlled" });
+            this.emit(loop, "agent.tool.requested", { callId: event.call.callId, tool: event.call.tool, delegatedToProvider: input.mode === "provider-controlled", ...(loop.providerThreadId ? { providerThreadId: loop.providerThreadId } : {}), ...(loop.providerTurnId ? { providerTurnId: loop.providerTurnId } : {}) });
             if (count > maxRepeatedToolCalls) { this.block(initial.id, "REPEATED_TOOL_CALL"); return; }
             this.emit(loop, "agent.tool.running", { callId: event.call.callId, tool: event.call.tool, delegatedToProvider: input.mode === "provider-controlled" });
             if (input.mode === "provider-controlled") continue;
@@ -435,7 +447,7 @@ export class AgentLoopEngine implements AgentLoopRunner {
             const resultType = result.allowed ? "TOOL_COMPLETED" : result.status === "NEEDS_RECONCILIATION" ? "TOOL_NEEDS_RECONCILIATION" : result.status === "FAILED" ? "TOOL_FAILED" : "TOOL_DENIED";
             const eventType = resultType === "TOOL_COMPLETED" ? "agent.tool.completed" : resultType === "TOOL_NEEDS_RECONCILIATION" ? "agent.tool.needs_reconciliation" : resultType === "TOOL_FAILED" ? "agent.tool.failed" : "agent.tool.denied";
             this.appendStep(loop, resultType, result.allowed ? "COMPLETED" : resultType === "TOOL_DENIED" ? "DENIED" : "FAILED", { callId: event.call.callId, reason: result.reason, result: result.result });
-            this.emit(loop, eventType, { callId: event.call.callId, reason: result.reason });
+            this.emit(loop, eventType, { callId: event.call.callId, tool: event.call.tool, reason: result.reason, ...(loop.providerThreadId ? { providerThreadId: loop.providerThreadId } : {}), ...(loop.providerTurnId ? { providerTurnId: loop.providerTurnId } : {}) });
             if (resultType === "TOOL_NEEDS_RECONCILIATION") { this.needsReconciliation(initial.id, result.reason ?? "UNKNOWN_TOOL_RESULT"); return; }
             messages.push({ role: "assistant", content: JSON.stringify({ toolCall: event.call }) }, { role: "tool", content: JSON.stringify(result), toolCallId: event.call.callId });
           }
@@ -476,7 +488,7 @@ export class AgentLoopEngine implements AgentLoopRunner {
       if (isTerminal(loop.state)) return;
       if (timedOut || Date.now() - startedMs >= maxDurationMs) { this.block(initial.id, "MAX_DURATION_EXCEEDED"); return; }
       this.appendStep(loop, "MODEL_COMPLETED", "COMPLETED", { step: loop.stepCount });
-      this.emit(loop, "agent.model.completed", { step: loop.stepCount });
+      this.emit(loop, "agent.model.completed", { step: loop.stepCount, ...(loop.providerThreadId ? { providerThreadId: loop.providerThreadId } : {}), ...(loop.providerTurnId ? { providerTurnId: loop.providerTurnId } : {}) });
       let decision: GateDecision;
       try {
         decision = await (input.gate ?? { evaluate: () => ({ action: "complete", reason: "MODEL_COMPLETED" } as GateDecision) }).evaluate({ content: fullText });
@@ -552,10 +564,39 @@ export class AgentLoopEngine implements AgentLoopRunner {
   }
 
   private clearDeadline(loopId: string): void { const timer = this.deadlineTimers.get(loopId); if (timer) clearTimeout(timer); this.deadlineTimers.delete(loopId); }
-  private complete(loopId: string, reason: string): void { this.clearDeadline(loopId); const completedAt = this.store.now(); const loop = { ...this.get(loopId), state: "COMPLETED" as const, completedAt }; const durationMs = loop.startedAt ? Math.max(0, Date.now() - Date.parse(loop.startedAt)) : null; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_COMPLETED", "COMPLETED", { reason, completedAt, durationMs }); this.emit(loop, "agent.loop.completed", { reason, completedAt, durationMs }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); }
-  private block(loopId: string, reason: string): void { this.clearDeadline(loopId); const completedAt = this.store.now(); const loop = { ...this.get(loopId), state: "BLOCKED" as const, completedAt, checkpointJson: JSON.stringify({ reason }) }; const durationMs = loop.startedAt ? Math.max(0, Date.now() - Date.parse(loop.startedAt)) : null; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_FAILED", "FAILED", { reason, completedAt, durationMs }); this.emit(loop, "agent.loop.failed", { reason, completedAt, durationMs }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); }
+  private clearProviderCommandTimeout(loopId: string, itemId: string): void {
+    const timers = this.providerCommandTimers.get(loopId);
+    const timer = timers?.get(itemId);
+    if (timer) clearTimeout(timer);
+    timers?.delete(itemId);
+    if (timers?.size === 0) this.providerCommandTimers.delete(loopId);
+  }
+  private clearProviderCommandTimeouts(loopId: string): void {
+    const timers = this.providerCommandTimers.get(loopId);
+    if (timers) for (const timer of timers.values()) clearTimeout(timer);
+    this.providerCommandTimers.delete(loopId);
+  }
+  private startProviderCommandTimeout(loopId: string, itemId: string, timeoutMs: number, cwd: string, controller: AbortController): void {
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || !itemId) return;
+    this.clearProviderCommandTimeout(loopId, itemId);
+    const timers = this.providerCommandTimers.get(loopId) ?? new Map<string, ReturnType<typeof setTimeout>>();
+    const timer = setTimeout(() => {
+      const current = this.get(loopId);
+      if (isTerminal(current.state)) return;
+      this.block(loopId, "PROVIDER_COMMAND_TIMEOUT", { itemId, itemType: "commandExecution", timeoutMs, cwd });
+      controller.abort();
+      if (current.providerThreadId && current.providerTurnId) {
+        void this.model.cancel({ conversationId: current.id, providerThreadId: current.providerThreadId, providerTurnId: current.providerTurnId }).catch(() => undefined);
+      }
+    }, timeoutMs);
+    timers.set(itemId, timer);
+    this.providerCommandTimers.set(loopId, timers);
+  }
+  private complete(loopId: string, reason: string): void { this.clearDeadline(loopId); this.clearProviderCommandTimeouts(loopId); const completedAt = this.store.now(); const loop = { ...this.get(loopId), state: "COMPLETED" as const, completedAt }; const durationMs = loop.startedAt ? Math.max(0, Date.now() - Date.parse(loop.startedAt)) : null; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_COMPLETED", "COMPLETED", { reason, completedAt, durationMs }); this.emit(loop, "agent.loop.completed", { reason, completedAt, durationMs }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); }
+  private block(loopId: string, reason: string, details: Record<string, unknown> = {}): void { this.clearDeadline(loopId); this.clearProviderCommandTimeouts(loopId); const completedAt = this.store.now(); const loop = { ...this.get(loopId), state: "BLOCKED" as const, completedAt, checkpointJson: JSON.stringify({ reason, ...details }) }; const durationMs = loop.startedAt ? Math.max(0, Date.now() - Date.parse(loop.startedAt)) : null; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_FAILED", "FAILED", { reason, ...details, completedAt, durationMs }); this.emit(loop, "agent.loop.failed", { reason, ...details, completedAt, durationMs }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); }
   private fail(loopId: string, error: string): void {
     this.clearDeadline(loopId);
+    this.clearProviderCommandTimeouts(loopId);
     const code = diagnosticCode(error);
     const persistedError = code === "DATABASE_BUSY" ? code : error;
     const completedAt = this.store.now();
@@ -568,7 +609,7 @@ export class AgentLoopEngine implements AgentLoopRunner {
     this.controllers.delete(loopId);
     this.callbacks.delete(loopId);
   }
-  private needsReconciliation(loopId: string, reason: string): void { this.clearDeadline(loopId); const completedAt = this.store.now(); const loop = { ...this.get(loopId), state: "NEEDS_RECONCILIATION" as const, completedAt, checkpointJson: JSON.stringify({ reason }) }; const durationMs = loop.startedAt ? Math.max(0, Date.now() - Date.parse(loop.startedAt)) : null; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_FAILED", "NEEDS_RECONCILIATION", { reason, completedAt, durationMs }); this.emit(loop, "agent.loop.recovery_required", { reason, completedAt, durationMs }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); }
+  private needsReconciliation(loopId: string, reason: string): void { this.clearDeadline(loopId); this.clearProviderCommandTimeouts(loopId); const completedAt = this.store.now(); const loop = { ...this.get(loopId), state: "NEEDS_RECONCILIATION" as const, completedAt, checkpointJson: JSON.stringify({ reason }) }; const durationMs = loop.startedAt ? Math.max(0, Date.now() - Date.parse(loop.startedAt)) : null; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_FAILED", "NEEDS_RECONCILIATION", { reason, completedAt, durationMs }); this.emit(loop, "agent.loop.recovery_required", { reason, completedAt, durationMs }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); }
 }
 
 function isTerminal(state: AgentLoopState): boolean {

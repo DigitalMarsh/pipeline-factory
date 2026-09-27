@@ -8,13 +8,18 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { InMemoryPipelineStore, LifecycleHookRunner, MergeService, PlanService, ProjectService, Scheduler, type AgentLoop, type DomainEvent, type ExecutionTelemetry, type ModelGateway, type VerificationCommandExecutor } from "@pipeline-factory/domain";
+import { InMemoryPipelineStore, LifecycleHookRunner, MergeService, PlanService, ProjectService, Scheduler, type AgentLoop, type DomainEvent, type ExecutionTelemetry, type ModelEvent, type ModelGateway, type ModelRequest, type VerificationCommandExecutor } from "@pipeline-factory/domain";
 import { createApp, sanitizeExplorerRequirementStatusEvent } from "./server.js";
 
 const apps: Array<Awaited<ReturnType<typeof createApp>>> = [];
 
 function createTestProject(store: InMemoryPipelineStore, id = "project-1") {
   return new ProjectService(store).create({ id, name: id, repoRoot: `/repo/${id}`, defaultBranch: "main", worktreeRoot: `/tmp/${id}-worktrees`, settings: { commands: [{ commandId: "project.test", argv: ["true"] }, { commandId: "project.typecheck", argv: ["true"] }] } });
+}
+
+async function waitUntil(check: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 200 && !check(); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 2));
+  expect(check()).toBe(true);
 }
 
 afterEach(async () => {
@@ -112,6 +117,51 @@ describe("Pipeline Factory v4 API", () => {
 
     expect(response.statusCode).toBe(404);
     expect(response.json()).toMatchObject({ code: "PROJECT_NOT_FOUND" });
+  });
+
+  it("persists the project execution thread and its preferences without creating a Plan or Run", async () => {
+    const store = new InMemoryPipelineStore();
+    createTestProject(store, "project-execution-api");
+    const requests: ModelRequest[] = [];
+    const model: ModelGateway = {
+      configFor: () => ({ model: "gpt-5.6-luna" }),
+      async *stream(request) {
+        requests.push(request);
+        yield { type: "thread.started", threadId: "provider-project-execution" } satisfies ModelEvent;
+        yield { type: "text.delta", text: "finished", providerThreadId: "provider-project-execution", providerTurnId: "turn-1", providerItemId: "item-1" } satisfies ModelEvent;
+        yield { type: "turn.completed" } satisfies ModelEvent;
+      },
+      async answerUserInput() { return undefined; },
+      async cancel() { return undefined; },
+    };
+    const app = createApp({ store, model, seed: false });
+    apps.push(app);
+
+    const initial = await app.inject({ method: "GET", url: "/api/v4/projects/project-execution-api/execution-thread" });
+    const reopened = await app.inject({ method: "GET", url: "/api/v4/projects/project-execution-api/execution-thread" });
+    expect(initial.statusCode).toBe(200);
+    expect(reopened.json().thread.id).toBe(initial.json().thread.id);
+
+    const invalidPreference = await app.inject({ method: "PATCH", url: "/api/v4/projects/project-execution-api/execution-thread/preferences", payload: { model: "arbitrary-model", reasoningEffort: null } });
+    expect(invalidPreference.statusCode).toBe(422);
+    expect(invalidPreference.json()).toMatchObject({ code: "PROJECT_EXECUTION_MODEL_INVALID" });
+
+    const preference = await app.inject({ method: "PATCH", url: "/api/v4/projects/project-execution-api/execution-thread/preferences", payload: { model: "gpt-5.6-sol", reasoningEffort: "high" } });
+    expect(preference.statusCode).toBe(200);
+    expect(preference.json().thread).toMatchObject({ modelOverride: "gpt-5.6-sol", reasoningEffortOverride: "high" });
+    const submitted = await app.inject({ method: "POST", url: "/api/v4/projects/project-execution-api/execution-thread/turns", payload: { content: "直接修复", clientTurnId: "api-turn-1" } });
+    expect(submitted.statusCode).toBe(200);
+    const duplicate = await app.inject({ method: "POST", url: "/api/v4/projects/project-execution-api/execution-thread/turns", payload: { content: "重试请求", clientTurnId: "api-turn-1" } });
+    expect(duplicate.json().assistant.id).toBe(submitted.json().assistant.id);
+    await waitUntil(() => store.listProjectExecutionMessages(initial.json().thread.id).find((message) => message.id === submitted.json().assistant.id)?.status === "COMPLETED");
+
+    const snapshot = await app.inject({ method: "GET", url: "/api/v4/projects/project-execution-api/execution-thread" });
+    const scopedEvents = await app.inject({ method: "GET", url: "/api/v4/workbench/events?projectId=project-execution-api" });
+    expect(snapshot.json().messages).toContainEqual(expect.objectContaining({ id: submitted.json().assistant.id, model: "gpt-5.6-sol", reasoningEffort: "high", content: "finished" }));
+    expect(scopedEvents.json().items).toEqual(expect.arrayContaining([expect.objectContaining({ type: "project.execution.turn.completed", aggregateId: initial.json().thread.id })]));
+    expect(requests[0]).toMatchObject({ cwd: "/repo/project-execution-api", modelConfig: { model: "gpt-5.6-sol", reasoningEffort: "high" } });
+    expect(store.listPlans().filter((plan) => plan.projectId === "project-execution-api")).toEqual([]);
+    expect(store.listRuns()).toEqual([]);
   });
 
   it("deletes an Explorer and returns the replacement thread", async () => {

@@ -188,7 +188,7 @@ a { color: inherit; text-decoration: none; }
 .execution-message:last-child { border-bottom: 0; }
 .execution-message-avatar { display: grid; place-items: center; width: 28px; height: 28px; flex: 0 0 28px; border-radius: 50%; background: #eef3fb; color: #5479bf; font-size: 9px; font-weight: 800; }
 .execution-message-guidance .execution-message-avatar { background: #e8f0ff; color: #4774cf; }
-.execution-message-activity .execution-message-avatar { background: #f2f5f9; color: #8997a8; }
+.execution-message-activity .execution-message-avatar, .execution-message-tool .execution-message-avatar { background: #f2f5f9; color: #8997a8; }
 .execution-message-body { min-width: 0; flex: 1; }
 .execution-message-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: #a0aaba; font-size: 9px; }
 .execution-message-meta strong { color: #52657f; font-size: 10px; }
@@ -198,12 +198,26 @@ a { color: inherit; text-decoration: none; }
 .execution-message-guidance { flex-direction: row-reverse; }
 .execution-message-guidance .execution-message-body { flex: 0 1 min(680px, 84%); }
 .execution-message-guidance .execution-message-meta { justify-content: flex-end; }
-.execution-message-activity { margin: 4px 0; padding: 10px 12px; border: 1px solid #edf0f4; border-radius: 7px; background: #fbfcfe; }
-.execution-message-activity .execution-message-avatar { margin-top: 1px; }
-.execution-message-activity.running { border-color: #dbe7ff; background: #f8fbff; }
+.execution-message-activity, .execution-message-tool { margin: 4px 0; padding: 10px 12px; border: 1px solid #edf0f4; border-radius: 7px; background: #fbfcfe; }
+.execution-message-activity .execution-message-avatar, .execution-message-tool .execution-message-avatar { margin-top: 1px; }
+.execution-message-activity.running, .execution-message-tool.running { border-color: #dbe7ff; background: #f8fbff; }
 .execution-message-activity.waiting { border-color: #f2e4c7; background: #fffaf0; }
-.execution-message-activity.failed { border-color: #f0d9dc; background: #fff8f8; }
-.execution-activity-detail { color: #7d8b9d !important; font-size: 10px !important; }
+.execution-message-activity.failed, .execution-message-tool.failed { border-color: #f0d9dc; background: #fff8f8; }
+.execution-message-activity.unknown, .execution-message-tool.unknown { border-color: #eee4c8; background: #fffdf6; }
+.execution-activity-detail { color: #65768d !important; font-size: 10px !important; line-height: 1.55 !important; overflow-wrap: anywhere; }
+.execution-message-note { display: block; margin-top: 5px; color: #95a1b1; font-size: 9px; }
+.execution-message-meta .agent-chip { color: #627aa8; }
+.execution-message-unknown .execution-message-meta .agent-chip { color: #9b7b31; }
+.execution-conversation-group { margin-bottom: 14px; }
+.execution-conversation-group-task { margin-left: 39px; padding-left: 14px; border-left: 2px solid #e8edf4; }
+.execution-conversation-group-task.selected { border-left-color: #78a3ec; }
+.execution-task-stream-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0 3px; padding: 9px 10px; border-radius: 6px; background: #f7f9fc; color: #52657f; }
+.execution-task-stream-heading strong { flex: 1; min-width: 0; font-size: 11px; }
+.execution-task-stream-step { color: #9aa7b8; font-size: 8px; font-weight: 800; letter-spacing: .09em; }
+.execution-task-stream-status { color: #7c8da4; font-size: 9px; }
+.execution-task-stream-heading small { flex: 1 0 100%; color: #9a7478; font-size: 9px; }
+.execution-task-stream-empty { margin: 0; padding: 8px 10px; color: #9aa6b6; font-size: 10px; }
+.execution-unassigned-heading { border: 1px dashed #e0e6ee; background: #fcfdff; }
 .execution-message.failed .execution-message-meta strong { color: #c65863; }
 .execution-message-plan { align-items: flex-start; }
 .execution-message-plan .execution-message-avatar { background: #eaf1ff; color: #4b7df0; }
@@ -250,10 +264,6 @@ a { color: inherit; text-decoration: none; }
 .diagnostics-teaser { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; padding: 17px 20px; border: 1px dashed #d7e0ec; border-radius: 8px; background: #fbfcfe; }
 .diagnostics-teaser h2 { margin: 5px 0 4px; color: #52657f; font-size: 14px; }
 .diagnostics-teaser p { margin: 0; color: #8996a8; font-size: 10px; }
-.diagnostic-drawer-summary { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; color: #7d8b9e; font-size: 10px; }
-.diagnostic-drawer-summary span { padding: 6px 9px; border-radius: 999px; background: #f3f6fa; }
-.diagnostic-section { margin-bottom: 18px; overflow: hidden; border: 1px solid #e3e8ef; border-radius: 8px; background: #fff; }
-.diagnostic-section .journal-heading { background: #fbfcfe; }
 .run-blocked-notice { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 18px; padding: 12px 15px; border: 1px solid #f0d7da; border-radius: 7px; background: #fff8f8; color: #c45b65; }
 .run-blocked-notice > svg { flex: 0 0 auto; margin-top: 2px; }
 .run-blocked-notice strong, .run-blocked-notice span { display: block; }
@@ -694,7 +704,7 @@ a { color: inherit; text-decoration: none; }
 .thread-action-popper .el-dropdown-menu__item.thread-action-danger .thread-action-menu-item svg { color: #d26b76; }
 .thread-action-popper .el-dropdown-menu__item.thread-action-danger:hover, .thread-action-popper .el-dropdown-menu__item.thread-action-danger:focus { background: #fff0f2; color: #b63f4d; }
 .thread-action-popper .el-dropdown-menu__item.thread-action-danger:hover .thread-action-menu-item svg, .thread-action-popper .el-dropdown-menu__item.thread-action-danger:focus .thread-action-menu-item svg { color: #b63f4d; }
-.execution-telemetry-panel { margin-bottom: 18px; border: 1px solid #dfe6ef; border-radius: 8px; background: linear-gradient(135deg, #ffffff 0%, #f8fbff 100%); box-shadow: 0 8px 22px rgba(35, 64, 102, .04); }.execution-telemetry-heading { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px 13px; }.execution-telemetry-heading h2 { margin: 5px 0 0; color: #1c2a3d; font-size: 15px; }.telemetry-source { color: #6d7c91; font-size: 10px; }.execution-telemetry-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin: 0 12px 12px; overflow: hidden; border: 1px solid #e5ebf2; border-radius: 6px; background: #e5ebf2; }.execution-telemetry-card { min-height: 86px; padding: 15px; background: rgba(255, 255, 255, .84); }.execution-telemetry-card span, .telemetry-detail-grid span { display: block; margin-bottom: 9px; color: #9aa6b6; font-size: 9px; font-weight: 800; letter-spacing: .08em; }.execution-telemetry-card strong { display: block; overflow: hidden; color: #243b5b; font: 700 14px ui-monospace, monospace; text-overflow: ellipsis; white-space: nowrap; }.execution-telemetry-card small { display: block; margin-top: 7px; overflow: hidden; color: #96a2b2; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }.telemetry-diagnostic-note { margin: 0 20px 15px; color: #7e8b9d; font-size: 11px; line-height: 1.6; }.telemetry-detail-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; margin: 0 20px 15px; overflow: hidden; border: 1px solid #e7ebf0; border-radius: 6px; background: #e7ebf0; }.telemetry-detail-grid > div { padding: 12px; background: #fff; }.telemetry-detail-grid strong { color: #334963; font: 12px ui-monospace, monospace; }.telemetry-diagnostic-meta { display: flex; flex-wrap: wrap; gap: 12px 18px; padding: 0 20px 18px; color: #8c99aa; font-size: 10px; }.telemetry-diagnostic-meta code { color: #526987; }.telemetry-diagnostic-section .journal-heading { padding-bottom: 15px; }
+.execution-telemetry-panel { margin-bottom: 18px; border: 1px solid #dfe6ef; border-radius: 8px; background: linear-gradient(135deg, #ffffff 0%, #f8fbff 100%); box-shadow: 0 8px 22px rgba(35, 64, 102, .04); }.execution-telemetry-heading { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px 13px; }.execution-telemetry-heading h2 { margin: 5px 0 0; color: #1c2a3d; font-size: 15px; }.telemetry-source { color: #6d7c91; font-size: 10px; }.execution-telemetry-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin: 0 12px 12px; overflow: hidden; border: 1px solid #e5ebf2; border-radius: 6px; background: #e5ebf2; }.execution-telemetry-card { min-height: 86px; padding: 15px; background: rgba(255, 255, 255, .84); }.execution-telemetry-card span, .telemetry-detail-grid span { display: block; margin-bottom: 9px; color: #9aa6b6; font-size: 9px; font-weight: 800; letter-spacing: .08em; }.execution-telemetry-card strong { display: block; overflow: hidden; color: #243b5b; font: 700 14px ui-monospace, monospace; text-overflow: ellipsis; white-space: nowrap; }.execution-telemetry-card small { display: block; margin-top: 7px; overflow: hidden; color: #96a2b2; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }.telemetry-detail-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; margin: 0 20px 15px; overflow: hidden; border: 1px solid #e7ebf0; border-radius: 6px; background: #e7ebf0; }.telemetry-detail-grid > div { padding: 12px; background: #fff; }.telemetry-detail-grid strong { color: #334963; font: 12px ui-monospace, monospace; }.telemetry-detail-grid-compact { margin: 0 12px 12px; grid-template-columns: repeat(4, minmax(0, 1fr)); }.telemetry-detail-grid-compact > div { min-width: 0; padding: 8px; }.telemetry-detail-grid-compact strong { display: block; overflow-wrap: anywhere; font-size: 10px; }
 
 /* Execution detail header: compact status cards keep the conversation as the primary surface. */
 .detail-page .detail-heading { position: sticky; top: 0; z-index: 4; display: grid; grid-template-columns: minmax(220px, .9fr) repeat(3, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(58px, auto)); gap: 6px 12px; align-items: stretch; margin: -8px -8px 20px; padding: 8px 8px 18px; border-bottom: 1px solid rgba(227, 232, 239, .86); background: rgba(248, 250, 252, .96); backdrop-filter: blur(10px); }
@@ -747,6 +757,7 @@ a { color: inherit; text-decoration: none; }
   .execution-header-status-details .execution-telemetry-grid-compact { grid-template-columns: 1fr; }
   .execution-header-detail-footer { align-items: flex-start; flex-direction: column; }
   .run-detail-page { --run-detail-gutter: 18px; --run-detail-content-gutter: 18px; padding-inline: 18px; padding-bottom: 0; }
+  .execution-conversation-group-task { margin-left: 0; padding-left: 10px; }
   .execution-message-guidance .execution-message-body { flex-basis: 92%; }
   .execution-plan-message-scope { grid-template-columns: 1fr; }
 }

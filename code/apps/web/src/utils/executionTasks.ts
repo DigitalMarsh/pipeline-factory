@@ -14,6 +14,9 @@ type TaskProgressPayload = {
   activeTaskId?: unknown;
   blockedTaskId?: unknown;
   blockedReason?: unknown;
+  taskId?: unknown;
+  state?: unknown;
+  reason?: unknown;
 };
 
 type Report = TaskProgressPayload;
@@ -24,12 +27,14 @@ export function projectExecutionTasks(tasks: PlanTask[], journal: ExecutionJourn
     .filter((task): task is PlanTask & { id: string } => typeof task.id === "string" && task.id.trim().length > 0)
     .map((task) => ({ ...task, id: task.id, status: "PENDING" as ExecutionTaskStatus, evidenceSequence: null, blockedReason: null }));
   const byId = new Map(projected.map((task) => [task.id, task]));
+  let hasTaskProgressFact = false;
 
   const applyReport = (report: Report, sequence: number) => {
     const completed = stringArray(report.completedTaskIds);
     for (const id of completed) {
       const task = byId.get(id);
       if (task) {
+        hasTaskProgressFact = true;
         task.status = "DONE";
         task.evidenceSequence = sequence;
         task.blockedReason = null;
@@ -38,6 +43,7 @@ export function projectExecutionTasks(tasks: PlanTask[], journal: ExecutionJourn
     if (typeof report.activeTaskId === "string") {
       const task = byId.get(report.activeTaskId);
       if (task && task.status !== "DONE") {
+        hasTaskProgressFact = true;
         task.status = "IN_PROGRESS";
         task.evidenceSequence = sequence;
       }
@@ -45,6 +51,7 @@ export function projectExecutionTasks(tasks: PlanTask[], journal: ExecutionJourn
     if (typeof report.blockedTaskId === "string") {
       const task = byId.get(report.blockedTaskId);
       if (task && task.status !== "DONE") {
+        hasTaskProgressFact = true;
         task.status = "BLOCKED";
         task.evidenceSequence = sequence;
         task.blockedReason = typeof report.blockedReason === "string" ? report.blockedReason : null;
@@ -54,7 +61,22 @@ export function projectExecutionTasks(tasks: PlanTask[], journal: ExecutionJourn
 
   // Newer runs receive a compact, structured TASK_PROGRESS fact.
   for (const entry of journal) {
-    if (entry.type === "TASK_PROGRESS" && entry.payload.action === "task-status") applyReport(entry.payload, entry.sequence);
+    if (entry.type !== "TASK_PROGRESS") continue;
+    if (entry.payload.action === "task-status") {
+      applyReport(entry.payload, entry.sequence);
+      continue;
+    }
+    if (entry.payload.action === "task-lifecycle" && typeof entry.payload.taskId === "string") {
+      const task = byId.get(entry.payload.taskId);
+      if (!task) continue;
+      const state = entry.payload.state;
+      if (state === "IN_PROGRESS" || state === "DONE" || state === "BLOCKED") {
+        hasTaskProgressFact = true;
+        task.status = state;
+        task.evidenceSequence = entry.sequence;
+        task.blockedReason = state === "BLOCKED" ? typeof entry.payload.reason === "string" ? entry.payload.reason : null : null;
+      }
+    }
   }
 
   // Older runs only contain the report protocol in MODEL_OUTPUT. Keep this as a read-only compatibility path.
@@ -75,29 +97,29 @@ export function projectExecutionTasks(tasks: PlanTask[], journal: ExecutionJourn
     if (report) applyReport(report, journal.at(-1)?.sequence ?? 0);
   }
 
-  // An active run with no explicit activeTaskId still exposes the next dependency-ready task as the current frontier.
-  if (["STARTING", "IN_PROGRESS"].includes(runStatus) && !projected.some((task) => task.status === "IN_PROGRESS")) {
-    const next = projected.find((task) => task.status === "PENDING" && task.dependencies.every((dependency) => byId.get(dependency)?.status === "DONE"));
-    if (next) next.status = "IN_PROGRESS";
+  // Missing structured task facts stay explicit; ordinary model text and Run status do not assign a task state.
+  if (!hasTaskProgressFact && !["QUEUED", "STARTING"].includes(runStatus)) {
+    for (const task of projected) task.status = "UNKNOWN";
   }
   return projected;
 }
 
-export function executionTaskSummary(tasks: ExecutionTask[]): { completed: number; total: number; blocked: number; active: number } {
+export function executionTaskSummary(tasks: ExecutionTask[]): { completed: number; total: number; blocked: number; active: number; unknown: number } {
   return {
     completed: tasks.filter((task) => task.status === "DONE").length,
     total: tasks.length,
     blocked: tasks.filter((task) => task.status === "BLOCKED").length,
     active: tasks.filter((task) => task.status === "IN_PROGRESS").length,
+    unknown: tasks.filter((task) => task.status === "UNKNOWN").length,
   };
 }
 
 export function executionTaskStatusLabel(status: ExecutionTaskStatus): string {
-  return ({ PENDING: "Pending", IN_PROGRESS: "In progress", DONE: "Completed", BLOCKED: "Blocked" } as Record<ExecutionTaskStatus, string>)[status];
+  return ({ PENDING: "Pending", IN_PROGRESS: "In progress", DONE: "Completed", BLOCKED: "Blocked", UNKNOWN: "Not recorded" } as Record<ExecutionTaskStatus, string>)[status];
 }
 
 export function executionTaskStatusType(status: ExecutionTaskStatus): "success" | "warning" | "danger" | "info" {
-  return ({ PENDING: "info", IN_PROGRESS: "warning", DONE: "success", BLOCKED: "danger" } as const)[status];
+  return ({ PENDING: "info", IN_PROGRESS: "warning", DONE: "success", BLOCKED: "danger", UNKNOWN: "info" } as const)[status];
 }
 
 /** 验证失败属于运行级证据，不会被投影成某个任务的伪造失败状态。 */

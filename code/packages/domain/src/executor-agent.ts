@@ -6,6 +6,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { AgentLoopEngine, type AgentLoop, type AgentLoopEvent, type AgentLoopMode, type GateContext } from "./agent-loop.js";
+import { resolveExecutorWorkingDirectory } from "./executor-working-directory.js";
 import { TaskProgressGate } from "./termination-gates.js";
 import { mergeModelUsage, normalizeModelUsage, updatePlanStatus, type ExecutionTelemetry, type ModelGateway, type ModelRoleConfig, type PipelineStore, type PlanRevisionV2, type Run } from "./index.js";
 import type { ToolRuntime } from "./tool-runtime.js";
@@ -13,6 +14,22 @@ import type { ToolRuntime } from "./tool-runtime.js";
 const REPORT_START = "<pipeline-factory-execution-report>";
 const REPORT_END = "</pipeline-factory-execution-report>";
 const execFileAsync = promisify(execFile);
+
+function boundedText(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  return value.trim().slice(0, maxLength);
+}
+
+function safeProviderName(value: unknown): string | undefined {
+  const name = boundedText(value, 120);
+  return name && /^[\p{L}\p{N}._:/-]+$/u.test(name) ? name : undefined;
+}
+
+function normalizeProviderStatus(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const status = value.trim().toLowerCase();
+  return ["failed", "error", "denied", "success", "succeeded", "completed", "complete", "cancelled", "canceled", "running", "in_progress"].includes(status) ? status : undefined;
+}
 
 /** Executor 必须返回的结构化完成报告；Gate 会据此判断任务、范围和报告是否完整。 */
 export type ExecutorReport = {
@@ -52,6 +69,11 @@ export class ExecutorAgent {
   private readonly engine: AgentLoopEngine;
   private readonly options: ExecutorAgentOptions;
   private readonly defaultToolRuntime: ToolRuntime | undefined;
+  private readonly modelContexts = new Map<string, { modelStep?: number; loopId?: string; providerThreadId?: string; providerTurnId?: string }>();
+  private readonly providerCallsByStep = new Map<string, Map<number, Map<string, string>>>();
+  private readonly taskProgressBuffers = new Map<string, { modelStep: number; text: string; scanOffset: number }>();
+  private readonly activeTaskByRun = new Map<string, string>();
+  private readonly currentTaskByRun = new Map<string, string>();
 
   constructor(private readonly store: PipelineStore, private readonly model: ModelGateway, toolRuntime?: ToolRuntime, options: ExecutorAgentOptions = {}) {
     this.options = options;
@@ -67,6 +89,8 @@ export class ExecutorAgent {
   /** 异步启动 Executor Loop；RunDetail 可通过 AgentLoop/SSE 观察实时进度。 */
   async start(run: Run, revision: PlanRevisionV2): Promise<AgentLoop> {
     this.assertRunnable(run, revision);
+    const workspaceRoot = run.workspacePath!;
+    const commandWorkingDirectory = await resolveExecutorWorkingDirectory(workspaceRoot, revision.contract.include, revision.contract.artifactPath);
     const projectConfig = this.executorModelConfig(revision);
     const mode = projectConfig.loopMode ?? this.options.mode ?? "provider-controlled";
     const maxDurationMs = revision.projectConfigSnapshot?.settings.concurrency.executionTimeoutMs ?? this.options.maxDurationMs;
@@ -87,19 +111,20 @@ export class ExecutorAgent {
       ...(maxDurationMs === undefined ? {} : { maxDurationMs }),
       ...(this.options.maxRepeatedToolCalls === undefined ? {} : { maxRepeatedToolCalls: this.options.maxRepeatedToolCalls }),
       ...(this.options.maxNoProgressSteps === undefined ? {} : { maxNoProgressSteps: this.options.maxNoProgressSteps }),
+      providerCommandTimeoutMs: revision.projectConfigSnapshot?.settings.concurrency.defaultTimeoutMs ?? 120_000,
       workspacePath: run.workspacePath!,
       ...(toolRuntime ? { toolRuntime } : {}),
       modelRequest: {
         conversationId: run.id,
         modelConfig: projectConfig,
-        ...(run.workspacePath ? { cwd: run.workspacePath } : {}),
+        cwd: commandWorkingDirectory,
         messages: [
-          { role: "system", content: this.systemInstructions(revision) },
+          { role: "system", content: this.systemInstructions(revision, workspaceRoot, commandWorkingDirectory) },
           { role: "user", content: `Execute the approved plan: ${revision.planId}@${revision.revision}.` },
         ],
       },
       gate: { evaluate },
-      onEvent: (event) => this.handleEvent(run, event, openToolCalls),
+      onEvent: (event) => this.handleEvent(run, event, openToolCalls, revision),
     });
     return loop;
   }
@@ -107,6 +132,8 @@ export class ExecutorAgent {
   /** 同步运行 Executor Loop，完成后同步 Run 的终态映射。 */
   async run(run: Run, revision: PlanRevisionV2): Promise<AgentLoop> {
     this.assertRunnable(run, revision);
+    const workspaceRoot = run.workspacePath!;
+    const commandWorkingDirectory = await resolveExecutorWorkingDirectory(workspaceRoot, revision.contract.include, revision.contract.artifactPath);
     const projectConfig = this.executorModelConfig(revision);
     const mode = projectConfig.loopMode ?? this.options.mode ?? "provider-controlled";
     const maxDurationMs = revision.projectConfigSnapshot?.settings.concurrency.executionTimeoutMs ?? this.options.maxDurationMs;
@@ -123,19 +150,20 @@ export class ExecutorAgent {
       ...(maxDurationMs === undefined ? {} : { maxDurationMs }),
       ...(this.options.maxRepeatedToolCalls === undefined ? {} : { maxRepeatedToolCalls: this.options.maxRepeatedToolCalls }),
       ...(this.options.maxNoProgressSteps === undefined ? {} : { maxNoProgressSteps: this.options.maxNoProgressSteps }),
+      providerCommandTimeoutMs: revision.projectConfigSnapshot?.settings.concurrency.defaultTimeoutMs ?? 120_000,
       workspacePath: run.workspacePath!,
       ...(toolRuntime ? { toolRuntime } : {}),
       modelRequest: {
         conversationId: run.id,
         modelConfig: projectConfig,
-        ...(run.workspacePath ? { cwd: run.workspacePath } : {}),
+        cwd: commandWorkingDirectory,
         messages: [
-          { role: "system", content: this.systemInstructions(revision) },
+          { role: "system", content: this.systemInstructions(revision, workspaceRoot, commandWorkingDirectory) },
           { role: "user", content: `Execute the approved plan: ${revision.planId}@${revision.revision}.` },
         ],
       },
       gate: { evaluate: async (context) => gate.evaluate({ ...context, ...(await this.progressContext(run, revision, context.content ?? "", openToolCalls)) }) },
-      onEvent: (event) => this.handleEvent(run, event, openToolCalls),
+      onEvent: (event) => this.handleEvent(run, event, openToolCalls, revision),
     });
     this.syncRunTerminalState(run, loop);
     return loop;
@@ -194,10 +222,11 @@ export class ExecutorAgent {
   }
 
   /** 将冻结的 Plan 合同和 Project 配置注入模型，确保执行阶段不读取当前 Project。 */
-  private systemInstructions(revision: PlanRevisionV2): string {
+  private systemInstructions(revision: PlanRevisionV2, workspaceRoot: string, commandWorkingDirectory: string): string {
     const executionContract = {
       planId: revision.planId,
       revision: revision.revision,
+      executionContext: { worktreeRoot: workspaceRoot, commandWorkingDirectory },
       contract: revision.contract,
       projectConfig: revision.projectConfigSnapshot
         ? { version: revision.projectConfigVersion, hash: revision.projectConfigHash, snapshot: revision.projectConfigSnapshot }
@@ -208,16 +237,45 @@ export class ExecutorAgent {
       "The approved Plan contract is the source of truth. The Plan is stored by the Factory, not as a file in the worktree; use the embedded contract below and do not search the worktree for a plan document.",
       `Work only inside the approved include scope: ${revision.contract.include.join(", ")}.`,
       `Never modify excluded or protected paths: ${revision.contract.exclude.join(", ")}.`,
-      "Do not claim completion in prose. End with <pipeline-factory-execution-report> JSON </pipeline-factory-execution-report>.",
+      `The Run worktree root is ${workspaceRoot}; Provider shell commands start in ${commandWorkingDirectory}. Do not assume the shell is at the worktree root.`,
+      "Before package-manager or build commands, verify pwd and the expected project manifest in the selected directory. Never run an install command in an ancestor directory that does not contain the project's manifest; if the expected project directory or manifest is missing, stop and report the exact blocker.",
+      "Treat include/exclude paths and execution-report changedPaths as relative to the worktree root. Resolve shell command paths from the command working directory without duplicating the worktree-relative prefix.",
+      "For each Plan task, first emit a machine-readable status marker on its own line: <pipeline-factory-task-progress>{\"taskId\":\"exact Plan task ID\",\"state\":\"started|completed|blocked\"}</pipeline-factory-task-progress>. Include reason only for blocked. Then give the user one concise status sentence naming the task ID/title and the observable action or outcome. These markers are the only live source of per-task state; the Factory validates every ID against the approved Plan. Do not infer task state from prose and do not reveal private reasoning. Never claim the whole Run is complete in prose. End with <pipeline-factory-execution-report> JSON </pipeline-factory-execution-report>.",
       "The JSON must contain completedTaskIds, changedPaths (or legacy pathsWithinScope array), and a non-empty report. Optional fields must be omitted entirely when they do not apply - never send null. When a task is currently being worked on or blocked, also include activeTaskId or blockedTaskId with blockedReason.",
       `Approved Plan contract:\n${JSON.stringify(executionContract, null, 2)}`,
     ].join(" ");
   }
 
   /** 把 Loop 事件投影为用户可读的 ExecutionThread journal，同时维护未完成工具集合。 */
-  private handleEvent(run: Run, event: AgentLoopEvent, openToolCalls: Set<string>): void {
+  private handleEvent(run: Run, event: AgentLoopEvent, openToolCalls: Set<string>, revision: PlanRevisionV2): void {
     if (!this.store.getExecutionThread(run.executionThreadId)) return;
     const payload = event.payload;
+    const eventStep = typeof payload.step === "number" ? payload.step : undefined;
+    if (event.type === "agent.step.started" && eventStep !== undefined) {
+      const activeTaskId = this.activeTaskByRun.get(run.id);
+      if (activeTaskId) this.currentTaskByRun.set(run.id, activeTaskId);
+      else this.currentTaskByRun.delete(run.id);
+      this.taskProgressBuffers.set(run.id, { modelStep: eventStep, text: "", scanOffset: 0 });
+    }
+    const previousContext = this.modelContexts.get(run.id) ?? {};
+    const providerThreadId = typeof payload.providerThreadId === "string" ? payload.providerThreadId : event.type === "agent.provider.thread.started" && typeof payload.threadId === "string" ? payload.threadId : previousContext.providerThreadId;
+    const providerTurnId = typeof payload.providerTurnId === "string" ? payload.providerTurnId : previousContext.providerTurnId;
+    const context = {
+      ...previousContext,
+      loopId: event.loopId,
+      ...(event.type === "agent.step.started" && eventStep !== undefined ? { modelStep: eventStep } : {}),
+      ...(providerThreadId ? { providerThreadId } : {}),
+      ...(providerTurnId ? { providerTurnId } : {}),
+    };
+    this.modelContexts.set(run.id, context);
+    const modelStep = event.type === "agent.step.started" ? eventStep : context.modelStep;
+    const association = {
+      loopId: event.loopId,
+      ...(modelStep === undefined ? {} : { modelStep }),
+      ...(this.currentTaskByRun.get(run.id) ? { taskId: this.currentTaskByRun.get(run.id) } : {}),
+      ...(providerThreadId ? { providerThreadId } : {}),
+      ...(providerTurnId ? { providerTurnId } : {}),
+    };
     if (event.type === "agent.loop.started") {
       this.updateTelemetry(run.executionThreadId, {
         model: typeof payload.model === "string" ? payload.model : null,
@@ -246,11 +304,31 @@ export class ExecutorAgent {
       this.updateTelemetry(run.executionThreadId, { completedAt, durationMs });
     }
     if (event.type === "agent.step.started" || event.type === "agent.model.completed" || event.type === "agent.context.compacted") {
-      this.append(run.executionThreadId, "TASK_PROGRESS", { event: event.type, ...payload });
+      this.append(run.executionThreadId, "TASK_PROGRESS", { event: event.type, ...association, ...(eventStep === undefined ? {} : { step: eventStep }) });
       if (event.type === "agent.model.completed") {
         const thread = this.store.getExecutionThread(run.executionThreadId);
-        const latestOutput = thread ? thread.journal.filter((entry) => entry.type === "MODEL_OUTPUT").map((entry) => String(entry.payload.text ?? "")).join("") : "";
+        const turnOutput = thread?.journal.filter((entry) => entry.type === "MODEL_OUTPUT" && entry.payload.modelStep === modelStep).map((entry) => String(entry.payload.text ?? "")).join("") ?? "";
+        const latestOutput = modelStep === undefined && thread ? thread.journal.filter((entry) => entry.type === "MODEL_OUTPUT").map((entry) => String(entry.payload.text ?? "")).join("") : turnOutput;
         const report = parseExecutorReport(latestOutput);
+        if (report) {
+          const validTaskIds = new Set(revision.contract.tasks.map((task) => task.id));
+          const activeTaskId = report.activeTaskId && validTaskIds.has(report.activeTaskId) ? report.activeTaskId : undefined;
+          const blockedTaskId = report.blockedTaskId && validTaskIds.has(report.blockedTaskId) ? report.blockedTaskId : undefined;
+          if (activeTaskId) {
+            this.activeTaskByRun.set(run.id, activeTaskId);
+            this.currentTaskByRun.set(run.id, activeTaskId);
+          } else {
+            this.activeTaskByRun.delete(run.id);
+            if (blockedTaskId) this.currentTaskByRun.set(run.id, blockedTaskId);
+          }
+        }
+        if (modelStep !== undefined) {
+          const pendingCalls = this.providerCallsByStep.get(run.id)?.get(modelStep);
+          for (const [callId, tool] of pendingCalls ?? []) {
+            this.append(run.executionThreadId, "TOOL_CALL", { action: "status-unknown", callId, tool, source: "provider", reason: "Provider 未返回此调用的结束状态。", ...association });
+          }
+          this.providerCallsByStep.get(run.id)?.delete(modelStep);
+        }
         if (report) {
           this.append(run.executionThreadId, "TASK_PROGRESS", {
             action: "task-status",
@@ -258,37 +336,141 @@ export class ExecutorAgent {
             ...(report.activeTaskId ? { activeTaskId: report.activeTaskId } : {}),
             ...(report.blockedTaskId ? { blockedTaskId: report.blockedTaskId } : {}),
             ...(report.blockedReason ? { blockedReason: report.blockedReason } : {}),
+            ...association,
           });
         }
       }
     }
-    if (event.type === "agent.model.text.delta") this.append(run.executionThreadId, "MODEL_OUTPUT", { text: payload.text });
-    if (event.type === "agent.tool.requested" && typeof payload.callId === "string" && payload.delegatedToProvider !== true) {
-      openToolCalls.add(payload.callId);
-      this.append(run.executionThreadId, "TOOL_CALL", { action: "requested", ...payload });
+    if (event.type === "agent.model.text.delta") {
+      const text = typeof payload.text === "string" ? payload.text : "";
+      if (text && modelStep !== undefined) this.recordTaskProgressMarkers(run, event, revision, modelStep, text, association);
+      const outputTaskId = this.currentTaskByRun.get(run.id);
+      this.append(run.executionThreadId, "MODEL_OUTPUT", { text, ...association, ...(outputTaskId ? { taskId: outputTaskId } : {}), ...(typeof payload.providerItemId === "string" ? { providerItemId: payload.providerItemId } : {}) });
     }
-    if ((event.type === "agent.tool.completed" || event.type === "agent.tool.denied" || event.type === "agent.tool.failed" || event.type === "agent.tool.needs_reconciliation") && typeof payload.callId === "string") {
-      openToolCalls.delete(payload.callId);
+    if (event.type === "agent.provider.activity") {
+      const itemType = typeof payload.itemType === "string" ? payload.itemType : "provider activity";
+      const toolLike = /tool|mcp/i.test(itemType);
+      const toolName = toolLike ? safeProviderName(payload.toolName) ?? safeProviderName(payload.title) : undefined;
+      const serverName = safeProviderName(payload.serverName);
+      const providerStatus = normalizeProviderStatus(payload.status);
+      const reason = boundedText(payload.error, 600);
+      const providerItemId = typeof payload.itemId === "string" ? payload.itemId : typeof payload.providerItemId === "string" ? payload.providerItemId : undefined;
+      this.append(run.executionThreadId, "PROVIDER_ACTIVITY", {
+        phase: payload.phase === "completed" ? "completed" : "started",
+        ...(providerItemId ? { itemId: providerItemId } : {}),
+        itemType,
+        ...(toolName ? { toolName } : {}),
+        ...(serverName ? { serverName } : {}),
+        ...(providerStatus ? { providerStatus } : {}),
+        ...(reason ? { reason } : {}),
+        ...(providerItemId ? { providerItemId } : {}),
+        ...(toolLike && providerItemId ? { callId: providerItemId } : {}),
+        ...association,
+      });
+      const matchingCalls = modelStep === undefined ? undefined : this.providerCallsByStep.get(run.id)?.get(modelStep);
+      const matchingTool = providerItemId ? matchingCalls?.get(providerItemId) : undefined;
+      if (providerItemId && matchingCalls && matchingTool !== undefined) {
+        const failed = Boolean(reason) || ["failed", "error", "denied", "cancelled", "canceled"].includes(providerStatus ?? "");
+        const succeeded = ["success", "succeeded"].includes(providerStatus ?? "");
+        const action = failed ? "failed" : succeeded ? "completed" : "status-unknown";
+        this.append(run.executionThreadId, "TOOL_CALL", { action, callId: providerItemId, tool: matchingTool || toolName || "", source: "provider", ...(reason ? { reason } : action === "status-unknown" ? { reason: "Provider 未提供此调用的结果状态。" } : {}), ...association });
+        matchingCalls.delete(providerItemId);
+      }
+    }
+    if (event.type === "agent.tool.requested") {
+      const callId = typeof payload.callId === "string" ? payload.callId : undefined;
+      const tool = typeof payload.tool === "string" ? payload.tool : undefined;
+      const delegatedToProvider = payload.delegatedToProvider === true;
+      if (callId && !delegatedToProvider) openToolCalls.add(callId);
+      if (callId && delegatedToProvider && modelStep !== undefined) {
+        const byStep = this.providerCallsByStep.get(run.id) ?? new Map<number, Map<string, string>>();
+        const calls = byStep.get(modelStep) ?? new Map<string, string>();
+        calls.set(callId, tool ?? "");
+        byStep.set(modelStep, calls);
+        this.providerCallsByStep.set(run.id, byStep);
+      }
+      this.append(run.executionThreadId, "TOOL_CALL", { action: "requested", ...(callId ? { callId } : {}), ...(tool ? { tool } : {}), source: delegatedToProvider ? "provider" : "factory", ...association });
+    }
+    if (event.type === "agent.tool.completed" || event.type === "agent.tool.denied" || event.type === "agent.tool.failed" || event.type === "agent.tool.needs_reconciliation") {
+      const callId = typeof payload.callId === "string" ? payload.callId : undefined;
+      if (callId) {
+        openToolCalls.delete(callId);
+        for (const calls of this.providerCallsByStep.get(run.id)?.values() ?? []) calls.delete(callId);
+      }
       const action = event.type.endsWith("denied") ? "denied" : event.type.endsWith("failed") ? "failed" : event.type.endsWith("reconciliation") ? "needs-reconciliation" : "completed";
-      this.append(run.executionThreadId, "TOOL_CALL", { action, ...payload });
+      const tool = typeof payload.tool === "string" ? payload.tool : undefined;
+      const reason = boundedText(payload.reason, 600);
+      this.append(run.executionThreadId, "TOOL_CALL", { action, ...(callId ? { callId } : {}), ...(tool ? { tool } : {}), source: "factory", ...(reason ? { reason } : {}), ...association });
     }
-    if (event.type === "agent.gate.checked") this.append(run.executionThreadId, "TASK_PROGRESS", payload);
+    if (event.type === "agent.gate.checked") this.append(run.executionThreadId, "TASK_PROGRESS", { action: payload.action, reason: boundedText(payload.reason, 600), ...association });
     if (event.type === "agent.loop.completed") {
-      this.append(run.executionThreadId, "TASK_PROGRESS", { state: "READY_FOR_VERIFY", ...payload });
+      this.append(run.executionThreadId, "TASK_PROGRESS", { state: "READY_FOR_VERIFY", ...association });
       this.setRunStatus(run, "READY_FOR_VERIFY");
     }
     if (event.type === "agent.loop.failed") {
-      this.append(run.executionThreadId, "TASK_PROGRESS", { state: "BLOCKED", ...payload });
-      this.setRunStatus(run, "BLOCKED", String(payload.reason ?? payload.error ?? "Executor loop blocked"));
+      const reason = boundedText(payload.reason ?? payload.error, 600) ?? "Executor loop blocked";
+      const activeTaskId = this.activeTaskByRun.get(run.id);
+      if (activeTaskId) this.append(run.executionThreadId, "TASK_PROGRESS", { action: "task-lifecycle", taskId: activeTaskId, state: "BLOCKED", reason, ...association });
+      this.append(run.executionThreadId, "TASK_PROGRESS", { state: "BLOCKED", reason, ...association });
+      this.activeTaskByRun.delete(run.id);
+      this.setRunStatus(run, "BLOCKED", reason);
     }
     if (event.type === "agent.loop.recovery_required") {
-      this.append(run.executionThreadId, "RECOVERY", payload);
-      this.setRunStatus(run, "BLOCKED", String(payload.reason ?? payload.error ?? "Executor recovery required"));
+      const reason = boundedText(payload.reason ?? payload.error, 600) ?? "Executor recovery required";
+      const activeTaskId = this.activeTaskByRun.get(run.id);
+      if (activeTaskId) this.append(run.executionThreadId, "TASK_PROGRESS", { action: "task-lifecycle", taskId: activeTaskId, state: "BLOCKED", reason, ...association });
+      this.append(run.executionThreadId, "RECOVERY", { reason, ...association });
+      this.activeTaskByRun.delete(run.id);
+      this.setRunStatus(run, "BLOCKED", reason);
     }
     if (event.type === "agent.loop.cancelled") {
-      this.append(run.executionThreadId, "TASK_PROGRESS", { state: "CANCELLED", ...payload });
+      this.append(run.executionThreadId, "TASK_PROGRESS", { state: "CANCELLED", ...association });
       this.setRunStatus(run, "CANCELLED");
     }
+  }
+
+  private recordTaskProgressMarkers(run: Run, event: AgentLoopEvent, revision: PlanRevisionV2, modelStep: number, delta: string, association: Record<string, unknown>): void {
+    const buffer = this.taskProgressBuffers.get(run.id);
+    if (!buffer || buffer.modelStep !== modelStep) this.taskProgressBuffers.set(run.id, { modelStep, text: delta, scanOffset: 0 });
+    else buffer.text += delta;
+    const currentBuffer = this.taskProgressBuffers.get(run.id);
+    if (!currentBuffer) return;
+    const taskIds = new Set(revision.contract.tasks.map((task) => task.id));
+    const markerStart = "<pipeline-factory-task-progress>";
+    const markerEnd = "</pipeline-factory-task-progress>";
+    const markerPattern = /<pipeline-factory-task-progress>([\s\S]*?)<\/pipeline-factory-task-progress>/g;
+    markerPattern.lastIndex = currentBuffer.scanOffset;
+    let match: RegExpExecArray | null;
+    while ((match = markerPattern.exec(currentBuffer.text)) !== null) {
+      currentBuffer.scanOffset = markerPattern.lastIndex;
+      let progress: Record<string, unknown> | null = null;
+      try {
+        const parsed: unknown = JSON.parse(match[1]?.trim() ?? "");
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) progress = parsed as Record<string, unknown>;
+      } catch {
+        // Incomplete or malformed progress markers do not change task status.
+      }
+      if (!progress) continue;
+      const taskId = typeof progress.taskId === "string" ? progress.taskId : "";
+      const state = progress.state;
+      if (!taskIds.has(taskId) || !["started", "completed", "blocked"].includes(String(state))) continue;
+      const reason = state === "blocked" ? boundedText(progress.reason, 600) : undefined;
+      this.currentTaskByRun.set(run.id, taskId);
+      if (state === "started") this.activeTaskByRun.set(run.id, taskId);
+      else if (this.activeTaskByRun.get(run.id) === taskId) this.activeTaskByRun.delete(run.id);
+      this.append(run.executionThreadId, "TASK_PROGRESS", {
+        action: "task-lifecycle",
+        state: state === "started" ? "IN_PROGRESS" : state === "completed" ? "DONE" : "BLOCKED",
+        ...(reason ? { reason } : state === "blocked" ? { reason: "阻塞原因未记录。" } : {}),
+        ...association,
+        taskId,
+        loopId: event.loopId,
+        modelStep,
+      });
+    }
+    const lastStart = currentBuffer.text.lastIndexOf(markerStart);
+    const lastEnd = currentBuffer.text.lastIndexOf(markerEnd);
+    currentBuffer.scanOffset = lastStart > lastEnd ? lastStart : Math.max(currentBuffer.scanOffset, currentBuffer.text.length - markerStart.length + 1);
   }
 
   private syncRunTerminalState(run: Run, loop: AgentLoop): void {
@@ -313,9 +495,8 @@ export class ExecutorAgent {
   private append(threadId: string, type: import("./index.js").JournalEntryType, payload: Record<string, unknown>): void {
     const thread = this.store.getExecutionThread(threadId);
     if (!thread) return;
-    const entry = { sequence: thread.journal.length + 1, type, occurredAt: this.store.now(), payload };
-    this.store.saveExecutionThread({ ...thread, journal: [...thread.journal, entry] });
-    this.store.appendEvent({ type: "run.executor.event", aggregateId: thread.runId, payload: { executionThreadId: thread.id, type, ...payload } });
+    const entry = this.store.appendExecutionJournal({ executionThreadId: thread.id, runId: thread.runId, type, payload });
+    this.store.appendEvent({ type: "run.executor.event", aggregateId: thread.runId, payload: { executionThreadId: thread.id, type, sequence: entry.sequence, occurredAt: entry.occurredAt, ...entry.payload } });
   }
 
   private updateTelemetry(threadId: string, update: Partial<ExecutionTelemetry>): void {

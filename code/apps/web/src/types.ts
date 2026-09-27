@@ -200,6 +200,54 @@ export type ExplorerTurn = {
   explorerPlanId?: string | undefined;
 };
 
+export type ProjectExecutionTurnStatus = "QUEUED" | "RUNNING" | "WAITING_FOR_INPUT" | "COMPLETED" | "FAILED" | "CANCELLED" | "RECOVERY_REQUIRED";
+
+export type ProjectExecutionThread = {
+  id: string;
+  projectId: string;
+  providerThreadId: string | null;
+  modelOverride: string | null;
+  reasoningEffortOverride: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ProjectExecutionMessage = {
+  id: string;
+  threadId: string;
+  turnId: string;
+  clientTurnId: string | null;
+  role: "user" | "assistant";
+  content: string;
+  status: ProjectExecutionTurnStatus;
+  error: string | null;
+  createdAt: string;
+  sequence: number;
+  loopId: string | null;
+  model: string | null;
+  reasoningEffort: string | null;
+};
+
+export type ProjectExecutionEvent = {
+  id: string;
+  sequence: number;
+  type: string;
+  aggregateId: string;
+  occurredAt: string;
+  payload: Record<string, unknown>;
+};
+
+export type ProjectExecutionThreadSnapshot = {
+  thread: ProjectExecutionThread;
+  messages: ProjectExecutionMessage[];
+  events: ProjectExecutionEvent[];
+  lastEventSequence: number;
+  defaultModel: string;
+  defaultReasoningEffort: string | null;
+  modelOptions: string[];
+  reasoningEffortOptions: Array<{ value: string | null; label: string }>;
+};
+
 export type ModelInputQuestion = {
   id: string;
   header: string;
@@ -274,7 +322,7 @@ export type PlanTask = {
   dependencies: string[];
 };
 
-export type ExecutionTaskStatus = "PENDING" | "IN_PROGRESS" | "DONE" | "BLOCKED";
+export type ExecutionTaskStatus = "PENDING" | "IN_PROGRESS" | "DONE" | "BLOCKED" | "UNKNOWN";
 export type ExecutionTask = PlanTask & {
   id: string;
   status: ExecutionTaskStatus;
@@ -401,11 +449,21 @@ export type ExecutionTelemetry = {
 };
 
 /** Run 的可审计 journal 容器，也是执行对话的事实来源。 */
+export type ExecutionJournalPayload = Record<string, unknown> & {
+  taskId?: string;
+  modelStep?: number;
+  loopId?: string;
+  providerThreadId?: string;
+  providerTurnId?: string;
+  providerItemId?: string;
+  callId?: string;
+};
+
 export type ExecutionThread = {
   id: string;
   runId: string;
   state: string;
-  journal: Array<{ sequence: number; type: string; occurredAt: string; payload: Record<string, unknown> }>;
+  journal: Array<{ sequence: number; type: string; occurredAt: string; payload: ExecutionJournalPayload }>;
   telemetry?: ExecutionTelemetry | null;
 };
 
@@ -418,7 +476,7 @@ export type RunJournalEvent = {
   sequence: number;
   type: string;
   occurredAt: string;
-  payload: Record<string, unknown>;
+  payload: ExecutionJournalPayload;
 };
 
 export type ToolCall = {

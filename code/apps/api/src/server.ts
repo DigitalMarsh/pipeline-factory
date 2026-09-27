@@ -18,6 +18,7 @@ import {
   ExplorerService,
   ExplorerDeleteBlockedError,
   ExplorerThreadService,
+  ProjectExecutionThreadService,
   ModelExplorerTitleGenerator,
   LifecycleHookRunner,
   LocalGitWorktreeAdapter,
@@ -119,6 +120,9 @@ const v4ThreadQuery = z.object({ threadId: z.string().min(1).optional(), explore
 const v4ThreadStatusQuery = z.object({ threadId: z.string().min(1), afterSequence: z.coerce.number().int().nonnegative().optional() });
 const loopEventsQuery = z.object({ format: z.enum(["json", "sse"]).optional(), afterSequence: z.coerce.number().int().nonnegative().optional() });
 const v4InputQuery = z.object({ threadId: z.string().min(1).optional(), explorerPlanId: z.string().min(1), status: z.enum(["OPEN", "SUBMITTING", "ANSWERED", "CANCELLED", "AUTO_RESOLVED", "RECOVERY_REQUIRED"]).optional() });
+const projectExecutionTurnBody = z.object({ content: z.string().trim().min(1).max(20_000), clientTurnId: z.string().trim().min(1).max(160) });
+const projectExecutionPreferencesBody = z.object({ model: z.string().trim().min(1).max(200).nullable(), reasoningEffort: z.enum(["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]).nullable() });
+const projectExecutionEventsQuery = z.object({ afterSequence: z.coerce.number().int().nonnegative().optional() });
 const hookBody = z.object({
   start: z
     .object({ commandId: z.string().min(1), enabled: z.boolean().optional(), timeoutMs: z.number().int().positive().optional(), maxAttempts: z.number().int().min(1).max(5).optional() })
@@ -203,6 +207,36 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
   });
   void explorer.backfillTitles();
   void explorer.recoverQueuedTurns();
+  const projectExecution = new ProjectExecutionThreadService(store, model, {
+    ...(options.config ? {
+    maxSteps: options.config.model.loop.maxSteps,
+    maxDurationMs: options.config.model.loop.maxDurationMs,
+    maxRepeatedToolCalls: options.config.model.loop.maxRepeatedToolCalls,
+    maxNoProgressSteps: options.config.model.loop.maxNoProgressSteps,
+    providerCommandTimeoutMs: options.config.runtime.defaultTimeoutMs,
+    toolRuntimeForProject: (project) => {
+      const commands = new RegisteredCommandExecutor(project.settings.commands);
+      const commandIds = new Set(project.settings.commands.map((command) => command.commandId));
+      return new DurableToolRuntime(store, new ToolGateway({
+        role: "executor",
+        workspaceRoot: project.repoRoot,
+        registeredCommandIds: commandIds,
+        mcpAllowedTools: new Set(project.settings.toolPolicy.allowedMcpTools),
+        pluginAllowedTools: new Set(project.settings.toolPolicy.allowedPluginTools),
+        computerUseAllowed: project.settings.toolPolicy.computerUseEnabled && Boolean(options.computerUse),
+        builtin: {
+          registeredCommandExecutor: (invocation) => commands.execute({
+            ...invocation,
+            context: { ...invocation.context, projectId: project.id, runId: invocation.context.runId || "project-execution", workspacePath: project.repoRoot, exitReason: "project_execution_thread" },
+          }),
+          ...(mcpRegistry ? { mcpToolExecutor: (name: string, input: Record<string, unknown>) => mcpRegistry.call(name, input) } : {}),
+          ...(pluginRegistry ? { pluginToolExecutor: (name: string, input: Record<string, unknown>) => pluginRegistry.bridge.call(name, input) } : {}),
+          ...(options.computerUse ? { computerUseExecutor: (input: Record<string, unknown>) => options.computerUse!.call({ action: input.action as import("@pipeline-factory/domain").ComputerUseAction, ...(typeof input.requestId === "string" ? { requestId: input.requestId } : {}), ...(typeof input.timeoutMs === "number" ? { timeoutMs: input.timeoutMs } : {}) }) } : {}),
+        },
+      }));
+    } } : {}),
+  });
+  projectExecution.recoverQueuedTurns();
   const scheduler = options.scheduler ?? (options.config ? createDefaultScheduler(store, options.config, model, mcpRegistry, pluginRegistry, options.computerUse) : undefined);
   const dispatchCoordinator = scheduler ? new PlanDispatchCoordinator({
     store,
@@ -217,6 +251,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       const loop = store.getAgentLoop(loopId);
       if (!loop) throw new Error(`AgentLoop ${loopId} not found`);
       if (loop.ownerType === "explorer-turn") return explorer.pauseLoop(loopId, reason);
+      if (loop.ownerType === "project-execution-turn") return projectExecution.pauseLoop(loopId, reason);
       if (schedulerLoopController) return schedulerLoopController.pause(loopId, reason);
       return persistLoopControl(store, loop, "PAUSED", reason);
     },
@@ -224,6 +259,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       const loop = store.getAgentLoop(loopId);
       if (!loop) throw new Error(`AgentLoop ${loopId} not found`);
       if (loop.ownerType === "explorer-turn") return explorer.resumeLoop(loopId);
+      if (loop.ownerType === "project-execution-turn") return projectExecution.resumeLoop(loopId);
       if (schedulerLoopController) return schedulerLoopController.resume(loopId);
       return persistLoopControl(store, loop, "RUNNING", "user_resumed");
     },
@@ -231,6 +267,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       const loop = store.getAgentLoop(loopId);
       if (!loop) throw new Error(`AgentLoop ${loopId} not found`);
       if (loop.ownerType === "explorer-turn") return explorer.cancelLoop(loopId, reason);
+      if (loop.ownerType === "project-execution-turn") return projectExecution.cancelLoop(loopId, reason);
       if (schedulerLoopController) return schedulerLoopController.cancel(loopId, reason);
       return persistLoopControl(store, loop, "CANCELLED", reason);
     },
@@ -1502,6 +1539,81 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     return { projectId: params.data.projectId, lifecycle: body.data };
   });
 
+  app.get("/api/v4/projects/:projectId/execution-thread", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    try {
+      const snapshot = projectExecution.get(params.data.projectId);
+      return { ...snapshot, events: store.listEvents({ aggregateId: snapshot.thread.id }) };
+    } catch (error) {
+      return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: error instanceof Error ? error.message : "Project not found" });
+    }
+  });
+
+  app.patch("/api/v4/projects/:projectId/execution-thread/preferences", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    const body = projectExecutionPreferencesBody.safeParse(request.body ?? {});
+    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid project execution preferences" });
+    try {
+      return { thread: projectExecution.updatePreferences(params.data.projectId, body.data) };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Invalid project execution preferences";
+      const status = message === "PROJECT_NOT_FOUND" ? 404 : 422;
+      return reply.code(status).send({ code: message, error: message });
+    }
+  });
+
+  app.post("/api/v4/projects/:projectId/execution-thread/turns", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    const body = projectExecutionTurnBody.safeParse(request.body ?? {});
+    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid project execution turn" });
+    try {
+      return projectExecution.submit(params.data.projectId, body.data);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Project execution turn cannot be submitted";
+      const status = message === "PROJECT_NOT_FOUND" ? 404 : message === "PROJECT_ARCHIVED" ? 409 : 400;
+      return reply.code(status).send({ code: message, error: message });
+    }
+  });
+
+  app.post("/api/v4/projects/:projectId/execution-thread/turns/:messageId/cancel", async (request, reply) => {
+    const params = z.object({ projectId: z.string().min(1), messageId: z.string().min(1) }).safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: "Invalid project execution cancel request" });
+    try {
+      const message = await projectExecution.cancel(params.data.projectId, params.data.messageId);
+      return { message };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Project execution turn cannot be cancelled";
+      return reply.code(message === "PROJECT_NOT_FOUND" ? 404 : 409).send({ code: message, error: message });
+    }
+  });
+
+  app.get("/api/v4/projects/:projectId/execution-thread/events", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    const query = projectExecutionEventsQuery.safeParse(request.query ?? {});
+    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid project execution event query" });
+    let threadId: string;
+    try { threadId = projectExecution.get(params.data.projectId).thread.id; }
+    catch (error) { return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: error instanceof Error ? error.message : "Project not found" }); }
+    reply.hijack();
+    const raw = reply.raw;
+    raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive", "access-control-allow-origin": "*" });
+    const headerSequence = Number(request.headers["last-event-id"] ?? "0") || 0;
+    let cursor = Math.max(query.data.afterSequence ?? 0, headerSequence);
+    const send = () => {
+      const events = store.listEvents({ aggregateId: threadId, afterSequence: cursor });
+      for (const event of events) {
+        cursor = event.sequence;
+        raw.write(`id: ${event.sequence}\nevent: project.execution\ndata: ${JSON.stringify({ sequence: event.sequence, type: event.type, payload: event.payload })}\n\n`);
+      }
+    };
+    send();
+    raw.write(`id: ${cursor}\nevent: stream.ready\ndata: ${JSON.stringify({ afterSequence: cursor })}\n\n`);
+    const poll = setInterval(send, 250);
+    const heartbeat = setInterval(() => raw.write(`: heartbeat ${Date.now()}\n\n`), 15_000);
+    request.raw.once("close", () => { clearInterval(poll); clearInterval(heartbeat); });
+  });
+
   app.get("/api/v4/projects/:projectId/runs", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
@@ -1726,6 +1838,10 @@ function eventBelongsToProject(store: PipelineStore, event: import("@pipeline-fa
   if (run?.projectId === projectId) return true;
   const thread = store.getThread(event.aggregateId);
   if (thread?.projectId === projectId) return true;
+  const projectExecutionThread = store.listProjects()
+    .map((project) => store.getProjectExecutionThread(project.id))
+    .find((candidate) => candidate?.id === event.aggregateId);
+  if (projectExecutionThread?.projectId === projectId) return true;
   const mergeRequest = store.getMergeRequest(event.aggregateId);
   if (mergeRequest && store.getRun(mergeRequest.runId)?.projectId === projectId) return true;
   const loop = store.getAgentLoop(event.aggregateId);
@@ -1733,6 +1849,12 @@ function eventBelongsToProject(store: PipelineStore, event: import("@pipeline-fa
   if (loop?.ownerType === "explorer-turn") {
     const turn = store.listThreads().find((candidate) => store.listTurns(candidate.id).some((item) => item.id === loop.ownerId));
     if (turn?.projectId === projectId) return true;
+  }
+  if (loop?.ownerType === "project-execution-turn") {
+    const executionThread = store.listProjects()
+      .map((project) => store.getProjectExecutionThread(project.id))
+      .find((candidate) => candidate && store.listProjectExecutionMessages(candidate.id).some((message) => message.id === loop.ownerId));
+    if (executionThread?.projectId === projectId) return true;
   }
   return false;
 }

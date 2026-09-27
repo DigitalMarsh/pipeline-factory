@@ -524,9 +524,16 @@ function mapCodexEvent(event: CodexAppServerEvent, source: { providerThreadId?: 
     if (itemType === "agentMessage" || itemType === "message") return null;
     const title = getString(item, "name") ?? getString(item, "title") ?? null;
     const summary = getString(item, "command") ?? getString(item, "text") ?? null;
+    const server = getObject(item, "server");
+    const serverName = getString(item, "serverName") ?? getString(server, "name");
+    const toolName = getString(item, "toolName") ?? (itemType.toLowerCase().includes("tool") ? getString(item, "name") : undefined);
+    const exitCode = typeof item.exitCode === "number" && Number.isFinite(item.exitCode) ? item.exitCode : undefined;
+    const status = getString(item, "status") ?? (exitCode === undefined ? undefined : exitCode === 0 ? "succeeded" : "failed");
+    const error = getString(item, "error") ?? getString(getObject(item, "error"), "message")
+      ?? (exitCode !== undefined && exitCode !== 0 ? `Provider command exited with code ${exitCode}` : undefined);
     const providerThreadId = getString(event.params, "threadId") ?? source.providerThreadId;
     const providerTurnId = getEventTurnId(event.params) ?? source.providerTurnId;
-    return { type: "provider.activity", phase: event.method === "item/started" ? "started" : "completed", itemId, itemType, title, summary, ...(providerThreadId ? { providerThreadId } : {}), ...(providerTurnId ? { providerTurnId } : {}), providerItemId: itemId };
+    return { type: "provider.activity", phase: event.method === "item/started" ? "started" : "completed", itemId, itemType, title, summary, ...(toolName ? { toolName } : {}), ...(serverName ? { serverName } : {}), ...(status ? { status } : {}), ...(error ? { error } : {}), ...(providerThreadId ? { providerThreadId } : {}), ...(providerTurnId ? { providerTurnId } : {}), providerItemId: itemId };
   }
   if (event.method === "item/tool/requestUserInput") {
     const request = event.params;

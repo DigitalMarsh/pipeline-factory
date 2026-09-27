@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { Check, CircleCheck, InfoFilled, VideoPause, VideoPlay, Warning } from "@element-plus/icons-vue";
 import type { AgentLoop, AgentLoopStep, ExecutionTask, ExecutionTelemetry, MergeRequest, Run, VerificationRun } from "../types";
-import { formatExecutionDuration, formatTokenSummary, telemetryModel, telemetryReasoning } from "../utils/executionTelemetry";
+import { formatExecutionDuration, formatTokenSummary, telemetryModel, telemetryReasoning, usageDetailRows } from "../utils/executionTelemetry";
 import { executionTaskStatusLabel, executionTaskStatusType, verificationSummary } from "../utils/executionTasks";
 import { canPauseRun, canTerminateRun, hasRunControlActions } from "../utils/runControls";
 
@@ -16,7 +16,7 @@ const props = defineProps<{
   telemetry: ExecutionTelemetry | null;
   telemetryNow: number;
   tasks: ExecutionTask[];
-  taskCounts: { completed: number; total: number; blocked: number; active: number };
+  taskCounts: { completed: number; total: number; blocked: number; active: number; unknown?: number };
   selectedTaskId: string | null;
   executorLoop: AgentLoop | null;
   executorSteps: AgentLoopStep[];
@@ -26,7 +26,6 @@ const props = defineProps<{
   actionBusy: boolean;
   sourceCommit: string;
   targetCommit: string;
-  diagnosticsCount: { journal: number; tools: number; steps: number };
 }>();
 
 const emit = defineEmits<{
@@ -36,7 +35,6 @@ const emit = defineEmits<{
   (event: "create-review"): void;
   (event: "confirm-merged"): void;
   (event: "open-plan"): void;
-  (event: "open-diagnostics"): void;
   (event: "update:source-commit", value: string): void;
   (event: "update:target-commit", value: string): void;
 }>();
@@ -46,6 +44,7 @@ const executionDuration = computed(() => formatExecutionDuration(props.telemetry
 const executionTokenSummary = computed(() => formatTokenSummary(props.telemetry?.usage));
 const executionTelemetryModel = computed(() => telemetryModel(props.telemetry));
 const executionTelemetryReasoning = computed(() => telemetryReasoning(props.telemetry));
+const executionUsageRows = computed(() => usageDetailRows(props.telemetry?.usage));
 const verificationStatusSummary = computed(() => verificationSummary(props.verification));
 const hasControls = computed(() => hasRunControlActions(props.run.status, props.threadState));
 const reviewStatus = computed(() => {
@@ -152,17 +151,18 @@ watch(() => props.run.id, () => {
           <div class="execution-telemetry-grid execution-telemetry-grid-compact">
             <div class="execution-telemetry-card"><span>MODEL</span><strong>{{ executionTelemetryModel }}</strong><small>实际生效模型</small></div>
             <div class="execution-telemetry-card"><span>REASONING</span><strong>{{ executionTelemetryReasoning }}</strong><small>冻结的推理等级</small></div>
-            <div class="execution-telemetry-card"><span>TOKENS USED</span><strong>{{ executionTokenSummary }}</strong><small>{{ telemetry?.usageSource === "provider" ? "输入 / 输出 / 推理 / 总量可在诊断中查看" : "Provider 未返回精确 usage" }}</small></div>
+            <div class="execution-telemetry-card"><span>TOKENS USED</span><strong>{{ executionTokenSummary }}</strong><small>{{ telemetry?.usageSource === "provider" ? "下方显示输入 / 输出 / 推理 / 总量" : "Provider 未返回精确 usage" }}</small></div>
             <div class="execution-telemetry-card"><span>EXECUTION TIME</span><strong>{{ executionDuration }}</strong><small>{{ executorLoop?.state === "RUNNING" || executorLoop?.state === "PAUSED" ? "实时 wall-clock" : "Executor Loop wall-clock" }}</small></div>
           </div>
-          <div class="execution-header-detail-footer"><span>{{ diagnosticsCount.journal }} journal entries · {{ diagnosticsCount.tools }} tool calls · {{ diagnosticsCount.steps }} loop steps</span><el-button size="small" @click="emit('open-diagnostics')">Open diagnostics</el-button></div>
+          <div v-if="executionUsageRows.length" class="telemetry-detail-grid telemetry-detail-grid-compact"><div v-for="row in executionUsageRows" :key="row.label"><span>{{ row.label }}</span><strong>{{ row.value }}</strong></div></div>
+          <div class="execution-header-detail-footer"><span>模型消息、工具 / MCP 调用和错误显示在执行会话中。</span></div>
         </section>
       </el-popover>
 
       <el-popover v-model:visible="progressOpen" placement="bottom" :width="560" trigger="click" popper-class="execution-header-status-popper" :teleported="true">
         <template #reference>
           <button class="execution-header-status-trigger" data-status-card="progress" type="button" aria-label="查看 Plan progress 详情" aria-controls="execution-header-progress-details" :aria-expanded="isOpen('progress')" @keydown.enter.prevent="toggleCard('progress')" @keydown.space.prevent="toggleCard('progress')">
-            <span :class="['execution-header-status-card', { ready: taskCounts.total > 0 && taskCounts.completed === taskCounts.total, blocked: taskCounts.blocked > 0 }]"><span class="header-status-card-label">PLAN PROGRESS</span><strong class="header-status-card-value">{{ taskCounts.completed }}/{{ taskCounts.total }} completed</strong><small class="header-status-card-meta">{{ taskCounts.blocked ? `${taskCounts.blocked} blocked` : taskCounts.active ? `${taskCounts.active} active` : "Execution steps" }}</small></span>
+            <span :class="['execution-header-status-card', { ready: taskCounts.total > 0 && taskCounts.completed === taskCounts.total, blocked: taskCounts.blocked > 0 }]"><span class="header-status-card-label">PLAN PROGRESS</span><strong class="header-status-card-value">{{ taskCounts.completed }}/{{ taskCounts.total }} completed</strong><small class="header-status-card-meta">{{ taskCounts.blocked ? `${taskCounts.blocked} blocked` : taskCounts.active ? `${taskCounts.active} active` : taskCounts.unknown ? `${taskCounts.unknown} not recorded` : "Execution steps" }}</small></span>
           </button>
         </template>
         <section id="execution-header-progress-details" class="execution-header-status-details" aria-label="Plan progress 详情">

@@ -87,10 +87,8 @@ function mountStatus(status = run.status) {
         actionBusy: false,
         sourceCommit: "abc123",
         targetCommit: "def456",
-        diagnosticsCount: { journal: 2, tools: 1, steps: 2 },
         onFocusTask: (value: unknown) => emitted.push({ event: "focus-task", payload: value }),
         onOpenPlan: () => emitted.push({ event: "open-plan" }),
-        onOpenDiagnostics: () => emitted.push({ event: "open-diagnostics" }),
       });
     },
   }));

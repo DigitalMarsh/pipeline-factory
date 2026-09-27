@@ -43,11 +43,12 @@ describe("projectExecutionJournal", () => {
       { sequence: 7, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:05.000Z", payload: { state: "BLOCKED", reason: "MAX_DURATION_EXCEEDED" } },
     ], "BLOCKED");
 
-    expect(items).toHaveLength(5);
+    expect(items).toHaveLength(6);
     expect(items[1]).toMatchObject({ kind: "model", role: "assistant", content: "正在读取计划", status: "COMPLETED" });
-    expect(items[2]).toMatchObject({ kind: "activity", status: "RUNNING", title: "Tool requested", detail: "read_file" });
-    expect(items[3]).toMatchObject({ kind: "guidance", role: "user", content: "只修改批准范围内的文件" });
-    expect(items[4]).toMatchObject({ kind: "activity", status: "FAILED", title: "Run blocked", detail: "MAX_DURATION_EXCEEDED" });
+    expect(items[2]).toMatchObject({ kind: "activity", status: "COMPLETED", title: "模型轮次 · #1" });
+    expect(items[3]).toMatchObject({ kind: "tool", status: "UNKNOWN", title: "Tool call", callId: "call-1" });
+    expect(items[4]).toMatchObject({ kind: "guidance", role: "user", content: "只修改批准范围内的文件" });
+    expect(items[5]).toMatchObject({ kind: "activity", status: "FAILED", title: "Run blocked", detail: "MAX_DURATION_EXCEEDED" });
   });
 
   it("marks a trailing model message as running while the execution thread is active", () => {
@@ -68,7 +69,7 @@ describe("projectExecutionJournal", () => {
     expect(items.some((item) => item.detail.includes("<pipeline-factory-execution-report>"))).toBe(false);
   });
 
-  it("hides repetitive loop bookkeeping from the primary conversation", () => {
+  it("shows model turns and context compaction while hiding empty continuation events", () => {
     const items = projectExecutionJournal([
       { sequence: 1, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:00.000Z", payload: { event: "agent.step.started", step: 1 } },
       { sequence: 2, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:01.000Z", payload: { event: "agent.model.completed", step: 1 } },
@@ -76,7 +77,10 @@ describe("projectExecutionJournal", () => {
       { sequence: 4, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:03.000Z", payload: { event: "continue" } },
     ], "ACTIVE");
 
-    expect(items).toEqual([]);
+    expect(items).toEqual([
+      expect.objectContaining({ title: "模型轮次 · #1", status: "COMPLETED", modelStep: 1 }),
+      expect.objectContaining({ title: "Context compacted", status: "INFO" }),
+    ]);
   });
 
   it("folds repeated reports with unchanged task progress into one card", () => {

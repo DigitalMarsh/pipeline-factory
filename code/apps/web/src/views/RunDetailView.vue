@@ -4,7 +4,7 @@
 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { ArrowLeft, ArrowUp, CircleCheck, Clock, Document, Warning } from "@element-plus/icons-vue";
+import { ArrowLeft, ArrowUp, Document, Warning } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 import ExecutionHeaderStatus from "../components/ExecutionHeaderStatus.vue";
@@ -12,10 +12,10 @@ import PlanDetailDrawer from "../components/PlanDetailDrawer.vue";
 import ProviderUsageFooter from "../components/ProviderUsageFooter.vue";
 import { api } from "../api";
 import MarkdownMessage from "../components/MarkdownMessage.vue";
-import type { AgentLoopStep, ExecutionTask, ExecutionThread, MergeRequest, Plan, PlanTask, Run, RunJournalEvent, ToolCall, VerificationRun } from "../types";
+import type { AgentLoopStep, ExecutionTask, ExecutionThread, MergeRequest, Plan, PlanTask, Run, RunJournalEvent, VerificationRun } from "../types";
 import { projectExecutionJournal, type ExecutionJournalEntry, type ExecutionPlanSnapshot, type ExecutionStreamItem } from "../utils/executionStream";
-import { formatExecutionDuration, formatProviderContextUsage, formatTokenSummary, telemetryModel, telemetryReasoning, usageDetailRows } from "../utils/executionTelemetry";
-import { executionTaskSummary, projectExecutionTasks } from "../utils/executionTasks";
+import { formatProviderContextUsage, telemetryModel } from "../utils/executionTelemetry";
+import { executionTaskStatusLabel, executionTaskSummary, projectExecutionTasks } from "../utils/executionTasks";
 import { canTerminateRun } from "../utils/runControls";
 import { describeRunLoadError } from "../utils/runLoadError";
 import { createProjectRequestScope } from "../utils/projectRoutes";
@@ -25,6 +25,7 @@ const route = useRoute();
 const router = useRouter();
 const props = withDefaults(defineProps<{ embedded?: boolean; projectId?: string; runId?: string }>(), { embedded: false });
 const emit = defineEmits<{ (event: "close"): void }>();
+type ExecutionConversationGroup = { id: string; kind: "plan" | "task" | "unassigned"; task?: ExecutionTask; items: ExecutionStreamItem[] };
 const embedded = computed(() => props.embedded);
 const projectId = computed(() => props.projectId ?? String(route.params.projectId ?? ""));
 const runId = computed(() => props.runId ?? String(route.params.runId ?? ""));
@@ -42,13 +43,11 @@ const sourceCommit = ref("");
 const targetCommit = ref("");
 const executorLoop = computed(() => run.value?.agentLoops?.find((loop) => loop.role === "executor") ?? null);
 const executorSteps = ref<AgentLoopStep[]>([]);
-const toolCalls = ref<ToolCall[]>([]);
 const planTasks = ref<PlanTask[]>([]);
 const executionMessages = ref<ExecutionStreamItem[]>([]);
 const executionTimeline = ref<HTMLElement | null>(null);
 const showScrollToLatest = ref(false);
 const runStreamConnected = ref(false);
-const diagnosticsOpen = ref(false);
 const planDetailOpen = ref(false);
 const planDetail = ref<Plan | null>(null);
 const planDetailRevisions = ref<number[]>([]);
@@ -74,13 +73,21 @@ const executionBlockReason = computed(() => {
 });
 const executionTasks = computed<ExecutionTask[]>(() => projectExecutionTasks(planTasks.value, thread.value?.journal ?? [], run.value?.status ?? ""));
 const executionTaskCounts = computed(() => executionTaskSummary(executionTasks.value));
+const executionConversationGroups = computed<ExecutionConversationGroup[]>(() => {
+  const groups: ExecutionConversationGroup[] = [];
+  const planMessages = executionMessages.value.filter((item) => item.kind === "plan");
+  if (planMessages.length) groups.push({ id: "plan", kind: "plan", items: planMessages });
+  const taskIds = new Set(executionTasks.value.map((task) => task.id));
+  for (const task of executionTasks.value) {
+    groups.push({ id: `task-${task.id}`, kind: "task", task, items: executionMessages.value.filter((item) => item.taskId === task.id) });
+  }
+  const unassigned = executionMessages.value.filter((item) => item.kind !== "plan" && (!item.taskId || !taskIds.has(item.taskId)));
+  if (unassigned.length) groups.push({ id: "unassigned", kind: "unassigned", items: unassigned });
+  return groups;
+});
 const executionTelemetry = computed(() => thread.value?.telemetry ?? null);
-const executionDuration = computed(() => formatExecutionDuration(executionTelemetry.value, telemetryNow.value));
-const executionTokenSummary = computed(() => formatTokenSummary(executionTelemetry.value?.usage));
 const executionTelemetryModel = computed(() => telemetryModel(executionTelemetry.value));
 const executionContextUsage = computed(() => formatProviderContextUsage(executionTelemetry.value?.usage?.inputTokens));
-const executionTelemetryReasoning = computed(() => telemetryReasoning(executionTelemetry.value));
-const executionUsageRows = computed(() => usageDetailRows(executionTelemetry.value?.usage));
 const canSendExecutionMessage = computed(() => Boolean(thread.value && !["CANCELLED", "COMPLETED"].includes(thread.value.state)));
 
 function rebuildExecutionMessages(): void {
@@ -132,11 +139,22 @@ function scrollExecutionToLatest(): void {
 
 function focusExecutionTask(task: ExecutionTask): void {
   selectedTaskId.value = task.id;
-  if (!task.evidenceSequence) return;
   void nextTick(() => {
-    const target = executionTimeline.value?.querySelector<HTMLElement>(`[data-sequence="${task.evidenceSequence}"]`);
+    const target = (task.evidenceSequence ? executionTimeline.value?.querySelector<HTMLElement>(`[data-sequence="${task.evidenceSequence}"]`) : null)
+      ?? Array.from(executionTimeline.value?.querySelectorAll<HTMLElement>("[data-task-id]") ?? []).find((element) => element.dataset.taskId === task.id);
     target?.scrollIntoView({ behavior: "smooth", block: "center" });
   });
+}
+
+function executionMessageStatusLabel(status: ExecutionStreamItem["status"]): string {
+  return ({ RUNNING: "进行中", COMPLETED: "已完成", WAITING: "等待中", FAILED: "失败 / 阻塞", INFO: "信息", UNKNOWN: "状态未知" } as const)[status];
+}
+
+function taskGroupEmptyNote(task: ExecutionTask): string {
+  if (task.status === "UNKNOWN") return "此任务的执行状态和关联会话未记录。";
+  if (task.status === "PENDING") return "尚无结构化进度事件表明此任务已开始。";
+  if (task.status === "BLOCKED") return task.blockedReason ?? "阻塞原因未记录。";
+  return "此任务暂未关联到已记录的执行消息。";
 }
 
 function resetPlanDetail(): void {
@@ -277,13 +295,11 @@ async function load() {
     } catch (caught) { error.value = describeRunLoadError(caught, "plan-revision"); }
     const loopId = response.run.agentLoops?.[0]?.id;
     executorSteps.value = [];
-    toolCalls.value = [];
     if (loopId) {
       try {
-        const [stepsResponse, toolsResponse] = await Promise.all([api.agentLoopSteps(loopId), api.agentLoopTools(loopId)]);
+        const stepsResponse = await api.agentLoopSteps(loopId);
         if (!requestScope.isCurrent(requestToken, `${requestProjectId}:${requestRunId}`)) return;
         executorSteps.value = stepsResponse.items;
-        toolCalls.value = toolsResponse.items;
       } catch (caught) { error.value = describeRunLoadError(caught, "agent-loop"); }
     }
     sourceCommit.value = response.mergeRequest?.sourceCommit ?? response.run.baseCommit;
@@ -424,14 +440,12 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
           :action-busy="actionBusy"
           :source-commit="sourceCommit"
           :target-commit="targetCommit"
-          :diagnostics-count="{ journal: thread?.journal.length ?? 0, tools: toolCalls.length, steps: executorSteps.length }"
           @focus-task="focusExecutionTask"
           @run-action="handleRunAction"
           @loop-action="handleLoopAction"
           @create-review="createReview"
           @confirm-merged="confirmMerged"
           @open-plan="openPlanDetail"
-          @open-diagnostics="diagnosticsOpen = true"
           @update:source-commit="updateSourceCommit"
           @update:target-commit="updateTargetCommit"
         />
@@ -442,26 +456,44 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
         <div class="execution-conversation-stage">
           <div ref="executionTimeline" class="execution-conversation" @scroll="updateExecutionScrollState">
           <div v-if="!executionMessages.length" class="empty-state"><Document :size="28" /><h3>Waiting for executor activity</h3><p>The execution conversation will appear here when the Run starts.</p></div>
-          <article v-for="item in executionMessages" :key="item.id" :data-sequence="item.sequence" :class="['execution-message', `execution-message-${item.kind}`, { failed: item.status === 'FAILED', waiting: item.status === 'WAITING', running: item.status === 'RUNNING' }]">
-            <div class="execution-message-avatar">{{ item.role === 'user' ? 'LS' : item.kind === 'plan' ? 'PL' : item.kind === 'model' ? 'EX' : '·' }}</div>
-            <div class="execution-message-body">
-              <div class="execution-message-meta"><strong>{{ item.title }}</strong><span v-if="item.status !== 'INFO'" class="agent-chip">{{ item.status }}</span><span v-if="item.repetitionCount && item.repetitionCount > 1">×{{ item.repetitionCount }} updates</span><span>{{ new Date(item.occurredAt).toLocaleTimeString('zh-CN') }}</span></div>
-              <template v-if="item.kind === 'plan' && item.plan">
-                <div class="execution-plan-message">
-                  <div class="execution-plan-message-summary"><MarkdownMessage :source="item.plan.goal" /></div>
-                  <button :id="`execution-plan-toggle-${item.id}`" class="execution-plan-toggle" type="button" :aria-expanded="planMessageExpanded" :aria-controls="`execution-plan-details-${item.id}`" @click="planMessageExpanded = !planMessageExpanded">{{ planMessageExpanded ? '收起 Plan 摘要' : '展开 Plan 摘要' }}</button>
-                  <div v-if="planMessageExpanded" :id="`execution-plan-details-${item.id}`" class="execution-plan-message-details">
-                    <div class="execution-plan-message-stats"><span><strong>{{ item.plan.tasks.length }}</strong> tasks</span><span><strong>{{ item.plan.acceptanceCriteria.length }}</strong> acceptance criteria</span><span><strong>{{ item.plan.verificationCommandIds.length }}</strong> verification commands</span></div>
-                    <div v-if="item.plan.tasks.length" class="execution-plan-message-section"><span class="execution-plan-message-label">TASKS</span><ul><li v-for="task in item.plan.tasks" :key="task.id ?? task.title">{{ task.title }}</li></ul></div>
-                    <div class="execution-plan-message-scope"><div><span class="execution-plan-message-label">INCLUDE</span><code v-for="path in item.plan.includePaths" :key="`include-${path}`">{{ path }}</code><small v-if="!item.plan.includePaths.length">No include paths</small></div><div><span class="execution-plan-message-label">EXCLUDE</span><code v-for="path in item.plan.excludePaths" :key="`exclude-${path}`">{{ path }}</code><small v-if="!item.plan.excludePaths.length">No exclude paths</small></div></div>
+          <section v-for="group in executionConversationGroups" :key="group.id" :class="['execution-conversation-group', `execution-conversation-group-${group.kind}`, { selected: selectedTaskId === group.task?.id }]" :data-task-id="group.task?.id">
+            <header v-if="group.task" class="execution-task-stream-heading">
+              <span class="execution-task-stream-step">PLAN TASK</span>
+              <strong>{{ group.task.title }}</strong>
+              <span class="execution-task-stream-status">{{ executionTaskStatusLabel(group.task.status) }}</span>
+              <small v-if="group.task.blockedReason">{{ group.task.blockedReason }}</small>
+            </header>
+            <header v-else-if="group.kind === 'unassigned'" class="execution-task-stream-heading execution-unassigned-heading">
+              <span class="execution-task-stream-step">RUN ACTIVITY</span><strong>任务关联未记录</strong><small>此处保留旧 Run 或未提供任务标识的事件。</small>
+            </header>
+            <p v-if="group.task && !group.items.length" class="execution-task-stream-empty">{{ taskGroupEmptyNote(group.task) }}</p>
+            <article v-for="item in group.items" :key="item.id" :data-sequence="item.sequence" :data-task-id="item.taskId" :data-model-step="item.modelStep" :class="['execution-message', `execution-message-${item.kind}`, { failed: item.status === 'FAILED', waiting: item.status === 'WAITING', running: item.status === 'RUNNING', unknown: item.status === 'UNKNOWN' }]">
+              <div class="execution-message-avatar">{{ item.role === 'user' ? 'LS' : item.kind === 'plan' ? 'PL' : item.kind === 'model' ? 'EX' : item.kind === 'tool' ? 'TL' : '·' }}</div>
+              <div class="execution-message-body">
+                <div class="execution-message-meta"><strong>{{ item.title }}</strong><span v-if="item.status !== 'INFO'" class="agent-chip">{{ executionMessageStatusLabel(item.status) }}</span><span v-if="item.modelStep !== undefined">Turn #{{ item.modelStep }}</span><span v-if="item.callId">Call {{ item.callId }}</span><span v-else-if="item.providerItemId">Provider item {{ item.providerItemId }}</span><span v-if="item.providerThreadId || item.providerTurnId" :title="`Thread ${item.providerThreadId ?? '未记录'} · Turn ${item.providerTurnId ?? '未记录'}`">Provider session linked</span><span>{{ new Date(item.occurredAt).toLocaleTimeString('zh-CN') }}</span></div>
+                <template v-if="item.kind === 'plan' && item.plan">
+                  <div class="execution-plan-message">
+                    <div class="execution-plan-message-summary"><MarkdownMessage :source="item.plan.goal" /></div>
+                    <button :id="`execution-plan-toggle-${item.id}`" class="execution-plan-toggle" type="button" :aria-expanded="planMessageExpanded" :aria-controls="`execution-plan-details-${item.id}`" @click="planMessageExpanded = !planMessageExpanded">{{ planMessageExpanded ? '收起 Plan 摘要' : '展开 Plan 摘要' }}</button>
+                    <div v-if="planMessageExpanded" :id="`execution-plan-details-${item.id}`" class="execution-plan-message-details">
+                      <div class="execution-plan-message-stats"><span><strong>{{ item.plan.tasks.length }}</strong> tasks</span><span><strong>{{ item.plan.acceptanceCriteria.length }}</strong> acceptance criteria</span><span><strong>{{ item.plan.verificationCommandIds.length }}</strong> verification commands</span></div>
+                      <div v-if="item.plan.tasks.length" class="execution-plan-message-section"><span class="execution-plan-message-label">TASKS</span><ul><li v-for="task in item.plan.tasks" :key="task.id ?? task.title">{{ task.title }}</li></ul></div>
+                      <div class="execution-plan-message-scope"><div><span class="execution-plan-message-label">INCLUDE</span><code v-for="path in item.plan.includePaths" :key="`include-${path}`">{{ path }}</code><small v-if="!item.plan.includePaths.length">No include paths</small></div><div><span class="execution-plan-message-label">EXCLUDE</span><code v-for="path in item.plan.excludePaths" :key="`exclude-${path}`">{{ path }}</code><small v-if="!item.plan.excludePaths.length">No exclude paths</small></div></div>
+                    </div>
+                    <div class="execution-plan-message-actions"><el-button text size="small" @click="openPlanDetail">View full plan</el-button></div>
                   </div>
-                  <div class="execution-plan-message-actions"><el-button text size="small" @click="openPlanDetail">View full plan</el-button></div>
-                </div>
-              </template>
-              <MarkdownMessage v-else-if="item.kind === 'model' || item.kind === 'guidance'" :source="item.content" :streaming="item.status === 'RUNNING'" />
-              <p v-else class="execution-activity-detail">{{ item.detail }}</p>
-            </div>
-          </article>
+                </template>
+                <template v-else-if="item.kind === 'model' || item.kind === 'guidance'">
+                  <MarkdownMessage :source="item.content" :streaming="item.status === 'RUNNING'" />
+                  <small v-if="item.detail || item.unrecordedFields?.length" class="execution-message-note">{{ item.detail || item.unrecordedFields?.join(' · ') }}</small>
+                </template>
+                <template v-else>
+                  <p class="execution-activity-detail">{{ item.detail }}</p>
+                  <small v-if="item.unrecordedFields?.length" class="execution-message-note">{{ item.unrecordedFields.join(' · ') }}</small>
+                </template>
+              </div>
+            </article>
+          </section>
           </div>
           <el-button v-if="showScrollToLatest" class="execution-scroll-latest" size="small" @click="scrollExecutionToLatest">Jump to latest</el-button>
         </div>
@@ -478,12 +510,6 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
         </div>
       </section>
     </template>
-    <el-drawer v-model="diagnosticsOpen" title="Execution diagnostics" size="min(760px, 92vw)">
-      <div class="diagnostic-drawer-summary"><span>{{ thread?.journal.length ?? 0 }} journal entries</span><span>{{ toolCalls.length }} tool calls</span><span>{{ executorLoop?.stepCount ?? 0 }} loop steps</span></div>
-      <section class="diagnostic-section telemetry-diagnostic-section"><div class="journal-heading"><div><div class="eyebrow">EXECUTION TELEMETRY</div><h2>Provider usage detail</h2></div><span>{{ executionTelemetry?.usageSource === 'provider' ? 'Provider exact' : '未记录' }}</span></div><p class="telemetry-diagnostic-note">来源：{{ executionTelemetry?.usageSource === 'provider' ? 'Provider 返回的精确 usage，未做本地估算。' : 'Provider 未返回精确 usage；历史 Run 不补算 token。' }}</p><div class="telemetry-detail-grid"><div v-for="row in executionUsageRows" :key="row.label"><span>{{ row.label }}</span><strong>{{ row.value }}</strong></div></div><div class="telemetry-diagnostic-meta"><span>模型 <code>{{ executionTelemetryModel }}</code></span><span>推理等级 <code>{{ executionTelemetryReasoning }}</code></span><span>耗时 <code>{{ executionDuration }}</code></span></div></section>
-      <section class="diagnostic-section"><div class="journal-heading"><div><div class="eyebrow">EXECUTION JOURNAL</div><h2>What happened</h2></div></div><div v-if="thread?.journal.length" class="journal-list"><div v-for="entry in thread.journal" :key="entry.sequence" class="journal-entry"><div class="journal-icon" :class="{ success: entry.type.includes('COMPLETED') || entry.type === 'COMMIT', warning: entry.type.includes('FAILED') }"><CircleCheck v-if="entry.type.includes('COMPLETED') || entry.type === 'COMMIT'" :size="15" /><Warning v-else-if="entry.type.includes('FAILED')" :size="15" /><Clock v-else :size="15" /></div><div><div class="journal-meta"><strong>{{ entry.type }}</strong><span>#{{ entry.sequence }}</span><span>{{ new Date(entry.occurredAt).toLocaleTimeString('zh-CN') }}</span></div><p>{{ JSON.stringify(entry.payload) }}</p></div></div></div><div v-else class="empty-state"><Document :size="28" /><h3>No journal entries</h3><p>The execution thread has not recorded activity yet.</p></div></section>
-      <section v-if="toolCalls.length" class="diagnostic-section"><div class="journal-heading"><div><div class="eyebrow">TOOL CALLS</div><h2>Audited tool activity</h2></div><span>{{ toolCalls.length }} calls</span></div><div class="journal-list"><div v-for="tool in toolCalls" :key="tool.callId" class="journal-entry"><div class="journal-icon" :class="{ success: tool.status === 'SUCCEEDED', warning: tool.status === 'FAILED' || tool.status === 'DENIED' || tool.status === 'UNKNOWN' || tool.status === 'NEEDS_RECONCILIATION' }"><CircleCheck v-if="tool.status === 'SUCCEEDED'" :size="15" /><Warning v-else-if="tool.status === 'FAILED' || tool.status === 'DENIED' || tool.status === 'UNKNOWN' || tool.status === 'NEEDS_RECONCILIATION'" :size="15" /><Clock v-else :size="15" /></div><div><div class="journal-meta"><strong>{{ tool.tool }}</strong><span>{{ tool.status }}</span><span>{{ new Date(tool.startedAt).toLocaleTimeString('zh-CN') }}</span></div><p>{{ tool.result ? JSON.stringify(tool.result) : 'No result yet' }}</p></div></div></div></section>
-    </el-drawer>
     <PlanDetailDrawer v-model="planDetailOpen" :plan="planDetail" :error="planDetailError" :revisions="planDetailRevisions" :read-only="true" @select-revision="selectPlanRevision" />
   </div>
 </template>

@@ -11,7 +11,7 @@ import type { ExplorerPlan, ExplorerThread, Project } from "../types";
 const styles = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../styles.css"), "utf8");
 const source = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "./ThreadRail.vue"), "utf8");
 
-function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplorer = false, projectActionId: string | null = null, includeArchived = false, showArchived = false, explorerLoading = false, explorerError: string | null = null, explorerItems?: ExplorerThread[], planCenterActive = false, planCenterCount = 2) {
+function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplorer = false, projectActionId: string | null = null, includeArchived = false, showArchived = false, explorerLoading = false, explorerError: string | null = null, explorerItems?: ExplorerThread[], planCenterActive = false, planCenterCount = 2, projectExecutionActive = false) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   let createExplorerCount = 0;
@@ -21,6 +21,7 @@ function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplor
   let selectedProjectId: string | null = null;
   let selectedExplorerId: string | null = null;
   let selectedExplorerPlanId: string | null = null;
+  let selectedProjectExecution = false;
   let renamedExplorerPlanId: string | null = null;
   let threadAction: string | null = null;
   let archivedExplorerId: string | null = null;
@@ -62,12 +63,14 @@ function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplor
         requirements,
         activeExplorerPlanId: "requirement-1",
         explorerPaused: false,
+        projectExecutionActive,
         onCreateExplorer: () => { createExplorerCount += 1; },
         onCreateProject: () => { createProjectCount += 1; },
         onSelectPanel: (value: "projects" | "explorers") => { selectedPanel = value; activePanel.value = value; },
         onSelectPlanCenter: () => { selectedPlanCenter = true; },
         onSelectProject: (projectId: string) => { selectedProjectId = projectId; },
         onSelectExplorer: (explorerId: string) => { selectedExplorerId = explorerId; },
+        onSelectProjectExecution: () => { selectedProjectExecution = true; },
         onSelectExplorerPlan: (explorerPlanId: string) => { selectedExplorerPlanId = explorerPlanId; },
         onRenameExplorerPlan: (explorerPlanId: string) => { renamedExplorerPlanId = explorerPlanId; },
         onThreadAction: (command: string) => { threadAction = command; },
@@ -95,6 +98,7 @@ function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplor
     getSelectedProjectId: () => selectedProjectId,
     getSelectedExplorerId: () => selectedExplorerId,
     getSelectedExplorerPlanId: () => selectedExplorerPlanId,
+    getSelectedProjectExecution: () => selectedProjectExecution,
     getRenamedExplorerPlanId: () => renamedExplorerPlanId,
     getThreadAction: () => threadAction,
     getArchivedExplorerId: () => archivedExplorerId,
@@ -105,6 +109,27 @@ function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplor
 }
 
 describe("ThreadRail left workspace navigation", () => {
+  it("places the fixed project execution entry between the project area and New Explorer", async () => {
+    const mounted = mountRail("explorers", false, null, false, false, false, null, undefined, false, 2, true);
+    const projectCard = mounted.host.querySelector<HTMLElement>(".project-context-card");
+    const executionEntry = mounted.host.querySelector<HTMLButtonElement>("[data-project-execution-entry]");
+    const createExplorer = mounted.host.querySelector<HTMLButtonElement>('button[aria-label="新建 Explorer"]');
+
+    expect(projectCard).not.toBeNull();
+    expect(executionEntry?.textContent).toContain("项目执行线程");
+    expect(executionEntry?.classList.contains("active")).toBe(true);
+    expect(executionEntry?.getAttribute("aria-current")).toBe("page");
+    expect(projectCard!.compareDocumentPosition(executionEntry!) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+    expect(executionEntry!.compareDocumentPosition(createExplorer!) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
+
+    executionEntry?.click();
+    await nextTick();
+    expect(mounted.getSelectedProjectExecution()).toBe(true);
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
   it("renders Explorers, Projects, and the plan center entry button", () => {
     const mounted = mountRail();
     const entries = [...mounted.host.querySelectorAll<HTMLButtonElement>("button.left-entry-button")];
@@ -385,7 +410,7 @@ describe("ThreadRail left workspace navigation", () => {
 
   it("emits create-explorer from the inline new Explorer button", async () => {
     const mounted = mountRail();
-    const createButton = mounted.host.querySelector<HTMLButtonElement>("button.left-panel-create");
+    const createButton = mounted.host.querySelector<HTMLButtonElement>('button[aria-label="新建 Explorer"]');
 
     expect(createButton).not.toBeNull();
     expect(createButton?.textContent).toContain("新建 Explorer");
@@ -399,7 +424,7 @@ describe("ThreadRail left workspace navigation", () => {
 
   it("disables the new Explorer button while creation is in flight", () => {
     const mounted = mountRail("explorers", true);
-    const createButton = mounted.host.querySelector<HTMLButtonElement>("button.left-panel-create");
+    const createButton = mounted.host.querySelector<HTMLButtonElement>('button[aria-label="新建 Explorer"]');
 
     expect(createButton?.disabled).toBe(true);
     expect(createButton?.getAttribute("aria-busy")).toBe("true");
@@ -421,7 +446,7 @@ describe("ThreadRail left workspace navigation", () => {
     const mounted = mountRail("explorers", false, null, false, false, false, null, []);
 
     expect(mounted.host.querySelector("[data-explorer-list-state=empty]")?.textContent).toContain("暂无 Explorer 线程");
-    expect(mounted.host.querySelector("button.left-panel-create")).not.toBeNull();
+    expect(mounted.host.querySelector('button[aria-label="新建 Explorer"]')).not.toBeNull();
 
     mounted.app.unmount();
     mounted.host.remove();

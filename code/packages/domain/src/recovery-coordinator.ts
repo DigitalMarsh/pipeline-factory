@@ -28,7 +28,7 @@ export class RecoveryCoordinator {
       affected.set(updated.id, updated);
     }
 
-    for (const loop of this.store.recoverAgentLoops().filter((item) => item.ownerType !== "explorer-turn")) {
+    for (const loop of this.store.recoverAgentLoops().filter((item) => item.ownerType === "run")) {
       if (uncertainLoopIds.has(loop.id)) {
         const updated = this.transition(loop, "NEEDS_RECONCILIATION", "UNKNOWN_TOOL_RESULT");
         affected.set(updated.id, updated);

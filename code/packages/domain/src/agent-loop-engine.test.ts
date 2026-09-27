@@ -140,6 +140,37 @@ describe("AgentLoopEngine", () => {
     expect(aborted).toBe(true);
   });
 
+  it("blocks and cancels a provider command at the project command timeout", async () => {
+    const store = new InMemoryPipelineStore();
+    let cancelled = false;
+    let aborted = false;
+    const model: ModelGateway = {
+      configFor: () => ({ model: "executor" }),
+      capabilities: () => ({ supportsStructuredUserInput: false, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
+      async *stream(request: ModelRequest) {
+        yield { type: "provider.activity", phase: "started", itemId: "command-1", itemType: "commandExecution", title: "npm install", summary: "npm install", providerThreadId: "provider-thread", providerTurnId: "provider-turn" };
+        await new Promise<void>((resolve) => request.signal?.addEventListener("abort", () => { aborted = true; resolve(); }, { once: true }));
+        yield { type: "provider.activity", phase: "completed", itemId: "command-1", itemType: "commandExecution", title: "npm install", summary: "npm install", providerThreadId: "provider-thread", providerTurnId: "provider-turn" };
+        yield { type: "turn.cancelled" };
+      },
+      async answerUserInput() { return undefined; },
+      async cancel() { cancelled = true; },
+    };
+
+    const loop = await new AgentLoopEngine(store, model).run({
+      ...baseInput(),
+      mode: "provider-controlled",
+      providerCommandTimeoutMs: 10,
+      modelRequest: { cwd: "/repo/code/personal-site", messages: [{ role: "user", content: "execute" }] },
+    });
+
+    expect(loop).toMatchObject({ state: "BLOCKED", checkpointJson: expect.stringContaining("PROVIDER_COMMAND_TIMEOUT") });
+    expect(aborted).toBe(true);
+    expect(cancelled).toBe(true);
+    expect(store.listAgentLoopSteps(loop.id).find((step) => step.stepType === "PROVIDER_ACTIVITY")?.payload).toMatchObject({ cwd: "/repo/code/personal-site", timeoutMs: 10 });
+    expect(store.listAgentLoopSteps(loop.id).at(-1)?.payload).toMatchObject({ reason: "PROVIDER_COMMAND_TIMEOUT", itemId: "command-1", cwd: "/repo/code/personal-site" });
+  });
+
   it("runs model, tool, tool result, and model again within one loop", async () => {
     const store = new InMemoryPipelineStore();
     let calls = 0;

@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-09-27 — 当前提交
+
+### Added
+
+- 增加每个 Project 独立的长期执行线程：持久化消息、Provider Thread、模型与推理等级偏好；按顺序处理请求，支持幂等提交、取消、重启后恢复队列，并通过项目级 API 和 SSE 回放进度。该入口可直接在项目仓库目录执行，不会隐式创建 Explorer Plan 或 Run。
+- 在 Explorer 左侧加入“项目执行线程”入口和会话面板，展示消息、Provider/工具活动、队列与连接状态，并支持切换模型偏好和发送请求。
+- 为 Run 工作树增加项目当前 Git 可见变更的快照基线，使已修改和普通未跟踪项目文件可供新 Run 使用；快照失败时清理新建的工作树和分支。
+- 新增执行目录解析与安全检查：从 Plan 的 `artifactPath` 或 `include` 推导命令工作目录，拒绝越界路径及符号链接，并向 Executor 明确传入工作树根目录与命令目录。
+- 新增 Run 执行预检与恢复流程文档，记录 Provider 命令超时、错误目录和清理旧工作树前的现场保全步骤。
+
+### Changed
+
+- Provider 代执行的命令现在受项目默认命令超时约束；超时会取消 Provider Turn、阻塞 Agent Loop，并记录活动 ID、工作目录及超时值。
+- Run journal 增加模型轮次、任务 ID、Provider 会话/活动及工具调用的关联字段；执行页按 Plan 任务展示模型输出、工具/MCP 活动和错误，明确标出未记录的状态，并将重复且进度未变化的 Executor 报告合并展示。
+- Executor 使用结构化任务进度标记更新任务状态；缺少任务事实时保持“未记录”，不根据模型叙述或 Run 状态推测。执行状态卡直接展示 token 用量明细，执行会话承载过程信息。
+- RecoveryCoordinator 仅处理 Run 所属 Agent Loop；项目执行线程单独将重启前未完成的轮次标为需要恢复。
+
+### Verification
+
+- `pnpm --dir code typecheck`、`pnpm --dir code build`、Web 277 个测试和 API 51 个测试通过；构建仍有大于 500 kB 的 chunk 提示。
+- Domain 测试 225/226 通过；`dispatch-coordinator.test.ts` 的 1 个测试期望 `RUNNING`，实际因 `NEEDS_CONFIGURATION` 停在 `WAITING`。该测试文件未在本次提交中修改。
+
 ## [Unreleased] - 2026-09-19
 
 ### Added
