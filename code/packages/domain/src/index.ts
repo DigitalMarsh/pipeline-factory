@@ -67,6 +67,9 @@ export type { GitMergeInspector } from "./git/merge-inspector.js";
 // ModelResult 一并跟着走：全仓只有 OpenAIModelGateway.complete 使用它。
 export { OpenAIModelGateway } from "./model/gateway-openai.js";
 export type { ModelFetch, ModelFetchResponse, ModelResult, OpenAIModelGatewayOptions } from "./model/gateway-openai.js";
+// 批 D：测试替身搬进 model/stub-gateway.ts。至此 model/ 下三个 ModelGateway 实现并列
+// （gateway-openai / stub-gateway / codex-app-server），一眼可分谁是生产、谁是降级、谁是替身。
+export { StubModelGateway } from "./model/stub-gateway.js";
 // PipelineStore 是**类型**，纯 re-export 不涉及运行时绑定，天然不会引出 S1 那类 ReferenceError；
 // 而它被 index.ts 内部大量用作参数类型（`store: PipelineStore`），所以仍用 import + export 两条，
 // 保持"类型在本模块作用域内可见"。
@@ -789,30 +792,6 @@ export interface ModelGateway {
   configFor(role: ModelRole): ModelRoleConfig;
   capabilities?(role: ModelRole): ModelCapabilities;
   readRateLimits?(): Promise<MappedCodexRateLimits>;
-}
-
-/** 测试用 ModelGateway；保持事件协议但不访问外部模型。 */
-export class StubModelGateway implements ModelGateway {
-  constructor(private readonly configs: Record<ModelRole, ModelRoleConfig>) {}
-
-  configFor(role: ModelRole): ModelRoleConfig { return this.configs[role]; }
-
-  capabilities(_role: ModelRole): ModelCapabilities {
-    return { supportsStructuredUserInput: false, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] };
-  }
-
-  async *stream(request: ModelRequest): AsyncIterable<ModelEvent> {
-    if (request.signal?.aborted) {
-      yield { type: "turn.cancelled" };
-      return;
-    }
-    yield { type: "text.delta", text: request.role === "explorer" ? "Stub Explorer response" : "Stub Executor response" };
-    yield { type: "turn.completed" };
-  }
-
-  async answerUserInput(): Promise<void> { return undefined; }
-  async cancel(): Promise<void> { return undefined; }
-  async readRateLimits(): Promise<MappedCodexRateLimits> { return { available: false, fiveHour: null, sevenDay: null, reason: "Codex rate-limit telemetry is unavailable" }; }
 }
 
 
