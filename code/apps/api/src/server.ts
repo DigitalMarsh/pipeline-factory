@@ -13,7 +13,6 @@ import {
   SqlitePipelineStore,
   Scheduler,
   ExplorerService,
-  ExplorerDeleteBlockedError,
   ExplorerThreadService,
   ProjectExecutionThreadService,
   ModelExplorerTitleGenerator,
@@ -37,7 +36,6 @@ import {
   VerificationService,
   PlanDispatchCoordinator,
   type PipelineStore,
-  type DomainEvent,
   type ExplorerThread,
   type HookDefinition,
   type PlanStatus,
@@ -51,7 +49,6 @@ import {
   type ProjectSettingsInput,
   type ProjectExecutionSnapshot,
 } from "@pipeline-factory/domain";
-import { projectExplorerActivity } from "@pipeline-factory/domain";
 import { assertGitBranch, detectDefaultBranch, inspectGitRepository } from "./runtime/git.js";
 import { z } from "zod";
 import type { FactoryConfig } from "./config.js";
@@ -61,6 +58,7 @@ import { openSseChannel } from "./http/sse.js";
 import { registerPlatformRoutes } from "./routes/platform.js";
 import { registerChangeProposalRoutes } from "./routes/change-proposals.js";
 import { registerProjectRoutes } from "./routes/projects.js";
+import { registerExplorerRoutes } from "./routes/explorers.js";
 import { registerWorkbenchRoutes } from "./routes/workbench.js";
 import { registerHookRoutes } from "./routes/hooks.js";
 import { registerAgentLoopRoutes } from "./routes/agent-loops.js";
@@ -78,11 +76,10 @@ import { projectExecutionEventsQuery, projectExecutionPreferencesBody, projectEx
 import { changeProposalBody } from "./schemas/change-proposals.js";
 import { sourceCommitBody, targetCommitBody } from "./schemas/merge-requests.js";
 import { guidanceBody } from "./schemas/runs.js";
-import { workbenchSnapshot, createProjectEventScope } from "./projections/workbench.js";
+// 投影函数只剩这两个还被组合根里未搬走的 plans 路由用；其余（workbenchSnapshot /
+// createProjectEventScope / projectRunThreadTelemetry / projectAgentLoopResponse / loopDiagnostics /
+// findProjectThread）的调用点都随各自 route 文件搬走了，server.ts 不再 import 它们。
 import { planProjection, decoratePlanRows } from "./projections/plan-lifecycle.js";
-import { projectRunThreadTelemetry } from "./projections/run-telemetry.js";
-import { loopDiagnostics, projectAgentLoopResponse } from "./projections/agent-loop.js";
-import { findProjectThread, sanitizeExplorerRequirementStatusEvent } from "./projections/explorer.js";
 
 /** API 组装依赖；生产环境使用 SQLite/真实 Gateway，测试可注入内存 Store 和 Stub。 */
 export type PipelineAppOptions = {
@@ -280,9 +277,11 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
 
   // ── 已抽出到 routes/ 的域 ──────────────────────────────────────────────────
   // 注册顺序不影响匹配：97 条路由里没有通配符，Fastify 基数树对静态段与参数段按优先级匹配。
-  // 投影函数（workbenchSnapshot / createProjectEventScope / projectRunThreadTelemetry /
-  // projectAgentLoopResponse / loopDiagnostics / findProjectThread）已在 `projections/`，
-  // 这里只传它们需要的 store / service；此前那些 `x: (a) => f(store, a)` 回调壳已随 P5 删除。
+  // 每个 register 只接它自己需要的 store / service —— 投影函数已在 `projections/`，
+  // route 直接 import，所以这里没有 `x: (a) => f(store, a)` 那种回调壳。
+  // `explorerThread: explorer` 是**刻意的重命名**：组合根里 ExplorerThreadService 的变量名叫
+  // `explorer`，与 ExplorerService 的 `explorers` 只差一个 s；route 文件里必须分得清
+  // "生命周期"与"回合执行"，所以在注入处改名，而不去动组合根里的变量名（那会牵动别处调用点）。
   // 平台级（health / 额度 / MCP 与插件工具目录 / plan 需求清单）与 Project 无关。
   registerPlatformRoutes(app, { model, mcpRegistry, pluginRegistry, config: options.config });
   registerWorkbenchRoutes(app, { store, projects });
@@ -293,168 +292,9 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
   registerMergeRequestRoutes(app, { store, merger, dispatchCoordinator });
   registerChangeProposalRoutes(app, { store, changeProposals });
   registerProjectRoutes(app, { store, projects, plans });
+  registerExplorerRoutes(app, { store, explorers, explorerThread: explorer });
   // ── 仍在组合根的域（P4b 后续步继续搬）──
 
-  app.post("/api/v4/projects/:projectId/explorers", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    const body = explorerCreateBody.safeParse(request.body ?? {});
-    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid Explorer creation request" });
-    try {
-      const explorer = explorers.create({ projectId: params.data.projectId, ...(body.data.title ? { title: body.data.title } : {}), ...(body.data.originThreadId ? { originThreadId: body.data.originThreadId } : {}) });
-      return reply.code(201).send({ explorer });
-    } catch (error) {
-      return reply.code(409).send({ error: error instanceof Error ? error.message : "Explorer cannot be created" });
-    }
-  });
-
-
-  app.get("/api/v4/projects/:projectId/explorers", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    return { items: explorers.list(params.data.projectId) };
-  });
-
-  app.get("/api/v4/projects/:projectId/explorers/:explorerId", async (request, reply) => {
-    const params = projectExplorerParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    const explorer = store.getThread(params.data.explorerId);
-    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
-    return { explorer };
-  });
-
-  app.get("/api/v4/projects/:projectId/explorers/:explorerId/explorer-plans", async (request, reply) => {
-    const params = projectExplorerParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    const explorer = store.getThread(params.data.explorerId);
-    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
-    return { items: explorers.listPlans(explorer.id) };
-  });
-
-  app.post("/api/v4/projects/:projectId/explorers/:explorerId/explorer-plans", async (request, reply) => {
-    const params = projectExplorerParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    const explorer = store.getThread(params.data.explorerId);
-    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
-    try {
-      const explorerPlan = explorers.createPlan(explorer.id);
-      return reply.code(201).send({ explorerPlan, explorer: store.getThread(explorer.id) });
-    } catch (error) {
-      return reply.code(409).send({ error: error instanceof Error ? error.message : "ExplorerPlan cannot be created" });
-    }
-  });
-
-  app.get("/api/v4/projects/:projectId/explorers/:explorerId/explorer-plans/:explorerPlanId/workspace", async (request, reply) => {
-    const params = projectExplorerPlanParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    const explorer = store.getThread(params.data.explorerId);
-    const explorerPlan = store.getExplorerPlan(params.data.explorerPlanId);
-    if (!explorer || explorer.projectId !== params.data.projectId || !explorerPlan || explorerPlan.explorerThreadId !== explorer.id || explorerPlan.projectId !== explorer.projectId) {
-      return reply.code(404).send({ error: "ExplorerPlan not found" });
-    }
-    const turns = store.listTurns(explorer.id).filter((turn) => turn.explorerPlanId === explorerPlan.id);
-    const turnIds = new Set(turns.map((turn) => turn.id));
-    const loops = store.listAgentLoops().filter((loop) => loop.ownerType === "explorer-turn" && turnIds.has(loop.ownerId));
-    const loopIds = new Set(loops.map((loop) => loop.id));
-    const steps = loops.flatMap((loop) => store.listAgentLoopSteps(loop.id)).filter((step) => loopIds.has(step.loopId));
-    const activity = projectExplorerActivity({ turns, loops, steps });
-    const selectedCandidate = explorerPlan.candidatePlanId ? store.getPlan(explorerPlan.candidatePlanId) : undefined;
-    const legacyCandidate = !explorerPlan.newPlanRequested && !explorerPlan.candidatePlanId
-      ? store.listPlans().filter((plan) => plan.projectId === explorer.projectId && plan.sourceExplorerThreadId === explorer.id && plan.explorerPlanId === explorerPlan.id && plan.status === "DRAFT").sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
-      : undefined;
-    const candidate = selectedCandidate?.status === "DRAFT" ? selectedCandidate : legacyCandidate ?? null;
-    const draft = explorer.activeRevisionDraftId ? store.getRevisionDraft(explorer.activeRevisionDraftId) : undefined;
-    const revisionDraft = draft && draft.explorerPlanId === explorerPlan.id && ["EDITING", "READY_TO_CONFIRM", "BASE_CHANGED"].includes(draft.status) ? draft : null;
-    return { explorerPlan, turns, activity, inputRequests: store.listInputRequests(explorer.id).filter((item) => item.explorerPlanId === explorerPlan.id), candidate: candidate ? { ...candidate, ...planProjection(store, candidate) } : null, revisionDraft, loops: loops.map((loop) => projectAgentLoopResponse(store, loop)), lastEventSequence: store.getLastEventSequence(explorer.id) };
-  });
-
-  app.post("/api/v4/projects/:projectId/explorers/:explorerId/explorer-plans/:explorerPlanId/rename", async (request, reply) => {
-    const params = projectExplorerPlanParams.safeParse(request.params);
-    const body = explorerRenameBody.safeParse(request.body ?? {});
-    if (!params.success || !body.success) return reply.code(400).send({ error: "ExplorerPlan title is required" });
-    const explorer = store.getThread(params.data.explorerId);
-    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
-    try {
-      return { explorerPlan: explorers.renamePlan(explorer.id, params.data.explorerPlanId, body.data.title) };
-    } catch (error) {
-      return reply.code(409).send({ error: error instanceof Error ? error.message : "ExplorerPlan cannot be renamed" });
-    }
-  });
-
-  app.post("/api/v4/projects/:projectId/explorers/:explorerId/explorer-plans/:explorerPlanId/activate", async (request, reply) => {
-    const params = projectExplorerPlanParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    const explorer = store.getThread(params.data.explorerId);
-    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
-    try {
-      const explorerPlan = explorers.activatePlan(explorer.id, params.data.explorerPlanId);
-      return { explorerPlan, explorer: store.getThread(explorer.id) };
-    } catch (error) {
-      return reply.code(404).send({ error: error instanceof Error ? error.message : "ExplorerPlan not found" });
-    }
-  });
-
-  app.post("/api/v4/projects/:projectId/explorers/:explorerId/archive", async (request, reply) => {
-    const params = projectExplorerParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    const explorer = store.getThread(params.data.explorerId);
-    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
-    try {
-      return { explorer: explorers.archive(explorer.id) };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return reply.code(409).send({ code: "EXPLORER_ARCHIVE_NOT_ALLOWED", error: message });
-    }
-  });
-
-  app.post("/api/v4/projects/:projectId/explorers/:explorerId/activate", async (request, reply) => {
-    const params = projectExplorerParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    const explorer = store.getThread(params.data.explorerId);
-    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
-    return { explorer: explorers.activate(explorer.id) };
-  });
-
-  app.post("/api/v4/projects/:projectId/explorers/:explorerId/rename", async (request, reply) => {
-    const params = projectExplorerParams.safeParse(request.params);
-    const body = explorerRenameBody.safeParse(request.body ?? {});
-    if (!params.success || !body.success) return reply.code(400).send({ error: "Explorer title is required" });
-    const explorer = store.getThread(params.data.explorerId);
-    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
-    return { explorer: explorers.rename(explorer.id, body.data.title) };
-  });
-
-  app.delete("/api/v4/projects/:projectId/explorers/:explorerId", async (request, reply) => {
-    const params = projectExplorerParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    const explorer = store.getThread(params.data.explorerId);
-    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
-    try {
-      const result = explorers.delete(explorer.id);
-      return { deletedExplorerId: explorer.id, replacementExplorer: result.replacementExplorer, project: result.project, deleted: result.deleted };
-    } catch (error) {
-      if (error instanceof ExplorerDeleteBlockedError) {
-        return reply.code(409).send({ code: error.code, error: error.message, message: error.message, activeRunIds: error.activeRunIds, activeLoopIds: error.activeLoopIds });
-      }
-      return reply.code(409).send({ code: "EXPLORER_DELETE_FAILED", error: error instanceof Error ? error.message : "Explorer cannot be deleted" });
-    }
-  });
-
-  app.get("/api/v4/projects/:projectId/explorers/:explorerId/activity", async (request, reply) => {
-    const params = projectExplorerParams.safeParse(request.params);
-    const query = explorerActivityQuery.safeParse(request.query);
-    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid Explorer activity query" });
-    const explorer = store.getThread(params.data.explorerId);
-    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
-    const explorerPlan = store.getExplorerPlan(query.data.explorerPlanId);
-    if (!explorerPlan || explorerPlan.explorerThreadId !== explorer.id || explorerPlan.projectId !== explorer.projectId) return reply.code(404).send({ error: "ExplorerPlan not found" });
-    const turns = store.listTurns(explorer.id).filter((turn) => turn.explorerPlanId === explorerPlan.id);
-    const turnIds = new Set(turns.map((turn) => turn.id));
-    const loops = store.listAgentLoops().filter((loop) => loop.ownerType === "explorer-turn" && turnIds.has(loop.ownerId));
-    const loopIds = new Set(loops.map((loop) => loop.id));
-    const steps = loops.flatMap((loop) => store.listAgentLoopSteps(loop.id)).filter((step) => loopIds.has(step.loopId));
-    const items = projectExplorerActivity({ turns, loops, steps }).filter((item) => item.explorerPlanId === explorerPlan.id).filter((item) => !query.data.afterSequence || item.sequence > query.data.afterSequence);
-    return { items, lastEventSequence: store.getLastEventSequence(explorer.id) };
-  });
 
   app.post("/api/v4/projects/:projectId/merge-reconciliation", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
@@ -593,113 +433,6 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       return reply.code(404).send({ code: "REVISION_DRAFT_NOT_FOUND", error: "No active revision draft" });
     }
     return { draft };
-  });
-
-  app.post("/api/v4/projects/:projectId/explorer-thread/turns", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    const body = v4TurnBody.safeParse(request.body ?? {});
-    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid v4 ExplorerThread turn" });
-    const thread = findProjectThread(store, params.data.projectId, body.data.threadId);
-    if (!thread) return reply.code(404).send({ error: "ExplorerThread not found" });
-    try {
-      const accepted = await explorer.startTurn({ threadId: body.data.threadId, explorerPlanId: body.data.explorerPlanId, content: body.data.content, clientTurnId: body.data.clientTurnId });
-      return reply.code(202).send({ turn: { user: accepted.user, assistant: accepted.assistant }, eventsUrl: accepted.eventsUrl, loopId: accepted.loopId, state: accepted.assistant.status });
-    } catch (error) {
-      return reply.code(409).send({ error: error instanceof Error ? error.message : "ExplorerThread turn cannot be started" });
-    }
-  });
-
-  app.get("/api/v4/projects/:projectId/explorer-thread/turns", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    const query = v4ThreadQuery.safeParse(request.query);
-    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid v4 turn query" });
-    const thread = findProjectThread(store, params.data.projectId, query.data.threadId);
-    if (!thread) return reply.code(404).send({ error: "ExplorerThread not found" });
-    const explorerPlan = store.getExplorerPlan(query.data.explorerPlanId);
-    if (!explorerPlan || explorerPlan.explorerThreadId !== thread.id || explorerPlan.projectId !== thread.projectId) return reply.code(404).send({ error: "ExplorerPlan not found" });
-    return { items: store.listTurns(thread.id).filter((turn) => turn.explorerPlanId === explorerPlan.id), lastEventSequence: store.getLastEventSequence(thread.id) };
-  });
-
-  app.get("/api/v4/projects/:projectId/explorer-thread/input-requests", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    const query = v4InputQuery.safeParse(request.query);
-    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid v4 input request query" });
-    const thread = findProjectThread(store, params.data.projectId, query.data.threadId);
-    if (!thread) return reply.code(404).send({ error: "ExplorerThread not found" });
-    const explorerPlan = store.getExplorerPlan(query.data.explorerPlanId);
-    if (!explorerPlan || explorerPlan.explorerThreadId !== thread.id || explorerPlan.projectId !== thread.projectId) return reply.code(404).send({ error: "ExplorerPlan not found" });
-    return { items: store.listInputRequests(thread.id, query.data.status).filter((item) => item.explorerPlanId === explorerPlan.id) };
-  });
-
-  app.post("/api/v4/projects/:projectId/explorer-thread/input-requests/:requestId/answer", async (request, reply) => {
-    const params = z.object({ projectId: z.string().min(1), requestId: z.string().min(1) }).safeParse(request.params);
-    const body = v4AnswerBody.safeParse(request.body ?? {});
-    if (!params.success || !body.success) return reply.code(400).send({ error: "clientRequestId and answers are required" });
-    const inputRequest = store.getInputRequest(params.data.requestId);
-    const thread = inputRequest ? findProjectThread(store, params.data.projectId, inputRequest.threadId) : undefined;
-    if (!thread) return reply.code(404).send({ error: "ExplorerThread not found" });
-    try { const result = await explorer.answerInput({ threadId: thread.id, requestId: params.data.requestId, answers: body.data.answers, clientRequestId: body.data.clientRequestId, actorId: body.data.actorId }); return result; }
-    catch (error) {
-      const message = error instanceof Error ? error.message : "Input answer failed";
-      return reply.code(message.includes("recovery is required") ? 503 : 409).send({ error: message });
-    }
-  });
-
-  app.post("/api/v4/projects/:projectId/explorer-thread/turns/:turnId/cancel", async (request, reply) => {
-    const params = z.object({ projectId: z.string().min(1), turnId: z.string().min(1) }).safeParse(request.params);
-    const body = z.object({ threadId: z.string().min(1), reason: z.string().trim().min(1).max(500).default("user_cancelled") }).safeParse(request.body ?? {});
-    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid v4 cancel request" });
-    const thread = findProjectThread(store, params.data.projectId, body.data.threadId);
-    if (!thread) return reply.code(404).send({ error: "ExplorerThread not found" });
-    try { return { turn: await explorer.cancelTurn({ threadId: thread.id, turnId: params.data.turnId, reason: body.data.reason }) }; }
-    catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "Turn cannot be cancelled" }); }
-  });
-
-  // Explorer SSE 使用 Last-Event-ID 与数据库事件序列回放，断线重连不会丢失已持久化消息。
-  app.get("/api/v4/projects/:projectId/explorer-thread/events", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    const query = v4ThreadQuery.safeParse(request.query);
-    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid v4 event query" });
-    const thread = findProjectThread(store, params.data.projectId, query.data.threadId);
-    if (!thread) return reply.code(404).send({ error: "ExplorerThread not found" });
-    const explorerPlan = store.getExplorerPlan(query.data.explorerPlanId);
-    if (!explorerPlan || explorerPlan.explorerThreadId !== thread.id || explorerPlan.projectId !== thread.projectId) return reply.code(404).send({ error: "ExplorerPlan not found" });
-    const headerSequence = Number(request.headers["last-event-id"] ?? 0) || 0;
-    let cursor = Math.max(query.data.afterSequence ?? 0, headerSequence);
-    const afterSequence = cursor;
-    // 订阅式通道：不传 poll，帧由 subscribeEvents 的回调推。unsubscribe 要等 subscribeEvents
-    // 返回才拿得到，所以走 onClose 登记（见 http/sse.ts 维护提示 4）。
-    const sse = openSseChannel(request, reply);
-    const send = (event: { sequence: number; type: string; payload: Record<string, unknown> }) => { cursor = event.sequence; const type = event.type.startsWith("explorer.") ? event.type.slice("explorer.".length) : event.type; sse.send(event.sequence, type, event.payload); };
-    const unsubscribe = explorer.subscribeEvents(thread.id, (event) => {
-      if (event.payload.explorerPlanId === explorerPlan.id) send(event);
-    }, afterSequence);
-    sse.onClose(unsubscribe);
-    cursor = Math.max(cursor, store.getLastEventSequence(thread.id));
-    sse.ready(cursor, { afterSequence: cursor, explorerPlanId: explorerPlan.id });
-  });
-
-  // Thread-level status stream contains only requirement/turn state metadata, never conversation content.
-  app.get("/api/v4/projects/:projectId/explorer-thread/requirement-status/events", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    const query = v4ThreadStatusQuery.safeParse(request.query);
-    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid requirement status event query" });
-    const thread = findProjectThread(store, params.data.projectId, query.data.threadId);
-    if (!thread) return reply.code(404).send({ error: "ExplorerThread not found" });
-    const headerSequence = Number(request.headers["last-event-id"] ?? 0) || 0;
-    let cursor = Math.max(query.data.afterSequence ?? 0, headerSequence);
-    const afterSequence = cursor;
-    const sse = openSseChannel(request, reply);
-    const send = (event: { sequence: number; type: string; payload: Record<string, unknown> }) => {
-      const projected = sanitizeExplorerRequirementStatusEvent(store, thread, event as DomainEvent);
-      if (!projected) return;
-      cursor = projected.sequence;
-      sse.send(projected.sequence, "requirement.status", projected.payload);
-    };
-    const unsubscribe = explorer.subscribeEvents(thread.id, send, afterSequence);
-    sse.onClose(unsubscribe);
-    cursor = Math.max(cursor, store.getLastEventSequence(thread.id));
-    sse.ready(cursor, { afterSequence: cursor });
   });
 
   app.get("/api/v4/plans/:planId/revisions", async (request, reply) => {
