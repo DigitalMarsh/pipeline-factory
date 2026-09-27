@@ -67,6 +67,7 @@ import { z } from "zod";
 import type { FactoryConfig } from "./config.js";
 import { RepositoryContextCache } from "./repository-context-cache.js";
 import { registerWebHosting } from "./web-hosting.js";
+import { openSseChannel } from "./http/sse.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -454,10 +455,9 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       return pending.filter((event) => belongsToProject(event));
     };
     if (query.data.format !== "sse") return { items: eventsForProject(query.data.afterSequence), cursor: store.getLastEventSequence() };
-    reply.hijack();
-    const raw = reply.raw;
-    raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive", "access-control-allow-origin": "*" });
     let cursor = query.data.afterSequence;
+    // poll 传的是"延迟取 send"的壳：send 里要用返回的通道，只能等通道建好再定义它。
+    const sse = openSseChannel(request, reply, { poll: () => send() });
     const send = () => {
       const pending = store.listEvents({ afterSequence: cursor });
       if (pending.length === 0) return;
@@ -465,14 +465,11 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       // 游标无条件推进到本批末尾：不属于本项目的中间事件不应每 250ms 被重复扫描。
       for (const event of pending) {
         cursor = event.sequence;
-        if (belongsToProject(event)) raw.write(`id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+        if (belongsToProject(event)) sse.send(event.sequence, event.type, event);
       }
     };
     send();
-    raw.write(`id: ${cursor}\nevent: stream.ready\ndata: ${JSON.stringify({ cursor })}\n\n`);
-    const poll = setInterval(send, 250);
-    const heartbeat = setInterval(() => raw.write(`: heartbeat ${Date.now()}\n\n`), 15_000);
-    request.raw.once("close", () => { clearInterval(poll); clearInterval(heartbeat); });
+    sse.ready(cursor, { cursor });
   });
 
   app.patch("/api/v4/projects/:projectId", async (request, reply) => {
@@ -589,10 +586,8 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       const current = store.getAgentLoop(params.data.loopId)!;
       return { items: store.listEvents({ aggregateId: params.data.loopId, afterSequence }), diagnostics: loopDiagnostics(store, current) };
     }
-    reply.hijack();
-    const raw = reply.raw;
-    raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive", "access-control-allow-origin": "*" });
     let cursor = afterSequence;
+    const sse = openSseChannel(request, reply, { poll: () => send() });
     const send = () => {
       const events = store.listEvents({ aggregateId: params.data.loopId, afterSequence: cursor });
       // 无新事件时不计算诊断：轮询在 Loop 静默期不应产生任何读取。
@@ -601,16 +596,12 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       const diagnostics = current ? loopDiagnostics(store, current) : null;
       for (const event of events) {
         cursor = event.sequence;
-        raw.write(`id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify({ loopId: params.data.loopId, sequence: event.sequence, ...event.payload, diagnostics })}\n\n`);
+        sse.send(event.sequence, event.type, { loopId: params.data.loopId, sequence: event.sequence, ...event.payload, diagnostics });
       }
     };
     send();
     const readyLoop = store.getAgentLoop(params.data.loopId);
-    raw.write(`id: ${cursor}\nevent: stream.ready\ndata: ${JSON.stringify({ afterSequence: cursor, diagnostics: readyLoop ? loopDiagnostics(store, readyLoop) : null })}\n\n`);
-    const poll = setInterval(send, 250);
-    const heartbeat = setInterval(() => raw.write(`: heartbeat ${Date.now()}\n\n`), 15_000);
-    const cleanup = () => { clearInterval(poll); clearInterval(heartbeat); };
-    request.raw.once("close", cleanup);
+    sse.ready(cursor, { afterSequence: cursor, diagnostics: readyLoop ? loopDiagnostics(store, readyLoop) : null });
   });
 
   // Run SSE 只回放 ExecutionThread journal，并同时带上当前 Run/Thread 状态供 UI 更新按钮显隐。
@@ -626,11 +617,9 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     const afterSequence = Math.max(query.data.afterSequence ?? 0, headerSequence);
     const acceptsSse = query.data.format === "sse" || (request.headers.accept ?? "").includes("text/event-stream");
     if (!acceptsSse) return { items: thread.journal.filter((entry) => entry.sequence > afterSequence) };
-    reply.hijack();
-    const raw = reply.raw;
-    raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive", "access-control-allow-origin": "*" });
     let cursor = afterSequence;
     let lastTelemetryKey: string | null = null;
+    const sse = openSseChannel(request, reply, { poll: () => send() });
     const send = () => {
       const currentRun = store.getRun(run.id);
       const currentThread = currentRun ? store.getExecutionThread(currentRun.executionThreadId) : undefined;
@@ -638,20 +627,18 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       const newEntries = projectedThread?.journal.filter((item) => item.sequence > cursor) ?? [];
       for (const entry of newEntries) {
         cursor = entry.sequence;
-        raw.write(`id: ${entry.sequence}\nevent: journal.entry\ndata: ${JSON.stringify({ runId: run.id, runStatus: currentRun?.status ?? null, threadState: projectedThread?.state ?? null, threadTelemetry: projectedThread?.telemetry ?? null, ...entry })}\n\n`);
+        sse.send(entry.sequence, "journal.entry", { runId: run.id, runStatus: currentRun?.status ?? null, threadState: projectedThread?.state ?? null, threadTelemetry: projectedThread?.telemetry ?? null, ...entry });
       }
       const telemetry = projectedThread?.telemetry ?? null;
       const telemetryKey = JSON.stringify(telemetry);
-      if (telemetryKey !== lastTelemetryKey && newEntries.length === 0 && lastTelemetryKey !== null) raw.write(`event: telemetry.updated\ndata: ${JSON.stringify({ runId: run.id, threadTelemetry: telemetry })}\n\n`);
+      // telemetry.updated 不属于事件序列，所以 id 传 null（不写 id 行）：否则 Last-Event-ID 会被
+      // 推到一个并不存在的事件序号上，重连时按它回放会丢事件。
+      if (telemetryKey !== lastTelemetryKey && newEntries.length === 0 && lastTelemetryKey !== null) sse.send(null, "telemetry.updated", { runId: run.id, threadTelemetry: telemetry });
       lastTelemetryKey = telemetryKey;
       return telemetry;
     };
     const initialTelemetry = send();
-    raw.write(`id: ${cursor}\nevent: stream.ready\ndata: ${JSON.stringify({ afterSequence: cursor, threadTelemetry: initialTelemetry })}\n\n`);
-    const poll = setInterval(send, 250);
-    const heartbeat = setInterval(() => raw.write(`: heartbeat ${Date.now()}\n\n`), 15_000);
-    const cleanup = () => { clearInterval(poll); clearInterval(heartbeat); };
-    request.raw.once("close", cleanup);
+    sse.ready(cursor, { afterSequence: cursor, threadTelemetry: initialTelemetry });
   });
 
   app.post("/api/v4/agent-loops/:loopId/pause", async (request, reply) => {
@@ -1071,21 +1058,19 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (!thread) return reply.code(404).send({ error: "ExplorerThread not found" });
     const explorerPlan = store.getExplorerPlan(query.data.explorerPlanId);
     if (!explorerPlan || explorerPlan.explorerThreadId !== thread.id || explorerPlan.projectId !== thread.projectId) return reply.code(404).send({ error: "ExplorerPlan not found" });
-    reply.hijack();
-    const raw = reply.raw;
-    raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive", "access-control-allow-origin": "*" });
     const headerSequence = Number(request.headers["last-event-id"] ?? 0) || 0;
     let cursor = Math.max(query.data.afterSequence ?? 0, headerSequence);
     const afterSequence = cursor;
-    const send = (event: { sequence: number; type: string; payload: Record<string, unknown> }) => { cursor = event.sequence; const type = event.type.startsWith("explorer.") ? event.type.slice("explorer.".length) : event.type; raw.write(`id: ${event.sequence}\nevent: ${type}\ndata: ${JSON.stringify(event.payload)}\n\n`); };
+    // 订阅式通道：不传 poll，帧由 subscribeEvents 的回调推。unsubscribe 要等 subscribeEvents
+    // 返回才拿得到，所以走 onClose 登记（见 http/sse.ts 维护提示 4）。
+    const sse = openSseChannel(request, reply);
+    const send = (event: { sequence: number; type: string; payload: Record<string, unknown> }) => { cursor = event.sequence; const type = event.type.startsWith("explorer.") ? event.type.slice("explorer.".length) : event.type; sse.send(event.sequence, type, event.payload); };
     const unsubscribe = explorer.subscribeEvents(thread.id, (event) => {
       if (event.payload.explorerPlanId === explorerPlan.id) send(event);
     }, afterSequence);
+    sse.onClose(unsubscribe);
     cursor = Math.max(cursor, store.getLastEventSequence(thread.id));
-    raw.write(`id: ${cursor}\nevent: stream.ready\ndata: ${JSON.stringify({ afterSequence: cursor, explorerPlanId: explorerPlan.id })}\n\n`);
-    const heartbeat = setInterval(() => raw.write(`: heartbeat ${Date.now()}\n\n`), 15_000);
-    const cleanup = () => { clearInterval(heartbeat); unsubscribe(); };
-    request.raw.once("close", cleanup);
+    sse.ready(cursor, { afterSequence: cursor, explorerPlanId: explorerPlan.id });
   });
 
   // Thread-level status stream contains only requirement/turn state metadata, never conversation content.
@@ -1095,24 +1080,20 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid requirement status event query" });
     const thread = findProjectThread(store, params.data.projectId, query.data.threadId);
     if (!thread) return reply.code(404).send({ error: "ExplorerThread not found" });
-    reply.hijack();
-    const raw = reply.raw;
-    raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive", "access-control-allow-origin": "*" });
     const headerSequence = Number(request.headers["last-event-id"] ?? 0) || 0;
     let cursor = Math.max(query.data.afterSequence ?? 0, headerSequence);
     const afterSequence = cursor;
+    const sse = openSseChannel(request, reply);
     const send = (event: { sequence: number; type: string; payload: Record<string, unknown> }) => {
       const projected = sanitizeExplorerRequirementStatusEvent(store, thread, event as DomainEvent);
       if (!projected) return;
       cursor = projected.sequence;
-      raw.write(`id: ${projected.sequence}\nevent: requirement.status\ndata: ${JSON.stringify(projected.payload)}\n\n`);
+      sse.send(projected.sequence, "requirement.status", projected.payload);
     };
     const unsubscribe = explorer.subscribeEvents(thread.id, send, afterSequence);
+    sse.onClose(unsubscribe);
     cursor = Math.max(cursor, store.getLastEventSequence(thread.id));
-    raw.write(`id: ${cursor}\nevent: stream.ready\ndata: ${JSON.stringify({ afterSequence: cursor })}\n\n`);
-    const heartbeat = setInterval(() => raw.write(`: heartbeat ${Date.now()}\n\n`), 15_000);
-    const cleanup = () => { clearInterval(heartbeat); unsubscribe(); };
-    request.raw.once("close", cleanup);
+    sse.ready(cursor, { afterSequence: cursor });
   });
 
   app.get("/api/v4/plans/:planId/revisions", async (request, reply) => {
@@ -1608,23 +1589,18 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     let threadId: string;
     try { threadId = projectExecution.get(params.data.projectId).thread.id; }
     catch (error) { return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: error instanceof Error ? error.message : "Project not found" }); }
-    reply.hijack();
-    const raw = reply.raw;
-    raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive", "access-control-allow-origin": "*" });
     const headerSequence = Number(request.headers["last-event-id"] ?? "0") || 0;
     let cursor = Math.max(query.data.afterSequence ?? 0, headerSequence);
+    const sse = openSseChannel(request, reply, { poll: () => send() });
     const send = () => {
       const events = store.listEvents({ aggregateId: threadId, afterSequence: cursor });
       for (const event of events) {
         cursor = event.sequence;
-        raw.write(`id: ${event.sequence}\nevent: project.execution\ndata: ${JSON.stringify({ sequence: event.sequence, type: event.type, payload: event.payload })}\n\n`);
+        sse.send(event.sequence, "project.execution", { sequence: event.sequence, type: event.type, payload: event.payload });
       }
     };
     send();
-    raw.write(`id: ${cursor}\nevent: stream.ready\ndata: ${JSON.stringify({ afterSequence: cursor })}\n\n`);
-    const poll = setInterval(send, 250);
-    const heartbeat = setInterval(() => raw.write(`: heartbeat ${Date.now()}\n\n`), 15_000);
-    request.raw.once("close", () => { clearInterval(poll); clearInterval(heartbeat); });
+    sse.ready(cursor, { afterSequence: cursor });
   });
 
   app.get("/api/v4/projects/:projectId/runs", async (request, reply) => {
