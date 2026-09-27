@@ -116,6 +116,12 @@ function diagnosticMessage(code: string): string {
   return TERMINAL_DIAGNOSTIC_MESSAGES[code] ?? "Agent Loop 执行失败";
 }
 
+/**
+ * 本投影只读取这三类步骤。文本增量（MODEL_TEXT_DELTA）占步骤总数 95% 以上且对诊断毫无贡献，
+ * 调用方应把它传给 Store 以跳过其余行；新增诊断维度时必须同步维护这里。
+ */
+export const AGENT_LOOP_DIAGNOSTIC_STEP_TYPES = ["PROVIDER_ACTIVITY", "GATE_CHECKED", "LOOP_FAILED"] as const;
+
 export function projectAgentLoopDiagnostics(loop: AgentLoop, steps: AgentLoopStep[]): AgentLoopDiagnostics {
   const providerItems = new Set<string>();
   for (const step of steps) {
@@ -214,6 +220,19 @@ export type AgentLoopEngineOptions = {
 };
 
 /**
+ * 流式文本的合并落库阈值（字符）。Provider 按 token 推送增量，逐条落库会把一次回复
+ * 放大成上万条步骤与事件；按字符阈值合并后落库量降低两个数量级，同时仍保持增量可见。
+ * 前端的流式渲染本身有 150ms 节流，因此更细的粒度不会带来更快的观感。
+ */
+const TEXT_DELTA_FLUSH_CHARS = 160;
+
+/**
+ * 流式文本的最长缓冲时间（毫秒）。低速率输出下字符阈值可能长时间达不到，
+ * 定时刷新保证用户仍能看到持续增长的文本，而不是等整个步骤结束才一次出现。
+ */
+const TEXT_DELTA_FLUSH_INTERVAL_MS = 40;
+
+/**
  * 驱动一次可恢复的模型循环，并把步骤、事件和控制状态持久化到 PipelineStore。
  * Provider-controlled 模式只消费 Provider 事件；factory-controlled 模式才会调用 ToolRuntime，
  * 这样两种工具循环不会嵌套，也不会重复执行 Provider 已经处理的工具。
@@ -234,6 +253,7 @@ export class AgentLoopEngine implements AgentLoopRunner {
   private readonly deadlineTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly providerCommandTimers = new Map<string, Map<string, ReturnType<typeof setTimeout>>>();
   private readonly callbacks = new Map<string, (event: AgentLoopEvent) => void>();
+  private readonly stepSequences = new Map<string, number>();
   private readonly options: Required<AgentLoopEngineOptions>;
 
   constructor(private readonly store: PipelineStore, private readonly model: ModelGateway, private readonly defaultToolRuntime?: ToolRuntime, options: AgentLoopEngineOptions = {}) {
@@ -327,6 +347,7 @@ export class AgentLoopEngine implements AgentLoopRunner {
     this.resolveWaiter(cancelled);
     this.controllers.delete(loopId);
     this.callbacks.delete(loopId);
+    this.stepSequences.delete(loopId);
     return cancelled;
   }
 
@@ -381,135 +402,182 @@ export class AgentLoopEngine implements AgentLoopRunner {
     }, maxDurationMs);
     this.deadlineTimers.set(initial.id, deadlineTimer);
 
+    // 流式文本缓冲区跨步骤保留，按字符阈值、定时器、输出项变化、其他事件插入或步骤结束时落库。
+    let deltaBuffer = "";
+    let deltaItemId: string | null = null;
+    let deltaThreadId: string | null = null;
+    let deltaTurnId: string | null = null;
+    let deltaTimer: ReturnType<typeof setTimeout> | null = null;
+    const clearDeltaTimer = (): void => { if (deltaTimer !== null) { clearTimeout(deltaTimer); deltaTimer = null; } };
+    const flushTextDelta = (current: AgentLoop): void => {
+      clearDeltaTimer();
+      if (!deltaBuffer) return;
+      const text = deltaBuffer;
+      deltaBuffer = "";
+      this.appendStep(current, "MODEL_TEXT_DELTA", "COMPLETED", { text, ...(deltaItemId ? { providerItemId: deltaItemId } : {}) });
+      this.emit(current, "agent.model.text.delta", { text, ...(deltaThreadId ? { providerThreadId: deltaThreadId } : {}), ...(deltaTurnId ? { providerTurnId: deltaTurnId } : {}), ...(deltaItemId ? { providerItemId: deltaItemId } : {}) });
+    };
+    // 低速率输出时字符阈值可能迟迟达不到；定时刷新保证文本仍能即时可见，而不是等步骤结束才出现。
+    const scheduleDeltaFlush = (): void => {
+      if (deltaTimer !== null) return;
+      deltaTimer = setTimeout(() => {
+        deltaTimer = null;
+        const current = this.store.getAgentLoop(initial.id);
+        if (!current || isTerminal(current.state)) return;
+        flushTextDelta(current);
+      }, TEXT_DELTA_FLUSH_INTERVAL_MS);
+    };
+
     // 每一轮只允许一个模型步骤；步骤完成后先过 gate，再决定是否继续上下文压缩。
     // 这保证“模型说完成”不会绕过 Plan/Task 的业务门禁，也为暂停和恢复留下 checkpoint。
-    for (;;) {
-      loop = this.get(initial.id);
-      if (timedOut) { this.block(initial.id, "MAX_DURATION_EXCEEDED"); return; }
-      if (loop.state === "PAUSED") { await this.waitUntilResumed(initial.id, controller.signal); continue; }
-      if (loop.state === "CANCELLED") return;
-      if (controller.signal.aborted) { await this.cancel(initial.id, "aborted"); return; }
-      if (Date.now() - startedMs >= maxDurationMs) { this.block(initial.id, "MAX_DURATION_EXCEEDED"); return; }
-      if (loop.stepCount >= loop.maxSteps) { this.block(initial.id, "MAX_STEPS_EXCEEDED"); return; }
-      loop = { ...loop, stepCount: loop.stepCount + 1 };
-      this.store.updateAgentLoop(loop);
-      this.appendStep(loop, "MODEL_STARTED", "RUNNING", { step: loop.stepCount });
-      this.emit(loop, "agent.step.started", { step: loop.stepCount, ...(loop.providerThreadId ? { providerThreadId: loop.providerThreadId } : {}), ...(loop.providerTurnId ? { providerTurnId: loop.providerTurnId } : {}) });
-      let stepText = "";
-      let progress = false;
-      try {
-        for await (const event of this.model.stream({ ...input.modelRequest, role: input.role, messages, providerThreadId: loop.providerThreadId ?? undefined, ...(continuationPrompt ? { continuationPrompt } : {}), signal: controller.signal })) {
-          loop = this.get(initial.id);
-          if (isTerminal(loop.state)) return;
-          if (event.type === "thread.started") { loop = { ...loop, providerThreadId: event.threadId }; this.store.updateAgentLoop(loop); this.emit(loop, "agent.provider.thread.started", { threadId: event.threadId }); }
-          if (event.type === "text.delta") {
-            stepText += event.text;
-            fullText += event.text;
-            progress = progress || event.text.trim().length > 0;
-            loop = { ...loop, ...(event.providerThreadId ? { providerThreadId: event.providerThreadId } : {}), ...(event.providerTurnId ? { providerTurnId: event.providerTurnId } : {}) };
-            this.store.updateAgentLoop(loop);
-            this.appendStep(loop, "MODEL_TEXT_DELTA", "COMPLETED", { text: event.text, ...(event.providerItemId ? { providerItemId: event.providerItemId } : {}) });
-            this.emit(loop, "agent.model.text.delta", { text: event.text, ...(event.providerThreadId ? { providerThreadId: event.providerThreadId } : {}), ...(event.providerTurnId ? { providerTurnId: event.providerTurnId } : {}), ...(event.providerItemId ? { providerItemId: event.providerItemId } : {}) });
-          }
-          if (event.type === "provider.activity") {
-            progress = true;
-            loop = { ...loop, ...(event.providerThreadId ? { providerThreadId: event.providerThreadId } : {}), ...(event.providerTurnId ? { providerTurnId: event.providerTurnId } : {}) };
-            this.store.updateAgentLoop(loop);
-            if (event.itemType === "commandExecution") {
-              if (event.phase === "completed") this.clearProviderCommandTimeout(initial.id, event.itemId);
-              else if (input.providerCommandTimeoutMs !== undefined) this.startProviderCommandTimeout(initial.id, event.itemId, input.providerCommandTimeoutMs, input.modelRequest.cwd ?? process.cwd(), controller);
-            }
-            const commandContext = event.itemType === "commandExecution"
-              ? { cwd: input.modelRequest.cwd ?? process.cwd(), timeoutMs: input.providerCommandTimeoutMs ?? null }
-              : {};
-            this.appendStep(loop, "PROVIDER_ACTIVITY", event.phase === "completed" ? "COMPLETED" : "RUNNING", { phase: event.phase, itemId: event.itemId, itemType: event.itemType, title: event.title, summary: event.summary, ...commandContext, providerItemId: event.providerItemId ?? event.itemId, providerControlled: true });
-            this.emit(loop, "agent.provider.activity", { phase: event.phase, itemId: event.itemId, itemType: event.itemType, title: event.title, summary: event.summary, ...commandContext, ...(event.toolName ? { toolName: event.toolName } : {}), ...(event.serverName ? { serverName: event.serverName } : {}), ...(event.status ? { status: event.status } : {}), ...(event.error ? { error: event.error } : {}), ...(event.providerThreadId ? { providerThreadId: event.providerThreadId } : {}), ...(event.providerTurnId ? { providerTurnId: event.providerTurnId } : {}), ...(event.providerItemId ? { providerItemId: event.providerItemId } : {}) });
-          }
-          if (event.type === "model.usage") {
-            loop = { ...loop, ...(event.providerThreadId ? { providerThreadId: event.providerThreadId } : {}), ...(event.providerTurnId ? { providerTurnId: event.providerTurnId } : {}) };
-            this.store.updateAgentLoop(loop);
-            this.appendStep(loop, "MODEL_USAGE", "COMPLETED", { ...event.usage, scope: event.scope });
-            this.emit(loop, "agent.model.usage", { ...event.usage, scope: event.scope, ...(event.providerThreadId ? { providerThreadId: event.providerThreadId } : {}), ...(event.providerTurnId ? { providerTurnId: event.providerTurnId } : {}) });
-          }
-          if (event.type === "tool.call") {
-            progress = true;
-            const signature = `${event.call.tool}:${JSON.stringify(event.call.input)}`;
-            const count = (repeatedCalls.get(signature) ?? 0) + 1;
-            repeatedCalls.set(signature, count);
-            this.appendStep(loop, "TOOL_REQUESTED", count > maxRepeatedToolCalls ? "FAILED" : "RUNNING", { callId: event.call.callId, tool: event.call.tool, delegatedToProvider: input.mode === "provider-controlled" });
-            this.emit(loop, "agent.tool.requested", { callId: event.call.callId, tool: event.call.tool, delegatedToProvider: input.mode === "provider-controlled", ...(loop.providerThreadId ? { providerThreadId: loop.providerThreadId } : {}), ...(loop.providerTurnId ? { providerTurnId: loop.providerTurnId } : {}) });
-            if (count > maxRepeatedToolCalls) { this.block(initial.id, "REPEATED_TOOL_CALL"); return; }
-            this.emit(loop, "agent.tool.running", { callId: event.call.callId, tool: event.call.tool, delegatedToProvider: input.mode === "provider-controlled" });
-            if (input.mode === "provider-controlled") continue;
-            const runtime = input.toolRuntime ?? this.defaultToolRuntime;
-            if (!runtime) { this.block(initial.id, "TOOL_RUNTIME_UNAVAILABLE"); return; }
-            const result = await runtime.execute(event.call, { loopId: initial.id, role: input.role, workspacePath: input.workspacePath ?? input.modelRequest.cwd ?? process.cwd() });
-            const resultType = result.allowed ? "TOOL_COMPLETED" : result.status === "NEEDS_RECONCILIATION" ? "TOOL_NEEDS_RECONCILIATION" : result.status === "FAILED" ? "TOOL_FAILED" : "TOOL_DENIED";
-            const eventType = resultType === "TOOL_COMPLETED" ? "agent.tool.completed" : resultType === "TOOL_NEEDS_RECONCILIATION" ? "agent.tool.needs_reconciliation" : resultType === "TOOL_FAILED" ? "agent.tool.failed" : "agent.tool.denied";
-            this.appendStep(loop, resultType, result.allowed ? "COMPLETED" : resultType === "TOOL_DENIED" ? "DENIED" : "FAILED", { callId: event.call.callId, reason: result.reason, result: result.result });
-            this.emit(loop, eventType, { callId: event.call.callId, tool: event.call.tool, reason: result.reason, ...(loop.providerThreadId ? { providerThreadId: loop.providerThreadId } : {}), ...(loop.providerTurnId ? { providerTurnId: loop.providerTurnId } : {}) });
-            if (resultType === "TOOL_NEEDS_RECONCILIATION") { this.needsReconciliation(initial.id, result.reason ?? "UNKNOWN_TOOL_RESULT"); return; }
-            messages.push({ role: "assistant", content: JSON.stringify({ toolCall: event.call }) }, { role: "tool", content: JSON.stringify(result), toolCallId: event.call.callId });
-          }
-          if (event.type === "turn.input_required") {
-            if (capabilities && !capabilities.supportsStructuredUserInput) { this.block(initial.id, "MODEL_CAPABILITY_UNAVAILABLE"); return; }
-            progress = true;
-            loop = { ...loop, state: "WAITING_FOR_INPUT", providerThreadId: event.request.threadId, providerTurnId: event.request.turnId, checkpointJson: JSON.stringify({ stepCount: loop.stepCount, providerThreadId: event.request.threadId, providerTurnId: event.request.turnId }) };
-            this.store.updateAgentLoop(loop);
-            this.appendStep(loop, "INPUT_REQUIRED", "RUNNING", { requestId: event.request.requestId, questions: event.request.questions, isBlocking: event.request.isBlocking });
-            this.emit(loop, "agent.input.required", { request: event.request });
-            const answers = await this.waitForInput(initial.id, event.request.requestId, controller.signal);
-            const pending = this.pendingInputs.get(initial.id);
-            try {
-              await this.model.answerUserInput({ requestId: event.request.requestId, answers });
-              pending?.complete();
-            } catch (error) {
-              pending?.fail(error instanceof Error ? error : new Error(String(error)));
-              throw error;
-            } finally {
-              this.pendingInputs.delete(initial.id);
-            }
-            this.appendStep(this.get(initial.id), "INPUT_RESOLVED", "COMPLETED", { requestId: event.request.requestId, answerCount: Object.values(answers).reduce((count, item) => count + item.answers.length, 0) });
-            loop = { ...this.get(initial.id), state: "RUNNING" as const };
-            this.store.updateAgentLoop(loop);
-            this.emit(loop, "agent.input.resolved", { requestId: event.request.requestId });
-          }
-          if (event.type === "turn.failed") { this.fail(initial.id, event.error); return; }
-          if (event.type === "turn.cancelled") { if (timedOut) this.block(initial.id, "MAX_DURATION_EXCEEDED"); else await this.cancel(initial.id, "provider_cancelled"); return; }
-          if (event.type === "turn.completed") break;
-        }
-      } catch (error) {
+    try {
+      for (;;) {
+        loop = this.get(initial.id);
         if (timedOut) { this.block(initial.id, "MAX_DURATION_EXCEEDED"); return; }
+        if (loop.state === "PAUSED") { await this.waitUntilResumed(initial.id, controller.signal); continue; }
+        if (loop.state === "CANCELLED") return;
         if (controller.signal.aborted) { await this.cancel(initial.id, "aborted"); return; }
-        this.fail(initial.id, error instanceof Error ? error.message : String(error));
-        return;
+        if (Date.now() - startedMs >= maxDurationMs) { this.block(initial.id, "MAX_DURATION_EXCEEDED"); return; }
+        if (loop.stepCount >= loop.maxSteps) { this.block(initial.id, "MAX_STEPS_EXCEEDED"); return; }
+        loop = { ...loop, stepCount: loop.stepCount + 1 };
+        this.store.updateAgentLoop(loop);
+        this.appendStep(loop, "MODEL_STARTED", "RUNNING", { step: loop.stepCount });
+        this.emit(loop, "agent.step.started", { step: loop.stepCount, ...(loop.providerThreadId ? { providerThreadId: loop.providerThreadId } : {}), ...(loop.providerTurnId ? { providerTurnId: loop.providerTurnId } : {}) });
+        let stepText = "";
+        let progress = false;
+        try {
+          for await (const event of this.model.stream({ ...input.modelRequest, role: input.role, messages, providerThreadId: loop.providerThreadId ?? undefined, ...(continuationPrompt ? { continuationPrompt } : {}), signal: controller.signal })) {
+            loop = this.get(initial.id);
+            // 任何非文本事件都必须排在已缓冲文本之后，否则时间线上的文本与工具/用量事件会换序。
+            if (event.type !== "text.delta") flushTextDelta(loop);
+            if (isTerminal(loop.state)) return;
+            if (event.type === "thread.started") { loop = { ...loop, providerThreadId: event.threadId }; this.store.updateAgentLoop(loop); this.emit(loop, "agent.provider.thread.started", { threadId: event.threadId }); }
+            if (event.type === "text.delta") {
+              stepText += event.text;
+              fullText += event.text;
+              progress = progress || event.text.trim().length > 0;
+              const nextThreadId = event.providerThreadId ?? loop.providerThreadId;
+              const nextTurnId = event.providerTurnId ?? loop.providerTurnId;
+              if (nextThreadId !== loop.providerThreadId || nextTurnId !== loop.providerTurnId) {
+                loop = { ...loop, providerThreadId: nextThreadId, providerTurnId: nextTurnId };
+                this.store.updateAgentLoop(loop);
+              }
+              const itemId = event.providerItemId ?? null;
+              // 同一回合内 Provider 可以切换输出项；切换时先落库，保持步骤与输出项的对应关系。
+              if (deltaBuffer && itemId !== deltaItemId) flushTextDelta(loop);
+              deltaBuffer += event.text;
+              deltaItemId = itemId;
+              deltaThreadId = nextThreadId;
+              deltaTurnId = nextTurnId;
+              if (deltaBuffer.length >= TEXT_DELTA_FLUSH_CHARS) flushTextDelta(loop);
+              else scheduleDeltaFlush();
+            }
+            if (event.type === "provider.activity") {
+              progress = true;
+              loop = { ...loop, ...(event.providerThreadId ? { providerThreadId: event.providerThreadId } : {}), ...(event.providerTurnId ? { providerTurnId: event.providerTurnId } : {}) };
+              this.store.updateAgentLoop(loop);
+              if (event.itemType === "commandExecution") {
+                if (event.phase === "completed") this.clearProviderCommandTimeout(initial.id, event.itemId);
+                else if (input.providerCommandTimeoutMs !== undefined) this.startProviderCommandTimeout(initial.id, event.itemId, input.providerCommandTimeoutMs, input.modelRequest.cwd ?? process.cwd(), controller);
+              }
+              const commandContext = event.itemType === "commandExecution"
+                ? { cwd: input.modelRequest.cwd ?? process.cwd(), timeoutMs: input.providerCommandTimeoutMs ?? null }
+                : {};
+              this.appendStep(loop, "PROVIDER_ACTIVITY", event.phase === "completed" ? "COMPLETED" : "RUNNING", { phase: event.phase, itemId: event.itemId, itemType: event.itemType, title: event.title, summary: event.summary, ...commandContext, providerItemId: event.providerItemId ?? event.itemId, providerControlled: true });
+              this.emit(loop, "agent.provider.activity", { phase: event.phase, itemId: event.itemId, itemType: event.itemType, title: event.title, summary: event.summary, ...commandContext, ...(event.toolName ? { toolName: event.toolName } : {}), ...(event.serverName ? { serverName: event.serverName } : {}), ...(event.status ? { status: event.status } : {}), ...(event.error ? { error: event.error } : {}), ...(event.providerThreadId ? { providerThreadId: event.providerThreadId } : {}), ...(event.providerTurnId ? { providerTurnId: event.providerTurnId } : {}), ...(event.providerItemId ? { providerItemId: event.providerItemId } : {}) });
+            }
+            if (event.type === "model.usage") {
+              loop = { ...loop, ...(event.providerThreadId ? { providerThreadId: event.providerThreadId } : {}), ...(event.providerTurnId ? { providerTurnId: event.providerTurnId } : {}) };
+              this.store.updateAgentLoop(loop);
+              this.appendStep(loop, "MODEL_USAGE", "COMPLETED", { ...event.usage, scope: event.scope });
+              this.emit(loop, "agent.model.usage", { ...event.usage, scope: event.scope, ...(event.providerThreadId ? { providerThreadId: event.providerThreadId } : {}), ...(event.providerTurnId ? { providerTurnId: event.providerTurnId } : {}) });
+            }
+            if (event.type === "tool.call") {
+              progress = true;
+              const signature = `${event.call.tool}:${JSON.stringify(event.call.input)}`;
+              const count = (repeatedCalls.get(signature) ?? 0) + 1;
+              repeatedCalls.set(signature, count);
+              this.appendStep(loop, "TOOL_REQUESTED", count > maxRepeatedToolCalls ? "FAILED" : "RUNNING", { callId: event.call.callId, tool: event.call.tool, delegatedToProvider: input.mode === "provider-controlled" });
+              this.emit(loop, "agent.tool.requested", { callId: event.call.callId, tool: event.call.tool, delegatedToProvider: input.mode === "provider-controlled", ...(loop.providerThreadId ? { providerThreadId: loop.providerThreadId } : {}), ...(loop.providerTurnId ? { providerTurnId: loop.providerTurnId } : {}) });
+              if (count > maxRepeatedToolCalls) { this.block(initial.id, "REPEATED_TOOL_CALL"); return; }
+              this.emit(loop, "agent.tool.running", { callId: event.call.callId, tool: event.call.tool, delegatedToProvider: input.mode === "provider-controlled" });
+              if (input.mode === "provider-controlled") continue;
+              const runtime = input.toolRuntime ?? this.defaultToolRuntime;
+              if (!runtime) { this.block(initial.id, "TOOL_RUNTIME_UNAVAILABLE"); return; }
+              const result = await runtime.execute(event.call, { loopId: initial.id, role: input.role, workspacePath: input.workspacePath ?? input.modelRequest.cwd ?? process.cwd() });
+              const resultType = result.allowed ? "TOOL_COMPLETED" : result.status === "NEEDS_RECONCILIATION" ? "TOOL_NEEDS_RECONCILIATION" : result.status === "FAILED" ? "TOOL_FAILED" : "TOOL_DENIED";
+              const eventType = resultType === "TOOL_COMPLETED" ? "agent.tool.completed" : resultType === "TOOL_NEEDS_RECONCILIATION" ? "agent.tool.needs_reconciliation" : resultType === "TOOL_FAILED" ? "agent.tool.failed" : "agent.tool.denied";
+              this.appendStep(loop, resultType, result.allowed ? "COMPLETED" : resultType === "TOOL_DENIED" ? "DENIED" : "FAILED", { callId: event.call.callId, reason: result.reason, result: result.result });
+              this.emit(loop, eventType, { callId: event.call.callId, tool: event.call.tool, reason: result.reason, ...(loop.providerThreadId ? { providerThreadId: loop.providerThreadId } : {}), ...(loop.providerTurnId ? { providerTurnId: loop.providerTurnId } : {}) });
+              if (resultType === "TOOL_NEEDS_RECONCILIATION") { this.needsReconciliation(initial.id, result.reason ?? "UNKNOWN_TOOL_RESULT"); return; }
+              messages.push({ role: "assistant", content: JSON.stringify({ toolCall: event.call }) }, { role: "tool", content: JSON.stringify(result), toolCallId: event.call.callId });
+            }
+            if (event.type === "turn.input_required") {
+              if (capabilities && !capabilities.supportsStructuredUserInput) { this.block(initial.id, "MODEL_CAPABILITY_UNAVAILABLE"); return; }
+              progress = true;
+              loop = { ...loop, state: "WAITING_FOR_INPUT", providerThreadId: event.request.threadId, providerTurnId: event.request.turnId, checkpointJson: JSON.stringify({ stepCount: loop.stepCount, providerThreadId: event.request.threadId, providerTurnId: event.request.turnId }) };
+              this.store.updateAgentLoop(loop);
+              this.appendStep(loop, "INPUT_REQUIRED", "RUNNING", { requestId: event.request.requestId, questions: event.request.questions, isBlocking: event.request.isBlocking });
+              this.emit(loop, "agent.input.required", { request: event.request });
+              const answers = await this.waitForInput(initial.id, event.request.requestId, controller.signal);
+              const pending = this.pendingInputs.get(initial.id);
+              try {
+                await this.model.answerUserInput({ requestId: event.request.requestId, answers });
+                pending?.complete();
+              } catch (error) {
+                pending?.fail(error instanceof Error ? error : new Error(String(error)));
+                throw error;
+              } finally {
+                this.pendingInputs.delete(initial.id);
+              }
+              this.appendStep(this.get(initial.id), "INPUT_RESOLVED", "COMPLETED", { requestId: event.request.requestId, answerCount: Object.values(answers).reduce((count, item) => count + item.answers.length, 0) });
+              loop = { ...this.get(initial.id), state: "RUNNING" as const };
+              this.store.updateAgentLoop(loop);
+              this.emit(loop, "agent.input.resolved", { requestId: event.request.requestId });
+            }
+            if (event.type === "turn.failed") { this.fail(initial.id, event.error); return; }
+            if (event.type === "turn.cancelled") { if (timedOut) this.block(initial.id, "MAX_DURATION_EXCEEDED"); else await this.cancel(initial.id, "provider_cancelled"); return; }
+            if (event.type === "turn.completed") break;
+          }
+        } catch (error) {
+          // 失败/取消前先落库已缓冲的文本，避免用户看到被截断的回复。
+          flushTextDelta(loop);
+          if (timedOut) { this.block(initial.id, "MAX_DURATION_EXCEEDED"); return; }
+          if (controller.signal.aborted) { await this.cancel(initial.id, "aborted"); return; }
+          this.fail(initial.id, error instanceof Error ? error.message : String(error));
+          return;
+        }
+        loop = this.get(initial.id);
+        if (isTerminal(loop.state)) return;
+        flushTextDelta(loop);
+        if (timedOut || Date.now() - startedMs >= maxDurationMs) { this.block(initial.id, "MAX_DURATION_EXCEEDED"); return; }
+        this.appendStep(loop, "MODEL_COMPLETED", "COMPLETED", { step: loop.stepCount });
+        this.emit(loop, "agent.model.completed", { step: loop.stepCount, ...(loop.providerThreadId ? { providerThreadId: loop.providerThreadId } : {}), ...(loop.providerTurnId ? { providerTurnId: loop.providerTurnId } : {}) });
+        let decision: GateDecision;
+        try {
+          decision = await (input.gate ?? { evaluate: () => ({ action: "complete", reason: "MODEL_COMPLETED" } as GateDecision) }).evaluate({ content: fullText });
+        } catch (error) {
+          this.fail(initial.id, error instanceof Error ? error.message : String(error));
+          return;
+        }
+        this.appendStep(loop, "GATE_CHECKED", decision.action === "blocked" ? "FAILED" : "COMPLETED", { action: decision.action, reason: decision.reason, ...(decision.diagnostics?.length ? { diagnostics: decision.diagnostics } : {}), ...(decision.action === "continue" && decision.continuationPrompt ? { continuationPrompt: decision.continuationPrompt } : {}) });
+        this.emit(loop, "agent.gate.checked", decision);
+        if (decision.action === "complete") { this.complete(initial.id, decision.reason); return; }
+        if (decision.action === "blocked") { this.block(initial.id, decision.reason); return; }
+        if (progress) noProgressSteps = 0; else noProgressSteps += 1;
+        if (noProgressSteps >= maxNoProgressSteps) { this.block(initial.id, "NO_PROGRESS"); return; }
+        if (stepText.trim()) messages.push({ role: "assistant", content: stepText });
+        const gateContinuationPrompt = decision.action === "continue" ? decision.continuationPrompt : undefined;
+        continuationPrompt = gateContinuationPrompt ?? `继续完善当前${input.role === "explorer" ? "计划" : "执行任务"}。不要重新开始已经完成的工作，只处理下一项必要内容。`;
+        messages.push({ role: "user", content: continuationPrompt });
+        loop = { ...this.get(initial.id), checkpointJson: JSON.stringify({ stepCount: loop.stepCount, providerThreadId: loop.providerThreadId, messageCount: messages.length, lastText: stepText.slice(-1000) }) };
+        this.store.updateAgentLoop(loop);
+        this.appendStep(loop, "CONTEXT_COMPACTED", "COMPLETED", { messageCount: messages.length });
+        this.emit(loop, "agent.context.compacted", { messageCount: messages.length });
       }
-      loop = this.get(initial.id);
-      if (isTerminal(loop.state)) return;
-      if (timedOut || Date.now() - startedMs >= maxDurationMs) { this.block(initial.id, "MAX_DURATION_EXCEEDED"); return; }
-      this.appendStep(loop, "MODEL_COMPLETED", "COMPLETED", { step: loop.stepCount });
-      this.emit(loop, "agent.model.completed", { step: loop.stepCount, ...(loop.providerThreadId ? { providerThreadId: loop.providerThreadId } : {}), ...(loop.providerTurnId ? { providerTurnId: loop.providerTurnId } : {}) });
-      let decision: GateDecision;
-      try {
-        decision = await (input.gate ?? { evaluate: () => ({ action: "complete", reason: "MODEL_COMPLETED" } as GateDecision) }).evaluate({ content: fullText });
-      } catch (error) {
-        this.fail(initial.id, error instanceof Error ? error.message : String(error));
-        return;
-      }
-      this.appendStep(loop, "GATE_CHECKED", decision.action === "blocked" ? "FAILED" : "COMPLETED", { action: decision.action, reason: decision.reason, ...(decision.diagnostics?.length ? { diagnostics: decision.diagnostics } : {}), ...(decision.action === "continue" && decision.continuationPrompt ? { continuationPrompt: decision.continuationPrompt } : {}) });
-      this.emit(loop, "agent.gate.checked", decision);
-      if (decision.action === "complete") { this.complete(initial.id, decision.reason); return; }
-      if (decision.action === "blocked") { this.block(initial.id, decision.reason); return; }
-      if (progress) noProgressSteps = 0; else noProgressSteps += 1;
-      if (noProgressSteps >= maxNoProgressSteps) { this.block(initial.id, "NO_PROGRESS"); return; }
-      if (stepText.trim()) messages.push({ role: "assistant", content: stepText });
-      const gateContinuationPrompt = decision.action === "continue" ? decision.continuationPrompt : undefined;
-      continuationPrompt = gateContinuationPrompt ?? `继续完善当前${input.role === "explorer" ? "计划" : "执行任务"}。不要重新开始已经完成的工作，只处理下一项必要内容。`;
-      messages.push({ role: "user", content: continuationPrompt });
-      loop = { ...this.get(initial.id), checkpointJson: JSON.stringify({ stepCount: loop.stepCount, providerThreadId: loop.providerThreadId, messageCount: messages.length, lastText: stepText.slice(-1000) }) };
-      this.store.updateAgentLoop(loop);
-      this.appendStep(loop, "CONTEXT_COMPACTED", "COMPLETED", { messageCount: messages.length });
-      this.emit(loop, "agent.context.compacted", { messageCount: messages.length });
+    } finally {
+      // 任何退出路径都不能留下未清理的定时器。
+      clearDeltaTimer();
     }
   }
 
@@ -553,11 +621,24 @@ export class AgentLoopEngine implements AgentLoopRunner {
 
   private appendStep(loop: AgentLoop, stepType: AgentStepType, status: AgentLoopStepStatus, payload: Record<string, unknown>): void {
     const step = this.store.appendAgentLoopStep({ loopId: loop.id, stepType, status, callId: typeof payload.callId === "string" ? payload.callId : null, providerThreadId: loop.providerThreadId, providerTurnId: loop.providerTurnId, payload });
+    this.stepSequences.set(loop.id, step.sequence);
     this.emit(loop, `agent.step.${stepType.toLowerCase()}`, { ...payload, sequence: step.sequence });
   }
 
+  /**
+   * Loop 当前的步骤序号。步骤序号从 1 连续递增，因此“最后一条步骤的序号”就是步骤总数。
+   * 首次访问从 Store 播种，之后由 appendStep 维护，避免每个事件都读取整张步骤表。
+   */
+  private currentStepSequence(loopId: string): number {
+    const cached = this.stepSequences.get(loopId);
+    if (cached !== undefined) return cached;
+    const seeded = this.store.getLastAgentLoopStepSequence(loopId);
+    this.stepSequences.set(loopId, seeded);
+    return seeded;
+  }
+
   private emit(loop: AgentLoop, type: string, payload: Record<string, unknown>): void {
-    const event: AgentLoopEvent = { loopId: loop.id, type, sequence: this.store.listAgentLoopSteps(loop.id).length, payload };
+    const event: AgentLoopEvent = { loopId: loop.id, type, sequence: this.currentStepSequence(loop.id), payload };
     this.callbacks.get(loop.id)?.(event);
     this.listeners.get(loop.id)?.forEach((listener) => listener(event));
     this.store.appendEvent({ type: type as import("./index.js").DomainEvent["type"], aggregateId: loop.id, payload });
@@ -592,8 +673,8 @@ export class AgentLoopEngine implements AgentLoopRunner {
     timers.set(itemId, timer);
     this.providerCommandTimers.set(loopId, timers);
   }
-  private complete(loopId: string, reason: string): void { this.clearDeadline(loopId); this.clearProviderCommandTimeouts(loopId); const completedAt = this.store.now(); const loop = { ...this.get(loopId), state: "COMPLETED" as const, completedAt }; const durationMs = loop.startedAt ? Math.max(0, Date.now() - Date.parse(loop.startedAt)) : null; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_COMPLETED", "COMPLETED", { reason, completedAt, durationMs }); this.emit(loop, "agent.loop.completed", { reason, completedAt, durationMs }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); }
-  private block(loopId: string, reason: string, details: Record<string, unknown> = {}): void { this.clearDeadline(loopId); this.clearProviderCommandTimeouts(loopId); const completedAt = this.store.now(); const loop = { ...this.get(loopId), state: "BLOCKED" as const, completedAt, checkpointJson: JSON.stringify({ reason, ...details }) }; const durationMs = loop.startedAt ? Math.max(0, Date.now() - Date.parse(loop.startedAt)) : null; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_FAILED", "FAILED", { reason, ...details, completedAt, durationMs }); this.emit(loop, "agent.loop.failed", { reason, ...details, completedAt, durationMs }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); }
+  private complete(loopId: string, reason: string): void { this.clearDeadline(loopId); this.clearProviderCommandTimeouts(loopId); const completedAt = this.store.now(); const loop = { ...this.get(loopId), state: "COMPLETED" as const, completedAt }; const durationMs = loop.startedAt ? Math.max(0, Date.now() - Date.parse(loop.startedAt)) : null; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_COMPLETED", "COMPLETED", { reason, completedAt, durationMs }); this.emit(loop, "agent.loop.completed", { reason, completedAt, durationMs }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); this.stepSequences.delete(loopId); }
+  private block(loopId: string, reason: string, details: Record<string, unknown> = {}): void { this.clearDeadline(loopId); this.clearProviderCommandTimeouts(loopId); const completedAt = this.store.now(); const loop = { ...this.get(loopId), state: "BLOCKED" as const, completedAt, checkpointJson: JSON.stringify({ reason, ...details }) }; const durationMs = loop.startedAt ? Math.max(0, Date.now() - Date.parse(loop.startedAt)) : null; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_FAILED", "FAILED", { reason, ...details, completedAt, durationMs }); this.emit(loop, "agent.loop.failed", { reason, ...details, completedAt, durationMs }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); this.stepSequences.delete(loopId); }
   private fail(loopId: string, error: string): void {
     this.clearDeadline(loopId);
     this.clearProviderCommandTimeouts(loopId);
@@ -608,8 +689,9 @@ export class AgentLoopEngine implements AgentLoopRunner {
     this.resolveWaiter(loop);
     this.controllers.delete(loopId);
     this.callbacks.delete(loopId);
+    this.stepSequences.delete(loopId);
   }
-  private needsReconciliation(loopId: string, reason: string): void { this.clearDeadline(loopId); this.clearProviderCommandTimeouts(loopId); const completedAt = this.store.now(); const loop = { ...this.get(loopId), state: "NEEDS_RECONCILIATION" as const, completedAt, checkpointJson: JSON.stringify({ reason }) }; const durationMs = loop.startedAt ? Math.max(0, Date.now() - Date.parse(loop.startedAt)) : null; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_FAILED", "NEEDS_RECONCILIATION", { reason, completedAt, durationMs }); this.emit(loop, "agent.loop.recovery_required", { reason, completedAt, durationMs }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); }
+  private needsReconciliation(loopId: string, reason: string): void { this.clearDeadline(loopId); this.clearProviderCommandTimeouts(loopId); const completedAt = this.store.now(); const loop = { ...this.get(loopId), state: "NEEDS_RECONCILIATION" as const, completedAt, checkpointJson: JSON.stringify({ reason }) }; const durationMs = loop.startedAt ? Math.max(0, Date.now() - Date.parse(loop.startedAt)) : null; this.store.updateAgentLoop(loop); this.appendStep(loop, "LOOP_FAILED", "NEEDS_RECONCILIATION", { reason, completedAt, durationMs }); this.emit(loop, "agent.loop.recovery_required", { reason, completedAt, durationMs }); this.resolveWaiter(loop); this.controllers.delete(loopId); this.callbacks.delete(loopId); this.stepSequences.delete(loopId); }
 }
 
 function isTerminal(state: AgentLoopState): boolean {

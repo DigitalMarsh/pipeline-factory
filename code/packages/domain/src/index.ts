@@ -36,7 +36,7 @@ export type { AgentLoop, AgentLoopDiagnostics, AgentLoopInput, AgentLoopMode, Ag
 export { AgentLoopEngine } from "./agent-loop.js";
 export { PROJECT_EXECUTION_MODELS, PROJECT_EXECUTION_REASONING_EFFORTS, ProjectExecutionThreadService } from "./project-execution-thread.js";
 export type { ProjectExecutionThreadServiceOptions, ProjectExecutionThreadSnapshot } from "./project-execution-thread.js";
-export { projectAgentLoopDiagnostics } from "./agent-loop.js";
+export { AGENT_LOOP_DIAGNOSTIC_STEP_TYPES, projectAgentLoopDiagnostics } from "./agent-loop.js";
 export { PlanCompletenessGate, TaskProgressGate } from "./termination-gates.js";
 export { ExecutorAgent, inspectWorkspaceScope, parseExecutorReport } from "./executor-agent.js";
 export type { ExecutorAgentOptions, ExecutorReport, WorkspaceScopeInspection, WorkspaceScopeInspector } from "./executor-agent.js";
@@ -878,7 +878,9 @@ export type PipelineStore = {
   listAgentLoops(ownerId?: string): AgentLoop[];
   updateAgentLoop(loop: AgentLoop): AgentLoop;
   appendAgentLoopStep(step: AgentLoopStepInput): AgentLoopStep;
-  listAgentLoopSteps(loopId: string): AgentLoopStep[];
+  listAgentLoopSteps(loopId: string, options?: { stepTypes?: readonly string[] }): AgentLoopStep[];
+  /** 只返回 Loop 当前最大步骤序号；用于事件序号推进，避免为此读取全部步骤。 */
+  getLastAgentLoopStepSequence(loopId: string): number;
   recoverAgentLoops(): AgentLoop[];
   saveToolCall(call: PersistedToolCall): PersistedToolCall;
   getToolCall(callId: string): PersistedToolCall | undefined;
@@ -886,7 +888,11 @@ export type PipelineStore = {
   updateToolCall(call: PersistedToolCall): PersistedToolCall;
   appendEvent(event: Omit<DomainEvent, "id" | "occurredAt" | "sequence">): DomainEvent;
   subscribeEvents?(listener: (event: DomainEvent) => void): () => void;
-  listEvents(options?: { afterSequence?: number; aggregateId?: string }): DomainEvent[];
+  /**
+   * 按序号升序读取事件。aggregateIds 与 types 是把过滤下推到存储层的手段，
+   * 让调用方不必为了筛出少量事件而把整张事件表读进内存；空数组等同于不筛选。
+   */
+  listEvents(options?: { afterSequence?: number; aggregateId?: string; aggregateIds?: readonly string[]; types?: readonly string[]; limit?: number }): DomainEvent[];
   getLastEventSequence(aggregateId?: string): number;
   deleteExplorerCascade(input: ExplorerDeletionInput): ExplorerDeletionSummary;
   getIdempotency(scope: string, key: string): Record<string, unknown> | undefined;
@@ -1416,7 +1422,11 @@ export class InMemoryPipelineStore implements PipelineStore {
     this.agentLoopSteps.set(input.loopId, current);
     return step;
   }
-  listAgentLoopSteps(loopId: string): AgentLoopStep[] { return [...(this.agentLoopSteps.get(loopId) ?? [])]; }
+  listAgentLoopSteps(loopId: string, options: { stepTypes?: readonly string[] } = {}): AgentLoopStep[] {
+    const steps = [...(this.agentLoopSteps.get(loopId) ?? [])];
+    return options.stepTypes ? steps.filter((step) => options.stepTypes!.includes(step.stepType)) : steps;
+  }
+  getLastAgentLoopStepSequence(loopId: string): number { return this.agentLoopSteps.get(loopId)?.length ?? 0; }
   recoverAgentLoops(): AgentLoop[] { return this.listAgentLoops().filter((loop) => loop.state === "RUNNING" || loop.state === "WAITING_FOR_INPUT" || loop.state === "PAUSED"); }
   saveToolCall(call: PersistedToolCall): PersistedToolCall { if (!this.toolCalls.has(call.callId)) this.toolCalls.set(call.callId, call); return this.toolCalls.get(call.callId)!; }
   getToolCall(callId: string): PersistedToolCall | undefined { return this.toolCalls.get(callId); }
@@ -1435,8 +1445,15 @@ export class InMemoryPipelineStore implements PipelineStore {
     return () => this.eventListeners.delete(listener);
   }
 
-  listEvents(options: { afterSequence?: number; aggregateId?: string } = {}): DomainEvent[] {
-    return this.events.filter((event) => event.sequence > (options.afterSequence ?? 0) && (!options.aggregateId || event.aggregateId === options.aggregateId));
+  listEvents(options: { afterSequence?: number; aggregateId?: string; aggregateIds?: readonly string[]; types?: readonly string[]; limit?: number } = {}): DomainEvent[] {
+    if (options.aggregateId && options.aggregateIds?.length) throw new Error("listEvents accepts either aggregateId or aggregateIds, not both");
+    const aggregateIds = options.aggregateIds?.length ? new Set(options.aggregateIds) : null;
+    const types = options.types?.length ? new Set<string>(options.types) : null;
+    const matched = this.events.filter((event) => event.sequence > (options.afterSequence ?? 0)
+      && (!options.aggregateId || event.aggregateId === options.aggregateId)
+      && (!aggregateIds || aggregateIds.has(event.aggregateId))
+      && (!types || types.has(event.type)));
+    return options.limit === undefined ? matched : matched.slice(-options.limit);
   }
 
   getLastEventSequence(aggregateId?: string): number {
@@ -1869,6 +1886,7 @@ export class SqlitePipelineStore implements PipelineStore {
         occurred_at TEXT NOT NULL,
         payload_json TEXT NOT NULL
       );
+      CREATE INDEX IF NOT EXISTS domain_events_aggregate_idx ON domain_events(aggregate_id, sequence);
       CREATE TABLE IF NOT EXISTS explorer_input_requests (
         id TEXT PRIMARY KEY,
         thread_id TEXT NOT NULL,
@@ -2437,9 +2455,18 @@ export class SqlitePipelineStore implements PipelineStore {
     return step;
   }
 
-  listAgentLoopSteps(loopId: string): AgentLoopStep[] {
-    const rows = this.database.prepare("SELECT * FROM agent_loop_steps WHERE loop_id = ? ORDER BY sequence ASC").all(loopId) as unknown as SqliteRow[];
+  listAgentLoopSteps(loopId: string, options: { stepTypes?: readonly string[] } = {}): AgentLoopStep[] {
+    const stepTypes = options.stepTypes;
+    if (stepTypes && stepTypes.length === 0) return [];
+    const filter = stepTypes ? ` AND step_type IN (${stepTypes.map(() => "?").join(", ")})` : "";
+    const params: string[] = stepTypes ? [loopId, ...stepTypes] : [loopId];
+    const rows = this.database.prepare(`SELECT * FROM agent_loop_steps WHERE loop_id = ?${filter} ORDER BY sequence ASC`).all(...params) as unknown as SqliteRow[];
     return rows.map((row) => this.agentLoopStepFromRow(row));
+  }
+
+  getLastAgentLoopStepSequence(loopId: string): number {
+    const row = this.database.prepare("SELECT COALESCE(MAX(sequence), 0) AS last_sequence FROM agent_loop_steps WHERE loop_id = ?").get(loopId) as SqliteRow;
+    return Number(row.last_sequence ?? 0);
   }
 
   recoverAgentLoops(): AgentLoop[] { return this.listAgentLoops().filter((loop) => loop.state === "RUNNING" || loop.state === "WAITING_FOR_INPUT" || loop.state === "PAUSED"); }
@@ -2488,8 +2515,33 @@ export class SqlitePipelineStore implements PipelineStore {
     return () => this.eventListeners.delete(listener);
   }
 
-  listEvents(options: { afterSequence?: number; aggregateId?: string } = {}): DomainEvent[] {
-    const rows = this.database.prepare(`SELECT * FROM domain_events WHERE sequence > ? ${options.aggregateId ? "AND aggregate_id = ?" : ""} ORDER BY sequence ASC`).all(...(options.aggregateId ? [options.afterSequence ?? 0, options.aggregateId] : [options.afterSequence ?? 0])) as unknown as SqliteRow[];
+  listEvents(options: { afterSequence?: number; aggregateId?: string; aggregateIds?: readonly string[]; types?: readonly string[]; limit?: number } = {}): DomainEvent[] {
+    // aggregateIds 用于"一次取多个聚合的事件"，走 domain_events_aggregate_idx；
+    // 它替代的是"读全表再在内存里筛"，对十万级事件表是数量级的差别。
+    const aggregateIds = options.aggregateIds?.length ? options.aggregateIds : null;
+    const types = options.types?.length ? options.types : null;
+    if (aggregateIds && options.aggregateId) throw new Error("listEvents accepts either aggregateId or aggregateIds, not both");
+    const clauses: string[] = ["sequence > ?"];
+    const params: Array<string | number> = [options.afterSequence ?? 0];
+    if (options.aggregateId) {
+      clauses.push("aggregate_id = ?");
+      params.push(options.aggregateId);
+    } else if (aggregateIds) {
+      clauses.push(`aggregate_id IN (${aggregateIds.map(() => "?").join(", ")})`);
+      params.push(...aggregateIds);
+    }
+    // 事件类型的取值集合很小且集中，按类型过滤能再砍掉大量与调用方无关的行。
+    if (types) {
+      clauses.push(`type IN (${types.map(() => "?").join(", ")})`);
+      params.push(...types);
+    }
+    const where = clauses.join(" AND ");
+    // limit 语义是“最新的 N 条”：先倒序截断再恢复升序，避免为了取尾部而加载全部历史事件。
+    const sql = options.limit === undefined
+      ? `SELECT * FROM domain_events WHERE ${where} ORDER BY sequence ASC`
+      : `SELECT * FROM (SELECT * FROM domain_events WHERE ${where} ORDER BY sequence DESC LIMIT ?) ORDER BY sequence ASC`;
+    if (options.limit !== undefined) params.push(options.limit);
+    const rows = this.database.prepare(sql).all(...params) as unknown as SqliteRow[];
     return rows.map((row) => ({
       id: String(row.id),
       sequence: Number(row.sequence),

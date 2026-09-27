@@ -135,6 +135,13 @@ let requirementStatusEventSource: EventSource | null = null;
 let requirementStatusScope: { projectId: string; threadId: string } | null = null;
 let explorerEventSequence: number | null = null;
 let planProjectionVersion = 0;
+// 流式增量期间把 activity/plan 投影的重新拉取合并到固定间隔；文本本身仍按事件即时合并到 turn，
+// 因此观感不受影响，但不会每个增量都触发 6 次请求。
+const PROJECTION_REFRESH_INTERVAL_MS = 400;
+/** Loop 的终态与门禁事件必须立即反映；其余步骤级事件可以合并到刷新间隔。 */
+const AGENT_LOOP_IMMEDIATE_REFRESH_EVENTS = new Set(["agent.step.gate_checked", "agent.loop.completed", "agent.loop.failed", "agent.loop.cancelled", "agent.loop.recovery_required", "agent.loop.paused", "agent.loop.resumed", "agent.input.required", "agent.input.resolved"]);
+let projectionRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+let loopRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 let detailRequestVersion = 0;
 let activeRequestToken = 0;
 // A delete already loads the replacement thread explicitly. Suppress the
@@ -1264,6 +1271,32 @@ async function refreshActivity() {
   }
 }
 
+/**
+ * 合并流式增量触发的投影刷新。尾部会再执行一次，保证最终状态与事件流一致；
+ * 页面卸载或切换线程时必须调用 cancelProjectionRefresh 清掉待执行任务。
+ */
+function scheduleProjectionRefresh() {
+  if (projectionRefreshTimer !== null) return;
+  projectionRefreshTimer = setTimeout(() => {
+    projectionRefreshTimer = null;
+    if (!thread.value) return;
+    void refreshActivity();
+    void refreshPlanProjection();
+  }, PROJECTION_REFRESH_INTERVAL_MS);
+}
+
+function cancelProjectionRefresh() {
+  if (projectionRefreshTimer === null) return;
+  clearTimeout(projectionRefreshTimer);
+  projectionRefreshTimer = null;
+}
+
+function cancelLoopRefresh() {
+  if (loopRefreshTimer === null) return;
+  clearTimeout(loopRefreshTimer);
+  loopRefreshTimer = null;
+}
+
 async function loadExplorerDetails(selected: ExplorerThread, requestProjectId: string, requestToken: number): Promise<boolean> {
   try {
     const [planGroupsResponse, plansResponse, confirmedResponse, threadPlansResponse] = await Promise.all([
@@ -1558,8 +1591,7 @@ function connectEvents() {
     const payload = JSON.parse((raw as MessageEvent).data) as { turnId: string; text: string };
     const current = turns.value.find((turn) => turn.id === payload.turnId);
     if (current) mergeTurn({ ...current, content: current.content + payload.text, status: "RUNNING" });
-    void refreshActivity();
-    void refreshPlanProjection();
+    scheduleProjectionRefresh();
   });
   eventSource.addEventListener("turn.input_required", async (raw) => {
     if (!isConnectionCurrent() || !replayGate.accept("turn.input_required")) return;
@@ -1614,21 +1646,28 @@ function connectLoopEvents() {
   loopEventSource = new EventSource(api.agentLoopEventsUrl(loopId));
   loopEventSource.addEventListener("stream.ready", () => { replayGate.accept("stream.ready"); });
   for (const eventName of ["agent.loop.started", "agent.step.started", "agent.step.model_text_delta", "agent.step.tool_requested", "agent.step.tool_completed", "agent.step.tool_denied", "agent.step.tool_failed", "agent.step.tool_needs_reconciliation", "agent.step.input_required", "agent.step.input_resolved", "agent.step.context_compacted", "agent.step.gate_checked", "agent.provider.activity", "agent.input.required", "agent.input.resolved", "agent.loop.paused", "agent.loop.resumed", "agent.loop.completed", "agent.loop.failed", "agent.loop.cancelled", "agent.loop.recovery_required"]) {
+    // 状态与门禁事件立即刷新；步骤级事件（文本增量、工具活动）合并到固定间隔，避免每个事件都拉取 Loop。
+    const immediate = AGENT_LOOP_IMMEDIATE_REFRESH_EVENTS.has(eventName);
     loopEventSource.addEventListener(eventName, () => {
       if (!isCurrentProjectScope(connectionProjectId, connectionToken) || thread.value?.id !== connectionThreadId || !replayGate.accept(eventName)) return;
-      void api.agentLoop(loopId).then(async (response) => {
-        if (!isCurrentProjectScope(connectionProjectId, connectionToken) || thread.value?.id !== connectionThreadId || agentLoop.value?.id !== loopId) return;
-        agentLoop.value = response.loop;
-        explorerPaused.value = response.loop.state === "PAUSED";
-        await refreshActivity();
-        if (["agent.step.gate_checked", "agent.loop.completed", "agent.loop.failed", "agent.loop.cancelled", "agent.loop.recovery_required"].includes(eventName)) await refreshPlanProjection();
-      }).catch(() => undefined);
+      const refresh = () => {
+        void api.agentLoop(loopId).then(async (response) => {
+          if (!isCurrentProjectScope(connectionProjectId, connectionToken) || thread.value?.id !== connectionThreadId || agentLoop.value?.id !== loopId) return;
+          agentLoop.value = response.loop;
+          explorerPaused.value = response.loop.state === "PAUSED";
+          await refreshActivity();
+          if (immediate) await refreshPlanProjection();
+        }).catch(() => undefined);
+      };
+      if (immediate) { cancelLoopRefresh(); refresh(); return; }
+      if (loopRefreshTimer !== null) return;
+      loopRefreshTimer = setTimeout(() => { loopRefreshTimer = null; refresh(); }, PROJECTION_REFRESH_INTERVAL_MS);
     });
   }
 }
 
 function closeRequirementStatusEvents() { requirementStatusEventSource?.close(); requirementStatusEventSource = null; requirementStatusScope = null; }
-function closeEvents() { eventSource?.close(); loopEventSource?.close(); eventSource = null; loopEventSource = null; }
+function closeEvents() { eventSource?.close(); loopEventSource?.close(); eventSource = null; loopEventSource = null; cancelProjectionRefresh(); cancelLoopRefresh(); }
 
 async function confirmPlan() {
   if (!candidate.value || !candidate.value.id && !candidate.value.planId || busy.value) return;

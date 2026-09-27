@@ -62,7 +62,7 @@ import {
   type ProjectSettingsInput,
   type ProjectExecutionSnapshot,
 } from "@pipeline-factory/domain";
-import { projectAgentLoopDiagnostics, projectExplorerActivity } from "@pipeline-factory/domain";
+import { AGENT_LOOP_DIAGNOSTIC_STEP_TYPES, projectAgentLoopDiagnostics, projectExplorerActivity } from "@pipeline-factory/domain";
 import { z } from "zod";
 import type { FactoryConfig } from "./config.js";
 import { RepositoryContextCache } from "./repository-context-cache.js";
@@ -445,16 +445,26 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     const query = workbenchQuery.safeParse(request.query ?? {});
     if (!query.success) return reply.code(400).send({ error: "Invalid Workbench event query" });
     if (!store.getProject(query.data.projectId)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `PROJECT_NOT_FOUND: ${query.data.projectId}` });
-    const eventsForProject = (afterSequence: number) => store.listEvents({ afterSequence }).filter((event) => eventBelongsToProject(store, event, query.data.projectId));
+    const eventsForProject = (afterSequence: number) => {
+      const pending = store.listEvents({ afterSequence });
+      if (pending.length === 0) return pending;
+      // 归属索引按需重建，保证连接期间新建的 Plan/Run/Loop 也能被正确归类。
+      const belongsToProject = createProjectEventScope(store, query.data.projectId);
+      return pending.filter((event) => belongsToProject(event));
+    };
     if (query.data.format !== "sse") return { items: eventsForProject(query.data.afterSequence), cursor: store.getLastEventSequence() };
     reply.hijack();
     const raw = reply.raw;
     raw.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive", "access-control-allow-origin": "*" });
     let cursor = query.data.afterSequence;
     const send = () => {
-      for (const event of eventsForProject(cursor)) {
+      const pending = store.listEvents({ afterSequence: cursor });
+      if (pending.length === 0) return;
+      const belongsToProject = createProjectEventScope(store, query.data.projectId);
+      // 游标无条件推进到本批末尾：不属于本项目的中间事件不应每 250ms 被重复扫描。
+      for (const event of pending) {
         cursor = event.sequence;
-        raw.write(`id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+        if (belongsToProject(event)) raw.write(`id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
       }
     };
     send();
@@ -576,7 +586,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     const acceptsSse = query.data.format === "sse" || (request.headers.accept ?? "").includes("text/event-stream");
     if (!acceptsSse) {
       const current = store.getAgentLoop(params.data.loopId)!;
-      return { items: store.listEvents({ aggregateId: params.data.loopId, afterSequence }), diagnostics: projectAgentLoopDiagnostics(current, store.listAgentLoopSteps(current.id)) };
+      return { items: store.listEvents({ aggregateId: params.data.loopId, afterSequence }), diagnostics: loopDiagnostics(store, current) };
     }
     reply.hijack();
     const raw = reply.raw;
@@ -584,8 +594,10 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     let cursor = afterSequence;
     const send = () => {
       const events = store.listEvents({ aggregateId: params.data.loopId, afterSequence: cursor });
+      // 无新事件时不计算诊断：轮询在 Loop 静默期不应产生任何读取。
+      if (events.length === 0) return;
       const current = store.getAgentLoop(params.data.loopId);
-      const diagnostics = current ? projectAgentLoopDiagnostics(current, store.listAgentLoopSteps(current.id)) : null;
+      const diagnostics = current ? loopDiagnostics(store, current) : null;
       for (const event of events) {
         cursor = event.sequence;
         raw.write(`id: ${event.sequence}\nevent: ${event.type}\ndata: ${JSON.stringify({ loopId: params.data.loopId, sequence: event.sequence, ...event.payload, diagnostics })}\n\n`);
@@ -593,7 +605,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     };
     send();
     const readyLoop = store.getAgentLoop(params.data.loopId);
-    raw.write(`id: ${cursor}\nevent: stream.ready\ndata: ${JSON.stringify({ afterSequence: cursor, diagnostics: readyLoop ? projectAgentLoopDiagnostics(readyLoop, store.listAgentLoopSteps(readyLoop.id)) : null })}\n\n`);
+    raw.write(`id: ${cursor}\nevent: stream.ready\ndata: ${JSON.stringify({ afterSequence: cursor, diagnostics: readyLoop ? loopDiagnostics(store, readyLoop) : null })}\n\n`);
     const poll = setInterval(send, 250);
     const heartbeat = setInterval(() => raw.write(`: heartbeat ${Date.now()}\n\n`), 15_000);
     const cleanup = () => { clearInterval(poll); clearInterval(heartbeat); };
@@ -1669,6 +1681,9 @@ function findProjectThread(store: PipelineStore, projectId: string, threadId?: s
 }
 
 const PLAN_LIFECYCLE_ORDER: Array<PlanLifecycleStatus> = ["DRAFT", "READY", "ENQUEUED", "DISPATCHED", "IN_PROGRESS", "VERIFYING", "MERGE_READY", "MERGED"];
+/** Workbench 首次加载回放的事件尾部窗口与最终保留条数；实时增量仍由 SSE 提供。 */
+const WORKBENCH_EVENT_TAIL_LIMIT = 4_000;
+const WORKBENCH_EVENT_LIMIT = 400;
 const PLAN_LIFECYCLE_NORMALIZED = new Set<PlanLifecycleStatus>(PLAN_LIFECYCLE_ORDER);
 const PLAN_LIFECYCLE_PROGRESS_STATUSES = new Set<PlanLifecycleStatus>(["READY", "ENQUEUED", "DISPATCHED", "IN_PROGRESS", "VERIFYING", "MERGE_READY", "MERGED", "BLOCKED", "NEEDS_PLAN_CHANGE", "NEEDS_CONFIGURATION"]);
 const UNCONFIRMED_LIFECYCLE_REASON = "Plan lifecycle is invalid: it reached a later state without a confirmation record.";
@@ -1681,6 +1696,40 @@ function normalizedLifecycleStatus(value: unknown): PlanLifecycleStatus | null {
   return null;
 }
 
+/**
+ * buildPlanLifecycle 只消费这些事件类型；Store 据此在 SQL 层直接跳过其余行
+ * （单个 ExplorerThread 聚合动辄两万余条 explorer.* 事件，对本时间线毫无贡献）。
+ * 维护提示：在下面的循环里新增分支时，必须把对应事件类型加进来，否则该事件读不到。
+ */
+const PLAN_LIFECYCLE_EVENT_TYPES = [
+  "plan.candidate.created", "plan.status.changed", "plan.confirmed", "plan.revision.confirmed",
+  "plan.configuration.revised", "plan.enqueued", "plan.dispatched", "verification.completed",
+  "change.proposal.created", "merge.confirmed", "plan.dispatch.state.changed",
+] as const;
+
+/**
+ * 与某个 Plan 相关的事件可能落在多个聚合上：Plan 自身、它的 Run、Run 的 MergeRequest
+ * 与 ChangeProposal，以及产生它的 ExplorerThread。这里把聚合 ID 收集齐，
+ * 交给 Store 走 aggregate_id 索引，避免为了筛出几十条事件而把整张事件表读进内存。
+ *
+ * 维护提示：新增"在别的聚合上写 payload.planId"的事件类型时，必须同步扩展这里，
+ * 否则该事件会在 Plan 时间线中丢失（buildPlanLifecycle 的谓词只在这批候选集内筛选）。
+ */
+function planEventAggregateIds(store: PipelineStore, plan: CandidatePlan): string[] {
+  const ids = new Set<string>([plan.id]);
+  if (plan.sourceExplorerThreadId) ids.add(plan.sourceExplorerThreadId);
+  const mergeRequests = store.listMergeRequests();
+  for (const run of store.listRuns()) {
+    if (run.planId !== plan.id) continue;
+    ids.add(run.id);
+    for (const proposal of store.listChangeProposals(run.id)) ids.add(proposal.id);
+    for (const request of mergeRequests) {
+      if (request.runId === run.id) ids.add(request.id);
+    }
+  }
+  return [...ids];
+}
+
 function buildPlanLifecycle(store: PipelineStore, plan: CandidatePlan, revision = plan.revision): PlanLifecycleEntry[] {
   const run = plan.runId ? store.getRun(plan.runId) : undefined;
   const dispatch = store.getDispatchState(plan.id);
@@ -1688,7 +1737,8 @@ function buildPlanLifecycle(store: PipelineStore, plan: CandidatePlan, revision 
   const entries = new Map<PlanLifecycleStatus, PlanLifecycleEntry>();
   const eventPlanId = (payload: Record<string, unknown>) => typeof payload.planId === "string" ? payload.planId : null;
   const eventRevision = (payload: Record<string, unknown>) => typeof payload.revision === "number" ? payload.revision : null;
-  const relevant = store.listEvents({ afterSequence: 0 }).filter((event) => event.aggregateId === plan.id || event.aggregateId === run?.id || eventPlanId(event.payload) === plan.id);
+  const relevant = store.listEvents({ afterSequence: 0, aggregateIds: planEventAggregateIds(store, plan), types: PLAN_LIFECYCLE_EVENT_TYPES })
+    .filter((event) => event.aggregateId === plan.id || event.aggregateId === run?.id || eventPlanId(event.payload) === plan.id);
   const add = (status: PlanLifecycleStatus, occurredAt: string | null, options: { reason?: string | null; runId?: string | null; eventRevision?: number | null } = {}) => {
     if (options.eventRevision !== null && options.eventRevision !== undefined && options.eventRevision !== revision) return;
     const existing = entries.get(status);
@@ -1817,7 +1867,12 @@ function workbenchSnapshot(store: PipelineStore, projects: ProjectService, proje
     planTitle: store.getPlan(run.planId)?.title ?? run.planId,
     dispatch: store.getDispatchState(run.planId) ?? null,
   }));
-  const events = store.listEvents({ afterSequence: 0 }).filter((event) => eventBelongsToProject(store, event, projectId));
+  // 只回放事件尾部：UI 的 Evidence 面板仅展示最近若干条，全量历史会把响应放大到数十 MB。
+  // 更早的事件仍可通过 SSE 的 Last-Event-ID 或各资源详情接口按需获取。
+  const belongsToProject = createProjectEventScope(store, projectId);
+  const events = store.listEvents({ afterSequence: 0, limit: WORKBENCH_EVENT_TAIL_LIMIT })
+    .filter((event) => belongsToProject(event))
+    .slice(-WORKBENCH_EVENT_LIMIT);
   return {
     activeProjectId: projectId,
     projects: projectRows,
@@ -1829,34 +1884,53 @@ function workbenchSnapshot(store: PipelineStore, projects: ProjectService, proje
   };
 }
 
-function eventBelongsToProject(store: PipelineStore, event: import("@pipeline-factory/domain").DomainEvent, projectId: string): boolean {
-  const payloadProjectId = event.payload.projectId;
-  if (payloadProjectId === projectId) return true;
-  const plan = store.getPlan(event.aggregateId);
-  if (plan?.projectId === projectId) return true;
-  const run = store.getRun(event.aggregateId);
-  if (run?.projectId === projectId) return true;
-  const thread = store.getThread(event.aggregateId);
-  if (thread?.projectId === projectId) return true;
-  const projectExecutionThread = store.listProjects()
-    .map((project) => store.getProjectExecutionThread(project.id))
-    .find((candidate) => candidate?.id === event.aggregateId);
-  if (projectExecutionThread?.projectId === projectId) return true;
-  const mergeRequest = store.getMergeRequest(event.aggregateId);
-  if (mergeRequest && store.getRun(mergeRequest.runId)?.projectId === projectId) return true;
-  const loop = store.getAgentLoop(event.aggregateId);
-  if (loop?.ownerType === "run" && store.getRun(loop.ownerId)?.projectId === projectId) return true;
-  if (loop?.ownerType === "explorer-turn") {
-    const turn = store.listThreads().find((candidate) => store.listTurns(candidate.id).some((item) => item.id === loop.ownerId));
-    if (turn?.projectId === projectId) return true;
+/**
+ * 事件归属判定器。构造时一次性建立 aggregateId → projectId 索引，
+ * 之后对每条事件只做 Map 查询；否则十万级事件会退化成数十万次单行查询。
+ */
+/**
+ * 诊断只依赖少量步骤类型。显式限定后 Store 会跳过占绝大多数的文本增量步骤，
+ * 使该投影从“读取整个 Loop 历史”降为“读取少量相关步骤”。
+ */
+function loopDiagnostics(store: PipelineStore, loop: import("@pipeline-factory/domain").AgentLoop) {
+  return projectAgentLoopDiagnostics(loop, store.listAgentLoopSteps(loop.id, { stepTypes: AGENT_LOOP_DIAGNOSTIC_STEP_TYPES }));
+}
+
+function createProjectEventScope(store: PipelineStore, projectId: string): (event: DomainEvent) => boolean {
+  const aggregateProject = new Map<string, string>();
+  const mergeRequestRun = new Map<string, string>();
+  const loopOwners = new Map<string, { ownerType: string; ownerId: string }>();
+
+  for (const project of store.listProjects()) {
+    const executionThread = store.getProjectExecutionThread(project.id);
+    if (!executionThread) continue;
+    aggregateProject.set(executionThread.id, project.id);
+    // Loop 的 ownerType=project-execution-turn 以消息 ID 反查 Project，这里一并建立索引。
+    for (const message of store.listProjectExecutionMessages(executionThread.id)) aggregateProject.set(message.id, project.id);
   }
-  if (loop?.ownerType === "project-execution-turn") {
-    const executionThread = store.listProjects()
-      .map((project) => store.getProjectExecutionThread(project.id))
-      .find((candidate) => candidate && store.listProjectExecutionMessages(candidate.id).some((message) => message.id === loop.ownerId));
-    if (executionThread?.projectId === projectId) return true;
+  for (const thread of store.listThreads()) {
+    aggregateProject.set(thread.id, thread.projectId);
+    // Loop 的 ownerType=explorer-turn 以 Turn ID 反查 Project。
+    for (const turn of store.listTurns(thread.id)) aggregateProject.set(turn.id, thread.projectId);
   }
-  return false;
+  for (const plan of store.listPlans()) aggregateProject.set(plan.id, plan.projectId);
+  for (const run of store.listRuns()) aggregateProject.set(run.id, run.projectId);
+  for (const request of store.listMergeRequests()) mergeRequestRun.set(request.id, request.runId);
+  for (const loop of store.listAgentLoops()) loopOwners.set(loop.id, { ownerType: loop.ownerType, ownerId: loop.ownerId });
+
+  const resolveProject = (aggregateId: string): string | null => {
+    const direct = aggregateProject.get(aggregateId);
+    if (direct) return direct;
+    const runId = mergeRequestRun.get(aggregateId);
+    if (runId) return aggregateProject.get(runId) ?? null;
+    const loop = loopOwners.get(aggregateId);
+    if (!loop) return null;
+    // 三类 owner 都已经在上面的索引里映射到 Project：run / explorer-turn / project-execution-turn。
+    if (loop.ownerType === "run" || loop.ownerType === "explorer-turn" || loop.ownerType === "project-execution-turn") return aggregateProject.get(loop.ownerId) ?? null;
+    return null;
+  };
+
+  return (event) => event.payload.projectId === projectId || resolveProject(event.aggregateId) === projectId;
 }
 
 /** canonicalize 并校验 Git 根目录；子目录、非 Git 目录和不可读路径均拒绝导入。 */
@@ -1916,7 +1990,7 @@ function persistLoopControl(store: PipelineStore, loop: AgentLoop, state: AgentL
 }
 
 function projectAgentLoopResponse(store: PipelineStore, loop: AgentLoop): AgentLoop & { diagnostics: AgentLoopDiagnostics } {
-  return { ...loop, checkpointJson: null, diagnostics: projectAgentLoopDiagnostics(loop, store.listAgentLoopSteps(loop.id)) };
+  return { ...loop, checkpointJson: null, diagnostics: loopDiagnostics(store, loop) };
 }
 
 /** 用全局配置组装默认 Scheduler；每个 Run 启动后再由 Revision 快照解析项目级适配器。 */

@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-09-27 — Explorer 流式交互与事件查询性能
+
+### Changed
+
+- Agent Loop 将高频模型文本增量合并后再写入步骤和事件：达到 160 字符、最长 40ms、Provider 输出项切换、遇到其他事件或步骤结束时刷新，减少逐 token 持久化和 SSE 事件数量，同时保留流式更新。
+- Agent Loop 事件序号改为由追加步骤维护，并在首次使用时从 Store 查询最大序号；诊断投影只读取 `PROVIDER_ACTIVITY`、`GATE_CHECKED` 和 `LOOP_FAILED` 步骤。
+- Store 的 `listEvents` 增加多聚合、事件类型和最新条数过滤，SQLite 为聚合 ID 与序号增加索引；Plan 生命周期事件在存储查询层过滤。
+- Workbench 初始事件快照最多检查全局最近 4,000 条，再保留当前 Project 最近 400 条；实时新事件仍通过 SSE 推送。Project 事件归属改为先建立聚合到 Project 的索引，避免逐事件重复查找。
+- Explorer 将流式期间的 activity、Plan 和 Agent Loop 投影刷新合并到 400ms 间隔；门禁、输入和终态事件仍立即刷新，并在线程切换或卸载时清理定时任务。
+
+### Added
+
+- 新增 Store 事件查询测试，覆盖 InMemory 与 SQLite 实现的多聚合筛选、事件类型筛选、空筛选语义、最新条数和冲突参数校验。
+
+### Changed files
+
+- API：`code/apps/api/src/server.ts`。
+- Domain：`code/packages/domain/src/agent-loop.ts`、`code/packages/domain/src/index.ts`、`code/packages/domain/src/store-event-query.test.ts`。
+- Explorer：`code/apps/web/src/views/ExplorerView.vue`。
+- 文档：`CHANGELOG.md`。
+
+### Verification
+
+- `git diff --check` 通过。
+- 本次未运行测试、typecheck 或 build；新增 Store 查询测试尚未在本次提交前执行。
+
 ## 2026-09-27 — Explorer 需求工作台与交互恢复
 
 ### Added
