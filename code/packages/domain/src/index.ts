@@ -28,9 +28,16 @@ import type { GeneratedPlanSpecV2, PlanValidationIssue, ResolvedPlanContractV2 }
 import { EXPLORER_PLAN_INSTRUCTIONS, EXPLORER_PLAN_REQUIREMENTS, REQUIRED_PLAN_AREAS, type ExplorerPlanRequirement } from "./platform/plan-requirements.js";
 import { mergeModelUsage, normalizeModelUsage, type ModelUsage, type ModelUsageScope } from "./model/usage.js";
 import { updatePlanStatus } from "./plan/status-transition.js";
+import { isRecord, isStringArray } from "./platform/guards.js";
+import { validatePlanContract } from "./plan/contract.js";
+import { assessPlanCompletion, type PlanArtifact, type PlanCompletionAssessment } from "./plan/completion.js";
 export { EXPLORER_PLAN_INSTRUCTIONS, EXPLORER_PLAN_REQUIREMENTS, REQUIRED_PLAN_AREAS, type ExplorerPlanRequirement };
 export { mergeModelUsage, normalizeModelUsage, type ModelUsage, type ModelUsageScope };
 export { updatePlanStatus };
+export { validatePlanContract };
+export { assessPlanCompletion, type PlanArtifact, type PlanCompletionAssessment };
+// isRecord / isStringArray / isNonEmptyStringArray 原先就是 index.ts 的**内部**函数（未 export），
+// 这里同样只 import 不 re-export，避免凭空扩大公共契约；它们仍是本模块自用的实现细节。
 export { EXECUTION_SLOT_RUN_STATUSES, ProjectService } from "./project.js";
 export { redactAuditPayload, redactAuditText } from "./redaction.js";
 export type { CreateProjectInput, Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings, ProjectSettingsInput, ProjectStatus, ProjectSummary, UpdateProjectInput } from "./project.js";
@@ -901,97 +908,6 @@ function defaultThreadContextSummary(now: string): ExplorerThreadContextSummary 
   return { version: 1, updatedAt: now, completedPlans: [], openPlanIds: [] };
 }
 
-export type PlanArtifact = { title: string; contract?: PlanContract; generatedSpec?: GeneratedPlanSpecV2 };
-export type PlanCompletionAssessment = {
-  status: PlanExplorationStatus;
-  missing: string[];
-  completed: string[];
-  diagnostics: PlanValidationIssue[];
-  artifact: PlanArtifact | null;
-};
-
-/** 解析模型协议块并检查 Plan 是否具备可执行的完整契约。 */
-export function assessPlanCompletion(content: string): PlanCompletionAssessment {
-  const candidates = planProtocolCandidates(content);
-  if (candidates.length === 0) return { status: "INCOMPLETE", missing: [...REQUIRED_PLAN_AREAS], completed: [], diagnostics: [], artifact: null };
-
-  let sawReadyCandidate = false;
-  let latestIncomplete: PlanCompletionAssessment | null = null;
-  for (const candidate of [...candidates].reverse()) {
-    if (candidate.status !== "READY") continue;
-    sawReadyCandidate = true;
-    const assessment = assessPlanArtifact(candidate.artifactText);
-    if (assessment.status === "READY") return assessment;
-    latestIncomplete ??= assessment;
-  }
-  if (latestIncomplete) {
-    const latest = [...candidates].reverse().find((candidate) => candidate.status === "READY");
-    const repeats = latest ? candidates.filter((candidate) => candidate.status === "READY" && candidate.artifactText === latest.artifactText).length : 0;
-    if (repeats > 1) return { ...latestIncomplete, diagnostics: [...latestIncomplete.diagnostics, { path: "$", code: "DUPLICATE", area: "完整执行契约", message: "本轮已重复输出相同的未通过 READY 协议块；请按字段诊断修改后再提交。" }] };
-    return latestIncomplete;
-  }
-  return sawReadyCandidate
-    ? { status: "INCOMPLETE", missing: ["完整执行契约"], completed: [], diagnostics: [{ path: "$", code: "INVALID", area: "完整执行契约", message: "READY 协议块不完整。" }], artifact: null }
-    : { status: "INCOMPLETE", missing: [...REQUIRED_PLAN_AREAS], completed: [], diagnostics: [], artifact: null };
-}
-
-function planProtocolCandidates(content: string): Array<{ status: string; artifactText: string }> {
-  const statusMatches = [...content.matchAll(/<pipeline-factory-plan-status>\s*([^<]+?)\s*<\/pipeline-factory-plan-status>/gi)];
-  const planMatches = [...content.matchAll(/<pipeline-factory-plan>\s*([\s\S]*?)\s*<\/pipeline-factory-plan>/gi)];
-  return statusMatches.flatMap((statusMatch, index) => {
-    const statusEnd = (statusMatch.index ?? 0) + statusMatch[0].length;
-    const nextStatusStart = statusMatches[index + 1]?.index ?? content.length;
-    const plan = planMatches.find((candidate) => (candidate.index ?? -1) >= statusEnd && (candidate.index ?? content.length) < nextStatusStart);
-    const statusText = statusMatch[1];
-    return plan && typeof plan[1] === "string" && typeof statusText === "string" ? [{ status: statusText.trim().toUpperCase(), artifactText: plan[1] }] : [];
-  });
-}
-
-function assessPlanArtifact(artifactText: string): PlanCompletionAssessment {
-  let parsed: unknown;
-  try { parsed = JSON.parse(artifactText); } catch { return { status: "INCOMPLETE", missing: ["完整执行契约"], completed: [], diagnostics: [{ path: "$", code: "INVALID", area: "完整执行契约", message: "必须是严格 JSON，不能使用代码围栏或残缺 JSON。" }], artifact: null }; }
-  if (!isRecord(parsed)) return { status: "INCOMPLETE", missing: ["完整执行契约"], completed: [], diagnostics: [{ path: "$", code: "INVALID", area: "完整执行契约", message: "必须是 JSON 对象。" }], artifact: null };
-  // V2 is intentionally a generated spec: Factory adds project identity, Git
-  // baseline and default verification commands only after this boundary.
-  if (parsed.schemaVersion === 2) {
-    try {
-      const generatedSpec = parseGeneratedPlanSpecV2(parsed);
-      return { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], diagnostics: [], artifact: { title: generatedSpec.title, generatedSpec } };
-    } catch (error) {
-      const diagnostics = error instanceof GeneratedPlanSpecV2ValidationError ? error.issues : validateGeneratedPlanSpecV2(parsed);
-      const missing = [...new Set(diagnostics.map((item) => item.area))];
-      return { status: "INCOMPLETE", missing: missing.length ? missing : ["完整执行契约"], completed: REQUIRED_PLAN_AREAS.filter((area) => !missing.includes(area)), diagnostics, artifact: null };
-    }
-  }
-  const missing: string[] = [];
-  const title = typeof parsed.title === "string" ? parsed.title.trim() : "";
-  if (!title) missing.push("方案标题");
-  const contract = parsed as Partial<PlanContract>;
-  if (typeof contract.goal !== "string" || !contract.goal.trim()) missing.push("目标与用户范围");
-  if (!isNonEmptyStringArray(contract.acceptanceCriteria)) missing.push("验收标准与验证命令");
-  if (!isStringArray(contract.include) || !isStringArray(contract.exclude)) missing.push("功能范围与排除项");
-  if (typeof contract.baseBranch !== "string" || !contract.baseBranch.trim() || typeof contract.baseCommit !== "string" || !contract.baseCommit.trim()) missing.push("基线 Branch 与 Commit");
-  if (!Array.isArray(contract.tasks) || contract.tasks.length === 0 || contract.tasks.some((task) => !isRecord(task) || typeof task.id !== "string" || !task.id.trim() || typeof task.title !== "string" || !task.title.trim() || !isStringArray(task.dependencies))) missing.push("实施任务、依赖与冲突");
-  if (contract.dependsOnPlanIds !== undefined && !isStringArray(contract.dependsOnPlanIds)) missing.push("实施任务、依赖与冲突");
-  if (!isStringArray(contract.conflictKeys)) missing.push("实施任务、依赖与冲突");
-  if (typeof contract.executorModelRole !== "string" || !contract.executorModelRole.trim() || typeof contract.toolPolicy !== "string" || !contract.toolPolicy.trim()) missing.push("Executor 模型与 ToolPolicy");
-  if (!isNonEmptyStringArray(contract.verificationCommandIds)) missing.push("验收标准与验证命令");
-  if (typeof contract.maxRepairAttempts !== "number" || contract.maxRepairAttempts < 0 || !Number.isInteger(contract.maxRepairAttempts)) missing.push("修复次数上限");
-  if (contract.mergeStrategy !== "manual" && contract.mergeStrategy !== "fast-forward" && contract.mergeStrategy !== "squash") missing.push("合并策略与人工确认");
-  if (contract.requireHumanMerge !== true) missing.push("合并策略与人工确认");
-  if (missing.length === 0) {
-    try { validatePlanContract(contract as PlanContract); } catch { missing.push("实施任务、依赖与冲突"); }
-  }
-  const uniqueMissing = [...new Set(missing)];
-  if (uniqueMissing.length > 0) return { status: "INCOMPLETE", missing: uniqueMissing, completed: REQUIRED_PLAN_AREAS.filter((area) => !uniqueMissing.includes(area)), diagnostics: uniqueMissing.map((area) => ({ path: "$", code: "REQUIRED" as const, area, message: "历史 V1 合同缺少必填字段。" })), artifact: null };
-  // Flat artifacts are history-only. New Explorer instructions only emit V2.
-  return { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], diagnostics: [], artifact: { title, contract: { ...(contract as PlanContract), schemaVersion: 1 } } };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
 function isVerificationRun(value: unknown): value is VerificationRun {
   if (!isRecord(value)) return false;
   return typeof value.id === "string"
@@ -1001,14 +917,6 @@ function isVerificationRun(value: unknown): value is VerificationRun {
     && Number.isInteger(value.repairAttempts)
     && Array.isArray(value.commandResults)
     && typeof value.completedAt === "string";
-}
-
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((item) => typeof item === "string");
-}
-
-function isNonEmptyStringArray(value: unknown): value is string[] {
-  return isStringArray(value) && value.length > 0 && value.every((item) => item.trim().length > 0);
 }
 
 function parseStringArray(value: unknown, fallback: string[]): string[] {
@@ -2955,44 +2863,6 @@ function verifiedProjectBaseline(project: Project): { baseBranch: string; baseCo
   } catch (error) {
     throw new Error(`Project ${project.id} has no verified Git baseline: ${error instanceof Error ? error.message : String(error)}`);
   }
-}
-
-/** Confirm/Enqueue 前校验执行合同的结构，避免无效任务图进入不可恢复的 Run。 */
-export function validatePlanContract(contract: PlanContract): void {
-  if (typeof contract.goal !== "string" || !contract.goal.trim()) throw new Error("Plan goal is required");
-  if (!isNonEmptyStringArray(contract.acceptanceCriteria)) throw new Error("Plan acceptance criteria must be a non-empty list");
-  for (const [field, values] of [["include", contract.include], ["exclude", contract.exclude], ["conflictKeys", contract.conflictKeys], ["verificationCommandIds", contract.verificationCommandIds]] as const) {
-    if (!isStringArray(values) || values.some((value) => !value.trim())) throw new Error(`Plan ${field} must contain non-empty strings`);
-  }
-  if (typeof contract.baseBranch !== "string" || !contract.baseBranch.trim() || typeof contract.baseCommit !== "string" || !contract.baseCommit.trim()) throw new Error("Plan base branch and commit are required");
-  if (typeof contract.executorModelRole !== "string" || !contract.executorModelRole.trim() || typeof contract.toolPolicy !== "string" || !contract.toolPolicy.trim()) throw new Error("Plan executor and tool policy are required");
-  if (!Number.isInteger(contract.maxRepairAttempts) || contract.maxRepairAttempts < 0) throw new Error("Plan max repair attempts must be a non-negative integer");
-  if (!["manual", "fast-forward", "squash"].includes(contract.mergeStrategy)) throw new Error("Plan merge strategy is invalid");
-  if (contract.requireHumanMerge !== true) throw new Error("Plan requires human merge confirmation");
-  if (contract.priority !== undefined && (!Number.isInteger(contract.priority) || contract.priority < 0)) throw new Error("Plan priority must be a non-negative integer");
-  const taskIds = contract.tasks.map((task) => task.id);
-  if (taskIds.some((id) => !id.trim())) throw new Error("Plan task ids must be non-empty");
-  if (new Set(taskIds).size !== taskIds.length) throw new Error("Plan task ids must be unique");
-  const known = new Set(taskIds);
-  for (const task of contract.tasks) {
-    if (!["PENDING", "READY", "DONE"].includes(task.status)) throw new Error(`Invalid status for task ${task.id}`);
-    for (const dependency of task.dependencies) if (!known.has(dependency)) throw new Error(`Task ${task.id} depends on unknown task ${dependency}`);
-  }
-  if (contract.dependsOnPlanIds !== undefined && (!isStringArray(contract.dependsOnPlanIds) || contract.dependsOnPlanIds.some((id) => id.trim().length === 0))) {
-    throw new Error("Plan dependencies must be a list of non-empty plan ids");
-  }
-  const visiting = new Set<string>();
-  const visited = new Set<string>();
-  const visit = (taskId: string): void => {
-    if (visiting.has(taskId)) throw new Error(`Plan task dependency cycle includes ${taskId}`);
-    if (visited.has(taskId)) return;
-    visiting.add(taskId);
-    const task = contract.tasks.find((candidate) => candidate.id === taskId)!;
-    for (const dependency of task.dependencies) visit(dependency);
-    visiting.delete(taskId);
-    visited.add(taskId);
-  };
-  for (const taskId of taskIds) visit(taskId);
 }
 
 function freezeDeep<T>(value: T): T {

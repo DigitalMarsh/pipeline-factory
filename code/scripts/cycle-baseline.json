@@ -1,5 +1,5 @@
 {
   "valueCycles": [
-    "packages/domain/src/executor-agent.ts | packages/domain/src/index.ts | packages/domain/src/termination-gates.ts | packages/domain/src/tool-runtime.ts"
+    "packages/domain/src/index.ts | packages/domain/src/tool-runtime.ts"
   ]
 }

@@ -3,7 +3,9 @@
  *
  * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
  */
-import { assessPlanCompletion } from "./index.js";
+// 从 plan/completion.js 而不是 index.js 导入：本模块对 index.js 不再有任何值级导入，
+// 因此这条回流边被切断（check-cycles.mjs 据此判定）。
+import { assessPlanCompletion } from "./plan/completion.js";
 import type { GateContext, GateDecision, TerminationGate } from "./agent-loop.js";
 
 /** 只有解析出完整的 machine-readable Plan contract 才允许 Explorer Loop 完成。 */
