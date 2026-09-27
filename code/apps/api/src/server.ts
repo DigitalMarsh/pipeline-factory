@@ -1,11 +1,26 @@
 /**
- * 模块职责：组装 Fastify 应用、Project/Thread/Plan/Run 路由和 SSE 控制面。
+ * 模块职责：**组合根** —— 读配置、造 Store 与各 Domain Service、把它们接到一个 Fastify 实例上、
+ *   注册路由、接管静态托管。本文件不再包含任何路由体：97 条路由全部在 `routes/`（见
+ *   `routes/index.ts` 的入口），投影函数在 `projections/`，git 子进程 IO 在 `runtime/git.ts`。
  *
- * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
+ * 本文件保留的四件事（都是从"必须只有一份"推出来的）：
+ *   1) `preHandler` 项目存在性 / 归档守卫 —— 全局横切，必须在这里且在任何路由注册之前。
+ *   2) `onClose` 资源释放 —— 释放顺序（协调器 → store → model → mcp）是组合根的职责。
+ *   3) 默认组件的构造（`createDefaultScheduler` / `createDefaultVerificationExecutor` /
+ *      `createModelGateway` / `readCommandDefinitions` / `persistLoopControl`）—— 只在没有
+ *      注入真实实现时用，属于"接线"而不是"业务"。
+ *   4) 依赖的注入（`registerApiRoutes` 的那一个对象字面量）。
+ *
+ * 维护提示：
+ *   1) **死 import 只能靠 grep 发现**：本仓未开 `noUnusedLocals`，tsc 看不见。每把一段代码搬出去，
+ *      都要对"它用过的名字"逐个 `grep -c '\b名字\b' server.ts`，计数为 1（只剩 import 行）即为死。
+ *      97 条路由搬完后一次性清掉了 24 个 zod schema、6 个 domain 类型、2 个 git 函数、
+ *      `openSseChannel`、`z`、`dirname` / `resolvePath`、`FastifyReply` —— 全是 tsc 抓不到的。
+ *   2) 本文件的公共契约或关键状态约束变化时，应同步更新说明。
  */
-import { basename, dirname, resolve as resolvePath } from "node:path";
+import { basename } from "node:path";
 import cors from "@fastify/cors";
-import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
+import Fastify, { type FastifyInstance } from "fastify";
 import {
   PlanService,
   MergeService,
@@ -36,50 +51,23 @@ import {
   VerificationService,
   PlanDispatchCoordinator,
   type PipelineStore,
-  type ExplorerThread,
-  type HookDefinition,
-  type PlanStatus,
   type VerificationCommandExecutor,
-  type VerificationRun,
   type ModelGateway,
   type ModelRole,
   type AgentLoop,
   type AgentLoopRunner,
-  type PlanContract,
-  type ProjectSettingsInput,
   type ProjectExecutionSnapshot,
 } from "@pipeline-factory/domain";
-import { assertGitBranch, detectDefaultBranch, inspectGitRepository } from "./runtime/git.js";
-import { z } from "zod";
+import { detectDefaultBranch } from "./runtime/git.js";
 import type { FactoryConfig } from "./config.js";
 import { RepositoryContextCache } from "./repository-context-cache.js";
 import { registerWebHosting } from "./web-hosting.js";
-import { openSseChannel } from "./http/sse.js";
-import { registerPlatformRoutes } from "./routes/platform.js";
-import { registerChangeProposalRoutes } from "./routes/change-proposals.js";
-import { registerProjectRoutes } from "./routes/projects.js";
-import { registerExplorerRoutes } from "./routes/explorers.js";
-import { registerWorkbenchRoutes } from "./routes/workbench.js";
-import { registerHookRoutes } from "./routes/hooks.js";
-import { registerAgentLoopRoutes } from "./routes/agent-loops.js";
-import { registerExecutionThreadRoutes } from "./routes/execution-threads.js";
-import { registerRunRoutes } from "./routes/runs.js";
-import { registerMergeRequestRoutes } from "./routes/merge-requests.js";
-import { actorBody, loopReasonBody, projectThreadParams } from "./schemas/common.js";
-import { projectCreateBody, projectSelectExplorerBody, projectUpdateBody, projectValidateBody } from "./schemas/projects.js";
-import { planIdParams, planRevisionParams, revisionDraftBody, revisionDraftParams, threadPlanQuery } from "./schemas/plans.js";
-import { explorerActivityQuery, explorerCandidateQuery, explorerCreateBody, explorerRenameBody, projectExplorerParams, projectExplorerPlanParams, v4AnswerBody, v4InputQuery, v4ThreadQuery, v4ThreadStatusQuery, v4TurnBody } from "./schemas/explorers.js";
-import { agentLoopParams, loopEventsQuery } from "./schemas/agent-loops.js";
-import { workbenchQuery } from "./schemas/workbench.js";
-import { hookBody } from "./schemas/hooks.js";
-import { projectExecutionEventsQuery, projectExecutionPreferencesBody, projectExecutionTurnBody } from "./schemas/execution-threads.js";
-import { changeProposalBody } from "./schemas/change-proposals.js";
-import { sourceCommitBody, targetCommitBody } from "./schemas/merge-requests.js";
-import { guidanceBody } from "./schemas/runs.js";
-// 投影函数只剩这两个还被组合根里未搬走的 plans 路由用；其余（workbenchSnapshot /
-// createProjectEventScope / projectRunThreadTelemetry / projectAgentLoopResponse / loopDiagnostics /
-// findProjectThread）的调用点都随各自 route 文件搬走了，server.ts 不再 import 它们。
-import { planProjection, decoratePlanRows } from "./projections/plan-lifecycle.js";
+import { registerApiRoutes } from "./routes/index.js";
+// 全部 97 条路由已分域搬进 `routes/`，组合根不再直接持有任何 zod schema、任何投影函数、
+// 任何 SSE 传输件——它们的 import 随各自的 route 文件走了。**本文件剩余的 import 只服务于
+// 组装**（构造 Service / 起 store / 接管静态托管）。
+// 检查死 import 的唯一手段是 grep（本仓未开 `noUnusedLocals`，tsc 看不见）；
+// 每搬走一个域都要对"该域用过的名字"逐个 grep 一遍。
 
 /** API 组装依赖；生产环境使用 SQLite/真实 Gateway，测试可注入内存 Store 和 Stub。 */
 export type PipelineAppOptions = {
@@ -248,26 +236,6 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       return reply.code(409).send({ code: "PROJECT_ARCHIVED", error: `Project ${projectId} is archived` });
     }
   });
-  const ensurePlanProject = (projectId: string, reply: FastifyReply, write = false) => {
-    const project = store.getProject(projectId);
-    if (!project) {
-      reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${projectId} not found` });
-      return null;
-    }
-    if (write && project?.status === "ARCHIVED") {
-      reply.code(409).send({ code: "PROJECT_ARCHIVED", error: `Project ${projectId} is archived` });
-      return null;
-    }
-    return project;
-  };
-  const confirmPlanFlow = async (planId: string, revision: number, actorId: string) => {
-    if (dispatchCoordinator) {
-      const result = await dispatchCoordinator.confirmAndDispatch(planId, revision, actorId);
-      return { plan: result.plan, run: result.run, dispatch: result.state, confirmation: { stage: result.state.phase ?? result.state.status, attempt: result.state.attempt, retryable: !result.run && result.state.status !== "COMPLETED" } };
-    }
-    const plan = plans.confirm(planId, actorId, revision);
-    return { plan, run: null, dispatch: null, confirmation: { stage: "FROZEN", attempt: 1, retryable: true } };
-  };
   app.addHook("onClose", async () => {
     dispatchCoordinator?.dispose();
     if (ownsStore && "close" in store && typeof store.close === "function") store.close();
@@ -275,395 +243,22 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (!options.mcpRegistry) await mcpRegistry?.close();
   });
 
-  // ── 已抽出到 routes/ 的域 ──────────────────────────────────────────────────
-  // 注册顺序不影响匹配：97 条路由里没有通配符，Fastify 基数树对静态段与参数段按优先级匹配。
-  // 每个 register 只接它自己需要的 store / service —— 投影函数已在 `projections/`，
-  // route 直接 import，所以这里没有 `x: (a) => f(store, a)` 那种回调壳。
-  // `explorerThread: explorer` 是**刻意的重命名**：组合根里 ExplorerThreadService 的变量名叫
+  // ── 全部 97 条路由经一个入口按域注册（11 个 routes/*.ts + routes/index.ts）────────────
+  // 每个域自己的 deps 类型在它自己的文件里（**显式 deps**：想知道 runs 依赖到 loopController 的
+  // 哪一步，看 `RunRouteDeps` 就行）。这里只负责凑齐并集，不做任何变换。
+  // 唯一的注入期改名是 `explorerThread: explorer`：组合根里 ExplorerThreadService 的变量名叫
   // `explorer`，与 ExplorerService 的 `explorers` 只差一个 s；route 文件里必须分得清
   // "生命周期"与"回合执行"，所以在注入处改名，而不去动组合根里的变量名（那会牵动别处调用点）。
-  // 平台级（health / 额度 / MCP 与插件工具目录 / plan 需求清单）与 Project 无关。
-  registerPlatformRoutes(app, { model, mcpRegistry, pluginRegistry, config: options.config });
-  registerWorkbenchRoutes(app, { store, projects });
-  registerHookRoutes(app, { store, projects });
-  registerAgentLoopRoutes(app, { store, loopController });
-  registerExecutionThreadRoutes(app, { store, projectExecution });
-  registerRunRoutes(app, { store, plans, merger, scheduler, verifier, verificationExecutor, loopController });
-  registerMergeRequestRoutes(app, { store, merger, dispatchCoordinator });
-  registerChangeProposalRoutes(app, { store, changeProposals });
-  registerProjectRoutes(app, { store, projects, plans });
-  registerExplorerRoutes(app, { store, explorers, explorerThread: explorer });
-  // ── 仍在组合根的域（P4b 后续步继续搬）──
-
-
-  app.get("/api/v4/projects/:projectId/plans", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    const query = threadPlanQuery.safeParse(request.query ?? {});
-    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid project plan query" });
-    if (!store.getProject(params.data.projectId)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
-    const statuses = query.data.status?.split(",").filter(Boolean) as PlanStatus[] | undefined;
-    try {
-      const result = plans.query({
-        projectId: params.data.projectId,
-        includeLineage: query.data.includeLineage,
-        limit: query.data.limit,
-        sort: query.data.sort,
-        ...(query.data.explorerThreadId ? { explorerThreadId: query.data.explorerThreadId } : {}),
-        ...(statuses?.length ? { status: statuses } : {}),
-        ...(query.data.q !== undefined ? { q: query.data.q } : {}),
-        ...(query.data.from !== undefined ? { from: query.data.from } : {}),
-        ...(query.data.to !== undefined ? { to: query.data.to } : {}),
-        ...(query.data.cursor !== undefined ? { cursor: query.data.cursor } : {}),
-      });
-      return { items: decoratePlanRows(store, result.items), nextCursor: result.nextCursor };
-    } catch (error) {
-      return reply.code(400).send({ error: error instanceof Error ? error.message : "Invalid project plan query" });
-    }
-  });
-
-  app.get("/api/v4/projects/:projectId/explorers/:explorerId/plans", async (request, reply) => {
-    const params = projectExplorerParams.safeParse(request.params);
-    const query = threadPlanQuery.safeParse(request.query ?? {});
-    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid Explorer plan query" });
-    const explorer = store.getThread(params.data.explorerId);
-    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
-    const statuses = query.data.status?.split(",").filter(Boolean) as PlanStatus[] | undefined;
-    try {
-      const result = plans.query({
-        projectId: params.data.projectId,
-        explorerThreadId: explorer.id,
-        includeLineage: query.data.includeLineage,
-        limit: query.data.limit,
-        sort: query.data.sort,
-        ...(statuses?.length ? { status: statuses } : {}),
-        ...(query.data.q !== undefined ? { q: query.data.q } : {}),
-        ...(query.data.from !== undefined ? { from: query.data.from } : {}),
-        ...(query.data.to !== undefined ? { to: query.data.to } : {}),
-        ...(query.data.cursor !== undefined ? { cursor: query.data.cursor } : {}),
-      });
-      return { items: decoratePlanRows(store, result.items), nextCursor: result.nextCursor };
-    } catch (error) {
-      return reply.code(400).send({ error: error instanceof Error ? error.message : "Invalid Explorer plan query" });
-    }
-  });
-
-  app.get("/api/v4/projects/:projectId/explorers/:explorerId/confirmed-plans", async (request, reply) => {
-    const params = projectExplorerParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    const explorer = store.getThread(params.data.explorerId);
-    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
-    const confirmedPlans = plans.listThreadPlans(explorer.id).filter((plan) => plan.status === "READY");
-    return { items: decoratePlanRows(store, confirmedPlans) };
-  });
-
-  app.get("/api/v4/projects/:projectId/explorers/:explorerId/all-plans", async (request, reply) => {
-    const params = projectExplorerParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    const explorer = store.getThread(params.data.explorerId);
-    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
-    return { items: plans.listExplorerThreadPlans(explorer.id).map((plan) => ({ ...plan, ...planProjection(store, plan), dispatch: store.getDispatchState(plan.id) ?? null })) };
-  });
-
-  app.get("/api/v4/projects/:projectId/candidate-plans", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    if (!store.getProject(params.data.projectId)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
-    return { items: plans.listProjectPlanCandidates(params.data.projectId).map((plan) => ({ ...plan, ...planProjection(store, plan), dispatch: store.getDispatchState(plan.id) ?? null })) };
-  });
-
-  app.get("/api/v4/projects/:projectId/tasks", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    if (!store.getProject(params.data.projectId)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
-    return { items: plans.listProjectTasks(params.data.projectId).map((plan) => ({ ...plan, ...planProjection(store, plan), dispatch: store.getDispatchState(plan.id) ?? null })) };
-  });
-
-  app.post("/api/v4/projects/:projectId/explorers/:explorerId/explorer-plans/:explorerPlanId/selected-plan", async (request, reply) => {
-    const params = projectExplorerPlanParams.safeParse(request.params);
-    const body = z.object({ planId: z.string().min(1).nullable() }).safeParse(request.body ?? {});
-    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid selected Plan" });
-    const explorer = store.getThread(params.data.explorerId);
-    const requirement = store.getExplorerPlan(params.data.explorerPlanId);
-    if (!explorer || explorer.projectId !== params.data.projectId || !requirement || requirement.explorerThreadId !== explorer.id || requirement.projectId !== explorer.projectId) return reply.code(404).send({ error: "ExplorerPlan not found" });
-    try { return { explorerPlan: plans.selectCandidate(requirement.id, body.data.planId) }; }
-    catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "Plan cannot be selected" }); }
-  });
-
-  app.get("/api/v4/projects/:projectId/explorers/:explorerId/candidate", async (request, reply) => {
-    const params = projectExplorerParams.safeParse(request.params);
-    const query = explorerCandidateQuery.safeParse(request.query ?? {});
-    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid Explorer candidate query" });
-    const explorer = store.getThread(params.data.explorerId);
-    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
-    const explorerPlanId = query.data.explorerPlanId ?? explorer.activeExplorerPlanId;
-    if (explorerPlanId) {
-      const explorerPlan = store.getExplorerPlan(explorerPlanId);
-      if (!explorerPlan || explorerPlan.explorerThreadId !== explorer.id) return reply.code(404).send({ error: "ExplorerPlan not found" });
-    }
-    const requirement = explorerPlanId ? store.getExplorerPlan(explorerPlanId) : explorer.activeExplorerPlanId ? store.getExplorerPlan(explorer.activeExplorerPlanId) : undefined;
-    const selected = requirement?.candidatePlanId ? store.getPlan(requirement.candidatePlanId) : undefined;
-    const legacyCandidate = requirement && !requirement.newPlanRequested && !requirement.candidatePlanId
-      ? store.listPlans().filter((plan) => plan.projectId === explorer.projectId && plan.sourceExplorerThreadId === explorer.id && plan.explorerPlanId === requirement.id && plan.status === "DRAFT").sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
-      : undefined;
-    const candidate = selected?.status === "DRAFT" && selected.sourceExplorerThreadId === explorer.id ? selected : legacyCandidate;
-    if (!candidate) return reply.code(404).send({ error: "Candidate plan not found" });
-    return { plan: { ...candidate, ...planProjection(store, candidate) } };
-  });
-
-  /** RevisionDraft is deliberately separate from a candidate Plan: it is mutable until confirmation. */
-  app.get("/api/v4/projects/:projectId/explorers/:explorerId/revision-draft", async (request, reply) => {
-    const params = projectExplorerParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    const explorer = store.getThread(params.data.explorerId);
-    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
-    if (!explorer.activeRevisionDraftId) return reply.code(404).send({ code: "REVISION_DRAFT_NOT_FOUND", error: "No active revision draft" });
-    const draft = store.getRevisionDraft(explorer.activeRevisionDraftId);
-    if (!draft || draft.projectId !== explorer.projectId || !["EDITING", "READY_TO_CONFIRM", "BASE_CHANGED"].includes(draft.status)) {
-      return reply.code(404).send({ code: "REVISION_DRAFT_NOT_FOUND", error: "No active revision draft" });
-    }
-    return { draft };
-  });
-
-  app.get("/api/v4/plans/:planId/revisions", async (request, reply) => {
-    const params = planIdParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    try {
-      const plan = plans.get(params.data.planId);
-      if (ensurePlanProject(plan.projectId, reply) === null) return;
-      return { plan: { ...plan, ...planProjection(store, plan) }, items: plans.listRevisions(plan.id), drafts: store.listRevisionDrafts(plan.id), lifecycle: store.listRevisionLifecycleProjections(plan.projectId, plan.id) };
-    } catch { return reply.code(404).send({ code: "PLAN_NOT_FOUND", error: "Plan not found" }); }
-  });
-
-  app.get("/api/v4/plans/:planId/candidate-versions", async (request, reply) => {
-    const params = planIdParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    try {
-      const plan = plans.get(params.data.planId);
-      if (ensurePlanProject(plan.projectId, reply) === null) return;
-      const items = store.listCandidateVersions(plan.id).map((version) => ({ ...version, isLatest: version.revision === plan.revision, readOnly: version.revision !== plan.revision || plan.status !== "DRAFT" }));
-      return { planId: plan.id, latestRevision: plan.revision, items };
-    } catch { return reply.code(404).send({ code: "PLAN_NOT_FOUND", error: "Plan not found" }); }
-  });
-
-  app.get("/api/v4/plans/:planId/candidate-versions/:revision", async (request, reply) => {
-    const params = planRevisionParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    try {
-      const plan = plans.get(params.data.planId);
-      if (ensurePlanProject(plan.projectId, reply) === null) return;
-      const version = store.listCandidateVersions(plan.id).find((item) => item.revision === params.data.revision);
-      if (!version) return reply.code(404).send({ code: "CANDIDATE_VERSION_NOT_FOUND", error: "Candidate version not found" });
-      return { planId: plan.id, latestRevision: plan.revision, version, readOnly: version.revision !== plan.revision || plan.status !== "DRAFT" };
-    } catch { return reply.code(404).send({ code: "PLAN_NOT_FOUND", error: "Plan not found" }); }
-  });
-
-  app.get("/api/v4/plans/:planId/revisions/:revision", async (request, reply) => {
-    const params = planRevisionParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    try {
-      const plan = plans.get(params.data.planId);
-      if (ensurePlanProject(plan.projectId, reply) === null) return;
-      const revision = plans.getRevision(plan.id, params.data.revision);
-      return { plan: { ...plan, ...planProjection(store, plan) }, planId: plan.id, revision, runs: store.listRuns().filter((run) => run.planId === plan.id && run.planRevision === revision.revision) };
-    } catch { return reply.code(404).send({ code: "REVISION_NOT_FOUND", error: "Plan revision not found" }); }
-  });
-
-  app.post("/api/v4/plans/:planId/revisions/:revision/drafts", async (request, reply) => {
-    const params = planRevisionParams.safeParse(request.params);
-    const body = revisionDraftBody.safeParse(request.body ?? {});
-    if (!params.success || !body.success || body.data.fromRevision !== params.data.revision) return reply.code(400).send({ error: "Invalid revision draft request" });
-    try {
-      const plan = plans.get(params.data.planId);
-      if (ensurePlanProject(plan.projectId, reply, true) === null) return;
-      const thread = store.getThread(body.data.explorerThreadId);
-      if (!thread || thread.projectId !== plan.projectId) return reply.code(404).send({ code: "EXPLORER_THREAD_PROJECT_MISMATCH", error: "ExplorerThread does not belong to Plan Project" });
-      const unmerged = store.listRuns().filter((run) => run.planId === plan.id && run.planRevision === params.data.revision && !store.findMergeRequestByRun(run.id)?.mergedAt && (run.workspacePath !== null || !["CANCELLED", "STALE"].includes(run.status)));
-      if (unmerged.length && !body.data.discardUnmergedRun) return reply.code(409).send({ code: "UNMERGED_RUN_CONFIRMATION_REQUIRED", error: "Revision has an unmerged Run/worktree; explicit discardUnmergedRun is required", runs: unmerged.map((run) => run.id) });
-      if (unmerged.length) {
-        if (!scheduler) return reply.code(503).send({ code: "CLEANUP_UNAVAILABLE", error: "Scheduler is required to clean an unmerged Run" });
-        for (const run of unmerged) {
-          for (const loop of store.listAgentLoops(run.executionThreadId)) if (loop.state === "RUNNING" || loop.state === "WAITING_FOR_INPUT" || loop.state === "PAUSED") await loopController.cancel(loop.id, "revision_superseded");
-          await scheduler.finish(run.id, "cancelled", {}, "revision_superseded");
-          if (store.listHookExecutions(run.id).some((hook) => hook.hookType === "cleanup" && hook.status === "failed")) return reply.code(409).send({ code: "CLEANUP_FAILED", error: "Cleanup hook failed; RevisionDraft was not created", runId: run.id });
-        }
-      }
-      const draft = plans.createRevisionDraft({ ...body.data, planId: plan.id, explorerThreadId: thread.id });
-      return reply.code(201).send({ draft, explorerThread: store.getThread(thread.id) });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return reply.code(message === "UNMERGED_RUN_CONFIRMATION_REQUIRED" ? 409 : 422).send({ code: message, error: message });
-    }
-  });
-
-  app.get("/api/v4/plans/:planId/revision-drafts/:draftId", async (request, reply) => {
-    const params = revisionDraftParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    const draft = store.getRevisionDraft(params.data.draftId);
-    if (!draft || draft.planId !== params.data.planId) return reply.code(404).send({ code: "REVISION_DRAFT_NOT_FOUND", error: "RevisionDraft not found" });
-    if (ensurePlanProject(draft.projectId, reply) === null) return;
-    return { draft };
-  });
-
-  app.post("/api/v4/plans/:planId/revision-drafts/:draftId/confirm", async (request, reply) => {
-    const params = revisionDraftParams.safeParse(request.params);
-    const body = actorBody.safeParse(request.body ?? {});
-    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid revision confirmation" });
-    const draft = store.getRevisionDraft(params.data.draftId);
-    if (!draft || draft.planId !== params.data.planId) return reply.code(404).send({ code: "REVISION_DRAFT_NOT_FOUND", error: "RevisionDraft not found" });
-    if (ensurePlanProject(draft.projectId, reply, true) === null) return;
-    try {
-      const plan = plans.confirmRevisionDraft(draft.draftId, body.data.actorId);
-      return await confirmPlanFlow(plan.id, plan.revision, body.data.actorId);
-    }
-    catch (error) { const message = error instanceof Error ? error.message : String(error); return reply.code(409).send({ code: message, error: message }); }
-  });
-
-  app.post("/api/v4/plans/:planId/revision-drafts/:draftId/discard", async (request, reply) => {
-    const params = revisionDraftParams.safeParse(request.params);
-    const body = actorBody.safeParse(request.body ?? {});
-    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid revision discard" });
-    const draft = store.getRevisionDraft(params.data.draftId);
-    if (!draft || draft.planId !== params.data.planId) return reply.code(404).send({ code: "REVISION_DRAFT_NOT_FOUND", error: "RevisionDraft not found" });
-    if (ensurePlanProject(draft.projectId, reply, true) === null) return;
-    try { return { draft: plans.discardRevisionDraft(draft.draftId, body.data.actorId) }; }
-    catch (error) { const message = error instanceof Error ? error.message : String(error); return reply.code(409).send({ code: message, error: message }); }
-  });
-
-  app.post("/api/v4/plans/:planId/revisions/:revision/enqueue", async (request, reply) => {
-    const params = planRevisionParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    try {
-      const plan = plans.get(params.data.planId);
-      if (ensurePlanProject(plan.projectId, reply, true) === null) return;
-      if (plan.revision !== params.data.revision) return reply.code(409).send({ code: "REVISION_NOT_LATEST", error: "Only the latest revision can be enqueued" });
-      return { plan: plans.enqueue(plan.id), dispatch: null };
-    } catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "Plan cannot be enqueued" }); }
-  });
-
-  app.post("/api/v4/plans/:planId/revisions/:revision/run", async (request, reply) => {
-    const params = planRevisionParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    if (!scheduler) return reply.code(503).send({ error: "Scheduler is not configured for this API instance" });
-    try {
-      const plan = plans.get(params.data.planId);
-      if (ensurePlanProject(plan.projectId, reply, true) === null) return;
-      if (plan.revision !== params.data.revision) return reply.code(409).send({ code: "REVISION_NOT_LATEST", error: "Only the latest revision can be dispatched" });
-      if (dispatchCoordinator) {
-        const dispatched = await dispatchCoordinator.dispatch(plan.id);
-        return { plan: dispatched.plan, run: dispatched.state.runId ? store.getRun(dispatched.state.runId) ?? null : null, dispatch: dispatched.state };
-      }
-      const project = store.getProject(plan.projectId);
-      const dispatchedPlan = plans.dispatch(plan.id);
-      return { plan: dispatchedPlan, run: await scheduler.start(plan.id, project?.settings.hooks ?? {}), dispatch: null };
-    } catch (error) { const message = error instanceof Error ? error.message : String(error); return reply.code(409).send({ code: "RUN_START_FAILED", error: message }); }
-  });
-
-  app.get("/api/v4/plans/:planId", async (request, reply) => {
-    const params = planIdParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    try {
-      const plan = plans.get(params.data.planId);
-      if (ensurePlanProject(plan.projectId, reply) === null) return;
-      const revision = store.getRevision(plan.id, plan.revision);
-      return { plan: { ...plan, ...planProjection(store, plan) }, revision: revision ?? null, projectSnapshot: revision?.projectConfigSnapshot ?? null, dispatch: dispatchCoordinator?.state(plan.id) ?? store.getDispatchState(plan.id) ?? null, mergeRequest: plan.runId ? merger.findByRun(plan.runId) ?? null : null };
-    } catch {
-      return reply.code(404).send({ error: "Plan not found" });
-    }
-  });
-
-  app.post("/api/v4/plans/:planId/revisions/:revision/confirm", async (request, reply) => {
-    const params = planRevisionParams.safeParse(request.params);
-    const body = actorBody.safeParse(request.body ?? {});
-    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid versioned confirmation request" });
-    try {
-      const plan = plans.get(params.data.planId);
-      if (ensurePlanProject(plan.projectId, reply, true) === null) return;
-      if (plan.revision !== params.data.revision) return reply.code(409).send({ code: "REVISION_NOT_LATEST", error: "Only the latest candidate version can be confirmed" });
-      return await confirmPlanFlow(plan.id, params.data.revision, body.data.actorId);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Plan cannot be confirmed";
-      return reply.code(message === "REVISION_NOT_LATEST" ? 409 : 409).send({ code: message, error: message, stage: message.includes("not found") ? "VALIDATING" : "VALIDATION_FAILED" });
-    }
-  });
-
-  app.post("/api/v4/plans/:planId/confirm", async (request, reply) => {
-    const params = planIdParams.safeParse(request.params);
-    const body = z.object({ actorId: z.string().min(1).default("local-user"), revision: z.number().int().positive().optional() }).safeParse(request.body ?? {});
-    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid confirmation request" });
-    try {
-      const plan = plans.get(params.data.planId);
-      if (ensurePlanProject(plan.projectId, reply, true) === null) return;
-      const revision = body.data.revision ?? plan.revision;
-      if (plan.revision !== revision) return reply.code(409).send({ code: "REVISION_NOT_LATEST", error: "Only the latest candidate version can be confirmed" });
-      return await confirmPlanFlow(plan.id, revision, body.data.actorId);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Plan cannot be confirmed";
-      return reply.code(409).send({ code: message, error: message, stage: "VALIDATION_FAILED" });
-    }
-  });
-
-  app.post("/api/v4/plans/:planId/discard", async (request, reply) => {
-    const params = planIdParams.safeParse(request.params);
-    const body = actorBody.safeParse(request.body ?? {});
-    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid discard request" });
-    try {
-      const plan = plans.get(params.data.planId);
-      if (ensurePlanProject(plan.projectId, reply, true) === null) return;
-      return { plan: plans.discard(params.data.planId, body.data.actorId) };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Plan cannot be discarded";
-      if (/not found/i.test(message)) return reply.code(404).send({ code: "PLAN_NOT_FOUND", error: "Plan not found" });
-      return reply.code(409).send({ code: "PLAN_CANNOT_BE_DISCARDED", error: message });
-    }
-  });
-
-  app.post("/api/v4/plans/:planId/enqueue", async (request, reply) => {
-    const params = planIdParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    try {
-      const plan = plans.get(params.data.planId);
-      if (ensurePlanProject(plan.projectId, reply, true) === null) return;
-      if (plan.revision > 1) return reply.code(409).send({ code: "REVISION_REQUIRED", error: "Use the revision-specific enqueue endpoint" });
-      return { plan: plans.enqueue(params.data.planId), dispatch: null };
-    } catch (error) {
-      return reply.code(409).send({ error: error instanceof Error ? error.message : "Plan cannot be enqueued" });
-    }
-  });
-
-  app.post("/api/v4/plans/:planId/revise-configuration", async (request, reply) => {
-    const params = planIdParams.safeParse(request.params);
-    const body = actorBody.safeParse(request.body ?? {});
-    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid configuration revision request" });
-    if (!dispatchCoordinator) return reply.code(503).send({ error: "Scheduler is not configured for this API instance" });
-    try {
-      const plan = plans.get(params.data.planId);
-      if (ensurePlanProject(plan.projectId, reply, true) === null) return;
-      return { plan: dispatchCoordinator.reviseConfiguration(plan.id, body.data.actorId) };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Plan configuration cannot be revised";
-      return reply.code(409).send({ code: "PLAN_CONFIGURATION_REVISION_FAILED", error: message });
-    }
-  });
-
-  app.post("/api/v4/plans/:planId/run", async (request, reply) => {
-    const params = planIdParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    if (!scheduler) return reply.code(503).send({ error: "Scheduler is not configured for this API instance" });
-    try {
-      const plan = plans.get(params.data.planId);
-      if (ensurePlanProject(plan.projectId, reply, true) === null) return;
-      if (plan.revision > 1) return reply.code(409).send({ code: "REVISION_REQUIRED", error: "Use the revision-specific run endpoint" });
-      if (dispatchCoordinator) {
-        const dispatched = await dispatchCoordinator.dispatch(plan.id);
-        return { plan: dispatched.plan, run: dispatched.state.runId ? store.getRun(dispatched.state.runId) ?? null : null, dispatch: dispatched.state };
-      }
-      const project = store.getProject(plan.projectId);
-      const dispatchedPlan = plans.dispatch(plan.id);
-      return { plan: dispatchedPlan, run: await scheduler.start(plan.id, project?.settings.hooks ?? {}), dispatch: null };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Run cannot be started";
-      return reply.code(409).send({ code: /RUN_PREREQUISITES_UNSATISFIED/.test(message) ? "RUN_PREREQUISITES_UNSATISFIED" : "RUN_START_FAILED", error: message });
-    }
+  // `ensurePlanProject` / `confirmPlanFlow` 这两个闭包辅助原在这里，已随 Plan 域搬进
+  // `routes/plans.ts`——全仓只有 Plan 路由用它们。想在组合根加**横切**守卫，用上面的 `preHandler`，
+  // 那才是正确的层。
+  registerApiRoutes(app, {
+    config: options.config,
+    store, projects, plans, explorers,
+    explorerThread: explorer,
+    merger, changeProposals, verifier, scheduler, dispatchCoordinator,
+    verificationExecutor, loopController, projectExecution,
+    model, mcpRegistry, pluginRegistry,
   });
 
   // 静态托管必须最后注册：setNotFoundHandler 是全局兜底，且必须在 app 启动前设置
