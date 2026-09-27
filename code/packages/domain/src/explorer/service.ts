@@ -1,0 +1,203 @@
+/**
+ * 模块职责：ExplorerService —— ExplorerThread 的创建、继承、归档、激活、标题修改，
+ *   以及级联删除（连同它的阻塞错误与"什么算活跃执行"的判定）。
+ *
+ * 为什么从 index.ts 抽出来：这是"一个 Explorer 线程能做什么"的完整答案，包含删除这条
+ *   **不可逆**路径。搬出来后它对 index.ts 只剩 \`import type\`，值依赖只有
+ *   explorer/thread-selection.ts 一个模块。
+ *
+ * 维护提示：
+ *   1) **deleteExplorerCascade 是事务边界**（末尾的 runInTransaction 三元）。整段删除必须
+ *      在同一个事务里完成；拆开会留下指向已删除 Explorer 的孤儿 Plan/Run。store 不提供
+ *      runInTransaction 时（内存实现）直接执行——这是有意的降级，不是遗漏。
+ *   2) EXPLORER_DELETE_ACTIVE_RUN_STATUSES 与 ExplorerDeleteBlockedError 是**配套的一对**：
+ *      前者决定"什么算还在跑"，后者把判定结果带给调用方（api 层靠 error.code ===
+ *      "EXPLORER_DELETE_BLOCKED" 映射成 409）。新增 Run 状态时必须同时想清楚它算不算活跃，
+ *      否则会出现"能删掉一个正在跑的线程"。
+ *   3) 删除后的**回退线程**由 replacementExplorer 承担：删掉当前线程时项目指针要落到一个还存在的
+ *      线程上。返回的 replacementExplorer 是从 store 重新读出来的（不是内存里的对象引用），
+ *      这样调用方拿到的状态与库一致。
+ *   4) 标题相关路径都要走 projectPlaceholderExplorerTitle / threadTitleMetadata，不要在本地
+ *      拼字符串——占位标题的形态（含项目简称）是前端展示契约的一部分。
+ *   5) selectCurrentExplorer 写的是 project 上的指针；本类里它出现在 create 与 delete 两处，
+ *      对应"新线程成为当前"和"删除后指针回退"。
+ */
+import { projectPlaceholderExplorerTitle, selectCurrentExplorer } from "./thread-selection.js";
+import { defaultExplorerPlan, defaultThreadContextSummary } from "../store/records.js";
+import type { PipelineStore } from "../store/pipeline-store.js";
+import type { Project } from "../project/project.js";
+import type { CreateExplorerInput, ExplorerDeletionInput, ExplorerDeletionSummary, ExplorerPlan, ExplorerThread, Run } from "../index.js";
+
+export class ExplorerDeleteBlockedError extends Error {
+  readonly code = "EXPLORER_DELETE_BLOCKED" as const;
+
+  constructor(readonly activeRunIds: string[], readonly activeLoopIds: string[]) {
+    super("ExplorerThread has active execution work; pause or cancel it before deleting the thread");
+    this.name = "ExplorerDeleteBlockedError";
+  }
+}
+
+const EXPLORER_DELETE_ACTIVE_RUN_STATUSES = new Set(["QUEUED", "STARTING", "IN_PROGRESS", "READY_FOR_VERIFY", "VERIFYING", "RECOVERING"]);
+
+/** 管理 ExplorerThread 的创建、继承、归档、激活和标题修改。 */
+export class ExplorerService {
+  constructor(private readonly store: PipelineStore) {}
+
+  /** 创建 Project 内的新 ExplorerThread，可显式继承来源线程。 */
+  create(input: CreateExplorerInput): ExplorerThread {
+    const origin = input.originThreadId ? this.store.getThread(input.originThreadId) : undefined;
+    if (input.originThreadId && (!origin || origin.projectId !== input.projectId)) throw new Error("Origin Explorer does not belong to this project");
+    let thread = this.store.saveThread({
+      id: this.store.nextId("explorer"),
+      projectId: input.projectId,
+      parentThreadId: null,
+      title: input.title?.trim() || "New Explorer",
+      contextMode: origin ? "EXPLICIT_CONTINUATION" : "FRESH",
+      originThreadId: origin?.id ?? null,
+      createdAt: input.createdAt,
+    });
+    if (thread.titleSource === "AUTO" && thread.titleStatus === "PLACEHOLDER") {
+      thread = this.store.updateThread({ ...thread, title: projectPlaceholderExplorerTitle(this.store, thread), titleStatus: "GENERATED" });
+    }
+    this.store.appendEvent({ type: "explorer.created", aggregateId: thread.id, payload: { projectId: thread.projectId, contextMode: thread.contextMode, originThreadId: thread.originThreadId, explorerPlanId: thread.activeExplorerPlanId, turnId: null, loopId: null } });
+    if (origin) this.store.appendEvent({ type: "explorer.continued", aggregateId: thread.id, payload: { originThreadId: origin.id, explorerPlanId: thread.activeExplorerPlanId, turnId: null, loopId: null } });
+    selectCurrentExplorer(this.store, thread);
+    return thread;
+  }
+
+  /** 按 id 读取 ExplorerThread。 */
+  get(explorerId: string): ExplorerThread {
+    const explorer = this.store.getThread(explorerId);
+    if (!explorer) throw new Error(`Explorer ${explorerId} not found`);
+    return explorer;
+  }
+
+  /** 返回线程下按创建顺序排列的 Plan 分区，并保证旧线程已有默认 Plan。 */
+  listPlans(explorerId: string): ExplorerPlan[] {
+    const explorer = this.get(explorerId);
+    let plans = this.store.listExplorerPlans(explorer.id);
+    if (!plans.length) {
+      const created = this.createPlan(explorer.id);
+      plans = [created];
+    }
+    return plans;
+  }
+
+  /** 创建空 Plan 分区；不启动 Provider，也不复制旧消息。 */
+  createPlan(explorerId: string): ExplorerPlan {
+    const explorer = this.get(explorerId);
+    if (explorer.state === "ARCHIVED") throw new Error(`ExplorerThread ${explorerId} is archived`);
+    const plans = this.store.listExplorerPlans(explorer.id);
+    const createdAt = this.store.now();
+    const plan = defaultExplorerPlan(explorer, this.store.nextId("explorer-plan"), (plans.at(-1)?.ordinal ?? 0) + 1, createdAt);
+    this.store.saveExplorerPlan(plan);
+    const contextSummary = explorer.contextSummary ?? defaultThreadContextSummary(createdAt);
+    const updatedThread = this.store.updateThread({ ...explorer, activeExplorerPlanId: plan.id, contextSummary: { ...contextSummary, updatedAt: createdAt, openPlanIds: [...new Set([...contextSummary.openPlanIds, plan.id])] }, lastActivityAt: createdAt });
+    this.store.appendEvent({ type: "explorer.plan.created", aggregateId: explorer.id, payload: { explorerId: explorer.id, explorerPlanId: plan.id, turnId: null, loopId: null, ordinal: plan.ordinal } });
+    void updatedThread;
+    return plan;
+  }
+
+  /** 切换当前 Plan；只更新线程的活动投影，不修改 Provider 会话。 */
+  activatePlan(explorerId: string, explorerPlanId: string): ExplorerPlan {
+    const explorer = this.get(explorerId);
+    const plan = this.store.getExplorerPlan(explorerPlanId);
+    if (!plan || plan.explorerThreadId !== explorer.id || plan.projectId !== explorer.projectId) throw new Error("ExplorerPlan does not belong to this ExplorerThread");
+    this.store.updateThread({ ...explorer, activeExplorerPlanId: plan.id, lastActivityAt: this.store.now() });
+    return plan;
+  }
+
+  renamePlan(explorerId: string, explorerPlanId: string, title: string): ExplorerPlan {
+    const explorer = this.get(explorerId);
+    const plan = this.store.getExplorerPlan(explorerPlanId);
+    if (!plan || plan.explorerThreadId !== explorer.id) throw new Error("ExplorerPlan does not belong to this ExplorerThread");
+    const normalized = title.trim();
+    if (!normalized) throw new Error("ExplorerPlan title cannot be empty");
+    const updated = this.store.updateExplorerPlan({ ...plan, title: normalized, titleSource: "MANUAL", titleStatus: "GENERATED", lastActivityAt: this.store.now() });
+    this.store.appendEvent({ type: "explorer.plan.renamed", aggregateId: explorer.id, payload: { explorerId: explorer.id, explorerPlanId: plan.id, turnId: null, loopId: null, title: normalized } });
+    return updated;
+  }
+
+  /** 只列出指定 Project 的线程，按最近活动倒序。 */
+  list(projectId: string): ExplorerThread[] {
+    return this.store.listThreads().filter((thread) => thread.projectId === projectId).sort((a, b) => Number(b.state === "ACTIVE") - Number(a.state === "ACTIVE") || b.lastActivityAt.localeCompare(a.lastActivityAt));
+  }
+
+  /** 归档线程并保留其 Turn、Plan 和事件历史。 */
+  archive(explorerId: string): ExplorerThread {
+    const explorer = this.get(explorerId);
+    if (explorer.state === "ARCHIVED") return explorer;
+    const project = this.store.getProject(explorer.projectId);
+    if (project?.currentExplorerThreadId === explorerId) throw new Error("Current Explorer cannot be archived");
+    const archived = this.store.updateThread({ ...explorer, state: "ARCHIVED", lastActivityAt: this.store.now() });
+    this.store.appendEvent({ type: "explorer.archived", aggregateId: explorerId, payload: { explorerId, explorerPlanId: explorer.activeExplorerPlanId, turnId: null, loopId: null } });
+    return archived;
+  }
+
+  /** 恢复归档线程的可写状态。 */
+  activate(explorerId: string): ExplorerThread {
+    const explorer = this.get(explorerId);
+    if (explorer.state === "ACTIVE") return explorer;
+    const active = this.store.updateThread({ ...explorer, state: "ACTIVE", lastActivityAt: this.store.now() });
+    this.store.appendEvent({ type: "explorer.activated", aggregateId: explorerId, payload: { explorerId, explorerPlanId: active.activeExplorerPlanId, turnId: null, loopId: null } });
+    selectCurrentExplorer(this.store, active);
+    return active;
+  }
+
+  /** 更新手工标题；空标题被拒绝且不会覆盖已有标题。 */
+  rename(explorerId: string, title: string): ExplorerThread {
+    const explorer = this.get(explorerId);
+    const normalized = title.trim();
+    if (!normalized) throw new Error("Explorer title cannot be empty");
+    return this.store.updateThread({ ...explorer, title: normalized, titleSource: "MANUAL", titleStatus: "GENERATED", lastActivityAt: this.store.now() });
+  }
+
+  /** 删除线程及其全部业务投影；审计事件保留，已结束 Run 的 worktree 不做文件系统清理。 */
+  delete(explorerId: string): { replacementExplorer: ExplorerThread; project: Project; deleted: ExplorerDeletionSummary } {
+    const explorer = this.get(explorerId);
+    const project = this.store.getProject(explorer.projectId);
+    if (!project) throw new Error(`Project ${explorer.projectId} not found`);
+    const explorerPlans = this.store.listExplorerPlans(explorer.id);
+    const explorerPlanIds = explorerPlans.map((plan) => plan.id);
+    const explorerPlanIdSet = new Set(explorerPlanIds);
+    const turns = this.store.listTurns(explorer.id);
+    const turnIds = turns.map((turn) => turn.id);
+    const turnIdSet = new Set(turnIds);
+    const plans = this.store.listPlans().filter((plan) => plan.sourceExplorerThreadId === explorer.id || (plan.explorerPlanId ? explorerPlanIdSet.has(plan.explorerPlanId) : false));
+    const planIds = plans.map((plan) => plan.id);
+    const planIdSet = new Set(planIds);
+    const runs = this.store.listRuns().filter((run) => planIdSet.has(run.planId));
+    const runIds = runs.map((run) => run.id);
+    const runIdSet = new Set(runIds);
+    const loops = this.store.listAgentLoops().filter((loop) => (loop.ownerType === "explorer-turn" && turnIdSet.has(loop.ownerId)) || (loop.ownerType === "run" && runIdSet.has(loop.ownerId)));
+    const activeLoopStates = new Set(["CREATED", "RUNNING", "WAITING_FOR_INPUT", "PAUSED", "RECOVERING"]);
+    const activeRunIds = runs.filter((run) => EXPLORER_DELETE_ACTIVE_RUN_STATUSES.has(run.status)).map((run) => run.id);
+    const activeLoopIds = loops.filter((loop) => activeLoopStates.has(loop.state)).map((loop) => loop.id);
+    if (activeRunIds.length || activeLoopIds.length) throw new ExplorerDeleteBlockedError(activeRunIds, activeLoopIds);
+
+    const replacementCandidate = this.store.listThreads()
+      .filter((thread) => thread.projectId === explorer.projectId && thread.id !== explorer.id && thread.state !== "ARCHIVED")
+      .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt))[0];
+    const input: Omit<ExplorerDeletionInput, "replacementExplorerId"> = {
+      projectId: explorer.projectId,
+      explorerId: explorer.id,
+      explorerPlanIds,
+      turnIds,
+      planIds,
+      runIds,
+      executionThreadIds: runs.map((run) => run.executionThreadId),
+      agentLoopIds: loops.map((loop) => loop.id),
+      inputRequestIds: this.store.listInputRequests(explorer.id).map((request) => request.id),
+    };
+
+    const remove = () => {
+      const replacementExplorer = replacementCandidate ?? this.create({ projectId: explorer.projectId });
+      const deleted = this.store.deleteExplorerCascade({ ...input, replacementExplorerId: replacementExplorer.id });
+      this.store.appendEvent({ type: "explorer.deleted", aggregateId: explorer.id, payload: { projectId: explorer.projectId, explorerId: explorer.id, replacementExplorerId: replacementExplorer.id, taskCount: deleted.taskCount, planCount: deleted.planCount, runCount: deleted.runCount } });
+      const savedProject = this.store.getProject(explorer.projectId);
+      if (!savedProject) throw new Error(`Project ${explorer.projectId} not found after Explorer deletion`);
+      return { replacementExplorer: this.store.getThread(replacementExplorer.id) as ExplorerThread, project: savedProject, deleted };
+    };
+    return this.store.runInTransaction ? this.store.runInTransaction(remove) : remove();
+  }
+}
