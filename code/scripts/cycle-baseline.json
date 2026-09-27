@@ -1,5 +1,3 @@
 {
-  "valueCycles": [
-    "packages/domain/src/index.ts | packages/domain/src/tool-runtime.ts"
-  ]
+  "valueCycles": []
 }

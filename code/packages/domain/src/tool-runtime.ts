@@ -4,12 +4,14 @@
  * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
  */
 import { createHash } from "node:crypto";
-import {
-  ToolGateway,
-  type PipelineStore,
-  type ToolCall,
-  type ToolCallResult,
-  type ToolRole,
+import { ToolGateway } from "./tools/gateway.js";
+// 用 import type 而不是"具名绑定带 type 前缀"：这样"本模块对 index.js 只剩类型依赖"是显式的，
+// check-cycles.mjs 也据此判定这最后一条回流边已被切断。
+import type {
+  PipelineStore,
+  ToolCall,
+  ToolCallResult,
+  ToolRole,
 } from "./index.js";
 
 /** 持久化工具运行上下文；loopId 用于幂等和恢复关联。 */

@@ -6,7 +6,6 @@
 import { projectAgentLoopDiagnostics } from "./agent-loop.js";
 import type { AgentLoop, AgentLoopDiagnostics, AgentLoopEvent, AgentLoopRunner, AgentLoopStep, AgentLoopStepInput } from "./agent-loop.js";
 import type { MappedCodexRateLimits } from "./codex-rate-limits.js";
-import { BuiltinToolExecutor, type BuiltinToolContext, type BuiltinToolExecutorOptions } from "./builtin-tool-executor.js";
 import { AgentLoopEngine } from "./agent-loop.js";
 import { PlanCompletenessGate } from "./termination-gates.js";
 import { composeExplorerTitle, ModelExplorerTitleGenerator, normalizeExplorerTitle, placeholderExplorerTitle, type ExplorerTitleGenerator, type ExplorerTitleSource, type ExplorerTitleStatus } from "./explorer-title.js";
@@ -38,6 +37,9 @@ export { validatePlanContract };
 export { assessPlanCompletion, type PlanArtifact, type PlanCompletionAssessment };
 // isRecord / isStringArray / isNonEmptyStringArray 原先就是 index.ts 的**内部**函数（未 export），
 // 这里同样只 import 不 re-export，避免凭空扩大公共契约；它们仍是本模块自用的实现细节。
+// ToolGateway 用纯 re-export：搬走之后 index.ts 内部已不再使用它，无需为它建本地绑定
+// （api 的 server.ts 与多个测试仍从本 barrel 取它，所以必须保留导出）。
+export { ToolGateway, type ToolGatewayOptions } from "./tools/gateway.js";
 export { EXECUTION_SLOT_RUN_STATUSES, ProjectService } from "./project.js";
 export { redactAuditPayload, redactAuditText } from "./redaction.js";
 export type { CreateProjectInput, Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings, ProjectSettingsInput, ProjectStatus, ProjectSummary, UpdateProjectInput } from "./project.js";
@@ -3875,116 +3877,6 @@ export type PersistedToolCall = {
   completedAt: string | null;
 };
 
-/** ToolGateway 的角色白名单、工作区边界和外部工具桥接配置。 */
-export type ToolGatewayOptions = {
-  role: ToolRole;
-  workspaceRoot: string;
-  registeredCommandIds?: ReadonlySet<string>;
-  mcpAllowedTools?: ReadonlySet<string>;
-  pluginAllowedTools?: ReadonlySet<string>;
-  computerUseAllowed?: boolean;
-  builtin?: Omit<BuiltinToolExecutorOptions, "workspaceRoot">;
-  handler?: (call: ToolCall, context?: BuiltinToolContext) => Promise<unknown>;
-};
-
-const READ_ONLY_TOOLS = new Set<ToolName>(["read_file", "list_files", "git_status", "git_diff", "git_log", "search_text"]);
-const EXECUTOR_TOOLS = new Set<ToolName>([...READ_ONLY_TOOLS, "write_file", "apply_patch", "run_registered_command", "run_verification", "git_commit"]);
-const PROTECTED_PATHS = new Set(["package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "tsconfig.json"]);
-
-/** 汇总 Builtin、MCP、Plugin 和 Computer Use 工具，并执行统一白名单检查。 */
-export class ToolGateway {
-  private readonly calls = new Map<string, ToolCallResult>();
-  private readonly workspaceRoot: string;
-  private readonly registeredCommandIds: ReadonlySet<string>;
-  private readonly mcpAllowedTools: ReadonlySet<string>;
-  private readonly pluginAllowedTools: ReadonlySet<string>;
-  private readonly builtin: BuiltinToolExecutor;
-
-  constructor(private readonly options: ToolGatewayOptions) {
-    this.workspaceRoot = resolve(options.workspaceRoot);
-    this.registeredCommandIds = options.registeredCommandIds ?? new Set();
-    this.mcpAllowedTools = options.mcpAllowedTools ?? new Set();
-    this.pluginAllowedTools = options.pluginAllowedTools ?? new Set();
-    this.builtin = new BuiltinToolExecutor({ workspaceRoot: this.workspaceRoot, ...(options.builtin ?? {}) });
-  }
-
-  async call(call: ToolCall, context?: BuiltinToolContext): Promise<ToolCallResult> {
-    const previous = this.calls.get(call.callId);
-    if (previous) return previous;
-    const denied = this.validate(call);
-    if (denied) {
-      const result = this.save({ callId: call.callId, allowed: false, status: "DENIED", reason: denied, result: null, audited: true });
-      return result;
-    }
-    try {
-      const value = this.options.handler ? await this.options.handler(call, context) : await this.builtin.execute(call, { workspacePath: context?.workspacePath ?? this.workspaceRoot, ...(context ?? {}) });
-      return this.save({ callId: call.callId, allowed: true, reason: null, result: value, audited: true });
-    } catch (error) {
-      const reason = error instanceof Error ? error.message : String(error);
-      if (isToolExecutionFailure(reason)) return this.save({ callId: call.callId, allowed: true, reason: null, result: { error: reason }, audited: true });
-      if (/outside the configured workspace boundary|Protected secrets|repository internals/i.test(reason)) return this.save({ callId: call.callId, allowed: false, status: "DENIED", reason, result: null, audited: true });
-      throw error;
-    }
-  }
-
-  private validate(call: ToolCall): string | null {
-    if (call.tool.startsWith("mcp:")) {
-      if (!this.mcpAllowedTools.has(call.tool)) return this.options.role === "explorer" ? "Explorer MCP tool is not explicitly allowed" : "MCP tool is not allowed by Executor policy";
-      if (!this.options.builtin?.mcpToolExecutor && !this.options.handler) return "MCP tool executor is not configured";
-      return null;
-    }
-    if (call.tool.startsWith("plugin:")) {
-      if (!this.pluginAllowedTools.has(call.tool)) return this.options.role === "explorer" ? "Explorer plugin tool is not explicitly allowed" : "Plugin tool is not allowed by Executor policy";
-      if (!this.options.builtin?.pluginToolExecutor && !this.options.handler) return "Plugin tool executor is not configured";
-      return null;
-    }
-    if (call.tool === "computer_use") {
-      if (this.options.computerUseAllowed !== true) return "Computer Use is denied by host policy";
-      if (!this.options.builtin?.computerUseExecutor && !this.options.handler) return "Computer Use host adapter is not configured";
-      return null;
-    }
-    const allowedTools = this.options.role === "explorer" ? READ_ONLY_TOOLS : EXECUTOR_TOOLS;
-    if (!allowedTools.has(call.tool)) return this.options.role === "explorer" ? "Explorer is read-only; this tool is disabled" : "Tool is not allowed by Executor policy";
-    if (["read_file", "write_file", "apply_patch"].includes(call.tool)) {
-      const path = call.input.path;
-      if (call.tool !== "apply_patch" && (typeof path !== "string" || !this.isInsideWorkspace(path))) return "Path is outside the workspace boundary";
-      if (typeof path === "string" && this.isProtectedPath(path)) return "Protected secrets, project configuration and Git internals are not accessible";
-    }
-    if (["list_files", "search_text", "git_diff"].includes(call.tool)) {
-      const path = call.input.path;
-      if (path !== undefined && (typeof path !== "string" || !this.isInsideWorkspace(path))) return "Path is outside the workspace boundary";
-      if (typeof path === "string" && this.isProtectedPath(path)) return "Protected secrets, project configuration and Git internals are not accessible";
-    }
-    if (call.tool === "git_commit" && call.input.paths !== undefined) {
-      const paths = call.input.paths;
-      if (!Array.isArray(paths) || paths.some((path) => typeof path !== "string" || !this.isInsideWorkspace(path))) return "Commit paths must stay inside the workspace boundary";
-      if (paths.some((path) => this.isProtectedPath(path as string))) return "Protected secrets, project configuration and Git internals are not accessible";
-    }
-    if (["run_registered_command", "run_verification"].includes(call.tool)) {
-      const commandId = call.input.commandId;
-      if (typeof commandId !== "string" || !this.registeredCommandIds.has(commandId)) return "Command is not registered for this project";
-    }
-    return null;
-  }
-
-  private isInsideWorkspace(path: string): boolean {
-    const target = resolve(this.workspaceRoot, path);
-    return target === this.workspaceRoot || target.startsWith(`${this.workspaceRoot}${sep}`) && (!isAbsolute(path) || target.startsWith(`${this.workspaceRoot}${sep}`));
-  }
-
-  private isProtectedPath(path: string): boolean {
-    const normalized = relative(this.workspaceRoot, resolve(this.workspaceRoot, path)).split(sep).join("/");
-    const basename = normalized.split("/").at(-1) ?? normalized;
-    return normalized === ".git" || normalized.startsWith(".git/") || normalized.startsWith(".env") || PROTECTED_PATHS.has(normalized) || PROTECTED_PATHS.has(basename);
-  }
-
-  private save(result: ToolCallResult): ToolCallResult { this.calls.set(result.callId, result); return result; }
-}
-
-function isToolExecutionFailure(reason: string): boolean {
-  return /does not exist|not a file|not a directory|No registered command executor|spawn/i.test(reason);
-}
-
 /** 模型职责角色；Explorer 只读分析，Executor 在 Run Worktree 中执行。 */
 export type ModelRole = "explorer" | "executor";
 /** 一个角色的模型和推理/循环策略，来源可为全局默认或 Project 快照。 */
@@ -5428,4 +5320,4 @@ import { createHash, randomUUID } from "node:crypto";
 import { execFile, execFileSync, spawn } from "node:child_process";
 import { DatabaseSync } from "node:sqlite";
 import { existsSync } from "node:fs";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { resolve } from "node:path";
