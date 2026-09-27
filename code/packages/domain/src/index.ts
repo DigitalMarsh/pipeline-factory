@@ -4,14 +4,25 @@
  *
  * 本文件自批 E 起**不含任何声明体**：没有类型定义、没有值级语句，每一行都是 import / export。
  *   于是"领域层的公共契约有哪些"只读这一个文件即可，"某个符号实现在哪"顺着 specifier 走。
- *   它同时**不含任何 node: 前缀的导入** —— 领域层的全部 IO 收敛在 platform/commands.ts
- *   （子进程）与 git/（子进程 + 文件系统）两处。这条不变量可随时复核：
+ *   它同时**不含任何 node: 前缀的导入**。这条不变量可随时复核：
  *       grep -nE 'from "(node|node:)' src/index.ts   # 必须为空
+ *   **但这只是本文件的性质，不是领域层的性质。** 领域层并未把 IO 收敛到少数几处：
+ *   58 个非测试模块里有 19 个直接 import node:，集中在 platform/（子进程）、git/
+ *   （子进程 + 文件系统）、tools/（文件系统 + 子进程 + 哈希）、store/sqlite-store.ts
+ *   （node:sqlite）、model/codex-app-server.ts（子进程），另有 node:crypto 散落在
+ *   plan/service.ts、project/project.ts、run/{merge,change-proposal,verification}.ts。
+ *   "本文件是纯的"与"领域层是纯的"是两件事，不要用前者推断后者。
  *   另一条不变量是本文件只有 import / export 语句：任何顶层声明（type / class / const /
  *   function）都不应再出现 —— 新概念一律放它所属的域目录，这里只加一行转发。
  *
  * 目录约定：按域分目录，域内 `types.ts` 只放类型，实现放在语义命名的模块里
  *   （platform/ model/ store/ plan/ explorer/ run/ agent/ tools/ project/ git/）。
+ *
+ * 模块可达性（批 F 实测，可复算）：58 个非测试模块 = 本文件自身 + 本文件直接转发的
+ *   50 个 + 只被相对 import 的内部模块 7 个 + **孤立模块 0 个**。也就是说没有"谁都够不着"
+ *   的隐蔽模块，每个模块要么是公共契约的域入口，要么在下面维护提示 3 里被显式登记为内部。
+ *   **新增模块时必须落进这三类之一**；若出现第三类（没人 import），那是死代码，先判断
+ *   是接线缺失还是该删，不要靠"补进 barrel"来消除账面孤立。
  *
  * 维护提示：
  *   1) **re-export 有两种形态，选错会在运行时才炸**：
@@ -31,7 +42,16 @@
  *      isRecord / isStringArray / isNonEmptyStringArray（platform/guards.ts）、
  *      store/records.ts 的 11 个辅助、selectCurrentExplorer / projectPlaceholderExplorerTitle
  *      （explorer/thread-selection.ts）、freezeDeep / freezeRevision（platform/freeze.ts）、
- *      snapshotProjectWorkingTree（git/worktree-snapshot.ts，只被 git/worktree.ts 使用）。
+ *      snapshotProjectWorkingTree（git/worktree-snapshot.ts，只被 git/worktree.ts 使用）、
+ *      resolveExecutorWorkingDirectory（tools/executor-working-directory.ts，只被
+ *      agent/executor-agent.ts 使用）。按模块看，内部模块恰好是这 7 个：
+ *      explorer/thread-selection.ts、git/baseline.ts、git/worktree-snapshot.ts、
+ *      platform/freeze.ts、platform/guards.ts、store/records.ts、
+ *      tools/executor-working-directory.ts。
+ *      **"没被外部引用"不等于"该公开"**：批 F 曾计划把 executor-working-directory.ts
+ *      补进本文件，实测后否决 —— 它从未在导出契约里（253 个符号从来不含它），apps/ 零引用，
+ *      是上述 7 个内部模块之一。给零外部消费者的符号增加公共面，只会让 P8 的类型共享多背
+ *      一个无意义的契约。**判据：不是"它够不够得着"，而是"外部有没有人要它"。**
  *   4) 值的导出与类型的导出**分开写**（`export {}` / `export type {}`），不要混在一行 ——
  *      混写会让"哪些是运行时绑定"难以速查。
  *   5) 新增导出时放进所属域的段落，不要追加到文件末尾。
