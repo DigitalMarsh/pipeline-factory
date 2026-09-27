@@ -1,0 +1,1510 @@
+/**
+ * 模块职责：PipelineStore 的 SQLite 实现——进程重启后仍然成立的持久化事实与领域事件。
+ *
+ * 为什么从 index.ts 抽出来：这是全仓最长的单一代码块（1,428 行，含 86 条建表/索引语句与
+ *   228 行 SQL），却因为和 5,000 行的 index.ts 同处一个文件而无法被单独阅读。
+ *   搬出来后它只依赖 store/records.ts（记录形状）、store/pipeline-store.ts（端口契约）与
+ *   plan/query.ts（查询投影）三个叶子模块，对 index.ts 只剩 `import type`。
+ *
+ * 维护提示（顺序敏感，改任何一处都要先想清楚启动期的执行次序）：
+ *   1) **建表 → 迁移 → 建索引**，三段在同一构造函数里按序执行，幂等（IF NOT EXISTS / 先查
+ *      PRAGMA table_info 再 ALTER）。新增列时不要直接改 CREATE TABLE——老库不会重跑建表，
+ *      必须补一条迁移分支；否则新列在老库上永远不存在，且错误只会在写入时暴露。
+ *   2) 行映射函数（*FromRow）是**唯一**允许出现 snake_case 的地方。它们必须与 store/records.ts
+ *      的默认值语义配套：读不出来的行回落默认值而不是抛错，否则一行坏数据会让整张表读崩。
+ *   3) `freezeRevision` 在写入 Revision 时调用：Revision 一旦落库就不允许再被原地修改。
+ *      去掉它不会让任何现有测试失败，但会让"Revision 不可变"这条领域约束在运行时消失。
+ *   4) 事件的 id / 序号由本层生成（appendEvent 的入参是 Omit<..., "id"|"occurredAt"|"sequence">）。
+ *      这是"事件序号在聚合内单调连续"的唯一保证，不要把它上移到调用方。
+ *   5) deleteExplorerCascade 的事件与事实必须在**同一事务**内完成；拆开会让级联删除只能半途
+ *      完成，留下指向已删除 Explorer 的孤儿 Plan。runInTransaction 就是为它和启动恢复准备的。
+ *   6) normalizeSqliteError 把 SQLITE_BUSY 归一成 "DATABASE_BUSY"：上层（调度器）靠这个字面量
+ *      判断"要不要重试"，改文案等于改重试策略。
+ */
+import { createHash, randomUUID } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
+import { containsAnyString, defaultExplorerPlan, defaultPlanExploration, defaultThreadContextSummary, isVerificationRun, parsePlanValidationIssues, parseStringArray, parseThreadContextSummary, summarizeExplorerMessage, threadTitleMetadata } from "./records.js";
+import { planQueryProjectionFor, type PlanQueryProjection } from "../plan/query.js";
+import { updatePlanStatus } from "../plan/status-transition.js";
+import { freezeRevision } from "../platform/freeze.js";
+import { isRecord } from "../platform/guards.js";
+import { REQUIRED_PLAN_AREAS } from "../platform/plan-requirements.js";
+import { redactAuditPayload, redactAuditText } from "../platform/redaction.js";
+import type { PipelineStore } from "./pipeline-store.js";
+import type { AgentLoop, AgentLoopStep, AgentLoopStepInput } from "../agent/agent-loop.js";
+import type { ExplorerTitleSource, ExplorerTitleStatus } from "../explorer/explorer-title.js";
+import type { PlanDispatchState } from "../run/dispatch-coordinator.js";
+import type { Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings } from "../project/project.js";
+import type { GeneratedPlanSpecV2, ResolvedPlanContractV2, PlanValidationIssue } from "../plan/plan-v2.js";
+import type {
+  CandidatePlan,
+  ChangeProposal,
+  ChangeProposalStatus,
+  DomainEvent,
+  DurableToolCallStatus,
+  ExecutionJournalEntry,
+  ExecutionJournalPayload,
+  ExecutionTelemetry,
+  ExecutionThread,
+  ExecutionThreadState,
+  ExplorerDeletionInput,
+  ExplorerDeletionSummary,
+  ExplorerInputRequest,
+  ExplorerInputRequestStatus,
+  ExplorerPlan,
+  ExplorerThread,
+  ExplorerThreadState,
+  ExplorerTurn,
+  HookExecution,
+  JournalEntryType,
+  MergeRequest,
+  ModelInputQuestion,
+  PersistedToolCall,
+  PlanContract,
+  PlanExplorationStatus,
+  PlanRevisionDraft,
+  PlanRevisionDraftStatus,
+  PlanRevisionV2,
+  PlanStatus,
+  ProjectExecutionMessage,
+  ProjectExecutionThread,
+  ProjectExecutionTurnStatus,
+  RegisterThreadInput,
+  RevisionLifecycleProjection,
+  Run,
+  RunStatus,
+  ToolCallResult,
+  ToolName,
+  ToolRole,
+  VerificationRun,
+  VerificationStatus,
+} from "../index.js";
+
+type SqliteRow = Record<string, unknown>;
+
+function sqlIn(column: string, values: readonly string[]): { clause: string; values: string[] } | null {
+  if (values.length === 0) return null;
+  return { clause: `${column} IN (${values.map(() => "?").join(", ")})`, values: [...values] };
+}
+
+function parseRequestId(value: string): string | number {
+  return /^-?\d+$/.test(value) ? Number(value) : value;
+}
+
+function normalizeSqliteError(error: unknown): Error {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/database is locked|SQLITE_BUSY/i.test(message)) return new Error("DATABASE_BUSY");
+  return error instanceof Error ? error : new Error(message);
+}
+
+/** SQLite Store；启动时负责幂等 migration，并保留事件、快照和运行历史。 */
+export class SqlitePipelineStore implements PipelineStore {
+  private readonly database: DatabaseSync;
+  private readonly eventListeners = new Set<(event: DomainEvent) => void>();
+
+  constructor(databasePath: string) {
+    this.database = new DatabaseSync(databasePath);
+    this.database.exec("PRAGMA foreign_keys = ON;");
+    this.database.exec("PRAGMA journal_mode = WAL;");
+    this.database.exec("PRAGMA busy_timeout = 5000;");
+    this.database.exec(`
+      CREATE TABLE IF NOT EXISTS factory_projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        short_name TEXT NOT NULL,
+        repo_root TEXT NOT NULL UNIQUE,
+        default_branch TEXT NOT NULL,
+        worktree_root TEXT NOT NULL,
+        status TEXT NOT NULL,
+        current_explorer_thread_id TEXT,
+        config_version INTEGER NOT NULL,
+        config_hash TEXT NOT NULL,
+        settings_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        archived_at TEXT
+      );
+      CREATE TABLE IF NOT EXISTS project_execution_threads (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL UNIQUE REFERENCES factory_projects(id) ON DELETE CASCADE,
+        provider_thread_id TEXT,
+        model_override TEXT,
+        reasoning_effort_override TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS project_execution_messages (
+        id TEXT PRIMARY KEY,
+        thread_id TEXT NOT NULL REFERENCES project_execution_threads(id) ON DELETE CASCADE,
+        turn_id TEXT NOT NULL,
+        client_turn_id TEXT,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        status TEXT NOT NULL,
+        error TEXT,
+        created_at TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        loop_id TEXT,
+        model TEXT,
+        reasoning_effort TEXT,
+        UNIQUE(thread_id, sequence)
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS project_execution_client_turn_id ON project_execution_messages(thread_id, client_turn_id) WHERE client_turn_id IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS project_execution_messages_order ON project_execution_messages(thread_id, sequence);
+      CREATE TABLE IF NOT EXISTS project_config_revisions (
+        project_id TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        hash TEXT NOT NULL,
+        snapshot_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (project_id, version)
+      );
+      CREATE TABLE IF NOT EXISTS explorer_threads (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        title TEXT NOT NULL DEFAULT 'New Explorer',
+        created_at TEXT,
+        title_source TEXT NOT NULL DEFAULT 'AUTO',
+        title_status TEXT NOT NULL DEFAULT 'PLACEHOLDER',
+        context_mode TEXT NOT NULL DEFAULT 'FRESH',
+        origin_thread_id TEXT,
+        parent_thread_id TEXT,
+        provider_thread_id TEXT,
+        state TEXT NOT NULL,
+        message_count INTEGER NOT NULL,
+        summary_ref TEXT,
+        active_explorer_plan_id TEXT,
+        context_summary_json TEXT,
+        last_activity_at TEXT NOT NULL,
+        exploration_status TEXT NOT NULL DEFAULT 'INCOMPLETE',
+        exploration_missing_json TEXT NOT NULL DEFAULT '[]',
+        exploration_completed_json TEXT NOT NULL DEFAULT '[]',
+        exploration_diagnostics_json TEXT NOT NULL DEFAULT '[]',
+        candidate_plan_id TEXT,
+        last_assessed_turn_id TEXT,
+        active_revision_draft_id TEXT
+      );
+      CREATE TABLE IF NOT EXISTS explorer_plans (
+        id TEXT PRIMARY KEY,
+        explorer_thread_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        ordinal INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        title_source TEXT NOT NULL DEFAULT 'AUTO',
+        title_status TEXT NOT NULL DEFAULT 'PLACEHOLDER',
+        message_count INTEGER NOT NULL DEFAULT 0,
+        latest_user_message_summary TEXT,
+        exploration_status TEXT NOT NULL DEFAULT 'INCOMPLETE',
+        exploration_missing_json TEXT NOT NULL DEFAULT '[]',
+        exploration_completed_json TEXT NOT NULL DEFAULT '[]',
+        exploration_diagnostics_json TEXT NOT NULL DEFAULT '[]',
+        candidate_plan_id TEXT,
+        new_plan_requested INTEGER NOT NULL DEFAULT 0,
+        provider_thread_id TEXT,
+        repository_context_key TEXT,
+        last_assessed_turn_id TEXT,
+        runtime_status TEXT,
+        created_at TEXT NOT NULL,
+        last_activity_at TEXT NOT NULL,
+        UNIQUE(explorer_thread_id, ordinal)
+      );
+      CREATE INDEX IF NOT EXISTS explorer_plans_thread_idx ON explorer_plans(explorer_thread_id, ordinal);
+      CREATE TABLE IF NOT EXISTS explorer_turns (
+        id TEXT PRIMARY KEY,
+        thread_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'COMPLETED',
+        error TEXT,
+        created_at TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        explorer_plan_id TEXT
+      );
+      CREATE TABLE IF NOT EXISTS candidate_plans (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        source_explorer_thread_id TEXT NOT NULL,
+        explorer_plan_id TEXT,
+        source_turn_id TEXT,
+        provider_thread_id TEXT,
+        provider_turn_id TEXT,
+        provider_item_id TEXT,
+        title TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        confirmed_by TEXT,
+        confirmed_at TEXT,
+        queued_at TEXT,
+        dispatched_at TEXT,
+        run_id TEXT,
+        last_event_at TEXT NOT NULL,
+        attention_reason TEXT,
+        contract_json TEXT NOT NULL,
+        generated_spec_json TEXT,
+        resolved_contract_json TEXT
+      );
+      CREATE TABLE IF NOT EXISTS plan_dispatch_states (
+        plan_id TEXT PRIMARY KEY,
+        revision INTEGER,
+        project_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        wait_reason TEXT,
+        queued_at TEXT NOT NULL,
+        run_id TEXT,
+        attempt INTEGER NOT NULL,
+        updated_at TEXT NOT NULL,
+        last_error TEXT,
+        phase TEXT,
+        automatic INTEGER NOT NULL DEFAULT 0,
+        confirmed_by TEXT
+      );
+      CREATE TABLE IF NOT EXISTS candidate_plan_versions (
+        plan_id TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        plan_json TEXT NOT NULL,
+        PRIMARY KEY (plan_id, revision)
+      );
+      CREATE TABLE IF NOT EXISTS plan_revisions (
+        plan_id TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        contract_json TEXT NOT NULL,
+        artifact_hash TEXT NOT NULL,
+        confirmed_by TEXT NOT NULL,
+        confirmed_at TEXT NOT NULL,
+        source_explorer_thread_id TEXT NOT NULL,
+        explorer_plan_id TEXT,
+        project_config_version INTEGER,
+        project_config_hash TEXT,
+        project_config_snapshot_json TEXT,
+        resolved_contract_json TEXT,
+        PRIMARY KEY (plan_id, revision)
+      );
+      CREATE TABLE IF NOT EXISTS plan_revision_drafts (
+        draft_id TEXT PRIMARY KEY,
+        plan_id TEXT NOT NULL,
+        project_id TEXT NOT NULL,
+        based_on_revision INTEGER NOT NULL,
+        target_revision INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        title TEXT NOT NULL,
+        contract_json TEXT NOT NULL,
+        generated_spec_json TEXT,
+        resolved_contract_json TEXT,
+        source_explorer_thread_id TEXT NOT NULL,
+        explorer_plan_id TEXT,
+        source_turn_id TEXT,
+        provider_thread_id TEXT,
+        provider_turn_id TEXT,
+        provider_item_id TEXT,
+        base_branch TEXT NOT NULL,
+        base_commit TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        confirmed_at TEXT,
+        UNIQUE(plan_id, target_revision)
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS plan_revision_drafts_active_uq
+        ON plan_revision_drafts(plan_id)
+        WHERE status IN ('EDITING', 'READY_TO_CONFIRM', 'BASE_CHANGED');
+      CREATE TABLE IF NOT EXISTS revision_lifecycle_projection (
+        plan_id TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        project_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        status TEXT NOT NULL,
+        source_explorer_thread_id TEXT NOT NULL,
+        run_id TEXT,
+        last_event_at TEXT NOT NULL,
+        PRIMARY KEY (plan_id, revision)
+      );
+      CREATE TABLE IF NOT EXISTS change_proposals (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        plan_id TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        requested_changes_json TEXT NOT NULL,
+        contract_json TEXT NOT NULL,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        created_by TEXT NOT NULL,
+        decided_at TEXT,
+        decided_by TEXT,
+        revision INTEGER
+      );
+      CREATE TABLE IF NOT EXISTS runs (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        plan_id TEXT NOT NULL,
+        plan_revision INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        branch TEXT NOT NULL,
+        workspace_path TEXT,
+        base_commit TEXT NOT NULL,
+        execution_thread_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        started_at TEXT
+      );
+      CREATE TABLE IF NOT EXISTS execution_threads (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        state TEXT NOT NULL,
+        journal_json TEXT NOT NULL,
+        telemetry_json TEXT
+      );
+      CREATE TABLE IF NOT EXISTS execution_journal (
+        execution_thread_id TEXT NOT NULL REFERENCES execution_threads(id),
+        run_id TEXT NOT NULL REFERENCES runs(id),
+        sequence INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        occurred_at TEXT NOT NULL,
+        payload_json TEXT NOT NULL,
+        PRIMARY KEY (run_id, sequence),
+        UNIQUE (execution_thread_id, sequence)
+      );
+      CREATE TABLE IF NOT EXISTS hook_executions (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL REFERENCES runs(id),
+        hook_type TEXT NOT NULL,
+        attempt INTEGER NOT NULL,
+        command_id TEXT,
+        cwd TEXT NOT NULL,
+        timeout_ms INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        exit_code INTEGER,
+        stdout TEXT NOT NULL,
+        stderr TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        completed_at TEXT NOT NULL,
+        UNIQUE (run_id, hook_type, attempt)
+      );
+      CREATE TABLE IF NOT EXISTS plan_query_projection (
+        plan_id TEXT PRIMARY KEY REFERENCES candidate_plans(id),
+        project_id TEXT NOT NULL REFERENCES factory_projects(id),
+        source_explorer_thread_id TEXT NOT NULL REFERENCES explorer_threads(id),
+        source_turn_id TEXT,
+        title TEXT NOT NULL,
+        goal TEXT NOT NULL,
+        revision INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        priority INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        queued_at TEXT,
+        dispatched_at TEXT,
+        last_event_at TEXT NOT NULL,
+        run_id TEXT,
+        attention_reason TEXT
+      );
+      CREATE INDEX IF NOT EXISTS plan_query_projection_project_idx ON plan_query_projection(project_id, status, queued_at, last_event_at);
+      CREATE INDEX IF NOT EXISTS plan_query_projection_source_idx ON plan_query_projection(source_explorer_thread_id, queued_at, last_event_at);
+      CREATE TABLE IF NOT EXISTS verification_runs (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        repair_attempts INTEGER NOT NULL,
+        command_results_json TEXT NOT NULL,
+        completed_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS merge_requests (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        plan_id TEXT NOT NULL,
+        source_commit TEXT NOT NULL,
+        target_branch TEXT NOT NULL,
+        status TEXT NOT NULL,
+        human_confirmation_required INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        merged_at TEXT,
+        detected_target_commit TEXT
+      );
+      CREATE TABLE IF NOT EXISTS agent_loops (
+        id TEXT PRIMARY KEY,
+        owner_type TEXT NOT NULL,
+        owner_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        state TEXT NOT NULL,
+        step_count INTEGER NOT NULL,
+        max_steps INTEGER NOT NULL,
+        started_at TEXT,
+        completed_at TEXT,
+        provider_thread_id TEXT,
+        provider_turn_id TEXT,
+        checkpoint_json TEXT
+      );
+      CREATE TABLE IF NOT EXISTS agent_loop_steps (
+        loop_id TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        step_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        call_id TEXT,
+        provider_thread_id TEXT,
+        provider_turn_id TEXT,
+        payload_json TEXT NOT NULL,
+        occurred_at TEXT NOT NULL,
+        PRIMARY KEY(loop_id, sequence)
+      );
+      CREATE TABLE IF NOT EXISTS tool_calls (
+        call_id TEXT PRIMARY KEY,
+        loop_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        tool TEXT NOT NULL,
+        status TEXT NOT NULL,
+        input_hash TEXT NOT NULL,
+        result_json TEXT,
+        started_at TEXT NOT NULL,
+        completed_at TEXT
+      );
+      CREATE TABLE IF NOT EXISTS domain_events (
+        id TEXT PRIMARY KEY,
+        sequence INTEGER NOT NULL UNIQUE,
+        type TEXT NOT NULL,
+        aggregate_id TEXT NOT NULL,
+        occurred_at TEXT NOT NULL,
+        payload_json TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS domain_events_aggregate_idx ON domain_events(aggregate_id, sequence);
+      CREATE TABLE IF NOT EXISTS explorer_input_requests (
+        id TEXT PRIMARY KEY,
+        thread_id TEXT NOT NULL,
+        explorer_plan_id TEXT,
+        local_turn_id TEXT NOT NULL,
+        provider_request_id TEXT NOT NULL,
+        provider_thread_id TEXT NOT NULL,
+        provider_turn_id TEXT NOT NULL,
+        item_id TEXT NOT NULL,
+        questions_json TEXT NOT NULL,
+        is_blocking INTEGER NOT NULL,
+        auto_resolution_ms INTEGER,
+        status TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        answered_at TEXT,
+        answered_by TEXT,
+        redacted_answer_summary_json TEXT,
+        UNIQUE(provider_thread_id, provider_turn_id, provider_request_id)
+      );
+      CREATE TABLE IF NOT EXISTS idempotency_keys (
+        scope TEXT NOT NULL,
+        key TEXT NOT NULL,
+        result_json TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(scope, key)
+      );
+    `);
+    try { this.database.exec("ALTER TABLE factory_projects ADD COLUMN short_name TEXT NOT NULL DEFAULT ''"); } catch { /* Existing databases already have the column. */ }
+    this.database.prepare("UPDATE factory_projects SET short_name = name WHERE short_name = ''").run();
+    try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN title TEXT NOT NULL DEFAULT 'New Explorer'"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN created_at TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN title_source TEXT NOT NULL DEFAULT 'AUTO'"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN title_status TEXT NOT NULL DEFAULT 'PLACEHOLDER'"); } catch { /* Existing databases already have the column. */ }
+    this.database.prepare("UPDATE explorer_threads SET created_at = COALESCE(created_at, (SELECT MIN(created_at) FROM explorer_turns WHERE explorer_turns.thread_id = explorer_threads.id), last_activity_at) WHERE created_at IS NULL").run();
+    this.database.prepare("UPDATE explorer_threads SET title_source = 'MANUAL', title_status = 'GENERATED' WHERE title NOT IN ('New Explorer', 'Previous exploration', 'ExplorerThread') AND title_source = 'AUTO' AND title_status = 'PLACEHOLDER'").run();
+    try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN context_mode TEXT NOT NULL DEFAULT 'FRESH'"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN origin_thread_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN provider_thread_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    this.database.prepare("UPDATE explorer_threads SET context_mode = 'LEGACY' WHERE title = 'New Explorer' AND id NOT LIKE 'explorer-%' AND (message_count > 0 OR provider_thread_id IS NOT NULL)").run();
+    try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN exploration_status TEXT NOT NULL DEFAULT 'INCOMPLETE'"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN exploration_missing_json TEXT NOT NULL DEFAULT '[]'"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN exploration_completed_json TEXT NOT NULL DEFAULT '[]'"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN exploration_diagnostics_json TEXT NOT NULL DEFAULT '[]'"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN candidate_plan_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN last_assessed_turn_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN active_revision_draft_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN active_explorer_plan_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_threads ADD COLUMN context_summary_json TEXT"); } catch { /* Existing databases already have the column. */ }
+    this.database.prepare("UPDATE explorer_threads SET exploration_missing_json = ? WHERE exploration_status = 'INCOMPLETE' AND last_assessed_turn_id IS NULL AND exploration_missing_json IN ('[]', '')").run(JSON.stringify(REQUIRED_PLAN_AREAS));
+    try { this.database.exec("ALTER TABLE explorer_turns ADD COLUMN status TEXT NOT NULL DEFAULT 'COMPLETED'"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_turns ADD COLUMN error TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_turns ADD COLUMN explorer_plan_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE candidate_plans ADD COLUMN explorer_plan_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_input_requests ADD COLUMN explorer_plan_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN explorer_plan_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE plan_revision_drafts ADD COLUMN explorer_plan_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_plans ADD COLUMN runtime_status TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_plans ADD COLUMN new_plan_requested INTEGER NOT NULL DEFAULT 0"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_plans ADD COLUMN provider_thread_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE explorer_plans ADD COLUMN repository_context_key TEXT"); } catch { /* Existing databases already have the column. */ }
+    this.database.exec("UPDATE explorer_turns SET status = 'FAILED', error = COALESCE(error, '历史记录未包含模型文本') WHERE role = 'assistant' AND trim(content) = '' AND status = 'COMPLETED'");
+    try { this.database.exec("ALTER TABLE candidate_plans ADD COLUMN contract_json TEXT NOT NULL DEFAULT '{}'"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE candidate_plans ADD COLUMN generated_spec_json TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE candidate_plans ADD COLUMN resolved_contract_json TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE candidate_plans ADD COLUMN source_turn_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE candidate_plans ADD COLUMN provider_thread_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE candidate_plans ADD COLUMN provider_turn_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE candidate_plans ADD COLUMN provider_item_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE candidate_plans ADD COLUMN dispatched_at TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN resolved_contract_json TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE plan_query_projection ADD COLUMN dispatched_at TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE plan_dispatch_states ADD COLUMN phase TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE plan_dispatch_states ADD COLUMN automatic INTEGER NOT NULL DEFAULT 0"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE plan_dispatch_states ADD COLUMN confirmed_by TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE plan_dispatch_states ADD COLUMN revision INTEGER"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE merge_requests ADD COLUMN detected_target_commit TEXT"); } catch { /* Existing databases already have the column. */ }
+    this.database.exec(`
+      UPDATE candidate_plans
+      SET dispatched_at = COALESCE(dispatched_at, queued_at)
+      WHERE dispatched_at IS NULL
+        AND queued_at IS NOT NULL
+        AND status IN ('QUEUED', 'DISPATCHED', 'IN_PROGRESS', 'VERIFYING', 'MERGE_READY', 'MERGED', 'BLOCKED', 'NEEDS_PLAN_CHANGE');
+      UPDATE candidate_plans
+      SET status = 'DISPATCHED'
+      WHERE status = 'QUEUED';
+    `);
+    try { this.database.exec("ALTER TABLE domain_events ADD COLUMN sequence INTEGER"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE execution_threads ADD COLUMN telemetry_json TEXT"); } catch { /* Existing databases already have the column. */ }
+    this.database.exec("UPDATE domain_events SET sequence = rowid WHERE sequence IS NULL");
+    try { this.database.exec("CREATE UNIQUE INDEX IF NOT EXISTS domain_events_sequence_uq ON domain_events(sequence)"); } catch { /* Existing databases already have the index. */ }
+    try { this.database.exec("ALTER TABLE change_proposals ADD COLUMN revision INTEGER"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN project_config_version INTEGER"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN project_config_hash TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN project_config_snapshot_json TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN source_turn_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN provider_thread_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN provider_turn_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN provider_item_id TEXT"); } catch { /* Existing databases already have the column. */ }
+    try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN provenance TEXT NOT NULL DEFAULT 'LEGACY'"); } catch { /* Existing databases already have the column. */ }
+    this.repairUnconfirmedProgressedPlans();
+    this.backfillExplorerPlans();
+    this.backfillLegacyRevisionHistory();
+    this.backfillCandidateVersions();
+    this.backfillLegacyVerificationRuns();
+    this.backfillPlanQueryProjection();
+  }
+
+  now(): string { return new Date().toISOString(); }
+
+  nextId(prefix: string): string { return `${prefix}-${randomUUID().slice(0, 12)}`; }
+
+  runInTransaction<T>(work: () => T): T {
+    this.database.exec("BEGIN IMMEDIATE;");
+    try {
+      const result = work();
+      this.database.exec("COMMIT;");
+      return result;
+    } catch (error) {
+      try { this.database.exec("ROLLBACK;"); } catch { /* Preserve the original failure. */ }
+      throw normalizeSqliteError(error);
+    }
+  }
+
+  saveProject(project: Project): Project {
+    this.database.prepare(`
+      INSERT INTO factory_projects (id, name, short_name, repo_root, default_branch, worktree_root, status, current_explorer_thread_id, config_version, config_hash, settings_json, created_at, updated_at, archived_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET name=excluded.name, short_name=excluded.short_name, repo_root=excluded.repo_root, default_branch=excluded.default_branch, worktree_root=excluded.worktree_root, status=excluded.status, current_explorer_thread_id=excluded.current_explorer_thread_id, config_version=excluded.config_version, config_hash=excluded.config_hash, settings_json=excluded.settings_json, created_at=excluded.created_at, updated_at=excluded.updated_at, archived_at=excluded.archived_at
+    `).run(project.id, project.name, project.shortName, project.repoRoot, project.defaultBranch, project.worktreeRoot, project.status, project.currentExplorerThreadId, project.configVersion, project.configHash, JSON.stringify(project.settings), project.createdAt, project.updatedAt, project.archivedAt);
+    return this.getProject(project.id) as Project;
+  }
+
+  getProject(projectId: string): Project | undefined {
+    const row = this.database.prepare("SELECT * FROM factory_projects WHERE id = ?").get(projectId) as SqliteRow | undefined;
+    return row ? this.projectFromRow(row) : undefined;
+  }
+
+  listProjects(): Project[] {
+    const rows = this.database.prepare("SELECT * FROM factory_projects ORDER BY name ASC").all() as unknown as SqliteRow[];
+    return rows.map((row) => this.projectFromRow(row));
+  }
+
+  updateProject(project: Project): Project {
+    if (!this.getProject(project.id)) throw new Error(`Project ${project.id} does not exist`);
+    return this.saveProject(project);
+  }
+
+  saveProjectExecutionThread(thread: ProjectExecutionThread): ProjectExecutionThread {
+    this.database.prepare("INSERT OR IGNORE INTO project_execution_threads (id, project_id, provider_thread_id, model_override, reasoning_effort_override, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(thread.id, thread.projectId, thread.providerThreadId, thread.modelOverride, thread.reasoningEffortOverride, thread.createdAt, thread.updatedAt);
+    return this.getProjectExecutionThread(thread.projectId) as ProjectExecutionThread;
+  }
+
+  getProjectExecutionThread(projectId: string): ProjectExecutionThread | undefined {
+    const row = this.database.prepare("SELECT * FROM project_execution_threads WHERE project_id = ?").get(projectId) as SqliteRow | undefined;
+    return row ? { id: String(row.id), projectId: String(row.project_id), providerThreadId: row.provider_thread_id === null ? null : String(row.provider_thread_id), modelOverride: row.model_override === null ? null : String(row.model_override), reasoningEffortOverride: row.reasoning_effort_override === null ? null : String(row.reasoning_effort_override), createdAt: String(row.created_at), updatedAt: String(row.updated_at) } : undefined;
+  }
+
+  updateProjectExecutionThread(thread: ProjectExecutionThread): ProjectExecutionThread {
+    this.database.prepare("UPDATE project_execution_threads SET provider_thread_id = ?, model_override = ?, reasoning_effort_override = ?, updated_at = ? WHERE project_id = ?").run(thread.providerThreadId, thread.modelOverride, thread.reasoningEffortOverride, thread.updatedAt, thread.projectId);
+    return this.getProjectExecutionThread(thread.projectId) as ProjectExecutionThread;
+  }
+
+  saveProjectExecutionMessage(message: ProjectExecutionMessage): ProjectExecutionMessage {
+    this.database.prepare("INSERT OR IGNORE INTO project_execution_messages (id, thread_id, turn_id, client_turn_id, role, content, status, error, created_at, sequence, loop_id, model, reasoning_effort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(message.id, message.threadId, message.turnId, message.clientTurnId, message.role, message.content, message.status, message.error, message.createdAt, message.sequence, message.loopId, message.model, message.reasoningEffort);
+    if (message.clientTurnId) return this.getProjectExecutionMessageByClientTurnId(message.threadId, message.clientTurnId) as ProjectExecutionMessage;
+    return this.listProjectExecutionMessages(message.threadId).find((item) => item.id === message.id) as ProjectExecutionMessage;
+  }
+
+  getProjectExecutionMessageByClientTurnId(threadId: string, clientTurnId: string): ProjectExecutionMessage | undefined {
+    const row = this.database.prepare("SELECT * FROM project_execution_messages WHERE thread_id = ? AND client_turn_id = ? AND role = 'user'").get(threadId, clientTurnId) as SqliteRow | undefined;
+    return row ? this.projectExecutionMessageFromRow(row) : undefined;
+  }
+
+  listProjectExecutionMessages(threadId: string): ProjectExecutionMessage[] {
+    const rows = this.database.prepare("SELECT * FROM project_execution_messages WHERE thread_id = ? ORDER BY sequence ASC").all(threadId) as unknown as SqliteRow[];
+    return rows.map((row) => this.projectExecutionMessageFromRow(row));
+  }
+
+  updateProjectExecutionMessage(message: ProjectExecutionMessage): ProjectExecutionMessage {
+    this.database.prepare("UPDATE project_execution_messages SET content = ?, status = ?, error = ?, loop_id = ?, model = ?, reasoning_effort = ? WHERE id = ? AND thread_id = ?").run(message.content, message.status, message.error, message.loopId, message.model, message.reasoningEffort, message.id, message.threadId);
+    return this.listProjectExecutionMessages(message.threadId).find((item) => item.id === message.id) as ProjectExecutionMessage;
+  }
+
+  saveProjectConfigRevision(revision: ProjectConfigRevision): ProjectConfigRevision {
+    this.database.prepare("INSERT OR IGNORE INTO project_config_revisions (project_id, version, hash, snapshot_json, created_at) VALUES (?, ?, ?, ?, ?)").run(revision.projectId, revision.version, revision.hash, JSON.stringify(revision.snapshot), revision.createdAt);
+    return this.listProjectConfigRevisions(revision.projectId).find((item) => item.version === revision.version) as ProjectConfigRevision;
+  }
+
+  listProjectConfigRevisions(projectId: string): ProjectConfigRevision[] {
+    const rows = this.database.prepare("SELECT * FROM project_config_revisions WHERE project_id = ? ORDER BY version ASC").all(projectId) as unknown as SqliteRow[];
+    return rows.map((row) => ({ projectId: String(row.project_id), version: Number(row.version), hash: String(row.hash), snapshot: JSON.parse(String(row.snapshot_json)) as ProjectExecutionSnapshot, createdAt: String(row.created_at) }));
+  }
+
+  saveThread(input: RegisterThreadInput): ExplorerThread {
+    const createdAt = input.createdAt ?? this.now();
+    const title = threadTitleMetadata(input.title, createdAt);
+    const thread: ExplorerThread = {
+      id: input.id,
+      projectId: input.projectId,
+      ...title,
+      createdAt,
+      contextMode: input.contextMode ?? "FRESH",
+      originThreadId: input.originThreadId ?? null,
+      parentThreadId: input.parentThreadId,
+      providerThreadId: input.providerThreadId ?? null,
+      state: "ACTIVE",
+      messageCount: 0,
+      summaryRef: null,
+      activeExplorerPlanId: null,
+      contextSummary: defaultThreadContextSummary(this.now()),
+      lastActivityAt: this.now(),
+      exploration: defaultPlanExploration(),
+      activeRevisionDraftId: null,
+    };
+    this.database.prepare(`
+      INSERT INTO explorer_threads (id, project_id, title, created_at, title_source, title_status, context_mode, origin_thread_id, parent_thread_id, provider_thread_id, state, message_count, summary_ref, active_explorer_plan_id, context_summary_json, last_activity_at, exploration_status, exploration_missing_json, exploration_completed_json, exploration_diagnostics_json, candidate_plan_id, last_assessed_turn_id, active_revision_draft_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, title=excluded.title, created_at=excluded.created_at, title_source=excluded.title_source, title_status=excluded.title_status, context_mode=excluded.context_mode, origin_thread_id=excluded.origin_thread_id, parent_thread_id=excluded.parent_thread_id
+    `).run(thread.id, thread.projectId, thread.title, thread.createdAt, thread.titleSource, thread.titleStatus, thread.contextMode, thread.originThreadId, thread.parentThreadId, thread.providerThreadId, thread.state, thread.messageCount, thread.summaryRef, thread.activeExplorerPlanId, thread.contextSummary ? JSON.stringify(thread.contextSummary) : null, thread.lastActivityAt, thread.exploration.status, JSON.stringify(thread.exploration.missing), JSON.stringify(thread.exploration.completed), JSON.stringify(thread.exploration.diagnostics), thread.exploration.candidatePlanId, thread.exploration.lastAssessedTurnId, thread.activeRevisionDraftId);
+    this.ensureExplorerPlansForThread(thread.id);
+    return this.getThread(thread.id) as ExplorerThread;
+  }
+
+  getThread(id: string): ExplorerThread | undefined {
+    const row = this.database.prepare("SELECT * FROM explorer_threads WHERE id = ?").get(id) as SqliteRow | undefined;
+    return row ? this.threadFromRow(row) : undefined;
+  }
+
+  listThreads(): ExplorerThread[] {
+    const rows = this.database.prepare("SELECT * FROM explorer_threads ORDER BY last_activity_at ASC").all() as unknown as SqliteRow[];
+    return rows.map((row) => this.threadFromRow(row));
+  }
+
+  updateThread(thread: ExplorerThread): ExplorerThread {
+    this.database.prepare("UPDATE explorer_threads SET title = ?, created_at = ?, title_source = ?, title_status = ?, context_mode = ?, origin_thread_id = ?, provider_thread_id = ?, state = ?, message_count = ?, summary_ref = ?, active_explorer_plan_id = ?, context_summary_json = ?, last_activity_at = ?, exploration_status = ?, exploration_missing_json = ?, exploration_completed_json = ?, exploration_diagnostics_json = ?, candidate_plan_id = ?, last_assessed_turn_id = ?, active_revision_draft_id = ? WHERE id = ?").run(thread.title, thread.createdAt, thread.titleSource, thread.titleStatus, thread.contextMode, thread.originThreadId, thread.providerThreadId, thread.state, thread.messageCount, thread.summaryRef, thread.activeExplorerPlanId, thread.contextSummary ? JSON.stringify(thread.contextSummary) : null, thread.lastActivityAt, thread.exploration.status, JSON.stringify(thread.exploration.missing), JSON.stringify(thread.exploration.completed), JSON.stringify(thread.exploration.diagnostics), thread.exploration.candidatePlanId, thread.exploration.lastAssessedTurnId, thread.activeRevisionDraftId, thread.id);
+    return this.getThread(thread.id) as ExplorerThread;
+  }
+
+  saveExplorerPlan(plan: ExplorerPlan): ExplorerPlan {
+    this.database.prepare(`
+      INSERT INTO explorer_plans (id, explorer_thread_id, project_id, ordinal, title, title_source, title_status, message_count, latest_user_message_summary, exploration_status, exploration_missing_json, exploration_completed_json, exploration_diagnostics_json, candidate_plan_id, new_plan_requested, provider_thread_id, repository_context_key, last_assessed_turn_id, runtime_status, created_at, last_activity_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET title=excluded.title, title_source=excluded.title_source, title_status=excluded.title_status, message_count=excluded.message_count, latest_user_message_summary=excluded.latest_user_message_summary, exploration_status=excluded.exploration_status, exploration_missing_json=excluded.exploration_missing_json, exploration_completed_json=excluded.exploration_completed_json, exploration_diagnostics_json=excluded.exploration_diagnostics_json, candidate_plan_id=excluded.candidate_plan_id, new_plan_requested=excluded.new_plan_requested, provider_thread_id=excluded.provider_thread_id, repository_context_key=excluded.repository_context_key, last_assessed_turn_id=excluded.last_assessed_turn_id, runtime_status=excluded.runtime_status, last_activity_at=excluded.last_activity_at
+    `).run(plan.id, plan.explorerThreadId, plan.projectId, plan.ordinal, plan.title, plan.titleSource, plan.titleStatus, plan.messageCount, plan.latestUserMessageSummary, plan.exploration.status, JSON.stringify(plan.exploration.missing), JSON.stringify(plan.exploration.completed), JSON.stringify(plan.exploration.diagnostics), plan.candidatePlanId, plan.newPlanRequested ? 1 : 0, plan.providerThreadId ?? null, plan.repositoryContextKey ?? null, plan.lastAssessedTurnId, plan.runtimeStatus ?? null, plan.createdAt, plan.lastActivityAt);
+    return this.getExplorerPlan(plan.id) as ExplorerPlan;
+  }
+
+  getExplorerPlan(id: string): ExplorerPlan | undefined {
+    const row = this.database.prepare("SELECT * FROM explorer_plans WHERE id = ?").get(id) as SqliteRow | undefined;
+    return row ? this.explorerPlanFromRow(row) : undefined;
+  }
+
+  listExplorerPlans(threadId?: string): ExplorerPlan[] {
+    const rows = this.database.prepare(`SELECT * FROM explorer_plans ${threadId ? "WHERE explorer_thread_id = ?" : ""} ORDER BY ordinal ASC, created_at ASC`).all(...(threadId ? [threadId] : [])) as unknown as SqliteRow[];
+    return rows.map((row) => this.explorerPlanFromRow(row));
+  }
+
+  updateExplorerPlan(plan: ExplorerPlan): ExplorerPlan {
+    if (!this.getExplorerPlan(plan.id)) throw new Error(`ExplorerPlan ${plan.id} does not exist`);
+    return this.saveExplorerPlan(plan);
+  }
+
+  saveTurn(turn: ExplorerTurn): ExplorerTurn {
+    this.database.prepare("INSERT INTO explorer_turns (id, thread_id, role, content, status, error, created_at, sequence, explorer_plan_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(turn.id, turn.threadId, turn.role, turn.content, turn.status ?? "COMPLETED", turn.error ?? null, turn.createdAt, turn.sequence, turn.explorerPlanId ?? null);
+    return turn;
+  }
+
+  updateTurn(turn: ExplorerTurn): ExplorerTurn {
+    this.database.prepare("UPDATE explorer_turns SET content = ?, status = ?, error = ? WHERE id = ?").run(turn.content, turn.status ?? "COMPLETED", turn.error ?? null, turn.id);
+    return this.listTurns(turn.threadId).find((item) => item.id === turn.id) as ExplorerTurn;
+  }
+
+  listTurns(threadId: string): ExplorerTurn[] {
+    const rows = this.database.prepare("SELECT * FROM explorer_turns WHERE thread_id = ? ORDER BY sequence ASC").all(threadId) as unknown as SqliteRow[];
+    return rows.map((row) => ({ id: String(row.id), threadId: String(row.thread_id), role: String(row.role) as ExplorerTurn["role"], content: String(row.content), status: String(row.status ?? "COMPLETED") as NonNullable<ExplorerTurn["status"]>, ...(row.error ? { error: String(row.error) } : {}), createdAt: String(row.created_at), sequence: Number(row.sequence), ...(row.explorer_plan_id ? { explorerPlanId: String(row.explorer_plan_id) } : {}) }));
+  }
+
+  saveInputRequest(request: ExplorerInputRequest): ExplorerInputRequest {
+    const existing = this.database.prepare("SELECT * FROM explorer_input_requests WHERE provider_thread_id = ? AND provider_turn_id = ? AND provider_request_id = ?").get(request.providerThreadId, request.providerTurnId, String(request.providerRequestId)) as SqliteRow | undefined;
+    if (existing) return this.inputRequestFromRow(existing);
+    if (request.isBlocking && this.database.prepare("SELECT 1 FROM explorer_input_requests WHERE local_turn_id = ? AND is_blocking = 1 AND status = 'OPEN' LIMIT 1").get(request.localTurnId)) throw new Error(`Explorer turn ${request.localTurnId} already has an open blocking input request`);
+    this.database.prepare("INSERT INTO explorer_input_requests (id, thread_id, explorer_plan_id, local_turn_id, provider_request_id, provider_thread_id, provider_turn_id, item_id, questions_json, is_blocking, auto_resolution_ms, status, created_at, answered_at, answered_by, redacted_answer_summary_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(request.id, request.threadId, request.explorerPlanId ?? null, request.localTurnId, String(request.providerRequestId), request.providerThreadId, request.providerTurnId, request.itemId, JSON.stringify(request.questions), request.isBlocking ? 1 : 0, request.autoResolutionMs, request.status, request.createdAt, request.answeredAt, request.answeredBy, request.redactedAnswerSummary ? JSON.stringify(request.redactedAnswerSummary) : null);
+    return this.getInputRequest(request.id) as ExplorerInputRequest;
+  }
+
+  getInputRequest(id: string): ExplorerInputRequest | undefined {
+    const row = this.database.prepare("SELECT * FROM explorer_input_requests WHERE id = ?").get(id) as SqliteRow | undefined;
+    return row ? this.inputRequestFromRow(row) : undefined;
+  }
+
+  listInputRequests(threadId: string, status?: ExplorerInputRequestStatus): ExplorerInputRequest[] {
+    const rows = this.database.prepare(`SELECT * FROM explorer_input_requests WHERE thread_id = ? ${status ? "AND status = ?" : ""} ORDER BY created_at ASC`).all(...(status ? [threadId, status] : [threadId])) as unknown as SqliteRow[];
+    return rows.map((row) => this.inputRequestFromRow(row));
+  }
+
+  updateInputRequest(request: ExplorerInputRequest): ExplorerInputRequest {
+    this.database.prepare("UPDATE explorer_input_requests SET status = ?, answered_at = ?, answered_by = ?, redacted_answer_summary_json = ? WHERE id = ?").run(request.status, request.answeredAt, request.answeredBy, request.redactedAnswerSummary ? JSON.stringify(request.redactedAnswerSummary) : null, request.id);
+    return this.getInputRequest(request.id) as ExplorerInputRequest;
+  }
+
+  savePlan(plan: CandidatePlan): CandidatePlan {
+    this.database.prepare(`
+      INSERT INTO candidate_plans (id, project_id, source_explorer_thread_id, explorer_plan_id, source_turn_id, provider_thread_id, provider_turn_id, provider_item_id, title, revision, status, created_at, confirmed_by, confirmed_at, queued_at, dispatched_at, run_id, last_event_at, attention_reason, contract_json, generated_spec_json, resolved_contract_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, source_explorer_thread_id=excluded.source_explorer_thread_id, explorer_plan_id=excluded.explorer_plan_id, source_turn_id=excluded.source_turn_id, provider_thread_id=excluded.provider_thread_id, provider_turn_id=excluded.provider_turn_id, provider_item_id=excluded.provider_item_id, title=excluded.title, revision=excluded.revision, status=excluded.status, confirmed_by=excluded.confirmed_by, confirmed_at=excluded.confirmed_at, queued_at=excluded.queued_at, dispatched_at=excluded.dispatched_at, run_id=excluded.run_id, last_event_at=excluded.last_event_at, attention_reason=excluded.attention_reason, contract_json=excluded.contract_json, generated_spec_json=excluded.generated_spec_json, resolved_contract_json=excluded.resolved_contract_json
+    `).run(plan.id, plan.projectId, plan.sourceExplorerThreadId, plan.explorerPlanId ?? null, plan.sourceTurnId, plan.providerThreadId, plan.providerTurnId, plan.providerItemId, plan.title, plan.revision, plan.status, plan.createdAt, plan.confirmedBy, plan.confirmedAt, plan.queuedAt, plan.dispatchedAt ?? null, plan.runId, plan.lastEventAt, plan.attentionReason, JSON.stringify(plan.contract), plan.generatedSpec ? JSON.stringify(plan.generatedSpec) : null, plan.resolvedContract ? JSON.stringify(plan.resolvedContract) : null);
+    if (this.getProject(plan.projectId) && this.getThread(plan.sourceExplorerThreadId)) this.savePlanQueryProjection(planQueryProjectionFor(plan));
+    return this.getPlan(plan.id) as CandidatePlan;
+  }
+
+  getPlan(id: string): CandidatePlan | undefined {
+    const row = this.database.prepare("SELECT * FROM candidate_plans WHERE id = ?").get(id) as SqliteRow | undefined;
+    return row ? this.planFromRow(row) : undefined;
+  }
+
+  listPlans(): CandidatePlan[] {
+    const rows = this.database.prepare("SELECT * FROM candidate_plans ORDER BY created_at ASC").all() as unknown as SqliteRow[];
+    return rows.map((row) => this.planFromRow(row));
+  }
+
+  updatePlan(plan: CandidatePlan): CandidatePlan { return this.savePlan(plan); }
+
+  saveCandidateVersion(plan: CandidatePlan): CandidatePlan {
+    this.database.prepare("INSERT OR IGNORE INTO candidate_plan_versions (plan_id, revision, plan_json) VALUES (?, ?, ?)").run(plan.id, plan.revision, JSON.stringify(plan));
+    return this.listCandidateVersions(plan.id).find((item) => item.revision === plan.revision)!;
+  }
+
+  listCandidateVersions(planId: string): CandidatePlan[] {
+    const rows = this.database.prepare("SELECT plan_json FROM candidate_plan_versions WHERE plan_id = ? ORDER BY revision ASC").all(planId) as unknown as SqliteRow[];
+    return rows.map((row) => JSON.parse(String(row.plan_json)) as CandidatePlan);
+  }
+
+  saveDispatchState(state: PlanDispatchState): PlanDispatchState {
+    this.database.prepare(`
+      INSERT INTO plan_dispatch_states (plan_id, revision, project_id, status, wait_reason, queued_at, run_id, attempt, updated_at, last_error, phase, automatic, confirmed_by)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(plan_id) DO UPDATE SET revision=excluded.revision, project_id=excluded.project_id, status=excluded.status, wait_reason=excluded.wait_reason, queued_at=excluded.queued_at, run_id=excluded.run_id, attempt=excluded.attempt, updated_at=excluded.updated_at, last_error=excluded.last_error, phase=excluded.phase, automatic=excluded.automatic, confirmed_by=excluded.confirmed_by
+    `).run(state.planId, state.revision ?? null, state.projectId, state.status, state.waitReason, state.queuedAt, state.runId, state.attempt, state.updatedAt, state.lastError, state.phase ?? null, state.automatic ? 1 : 0, state.confirmedBy ?? null);
+    return this.getDispatchState(state.planId) as PlanDispatchState;
+  }
+
+  deleteDispatchState(planId: string): void {
+    this.database.prepare("DELETE FROM plan_dispatch_states WHERE plan_id = ?").run(planId);
+  }
+
+  getDispatchState(planId: string): PlanDispatchState | undefined {
+    const row = this.database.prepare("SELECT * FROM plan_dispatch_states WHERE plan_id = ?").get(planId) as SqliteRow | undefined;
+    return row ? this.dispatchStateFromRow(row) : undefined;
+  }
+
+  listDispatchStates(projectId?: string): PlanDispatchState[] {
+    const rows = this.database.prepare(`SELECT * FROM plan_dispatch_states ${projectId ? "WHERE project_id = ?" : ""} ORDER BY queued_at ASC, plan_id ASC`).all(...(projectId ? [projectId] : [])) as unknown as SqliteRow[];
+    return rows.map((row) => this.dispatchStateFromRow(row));
+  }
+
+  saveRevision(revision: PlanRevisionV2): PlanRevisionV2 {
+    this.database.prepare("INSERT OR IGNORE INTO plan_revisions (plan_id, revision, contract_json, artifact_hash, confirmed_by, confirmed_at, source_explorer_thread_id, explorer_plan_id, project_config_version, project_config_hash, project_config_snapshot_json, resolved_contract_json, source_turn_id, provider_thread_id, provider_turn_id, provider_item_id, provenance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(revision.planId, revision.revision, JSON.stringify(revision.contract), revision.artifactHash, revision.confirmedBy, revision.confirmedAt, revision.sourceExplorerThreadId, revision.explorerPlanId ?? null, revision.projectConfigVersion ?? null, revision.projectConfigHash ?? null, revision.projectConfigSnapshot ? JSON.stringify(revision.projectConfigSnapshot) : null, revision.resolvedContract ? JSON.stringify(revision.resolvedContract) : null, revision.sourceTurnId ?? null, revision.providerThreadId ?? null, revision.providerTurnId ?? null, revision.providerItemId ?? null, revision.provenance ?? "CURRENT");
+    return this.getRevision(revision.planId, revision.revision) as PlanRevisionV2;
+  }
+
+  getRevision(planId: string, revision: number): PlanRevisionV2 | undefined {
+    const row = this.database.prepare("SELECT * FROM plan_revisions WHERE plan_id = ? AND revision = ?").get(planId, revision) as SqliteRow | undefined;
+    if (!row) return undefined;
+    return freezeRevision({ planId: String(row.plan_id), revision: Number(row.revision), contract: JSON.parse(String(row.contract_json)) as PlanContract, ...(row.resolved_contract_json ? { resolvedContract: JSON.parse(String(row.resolved_contract_json)) as ResolvedPlanContractV2 } : {}), artifactHash: String(row.artifact_hash), confirmedBy: String(row.confirmed_by), confirmedAt: String(row.confirmed_at), sourceExplorerThreadId: String(row.source_explorer_thread_id), ...(row.explorer_plan_id === null || row.explorer_plan_id === undefined ? {} : { explorerPlanId: String(row.explorer_plan_id) }), sourceTurnId: row.source_turn_id === null || row.source_turn_id === undefined ? null : String(row.source_turn_id), providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id), providerTurnId: row.provider_turn_id === null || row.provider_turn_id === undefined ? null : String(row.provider_turn_id), providerItemId: row.provider_item_id === null || row.provider_item_id === undefined ? null : String(row.provider_item_id), provenance: row.provenance === "CURRENT" ? "CURRENT" : "LEGACY", ...(row.project_config_version === null || row.project_config_version === undefined ? {} : { projectConfigVersion: Number(row.project_config_version) }), ...(row.project_config_hash === null || row.project_config_hash === undefined ? {} : { projectConfigHash: String(row.project_config_hash) }), ...(row.project_config_snapshot_json === null || row.project_config_snapshot_json === undefined ? {} : { projectConfigSnapshot: JSON.parse(String(row.project_config_snapshot_json)) as ProjectExecutionSnapshot }) });
+  }
+
+  listRevisions(planId: string): PlanRevisionV2[] {
+    const rows = this.database.prepare("SELECT revision FROM plan_revisions WHERE plan_id = ? ORDER BY revision ASC").all(planId) as unknown as SqliteRow[];
+    return rows.map((row) => this.getRevision(planId, Number(row.revision))!).filter(Boolean);
+  }
+
+  saveRevisionDraft(draft: PlanRevisionDraft): PlanRevisionDraft {
+    this.database.prepare("INSERT INTO plan_revision_drafts (draft_id, plan_id, project_id, based_on_revision, target_revision, status, title, contract_json, generated_spec_json, resolved_contract_json, source_explorer_thread_id, explorer_plan_id, source_turn_id, provider_thread_id, provider_turn_id, provider_item_id, base_branch, base_commit, created_at, updated_at, confirmed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(draft.draftId, draft.planId, draft.projectId, draft.basedOnRevision, draft.targetRevision, draft.status, draft.title, JSON.stringify(draft.contract), draft.generatedSpec ? JSON.stringify(draft.generatedSpec) : null, draft.resolvedContract ? JSON.stringify(draft.resolvedContract) : null, draft.sourceExplorerThreadId, draft.explorerPlanId ?? null, draft.sourceTurnId, draft.providerThreadId, draft.providerTurnId, draft.providerItemId, draft.baseBranch, draft.baseCommit, draft.createdAt, draft.updatedAt, draft.confirmedAt);
+    return this.getRevisionDraft(draft.draftId)!;
+  }
+  getRevisionDraft(draftId: string): PlanRevisionDraft | undefined {
+    const row = this.database.prepare("SELECT * FROM plan_revision_drafts WHERE draft_id = ?").get(draftId) as SqliteRow | undefined;
+    return row ? this.revisionDraftFromRow(row) : undefined;
+  }
+  listRevisionDrafts(planId?: string): PlanRevisionDraft[] {
+    const rows = this.database.prepare(`SELECT * FROM plan_revision_drafts ${planId ? "WHERE plan_id = ?" : ""} ORDER BY target_revision ASC, created_at ASC`).all(...(planId ? [planId] : [])) as unknown as SqliteRow[];
+    return rows.map((row) => this.revisionDraftFromRow(row));
+  }
+  updateRevisionDraft(draft: PlanRevisionDraft): PlanRevisionDraft {
+    this.database.prepare("UPDATE plan_revision_drafts SET status = ?, title = ?, contract_json = ?, generated_spec_json = ?, resolved_contract_json = ?, source_explorer_thread_id = ?, explorer_plan_id = ?, source_turn_id = ?, provider_thread_id = ?, provider_turn_id = ?, provider_item_id = ?, base_branch = ?, base_commit = ?, updated_at = ?, confirmed_at = ? WHERE draft_id = ?").run(draft.status, draft.title, JSON.stringify(draft.contract), draft.generatedSpec ? JSON.stringify(draft.generatedSpec) : null, draft.resolvedContract ? JSON.stringify(draft.resolvedContract) : null, draft.sourceExplorerThreadId, draft.explorerPlanId ?? null, draft.sourceTurnId, draft.providerThreadId, draft.providerTurnId, draft.providerItemId, draft.baseBranch, draft.baseCommit, draft.updatedAt, draft.confirmedAt, draft.draftId);
+    return this.getRevisionDraft(draft.draftId)!;
+  }
+  saveRevisionLifecycleProjection(projection: RevisionLifecycleProjection): RevisionLifecycleProjection {
+    this.database.prepare("INSERT INTO revision_lifecycle_projection (plan_id, revision, project_id, title, status, source_explorer_thread_id, run_id, last_event_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(plan_id, revision) DO UPDATE SET project_id=excluded.project_id, title=excluded.title, status=excluded.status, source_explorer_thread_id=excluded.source_explorer_thread_id, run_id=excluded.run_id, last_event_at=excluded.last_event_at").run(projection.planId, projection.revision, projection.projectId, projection.title, projection.status, projection.sourceExplorerThreadId, projection.runId, projection.lastEventAt);
+    return projection;
+  }
+  listRevisionLifecycleProjections(projectId?: string, planId?: string): RevisionLifecycleProjection[] {
+    const clauses = [projectId ? "project_id = ?" : "", planId ? "plan_id = ?" : ""].filter(Boolean);
+    const values = [projectId, planId].filter((value): value is string => Boolean(value));
+    const rows = this.database.prepare(`SELECT * FROM revision_lifecycle_projection ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""} ORDER BY plan_id ASC, revision ASC`).all(...values) as unknown as SqliteRow[];
+    return rows.map((row) => ({ planId: String(row.plan_id), revision: Number(row.revision), projectId: String(row.project_id), title: String(row.title), status: String(row.status) as RevisionLifecycleProjection["status"], sourceExplorerThreadId: String(row.source_explorer_thread_id), runId: row.run_id === null ? null : String(row.run_id), lastEventAt: String(row.last_event_at) }));
+  }
+
+  saveChangeProposal(proposal: ChangeProposal): ChangeProposal {
+    this.database.prepare("INSERT OR IGNORE INTO change_proposals (id, run_id, plan_id, reason, requested_changes_json, contract_json, status, created_at, created_by, decided_at, decided_by, revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(proposal.id, proposal.runId, proposal.planId, proposal.reason, JSON.stringify(proposal.requestedChanges), JSON.stringify(proposal.contract), proposal.status, proposal.createdAt, proposal.createdBy, proposal.decidedAt, proposal.decidedBy, proposal.revision);
+    return this.getChangeProposal(proposal.id) as ChangeProposal;
+  }
+
+  getChangeProposal(id: string): ChangeProposal | undefined {
+    const row = this.database.prepare("SELECT * FROM change_proposals WHERE id = ?").get(id) as SqliteRow | undefined;
+    return row ? this.changeProposalFromRow(row) : undefined;
+  }
+
+  listChangeProposals(runId?: string): ChangeProposal[] {
+    const rows = this.database.prepare(`SELECT * FROM change_proposals ${runId ? "WHERE run_id = ?" : ""} ORDER BY created_at ASC`).all(...(runId ? [runId] : [])) as unknown as SqliteRow[];
+    return rows.map((row) => this.changeProposalFromRow(row));
+  }
+
+  updateChangeProposal(proposal: ChangeProposal): ChangeProposal {
+    this.database.prepare("UPDATE change_proposals SET status = ?, decided_at = ?, decided_by = ?, revision = ? WHERE id = ?").run(proposal.status, proposal.decidedAt, proposal.decidedBy, proposal.revision, proposal.id);
+    return this.getChangeProposal(proposal.id) as ChangeProposal;
+  }
+
+  saveRun(run: Run): Run {
+    this.database.prepare("INSERT INTO runs (id, project_id, plan_id, plan_revision, status, branch, workspace_path, base_commit, execution_thread_id, created_at, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET status=excluded.status, workspace_path=excluded.workspace_path, started_at=excluded.started_at").run(run.id, run.projectId, run.planId, run.planRevision, run.status, run.branch, run.workspacePath, run.baseCommit, run.executionThreadId, run.createdAt, run.startedAt);
+    return this.getRun(run.id) as Run;
+  }
+
+  getRun(runId: string): Run | undefined {
+    const row = this.database.prepare("SELECT * FROM runs WHERE id = ?").get(runId) as SqliteRow | undefined;
+    return row ? this.runFromRow(row) : undefined;
+  }
+
+  listRuns(): Run[] {
+    const rows = this.database.prepare("SELECT * FROM runs ORDER BY created_at ASC").all() as unknown as SqliteRow[];
+    return rows.map((row) => this.runFromRow(row));
+  }
+
+  saveExecutionThread(thread: ExecutionThread): ExecutionThread {
+    const safe = { ...thread, journal: thread.journal.map((entry) => ({ ...entry, payload: redactAuditPayload(entry.payload) as ExecutionJournalPayload })) };
+    this.database.prepare("INSERT INTO execution_threads (id, run_id, state, journal_json, telemetry_json) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET state=excluded.state, journal_json=excluded.journal_json, telemetry_json=excluded.telemetry_json").run(safe.id, safe.runId, safe.state, JSON.stringify(safe.journal), safe.telemetry ? JSON.stringify(safe.telemetry) : null);
+    for (const entry of safe.journal) {
+      this.database.prepare("INSERT OR IGNORE INTO execution_journal (execution_thread_id, run_id, sequence, type, occurred_at, payload_json) VALUES (?, ?, ?, ?, ?, ?)").run(safe.id, safe.runId, entry.sequence, entry.type, entry.occurredAt, JSON.stringify(entry.payload));
+    }
+    return this.getExecutionThread(safe.id) as ExecutionThread;
+  }
+
+  appendExecutionJournal(input: { executionThreadId: string; runId: string; type: JournalEntryType; payload: Record<string, unknown>; occurredAt?: string }): ExecutionJournalEntry {
+    const thread = this.getExecutionThread(input.executionThreadId);
+    if (!thread || thread.runId !== input.runId) throw new Error(`ExecutionThread ${input.executionThreadId} does not belong to Run ${input.runId}`);
+    const sequence = Number((this.database.prepare("SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM execution_journal WHERE run_id = ?").get(input.runId) as SqliteRow).next_sequence);
+    const entry: ExecutionJournalEntry = { sequence, type: input.type, occurredAt: input.occurredAt ?? this.now(), payload: redactAuditPayload(input.payload) as ExecutionJournalPayload };
+    this.database.prepare("INSERT INTO execution_journal (execution_thread_id, run_id, sequence, type, occurred_at, payload_json) VALUES (?, ?, ?, ?, ?, ?)").run(input.executionThreadId, input.runId, entry.sequence, entry.type, entry.occurredAt, JSON.stringify(entry.payload));
+    return entry;
+  }
+
+  saveHookExecution(execution: HookExecution): HookExecution {
+    const safe = { ...execution, stdout: redactAuditText(execution.stdout), stderr: redactAuditText(execution.stderr) };
+    this.database.prepare("INSERT OR IGNORE INTO hook_executions (id, run_id, hook_type, attempt, command_id, cwd, timeout_ms, status, exit_code, stdout, stderr, started_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(safe.id, safe.runId, safe.hookType, safe.attempt, safe.commandId, safe.cwd, safe.timeoutMs, safe.status, safe.exitCode, safe.stdout, safe.stderr, safe.startedAt, safe.completedAt);
+    return this.getHookExecution(safe.runId, safe.hookType, safe.attempt) as HookExecution;
+  }
+
+  getHookExecution(runId: string, hookType: HookExecution["hookType"], attempt: number): HookExecution | undefined {
+    const row = this.database.prepare("SELECT * FROM hook_executions WHERE run_id = ? AND hook_type = ? AND attempt = ?").get(runId, hookType, attempt) as SqliteRow | undefined;
+    return row ? this.hookExecutionFromRow(row) : undefined;
+  }
+
+  listHookExecutions(runId?: string): HookExecution[] {
+    const rows = this.database.prepare(`SELECT * FROM hook_executions ${runId ? "WHERE run_id = ?" : ""} ORDER BY started_at ASC, attempt ASC`).all(...(runId ? [runId] : [])) as unknown as SqliteRow[];
+    return rows.map((row) => this.hookExecutionFromRow(row));
+  }
+
+  savePlanQueryProjection(projection: PlanQueryProjection): PlanQueryProjection {
+    this.database.prepare("INSERT INTO plan_query_projection (plan_id, project_id, source_explorer_thread_id, source_turn_id, title, goal, revision, status, priority, created_at, queued_at, dispatched_at, last_event_at, run_id, attention_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(plan_id) DO UPDATE SET project_id=excluded.project_id, source_explorer_thread_id=excluded.source_explorer_thread_id, source_turn_id=excluded.source_turn_id, title=excluded.title, goal=excluded.goal, revision=excluded.revision, status=excluded.status, priority=excluded.priority, created_at=excluded.created_at, queued_at=excluded.queued_at, dispatched_at=excluded.dispatched_at, last_event_at=excluded.last_event_at, run_id=excluded.run_id, attention_reason=excluded.attention_reason").run(projection.planId, projection.projectId, projection.sourceExplorerThreadId, projection.sourceTurnId, projection.title, projection.goal, projection.revision, projection.status, projection.priority, projection.createdAt, projection.queuedAt, projection.dispatchedAt ?? null, projection.lastEventAt, projection.runId, projection.attentionReason);
+    return this.getPlanQueryProjection(projection.planId) as PlanQueryProjection;
+  }
+
+  getPlanQueryProjection(planId: string): PlanQueryProjection | undefined {
+    const row = this.database.prepare("SELECT * FROM plan_query_projection WHERE plan_id = ?").get(planId) as SqliteRow | undefined;
+    return row ? this.planQueryProjectionFromRow(row) : undefined;
+  }
+
+  listPlanQueryProjection(projectId?: string): PlanQueryProjection[] {
+    const rows = this.database.prepare(`SELECT * FROM plan_query_projection ${projectId ? "WHERE project_id = ?" : ""} ORDER BY created_at ASC, plan_id ASC`).all(...(projectId ? [projectId] : [])) as unknown as SqliteRow[];
+    return rows.map((row) => this.planQueryProjectionFromRow(row));
+  }
+
+  saveVerificationRun(verification: VerificationRun): VerificationRun {
+    this.database.prepare("INSERT OR IGNORE INTO verification_runs (id, run_id, status, repair_attempts, command_results_json, completed_at) VALUES (?, ?, ?, ?, ?, ?)").run(verification.id, verification.runId, verification.status, verification.repairAttempts, JSON.stringify(verification.commandResults), verification.completedAt);
+    return this.getVerificationById(verification.id) as VerificationRun;
+  }
+
+  getVerificationRun(runId: string): VerificationRun | undefined {
+    const row = this.database.prepare("SELECT * FROM verification_runs WHERE run_id = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1").get(runId) as SqliteRow | undefined;
+    return row ? this.verificationFromRow(row) : undefined;
+  }
+
+  listVerificationRuns(runId?: string): VerificationRun[] {
+    const rows = this.database.prepare(`SELECT * FROM verification_runs ${runId ? "WHERE run_id = ?" : ""} ORDER BY completed_at ASC, rowid ASC`).all(...(runId ? [runId] : [])) as unknown as SqliteRow[];
+    return rows.map((row) => this.verificationFromRow(row));
+  }
+
+  private backfillLegacyVerificationRuns(): void {
+    const insert = this.database.prepare("INSERT OR IGNORE INTO verification_runs (id, run_id, status, repair_attempts, command_results_json, completed_at) VALUES (?, ?, ?, ?, ?, ?)");
+    const rows = this.database.prepare("SELECT journal_json FROM execution_threads").all() as unknown as SqliteRow[];
+    for (const row of rows) {
+      let journal: unknown;
+      try { journal = JSON.parse(String(row.journal_json)); } catch { continue; }
+      if (!Array.isArray(journal)) continue;
+      for (const entry of journal) {
+        if (!isRecord(entry) || entry.type !== "VERIFICATION" || !isVerificationRun(entry.payload)) continue;
+        const verification = entry.payload;
+        insert.run(verification.id, verification.runId, verification.status, verification.repairAttempts, JSON.stringify(verification.commandResults), verification.completedAt);
+      }
+    }
+  }
+
+  saveMergeRequest(request: MergeRequest): MergeRequest {
+    this.database.prepare("INSERT OR IGNORE INTO merge_requests (id, run_id, plan_id, source_commit, target_branch, status, human_confirmation_required, created_at, merged_at, detected_target_commit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(request.id, request.runId, request.planId, request.sourceCommit, request.targetBranch, request.status, request.humanConfirmationRequired ? 1 : 0, request.createdAt, request.mergedAt, request.detectedTargetCommit ?? null);
+    return this.getMergeRequest(request.id) as MergeRequest;
+  }
+
+  getMergeRequest(requestId: string): MergeRequest | undefined {
+    const row = this.database.prepare("SELECT * FROM merge_requests WHERE id = ?").get(requestId) as SqliteRow | undefined;
+    return row ? this.mergeRequestFromRow(row) : undefined;
+  }
+
+  findMergeRequestByRun(runId: string): MergeRequest | undefined {
+    const row = this.database.prepare("SELECT * FROM merge_requests WHERE run_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1").get(runId) as SqliteRow | undefined;
+    return row ? this.mergeRequestFromRow(row) : undefined;
+  }
+
+  listMergeRequests(): MergeRequest[] {
+    const rows = this.database.prepare("SELECT * FROM merge_requests ORDER BY created_at ASC, rowid ASC").all() as unknown as SqliteRow[];
+    return rows.map((row) => this.mergeRequestFromRow(row));
+  }
+
+  updateMergeRequest(request: MergeRequest): MergeRequest {
+    this.database.prepare("UPDATE merge_requests SET status = ?, merged_at = ?, detected_target_commit = ? WHERE id = ?").run(request.status, request.mergedAt, request.detectedTargetCommit ?? null, request.id);
+    return this.getMergeRequest(request.id) as MergeRequest;
+  }
+
+  saveAgentLoop(loop: AgentLoop): AgentLoop {
+    this.database.prepare(`
+      INSERT INTO agent_loops (id, owner_type, owner_id, role, mode, state, step_count, max_steps, started_at, completed_at, provider_thread_id, provider_turn_id, checkpoint_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET owner_type=excluded.owner_type, owner_id=excluded.owner_id, role=excluded.role, mode=excluded.mode, state=excluded.state, step_count=excluded.step_count, max_steps=excluded.max_steps, started_at=excluded.started_at, completed_at=excluded.completed_at, provider_thread_id=excluded.provider_thread_id, provider_turn_id=excluded.provider_turn_id, checkpoint_json=excluded.checkpoint_json
+    `).run(loop.id, loop.ownerType, loop.ownerId, loop.role, loop.mode, loop.state, loop.stepCount, loop.maxSteps, loop.startedAt, loop.completedAt, loop.providerThreadId, loop.providerTurnId, loop.checkpointJson);
+    return this.getAgentLoop(loop.id) as AgentLoop;
+  }
+
+  getAgentLoop(loopId: string): AgentLoop | undefined {
+    const row = this.database.prepare("SELECT * FROM agent_loops WHERE id = ?").get(loopId) as SqliteRow | undefined;
+    return row ? this.agentLoopFromRow(row) : undefined;
+  }
+
+  listAgentLoops(ownerId?: string): AgentLoop[] {
+    const rows = this.database.prepare(`SELECT * FROM agent_loops ${ownerId ? "WHERE owner_id = ?" : ""} ORDER BY rowid ASC`).all(...(ownerId ? [ownerId] : [])) as unknown as SqliteRow[];
+    return rows.map((row) => this.agentLoopFromRow(row));
+  }
+
+  updateAgentLoop(loop: AgentLoop): AgentLoop {
+    if (!this.getAgentLoop(loop.id)) throw new Error(`AgentLoop ${loop.id} does not exist`);
+    return this.saveAgentLoop(loop);
+  }
+
+  appendAgentLoopStep(input: AgentLoopStepInput): AgentLoopStep {
+    const nextSequence = Number((this.database.prepare("SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM agent_loop_steps WHERE loop_id = ?").get(input.loopId) as SqliteRow).next_sequence);
+    const step: AgentLoopStep = { ...input, callId: input.callId ?? null, providerThreadId: input.providerThreadId ?? null, providerTurnId: input.providerTurnId ?? null, sequence: nextSequence, occurredAt: input.occurredAt ?? this.now() };
+    this.database.prepare("INSERT INTO agent_loop_steps (loop_id, sequence, step_type, status, call_id, provider_thread_id, provider_turn_id, payload_json, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(step.loopId, step.sequence, step.stepType, step.status, step.callId, step.providerThreadId, step.providerTurnId, JSON.stringify(step.payload), step.occurredAt);
+    return step;
+  }
+
+  listAgentLoopSteps(loopId: string, options: { stepTypes?: readonly string[] } = {}): AgentLoopStep[] {
+    const stepTypes = options.stepTypes;
+    if (stepTypes && stepTypes.length === 0) return [];
+    const filter = stepTypes ? ` AND step_type IN (${stepTypes.map(() => "?").join(", ")})` : "";
+    const params: string[] = stepTypes ? [loopId, ...stepTypes] : [loopId];
+    const rows = this.database.prepare(`SELECT * FROM agent_loop_steps WHERE loop_id = ?${filter} ORDER BY sequence ASC`).all(...params) as unknown as SqliteRow[];
+    return rows.map((row) => this.agentLoopStepFromRow(row));
+  }
+
+  getLastAgentLoopStepSequence(loopId: string): number {
+    const row = this.database.prepare("SELECT COALESCE(MAX(sequence), 0) AS last_sequence FROM agent_loop_steps WHERE loop_id = ?").get(loopId) as SqliteRow;
+    return Number(row.last_sequence ?? 0);
+  }
+
+  recoverAgentLoops(): AgentLoop[] { return this.listAgentLoops().filter((loop) => loop.state === "RUNNING" || loop.state === "WAITING_FOR_INPUT" || loop.state === "PAUSED"); }
+
+  saveToolCall(call: PersistedToolCall): PersistedToolCall {
+    this.database.prepare("INSERT OR IGNORE INTO tool_calls (call_id, loop_id, role, tool, status, input_hash, result_json, started_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(call.callId, call.loopId, call.role, call.tool, call.status, call.inputHash, call.result ? JSON.stringify(call.result) : null, call.startedAt, call.completedAt);
+    return this.getToolCall(call.callId) as PersistedToolCall;
+  }
+
+  getToolCall(callId: string): PersistedToolCall | undefined {
+    const row = this.database.prepare("SELECT * FROM tool_calls WHERE call_id = ?").get(callId) as SqliteRow | undefined;
+    return row ? this.toolCallFromRow(row) : undefined;
+  }
+
+  listToolCalls(loopId?: string): PersistedToolCall[] {
+    const rows = this.database.prepare(`SELECT * FROM tool_calls ${loopId ? "WHERE loop_id = ?" : ""} ORDER BY started_at ASC`).all(...(loopId ? [loopId] : [])) as unknown as SqliteRow[];
+    return rows.map((row) => this.toolCallFromRow(row));
+  }
+
+  updateToolCall(call: PersistedToolCall): PersistedToolCall {
+    if (!this.getToolCall(call.callId)) throw new Error(`Tool call ${call.callId} does not exist`);
+    this.database.prepare("UPDATE tool_calls SET status = ?, result_json = ?, completed_at = ? WHERE call_id = ?").run(call.status, call.result ? JSON.stringify(call.result) : null, call.completedAt, call.callId);
+    return this.getToolCall(call.callId) as PersistedToolCall;
+  }
+
+  getExecutionThread(threadId: string): ExecutionThread | undefined {
+    const row = this.database.prepare("SELECT * FROM execution_threads WHERE id = ?").get(threadId) as SqliteRow | undefined;
+    if (!row) return undefined;
+    const journalRows = this.database.prepare("SELECT sequence, type, occurred_at, payload_json FROM execution_journal WHERE execution_thread_id = ? ORDER BY sequence ASC").all(threadId) as unknown as SqliteRow[];
+    const journal = journalRows.length > 0
+      ? journalRows.map((entry) => ({ sequence: Number(entry.sequence), type: String(entry.type) as JournalEntryType, occurredAt: String(entry.occurred_at), payload: JSON.parse(String(entry.payload_json)) as ExecutionJournalPayload }))
+      : JSON.parse(String(row.journal_json)) as ExecutionJournalEntry[];
+    const telemetry = typeof row.telemetry_json === "string" && row.telemetry_json.length > 0 ? JSON.parse(row.telemetry_json) as ExecutionTelemetry : null;
+    return { id: String(row.id), runId: String(row.run_id), state: String(row.state) as ExecutionThreadState, journal, telemetry };
+  }
+
+  appendEvent(event: Omit<DomainEvent, "id" | "occurredAt" | "sequence">): DomainEvent {
+    const saved: DomainEvent = { ...event, payload: redactAuditPayload(event.payload), id: this.nextId("event"), sequence: Number((this.database.prepare("SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM domain_events").get() as SqliteRow).next_sequence), occurredAt: this.now() };
+    this.database.prepare("INSERT INTO domain_events (id, sequence, type, aggregate_id, occurred_at, payload_json) VALUES (?, ?, ?, ?, ?, ?)").run(saved.id, saved.sequence, saved.type, saved.aggregateId, saved.occurredAt, JSON.stringify(saved.payload));
+    for (const listener of this.eventListeners) listener(saved);
+    return saved;
+  }
+
+  subscribeEvents(listener: (event: DomainEvent) => void): () => void {
+    this.eventListeners.add(listener);
+    return () => this.eventListeners.delete(listener);
+  }
+
+  listEvents(options: { afterSequence?: number; aggregateId?: string; aggregateIds?: readonly string[]; types?: readonly string[]; limit?: number } = {}): DomainEvent[] {
+    // aggregateIds 用于"一次取多个聚合的事件"，走 domain_events_aggregate_idx；
+    // 它替代的是"读全表再在内存里筛"，对十万级事件表是数量级的差别。
+    const aggregateIds = options.aggregateIds?.length ? options.aggregateIds : null;
+    const types = options.types?.length ? options.types : null;
+    if (aggregateIds && options.aggregateId) throw new Error("listEvents accepts either aggregateId or aggregateIds, not both");
+    const clauses: string[] = ["sequence > ?"];
+    const params: Array<string | number> = [options.afterSequence ?? 0];
+    if (options.aggregateId) {
+      clauses.push("aggregate_id = ?");
+      params.push(options.aggregateId);
+    } else if (aggregateIds) {
+      clauses.push(`aggregate_id IN (${aggregateIds.map(() => "?").join(", ")})`);
+      params.push(...aggregateIds);
+    }
+    // 事件类型的取值集合很小且集中，按类型过滤能再砍掉大量与调用方无关的行。
+    if (types) {
+      clauses.push(`type IN (${types.map(() => "?").join(", ")})`);
+      params.push(...types);
+    }
+    const where = clauses.join(" AND ");
+    // limit 语义是“最新的 N 条”：先倒序截断再恢复升序，避免为了取尾部而加载全部历史事件。
+    const sql = options.limit === undefined
+      ? `SELECT * FROM domain_events WHERE ${where} ORDER BY sequence ASC`
+      : `SELECT * FROM (SELECT * FROM domain_events WHERE ${where} ORDER BY sequence DESC LIMIT ?) ORDER BY sequence ASC`;
+    if (options.limit !== undefined) params.push(options.limit);
+    const rows = this.database.prepare(sql).all(...params) as unknown as SqliteRow[];
+    return rows.map((row) => ({
+      id: String(row.id),
+      sequence: Number(row.sequence),
+      type: String(row.type) as DomainEvent["type"],
+      aggregateId: String(row.aggregate_id),
+      occurredAt: String(row.occurred_at),
+      payload: JSON.parse(String(row.payload_json)) as Record<string, unknown>,
+    }));
+  }
+
+  getLastEventSequence(aggregateId?: string): number {
+    const row = this.database.prepare(`SELECT COALESCE(MAX(sequence), 0) AS last_sequence FROM domain_events ${aggregateId ? "WHERE aggregate_id = ?" : ""}`).get(...(aggregateId ? [aggregateId] : [])) as SqliteRow;
+    return Number(row.last_sequence ?? 0);
+  }
+
+  deleteExplorerCascade(input: ExplorerDeletionInput): ExplorerDeletionSummary {
+    const project = this.getProject(input.projectId);
+    const replacement = this.getThread(input.replacementExplorerId);
+    if (!project || !replacement || replacement.projectId !== input.projectId || replacement.id === input.explorerId) throw new Error("Explorer deletion replacement is invalid");
+    if (project.currentExplorerThreadId === input.explorerId) this.database.prepare("UPDATE factory_projects SET current_explorer_thread_id = ?, updated_at = ? WHERE id = ?").run(replacement.id, this.now(), input.projectId);
+
+    const explorerPlanIds = sqlIn("id", input.explorerPlanIds);
+    const planIds = sqlIn("plan_id", input.planIds);
+    const planEntityIds = sqlIn("id", input.planIds);
+    const runIds = sqlIn("run_id", input.runIds);
+    const runEntityIds = sqlIn("id", input.runIds);
+    const loopIds = sqlIn("loop_id", input.agentLoopIds);
+    const loopEntityIds = sqlIn("id", input.agentLoopIds);
+    const executionThreadEntityIds = sqlIn("id", input.executionThreadIds);
+
+    if (runIds) {
+      this.database.prepare(`DELETE FROM execution_journal WHERE ${runIds.clause}`).run(...runIds.values);
+      this.database.prepare(`DELETE FROM hook_executions WHERE ${runIds.clause}`).run(...runIds.values);
+      this.database.prepare(`DELETE FROM verification_runs WHERE ${runIds.clause}`).run(...runIds.values);
+      this.database.prepare(`DELETE FROM merge_requests WHERE ${runIds.clause}`).run(...runIds.values);
+    }
+    if (loopIds) {
+      this.database.prepare(`DELETE FROM agent_loop_steps WHERE ${loopIds.clause}`).run(...loopIds.values);
+      this.database.prepare(`DELETE FROM tool_calls WHERE ${loopIds.clause}`).run(...loopIds.values);
+      if (loopEntityIds) this.database.prepare(`DELETE FROM agent_loops WHERE ${loopEntityIds.clause}`).run(...loopEntityIds.values);
+    }
+    if (executionThreadEntityIds) this.database.prepare(`DELETE FROM execution_threads WHERE ${executionThreadEntityIds.clause}`).run(...executionThreadEntityIds.values);
+    if (runEntityIds) this.database.prepare(`DELETE FROM runs WHERE ${runEntityIds.clause}`).run(...runEntityIds.values);
+    if (planIds) {
+      this.database.prepare(`DELETE FROM change_proposals WHERE ${planIds.clause}`).run(...planIds.values);
+      this.database.prepare(`DELETE FROM plan_dispatch_states WHERE ${planIds.clause}`).run(...planIds.values);
+      this.database.prepare(`DELETE FROM plan_revisions WHERE ${planIds.clause}`).run(...planIds.values);
+      this.database.prepare(`DELETE FROM plan_revision_drafts WHERE ${planIds.clause}`).run(...planIds.values);
+      this.database.prepare(`DELETE FROM candidate_plan_versions WHERE ${planIds.clause}`).run(...planIds.values);
+      this.database.prepare(`DELETE FROM revision_lifecycle_projection WHERE ${planIds.clause}`).run(...planIds.values);
+      this.database.prepare(`DELETE FROM plan_query_projection WHERE ${planIds.clause}`).run(...planIds.values);
+      if (planEntityIds) this.database.prepare(`DELETE FROM candidate_plans WHERE ${planEntityIds.clause}`).run(...planEntityIds.values);
+    }
+    if (explorerPlanIds) this.database.prepare(`DELETE FROM explorer_plans WHERE ${explorerPlanIds.clause}`).run(...explorerPlanIds.values);
+    const inputRequestIds = sqlIn("id", input.inputRequestIds);
+    if (inputRequestIds) this.database.prepare(`DELETE FROM explorer_input_requests WHERE thread_id = ? OR ${inputRequestIds.clause}`).run(input.explorerId, ...inputRequestIds.values);
+    else this.database.prepare("DELETE FROM explorer_input_requests WHERE thread_id = ?").run(input.explorerId);
+    this.database.prepare("DELETE FROM explorer_turns WHERE thread_id = ?").run(input.explorerId);
+
+    const deletedIds = new Set([input.explorerId, ...input.explorerPlanIds, ...input.turnIds, ...input.planIds, ...input.runIds, ...input.executionThreadIds, ...input.agentLoopIds, ...input.inputRequestIds]);
+    const idempotencyRows = this.database.prepare("SELECT scope, key, result_json FROM idempotency_keys").all() as unknown as SqliteRow[];
+    for (const row of idempotencyRows) {
+      let result: unknown;
+      try { result = JSON.parse(String(row.result_json)); } catch { continue; }
+      if (containsAnyString(result, deletedIds)) this.database.prepare("DELETE FROM idempotency_keys WHERE scope = ? AND key = ?").run(String(row.scope), String(row.key));
+    }
+    this.database.prepare("DELETE FROM explorer_threads WHERE id = ? AND project_id = ?").run(input.explorerId, input.projectId);
+    return { taskCount: input.explorerPlanIds.length, planCount: input.planIds.length, runCount: input.runIds.length };
+  }
+
+  getIdempotency(scope: string, key: string): Record<string, unknown> | undefined {
+    const row = this.database.prepare("SELECT result_json FROM idempotency_keys WHERE scope = ? AND key = ?").get(scope, key) as SqliteRow | undefined;
+    return row ? JSON.parse(String(row.result_json)) as Record<string, unknown> : undefined;
+  }
+
+  saveIdempotency(scope: string, key: string, result: Record<string, unknown>): void {
+    this.database.prepare("INSERT OR IGNORE INTO idempotency_keys (scope, key, result_json, created_at) VALUES (?, ?, ?, ?)").run(scope, key, JSON.stringify(result), this.now());
+  }
+
+  close(): void { this.database.close(); }
+
+  private projectFromRow(row: SqliteRow): Project {
+    return {
+      id: String(row.id),
+      name: String(row.name),
+      shortName: String(row.short_name ?? row.name),
+      repoRoot: String(row.repo_root),
+      defaultBranch: String(row.default_branch),
+      worktreeRoot: String(row.worktree_root),
+      status: String(row.status) as Project["status"],
+      currentExplorerThreadId: row.current_explorer_thread_id === null || row.current_explorer_thread_id === undefined ? null : String(row.current_explorer_thread_id),
+      configVersion: Number(row.config_version),
+      configHash: String(row.config_hash),
+      settings: JSON.parse(String(row.settings_json)) as ProjectSettings,
+      createdAt: String(row.created_at),
+      updatedAt: String(row.updated_at),
+      archivedAt: row.archived_at === null || row.archived_at === undefined ? null : String(row.archived_at),
+    };
+  }
+
+  private projectExecutionMessageFromRow(row: SqliteRow): ProjectExecutionMessage {
+    return {
+      id: String(row.id),
+      threadId: String(row.thread_id),
+      turnId: String(row.turn_id),
+      clientTurnId: row.client_turn_id === null ? null : String(row.client_turn_id),
+      role: String(row.role) as ProjectExecutionMessage["role"],
+      content: String(row.content),
+      status: String(row.status) as ProjectExecutionTurnStatus,
+      error: row.error === null ? null : String(row.error),
+      createdAt: String(row.created_at),
+      sequence: Number(row.sequence),
+      loopId: row.loop_id === null ? null : String(row.loop_id),
+      model: row.model === null ? null : String(row.model),
+      reasoningEffort: row.reasoning_effort === null ? null : String(row.reasoning_effort),
+    };
+  }
+
+  private threadFromRow(row: SqliteRow): ExplorerThread {
+    const lastActivityAt = String(row.last_activity_at);
+    return {
+      id: String(row.id), projectId: String(row.project_id), title: String(row.title ?? "New Explorer"), createdAt: String(row.created_at ?? lastActivityAt),
+      titleSource: String(row.title_source ?? "AUTO") as ExplorerTitleSource, titleStatus: String(row.title_status ?? "PLACEHOLDER") as ExplorerTitleStatus,
+      contextMode: String(row.context_mode ?? "FRESH") as ExplorerThread["contextMode"],
+      originThreadId: row.origin_thread_id === null || row.origin_thread_id === undefined ? null : String(row.origin_thread_id),
+      parentThreadId: row.parent_thread_id === null ? null : String(row.parent_thread_id),
+      providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id),
+      state: String(row.state) as ExplorerThreadState, messageCount: Number(row.message_count),
+      summaryRef: row.summary_ref === null ? null : String(row.summary_ref),
+      activeExplorerPlanId: row.active_explorer_plan_id === null || row.active_explorer_plan_id === undefined ? null : String(row.active_explorer_plan_id),
+      contextSummary: parseThreadContextSummary(row.context_summary_json, lastActivityAt), lastActivityAt,
+      exploration: { status: String(row.exploration_status ?? "INCOMPLETE") as PlanExplorationStatus, missing: parseStringArray(row.exploration_missing_json, [...REQUIRED_PLAN_AREAS]), completed: parseStringArray(row.exploration_completed_json, []), diagnostics: parsePlanValidationIssues(row.exploration_diagnostics_json), candidatePlanId: row.candidate_plan_id === null || row.candidate_plan_id === undefined ? null : String(row.candidate_plan_id), lastAssessedTurnId: row.last_assessed_turn_id === null || row.last_assessed_turn_id === undefined ? null : String(row.last_assessed_turn_id) },
+      activeRevisionDraftId: row.active_revision_draft_id === null || row.active_revision_draft_id === undefined ? null : String(row.active_revision_draft_id),
+    };
+  }
+
+  private explorerPlanFromRow(row: SqliteRow): ExplorerPlan {
+    return {
+      id: String(row.id), explorerThreadId: String(row.explorer_thread_id), projectId: String(row.project_id), ordinal: Number(row.ordinal),
+      title: String(row.title), titleSource: String(row.title_source ?? "AUTO") as ExplorerTitleSource, titleStatus: String(row.title_status ?? "PLACEHOLDER") as ExplorerTitleStatus,
+      messageCount: Number(row.message_count ?? 0), latestUserMessageSummary: row.latest_user_message_summary === null || row.latest_user_message_summary === undefined ? null : String(row.latest_user_message_summary),
+      exploration: { status: String(row.exploration_status ?? "INCOMPLETE") as PlanExplorationStatus, missing: parseStringArray(row.exploration_missing_json, [...REQUIRED_PLAN_AREAS]), completed: parseStringArray(row.exploration_completed_json, []), diagnostics: parsePlanValidationIssues(row.exploration_diagnostics_json), candidatePlanId: row.candidate_plan_id === null || row.candidate_plan_id === undefined ? null : String(row.candidate_plan_id), lastAssessedTurnId: row.last_assessed_turn_id === null || row.last_assessed_turn_id === undefined ? null : String(row.last_assessed_turn_id) },
+      newPlanRequested: Number(row.new_plan_requested ?? 0) === 1,
+      providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id),
+      repositoryContextKey: row.repository_context_key === null || row.repository_context_key === undefined ? null : String(row.repository_context_key),
+      candidatePlanId: row.candidate_plan_id === null || row.candidate_plan_id === undefined ? null : String(row.candidate_plan_id), lastAssessedTurnId: row.last_assessed_turn_id === null || row.last_assessed_turn_id === undefined ? null : String(row.last_assessed_turn_id), ...(row.runtime_status === null || row.runtime_status === undefined ? {} : { runtimeStatus: String(row.runtime_status) as NonNullable<ExplorerTurn["status"]> }), createdAt: String(row.created_at), lastActivityAt: String(row.last_activity_at),
+    };
+  }
+
+  private inputRequestFromRow(row: SqliteRow): ExplorerInputRequest {
+    return {
+      id: String(row.id), threadId: String(row.thread_id), ...(row.explorer_plan_id ? { explorerPlanId: String(row.explorer_plan_id) } : {}), localTurnId: String(row.local_turn_id),
+      providerRequestId: parseRequestId(String(row.provider_request_id)), providerThreadId: String(row.provider_thread_id), providerTurnId: String(row.provider_turn_id), itemId: String(row.item_id),
+      questions: JSON.parse(String(row.questions_json)) as ModelInputQuestion[], isBlocking: Number(row.is_blocking) === 1, autoResolutionMs: row.auto_resolution_ms === null ? null : Number(row.auto_resolution_ms), status: String(row.status) as ExplorerInputRequestStatus,
+      createdAt: String(row.created_at), answeredAt: row.answered_at === null ? null : String(row.answered_at), answeredBy: row.answered_by === null ? null : String(row.answered_by), redactedAnswerSummary: row.redacted_answer_summary_json === null ? null : JSON.parse(String(row.redacted_answer_summary_json)) as Record<string, unknown>,
+    };
+  }
+
+  private getVerificationById(id: string): VerificationRun | undefined {
+    const row = this.database.prepare("SELECT * FROM verification_runs WHERE id = ?").get(id) as SqliteRow | undefined;
+    return row ? this.verificationFromRow(row) : undefined;
+  }
+
+  private verificationFromRow(row: SqliteRow): VerificationRun {
+    return {
+      id: String(row.id),
+      runId: String(row.run_id),
+      status: String(row.status) as VerificationStatus,
+      repairAttempts: Number(row.repair_attempts),
+      commandResults: JSON.parse(String(row.command_results_json)) as VerificationRun["commandResults"],
+      completedAt: String(row.completed_at),
+    };
+  }
+
+  private hookExecutionFromRow(row: SqliteRow): HookExecution {
+    return {
+      id: String(row.id),
+      runId: String(row.run_id),
+      hookType: String(row.hook_type) as HookExecution["hookType"],
+      attempt: Number(row.attempt),
+      commandId: row.command_id === null || row.command_id === undefined ? null : String(row.command_id),
+      cwd: String(row.cwd),
+      timeoutMs: Number(row.timeout_ms),
+      status: String(row.status) as HookExecution["status"],
+      exitCode: row.exit_code === null || row.exit_code === undefined ? null : Number(row.exit_code),
+      stdout: String(row.stdout),
+      stderr: String(row.stderr),
+      startedAt: String(row.started_at),
+      completedAt: String(row.completed_at),
+    };
+  }
+
+  private planQueryProjectionFromRow(row: SqliteRow): PlanQueryProjection {
+    return {
+      planId: String(row.plan_id),
+      projectId: String(row.project_id),
+      sourceExplorerThreadId: String(row.source_explorer_thread_id),
+      sourceTurnId: row.source_turn_id === null || row.source_turn_id === undefined ? null : String(row.source_turn_id),
+      title: String(row.title),
+      goal: String(row.goal),
+      revision: Number(row.revision),
+      status: String(row.status) as PlanStatus,
+      priority: Number(row.priority),
+      createdAt: String(row.created_at),
+      queuedAt: row.queued_at === null || row.queued_at === undefined ? null : String(row.queued_at),
+      dispatchedAt: row.dispatched_at === null || row.dispatched_at === undefined ? null : String(row.dispatched_at),
+      lastEventAt: String(row.last_event_at),
+      runId: row.run_id === null || row.run_id === undefined ? null : String(row.run_id),
+      attentionReason: row.attention_reason === null || row.attention_reason === undefined ? null : String(row.attention_reason),
+    };
+  }
+
+  private revisionDraftFromRow(row: SqliteRow): PlanRevisionDraft {
+    return Object.freeze({
+      draftId: String(row.draft_id), planId: String(row.plan_id), projectId: String(row.project_id), basedOnRevision: Number(row.based_on_revision), targetRevision: Number(row.target_revision), status: String(row.status) as PlanRevisionDraftStatus,
+      title: String(row.title), contract: JSON.parse(String(row.contract_json)) as PlanContract,
+      ...(row.generated_spec_json ? { generatedSpec: JSON.parse(String(row.generated_spec_json)) as GeneratedPlanSpecV2 } : {}),
+      ...(row.resolved_contract_json ? { resolvedContract: JSON.parse(String(row.resolved_contract_json)) as ResolvedPlanContractV2 } : {}),
+      sourceExplorerThreadId: String(row.source_explorer_thread_id), ...(row.explorer_plan_id === null || row.explorer_plan_id === undefined ? {} : { explorerPlanId: String(row.explorer_plan_id) }), sourceTurnId: row.source_turn_id === null ? null : String(row.source_turn_id), providerThreadId: row.provider_thread_id === null ? null : String(row.provider_thread_id), providerTurnId: row.provider_turn_id === null ? null : String(row.provider_turn_id), providerItemId: row.provider_item_id === null ? null : String(row.provider_item_id),
+      baseBranch: String(row.base_branch), baseCommit: String(row.base_commit), createdAt: String(row.created_at), updatedAt: String(row.updated_at), confirmedAt: row.confirmed_at === null ? null : String(row.confirmed_at),
+    });
+  }
+
+  /** 为新旧线程确保至少存在一个 Plan，并把历史事实归入默认 Plan。 */
+  private ensureExplorerPlansForThread(threadId: string): void {
+    const thread = this.getThread(threadId);
+    if (!thread) return;
+    let plans = this.listExplorerPlans(threadId);
+    if (plans.length === 0) {
+      const plan = defaultExplorerPlan(thread, this.nextId("explorer-plan"), 1, thread.lastActivityAt);
+      this.saveExplorerPlan(plan);
+      plans = [plan];
+    }
+    const activePlan = plans.find((plan) => plan.id === thread.activeExplorerPlanId) ?? plans[0];
+    if (!activePlan) return;
+    for (const turn of this.listTurns(threadId)) {
+      if (!turn.explorerPlanId) this.database.prepare("UPDATE explorer_turns SET explorer_plan_id = ? WHERE id = ?").run(activePlan.id, turn.id);
+    }
+    for (const plan of this.listPlans().filter((item) => item.sourceExplorerThreadId === threadId)) {
+      if (plan.explorerPlanId) continue;
+      const owner = plan.sourceTurnId ? this.listTurns(threadId).find((turn) => turn.id === plan.sourceTurnId) : undefined;
+      this.database.prepare("UPDATE candidate_plans SET explorer_plan_id = ? WHERE id = ?").run(owner?.explorerPlanId ?? activePlan.id, plan.id);
+    }
+    for (const request of this.listInputRequests(threadId)) {
+      if (!request.explorerPlanId) this.database.prepare("UPDATE explorer_input_requests SET explorer_plan_id = ? WHERE id = ?").run(activePlan.id, request.id);
+    }
+    const current = this.getThread(threadId)!;
+    const associatedPlans = this.listPlans().filter((plan) => plan.sourceExplorerThreadId === threadId);
+    for (const plan of plans) {
+      const planTurns = this.listTurns(threadId).filter((turn) => turn.explorerPlanId === plan.id);
+      const latestUser = [...planTurns].reverse().find((turn) => turn.role === "user");
+      const latestAssistant = [...planTurns].reverse().find((turn) => turn.role === "assistant");
+      const associatedCandidate = associatedPlans.filter((item) => item.explorerPlanId === plan.id && item.status === "DRAFT").sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+      const legacyProjection = plans.length === 1 && plan.id === activePlan.id && planTurns.length > 0 ? current.exploration : plan.exploration;
+      const selectedCandidateId = plan.newPlanRequested ? null : plan.candidatePlanId ?? associatedCandidate?.id ?? legacyProjection.candidatePlanId;
+      this.saveExplorerPlan({
+        ...plan,
+        messageCount: planTurns.length || plan.messageCount,
+        latestUserMessageSummary: latestUser ? summarizeExplorerMessage(latestUser.content) : plan.latestUserMessageSummary,
+        exploration: { ...legacyProjection, candidatePlanId: selectedCandidateId },
+        candidatePlanId: selectedCandidateId,
+        newPlanRequested: Boolean(plan.newPlanRequested),
+        lastAssessedTurnId: legacyProjection.lastAssessedTurnId ?? plan.lastAssessedTurnId,
+        ...(latestAssistant?.status ? { runtimeStatus: latestAssistant.status } : {}),
+      });
+    }
+    const refreshedPlans = this.listExplorerPlans(threadId);
+    const contextSummary = current.contextSummary ?? defaultThreadContextSummary(current.lastActivityAt);
+    const completedPlans = refreshedPlans.filter((plan) => plan.exploration.status === "READY").map((plan) => {
+      const candidate = plan.candidatePlanId ? this.getPlan(plan.candidatePlanId) : undefined;
+      return { explorerPlanId: plan.id, title: plan.title, status: plan.exploration.status, goal: candidate?.contract.goal ?? null, keyConstraints: [...(candidate?.generatedSpec?.design?.technicalConstraints ?? [])], latestUserMessageSummary: plan.latestUserMessageSummary };
+    });
+    const updatedSummary = { ...contextSummary, completedPlans, openPlanIds: refreshedPlans.filter((plan) => plan.exploration.status !== "READY").map((plan) => plan.id) };
+    this.database.prepare("UPDATE explorer_threads SET active_explorer_plan_id = ?, context_summary_json = ? WHERE id = ?").run(activePlan.id, JSON.stringify(updatedSummary), threadId);
+  }
+
+  private backfillExplorerPlans(): void {
+    for (const thread of this.listThreads()) this.ensureExplorerPlansForThread(thread.id);
+  }
+
+  /**
+   * 旧版本可能只保存了 queued/dispatched 事实，没有保存确认事实。
+   * 这类记录不能继续被当作可执行 Plan，保留历史时间但转入 BLOCKED，等待重新确认。
+   */
+  private repairUnconfirmedProgressedPlans(): void {
+    const rows = this.database.prepare("SELECT * FROM candidate_plans WHERE confirmed_at IS NULL AND status IN (?, ?, ?, ?, ?, ?, ?, ?)").all("READY", "QUEUED", "ENQUEUED", "DISPATCHED", "IN_PROGRESS", "VERIFYING", "MERGE_READY", "MERGED") as unknown as SqliteRow[];
+    const hasConfirmationEvent = this.database.prepare("SELECT 1 AS present FROM domain_events WHERE aggregate_id = ? AND type IN (?, ?, ?) LIMIT 1");
+    for (const row of rows) {
+      const planId = String(row.id);
+      if (hasConfirmationEvent.get(planId, "plan.confirmed", "plan.revision.confirmed", "plan.configuration.revised")) continue;
+      const plan = this.planFromRow(row);
+      const reason = "Plan lifecycle is invalid: it reached a later state without a confirmation record.";
+      const repairedAt = this.now();
+      updatePlanStatus(this, plan, { status: "BLOCKED", attentionReason: reason, lastEventAt: repairedAt }, reason);
+    }
+  }
+
+  private backfillPlanQueryProjection(): void {
+    for (const plan of this.listPlans()) {
+      if (this.getProject(plan.projectId) && this.getThread(plan.sourceExplorerThreadId)) this.savePlanQueryProjection(planQueryProjectionFor(plan));
+    }
+  }
+
+  /** 历史未确认内容被覆盖时只剩当前快照；保留它为可查看版本，不伪造丢失的旧内容。 */
+  private backfillCandidateVersions(): void {
+    for (const plan of this.listPlans()) {
+      if (plan.status === "DRAFT") this.saveCandidateVersion(plan);
+    }
+  }
+
+  /** 将旧 candidate 聚合回填为只读 Revision；缺少当时快照的一律标记 LEGACY。 */
+  private backfillLegacyRevisionHistory(): void {
+    const insertRevision = this.database.prepare("INSERT OR IGNORE INTO plan_revisions (plan_id, revision, contract_json, artifact_hash, confirmed_by, confirmed_at, source_explorer_thread_id, source_turn_id, provider_thread_id, provider_turn_id, provider_item_id, provenance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'LEGACY')");
+    const insertProjection = this.database.prepare("INSERT OR IGNORE INTO revision_lifecycle_projection (plan_id, revision, project_id, title, status, source_explorer_thread_id, run_id, last_event_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+    for (const plan of this.listPlans()) {
+      if (!["READY", "ENQUEUED", "DISPATCHED", "QUEUED", "IN_PROGRESS", "VERIFYING", "MERGE_READY", "MERGED", "BLOCKED", "NEEDS_PLAN_CHANGE"].includes(plan.status)) continue;
+      const confirmedAt = plan.confirmedAt ?? plan.createdAt;
+      const artifactHash = `sha256:${createHash("sha256").update(JSON.stringify(plan.contract)).digest("hex")}`;
+      insertRevision.run(plan.id, plan.revision, JSON.stringify(plan.contract), artifactHash, plan.confirmedBy ?? "legacy", confirmedAt, plan.sourceExplorerThreadId, plan.sourceTurnId, plan.providerThreadId, plan.providerTurnId, plan.providerItemId);
+      insertProjection.run(plan.id, plan.revision, plan.projectId, plan.title, "LEGACY", plan.sourceExplorerThreadId, plan.runId, plan.lastEventAt);
+    }
+  }
+
+  private mergeRequestFromRow(row: SqliteRow): MergeRequest {
+    return {
+      id: String(row.id),
+      runId: String(row.run_id),
+      planId: String(row.plan_id),
+      sourceCommit: String(row.source_commit),
+      targetBranch: String(row.target_branch),
+      status: String(row.status) as MergeRequest["status"],
+      humanConfirmationRequired: true,
+      createdAt: String(row.created_at),
+      mergedAt: row.merged_at === null ? null : String(row.merged_at),
+      ...(row.detected_target_commit === null || row.detected_target_commit === undefined ? {} : { detectedTargetCommit: String(row.detected_target_commit) }),
+    };
+  }
+
+  private planFromRow(row: SqliteRow): CandidatePlan {
+    return { id: String(row.id), projectId: String(row.project_id), sourceExplorerThreadId: String(row.source_explorer_thread_id), ...(row.explorer_plan_id ? { explorerPlanId: String(row.explorer_plan_id) } : {}), sourceTurnId: row.source_turn_id === null || row.source_turn_id === undefined ? null : String(row.source_turn_id), providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id), providerTurnId: row.provider_turn_id === null || row.provider_turn_id === undefined ? null : String(row.provider_turn_id), providerItemId: row.provider_item_id === null || row.provider_item_id === undefined ? null : String(row.provider_item_id), title: String(row.title), revision: Number(row.revision), status: String(row.status) as PlanStatus, createdAt: String(row.created_at), confirmedBy: row.confirmed_by === null ? null : String(row.confirmed_by), confirmedAt: row.confirmed_at === null ? null : String(row.confirmed_at), queuedAt: row.queued_at === null ? null : String(row.queued_at), dispatchedAt: row.dispatched_at === null || row.dispatched_at === undefined ? null : String(row.dispatched_at), runId: row.run_id === null ? null : String(row.run_id), lastEventAt: String(row.last_event_at), attentionReason: row.attention_reason === null ? null : String(row.attention_reason), contract: JSON.parse(String(row.contract_json ?? "{}")) as PlanContract, ...(row.generated_spec_json ? { generatedSpec: JSON.parse(String(row.generated_spec_json)) as GeneratedPlanSpecV2 } : {}), ...(row.resolved_contract_json ? { resolvedContract: JSON.parse(String(row.resolved_contract_json)) as ResolvedPlanContractV2 } : {}) };
+  }
+
+  private dispatchStateFromRow(row: SqliteRow): PlanDispatchState {
+    return {
+      planId: String(row.plan_id),
+      ...(row.revision === null || row.revision === undefined ? {} : { revision: Number(row.revision) }),
+      projectId: String(row.project_id),
+      status: String(row.status) as PlanDispatchState["status"],
+      waitReason: row.wait_reason === null || row.wait_reason === undefined ? null : String(row.wait_reason) as PlanDispatchState["waitReason"],
+      queuedAt: String(row.queued_at),
+      runId: row.run_id === null || row.run_id === undefined ? null : String(row.run_id),
+      attempt: Number(row.attempt),
+      updatedAt: String(row.updated_at),
+      lastError: row.last_error === null || row.last_error === undefined ? null : String(row.last_error),
+      ...(row.phase ? { phase: String(row.phase) as NonNullable<PlanDispatchState["phase"]> } : {}),
+      automatic: Number(row.automatic ?? 0) === 1,
+      confirmedBy: row.confirmed_by === null || row.confirmed_by === undefined ? null : String(row.confirmed_by),
+    };
+  }
+
+  private changeProposalFromRow(row: SqliteRow): ChangeProposal {
+    return {
+      id: String(row.id), runId: String(row.run_id), planId: String(row.plan_id), reason: String(row.reason),
+      requestedChanges: JSON.parse(String(row.requested_changes_json)) as string[], contract: JSON.parse(String(row.contract_json)) as PlanContract,
+      status: String(row.status) as ChangeProposalStatus, createdAt: String(row.created_at), createdBy: String(row.created_by),
+      decidedAt: row.decided_at === null ? null : String(row.decided_at), decidedBy: row.decided_by === null ? null : String(row.decided_by), revision: row.revision === null || row.revision === undefined ? null : Number(row.revision),
+    };
+  }
+
+  private runFromRow(row: SqliteRow): Run {
+    return { id: String(row.id), projectId: String(row.project_id), planId: String(row.plan_id), planRevision: Number(row.plan_revision), status: String(row.status) as RunStatus, branch: String(row.branch), workspacePath: row.workspace_path === null ? null : String(row.workspace_path), baseCommit: String(row.base_commit), executionThreadId: String(row.execution_thread_id), createdAt: String(row.created_at), startedAt: row.started_at === null ? null : String(row.started_at) };
+  }
+
+  private agentLoopFromRow(row: SqliteRow): AgentLoop {
+    return {
+      id: String(row.id), ownerType: String(row.owner_type) as AgentLoop["ownerType"], ownerId: String(row.owner_id), role: String(row.role) as AgentLoop["role"], mode: String(row.mode) as AgentLoop["mode"], state: String(row.state) as AgentLoop["state"], stepCount: Number(row.step_count), maxSteps: Number(row.max_steps), startedAt: row.started_at === null ? null : String(row.started_at), completedAt: row.completed_at === null ? null : String(row.completed_at), providerThreadId: row.provider_thread_id === null ? null : String(row.provider_thread_id), providerTurnId: row.provider_turn_id === null ? null : String(row.provider_turn_id), checkpointJson: row.checkpoint_json === null ? null : String(row.checkpoint_json),
+    };
+  }
+
+  private agentLoopStepFromRow(row: SqliteRow): AgentLoopStep {
+    return {
+      loopId: String(row.loop_id), sequence: Number(row.sequence), stepType: String(row.step_type) as AgentLoopStep["stepType"], status: String(row.status) as AgentLoopStep["status"], callId: row.call_id === null ? null : String(row.call_id), providerThreadId: row.provider_thread_id === null ? null : String(row.provider_thread_id), providerTurnId: row.provider_turn_id === null ? null : String(row.provider_turn_id), payload: JSON.parse(String(row.payload_json)) as Record<string, unknown>, occurredAt: String(row.occurred_at),
+    };
+  }
+
+  private toolCallFromRow(row: SqliteRow): PersistedToolCall {
+    return { callId: String(row.call_id), loopId: String(row.loop_id), role: String(row.role) as ToolRole, tool: String(row.tool) as ToolName, status: String(row.status) as DurableToolCallStatus, inputHash: String(row.input_hash), result: row.result_json === null ? null : JSON.parse(String(row.result_json)) as ToolCallResult, startedAt: String(row.started_at), completedAt: row.completed_at === null ? null : String(row.completed_at) };
+  }
+}
