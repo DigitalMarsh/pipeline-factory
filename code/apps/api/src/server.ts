@@ -39,8 +39,6 @@ import {
   ChangeProposalService,
   VerificationService,
   PlanDispatchCoordinator,
-  EXPLORER_PLAN_REQUIREMENTS,
-  mapCodexRateLimits,
   type PipelineStore,
   type CandidatePlan,
   type DomainEvent,
@@ -68,6 +66,7 @@ import type { FactoryConfig } from "./config.js";
 import { RepositoryContextCache } from "./repository-context-cache.js";
 import { registerWebHosting } from "./web-hosting.js";
 import { openSseChannel } from "./http/sse.js";
+import { registerPlatformRoutes } from "./routes/platform.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -354,8 +353,8 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (!options.mcpRegistry) await mcpRegistry?.close();
   });
 
-  // Health 端点不挂在 /api/v4/projects 下，便于启动脚本在没有 Project 上下文时确认服务就绪。
-  app.get("/health", async () => ({ status: "ok", service: "pipeline-factory-api", version: "v4", modelBackend: options.config?.model.backend ?? "stub", model: model.configFor("explorer").model }));
+  // 平台级路由（health / 额度 / MCP 与插件工具目录 / plan 需求清单）与 Project 无关，见 routes/platform.ts。
+  registerPlatformRoutes(app, { model, mcpRegistry, pluginRegistry, config: options.config });
 
   // Project Catalog 和设置路由只负责 HTTP 输入/输出，具体版本、路径和归档规则由 ProjectService 决定。
   app.get("/api/v4/projects", async (request) => {
@@ -527,30 +526,6 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     catch (error) { const message = error instanceof Error ? error.message : String(error); return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: message }); }
   });
 
-  app.get("/api/v4/codex/rate-limits", async () => {
-    const rateLimits = model.readRateLimits ? await model.readRateLimits().catch(() => mapCodexRateLimits(null)) : mapCodexRateLimits(null);
-    return { rateLimits };
-  });
-
-  app.get("/api/v4/mcp/tools", async (request, reply) => {
-    if (!mcpRegistry) return { tools: [] };
-    try {
-      return { tools: await mcpRegistry.discover() };
-    } catch (error) {
-      return reply.code(502).send({ error: error instanceof Error ? error.message : "MCP discovery failed" });
-    }
-  });
-
-  app.get("/api/v4/plugins/tools", async (request, reply) => {
-    if (!pluginRegistry) return { tools: [] };
-    try {
-      if (options.config?.plugins.directories.length) await pluginRegistry.discover(options.config.plugins.directories);
-      return { tools: pluginRegistry.listTools() };
-    } catch (error) {
-      return reply.code(502).send({ error: error instanceof Error ? error.message : "Plugin discovery failed" });
-    }
-  });
-
   app.get("/api/v4/agent-loops/:loopId", async (request, reply) => {
     const params = agentLoopParams.safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: "Invalid Agent Loop id" });
@@ -700,7 +675,6 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     }
   });
 
-  app.get("/api/v4/explorer-plan-requirements", async () => ({ requirements: EXPLORER_PLAN_REQUIREMENTS }));
 
   app.get("/api/v4/projects/:projectId/explorers", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
