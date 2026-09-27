@@ -14,6 +14,7 @@ import ExplorerPolicyDrawer from "../components/ExplorerPolicyDrawer.vue";
 import ThreadRail from "../components/ThreadRail.vue";
 import ExplorerRequirementList from "../components/ExplorerRequirementList.vue";
 import { isConversationArtifactPlan, projectExplorerRequirementRows } from "../utils/explorerRequirementRows";
+import { DEFAULT_EXPLORER_PLAN_REQUIREMENTS, type ExplorerPlanRequirement } from "../utils/explorerPlanRequirements";
 import { scrollTimelineToLatest } from "../utils/scrollTimeline";
 import { optional } from "../utils/optional";
 import { closePolicyPanel, openPolicyPanel } from "../utils/policyPanel";
@@ -69,18 +70,6 @@ const { project, projects, thread, explorers, turns, activity, projectRuns, proj
 const projectCreateOpen = ref(false);
 const projectSettingsOpen = ref(false);
 const projectSettingsProjectId = ref<string | null>(null);
-type ExplorerPlanRequirement = { key: string; label: string; requiredFields: string[]; optionalFields: string[]; factoryOwnedFields?: string[] };
-// Requirements must remain visible while an older API instance is restarting; the
-// API manifest replaces this fallback as soon as it is available.
-const defaultPlanRequirements: ExplorerPlanRequirement[] = [
-  { key: "objective", label: "目标与用户范围", requiredFields: ["title", "objective.goal", "objective.audience"], optionalFields: [] },
-  { key: "scope", label: "功能范围与排除项", requiredFields: ["objective.outOfScope", "scope.includePaths", "scope.excludePaths"], optionalFields: [] },
-  { key: "design", label: "技术方案与关键约束", requiredFields: ["design.technicalConstraints"], optionalFields: [] },
-  { key: "safety", label: "数据、安全与异常处理", requiredFields: ["design.dataSecurity", "design.failureHandling"], optionalFields: [] },
-  { key: "verification", label: "验收标准与验证命令", requiredFields: ["objective.acceptanceCriteria", "verification.mode"], optionalFields: [] },
-  { key: "delivery", label: "实施任务、依赖与冲突", requiredFields: ["tasks", "dependencies", "conflicts"], optionalFields: [] },
-  { key: "execution", label: "执行与人工合并", requiredFields: ["artifact.mode", "merge.strategy", "merge.requireHumanMerge"], optionalFields: ["execution.executorModelRole", "execution.toolPolicy", "execution.maxRepairAttempts"] },
-];
 const planRequirements = ref<ExplorerPlanRequirement[]>([]);
 const draft = ref("");
 const requirementDrafts = new Map<string, string>();
@@ -1056,7 +1045,7 @@ async function loadExplorerDirectory(requestProjectId: string, requestToken: num
   if (healthResponse?.model) explorerModel.value = healthResponse.model;
   explorers.value = explorerResponse.items;
   projectRuns.value = projectRunsResponse.items;
-  planRequirements.value = requirementsResponse?.requirements.areas ?? defaultPlanRequirements;
+  planRequirements.value = requirementsResponse?.requirements.areas ?? DEFAULT_EXPLORER_PLAN_REQUIREMENTS;
   explorerError.value = null;
 
   // 固定执行线程只加载项目目录；没有 Explorer 时不能为进入执行模式而
