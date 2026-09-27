@@ -3,7 +3,7 @@
  *   以及级联删除（连同它的阻塞错误与"什么算活跃执行"的判定）。
  *
  * 为什么从 index.ts 抽出来：这是"一个 Explorer 线程能做什么"的完整答案，包含删除这条
- *   **不可逆**路径。搬出来后它对 index.ts 只剩 \`import type\`，值依赖只有
+ *   **不可逆**路径。搬出来后它对 index.ts 只剩 `import type`，值依赖只有
  *   explorer/thread-selection.ts 一个模块。
  *
  * 维护提示：
