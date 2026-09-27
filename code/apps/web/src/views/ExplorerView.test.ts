@@ -5,6 +5,10 @@ import { describe, expect, it } from "vitest";
 const explorerViewSource = readFileSync(fileURLToPath(new URL("./ExplorerView.vue", import.meta.url)), "utf8");
 const explorerStylesSource = readFileSync(fileURLToPath(new URL("../styles.css", import.meta.url)), "utf8");
 const explorerTimelineSource = readFileSync(fileURLToPath(new URL("../utils/explorerTimeline.ts", import.meta.url)), "utf8");
+// P7 第二级把这条投影链从视图搬进了 composable。下面的断言跟着代码走，
+// **没有放宽**：正向断言改读新归属文件，负向断言（`syntheticPlanItems`）
+// 在新旧两个文件上都必须成立，否则守卫会悄悄失效。
+const explorerTimelineComposableSource = readFileSync(fileURLToPath(new URL("../composables/useExplorerTimeline.ts", import.meta.url)), "utf8");
 const explorerScopeSource = readFileSync(fileURLToPath(new URL("../utils/explorerScope.ts", import.meta.url)), "utf8");
 const threadRailSource = readFileSync(fileURLToPath(new URL("../components/ThreadRail.vue", import.meta.url)), "utf8");
 const explorerHeaderStatusSource = readFileSync(fileURLToPath(new URL("../components/ExplorerHeaderStatus.vue", import.meta.url)), "utf8");
@@ -238,10 +242,11 @@ describe("Explorer inline message presentation", () => {
   });
 
   it("renders each bound plan only in its generating assistant message and inserts detached plans into the shared timeline", () => {
-    expect(explorerViewSource).toContain("const planBindings = computed(() => buildPlanActivityBindings");
-    expect(explorerViewSource).toContain("const activeTaskPlans = computed<Plan[]>(() => allPlans.value.filter((plan) => belongsToActivePlan(plan.explorerPlanId)))");
-    expect(explorerViewSource).toContain("buildPlanActivityBindings(activeTaskPlans.value, visibleActivity.value)");
-    expect(explorerViewSource).toContain("buildExplorerTimeline(visibleActivity.value, visibleInputRequests.value, detachedPlans.value)");
+    expect(explorerTimelineComposableSource).toContain("const planBindings = computed(() => buildPlanActivityBindings");
+    expect(explorerTimelineComposableSource).toContain("const activeTaskPlans = computed<Plan[]>(() => deps.allPlans.value.filter((plan) => belongsToActivePlan(plan.explorerPlanId)))");
+    expect(explorerTimelineComposableSource).toContain("buildPlanActivityBindings(activeTaskPlans.value, visibleActivity.value)");
+    expect(explorerTimelineComposableSource).toContain("buildExplorerTimeline(visibleActivity.value, visibleInputRequests.value, detachedPlans.value)");
+    expect(explorerTimelineComposableSource).not.toContain("syntheticPlanItems");
     expect(explorerViewSource).toContain("v-else-if=\"item.kind === 'plan'\"");
     expect(explorerViewSource).not.toContain("syntheticPlanItems");
     expect(explorerViewSource).not.toContain("v-for=\"item in syntheticPlanItems\"");

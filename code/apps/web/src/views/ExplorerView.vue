@@ -19,7 +19,7 @@ import { optional } from "../utils/optional";
 import { closePolicyPanel, openPolicyPanel } from "../utils/policyPanel";
 import { createOptimisticUserTurn, settleOptimisticTurn } from "../utils/optimisticTurn";
 import { shouldSubmitComposer } from "../utils/composerKeyboard";
-import { isExplorerTurnProcessing, turnContent } from "../utils/turnStatus";
+import { isExplorerTurnProcessing } from "../utils/turnStatus";
 import { formatContextUsage } from "../utils/explorerStatus";
 import { createSseReplayGate } from "../utils/sseReplayGate";
 import ExplorerInputDialog from "../components/ExplorerInputDialog.vue";
@@ -35,12 +35,12 @@ import scrollToLatestIcon from "../assets/scroll-to-latest.png";
 import { normalizePlanProjection, planFromRevisionDraft as revisionDraftToPlan } from "../utils/planProjection";
 import { isCandidatePlan as isCandidatePlanFor } from "../utils/planControls";
 import { readableAssistantText } from "../utils/planProtocolDisplay";
-import { detachedPlanAnchorId, planActivityBindings as buildPlanActivityBindings, planAnchorId, planAnchorKey, planForActivity as planForActivityIn, planIdentity } from "../utils/planTimeline";
+import { detachedPlanAnchorId, planAnchorId, planAnchorKey, planForActivity as planForActivityIn, planIdentity } from "../utils/planTimeline";
 import { taskDisplayTitle } from "../utils/taskTree";
 import { isConfirmedPlanRevision, resolvePlanVersionHistory } from "../utils/planVersionHistory";
 import { inputAnswerDisplayLabels, inputAnswerDisplayText } from "../utils/explorerInput";
 import { createProjectRequestScope, projectPathForModule } from "../utils/projectRoutes";
-import { buildExplorerTimeline, explorerTimelineTarget as activityTarget, explorerPlanAnchorId, inputRequestTarget } from "../utils/explorerTimeline";
+import { explorerTimelineTarget as activityTarget, explorerPlanAnchorId, inputRequestTarget } from "../utils/explorerTimeline";
 import { activityIconKind, activityKindLabel, activityStatusLabel, explorerDisplayTitle, formatTurnTime, inputStatusLabel as inputStatusText } from "../utils/explorerPresentation";
 import { planStatusLabel as statusLabel } from "../utils/planStatus";
 import { belongsToExplorerPlan } from "../utils/explorerScope";
@@ -51,6 +51,7 @@ import { canCreateConfigurationRevision as canCreateConfigurationRevisionFor } f
 import { clearExplorerInputProgressDraft, loadExplorerInputProgressDraft, saveExplorerInputProgressDraft } from "../utils/explorerInputProgressDraft";
 import type { ExplorerInputProgress, ExplorerInputProgressScope } from "../utils/explorerInputProgressDraft";
 
+import { useExplorerTimeline } from "../composables/useExplorerTimeline";
 import { useTimelineScroll } from "../composables/useTimelineScroll";
 
 const route = useRoute();
@@ -197,9 +198,6 @@ const expandedUserMessageIds = ref<Set<string>>(new Set());
 function belongsToActivePlan(planId: string | null | undefined): boolean {
   return belongsToExplorerPlan(planId, activeExplorerPlan.value?.id ?? null);
 }
-const visibleTurns = computed(() => turns.value.filter((turn) => belongsToActivePlan(turn.explorerPlanId)));
-const visibleActivity = computed(() => (activity.value.length ? activity.value : visibleTurns.value.map((turn) => ({ id: `fallback-${turn.id}`, explorerId: turn.threadId, turnId: turn.id, sequence: turn.sequence, kind: turn.role === "user" ? "USER_MESSAGE" : "ASSISTANT_MESSAGE", status: turn.status === "FAILED" ? "FAILED" : turn.status === "RUNNING" ? "RUNNING" : turn.status === "WAITING_FOR_INPUT" || turn.status === "QUEUED" ? "WAITING" : "COMPLETED", title: turn.role === "user" ? "You" : "Plan Explorer", summary: turn.role === "assistant" ? readableAssistantText(turnContent(turn)) : turnContent(turn), details: turn.error ? { error: turn.error } : null, occurredAt: turn.createdAt, explorerPlanId: turn.explorerPlanId })) as ExplorerActivityItem[]).filter((item) => belongsToActivePlan(item.explorerPlanId)));
-const visibleInputRequests = computed(() => inputRequests.value.filter((item) => belongsToActivePlan(item.explorerPlanId)));
 const activePlanBusy = computed(() => visibleTurns.value.some((turn) => turn.status === "RUNNING" || turn.status === "WAITING_FOR_INPUT" || turn.status === "PAUSED" || turn.status === "QUEUED"));
 const activePlanWaitingForInput = computed(() => visibleTurns.value.some((turn) => turn.status === "WAITING_FOR_INPUT"));
 const sendingCurrentPlan = computed(() => Boolean(activeExplorerPlan.value && pendingSendPlanIds.value.has(activeExplorerPlan.value.id)));
@@ -208,7 +206,6 @@ const allPlans = computed<Plan[]>(() => {
   for (const plan of [candidate.value, ...confirmedPlans.value, ...enqueued.value, ...dispatched.value]) if (plan) unique.set(planIdentity(plan), plan);
   return [...unique.values()];
 });
-const activeTaskPlans = computed<Plan[]>(() => allPlans.value.filter((plan) => belongsToActivePlan(plan.explorerPlanId)));
 const activePlans = computed<Plan[]>(() => activeRuns.value.map((run) => {
   const existing = allPlans.value.find((plan) => planIdentity(plan) === run.planId || plan.planId === run.planId || plan.id === run.planId);
   const status: Plan["status"] = run.status === "VERIFYING" ? "VERIFYING" : "IN_PROGRESS";
@@ -232,9 +229,12 @@ const activePlans = computed<Plan[]>(() => activeRuns.value.map((run) => {
     executionThread: { id: run.executionThreadId, runId: run.id, state: run.status },
   };
 }));
-const planBindings = computed(() => buildPlanActivityBindings(activeTaskPlans.value, visibleActivity.value));
-const detachedPlans = computed(() => activeTaskPlans.value.filter((plan) => ![...planBindings.value.values()].some((bound) => planIdentity(bound) === planIdentity(plan))));
-const timelineItems = computed(() => buildExplorerTimeline(visibleActivity.value, visibleInputRequests.value, detachedPlans.value));
+
+/**
+ * 需求范围内的 Turn / Activity / 输入 / Plan 投影成消息时间线，交给 composable。
+ * `activeTaskPlans` 是它内部的中间量，不再暴露给视图。
+ */
+const { visibleTurns, visibleActivity, visibleInputRequests, planBindings, detachedPlans, timelineItems } = useExplorerTimeline({ turns, activity, inputRequests, allPlans, activeExplorerPlan });
 
 /**
  * 时间线滚动状态（"是否已到底"与两条激活键）交给 composable。
