@@ -67,6 +67,8 @@ import { RepositoryContextCache } from "./repository-context-cache.js";
 import { registerWebHosting } from "./web-hosting.js";
 import { openSseChannel } from "./http/sse.js";
 import { registerPlatformRoutes } from "./routes/platform.js";
+import { registerChangeProposalRoutes } from "./routes/change-proposals.js";
+import { registerWorkbenchRoutes } from "./routes/workbench.js";
 import { actorBody, loopReasonBody, projectThreadParams } from "./schemas/common.js";
 import { projectCreateBody, projectSelectExplorerBody, projectUpdateBody, projectValidateBody } from "./schemas/projects.js";
 import { planIdParams, planRevisionParams, revisionDraftBody, revisionDraftParams, threadPlanQuery } from "./schemas/plans.js";
@@ -374,41 +376,8 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     return { summary: projects.summary(params.data.projectId) };
   });
 
-  app.get("/api/v4/workbench", async (request, reply) => {
-    const query = workbenchQuery.safeParse(request.query ?? {});
-    if (!query.success) return reply.code(400).send({ error: "Invalid Workbench query" });
-    if (!store.getProject(query.data.projectId)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${query.data.projectId} not found` });
-    return workbenchSnapshot(store, projects, query.data.projectId);
-  });
-
-  app.get("/api/v4/workbench/events", async (request, reply) => {
-    const query = workbenchQuery.safeParse(request.query ?? {});
-    if (!query.success) return reply.code(400).send({ error: "Invalid Workbench event query" });
-    if (!store.getProject(query.data.projectId)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `PROJECT_NOT_FOUND: ${query.data.projectId}` });
-    const eventsForProject = (afterSequence: number) => {
-      const pending = store.listEvents({ afterSequence });
-      if (pending.length === 0) return pending;
-      // 归属索引按需重建，保证连接期间新建的 Plan/Run/Loop 也能被正确归类。
-      const belongsToProject = createProjectEventScope(store, query.data.projectId);
-      return pending.filter((event) => belongsToProject(event));
-    };
-    if (query.data.format !== "sse") return { items: eventsForProject(query.data.afterSequence), cursor: store.getLastEventSequence() };
-    let cursor = query.data.afterSequence;
-    // poll 传的是"延迟取 send"的壳：send 里要用返回的通道，只能等通道建好再定义它。
-    const sse = openSseChannel(request, reply, { poll: () => send() });
-    const send = () => {
-      const pending = store.listEvents({ afterSequence: cursor });
-      if (pending.length === 0) return;
-      const belongsToProject = createProjectEventScope(store, query.data.projectId);
-      // 游标无条件推进到本批末尾：不属于本项目的中间事件不应每 250ms 被重复扫描。
-      for (const event of pending) {
-        cursor = event.sequence;
-        if (belongsToProject(event)) sse.send(event.sequence, event.type, event);
-      }
-    };
-    send();
-    sse.ready(cursor, { cursor });
-  });
+  // Workbench 快照与事件流见 routes/workbench.ts；两个投影函数暂时以回调注入（P5 再搬 projections/）。
+  registerWorkbenchRoutes(app, { store, snapshot: (projectId) => workbenchSnapshot(store, projects, projectId), projectEventScope: (projectId) => createProjectEventScope(store, projectId) });
 
   app.patch("/api/v4/projects/:projectId", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
@@ -1251,34 +1220,8 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     }
   });
 
-  app.post("/api/v4/runs/:runId/change-proposals", async (request, reply) => {
-    const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
-    const body = changeProposalBody.safeParse(request.body ?? {});
-    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid ChangeProposal" });
-    try {
-      const proposal = changeProposals.create({ runId: params.data.runId, reason: body.data.reason, requestedChanges: body.data.requestedChanges, contract: body.data.contract as unknown as PlanContract, createdBy: body.data.createdBy });
-      return reply.code(201).send({ proposal });
-    } catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "ChangeProposal cannot be created" }); }
-  });
-
-  app.get("/api/v4/runs/:runId/change-proposals", async (request, reply) => {
-    const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: "Invalid run id" });
-    if (!store.getRun(params.data.runId)) return reply.code(404).send({ error: "Run not found" });
-    return { items: store.listChangeProposals(params.data.runId) };
-  });
-
-  app.post("/api/v4/change-proposals/:proposalId/approve", async (request, reply) => {
-    const params = z.object({ proposalId: z.string().min(1) }).safeParse(request.params);
-    const body = actorBody.safeParse(request.body ?? {});
-    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid ChangeProposal approval" });
-    const proposal = store.getChangeProposal(params.data.proposalId);
-    if (!proposal) return reply.code(404).send({ error: "ChangeProposal not found" });
-    try {
-      const approved = await changeProposals.approve(params.data.proposalId, body.data.actorId);
-      return { ...approved, plan: store.getPlan(approved.plan.id) ?? approved.plan, run: null };
-    } catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "ChangeProposal cannot be approved" }); }
-  });
+  // ChangeProposal 的 3 条路由见 routes/change-proposals.ts。
+  registerChangeProposalRoutes(app, { store, changeProposals });
 
   app.post("/api/v4/runs/:runId/finish", async (request, reply) => {
     const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
