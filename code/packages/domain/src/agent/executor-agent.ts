@@ -6,14 +6,14 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { AgentLoopEngine, type AgentLoop, type AgentLoopEvent, type AgentLoopMode, type GateContext } from "./agent-loop.js";
-import { resolveExecutorWorkingDirectory } from "./executor-working-directory.js";
+import { resolveExecutorWorkingDirectory } from "../tools/executor-working-directory.js";
 import { TaskProgressGate } from "./termination-gates.js";
-import { mergeModelUsage, normalizeModelUsage } from "./model/usage.js";
-import { updatePlanStatus } from "./plan/status-transition.js";
+import { mergeModelUsage, normalizeModelUsage } from "../model/usage.js";
+import { updatePlanStatus } from "../plan/status-transition.js";
 // 用 import type 而不是"具名绑定带 type 前缀"：这样"本模块对 index.js 只剩类型依赖"是显式的，
 // check-cycles.mjs 也据此判定这条回流边已被切断。
-import type { ExecutionTelemetry, ModelGateway, ModelRoleConfig, PipelineStore, PlanRevisionV2, Run } from "./index.js";
-import type { ToolRuntime } from "./tool-runtime.js";
+import type { ExecutionTelemetry, ModelGateway, ModelRoleConfig, PipelineStore, PlanRevisionV2, Run } from "../index.js";
+import type { ToolRuntime } from "../tools/tool-runtime.js";
 
 const REPORT_START = "<pipeline-factory-execution-report>";
 const REPORT_END = "</pipeline-factory-execution-report>";
@@ -496,7 +496,7 @@ export class ExecutorAgent {
     }
   }
 
-  private append(threadId: string, type: import("./index.js").JournalEntryType, payload: Record<string, unknown>): void {
+  private append(threadId: string, type: import("../index.js").JournalEntryType, payload: Record<string, unknown>): void {
     const thread = this.store.getExecutionThread(threadId);
     if (!thread) return;
     const entry = this.store.appendExecutionJournal({ executionThreadId: thread.id, runId: thread.runId, type, payload });

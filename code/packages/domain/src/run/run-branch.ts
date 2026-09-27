@@ -1,4 +1,4 @@
-import type { ModelGateway } from "./index.js";
+import type { ModelGateway } from "../index.js";
 
 const RUN_BRANCH_PREFIX = "factory";
 const FALLBACK_RUN_BRANCH_SLUG = "change";

@@ -7,7 +7,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ExplorerThreadService, InMemoryPipelineStore, LifecycleHookRunner, PlanService, ProjectService, Scheduler, SqlitePipelineStore, validatePlanContract, type ModelGateway } from "./index.js";
+import { ExplorerThreadService, InMemoryPipelineStore, LifecycleHookRunner, PlanService, ProjectService, Scheduler, SqlitePipelineStore, validatePlanContract, type ModelGateway } from "../index.js";
 
 describe("ProjectService", () => {
   it("rejects duplicate, unknown, and cyclic task dependencies before confirmation", () => {

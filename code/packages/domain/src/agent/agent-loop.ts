@@ -149,9 +149,9 @@ export function projectAgentLoopDiagnostics(loop: AgentLoop, steps: AgentLoopSte
   return { providerActivityCount: providerItems.size, lastGate, terminal: { code, message: diagnosticMessage(code) } };
 }
 
-import type { ModelEvent, ModelGateway, ModelMessage, ModelRequest, ModelRole, ToolCall } from "./index.js";
-import type { PipelineStore } from "./index.js";
-import type { ToolRuntime } from "./tool-runtime.js";
+import type { ModelEvent, ModelGateway, ModelMessage, ModelRequest, ModelRole, ToolCall } from "../index.js";
+import type { PipelineStore } from "../index.js";
+import type { ToolRuntime } from "../tools/tool-runtime.js";
 
 /** 启动 Loop 所需的角色、循环限制、模型请求和可选工具/门禁。 */
 export type AgentLoopInput = {
@@ -641,7 +641,7 @@ export class AgentLoopEngine implements AgentLoopRunner {
     const event: AgentLoopEvent = { loopId: loop.id, type, sequence: this.currentStepSequence(loop.id), payload };
     this.callbacks.get(loop.id)?.(event);
     this.listeners.get(loop.id)?.forEach((listener) => listener(event));
-    this.store.appendEvent({ type: type as import("./index.js").DomainEvent["type"], aggregateId: loop.id, payload });
+    this.store.appendEvent({ type: type as import("../index.js").DomainEvent["type"], aggregateId: loop.id, payload });
   }
 
   private clearDeadline(loopId: string): void { const timer = this.deadlineTimers.get(loopId); if (timer) clearTimeout(timer); this.deadlineTimers.delete(loopId); }

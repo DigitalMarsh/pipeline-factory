@@ -11,7 +11,7 @@ import type {
   PipelineStore,
   RegisteredCommandDefinition,
   RunStatus,
-} from "./index.js";
+} from "../index.js";
 
 /** Project 生命周期状态；ARCHIVED 保留历史但关闭新的写入和执行入口。 */
 export type ProjectStatus = "ACTIVE" | "ARCHIVED";

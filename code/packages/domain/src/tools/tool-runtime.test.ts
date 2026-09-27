@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { createHash } from "node:crypto";
 import { DurableToolRuntime } from "./tool-runtime.js";
-import { InMemoryPipelineStore, ToolGateway, type ToolCall } from "./index.js";
+import { InMemoryPipelineStore, ToolGateway, type ToolCall } from "../index.js";
 
 describe("DurableToolRuntime", () => {
   it("persists a tool result and returns it for a repeated call id", async () => {

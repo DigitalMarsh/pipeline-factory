@@ -3,8 +3,8 @@
  *
  * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
  */
-import type { AgentLoop, AgentLoopStep } from "./agent-loop.js";
-import type { ExplorerTurn } from "./index.js";
+import type { AgentLoop, AgentLoopStep } from "../agent/agent-loop.js";
+import type { ExplorerTurn } from "../index.js";
 
 /** Explorer 时间线中的消息、工具、Plan 和状态事件类型。 */
 export type ExplorerActivityKind =

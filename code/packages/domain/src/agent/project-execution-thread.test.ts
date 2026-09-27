@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { InMemoryPipelineStore, ProjectService, SqlitePipelineStore, type ModelEvent, type ModelGateway, type ModelRequest } from "./index.js";
+import { InMemoryPipelineStore, ProjectService, SqlitePipelineStore, type ModelEvent, type ModelGateway, type ModelRequest } from "../index.js";
 import { ProjectExecutionThreadService } from "./project-execution-thread.js";
 
 async function waitUntil(check: () => boolean): Promise<void> {

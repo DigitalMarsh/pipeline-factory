@@ -8,7 +8,7 @@ import {
   type ModelEvent,
   type ModelGateway,
   type ModelRequest,
-} from "./index.js";
+} from "../index.js";
 
 function model(output: string): { gateway: ModelGateway; requests: ModelRequest[] } {
   const requests: ModelRequest[] = [];

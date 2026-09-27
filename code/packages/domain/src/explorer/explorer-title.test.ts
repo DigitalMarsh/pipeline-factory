@@ -13,7 +13,7 @@ import {
   type ModelEvent,
   type ModelGateway,
   type ModelRequest,
-} from "./index.js";
+} from "../index.js";
 import { composeExplorerTitle, normalizeExplorerTitle, placeholderExplorerTitle } from "./explorer-title.js";
 
 function model(): ModelGateway {

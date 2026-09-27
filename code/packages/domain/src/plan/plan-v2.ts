@@ -3,7 +3,7 @@
  * Factory persists and executes. In particular the model never supplies a
  * command id, repository identity, branch, commit or Project configuration.
  */
-import type { ProjectExecutionSnapshot } from "./project.js";
+import type { ProjectExecutionSnapshot } from "../project/project.js";
 
 export type PlanArtifactMode = "CONVERSATION" | "REPOSITORY_FILE";
 export type PlanValidationIssueCode = "REQUIRED" | "INVALID" | "FORBIDDEN" | "MODE_CONFLICT" | "DUPLICATE";

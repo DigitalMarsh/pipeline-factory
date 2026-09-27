@@ -20,8 +20,8 @@
  *   5) missing 用的是**面向用户的领域名**（REQUIRED_PLAN_AREAS 的成员），不是字段路径；
  *      diagnostics 才带 path/area/code。UI 与 continuationPrompt 分别消费两者。
  */
-import { GeneratedPlanSpecV2ValidationError, parseGeneratedPlanSpecV2, validateGeneratedPlanSpecV2 } from "../plan-v2.js";
-import type { GeneratedPlanSpecV2, PlanValidationIssue } from "../plan-v2.js";
+import { GeneratedPlanSpecV2ValidationError, parseGeneratedPlanSpecV2, validateGeneratedPlanSpecV2 } from "./plan-v2.js";
+import type { GeneratedPlanSpecV2, PlanValidationIssue } from "./plan-v2.js";
 import { REQUIRED_PLAN_AREAS } from "../platform/plan-requirements.js";
 import { isNonEmptyStringArray, isRecord, isStringArray } from "../platform/guards.js";
 import { validatePlanContract } from "./contract.js";

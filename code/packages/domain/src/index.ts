@@ -3,20 +3,20 @@
  *
  * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
  */
-import { projectAgentLoopDiagnostics } from "./agent-loop.js";
-import type { AgentLoop, AgentLoopDiagnostics, AgentLoopEvent, AgentLoopRunner, AgentLoopStep, AgentLoopStepInput } from "./agent-loop.js";
-import type { MappedCodexRateLimits } from "./codex-rate-limits.js";
-import { AgentLoopEngine } from "./agent-loop.js";
-import { PlanCompletenessGate } from "./termination-gates.js";
-import { composeExplorerTitle, ModelExplorerTitleGenerator, normalizeExplorerTitle, placeholderExplorerTitle, type ExplorerTitleGenerator, type ExplorerTitleSource, type ExplorerTitleStatus } from "./explorer-title.js";
-import { allocateRunBranchLeaf, composeRunBranchLeaf, ModelRunBranchNameGenerator, normalizeRunBranchSlug, runBranchName, type RunBranchNameGenerator } from "./run-branch.js";
-import { snapshotProjectWorkingTree } from "./worktree-snapshot.js";
-import { EXECUTION_SLOT_RUN_STATUSES, ProjectService } from "./project.js";
-import type { Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings } from "./project.js";
-import type { PlanDispatchState } from "./dispatch-coordinator.js";
-import { redactAuditPayload, redactAuditText } from "./redaction.js";
-import { GeneratedPlanSpecV2ValidationError, parseGeneratedPlanSpecV2, resolvePlanContractV2, validateGeneratedPlanSpecV2 } from "./plan-v2.js";
-import type { GeneratedPlanSpecV2, PlanValidationIssue, ResolvedPlanContractV2 } from "./plan-v2.js";
+import { projectAgentLoopDiagnostics } from "./agent/agent-loop.js";
+import type { AgentLoop, AgentLoopDiagnostics, AgentLoopEvent, AgentLoopRunner, AgentLoopStep, AgentLoopStepInput } from "./agent/agent-loop.js";
+import type { MappedCodexRateLimits } from "./model/codex-rate-limits.js";
+import { AgentLoopEngine } from "./agent/agent-loop.js";
+import { PlanCompletenessGate } from "./agent/termination-gates.js";
+import { composeExplorerTitle, ModelExplorerTitleGenerator, normalizeExplorerTitle, placeholderExplorerTitle, type ExplorerTitleGenerator, type ExplorerTitleSource, type ExplorerTitleStatus } from "./explorer/explorer-title.js";
+import { allocateRunBranchLeaf, composeRunBranchLeaf, ModelRunBranchNameGenerator, normalizeRunBranchSlug, runBranchName, type RunBranchNameGenerator } from "./run/run-branch.js";
+import { snapshotProjectWorkingTree } from "./git/worktree-snapshot.js";
+import { EXECUTION_SLOT_RUN_STATUSES, ProjectService } from "./project/project.js";
+import type { Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings } from "./project/project.js";
+import type { PlanDispatchState } from "./run/dispatch-coordinator.js";
+import { redactAuditPayload, redactAuditText } from "./platform/redaction.js";
+import { GeneratedPlanSpecV2ValidationError, parseGeneratedPlanSpecV2, resolvePlanContractV2, validateGeneratedPlanSpecV2 } from "./plan/plan-v2.js";
+import type { GeneratedPlanSpecV2, PlanValidationIssue, ResolvedPlanContractV2 } from "./plan/plan-v2.js";
 /**
  * P2 解环期间从 index.ts 抽出去的符号统一放在这里，用"先 import 再 export"的形态。
  * 不能写成 `export { ... } from "./x.js"`：纯 re-export 只把绑定转发给消费者，**不会给本模块
@@ -40,41 +40,41 @@ export { assessPlanCompletion, type PlanArtifact, type PlanCompletionAssessment 
 // ToolGateway 用纯 re-export：搬走之后 index.ts 内部已不再使用它，无需为它建本地绑定
 // （api 的 server.ts 与多个测试仍从本 barrel 取它，所以必须保留导出）。
 export { ToolGateway, type ToolGatewayOptions } from "./tools/gateway.js";
-export { EXECUTION_SLOT_RUN_STATUSES, ProjectService } from "./project.js";
-export { redactAuditPayload, redactAuditText } from "./redaction.js";
-export type { CreateProjectInput, Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings, ProjectSettingsInput, ProjectStatus, ProjectSummary, UpdateProjectInput } from "./project.js";
-export { PlanDispatchCoordinator } from "./dispatch-coordinator.js";
-export type { PlanDispatchCoordinatorOptions, PlanDispatchPhase, PlanDispatchState, PlanDispatchStatus, PlanDispatchWaitReason } from "./dispatch-coordinator.js";
-export { projectExplorerActivity } from "./explorer-activity.js";
-export type { ExplorerActivityInput, ExplorerActivityItem, ExplorerActivityKind } from "./explorer-activity.js";
-export { assertSafeProjectRelativeGlob, parseGeneratedPlanSpecV2, resolvePlanContractV2, validateGeneratedPlanSpecV2 } from "./plan-v2.js";
-export type { GeneratedPlanSpecV2, GitBaseline, PlanArtifactMode, PlanValidationIssue, PlanValidationIssueCode, ResolvedPlanContractV2 } from "./plan-v2.js";
-export { composeExplorerTitle, explorerTimestamp, ModelExplorerTitleGenerator, normalizeExplorerTitle, placeholderExplorerTitle } from "./explorer-title.js";
-export type { ExplorerTitleGenerator, ExplorerTitleSource, ExplorerTitleStatus } from "./explorer-title.js";
-export { allocateRunBranchLeaf, composeRunBranchLeaf, ModelRunBranchNameGenerator, normalizeRunBranchSlug, runBranchDate, runBranchName } from "./run-branch.js";
-export type { RunBranchNameGenerator, RunBranchNameInput } from "./run-branch.js";
+export { EXECUTION_SLOT_RUN_STATUSES, ProjectService } from "./project/project.js";
+export { redactAuditPayload, redactAuditText } from "./platform/redaction.js";
+export type { CreateProjectInput, Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings, ProjectSettingsInput, ProjectStatus, ProjectSummary, UpdateProjectInput } from "./project/project.js";
+export { PlanDispatchCoordinator } from "./run/dispatch-coordinator.js";
+export type { PlanDispatchCoordinatorOptions, PlanDispatchPhase, PlanDispatchState, PlanDispatchStatus, PlanDispatchWaitReason } from "./run/dispatch-coordinator.js";
+export { projectExplorerActivity } from "./explorer/explorer-activity.js";
+export type { ExplorerActivityInput, ExplorerActivityItem, ExplorerActivityKind } from "./explorer/explorer-activity.js";
+export { assertSafeProjectRelativeGlob, parseGeneratedPlanSpecV2, resolvePlanContractV2, validateGeneratedPlanSpecV2 } from "./plan/plan-v2.js";
+export type { GeneratedPlanSpecV2, GitBaseline, PlanArtifactMode, PlanValidationIssue, PlanValidationIssueCode, ResolvedPlanContractV2 } from "./plan/plan-v2.js";
+export { composeExplorerTitle, explorerTimestamp, ModelExplorerTitleGenerator, normalizeExplorerTitle, placeholderExplorerTitle } from "./explorer/explorer-title.js";
+export type { ExplorerTitleGenerator, ExplorerTitleSource, ExplorerTitleStatus } from "./explorer/explorer-title.js";
+export { allocateRunBranchLeaf, composeRunBranchLeaf, ModelRunBranchNameGenerator, normalizeRunBranchSlug, runBranchDate, runBranchName } from "./run/run-branch.js";
+export type { RunBranchNameGenerator, RunBranchNameInput } from "./run/run-branch.js";
 
-export type { AgentLoop, AgentLoopDiagnostics, AgentLoopInput, AgentLoopMode, AgentLoopResult, AgentLoopState, AgentLoopStep, AgentLoopStepInput, AgentLoopStepStatus, AgentLoopRunner, AgentStepType, GateContext, GateDecision, TerminationGate } from "./agent-loop.js";
-export { AgentLoopEngine } from "./agent-loop.js";
-export { PROJECT_EXECUTION_MODELS, PROJECT_EXECUTION_REASONING_EFFORTS, ProjectExecutionThreadService } from "./project-execution-thread.js";
-export type { ProjectExecutionThreadServiceOptions, ProjectExecutionThreadSnapshot } from "./project-execution-thread.js";
-export { AGENT_LOOP_DIAGNOSTIC_STEP_TYPES, projectAgentLoopDiagnostics } from "./agent-loop.js";
-export { PlanCompletenessGate, TaskProgressGate } from "./termination-gates.js";
-export { ExecutorAgent, inspectWorkspaceScope, parseExecutorReport } from "./executor-agent.js";
-export type { ExecutorAgentOptions, ExecutorReport, WorkspaceScopeInspection, WorkspaceScopeInspector } from "./executor-agent.js";
-export { RecoveryCoordinator } from "./recovery-coordinator.js";
-export { mapCodexRateLimits } from "./codex-rate-limits.js";
-export type { CodexRateLimitBucket, CodexRateLimitWindow, CodexRateLimitsResponse, MappedCodexRateLimits, MappedRateLimit } from "./codex-rate-limits.js";
-export { BuiltinToolExecutor } from "./builtin-tool-executor.js";
-export type { BuiltinToolContext, BuiltinToolExecutorOptions } from "./builtin-tool-executor.js";
-export { DurableToolRuntime } from "./tool-runtime.js";
-export type { ToolExecutionContext, ToolRuntime } from "./tool-runtime.js";
-export { McpClient, McpToolRegistry } from "./mcp.js";
-export type { McpClientOptions, McpRpcTransport, McpServerConfig, McpToolCallResult, McpToolDefinition, McpToolRegistryOptions, QualifiedMcpTool } from "./mcp.js";
-export { PluginRegistry, PluginToolBridge } from "./plugin.js";
-export type { PluginManifest, PluginRegistryOptions, PluginStatus, PluginTool, PluginToolDefinition, PluginToolHandler } from "./plugin.js";
-export { ComputerUseBridge } from "./computer-use.js";
-export type { ComputerUseAction, ComputerUseBridgeOptions, ComputerUseEvent, ComputerUseHostAdapter, ComputerUseScreenshot } from "./computer-use.js";
+export type { AgentLoop, AgentLoopDiagnostics, AgentLoopInput, AgentLoopMode, AgentLoopResult, AgentLoopState, AgentLoopStep, AgentLoopStepInput, AgentLoopStepStatus, AgentLoopRunner, AgentStepType, GateContext, GateDecision, TerminationGate } from "./agent/agent-loop.js";
+export { AgentLoopEngine } from "./agent/agent-loop.js";
+export { PROJECT_EXECUTION_MODELS, PROJECT_EXECUTION_REASONING_EFFORTS, ProjectExecutionThreadService } from "./agent/project-execution-thread.js";
+export type { ProjectExecutionThreadServiceOptions, ProjectExecutionThreadSnapshot } from "./agent/project-execution-thread.js";
+export { AGENT_LOOP_DIAGNOSTIC_STEP_TYPES, projectAgentLoopDiagnostics } from "./agent/agent-loop.js";
+export { PlanCompletenessGate, TaskProgressGate } from "./agent/termination-gates.js";
+export { ExecutorAgent, inspectWorkspaceScope, parseExecutorReport } from "./agent/executor-agent.js";
+export type { ExecutorAgentOptions, ExecutorReport, WorkspaceScopeInspection, WorkspaceScopeInspector } from "./agent/executor-agent.js";
+export { RecoveryCoordinator } from "./run/recovery-coordinator.js";
+export { mapCodexRateLimits } from "./model/codex-rate-limits.js";
+export type { CodexRateLimitBucket, CodexRateLimitWindow, CodexRateLimitsResponse, MappedCodexRateLimits, MappedRateLimit } from "./model/codex-rate-limits.js";
+export { BuiltinToolExecutor } from "./tools/builtin-tool-executor.js";
+export type { BuiltinToolContext, BuiltinToolExecutorOptions } from "./tools/builtin-tool-executor.js";
+export { DurableToolRuntime } from "./tools/tool-runtime.js";
+export type { ToolExecutionContext, ToolRuntime } from "./tools/tool-runtime.js";
+export { McpClient, McpToolRegistry } from "./tools/mcp.js";
+export type { McpClientOptions, McpRpcTransport, McpServerConfig, McpToolCallResult, McpToolDefinition, McpToolRegistryOptions, QualifiedMcpTool } from "./tools/mcp.js";
+export { PluginRegistry, PluginToolBridge } from "./tools/plugin.js";
+export type { PluginManifest, PluginRegistryOptions, PluginStatus, PluginTool, PluginToolDefinition, PluginToolHandler } from "./tools/plugin.js";
+export { ComputerUseBridge } from "./tools/computer-use.js";
+export type { ComputerUseAction, ComputerUseBridgeOptions, ComputerUseEvent, ComputerUseHostAdapter, ComputerUseScreenshot } from "./tools/computer-use.js";
 
 /** Plan 从草稿到执行、验证和合并的持久化状态；DISCARDED 为不可逆终态。 */
 export type PlanStatus =
@@ -3893,7 +3893,7 @@ export type ModelRoleConfig = {
 export type ModelCapabilities = {
   supportsStructuredUserInput: boolean;
   supportsToolCalls: boolean;
-  supportedLoopModes: import("./agent-loop.js").AgentLoopMode[];
+  supportedLoopModes: import("./agent/agent-loop.js").AgentLoopMode[];
 };
 /** 传给模型的受控工具描述和输入 schema。 */
 export type ModelToolDefinition = {
@@ -4603,8 +4603,8 @@ function validateInputAnswers(questions: ModelInputQuestion[], answers: ModelInp
   }
 }
 
-export { CodexAppServerClient, CodexAppServerGateway } from "./codex-app-server.js";
-export type { CodexAppServerClientOptions, CodexAppServerEvent, CodexAppServerGatewayOptions, CodexAppServerSession, CodexAppServerSessionFactory, CodexSpawnProcess, CodexThreadStartParams, CodexTurnStartParams } from "./codex-app-server.js";
+export { CodexAppServerClient, CodexAppServerGateway } from "./model/codex-app-server.js";
+export type { CodexAppServerClientOptions, CodexAppServerEvent, CodexAppServerGatewayOptions, CodexAppServerSession, CodexAppServerSessionFactory, CodexSpawnProcess, CodexThreadStartParams, CodexTurnStartParams } from "./model/codex-app-server.js";
 
 /** Run 的执行、验证、合并和恢复状态；BLOCKED 需要人工关注。 */
 export type RunStatus = "QUEUED" | "STARTING" | "IN_PROGRESS" | "READY_FOR_VERIFY" | "VERIFYING" | "MERGE_READY" | "BLOCKED" | "NEEDS_PLAN_CHANGE" | "STALE" | "RECOVERING" | "CANCELLED";

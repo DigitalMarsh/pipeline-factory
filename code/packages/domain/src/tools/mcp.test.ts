@@ -4,7 +4,7 @@
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  */
 import { describe, expect, it } from "vitest";
-import { McpClient, McpToolRegistry, type McpRpcTransport } from "./index.js";
+import { McpClient, McpToolRegistry, type McpRpcTransport } from "../index.js";
 
 function fakeTransport(calls: Array<{ method: string; params: Record<string, unknown> }>): McpRpcTransport {
   return {

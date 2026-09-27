@@ -3,7 +3,7 @@
  *
  * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
  */
-import type { ModelGateway } from "./index.js";
+import type { ModelGateway } from "../index.js";
 
 /** Explorer 标题来源；手工标题不会被模型自动覆盖。 */
 export type ExplorerTitleSource = "AUTO" | "MANUAL";

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { InMemoryPipelineStore, PlanService, ProjectService, VerificationService, parseGeneratedPlanSpecV2, resolvePlanContractV2, validateGeneratedPlanSpecV2, type PlanRevisionV2, type ProjectExecutionSnapshot, type Run } from "./index.js";
+import { InMemoryPipelineStore, PlanService, ProjectService, VerificationService, parseGeneratedPlanSpecV2, resolvePlanContractV2, validateGeneratedPlanSpecV2, type PlanRevisionV2, type ProjectExecutionSnapshot, type Run } from "../index.js";
 
 function repository(): string {
   const root = mkdtempSync(join(tmpdir(), "pipeline-plan-dependencies-"));

@@ -8,7 +8,7 @@ import {
   CodexAppServerGateway,
   type CodexAppServerSession,
   type CodexAppServerSessionFactory,
-} from "./index.js";
+} from "../index.js";
 
 function createSessionFactory(events: Array<{ id?: string | number; method: string; params: Record<string, unknown> }>, calls: Array<{ method: string; params: unknown }>): CodexAppServerSessionFactory {
   const session: CodexAppServerSession = {

@@ -12,8 +12,8 @@ import type {
   ProjectExecutionMessage,
   ProjectExecutionThread,
   ProjectExecutionTurnStatus,
-} from "./index.js";
-import type { ToolRuntime } from "./tool-runtime.js";
+} from "../index.js";
+import type { ToolRuntime } from "../tools/tool-runtime.js";
 
 export const PROJECT_EXECUTION_MODELS = [
   "gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5",

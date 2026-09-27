@@ -4,8 +4,8 @@
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  */
 import { describe, expect, it } from "vitest";
-import { AgentLoopEngine } from "./agent-loop.js";
-import { DurableToolRuntime } from "./tool-runtime.js";
+import { AgentLoopEngine } from "./agent/agent-loop.js";
+import { DurableToolRuntime } from "./tools/tool-runtime.js";
 import { InMemoryPipelineStore, ToolGateway, type ModelEvent, type ModelGateway, type ModelRequest, type TerminationGate } from "./index.js";
 
 const completeWhenTextContainsDone: TerminationGate = {
@@ -215,7 +215,7 @@ describe("AgentLoopEngine", () => {
       async answerUserInput() { return undefined; },
       async cancel() { return undefined; },
     };
-    const runtime: import("./tool-runtime.js").ToolRuntime = {
+    const runtime: import("./tools/tool-runtime.js").ToolRuntime = {
       async execute(call) { return { callId: call.callId, allowed: false, status: "FAILED", reason: "MCP timeout", result: null, audited: true }; },
       async reconcile() { return undefined; },
     };
@@ -238,7 +238,7 @@ describe("AgentLoopEngine", () => {
       async answerUserInput() { return undefined; },
       async cancel() { return undefined; },
     };
-    const runtime: import("./tool-runtime.js").ToolRuntime = {
+    const runtime: import("./tools/tool-runtime.js").ToolRuntime = {
       async execute(call) { return { callId: call.callId, allowed: false, status: "NEEDS_RECONCILIATION", reason: "side effect status is unknown", result: null, audited: true }; },
       async reconcile() { return undefined; },
     };

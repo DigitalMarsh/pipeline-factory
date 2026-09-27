@@ -4,7 +4,7 @@
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  */
 import { describe, expect, it } from "vitest";
-import { InMemoryPipelineStore, PlanService, ProjectService, type AgentLoop, type ExplorerInputRequest, type ExplorerTurn, type Run } from "./index.js";
+import { InMemoryPipelineStore, PlanService, ProjectService, type AgentLoop, type ExplorerInputRequest, type ExplorerTurn, type Run } from "../index.js";
 import { RecoveryCoordinator } from "./recovery-coordinator.js";
 
 function loop(store: InMemoryPipelineStore, id: string, state: AgentLoop["state"], providerThreadId: string | null = null, providerTurnId: string | null = null, ownerId = `run-${id}`): AgentLoop {

@@ -2,8 +2,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import * as domain from "./index.js";
-import { InMemoryPipelineStore, LifecycleHookRunner, PlanService, ProjectService, Scheduler, SqlitePipelineStore, resolvePlanContractV2 } from "./index.js";
+import * as domain from "../index.js";
+import { InMemoryPipelineStore, LifecycleHookRunner, PlanService, ProjectService, Scheduler, SqlitePipelineStore, resolvePlanContractV2 } from "../index.js";
 
 const coordinatorModule = domain as unknown as {
   PlanDispatchCoordinator: new (options: {

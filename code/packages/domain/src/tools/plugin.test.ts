@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { PluginRegistry, PluginToolBridge, type PluginManifest } from "./index.js";
+import { PluginRegistry, PluginToolBridge, type PluginManifest } from "../index.js";
 
 const manifest: PluginManifest = {
   id: "com.example.docs",

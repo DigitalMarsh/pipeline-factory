@@ -10,9 +10,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ExecutorAgent, inspectWorkspaceScope, parseExecutorReport } from "./executor-agent.js";
-import { resolveExecutorWorkingDirectory } from "./executor-working-directory.js";
-import { InMemoryPipelineStore, LifecycleHookRunner, PlanService, Scheduler, ToolGateway, type AgentLoop, type ModelEvent, type ModelGateway, type ModelRequest } from "./index.js";
-import { DurableToolRuntime } from "./tool-runtime.js";
+import { resolveExecutorWorkingDirectory } from "../tools/executor-working-directory.js";
+import { InMemoryPipelineStore, LifecycleHookRunner, PlanService, Scheduler, ToolGateway, type AgentLoop, type ModelEvent, type ModelGateway, type ModelRequest } from "../index.js";
+import { DurableToolRuntime } from "../tools/tool-runtime.js";
 
 const executionReport = (taskId: string) => `<pipeline-factory-execution-report>${JSON.stringify({
   completedTaskIds: [taskId],

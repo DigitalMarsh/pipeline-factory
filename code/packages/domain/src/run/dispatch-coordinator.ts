@@ -3,7 +3,7 @@
  *
  * 协调器只负责排队、依赖/容量/冲突判断和验证唤醒，不改变 PlanRevision，也不执行合并。
  */
-import { EXECUTION_SLOT_RUN_STATUSES } from "./project.js";
+import { EXECUTION_SLOT_RUN_STATUSES } from "../project/project.js";
 import type {
   CandidatePlan,
   DomainEvent,
@@ -13,7 +13,7 @@ import type {
   Run,
   Scheduler,
   VerificationRun,
-} from "./index.js";
+} from "../index.js";
 
 export type PlanDispatchStatus =
   | "QUEUED"

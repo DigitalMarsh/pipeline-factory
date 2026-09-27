@@ -7,7 +7,7 @@ import { mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { ToolGateway, type CommandInvocation, type CommandResult, type ToolCall } from "./index.js";
+import { ToolGateway, type CommandInvocation, type CommandResult, type ToolCall } from "../index.js";
 
 const directories: string[] = [];
 

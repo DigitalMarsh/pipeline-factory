@@ -13,7 +13,7 @@ import {
   projectAgentLoopDiagnostics,
   type AgentLoop,
   type AgentLoopStep,
-} from "./index.js";
+} from "../index.js";
 
 describe("AgentLoop persistence contract", () => {
   it("persists loops and steps in SQLite", () => {

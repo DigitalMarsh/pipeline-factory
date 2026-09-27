@@ -7,7 +7,7 @@ import { realpathSync } from "node:fs";
 import { mkdir, readdir, readFile as readFileAsync, realpath, stat, writeFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { dirname, relative, resolve, sep } from "node:path";
-import type { CommandExecutor, CommandResult, HookContext, ToolCall, ToolRole } from "./index.js";
+import type { CommandExecutor, CommandResult, HookContext, ToolCall, ToolRole } from "../index.js";
 
 /** 内置工具执行上下文；workspacePath 是所有文件和命令的安全边界。 */
 export type BuiltinToolContext = {

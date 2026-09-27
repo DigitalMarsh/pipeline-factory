@@ -4,11 +4,11 @@
  * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { EXPLORER_PLAN_INSTRUCTIONS } from "./platform/plan-requirements.js";
-import { normalizeModelUsage } from "./model/usage.js";
+import { EXPLORER_PLAN_INSTRUCTIONS } from "../platform/plan-requirements.js";
+import { normalizeModelUsage } from "./usage.js";
 // 用 import type 而不是"具名绑定带 type 前缀"：这样"本模块对 index.js 只剩类型依赖"是显式的，
 // check-cycles.mjs 也据此判定这条边已被切断。
-import type { ModelCapabilities, ModelEvent, ModelGateway, ModelMessage, ModelRequest, ModelRole, ModelRoleConfig } from "./index.js";
+import type { ModelCapabilities, ModelEvent, ModelGateway, ModelMessage, ModelRequest, ModelRole, ModelRoleConfig } from "../index.js";
 import { mapCodexRateLimits, type CodexRateLimitsResponse, type MappedCodexRateLimits } from "./codex-rate-limits.js";
 
 type JsonObject = Record<string, unknown>;
@@ -477,7 +477,7 @@ export class CodexAppServerGateway implements ModelGateway {
     await session?.close();
   }
 
-  async answerUserInput(input: { requestId: string | number; answers: import("./index.js").ModelInputAnswers }): Promise<void> {
+  async answerUserInput(input: { requestId: string | number; answers: import("../index.js").ModelInputAnswers }): Promise<void> {
     const session = this.pendingInputSessions.get(String(input.requestId));
     if (!session) throw new Error(`No active Codex App Server input request ${String(input.requestId)}`);
     await session.answerUserInput(input.requestId, { answers: input.answers });

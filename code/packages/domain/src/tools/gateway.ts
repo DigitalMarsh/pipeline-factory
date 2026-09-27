@@ -22,8 +22,8 @@
  *      在 catch 里缩小异常范围会把真正的实现 bug 静默成模型可见的工具错误。
  */
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import { BuiltinToolExecutor } from "../builtin-tool-executor.js";
-import type { BuiltinToolContext, BuiltinToolExecutorOptions } from "../builtin-tool-executor.js";
+import { BuiltinToolExecutor } from "./builtin-tool-executor.js";
+import type { BuiltinToolContext, BuiltinToolExecutorOptions } from "./builtin-tool-executor.js";
 import type { ToolCall, ToolCallResult, ToolName, ToolRole } from "../index.js";
 
 /** ToolGateway 的角色白名单、工作区边界和外部工具桥接配置。 */
