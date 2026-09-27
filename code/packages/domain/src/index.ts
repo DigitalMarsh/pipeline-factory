@@ -64,6 +64,9 @@ export { SqlitePipelineStore } from "./store/sqlite-store.js";
 // ExplorerThreadService 直接调用，故 import + export 之外还要保留本地绑定——它们**不是**
 // 公共契约（原先就没 export），所以只 import 不 re-export。
 import { projectPlaceholderExplorerTitle, selectCurrentExplorer } from "./explorer/thread-selection.js";
+// 业务 Service 开始逐批搬走（批 C）。每一行都是纯 re-export：index.ts 内部不实例化它们
+// （组合根在 apps/api），只需要把绑定转发给从 barrel 取用的消费者。
+export { ChangeProposalService } from "./run/change-proposal.js";
 export { EXECUTION_SLOT_RUN_STATUSES, ProjectService } from "./project/project.js";
 export { redactAuditPayload, redactAuditText } from "./platform/redaction.js";
 export type { CreateProjectInput, Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings, ProjectSettingsInput, ProjectStatus, ProjectSummary, UpdateProjectInput } from "./project/project.js";
@@ -1519,75 +1522,6 @@ export type CreateChangeProposalInput = {
   contract: PlanContract;
   createdBy?: string;
 };
-
-/** 将执行阶段发现的范围变化安全地送回 Plan；批准会创建新的不可变 Revision。 */
-export class ChangeProposalService {
-  constructor(private readonly store: PipelineStore) {}
-
-  /** 为 Run 创建唯一 OPEN 提案；重复调用返回已有开放提案。 */
-  create(input: CreateChangeProposalInput): ChangeProposal {
-    const run = this.store.getRun(input.runId);
-    if (!run) throw new Error(`Run ${input.runId} not found`);
-    const plan = this.store.getPlan(run.planId);
-    if (!plan) throw new Error(`Plan ${run.planId} not found`);
-    const existing = this.store.listChangeProposals(run.id).find((proposal) => proposal.status === "OPEN");
-    if (existing) return existing;
-    const proposal: ChangeProposal = {
-      id: this.store.nextId("change-proposal"),
-      runId: run.id,
-      planId: plan.id,
-      reason: input.reason,
-      requestedChanges: [...input.requestedChanges],
-      contract: input.contract,
-      status: "OPEN",
-      createdAt: this.store.now(),
-      createdBy: input.createdBy ?? "executor",
-      decidedAt: null,
-      decidedBy: null,
-      revision: null,
-    };
-    this.store.saveChangeProposal(proposal);
-    this.store.saveRun({ ...run, status: "NEEDS_PLAN_CHANGE" });
-    updatePlanStatus(this.store, plan, { status: "NEEDS_PLAN_CHANGE", attentionReason: input.reason, lastEventAt: proposal.createdAt }, input.reason);
-    this.store.appendEvent({ type: "change.proposal.created", aggregateId: proposal.id, payload: { runId: run.id, planId: plan.id, revision: plan.revision, reason: input.reason, requestedChanges: input.requestedChanges } });
-    return proposal;
-  }
-
-  async approve(proposalId: string, actorId: string): Promise<ApprovedChangeProposal> {
-    const proposal = this.store.getChangeProposal(proposalId);
-    if (!proposal) throw new Error(`ChangeProposal ${proposalId} not found`);
-    const plan = this.store.getPlan(proposal.planId);
-    if (!plan) throw new Error(`Plan ${proposal.planId} not found`);
-    if (proposal.status === "APPROVED") {
-      if (!proposal.revision) throw new Error(`Approved ChangeProposal ${proposal.id} is missing its revision`);
-      const revision = this.store.getRevision(plan.id, proposal.revision);
-      if (!revision) throw new Error(`ChangeProposal ${proposal.id} revision is missing`);
-      const run = plan.runId ? this.store.getRun(plan.runId) ?? null : this.store.listRuns().find((item) => item.planId === plan.id && item.planRevision === revision.revision && item.id !== proposal.runId) ?? null;
-      return { proposal, plan, revision, run };
-    }
-    if (proposal.status !== "OPEN") throw new Error(`ChangeProposal ${proposal.id} cannot be approved from ${proposal.status}`);
-    const revisionNumber = plan.revision + 1;
-    const confirmedAt = this.store.now();
-    const project = this.store.getProject(plan.projectId);
-    const projectConfigSnapshot = project ? new ProjectService(this.store).snapshot(project.id) : undefined;
-    const revision = freezeRevision({
-      planId: plan.id,
-      revision: revisionNumber,
-      contract: proposal.contract,
-      artifactHash: `sha256:${createHash("sha256").update(JSON.stringify({ contract: proposal.contract, projectConfigSnapshot })).digest("hex")}`,
-      confirmedBy: actorId,
-      confirmedAt,
-      sourceExplorerThreadId: plan.sourceExplorerThreadId,
-      ...(plan.explorerPlanId ? { explorerPlanId: plan.explorerPlanId } : {}),
-      ...(projectConfigSnapshot ? { projectConfigVersion: projectConfigSnapshot.configVersion, projectConfigHash: projectConfigSnapshot.configHash, projectConfigSnapshot } : {}),
-    });
-    this.store.saveRevision(revision);
-    const approvedProposal = this.store.updateChangeProposal({ ...proposal, status: "APPROVED", decidedAt: confirmedAt, decidedBy: actorId, revision: revisionNumber });
-    const enqueuedPlan = updatePlanStatus(this.store, plan, { revision: revisionNumber, contract: proposal.contract, status: "ENQUEUED", confirmedBy: actorId, confirmedAt, queuedAt: confirmedAt, dispatchedAt: null, runId: null, attentionReason: null, lastEventAt: confirmedAt });
-    this.store.appendEvent({ type: "change.proposal.approved", aggregateId: proposal.id, payload: { actorId, revision: revisionNumber, planId: plan.id } });
-    return { proposal: approvedProposal, plan: enqueuedPlan, revision, run: null };
-  }
-}
 
 /** 执行 Project 快照中声明的 Start/Cleanup Hook，并把失败映射为运行关注项。 */
 export class LifecycleHookRunner {
