@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { ExplorerActivityItem, Plan } from "../types";
-import { detachedPlanAnchorId, findPlanForActivity, getPlanTimelineTarget, planActivityBindings, planAnchorId, planAnchorKey, planForActivity, planIdentity, planTimelineItems } from "./planTimeline";
+import { detachedPlanAnchorId, findPlanForActivity, getPlanTimelineTarget, planActivityBindings, planAnchorId, planAnchorKey, planForActivity, planIdentity, planIdentityOrNull, planTimelineItems } from "./planTimeline";
 
 const activity = (turnId: string, title: string, occurredAt = "2026-08-29T10:00:00.000Z", providerItemId?: string): ExplorerActivityItem => ({
   id: `activity-${turnId}-${providerItemId ?? occurredAt}`,
@@ -154,6 +154,11 @@ describe("Plan 身份的回退顺序（P8.3 行为锁定）", () => {
     expect(planIdentity(bare({ id: "" }))).toBe("");
   });
 
+  it("planIdentityOrNull exposes missing identity instead of choosing a title", () => {
+    const untyped = { ...plan("plan-1", "turn-1"), id: undefined, planId: undefined, title: "只有标题" } as unknown as Plan;
+    expect(planIdentityOrNull(untyped)).toBeNull();
+    expect(planIdentity(untyped)).toBe("只有标题");
+  });
   it("id 整个缺失（运行时未类型化的数据）才退化到 title，绝不产出 undefined", () => {
     const untyped = { ...plan("plan-1", "turn-1"), id: undefined, planId: undefined, title: "只有标题" } as unknown as Plan;
 

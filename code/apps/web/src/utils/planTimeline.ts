@@ -17,9 +17,14 @@ export type PlanTimelineItem = {
   target: string;
 };
 
+/** 返回持久化身份；没有 `planId` / `id` 时返回 null，让调用方显式选择 fallback 语义。 */
+export function planIdentityOrNull(plan: Plan): string | null {
+  return plan.planId ?? plan.id ?? null;
+}
+
 /** 使用 Plan 的持久化 ID 作为跨活动、列表和聊天锚点的稳定身份。 */
 export function planIdentity(plan: Plan): string {
-  return plan.planId ?? plan.id ?? plan.title;
+  return planIdentityOrNull(plan) ?? plan.title;
 }
 
 function readyPlanTitle(activity: ExplorerActivityItem): string | null {

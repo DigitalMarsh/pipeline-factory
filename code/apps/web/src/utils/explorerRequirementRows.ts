@@ -3,6 +3,7 @@
  * 维护提示：状态映射只读取现有服务端状态，不推断或推进后端生命周期。
  */
 import type { ExplorerPlan, Plan, Run } from "../types";
+import { planIdentityOrNull } from "./planTimeline";
 import { taskDisplayTitle } from "./taskTree";
 
 export type RequirementStatusTone = "neutral" | "progress" | "attention" | "success" | "danger";
@@ -23,7 +24,7 @@ const CONFIRMED_PLAN_STATUSES = new Set([
 ]);
 
 function planIdentity(plan: Plan): string {
-  return plan.planId ?? plan.id ?? "";
+  return planIdentityOrNull(plan) ?? "";
 }
 
 export function isConversationArtifactPlan(plan: Plan | null | undefined): boolean {
