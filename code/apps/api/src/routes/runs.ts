@@ -8,7 +8,7 @@
  * 维护提示：
  *   1) **Run 事件流只回放 `thread.journal`，不是 store 的 DomainEvent。** Run 的对外契约就是
  *      journal 序列；做遥测（telemetry）时是**读 store 重新投影**而不是读 journal 字段——
- *      journal 里没有 telemetry，它由 `threadTelemetry` 这个投影函数从 revision/loop 现算。
+ *      journal 里没有 telemetry，它由 `projectRunThreadTelemetry` 这个投影函数从 revision/loop 现算。
  *   2) **`telemetry.updated` 帧的 id 必须传 null**（`sse.send(null, ...)`，代码里带原注释）：
  *      它不属于事件序列，给它一个 id 会把 Last-Event-ID 推到不存在的序号上，重连按它回放会丢事件。
  *      同时注意它只在 `newEntries.length === 0 && lastTelemetryKey !== null` 时发——即"没有新事件
@@ -17,16 +17,17 @@
  *      重跑会覆盖已有的验证结论，这是不可逆的。
  *   4) `scheduler` / `verificationExecutor` 都可缺省，缺省时对应路由返回 **503**（不是 500）：
  *      这是"本实例没配这个能力"，属于服务不可用语义。
- *   5) `threadTelemetry` 是回调 dep：`projectRunThreadTelemetry` 目前在组合根，方案 P5 搬到
- *      `projections/`。用回调注入避免 route ↔ 组合根的类型环。
+ *   5) 遥测投影 `projectRunThreadTelemetry` 已搬进 `projections/` 并改为普通 import；
+ *      它此前是回调 dep（理由同 `routes/agent-loops.ts` 的第 4 条），现在不需要了。
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import type { AgentLoopRunner, ExecutionThread, MergeService, PipelineStore, PlanService, Scheduler, VerificationCommandExecutor, VerificationService } from "@pipeline-factory/domain";
+import type { AgentLoopRunner, MergeService, PipelineStore, PlanService, Scheduler, VerificationCommandExecutor, VerificationService } from "@pipeline-factory/domain";
 import { guidanceBody } from "../schemas/runs.js";
 import { loopEventsQuery } from "../schemas/agent-loops.js";
 import { loopReasonBody, projectThreadParams } from "../schemas/common.js";
 import { openSseChannel } from "../http/sse.js";
+import { projectRunThreadTelemetry } from "../projections/run-telemetry.js";
 
 export type RunRouteDeps = {
   store: PipelineStore;
@@ -43,13 +44,12 @@ export type RunRouteDeps = {
   verifier: VerificationService;
   /** 可缺省：缺省时 `/verify` 返回 503。 */
   verificationExecutor?: VerificationCommandExecutor | undefined;
-  /** Run 执行线程的遥测投影。当前在组合根（`projectRunThreadTelemetry`），P5 搬到 `projections/`。 */
-  threadTelemetry: (run: { id: string; planId: string; planRevision: number }, thread: ExecutionThread) => ExecutionThread;
 };
 
 export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): void {
-  const { store, plans, merger, scheduler, verifier, verificationExecutor, loopController, threadTelemetry } = deps;
+  const { store, plans, merger, scheduler, verifier, verificationExecutor, loopController } = deps;
 
+  // Run SSE 只回放 ExecutionThread journal，并同时带上当前 Run/Thread 状态供 UI 更新按钮显隐。
   app.get("/api/v4/runs/:runId/events", async (request, reply) => {
     const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
     const query = loopEventsQuery.safeParse(request.query);
@@ -68,7 +68,7 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
     const send = () => {
       const currentRun = store.getRun(run.id);
       const currentThread = currentRun ? store.getExecutionThread(currentRun.executionThreadId) : undefined;
-      const projectedThread = currentRun && currentThread ? threadTelemetry(currentRun, currentThread) : currentThread;
+      const projectedThread = currentRun && currentThread ? projectRunThreadTelemetry(store, currentRun, currentThread) : currentThread;
       const newEntries = projectedThread?.journal.filter((item) => item.sequence > cursor) ?? [];
       for (const entry of newEntries) {
         cursor = entry.sequence;
@@ -120,7 +120,7 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
     try {
       const run = scheduler.pause(params.data.runId);
       const thread = scheduler.thread(run.executionThreadId);
-      return { run, thread: threadTelemetry(run, thread) };
+      return { run, thread: projectRunThreadTelemetry(store, run, thread) };
     } catch (error) {
       return reply.code(409).send({ error: error instanceof Error ? error.message : "Run cannot be paused" });
     }
@@ -133,7 +133,7 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
     try {
       const run = scheduler.resume(params.data.runId);
       const thread = scheduler.thread(run.executionThreadId);
-      return { run, thread: threadTelemetry(run, thread) };
+      return { run, thread: projectRunThreadTelemetry(store, run, thread) };
     } catch (error) {
       return reply.code(409).send({ error: error instanceof Error ? error.message : "Run cannot be resumed" });
     }
@@ -147,7 +147,7 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
     try {
       const thread = scheduler.addGuidance(params.data.runId, body.data.content);
       const run = store.getRun(params.data.runId);
-      return { thread: run ? threadTelemetry(run, thread) : thread };
+      return { thread: run ? projectRunThreadTelemetry(store, run, thread) : thread };
     }
     catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "Guidance cannot be added" }); }
   });
@@ -192,7 +192,7 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
     const run = store.getRun(params.data.runId);
     if (!run) return reply.code(404).send({ error: "Run not found" });
     const executionThread = store.getExecutionThread(run.executionThreadId);
-    return { run: { ...run, agentLoops: store.listAgentLoops(run.id) }, executionThread: executionThread ? threadTelemetry(run, executionThread) : null, verification: store.getVerificationRun(run.id) ?? null, mergeRequest: merger.findByRun(run.id) ?? null };
+    return { run: { ...run, agentLoops: store.listAgentLoops(run.id) }, executionThread: executionThread ? projectRunThreadTelemetry(store, run, executionThread) : null, verification: store.getVerificationRun(run.id) ?? null, mergeRequest: merger.findByRun(run.id) ?? null };
   });
 
   app.get("/api/v4/execution-threads/:threadId", async (request, reply) => {
@@ -201,6 +201,6 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
     const thread = store.getExecutionThread(params.data.threadId);
     if (!thread) return reply.code(404).send({ error: "ExecutionThread not found" });
     const run = store.getRun(thread.runId);
-    return { thread: run ? threadTelemetry(run, thread) : thread };
+    return { thread: run ? projectRunThreadTelemetry(store, run, thread) : thread };
   });
 }

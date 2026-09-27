@@ -40,11 +40,8 @@ import {
   VerificationService,
   PlanDispatchCoordinator,
   type PipelineStore,
-  type CandidatePlan,
   type DomainEvent,
   type ExplorerThread,
-  type PlanLifecycleEntry,
-  type PlanLifecycleStatus,
   type HookDefinition,
   type PlanStatus,
   type VerificationCommandExecutor,
@@ -52,15 +49,12 @@ import {
   type ModelGateway,
   type ModelRole,
   type AgentLoop,
-  type AgentLoopDiagnostics,
   type AgentLoopRunner,
-  type ExecutionThread,
-  type ExecutionTelemetry,
   type PlanContract,
   type ProjectSettingsInput,
   type ProjectExecutionSnapshot,
 } from "@pipeline-factory/domain";
-import { AGENT_LOOP_DIAGNOSTIC_STEP_TYPES, projectAgentLoopDiagnostics, projectExplorerActivity } from "@pipeline-factory/domain";
+import { projectExplorerActivity } from "@pipeline-factory/domain";
 import { z } from "zod";
 import type { FactoryConfig } from "./config.js";
 import { RepositoryContextCache } from "./repository-context-cache.js";
@@ -85,25 +79,13 @@ import { projectExecutionEventsQuery, projectExecutionPreferencesBody, projectEx
 import { changeProposalBody } from "./schemas/change-proposals.js";
 import { sourceCommitBody, targetCommitBody } from "./schemas/merge-requests.js";
 import { guidanceBody } from "./schemas/runs.js";
+import { workbenchSnapshot, createProjectEventScope } from "./projections/workbench.js";
+import { planProjection, decoratePlanRows } from "./projections/plan-lifecycle.js";
+import { projectRunThreadTelemetry } from "./projections/run-telemetry.js";
+import { loopDiagnostics, projectAgentLoopResponse } from "./projections/agent-loop.js";
+import { findProjectThread, sanitizeExplorerRequirementStatusEvent } from "./projections/explorer.js";
 
 const execFileAsync = promisify(execFile);
-
-export function sanitizeExplorerRequirementStatusEvent(
-  store: Pick<PipelineStore, "getExplorerPlan">,
-  thread: Pick<ExplorerThread, "id" | "projectId">,
-  event: DomainEvent,
-): { sequence: number; payload: { explorerPlanId: string; turnId: string | null; status: string; occurredAt: string } } | null {
-  if (event.type !== "explorer.requirement.status.changed") return null;
-  const explorerPlanId = event.payload.explorerPlanId;
-  const turnId = event.payload.turnId;
-  const status = event.payload.status;
-  const occurredAt = event.payload.occurredAt;
-  const allowedStatuses = new Set(["QUEUED", "RUNNING", "WAITING_FOR_INPUT", "PAUSED", "COMPLETED", "FAILED", "CANCELLED"]);
-  if (typeof explorerPlanId !== "string" || (typeof turnId !== "string" && turnId !== null) || typeof status !== "string" || !allowedStatuses.has(status) || typeof occurredAt !== "string") return null;
-  const plan = store.getExplorerPlan(explorerPlanId);
-  if (!plan || plan.explorerThreadId !== thread.id || plan.projectId !== thread.projectId) return null;
-  return { sequence: event.sequence, payload: { explorerPlanId, turnId, status, occurredAt } };
-}
 
 /** API 组装依赖；生产环境使用 SQLite/真实 Gateway，测试可注入内存 Store 和 Stub。 */
 export type PipelineAppOptions = {
@@ -301,16 +283,16 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
 
   // ── 已抽出到 routes/ 的域 ──────────────────────────────────────────────────
   // 注册顺序不影响匹配：97 条路由里没有通配符，Fastify 基数树对静态段与参数段按优先级匹配。
-  // 方案 P5 会把下面三个以回调注入的投影函数（workbenchSnapshot / createProjectEventScope /
-  // projectRunThreadTelemetry / projectAgentLoopResponse / loopDiagnostics / findProjectThread）
-  // 搬进 projections/，届时这里的 `x: (a) => f(store, a)` 壳会退化成普通 import。
+  // 投影函数（workbenchSnapshot / createProjectEventScope / projectRunThreadTelemetry /
+  // projectAgentLoopResponse / loopDiagnostics / findProjectThread）已在 `projections/`，
+  // 这里只传它们需要的 store / service；此前那些 `x: (a) => f(store, a)` 回调壳已随 P5 删除。
   // 平台级（health / 额度 / MCP 与插件工具目录 / plan 需求清单）与 Project 无关。
   registerPlatformRoutes(app, { model, mcpRegistry, pluginRegistry, config: options.config });
-  registerWorkbenchRoutes(app, { store, snapshot: (projectId) => workbenchSnapshot(store, projects, projectId), projectEventScope: (projectId) => createProjectEventScope(store, projectId) });
+  registerWorkbenchRoutes(app, { store, projects });
   registerHookRoutes(app, { store, projects });
-  registerAgentLoopRoutes(app, { store, loopController, loopResponse: (loop) => projectAgentLoopResponse(store, loop), diagnostics: (loop) => loopDiagnostics(store, loop), findThread: (projectId, threadId) => findProjectThread(store, projectId, threadId) });
+  registerAgentLoopRoutes(app, { store, loopController });
   registerExecutionThreadRoutes(app, { store, projectExecution });
-  registerRunRoutes(app, { store, plans, merger, scheduler, verifier, verificationExecutor, loopController, threadTelemetry: (run, thread) => projectRunThreadTelemetry(store, run, thread) });
+  registerRunRoutes(app, { store, plans, merger, scheduler, verifier, verificationExecutor, loopController });
   registerMergeRequestRoutes(app, { store, merger, dispatchCoordinator });
   registerChangeProposalRoutes(app, { store, changeProposals });
   // ── 仍在组合根的域（P4b 后续步继续搬）──
@@ -448,10 +430,6 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     try { return { items: projects.configHistory(params.data.projectId) }; }
     catch (error) { const message = error instanceof Error ? error.message : String(error); return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: message }); }
   });
-
-  // Agent Loop SSE 面向诊断和控制页；非 SSE 请求仍返回 JSON，方便测试和故障排查。
-
-  // Run SSE 只回放 ExecutionThread journal，并同时带上当前 Run/Thread 状态供 UI 更新按钮显隐。
 
   app.post("/api/v4/projects/:projectId/explorers", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
@@ -1110,286 +1088,6 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
   return app;
 }
 
-/** 为没有 telemetry_json 的历史 Run 提供只读投影；不会回写旧数据或估算 token。 */
-function projectRunThreadTelemetry(store: PipelineStore, run: { id: string; planId: string; planRevision: number }, thread: ExecutionThread): ExecutionThread {
-  const revision = store.getRevision(run.planId, run.planRevision);
-  const loop = store.listAgentLoops(run.id).find((item) => item.role === "executor");
-  const executorConfig = revision?.projectConfigSnapshot?.settings.models.executor;
-  const existing = thread.telemetry;
-  const startedAt = existing?.startedAt ?? loop?.startedAt ?? null;
-  const completedAt = existing?.completedAt ?? loop?.completedAt ?? null;
-  const durationMs = existing?.durationMs ?? (startedAt && completedAt ? Math.max(0, Date.parse(completedAt) - Date.parse(startedAt)) : null);
-  const telemetry: ExecutionTelemetry = {
-    model: existing?.model ?? executorConfig?.model ?? null,
-    reasoningEffort: existing?.reasoningEffort ?? executorConfig?.reasoningEffort ?? null,
-    startedAt,
-    completedAt,
-    durationMs,
-    usage: existing?.usage ?? null,
-    usageSource: existing?.usageSource ?? "not-recorded",
-    usageScope: existing?.usageScope ?? null,
-  };
-  return { ...thread, telemetry };
-}
-
-/** 在指定 Project 内解析 Thread；不允许用相同 Thread ID 跨 Project 访问数据。 */
-function findProjectThread(store: PipelineStore, projectId: string, threadId?: string) {
-  return store.listThreads().find((thread) => thread.projectId === projectId && (threadId ? thread.id === threadId : thread.parentThreadId === null));
-}
-
-const PLAN_LIFECYCLE_ORDER: Array<PlanLifecycleStatus> = ["DRAFT", "READY", "ENQUEUED", "DISPATCHED", "IN_PROGRESS", "VERIFYING", "MERGE_READY", "MERGED"];
-/** Workbench 首次加载回放的事件尾部窗口与最终保留条数；实时增量仍由 SSE 提供。 */
-const WORKBENCH_EVENT_TAIL_LIMIT = 4_000;
-const WORKBENCH_EVENT_LIMIT = 400;
-const PLAN_LIFECYCLE_NORMALIZED = new Set<PlanLifecycleStatus>(PLAN_LIFECYCLE_ORDER);
-const PLAN_LIFECYCLE_PROGRESS_STATUSES = new Set<PlanLifecycleStatus>(["READY", "ENQUEUED", "DISPATCHED", "IN_PROGRESS", "VERIFYING", "MERGE_READY", "MERGED", "BLOCKED", "NEEDS_PLAN_CHANGE", "NEEDS_CONFIGURATION"]);
-const UNCONFIRMED_LIFECYCLE_REASON = "Plan lifecycle is invalid: it reached a later state without a confirmation record.";
-
-function normalizedLifecycleStatus(value: unknown): PlanLifecycleStatus | null {
-  if (value === "QUEUED") return "ENQUEUED";
-  if (typeof value !== "string") return null;
-  if (PLAN_LIFECYCLE_NORMALIZED.has(value as PlanLifecycleStatus)) return value as PlanLifecycleStatus;
-  if (["BLOCKED", "NEEDS_PLAN_CHANGE", "NEEDS_CONFIGURATION"].includes(value)) return value as PlanLifecycleStatus;
-  return null;
-}
-
-/**
- * buildPlanLifecycle 只消费这些事件类型；Store 据此在 SQL 层直接跳过其余行
- * （单个 ExplorerThread 聚合动辄两万余条 explorer.* 事件，对本时间线毫无贡献）。
- * 维护提示：在下面的循环里新增分支时，必须把对应事件类型加进来，否则该事件读不到。
- */
-const PLAN_LIFECYCLE_EVENT_TYPES = [
-  "plan.candidate.created", "plan.status.changed", "plan.confirmed", "plan.revision.confirmed",
-  "plan.configuration.revised", "plan.enqueued", "plan.dispatched", "verification.completed",
-  "change.proposal.created", "merge.confirmed", "plan.dispatch.state.changed",
-] as const;
-
-/**
- * 与某个 Plan 相关的事件可能落在多个聚合上：Plan 自身、它的 Run、Run 的 MergeRequest
- * 与 ChangeProposal，以及产生它的 ExplorerThread。这里把聚合 ID 收集齐，
- * 交给 Store 走 aggregate_id 索引，避免为了筛出几十条事件而把整张事件表读进内存。
- *
- * 维护提示：新增"在别的聚合上写 payload.planId"的事件类型时，必须同步扩展这里，
- * 否则该事件会在 Plan 时间线中丢失（buildPlanLifecycle 的谓词只在这批候选集内筛选）。
- */
-function planEventAggregateIds(store: PipelineStore, plan: CandidatePlan): string[] {
-  const ids = new Set<string>([plan.id]);
-  if (plan.sourceExplorerThreadId) ids.add(plan.sourceExplorerThreadId);
-  const mergeRequests = store.listMergeRequests();
-  for (const run of store.listRuns()) {
-    if (run.planId !== plan.id) continue;
-    ids.add(run.id);
-    for (const proposal of store.listChangeProposals(run.id)) ids.add(proposal.id);
-    for (const request of mergeRequests) {
-      if (request.runId === run.id) ids.add(request.id);
-    }
-  }
-  return [...ids];
-}
-
-function buildPlanLifecycle(store: PipelineStore, plan: CandidatePlan, revision = plan.revision): PlanLifecycleEntry[] {
-  const run = plan.runId ? store.getRun(plan.runId) : undefined;
-  const dispatch = store.getDispatchState(plan.id);
-  const currentStatus = dispatch?.waitReason === "NEEDS_CONFIGURATION" ? "NEEDS_CONFIGURATION" : normalizedLifecycleStatus(plan.status);
-  const entries = new Map<PlanLifecycleStatus, PlanLifecycleEntry>();
-  const eventPlanId = (payload: Record<string, unknown>) => typeof payload.planId === "string" ? payload.planId : null;
-  const eventRevision = (payload: Record<string, unknown>) => typeof payload.revision === "number" ? payload.revision : null;
-  const relevant = store.listEvents({ afterSequence: 0, aggregateIds: planEventAggregateIds(store, plan), types: PLAN_LIFECYCLE_EVENT_TYPES })
-    .filter((event) => event.aggregateId === plan.id || event.aggregateId === run?.id || eventPlanId(event.payload) === plan.id);
-  const add = (status: PlanLifecycleStatus, occurredAt: string | null, options: { reason?: string | null; runId?: string | null; eventRevision?: number | null } = {}) => {
-    if (options.eventRevision !== null && options.eventRevision !== undefined && options.eventRevision !== revision) return;
-    const existing = entries.get(status);
-    if (existing && existing.occurredAt && occurredAt && existing.occurredAt <= occurredAt) return;
-    entries.set(status, { status, occurredAt, revision, current: status === currentStatus, ...(options.reason !== undefined ? { reason: options.reason } : {}), ...(options.runId !== undefined ? { runId: options.runId } : {}), ...(run ? { executionThreadId: run.executionThreadId } : {}) });
-  };
-
-  add("DRAFT", plan.createdAt);
-  if (plan.confirmedAt) add("READY", plan.confirmedAt);
-  if (plan.queuedAt) add("ENQUEUED", plan.queuedAt);
-  if (plan.dispatchedAt) add("DISPATCHED", plan.dispatchedAt);
-  if (run?.startedAt) add("IN_PROGRESS", run.startedAt, { runId: run.id });
-
-  for (const event of relevant) {
-    const payload = event.payload;
-    const eventRev = eventRevision(payload);
-    const matchingEventRevision = eventRev ?? (revision === 1 ? null : -1);
-    if (event.type === "plan.candidate.created") add("DRAFT", event.occurredAt, { eventRevision: matchingEventRevision });
-    if (event.type === "plan.status.changed") {
-      const status = normalizedLifecycleStatus(payload.toStatus);
-      if (status) add(status, event.occurredAt, { reason: typeof payload.reason === "string" ? payload.reason : null, runId: typeof payload.runId === "string" ? payload.runId : null, eventRevision: eventRev });
-    }
-    if (event.type === "plan.confirmed" || event.type === "plan.revision.confirmed" || event.type === "plan.configuration.revised") add("READY", event.occurredAt, { eventRevision: matchingEventRevision });
-    if (event.type === "plan.enqueued") add("ENQUEUED", typeof payload.queuedAt === "string" ? payload.queuedAt : event.occurredAt, { eventRevision: matchingEventRevision });
-    if (event.type === "plan.dispatched") add("DISPATCHED", typeof payload.dispatchedAt === "string" ? payload.dispatchedAt : event.occurredAt, { eventRevision: matchingEventRevision });
-    if (event.type === "verification.completed") {
-      const verificationStatus = payload.status;
-      add(verificationStatus === "PASSED" || verificationStatus === "SKIPPED" ? "MERGE_READY" : "BLOCKED", typeof payload.completedAt === "string" ? payload.completedAt : event.occurredAt, { reason: verificationStatus === "PASSED" || verificationStatus === "SKIPPED" ? null : "Verification failed", runId: run?.id ?? null, eventRevision: matchingEventRevision });
-    }
-    if (event.type === "change.proposal.created") add("NEEDS_PLAN_CHANGE", event.occurredAt, { reason: typeof payload.reason === "string" ? payload.reason : null, runId: typeof payload.runId === "string" ? payload.runId : null, eventRevision: matchingEventRevision });
-    if (event.type === "merge.confirmed") add("MERGED", event.occurredAt, { runId: run?.id ?? null, eventRevision: matchingEventRevision });
-    if (event.type === "plan.dispatch.state.changed" && payload.waitReason === "NEEDS_CONFIGURATION") add("NEEDS_CONFIGURATION", typeof payload.updatedAt === "string" ? payload.updatedAt : event.occurredAt, { reason: typeof payload.lastError === "string" ? payload.lastError : "Needs configuration", runId: typeof payload.runId === "string" ? payload.runId : null, eventRevision: eventRev });
-  }
-
-  if (dispatch?.waitReason === "NEEDS_CONFIGURATION") add("NEEDS_CONFIGURATION", dispatch.updatedAt ?? null, { reason: dispatch.lastError ?? "Needs configuration", runId: dispatch.runId });
-  let lifecycleCurrentStatus = currentStatus;
-  const hasConfirmation = entries.has("READY");
-  const progressedWithoutConfirmation = !hasConfirmation && (
-    [...entries.keys()].some((status) => status !== "DRAFT")
-    || (currentStatus !== null && PLAN_LIFECYCLE_PROGRESS_STATUSES.has(currentStatus))
-  );
-  if (progressedWithoutConfirmation) {
-    const draft = entries.get("DRAFT") ?? { status: "DRAFT" as const, occurredAt: plan.createdAt, revision, current: false };
-    const existingBlocked = entries.get("BLOCKED");
-    entries.clear();
-    entries.set("DRAFT", { ...draft, current: false });
-    entries.set("BLOCKED", {
-      ...(existingBlocked ?? { status: "BLOCKED" as const, occurredAt: null, revision, current: true }),
-      current: true,
-      reason: existingBlocked?.reason ?? plan.attentionReason ?? UNCONFIRMED_LIFECYCLE_REASON,
-      ...(existingBlocked?.runId === undefined && plan.runId ? { runId: plan.runId } : {}),
-      ...(existingBlocked?.executionThreadId === undefined && run ? { executionThreadId: run.executionThreadId } : {}),
-    });
-    lifecycleCurrentStatus = "BLOCKED";
-  }
-  return [...entries.values()]
-    .sort((a, b) => {
-      const aOrder = PLAN_LIFECYCLE_ORDER.indexOf(a.status);
-      const bOrder = PLAN_LIFECYCLE_ORDER.indexOf(b.status);
-      return (aOrder < 0 ? PLAN_LIFECYCLE_ORDER.length : aOrder) - (bOrder < 0 ? PLAN_LIFECYCLE_ORDER.length : bOrder);
-    })
-    .map((entry) => ({ ...entry, current: entry.status === lifecycleCurrentStatus, ...(entry.runId === undefined && run ? { runId: run.id } : {}) }));
-}
-
-function planExecutionThread(store: PipelineStore, plan: CandidatePlan) {
-  const run = plan.runId ? store.getRun(plan.runId) : undefined;
-  if (!run) return null;
-  const thread = store.getExecutionThread(run.executionThreadId);
-  return { id: run.executionThreadId, runId: run.id, state: thread?.state ?? run.status };
-}
-
-function planProjection(store: PipelineStore, plan: CandidatePlan) {
-  return { confirmedAt: plan.confirmedAt ?? null, lifecycle: buildPlanLifecycle(store, plan), executionThread: planExecutionThread(store, plan) };
-}
-
-/** 将 PlanRevision 的快照版本与当前 Project 对比，供 Plan Center 显示 CURRENT/CHANGED/LEGACY。 */
-function decoratePlanRows(store: PipelineStore, rows: Array<{ planId: string; revision: number; projectId: string }>) {
-  return rows.map((row) => {
-    const revision = store.getRevision(row.planId, row.revision);
-    const plan = store.getPlan(row.planId);
-    const snapshot = revision?.projectConfigSnapshot;
-    const project = store.getProject(row.projectId);
-    return {
-      ...row,
-      ...(plan ? planProjection(store, plan) : { confirmedAt: null, lifecycle: [], executionThread: null }),
-      projectConfigVersion: revision?.projectConfigVersion ?? null,
-      projectConfigHash: revision?.projectConfigHash ?? null,
-      projectConfigStatus: !snapshot ? "LEGACY" : project && snapshot.configVersion === project.configVersion && snapshot.configHash === project.configHash ? "CURRENT" : "CHANGED",
-      dispatch: store.getDispatchState(row.planId) ?? null,
-      mergeRequest: plan?.runId ? store.findMergeRequestByRun(plan.runId) ?? null : null,
-      ...(plan?.generatedSpec ? { generatedSpec: plan.generatedSpec } : {}),
-      ...(plan?.resolvedContract ? { resolvedContract: plan.resolvedContract } : {}),
-    };
-  });
-}
-
-function workbenchSnapshot(store: PipelineStore, projects: ProjectService, projectId: string) {
-  const project = projects.get(projectId);
-  const projectRows = [{ ...project, summary: projects.summary(project.id) }];
-  const plans = store.listPlans()
-    .filter((plan) => plan.projectId === projectId)
-    .filter((plan) => plan.status !== "DRAFT" && plan.status !== "DISCARDED")
-    .map((plan) => ({
-      planId: plan.id,
-      title: plan.title,
-      revision: plan.revision,
-      status: plan.status,
-      projectId: plan.projectId,
-      sourceExplorerThreadId: plan.sourceExplorerThreadId,
-      sourceTurnId: plan.sourceTurnId,
-      providerThreadId: plan.providerThreadId,
-      providerTurnId: plan.providerTurnId,
-      providerItemId: plan.providerItemId,
-      createdAt: plan.createdAt,
-      queuedAt: plan.queuedAt,
-      dispatchedAt: plan.dispatchedAt ?? null,
-      runId: plan.runId,
-      lastEventAt: plan.lastEventAt,
-      attentionReason: plan.attentionReason,
-      contract: plan.contract,
-      dispatch: store.getDispatchState(plan.id) ?? null,
-      ...planProjection(store, plan),
-    }));
-  const runs = store.listRuns().filter((run) => run.projectId === projectId).map((run) => ({
-    ...run,
-    planTitle: store.getPlan(run.planId)?.title ?? run.planId,
-    dispatch: store.getDispatchState(run.planId) ?? null,
-  }));
-  // 只回放事件尾部：UI 的 Evidence 面板仅展示最近若干条，全量历史会把响应放大到数十 MB。
-  // 更早的事件仍可通过 SSE 的 Last-Event-ID 或各资源详情接口按需获取。
-  const belongsToProject = createProjectEventScope(store, projectId);
-  const events = store.listEvents({ afterSequence: 0, limit: WORKBENCH_EVENT_TAIL_LIMIT })
-    .filter((event) => belongsToProject(event))
-    .slice(-WORKBENCH_EVENT_LIMIT);
-  return {
-    activeProjectId: projectId,
-    projects: projectRows,
-    plans,
-    runs,
-    dispatchStates: store.listDispatchStates(projectId),
-    events,
-    cursor: store.getLastEventSequence(),
-  };
-}
-
-/**
- * 事件归属判定器。构造时一次性建立 aggregateId → projectId 索引，
- * 之后对每条事件只做 Map 查询；否则十万级事件会退化成数十万次单行查询。
- */
-/**
- * 诊断只依赖少量步骤类型。显式限定后 Store 会跳过占绝大多数的文本增量步骤，
- * 使该投影从“读取整个 Loop 历史”降为“读取少量相关步骤”。
- */
-function loopDiagnostics(store: PipelineStore, loop: import("@pipeline-factory/domain").AgentLoop) {
-  return projectAgentLoopDiagnostics(loop, store.listAgentLoopSteps(loop.id, { stepTypes: AGENT_LOOP_DIAGNOSTIC_STEP_TYPES }));
-}
-
-function createProjectEventScope(store: PipelineStore, projectId: string): (event: DomainEvent) => boolean {
-  const aggregateProject = new Map<string, string>();
-  const mergeRequestRun = new Map<string, string>();
-  const loopOwners = new Map<string, { ownerType: string; ownerId: string }>();
-
-  for (const project of store.listProjects()) {
-    const executionThread = store.getProjectExecutionThread(project.id);
-    if (!executionThread) continue;
-    aggregateProject.set(executionThread.id, project.id);
-    // Loop 的 ownerType=project-execution-turn 以消息 ID 反查 Project，这里一并建立索引。
-    for (const message of store.listProjectExecutionMessages(executionThread.id)) aggregateProject.set(message.id, project.id);
-  }
-  for (const thread of store.listThreads()) {
-    aggregateProject.set(thread.id, thread.projectId);
-    // Loop 的 ownerType=explorer-turn 以 Turn ID 反查 Project。
-    for (const turn of store.listTurns(thread.id)) aggregateProject.set(turn.id, thread.projectId);
-  }
-  for (const plan of store.listPlans()) aggregateProject.set(plan.id, plan.projectId);
-  for (const run of store.listRuns()) aggregateProject.set(run.id, run.projectId);
-  for (const request of store.listMergeRequests()) mergeRequestRun.set(request.id, request.runId);
-  for (const loop of store.listAgentLoops()) loopOwners.set(loop.id, { ownerType: loop.ownerType, ownerId: loop.ownerId });
-
-  const resolveProject = (aggregateId: string): string | null => {
-    const direct = aggregateProject.get(aggregateId);
-    if (direct) return direct;
-    const runId = mergeRequestRun.get(aggregateId);
-    if (runId) return aggregateProject.get(runId) ?? null;
-    const loop = loopOwners.get(aggregateId);
-    if (!loop) return null;
-    // 三类 owner 都已经在上面的索引里映射到 Project：run / explorer-turn / project-execution-turn。
-    if (loop.ownerType === "run" || loop.ownerType === "explorer-turn" || loop.ownerType === "project-execution-turn") return aggregateProject.get(loop.ownerId) ?? null;
-    return null;
-  };
-
-  return (event) => event.payload.projectId === projectId || resolveProject(event.aggregateId) === projectId;
-}
-
 /** canonicalize 并校验 Git 根目录；子目录、非 Git 目录和不可读路径均拒绝导入。 */
 async function inspectGitRepository(inputPath: string): Promise<{ repoRoot: string; defaultBranch: string }> {
   const candidate = await realpath(resolvePath(inputPath));
@@ -1444,10 +1142,6 @@ function persistLoopControl(store: PipelineStore, loop: AgentLoop, state: AgentL
   store.appendAgentLoopStep({ loopId: loop.id, stepType: state === "CANCELLED" ? "LOOP_COMPLETED" : state === "PAUSED" ? "LOOP_SUSPENDED" : "LOOP_RESUMED", status: state === "CANCELLED" ? "CANCELLED" : "RUNNING", payload: { reason } });
   store.appendEvent({ type: state === "CANCELLED" ? "agent.loop.cancelled" : state === "PAUSED" ? "agent.loop.paused" : "agent.loop.resumed", aggregateId: loop.id, payload: { reason } });
   return updated;
-}
-
-function projectAgentLoopResponse(store: PipelineStore, loop: AgentLoop): AgentLoop & { diagnostics: AgentLoopDiagnostics } {
-  return { ...loop, checkpointJson: null, diagnostics: loopDiagnostics(store, loop) };
 }
 
 /** 用全局配置组装默认 Scheduler；每个 Run 启动后再由 Revision 快照解析项目级适配器。 */

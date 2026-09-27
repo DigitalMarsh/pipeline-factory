@@ -9,7 +9,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryPipelineStore, LifecycleHookRunner, MergeService, PlanService, ProjectService, Scheduler, type AgentLoop, type DomainEvent, type ExecutionTelemetry, type ModelEvent, type ModelGateway, type ModelRequest, type VerificationCommandExecutor } from "@pipeline-factory/domain";
-import { createApp, sanitizeExplorerRequirementStatusEvent } from "./server.js";
+import { createApp } from "./server.js";
+import { sanitizeExplorerRequirementStatusEvent } from "./projections/explorer.js";
 
 const apps: Array<Awaited<ReturnType<typeof createApp>>> = [];
 
