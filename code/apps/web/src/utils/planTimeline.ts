@@ -64,6 +64,14 @@ export function planActivityBindings(plans: Plan[], activities: ExplorerActivity
   return bindings;
 }
 
+/**
+ * 某条 Activity 行上挂着哪张 Plan 卡片（P7-4 从 `ExplorerView.vue` 下沉）。
+ * 绑定表由 `planActivityBindings` 产出，这里只做查找。
+ */
+export function planForActivity(item: Pick<ExplorerActivityItem, "id">, bindings: Map<string, Plan>): Plan | null {
+  return bindings.get(item.id) ?? null;
+}
+
 /** 从统一绑定结果读取当前消息承载的 Plan，避免同一 turn 的多个文本片段重复渲染。 */
 export function findPlanForActivity(activity: ExplorerActivityItem, plans: Plan[], activities: ExplorerActivityItem[] = [activity]): Plan | null {
   return planActivityBindings(plans, activities).get(activity.id) ?? null;

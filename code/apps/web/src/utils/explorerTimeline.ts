@@ -5,6 +5,7 @@
  * 因此不能在模板里把待处理项固定放到顶部、已回答项统一追加到末尾。
  */
 import type { ExplorerActivityItem, ExplorerInputRequest, Plan } from "../types";
+import { planIdentity } from "./planTimeline";
 
 export type ExplorerTimelineItem =
   | { key: string; kind: "activity"; activity: ExplorerActivityItem; occurredAt: string }
@@ -62,8 +63,7 @@ export function buildExplorerTimeline(activities: ExplorerActivityItem[], inputR
   });
 
   detachedPlans.forEach((plan, index) => {
-    const planId = plan.planId ?? plan.id ?? plan.title;
-    items.push({ key: `plan:${planId}`, kind: "plan", plan, occurredAt: plan.createdAt ?? plan.lastEventAt ?? plan.queuedAt ?? "", index: activities.length + inputRequests.length + index });
+    items.push({ key: `plan:${planIdentity(plan)}`, kind: "plan", plan, occurredAt: plan.createdAt ?? plan.lastEventAt ?? plan.queuedAt ?? "", index: activities.length + inputRequests.length + index });
   });
 
   return items

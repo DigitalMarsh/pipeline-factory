@@ -19,7 +19,7 @@ import { optional } from "../utils/optional";
 import { closePolicyPanel, openPolicyPanel } from "../utils/policyPanel";
 import { createOptimisticUserTurn, settleOptimisticTurn } from "../utils/optimisticTurn";
 import { shouldSubmitComposer } from "../utils/composerKeyboard";
-import { isExplorerTurnProcessing } from "../utils/turnStatus";
+import { isExplorerTurnProcessing, turnContent } from "../utils/turnStatus";
 import { formatContextUsage } from "../utils/explorerStatus";
 import { createSseReplayGate } from "../utils/sseReplayGate";
 import ExplorerInputDialog from "../components/ExplorerInputDialog.vue";
@@ -34,8 +34,8 @@ import RunDetailView from "./RunDetailView.vue";
 import scrollToLatestIcon from "../assets/scroll-to-latest.png";
 import { normalizePlanProjection, planFromRevisionDraft as revisionDraftToPlan } from "../utils/planProjection";
 import { isCandidatePlan as isCandidatePlanFor } from "../utils/planControls";
-import { parsePlanProtocolDisplay } from "../utils/planProtocolDisplay";
-import { detachedPlanAnchorId, planActivityBindings as buildPlanActivityBindings, planAnchorId, planAnchorKey, planIdentity } from "../utils/planTimeline";
+import { readableAssistantText } from "../utils/planProtocolDisplay";
+import { detachedPlanAnchorId, planActivityBindings as buildPlanActivityBindings, planAnchorId, planAnchorKey, planForActivity as planForActivityIn, planIdentity } from "../utils/planTimeline";
 import { taskDisplayTitle } from "../utils/taskTree";
 import { isConfirmedPlanRevision, resolvePlanVersionHistory } from "../utils/planVersionHistory";
 import { inputAnswerDisplayLabels, inputAnswerDisplayText } from "../utils/explorerInput";
@@ -359,19 +359,6 @@ async function refreshThread() {
   if (!error.value) ElMessage.success("ExplorerThread 已刷新");
 }
 
-function turnContent(turn: ExplorerTurn): string {
-  if (turn.content.trim()) return turn.content;
-  if (turn.status === "RUNNING") return "Plan Explorer 正在处理…";
-  if (turn.status === "WAITING_FOR_INPUT") return "Plan Explorer 正在等待你的选择…";
-  return turn.status === "FAILED" ? `模型调用失败：${turn.error ?? "未知错误"}` : "模型未返回内容";
-}
-
-function readableAssistantText(content: string): string {
-  const display = parsePlanProtocolDisplay(content);
-  if (display.kind === "ready") return [display.prose, `完整执行方案已生成：${display.title}`].filter(Boolean).join(" ");
-  return display.kind === "plain" ? display.text : display.text;
-}
-
 function isUserMessageExpanded(activityId: string): boolean {
   return expandedUserMessageIds.value.has(activityId);
 }
@@ -383,26 +370,13 @@ function toggleUserMessage(activityId: string): void {
   expandedUserMessageIds.value = next;
 }
 
-function planActivityDetails(item: ExplorerActivityItem): Record<string, unknown> | null {
-  return item.kind === "ASSISTANT_MESSAGE" && item.details?.planProtocol === true && item.details.status === "READY" ? item.details : null;
-}
-
+/** 只负责把绑定表喂给 utils 里的纯查找。 */
 function planForActivity(item: ExplorerActivityItem): Plan | null {
-  return planBindings.value.get(item.id) ?? null;
+  return planForActivityIn(item, planBindings.value);
 }
 
 function isCandidatePlan(plan: Plan | null): boolean {
   return isCandidatePlanFor(plan, candidate.value);
-}
-
-function planActivityGoal(item: ExplorerActivityItem): string {
-  const details = planActivityDetails(item);
-  return typeof details?.goal === "string" ? details.goal : "结构化执行方案已完成校验。";
-}
-
-function planActivityCount(item: ExplorerActivityItem, key: string): number {
-  const value = planActivityDetails(item)?.[key];
-  return typeof value === "number" ? value : 0;
 }
 
 function inputProgressScope(): ExplorerInputProgressScope | null {

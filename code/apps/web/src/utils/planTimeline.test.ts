@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { ExplorerActivityItem, Plan } from "../types";
-import { detachedPlanAnchorId, findPlanForActivity, getPlanTimelineTarget, planActivityBindings, planAnchorId, planAnchorKey, planTimelineItems } from "./planTimeline";
+import { detachedPlanAnchorId, findPlanForActivity, getPlanTimelineTarget, planActivityBindings, planAnchorId, planAnchorKey, planForActivity, planIdentity, planTimelineItems } from "./planTimeline";
 
 const activity = (turnId: string, title: string, occurredAt = "2026-08-29T10:00:00.000Z", providerItemId?: string): ExplorerActivityItem => ({
   id: `activity-${turnId}-${providerItemId ?? occurredAt}`,
@@ -122,5 +122,41 @@ describe("plan DOM 锚点", () => {
 
     expect(entries[0]?.key).toBe(planAnchorKey(bound));
     expect(planAnchorKey(bound)).toBe("plan-plan-1");
+  });
+});
+
+describe("Activity 上的 Plan 卡片查找", () => {
+  it("命中绑定的活动 id 就返回那张 Plan", () => {
+    const bound = plan("plan-1", "turn-1");
+    const bindings = planActivityBindings([bound], [activity("turn-1", bound.title, undefined, "item-plan-1")]);
+    const [activityId] = [...bindings.keys()];
+
+    expect(planForActivity({ id: activityId! }, bindings)).toBe(bound);
+  });
+
+  it("没绑定的活动一律返回 null，不抛错", () => {
+    expect(planForActivity({ id: "activity-nope" }, new Map())).toBeNull();
+  });
+});
+
+describe("Plan 身份的回退顺序（P8.3 行为锁定）", () => {
+  const bare = (overrides: Partial<Plan>): Plan => ({ ...plan("plan-1", "turn-1"), ...overrides });
+
+  it("planId 优先于 id", () => {
+    expect(planIdentity(bare({ planId: "dispatched-1" }))).toBe("dispatched-1");
+    expect(planIdentity(bare({}))).toBe("plan-1");
+  });
+
+  it("空串不算缺失——?? 只对 null/undefined 退化", () => {
+    // 这条锁的是"空串会原样当身份用"，所以 planTimeline 的 key 可能是 `plan-`。
+    // 不是因为这里对，而是因为它与 explorerRequirementRows 那份（退化到 ""）是
+    // 两种真实语义，统一任何一侧都是行为变更。见方案 P8.3。
+    expect(planIdentity(bare({ id: "" }))).toBe("");
+  });
+
+  it("id 整个缺失（运行时未类型化的数据）才退化到 title，绝不产出 undefined", () => {
+    const untyped = { ...plan("plan-1", "turn-1"), id: undefined, planId: undefined, title: "只有标题" } as unknown as Plan;
+
+    expect(planIdentity(untyped)).toBe("只有标题");
   });
 });

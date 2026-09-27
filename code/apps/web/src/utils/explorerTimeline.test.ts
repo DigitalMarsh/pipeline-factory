@@ -2,7 +2,7 @@
  * 测试职责：验证 Explorer 消息流把结构化输入按生成时间插入，而不是统一追加到末尾。
  */
 import { describe, expect, it } from "vitest";
-import type { ExplorerActivityItem, ExplorerInputRequest } from "../types";
+import type { ExplorerActivityItem, ExplorerInputRequest, Plan } from "../types";
 import { buildExplorerMessageTimeline, buildExplorerTimeline, explorerPlanAnchorId, explorerTimelineTarget, inputRequestTarget } from "./explorerTimeline";
 
 const activity = (id: string, kind: ExplorerActivityItem["kind"], occurredAt: string): ExplorerActivityItem => ({
@@ -137,5 +137,35 @@ describe("Explorer 锚点 id", () => {
   it("需求区块锚点由 explorerPlanId 直接拼出", () => {
     expect(explorerPlanAnchorId("explorer-plan-9")).toBe("explorer-plan-explorer-plan-9");
     expect(explorerPlanAnchorId("")).toBe("explorer-plan-");
+  });
+});
+
+const detachedPlan = (overrides: Partial<Plan> = {}): Plan => ({
+  id: "plan-7",
+  title: "Detached plan",
+  revision: 1,
+  status: "DRAFT",
+  projectId: "project-1",
+  sourceExplorerThreadId: "explorer-1",
+  sourceTurnId: null,
+  createdAt: "2026-09-01T10:01:00.000Z",
+  queuedAt: null,
+  runId: null,
+  lastEventAt: "2026-09-01T10:01:00.000Z",
+  attentionReason: null,
+  ...overrides,
+});
+
+describe("游离 Plan 的时间线 key", () => {
+  it("与 planIdentity 同规则：planId 优先，其次 id", () => {
+    const items = buildExplorerTimeline([], [], [detachedPlan()]);
+
+    expect(items.map((item) => item.key)).toEqual(["plan:plan-7"]);
+  });
+
+  it("派发态用 planId 时 key 跟着 planId 走", () => {
+    const items = buildExplorerTimeline([], [], [detachedPlan({ planId: "dispatched-9" })]);
+
+    expect(items.map((item) => item.key)).toEqual(["plan:dispatched-9"]);
   });
 });

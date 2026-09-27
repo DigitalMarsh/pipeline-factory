@@ -2,6 +2,10 @@
  * 模块职责：提供 Pipeline Factory Web 层的类型、请求或状态辅助能力。
  *
  * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
+ * 补充：`readableAssistantText` 是从 `ExplorerView.vue` 下沉来的（P7-4）。
+ * 它内部那句 `display.kind === "plain" ? display.text : display.text` 的两个分支
+ * 是**同一个值**，看着像笔误。**不要"顺手修好"**——本批下沉的判据是行为零变化，
+ * 清理等价代码属于后续可选收尾。要合并请单独提交并说明为什么两个分支曾不同。
  */
 export type PlanProtocolDisplay =
   | { kind: "plain"; text: string }
@@ -78,4 +82,15 @@ export function parsePlanProtocolDisplay(content: string): PlanProtocolDisplay {
     acceptanceCount: countArray(parsed, "acceptanceCriteria"),
     verificationCount: countArray(parsed, "verificationCommandIds"),
   };
+}
+
+/**
+ * 助手消息在界面上的可读文本。
+ * `ready` 时把方案标题接在正文后面，其余形态回退到展示对象自己的 `text`
+ * （`generating` / `invalid` 已经把提示语拼进了 `text`，`plain` 就是原文）。
+ */
+export function readableAssistantText(content: string): string {
+  const display = parsePlanProtocolDisplay(content);
+  if (display.kind === "ready") return [display.prose, `完整执行方案已生成：${display.title}`].filter(Boolean).join(" ");
+  return display.kind === "plain" ? display.text : display.text;
 }
