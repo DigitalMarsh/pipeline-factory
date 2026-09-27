@@ -60,6 +60,10 @@ import { containsAnyString, defaultExplorerPlan, defaultPlanExploration, default
 // 与测试从本 barrel 取），无需为它建本地绑定。SqlitePipelineStore 随后同理。
 export { InMemoryPipelineStore } from "./store/in-memory-store.js";
 export { SqlitePipelineStore } from "./store/sqlite-store.js";
+// explorer/thread-selection.ts 的两个辅助仍被本模块内的 PlanService / ExplorerService /
+// ExplorerThreadService 直接调用，故 import + export 之外还要保留本地绑定——它们**不是**
+// 公共契约（原先就没 export），所以只 import 不 re-export。
+import { projectPlaceholderExplorerTitle, selectCurrentExplorer } from "./explorer/thread-selection.js";
 export { EXECUTION_SLOT_RUN_STATUSES, ProjectService } from "./project/project.js";
 export { redactAuditPayload, redactAuditText } from "./platform/redaction.js";
 export type { CreateProjectInput, Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings, ProjectSettingsInput, ProjectStatus, ProjectSummary, UpdateProjectInput } from "./project/project.js";
@@ -372,14 +376,6 @@ export type RevisionLifecycleProjection = {
   runId: string | null;
   lastEventAt: string;
 };
-
-function selectCurrentExplorer(store: PipelineStore, thread: ExplorerThread): void {
-  const project = store.getProject(thread.projectId);
-  if (project && project.currentExplorerThreadId !== thread.id) {
-    store.updateProject({ ...project, currentExplorerThreadId: thread.id, updatedAt: store.now() });
-    store.appendEvent({ type: "project.explorer.selected", aggregateId: project.id, payload: { projectId: project.id, explorerId: thread.id } });
-  }
-}
 
 /** 所有聚合共享的审计事件格式；payload 只保存结构化业务事实。 */
 export type DomainEvent = {
@@ -704,10 +700,6 @@ export type HookExecution = {
 };
 
 const DEFAULT_HOOK_TIMEOUT_MS = 120_000;
-
-function projectPlaceholderExplorerTitle(store: PipelineStore, thread: ExplorerThread): string {
-  return placeholderExplorerTitle(thread.createdAt, store.getProject(thread.projectId)?.shortName);
-}
 
 function defaultPlanContract(title: string): PlanContract {
   return {
