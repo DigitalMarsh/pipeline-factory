@@ -1,20 +1,24 @@
 /**
  * 模块职责：**组合根** —— 读配置、造 Store 与各 Domain Service、把它们接到一个 Fastify 实例上、
- *   注册路由、接管静态托管。本文件不再包含任何路由体：97 条路由全部在 `routes/`（见
- *   `routes/index.ts` 的入口），投影函数在 `projections/`，git 子进程 IO 在 `runtime/git.ts`。
+ *   注册路由、接管静态托管。
+ *
+ * 本文件之外的分工（`createApp` 读起来就是这份清单）：
+ *   - `routes/index.ts` —— 97 条路由的唯一注册入口；每个域的 HTTP 处理器在 `routes/<域>.ts`。
+ *   - `projections/` —— 无 IO 的投影函数（计划生命周期、workbench、运行遥测、agent loop、explorer）。
+ *   - `runtime/` —— 默认组件的构造与需要 IO 的适配：`git.ts`（子进程）、`scheduler.ts`、
+ *     `verification.ts`、`model-gateway.ts`、`commands.ts`、`loop-control.ts`。
+ *   - `http/sse.ts` —— SSE 传输层；`web-hosting.ts` —— 静态托管与 SPA fallback。
  *
  * 本文件保留的四件事（都是从"必须只有一份"推出来的）：
  *   1) `preHandler` 项目存在性 / 归档守卫 —— 全局横切，必须在这里且在任何路由注册之前。
  *   2) `onClose` 资源释放 —— 释放顺序（协调器 → store → model → mcp）是组合根的职责。
- *   3) 默认组件的构造（`createDefaultScheduler` / `createDefaultVerificationExecutor` /
- *      `createModelGateway` / `readCommandDefinitions` / `persistLoopControl`）—— 只在没有
- *      注入真实实现时用，属于"接线"而不是"业务"。
+ *   3) 各 Domain Service 的**构造与选择**（`options.X ?? 默认实现`）—— 这是组合根的定义。
  *   4) 依赖的注入（`registerApiRoutes` 的那一个对象字面量）。
  *
  * 维护提示：
  *   1) **死 import 只能靠 grep 发现**：本仓未开 `noUnusedLocals`，tsc 看不见。每把一段代码搬出去，
  *      都要对"它用过的名字"逐个 `grep -c '\b名字\b' server.ts`，计数为 1（只剩 import 行）即为死。
- *      97 条路由搬完后一次性清掉了 24 个 zod schema、6 个 domain 类型、2 个 git 函数、
+ *      97 条路由搬完后一次性清掉了 33 个 zod schema、6 个 domain 类型、2 个投影函数、2 个 git 函数、
  *      `openSseChannel`、`z`、`dirname` / `resolvePath`、`FastifyReply` —— 全是 tsc 抓不到的。
  *   2) 本文件的公共契约或关键状态约束变化时，应同步更新说明。
  */
@@ -31,11 +35,6 @@ import {
   ExplorerThreadService,
   ProjectExecutionThreadService,
   ModelExplorerTitleGenerator,
-  LifecycleHookRunner,
-  LocalGitWorktreeAdapter,
-  ModelRunBranchNameGenerator,
-  OpenAIModelGateway,
-  CodexAppServerGateway,
   RegisteredCommandExecutor,
   ToolGateway,
   DurableToolRuntime,
@@ -45,24 +44,24 @@ import {
   ProjectService,
   StubModelGateway,
   RecoveryCoordinator,
-  ExecutorAgent,
-  inspectWorkspaceScope,
   ChangeProposalService,
   VerificationService,
   PlanDispatchCoordinator,
   type PipelineStore,
   type VerificationCommandExecutor,
   type ModelGateway,
-  type ModelRole,
   type AgentLoop,
   type AgentLoopRunner,
-  type ProjectExecutionSnapshot,
 } from "@pipeline-factory/domain";
 import { detectDefaultBranch } from "./runtime/git.js";
 import type { FactoryConfig } from "./config.js";
 import { RepositoryContextCache } from "./repository-context-cache.js";
 import { registerWebHosting } from "./web-hosting.js";
 import { registerApiRoutes } from "./routes/index.js";
+import { persistLoopControl } from "./runtime/loop-control.js";
+import { createDefaultScheduler } from "./runtime/scheduler.js";
+import { createDefaultVerificationExecutor } from "./runtime/verification.js";
+import { createModelGateway } from "./runtime/model-gateway.js";
 // 全部 97 条路由已分域搬进 `routes/`，组合根不再直接持有任何 zod schema、任何投影函数、
 // 任何 SSE 传输件——它们的 import 随各自的 route 文件走了。**本文件剩余的 import 只服务于
 // 组装**（构造 Service / 起 store / 接管静态托管）。
@@ -267,111 +266,4 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
   if (options.config?.server.serveWeb) registerWebHosting(app, options.config);
 
   return app;
-}
-/** 在没有真实 Loop Controller 的测试/降级场景中持久化控制事实，并复用相同状态转换检查。 */
-function persistLoopControl(store: PipelineStore, loop: AgentLoop, state: AgentLoop["state"], reason: string): AgentLoop {
-  const terminal = new Set<AgentLoop["state"]>(["BLOCKED", "COMPLETED", "FAILED", "CANCELLED", "NEEDS_RECONCILIATION"]);
-  if (terminal.has(loop.state)) throw new Error(`AgentLoop ${loop.id} is already ${loop.state}`);
-  if (state === "RUNNING" && loop.state !== "PAUSED") throw new Error(`AgentLoop ${loop.id} cannot be resumed from ${loop.state}`);
-  if (state === "PAUSED" && loop.state !== "RUNNING") throw new Error(`AgentLoop ${loop.id} cannot be paused from ${loop.state}`);
-  const updated = { ...loop, state, ...(state === "CANCELLED" ? { completedAt: store.now() } : {}), checkpointJson: JSON.stringify({ reason, stepCount: loop.stepCount }) };
-  store.updateAgentLoop(updated);
-  store.appendAgentLoopStep({ loopId: loop.id, stepType: state === "CANCELLED" ? "LOOP_COMPLETED" : state === "PAUSED" ? "LOOP_SUSPENDED" : "LOOP_RESUMED", status: state === "CANCELLED" ? "CANCELLED" : "RUNNING", payload: { reason } });
-  store.appendEvent({ type: state === "CANCELLED" ? "agent.loop.cancelled" : state === "PAUSED" ? "agent.loop.paused" : "agent.loop.resumed", aggregateId: loop.id, payload: { reason } });
-  return updated;
-}
-
-/** 用全局配置组装默认 Scheduler；每个 Run 启动后再由 Revision 快照解析项目级适配器。 */
-function createDefaultScheduler(store: PipelineStore, config: FactoryConfig, model: ModelGateway, mcpRegistry?: McpToolRegistry, pluginRegistry?: PluginRegistry, computerUse?: ComputerUseBridge): Scheduler {
-  const definitions = readCommandDefinitions(config);
-  const commands = new RegisteredCommandExecutor(definitions);
-  const registeredCommandIds = new Set(definitions.map((definition) => definition.commandId));
-  const mcpAllowedTools = new Set(config.mcp.servers.flatMap((server) => server.allowedTools.map((tool) => "mcp:" + server.name + ":" + tool)));
-  const projectCommands = (snapshot: ProjectExecutionSnapshot) => new RegisteredCommandExecutor(snapshot.settings.commands);
-  const projectDefinitions = (snapshot: ProjectExecutionSnapshot) => [...snapshot.settings.commands];
-  return new Scheduler({
-    store,
-    branchNameGenerator: new ModelRunBranchNameGenerator(model),
-    workspace: new LocalGitWorktreeAdapter({ projectRoot: config.project.root, worktreeRoot: config.storage.worktreeRoot }),
-    hooks: new LifecycleHookRunner(commands.execute.bind(commands), { cleanupCwd: config.project.root }),
-    workspaceFactory: (snapshot) => new LocalGitWorktreeAdapter({ projectRoot: snapshot.repoRoot, worktreeRoot: snapshot.worktreeRoot }),
-    hookRunnerFactory: (snapshot) => {
-      const snapshotCommands = projectCommands(snapshot);
-      return new LifecycleHookRunner(snapshotCommands.execute.bind(snapshotCommands), { cleanupCwd: snapshot.repoRoot });
-    },
-    executor: new ExecutorAgent(store, model, undefined, {
-      maxSteps: config.model.loop.maxSteps,
-      maxDurationMs: config.model.loop.maxDurationMs,
-      maxRepeatedToolCalls: config.model.loop.maxRepeatedToolCalls,
-      maxNoProgressSteps: config.model.loop.maxNoProgressSteps,
-      workspaceScopeInspector: inspectWorkspaceScope,
-      toolRuntimeFactory: (run, revision) => {
-        const snapshot = revision.projectConfigSnapshot;
-        const snapshotDefinitions = snapshot ? projectDefinitions(snapshot) : definitions;
-        const snapshotCommands = snapshot ? new RegisteredCommandExecutor(snapshotDefinitions) : commands;
-        const snapshotCommandIds = new Set(snapshotDefinitions.map((definition) => definition.commandId));
-        const snapshotMcpTools = snapshot ? new Set(snapshot.settings.toolPolicy.allowedMcpTools) : mcpAllowedTools;
-        const snapshotPluginTools = snapshot ? new Set(snapshot.settings.toolPolicy.allowedPluginTools) : new Set(config.plugins.allowedTools);
-        return new DurableToolRuntime(store, new ToolGateway({
-        role: "executor",
-        workspaceRoot: run.workspacePath!,
-        registeredCommandIds: snapshot ? snapshotCommandIds : registeredCommandIds,
-        mcpAllowedTools: snapshotMcpTools,
-        pluginAllowedTools: snapshotPluginTools,
-        computerUseAllowed: (snapshot?.settings.toolPolicy.computerUseEnabled ?? config.computerUse.enabled) && Boolean(computerUse),
-        builtin: {
-          registeredCommandExecutor: (invocation) => snapshotCommands.execute({
-            ...invocation,
-            context: {
-              ...invocation.context,
-              projectId: run.projectId,
-              runId: run.id,
-              workspacePath: run.workspacePath!,
-              branch: run.branch,
-              baseCommit: run.baseCommit,
-            },
-          }),
-          ...(mcpRegistry ? { mcpToolExecutor: (name: string, input: Record<string, unknown>) => mcpRegistry.call(name, input) } : {}),
-          ...(pluginRegistry ? { pluginToolExecutor: (name: string, input: Record<string, unknown>) => pluginRegistry.bridge.call(name, input) } : {}),
-          ...(computerUse ? {
-            computerUseExecutor: (input: Record<string, unknown>) => computerUse.call({
-              action: input.action as import("@pipeline-factory/domain").ComputerUseAction,
-              ...(typeof input.requestId === "string" ? { requestId: input.requestId } : {}),
-              ...(typeof input.timeoutMs === "number" ? { timeoutMs: input.timeoutMs } : {}),
-            }),
-          } : {}),
-        },
-      }));
-      },
-    }),
-  });
-}
-
-/** 构造验证命令执行器；存在快照时优先使用快照命令和超时，旧 Revision 才使用全局兼容配置。 */
-function createDefaultVerificationExecutor(store: PipelineStore, config: FactoryConfig): VerificationCommandExecutor {
-  const commands = new RegisteredCommandExecutor(readCommandDefinitions(config));
-  return (commandId, run) => {
-    if (!run.workspacePath) return Promise.resolve({ exitCode: 1, stdout: "", stderr: "Run workspace is not available" });
-    const revision = store.getRevision(run.planId, run.planRevision);
-    const snapshot = revision?.projectConfigSnapshot;
-    const snapshotCommands = snapshot ? new RegisteredCommandExecutor(snapshot.settings.commands) : commands;
-    return snapshotCommands.execute({ commandId, cwd: run.workspacePath, timeoutMs: snapshot?.settings.concurrency.defaultTimeoutMs ?? 120_000, context: { projectId: run.projectId, runId: run.id, workspacePath: run.workspacePath, branch: run.branch, baseCommit: run.baseCommit, exitReason: "verification" } });
-  };
-}
-
-function readCommandDefinitions(config: FactoryConfig): Array<{ commandId: string; category: "verification"; enabled: true; argv: readonly [string, ...string[]]; environment?: Readonly<Record<string, string>> | undefined }> {
-  return config.project.commands.flatMap((command) => command.argv.length > 0 ? [{ commandId: command.commandId, category: "verification" as const, enabled: true as const, argv: [command.argv[0]!, ...command.argv.slice(1)] as readonly [string, ...string[]], environment: command.environment }] : []);
-}
-
-function createModelGateway(config: FactoryConfig): ModelGateway {
-  const roles = config.model.roles as Record<ModelRole, { model: string; temperature?: number; maxOutputTokens?: number; reasoningEffort?: string; developerInstructions?: string; loopMode?: "provider-controlled" | "factory-controlled" }>;
-  if (config.model.backend === "stub") return new StubModelGateway(roles);
-  if (config.model.backend === "openai-responses") {
-    const openai = config.model.openai;
-    if (!openai?.apiKey) throw new Error("Factory configuration requires model.openai.apiKey for openai-responses backend");
-    return new OpenAIModelGateway({ apiKey: openai.apiKey, roles, ...(openai.baseUrl ? { baseUrl: openai.baseUrl } : {}) });
-  }
-  const appServer = config.model.codexAppServer;
-  if (!appServer) throw new Error("Factory configuration requires model.codexAppServer for codex-app-server backend");
-  return new CodexAppServerGateway({ roles, command: appServer.command, args: appServer.args, cwd: appServer.cwd, startupTimeoutMs: appServer.startupTimeoutMs, requestTimeoutMs: appServer.requestTimeoutMs, maxRestarts: appServer.maxRestarts, clientName: appServer.clientName, clientVersion: appServer.clientVersion });
 }
