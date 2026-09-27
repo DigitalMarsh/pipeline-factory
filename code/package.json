@@ -4,11 +4,17 @@
   "type": "module",
   "packageManager": "pnpm@11.18.0",
   "scripts": {
-    "test": "pnpm --recursive test",
+    "dev": "pnpm --parallel --filter @pipeline-factory/api --filter @pipeline-factory/web run dev",
+    "dev:api": "pnpm --filter @pipeline-factory/api dev",
+    "dev:web": "pnpm --filter @pipeline-factory/web dev",
+    "test": "pnpm --recursive --no-bail test",
     "typecheck": "pnpm --recursive typecheck",
     "build": "pnpm --recursive build",
-    "dev:api": "pnpm --filter @pipeline-factory/api dev",
-    "dev:web": "pnpm --filter @pipeline-factory/web dev"
+    "start": "node scripts/service.mjs start --mode prod",
+    "stop": "node scripts/service.mjs stop",
+    "status": "node scripts/service.mjs status",
+    "check:cycles": "node scripts/check-cycles.mjs",
+    "verify": "node scripts/verify.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

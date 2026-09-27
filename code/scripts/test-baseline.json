@@ -1,0 +1,11 @@
+{
+  "_说明": "重构期间的测试豁免清单。verify.mjs 会断言：失败的用例必须逐条列在下面。任何不在此列的新失败都判定为该阶段未完成。",
+  "knownFailures": [
+    {
+      "package": "@pipeline-factory/domain",
+      "test": "PlanDispatchCoordinator does not treat V2 natural-language prerequisites as Plan dependencies during dispatch",
+      "location": "packages/domain/src/dispatch-coordinator.test.ts:121",
+      "reason": "P0 记录基线时即存在，与结构重构无关：用例期望确认后 status=RUNNING，实得 WAITING/NEEDS_CONFIGURATION。计划明确要求重构期间不修它——把行为变更混进结构重构会让两类风险无法归因。若某阶段想真正修好它，应单独成一个提交与一个决定。"
+    }
+  ]
+}

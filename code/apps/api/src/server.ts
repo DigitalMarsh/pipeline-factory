@@ -66,6 +66,7 @@ import { AGENT_LOOP_DIAGNOSTIC_STEP_TYPES, projectAgentLoopDiagnostics, projectE
 import { z } from "zod";
 import type { FactoryConfig } from "./config.js";
 import { RepositoryContextCache } from "./repository-context-cache.js";
+import { registerWebHosting } from "./web-hosting.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -1649,6 +1650,11 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     const run = store.getRun(thread.runId);
     return { thread: run ? projectRunThreadTelemetry(store, run, thread) : thread };
   });
+
+  // 静态托管必须最后注册：setNotFoundHandler 是全局兜底，且必须在 app 启动前设置
+  // （启动后再调用会抛 AVV_ERR_ROOT_PLG_BOOTED）。它只接管"没有匹配到任何路由"的请求，
+  // 因此顺序上放在全部 API 路由之后才语义正确。
+  if (options.config?.server.serveWeb) registerWebHosting(app, options.config);
 
   return app;
 }

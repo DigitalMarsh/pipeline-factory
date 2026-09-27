@@ -52,6 +52,13 @@ const configSchema = z.object({
   server: z.object({
     host: z.string().min(1).default("127.0.0.1"),
     port: z.number().int().min(1).max(65_535).default(4310),
+    /**
+     * 是否由本进程托管 Web 构建产物。默认关闭，这样测试与 `pnpm dev:api` 的行为
+     * 与引入单进程托管之前完全一致；生产方式由 config 显式打开。
+     */
+    serveWeb: z.boolean().default(false),
+    /** Web 构建产物目录，相对配置文件所在目录解析。 */
+    webDistPath: z.string().min(1).default("../apps/web/dist"),
   }).default({}),
   web: z.object({
     host: z.string().min(1).default("127.0.0.1"),
@@ -142,6 +149,10 @@ export function loadFactoryConfig(configPath = resolveConfigPath(undefined)): Fa
   return {
     ...parsed.data,
     configPath: absoluteConfigPath,
+    server: {
+      ...parsed.data.server,
+      webDistPath: resolveFromConfig(baseDirectory, parsed.data.server.webDistPath),
+    },
     storage: {
       ...parsed.data.storage,
       databasePath: resolveFromConfig(baseDirectory, parsed.data.storage.databasePath),
