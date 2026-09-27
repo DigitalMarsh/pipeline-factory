@@ -296,17 +296,6 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
   // ── 仍在组合根的域（P4b 后续步继续搬）──
 
 
-  app.post("/api/v4/projects/:projectId/merge-reconciliation", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    if (!store.getProject(params.data.projectId)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
-    try {
-      return merger.reconcileProject(params.data.projectId);
-    } catch (error) {
-      return reply.code(409).send({ code: "MERGE_RECONCILIATION_FAILED", error: error instanceof Error ? error.message : "Merge reconciliation failed" });
-    }
-  });
-
   app.get("/api/v4/projects/:projectId/plans", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
     const query = threadPlanQuery.safeParse(request.query ?? {});

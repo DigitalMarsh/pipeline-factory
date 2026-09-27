@@ -1,6 +1,6 @@
 /**
- * 模块职责：MergeRequest 的 4 条路由 —— 两条挂在 run 下（创建 / 查询）、两条按 mergeRequestId
- *   操作（查询 / 人工确认已合并）。
+ * 模块职责：Merge 域的 5 条路由 —— MergeRequest 的创建 / 查询 / 人工确认已合并，
+ *   以及项目级的 `merge-reconciliation`（对账：把 git 里的实际合并状态追回到库中）。
  *
  * 为什么这一组单独成文件：它们的写路径要**唤醒调度协调器**，读路径不用。放一起能让这条分界
  *   一眼可见：只有 `confirm-merged` 会 `await dispatchCoordinator.wake()`。
@@ -15,11 +15,16 @@
  *      400，破坏幂等。
  *   3) `verifier` 不在这里：验证是 Run 域的职责（见 routes/runs.ts 的 /verify）。本文件只消费
  *      store 里已存在的 VerificationRun。
+ *   4) `POST /projects/:projectId/merge-reconciliation` 的路径前缀是 project 而不是 merge-request,
+ *      但仍归本文件：它调的是 `merger.reconcileProject`，语义上就是 MergeService 的对账动作,
+ *      与其余四条共用同一个 `merger` 依赖。**按域切,不按路径前缀切**（同 routes/projects.ts 与
+ *      routes/explorers.ts 的那条判据）。它不唤醒协调器：对账本身会按需推进 Plan 状态。
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { MergeService, PipelineStore, PlanDispatchCoordinator } from "@pipeline-factory/domain";
 import { sourceCommitBody, targetCommitBody } from "../schemas/merge-requests.js";
+import { projectThreadParams } from "../schemas/common.js";
 
 export type MergeRequestRouteDeps = {
   store: PipelineStore;
@@ -75,5 +80,16 @@ export function registerMergeRequestRoutes(app: FastifyInstance, deps: MergeRequ
       return { mergeRequest };
     }
     catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "MergeRequest cannot be confirmed" }); }
+  });
+
+  app.post("/api/v4/projects/:projectId/merge-reconciliation", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    if (!store.getProject(params.data.projectId)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
+    try {
+      return merger.reconcileProject(params.data.projectId);
+    } catch (error) {
+      return reply.code(409).send({ code: "MERGE_RECONCILIATION_FAILED", error: error instanceof Error ? error.message : "Merge reconciliation failed" });
+    }
   });
 }
