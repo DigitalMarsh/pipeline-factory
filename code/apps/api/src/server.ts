@@ -67,6 +67,17 @@ import { RepositoryContextCache } from "./repository-context-cache.js";
 import { registerWebHosting } from "./web-hosting.js";
 import { openSseChannel } from "./http/sse.js";
 import { registerPlatformRoutes } from "./routes/platform.js";
+import { actorBody, loopReasonBody, projectThreadParams } from "./schemas/common.js";
+import { projectCreateBody, projectSelectExplorerBody, projectUpdateBody, projectValidateBody } from "./schemas/projects.js";
+import { planIdParams, planRevisionParams, revisionDraftBody, revisionDraftParams, threadPlanQuery } from "./schemas/plans.js";
+import { explorerActivityQuery, explorerCandidateQuery, explorerCreateBody, explorerRenameBody, projectExplorerParams, projectExplorerPlanParams, v4AnswerBody, v4InputQuery, v4ThreadQuery, v4ThreadStatusQuery, v4TurnBody } from "./schemas/explorers.js";
+import { agentLoopParams, loopEventsQuery } from "./schemas/agent-loops.js";
+import { workbenchQuery } from "./schemas/workbench.js";
+import { hookBody } from "./schemas/hooks.js";
+import { projectExecutionEventsQuery, projectExecutionPreferencesBody, projectExecutionTurnBody } from "./schemas/execution-threads.js";
+import { changeProposalBody } from "./schemas/change-proposals.js";
+import { sourceCommitBody, targetCommitBody } from "./schemas/merge-requests.js";
+import { guidanceBody } from "./schemas/runs.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -86,78 +97,6 @@ export function sanitizeExplorerRequirementStatusEvent(
   if (!plan || plan.explorerThreadId !== thread.id || plan.projectId !== thread.projectId) return null;
   return { sequence: event.sequence, payload: { explorerPlanId, turnId, status, occurredAt } };
 }
-
-const planIdParams = z.object({ planId: z.string().min(1) });
-const planRevisionParams = z.object({ planId: z.string().min(1), revision: z.coerce.number().int().positive() });
-const revisionDraftParams = z.object({ planId: z.string().min(1), draftId: z.string().min(1) });
-const projectThreadParams = z.object({ projectId: z.string().min(1) });
-const projectExplorerParams = z.object({ projectId: z.string().min(1), explorerId: z.string().min(1) });
-const projectExplorerPlanParams = z.object({ projectId: z.string().min(1), explorerId: z.string().min(1), explorerPlanId: z.string().min(1) });
-const explorerCreateBody = z.object({ title: z.string().trim().min(1).max(200).optional(), originThreadId: z.string().min(1).optional() });
-const explorerRenameBody = z.object({ title: z.string().trim().min(1).max(200) });
-const explorerActivityQuery = z.object({ explorerPlanId: z.string().min(1), afterSequence: z.coerce.number().int().nonnegative().optional() });
-const explorerCandidateQuery = z.object({ explorerPlanId: z.string().min(1).optional() });
-const threadPlanQuery = z.object({
-  explorerThreadId: z.string().min(1).optional(),
-  includeLineage: z.preprocess((value) => value === "false" ? false : value === "true" ? true : value, z.boolean().default(true)),
-  status: z.string().optional(),
-  q: z.string().optional(),
-  from: z.string().datetime({ offset: true }).optional(),
-  to: z.string().datetime({ offset: true }).optional(),
-  cursor: z.string().min(1).optional(),
-  limit: z.coerce.number().int().min(1).max(100).default(50),
-  sort: z.enum(["queued_at", "last_event_at", "priority", "status"]).default("queued_at"),
-});
-const workbenchQuery = z.object({
-  projectId: z.string().min(1),
-  afterSequence: z.coerce.number().int().nonnegative().default(0),
-  format: z.enum(["json", "sse"]).default("json"),
-});
-const actorBody = z.object({ actorId: z.string().min(1).default("local-user") });
-const revisionDraftBody = z.object({ fromRevision: z.number().int().positive(), explorerThreadId: z.string().min(1), discardUnmergedRun: z.boolean(), clientRequestId: z.string().min(1).max(200) });
-const v4TurnBody = z.object({ threadId: z.string().min(1), explorerPlanId: z.string().min(1), content: z.string().trim().min(1).max(20_000), clientTurnId: z.string().min(1).max(200) });
-const v4AnswerBody = z.object({ clientRequestId: z.string().min(1).max(200), answers: z.record(z.object({ answers: z.array(z.string().max(20_000)).min(1) })), actorId: z.string().min(1).default("local-user") });
-const v4ThreadQuery = z.object({ threadId: z.string().min(1).optional(), explorerPlanId: z.string().min(1), afterSequence: z.coerce.number().int().nonnegative().optional() });
-const v4ThreadStatusQuery = z.object({ threadId: z.string().min(1), afterSequence: z.coerce.number().int().nonnegative().optional() });
-const loopEventsQuery = z.object({ format: z.enum(["json", "sse"]).optional(), afterSequence: z.coerce.number().int().nonnegative().optional() });
-const v4InputQuery = z.object({ threadId: z.string().min(1).optional(), explorerPlanId: z.string().min(1), status: z.enum(["OPEN", "SUBMITTING", "ANSWERED", "CANCELLED", "AUTO_RESOLVED", "RECOVERY_REQUIRED"]).optional() });
-const projectExecutionTurnBody = z.object({ content: z.string().trim().min(1).max(20_000), clientTurnId: z.string().trim().min(1).max(160) });
-const projectExecutionPreferencesBody = z.object({ model: z.string().trim().min(1).max(200).nullable(), reasoningEffort: z.enum(["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]).nullable() });
-const projectExecutionEventsQuery = z.object({ afterSequence: z.coerce.number().int().nonnegative().optional() });
-const hookBody = z.object({
-  start: z
-    .object({ commandId: z.string().min(1), enabled: z.boolean().optional(), timeoutMs: z.number().int().positive().optional(), maxAttempts: z.number().int().min(1).max(5).optional() })
-    .optional(),
-  cleanup: z
-    .object({ commandId: z.string().min(1), enabled: z.boolean().optional(), timeoutMs: z.number().int().positive().optional(), maxAttempts: z.number().int().min(1).max(5).optional() })
-    .optional(),
-});
-const guidanceBody = z.object({ content: z.string().trim().min(1).max(20_000) });
-const sourceCommitBody = z.object({ sourceCommit: z.string().trim().min(1).max(200) });
-const targetCommitBody = z.object({ targetCommit: z.string().trim().min(1).max(200) });
-const changeProposalBody = z.object({ reason: z.string().trim().min(1).max(4_000), requestedChanges: z.array(z.string().trim().min(1).max(2_000)).min(1).max(50), contract: z.record(z.unknown()), createdBy: z.string().min(1).default("executor") });
-const agentLoopParams = z.object({ loopId: z.string().min(1) });
-const loopReasonBody = z.object({ reason: z.string().trim().min(1).max(500).default("user_requested") });
-const projectCreateBody = z.object({
-  id: z.string().trim().min(1).max(100).optional(),
-  name: z.string().trim().min(1).max(200),
-  shortName: z.string().trim().max(100).optional(),
-  repoRoot: z.string().trim().min(1),
-  defaultBranch: z.string().trim().min(1).optional(),
-  worktreeRoot: z.string().trim().min(1).optional(),
-  settings: z.record(z.unknown()).optional(),
-});
-const projectUpdateBody = z.object({
-  name: z.string().trim().min(1).max(200).optional(),
-  shortName: z.string().trim().max(100).optional(),
-  repoRoot: z.string().trim().min(1).optional(),
-  defaultBranch: z.string().trim().min(1).optional(),
-  worktreeRoot: z.string().trim().min(1).optional(),
-  settings: z.record(z.unknown()).optional(),
-  expectedConfigVersion: z.number().int().positive().optional(),
-});
-const projectValidateBody = z.object({ repoRoot: z.string().trim().min(1).optional() });
-const projectSelectExplorerBody = z.object({ explorerId: z.string().trim().min(1) });
 
 /** API 组装依赖；生产环境使用 SQLite/真实 Gateway，测试可注入内存 Store 和 Stub。 */
 export type PipelineAppOptions = {
