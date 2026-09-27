@@ -41,15 +41,18 @@ export { assessPlanCompletion, type PlanArtifact, type PlanCompletionAssessment 
 // （api 的 server.ts 与多个测试仍从本 barrel 取它，所以必须保留导出）。
 export { ToolGateway, type ToolGatewayOptions } from "./tools/gateway.js";
 // 批 D：命令执行端口与其本地实现搬进 platform/commands.ts。
-// CommandResult / CommandExecutor / HookContext 三个类型在本模块剩下的 HookRunResult 与
-// LifecycleHookRunner 里仍有引用，所以走 import + export 两条保住本地绑定；
-// CommandInvocation / RegisteredCommandDefinition / ProcessRunner 已无内部引用，纯 re-export。
-import type { CommandExecutor, CommandResult, HookContext } from "./platform/commands.js";
+// CommandResult 在本模块剩下的 GitCommandRunner / VerificationCommandExecutor 里仍有引用，
+// 所以走 import + export 两条保住本地绑定；CommandExecutor / HookContext 随 Hook 一并搬进
+// run/hooks.ts 后已无内部引用，与其余四个类型一起纯 re-export。
+import type { CommandResult } from "./platform/commands.js";
 export type { CommandExecutor, CommandInvocation, CommandResult, HookContext, ProcessRunner, RegisteredCommandDefinition } from "./platform/commands.js";
 // defaultProcessRunner 搬迁前就是**未导出**的内部函数（只在 RegisteredCommandExecutor 的
 // 默认参数里出现），搬进 platform/commands.ts 后仍是模块私有，本 barrel 不转发它，
 // 避免凭空扩大公共契约。
 export { RegisteredCommandExecutor } from "./platform/commands.js";
+// 批 D：Hook 执行器与其结果类型搬进 run/hooks.ts。本模块内部已无引用，全部纯 re-export。
+export { LifecycleHookRunner } from "./run/hooks.js";
+export type { HookDefinition, HookExecution, HookRunResult } from "./run/hooks.js";
 // PipelineStore 是**类型**，纯 re-export 不涉及运行时绑定，天然不会引出 S1 那类 ReferenceError；
 // 而它被 index.ts 内部大量用作参数类型（`store: PipelineStore`），所以仍用 import + export 两条，
 // 保持"类型在本模块作用域内可见"。
@@ -602,13 +605,6 @@ export type CreateExplorerInput = {
   createdAt?: string | undefined;
 };
 
-/** Project 快照中注册的 Hook 命令及其启用/超时策略。 */
-export type HookDefinition = {
-  commandId: string;
-  enabled?: boolean | undefined;
-  timeoutMs?: number | undefined;
-  maxAttempts?: number | undefined;
-};
 
 
 /** Provider 结构化询问中的单个问题；secret 答案只能保存脱敏摘要。 */
@@ -658,43 +654,8 @@ export type ExplorerInputRequest = {
   redactedAnswerSummary: Record<string, unknown> | null;
 };
 
-/** Start/Cleanup Hook 的归一化结果及其是否阻塞 Run 的判断。 */
-export type HookRunResult = {
-  hook: "start" | "cleanup";
-  status: "completed" | "failed" | "skipped";
-  blocked: boolean;
-  needsAttention: boolean;
-  result: CommandResult | null;
-  attempts: Array<{
-    attempt: number;
-    commandId: string | null;
-    cwd: string;
-    timeoutMs: number;
-    status: "completed" | "failed" | "skipped";
-    result: CommandResult | null;
-    startedAt: string;
-    completedAt: string;
-  }>;
-};
 
-/** 一次 Hook 尝试的完整审计事实；同一 Run/Hook 的 attempt 不可复用。 */
-export type HookExecution = {
-  id: string;
-  runId: string;
-  hookType: "start" | "cleanup";
-  attempt: number;
-  commandId: string | null;
-  cwd: string;
-  timeoutMs: number;
-  status: "completed" | "failed" | "skipped";
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-  startedAt: string;
-  completedAt: string;
-};
 
-const DEFAULT_HOOK_TIMEOUT_MS = 120_000;
 
 export type CreateChangeProposalInput = {
   runId: string;
@@ -704,67 +665,6 @@ export type CreateChangeProposalInput = {
   createdBy?: string;
 };
 
-/** 执行 Project 快照中声明的 Start/Cleanup Hook，并把失败映射为运行关注项。 */
-export class LifecycleHookRunner {
-  private readonly cleanupCwd: string;
-
-  constructor(private readonly executor: CommandExecutor, options: { cleanupCwd?: string } = {}) {
-    this.cleanupCwd = options.cleanupCwd ?? process.cwd();
-  }
-
-  async runStart(hook: HookDefinition | undefined, context: HookContext): Promise<HookRunResult> {
-    return this.run("start", hook, context, true);
-  }
-
-  async runCleanup(hook: HookDefinition | undefined, context: HookContext): Promise<HookRunResult> {
-    return this.run("cleanup", hook, context, false);
-  }
-
-  private async run(
-    hook: "start" | "cleanup",
-    definition: HookDefinition | undefined,
-    context: HookContext,
-    blocksRun: boolean,
-  ): Promise<HookRunResult> {
-    const cwd = hook === "start" ? context.workspacePath : this.cleanupCwd;
-    const timeoutMs = definition?.timeoutMs ?? DEFAULT_HOOK_TIMEOUT_MS;
-    if (!definition || definition.enabled === false) {
-      return {
-        hook,
-        status: "skipped",
-        blocked: false,
-        needsAttention: false,
-        result: null,
-        attempts: [{ attempt: 1, commandId: definition?.commandId ?? null, cwd, timeoutMs, status: "skipped", result: null, startedAt: new Date().toISOString(), completedAt: new Date().toISOString() }],
-      };
-    }
-    const attempts: HookRunResult["attempts"] = [];
-    const maxAttempts = Math.max(1, definition.maxAttempts ?? 1);
-    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-      const startedAt = new Date().toISOString();
-      let result: CommandResult;
-      try {
-        result = await this.executor({ commandId: definition.commandId, cwd, timeoutMs, context });
-      } catch (error) {
-        result = { exitCode: 1, stdout: "", stderr: error instanceof Error ? error.message : String(error) };
-      }
-      const completedAt = new Date().toISOString();
-      const status = result.exitCode === 0 ? "completed" : "failed";
-      attempts.push({ attempt, commandId: definition.commandId, cwd, timeoutMs, status, result, startedAt, completedAt });
-      if (status === "completed") break;
-    }
-    const finalAttempt = attempts.at(-1)!;
-    const failed = finalAttempt.status === "failed";
-    return {
-      hook,
-      status: failed ? "failed" : "completed",
-      blocked: failed && blocksRun,
-      needsAttention: failed && !blocksRun,
-      result: finalAttempt.result,
-      attempts,
-    };
-  }
-}
 
 
 /** 工具调用角色；Explorer 和 Executor 使用不同的允许集合。 */
