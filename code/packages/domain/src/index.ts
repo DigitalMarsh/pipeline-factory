@@ -68,6 +68,7 @@ import { projectPlaceholderExplorerTitle, selectCurrentExplorer } from "./explor
 // （组合根在 apps/api），只需要把绑定转发给从 barrel 取用的消费者。
 export { ChangeProposalService } from "./run/change-proposal.js";
 export { VerificationService } from "./run/verification.js";
+export { MergeService } from "./run/merge.js";
 export { EXECUTION_SLOT_RUN_STATUSES, ProjectService } from "./project/project.js";
 export { redactAuditPayload, redactAuditText } from "./platform/redaction.js";
 export type { CreateProjectInput, Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings, ProjectSettingsInput, ProjectStatus, ProjectSummary, UpdateProjectInput } from "./project/project.js";
@@ -2901,131 +2902,6 @@ export const localGitMergeInspector: GitMergeInspector = {
     return gitCommand(repoRoot, ["merge-base", "--is-ancestor", targetCommit, targetBranch]);
   },
 };
-
-/** 创建并确认人工 MergeRequest；Factory 不替用户直接改写目标分支。 */
-export class MergeService {
-  constructor(private readonly store: PipelineStore, private readonly options: { git?: GitMergeInspector } = {}) {}
-
-  /** 为验证通过的 Run 创建幂等 MergeRequest。 */
-  createRequest(run: Run, verification: VerificationRun, sourceCommit: string): MergeRequest {
-    if (run.status !== "MERGE_READY" || (verification.status !== "PASSED" && verification.status !== "SKIPPED")) throw new Error("MergeRequest requires completed verification evidence");
-    if (verification.runId !== run.id) throw new Error("Verification evidence must belong to the same run");
-    const existing = this.store.findMergeRequestByRun(run.id);
-    if (existing) return existing;
-    const project = this.store.getProject(run.projectId);
-    if (project && this.options.git && !this.options.git.commitExists(project.repoRoot, sourceCommit)) {
-      throw new Error(`Source commit ${sourceCommit} could not be verified in the project repository`);
-    }
-    return this.createOpenRequest(run, sourceCommit, null);
-  }
-
-  /** 按当前 Project 的 Git 事实补齐外部合并证据，但绝不自动改变 Plan 状态。 */
-  reconcileProject(projectId: string): MergeReconciliationReport {
-    const project = this.store.getProject(projectId);
-    if (!project) throw new Error(`Project ${projectId} not found`);
-    const items = this.store.listRuns()
-      .filter((run) => run.projectId === projectId && run.status === "MERGE_READY")
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id))
-      .map((run) => this.reconcileRun(project, run));
-    return { projectId, checkedAt: new Date().toISOString(), items };
-  }
-
-  /** 查找 Run 对应的 MergeRequest。 */
-  findByRun(runId: string): MergeRequest | undefined { return this.store.findMergeRequestByRun(runId); }
-  /** 按 id 读取 MergeRequest。 */
-  get(requestId: string): MergeRequest | undefined { return this.store.getMergeRequest(requestId); }
-  /** 列出全部 MergeRequest 供人工审核台使用。 */
-  list(): MergeRequest[] { return this.store.listMergeRequests(); }
-
-  /** 只有目标提交与已审核源提交一致时才确认合并。 */
-  confirmMerged(requestId: string, targetCommit: string): MergeRequest {
-    const request = this.store.getMergeRequest(requestId);
-    if (!request) throw new Error(`MergeRequest ${requestId} not found`);
-    if (request.status === "MERGED") return request;
-    if (!this.options.git && targetCommit !== request.sourceCommit) throw new Error("Target commit does not match the reviewed source commit");
-    const plan = this.store.getPlan(request.planId);
-    const project = plan ? this.store.getProject(plan.projectId) : undefined;
-    if (project && this.options.git) {
-      if (!this.options.git.commitExists(project.repoRoot, targetCommit)) throw new Error(`Target commit ${targetCommit} could not be verified in the project repository`);
-      if (!this.options.git.isAncestor(project.repoRoot, request.sourceCommit, targetCommit)) throw new Error("Source commit is not an ancestor of the target commit");
-      if (!this.options.git.branchContains(project.repoRoot, request.targetBranch, targetCommit)) throw new Error("Target branch does not contain the reviewed source commit");
-    }
-    const merged = { ...request, status: "MERGED" as const, mergedAt: new Date().toISOString() };
-    this.store.updateMergeRequest(merged);
-    if (plan) updatePlanStatus(this.store, plan, { status: "MERGED", lastEventAt: merged.mergedAt ?? plan.lastEventAt });
-    this.store.appendEvent({ type: "merge.confirmed", aggregateId: requestId, payload: { targetCommit, planId: request.planId, revision: plan?.revision ?? null } });
-    return merged;
-  }
-
-  private reconcileRun(project: Project, run: Run): MergeReconciliationItem {
-    const existing = this.store.findMergeRequestByRun(run.id);
-    try {
-      const targetBranch = existing?.targetBranch ?? this.targetBranch(run);
-      if (existing?.status === "MERGED") {
-        return { runId: run.id, planId: run.planId, outcome: "ALREADY_MERGED", mergeRequest: existing, sourceCommit: existing.sourceCommit, targetBranch, targetCommit: existing.detectedTargetCommit ?? null, reason: null };
-      }
-      const verification = this.store.getVerificationRun(run.id);
-      if (!verification || (verification.status !== "PASSED" && verification.status !== "SKIPPED")) {
-        return { runId: run.id, planId: run.planId, outcome: "UNAVAILABLE", mergeRequest: existing ?? null, sourceCommit: existing?.sourceCommit ?? null, targetBranch, targetCommit: null, reason: "A passed or skipped VerificationRun is required" };
-      }
-      const git = this.options.git;
-      if (!git) return { runId: run.id, planId: run.planId, outcome: "UNAVAILABLE", mergeRequest: existing ?? null, sourceCommit: existing?.sourceCommit ?? null, targetBranch, targetCommit: null, reason: "Git merge inspection is not configured" };
-
-      const sourceCommit = existing?.sourceCommit ?? this.resolveRunSource(git, project, run);
-      if (!targetBranch) return { runId: run.id, planId: run.planId, outcome: "UNAVAILABLE", mergeRequest: existing ?? null, sourceCommit, targetBranch: null, targetCommit: null, reason: "Frozen Plan revision base branch could not be resolved" };
-      if (!sourceCommit) return { runId: run.id, planId: run.planId, outcome: "UNAVAILABLE", mergeRequest: existing ?? null, sourceCommit: null, targetBranch, targetCommit: null, reason: "Run worktree and branch HEAD could not be resolved" };
-      if (!git.commitExists(project.repoRoot, sourceCommit)) return { runId: run.id, planId: run.planId, outcome: "UNAVAILABLE", mergeRequest: existing ?? null, sourceCommit, targetBranch, targetCommit: null, reason: `Source commit ${sourceCommit} could not be verified in the project repository` };
-      const targetCommit = git.resolveCommit(project.repoRoot, targetBranch);
-      if (!targetCommit) return { runId: run.id, planId: run.planId, outcome: "UNAVAILABLE", mergeRequest: existing ?? null, sourceCommit, targetBranch, targetCommit: null, reason: `Target branch ${targetBranch} could not be resolved` };
-      const contained = git.isAncestor(project.repoRoot, sourceCommit, targetCommit) && git.branchContains(project.repoRoot, targetBranch, targetCommit);
-      if (!contained) {
-        if (existing?.status === "OPEN" && existing.detectedTargetCommit) {
-          const cleared = { ...existing, detectedTargetCommit: null };
-          this.store.updateMergeRequest(cleared);
-          return { runId: run.id, planId: run.planId, outcome: "NOT_MERGED", mergeRequest: cleared, sourceCommit, targetBranch, targetCommit, reason: "Target branch does not currently contain the reviewed source commit" };
-        }
-        return { runId: run.id, planId: run.planId, outcome: "NOT_MERGED", mergeRequest: existing ?? null, sourceCommit, targetBranch, targetCommit, reason: "Target branch does not currently contain the reviewed source commit" };
-      }
-      if (existing) {
-        const updated = existing.detectedTargetCommit === targetCommit ? existing : { ...existing, detectedTargetCommit: targetCommit };
-        if (updated !== existing) {
-          this.store.updateMergeRequest(updated);
-          this.store.appendEvent({ type: "merge.detected", aggregateId: updated.id, payload: { runId: run.id, planId: run.planId, sourceCommit, targetBranch, targetCommit } });
-        }
-        return { runId: run.id, planId: run.planId, outcome: "ALREADY_OPEN", mergeRequest: updated, sourceCommit, targetBranch, targetCommit, reason: null };
-      }
-      const request = this.createOpenRequest(run, sourceCommit, targetCommit);
-      this.store.appendEvent({ type: "merge.detected", aggregateId: request.id, payload: { runId: run.id, planId: run.planId, sourceCommit, targetBranch, targetCommit } });
-      return { runId: run.id, planId: run.planId, outcome: "DETECTED", mergeRequest: request, sourceCommit, targetBranch, targetCommit, reason: null };
-    } catch (error) {
-      return { runId: run.id, planId: run.planId, outcome: "UNAVAILABLE", mergeRequest: existing ?? null, sourceCommit: existing?.sourceCommit ?? null, targetBranch: existing?.targetBranch ?? null, targetCommit: null, reason: `Git merge inspection failed: ${error instanceof Error ? error.message : String(error)}` };
-    }
-  }
-
-  private createOpenRequest(run: Run, sourceCommit: string, detectedTargetCommit: string | null): MergeRequest {
-    const plan = this.store.getPlan(run.planId);
-    const revision = plan ? this.store.getRevision(plan.id, run.planRevision) : undefined;
-    const request: MergeRequest = { id: `merge-${randomUUID().slice(0, 12)}`, runId: run.id, planId: run.planId, sourceCommit, targetBranch: revision?.contract.baseBranch ?? "main", status: "OPEN", humanConfirmationRequired: true, createdAt: new Date().toISOString(), mergedAt: null, ...(detectedTargetCommit ? { detectedTargetCommit } : {}) };
-    this.store.saveMergeRequest(request);
-    this.store.appendEvent({ type: "merge.request.created", aggregateId: request.id, payload: request });
-    return request;
-  }
-
-  private targetBranch(run: Run): string | null {
-    const plan = this.store.getPlan(run.planId);
-    const revision = plan ? this.store.getRevision(plan.id, run.planRevision) : undefined;
-    const branch = revision?.contract.baseBranch?.trim();
-    return branch || null;
-  }
-
-  private resolveRunSource(git: GitMergeInspector, project: Project, run: Run): string | null {
-    if (run.workspacePath) {
-      const workspaceHead = git.resolveCommit(run.workspacePath, "HEAD");
-      if (workspaceHead) return workspaceHead;
-    }
-    return git.resolveCommit(project.repoRoot, run.branch);
-  }
-}
 
 export type ToolCallLedgerStatus = "PENDING" | "COMPLETED" | "DENIED" | "UNCERTAIN" | "NEEDS_RECONCILIATION";
 export type ToolCallLedgerEntry = { callId: string; tool: ToolName; status: ToolCallLedgerStatus; result: ToolCallResult; replay: boolean };
