@@ -22,6 +22,9 @@ const planProjectionComposableSource = readFileSync(fileURLToPath(new URL("../co
 // 第五次出现同一类处置（P7-10）：Plan 生命周期写操作搬进了 usePlanLifecycleActions。
 // 正向断言跟随 composable；视图保留动作解构与 template 的用户界面判据，两侧都留。
 const planLifecycleActionsComposableSource = readFileSync(fileURLToPath(new URL("../composables/usePlanLifecycleActions.ts", import.meta.url)), "utf8");
+// 第六次出现同一类处置（P7-11）：三条 SSE 通道与续传读侧搬进 useExplorerSse。
+// 视图保留连接/断连方法的委托，EventSource 实例与 handler 不得回流。
+const explorerSseComposableSource = readFileSync(fileURLToPath(new URL("../composables/useExplorerSse.ts", import.meta.url)), "utf8");
 const explorerScopeSource = readFileSync(fileURLToPath(new URL("../utils/explorerScope.ts", import.meta.url)), "utf8");
 const threadRailSource = readFileSync(fileURLToPath(new URL("../components/ThreadRail.vue", import.meta.url)), "utf8");
 const explorerHeaderStatusSource = readFileSync(fileURLToPath(new URL("../components/ExplorerHeaderStatus.vue", import.meta.url)), "utf8");
@@ -438,20 +441,22 @@ describe("Explorer plan projection extraction", () => {
   });
 
   it("keeps the SSE resume cursor owned by the projection composable", () => {
-    // P7-9 定的归属：游标的**写侧**全在 usePlanProjection（workspace / activity 响应带的
-    // lastEventSequence 与复位），视图只剩三处**读**（两条建连 URL + replayGate 就绪判定），
-    // 它们随 useExplorerSse 一起搬走。这条断言防的是"游标被复制成两份"——
-    // 两份单看都自洽，只有续传时才会丢事件。
+    // 写侧的两条响应更新与复位仍锁在 usePlanProjection，读侧锁在 useExplorerSse，
+    // 两边都留才能防止游标被复制或责任倒置。
     expect(planProjectionComposableSource).toContain("explorerEventSequence.value = Math.max(explorerEventSequence.value ?? 0, workspace.lastEventSequence ?? 0);");
     expect(planProjectionComposableSource).toContain("explorerEventSequence.value = Math.max(explorerEventSequence.value ?? 0, response.lastEventSequence ?? 0);");
     expect(planProjectionComposableSource).toContain("    explorerEventSequence.value = null;");
-    // 否掉的是**建连代码**，不是这五个字：composable 的维护提示 1 里就写着
-    // "等 useExplorerSse 把那几条 new EventSource(...) 收走"，按字面量否会被自己的注释绊倒
-    // （同批 C 那条"按文本计数时注释里的符号名产生假阳性"）。
-    expect(planProjectionComposableSource).not.toContain("new EventSource(api.");
-    expect(explorerViewSource).toContain("if (explorerEventSequence.value !== null) replayGate.markReady();");
-    expect(explorerViewSource).toContain("explorerEventSequence.value ?? undefined");
-    expect(explorerViewSource).not.toContain("let explorerEventSequence");
+    // P7-11：游标的写侧仍全在 usePlanProjection，三条 SSE 通道的读侧已经一起搬进
+    // useExplorerSse。视图只解构生命周期方法，不持有 EventSource 或 handler。
+    expect(explorerSseComposableSource).toContain("if (deps.explorerEventSequence.value !== null) replayGate.markReady();");
+    expect(explorerSseComposableSource).toContain("deps.explorerEventSequence.value ?? undefined");
+    expect(explorerSseComposableSource).toContain("new EventSource(api.explorerEventsUrl");
+    expect(explorerSseComposableSource).toContain("eventSource.addEventListener(\"turn.input_required\"");
+    expect(explorerViewSource).toContain("const { connectEvents, connectRequirementStatusEvents, connectLoopEvents, connectLoopEventsIfConnected, closeEvents, closeRequirementStatusEvents } = useExplorerSse(");
+    expect(explorerViewSource).not.toContain("new EventSource(");
+    expect(explorerViewSource).not.toContain("let eventSource");
+    expect(explorerViewSource).not.toContain("function refreshTurnsAfterEvent");
+    expect(explorerViewSource).not.toContain("replayGate.markReady");
   });
 });
 
@@ -589,7 +594,7 @@ describe("Explorer composer availability", () => {
     expect(explorerInputRequestsComposableSource).toContain("item.status === \"SUBMITTING\"");
     expect(explorerViewSource).not.toContain("loadExplorerInputProgressDraft");
     expect(explorerViewSource).not.toContain("saveExplorerInputProgressDraft");
-    expect(explorerViewSource).toContain("inputCardRequest, setInputRequests, resetInputState, inputAnswerLabelsFor, inputAnswerText, inputStatusLabel, openInputRequest, updateInputProgress, submitInput, cancelInput } = useExplorerInputRequests(");
+    expect(explorerViewSource).toContain("inputCardRequest, setInputRequests, adoptInputRequest, resetInputState, inputAnswerLabelsFor, inputAnswerText, inputStatusLabel, openInputRequest, updateInputProgress, submitInput, cancelInput } = useExplorerInputRequests(");
     // 这两条测的是**模板**里的用户可见文案，留在视图。
     expect(explorerViewSource).toContain("正在提交结构化答案，确认后本轮会继续");
     expect(explorerViewSource).toContain("inputCardRequest?.status === 'SUBMITTING'");

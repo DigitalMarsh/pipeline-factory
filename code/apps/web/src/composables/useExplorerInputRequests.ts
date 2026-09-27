@@ -85,6 +85,21 @@ export function useExplorerInputRequests(deps: ExplorerInputRequestDeps) {
     }
   }
 
+  /**
+   * SSE 的 `turn.input_required` 需要按事件 payload 指定的 requestId 落位，不能只取列表里的
+   * 第一个 OPEN；普通刷新则传 null，沿用 `setInputRequests` 的自然落位。把这条过渡态接缝
+   * 收成具名方法，避免 SSE 直接写 pending / recovery / dialog 三份内部状态。
+   */
+  function adoptInputRequest(requestId: string | null, items: ExplorerInputRequest[]): void {
+    setInputRequests(items);
+    if (requestId !== null) {
+      pendingInput.value = items.find((item) => item.id === requestId) ?? null;
+      recoveryInput.value = null;
+      inputDialogOpen.value = Boolean(pendingInput.value?.isBlocking);
+    }
+    if (!pendingInput.value) inputDialogOpen.value = false;
+  }
+
   /** 线程级复位；跨 composable 的总复位由视图的 `resetThreadState` 负责。 */
   function resetInputState(): void {
     inputRequests.value = [];
@@ -181,6 +196,7 @@ export function useExplorerInputRequests(deps: ExplorerInputRequestDeps) {
     inputAnswerInFlight,
     inputCardRequest,
     setInputRequests,
+    adoptInputRequest,
     resetInputState,
     inputAnswerLabelsFor,
     inputAnswerText,

@@ -9,9 +9,8 @@
  * 维护提示：
  * 1. **`explorerEventSequence`（SSE 续传游标）归本文件。** 它的写侧只有两处，
  *    都是投影加载（workspace / activity 响应带的 `lastEventSequence`）与复位；
- *    读侧只有 SSE 建连。**写侧唯一，所以不需要等 `useExplorerSse`**——SSE 抽出时
- *    以入参读它即可，不要再搬。当前视图侧的三处 `explorerEventSequence.value` 读是
- *    过渡态形状（等 `useExplorerSse` 把那几条 `new EventSource(...)` 收走）。
+ *    读侧全部在 `useExplorerSse`。**写侧唯一，所以不需要等 SSE 抽取**——连接 composable
+ *    以 ref 读它即可，不要再搬或复制。
  * 2. **`loadActivePlanWorkspace` 会写会话状态。** 它写 `turns` / `activity` / `agentLoop` /
  *    `explorerPaused` / `inputDialogOpen` 并调 `setInputRequests`——这些是**入参 ref**
  *    （见 `PlanProjectionDeps`），不是本文件的私有状态。不要为了"少几个入参"把它们
@@ -35,8 +34,8 @@ import { planIdentity } from "../utils/planTimeline";
  * 流式增量期间把 activity / plan 投影的重新拉取合并到固定间隔；文本本身仍按事件即时合并到
  * turn，因此观感不受影响，但不会每个增量都触发 6 次请求。
  *
- * **导出**：视图的 Agent Loop 刷新合并（`connectLoopEvents`）用的是同一个节拍语义，
- * 不要再在视图里写一份 400 的字面量——等 `useExplorerSse` 抽出后这条 import 会随读侧一起消失。
+ * **导出**：`useExplorerSse` 的 Agent Loop 刷新合并也使用同一个节拍语义，
+ * 不要在两个 composable 各保留一个 400 的字面量。
  */
 export const PROJECTION_REFRESH_INTERVAL_MS = 400;
 

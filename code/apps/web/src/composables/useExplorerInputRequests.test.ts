@@ -164,6 +164,29 @@ describe("setInputRequests 的落位规则", () => {
   });
 });
 
+describe("SSE 输入请求接缝", () => {
+  it("按 payload requestId 落位，而不是把列表第一个 OPEN 当成答案目标", () => {
+    const s = setup();
+    const first = request("r-first");
+    const targeted = request("r-targeted");
+
+    s.adoptInputRequest("r-targeted", [first, targeted]);
+
+    expect(s.pendingInput.value?.id).toBe("r-targeted");
+    expect(s.inputDialogOpen.value).toBe(true);
+  });
+
+  it("普通刷新传 null 时沿用列表落位，并在没有 pending 时关闭对话框", () => {
+    const s = setup();
+    s.inputDialogOpen.value = true;
+    s.adoptInputRequest(null, [request("r-done", { status: "ANSWERED" })]);
+
+    expect(s.pendingInput.value).toBeNull();
+    expect(s.inputDialogOpen.value).toBe(false);
+  });
+});
+
+
 describe("草稿的载入与清理", () => {
   it("SUBMITTING 的请求会把已存的草稿载入 inputProgress", () => {
     const s = setup();

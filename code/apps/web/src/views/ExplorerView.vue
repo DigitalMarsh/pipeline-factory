@@ -21,7 +21,6 @@ import { createOptimisticUserTurn, settleOptimisticTurn } from "../utils/optimis
 import { shouldSubmitComposer } from "../utils/composerKeyboard";
 import { isExplorerTurnProcessing } from "../utils/turnStatus";
 import { formatContextUsage } from "../utils/explorerStatus";
-import { createSseReplayGate } from "../utils/sseReplayGate";
 import ExplorerInputDialog from "../components/ExplorerInputDialog.vue";
 import MarkdownMessage from "../components/MarkdownMessage.vue";
 import ProjectExecutionThreadPanel from "../components/ProjectExecutionThreadPanel.vue";
@@ -50,8 +49,9 @@ import { canCreateConfigurationRevision as canCreateConfigurationRevisionFor } f
 import { useExplorerInputRequests, type ExplorerInputDialogHandle } from "../composables/useExplorerInputRequests";
 import { useExplorerSession } from "../composables/useExplorerSession";
 import { useExplorerTimeline } from "../composables/useExplorerTimeline";
-import { PROJECTION_REFRESH_INTERVAL_MS, usePlanProjection } from "../composables/usePlanProjection";
+import { usePlanProjection } from "../composables/usePlanProjection";
 import { usePlanLifecycleActions } from "../composables/usePlanLifecycleActions";
+import { useExplorerSse } from "../composables/useExplorerSse";
 import { useTimelineScroll } from "../composables/useTimelineScroll";
 
 const route = useRoute();
@@ -119,13 +119,6 @@ const agentLoop = ref<AgentLoop | null>(null);
 const explorerModel = ref("gpt-5.6-luna");
 const inputDialog = ref<ExplorerInputDialogHandle | null>(null);
 const mounted = ref(false);
-let eventSource: EventSource | null = null;
-let loopEventSource: EventSource | null = null;
-let requirementStatusEventSource: EventSource | null = null;
-let requirementStatusScope: { projectId: string; threadId: string } | null = null;
-/** Loop 的终态与门禁事件必须立即反映；其余步骤级事件可以合并到刷新间隔。 */
-const AGENT_LOOP_IMMEDIATE_REFRESH_EVENTS = new Set(["agent.step.gate_checked", "agent.loop.completed", "agent.loop.failed", "agent.loop.cancelled", "agent.loop.recovery_required", "agent.loop.paused", "agent.loop.resumed", "agent.input.required", "agent.input.resolved"]);
-let loopRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 let detailRequestVersion = 0;
 // A delete already loads the replacement thread explicitly. Suppress the
 // route watcher for that one navigation so the old thread cannot race the
@@ -163,7 +156,7 @@ const agentLoopCompletionLabel = computed(() => agentLoop.value ? formatAgentLoo
  * 还会回退到 thread / explorerPlans[0]，两条链路必须一致，否则会错位。
  * `inputDialog` 的模板 ref 留在本文件——`ref="inputDialog"` 要求它是个顶层绑定。
  */
-const { pendingInput, recoveryInput, inputRequests, inputProgress, inputDialogOpen, inputAnswerInFlight, inputCardRequest, setInputRequests, resetInputState, inputAnswerLabelsFor, inputAnswerText, inputStatusLabel, openInputRequest, updateInputProgress, submitInput, cancelInput } = useExplorerInputRequests({ projectId, thread, activeExplorerPlanId: computed(() => activeExplorerPlan.value?.id ?? null), inputDialog });
+const { pendingInput, recoveryInput, inputRequests, inputProgress, inputDialogOpen, inputAnswerInFlight, inputCardRequest, setInputRequests, adoptInputRequest, resetInputState, inputAnswerLabelsFor, inputAnswerText, inputStatusLabel, openInputRequest, updateInputProgress, submitInput, cancelInput } = useExplorerInputRequests({ projectId, thread, activeExplorerPlanId: computed(() => activeExplorerPlan.value?.id ?? null), inputDialog });
 
 /**
  * 需求投影（需求分组 / 候选 / 确认 / 入队 / 派发、当前需求的工作区与活动）交给 composable。
@@ -255,6 +248,31 @@ const { visibleTurns, visibleActivity, visibleInputRequests, planBindings, detac
  * `timeline` 的模板 ref 留在本文件——`ref="timeline"` 要求它是个顶层绑定。
  */
 const { activePlanKey, activeTimelineKey, jumpToLatest, jumpToTimelineTarget, showScrollToLatest, updateTimelineScrollState } = useTimelineScroll(timeline, { visibleActivity, planBindings });
+
+/**
+ * 三条 SSE 通道及其生命周期交给 composable；视图只提供状态 ref、刷新回调与 load 回调。
+ * `explorerEventSequence` 由 usePlanProjection 持有，SSE 侧只读它构造续传 URL。
+ */
+const { connectEvents, connectRequirementStatusEvents, connectLoopEvents, connectLoopEventsIfConnected, closeEvents, closeRequirementStatusEvents } = useExplorerSse({
+  projectId,
+  thread,
+  explorers,
+  activeExplorerPlan,
+  explorerPlans,
+  turns,
+  agentLoop,
+  explorerPaused,
+  explorerEventSequence,
+  timeline,
+  projectScopeToken,
+  isCurrentProjectScope,
+  refreshActivity,
+  refreshPlanProjection,
+  scheduleProjectionRefresh,
+  cancelProjectionRefresh,
+  adoptInputRequest,
+  load,
+});
 
 function setPolicyOpen(value: boolean) {
   policyOpen.value = value ? openPolicyPanel(policyOpen.value) : closePolicyPanel(policyOpen.value);
@@ -989,12 +1007,6 @@ async function toggleExplorerArchive(explorerId: string) {
   }
 }
 
-function cancelLoopRefresh() {
-  if (loopRefreshTimer === null) return;
-  clearTimeout(loopRefreshTimer);
-  loopRefreshTimer = null;
-}
-
 async function loadExplorerDetails(selected: ExplorerThread, requestProjectId: string, requestToken: number): Promise<boolean> {
   try {
     const [planGroupsResponse, plansResponse, confirmedResponse, threadPlansResponse] = await Promise.all([
@@ -1015,7 +1027,7 @@ async function loadExplorerDetails(selected: ExplorerThread, requestProjectId: s
     applyPlanProjection(projection, confirmedResponse?.items ?? [], null);
     const workspaceLoaded = await loadActivePlanWorkspace(selected.id, activeExplorerPlanId.value, requestProjectId, requestToken);
     if (!workspaceLoaded) return false;
-    if (eventSource) connectLoopEvents();
+    connectLoopEventsIfConnected();
     explorerPaused.value = agentLoop.value?.state === "PAUSED";
     const routeDrawerTab = route.query.requirementTab;
     if (activeRunId.value) {
@@ -1180,127 +1192,6 @@ function mergeTurn(turn: ExplorerTurn) {
   if (index < 0) turns.value = [...turns.value, turn];
   else turns.value = turns.value.map((item) => item.id === turn.id ? { ...item, ...turn } : item);
 }
-
-async function refreshTurnsAfterEvent() {
-  if (!thread.value) return;
-  const explorerPlanId = activeExplorerPlan.value?.id;
-  if (!explorerPlanId) return;
-  const requestProjectId = projectId.value;
-  const requestThreadId = thread.value.id;
-  const requestToken = projectScopeToken();
-  const response = await api.getExplorerTurns(requestProjectId, requestThreadId, explorerPlanId);
-  if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== requestThreadId || activeExplorerPlan.value?.id !== explorerPlanId) return;
-  turns.value = response.items;
-  await refreshActivity();
-  await refreshPlanProjection();
-  const inputResponse = await api.inputRequests(requestProjectId, requestThreadId, explorerPlanId);
-  if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== requestThreadId || activeExplorerPlan.value?.id !== explorerPlanId) return;
-  setInputRequests(inputResponse.items);
-  if (!pendingInput.value) inputDialogOpen.value = false;
-  await nextTick();
-  if (timeline.value) scrollTimelineToLatest(timeline.value);
-}
-
-function connectEvents() {
-  if (!thread.value || !activeExplorerPlan.value || typeof EventSource === "undefined") return;
-  connectRequirementStatusEvents();
-  const connectionProjectId = projectId.value;
-  const connectionThreadId = thread.value.id;
-  const connectionPlanId = activeExplorerPlan.value.id;
-  const connectionToken = projectScopeToken();
-  const isConnectionCurrent = () => isCurrentProjectScope(connectionProjectId, connectionToken) && thread.value?.id === connectionThreadId && activeExplorerPlan.value?.id === connectionPlanId;
-  eventSource?.close();
-  loopEventSource?.close();
-  const replayGate = createSseReplayGate();
-  if (explorerEventSequence.value !== null) replayGate.markReady();
-  eventSource = new EventSource(api.explorerEventsUrl(connectionProjectId, connectionThreadId, connectionPlanId, explorerEventSequence.value ?? undefined));
-  eventSource.addEventListener("stream.ready", () => {
-    if (!isConnectionCurrent()) return;
-    replayGate.accept("stream.ready");
-    void refreshTurnsAfterEvent();
-  });
-  eventSource.addEventListener("turn.text.delta", (raw) => {
-    if (!isConnectionCurrent() || !replayGate.accept("turn.text.delta")) return;
-    const payload = JSON.parse((raw as MessageEvent).data) as { turnId: string; text: string };
-    const current = turns.value.find((turn) => turn.id === payload.turnId);
-    if (current) mergeTurn({ ...current, content: current.content + payload.text, status: "RUNNING" });
-    scheduleProjectionRefresh();
-  });
-  eventSource.addEventListener("turn.input_required", async (raw) => {
-    if (!isConnectionCurrent() || !replayGate.accept("turn.input_required")) return;
-    const payload = JSON.parse((raw as MessageEvent).data) as { requestId: string };
-    const response = await api.inputRequests(connectionProjectId, connectionThreadId, connectionPlanId);
-    if (!isConnectionCurrent()) return;
-    setInputRequests(response.items);
-    pendingInput.value = response.items.find((item) => item.id === payload.requestId) ?? null;
-    recoveryInput.value = null;
-    inputDialogOpen.value = Boolean(pendingInput.value?.isBlocking);
-    void refreshPlanProjection();
-  });
-  eventSource.addEventListener("title.updated", (raw) => {
-    if (!isConnectionCurrent() || !replayGate.accept("title.updated")) return;
-    const payload = JSON.parse((raw as MessageEvent).data) as { explorerId: string; title: string; titleStatus: ExplorerThread["titleStatus"] };
-    if (payload.explorerId !== connectionThreadId || !thread.value) return;
-    thread.value = { ...thread.value, title: payload.title, titleStatus: payload.titleStatus };
-    explorers.value = explorers.value.map((item) => item.id === payload.explorerId ? { ...item, title: payload.title, titleStatus: payload.titleStatus } : item);
-  });
-  for (const eventName of ["turn.accepted", "turn.started", "turn.completed", "turn.failed", "turn.cancelled", "turn.input.resolved", "plan.ready"]) eventSource.addEventListener(eventName, () => { if (!isConnectionCurrent() || !replayGate.accept(eventName)) return; void refreshTurnsAfterEvent(); });
-  for (const eventName of ["plan.created", "plan.renamed"]) eventSource.addEventListener(eventName, () => { if (!isConnectionCurrent() || !replayGate.accept(eventName)) return; void refreshPlanProjection(); });
-  eventSource.addEventListener("thread.state.changed", () => { if (!isConnectionCurrent() || !replayGate.accept("thread.state.changed")) return; closeEvents(); void load().then((loaded) => { if (loaded) connectEvents(); }); });
-  connectLoopEvents();
-}
-
-function connectRequirementStatusEvents() {
-  if (!thread.value || typeof EventSource === "undefined") return;
-  const connectionProjectId = projectId.value;
-  const connectionThreadId = thread.value.id;
-  if (requirementStatusEventSource && requirementStatusScope?.projectId === connectionProjectId && requirementStatusScope.threadId === connectionThreadId) return;
-  closeRequirementStatusEvents();
-  const connectionToken = projectScopeToken();
-  const source = new EventSource(api.explorerRequirementStatusEventsUrl(connectionProjectId, connectionThreadId, explorerEventSequence.value ?? undefined));
-  requirementStatusEventSource = source;
-  requirementStatusScope = { projectId: connectionProjectId, threadId: connectionThreadId };
-  source.addEventListener("requirement.status", (raw) => {
-    if (requirementStatusEventSource !== source || !isCurrentProjectScope(connectionProjectId, connectionToken) || thread.value?.id !== connectionThreadId) return;
-    const payload = JSON.parse((raw as MessageEvent).data) as { explorerPlanId: string; turnId: string | null; status: NonNullable<ExplorerPlan["runtimeStatus"]>; occurredAt: string };
-    if (!explorerPlans.value.some((plan) => plan.id === payload.explorerPlanId && plan.explorerThreadId === connectionThreadId)) return;
-    explorerPlans.value = explorerPlans.value.map((plan) => plan.id === payload.explorerPlanId ? { ...plan, runtimeStatus: payload.status, lastActivityAt: payload.occurredAt } : plan);
-  });
-}
-
-function connectLoopEvents() {
-  if (!agentLoop.value || typeof EventSource === "undefined") return;
-  const connectionProjectId = projectId.value;
-  const connectionThreadId = thread.value?.id;
-  const connectionToken = projectScopeToken();
-  const loopId = agentLoop.value.id;
-  loopEventSource?.close();
-  const replayGate = createSseReplayGate();
-  loopEventSource = new EventSource(api.agentLoopEventsUrl(loopId));
-  loopEventSource.addEventListener("stream.ready", () => { replayGate.accept("stream.ready"); });
-  for (const eventName of ["agent.loop.started", "agent.step.started", "agent.step.model_text_delta", "agent.step.tool_requested", "agent.step.tool_completed", "agent.step.tool_denied", "agent.step.tool_failed", "agent.step.tool_needs_reconciliation", "agent.step.input_required", "agent.step.input_resolved", "agent.step.context_compacted", "agent.step.gate_checked", "agent.provider.activity", "agent.input.required", "agent.input.resolved", "agent.loop.paused", "agent.loop.resumed", "agent.loop.completed", "agent.loop.failed", "agent.loop.cancelled", "agent.loop.recovery_required"]) {
-    // 状态与门禁事件立即刷新；步骤级事件（文本增量、工具活动）合并到固定间隔，避免每个事件都拉取 Loop。
-    const immediate = AGENT_LOOP_IMMEDIATE_REFRESH_EVENTS.has(eventName);
-    loopEventSource.addEventListener(eventName, () => {
-      if (!isCurrentProjectScope(connectionProjectId, connectionToken) || thread.value?.id !== connectionThreadId || !replayGate.accept(eventName)) return;
-      const refresh = () => {
-        void api.agentLoop(loopId).then(async (response) => {
-          if (!isCurrentProjectScope(connectionProjectId, connectionToken) || thread.value?.id !== connectionThreadId || agentLoop.value?.id !== loopId) return;
-          agentLoop.value = response.loop;
-          explorerPaused.value = response.loop.state === "PAUSED";
-          await refreshActivity();
-          if (immediate) await refreshPlanProjection();
-        }).catch(() => undefined);
-      };
-      if (immediate) { cancelLoopRefresh(); refresh(); return; }
-      if (loopRefreshTimer !== null) return;
-      loopRefreshTimer = setTimeout(() => { loopRefreshTimer = null; refresh(); }, PROJECTION_REFRESH_INTERVAL_MS);
-    });
-  }
-}
-
-function closeRequirementStatusEvents() { requirementStatusEventSource?.close(); requirementStatusEventSource = null; requirementStatusScope = null; }
-function closeEvents() { eventSource?.close(); loopEventSource?.close(); eventSource = null; loopEventSource = null; cancelProjectionRefresh(); cancelLoopRefresh(); }
 
 function reloadExplorer() {
   closeEvents();
