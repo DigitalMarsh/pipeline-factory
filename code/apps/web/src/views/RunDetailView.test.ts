@@ -21,10 +21,11 @@ describe("Run detail execution conversation", () => {
     expect(runDetailSource).toContain('class="execution-activity-detail"');
   });
 
-  it("supports embedding the complete Run surface inside an Explorer conversation", () => {
+  it("supports embedding the complete Run surface and opening Plan in the shared drawer", () => {
     expect(runDetailSource).toContain("defineProps<{ embedded?: boolean; projectId?: string; runId?: string }>");
-    expect(runDetailSource).toContain("defineEmits<{ (event: \"close\"): void }>");
+    expect(runDetailSource).toContain('defineEmits<{ (event: "close"): void; (event: "open-plan", plan: Plan): void }>()');
     expect(runDetailSource).toContain("detail-page-embedded");
+    expect(runDetailSource).toContain('emit("open-plan", planDetail.value)');
     expect(runDetailSource).toContain("@click=\"closeView\"");
   });
 

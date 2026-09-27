@@ -24,7 +24,7 @@ import { shouldSubmitComposer } from "../utils/composerKeyboard";
 const route = useRoute();
 const router = useRouter();
 const props = withDefaults(defineProps<{ embedded?: boolean; projectId?: string; runId?: string }>(), { embedded: false });
-const emit = defineEmits<{ (event: "close"): void }>();
+const emit = defineEmits<{ (event: "close"): void; (event: "open-plan", plan: Plan): void }>();
 type ExecutionConversationGroup = { id: string; kind: "plan" | "task" | "unassigned"; task?: ExecutionTask; items: ExecutionStreamItem[] };
 const embedded = computed(() => props.embedded);
 const projectId = computed(() => props.projectId ?? String(route.params.projectId ?? ""));
@@ -169,7 +169,7 @@ async function openPlanDetail(): Promise<void> {
   const currentRun = run.value;
   if (!currentRun) return;
   const requestToken = ++planDetailRequestToken;
-  planDetailOpen.value = true;
+  planDetailOpen.value = !embedded.value;
   planDetail.value = null;
   planDetailRevisions.value = [];
   planDetailError.value = null;
@@ -193,6 +193,7 @@ async function openPlanDetail(): Promise<void> {
       mergeRequest: detailResponse.mergeRequest ?? mergeRequest.value,
       runId: currentRun.id,
     };
+    if (embedded.value && planDetail.value) emit("open-plan", planDetail.value);
   } catch (caught) {
     if (requestToken !== planDetailRequestToken) return;
     planDetailError.value = caught instanceof Error ? `无法加载完整 Plan：${caught.message}` : "无法加载完整 Plan";

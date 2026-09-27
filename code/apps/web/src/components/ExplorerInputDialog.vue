@@ -7,11 +7,11 @@ import { computed, nextTick, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { ArrowLeft, ArrowRight, Check, Lock, CircleClose } from "@element-plus/icons-vue";
 import type { ExplorerInputRequest } from "../types";
+import type { ExplorerInputProgress } from "../utils/explorerInputProgressDraft";
 import { allInputQuestionsAnswered, buildInputAnswers, hasFreeformInput, hasSelectableOptions, inputQuestionComplete, nextInputQuestionIndex, previousInputQuestionIndex, resolveQuestionAnswers } from "../utils/explorerInput";
 
-const props = defineProps<{ modelValue: boolean; request: ExplorerInputRequest | null }>();
-type InputProgress = { requestId: string; currentIndex: number; values: Record<string, string[]>; otherValues: Record<string, string> };
-const emit = defineEmits<{ "update:modelValue": [value: boolean]; submit: [answers: Record<string, { answers: string[] }>]; cancel: []; progress: [progress: InputProgress] }>();
+const props = defineProps<{ modelValue: boolean; request: ExplorerInputRequest | null; progress?: ExplorerInputProgress | null }>();
+const emit = defineEmits<{ "update:modelValue": [value: boolean]; submit: [answers: Record<string, { answers: string[] }>]; cancel: []; progress: [progress: ExplorerInputProgress] }>();
 const answers = ref<Record<string, string[]>>({});
 const otherAnswers = ref<Record<string, string>>({});
 const currentIndex = ref(0);
@@ -31,17 +31,18 @@ const isLastQuestion = computed(() => {
 });
 const completedQuestionCount = computed(() => props.request?.questions.filter((question) => inputQuestionComplete(question, answers.value[question.id] ?? [], otherAnswers.value[question.id] ?? "")).length ?? 0);
 
-// 每个请求只初始化一次本地答案；切换问题序号不会丢失其他题目的已选内容。
+// 每个请求只初始化一次本地答案；页面刷新后从对应的草稿恢复非敏感答案。
 watch(() => props.request?.id, async () => {
   const next: Record<string, string[]> = {};
-  for (const question of props.request?.questions ?? []) next[question.id] = [];
+  for (const question of props.request?.questions ?? []) next[question.id] = [...(props.progress?.values[question.id] ?? [])];
   answers.value = next;
-  otherAnswers.value = {};
-  currentIndex.value = 0;
+  otherAnswers.value = { ...(props.progress?.otherValues ?? {}) };
+  const maxIndex = Math.max(0, (props.request?.questions.length ?? 1) - 1);
+  currentIndex.value = Math.max(0, Math.min(maxIndex, props.progress?.currentIndex ?? 0));
   error.value = null;
   await nextTick();
   focusCurrentQuestion();
-});
+}, { immediate: true });
 
 /** 将键盘焦点留在当前题目，避免固定视口切题后用户需要重新寻找输入控件。 */
 function focusCurrentQuestion() {
@@ -64,12 +65,14 @@ function selectQuestion(index: number) {
   if (!props.request || submitting.value || index < 0 || index >= props.request.questions.length) return;
   currentIndex.value = index;
   error.value = null;
+  emitProgress();
   void nextTick(focusCurrentQuestion);
 }
 
 function previousQuestion() {
   currentIndex.value = previousInputQuestionIndex(currentIndex.value);
   error.value = null;
+  emitProgress();
   void nextTick(focusCurrentQuestion);
 }
 
@@ -82,6 +85,7 @@ function nextQuestion() {
   }
   currentIndex.value = nextInputQuestionIndex(currentIndex.value, props.request?.questions.length ?? 0);
   error.value = null;
+  emitProgress();
   void nextTick(focusCurrentQuestion);
 }
 

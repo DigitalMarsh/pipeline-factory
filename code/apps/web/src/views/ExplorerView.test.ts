@@ -23,7 +23,7 @@ describe("Explorer thread actions", () => {
     expect(threadRailSource).toContain('command="policy"');
     expect(threadRailSource).toContain('command="refresh"');
     expect(threadRailSource).toContain('command="toggle-pause"');
-    expect(threadRailSource).toContain('command="new-requirement"');
+    expect(threadRailSource).not.toContain('command="new-requirement"');
     expect(threadRailSource).toContain('command="delete"');
     expect(threadRailSource).toContain("删除线程");
     expect(threadRailSource).toContain("thread-action-danger");
@@ -72,38 +72,30 @@ describe("Provider usage footer wiring", () => {
 });
 
 describe("Explorer project selector wiring", () => {
-  it("loads the project catalog and delegates sidebar selections", () => {
+  it("loads the project catalog and delegates thread navigation", () => {
     expect(explorerViewSource).toContain("api.projects()");
     expect(explorerViewSource).toContain(":panel=\"leftPanel\"");
     expect(explorerViewSource).toContain(":projects=\"projects\"");
     expect(explorerViewSource).toContain(":explorers=\"explorers\"");
     expect(explorerViewSource).toContain(":show-archived=\"showArchivedExplorers\"");
     expect(explorerViewSource).toContain(":explorer-action-id=\"explorerActionId\"");
-    expect(explorerViewSource).toContain(":plan-center-active=\"contextPanel === 'plan-center'\"");
-    expect(explorerViewSource).toContain(":plan-center-count=\"planCenterCount\"");
-    expect(explorerViewSource).toContain(":requirements=\"explorerPlans\"");
-    expect(explorerViewSource).toContain(":active-explorer-plan-id=\"activeExplorerPlan?.id ?? null\"");
-    expect(explorerViewSource).not.toContain(":expanded-task-ids=");
-    expect(explorerViewSource).toContain("@select-explorer-plan=\"selectExplorerPlan($event)\"");
-    expect(explorerViewSource).not.toContain("@toggle-task-expanded=");
-    expect(explorerViewSource).not.toContain("@select-plan-tree-item");
-    expect(explorerViewSource).toContain("@rename-explorer-plan=\"renameExplorerPlan\"");
     expect(explorerViewSource).toContain("@thread-action=\"handleThreadAction\"");
     expect(explorerViewSource).toContain("@select-panel=\"leftPanel = $event\"");
-    expect(explorerViewSource).toContain("@select-plan-center=\"selectContextPanel('plan-center')\"");
     expect(explorerViewSource).toContain("@select-project=\"switchProject\"");
     expect(explorerViewSource).toContain("@select-explorer=\"selectExplorer\"");
     expect(explorerViewSource).toContain("@toggle-show-archived=\"showArchivedExplorers = $event\"");
     expect(explorerViewSource).toContain("@archive-explorer=\"toggleExplorerArchive\"");
     expect(explorerViewSource).toContain("@create-explorer=\"createExplorer\"");
     expect(explorerViewSource).toContain("@create-project=\"openProjectCreateDialog\"");
-    expect(explorerViewSource).toContain("projectPathForModule(\"explore\", selectedProjectId)");
     expect(explorerViewSource).toContain("@open-project=\"switchProject\"");
+    expect(explorerViewSource).not.toContain(":requirements=\"explorerPlans\"");
+    expect(explorerViewSource).not.toContain("@select-plan-center=");
+    expect(explorerViewSource).not.toContain("@select-explorer-plan=");
   });
 
   it("renders Explorer threads inline without the history drawer", () => {
     expect(threadRailSource).toContain("explorer-list");
-    expect(threadRailSource).toContain("class=\"left-panel-create\"");
+    expect(threadRailSource).toContain('class="left-panel-create"');
     expect(explorerViewSource).not.toContain("ExplorerHistoryDrawer");
     expect(explorerViewSource).not.toContain("historyOpen");
     expect(explorerViewSource).not.toContain("open-history");
@@ -112,277 +104,130 @@ describe("Explorer project selector wiring", () => {
   });
 });
 
-describe("Explorer context panel wiring", () => {
-  it("opens Run inside the selected Task conversation without replacing the Explorer shell", () => {
+describe("Explorer requirement list and shared drawer", () => {
+  it("shows the selected thread requirement projection in the center and removes old context panels", () => {
+    expect(explorerViewSource).toContain('import ExplorerRequirementList from "../components/ExplorerRequirementList.vue"');
+    expect(explorerViewSource).toContain('<ExplorerRequirementList');
+    expect(explorerViewSource).toContain(":rows=\"requirementRows\"");
+    expect(explorerViewSource).toContain('@add="openAddRequirementDialog"');
+    expect(explorerViewSource).toContain('@explore="openRequirementChat"');
+    expect(explorerViewSource).toContain('@view-plan="openRequirementPlan"');
+    expect(explorerViewSource).toContain('@open-task="openRequirementTask"');
+    expect(explorerViewSource).toContain("projectExplorerRequirementRows(");
+    expect(explorerViewSource).not.toContain("<PlanCenterPanel");
+    expect(explorerViewSource).not.toContain('class="context-panel-shell"');
+    expect(explorerViewSource).not.toContain('class="context-entry-rail"');
+  });
+
+  it("uses one shared drawer for Explorer chat, full Plan detail, and Run", () => {
+    expect(explorerViewSource).toContain('import PlanDetailContent from "../components/PlanDetailContent.vue"');
     expect(explorerViewSource).toContain('import RunDetailView from "./RunDetailView.vue"');
     expect(explorerViewSource).toContain('const activeRunId = computed(() => typeof route.query.runId === "string" ? route.query.runId : null)');
+    expect(explorerViewSource).toContain('<PlanDetailContent');
     expect(explorerViewSource).toContain('<RunDetailView v-if="activeRunId"');
     expect(explorerViewSource).toContain('@close="closeRunView"');
-    expect(explorerViewSource).toContain('contextPanel === \'plan-center\'');
-    expect(explorerViewSource).toContain('@open-run="openPlanRun"');
-    expect(explorerViewSource).toContain('delete query.runId');
+    expect(explorerViewSource).toContain('role="tablist" aria-label="需求详情类型"');
+    expect(explorerViewSource).toContain("探索对话");
+    expect(explorerViewSource).toContain("Plan 详情");
+    expect(explorerViewSource).toContain("Run");
+    expect(explorerViewSource).toContain("delete query.runId");
+    expect(explorerViewSource).toContain('@open-plan="openPlanDetail"');
   });
 
-  it("keeps the current panel count in the compact context header", () => {
-    expect(explorerViewSource).toContain('class="context-header-title"');
-    expect(explorerViewSource).toContain('class="context-header-count"');
-    expect(explorerViewSource).toContain('id="context-panel-title"');
-    expect(explorerViewSource).toMatch(/class="context-header-count"[^>]*>\{\{ contextPanelCount \}\}/);
-    expect(explorerViewSource).not.toContain('class="context-panel-intro"');
-    expect(explorerViewSource).not.toContain('class="context-section-title"');
-    expect(explorerStylesSource).toContain(".context-header-title");
-    expect(explorerStylesSource).toContain(".context-header-count");
-    expect(explorerStylesSource).not.toContain(".context-section-title");
+  it("shows the selected Plan immediately while full details load and ignores stale detail responses", () => {
+    const openPlanDetailSource = explorerViewSource.match(/async function openPlanDetail\(plan: Plan\): Promise<void> \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(openPlanDetailSource).toContain("detailPlan.value = plan");
+    expect(openPlanDetailSource.indexOf("detailPlan.value = plan")).toBeLessThan(openPlanDetailSource.indexOf("await api.getPlan(planId)"));
+    expect(openPlanDetailSource).toContain("requestVersion === detailRequestVersion");
+    expect(openPlanDetailSource).toContain("currentRevisionDraft.status !== \"CONFIRMED\"");
+    expect(openPlanDetailSource).toContain("detailPlan.value = planFromRevisionDraft(currentRevisionDraft)");
+    expect(openPlanDetailSource).toContain("const generatedSpec = response.plan.generatedSpec ?? plan.generatedSpec");
   });
 
-  it("connects the right entry rail to an independent dynamic panel", () => {
-    expect(explorerViewSource).toContain("contextPanel");
-    expect(explorerViewSource).toContain("context-panel-shell");
-    expect(explorerViewSource).toContain("context-entry-rail");
-    expect(explorerViewSource).toContain("context-entry-button");
-    expect(explorerViewSource).not.toContain("context-panel-nav");
-    expect(explorerViewSource).toContain("data-context");
-    expect(explorerViewSource).toContain('key: "candidate"');
-    expect(explorerViewSource).toContain('key: "confirmed"');
-    expect(explorerViewSource).toContain('key: "dispatched"');
-    expect(explorerViewSource).toContain('key: "active"');
-    expect(explorerViewSource).toContain('key: "attention"');
-    expect(explorerViewSource).toContain("needsAttentionCount");
-    expect(explorerViewSource).toContain("待处理事项");
-    expect(explorerViewSource).toContain("contextPanel === 'attention'");
-    expect(explorerViewSource).toContain("selectContextPanel");
-    expect(explorerViewSource).toContain("context-panel-content");
-    expect(explorerViewSource).toContain('aria-labelledby="context-panel-title"');
-    expect(explorerViewSource).toContain("候选方案");
-    expect(explorerViewSource).toContain("已确认方案");
-    expect(explorerViewSource).toContain("已派发方案");
-    expect(explorerViewSource).toContain("运行中任务");
-    expect(explorerViewSource).toContain("待处理事项");
-    expect(explorerViewSource).toContain("confirmedPlans");
-    expect(explorerViewSource).toContain("api.explorerConfirmedPlans");
-    expect(explorerViewSource).toContain("contextPanel === 'confirmed'");
-    expect(explorerViewSource).not.toContain(":context-selection=\"contextPanel\"");
-    expect(explorerViewSource).not.toContain("@select-context=\"selectContextPanel\"");
+  it("creates a requirement once and keeps failed first messages available for retry", () => {
+    expect(explorerViewSource).toContain("async function openAddRequirementDialog()");
+    expect(explorerViewSource).toContain("api.createExplorerPlan(projectId.value, currentThread.id)");
+    expect(explorerViewSource).toContain("await sendTurn()");
+    expect(explorerViewSource).toContain("async function sendTurn(): Promise<boolean>");
+    expect(explorerViewSource).toContain("failedExplorerSends");
+    expect(explorerViewSource).toContain("clientTurnId");
+    expect(explorerViewSource).toContain("draft.value = content");
   });
 
-  it("uses compact button content instead of long menu descriptions", () => {
-    expect(explorerViewSource).toContain("context-entry-label");
-    expect(explorerViewSource).toContain("context-entry-count");
-    expect(explorerViewSource).not.toContain("context-entry-copy");
-    expect(explorerViewSource).not.toContain("{{ item.description }}");
+  it("preserves confirm and enqueue order while opening the task tab", () => {
+    expect(explorerViewSource).toContain("async function confirmPlan()");
+    expect(explorerViewSource).toContain("api.confirmPlan(");
+    expect(explorerViewSource).toContain("async function enqueuePlan(");
+    expect(explorerViewSource).toContain("api.enqueuePlan(id)");
+    expect(explorerViewSource).toContain("if (isConversationArtifactPlan(plan))");
+    expect(explorerViewSource).toContain("CONVERSATION_ARTIFACT_NOT_EXECUTABLE");
+    expect(explorerViewSource).toContain('drawerTab.value = "task"');
+    expect(explorerViewSource).toContain("taskPanelPlan.status === 'READY' && isConversationArtifactPlan(taskPanelPlan)");
+    expect(explorerViewSource).toContain("返回探索对话修订");
+    expect(explorerViewSource).toContain("此 Plan 是对话产物，不能入队执行。");
+    expect(explorerViewSource).toContain("taskPanelPlan.status === 'READY'");
+    expect(explorerViewSource).toContain("入队和开始运行是两个独立步骤。");
   });
 
-  it("uses Chinese labels for the right context menu and corresponding titles", () => {
-    const contextMenuSource = explorerViewSource.match(/const contextMenuItems = computed\(\(\) => \[[\s\S]*?\n\]\);/)?.[0] ?? "";
-
-    expect(contextMenuSource).toContain('label: "候选方案", railLabel: "候选"');
-    expect(contextMenuSource).toContain('label: "已确认方案", railLabel: "已确认"');
-    expect(contextMenuSource).toContain('label: "已入队方案", railLabel: "已入队"');
-    expect(contextMenuSource).toContain('label: "已派发方案", railLabel: "已派发"');
-    expect(contextMenuSource).toContain('label: "运行中任务", railLabel: "运行中"');
-    expect(contextMenuSource).toContain('label: "待处理事项", railLabel: "待处理"');
-    expect(contextMenuSource).not.toContain('label: "Plan candidates"');
-    expect(contextMenuSource).not.toContain('label: "Confirmed plans"');
-    expect(contextMenuSource).not.toContain('label: "Enqueued plans"');
-    expect(contextMenuSource).not.toContain('label: "Dispatched plans"');
-    expect(contextMenuSource).not.toContain('label: "Active runs"');
-    expect(contextMenuSource).not.toContain('label: "Needs attention"');
-    expect(explorerViewSource).not.toContain('<div class="eyebrow">线程上下文</div>');
-    expect(explorerViewSource).toContain('<div class="context-header-title-row">');
-    expect(explorerViewSource).toContain('aria-label="Refresh"');
-    expect(explorerViewSource).toContain('aria-label="上下文分区"');
-    expect(explorerViewSource).not.toContain('aria-label="线程上下文分区"');
-    expect(explorerStylesSource).toMatch(/\.context-panel-shell \.context-panel \{[^}]*padding: 12px 17px 16px;/);
-    expect(explorerStylesSource).toMatch(/\.context-panel-shell \.context-header \{[^}]*align-items: center;[^}]*padding: 0 5px 10px;/);
-    expect(explorerStylesSource).toContain('.context-panel-shell .context-header-title-row { margin-top: 0; }');
-    expect(explorerStylesSource).toContain('.context-panel-shell .context-panel-content { padding-top: 12px; }');
-  });
-
-  it("renders the context choices as a vertical entry rail", () => {
-    expect(explorerViewSource).toContain('role="tablist"');
-    expect(explorerViewSource).toContain('role="tab"');
-    expect(explorerViewSource).toContain(":aria-selected=");
-    expect(explorerViewSource).toContain("context-entry-button");
-  });
-
-  it("keeps the right entry rail beside the content instead of inside its column", () => {
-    expect(explorerViewSource).toMatch(/<div class="context-panel">[\s\S]*?<div class="context-panel-scroll">[\s\S]*?<\/div>\s*<\/div>\s*<nav class="context-entry-rail"/);
-  });
-
-  it("uses a semantic style hook for the confirmed entry", () => {
-    expect(explorerViewSource).toContain("context-entry-confirmed");
-    expect(explorerStylesSource).toContain(".context-entry-confirmed .context-entry-icon");
-  });
-
-  it("exposes enqueue action for READY plans in the confirmed panel", () => {
-    const confirmedSection = explorerViewSource.match(/<section v-else-if="contextPanel === 'confirmed'"[\s\S]*?<\/section>/)?.[0] ?? "";
-    const enqueueSource = explorerViewSource.match(/async function enqueuePlan[\s\S]*?\n\}/)?.[0] ?? "";
-
-    expect(confirmedSection).toContain("plan.status === 'READY'");
-    expect(confirmedSection).toContain('@click.stop="enqueuePlan(plan)"');
-    expect(confirmedSection).toContain("Enqueue plan");
-    expect(enqueueSource).toContain("plan: Plan | null = candidate.value");
-    expect(enqueueSource).toContain("const id = plan.id ?? plan.planId");
-  });
-
-  it("separates Enqueued from Dispatched and moves the Plan Center entry to the primary rail", () => {
-    const enqueuedSection = explorerViewSource.match(/<section v-else-if="contextPanel === 'enqueued'"[\s\S]*?<\/section>/)?.[0] ?? "";
-    const contextMenuSource = explorerViewSource.match(/const contextMenuItems = computed\(\(\) => \[[\s\S]*?\n\]\);/)?.[0] ?? "";
-
-    expect(explorerViewSource).toContain('key: "enqueued"');
-    expect(contextMenuSource).not.toContain('key: "plan-center"');
-    expect(enqueuedSection).toContain("plan.status === 'ENQUEUED'");
-    expect(enqueuedSection).toContain('@click.stop="startPlanRun(plan)"');
-    expect(enqueuedSection).toContain("Start run");
-    expect(explorerViewSource).toContain('<PlanCenterPanel :project-id="projectId"');
-    expect(explorerViewSource).toContain("contextPanel === 'plan-center'");
-    expect(explorerViewSource).toContain("plan.dispatchedAt !== null");
-  });
-
-  it("makes configuration-blocked dispatched plans recoverable", () => {
-    const dispatchedSection = explorerViewSource.match(/<section v-else-if="contextPanel === 'dispatched'"[\s\S]*?<\/section>/)?.[0] ?? "";
-
-    expect(dispatchedSection).toContain("NEEDS_CONFIGURATION");
-    expect(dispatchedSection).toContain("Configure verification commands");
-    expect(dispatchedSection).toContain("Create updated revision");
-    expect(explorerViewSource).toContain("api.revisePlanConfiguration");
-    expect(planCenterSource).toContain("NEEDS_CONFIGURATION");
-    expect(planCenterSource).toContain("Create updated revision");
-    expect(planCenterSource).toContain("Configure verification commands");
-  });
-
-  it("uses the project-wide run projection for Active runs, including STARTING", () => {
-    const activeSection = explorerViewSource.match(/<section v-else-if="contextPanel === 'active'"[\s\S]*?<\/section>/)?.[0] ?? "";
-
-    expect(explorerViewSource).toContain("const projectRuns = ref<Run[]>([])");
-    expect(explorerViewSource).toContain("api.projectRuns(requestProjectId)");
-    expect(explorerViewSource).toContain('["STARTING", "IN_PROGRESS", "VERIFYING"].includes(run.status)');
-    expect(activeSection).toContain('v-for="plan in activePlans"');
-    expect(activeSection).toContain("TaskLifecycleCard");
-    expect(explorerViewSource).toContain("const activePlans = computed<Plan[]>");
-    expect(activeSection).toContain("Starting, running, and verifying runs across this project appear here.");
-  });
-
-  it("opens the same full-plan drawer from every context stage", () => {
-    expect(explorerViewSource).toContain("const detailPlan = ref<Plan | null>(null)");
-    expect(explorerViewSource).toContain("function openPlanDetail(plan: Plan)");
-    expect(explorerViewSource).toContain('<PlanDetailDrawer v-model="drawerOpen" :plan="detailPlan"');
-    expect(explorerViewSource).toContain('@view-details="openPlanDetail"');
-
-    for (const panel of ["confirmed", "enqueued", "dispatched", "attention"]) {
-      const section = explorerViewSource.match(new RegExp(`<section v-else-if="contextPanel === '${panel}'"[\\s\\S]*?<\\/section>`))?.[0] ?? "";
-      expect(section).toContain('@view-details="openPlanDetail"');
-    }
-
-    expect(explorerViewSource).toContain("TaskLifecycleCard");
-    expect(planCenterSource).toContain("emit('view-plan', plan)");
-    expect(planCenterSource).toContain("View full plan");
-  });
-
-  it("uses the shared lifecycle card across every right-hand task menu", () => {
-    for (const panel of ["candidate", "confirmed", "enqueued", "dispatched", "active", "attention"]) {
-      const section = panel === "candidate"
-        ? explorerViewSource.match(/<section v-if="contextPanel === 'candidate'"[\s\S]*?<\/section>/)?.[0] ?? ""
-        : explorerViewSource.match(new RegExp(`<section v-else-if="contextPanel === '${panel}'"[\\s\\S]*?<\\/section>`))?.[0] ?? "";
-      expect(section).toContain("TaskLifecycleCard");
-    }
-    expect(explorerViewSource).toContain("context-entry-count");
-    expect(explorerViewSource).toContain("context-entry-attention");
-  });
-
-  it("uses the shared card footer for run navigation and keeps attention actions separate", () => {
-    const dispatchedSection = explorerViewSource.match(/<section v-else-if="contextPanel === 'dispatched'"[\s\S]*?<\/section>/)?.[0] ?? "";
-    const attentionSection = explorerViewSource.match(/<section v-else-if="contextPanel === 'attention'"[\s\S]*?<\/section>/)?.[0] ?? "";
-
-    expect(explorerViewSource).not.toContain("function planRunPath");
-    expect(dispatchedSection).not.toContain("View run");
-    expect(attentionSection).not.toContain("Open run");
-    expect(dispatchedSection).toContain("Configure verification commands");
-    expect(dispatchedSection).toContain("Create updated revision");
-    expect(dispatchedSection).toContain('@open-run="openPlanRun"');
-    expect(attentionSection).toContain('@open-run="openPlanRun"');
+  it("routes drawer tabs to the selected requirement's existing Plan and Run", () => {
+    const switchTabSource = explorerViewSource.match(/function switchDrawerTab\(tab: SharedDrawerTab\): void \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(switchTabSource).toContain("void openPlanDetail(selectedRequirementRow.value.plan)");
+    expect(switchTabSource).toContain("row?.run?.id ?? row?.plan?.runId ?? row?.plan?.dispatch?.runId");
+    expect(switchTabSource).toContain("void openRunView(runId, thread.value?.id, row?.explorerPlan.id)");
   });
 });
 
-describe("Explorer panel state independence", () => {
-  it("keeps left navigation and right context selection as separate state", () => {
+describe("Explorer thread and drawer state", () => {
+  it("keeps thread navigation separate and preserves the per-thread selected requirement", () => {
     expect(explorerViewSource).toContain('type LeftPanel = "projects" | "explorers"');
     expect(explorerViewSource).toContain('const leftPanel = ref<LeftPanel>("explorers")');
-    expect(explorerViewSource).toContain('const contextPanel = ref<ContextPanel>("candidate")');
-    expect(explorerViewSource).toContain('const confirmedPlans = ref<Plan[]>([])');
-    expect(explorerViewSource).toContain("function syncPanelStateFromRoute()");
-    expect(explorerViewSource).toContain("function panelStateQuery()");
     expect(explorerViewSource).toContain("function explorerRouteQuery");
-    expect(explorerViewSource).toContain("...panelStateQuery()");
-
-    const resetSource = explorerViewSource.match(/function resetProjectState\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
-    expect(resetSource).not.toContain("leftPanel.value");
-    expect(resetSource).not.toContain('contextPanel.value = "candidate"');
+    expect(explorerViewSource).toContain("query.explorerPlanId");
+    expect(explorerViewSource).toContain("selected.activeExplorerPlanId");
+    expect(explorerViewSource).toContain("explorerPlans.value[0]?.id ?? null");
+    expect(explorerViewSource).toContain("function resetThreadState()");
+    expect(explorerViewSource).toContain("drawerOpen.value = false");
+    expect(explorerViewSource).toContain('drawerTab.value = "explorer"');
   });
 
-  it("keeps Explorer as the refresh default and removes left-panel persistence from navigation", () => {
-    expect(explorerViewSource).toContain('const leftPanel = ref<LeftPanel>("explorers")');
-    expect(explorerViewSource).toContain("function explorerRouteQuery");
-    expect(explorerViewSource).not.toContain("const routeLeftPanel = route.query.leftPanel");
-    expect(explorerViewSource).toMatch(/function panelStateQuery\(\) \{[\s\S]*?return \{ contextPanel: contextPanel\.value \};/);
+  it("closes and clears the drawer when switching threads", () => {
+    const resetSource = explorerViewSource.match(/function resetThreadState\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(resetSource).toContain("drawerOpen.value = false");
+    expect(resetSource).toContain("detailPlan.value = null");
+    expect(explorerViewSource).toContain("function selectExplorer(explorerId: string)");
+    expect(explorerViewSource).toContain("void reloadSelectedExplorer()");
   });
 });
 
-describe("Explorer candidate action layout", () => {
-  it("does not offer manual candidate creation when the thread has no candidate", () => {
-    const candidateSection = explorerViewSource.match(/<section v-if="contextPanel === 'candidate'"[\s\S]*?<\/section>/)?.[0] ?? "";
-
-    expect(candidateSection).toContain("No candidate plan");
-    expect(candidateSection).not.toContain("Create candidate plan");
+describe("Explorer requirement actions", () => {
+  it("does not offer an unrelated manual candidate creation action", () => {
     expect(explorerViewSource).not.toContain("candidateEmptyOpen");
     expect(explorerViewSource).not.toContain("candidateTitle");
     expect(explorerViewSource).not.toContain("createCandidate");
     expect(explorerViewSource).not.toContain("api.createExplorerCandidate");
   });
-
-  it("keeps right-panel plan actions on one equal-width row", () => {
-    expect(explorerStylesSource).toMatch(/\.context-plan-card \.candidate-actions \{[^}]*flex-wrap: nowrap;/);
-    expect(explorerStylesSource).toMatch(/\.context-plan-card \.candidate-actions \.el-button \{[^}]*flex: 1 1 0;[^}]*min-width: 0;[^}]*margin-left: 0;/);
-  });
 });
 
 describe("Explorer rail layout", () => {
-  it("gives both rails fixed entry columns while preserving timeline-only scrolling", () => {
+  it("uses a two-column shell and adapts the requirement list for narrow screens", () => {
     expect(explorerStylesSource).toContain(".left-entry-rail");
-    expect(explorerStylesSource).toContain(".context-entry-rail");
-    expect(explorerStylesSource).toContain(".context-panel-shell");
-    expect(explorerStylesSource).toMatch(/grid-template-columns: 330px minmax\(560px, 1fr\) 360px;/);
+    expect(explorerStylesSource).toContain(".console-layout { grid-template-columns: 330px minmax(0, 1fr); }");
+    expect(explorerStylesSource).toContain(".shared-drawer-shell");
+    expect(explorerStylesSource).toContain(".shared-drawer-tabs");
+    expect(explorerStylesSource).toMatch(/@media \(max-width: 720px\)[\s\S]*?\.shared-drawer-header/);
     expect(explorerStylesSource).toContain(".timeline { flex: 1 1 auto;");
-    expect(explorerStylesSource).toContain("overflow-y: auto;");
     expect(explorerStylesSource).toContain(".composer { flex: 0 0 auto;");
   });
 });
 
 describe("Explorer inline message presentation", () => {
-  it("renders only requirement nodes in the thread rail while keeping expandable user summaries", () => {
-    expect(threadRailSource).toContain('class="explorer-thread-tree"');
-    expect(explorerViewSource).toContain(":requirements=\"explorerPlans\"");
-    expect(threadRailSource).toContain('aria-label="探索线程与需求导航"');
-    expect(threadRailSource).toContain("<el-tree");
-    expect(threadRailSource).toContain('node-key="key"');
-    expect(threadRailSource).toContain(':default-expand-all="true"');
-    expect(threadRailSource).toContain(':expand-on-click-node="false"');
-    expect(threadRailSource).toContain('kind: "requirement" as const');
-    expect(threadRailSource).not.toContain("等待生成 Plan");
-    expect(threadRailSource).not.toContain("explorer-tree-plan-button");
-    expect(explorerViewSource).not.toContain('class="task-tree-rail"');
-    expect(explorerViewSource).not.toContain(">MESSAGES</span>");
-    expect(explorerStylesSource).toMatch(/\.timeline-stage \{[^}]*position: relative;/);
-    expect(explorerStylesSource).toContain(".explorer-thread-tree { box-sizing: border-box; min-width: 0; width: 100%;");
-    expect(explorerStylesSource).toContain(".explorer-thread-tree .el-tree-node__expand-icon");
-    expect(explorerStylesSource).toContain(".explorer-thread-tree > .el-tree-node > .el-tree-node__children::before");
-    expect(explorerStylesSource).toContain(".explorer-thread-tree > .el-tree-node > .el-tree-node__children > .el-tree-node::after");
-    expect(explorerStylesSource).toContain(".explorer-thread-row-head { display: flex; box-sizing: border-box; min-width: 0; width: 100%;");
-    expect(explorerStylesSource).toContain(".explorer-tree-rename:hover, .explorer-tree-rename:focus-visible");
+  it("keeps the left thread rail clear of requirement rows while retaining accessible chat summaries", () => {
+    expect(threadRailSource).not.toContain("<el-tree");
+    expect(threadRailSource).not.toContain("explorer-thread-tree");
+    expect(threadRailSource).not.toContain('command="new-requirement"');
     expect(explorerViewSource).toContain('class="user-message-summary"');
     expect(explorerViewSource).toContain(':aria-expanded="isUserMessageExpanded(item.activity.id)"');
     expect(explorerViewSource).toContain('@click="toggleUserMessage(item.activity.id)"');
-    expect(explorerViewSource).toContain('class="user-message-summary-preview"');
     expect(explorerViewSource).toContain('class="user-message-content"');
     expect(explorerStylesSource).toContain(".user-message-summary:focus-visible");
   });
@@ -410,62 +255,32 @@ describe("Explorer inline message presentation", () => {
     expect(explorerScopeSource).toContain('return itemPlanId === activePlanId;');
   });
 
-  it("renders one accessible requirement node per ExplorerPlan, restores selection and scopes its workspace", () => {
+  it("projects one accessible center row per current-thread requirement", () => {
+    const listSource = readFileSync(fileURLToPath(new URL("../components/ExplorerRequirementList.vue", import.meta.url)), "utf8");
     expect(explorerViewSource).toContain("const explorerPlans = ref<ExplorerPlan[]>([])");
-    expect(explorerViewSource).toContain("const activeExplorerPlanId = ref<string | null>(null)");
     expect(explorerViewSource).toContain("api.explorerPlanGroups(requestProjectId, selected.id)");
     expect(explorerViewSource).toContain("api.createExplorerPlan(projectId.value, currentThread.id)");
     expect(explorerViewSource).toContain("api.explorerPlanWorkspace");
     expect(explorerViewSource).toContain("route.query.explorerPlanId");
-    expect(threadRailSource).toContain('class="explorer-tree-task-button"');
-    expect(threadRailSource).toContain("taskDisplayTitle(data.requirement)");
-    expect(threadRailSource).toContain("taskRuntimeLabel(data.requirement)");
-    expect(threadRailSource).toContain("emit('select-explorer-plan', data.requirement.id)");
-    expect(threadRailSource).toContain("emit('rename-explorer-plan', data.requirement.id)");
-    expect(explorerViewSource).toContain('@select="selectPlanFromCard"');
-    expect(threadRailSource).toContain('command="new-requirement"');
-    expect(explorerViewSource).toContain("新建需求");
-    expect(explorerViewSource).not.toContain('command="new-plan"');
-    expect(explorerViewSource).not.toContain("新建 Plan");
-    expect(explorerViewSource).toContain("const requirementDrafts = new Map<string, string>()");
+    expect(explorerViewSource).toContain("const requirementRows = computed(() => projectExplorerRequirementRows(");
+    expect(listSource).toContain('aria-label="当前探索线程的需求清单"');
+    expect(listSource).toContain("row.planStatus.label");
+    expect(listSource).toContain("row.taskStatus.label");
+    expect(listSource).toContain("查看 V{{ row.plan.revision }}");
+    expect(listSource).toContain("新增需求");
+    expect(listSource).toContain("这个探索线程还没有需求");
+    expect(explorerViewSource).toContain("requirementDrafts");
     expect(explorerViewSource).not.toContain('aria-label="Plan timeline"');
-    expect(explorerViewSource).not.toContain("EXPLORER PLANS");
-    expect(explorerStylesSource).not.toContain(".timeline-rail-plans");
   });
 });
 
-describe("Explorer context panel dark theme", () => {
-  it("uses the left navigation palette across the right panel surfaces", () => {
-    expect(explorerStylesSource).toMatch(/\.context-panel-shell \{[^}]*background: #101827;/);
-    expect(explorerStylesSource).toMatch(/\.context-panel-shell \.context-panel \{[^}]*background: #101827;/);
-    expect(explorerStylesSource).toMatch(/\.context-entry-rail \{[^}]*border-left: 1px solid #29364d;[^}]*background: #101a2b;/);
-    expect(explorerStylesSource).toMatch(/\.context-entry-button \{[^}]*border: 1px solid #293b58;[^}]*background: #16253d;[^}]*color: #91a5c0;/);
-    expect(explorerStylesSource).toMatch(/\.context-entry-button\.active \{[^}]*border-color: #4c9cf0;[^}]*background: #24548b;[^}]*color: #fff;/);
-    expect(explorerStylesSource).toMatch(/\.context-panel-shell \.context-plan-card \{[^}]*border: 1px solid #355b8b;[^}]*background: #16253d;/);
-    expect(explorerStylesSource).toMatch(/\.context-panel-shell \.context-plan-row \{[^}]*border: 1px solid #293b58;[^}]*background: #16253d;/);
-  });
-
-  it("keeps dark-theme interaction states and semantic entry colors", () => {
-    expect(explorerStylesSource).toMatch(/\.context-entry-button:hover, \.context-entry-button:focus-visible \{[^}]*border-color: #4f86d7;[^}]*background: #1b3559;[^}]*color: #dcecff;/);
-    expect(explorerStylesSource).toContain(".context-entry-confirmed .context-entry-icon { color: #70d5a4; }");
-    expect(explorerStylesSource).toContain(".context-entry-dispatched .context-entry-icon { color: #9ddcff; }");
-    expect(explorerStylesSource).toContain(".context-entry-active .context-entry-icon { color: #75baf2; }");
-    expect(explorerStylesSource).toContain(".context-entry-attention .context-entry-icon { color: #f19aa0; }");
-  });
-
-  it("keeps task-card exceptions separate from the neutral card header", () => {
-    expect(explorerStylesSource).toContain(".task-lifecycle-card-head { display: block; min-width: 0; }");
-    expect(explorerStylesSource).toContain(".task-lifecycle-card-title-row { display: flex; min-width: 0; min-height: calc(2 * 1.36em); align-items: center; gap: 8px; }");
-    expect(explorerStylesSource).toContain("height: calc(2 * 1.36em);");
-    expect(explorerStylesSource).toContain(".task-lifecycle-card-version { flex: 0 0 auto; align-self: center;");
-    expect(explorerStylesSource).toContain(".task-lifecycle-timeline { --task-lifecycle-row-gap: 12px; display: grid; min-width: 0; margin-top: 2px;");
-    expect(explorerStylesSource).toContain(".task-lifecycle-row-connector-arrow");
-    expect(explorerStylesSource).toContain(".task-lifecycle-row-reverse .task-lifecycle-row-connector-arrow");
-    expect(explorerStylesSource).toContain(".task-lifecycle-row-turn-arrow");
-    expect(explorerStylesSource).not.toContain(".task-lifecycle-row-line");
-    expect(explorerStylesSource).not.toContain(".task-lifecycle-card-icon");
-    expect(explorerStylesSource).toContain(".task-lifecycle-exception-icon");
-    expect(explorerStylesSource).toContain(".task-lifecycle-exception-current");
+describe("Explorer requirement and drawer styling", () => {
+  it("styles the center list, shared drawer and actionable statuses", () => {
+    expect(explorerStylesSource).toContain(".requirement-list-panel");
+    expect(explorerStylesSource).toContain(".requirement-table-row");
+    expect(explorerStylesSource).toContain(".shared-drawer-shell");
+    expect(explorerStylesSource).toContain(".shared-drawer-tabs button:focus-visible");
+    expect(explorerStylesSource).toContain(".task-action-panel");
   });
 });
 
@@ -653,13 +468,20 @@ describe("Explorer composer availability", () => {
   it("keeps the composer editable and locks sending only for the active requirement", () => {
     expect(explorerViewSource).toContain(`<textarea v-model="draft" :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || explorerPaused"`);
     expect(explorerViewSource).not.toContain(`<textarea v-model="draft" :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || explorerPaused || busy"`);
-    expect(explorerViewSource).toContain(`:loading="activePlanBusy || sendingCurrentPlan"`);
+    expect(explorerViewSource).toContain(`:loading="activePlanBusy && !activePlanWaitingForInput || sendingCurrentPlan"`);
     expect(explorerViewSource).toContain(`|| explorerPaused || activePlanBusy || sendingCurrentPlan || busy"`);
   });
 
   it("explains why the send button is unavailable while the selected requirement is running", () => {
-    expect(explorerViewSource).toContain(`:title="activePlanBusy ? '当前需求回合执行中，完成后可继续' : 'Send message'"`);
+    expect(explorerViewSource).toContain(`:title="pendingInput ? '请先回答上方结构化问题' : activePlanBusy ? '当前需求回合执行中，完成后可继续' : 'Send message'"`);
     expect(explorerViewSource).toContain(`if (!content || activePlanBusy.value || sendingCurrentPlan.value || busy.value || !thread.value || thread.value.state === "ARCHIVED"`);
+  });
+
+  it("restores saved answers after refresh and explains submissions still awaiting provider confirmation", () => {
+    expect(explorerViewSource).toContain("loadExplorerInputProgressDraft(scope, draftRequest)");
+    expect(explorerViewSource).toContain("saveExplorerInputProgressDraft(scope, request, progress)");
+    expect(explorerViewSource).toContain("item.status === \"SUBMITTING\"");
+    expect(explorerViewSource).toContain("正在提交结构化答案，确认后本轮会继续");
   });
 });
 

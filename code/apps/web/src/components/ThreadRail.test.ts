@@ -134,13 +134,11 @@ describe("ThreadRail left workspace navigation", () => {
     const mounted = mountRail();
     const entries = [...mounted.host.querySelectorAll<HTMLButtonElement>("button.left-entry-button")];
 
-    expect(entries).toHaveLength(3);
-    expect(entries.map((entry) => entry.textContent?.trim())).toEqual(["探索", "项目", "计划中心2"]);
+    expect(entries).toHaveLength(2);
+    expect(entries.map((entry) => entry.textContent?.trim())).toEqual(["探索", "项目"]);
     expect(entries[0]?.getAttribute("aria-selected")).toBe("true");
     expect(entries[1]?.getAttribute("aria-selected")).toBe("false");
-    expect(entries[2]?.getAttribute("aria-selected")).toBe("false");
-    expect(entries[2]?.getAttribute("data-left-context")).toBe("plan-center");
-    expect(entries[2]?.getAttribute("aria-label")).toBe("计划中心");
+    expect(mounted.host.querySelector('[data-left-context="plan-center"]')).toBeNull();
     expect(mounted.host.querySelector(".explorer-list")).not.toBeNull();
 
     mounted.app.unmount();
@@ -302,43 +300,30 @@ describe("ThreadRail left workspace navigation", () => {
     expect(currentThread?.querySelector(".explorer-list-item")?.textContent ?? "").not.toContain("explorer-1");
     expect(currentThread?.classList.contains("active")).toBe(true);
     expect(currentThread?.getAttribute("aria-current")).toBe("page");
-    expect(currentThread?.getAttribute("aria-expanded")).toBe("true");
-    expect(mounted.host.querySelector<HTMLButtonElement>('button[data-explorer-id="explorer-2"]')?.getAttribute("aria-expanded")).toBe("false");
+    expect(mounted.host.querySelector<HTMLButtonElement>('button[data-explorer-id="explorer-2"]')?.classList.contains("active")).toBe(false);
 
     mounted.app.unmount();
     mounted.host.remove();
   });
 
-  it("renders only numbered requirements under the active Explorer and keeps the connector clear", async () => {
+  it("keeps requirement navigation out of the Explorer thread rail", async () => {
     const mounted = mountRail();
     const activeRow = mounted.host.querySelector<HTMLElement>('[data-explorer-id="explorer-1"]');
     const inactiveRow = mounted.host.querySelector<HTMLElement>('[data-explorer-id="explorer-2"]');
 
-    expect(activeRow?.querySelector(".explorer-thread-tree")).not.toBeNull();
-    expect(activeRow?.querySelector(".el-tree")).not.toBeNull();
-    expect(activeRow?.querySelectorAll(".el-tree-node")).toHaveLength(3);
-    expect(activeRow?.querySelectorAll(".explorer-tree-task-row")).toHaveLength(2);
-    expect(activeRow?.querySelectorAll(".explorer-tree-plan-button")).toHaveLength(0);
-    expect(activeRow?.textContent).toContain("需求1：写一份苹果的简介");
-    expect(activeRow?.textContent).toContain("需求2：写一份香蕉的简介");
-    expect(source).toContain("<el-tree");
-    expect(source).toContain(":default-expand-all=\"true\"");
-    expect(source).toContain(":expand-on-click-node=\"false\"");
-    expect(styles).toContain(".explorer-thread-tree .el-tree-node__expand-icon { display: none; }");
-    expect(styles).toContain(".explorer-thread-tree > .el-tree-node > .el-tree-node__children::before");
-    expect(styles).toContain(".explorer-thread-tree > .el-tree-node > .el-tree-node__children > .el-tree-node::after");
-    expect(styles).toContain(".explorer-thread-tree > .el-tree-node > .el-tree-node__children::before { position: absolute; top: 0; bottom: 20px;");
-    expect(styles).toContain(".explorer-thread-row-head { display: flex; box-sizing: border-box; min-width: 0; width: 100%;");
-    expect(styles).toContain(".thread-rail .explorer-tree-task-row.active { border-left-color:");
+    expect(activeRow?.querySelector(".explorer-thread-tree")).toBeNull();
+    expect(mounted.host.querySelector(".el-tree")).toBeNull();
+    expect(activeRow?.querySelectorAll(".explorer-tree-task-row")).toHaveLength(0);
+    expect(activeRow?.textContent).not.toContain("写一份苹果的简介");
+    expect(activeRow?.textContent).not.toContain("写一份香蕉的简介");
     expect(inactiveRow?.querySelector(".explorer-thread-tree")).toBeNull();
-    expect(activeRow?.querySelector<HTMLButtonElement>(".explorer-tree-task-button")?.getAttribute("aria-current")).toBe("page");
+    expect(source).not.toContain("<el-tree");
+    expect(source).not.toContain('command="new-requirement"');
 
-    activeRow?.querySelectorAll<HTMLButtonElement>(".explorer-tree-task-button")[1]?.click();
-    activeRow?.querySelector<HTMLButtonElement>('[aria-label="重命名需求2：写一份香蕉的简介"]')?.click();
+    activeRow?.querySelector<HTMLButtonElement>('button[data-explorer-id="explorer-1"]')?.click();
     await nextTick();
 
-    expect(mounted.getSelectedExplorerPlanId()).toBe("requirement-2");
-    expect(mounted.getRenamedExplorerPlanId()).toBe("requirement-2");
+    expect(mounted.getSelectedExplorerId()).toBe("explorer-1");
 
     mounted.app.unmount();
     mounted.host.remove();
@@ -491,20 +476,16 @@ describe("ThreadRail left workspace navigation", () => {
     mounted.host.remove();
   });
 
-  it("moves only Plan Center into the left rail", async () => {
+  it("does not put Plan Center in the left rail", async () => {
     const mounted = mountRail();
 
     expect(mounted.host.querySelector(".rail-nav")).toBeNull();
     expect(mounted.host.querySelectorAll("button[data-context]")).toHaveLength(0);
-    expect(mounted.host.querySelector<HTMLButtonElement>('button[data-left-context="plan-center"]')).not.toBeNull();
+    expect(mounted.host.querySelector<HTMLButtonElement>('button[data-left-context="plan-center"]')).toBeNull();
     expect(mounted.host.textContent).not.toContain("Plan candidates");
     expect(mounted.host.textContent).not.toContain("Dispatched plans");
     expect(mounted.host.textContent).not.toContain("Active runs");
     expect(mounted.host.textContent).not.toContain("Needs attention");
-
-    mounted.host.querySelector<HTMLButtonElement>('button[data-left-context="plan-center"]')?.click();
-    await nextTick();
-    expect(mounted.getSelectedPlanCenter()).toBe(true);
 
     mounted.app.unmount();
     mounted.host.remove();

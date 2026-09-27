@@ -322,6 +322,21 @@ export type PlanTask = {
   dependencies: string[];
 };
 
+export type GeneratedPlanSpec = {
+  schemaVersion: 2;
+  title: string;
+  artifact: { mode: "CONVERSATION" | "REPOSITORY_FILE"; path?: string };
+  objective: { goal: string; audience: string[]; acceptanceCriteria: string[]; outOfScope: string[] };
+  design: { technicalConstraints: string[]; dataSecurity: string[]; failureHandling: string[] };
+  scope: { includePaths: string[]; excludePaths: string[] };
+  tasks: Array<{ id: string; title: string; dependencies: string[]; status?: "PENDING" | "READY" | "DONE" }>;
+  dependencies: string[];
+  conflicts: string[];
+  execution: { executorModelRole?: string; toolPolicy?: string; maxRepairAttempts?: number };
+  verification: { mode: "PROJECT_DEFAULT" | "NONE" };
+  merge: { strategy: "manual" | "fast-forward" | "squash"; requireHumanMerge: true };
+};
+
 export type ExecutionTaskStatus = "PENDING" | "IN_PROGRESS" | "DONE" | "BLOCKED" | "UNKNOWN";
 export type ExecutionTask = PlanTask & {
   id: string;
@@ -382,7 +397,7 @@ export type Plan = {
     dependsOnPlanIds?: string[];
   };
   resolvedContract?: ResolvedPlanContract;
-  generatedSpec?: { artifact: { mode: "CONVERSATION" | "REPOSITORY_FILE"; path?: string }; objective?: { audience?: string[] }; design?: { technicalConstraints: string[]; dataSecurity: string[]; failureHandling: string[] }; conflicts?: string[] };
+  generatedSpec?: GeneratedPlanSpec;
   dispatch?: PlanDispatchState | null;
   mergeRequest?: MergeRequest | null;
 };

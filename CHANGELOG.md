@@ -1,6 +1,36 @@
 # Changelog
 
-## 2026-09-27 — 当前提交
+## 2026-09-27 — Explorer 需求工作台与交互恢复
+
+### Added
+
+- 新增当前 ExplorerThread 的需求清单投影：按需求序号稳定排序，将需求、有效 Plan 修订和关联 Run 汇总到同一行；点击 Plan 状态、结构化 Plan 或任务状态分别进入探索对话、Plan 详情或 Run。
+- 新增需求行组件与共享右侧抽屉页签，支持当前需求的探索对话、Plan 详情、待入队操作和 Run 对话；线程切换会清除旧线程抽屉内容，并保持需求选择与路由状态一致。
+- 新增 Explorer 输入回答草稿恢复：在当前浏览器标签页保存需求范围内的非敏感回答和题目位置，刷新后恢复；敏感题答案不写入 sessionStorage，已结束请求会清理草稿。
+- 将完整 Plan 正文抽为可复用组件，并读取 `generatedSpec` 的 V2 结构化字段，使完整解析契约尚未生成时也能查看目标、范围、任务、产物和执行策略。
+
+### Changed
+
+- 左侧线程栏仅显示 Project 与 ExplorerThread，移除其下的需求子项；需求新增入口和清单移到主工作区。新增需求后在当前线程创建对应 ExplorerPlan，并将描述作为首条探索消息；发送失败时保留该需求以便重试。
+- Plan 已确认但尚未创建 Run 时，Run 页签显示待入队状态；对话型 Plan 会在入队前给出不可执行原因和修订指引，处理 `CONVERSATION_ARTIFACT_NOT_EXECUTABLE`，不改变服务端接口或生命周期顺序。
+- 线程和需求切换时同步更新清单范围、路由与抽屉状态，避免旧需求内容残留；响应式布局覆盖窄屏清单和抽屉展示。
+
+### Changed files
+
+- 组件：`code/apps/web/src/components/ExplorerInputDialog.vue`、`code/apps/web/src/components/ExplorerRequirementList.vue`、`code/apps/web/src/components/PlanDetailContent.vue`、`code/apps/web/src/components/PlanDetailDrawer.vue`、`code/apps/web/src/components/ThreadRail.vue`。
+- 页面与类型：`code/apps/web/src/views/ExplorerView.vue`、`code/apps/web/src/views/RunDetailView.vue`、`code/apps/web/src/styles.css`、`code/apps/web/src/types.ts`。
+- 工具：`code/apps/web/src/utils/explorerInputProgressDraft.ts`、`code/apps/web/src/utils/explorerRequirementRows.ts`。
+- 测试：`code/apps/web/src/components/PlanDetailDrawer.test.ts`、`code/apps/web/src/components/ThreadRail.test.ts`、`code/apps/web/src/views/ExplorerView.test.ts`、`code/apps/web/src/views/RunDetailView.test.ts`、`code/apps/web/src/utils/explorerInputProgressDraft.test.ts`、`code/apps/web/src/utils/explorerRequirementRows.test.ts`。
+- 文档：`CHANGELOG.md`。
+
+### Verification
+
+- `npm --prefix code/apps/web test`：54 个测试文件、274 个测试通过。
+- `npm --prefix code/apps/web run typecheck` 与 `npm --prefix code/apps/web run build` 通过；构建仍提示存在大于 500 kB 的 chunk。
+- `git diff --check` 通过。
+- 浏览器全流程验收未完成：当时 API 与 Web 健康检查失败（过期 PID 文件且端点不可用），已打开的浏览器标签也未能完成自动化交互；自动化测试和构建不能替代运行中的浏览器验收。
+
+## 2026-09-27 — 执行线程与 Run 可观测性
 
 ### Added
 
