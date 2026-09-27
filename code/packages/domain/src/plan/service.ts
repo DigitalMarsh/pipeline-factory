@@ -12,23 +12,22 @@
  *      updatePlanStatus 的路径都遵守这一点，新增路径也要。
  *   2) `revision` 是**单调递增的版本号**，确认/修订时取 `plan.revision + 1` 而不是从
  *      revision 表里 max+1。Revision 一旦落库就 freezeRevision（不可变），历史版本永不改写。
- *   3) 本文件里的三个模块级辅助有各自的历史包袱，别当成随手可改的工具：
+ *   3) 本文件里的两个模块级辅助有各自的历史包袱，别当成随手可改的工具：
  *      - defaultPlanContract 是 V1 契约的兜底（老 Plan 没有可执行的 V2 契约时用它），
  *        它的 acceptanceCriteria 文案会被前端原样展示；
  *      - executionContractFromResolvedV2 把 V2 解析结果"投影回" V1 形状，是 V1/V2 并存的
  *        过渡层，删除它会立刻打断所有读 contract 的老路径；
- *      - verifiedProjectBaseline **会执行 git 子进程**（execFileSync）。它是领域层混入 IO 的
- *        具体坏味道，已记入批 D 的待迁清单（目标 git/baseline.ts），本轮暂不搬动以免与
- *        其余 git IO 迁移交错。
+ *      - verifiedProjectBaseline 在批 D 已搬去 **git/baseline.ts**（它会执行 git 子进程，原先
+ *        是本文件里唯一的 IO）。本文件现在只 import 它，不再自己碰 Git。
  *   4) 查询侧（query / listThreadPlans / listProjectPlans）用的是 plan/query.ts 的投影与游标，
  *      投影字段的增删要同步两个 Store 实现，见该文件的维护提示。
  */
 import { createHash } from "node:crypto";
-import { execFileSync } from "node:child_process";
 import { parseGeneratedPlanSpecV2, resolvePlanContractV2 } from "./plan-v2.js";
 import { validatePlanContract } from "./contract.js";
 import { updatePlanStatus } from "./status-transition.js";
 import { freezeRevision } from "../platform/freeze.js";
+import { verifiedProjectBaseline } from "../git/baseline.js";
 import { ProjectService } from "../project/project.js";
 import { selectCurrentExplorer } from "../explorer/thread-selection.js";
 import { decodePlanCursor, encodePlanCursor, planQueryProjectionFor } from "./query.js";
@@ -103,16 +102,6 @@ function executionContractFromResolvedV2(contract: ResolvedPlanContractV2): Plan
     dependsOnPlanIds: [],
     priority: 0,
   };
-}
-
-function verifiedProjectBaseline(project: Project): { baseBranch: string; baseCommit: string } {
-  try {
-    const baseCommit = execFileSync("git", ["rev-parse", "--verify", `${project.defaultBranch}^{commit}`], { cwd: project.repoRoot, encoding: "utf8" }).trim();
-    if (!baseCommit) throw new Error("empty commit");
-    return { baseBranch: project.defaultBranch, baseCommit };
-  } catch (error) {
-    throw new Error(`Project ${project.id} has no verified Git baseline: ${error instanceof Error ? error.message : String(error)}`);
-  }
 }
 
 /**
