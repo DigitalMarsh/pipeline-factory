@@ -40,6 +40,11 @@ export { assessPlanCompletion, type PlanArtifact, type PlanCompletionAssessment 
 // ToolGateway 用纯 re-export：搬走之后 index.ts 内部已不再使用它，无需为它建本地绑定
 // （api 的 server.ts 与多个测试仍从本 barrel 取它，所以必须保留导出）。
 export { ToolGateway, type ToolGatewayOptions } from "./tools/gateway.js";
+// PipelineStore 是**类型**，纯 re-export 不涉及运行时绑定，天然不会引出 S1 那类 ReferenceError；
+// 而它被 index.ts 内部大量用作参数类型（`store: PipelineStore`），所以仍用 import + export 两条，
+// 保持"类型在本模块作用域内可见"。
+import type { PipelineStore } from "./store/pipeline-store.js";
+export type { PipelineStore };
 export { EXECUTION_SLOT_RUN_STATUSES, ProjectService } from "./project/project.js";
 export { redactAuditPayload, redactAuditText } from "./platform/redaction.js";
 export type { CreateProjectInput, Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings, ProjectSettingsInput, ProjectStatus, ProjectSummary, UpdateProjectInput } from "./project/project.js";
@@ -776,108 +781,6 @@ export type HookExecution = {
   stderr: string;
   startedAt: string;
   completedAt: string;
-};
-
-/** Domain 的持久化端口；内存和 SQLite 实现必须保持相同的事实及事件语义。 */
-export type PipelineStore = {
-  now(): string;
-  nextId(prefix: string): string;
-  saveThread(input: RegisterThreadInput): ExplorerThread;
-  getThread(id: string): ExplorerThread | undefined;
-  listThreads(): ExplorerThread[];
-  updateThread(thread: ExplorerThread): ExplorerThread;
-  saveExplorerPlan(plan: ExplorerPlan): ExplorerPlan;
-  getExplorerPlan(id: string): ExplorerPlan | undefined;
-  listExplorerPlans(threadId?: string): ExplorerPlan[];
-  updateExplorerPlan(plan: ExplorerPlan): ExplorerPlan;
-  saveProject(project: Project): Project;
-  getProject(projectId: string): Project | undefined;
-  saveProjectExecutionThread(thread: ProjectExecutionThread): ProjectExecutionThread;
-  getProjectExecutionThread(projectId: string): ProjectExecutionThread | undefined;
-  updateProjectExecutionThread(thread: ProjectExecutionThread): ProjectExecutionThread;
-  saveProjectExecutionMessage(message: ProjectExecutionMessage): ProjectExecutionMessage;
-  getProjectExecutionMessageByClientTurnId(threadId: string, clientTurnId: string): ProjectExecutionMessage | undefined;
-  listProjectExecutionMessages(threadId: string): ProjectExecutionMessage[];
-  updateProjectExecutionMessage(message: ProjectExecutionMessage): ProjectExecutionMessage;
-  listProjects(): Project[];
-  updateProject(project: Project): Project;
-  saveProjectConfigRevision(revision: ProjectConfigRevision): ProjectConfigRevision;
-  listProjectConfigRevisions(projectId: string): ProjectConfigRevision[];
-  saveTurn(turn: ExplorerTurn): ExplorerTurn;
-  updateTurn(turn: ExplorerTurn): ExplorerTurn;
-  listTurns(threadId: string): ExplorerTurn[];
-  saveInputRequest(request: ExplorerInputRequest): ExplorerInputRequest;
-  getInputRequest(id: string): ExplorerInputRequest | undefined;
-  listInputRequests(threadId: string, status?: ExplorerInputRequestStatus): ExplorerInputRequest[];
-  updateInputRequest(request: ExplorerInputRequest): ExplorerInputRequest;
-  savePlan(plan: CandidatePlan): CandidatePlan;
-  getPlan(id: string): CandidatePlan | undefined;
-  listPlans(): CandidatePlan[];
-  updatePlan(plan: CandidatePlan): CandidatePlan;
-  saveCandidateVersion(plan: CandidatePlan): CandidatePlan;
-  listCandidateVersions(planId: string): CandidatePlan[];
-  saveDispatchState(state: PlanDispatchState): PlanDispatchState;
-  /** 删除当前调度投影；历史状态变更仍保留在领域事件中。 */
-  deleteDispatchState(planId: string): void;
-  getDispatchState(planId: string): PlanDispatchState | undefined;
-  listDispatchStates(projectId?: string): PlanDispatchState[];
-  saveRevision(revision: PlanRevisionV2): PlanRevisionV2;
-  getRevision(planId: string, revision: number): PlanRevisionV2 | undefined;
-  listRevisions(planId: string): PlanRevisionV2[];
-  saveRevisionDraft(draft: PlanRevisionDraft): PlanRevisionDraft;
-  getRevisionDraft(draftId: string): PlanRevisionDraft | undefined;
-  listRevisionDrafts(planId?: string): PlanRevisionDraft[];
-  updateRevisionDraft(draft: PlanRevisionDraft): PlanRevisionDraft;
-  saveRevisionLifecycleProjection(projection: RevisionLifecycleProjection): RevisionLifecycleProjection;
-  listRevisionLifecycleProjections(projectId?: string, planId?: string): RevisionLifecycleProjection[];
-  saveChangeProposal(proposal: ChangeProposal): ChangeProposal;
-  getChangeProposal(id: string): ChangeProposal | undefined;
-  listChangeProposals(runId?: string): ChangeProposal[];
-  updateChangeProposal(proposal: ChangeProposal): ChangeProposal;
-  saveRun(run: Run): Run;
-  getRun(runId: string): Run | undefined;
-  listRuns(): Run[];
-  saveExecutionThread(thread: ExecutionThread): ExecutionThread;
-  getExecutionThread(threadId: string): ExecutionThread | undefined;
-  appendExecutionJournal(input: { executionThreadId: string; runId: string; type: JournalEntryType; payload: Record<string, unknown>; occurredAt?: string }): ExecutionJournalEntry;
-  saveHookExecution(execution: HookExecution): HookExecution;
-  listHookExecutions(runId?: string): HookExecution[];
-  savePlanQueryProjection(projection: PlanQueryProjection): PlanQueryProjection;
-  listPlanQueryProjection(projectId?: string): PlanQueryProjection[];
-  saveVerificationRun(verification: VerificationRun): VerificationRun;
-  getVerificationRun(runId: string): VerificationRun | undefined;
-  listVerificationRuns(runId?: string): VerificationRun[];
-  saveMergeRequest(request: MergeRequest): MergeRequest;
-  getMergeRequest(requestId: string): MergeRequest | undefined;
-  findMergeRequestByRun(runId: string): MergeRequest | undefined;
-  listMergeRequests(): MergeRequest[];
-  updateMergeRequest(request: MergeRequest): MergeRequest;
-  saveAgentLoop(loop: AgentLoop): AgentLoop;
-  getAgentLoop(loopId: string): AgentLoop | undefined;
-  listAgentLoops(ownerId?: string): AgentLoop[];
-  updateAgentLoop(loop: AgentLoop): AgentLoop;
-  appendAgentLoopStep(step: AgentLoopStepInput): AgentLoopStep;
-  listAgentLoopSteps(loopId: string, options?: { stepTypes?: readonly string[] }): AgentLoopStep[];
-  /** 只返回 Loop 当前最大步骤序号；用于事件序号推进，避免为此读取全部步骤。 */
-  getLastAgentLoopStepSequence(loopId: string): number;
-  recoverAgentLoops(): AgentLoop[];
-  saveToolCall(call: PersistedToolCall): PersistedToolCall;
-  getToolCall(callId: string): PersistedToolCall | undefined;
-  listToolCalls(loopId?: string): PersistedToolCall[];
-  updateToolCall(call: PersistedToolCall): PersistedToolCall;
-  appendEvent(event: Omit<DomainEvent, "id" | "occurredAt" | "sequence">): DomainEvent;
-  subscribeEvents?(listener: (event: DomainEvent) => void): () => void;
-  /**
-   * 按序号升序读取事件。aggregateIds 与 types 是把过滤下推到存储层的手段，
-   * 让调用方不必为了筛出少量事件而把整张事件表读进内存；空数组等同于不筛选。
-   */
-  listEvents(options?: { afterSequence?: number; aggregateId?: string; aggregateIds?: readonly string[]; types?: readonly string[]; limit?: number }): DomainEvent[];
-  getLastEventSequence(aggregateId?: string): number;
-  deleteExplorerCascade(input: ExplorerDeletionInput): ExplorerDeletionSummary;
-  getIdempotency(scope: string, key: string): Record<string, unknown> | undefined;
-  saveIdempotency(scope: string, key: string, result: Record<string, unknown>): void;
-  /** Optional store-level transaction used for startup recovery atomicity. */
-  runInTransaction?<T>(work: () => T): T;
 };
 
 const DEFAULT_HOOK_TIMEOUT_MS = 120_000;
