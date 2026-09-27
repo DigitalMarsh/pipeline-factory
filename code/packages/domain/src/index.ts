@@ -45,6 +45,17 @@ export { ToolGateway, type ToolGatewayOptions } from "./tools/gateway.js";
 // 保持"类型在本模块作用域内可见"。
 import type { PipelineStore } from "./store/pipeline-store.js";
 export type { PipelineStore };
+// Plan Center 的查询投影与游标。5 个类型原本就是 `export type`（公共契约），且 index.ts 内部
+// （PlanService.query / SqlitePipelineStore 行映射）直接把它们用作签名类型，所以 import + export 两条都要。
+// 三个函数原先未 export，只 import 不 re-export。
+import { encodePlanCursor, decodePlanCursor, planQueryProjectionFor, type PlanIndexRow, type PlanQuery, type PlanQueryProjection, type PlanQueryResult, type PlanQuerySort } from "./plan/query.js";
+export type { PlanIndexRow, PlanQuery, PlanQueryProjection, PlanQueryResult, PlanQuerySort };
+// freezeDeep 搬走后在 index.ts 内已无引用（只有 freezeRevision 仍在用），故只 import freezeRevision。
+import { freezeRevision } from "./platform/freeze.js";
+// store/records.ts 的 11 个辅助原先都是 index.ts 的**内部**函数（未 export），只 import 不 re-export。
+// 它们是 Store 两个实现与 ExplorerService / ExplorerThreadService 的共用依赖；留在 index.ts 会让
+// 批 B 搬 store 时产生 store → index 的值级回流边，P2 刚清零的环会重新出现。
+import { containsAnyString, defaultExplorerPlan, defaultPlanExploration, defaultThreadContextSummary, isVerificationRun, parsePlanValidationIssues, parseStringArray, parseThreadContextSummary, stripPlanProtocol, summarizeExplorerMessage, threadTitleMetadata } from "./store/records.js";
 export { EXECUTION_SLOT_RUN_STATUSES, ProjectService } from "./project/project.js";
 export { redactAuditPayload, redactAuditText } from "./platform/redaction.js";
 export type { CreateProjectInput, Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings, ProjectSettingsInput, ProjectStatus, ProjectSummary, UpdateProjectInput } from "./project/project.js";
@@ -358,100 +369,6 @@ export type RevisionLifecycleProjection = {
   lastEventAt: string;
 };
 
-/** Plan Center 和 Explorer Plans 导航使用的轻量索引行。 */
-export type PlanIndexRow = {
-  planId: string;
-  title: string;
-  revision: number;
-  status: PlanStatus;
-  projectId: string;
-  sourceExplorerThreadId: string;
-  explorerPlanId?: string;
-  sourceTurnId: string | null;
-  providerThreadId: string | null;
-  providerTurnId: string | null;
-  providerItemId: string | null;
-  createdAt: string;
-  queuedAt: string | null;
-  dispatchedAt?: string | null;
-  runId: string | null;
-  lastEventAt: string;
-  attentionReason: string | null;
-  priority: number;
-};
-
-/** Plan Center 使用的持久化查询投影；只包含可检索、可排序的只读字段。 */
-export type PlanQueryProjection = {
-  planId: string;
-  projectId: string;
-  sourceExplorerThreadId: string;
-  sourceTurnId: string | null;
-  title: string;
-  goal: string;
-  revision: number;
-  status: PlanStatus;
-  priority: number;
-  createdAt: string;
-  queuedAt: string | null;
-  dispatchedAt?: string | null;
-  lastEventAt: string;
-  runId: string | null;
-  attentionReason: string | null;
-};
-
-export type PlanQuerySort = "queued_at" | "last_event_at" | "priority" | "status";
-
-/** Plan Center 的完整查询契约；cursor 与 sort 一起形成稳定分页边界。 */
-export type PlanQuery = {
-  projectId: string;
-  explorerThreadId?: string;
-  includeLineage?: boolean;
-  status?: PlanStatus[];
-  q?: string;
-  from?: string;
-  to?: string;
-  cursor?: string;
-  limit: number;
-  sort: PlanQuerySort;
-};
-
-export type PlanQueryResult = { items: PlanIndexRow[]; nextCursor: string | null };
-
-function planQueryProjectionFor(plan: CandidatePlan): PlanQueryProjection {
-  return {
-    planId: plan.id,
-    projectId: plan.projectId,
-    sourceExplorerThreadId: plan.sourceExplorerThreadId,
-    sourceTurnId: plan.sourceTurnId,
-    title: plan.title,
-    goal: plan.contract.goal,
-    revision: plan.revision,
-    status: plan.status,
-    priority: plan.contract.priority ?? 0,
-    createdAt: plan.createdAt,
-    queuedAt: plan.queuedAt,
-    dispatchedAt: plan.dispatchedAt ?? null,
-    lastEventAt: plan.lastEventAt,
-    runId: plan.runId,
-    attentionReason: plan.attentionReason,
-  };
-}
-
-type PlanCursor = { sort: PlanQuerySort; planId: string };
-
-function encodePlanCursor(cursor: PlanCursor): string {
-  return Buffer.from(JSON.stringify(cursor), "utf8").toString("base64url");
-}
-
-function decodePlanCursor(value: string): PlanCursor {
-  try {
-    const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as Partial<PlanCursor>;
-    if (typeof parsed.planId !== "string" || !parsed.planId || !["queued_at", "last_event_at", "priority", "status"].includes(parsed.sort ?? "")) throw new Error("invalid");
-    return { planId: parsed.planId, sort: parsed.sort as PlanQuerySort };
-  } catch {
-    throw new Error("Invalid Plan query cursor");
-  }
-}
 
 function selectCurrentExplorer(store: PipelineStore, thread: ExplorerThread): void {
   const project = store.getProject(thread.projectId);
@@ -785,104 +702,11 @@ export type HookExecution = {
 
 const DEFAULT_HOOK_TIMEOUT_MS = 120_000;
 
-function defaultPlanExploration(): PlanExploration {
-  return { status: "INCOMPLETE", missing: [...REQUIRED_PLAN_AREAS], completed: [], diagnostics: [], candidatePlanId: null, lastAssessedTurnId: null };
-}
-
-function defaultExplorerPlan(thread: Pick<ExplorerThread, "id" | "projectId" | "createdAt">, id: string, ordinal: number, now: string): ExplorerPlan {
-  return {
-    id,
-    explorerThreadId: thread.id,
-    projectId: thread.projectId,
-    ordinal,
-    title: `Plan ${ordinal} / 待探索`,
-    titleSource: "AUTO",
-    titleStatus: "PLACEHOLDER",
-    messageCount: 0,
-    latestUserMessageSummary: null,
-    exploration: defaultPlanExploration(),
-    candidatePlanId: null,
-    newPlanRequested: false,
-    lastAssessedTurnId: null,
-    createdAt: thread.createdAt,
-    lastActivityAt: now,
-  };
-}
-
-function defaultThreadContextSummary(now: string): ExplorerThreadContextSummary {
-  return { version: 1, updatedAt: now, completedPlans: [], openPlanIds: [] };
-}
-
-function isVerificationRun(value: unknown): value is VerificationRun {
-  if (!isRecord(value)) return false;
-  return typeof value.id === "string"
-    && typeof value.runId === "string"
-    && (value.status === "PASSED" || value.status === "SKIPPED" || value.status === "FAILED" || value.status === "BLOCKED")
-    && typeof value.repairAttempts === "number"
-    && Number.isInteger(value.repairAttempts)
-    && Array.isArray(value.commandResults)
-    && typeof value.completedAt === "string";
-}
-
-function parseStringArray(value: unknown, fallback: string[]): string[] {
-  if (typeof value !== "string") return [...fallback];
-  try { const parsed: unknown = JSON.parse(value); return isStringArray(parsed) ? parsed : [...fallback]; } catch { return [...fallback]; }
-}
-
-function parseThreadContextSummary(value: unknown, fallbackTime: string): ExplorerThreadContextSummary {
-  if (typeof value !== "string") return defaultThreadContextSummary(fallbackTime);
-  try {
-    const parsed = JSON.parse(value) as Partial<ExplorerThreadContextSummary>;
-    if (parsed.version !== 1 || !Array.isArray(parsed.completedPlans) || !Array.isArray(parsed.openPlanIds)) return defaultThreadContextSummary(fallbackTime);
-    return { version: 1, updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : fallbackTime, completedPlans: parsed.completedPlans as ExplorerThreadContextSummary["completedPlans"], openPlanIds: parsed.openPlanIds.filter((id): id is string => typeof id === "string") };
-  } catch {
-    return defaultThreadContextSummary(fallbackTime);
-  }
-}
-
-function parsePlanValidationIssues(value: unknown): PlanValidationIssue[] {
-  try {
-    const parsed = JSON.parse(String(value ?? "[]"));
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter((item): item is PlanValidationIssue => isRecord(item)
-      && typeof item.path === "string"
-      && typeof item.code === "string"
-      && typeof item.area === "string"
-      && typeof item.message === "string")
-      .map((item) => ({ path: item.path, code: item.code as PlanValidationIssue["code"], area: item.area, message: item.message }));
-  } catch { return []; }
-}
-
-const LEGACY_AUTO_TITLES = new Set(["New Explorer", "Previous exploration", "ExplorerThread"]);
-
-function threadTitleMetadata(title: string | undefined, createdAt: string): { title: string; titleSource: ExplorerTitleSource; titleStatus: ExplorerTitleStatus } {
-  const normalized = title?.trim();
-  if (!normalized || LEGACY_AUTO_TITLES.has(normalized)) return { title: placeholderExplorerTitle(createdAt), titleSource: "AUTO", titleStatus: "PLACEHOLDER" };
-  return { title: normalized, titleSource: "MANUAL", titleStatus: "GENERATED" };
-}
 
 function projectPlaceholderExplorerTitle(store: PipelineStore, thread: ExplorerThread): string {
   return placeholderExplorerTitle(thread.createdAt, store.getProject(thread.projectId)?.shortName);
 }
 
-function containsAnyString(value: unknown, ids: ReadonlySet<string>): boolean {
-  if (typeof value === "string") return ids.has(value);
-  if (Array.isArray(value)) return value.some((item) => containsAnyString(item, ids));
-  if (isRecord(value)) return Object.values(value).some((item) => containsAnyString(item, ids));
-  return false;
-}
-
-function stripPlanProtocol(content: string): string {
-  return content
-    .replace(/<pipeline-factory-plan-status>[\s\S]*?<\/pipeline-factory-plan-status>/gi, "")
-    .replace(/<pipeline-factory-plan>[\s\S]*?<\/pipeline-factory-plan>/gi, "")
-    .trim();
-}
-
-function summarizeExplorerMessage(content: string): string {
-  const normalized = content.replace(/\s+/g, " ").trim();
-  return normalized.length > 180 ? `${normalized.slice(0, 177)}…` : normalized;
-}
 
 /** 用于测试和轻量集成的内存 Store，不改变领域服务的持久化接口。 */
 export class InMemoryPipelineStore implements PipelineStore {
@@ -2770,17 +2594,6 @@ function verifiedProjectBaseline(project: Project): { baseBranch: string; baseCo
   }
 }
 
-function freezeDeep<T>(value: T): T {
-  if (value && typeof value === "object" && !Object.isFrozen(value)) {
-    Object.freeze(value);
-    for (const child of Object.values(value as Record<string, unknown>)) freezeDeep(child);
-  }
-  return value;
-}
-
-function freezeRevision(revision: PlanRevisionV2): PlanRevisionV2 {
-  return freezeDeep(revision);
-}
 
 /**
  * 负责 ExplorerThread、CandidatePlan、Confirm、Enqueue 和 Revision 的业务边界。
