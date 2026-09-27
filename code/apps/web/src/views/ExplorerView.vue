@@ -42,7 +42,7 @@ import { explorerTimelineTarget as activityTarget, explorerPlanAnchorId, inputRe
 import { activityIconKind, activityKindLabel, activityStatusLabel, explorerDisplayTitle, formatTurnTime } from "../utils/explorerPresentation";
 import { planStatusLabel as statusLabel } from "../utils/planStatus";
 
-import { formatAgentLoopCompletion, formatAgentLoopGate, formatAgentLoopTerminal } from "../utils/agentLoopPresentation";
+import { formatAgentLoopCompletion, formatAgentLoopGate, formatAgentLoopState, formatAgentLoopTerminal } from "../utils/agentLoopPresentation";
 import { summarizeUserMessage as userMessageSummary } from "../utils/messageSummary";
 import { canCreateConfigurationRevision as canCreateConfigurationRevisionFor } from "../utils/runPrerequisites";
 
@@ -146,7 +146,7 @@ const contextMenuItems = computed(() => [
   { key: "attention" as ContextPanel, label: "待处理事项", railLabel: "待处理", entryClass: "context-entry-attention", count: needsAttentionCount.value, icon: Warning },
 ]);
 const contextUsage = computed(() => formatContextUsage(turns.value));
-const agentLoopLabel = computed(() => ({ CREATED: "Created", RUNNING: "Running", WAITING_FOR_INPUT: "Waiting for input", PAUSED: "Paused", RECOVERING: "Recovery required", BLOCKED: "Blocked", COMPLETED: "Completed", FAILED: "Failed", CANCELLED: "Cancelled", NEEDS_RECONCILIATION: "Needs reconciliation" } as Record<string, string>)[agentLoop.value?.state ?? ""] ?? "No active loop");
+const agentLoopLabel = computed(() => formatAgentLoopState(agentLoop.value?.state));
 const agentLoopGateLabel = computed(() => formatAgentLoopGate(agentLoop.value?.diagnostics));
 const agentLoopTerminalLabel = computed(() => formatAgentLoopTerminal(agentLoop.value?.diagnostics));
 const agentLoopCompletionLabel = computed(() => agentLoop.value ? formatAgentLoopCompletion(agentLoop.value) : null);

@@ -19,6 +19,7 @@ import { executionTaskStatusLabel, executionTaskSummary, projectExecutionTasks }
 import { canTerminateRun } from "../utils/runControls";
 import { describeRunLoadError } from "../utils/runLoadError";
 import { createProjectRequestScope } from "../utils/projectRoutes";
+import { formatAgentLoopState } from "../utils/agentLoopPresentation";
 import { shouldSubmitComposer } from "../utils/composerKeyboard";
 
 const route = useRoute();
@@ -62,7 +63,7 @@ let telemetryTimer: ReturnType<typeof setInterval> | null = null;
 let planDetailRequestToken = 0;
 // ExecutionThread journal 是持久化事实，conversation projection 只负责把事实转换为可读消息。
 // sequence 同时作为 SSE 游标，重连时从最后一条已接受的事件继续回放。
-const loopStatusLabel = computed(() => ({ CREATED: "Created", RUNNING: "Running", WAITING_FOR_INPUT: "Waiting for input", PAUSED: "Paused", RECOVERING: "Recovery required", BLOCKED: "Blocked", COMPLETED: "Completed", FAILED: "Failed", CANCELLED: "Cancelled", NEEDS_RECONCILIATION: "Needs reconciliation" } as Record<string, string>)[executorLoop.value?.state ?? ""] ?? "No loop");
+const loopStatusLabel = computed(() => formatAgentLoopState(executorLoop.value?.state, "No loop"));
 const executionStatusLabel = computed(() => runStreamConnected.value ? "Live" : ["IN_PROGRESS", "STARTING"].includes(run.value?.status ?? "") ? "Reconnecting" : "Saved");
 const executionBlockReason = computed(() => {
   for (const entry of [...(thread.value?.journal ?? [])].reverse()) {

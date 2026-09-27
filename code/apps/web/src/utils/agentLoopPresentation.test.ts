@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { formatAgentLoopCompletion, formatAgentLoopGate, formatAgentLoopTerminal } from "./agentLoopPresentation";
+import { formatAgentLoopCompletion, formatAgentLoopGate, formatAgentLoopState, formatAgentLoopTerminal } from "./agentLoopPresentation";
 
 describe("agent loop presentation", () => {
+  it("shares state labels while allowing each surface to choose its empty fallback", () => {
+    expect(formatAgentLoopState("WAITING_FOR_INPUT")).toBe("Waiting for input");
+    expect(formatAgentLoopState(undefined)).toBe("No active loop");
+    expect(formatAgentLoopState(undefined, "No loop")).toBe("No loop");
+  });
+
   it("labels an incomplete plan with the missing areas", () => {
     expect(formatAgentLoopGate({ lastGate: { action: "continue", reason: "PLAN_INCOMPLETE:完整方案缺少验收标准与验证命令" } })).toBe("Plan incomplete · 验收标准与验证命令");
     expect(formatAgentLoopGate({ lastGate: { action: "complete", reason: "PLAN_READY" } })).toBe("Plan ready");

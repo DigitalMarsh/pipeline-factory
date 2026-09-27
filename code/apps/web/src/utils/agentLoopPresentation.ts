@@ -1,5 +1,22 @@
 import type { AgentLoop, AgentLoopDiagnostics } from "../types";
 
+const AGENT_LOOP_STATE_LABELS: Record<string, string> = {
+  CREATED: "Created",
+  RUNNING: "Running",
+  WAITING_FOR_INPUT: "Waiting for input",
+  PAUSED: "Paused",
+  RECOVERING: "Recovery required",
+  BLOCKED: "Blocked",
+  COMPLETED: "Completed",
+  FAILED: "Failed",
+  CANCELLED: "Cancelled",
+  NEEDS_RECONCILIATION: "Needs reconciliation",
+};
+
+export function formatAgentLoopState(state: string | null | undefined, fallback = "No active loop"): string {
+  return AGENT_LOOP_STATE_LABELS[state ?? ""] ?? fallback;
+}
+
 export function formatAgentLoopGate(diagnostics?: Pick<AgentLoopDiagnostics, "lastGate">): string | null {
   const gate = diagnostics?.lastGate;
   if (!gate) return null;
