@@ -8,7 +8,11 @@ import { promisify } from "node:util";
 import { AgentLoopEngine, type AgentLoop, type AgentLoopEvent, type AgentLoopMode, type GateContext } from "./agent-loop.js";
 import { resolveExecutorWorkingDirectory } from "./executor-working-directory.js";
 import { TaskProgressGate } from "./termination-gates.js";
-import { mergeModelUsage, normalizeModelUsage, updatePlanStatus, type ExecutionTelemetry, type ModelGateway, type ModelRoleConfig, type PipelineStore, type PlanRevisionV2, type Run } from "./index.js";
+import { mergeModelUsage, normalizeModelUsage } from "./model/usage.js";
+import { updatePlanStatus } from "./plan/status-transition.js";
+// 用 import type 而不是"具名绑定带 type 前缀"：这样"本模块对 index.js 只剩类型依赖"是显式的，
+// check-cycles.mjs 也据此判定这条回流边已被切断。
+import type { ExecutionTelemetry, ModelGateway, ModelRoleConfig, PipelineStore, PlanRevisionV2, Run } from "./index.js";
 import type { ToolRuntime } from "./tool-runtime.js";
 
 const REPORT_START = "<pipeline-factory-execution-report>";

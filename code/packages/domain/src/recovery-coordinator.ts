@@ -3,7 +3,10 @@
  *
  * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
  */
-import { updatePlanStatus, type AgentLoop, type PipelineStore, type PlanStatus, type RunStatus } from "./index.js";
+import { updatePlanStatus } from "./plan/status-transition.js";
+// 用 import type 而不是"具名绑定带 type 前缀"：这样"本模块对 index.js 只剩类型依赖"是显式的，
+// check-cycles.mjs 也据此判定这条回流边已被切断。
+import type { AgentLoop, PipelineStore, PlanStatus, RunStatus } from "./index.js";
 
 /** 启动恢复协调器，把未完成 Loop、未知工具副作用和 Run/Plan 投影恢复到可诊断状态。 */
 export class RecoveryCoordinator {

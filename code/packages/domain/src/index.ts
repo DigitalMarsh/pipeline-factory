@@ -27,8 +27,10 @@ import type { GeneratedPlanSpecV2, PlanValidationIssue, ResolvedPlanContractV2 }
  */
 import { EXPLORER_PLAN_INSTRUCTIONS, EXPLORER_PLAN_REQUIREMENTS, REQUIRED_PLAN_AREAS, type ExplorerPlanRequirement } from "./platform/plan-requirements.js";
 import { mergeModelUsage, normalizeModelUsage, type ModelUsage, type ModelUsageScope } from "./model/usage.js";
+import { updatePlanStatus } from "./plan/status-transition.js";
 export { EXPLORER_PLAN_INSTRUCTIONS, EXPLORER_PLAN_REQUIREMENTS, REQUIRED_PLAN_AREAS, type ExplorerPlanRequirement };
 export { mergeModelUsage, normalizeModelUsage, type ModelUsage, type ModelUsageScope };
+export { updatePlanStatus };
 export { EXECUTION_SLOT_RUN_STATUSES, ProjectService } from "./project.js";
 export { redactAuditPayload, redactAuditText } from "./redaction.js";
 export type { CreateProjectInput, Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings, ProjectSettingsInput, ProjectStatus, ProjectSummary, UpdateProjectInput } from "./project.js";
@@ -3009,31 +3011,6 @@ function freezeRevision(revision: PlanRevisionV2): PlanRevisionV2 {
  * 负责 ExplorerThread、CandidatePlan、Confirm、Enqueue 和 Revision 的业务边界。
  * CandidatePlan 的状态变化始终先写事实，再追加领域事件，避免 UI 投影领先于持久化状态。
  */
-/** 统一记录 Plan 状态变更；领域语义事件仍由各业务服务分别保留。 */
-export function updatePlanStatus(
-  store: PipelineStore,
-  plan: CandidatePlan,
-  updates: Partial<CandidatePlan>,
-  reason?: string | null,
-): CandidatePlan {
-  const updated = store.updatePlan({ ...plan, ...updates });
-  if (updated.status !== plan.status) {
-    store.appendEvent({
-      type: "plan.status.changed",
-      aggregateId: plan.id,
-      payload: {
-        planId: plan.id,
-        fromStatus: plan.status,
-        toStatus: updated.status,
-        revision: updated.revision,
-        runId: updated.runId,
-        reason: reason ?? updated.attentionReason ?? null,
-      },
-    });
-  }
-  return updated;
-}
-
 export class PlanService {
   private readonly projects: ProjectService;
 
