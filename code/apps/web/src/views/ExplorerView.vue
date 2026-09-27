@@ -14,7 +14,7 @@ import ExplorerPolicyDrawer from "../components/ExplorerPolicyDrawer.vue";
 import ThreadRail from "../components/ThreadRail.vue";
 import ExplorerRequirementList from "../components/ExplorerRequirementList.vue";
 import { isConversationArtifactPlan, projectExplorerRequirementRows } from "../utils/explorerRequirementRows";
-import { isTimelineAtLatest as isTimelineAtLatestPosition, scrollTimelineToLatest } from "../utils/scrollTimeline";
+import { scrollTimelineToLatest } from "../utils/scrollTimeline";
 import { optional } from "../utils/optional";
 import { closePolicyPanel, openPolicyPanel } from "../utils/policyPanel";
 import { createOptimisticUserTurn, settleOptimisticTurn } from "../utils/optimisticTurn";
@@ -44,11 +44,14 @@ import { buildExplorerTimeline, explorerTimelineTarget as activityTarget, explor
 import { activityIconKind, activityKindLabel, activityStatusLabel, explorerDisplayTitle, formatTurnTime, inputStatusLabel as inputStatusText } from "../utils/explorerPresentation";
 import { planStatusLabel as statusLabel } from "../utils/planStatus";
 import { belongsToExplorerPlan } from "../utils/explorerScope";
+
 import { formatAgentLoopCompletion, formatAgentLoopGate, formatAgentLoopTerminal } from "../utils/agentLoopPresentation";
 import { summarizeUserMessage as userMessageSummary } from "../utils/messageSummary";
 import { canCreateConfigurationRevision as canCreateConfigurationRevisionFor } from "../utils/runPrerequisites";
 import { clearExplorerInputProgressDraft, loadExplorerInputProgressDraft, saveExplorerInputProgressDraft } from "../utils/explorerInputProgressDraft";
 import type { ExplorerInputProgress, ExplorerInputProgressScope } from "../utils/explorerInputProgressDraft";
+
+import { useTimelineScroll } from "../composables/useTimelineScroll";
 
 const route = useRoute();
 const router = useRouter();
@@ -119,7 +122,6 @@ const creatingExplorer = ref(false);
 const showArchivedExplorers = ref(false);
 const explorerActionId = ref<string | null>(null);
 const projectActionId = ref<string | null>(null);
-const showScrollToLatest = ref(false);
 const timeline = ref<HTMLElement | null>(null);
 const pendingInput = ref<ExplorerInputRequest | null>(null);
 const recoveryInput = ref<ExplorerInputRequest | null>(null);
@@ -191,8 +193,6 @@ const selectedRequirementRow = computed(() => requirementRows.value.find((row) =
 const sharedDrawerTitle = computed(() => selectedRequirementRow.value?.title ?? (activeExplorerPlan.value ? taskDisplayTitle(activeExplorerPlan.value) : "需求详情"));
 const taskPanelPlan = computed(() => selectedRequirementRow.value?.plan ?? null);
 const explorationProgress = computed(() => activeExplorerPlan.value?.exploration ?? thread.value?.exploration ?? { status: "INCOMPLETE" as const, missing: [], completed: [], diagnostics: [], candidatePlanId: null, lastAssessedTurnId: null });
-const activeTimelineKey = ref("");
-const activePlanKey = ref("");
 const expandedUserMessageIds = ref<Set<string>>(new Set());
 function belongsToActivePlan(planId: string | null | undefined): boolean {
   return belongsToExplorerPlan(planId, activeExplorerPlan.value?.id ?? null);
@@ -235,6 +235,12 @@ const activePlans = computed<Plan[]>(() => activeRuns.value.map((run) => {
 const planBindings = computed(() => buildPlanActivityBindings(activeTaskPlans.value, visibleActivity.value));
 const detachedPlans = computed(() => activeTaskPlans.value.filter((plan) => ![...planBindings.value.values()].some((bound) => planIdentity(bound) === planIdentity(plan))));
 const timelineItems = computed(() => buildExplorerTimeline(visibleActivity.value, visibleInputRequests.value, detachedPlans.value));
+
+/**
+ * 时间线滚动状态（"是否已到底"与两条激活键）交给 composable。
+ * `timeline` 的模板 ref 留在本文件——`ref="timeline"` 要求它是个顶层绑定。
+ */
+const { activePlanKey, activeTimelineKey, jumpToLatest, jumpToTimelineTarget, showScrollToLatest, updateTimelineScrollState } = useTimelineScroll(timeline, { visibleActivity, planBindings });
 
 function setPolicyOpen(value: boolean) {
   policyOpen.value = value ? openPolicyPanel(policyOpen.value) : closePolicyPanel(policyOpen.value);
@@ -538,48 +544,6 @@ function applyPlanProjection(projection: ReturnType<typeof normalizePlanProjecti
   confirmedPlans.value = confirmed.filter((plan) => plan.status === "READY");
   enqueued.value = projection.dispatched.filter((plan) => plan.status === "ENQUEUED");
   dispatched.value = projection.dispatched.filter((plan) => plan.dispatchedAt !== null && plan.dispatchedAt !== undefined);
-}
-
-function jumpToTimelineTarget(targetId: string, key: string) {
-  const target = document.getElementById(targetId);
-  if (!timeline.value || !target) return;
-  const timelineRect = timeline.value.getBoundingClientRect();
-  const targetRect = target.getBoundingClientRect();
-  const targetTop = timeline.value.scrollTop + targetRect.top - timelineRect.top - 20;
-  timeline.value.scrollTo({ top: Math.max(0, targetTop), behavior: "smooth" });
-  activeTimelineKey.value = target.dataset.navKey?.startsWith("message-") ? target.dataset.navKey : key;
-  activePlanKey.value = key.startsWith("plan-") ? key : "";
-}
-
-function updateActiveTimeline() {
-  if (!timeline.value) return;
-  const nodes = [...timeline.value.querySelectorAll<HTMLElement>("[data-nav-key]")];
-  const marker = timeline.value.scrollTop + 72;
-  const timelineRect = timeline.value.getBoundingClientRect();
-  let current = nodes[0]?.dataset.navKey ?? activeTimelineKey.value;
-  for (const node of nodes) {
-    const nodeTop = timeline.value.scrollTop + node.getBoundingClientRect().top - timelineRect.top;
-    if (nodeTop <= marker && node.dataset.navKey) current = node.dataset.navKey;
-    if (nodeTop > marker) break;
-  }
-  activeTimelineKey.value = current;
-  if (current.startsWith("plan-")) {
-    activePlanKey.value = current;
-    return;
-  }
-  const activeMessage = current.startsWith("message-") ? visibleActivity.value.find((item) => activityTarget(item, 0) === current) : null;
-  activePlanKey.value = activeMessage ? planAnchorKey(planForActivity(activeMessage)) : "";
-}
-
-function updateTimelineScrollState() {
-  showScrollToLatest.value = timeline.value ? !isTimelineAtLatestPosition(timeline.value) : false;
-  updateActiveTimeline();
-}
-
-function jumpToLatest() {
-  if (!timeline.value) return;
-  scrollTimelineToLatest(timeline.value);
-  showScrollToLatest.value = false;
 }
 
 function syncHashPanel(hash: string) {
