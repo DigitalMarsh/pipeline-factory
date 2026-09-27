@@ -19,6 +19,9 @@ const explorerInputRequestsComposableSource = readFileSync(fileURLToPath(new URL
 // 第四次出现同一类处置（P7-9）：需求投影整块搬进了 usePlanProjection。
 // 规则同前——**正向断言搬到 composable，视图这一侧换成委托语句，两条都留**。
 const planProjectionComposableSource = readFileSync(fileURLToPath(new URL("../composables/usePlanProjection.ts", import.meta.url)), "utf8");
+// 第五次出现同一类处置（P7-10）：Plan 生命周期写操作搬进了 usePlanLifecycleActions。
+// 正向断言跟随 composable；视图保留动作解构与 template 的用户界面判据，两侧都留。
+const planLifecycleActionsComposableSource = readFileSync(fileURLToPath(new URL("../composables/usePlanLifecycleActions.ts", import.meta.url)), "utf8");
 const explorerScopeSource = readFileSync(fileURLToPath(new URL("../utils/explorerScope.ts", import.meta.url)), "utf8");
 const threadRailSource = readFileSync(fileURLToPath(new URL("../components/ThreadRail.vue", import.meta.url)), "utf8");
 const explorerHeaderStatusSource = readFileSync(fileURLToPath(new URL("../components/ExplorerHeaderStatus.vue", import.meta.url)), "utf8");
@@ -169,12 +172,19 @@ describe("Explorer requirement list and shared drawer", () => {
   });
 
   it("preserves confirm and enqueue order while opening the task tab", () => {
-    expect(explorerViewSource).toContain("async function confirmPlan()");
-    expect(explorerViewSource).toContain("api.confirmPlan(");
-    expect(explorerViewSource).toContain("async function enqueuePlan(");
-    expect(explorerViewSource).toContain("api.enqueuePlan(id)");
-    expect(explorerViewSource).toContain("if (isConversationArtifactPlan(plan))");
-    expect(explorerViewSource).toContain("CONVERSATION_ARTIFACT_NOT_EXECUTABLE");
+    // P7-10：写操作的正向守卫跟随 composable，视图这一侧锁住"组合根把六个动作
+    // 接回来"；模板里的 task drawer 与对话产物文案仍由视图锁住。
+    expect(planLifecycleActionsComposableSource).toContain("async function confirmPlan()");
+    expect(planLifecycleActionsComposableSource).toContain("api.confirmPlan(");
+    expect(planLifecycleActionsComposableSource).toContain("async function enqueuePlan(");
+    expect(planLifecycleActionsComposableSource).toContain("api.enqueuePlan(id)");
+    expect(planLifecycleActionsComposableSource).toContain("if (isConversationArtifactPlan(plan))");
+    expect(planLifecycleActionsComposableSource).toContain("CONVERSATION_ARTIFACT_NOT_EXECUTABLE");
+    expect(planLifecycleActionsComposableSource).toContain("async function startPlanRun(plan: Plan): Promise<void>");
+    expect(planLifecycleActionsComposableSource).toContain("async function revisePlanConfiguration(plan: Plan): Promise<void>");
+    expect(planLifecycleActionsComposableSource).toContain("function handlePlanCenterConfigurationRevised(): void");
+    expect(planLifecycleActionsComposableSource).toContain("async function discardPlan()");
+    expect(explorerViewSource).toContain("const { confirmPlan, enqueuePlan, startPlanRun, revisePlanConfiguration, handlePlanCenterConfigurationRevised, discardPlan } = usePlanLifecycleActions(");
     expect(explorerViewSource).toContain('drawerTab.value = "task"');
     expect(explorerViewSource).toContain("taskPanelPlan.status === 'READY' && isConversationArtifactPlan(taskPanelPlan)");
     expect(explorerViewSource).toContain("返回探索对话修订");

@@ -51,6 +51,7 @@ import { useExplorerInputRequests, type ExplorerInputDialogHandle } from "../com
 import { useExplorerSession } from "../composables/useExplorerSession";
 import { useExplorerTimeline } from "../composables/useExplorerTimeline";
 import { PROJECTION_REFRESH_INTERVAL_MS, usePlanProjection } from "../composables/usePlanProjection";
+import { usePlanLifecycleActions } from "../composables/usePlanLifecycleActions";
 import { useTimelineScroll } from "../composables/useTimelineScroll";
 
 const route = useRoute();
@@ -214,6 +215,34 @@ const activePlans = computed<Plan[]>(() => activeRuns.value.map((run) => {
     executionThread: { id: run.executionThreadId, runId: run.id, state: run.status },
   };
 }));
+
+/**
+ * Plan 生命周期写操作（确认 / 入队 / Run / 丢弃 / 配置修订）交给 composable。
+ * 它只收状态 ref 与两个组合根回调；路由和需求清单的具体形状不下沉。
+ */
+const { confirmPlan, enqueuePlan, startPlanRun, revisePlanConfiguration, handlePlanCenterConfigurationRevised, discardPlan } = usePlanLifecycleActions({
+  projectId,
+  project,
+  thread,
+  activeExplorerPlan,
+  selectedRequirementPlan: computed(() => selectedRequirementRow.value?.plan ?? null),
+  candidate,
+  revisionDraft,
+  detailPlan,
+  enqueued,
+  projectRuns,
+  busy,
+  error,
+  drawerOpen,
+  drawerTab,
+  contextPanel,
+  refreshPlanProjection,
+  openRunView,
+});
+
+function canCreateConfigurationRevision(plan: Plan): boolean {
+  return canCreateConfigurationRevisionFor(plan, project.value);
+}
 
 /**
  * 需求范围内的 Turn / Activity / 输入 / Plan 投影成消息时间线，交给 composable。
@@ -1272,164 +1301,6 @@ function connectLoopEvents() {
 
 function closeRequirementStatusEvents() { requirementStatusEventSource?.close(); requirementStatusEventSource = null; requirementStatusScope = null; }
 function closeEvents() { eventSource?.close(); loopEventSource?.close(); eventSource = null; loopEventSource = null; cancelProjectionRefresh(); cancelLoopRefresh(); }
-
-async function confirmPlan() {
-  if (!candidate.value || !candidate.value.id && !candidate.value.planId || busy.value) return;
-  const id = candidate.value.id ?? candidate.value.planId!;
-  const activeDraft = revisionDraft.value;
-  if (activeDraft && activeDraft.planId === id) {
-    if (activeDraft.status !== "READY_TO_CONFIRM") {
-      ElMessage.info(activeDraft.status === "BASE_CHANGED" ? "Default branch changed. Rebase the revision draft before confirmation." : "Continue exploring until this revision draft is ready to confirm.");
-      return;
-    }
-    busy.value = true;
-    try {
-      const response = await api.confirmRevisionDraft(id, activeDraft.draftId);
-      drawerTab.value = "plan";
-      drawerOpen.value = true;
-      await refreshPlanProjection();
-      detailPlan.value = response.plan;
-      ElMessage.success(`Revision ${activeDraft.targetRevision} confirmed · ${response.confirmation?.stage ?? "FROZEN"}`);
-    } catch (caught) { error.value = caught instanceof Error ? `Confirm revision failed: ${caught.message}` : "Confirm revision failed"; }
-    finally { busy.value = false; }
-    return;
-  }
-  busy.value = true;
-  try {
-    const response = await api.confirmPlan(id, candidate.value.revision);
-    await refreshPlanProjection();
-    if (response.plan.status === "DRAFT") {
-      const failure = response.dispatch?.lastError ?? "Plan 校验未通过";
-      error.value = `确认停在 ${response.confirmation.stage}：${failure}`;
-      ElMessage.error(error.value);
-      return;
-    }
-    drawerTab.value = "plan";
-    drawerOpen.value = true;
-    detailPlan.value = response.plan;
-    const runText = response.run ? ` · Run ${response.run.id}` : "";
-    const issueText = response.dispatch?.lastError ? ` · ${response.dispatch.lastError}` : "";
-    ElMessage.success(`Plan 已确认 · ${response.confirmation.stage}${runText}${issueText}`);
-  } catch (caught) { error.value = caught instanceof Error ? `Confirm plan 失败：${caught.message}` : "Confirm plan 失败"; } finally { busy.value = false; }
-}
-
-async function enqueuePlan(plan: Plan | null = candidate.value) {
-  if (!plan || plan.status !== "READY" || busy.value) return;
-  if (isConversationArtifactPlan(plan)) {
-    ElMessage.error("此 Plan 是对话产物，不能入队执行。请在探索对话中修订为仓库文件产物并确认新版本。");
-    return;
-  }
-  const id = plan.id ?? plan.planId;
-  if (!id) return;
-  busy.value = true;
-  try {
-    const enqueuedPlan = (await (plan.revision > 1 ? api.enqueuePlanRevision(id, plan.revision) : api.enqueuePlan(id))).plan;
-    enqueued.value = [enqueuedPlan, ...enqueued.value.filter((item) => planIdentity(item) !== planIdentity(enqueuedPlan))];
-    candidate.value = null;
-    await refreshPlanProjection();
-    drawerTab.value = "task";
-    drawerOpen.value = true;
-    ElMessage.success("Plan 已进入 Enqueued 阶段");
-  } catch (caught) {
-    const message = caught instanceof Error ? caught.message : "";
-    if (message === "CONVERSATION_ARTIFACT_NOT_EXECUTABLE") {
-      ElMessage.error("此 Plan 是对话产物，不能入队执行。请在探索对话中修订为仓库文件产物并确认新版本。");
-    } else {
-      error.value = message ? `Enqueue plan 失败：${message}` : "Enqueue plan 失败";
-    }
-  } finally {
-    busy.value = false;
-  }
-}
-
-async function startPlanRun(plan: Plan): Promise<void> {
-  const id = plan.id ?? plan.planId;
-  if (!id || plan.status !== "ENQUEUED" || busy.value) return;
-  busy.value = true;
-  error.value = null;
-  try {
-    const result = await (plan.revision > 1 ? api.startPlanRevisionRun(id, plan.revision) : api.startPlanRun(id));
-    await refreshPlanProjection();
-    drawerTab.value = "task";
-    drawerOpen.value = true;
-    const runId = result.run?.id ?? selectedRequirementRow.value?.plan?.runId ?? selectedRequirementRow.value?.plan?.dispatch?.runId;
-    if (result.run) projectRuns.value = [result.run, ...projectRuns.value.filter((run) => run.id !== result.run!.id)];
-    if (runId) await openRunView(runId, thread.value?.id, activeExplorerPlan.value?.id);
-    ElMessage.success(result.dispatch?.waitReason ? `Plan 已派发，正在等待：${result.dispatch.waitReason}` : "Plan 已进入 Dispatched 阶段");
-  } catch (caught) {
-    error.value = caught instanceof Error ? `Start run 失败：${caught.message}` : "Start run 失败";
-    ElMessage.error(error.value);
-  } finally {
-    busy.value = false;
-  }
-}
-
-function canCreateConfigurationRevision(plan: Plan): boolean {
-  return canCreateConfigurationRevisionFor(plan, project.value);
-}
-
-async function revisePlanConfiguration(plan: Plan): Promise<void> {
-  const id = plan.id ?? plan.planId;
-  if (!id || plan.status !== "DISPATCHED" || plan.runId || plan.dispatch?.status !== "WAITING" || plan.dispatch.waitReason !== "NEEDS_CONFIGURATION" || !canCreateConfigurationRevision(plan) || busy.value) return;
-  busy.value = true;
-  error.value = null;
-  try {
-    await api.revisePlanConfiguration(id);
-    await refreshPlanProjection();
-    contextPanel.value = "confirmed";
-    ElMessage.success("已基于当前配置创建新 Revision，请重新 Enqueue 并 Start run");
-  } catch (caught) {
-    error.value = caught instanceof Error ? `Create updated revision 失败：${caught.message}` : "Create updated revision 失败";
-    ElMessage.error(error.value);
-  } finally {
-    busy.value = false;
-  }
-}
-
-function handlePlanCenterConfigurationRevised(): void {
-  void refreshPlanProjection();
-  contextPanel.value = "confirmed";
-}
-
-async function discardPlan() {
-  if (!candidate.value || candidate.value.status !== "DRAFT" || busy.value) return;
-  const id = candidate.value.id ?? candidate.value.planId;
-  if (!id) return;
-  const activeDraft = revisionDraft.value;
-  if (activeDraft && activeDraft.planId === id) {
-    try {
-      await ElMessageBox.confirm(`Discard revision V${activeDraft.targetRevision}? The confirmed V${activeDraft.basedOnRevision} remains unchanged.`, "Discard revision draft", { confirmButtonText: "Discard revision", cancelButtonText: "Keep editing", type: "warning" });
-    } catch { return; }
-    busy.value = true;
-    try {
-      await api.discardRevisionDraft(id, activeDraft.draftId);
-      drawerOpen.value = false;
-      await refreshPlanProjection();
-      ElMessage.success(`Revision ${activeDraft.targetRevision} discarded`);
-    } catch (caught) { error.value = caught instanceof Error ? `Discard revision failed: ${caught.message}` : "Discard revision failed"; }
-    finally { busy.value = false; }
-    return;
-  }
-  try {
-    await ElMessageBox.confirm(`Discard “${candidate.value.title}”? This Plan will be kept as Discarded and cannot be confirmed, enqueued, or started.`, "Discard plan", { confirmButtonText: "Discard plan", cancelButtonText: "Keep editing", type: "warning" });
-  } catch {
-    return;
-  }
-  busy.value = true;
-  error.value = null;
-  try {
-    await api.discardPlan(id);
-    candidate.value = null;
-    drawerOpen.value = false;
-    await refreshPlanProjection();
-    ElMessage.success("Plan discarded");
-  } catch (caught) {
-    error.value = caught instanceof Error ? `Discard plan 失败：${caught.message}` : "Discard plan 失败";
-    ElMessage.error(error.value);
-  } finally {
-    busy.value = false;
-  }
-}
 
 function reloadExplorer() {
   closeEvents();
