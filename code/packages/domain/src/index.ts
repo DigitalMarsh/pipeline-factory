@@ -57,6 +57,11 @@ export type { HookDefinition, HookExecution, HookRunResult } from "./run/hooks.j
 // （defaultGitCommand 与原样保持一致：它本来就是模块私有，不转发）。
 export { LocalGitWorktreeAdapter } from "./git/worktree.js";
 export type { GitCommandRunner, LocalGitWorktreeOptions, Workspace, WorkspaceAdapter } from "./git/worktree.js";
+// 批 D：Merge 的 Git 证据实现搬进 git/merge-inspector.ts。本模块内部已无引用，纯 re-export
+// （gitCommand / gitResolveCommit 与原样一致：本来就是模块私有，不转发）。
+// 至此 index.ts 已不含任何 node: 导入 —— 领域层的全部 IO 都落在 platform/ commands 与 git/ 下。
+export { localGitMergeInspector } from "./git/merge-inspector.js";
+export type { GitMergeInspector } from "./git/merge-inspector.js";
 // PipelineStore 是**类型**，纯 re-export 不涉及运行时绑定，天然不会引出 S1 那类 ReferenceError；
 // 而它被 index.ts 内部大量用作参数类型（`store: PipelineStore`），所以仍用 import + export 两条，
 // 保持"类型在本模块作用域内可见"。
@@ -985,50 +990,6 @@ export type MergeReconciliationReport = {
   items: MergeReconciliationItem[];
 };
 
-/** Merge 前必须由 Git 证明源提交和目标分支的关系；测试可注入确定性实现。 */
-export type GitMergeInspector = {
-  commitExists(repoRoot: string, commit: string): boolean;
-  resolveCommit(repoRoot: string, ref: string): string | null;
-  isAncestor(repoRoot: string, sourceCommit: string, targetCommit: string): boolean;
-  branchContains(repoRoot: string, targetBranch: string, targetCommit: string): boolean;
-};
-
-function gitCommand(repoRoot: string, args: string[]): boolean {
-  try {
-    execFileSync("git", args, { cwd: repoRoot, stdio: ["ignore", "ignore", "ignore"] });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function gitResolveCommit(repoRoot: string, ref: string): string | null {
-  if (!existsSync(repoRoot)) return null;
-  try {
-    return execFileSync("git", ["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`], { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || null;
-  } catch {
-    return null;
-  }
-}
-
-/** 默认 Git 证据实现；无效的旧测试路径交由 Project API 的仓库校验拦截。 */
-export const localGitMergeInspector: GitMergeInspector = {
-  commitExists(repoRoot, commit) {
-    if (!existsSync(repoRoot)) return true;
-    return gitCommand(repoRoot, ["cat-file", "-e", `${commit}^{commit}`]);
-  },
-  resolveCommit(repoRoot, ref) {
-    return gitResolveCommit(repoRoot, ref);
-  },
-  isAncestor(repoRoot, sourceCommit, targetCommit) {
-    if (!existsSync(repoRoot)) return true;
-    return gitCommand(repoRoot, ["merge-base", "--is-ancestor", sourceCommit, targetCommit]);
-  },
-  branchContains(repoRoot, targetBranch, targetCommit) {
-    if (!existsSync(repoRoot)) return true;
-    return gitCommand(repoRoot, ["merge-base", "--is-ancestor", targetCommit, targetBranch]);
-  },
-};
 
 export type ToolCallLedgerStatus = "PENDING" | "COMPLETED" | "DENIED" | "UNCERTAIN" | "NEEDS_RECONCILIATION";
 export type ToolCallLedgerEntry = { callId: string; tool: ToolName; status: ToolCallLedgerStatus; result: ToolCallResult; replay: boolean };
@@ -1057,5 +1018,3 @@ export class ToolCallLedger {
 
   list(): ToolCallLedgerEntry[] { return [...this.entries.values()]; }
 }
-import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
