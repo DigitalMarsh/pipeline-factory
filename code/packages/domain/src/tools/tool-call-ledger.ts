@@ -25,10 +25,10 @@
  *      经 store 写。也就是说这里记录的是**设计意图**而不是线上行为 —— 读它的逻辑前先确认
  *      它是否已被接上。要么把它接进 tool-runtime 的恢复路径，要么删掉并由 PersistedToolCall
  *      承担；**不要在"它已经在工作"的假设下改它**。
- *   5) ToolCall / ToolCallResult / ToolName 类型**当前仍从 ../index.js 取**（type-only 边），
- *      批 E 建 tools/types.ts 时统一改指过去。
+ *   5) ToolCall / ToolCallResult / ToolName 类型在**批 E 已改指 ./types.js**（type-only 边；
+ *      批 D 当时从 ../index.js 取）。工具层的类型契约现在只有一个出处：tools/types.ts。
  */
-import type { ToolCall, ToolCallResult, ToolName } from "../index.js";
+import type { ToolCall, ToolCallResult, ToolName } from "./types.js";
 
 export type ToolCallLedgerStatus = "PENDING" | "COMPLETED" | "DENIED" | "UNCERTAIN" | "NEEDS_RECONCILIATION";
 export type ToolCallLedgerEntry = { callId: string; tool: ToolName; status: ToolCallLedgerStatus; result: ToolCallResult; replay: boolean };

@@ -18,11 +18,12 @@
  *      !capabilities.supportedLoopModes.includes(mode)`，两者都不满足 → 抛
  *      MODEL_CAPABILITY_UNAVAILABLE。**真跑 Executor 工具循环必须走 codex-app-server**；
  *      改这两个值会让本替身"看起来"能驱动工具循环，而它并不会 yield tool.call。
- *   4) 依赖的 ModelGateway / ModelRequest / ModelEvent 等类型**当前仍从 ../index.js 取**
- *      （type-only 边），批 E 建 model/types.ts 时统一改指过去。
+ *   4) 依赖的 ModelGateway / ModelRequest / ModelEvent 等类型在**批 E 已改指 ./types.js**
+ *      （type-only 边；批 D 当时从 ../index.js 取）。至此 model/ 下三个 ModelGateway 实现
+ *      都直接从同一处契约取类型，接口边界不再需要经由 barrel 绕一圈。
  */
 import type { MappedCodexRateLimits } from "./codex-rate-limits.js";
-import type { ModelCapabilities, ModelEvent, ModelGateway, ModelRequest, ModelRole, ModelRoleConfig } from "../index.js";
+import type { ModelCapabilities, ModelEvent, ModelGateway, ModelRequest, ModelRole, ModelRoleConfig } from "./types.js";
 
 /** 测试用 ModelGateway；保持事件协议但不访问外部模型。 */
 export class StubModelGateway implements ModelGateway {

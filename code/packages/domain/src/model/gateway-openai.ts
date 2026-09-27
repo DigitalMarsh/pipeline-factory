@@ -25,11 +25,12 @@
  *      上层以为答案已送达 Provider。
  *   5) extractResponseText 只是 `payload.output_text` 不是字符串时的兜底（走
  *      output[].content[].text 并拼接），它是本模块私有，barrel 不转发。
- *   6) 依赖的 ModelGateway / ModelRequest / ModelEvent 等类型**当前仍从 ../index.js 取**，
- *      批 E 建 model/types.ts 时统一改指过去；这是一条 type-only 边，不构成值级环。
+ *   6) 依赖的 ModelGateway / ModelRequest / ModelEvent 等类型在**批 E 已改指 ./types.js**
+ *      （批 D 当时从 ../index.js 取，是为了让搬迁提交保持"只搬不改"的形态）。
+ *      这是一条 type-only 边，本文件与 model/types.ts 之间不构成值级环。
  */
 import { normalizeModelUsage, type ModelUsage } from "./usage.js";
-import type { ModelCapabilities, ModelEvent, ModelGateway, ModelRequest, ModelRole, ModelRoleConfig } from "../index.js";
+import type { ModelCapabilities, ModelEvent, ModelGateway, ModelRequest, ModelRole, ModelRoleConfig } from "./types.js";
 
 /** 非流式模型调用的规范化结果。 */
 export type ModelResult = { text: string; requestId: string | null; model: string; usage: ModelUsage | null };
