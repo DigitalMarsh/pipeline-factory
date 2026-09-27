@@ -3,10 +3,7 @@
  *
  * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
  */
-import { execFile, execFileSync } from "node:child_process";
-import { realpath } from "node:fs/promises";
 import { basename, dirname, resolve as resolvePath } from "node:path";
-import { promisify } from "node:util";
 import cors from "@fastify/cors";
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import {
@@ -55,6 +52,7 @@ import {
   type ProjectExecutionSnapshot,
 } from "@pipeline-factory/domain";
 import { projectExplorerActivity } from "@pipeline-factory/domain";
+import { assertGitBranch, detectDefaultBranch, inspectGitRepository } from "./runtime/git.js";
 import { z } from "zod";
 import type { FactoryConfig } from "./config.js";
 import { RepositoryContextCache } from "./repository-context-cache.js";
@@ -84,8 +82,6 @@ import { planProjection, decoratePlanRows } from "./projections/plan-lifecycle.j
 import { projectRunThreadTelemetry } from "./projections/run-telemetry.js";
 import { loopDiagnostics, projectAgentLoopResponse } from "./projections/agent-loop.js";
 import { findProjectThread, sanitizeExplorerRequirementStatusEvent } from "./projections/explorer.js";
-
-const execFileAsync = promisify(execFile);
 
 /** API 组装依赖；生产环境使用 SQLite/真实 Gateway，测试可注入内存 Store 和 Stub。 */
 export type PipelineAppOptions = {
@@ -1087,50 +1083,6 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
 
   return app;
 }
-
-/** canonicalize 并校验 Git 根目录；子目录、非 Git 目录和不可读路径均拒绝导入。 */
-async function inspectGitRepository(inputPath: string): Promise<{ repoRoot: string; defaultBranch: string }> {
-  const candidate = await realpath(resolvePath(inputPath));
-  let gitRoot: string;
-  try {
-    const result = await execFileAsync("git", ["rev-parse", "--show-toplevel"], { cwd: candidate });
-    gitRoot = await realpath(String(result.stdout).trim());
-  } catch (error) {
-    throw new Error(`Path is not a Git repository: ${error instanceof Error ? error.message : String(error)}`);
-  }
-  if (gitRoot !== candidate) throw new Error(`Path must be the Git repository root: ${gitRoot}`);
-  let defaultBranch = "main";
-  try {
-    const result = await execFileAsync("git", ["symbolic-ref", "--short", "HEAD"], { cwd: gitRoot });
-    const branch = String(result.stdout).trim();
-    if (branch) defaultBranch = branch;
-  } catch {
-    try {
-      const result = await execFileAsync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: gitRoot });
-      const branch = String(result.stdout).trim();
-      if (branch && branch !== "HEAD") defaultBranch = branch;
-    } catch { /* Detached or unavailable branch metadata keeps the safe default. */ }
-  }
-  return { repoRoot: gitRoot, defaultBranch };
-}
-
-async function assertGitBranch(repoRoot: string, branch: string): Promise<void> {
-  const normalized = branch.trim();
-  if (!normalized || normalized.startsWith("-") || normalized.includes("..")) throw new Error(`Invalid default branch ${branch}`);
-  try {
-    await execFileAsync("git", ["rev-parse", "--verify", `refs/heads/${normalized}`], { cwd: repoRoot });
-  } catch {
-    throw new Error(`Default branch ${normalized} does not exist in ${repoRoot}`);
-  }
-}
-
-function detectDefaultBranch(repoRoot: string): string {
-  try {
-    const value = execFileSync("git", ["symbolic-ref", "--short", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
-    return value || "main";
-  } catch { return "main"; }
-}
-
 /** 在没有真实 Loop Controller 的测试/降级场景中持久化控制事实，并复用相同状态转换检查。 */
 function persistLoopControl(store: PipelineStore, loop: AgentLoop, state: AgentLoop["state"], reason: string): AgentLoop {
   const terminal = new Set<AgentLoop["state"]>(["BLOCKED", "COMPLETED", "FAILED", "CANCELLED", "NEEDS_RECONCILIATION"]);
