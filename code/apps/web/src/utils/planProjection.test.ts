@@ -4,8 +4,8 @@
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  */
 import { describe, expect, it } from "vitest";
-import { normalizePlanProjection } from "./planProjection";
-import type { ExplorerThread, Plan } from "../types";
+import { normalizePlanProjection, planFromRevisionDraft } from "./planProjection";
+import type { ExplorerThread, Plan, PlanRevisionDraft } from "../types";
 
 const explorer: ExplorerThread = {
   id: "explorer-1",
@@ -50,5 +50,55 @@ describe("plan projection", () => {
 
     expect(projection.candidate).toBeNull();
     expect(projection.dispatched.map((item) => item.id)).toEqual(["plan-1", "plan-2"]);
+  });
+});
+
+const draft = (overrides: Partial<PlanRevisionDraft> = {}): PlanRevisionDraft => ({
+  draftId: "draft-1",
+  planId: "plan-9",
+  projectId: "project-1",
+  basedOnRevision: 2,
+  targetRevision: 3,
+  status: "EDITING",
+  title: "Revised plan",
+  contract: undefined,
+  sourceExplorerThreadId: "explorer-1",
+  sourceTurnId: null,
+  providerThreadId: "provider-thread-1",
+  providerTurnId: "provider-turn-1",
+  providerItemId: null,
+  baseBranch: "main",
+  baseCommit: "abc1234",
+  createdAt: "2026-08-29T10:04:00.000Z",
+  updatedAt: "2026-08-29T10:05:00.000Z",
+  confirmedAt: null,
+  ...overrides,
+});
+
+describe("修订草稿投影成 Plan 卡片", () => {
+  it("把草稿的目标 Revision 当作卡片 Revision，状态固定为 DRAFT", () => {
+    const plan = planFromRevisionDraft(draft(), null);
+
+    expect(plan.planId).toBe("plan-9");
+    expect(plan.revision).toBe(3);
+    expect(plan.status).toBe("DRAFT");
+    expect(plan.runId).toBeNull();
+  });
+
+  it("草稿没带走属时挂到当前激活需求上", () => {
+    expect(planFromRevisionDraft(draft(), "explorer-plan-5").explorerPlanId).toBe("explorer-plan-5");
+  });
+
+  it("草稿自己带的归属优先于回退值", () => {
+    expect(planFromRevisionDraft(draft({ explorerPlanId: "explorer-plan-1" }), "explorer-plan-5").explorerPlanId).toBe("explorer-plan-1");
+  });
+
+  it("没有激活需求时草稿不归属任何需求", () => {
+    expect(planFromRevisionDraft(draft(), null).explorerPlanId).toBeUndefined();
+  });
+
+  it("基底分支变化时给出 rebase 提示，其余状态不给", () => {
+    expect(planFromRevisionDraft(draft({ status: "BASE_CHANGED" }), null).attentionReason).toContain("rebase");
+    expect(planFromRevisionDraft(draft(), null).attentionReason).toBeNull();
   });
 });

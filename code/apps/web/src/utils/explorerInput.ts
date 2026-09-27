@@ -4,6 +4,7 @@
  * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
  */
 import type { ExplorerInputRequest, ModelInputQuestion } from "../types";
+import type { ExplorerInputProgress } from "./explorerInputProgressDraft";
 
 export function hasSelectableOptions(question: ModelInputQuestion): boolean {
   return Array.isArray(question.options) && question.options.length > 0;
@@ -70,4 +71,38 @@ export function redactedAnswerSummary(request: ExplorerInputRequest, values: Rec
     const answers = (values[question.id] ?? []).map((answer) => answer.trim()).filter(Boolean);
     return [question.id, { answerCount: answers.length, secret: question.isSecret, ...(question.isSecret ? {} : { answers }) }];
   }));
+}
+
+/**
+ * 一道题要显示成哪些答案文本。
+ *
+ * **草稿优先**：`progress` 是本地未提交的编辑状态，只有 `progress.requestId` 与这张请求对得上时
+ * 才用它——否则会把上一张请求的草稿显示到这一张上。没有草稿时才回落到服务端的
+ * `redactedAnswerSummary`（那是已提交的答案，密钥题只留数量）。
+ *
+ * 密钥题的**本地草稿**也一律显示"已隐藏"，与提交后一致：用户不该在屏幕上看到自己刚敲的密钥。
+ */
+export function inputAnswerDisplayLabels(request: ExplorerInputRequest, question: ModelInputQuestion, progress: ExplorerInputProgress | null): string[] {
+  const draft = progress?.requestId === request.id ? progress : null;
+  if (draft) {
+    const values = resolveQuestionAnswers(question, draft.values[question.id] ?? [], draft.otherValues[question.id] ?? "");
+    if (question.isSecret) return values.length ? ["已隐藏"] : [];
+    return values;
+  }
+  return inputAnswerLabels(question, request.redactedAnswerSummary);
+}
+
+/**
+ * 一张输入卡片上"回答"那一行的完整文案。
+ *
+ * 顺序即优先级：**有答案就显示答案**，哪怕请求还在提交中或已被恢复——答案已经是事实了。
+ * 只有在没有答案可显示时才按状态给过程文案（提交中 / 等待恢复 / 已提交 / 尚未选择）。
+ */
+export function inputAnswerDisplayText(request: ExplorerInputRequest, question: ModelInputQuestion, progress: ExplorerInputProgress | null, inFlightRequestId: string | null): string {
+  const labels = inputAnswerDisplayLabels(request, question, progress);
+  if (labels.length) return labels.join("、");
+  if (request.status === "SUBMITTING" || inFlightRequestId === request.id) return "提交结果确认中";
+  if (request.status === "RECOVERY_REQUIRED") return "等待恢复";
+  if (request.status === "ANSWERED" || request.status === "AUTO_RESOLVED") return "已提交";
+  return "尚未选择";
 }

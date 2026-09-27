@@ -4,7 +4,9 @@
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  */
 import { describe, expect, it } from "vitest";
-import { allInputQuestionsAnswered, buildInputAnswers, hasFreeformInput, hasSelectableOptions, inputAnswerLabels, inputQuestionComplete, nextInputQuestionIndex, previousInputQuestionIndex, redactedAnswerSummary, resolveQuestionAnswers } from "./explorerInput";
+import { allInputQuestionsAnswered, buildInputAnswers, hasFreeformInput, hasSelectableOptions, inputAnswerDisplayLabels, inputAnswerDisplayText, inputAnswerLabels, inputQuestionComplete, nextInputQuestionIndex, previousInputQuestionIndex, redactedAnswerSummary, resolveQuestionAnswers } from "./explorerInput";
+import type { ExplorerInputProgress } from "./explorerInputProgressDraft";
+import type { ExplorerInputRequest, ModelInputQuestion } from "../types";
 
 describe("explorer structured input", () => {
   const questions = [
@@ -52,5 +54,78 @@ describe("explorer structured input", () => {
     expect(nextInputQuestionIndex(1, questions.length)).toBe(1);
     expect(previousInputQuestionIndex(1)).toBe(0);
     expect(previousInputQuestionIndex(0)).toBe(0);
+  });
+});
+
+const question = (overrides: Partial<ModelInputQuestion> = {}): ModelInputQuestion => ({ id: "choice", header: "Choice", question: "Pick", isOther: true, isSecret: false, options: [{ label: "A", description: "one" }, { label: "B", description: "two" }], ...overrides });
+
+const request = (overrides: Partial<ExplorerInputRequest> = {}): ExplorerInputRequest => ({
+  id: "input-1",
+  threadId: "thread-1",
+  localTurnId: "turn-1",
+  providerRequestId: "request-1",
+  providerThreadId: "provider-thread-1",
+  providerTurnId: "provider-turn-1",
+  itemId: "item-1",
+  questions: [question()],
+  isBlocking: true,
+  autoResolutionMs: null,
+  status: "OPEN",
+  createdAt: "2026-01-01T00:00:00.000Z",
+  answeredAt: null,
+  answeredBy: null,
+  redactedAnswerSummary: null,
+  ...overrides,
+});
+
+const progress = (overrides: Partial<ExplorerInputProgress> = {}): ExplorerInputProgress => ({ requestId: "input-1", currentIndex: 0, values: {}, otherValues: {}, ...overrides });
+
+describe("答案展示（草稿优先）", () => {
+  it("本地草稿优先于服务端已提交答案", () => {
+    const withDraft = request({ redactedAnswerSummary: { choice: { answerCount: 1, secret: false, answers: ["A"] } } });
+
+    expect(inputAnswerDisplayLabels(withDraft, question(), progress({ values: { choice: ["B"] } }))).toEqual(["B"]);
+  });
+
+  it("草稿属于另一张请求时不借用，回落到服务端答案", () => {
+    const withAnswer = request({ redactedAnswerSummary: { choice: { answerCount: 1, secret: false, answers: ["A"] } } });
+
+    expect(inputAnswerDisplayLabels(withAnswer, question(), progress({ requestId: "input-other", values: { choice: ["B"] } }))).toEqual(["A"]);
+  });
+
+  it("密钥题的本地草稿也隐藏，不让明文出现在屏幕上", () => {
+    const secret = question({ id: "token", isSecret: true, options: null });
+    const labels = inputAnswerDisplayLabels(request(), secret, progress({ values: { token: ["top-secret"] } }));
+
+    expect(labels).toEqual(["已隐藏"]);
+    expect(labels.join("")).not.toContain("top-secret");
+  });
+
+  it("没有草稿也没有答案时返回空数组", () => {
+    expect(inputAnswerDisplayLabels(request(), question(), null)).toEqual([]);
+    expect(inputAnswerDisplayLabels(request(), question(), progress())).toEqual([]);
+  });
+});
+
+describe("回答行文案", () => {
+  it("有答案就显示答案，哪怕请求还在提交中", () => {
+    expect(inputAnswerDisplayText(request({ status: "SUBMITTING" }), question(), progress({ values: { choice: ["A"] } }), "input-1")).toBe("A");
+  });
+
+  it("多个答案用顿号连接", () => {
+    expect(inputAnswerDisplayText(request({ status: "ANSWERED" }), question(), progress({ values: { choice: ["A", "B"] } }), null)).toBe("A、B");
+  });
+
+  it("没答案时按状态给过程文案，本地在途标记优先", () => {
+    expect(inputAnswerDisplayText(request({ status: "OPEN" }), question(), null, "input-1")).toBe("提交结果确认中");
+    expect(inputAnswerDisplayText(request({ status: "SUBMITTING" }), question(), null, null)).toBe("提交结果确认中");
+    expect(inputAnswerDisplayText(request({ status: "RECOVERY_REQUIRED" }), question(), null, null)).toBe("等待恢复");
+    expect(inputAnswerDisplayText(request({ status: "ANSWERED" }), question(), null, null)).toBe("已提交");
+    expect(inputAnswerDisplayText(request({ status: "AUTO_RESOLVED" }), question(), null, null)).toBe("已提交");
+    expect(inputAnswerDisplayText(request({ status: "OPEN" }), question(), null, null)).toBe("尚未选择");
+  });
+
+  it("在途标记只对同一张请求生效", () => {
+    expect(inputAnswerDisplayText(request({ id: "input-2", status: "OPEN" }), question(), null, "input-1")).toBe("尚未选择");
   });
 });

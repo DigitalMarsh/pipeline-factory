@@ -32,12 +32,13 @@ import ExplorerHeaderStatus from "../components/ExplorerHeaderStatus.vue";
 import ProviderUsageFooter from "../components/ProviderUsageFooter.vue";
 import RunDetailView from "./RunDetailView.vue";
 import scrollToLatestIcon from "../assets/scroll-to-latest.png";
-import { normalizePlanProjection } from "../utils/planProjection";
+import { normalizePlanProjection, planFromRevisionDraft as revisionDraftToPlan } from "../utils/planProjection";
+import { isCandidatePlan as isCandidatePlanFor } from "../utils/planControls";
 import { parsePlanProtocolDisplay } from "../utils/planProtocolDisplay";
 import { detachedPlanAnchorId, planActivityBindings as buildPlanActivityBindings, planAnchorId, planAnchorKey, planIdentity } from "../utils/planTimeline";
 import { taskDisplayTitle } from "../utils/taskTree";
 import { isConfirmedPlanRevision, resolvePlanVersionHistory } from "../utils/planVersionHistory";
-import { inputAnswerLabels, resolveQuestionAnswers } from "../utils/explorerInput";
+import { inputAnswerDisplayLabels, inputAnswerDisplayText } from "../utils/explorerInput";
 import { createProjectRequestScope, projectPathForModule } from "../utils/projectRoutes";
 import { buildExplorerTimeline, explorerTimelineTarget as activityTarget, explorerPlanAnchorId, inputRequestTarget } from "../utils/explorerTimeline";
 import { activityIconKind, activityKindLabel, activityStatusLabel, explorerDisplayTitle, formatTurnTime, inputStatusLabel as inputStatusText } from "../utils/explorerPresentation";
@@ -45,7 +46,7 @@ import { planStatusLabel as statusLabel } from "../utils/planStatus";
 import { belongsToExplorerPlan } from "../utils/explorerScope";
 import { formatAgentLoopCompletion, formatAgentLoopGate, formatAgentLoopTerminal } from "../utils/agentLoopPresentation";
 import { summarizeUserMessage as userMessageSummary } from "../utils/messageSummary";
-import { parseMissingRunCommands } from "../utils/runPrerequisites";
+import { canCreateConfigurationRevision as canCreateConfigurationRevisionFor } from "../utils/runPrerequisites";
 import { clearExplorerInputProgressDraft, loadExplorerInputProgressDraft, saveExplorerInputProgressDraft } from "../utils/explorerInputProgressDraft";
 import type { ExplorerInputProgress, ExplorerInputProgressScope } from "../utils/explorerInputProgressDraft";
 
@@ -391,7 +392,7 @@ function planForActivity(item: ExplorerActivityItem): Plan | null {
 }
 
 function isCandidatePlan(plan: Plan | null): boolean {
-  return Boolean(plan && candidate.value && planIdentity(plan) === planIdentity(candidate.value));
+  return isCandidatePlanFor(plan, candidate.value);
 }
 
 function planActivityGoal(item: ExplorerActivityItem): string {
@@ -496,26 +497,15 @@ function resetProjectState(nextProjectId = projectId.value) {
   resetThreadState();
 }
 
+/** 下面三个 wrapper 只负责把本地状态（草稿进度、在途标记）喂给 utils 里的纯函数。 */
 function inputAnswerLabelsFor(request: ExplorerInputRequest, question: ExplorerInputRequest["questions"][number]): string[] {
-  const progress = inputProgress.value?.requestId === request.id ? inputProgress.value : null;
-  if (progress) {
-    const values = resolveQuestionAnswers(question, progress.values[question.id] ?? [], progress.otherValues[question.id] ?? "");
-    if (question.isSecret) return values.length ? ["已隐藏"] : [];
-    return values;
-  }
-  return inputAnswerLabels(question, request.redactedAnswerSummary);
+  return inputAnswerDisplayLabels(request, question, inputProgress.value);
 }
 
 function inputAnswerText(request: ExplorerInputRequest, question: ExplorerInputRequest["questions"][number]): string {
-  const labels = inputAnswerLabelsFor(request, question);
-  if (labels.length) return labels.join("、");
-  if (request.status === "SUBMITTING" || inputAnswerInFlight.value === request.id) return "提交结果确认中";
-  if (request.status === "RECOVERY_REQUIRED") return "等待恢复";
-  if (request.status === "ANSWERED" || request.status === "AUTO_RESOLVED") return "已提交";
-  return "尚未选择";
+  return inputAnswerDisplayText(request, question, inputProgress.value, inputAnswerInFlight.value);
 }
 
-/** 委托给 `utils/explorerPresentation.ts` 的纯函数：组件只负责把本地在途标记喂进去。 */
 function inputStatusLabel(request: ExplorerInputRequest): string {
   return inputStatusText(request, inputAnswerInFlight.value);
 }
@@ -564,27 +554,7 @@ async function loadActivePlanWorkspace(explorerId: string, explorerPlanId: strin
 }
 
 function planFromRevisionDraft(item: PlanRevisionDraft): Plan {
-  return {
-    id: item.planId,
-    planId: item.planId,
-    title: item.title,
-    revision: item.targetRevision,
-    status: "DRAFT",
-    projectId: item.projectId,
-    sourceExplorerThreadId: item.sourceExplorerThreadId,
-    ...(item.explorerPlanId ? { explorerPlanId: item.explorerPlanId } : activeExplorerPlanId.value ? { explorerPlanId: activeExplorerPlanId.value } : {}),
-    sourceTurnId: item.sourceTurnId,
-    providerThreadId: item.providerThreadId,
-    providerTurnId: item.providerTurnId,
-    providerItemId: item.providerItemId,
-    ...(item.contract ? { contract: item.contract } : {}),
-    ...(item.resolvedContract ? { resolvedContract: item.resolvedContract } : {}),
-    queuedAt: null,
-    dispatchedAt: null,
-    runId: null,
-    lastEventAt: item.updatedAt,
-    attentionReason: item.status === "BASE_CHANGED" ? "The default branch changed; rebase this draft before confirming." : null,
-  };
+  return revisionDraftToPlan(item, activeExplorerPlanId.value);
 }
 
 function applyPlanProjection(projection: ReturnType<typeof normalizePlanProjection>, confirmed: Plan[], activeRevisionDraft: PlanRevisionDraft | null = null): void {
@@ -1690,16 +1660,8 @@ async function startPlanRun(plan: Plan): Promise<void> {
   }
 }
 
-function configurationBlockedCommands(plan: Plan): string[] {
-  if (plan.dispatch?.waitReason !== "NEEDS_CONFIGURATION") return [];
-  return parseMissingRunCommands(plan.dispatch.lastError ?? "");
-}
-
 function canCreateConfigurationRevision(plan: Plan): boolean {
-  const missingCommands = configurationBlockedCommands(plan);
-  if (!missingCommands.length || !project.value) return false;
-  const registered = new Set(project.value.settings.commands.map((command) => command.commandId));
-  return missingCommands.every((commandId) => registered.has(commandId));
+  return canCreateConfigurationRevisionFor(plan, project.value);
 }
 
 async function revisePlanConfiguration(plan: Plan): Promise<void> {
