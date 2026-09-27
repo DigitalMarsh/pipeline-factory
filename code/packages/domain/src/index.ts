@@ -40,6 +40,16 @@ export { assessPlanCompletion, type PlanArtifact, type PlanCompletionAssessment 
 // ToolGateway 用纯 re-export：搬走之后 index.ts 内部已不再使用它，无需为它建本地绑定
 // （api 的 server.ts 与多个测试仍从本 barrel 取它，所以必须保留导出）。
 export { ToolGateway, type ToolGatewayOptions } from "./tools/gateway.js";
+// 批 D：命令执行端口与其本地实现搬进 platform/commands.ts。
+// CommandResult / CommandExecutor / HookContext 三个类型在本模块剩下的 HookRunResult 与
+// LifecycleHookRunner 里仍有引用，所以走 import + export 两条保住本地绑定；
+// CommandInvocation / RegisteredCommandDefinition / ProcessRunner 已无内部引用，纯 re-export。
+import type { CommandExecutor, CommandResult, HookContext } from "./platform/commands.js";
+export type { CommandExecutor, CommandInvocation, CommandResult, HookContext, ProcessRunner, RegisteredCommandDefinition } from "./platform/commands.js";
+// defaultProcessRunner 搬迁前就是**未导出**的内部函数（只在 RegisteredCommandExecutor 的
+// 默认参数里出现），搬进 platform/commands.ts 后仍是模块私有，本 barrel 不转发它，
+// 避免凭空扩大公共契约。
+export { RegisteredCommandExecutor } from "./platform/commands.js";
 // PipelineStore 是**类型**，纯 re-export 不涉及运行时绑定，天然不会引出 S1 那类 ReferenceError；
 // 而它被 index.ts 内部大量用作参数类型（`store: PipelineStore`），所以仍用 import + export 两条，
 // 保持"类型在本模块作用域内可见"。
@@ -600,33 +610,6 @@ export type HookDefinition = {
   maxAttempts?: number | undefined;
 };
 
-/** Hook 执行上下文；路径固定指向当前 Run 的 Worktree。 */
-export type HookContext = {
-  projectId: string;
-  runId: string;
-  workspacePath: string;
-  branch: string;
-  baseCommit: string;
-  exitReason: string;
-};
-
-/** 已注册命令的一次确定性调用，不携带任意 shell 字符串。 */
-export type CommandInvocation = {
-  commandId: string;
-  cwd: string;
-  timeoutMs: number;
-  context: HookContext;
-};
-
-/** 进程执行结果；exitCode 为 null 表示进程被信号或运行时中断。 */
-export type CommandResult = {
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-};
-
-/** Hook/验证共用的命令执行端口。 */
-export type CommandExecutor = (command: CommandInvocation) => Promise<CommandResult>;
 
 /** Provider 结构化询问中的单个问题；secret 答案只能保存脱敏摘要。 */
 export type ModelInputQuestion = {
@@ -783,71 +766,6 @@ export class LifecycleHookRunner {
   }
 }
 
-/** Commands are policy objects, not model input. Unclassified legacy commands are disabled by migration. */
-export type RegisteredCommandDefinition = {
-  commandId: string;
-  category?: "verification" | "lifecycle" | "executor-tool" | "unclassified";
-  description?: string;
-  enabled?: boolean;
-  argv: readonly [string, ...string[]];
-  environment?: Readonly<Record<string, string>> | undefined;
-  timeoutMs?: number;
-};
-export type ProcessRunner = (argv: string[], cwd: string, timeoutMs: number, env: Record<string, string>) => Promise<CommandResult>;
-
-/** 只执行已注册的 argv 命令，禁止模型通过字符串拼接调用任意 Shell。 */
-export class RegisteredCommandExecutor {
-  private readonly commands = new Map<string, RegisteredCommandDefinition>();
-  private readonly runProcess: ProcessRunner;
-
-  constructor(commands: RegisteredCommandDefinition[], runProcess: ProcessRunner = defaultProcessRunner) {
-    for (const command of commands) this.commands.set(command.commandId, command);
-    this.runProcess = runProcess;
-  }
-
-  execute(command: CommandInvocation): Promise<CommandResult> {
-    const definition = this.commands.get(command.commandId);
-    if (!definition) return Promise.resolve({ exitCode: 127, stdout: "", stderr: `Command ${command.commandId} is not registered` });
-    if (definition.enabled === false) return Promise.resolve({ exitCode: 126, stdout: "", stderr: `Command ${command.commandId} is disabled` });
-    const env: Record<string, string> = { ...(definition.environment ?? {}) };
-    // PATH is process resolution infrastructure, not project data; preserve it
-    // when a Project command leaves the optional environment block empty.
-    if (!env.PATH && process.env.PATH) env.PATH = process.env.PATH;
-    if (!env.Path && process.env.Path) env.Path = process.env.Path;
-    Object.assign(env, {
-      PIPELINE_PROJECT_ID: command.context.projectId,
-      PIPELINE_RUN_ID: command.context.runId,
-      PIPELINE_WORKSPACE_PATH: command.context.workspacePath,
-      PIPELINE_BRANCH: command.context.branch,
-      PIPELINE_BASE_COMMIT: command.context.baseCommit,
-      PIPELINE_EXIT_REASON: command.context.exitReason,
-    });
-    return this.runProcess([...definition.argv], command.cwd, definition.timeoutMs ?? command.timeoutMs, env);
-  }
-
-  invoke(command: CommandInvocation): Promise<CommandResult> { return this.execute(command); }
-}
-
-function defaultProcessRunner(argv: string[], cwd: string, timeoutMs: number, env: Record<string, string>): Promise<CommandResult> {
-  return new Promise((resolveResult) => {
-    const child = spawn(argv[0]!, argv.slice(1), { cwd, env, detached: true });
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    const settle = (result: CommandResult) => { if (!settled) { settled = true; clearTimeout(timer); resolveResult(result); } };
-    child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-    child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
-    child.on("error", (error) => settle({ exitCode: 1, stdout, stderr: `${stderr}${error.message}` }));
-    child.on("close", (code) => settle({ exitCode: code, stdout, stderr }));
-    const timer = setTimeout(() => {
-      if (child.pid) {
-        try { process.kill(-child.pid, "SIGTERM"); } catch { child.kill("SIGTERM"); }
-        setTimeout(() => { if (!settled) { try { process.kill(-child.pid!, "SIGKILL"); } catch { child.kill("SIGKILL"); } } }, 1000);
-      }
-      settle({ exitCode: 124, stdout, stderr: `${stderr}Command timed out` });
-    }, timeoutMs);
-  });
-}
 
 /** 工具调用角色；Explorer 和 Executor 使用不同的允许集合。 */
 export type ToolRole = "explorer" | "executor";
