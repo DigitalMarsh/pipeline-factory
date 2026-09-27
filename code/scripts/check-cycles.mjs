@@ -233,11 +233,38 @@ if (!existsSync(baselinePath)) {
 const baseline = new Set(JSON.parse(readFileSync(baselinePath, "utf8")).valueCycles ?? []);
 const introduced = valueCycles.filter((cycle) => !baseline.has(fingerprint(cycle)));
 const resolved = [...baseline].filter((key) => !valueCycles.some((cycle) => fingerprint(cycle) === key));
+const shortName = (member) => member.slice(member.lastIndexOf("/") + 1);
 
-if (resolved.length) console.log(`\n已消除的环：${resolved.length}（记得更新基线）`);
-if (introduced.length) {
-  console.error(`\n新增了 ${introduced.length} 个值级环：`);
-  for (const cycle of introduced) console.error(`  - ${cycle.join(", ")}`);
+/**
+ * 指纹是成员列表，所以"强连通分量变小"也会让指纹变化，从而被当成新环。
+ * 解环的每一步都正是这种情形，不区分的话每步都要对着一条假警报做判断。
+ * 判据：新环的成员是某个已消除基线环的子集 → 是收缩（进度）；否则是真的引入（回归）。
+ * 两者都 exit 1，因为基线都必须更新——但给出的行动完全不同。
+ */
+const shrinkages = [];
+const regressions = [];
+for (const cycle of introduced) {
+  // 方向必须是"新环的成员全部出自旧环"（新 ⊆ 旧）。反过来写成"旧 ⊆ 新"的话，
+  // 收缩时旧环总有一个成员已脱离，判定会永远失败，每一步解环都会报成假回归。
+  const shrunkFrom = resolved.find((key) => {
+    const members = new Set(key.split(" | "));
+    return cycle.every((member) => members.has(member));
+  });
+  (shrunkFrom ? shrinkages : regressions).push({ cycle, shrunkFrom });
+}
+
+for (const { cycle, shrunkFrom } of shrinkages) {
+  const dropped = shrunkFrom.split(" | ").filter((member) => !new Set(cycle).has(member)).map(shortName);
+  console.log(`\n环在收缩：${shrunkFrom.split(" | ").length} 个模块 → ${cycle.length} 个模块，已脱离 ${dropped.join(", ")}`);
+}
+if (shrinkages.length) console.log("这是解环的预期进度，不是回归。更新基线：node scripts/check-cycles.mjs --write-baseline");
+
+if (regressions.length) {
+  console.error(`\n新增了 ${regressions.length} 个值级环（回归）：`);
+  for (const { cycle } of regressions) console.error(`  - ${cycle.join(", ")}`);
   process.exit(1);
 }
+
+if (resolved.length && !shrinkages.length) console.log(`\n已消除的环：${resolved.length}（记得更新基线）`);
+if (introduced.length) process.exit(1);
 console.log("\n没有新增值级环。");

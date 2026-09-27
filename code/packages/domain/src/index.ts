@@ -18,6 +18,17 @@ import type { PlanDispatchState } from "./dispatch-coordinator.js";
 import { redactAuditPayload, redactAuditText } from "./redaction.js";
 import { GeneratedPlanSpecV2ValidationError, parseGeneratedPlanSpecV2, resolvePlanContractV2, validateGeneratedPlanSpecV2 } from "./plan-v2.js";
 import type { GeneratedPlanSpecV2, PlanValidationIssue, ResolvedPlanContractV2 } from "./plan-v2.js";
+/**
+ * P2 解环期间从 index.ts 抽出去的符号统一放在这里，用"先 import 再 export"的形态。
+ * 不能写成 `export { ... } from "./x.js"`：纯 re-export 只把绑定转发给消费者，**不会给本模块
+ * 作用域创建同名绑定**，而 index.ts 自己还要用 REQUIRED_PLAN_AREAS / normalizeModelUsage 等，
+ * 写成纯 re-export 会得到一个只在运行时才炸的 `ReferenceError: ... is not defined`。
+ * 每抽一个符号前都要先确认 index.ts 内部是否还在用它。
+ */
+import { EXPLORER_PLAN_INSTRUCTIONS, EXPLORER_PLAN_REQUIREMENTS, REQUIRED_PLAN_AREAS, type ExplorerPlanRequirement } from "./platform/plan-requirements.js";
+import { mergeModelUsage, normalizeModelUsage, type ModelUsage, type ModelUsageScope } from "./model/usage.js";
+export { EXPLORER_PLAN_INSTRUCTIONS, EXPLORER_PLAN_REQUIREMENTS, REQUIRED_PLAN_AREAS, type ExplorerPlanRequirement };
+export { mergeModelUsage, normalizeModelUsage, type ModelUsage, type ModelUsageScope };
 export { EXECUTION_SLOT_RUN_STATUSES, ProjectService } from "./project.js";
 export { redactAuditPayload, redactAuditText } from "./redaction.js";
 export type { CreateProjectInput, Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings, ProjectSettingsInput, ProjectStatus, ProjectSummary, UpdateProjectInput } from "./project.js";
@@ -105,17 +116,6 @@ export type PlanExploration = {
   candidatePlanId: string | null;
   lastAssessedTurnId: string | null;
 };
-
-/**
- * 维护提示：这里必须"先 import 再 export"，不能写成 `export { ... } from "..."`。
- * 后者只把绑定转发给消费者，**不会在当前模块作用域里创建同名绑定**，而 index.ts 自己在
- * defaultPlanExploration / SqlitePipelineStore 等处要用 REQUIRED_PLAN_AREAS——
- * 写成纯 re-export 会得到一个只在运行时才炸的 `ReferenceError: REQUIRED_PLAN_AREAS is not defined`。
- * 抽后续符号（model/usage.ts、plan/status-transition.ts…）时同理：先确认 index.ts 内部是否还要用。
- */
-import { EXPLORER_PLAN_INSTRUCTIONS, EXPLORER_PLAN_REQUIREMENTS, REQUIRED_PLAN_AREAS, type ExplorerPlanRequirement } from "./platform/plan-requirements.js";
-
-export { EXPLORER_PLAN_INSTRUCTIONS, EXPLORER_PLAN_REQUIREMENTS, REQUIRED_PLAN_AREAS, type ExplorerPlanRequirement };
 
 /** Factory 内部的长期 Explorer 工作区，与外部 Provider Thread 标识分离。 */
 export type ExplorerThread = {
@@ -4164,14 +4164,6 @@ export type ModelToolDefinition = {
 };
 /** Provider 会话中的规范化消息。 */
 export type ModelMessage = { role: "system" | "user" | "assistant" | "tool"; content: string; toolCallId?: string };
-/** Provider 返回的精确 token 用量；null 表示 Provider 没有返回对应字段。 */
-export type ModelUsage = {
-  inputTokens: number | null;
-  outputTokens: number | null;
-  reasoningTokens: number | null;
-  totalTokens: number | null;
-};
-export type ModelUsageScope = "turn" | "total";
 
 /** 执行线程的持久化遥测；不对缺失的 Provider usage 做本地估算。 */
 export type ExecutionTelemetry = {
@@ -4185,41 +4177,6 @@ export type ExecutionTelemetry = {
   usageScope: ModelUsageScope | null;
 };
 
-const usageField = (value: unknown): number | null => typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
-
-/** 兼容 OpenAI snake_case、App Server camelCase 及其嵌套 reasoning 字段。 */
-export function normalizeModelUsage(value: unknown): ModelUsage | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const candidate = value as Record<string, unknown>;
-  const outputDetails = candidate.output_tokens_details && typeof candidate.output_tokens_details === "object" ? candidate.output_tokens_details as Record<string, unknown> : {};
-  const outputDetailsCamel = candidate.outputTokensDetails && typeof candidate.outputTokensDetails === "object" ? candidate.outputTokensDetails as Record<string, unknown> : {};
-  const usage: ModelUsage = {
-    inputTokens: usageField(candidate.input_tokens ?? candidate.inputTokens),
-    outputTokens: usageField(candidate.output_tokens ?? candidate.outputTokens),
-    reasoningTokens: usageField(candidate.reasoning_tokens ?? candidate.reasoningTokens ?? candidate.reasoning_output_tokens ?? candidate.reasoningOutputTokens ?? outputDetails.reasoning_tokens ?? outputDetailsCamel.reasoningTokens),
-    totalTokens: usageField(candidate.total_tokens ?? candidate.totalTokens),
-  };
-  return Object.values(usage).some((item) => item !== null) ? usage : null;
-}
-
-/** 聚合多个 Provider turn；total scope 使用 Provider 的累计值而不是重复相加。 */
-export function mergeModelUsage(previous: ModelUsage | null, incoming: ModelUsage, scope: ModelUsageScope): ModelUsage {
-  if (scope === "total") {
-    return {
-      inputTokens: incoming.inputTokens ?? previous?.inputTokens ?? null,
-      outputTokens: incoming.outputTokens ?? previous?.outputTokens ?? null,
-      reasoningTokens: incoming.reasoningTokens ?? previous?.reasoningTokens ?? null,
-      totalTokens: incoming.totalTokens ?? previous?.totalTokens ?? null,
-    };
-  }
-  const add = (before: number | null | undefined, after: number | null): number | null => before === null || before === undefined ? after : after === null ? before : before + after;
-  return {
-    inputTokens: add(previous?.inputTokens, incoming.inputTokens),
-    outputTokens: add(previous?.outputTokens, incoming.outputTokens),
-    reasoningTokens: add(previous?.reasoningTokens, incoming.reasoningTokens),
-    totalTokens: add(previous?.totalTokens, incoming.totalTokens),
-  };
-}
 /** 一次 Explorer/Executor 模型调用的完整上下文。 */
 export type ModelRequest = {
   role: ModelRole;

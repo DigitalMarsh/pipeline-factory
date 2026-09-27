@@ -5,7 +5,10 @@
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EXPLORER_PLAN_INSTRUCTIONS } from "./platform/plan-requirements.js";
-import { normalizeModelUsage, type ModelCapabilities, type ModelEvent, type ModelGateway, type ModelMessage, type ModelRequest, type ModelRole, type ModelRoleConfig } from "./index.js";
+import { normalizeModelUsage } from "./model/usage.js";
+// 用 import type 而不是"具名绑定带 type 前缀"：这样"本模块对 index.js 只剩类型依赖"是显式的，
+// check-cycles.mjs 也据此判定这条边已被切断。
+import type { ModelCapabilities, ModelEvent, ModelGateway, ModelMessage, ModelRequest, ModelRole, ModelRoleConfig } from "./index.js";
 import { mapCodexRateLimits, type CodexRateLimitsResponse, type MappedCodexRateLimits } from "./codex-rate-limits.js";
 
 type JsonObject = Record<string, unknown>;
