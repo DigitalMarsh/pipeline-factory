@@ -60,6 +60,7 @@ import { registerWebHosting } from "./web-hosting.js";
 import { openSseChannel } from "./http/sse.js";
 import { registerPlatformRoutes } from "./routes/platform.js";
 import { registerChangeProposalRoutes } from "./routes/change-proposals.js";
+import { registerProjectRoutes } from "./routes/projects.js";
 import { registerWorkbenchRoutes } from "./routes/workbench.js";
 import { registerHookRoutes } from "./routes/hooks.js";
 import { registerAgentLoopRoutes } from "./routes/agent-loops.js";
@@ -291,141 +292,8 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
   registerRunRoutes(app, { store, plans, merger, scheduler, verifier, verificationExecutor, loopController });
   registerMergeRequestRoutes(app, { store, merger, dispatchCoordinator });
   registerChangeProposalRoutes(app, { store, changeProposals });
+  registerProjectRoutes(app, { store, projects, plans });
   // ── 仍在组合根的域（P4b 后续步继续搬）──
-
-  // Project Catalog 和设置路由只负责 HTTP 输入/输出，具体版本、路径和归档规则由 ProjectService 决定。
-  app.get("/api/v4/projects", async (request) => {
-    const query = z.object({ status: z.enum(["ACTIVE", "ARCHIVED"]).optional() }).safeParse(request.query ?? {});
-    const list = query.success ? projects.list(query.data.status) : projects.list();
-    return { items: list.map((project) => {
-      const summary = projects.summary(project.id);
-      return {
-        ...project,
-        summary: {
-          currentExplorerThread: summary.currentExplorerThread,
-          currentExplorerTitle: summary.currentExplorerThread ? store.getThread(summary.currentExplorerThread)?.title ?? null : null,
-          threadCount: summary.threadCount,
-          planCount: summary.planCount,
-          runCount: summary.runCount,
-          activeRunCount: summary.activeRunCount,
-          needsAttentionCount: summary.needsAttentionCount,
-          lastActivityAt: summary.lastActivityAt,
-        },
-      };
-    }) };
-  });
-
-  app.post("/api/v4/projects", async (request, reply) => {
-    const body = projectCreateBody.safeParse(request.body ?? {});
-    if (!body.success) return reply.code(400).send({ error: body.error.flatten() });
-    try {
-      const repository = await inspectGitRepository(body.data.repoRoot);
-      const defaultBranch = body.data.defaultBranch ?? repository.defaultBranch;
-      await assertGitBranch(repository.repoRoot, defaultBranch);
-      const worktreeRoot = body.data.worktreeRoot ?? resolvePath(dirname(repository.repoRoot), `.${basename(repository.repoRoot)}-pipeline-worktrees`);
-      let project = projects.create({
-        ...(body.data.id ? { id: body.data.id } : {}),
-        name: body.data.name,
-        ...(body.data.shortName !== undefined ? { shortName: body.data.shortName } : {}),
-        repoRoot: repository.repoRoot,
-        defaultBranch,
-        worktreeRoot,
-        ...(body.data.settings ? { settings: body.data.settings as ProjectSettingsInput } : {}),
-      });
-      const existingExplorer = store.listThreads().find((thread) => thread.projectId === project.id && thread.state !== "ARCHIVED");
-      const explorerThread = existingExplorer ?? plans.registerThread({ id: store.nextId("explorer"), projectId: project.id, parentThreadId: null, title: "New Explorer" });
-      project = projects.selectExplorer(project.id, explorerThread.id);
-      return reply.code(201).send({ project, explorer: explorerThread });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const status = /Git repository|does not exist|absolute path/i.test(message) ? 422 : 409;
-      return reply.code(status).send({ code: status === 422 ? "INVALID_GIT_REPOSITORY" : "PROJECT_CONFLICT", error: message });
-    }
-  });
-
-  app.post("/api/v4/projects/:projectId/validate-repository", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    const body = projectValidateBody.safeParse(request.body ?? {});
-    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid repository validation request" });
-    const project = store.getProject(params.data.projectId);
-    if (!project) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
-    try {
-      const repository = await inspectGitRepository(body.data.repoRoot ?? project.repoRoot);
-      return { valid: true, repoRoot: repository.repoRoot, defaultBranch: repository.defaultBranch };
-    } catch (error) {
-      return reply.code(422).send({ code: "INVALID_GIT_REPOSITORY", error: error instanceof Error ? error.message : String(error) });
-    }
-  });
-
-  app.get("/api/v4/projects/:projectId", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    const project = store.getProject(params.data.projectId);
-    if (!project) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
-    return { project, summary: projects.summary(project.id) };
-  });
-
-  app.get("/api/v4/projects/:projectId/summary", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    if (!store.getProject(params.data.projectId)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
-    return { summary: projects.summary(params.data.projectId) };
-  });
-
-  app.patch("/api/v4/projects/:projectId", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    const body = projectUpdateBody.safeParse(request.body ?? {});
-    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid Project update request" });
-    try {
-      const project = projects.get(params.data.projectId);
-      const repository = body.data.repoRoot ? await inspectGitRepository(body.data.repoRoot) : undefined;
-      const defaultBranch = body.data.defaultBranch ?? (repository ? repository.defaultBranch : undefined);
-      if (defaultBranch) await assertGitBranch(repository?.repoRoot ?? project.repoRoot, defaultBranch);
-      const updated = projects.update(params.data.projectId, {
-        ...(body.data.name ? { name: body.data.name } : {}),
-        ...(body.data.shortName !== undefined ? { shortName: body.data.shortName } : {}),
-        ...(repository ? { repoRoot: repository.repoRoot, ...(body.data.defaultBranch ? {} : { defaultBranch: repository.defaultBranch }) } : body.data.repoRoot ? { repoRoot: body.data.repoRoot } : {}),
-        ...(body.data.defaultBranch ? { defaultBranch: body.data.defaultBranch } : {}),
-        ...(body.data.worktreeRoot ? { worktreeRoot: body.data.worktreeRoot } : {}),
-        ...(body.data.expectedConfigVersion ? { expectedConfigVersion: body.data.expectedConfigVersion } : {}),
-        ...(body.data.settings ? { settings: body.data.settings as ProjectSettingsInput } : {}),
-      });
-      return { project: updated };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const code = /not found/i.test(message) ? "PROJECT_NOT_FOUND" : /configuration version conflict/i.test(message) ? "CONFIG_VERSION_CONFLICT" : /active runs/i.test(message) ? "PROJECT_HAS_ACTIVE_RUNS" : /Git repository|branch|does not exist|absolute path/i.test(message) ? "INVALID_GIT_REPOSITORY" : "PROJECT_UPDATE_FAILED";
-      return reply.code(code === "INVALID_GIT_REPOSITORY" ? 422 : code === "PROJECT_NOT_FOUND" ? 404 : 409).send({ code, error: message });
-    }
-  });
-
-  app.post("/api/v4/projects/:projectId/archive", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    try { return { project: projects.archive(params.data.projectId) }; }
-    catch (error) { const message = error instanceof Error ? error.message : String(error); return reply.code(/not found/i.test(message) ? 404 : 409).send({ code: /not found/i.test(message) ? "PROJECT_NOT_FOUND" : "PROJECT_HAS_ACTIVE_RUNS", error: message }); }
-  });
-
-  app.post("/api/v4/projects/:projectId/activate", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    try { return { project: projects.activate(params.data.projectId) }; }
-    catch (error) { const message = error instanceof Error ? error.message : String(error); return reply.code(/not found/i.test(message) ? 404 : 409).send({ code: /not found/i.test(message) ? "PROJECT_NOT_FOUND" : "PROJECT_ACTIVATION_FAILED", error: message }); }
-  });
-
-  app.post("/api/v4/projects/:projectId/select-explorer", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    const body = projectSelectExplorerBody.safeParse(request.body ?? {});
-    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid Explorer selection request" });
-    try { return { project: projects.selectExplorer(params.data.projectId, body.data.explorerId) }; }
-    catch (error) { const message = error instanceof Error ? error.message : String(error); return reply.code(/Project .* not found/i.test(message) ? 404 : 409).send({ code: /Project .* not found/i.test(message) ? "PROJECT_NOT_FOUND" : "EXPLORER_SELECTION_FAILED", error: message }); }
-  });
-
-  app.get("/api/v4/projects/:projectId/config-history", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    try { return { items: projects.configHistory(params.data.projectId) }; }
-    catch (error) { const message = error instanceof Error ? error.message : String(error); return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: message }); }
-  });
 
   app.post("/api/v4/projects/:projectId/explorers", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
