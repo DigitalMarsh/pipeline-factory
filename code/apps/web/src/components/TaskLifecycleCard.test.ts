@@ -70,7 +70,7 @@ describe("TaskLifecycleCard", () => {
       "Running",
       "Verifying",
       "Ready for review",
-      "Completed",
+      "Merged",
     ]);
     expect([...host.querySelectorAll(".task-lifecycle-step")].every((step) => {
       const children = [...step.children].map((child) => child.className);

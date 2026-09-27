@@ -1,19 +1,21 @@
 import type { Plan, PlanLifecycleEntry, PlanLifecycleStatus } from "../types";
+import { planStatusLabel } from "./planStatus";
 
 export const PLAN_LIFECYCLE_STEPS: Array<{ status: PlanLifecycleStatus; label: string }> = [
-  { status: "DRAFT", label: "Candidate" },
-  { status: "READY", label: "Confirmed" },
-  { status: "ENQUEUED", label: "Enqueued" },
-  { status: "DISPATCHED", label: "Dispatched" },
-  { status: "IN_PROGRESS", label: "Running" },
-  { status: "VERIFYING", label: "Verifying" },
-  { status: "MERGE_READY", label: "Ready for review" },
-  { status: "MERGED", label: "Completed" },
+  { status: "DRAFT", label: planStatusLabel("DRAFT") },
+  { status: "READY", label: planStatusLabel("READY") },
+  { status: "ENQUEUED", label: planStatusLabel("ENQUEUED") },
+  { status: "DISPATCHED", label: planStatusLabel("DISPATCHED") },
+  { status: "IN_PROGRESS", label: planStatusLabel("IN_PROGRESS") },
+  { status: "VERIFYING", label: planStatusLabel("VERIFYING") },
+  { status: "MERGE_READY", label: planStatusLabel("MERGE_READY") },
+  { status: "MERGED", label: planStatusLabel("MERGED") },
 ];
 
 export const PLAN_LIFECYCLE_EXCEPTIONS: Array<{ status: PlanLifecycleStatus; label: string }> = [
-  { status: "BLOCKED", label: "Blocked" },
-  { status: "NEEDS_PLAN_CHANGE", label: "Plan change required" },
+  { status: "BLOCKED", label: planStatusLabel("BLOCKED") },
+  { status: "NEEDS_PLAN_CHANGE", label: planStatusLabel("NEEDS_PLAN_CHANGE") },
+  // This is a dispatch wait reason, not a PlanStatus, so it intentionally remains local.
   { status: "NEEDS_CONFIGURATION", label: "Needs configuration" },
 ];
 

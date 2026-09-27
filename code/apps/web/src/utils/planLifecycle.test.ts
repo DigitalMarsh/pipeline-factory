@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Plan } from "../types";
-import { formatLifecycleTime, lifecycleEntriesFor, normalizedLifecycleStatus } from "./planLifecycle";
+import { formatLifecycleTime, lifecycleEntriesFor, lifecycleLabel, normalizedLifecycleStatus } from "./planLifecycle";
 
 function plan(overrides: Partial<Plan> = {}): Plan {
   return {
@@ -52,6 +52,13 @@ describe("plan lifecycle presentation", () => {
     const entries = lifecycleEntriesFor(plan({ status: "MERGE_READY", confirmedAt: null, queuedAt: "2026-09-19T01:02:00.000Z", dispatchedAt: "2026-09-19T01:03:00.000Z", createdAt: "" }));
     expect(entries.map((entry) => entry.status)).toEqual(["DRAFT", "BLOCKED"]);
     expect(entries.at(-1)).toMatchObject({ current: true, occurredAt: null });
+  });
+
+  it("uses the shared Plan status wording for lifecycle labels", () => {
+    // P8.3：这条先锁住可见差异，再收敛 planLifecycle 的两张标签表。
+    expect(lifecycleLabel("MERGED")).toBe("Merged");
+    expect(lifecycleLabel("BLOCKED")).toBe("Blocked");
+    expect(lifecycleLabel("NEEDS_CONFIGURATION")).toBe("Needs configuration");
   });
 
   it("formats current-year times compactly and includes another year", () => {
