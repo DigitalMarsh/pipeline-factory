@@ -41,9 +41,9 @@ export { assessPlanCompletion, type PlanArtifact, type PlanCompletionAssessment 
 // （api 的 server.ts 与多个测试仍从本 barrel 取它，所以必须保留导出）。
 export { ToolGateway, type ToolGatewayOptions } from "./tools/gateway.js";
 // 批 D：命令执行端口与其本地实现搬进 platform/commands.ts。
-// CommandResult 在本模块剩下的 GitCommandRunner / VerificationCommandExecutor 里仍有引用，
-// 所以走 import + export 两条保住本地绑定；CommandExecutor / HookContext 随 Hook 一并搬进
-// run/hooks.ts 后已无内部引用，与其余四个类型一起纯 re-export。
+// CommandResult 在本模块剩下的 VerificationCommandExecutor 里仍有引用，所以走 import + export
+// 两条保住本地绑定；CommandExecutor / HookContext 随 Hook 一并搬进 run/hooks.ts 后已无内部引用，
+// 与其余四个类型一起纯 re-export。
 import type { CommandResult } from "./platform/commands.js";
 export type { CommandExecutor, CommandInvocation, CommandResult, HookContext, ProcessRunner, RegisteredCommandDefinition } from "./platform/commands.js";
 // defaultProcessRunner 搬迁前就是**未导出**的内部函数（只在 RegisteredCommandExecutor 的
@@ -53,6 +53,10 @@ export { RegisteredCommandExecutor } from "./platform/commands.js";
 // 批 D：Hook 执行器与其结果类型搬进 run/hooks.ts。本模块内部已无引用，全部纯 re-export。
 export { LifecycleHookRunner } from "./run/hooks.js";
 export type { HookDefinition, HookExecution, HookRunResult } from "./run/hooks.js";
+// 批 D：Git Worktree 边界搬进 git/worktree.ts。本模块内部已无引用，全部纯 re-export
+// （defaultGitCommand 与原样保持一致：它本来就是模块私有，不转发）。
+export { LocalGitWorktreeAdapter } from "./git/worktree.js";
+export type { GitCommandRunner, LocalGitWorktreeOptions, Workspace, WorkspaceAdapter } from "./git/worktree.js";
 // PipelineStore 是**类型**，纯 re-export 不涉及运行时绑定，天然不会引出 S1 那类 ReferenceError；
 // 而它被 index.ts 内部大量用作参数类型（`store: PipelineStore`），所以仍用 import + export 两条，
 // 保持"类型在本模块作用域内可见"。
@@ -606,7 +610,6 @@ export type CreateExplorerInput = {
 };
 
 
-
 /** Provider 结构化询问中的单个问题；secret 答案只能保存脱敏摘要。 */
 export type ModelInputQuestion = {
   id: string;
@@ -655,8 +658,6 @@ export type ExplorerInputRequest = {
 };
 
 
-
-
 export type CreateChangeProposalInput = {
   runId: string;
   reason: string;
@@ -664,7 +665,6 @@ export type CreateChangeProposalInput = {
   contract: PlanContract;
   createdBy?: string;
 };
-
 
 
 /** 工具调用角色；Explorer 和 Executor 使用不同的允许集合。 */
@@ -934,62 +934,6 @@ export type Run = {
   startedAt: string | null;
 };
 
-/** 一个 Run 的 Git Worktree 事实。 */
-export type Workspace = { path: string; branch: string; baseCommit: string };
-/** Worktree 创建/移除端口；实现必须使用 Revision 快照中的路径。 */
-export type WorkspaceAdapter = {
-  create(input: { projectId: string; runId: string; branch: string; baseCommit: string }): Promise<Workspace>;
-  remove(workspace: Workspace): Promise<void>;
-};
-
-/** 可注入的 Git 命令执行端口。 */
-export type GitCommandRunner = (args: string[], cwd: string) => Promise<CommandResult>;
-/** 本地 Git Worktree 适配器配置。 */
-export type LocalGitWorktreeOptions = { projectRoot: string; worktreeRoot: string; runGit?: GitCommandRunner | undefined };
-
-/** 使用 Git 创建和移除 Run 专属 Worktree；执行目录与只读 Explorer 的 repoRoot 分离。 */
-export class LocalGitWorktreeAdapter implements WorkspaceAdapter {
-  private readonly runGit: GitCommandRunner;
-
-  constructor(private readonly options: LocalGitWorktreeOptions) {
-    this.runGit = options.runGit ?? defaultGitCommand;
-  }
-
-  async create(input: { projectId: string; runId: string; branch: string; baseCommit: string }): Promise<Workspace> {
-    const branchLeaf = input.branch.slice(input.branch.lastIndexOf("/") + 1);
-    const workspaceName = /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(branchLeaf) ? branchLeaf : input.runId;
-    const path = resolve(this.options.worktreeRoot, workspaceName);
-    const verified = await this.runGit(["rev-parse", "--verify", input.baseCommit], this.options.projectRoot);
-    if (verified.exitCode !== 0) throw new Error(`Base commit ${input.baseCommit} could not be verified`);
-    const created = await this.runGit(["worktree", "add", "-b", input.branch, path, input.baseCommit], this.options.projectRoot);
-    if (created.exitCode !== 0) throw new Error(`Git worktree could not be created: ${created.stderr}`);
-    try {
-      const baseCommit = await snapshotProjectWorkingTree({
-        projectRoot: this.options.projectRoot,
-        worktreeRoot: this.options.worktreeRoot,
-        workspacePath: path,
-        baseCommit: input.baseCommit,
-        runGit: this.runGit,
-      });
-      return { path, branch: input.branch, baseCommit };
-    } catch (error) {
-      await this.runGit(["worktree", "remove", "--force", path], this.options.projectRoot).catch(() => undefined);
-      await this.runGit(["branch", "-D", input.branch], this.options.projectRoot).catch(() => undefined);
-      throw new Error(`Git worktree baseline could not be created: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-
-  async remove(workspace: Workspace): Promise<void> {
-    const removed = await this.runGit(["worktree", "remove", "--force", workspace.path], this.options.projectRoot);
-    if (removed.exitCode !== 0) throw new Error(`Git worktree could not be removed: ${removed.stderr}`);
-  }
-}
-
-function defaultGitCommand(args: string[], cwd: string): Promise<CommandResult> {
-  return new Promise((resolveResult) => {
-    execFile("git", args, { cwd, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => resolveResult({ exitCode: error ? 1 : 0, stdout: String(stdout), stderr: String(stderr) }));
-  });
-}
 
 export type VerificationStatus = "PASSED" | "SKIPPED" | "FAILED" | "BLOCKED";
 /** 单次验证及其修复尝试结果。 */
@@ -1113,8 +1057,5 @@ export class ToolCallLedger {
 
   list(): ToolCallLedgerEntry[] { return [...this.entries.values()]; }
 }
-import { createHash, randomUUID } from "node:crypto";
-import { execFile, execFileSync, spawn } from "node:child_process";
-import { DatabaseSync } from "node:sqlite";
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
