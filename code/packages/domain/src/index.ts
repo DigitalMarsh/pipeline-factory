@@ -70,6 +70,10 @@ export type { ModelFetch, ModelFetchResponse, ModelResult, OpenAIModelGatewayOpt
 // 批 D：测试替身搬进 model/stub-gateway.ts。至此 model/ 下三个 ModelGateway 实现并列
 // （gateway-openai / stub-gateway / codex-app-server），一眼可分谁是生产、谁是降级、谁是替身。
 export { StubModelGateway } from "./model/stub-gateway.js";
+// 批 D：进程内工具调用账本搬进 tools/tool-call-ledger.ts，与它实际执行点
+// tool-runtime.ts 相邻。本模块内部已无引用，纯 re-export。
+export { ToolCallLedger } from "./tools/tool-call-ledger.js";
+export type { ToolCallLedgerEntry, ToolCallLedgerStatus } from "./tools/tool-call-ledger.js";
 // PipelineStore 是**类型**，纯 re-export 不涉及运行时绑定，天然不会引出 S1 那类 ReferenceError；
 // 而它被 index.ts 内部大量用作参数类型（`store: PipelineStore`），所以仍用 import + export 两条，
 // 保持"类型在本模块作用域内可见"。
@@ -900,31 +904,3 @@ export type MergeReconciliationReport = {
   items: MergeReconciliationItem[];
 };
 
-
-export type ToolCallLedgerStatus = "PENDING" | "COMPLETED" | "DENIED" | "UNCERTAIN" | "NEEDS_RECONCILIATION";
-export type ToolCallLedgerEntry = { callId: string; tool: ToolName; status: ToolCallLedgerStatus; result: ToolCallResult; replay: boolean };
-
-/** 记录工具调用的确定性结果；UNCERTAIN 恢复为 NEEDS_RECONCILIATION，禁止静默重放。 */
-export class ToolCallLedger {
-  private readonly entries = new Map<string, ToolCallLedgerEntry>();
-
-  record(call: ToolCall, result: ToolCallResult, status: ToolCallLedgerStatus): ToolCallLedgerEntry {
-    const entry: ToolCallLedgerEntry = { callId: call.callId, tool: call.tool, status, result, replay: false };
-    this.entries.set(call.callId, entry);
-    return entry;
-  }
-
-  recover(): Array<{ callId: string; status: "NEEDS_RECONCILIATION"; replay: false }> {
-    const recovered: Array<{ callId: string; status: "NEEDS_RECONCILIATION"; replay: false }> = [];
-    for (const entry of this.entries.values()) {
-      if (entry.status === "UNCERTAIN") {
-        entry.status = "NEEDS_RECONCILIATION";
-        entry.replay = false;
-        recovered.push({ callId: entry.callId, status: "NEEDS_RECONCILIATION", replay: false });
-      }
-    }
-    return recovered;
-  }
-
-  list(): ToolCallLedgerEntry[] { return [...this.entries.values()]; }
-}
