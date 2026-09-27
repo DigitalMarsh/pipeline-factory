@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "pretest": "pnpm --filter @pipeline-factory/domain build",
     "test": "vitest run",
+    "pretypecheck": "pnpm --filter @pipeline-factory/domain build",
     "typecheck": "vue-tsc --noEmit",
     "build": "vite build"
   },
@@ -18,6 +20,7 @@
     "vue-router": "^4.5.0"
   },
   "devDependencies": {
+    "@pipeline-factory/domain": "workspace:*",
     "@vitejs/plugin-vue": "^5.2.1",
     "jsdom": "^25.0.1",
     "vite": "^6.0.7",

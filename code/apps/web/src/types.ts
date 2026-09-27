@@ -3,7 +3,7 @@
  *
  * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
  */
-export type PlanStatus = "DRAFT" | "DISCARDED" | "READY" | "ENQUEUED" | "DISPATCHED" | "QUEUED" | "IN_PROGRESS" | "VERIFYING" | "MERGE_READY" | "MERGED" | "BLOCKED" | "NEEDS_PLAN_CHANGE";
+export type PlanStatus = "DRAFT" | "DISCARDED" | "DESIGNED" | "PLANNED" | "READY" | "ENQUEUED" | "DISPATCHED" | "QUEUED" | "IN_PROGRESS" | "VERIFYING" | "MERGE_READY" | "MERGED" | "BLOCKED" | "NEEDS_PLAN_CHANGE";
 export type PlanLifecycleStatus = PlanStatus | "NEEDS_CONFIGURATION";
 export type PlanLifecycleEntry = {
   status: PlanLifecycleStatus;
@@ -17,7 +17,7 @@ export type PlanLifecycleEntry = {
 export type ExecutionThreadSummary = { id: string; runId: string; state: string } | null;
 export type PlanDispatchStatus = "QUEUED" | "WAITING" | "DISPATCHING" | "RUNNING" | "VERIFYING" | "NEEDS_REVIEW" | "BLOCKED" | "COMPLETED";
 export type PlanDispatchWaitReason = "WAITING_DEPENDENCY" | "WAITING_CONFLICT" | "WAITING_PROJECT_CAPACITY" | "WAITING_GLOBAL_CAPACITY" | "NEEDS_CONFIGURATION";
-export type PlanDispatchState = {
+export type PlanDispatchState = Readonly<{
   planId: string;
   revision?: number;
   projectId: string;
@@ -31,7 +31,7 @@ export type PlanDispatchState = {
   phase?: "VALIDATING" | "VALIDATION_FAILED" | "FROZEN" | "ENQUEUING" | "ENQUEUE_FAILED" | "ENQUEUED" | "DISPATCHING" | "DISPATCH_FAILED" | "DISPATCHED" | "STARTING_RUN" | "RUN_STARTED" | "WAITING" | "RUN_START_FAILED" | "NEEDS_REVIEW" | "ATTENTION" | "COMPLETED";
   automatic?: boolean;
   confirmedBy?: string | null;
-};
+}>;
 
 export type AgentLoopDiagnostics = {
   providerActivityCount: number;
