@@ -94,7 +94,7 @@ export function registerExplorerRoutes(app: FastifyInstance, deps: ExplorerRoute
     if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
     try {
       const explorerPlan = explorers.createPlan(explorer.id);
-      return reply.code(201).send({ explorerPlan, explorer: store.getThread(explorer.id) });
+      return reply.code(201).send({ explorerPlan, explorer: explorers.get(explorer.id) });
     } catch (error) {
       return reply.code(409).send({ error: error instanceof Error ? error.message : "ExplorerPlan cannot be created" });
     }
@@ -144,7 +144,7 @@ export function registerExplorerRoutes(app: FastifyInstance, deps: ExplorerRoute
     if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
     try {
       const explorerPlan = explorers.activatePlan(explorer.id, params.data.explorerPlanId);
-      return { explorerPlan, explorer: store.getThread(explorer.id) };
+      return { explorerPlan, explorer: explorers.get(explorer.id) };
     } catch (error) {
       return reply.code(404).send({ error: error instanceof Error ? error.message : "ExplorerPlan not found" });
     }
