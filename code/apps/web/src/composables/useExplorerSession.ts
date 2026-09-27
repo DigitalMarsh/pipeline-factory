@@ -12,10 +12,9 @@
  *    `requestScope.isCurrent(token, projectId)` 管"令牌是否已被更新的请求取代"，
  *    `projectId.value === requestProjectId` 管"路由上的项目是否已经换掉"。
  *    两者都要留——项目切换时路由更新与令牌签发不是同一个时刻，只留一条会漏掉一种竞态。
- * 3. **`explorerEventSequence`（SSE 续传游标）有意留在视图里**，没有随本文件搬走：
- *    它被"投影加载"路径写（workspace / activity 响应带的 `lastEventSequence`）、
- *    被"SSE 连接"路径读。两条路的归属要等 `useExplorerSse` 抽出时才能定，
- *    现在搬只会制造一次无谓的往返。
+ * 3. **`explorerEventSequence`（SSE 续传游标）归 `usePlanProjection`**，不属于本文件：
+ *    它的写侧在 workspace / activity 响应带的 `lastEventSequence` 与投影复位，读侧暂时还在
+ *    视图的 SSE 建连路径；等 `useExplorerSse` 抽出时，读侧以 ref 传入即可，不要再复制游标。
  * 4. `resetSessionState()` **只清"线程级"那三个字段**（`thread` / `turns` / `activity`），
  *    对应视图里 `resetThreadState` 的会话部分；`explorers` / `projectRuns` / `project`
  *    是"项目级"的，由项目切换路径（视图的 `resetProjectState`）清——**两者不要合并**：

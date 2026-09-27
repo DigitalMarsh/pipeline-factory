@@ -16,6 +16,9 @@ const explorerSessionComposableSource = readFileSync(fileURLToPath(new URL("../c
 // 第三次出现同一类处置（P7-8）：输入请求整块搬进了 useExplorerInputRequests。
 // 规则同前——**正向断言搬到 composable，视图这一侧换成委托语句，两条都留**。
 const explorerInputRequestsComposableSource = readFileSync(fileURLToPath(new URL("../composables/useExplorerInputRequests.ts", import.meta.url)), "utf8");
+// 第四次出现同一类处置（P7-9）：需求投影整块搬进了 usePlanProjection。
+// 规则同前——**正向断言搬到 composable，视图这一侧换成委托语句，两条都留**。
+const planProjectionComposableSource = readFileSync(fileURLToPath(new URL("../composables/usePlanProjection.ts", import.meta.url)), "utf8");
 const explorerScopeSource = readFileSync(fileURLToPath(new URL("../utils/explorerScope.ts", import.meta.url)), "utf8");
 const threadRailSource = readFileSync(fileURLToPath(new URL("../components/ThreadRail.vue", import.meta.url)), "utf8");
 const explorerHeaderStatusSource = readFileSync(fileURLToPath(new URL("../components/ExplorerHeaderStatus.vue", import.meta.url)), "utf8");
@@ -273,10 +276,15 @@ describe("Explorer inline message presentation", () => {
 
   it("projects one accessible center row per current-thread requirement", () => {
     const listSource = readFileSync(fileURLToPath(new URL("../components/ExplorerRequirementList.vue", import.meta.url)), "utf8");
-    expect(explorerViewSource).toContain("const explorerPlans = ref<ExplorerPlan[]>([])");
+    // P7-9：投影状态与 workspace 加载搬进 usePlanProjection。正向断言跟着代码走，
+    // 视图这一侧换成"解构了哪些状态"与"委托给了谁"（`api.explorerPlanWorkspace` 在视图里
+    // 已经一个字都不剩，只断言"视图里没有"是不够的——那样空文件也能过）。
+    expect(planProjectionComposableSource).toContain("const explorerPlans = ref<ExplorerPlan[]>([]);");
+    expect(explorerViewSource).toContain("enqueued, dispatched, explorerEventSequence, activeExplorerPlan, allPlans, planFromRevisionDraft, applyPlanProjection, loadActivePlanWorkspace, refreshPlanProjection");
     expect(explorerViewSource).toContain("api.explorerPlanGroups(requestProjectId, selected.id)");
     expect(explorerViewSource).toContain("api.createExplorerPlan(projectId.value, currentThread.id)");
-    expect(explorerViewSource).toContain("api.explorerPlanWorkspace");
+    expect(planProjectionComposableSource).toContain("api.explorerPlanWorkspace(requestProjectId, explorerId, explorerPlanId)");
+    expect(explorerViewSource).toContain("const workspaceLoaded = await loadActivePlanWorkspace(selected.id, activeExplorerPlanId.value, requestProjectId, requestToken)");
     expect(explorerViewSource).toContain("route.query.explorerPlanId");
     expect(explorerViewSource).toContain("const requirementRows = computed(() => projectExplorerRequirementRows(");
     expect(listSource).toContain('aria-label="当前探索线程的需求清单"');
@@ -305,7 +313,9 @@ describe("Explorer thread switching", () => {
     expect(explorerViewSource).toContain("async function selectExplorer(explorerId: string)");
     expect(explorerViewSource).toContain("query: explorerRouteQuery(explorerId), hash: \"\" });");
     expect(explorerViewSource).toContain("void reloadSelectedExplorer();");
-    expect(explorerViewSource).toContain("api.explorerPlanWorkspace(requestProjectId, explorerId, explorerPlanId)");
+    // P7-9：workspace 加载的 API 调用搬进了 composable，视图这一侧只留委托调用。
+    expect(planProjectionComposableSource).toContain("api.explorerPlanWorkspace(requestProjectId, explorerId, explorerPlanId)");
+    expect(explorerViewSource).toContain("await loadActivePlanWorkspace(currentThread.id, selectedPlan.id, requestProjectId, requestToken)");
   });
 
   it("separates Explorer creation from turn busy state and clears stale thread data", () => {
@@ -332,6 +342,16 @@ describe("Explorer thread switching", () => {
     expect(explorerInputRequestsComposableSource).toContain("inputRequests.value = [];");
     expect(explorerInputRequestsComposableSource).toContain("pendingInput.value = null;");
     expect(explorerInputRequestsComposableSource).toContain("inputDialogOpen.value = false;");
+    // P7-9 同一条处置：投影的九个清空赋值与"让在途刷新作废"的世代自增也搬走了。
+    // 同样正负两侧都断言——`planProjectionVersion` 在视图里必须一个字都不剩。
+    expect(resetSource).toContain("resetPlanProjection();");
+    expect(resetSource).not.toContain("explorerPlans.value = []");
+    expect(resetSource).not.toContain("threadPlans.value = []");
+    expect(resetSource).not.toContain("candidate.value = null");
+    expect(resetSource).not.toContain("explorerEventSequence");
+    expect(planProjectionComposableSource).toContain("explorerPlans.value = [];");
+    expect(planProjectionComposableSource).toContain("activeExplorerPlanId.value = null;");
+    expect(planProjectionComposableSource).toContain("beginPlanProjection();");
     expect(explorerViewSource).toContain(":creating-explorer=\"creatingExplorer\"");
   });
 
@@ -366,11 +386,20 @@ describe("Explorer thread switching", () => {
 
   it("keeps thread loading compatible with API instances without confirmed-plan projection", () => {
     const detailSource = explorerViewSource.match(/async function loadExplorerDetails[\s\S]*?\n\}/)?.[0] ?? "";
-    const refreshSource = explorerViewSource.match(/async function refreshPlanProjection[\s\S]*?\n\}/)?.[0] ?? "";
+    // P7-9：`refreshPlanProjection` 整块搬进了 usePlanProjection，这一侧改读新归属文件。
+    // 注意：如果只把正则的搜索对象留在视图上，匹配不到时会得到空字符串，
+    // **而下面那两条 `not.toContain` 会照样通过**——那才是这条守卫真正会悄悄失效的地方。
+    const refreshSource = planProjectionComposableSource.match(/async function refreshPlanProjection[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(refreshSource).not.toBe("");
     expect(detailSource).toContain("optional(() => api.explorerConfirmedPlans(requestProjectId, selected.id))");
     expect(detailSource).toContain("confirmedResponse?.items ?? []");
     expect(refreshSource).toContain("optional(() => api.explorerConfirmedPlans(requestProjectId, explorerId))");
     expect(refreshSource).toContain("confirmedResponse?.items ?? []");
+    // 视图这一侧换成"委托给了谁"+"旧写法不许长回来"。
+    expect(explorerViewSource).toContain("applyPlanProjection(projection, confirmedResponse?.items ?? [], null)");
+    // 只否掉**搬走的那一处**：视图的 `loadExplorerDetails` 仍然自己发这个可选请求
+    // （它的 key 是 `selected.id`），否掉整个方法名会误伤。
+    expect(explorerViewSource).not.toContain("api.explorerConfirmedPlans(requestProjectId, explorerId)");
     expect(detailSource).not.toContain("api.explorerCandidate");
     expect(detailSource).not.toContain("api.explorerRevisionDraft");
     expect(refreshSource).not.toContain("api.explorerCandidate");
@@ -382,6 +411,37 @@ describe("Explorer thread switching", () => {
     expect(explorerViewSource).toContain(":explorer-error=\"explorerError\"");
     expect(explorerViewSource).toContain("explorers.value = [created.explorer");
     expect(explorerViewSource).toContain("thread.value = created.explorer");
+  });
+});
+
+describe("Explorer plan projection extraction", () => {
+  it("captures the projection generation through named accessors and keeps the counter private", () => {
+    // P7-9：视图里 `selectExplorerPlan` 也在用同一套"发起时捕获、返回后比对"的世代守卫，
+    // 所以 composable 以两个具名函数暴露，**不暴露可写计数器**——否则视图那三处会比
+    // composable 内部的比对多出第二种写法（`requestVersion !== planProjectionVersion`），
+    // 而它读的是另一个模块的 let，谁也拦不住。
+    expect(explorerViewSource).toContain("const requestVersion = beginPlanProjection();");
+    expect(explorerViewSource).toContain("!isCurrentPlanProjection(requestVersion)");
+    expect(explorerViewSource).not.toContain("planProjectionVersion");
+    expect(planProjectionComposableSource).toContain("function isCurrentPlanProjection(version = planProjectionVersion): boolean {");
+    expect(planProjectionComposableSource).toContain("return version === planProjectionVersion;");
+  });
+
+  it("keeps the SSE resume cursor owned by the projection composable", () => {
+    // P7-9 定的归属：游标的**写侧**全在 usePlanProjection（workspace / activity 响应带的
+    // lastEventSequence 与复位），视图只剩三处**读**（两条建连 URL + replayGate 就绪判定），
+    // 它们随 useExplorerSse 一起搬走。这条断言防的是"游标被复制成两份"——
+    // 两份单看都自洽，只有续传时才会丢事件。
+    expect(planProjectionComposableSource).toContain("explorerEventSequence.value = Math.max(explorerEventSequence.value ?? 0, workspace.lastEventSequence ?? 0);");
+    expect(planProjectionComposableSource).toContain("explorerEventSequence.value = Math.max(explorerEventSequence.value ?? 0, response.lastEventSequence ?? 0);");
+    expect(planProjectionComposableSource).toContain("    explorerEventSequence.value = null;");
+    // 否掉的是**建连代码**，不是这五个字：composable 的维护提示 1 里就写着
+    // "等 useExplorerSse 把那几条 new EventSource(...) 收走"，按字面量否会被自己的注释绊倒
+    // （同批 C 那条"按文本计数时注释里的符号名产生假阳性"）。
+    expect(planProjectionComposableSource).not.toContain("new EventSource(api.");
+    expect(explorerViewSource).toContain("if (explorerEventSequence.value !== null) replayGate.markReady();");
+    expect(explorerViewSource).toContain("explorerEventSequence.value ?? undefined");
+    expect(explorerViewSource).not.toContain("let explorerEventSequence");
   });
 });
 
