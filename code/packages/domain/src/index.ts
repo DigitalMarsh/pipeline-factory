@@ -106,48 +106,16 @@ export type PlanExploration = {
   lastAssessedTurnId: string | null;
 };
 
-/** 形成可执行方案必须覆盖的业务和工程领域。 */
-export const REQUIRED_PLAN_AREAS = [
-  "目标与用户范围",
-  "功能范围与排除项",
-  "技术方案与关键约束",
-  "数据、安全与异常处理",
-  "验收标准与验证命令",
-  "实施任务、依赖与冲突",
-  "合并策略与人工确认",
-] as const;
+/**
+ * 维护提示：这里必须"先 import 再 export"，不能写成 `export { ... } from "..."`。
+ * 后者只把绑定转发给消费者，**不会在当前模块作用域里创建同名绑定**，而 index.ts 自己在
+ * defaultPlanExploration / SqlitePipelineStore 等处要用 REQUIRED_PLAN_AREAS——
+ * 写成纯 re-export 会得到一个只在运行时才炸的 `ReferenceError: REQUIRED_PLAN_AREAS is not defined`。
+ * 抽后续符号（model/usage.ts、plan/status-transition.ts…）时同理：先确认 index.ts 内部是否还要用。
+ */
+import { EXPLORER_PLAN_INSTRUCTIONS, EXPLORER_PLAN_REQUIREMENTS, REQUIRED_PLAN_AREAS, type ExplorerPlanRequirement } from "./platform/plan-requirements.js";
 
-export type ExplorerPlanRequirement = { key: string; label: string; requiredFields: string[]; optionalFields: string[]; factoryOwnedFields?: string[] | undefined };
-export const EXPLORER_PLAN_REQUIREMENTS = {
-  requirementsVersion: 1,
-  schemaVersion: 2,
-  areas: [
-    { key: "objective", label: "目标与用户范围", requiredFields: ["title", "objective.goal", "objective.audience"], optionalFields: [] },
-    { key: "scope", label: "功能范围与排除项", requiredFields: ["objective.outOfScope", "scope.includePaths", "scope.excludePaths"], optionalFields: [] },
-    { key: "design", label: "技术方案与关键约束", requiredFields: ["design.technicalConstraints"], optionalFields: [] },
-    { key: "safety", label: "数据、安全与异常处理", requiredFields: ["design.dataSecurity", "design.failureHandling"], optionalFields: [] },
-    { key: "verification", label: "验收标准与验证命令", requiredFields: ["objective.acceptanceCriteria", "verification.mode"], optionalFields: [] },
-    { key: "delivery", label: "实施任务、依赖与冲突", requiredFields: ["tasks", "dependencies", "conflicts", "execution"], optionalFields: ["execution.executorModelRole", "execution.toolPolicy", "execution.maxRepairAttempts"] },
-    { key: "merge", label: "合并策略与人工确认", requiredFields: ["merge.strategy", "merge.requireHumanMerge"], optionalFields: [] },
-  ] satisfies ExplorerPlanRequirement[],
-  artifactModes: [
-    { mode: "CONVERSATION", label: "对话产物", includePaths: "EMPTY", verificationMode: "NONE", executable: false },
-    { mode: "REPOSITORY_FILE", label: "仓库文件", includePaths: "NON_EMPTY", verificationMode: "PROJECT_DEFAULT_OR_NONE", executable: true },
-  ] as const,
-  factoryOwnedFields: ["repository", "baseBranch", "baseCommit", "configVersion", "configHash", "verification.commandIds", "verificationCommandIds"],
-} as const;
-
-/** 注入 Explorer 的职责和 machine-readable Plan 协议；变更需同步协议解析器。 */
-export const EXPLORER_PLAN_INSTRUCTIONS = `
-你是 Pipeline Factory 的 Plan Explorer。你的职责是围绕用户需求持续探索，直到形成可执行的完整设计方案；一次普通 turn 结束不代表探索完成。
-先分析目标、用户范围、功能边界、技术方案、数据与安全、异常处理、验收标准、实施任务、依赖、冲突、验证和合并策略。把当前所有互不依赖且需要用户决策的问题合并到一次原生 item/tool/requestUserInput 请求中；不要在普通文本中把问题伪装成选择题。若用户没有明确产物模式，必须询问 CONVERSATION（仅对话审阅）或 REPOSITORY_FILE（写入仓库文件），不得自行假设。
-完整方案的模型必填字段为：title；artifact.mode（REPOSITORY_FILE 时 artifact.path 必填）；objective.goal、objective.audience、objective.acceptanceCriteria、objective.outOfScope；design.technicalConstraints、design.dataSecurity、design.failureHandling；scope.includePaths、scope.excludePaths；tasks、dependencies、conflicts、execution、verification.mode、merge.strategy、merge.requireHumanMerge。outOfScope、excludePaths、dependencies、conflicts、task.dependencies 可以为空数组；dependencies 表示自然语言执行前置条件（如 Node.js 版本、包管理器），不是 CandidatePlan ID；应将其内容同时纳入 design.technicalConstraints。技术/安全/异常/受众/验收必须显式给出至少一项，“无新增约束”也必须写明。execution 内的 executorModelRole、toolPolicy、maxRepairAttempts 可省略，由 Factory 使用默认值。
-REPOSITORY_FILE：artifact.path 必须是项目根相对路径或 glob，且必须包含在 scope.includePaths 中，scope.includePaths 至少一项。CONVERSATION：artifact.path 不得出现，scope.includePaths 必须为 []，verification.mode 必须为 NONE；它仍会生成可审阅 CandidatePlan，但不能入队或执行。
-模型不得填写 repository、baseBranch、baseCommit、configVersion、configHash、commandIds 或 verificationCommandIds；这些字段只能由 Factory 基于当前 Project 与 Git 基线解析。范围不能填绝对路径、.. 或概念性描述。
-只有所有关键项都已确认，才能输出完整方案。完整方案必须在普通说明之后追加以下机器可校验协议块，JSON 必须是严格 JSON，不要使用 Markdown 代码围栏：
-<pipeline-factory-plan-status>READY</pipeline-factory-plan-status>
-<pipeline-factory-plan>{"schemaVersion":2,"title":"...","artifact":{"mode":"REPOSITORY_FILE","path":"docs/guide.md"},"objective":{"goal":"...","audience":["..."],"acceptanceCriteria":["..."],"outOfScope":[]},"design":{"technicalConstraints":["..."],"dataSecurity":["..."],"failureHandling":["..."]},"scope":{"includePaths":["docs/guide.md"],"excludePaths":[]},"tasks":[{"id":"task-1","title":"...","dependencies":[],"status":"READY"}],"dependencies":[],"conflicts":[],"execution":{},"verification":{"mode":"PROJECT_DEFAULT"},"merge":{"strategy":"manual","requireHumanMerge":true}}</pipeline-factory-plan>
-不要在缺少关键决策时输出 READY；不要把“已记录某个选择”当作完整方案。收到字段级校验错误后，逐项修复；不得原样重复未通过的 READY 协议块。`;
+export { EXPLORER_PLAN_INSTRUCTIONS, EXPLORER_PLAN_REQUIREMENTS, REQUIRED_PLAN_AREAS, type ExplorerPlanRequirement };
 
 /** Factory 内部的长期 Explorer 工作区，与外部 Provider Thread 标识分离。 */
 export type ExplorerThread = {

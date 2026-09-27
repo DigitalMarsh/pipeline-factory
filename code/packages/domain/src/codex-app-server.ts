@@ -4,7 +4,8 @@
  * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { EXPLORER_PLAN_INSTRUCTIONS, normalizeModelUsage, type ModelCapabilities, type ModelEvent, type ModelGateway, type ModelMessage, type ModelRequest, type ModelRole, type ModelRoleConfig } from "./index.js";
+import { EXPLORER_PLAN_INSTRUCTIONS } from "./platform/plan-requirements.js";
+import { normalizeModelUsage, type ModelCapabilities, type ModelEvent, type ModelGateway, type ModelMessage, type ModelRequest, type ModelRole, type ModelRoleConfig } from "./index.js";
 import { mapCodexRateLimits, type CodexRateLimitsResponse, type MappedCodexRateLimits } from "./codex-rate-limits.js";
 
 type JsonObject = Record<string, unknown>;
