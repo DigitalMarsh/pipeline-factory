@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-09-28 — SQLite 语句缓存（A3）
+
+### Changed
+
+- `SqlitePipelineStore` 的 127 处方法体内联 `this.database.prepare(sql)` 全部改为 `this.statement(sql)`：按 SQL 文本记忆化已编译语句。此前每执行一次就重新编译一次 SQL 文本，而本类绝大多数调用点是"同一条 SQL 反复执行"——`appendEvent` 在流式期间每秒被调几十次，`getProject` 在每次 `savePlan`/`saveRun` 的收尾都被调一次。
+- **构造函数里的迁移区刻意不缓存**（仍是 `this.database.prepare(...)`，共 5 处）：那里每条语句只执行一次，缓存没有收益，却会让语句句柄跨越紧随其后的 `ALTER TABLE` 存活，平白引入"schema 已变但语句早已编译"的疑问。这条例外写进了模块头的维护提示 7，与"新增列必须补迁移分支"并列——两者都容易在改动时被忽略。
+- 缓存设了条目上限（512），超出即整体清空重建。**这是有意为之的粗暴做法**：带 `IN (?, ?, …)` 的语句文本随参数个数变化（`sqlIn` 的返回值、`listEvents` 的 `aggregateIds`/`types`、`deleteExplorerCascade` 按被删 ID 个数生成的十几条 DELETE），参数个数有多少种就占多少条；`deleteExplorerCascade` 是唯一可能让它显著增长的调用方。清空只让下一轮调用重新编译一次，不影响正确性；不做 LRU 是因为触发场景本身罕见，为它维护访问序会让这个纯加速层比它加速的东西更复杂。
+- `close()` 先清空语句表再关连接：`node:sqlite` 的 `StatementSync` 没有显式 finalize，持引用即在连接存活期内有效，主动释放比交给 GC 去和连接关闭赛跑更可控。
+
+### Added
+
+- 新增 `packages/domain/src/store-statement-cache.test.ts`：对 `DatabaseSync.prototype.prepare` 计数，把"编译次数"这条功能上不可见的性质变成可断言的。四个用例分别覆盖：同一 SQL 反复执行只编译一次、SQL 文本不同才各编译一次、命中缓存不改变结果（写入后读到的仍是最新值，即缓存的是语句不是结果）、带 `IN` 列表的语句按元数分桶。
+
+### Changed files
+
+- Domain：`code/packages/domain/src/store/sqlite-store.ts`、`code/packages/domain/src/store-statement-cache.test.ts`（新增）。
+
+### Verification
+
+- `pnpm --dir code verify` 通过：domain 268/268、API 72/72、Web 424/424，无新增值级循环依赖。
+- 守卫经**反向验证**：把 `getProject` 改回 `this.database.prepare(...)`，前两个用例按预期失败（`expected 50 to be 1`、`expected 8 to be 7`），恢复后 4/4 通过。确认它抓的是编译次数而非别的性质。
+- **没有断言缓存上限**：观测它要么把 `STATEMENT_CACHE_LIMIT` 导出成公开面，要么把清空时机编码进用例，两者都会让这个纯加速层更难改。上限作为防御性措施记录在本条与源码注释里，不作为契约。
+- 未测性能数字：本仓没有基准设施，本次不新增；收益的定性依据是"消除重复编译"这一机制本身。
+- 未做浏览器验收：纯存储层改动，无前端可见行为变化。
+
 ## 2026-09-28 — 验证命令判定规则收敛（修复基线里挂着的那个真实缺陷）+ Plan 列表读取复杂度
 
 ### Fixed

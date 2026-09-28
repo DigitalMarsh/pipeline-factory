@@ -20,9 +20,13 @@
  *      完成，留下指向已删除 Explorer 的孤儿 Plan。runInTransaction 就是为它和启动恢复准备的。
  *   6) normalizeSqliteError 把 SQLITE_BUSY 归一成 "DATABASE_BUSY"：上层（调度器）靠这个字面量
  *      判断"要不要重试"，改文案等于改重试策略。
+ *   7) 所有方法体里的 SQL 一律走 `this.statement(sql)`，不要直接 `this.database.prepare(...)`：
+ *      后者每次调用都重新编译一遍 SQL 文本。**唯一的例外是构造函数里的迁移区**（`ALTER TABLE`
+ *      与紧随其后的 `prepare(...).run()`）——那里每条语句只执行一次，缓存没有收益，却会让句柄
+ *      跨越后续的 ALTER 存活，平白引入"schema 变了但语句已编译"的疑问。见 statement() 的注释。
  */
 import { createHash, randomUUID } from "node:crypto";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { containsAnyString, defaultExplorerPlan, defaultPlanExploration, defaultThreadContextSummary, isVerificationRun, parsePlanValidationIssues, parseStringArray, parseThreadContextSummary, summarizeExplorerMessage, threadTitleMetadata } from "./records.js";
 import { planQueryProjectionFor, type PlanQueryProjection } from "../plan/query.js";
 import { updatePlanStatus } from "../plan/status-transition.js";
@@ -97,10 +101,19 @@ function normalizeSqliteError(error: unknown): Error {
   return error instanceof Error ? error : new Error(message);
 }
 
+/** 语句缓存条目上限。取值理由见 SqlitePipelineStore#statement 的注释。 */
+const STATEMENT_CACHE_LIMIT = 512;
+
 /** SQLite Store；启动时负责幂等 migration，并保留事件、快照和运行历史。 */
 export class SqlitePipelineStore implements PipelineStore {
   private readonly database: DatabaseSync;
   private readonly eventListeners = new Set<(event: DomainEvent) => void>();
+  /**
+   * SQL 文本 → 已编译语句。`DatabaseSync.prepare` 每次调用都会把 SQL 重新编译一遍，
+   * 而本类 130 余处调用点里的绝大多数是"同一条 SQL 反复执行"（appendEvent、getProject、
+   * listRuns……），重编译是纯粹的重复劳动。
+   */
+  private readonly statements = new Map<string, StatementSync>();
 
   constructor(databasePath: string) {
     this.database = new DatabaseSync(databasePath);
@@ -577,6 +590,36 @@ export class SqlitePipelineStore implements PipelineStore {
     this.backfillPlanQueryProjection();
   }
 
+  /**
+   * 取一条已编译语句，没有就编译并记住。**方法体里的 SQL 一律走这里。**
+   *
+   * 为什么需要：`prepare` 把 SQL 文本解析成字节码，本类 130 余处调用点里绝大多数每次执行
+   *   的都是同一条 SQL（`appendEvent` 在流式期间每秒被调几十次），不缓存等于反复编译同一段文本。
+   *
+   * 键是 SQL 文本本身，所以只有"文本确实不同"的调用才会各占一条——这一点是有意为之：
+   *   带 `IN (?, ?, …)` 的语句（`sqlIn` 的返回值、`listEvents` 的 aggregateIds/types）文本随参数
+   *   个数变化，参数个数有多少种就占多少条。`deleteExplorerCascade` 是唯一可能让它显著增长的
+   *   调用方（一次删除会按被删 ID 个数生成十几条不同元数的 DELETE）。因此这里设了上限：
+   *   超出即整体清空重建。清空是安全但粗暴的——它只是让下一轮调用重新编译一次，不会影响
+   *   正确性；之所以不做 LRU，是因为触发它的场景本身很罕见，而为它维护访问序会让这个
+   *   纯加速层变得比它加速的东西更复杂。
+   *
+   * 不缓存的三类调用（都直接写 `this.database.prepare`，见模块头提示 7）：
+   *   构造函数的迁移区、`PRAGMA`/事务控制、以及 `exec` 系列——它们要么只跑一次，
+   *   要么不是"语句"。
+   *
+   * 生命周期：node:sqlite 的 StatementSync 没有显式 finalize，持引用即在连接存活期内有效；
+   *   `close()` 先清空本表再关连接，避免把句柄的释放交给 GC 去和连接关闭赛跑。
+   */
+  private statement(sql: string): StatementSync {
+    const cached = this.statements.get(sql);
+    if (cached) return cached;
+    if (this.statements.size >= STATEMENT_CACHE_LIMIT) this.statements.clear();
+    const prepared = this.database.prepare(sql);
+    this.statements.set(sql, prepared);
+    return prepared;
+  }
+
   now(): string { return new Date().toISOString(); }
 
   nextId(prefix: string): string { return `${prefix}-${randomUUID().slice(0, 12)}`; }
@@ -594,7 +637,7 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   saveProject(project: Project): Project {
-    this.database.prepare(`
+    this.statement(`
       INSERT INTO factory_projects (id, name, short_name, repo_root, default_branch, worktree_root, status, current_explorer_thread_id, config_version, config_hash, settings_json, created_at, updated_at, archived_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET name=excluded.name, short_name=excluded.short_name, repo_root=excluded.repo_root, default_branch=excluded.default_branch, worktree_root=excluded.worktree_root, status=excluded.status, current_explorer_thread_id=excluded.current_explorer_thread_id, config_version=excluded.config_version, config_hash=excluded.config_hash, settings_json=excluded.settings_json, created_at=excluded.created_at, updated_at=excluded.updated_at, archived_at=excluded.archived_at
@@ -603,12 +646,12 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   getProject(projectId: string): Project | undefined {
-    const row = this.database.prepare("SELECT * FROM factory_projects WHERE id = ?").get(projectId) as SqliteRow | undefined;
+    const row = this.statement("SELECT * FROM factory_projects WHERE id = ?").get(projectId) as SqliteRow | undefined;
     return row ? this.projectFromRow(row) : undefined;
   }
 
   listProjects(): Project[] {
-    const rows = this.database.prepare("SELECT * FROM factory_projects ORDER BY name ASC").all() as unknown as SqliteRow[];
+    const rows = this.statement("SELECT * FROM factory_projects ORDER BY name ASC").all() as unknown as SqliteRow[];
     return rows.map((row) => this.projectFromRow(row));
   }
 
@@ -618,48 +661,48 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   saveProjectExecutionThread(thread: ProjectExecutionThread): ProjectExecutionThread {
-    this.database.prepare("INSERT OR IGNORE INTO project_execution_threads (id, project_id, provider_thread_id, model_override, reasoning_effort_override, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(thread.id, thread.projectId, thread.providerThreadId, thread.modelOverride, thread.reasoningEffortOverride, thread.createdAt, thread.updatedAt);
+    this.statement("INSERT OR IGNORE INTO project_execution_threads (id, project_id, provider_thread_id, model_override, reasoning_effort_override, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(thread.id, thread.projectId, thread.providerThreadId, thread.modelOverride, thread.reasoningEffortOverride, thread.createdAt, thread.updatedAt);
     return this.getProjectExecutionThread(thread.projectId) as ProjectExecutionThread;
   }
 
   getProjectExecutionThread(projectId: string): ProjectExecutionThread | undefined {
-    const row = this.database.prepare("SELECT * FROM project_execution_threads WHERE project_id = ?").get(projectId) as SqliteRow | undefined;
+    const row = this.statement("SELECT * FROM project_execution_threads WHERE project_id = ?").get(projectId) as SqliteRow | undefined;
     return row ? { id: String(row.id), projectId: String(row.project_id), providerThreadId: row.provider_thread_id === null ? null : String(row.provider_thread_id), modelOverride: row.model_override === null ? null : String(row.model_override), reasoningEffortOverride: row.reasoning_effort_override === null ? null : String(row.reasoning_effort_override), createdAt: String(row.created_at), updatedAt: String(row.updated_at) } : undefined;
   }
 
   updateProjectExecutionThread(thread: ProjectExecutionThread): ProjectExecutionThread {
-    this.database.prepare("UPDATE project_execution_threads SET provider_thread_id = ?, model_override = ?, reasoning_effort_override = ?, updated_at = ? WHERE project_id = ?").run(thread.providerThreadId, thread.modelOverride, thread.reasoningEffortOverride, thread.updatedAt, thread.projectId);
+    this.statement("UPDATE project_execution_threads SET provider_thread_id = ?, model_override = ?, reasoning_effort_override = ?, updated_at = ? WHERE project_id = ?").run(thread.providerThreadId, thread.modelOverride, thread.reasoningEffortOverride, thread.updatedAt, thread.projectId);
     return this.getProjectExecutionThread(thread.projectId) as ProjectExecutionThread;
   }
 
   saveProjectExecutionMessage(message: ProjectExecutionMessage): ProjectExecutionMessage {
-    this.database.prepare("INSERT OR IGNORE INTO project_execution_messages (id, thread_id, turn_id, client_turn_id, role, content, status, error, created_at, sequence, loop_id, model, reasoning_effort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(message.id, message.threadId, message.turnId, message.clientTurnId, message.role, message.content, message.status, message.error, message.createdAt, message.sequence, message.loopId, message.model, message.reasoningEffort);
+    this.statement("INSERT OR IGNORE INTO project_execution_messages (id, thread_id, turn_id, client_turn_id, role, content, status, error, created_at, sequence, loop_id, model, reasoning_effort) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(message.id, message.threadId, message.turnId, message.clientTurnId, message.role, message.content, message.status, message.error, message.createdAt, message.sequence, message.loopId, message.model, message.reasoningEffort);
     if (message.clientTurnId) return this.getProjectExecutionMessageByClientTurnId(message.threadId, message.clientTurnId) as ProjectExecutionMessage;
     return this.listProjectExecutionMessages(message.threadId).find((item) => item.id === message.id) as ProjectExecutionMessage;
   }
 
   getProjectExecutionMessageByClientTurnId(threadId: string, clientTurnId: string): ProjectExecutionMessage | undefined {
-    const row = this.database.prepare("SELECT * FROM project_execution_messages WHERE thread_id = ? AND client_turn_id = ? AND role = 'user'").get(threadId, clientTurnId) as SqliteRow | undefined;
+    const row = this.statement("SELECT * FROM project_execution_messages WHERE thread_id = ? AND client_turn_id = ? AND role = 'user'").get(threadId, clientTurnId) as SqliteRow | undefined;
     return row ? this.projectExecutionMessageFromRow(row) : undefined;
   }
 
   listProjectExecutionMessages(threadId: string): ProjectExecutionMessage[] {
-    const rows = this.database.prepare("SELECT * FROM project_execution_messages WHERE thread_id = ? ORDER BY sequence ASC").all(threadId) as unknown as SqliteRow[];
+    const rows = this.statement("SELECT * FROM project_execution_messages WHERE thread_id = ? ORDER BY sequence ASC").all(threadId) as unknown as SqliteRow[];
     return rows.map((row) => this.projectExecutionMessageFromRow(row));
   }
 
   updateProjectExecutionMessage(message: ProjectExecutionMessage): ProjectExecutionMessage {
-    this.database.prepare("UPDATE project_execution_messages SET content = ?, status = ?, error = ?, loop_id = ?, model = ?, reasoning_effort = ? WHERE id = ? AND thread_id = ?").run(message.content, message.status, message.error, message.loopId, message.model, message.reasoningEffort, message.id, message.threadId);
+    this.statement("UPDATE project_execution_messages SET content = ?, status = ?, error = ?, loop_id = ?, model = ?, reasoning_effort = ? WHERE id = ? AND thread_id = ?").run(message.content, message.status, message.error, message.loopId, message.model, message.reasoningEffort, message.id, message.threadId);
     return this.listProjectExecutionMessages(message.threadId).find((item) => item.id === message.id) as ProjectExecutionMessage;
   }
 
   saveProjectConfigRevision(revision: ProjectConfigRevision): ProjectConfigRevision {
-    this.database.prepare("INSERT OR IGNORE INTO project_config_revisions (project_id, version, hash, snapshot_json, created_at) VALUES (?, ?, ?, ?, ?)").run(revision.projectId, revision.version, revision.hash, JSON.stringify(revision.snapshot), revision.createdAt);
+    this.statement("INSERT OR IGNORE INTO project_config_revisions (project_id, version, hash, snapshot_json, created_at) VALUES (?, ?, ?, ?, ?)").run(revision.projectId, revision.version, revision.hash, JSON.stringify(revision.snapshot), revision.createdAt);
     return this.listProjectConfigRevisions(revision.projectId).find((item) => item.version === revision.version) as ProjectConfigRevision;
   }
 
   listProjectConfigRevisions(projectId: string): ProjectConfigRevision[] {
-    const rows = this.database.prepare("SELECT * FROM project_config_revisions WHERE project_id = ? ORDER BY version ASC").all(projectId) as unknown as SqliteRow[];
+    const rows = this.statement("SELECT * FROM project_config_revisions WHERE project_id = ? ORDER BY version ASC").all(projectId) as unknown as SqliteRow[];
     return rows.map((row) => ({ projectId: String(row.project_id), version: Number(row.version), hash: String(row.hash), snapshot: JSON.parse(String(row.snapshot_json)) as ProjectExecutionSnapshot, createdAt: String(row.created_at) }));
   }
 
@@ -684,7 +727,7 @@ export class SqlitePipelineStore implements PipelineStore {
       exploration: defaultPlanExploration(),
       activeRevisionDraftId: null,
     };
-    this.database.prepare(`
+    this.statement(`
       INSERT INTO explorer_threads (id, project_id, title, created_at, title_source, title_status, context_mode, origin_thread_id, parent_thread_id, provider_thread_id, state, message_count, summary_ref, active_explorer_plan_id, context_summary_json, last_activity_at, exploration_status, exploration_missing_json, exploration_completed_json, exploration_diagnostics_json, candidate_plan_id, last_assessed_turn_id, active_revision_draft_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, title=excluded.title, created_at=excluded.created_at, title_source=excluded.title_source, title_status=excluded.title_status, context_mode=excluded.context_mode, origin_thread_id=excluded.origin_thread_id, parent_thread_id=excluded.parent_thread_id
@@ -694,22 +737,22 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   getThread(id: string): ExplorerThread | undefined {
-    const row = this.database.prepare("SELECT * FROM explorer_threads WHERE id = ?").get(id) as SqliteRow | undefined;
+    const row = this.statement("SELECT * FROM explorer_threads WHERE id = ?").get(id) as SqliteRow | undefined;
     return row ? this.threadFromRow(row) : undefined;
   }
 
   listThreads(): ExplorerThread[] {
-    const rows = this.database.prepare("SELECT * FROM explorer_threads ORDER BY last_activity_at ASC").all() as unknown as SqliteRow[];
+    const rows = this.statement("SELECT * FROM explorer_threads ORDER BY last_activity_at ASC").all() as unknown as SqliteRow[];
     return rows.map((row) => this.threadFromRow(row));
   }
 
   updateThread(thread: ExplorerThread): ExplorerThread {
-    this.database.prepare("UPDATE explorer_threads SET title = ?, created_at = ?, title_source = ?, title_status = ?, context_mode = ?, origin_thread_id = ?, provider_thread_id = ?, state = ?, message_count = ?, summary_ref = ?, active_explorer_plan_id = ?, context_summary_json = ?, last_activity_at = ?, exploration_status = ?, exploration_missing_json = ?, exploration_completed_json = ?, exploration_diagnostics_json = ?, candidate_plan_id = ?, last_assessed_turn_id = ?, active_revision_draft_id = ? WHERE id = ?").run(thread.title, thread.createdAt, thread.titleSource, thread.titleStatus, thread.contextMode, thread.originThreadId, thread.providerThreadId, thread.state, thread.messageCount, thread.summaryRef, thread.activeExplorerPlanId, thread.contextSummary ? JSON.stringify(thread.contextSummary) : null, thread.lastActivityAt, thread.exploration.status, JSON.stringify(thread.exploration.missing), JSON.stringify(thread.exploration.completed), JSON.stringify(thread.exploration.diagnostics), thread.exploration.candidatePlanId, thread.exploration.lastAssessedTurnId, thread.activeRevisionDraftId, thread.id);
+    this.statement("UPDATE explorer_threads SET title = ?, created_at = ?, title_source = ?, title_status = ?, context_mode = ?, origin_thread_id = ?, provider_thread_id = ?, state = ?, message_count = ?, summary_ref = ?, active_explorer_plan_id = ?, context_summary_json = ?, last_activity_at = ?, exploration_status = ?, exploration_missing_json = ?, exploration_completed_json = ?, exploration_diagnostics_json = ?, candidate_plan_id = ?, last_assessed_turn_id = ?, active_revision_draft_id = ? WHERE id = ?").run(thread.title, thread.createdAt, thread.titleSource, thread.titleStatus, thread.contextMode, thread.originThreadId, thread.providerThreadId, thread.state, thread.messageCount, thread.summaryRef, thread.activeExplorerPlanId, thread.contextSummary ? JSON.stringify(thread.contextSummary) : null, thread.lastActivityAt, thread.exploration.status, JSON.stringify(thread.exploration.missing), JSON.stringify(thread.exploration.completed), JSON.stringify(thread.exploration.diagnostics), thread.exploration.candidatePlanId, thread.exploration.lastAssessedTurnId, thread.activeRevisionDraftId, thread.id);
     return this.getThread(thread.id) as ExplorerThread;
   }
 
   saveExplorerPlan(plan: ExplorerPlan): ExplorerPlan {
-    this.database.prepare(`
+    this.statement(`
       INSERT INTO explorer_plans (id, explorer_thread_id, project_id, ordinal, title, title_source, title_status, message_count, latest_user_message_summary, exploration_status, exploration_missing_json, exploration_completed_json, exploration_diagnostics_json, candidate_plan_id, new_plan_requested, provider_thread_id, repository_context_key, last_assessed_turn_id, runtime_status, created_at, last_activity_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET title=excluded.title, title_source=excluded.title_source, title_status=excluded.title_status, message_count=excluded.message_count, latest_user_message_summary=excluded.latest_user_message_summary, exploration_status=excluded.exploration_status, exploration_missing_json=excluded.exploration_missing_json, exploration_completed_json=excluded.exploration_completed_json, exploration_diagnostics_json=excluded.exploration_diagnostics_json, candidate_plan_id=excluded.candidate_plan_id, new_plan_requested=excluded.new_plan_requested, provider_thread_id=excluded.provider_thread_id, repository_context_key=excluded.repository_context_key, last_assessed_turn_id=excluded.last_assessed_turn_id, runtime_status=excluded.runtime_status, last_activity_at=excluded.last_activity_at
@@ -718,12 +761,12 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   getExplorerPlan(id: string): ExplorerPlan | undefined {
-    const row = this.database.prepare("SELECT * FROM explorer_plans WHERE id = ?").get(id) as SqliteRow | undefined;
+    const row = this.statement("SELECT * FROM explorer_plans WHERE id = ?").get(id) as SqliteRow | undefined;
     return row ? this.explorerPlanFromRow(row) : undefined;
   }
 
   listExplorerPlans(threadId?: string): ExplorerPlan[] {
-    const rows = this.database.prepare(`SELECT * FROM explorer_plans ${threadId ? "WHERE explorer_thread_id = ?" : ""} ORDER BY ordinal ASC, created_at ASC`).all(...(threadId ? [threadId] : [])) as unknown as SqliteRow[];
+    const rows = this.statement(`SELECT * FROM explorer_plans ${threadId ? "WHERE explorer_thread_id = ?" : ""} ORDER BY ordinal ASC, created_at ASC`).all(...(threadId ? [threadId] : [])) as unknown as SqliteRow[];
     return rows.map((row) => this.explorerPlanFromRow(row));
   }
 
@@ -733,45 +776,45 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   saveTurn(turn: ExplorerTurn): ExplorerTurn {
-    this.database.prepare("INSERT INTO explorer_turns (id, thread_id, role, content, status, error, created_at, sequence, explorer_plan_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(turn.id, turn.threadId, turn.role, turn.content, turn.status ?? "COMPLETED", turn.error ?? null, turn.createdAt, turn.sequence, turn.explorerPlanId ?? null);
+    this.statement("INSERT INTO explorer_turns (id, thread_id, role, content, status, error, created_at, sequence, explorer_plan_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(turn.id, turn.threadId, turn.role, turn.content, turn.status ?? "COMPLETED", turn.error ?? null, turn.createdAt, turn.sequence, turn.explorerPlanId ?? null);
     return turn;
   }
 
   updateTurn(turn: ExplorerTurn): ExplorerTurn {
-    this.database.prepare("UPDATE explorer_turns SET content = ?, status = ?, error = ? WHERE id = ?").run(turn.content, turn.status ?? "COMPLETED", turn.error ?? null, turn.id);
+    this.statement("UPDATE explorer_turns SET content = ?, status = ?, error = ? WHERE id = ?").run(turn.content, turn.status ?? "COMPLETED", turn.error ?? null, turn.id);
     return this.listTurns(turn.threadId).find((item) => item.id === turn.id) as ExplorerTurn;
   }
 
   listTurns(threadId: string): ExplorerTurn[] {
-    const rows = this.database.prepare("SELECT * FROM explorer_turns WHERE thread_id = ? ORDER BY sequence ASC").all(threadId) as unknown as SqliteRow[];
+    const rows = this.statement("SELECT * FROM explorer_turns WHERE thread_id = ? ORDER BY sequence ASC").all(threadId) as unknown as SqliteRow[];
     return rows.map((row) => ({ id: String(row.id), threadId: String(row.thread_id), role: String(row.role) as ExplorerTurn["role"], content: String(row.content), status: String(row.status ?? "COMPLETED") as NonNullable<ExplorerTurn["status"]>, ...(row.error ? { error: String(row.error) } : {}), createdAt: String(row.created_at), sequence: Number(row.sequence), ...(row.explorer_plan_id ? { explorerPlanId: String(row.explorer_plan_id) } : {}) }));
   }
 
   saveInputRequest(request: ExplorerInputRequest): ExplorerInputRequest {
-    const existing = this.database.prepare("SELECT * FROM explorer_input_requests WHERE provider_thread_id = ? AND provider_turn_id = ? AND provider_request_id = ?").get(request.providerThreadId, request.providerTurnId, String(request.providerRequestId)) as SqliteRow | undefined;
+    const existing = this.statement("SELECT * FROM explorer_input_requests WHERE provider_thread_id = ? AND provider_turn_id = ? AND provider_request_id = ?").get(request.providerThreadId, request.providerTurnId, String(request.providerRequestId)) as SqliteRow | undefined;
     if (existing) return this.inputRequestFromRow(existing);
-    if (request.isBlocking && this.database.prepare("SELECT 1 FROM explorer_input_requests WHERE local_turn_id = ? AND is_blocking = 1 AND status = 'OPEN' LIMIT 1").get(request.localTurnId)) throw new Error(`Explorer turn ${request.localTurnId} already has an open blocking input request`);
-    this.database.prepare("INSERT INTO explorer_input_requests (id, thread_id, explorer_plan_id, local_turn_id, provider_request_id, provider_thread_id, provider_turn_id, item_id, questions_json, is_blocking, auto_resolution_ms, status, created_at, answered_at, answered_by, redacted_answer_summary_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(request.id, request.threadId, request.explorerPlanId ?? null, request.localTurnId, String(request.providerRequestId), request.providerThreadId, request.providerTurnId, request.itemId, JSON.stringify(request.questions), request.isBlocking ? 1 : 0, request.autoResolutionMs, request.status, request.createdAt, request.answeredAt, request.answeredBy, request.redactedAnswerSummary ? JSON.stringify(request.redactedAnswerSummary) : null);
+    if (request.isBlocking && this.statement("SELECT 1 FROM explorer_input_requests WHERE local_turn_id = ? AND is_blocking = 1 AND status = 'OPEN' LIMIT 1").get(request.localTurnId)) throw new Error(`Explorer turn ${request.localTurnId} already has an open blocking input request`);
+    this.statement("INSERT INTO explorer_input_requests (id, thread_id, explorer_plan_id, local_turn_id, provider_request_id, provider_thread_id, provider_turn_id, item_id, questions_json, is_blocking, auto_resolution_ms, status, created_at, answered_at, answered_by, redacted_answer_summary_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(request.id, request.threadId, request.explorerPlanId ?? null, request.localTurnId, String(request.providerRequestId), request.providerThreadId, request.providerTurnId, request.itemId, JSON.stringify(request.questions), request.isBlocking ? 1 : 0, request.autoResolutionMs, request.status, request.createdAt, request.answeredAt, request.answeredBy, request.redactedAnswerSummary ? JSON.stringify(request.redactedAnswerSummary) : null);
     return this.getInputRequest(request.id) as ExplorerInputRequest;
   }
 
   getInputRequest(id: string): ExplorerInputRequest | undefined {
-    const row = this.database.prepare("SELECT * FROM explorer_input_requests WHERE id = ?").get(id) as SqliteRow | undefined;
+    const row = this.statement("SELECT * FROM explorer_input_requests WHERE id = ?").get(id) as SqliteRow | undefined;
     return row ? this.inputRequestFromRow(row) : undefined;
   }
 
   listInputRequests(threadId: string, status?: ExplorerInputRequestStatus): ExplorerInputRequest[] {
-    const rows = this.database.prepare(`SELECT * FROM explorer_input_requests WHERE thread_id = ? ${status ? "AND status = ?" : ""} ORDER BY created_at ASC`).all(...(status ? [threadId, status] : [threadId])) as unknown as SqliteRow[];
+    const rows = this.statement(`SELECT * FROM explorer_input_requests WHERE thread_id = ? ${status ? "AND status = ?" : ""} ORDER BY created_at ASC`).all(...(status ? [threadId, status] : [threadId])) as unknown as SqliteRow[];
     return rows.map((row) => this.inputRequestFromRow(row));
   }
 
   updateInputRequest(request: ExplorerInputRequest): ExplorerInputRequest {
-    this.database.prepare("UPDATE explorer_input_requests SET status = ?, answered_at = ?, answered_by = ?, redacted_answer_summary_json = ? WHERE id = ?").run(request.status, request.answeredAt, request.answeredBy, request.redactedAnswerSummary ? JSON.stringify(request.redactedAnswerSummary) : null, request.id);
+    this.statement("UPDATE explorer_input_requests SET status = ?, answered_at = ?, answered_by = ?, redacted_answer_summary_json = ? WHERE id = ?").run(request.status, request.answeredAt, request.answeredBy, request.redactedAnswerSummary ? JSON.stringify(request.redactedAnswerSummary) : null, request.id);
     return this.getInputRequest(request.id) as ExplorerInputRequest;
   }
 
   savePlan(plan: CandidatePlan): CandidatePlan {
-    this.database.prepare(`
+    this.statement(`
       INSERT INTO candidate_plans (id, project_id, source_explorer_thread_id, explorer_plan_id, source_turn_id, provider_thread_id, provider_turn_id, provider_item_id, title, revision, status, created_at, confirmed_by, confirmed_at, queued_at, dispatched_at, run_id, last_event_at, attention_reason, contract_json, generated_spec_json, resolved_contract_json)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, source_explorer_thread_id=excluded.source_explorer_thread_id, explorer_plan_id=excluded.explorer_plan_id, source_turn_id=excluded.source_turn_id, provider_thread_id=excluded.provider_thread_id, provider_turn_id=excluded.provider_turn_id, provider_item_id=excluded.provider_item_id, title=excluded.title, revision=excluded.revision, status=excluded.status, confirmed_by=excluded.confirmed_by, confirmed_at=excluded.confirmed_at, queued_at=excluded.queued_at, dispatched_at=excluded.dispatched_at, run_id=excluded.run_id, last_event_at=excluded.last_event_at, attention_reason=excluded.attention_reason, contract_json=excluded.contract_json, generated_spec_json=excluded.generated_spec_json, resolved_contract_json=excluded.resolved_contract_json
@@ -787,29 +830,29 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   getPlan(id: string): CandidatePlan | undefined {
-    const row = this.database.prepare("SELECT * FROM candidate_plans WHERE id = ?").get(id) as SqliteRow | undefined;
+    const row = this.statement("SELECT * FROM candidate_plans WHERE id = ?").get(id) as SqliteRow | undefined;
     return row ? this.planFromRow(row) : undefined;
   }
 
   listPlans(): CandidatePlan[] {
-    const rows = this.database.prepare("SELECT * FROM candidate_plans ORDER BY created_at ASC").all() as unknown as SqliteRow[];
+    const rows = this.statement("SELECT * FROM candidate_plans ORDER BY created_at ASC").all() as unknown as SqliteRow[];
     return rows.map((row) => this.planFromRow(row));
   }
 
   updatePlan(plan: CandidatePlan): CandidatePlan { return this.savePlan(plan); }
 
   saveCandidateVersion(plan: CandidatePlan): CandidatePlan {
-    this.database.prepare("INSERT OR IGNORE INTO candidate_plan_versions (plan_id, revision, plan_json) VALUES (?, ?, ?)").run(plan.id, plan.revision, JSON.stringify(plan));
+    this.statement("INSERT OR IGNORE INTO candidate_plan_versions (plan_id, revision, plan_json) VALUES (?, ?, ?)").run(plan.id, plan.revision, JSON.stringify(plan));
     return this.listCandidateVersions(plan.id).find((item) => item.revision === plan.revision)!;
   }
 
   listCandidateVersions(planId: string): CandidatePlan[] {
-    const rows = this.database.prepare("SELECT plan_json FROM candidate_plan_versions WHERE plan_id = ? ORDER BY revision ASC").all(planId) as unknown as SqliteRow[];
+    const rows = this.statement("SELECT plan_json FROM candidate_plan_versions WHERE plan_id = ? ORDER BY revision ASC").all(planId) as unknown as SqliteRow[];
     return rows.map((row) => JSON.parse(String(row.plan_json)) as CandidatePlan);
   }
 
   saveDispatchState(state: PlanDispatchState): PlanDispatchState {
-    this.database.prepare(`
+    this.statement(`
       INSERT INTO plan_dispatch_states (plan_id, revision, project_id, status, wait_reason, queued_at, run_id, attempt, updated_at, last_error, phase, automatic, confirmed_by)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(plan_id) DO UPDATE SET revision=excluded.revision, project_id=excluded.project_id, status=excluded.status, wait_reason=excluded.wait_reason, queued_at=excluded.queued_at, run_id=excluded.run_id, attempt=excluded.attempt, updated_at=excluded.updated_at, last_error=excluded.last_error, phase=excluded.phase, automatic=excluded.automatic, confirmed_by=excluded.confirmed_by
@@ -818,102 +861,102 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   deleteDispatchState(planId: string): void {
-    this.database.prepare("DELETE FROM plan_dispatch_states WHERE plan_id = ?").run(planId);
+    this.statement("DELETE FROM plan_dispatch_states WHERE plan_id = ?").run(planId);
   }
 
   getDispatchState(planId: string): PlanDispatchState | undefined {
-    const row = this.database.prepare("SELECT * FROM plan_dispatch_states WHERE plan_id = ?").get(planId) as SqliteRow | undefined;
+    const row = this.statement("SELECT * FROM plan_dispatch_states WHERE plan_id = ?").get(planId) as SqliteRow | undefined;
     return row ? this.dispatchStateFromRow(row) : undefined;
   }
 
   listDispatchStates(projectId?: string): PlanDispatchState[] {
-    const rows = this.database.prepare(`SELECT * FROM plan_dispatch_states ${projectId ? "WHERE project_id = ?" : ""} ORDER BY queued_at ASC, plan_id ASC`).all(...(projectId ? [projectId] : [])) as unknown as SqliteRow[];
+    const rows = this.statement(`SELECT * FROM plan_dispatch_states ${projectId ? "WHERE project_id = ?" : ""} ORDER BY queued_at ASC, plan_id ASC`).all(...(projectId ? [projectId] : [])) as unknown as SqliteRow[];
     return rows.map((row) => this.dispatchStateFromRow(row));
   }
 
   saveRevision(revision: PlanRevisionV2): PlanRevisionV2 {
-    this.database.prepare("INSERT OR IGNORE INTO plan_revisions (plan_id, revision, contract_json, artifact_hash, confirmed_by, confirmed_at, source_explorer_thread_id, explorer_plan_id, project_config_version, project_config_hash, project_config_snapshot_json, resolved_contract_json, source_turn_id, provider_thread_id, provider_turn_id, provider_item_id, provenance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(revision.planId, revision.revision, JSON.stringify(revision.contract), revision.artifactHash, revision.confirmedBy, revision.confirmedAt, revision.sourceExplorerThreadId, revision.explorerPlanId ?? null, revision.projectConfigVersion ?? null, revision.projectConfigHash ?? null, revision.projectConfigSnapshot ? JSON.stringify(revision.projectConfigSnapshot) : null, revision.resolvedContract ? JSON.stringify(revision.resolvedContract) : null, revision.sourceTurnId ?? null, revision.providerThreadId ?? null, revision.providerTurnId ?? null, revision.providerItemId ?? null, revision.provenance ?? "CURRENT");
+    this.statement("INSERT OR IGNORE INTO plan_revisions (plan_id, revision, contract_json, artifact_hash, confirmed_by, confirmed_at, source_explorer_thread_id, explorer_plan_id, project_config_version, project_config_hash, project_config_snapshot_json, resolved_contract_json, source_turn_id, provider_thread_id, provider_turn_id, provider_item_id, provenance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(revision.planId, revision.revision, JSON.stringify(revision.contract), revision.artifactHash, revision.confirmedBy, revision.confirmedAt, revision.sourceExplorerThreadId, revision.explorerPlanId ?? null, revision.projectConfigVersion ?? null, revision.projectConfigHash ?? null, revision.projectConfigSnapshot ? JSON.stringify(revision.projectConfigSnapshot) : null, revision.resolvedContract ? JSON.stringify(revision.resolvedContract) : null, revision.sourceTurnId ?? null, revision.providerThreadId ?? null, revision.providerTurnId ?? null, revision.providerItemId ?? null, revision.provenance ?? "CURRENT");
     return this.getRevision(revision.planId, revision.revision) as PlanRevisionV2;
   }
 
   getRevision(planId: string, revision: number): PlanRevisionV2 | undefined {
-    const row = this.database.prepare("SELECT * FROM plan_revisions WHERE plan_id = ? AND revision = ?").get(planId, revision) as SqliteRow | undefined;
+    const row = this.statement("SELECT * FROM plan_revisions WHERE plan_id = ? AND revision = ?").get(planId, revision) as SqliteRow | undefined;
     if (!row) return undefined;
     return freezeRevision({ planId: String(row.plan_id), revision: Number(row.revision), contract: JSON.parse(String(row.contract_json)) as PlanContract, ...(row.resolved_contract_json ? { resolvedContract: JSON.parse(String(row.resolved_contract_json)) as ResolvedPlanContractV2 } : {}), artifactHash: String(row.artifact_hash), confirmedBy: String(row.confirmed_by), confirmedAt: String(row.confirmed_at), sourceExplorerThreadId: String(row.source_explorer_thread_id), ...(row.explorer_plan_id === null || row.explorer_plan_id === undefined ? {} : { explorerPlanId: String(row.explorer_plan_id) }), sourceTurnId: row.source_turn_id === null || row.source_turn_id === undefined ? null : String(row.source_turn_id), providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id), providerTurnId: row.provider_turn_id === null || row.provider_turn_id === undefined ? null : String(row.provider_turn_id), providerItemId: row.provider_item_id === null || row.provider_item_id === undefined ? null : String(row.provider_item_id), provenance: row.provenance === "CURRENT" ? "CURRENT" : "LEGACY", ...(row.project_config_version === null || row.project_config_version === undefined ? {} : { projectConfigVersion: Number(row.project_config_version) }), ...(row.project_config_hash === null || row.project_config_hash === undefined ? {} : { projectConfigHash: String(row.project_config_hash) }), ...(row.project_config_snapshot_json === null || row.project_config_snapshot_json === undefined ? {} : { projectConfigSnapshot: JSON.parse(String(row.project_config_snapshot_json)) as ProjectExecutionSnapshot }) });
   }
 
   listRevisions(planId: string): PlanRevisionV2[] {
-    const rows = this.database.prepare("SELECT revision FROM plan_revisions WHERE plan_id = ? ORDER BY revision ASC").all(planId) as unknown as SqliteRow[];
+    const rows = this.statement("SELECT revision FROM plan_revisions WHERE plan_id = ? ORDER BY revision ASC").all(planId) as unknown as SqliteRow[];
     return rows.map((row) => this.getRevision(planId, Number(row.revision))!).filter(Boolean);
   }
 
   saveRevisionDraft(draft: PlanRevisionDraft): PlanRevisionDraft {
-    this.database.prepare("INSERT INTO plan_revision_drafts (draft_id, plan_id, project_id, based_on_revision, target_revision, status, title, contract_json, generated_spec_json, resolved_contract_json, source_explorer_thread_id, explorer_plan_id, source_turn_id, provider_thread_id, provider_turn_id, provider_item_id, base_branch, base_commit, created_at, updated_at, confirmed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(draft.draftId, draft.planId, draft.projectId, draft.basedOnRevision, draft.targetRevision, draft.status, draft.title, JSON.stringify(draft.contract), draft.generatedSpec ? JSON.stringify(draft.generatedSpec) : null, draft.resolvedContract ? JSON.stringify(draft.resolvedContract) : null, draft.sourceExplorerThreadId, draft.explorerPlanId ?? null, draft.sourceTurnId, draft.providerThreadId, draft.providerTurnId, draft.providerItemId, draft.baseBranch, draft.baseCommit, draft.createdAt, draft.updatedAt, draft.confirmedAt);
+    this.statement("INSERT INTO plan_revision_drafts (draft_id, plan_id, project_id, based_on_revision, target_revision, status, title, contract_json, generated_spec_json, resolved_contract_json, source_explorer_thread_id, explorer_plan_id, source_turn_id, provider_thread_id, provider_turn_id, provider_item_id, base_branch, base_commit, created_at, updated_at, confirmed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(draft.draftId, draft.planId, draft.projectId, draft.basedOnRevision, draft.targetRevision, draft.status, draft.title, JSON.stringify(draft.contract), draft.generatedSpec ? JSON.stringify(draft.generatedSpec) : null, draft.resolvedContract ? JSON.stringify(draft.resolvedContract) : null, draft.sourceExplorerThreadId, draft.explorerPlanId ?? null, draft.sourceTurnId, draft.providerThreadId, draft.providerTurnId, draft.providerItemId, draft.baseBranch, draft.baseCommit, draft.createdAt, draft.updatedAt, draft.confirmedAt);
     return this.getRevisionDraft(draft.draftId)!;
   }
   getRevisionDraft(draftId: string): PlanRevisionDraft | undefined {
-    const row = this.database.prepare("SELECT * FROM plan_revision_drafts WHERE draft_id = ?").get(draftId) as SqliteRow | undefined;
+    const row = this.statement("SELECT * FROM plan_revision_drafts WHERE draft_id = ?").get(draftId) as SqliteRow | undefined;
     return row ? this.revisionDraftFromRow(row) : undefined;
   }
   listRevisionDrafts(planId?: string): PlanRevisionDraft[] {
-    const rows = this.database.prepare(`SELECT * FROM plan_revision_drafts ${planId ? "WHERE plan_id = ?" : ""} ORDER BY target_revision ASC, created_at ASC`).all(...(planId ? [planId] : [])) as unknown as SqliteRow[];
+    const rows = this.statement(`SELECT * FROM plan_revision_drafts ${planId ? "WHERE plan_id = ?" : ""} ORDER BY target_revision ASC, created_at ASC`).all(...(planId ? [planId] : [])) as unknown as SqliteRow[];
     return rows.map((row) => this.revisionDraftFromRow(row));
   }
   updateRevisionDraft(draft: PlanRevisionDraft): PlanRevisionDraft {
-    this.database.prepare("UPDATE plan_revision_drafts SET status = ?, title = ?, contract_json = ?, generated_spec_json = ?, resolved_contract_json = ?, source_explorer_thread_id = ?, explorer_plan_id = ?, source_turn_id = ?, provider_thread_id = ?, provider_turn_id = ?, provider_item_id = ?, base_branch = ?, base_commit = ?, updated_at = ?, confirmed_at = ? WHERE draft_id = ?").run(draft.status, draft.title, JSON.stringify(draft.contract), draft.generatedSpec ? JSON.stringify(draft.generatedSpec) : null, draft.resolvedContract ? JSON.stringify(draft.resolvedContract) : null, draft.sourceExplorerThreadId, draft.explorerPlanId ?? null, draft.sourceTurnId, draft.providerThreadId, draft.providerTurnId, draft.providerItemId, draft.baseBranch, draft.baseCommit, draft.updatedAt, draft.confirmedAt, draft.draftId);
+    this.statement("UPDATE plan_revision_drafts SET status = ?, title = ?, contract_json = ?, generated_spec_json = ?, resolved_contract_json = ?, source_explorer_thread_id = ?, explorer_plan_id = ?, source_turn_id = ?, provider_thread_id = ?, provider_turn_id = ?, provider_item_id = ?, base_branch = ?, base_commit = ?, updated_at = ?, confirmed_at = ? WHERE draft_id = ?").run(draft.status, draft.title, JSON.stringify(draft.contract), draft.generatedSpec ? JSON.stringify(draft.generatedSpec) : null, draft.resolvedContract ? JSON.stringify(draft.resolvedContract) : null, draft.sourceExplorerThreadId, draft.explorerPlanId ?? null, draft.sourceTurnId, draft.providerThreadId, draft.providerTurnId, draft.providerItemId, draft.baseBranch, draft.baseCommit, draft.updatedAt, draft.confirmedAt, draft.draftId);
     return this.getRevisionDraft(draft.draftId)!;
   }
   saveRevisionLifecycleProjection(projection: RevisionLifecycleProjection): RevisionLifecycleProjection {
-    this.database.prepare("INSERT INTO revision_lifecycle_projection (plan_id, revision, project_id, title, status, source_explorer_thread_id, run_id, last_event_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(plan_id, revision) DO UPDATE SET project_id=excluded.project_id, title=excluded.title, status=excluded.status, source_explorer_thread_id=excluded.source_explorer_thread_id, run_id=excluded.run_id, last_event_at=excluded.last_event_at").run(projection.planId, projection.revision, projection.projectId, projection.title, projection.status, projection.sourceExplorerThreadId, projection.runId, projection.lastEventAt);
+    this.statement("INSERT INTO revision_lifecycle_projection (plan_id, revision, project_id, title, status, source_explorer_thread_id, run_id, last_event_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(plan_id, revision) DO UPDATE SET project_id=excluded.project_id, title=excluded.title, status=excluded.status, source_explorer_thread_id=excluded.source_explorer_thread_id, run_id=excluded.run_id, last_event_at=excluded.last_event_at").run(projection.planId, projection.revision, projection.projectId, projection.title, projection.status, projection.sourceExplorerThreadId, projection.runId, projection.lastEventAt);
     return projection;
   }
   listRevisionLifecycleProjections(projectId?: string, planId?: string): RevisionLifecycleProjection[] {
     const clauses = [projectId ? "project_id = ?" : "", planId ? "plan_id = ?" : ""].filter(Boolean);
     const values = [projectId, planId].filter((value): value is string => Boolean(value));
-    const rows = this.database.prepare(`SELECT * FROM revision_lifecycle_projection ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""} ORDER BY plan_id ASC, revision ASC`).all(...values) as unknown as SqliteRow[];
+    const rows = this.statement(`SELECT * FROM revision_lifecycle_projection ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""} ORDER BY plan_id ASC, revision ASC`).all(...values) as unknown as SqliteRow[];
     return rows.map((row) => ({ planId: String(row.plan_id), revision: Number(row.revision), projectId: String(row.project_id), title: String(row.title), status: String(row.status) as RevisionLifecycleProjection["status"], sourceExplorerThreadId: String(row.source_explorer_thread_id), runId: row.run_id === null ? null : String(row.run_id), lastEventAt: String(row.last_event_at) }));
   }
 
   saveChangeProposal(proposal: ChangeProposal): ChangeProposal {
-    this.database.prepare("INSERT OR IGNORE INTO change_proposals (id, run_id, plan_id, reason, requested_changes_json, contract_json, status, created_at, created_by, decided_at, decided_by, revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(proposal.id, proposal.runId, proposal.planId, proposal.reason, JSON.stringify(proposal.requestedChanges), JSON.stringify(proposal.contract), proposal.status, proposal.createdAt, proposal.createdBy, proposal.decidedAt, proposal.decidedBy, proposal.revision);
+    this.statement("INSERT OR IGNORE INTO change_proposals (id, run_id, plan_id, reason, requested_changes_json, contract_json, status, created_at, created_by, decided_at, decided_by, revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(proposal.id, proposal.runId, proposal.planId, proposal.reason, JSON.stringify(proposal.requestedChanges), JSON.stringify(proposal.contract), proposal.status, proposal.createdAt, proposal.createdBy, proposal.decidedAt, proposal.decidedBy, proposal.revision);
     return this.getChangeProposal(proposal.id) as ChangeProposal;
   }
 
   getChangeProposal(id: string): ChangeProposal | undefined {
-    const row = this.database.prepare("SELECT * FROM change_proposals WHERE id = ?").get(id) as SqliteRow | undefined;
+    const row = this.statement("SELECT * FROM change_proposals WHERE id = ?").get(id) as SqliteRow | undefined;
     return row ? this.changeProposalFromRow(row) : undefined;
   }
 
   listChangeProposals(runId?: string): ChangeProposal[] {
-    const rows = this.database.prepare(`SELECT * FROM change_proposals ${runId ? "WHERE run_id = ?" : ""} ORDER BY created_at ASC`).all(...(runId ? [runId] : [])) as unknown as SqliteRow[];
+    const rows = this.statement(`SELECT * FROM change_proposals ${runId ? "WHERE run_id = ?" : ""} ORDER BY created_at ASC`).all(...(runId ? [runId] : [])) as unknown as SqliteRow[];
     return rows.map((row) => this.changeProposalFromRow(row));
   }
 
   updateChangeProposal(proposal: ChangeProposal): ChangeProposal {
-    this.database.prepare("UPDATE change_proposals SET status = ?, decided_at = ?, decided_by = ?, revision = ? WHERE id = ?").run(proposal.status, proposal.decidedAt, proposal.decidedBy, proposal.revision, proposal.id);
+    this.statement("UPDATE change_proposals SET status = ?, decided_at = ?, decided_by = ?, revision = ? WHERE id = ?").run(proposal.status, proposal.decidedAt, proposal.decidedBy, proposal.revision, proposal.id);
     return this.getChangeProposal(proposal.id) as ChangeProposal;
   }
 
   saveRun(run: Run): Run {
-    this.database.prepare("INSERT INTO runs (id, project_id, plan_id, plan_revision, status, branch, workspace_path, base_commit, execution_thread_id, created_at, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET status=excluded.status, workspace_path=excluded.workspace_path, started_at=excluded.started_at").run(run.id, run.projectId, run.planId, run.planRevision, run.status, run.branch, run.workspacePath, run.baseCommit, run.executionThreadId, run.createdAt, run.startedAt);
+    this.statement("INSERT INTO runs (id, project_id, plan_id, plan_revision, status, branch, workspace_path, base_commit, execution_thread_id, created_at, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET status=excluded.status, workspace_path=excluded.workspace_path, started_at=excluded.started_at").run(run.id, run.projectId, run.planId, run.planRevision, run.status, run.branch, run.workspacePath, run.baseCommit, run.executionThreadId, run.createdAt, run.startedAt);
     return this.getRun(run.id) as Run;
   }
 
   getRun(runId: string): Run | undefined {
-    const row = this.database.prepare("SELECT * FROM runs WHERE id = ?").get(runId) as SqliteRow | undefined;
+    const row = this.statement("SELECT * FROM runs WHERE id = ?").get(runId) as SqliteRow | undefined;
     return row ? this.runFromRow(row) : undefined;
   }
 
   listRuns(): Run[] {
-    const rows = this.database.prepare("SELECT * FROM runs ORDER BY created_at ASC").all() as unknown as SqliteRow[];
+    const rows = this.statement("SELECT * FROM runs ORDER BY created_at ASC").all() as unknown as SqliteRow[];
     return rows.map((row) => this.runFromRow(row));
   }
 
   saveExecutionThread(thread: ExecutionThread): ExecutionThread {
     const safe = { ...thread, journal: thread.journal.map((entry) => ({ ...entry, payload: redactAuditPayload(entry.payload) as ExecutionJournalPayload })) };
-    this.database.prepare("INSERT INTO execution_threads (id, run_id, state, journal_json, telemetry_json) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET state=excluded.state, journal_json=excluded.journal_json, telemetry_json=excluded.telemetry_json").run(safe.id, safe.runId, safe.state, JSON.stringify(safe.journal), safe.telemetry ? JSON.stringify(safe.telemetry) : null);
+    this.statement("INSERT INTO execution_threads (id, run_id, state, journal_json, telemetry_json) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET state=excluded.state, journal_json=excluded.journal_json, telemetry_json=excluded.telemetry_json").run(safe.id, safe.runId, safe.state, JSON.stringify(safe.journal), safe.telemetry ? JSON.stringify(safe.telemetry) : null);
     for (const entry of safe.journal) {
-      this.database.prepare("INSERT OR IGNORE INTO execution_journal (execution_thread_id, run_id, sequence, type, occurred_at, payload_json) VALUES (?, ?, ?, ?, ?, ?)").run(safe.id, safe.runId, entry.sequence, entry.type, entry.occurredAt, JSON.stringify(entry.payload));
+      this.statement("INSERT OR IGNORE INTO execution_journal (execution_thread_id, run_id, sequence, type, occurred_at, payload_json) VALUES (?, ?, ?, ?, ?, ?)").run(safe.id, safe.runId, entry.sequence, entry.type, entry.occurredAt, JSON.stringify(entry.payload));
     }
     return this.getExecutionThread(safe.id) as ExecutionThread;
   }
@@ -921,61 +964,61 @@ export class SqlitePipelineStore implements PipelineStore {
   appendExecutionJournal(input: { executionThreadId: string; runId: string; type: JournalEntryType; payload: Record<string, unknown>; occurredAt?: string }): ExecutionJournalEntry {
     const thread = this.getExecutionThread(input.executionThreadId);
     if (!thread || thread.runId !== input.runId) throw new Error(`ExecutionThread ${input.executionThreadId} does not belong to Run ${input.runId}`);
-    const sequence = Number((this.database.prepare("SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM execution_journal WHERE run_id = ?").get(input.runId) as SqliteRow).next_sequence);
+    const sequence = Number((this.statement("SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM execution_journal WHERE run_id = ?").get(input.runId) as SqliteRow).next_sequence);
     const entry: ExecutionJournalEntry = { sequence, type: input.type, occurredAt: input.occurredAt ?? this.now(), payload: redactAuditPayload(input.payload) as ExecutionJournalPayload };
-    this.database.prepare("INSERT INTO execution_journal (execution_thread_id, run_id, sequence, type, occurred_at, payload_json) VALUES (?, ?, ?, ?, ?, ?)").run(input.executionThreadId, input.runId, entry.sequence, entry.type, entry.occurredAt, JSON.stringify(entry.payload));
+    this.statement("INSERT INTO execution_journal (execution_thread_id, run_id, sequence, type, occurred_at, payload_json) VALUES (?, ?, ?, ?, ?, ?)").run(input.executionThreadId, input.runId, entry.sequence, entry.type, entry.occurredAt, JSON.stringify(entry.payload));
     return entry;
   }
 
   saveHookExecution(execution: HookExecution): HookExecution {
     const safe = { ...execution, stdout: redactAuditText(execution.stdout), stderr: redactAuditText(execution.stderr) };
-    this.database.prepare("INSERT OR IGNORE INTO hook_executions (id, run_id, hook_type, attempt, command_id, cwd, timeout_ms, status, exit_code, stdout, stderr, started_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(safe.id, safe.runId, safe.hookType, safe.attempt, safe.commandId, safe.cwd, safe.timeoutMs, safe.status, safe.exitCode, safe.stdout, safe.stderr, safe.startedAt, safe.completedAt);
+    this.statement("INSERT OR IGNORE INTO hook_executions (id, run_id, hook_type, attempt, command_id, cwd, timeout_ms, status, exit_code, stdout, stderr, started_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(safe.id, safe.runId, safe.hookType, safe.attempt, safe.commandId, safe.cwd, safe.timeoutMs, safe.status, safe.exitCode, safe.stdout, safe.stderr, safe.startedAt, safe.completedAt);
     return this.getHookExecution(safe.runId, safe.hookType, safe.attempt) as HookExecution;
   }
 
   getHookExecution(runId: string, hookType: HookExecution["hookType"], attempt: number): HookExecution | undefined {
-    const row = this.database.prepare("SELECT * FROM hook_executions WHERE run_id = ? AND hook_type = ? AND attempt = ?").get(runId, hookType, attempt) as SqliteRow | undefined;
+    const row = this.statement("SELECT * FROM hook_executions WHERE run_id = ? AND hook_type = ? AND attempt = ?").get(runId, hookType, attempt) as SqliteRow | undefined;
     return row ? this.hookExecutionFromRow(row) : undefined;
   }
 
   listHookExecutions(runId?: string): HookExecution[] {
-    const rows = this.database.prepare(`SELECT * FROM hook_executions ${runId ? "WHERE run_id = ?" : ""} ORDER BY started_at ASC, attempt ASC`).all(...(runId ? [runId] : [])) as unknown as SqliteRow[];
+    const rows = this.statement(`SELECT * FROM hook_executions ${runId ? "WHERE run_id = ?" : ""} ORDER BY started_at ASC, attempt ASC`).all(...(runId ? [runId] : [])) as unknown as SqliteRow[];
     return rows.map((row) => this.hookExecutionFromRow(row));
   }
 
   savePlanQueryProjection(projection: PlanQueryProjection): PlanQueryProjection {
-    this.database.prepare("INSERT INTO plan_query_projection (plan_id, project_id, source_explorer_thread_id, source_turn_id, title, goal, revision, status, priority, created_at, queued_at, dispatched_at, last_event_at, run_id, attention_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(plan_id) DO UPDATE SET project_id=excluded.project_id, source_explorer_thread_id=excluded.source_explorer_thread_id, source_turn_id=excluded.source_turn_id, title=excluded.title, goal=excluded.goal, revision=excluded.revision, status=excluded.status, priority=excluded.priority, created_at=excluded.created_at, queued_at=excluded.queued_at, dispatched_at=excluded.dispatched_at, last_event_at=excluded.last_event_at, run_id=excluded.run_id, attention_reason=excluded.attention_reason").run(projection.planId, projection.projectId, projection.sourceExplorerThreadId, projection.sourceTurnId, projection.title, projection.goal, projection.revision, projection.status, projection.priority, projection.createdAt, projection.queuedAt, projection.dispatchedAt ?? null, projection.lastEventAt, projection.runId, projection.attentionReason);
+    this.statement("INSERT INTO plan_query_projection (plan_id, project_id, source_explorer_thread_id, source_turn_id, title, goal, revision, status, priority, created_at, queued_at, dispatched_at, last_event_at, run_id, attention_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(plan_id) DO UPDATE SET project_id=excluded.project_id, source_explorer_thread_id=excluded.source_explorer_thread_id, source_turn_id=excluded.source_turn_id, title=excluded.title, goal=excluded.goal, revision=excluded.revision, status=excluded.status, priority=excluded.priority, created_at=excluded.created_at, queued_at=excluded.queued_at, dispatched_at=excluded.dispatched_at, last_event_at=excluded.last_event_at, run_id=excluded.run_id, attention_reason=excluded.attention_reason").run(projection.planId, projection.projectId, projection.sourceExplorerThreadId, projection.sourceTurnId, projection.title, projection.goal, projection.revision, projection.status, projection.priority, projection.createdAt, projection.queuedAt, projection.dispatchedAt ?? null, projection.lastEventAt, projection.runId, projection.attentionReason);
     return this.getPlanQueryProjection(projection.planId) as PlanQueryProjection;
   }
 
   getPlanQueryProjection(planId: string): PlanQueryProjection | undefined {
-    const row = this.database.prepare("SELECT * FROM plan_query_projection WHERE plan_id = ?").get(planId) as SqliteRow | undefined;
+    const row = this.statement("SELECT * FROM plan_query_projection WHERE plan_id = ?").get(planId) as SqliteRow | undefined;
     return row ? this.planQueryProjectionFromRow(row) : undefined;
   }
 
   listPlanQueryProjection(projectId?: string): PlanQueryProjection[] {
-    const rows = this.database.prepare(`SELECT * FROM plan_query_projection ${projectId ? "WHERE project_id = ?" : ""} ORDER BY created_at ASC, plan_id ASC`).all(...(projectId ? [projectId] : [])) as unknown as SqliteRow[];
+    const rows = this.statement(`SELECT * FROM plan_query_projection ${projectId ? "WHERE project_id = ?" : ""} ORDER BY created_at ASC, plan_id ASC`).all(...(projectId ? [projectId] : [])) as unknown as SqliteRow[];
     return rows.map((row) => this.planQueryProjectionFromRow(row));
   }
 
   saveVerificationRun(verification: VerificationRun): VerificationRun {
-    this.database.prepare("INSERT OR IGNORE INTO verification_runs (id, run_id, status, repair_attempts, command_results_json, completed_at, reason) VALUES (?, ?, ?, ?, ?, ?, ?)").run(verification.id, verification.runId, verification.status, verification.repairAttempts, JSON.stringify(verification.commandResults), verification.completedAt, verification.reason ?? null);
+    this.statement("INSERT OR IGNORE INTO verification_runs (id, run_id, status, repair_attempts, command_results_json, completed_at, reason) VALUES (?, ?, ?, ?, ?, ?, ?)").run(verification.id, verification.runId, verification.status, verification.repairAttempts, JSON.stringify(verification.commandResults), verification.completedAt, verification.reason ?? null);
     return this.getVerificationById(verification.id) as VerificationRun;
   }
 
   getVerificationRun(runId: string): VerificationRun | undefined {
-    const row = this.database.prepare("SELECT * FROM verification_runs WHERE run_id = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1").get(runId) as SqliteRow | undefined;
+    const row = this.statement("SELECT * FROM verification_runs WHERE run_id = ? ORDER BY completed_at DESC, rowid DESC LIMIT 1").get(runId) as SqliteRow | undefined;
     return row ? this.verificationFromRow(row) : undefined;
   }
 
   listVerificationRuns(runId?: string): VerificationRun[] {
-    const rows = this.database.prepare(`SELECT * FROM verification_runs ${runId ? "WHERE run_id = ?" : ""} ORDER BY completed_at ASC, rowid ASC`).all(...(runId ? [runId] : [])) as unknown as SqliteRow[];
+    const rows = this.statement(`SELECT * FROM verification_runs ${runId ? "WHERE run_id = ?" : ""} ORDER BY completed_at ASC, rowid ASC`).all(...(runId ? [runId] : [])) as unknown as SqliteRow[];
     return rows.map((row) => this.verificationFromRow(row));
   }
 
   private backfillLegacyVerificationRuns(): void {
-    const insert = this.database.prepare("INSERT OR IGNORE INTO verification_runs (id, run_id, status, repair_attempts, command_results_json, completed_at) VALUES (?, ?, ?, ?, ?, ?)");
-    const rows = this.database.prepare("SELECT journal_json FROM execution_threads").all() as unknown as SqliteRow[];
+    const insert = this.statement("INSERT OR IGNORE INTO verification_runs (id, run_id, status, repair_attempts, command_results_json, completed_at) VALUES (?, ?, ?, ?, ?, ?)");
+    const rows = this.statement("SELECT journal_json FROM execution_threads").all() as unknown as SqliteRow[];
     for (const row of rows) {
       let journal: unknown;
       try { journal = JSON.parse(String(row.journal_json)); } catch { continue; }
@@ -989,32 +1032,32 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   saveMergeRequest(request: MergeRequest): MergeRequest {
-    this.database.prepare("INSERT OR IGNORE INTO merge_requests (id, run_id, plan_id, source_commit, target_branch, status, human_confirmation_required, created_at, merged_at, detected_target_commit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(request.id, request.runId, request.planId, request.sourceCommit, request.targetBranch, request.status, request.humanConfirmationRequired ? 1 : 0, request.createdAt, request.mergedAt, request.detectedTargetCommit ?? null);
+    this.statement("INSERT OR IGNORE INTO merge_requests (id, run_id, plan_id, source_commit, target_branch, status, human_confirmation_required, created_at, merged_at, detected_target_commit) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(request.id, request.runId, request.planId, request.sourceCommit, request.targetBranch, request.status, request.humanConfirmationRequired ? 1 : 0, request.createdAt, request.mergedAt, request.detectedTargetCommit ?? null);
     return this.getMergeRequest(request.id) as MergeRequest;
   }
 
   getMergeRequest(requestId: string): MergeRequest | undefined {
-    const row = this.database.prepare("SELECT * FROM merge_requests WHERE id = ?").get(requestId) as SqliteRow | undefined;
+    const row = this.statement("SELECT * FROM merge_requests WHERE id = ?").get(requestId) as SqliteRow | undefined;
     return row ? this.mergeRequestFromRow(row) : undefined;
   }
 
   findMergeRequestByRun(runId: string): MergeRequest | undefined {
-    const row = this.database.prepare("SELECT * FROM merge_requests WHERE run_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1").get(runId) as SqliteRow | undefined;
+    const row = this.statement("SELECT * FROM merge_requests WHERE run_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1").get(runId) as SqliteRow | undefined;
     return row ? this.mergeRequestFromRow(row) : undefined;
   }
 
   listMergeRequests(): MergeRequest[] {
-    const rows = this.database.prepare("SELECT * FROM merge_requests ORDER BY created_at ASC, rowid ASC").all() as unknown as SqliteRow[];
+    const rows = this.statement("SELECT * FROM merge_requests ORDER BY created_at ASC, rowid ASC").all() as unknown as SqliteRow[];
     return rows.map((row) => this.mergeRequestFromRow(row));
   }
 
   updateMergeRequest(request: MergeRequest): MergeRequest {
-    this.database.prepare("UPDATE merge_requests SET status = ?, merged_at = ?, detected_target_commit = ? WHERE id = ?").run(request.status, request.mergedAt, request.detectedTargetCommit ?? null, request.id);
+    this.statement("UPDATE merge_requests SET status = ?, merged_at = ?, detected_target_commit = ? WHERE id = ?").run(request.status, request.mergedAt, request.detectedTargetCommit ?? null, request.id);
     return this.getMergeRequest(request.id) as MergeRequest;
   }
 
   saveAgentLoop(loop: AgentLoop): AgentLoop {
-    this.database.prepare(`
+    this.statement(`
       INSERT INTO agent_loops (id, owner_type, owner_id, role, mode, state, step_count, max_steps, started_at, completed_at, provider_thread_id, provider_turn_id, checkpoint_json)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET owner_type=excluded.owner_type, owner_id=excluded.owner_id, role=excluded.role, mode=excluded.mode, state=excluded.state, step_count=excluded.step_count, max_steps=excluded.max_steps, started_at=excluded.started_at, completed_at=excluded.completed_at, provider_thread_id=excluded.provider_thread_id, provider_turn_id=excluded.provider_turn_id, checkpoint_json=excluded.checkpoint_json
@@ -1023,12 +1066,12 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   getAgentLoop(loopId: string): AgentLoop | undefined {
-    const row = this.database.prepare("SELECT * FROM agent_loops WHERE id = ?").get(loopId) as SqliteRow | undefined;
+    const row = this.statement("SELECT * FROM agent_loops WHERE id = ?").get(loopId) as SqliteRow | undefined;
     return row ? this.agentLoopFromRow(row) : undefined;
   }
 
   listAgentLoops(ownerId?: string): AgentLoop[] {
-    const rows = this.database.prepare(`SELECT * FROM agent_loops ${ownerId ? "WHERE owner_id = ?" : ""} ORDER BY rowid ASC`).all(...(ownerId ? [ownerId] : [])) as unknown as SqliteRow[];
+    const rows = this.statement(`SELECT * FROM agent_loops ${ownerId ? "WHERE owner_id = ?" : ""} ORDER BY rowid ASC`).all(...(ownerId ? [ownerId] : [])) as unknown as SqliteRow[];
     return rows.map((row) => this.agentLoopFromRow(row));
   }
 
@@ -1038,9 +1081,9 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   appendAgentLoopStep(input: AgentLoopStepInput): AgentLoopStep {
-    const nextSequence = Number((this.database.prepare("SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM agent_loop_steps WHERE loop_id = ?").get(input.loopId) as SqliteRow).next_sequence);
+    const nextSequence = Number((this.statement("SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM agent_loop_steps WHERE loop_id = ?").get(input.loopId) as SqliteRow).next_sequence);
     const step: AgentLoopStep = { ...input, callId: input.callId ?? null, providerThreadId: input.providerThreadId ?? null, providerTurnId: input.providerTurnId ?? null, sequence: nextSequence, occurredAt: input.occurredAt ?? this.now() };
-    this.database.prepare("INSERT INTO agent_loop_steps (loop_id, sequence, step_type, status, call_id, provider_thread_id, provider_turn_id, payload_json, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(step.loopId, step.sequence, step.stepType, step.status, step.callId, step.providerThreadId, step.providerTurnId, JSON.stringify(step.payload), step.occurredAt);
+    this.statement("INSERT INTO agent_loop_steps (loop_id, sequence, step_type, status, call_id, provider_thread_id, provider_turn_id, payload_json, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(step.loopId, step.sequence, step.stepType, step.status, step.callId, step.providerThreadId, step.providerTurnId, JSON.stringify(step.payload), step.occurredAt);
     return step;
   }
 
@@ -1049,42 +1092,42 @@ export class SqlitePipelineStore implements PipelineStore {
     if (stepTypes && stepTypes.length === 0) return [];
     const filter = stepTypes ? ` AND step_type IN (${stepTypes.map(() => "?").join(", ")})` : "";
     const params: string[] = stepTypes ? [loopId, ...stepTypes] : [loopId];
-    const rows = this.database.prepare(`SELECT * FROM agent_loop_steps WHERE loop_id = ?${filter} ORDER BY sequence ASC`).all(...params) as unknown as SqliteRow[];
+    const rows = this.statement(`SELECT * FROM agent_loop_steps WHERE loop_id = ?${filter} ORDER BY sequence ASC`).all(...params) as unknown as SqliteRow[];
     return rows.map((row) => this.agentLoopStepFromRow(row));
   }
 
   getLastAgentLoopStepSequence(loopId: string): number {
-    const row = this.database.prepare("SELECT COALESCE(MAX(sequence), 0) AS last_sequence FROM agent_loop_steps WHERE loop_id = ?").get(loopId) as SqliteRow;
+    const row = this.statement("SELECT COALESCE(MAX(sequence), 0) AS last_sequence FROM agent_loop_steps WHERE loop_id = ?").get(loopId) as SqliteRow;
     return Number(row.last_sequence ?? 0);
   }
 
   recoverAgentLoops(): AgentLoop[] { return this.listAgentLoops().filter((loop) => loop.state === "RUNNING" || loop.state === "WAITING_FOR_INPUT" || loop.state === "PAUSED"); }
 
   saveToolCall(call: PersistedToolCall): PersistedToolCall {
-    this.database.prepare("INSERT OR IGNORE INTO tool_calls (call_id, loop_id, role, tool, status, input_hash, result_json, started_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(call.callId, call.loopId, call.role, call.tool, call.status, call.inputHash, call.result ? JSON.stringify(call.result) : null, call.startedAt, call.completedAt);
+    this.statement("INSERT OR IGNORE INTO tool_calls (call_id, loop_id, role, tool, status, input_hash, result_json, started_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(call.callId, call.loopId, call.role, call.tool, call.status, call.inputHash, call.result ? JSON.stringify(call.result) : null, call.startedAt, call.completedAt);
     return this.getToolCall(call.callId) as PersistedToolCall;
   }
 
   getToolCall(callId: string): PersistedToolCall | undefined {
-    const row = this.database.prepare("SELECT * FROM tool_calls WHERE call_id = ?").get(callId) as SqliteRow | undefined;
+    const row = this.statement("SELECT * FROM tool_calls WHERE call_id = ?").get(callId) as SqliteRow | undefined;
     return row ? this.toolCallFromRow(row) : undefined;
   }
 
   listToolCalls(loopId?: string): PersistedToolCall[] {
-    const rows = this.database.prepare(`SELECT * FROM tool_calls ${loopId ? "WHERE loop_id = ?" : ""} ORDER BY started_at ASC`).all(...(loopId ? [loopId] : [])) as unknown as SqliteRow[];
+    const rows = this.statement(`SELECT * FROM tool_calls ${loopId ? "WHERE loop_id = ?" : ""} ORDER BY started_at ASC`).all(...(loopId ? [loopId] : [])) as unknown as SqliteRow[];
     return rows.map((row) => this.toolCallFromRow(row));
   }
 
   updateToolCall(call: PersistedToolCall): PersistedToolCall {
     if (!this.getToolCall(call.callId)) throw new Error(`Tool call ${call.callId} does not exist`);
-    this.database.prepare("UPDATE tool_calls SET status = ?, result_json = ?, completed_at = ? WHERE call_id = ?").run(call.status, call.result ? JSON.stringify(call.result) : null, call.completedAt, call.callId);
+    this.statement("UPDATE tool_calls SET status = ?, result_json = ?, completed_at = ? WHERE call_id = ?").run(call.status, call.result ? JSON.stringify(call.result) : null, call.completedAt, call.callId);
     return this.getToolCall(call.callId) as PersistedToolCall;
   }
 
   getExecutionThread(threadId: string): ExecutionThread | undefined {
-    const row = this.database.prepare("SELECT * FROM execution_threads WHERE id = ?").get(threadId) as SqliteRow | undefined;
+    const row = this.statement("SELECT * FROM execution_threads WHERE id = ?").get(threadId) as SqliteRow | undefined;
     if (!row) return undefined;
-    const journalRows = this.database.prepare("SELECT sequence, type, occurred_at, payload_json FROM execution_journal WHERE execution_thread_id = ? ORDER BY sequence ASC").all(threadId) as unknown as SqliteRow[];
+    const journalRows = this.statement("SELECT sequence, type, occurred_at, payload_json FROM execution_journal WHERE execution_thread_id = ? ORDER BY sequence ASC").all(threadId) as unknown as SqliteRow[];
     const journal = journalRows.length > 0
       ? journalRows.map((entry) => ({ sequence: Number(entry.sequence), type: String(entry.type) as JournalEntryType, occurredAt: String(entry.occurred_at), payload: JSON.parse(String(entry.payload_json)) as ExecutionJournalPayload }))
       : JSON.parse(String(row.journal_json)) as ExecutionJournalEntry[];
@@ -1093,8 +1136,8 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   appendEvent(event: Omit<DomainEvent, "id" | "occurredAt" | "sequence">): DomainEvent {
-    const saved: DomainEvent = { ...event, payload: redactAuditPayload(event.payload), id: this.nextId("event"), sequence: Number((this.database.prepare("SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM domain_events").get() as SqliteRow).next_sequence), occurredAt: this.now() };
-    this.database.prepare("INSERT INTO domain_events (id, sequence, type, aggregate_id, occurred_at, payload_json) VALUES (?, ?, ?, ?, ?, ?)").run(saved.id, saved.sequence, saved.type, saved.aggregateId, saved.occurredAt, JSON.stringify(saved.payload));
+    const saved: DomainEvent = { ...event, payload: redactAuditPayload(event.payload), id: this.nextId("event"), sequence: Number((this.statement("SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM domain_events").get() as SqliteRow).next_sequence), occurredAt: this.now() };
+    this.statement("INSERT INTO domain_events (id, sequence, type, aggregate_id, occurred_at, payload_json) VALUES (?, ?, ?, ?, ?, ?)").run(saved.id, saved.sequence, saved.type, saved.aggregateId, saved.occurredAt, JSON.stringify(saved.payload));
     for (const listener of this.eventListeners) listener(saved);
     return saved;
   }
@@ -1134,7 +1177,7 @@ export class SqlitePipelineStore implements PipelineStore {
         ? `SELECT * FROM domain_events WHERE ${where} ORDER BY sequence ASC LIMIT ?`
         : `SELECT * FROM (SELECT * FROM domain_events WHERE ${where} ORDER BY sequence DESC LIMIT ?) ORDER BY sequence ASC`;
     if (options.limit !== undefined) params.push(options.limit);
-    const rows = this.database.prepare(sql).all(...params) as unknown as SqliteRow[];
+    const rows = this.statement(sql).all(...params) as unknown as SqliteRow[];
     return rows.map((row) => ({
       id: String(row.id),
       sequence: Number(row.sequence),
@@ -1146,7 +1189,7 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   getLastEventSequence(aggregateId?: string): number {
-    const row = this.database.prepare(`SELECT COALESCE(MAX(sequence), 0) AS last_sequence FROM domain_events ${aggregateId ? "WHERE aggregate_id = ?" : ""}`).get(...(aggregateId ? [aggregateId] : [])) as SqliteRow;
+    const row = this.statement(`SELECT COALESCE(MAX(sequence), 0) AS last_sequence FROM domain_events ${aggregateId ? "WHERE aggregate_id = ?" : ""}`).get(...(aggregateId ? [aggregateId] : [])) as SqliteRow;
     return Number(row.last_sequence ?? 0);
   }
 
@@ -1154,7 +1197,7 @@ export class SqlitePipelineStore implements PipelineStore {
     const project = this.getProject(input.projectId);
     const replacement = this.getThread(input.replacementExplorerId);
     if (!project || !replacement || replacement.projectId !== input.projectId || replacement.id === input.explorerId) throw new Error("Explorer deletion replacement is invalid");
-    if (project.currentExplorerThreadId === input.explorerId) this.database.prepare("UPDATE factory_projects SET current_explorer_thread_id = ?, updated_at = ? WHERE id = ?").run(replacement.id, this.now(), input.projectId);
+    if (project.currentExplorerThreadId === input.explorerId) this.statement("UPDATE factory_projects SET current_explorer_thread_id = ?, updated_at = ? WHERE id = ?").run(replacement.id, this.now(), input.projectId);
 
     const explorerPlanIds = sqlIn("id", input.explorerPlanIds);
     const planIds = sqlIn("plan_id", input.planIds);
@@ -1166,55 +1209,58 @@ export class SqlitePipelineStore implements PipelineStore {
     const executionThreadEntityIds = sqlIn("id", input.executionThreadIds);
 
     if (runIds) {
-      this.database.prepare(`DELETE FROM execution_journal WHERE ${runIds.clause}`).run(...runIds.values);
-      this.database.prepare(`DELETE FROM hook_executions WHERE ${runIds.clause}`).run(...runIds.values);
-      this.database.prepare(`DELETE FROM verification_runs WHERE ${runIds.clause}`).run(...runIds.values);
-      this.database.prepare(`DELETE FROM merge_requests WHERE ${runIds.clause}`).run(...runIds.values);
+      this.statement(`DELETE FROM execution_journal WHERE ${runIds.clause}`).run(...runIds.values);
+      this.statement(`DELETE FROM hook_executions WHERE ${runIds.clause}`).run(...runIds.values);
+      this.statement(`DELETE FROM verification_runs WHERE ${runIds.clause}`).run(...runIds.values);
+      this.statement(`DELETE FROM merge_requests WHERE ${runIds.clause}`).run(...runIds.values);
     }
     if (loopIds) {
-      this.database.prepare(`DELETE FROM agent_loop_steps WHERE ${loopIds.clause}`).run(...loopIds.values);
-      this.database.prepare(`DELETE FROM tool_calls WHERE ${loopIds.clause}`).run(...loopIds.values);
-      if (loopEntityIds) this.database.prepare(`DELETE FROM agent_loops WHERE ${loopEntityIds.clause}`).run(...loopEntityIds.values);
+      this.statement(`DELETE FROM agent_loop_steps WHERE ${loopIds.clause}`).run(...loopIds.values);
+      this.statement(`DELETE FROM tool_calls WHERE ${loopIds.clause}`).run(...loopIds.values);
+      if (loopEntityIds) this.statement(`DELETE FROM agent_loops WHERE ${loopEntityIds.clause}`).run(...loopEntityIds.values);
     }
-    if (executionThreadEntityIds) this.database.prepare(`DELETE FROM execution_threads WHERE ${executionThreadEntityIds.clause}`).run(...executionThreadEntityIds.values);
-    if (runEntityIds) this.database.prepare(`DELETE FROM runs WHERE ${runEntityIds.clause}`).run(...runEntityIds.values);
+    if (executionThreadEntityIds) this.statement(`DELETE FROM execution_threads WHERE ${executionThreadEntityIds.clause}`).run(...executionThreadEntityIds.values);
+    if (runEntityIds) this.statement(`DELETE FROM runs WHERE ${runEntityIds.clause}`).run(...runEntityIds.values);
     if (planIds) {
-      this.database.prepare(`DELETE FROM change_proposals WHERE ${planIds.clause}`).run(...planIds.values);
-      this.database.prepare(`DELETE FROM plan_dispatch_states WHERE ${planIds.clause}`).run(...planIds.values);
-      this.database.prepare(`DELETE FROM plan_revisions WHERE ${planIds.clause}`).run(...planIds.values);
-      this.database.prepare(`DELETE FROM plan_revision_drafts WHERE ${planIds.clause}`).run(...planIds.values);
-      this.database.prepare(`DELETE FROM candidate_plan_versions WHERE ${planIds.clause}`).run(...planIds.values);
-      this.database.prepare(`DELETE FROM revision_lifecycle_projection WHERE ${planIds.clause}`).run(...planIds.values);
-      this.database.prepare(`DELETE FROM plan_query_projection WHERE ${planIds.clause}`).run(...planIds.values);
-      if (planEntityIds) this.database.prepare(`DELETE FROM candidate_plans WHERE ${planEntityIds.clause}`).run(...planEntityIds.values);
+      this.statement(`DELETE FROM change_proposals WHERE ${planIds.clause}`).run(...planIds.values);
+      this.statement(`DELETE FROM plan_dispatch_states WHERE ${planIds.clause}`).run(...planIds.values);
+      this.statement(`DELETE FROM plan_revisions WHERE ${planIds.clause}`).run(...planIds.values);
+      this.statement(`DELETE FROM plan_revision_drafts WHERE ${planIds.clause}`).run(...planIds.values);
+      this.statement(`DELETE FROM candidate_plan_versions WHERE ${planIds.clause}`).run(...planIds.values);
+      this.statement(`DELETE FROM revision_lifecycle_projection WHERE ${planIds.clause}`).run(...planIds.values);
+      this.statement(`DELETE FROM plan_query_projection WHERE ${planIds.clause}`).run(...planIds.values);
+      if (planEntityIds) this.statement(`DELETE FROM candidate_plans WHERE ${planEntityIds.clause}`).run(...planEntityIds.values);
     }
-    if (explorerPlanIds) this.database.prepare(`DELETE FROM explorer_plans WHERE ${explorerPlanIds.clause}`).run(...explorerPlanIds.values);
+    if (explorerPlanIds) this.statement(`DELETE FROM explorer_plans WHERE ${explorerPlanIds.clause}`).run(...explorerPlanIds.values);
     const inputRequestIds = sqlIn("id", input.inputRequestIds);
-    if (inputRequestIds) this.database.prepare(`DELETE FROM explorer_input_requests WHERE thread_id = ? OR ${inputRequestIds.clause}`).run(input.explorerId, ...inputRequestIds.values);
-    else this.database.prepare("DELETE FROM explorer_input_requests WHERE thread_id = ?").run(input.explorerId);
-    this.database.prepare("DELETE FROM explorer_turns WHERE thread_id = ?").run(input.explorerId);
+    if (inputRequestIds) this.statement(`DELETE FROM explorer_input_requests WHERE thread_id = ? OR ${inputRequestIds.clause}`).run(input.explorerId, ...inputRequestIds.values);
+    else this.statement("DELETE FROM explorer_input_requests WHERE thread_id = ?").run(input.explorerId);
+    this.statement("DELETE FROM explorer_turns WHERE thread_id = ?").run(input.explorerId);
 
     const deletedIds = new Set([input.explorerId, ...input.explorerPlanIds, ...input.turnIds, ...input.planIds, ...input.runIds, ...input.executionThreadIds, ...input.agentLoopIds, ...input.inputRequestIds]);
-    const idempotencyRows = this.database.prepare("SELECT scope, key, result_json FROM idempotency_keys").all() as unknown as SqliteRow[];
+    const idempotencyRows = this.statement("SELECT scope, key, result_json FROM idempotency_keys").all() as unknown as SqliteRow[];
     for (const row of idempotencyRows) {
       let result: unknown;
       try { result = JSON.parse(String(row.result_json)); } catch { continue; }
-      if (containsAnyString(result, deletedIds)) this.database.prepare("DELETE FROM idempotency_keys WHERE scope = ? AND key = ?").run(String(row.scope), String(row.key));
+      if (containsAnyString(result, deletedIds)) this.statement("DELETE FROM idempotency_keys WHERE scope = ? AND key = ?").run(String(row.scope), String(row.key));
     }
-    this.database.prepare("DELETE FROM explorer_threads WHERE id = ? AND project_id = ?").run(input.explorerId, input.projectId);
+    this.statement("DELETE FROM explorer_threads WHERE id = ? AND project_id = ?").run(input.explorerId, input.projectId);
     return { taskCount: input.explorerPlanIds.length, planCount: input.planIds.length, runCount: input.runIds.length };
   }
 
   getIdempotency(scope: string, key: string): Record<string, unknown> | undefined {
-    const row = this.database.prepare("SELECT result_json FROM idempotency_keys WHERE scope = ? AND key = ?").get(scope, key) as SqliteRow | undefined;
+    const row = this.statement("SELECT result_json FROM idempotency_keys WHERE scope = ? AND key = ?").get(scope, key) as SqliteRow | undefined;
     return row ? JSON.parse(String(row.result_json)) as Record<string, unknown> : undefined;
   }
 
   saveIdempotency(scope: string, key: string, result: Record<string, unknown>): void {
-    this.database.prepare("INSERT OR IGNORE INTO idempotency_keys (scope, key, result_json, created_at) VALUES (?, ?, ?, ?)").run(scope, key, JSON.stringify(result), this.now());
+    this.statement("INSERT OR IGNORE INTO idempotency_keys (scope, key, result_json, created_at) VALUES (?, ?, ?, ?)").run(scope, key, JSON.stringify(result), this.now());
   }
 
-  close(): void { this.database.close(); }
+  close(): void {
+    this.statements.clear();
+    this.database.close();
+  }
 
   private projectFromRow(row: SqliteRow): Project {
     return {
@@ -1294,7 +1340,7 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   private getVerificationById(id: string): VerificationRun | undefined {
-    const row = this.database.prepare("SELECT * FROM verification_runs WHERE id = ?").get(id) as SqliteRow | undefined;
+    const row = this.statement("SELECT * FROM verification_runs WHERE id = ?").get(id) as SqliteRow | undefined;
     return row ? this.verificationFromRow(row) : undefined;
   }
 
@@ -1374,15 +1420,15 @@ export class SqlitePipelineStore implements PipelineStore {
     const activePlan = plans.find((plan) => plan.id === thread.activeExplorerPlanId) ?? plans[0];
     if (!activePlan) return;
     for (const turn of this.listTurns(threadId)) {
-      if (!turn.explorerPlanId) this.database.prepare("UPDATE explorer_turns SET explorer_plan_id = ? WHERE id = ?").run(activePlan.id, turn.id);
+      if (!turn.explorerPlanId) this.statement("UPDATE explorer_turns SET explorer_plan_id = ? WHERE id = ?").run(activePlan.id, turn.id);
     }
     for (const plan of this.listPlans().filter((item) => item.sourceExplorerThreadId === threadId)) {
       if (plan.explorerPlanId) continue;
       const owner = plan.sourceTurnId ? this.listTurns(threadId).find((turn) => turn.id === plan.sourceTurnId) : undefined;
-      this.database.prepare("UPDATE candidate_plans SET explorer_plan_id = ? WHERE id = ?").run(owner?.explorerPlanId ?? activePlan.id, plan.id);
+      this.statement("UPDATE candidate_plans SET explorer_plan_id = ? WHERE id = ?").run(owner?.explorerPlanId ?? activePlan.id, plan.id);
     }
     for (const request of this.listInputRequests(threadId)) {
-      if (!request.explorerPlanId) this.database.prepare("UPDATE explorer_input_requests SET explorer_plan_id = ? WHERE id = ?").run(activePlan.id, request.id);
+      if (!request.explorerPlanId) this.statement("UPDATE explorer_input_requests SET explorer_plan_id = ? WHERE id = ?").run(activePlan.id, request.id);
     }
     const current = this.getThread(threadId)!;
     const associatedPlans = this.listPlans().filter((plan) => plan.sourceExplorerThreadId === threadId);
@@ -1411,7 +1457,7 @@ export class SqlitePipelineStore implements PipelineStore {
       return { explorerPlanId: plan.id, title: plan.title, status: plan.exploration.status, goal: candidate?.contract.goal ?? null, keyConstraints: [...(candidate?.generatedSpec?.design?.technicalConstraints ?? [])], latestUserMessageSummary: plan.latestUserMessageSummary };
     });
     const updatedSummary = { ...contextSummary, completedPlans, openPlanIds: refreshedPlans.filter((plan) => plan.exploration.status !== "READY").map((plan) => plan.id) };
-    this.database.prepare("UPDATE explorer_threads SET active_explorer_plan_id = ?, context_summary_json = ? WHERE id = ?").run(activePlan.id, JSON.stringify(updatedSummary), threadId);
+    this.statement("UPDATE explorer_threads SET active_explorer_plan_id = ?, context_summary_json = ? WHERE id = ?").run(activePlan.id, JSON.stringify(updatedSummary), threadId);
   }
 
   private backfillExplorerPlans(): void {
@@ -1423,8 +1469,8 @@ export class SqlitePipelineStore implements PipelineStore {
    * 这类记录不能继续被当作可执行 Plan，保留历史时间但转入 BLOCKED，等待重新确认。
    */
   private repairUnconfirmedProgressedPlans(): void {
-    const rows = this.database.prepare("SELECT * FROM candidate_plans WHERE confirmed_at IS NULL AND status IN (?, ?, ?, ?, ?, ?, ?, ?)").all("READY", "QUEUED", "ENQUEUED", "DISPATCHED", "IN_PROGRESS", "VERIFYING", "MERGE_READY", "MERGED") as unknown as SqliteRow[];
-    const hasConfirmationEvent = this.database.prepare("SELECT 1 AS present FROM domain_events WHERE aggregate_id = ? AND type IN (?, ?, ?) LIMIT 1");
+    const rows = this.statement("SELECT * FROM candidate_plans WHERE confirmed_at IS NULL AND status IN (?, ?, ?, ?, ?, ?, ?, ?)").all("READY", "QUEUED", "ENQUEUED", "DISPATCHED", "IN_PROGRESS", "VERIFYING", "MERGE_READY", "MERGED") as unknown as SqliteRow[];
+    const hasConfirmationEvent = this.statement("SELECT 1 AS present FROM domain_events WHERE aggregate_id = ? AND type IN (?, ?, ?) LIMIT 1");
     for (const row of rows) {
       const planId = String(row.id);
       if (hasConfirmationEvent.get(planId, "plan.confirmed", "plan.revision.confirmed", "plan.configuration.revised")) continue;
@@ -1461,7 +1507,7 @@ export class SqlitePipelineStore implements PipelineStore {
    * 幂等：修完后状态不再落在下面的集合里，重启不会重复处理。
    */
   private repairOrphanedPlans(): void {
-    const rows = this.database.prepare(`
+    const rows = this.statement(`
       SELECT * FROM candidate_plans
       WHERE status IN (?, ?, ?, ?, ?, ?, ?, ?)
         AND source_explorer_thread_id NOT IN (SELECT id FROM explorer_threads)
@@ -1482,8 +1528,8 @@ export class SqlitePipelineStore implements PipelineStore {
 
   /** 将旧 candidate 聚合回填为只读 Revision；缺少当时快照的一律标记 LEGACY。 */
   private backfillLegacyRevisionHistory(): void {
-    const insertRevision = this.database.prepare("INSERT OR IGNORE INTO plan_revisions (plan_id, revision, contract_json, artifact_hash, confirmed_by, confirmed_at, source_explorer_thread_id, source_turn_id, provider_thread_id, provider_turn_id, provider_item_id, provenance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'LEGACY')");
-    const insertProjection = this.database.prepare("INSERT OR IGNORE INTO revision_lifecycle_projection (plan_id, revision, project_id, title, status, source_explorer_thread_id, run_id, last_event_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+    const insertRevision = this.statement("INSERT OR IGNORE INTO plan_revisions (plan_id, revision, contract_json, artifact_hash, confirmed_by, confirmed_at, source_explorer_thread_id, source_turn_id, provider_thread_id, provider_turn_id, provider_item_id, provenance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'LEGACY')");
+    const insertProjection = this.statement("INSERT OR IGNORE INTO revision_lifecycle_projection (plan_id, revision, project_id, title, status, source_explorer_thread_id, run_id, last_event_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
     for (const plan of this.listPlans()) {
       if (!["READY", "ENQUEUED", "DISPATCHED", "QUEUED", "IN_PROGRESS", "VERIFYING", "MERGE_READY", "MERGED", "BLOCKED", "NEEDS_PLAN_CHANGE"].includes(plan.status)) continue;
       const confirmedAt = plan.confirmedAt ?? plan.createdAt;
