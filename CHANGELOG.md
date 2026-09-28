@@ -1,5 +1,41 @@
 # Changelog
 
+## 2026-09-28 — D3 结论：只做 D3-1，另两簇记账不做
+
+D3 原计划把 ExplorerView.vue 的 script 块按三簇拆成 `usePlanDetailDrawer` / `useProjectDialogs` /
+`useExplorerComposer`。**D3-1 做了，另两簇经核实不该按原样做**——计划里那三簇是照符号名前缀猜的，
+不是照实际内聚度划的，和后端 B1 是同一种偏差。
+
+### D3-2 `useProjectDialogs`：前提不成立，且真实规模不值得抽
+
+计划把 `renameDialogOpen` / `renameSaving` / `renameError` 归进"项目与对话框编排"，但它们
+**属于线程重命名**：唯一写它们的是 `openRenameDialog` / `renameThread`，而 `renameThread` 与
+`isCurrentProjectScope`、`thread`、导航耦合在一起，是一个独立功能，不是项目对话框的一部分。
+去掉这三者之后，"项目对话框"只剩 `projectCreateOpen` / `projectSettingsOpen` /
+`projectSettingsProjectId` 三个 ref 与两个开关函数，**约 20 行**——为它新增一个文件、一个测试与
+一条 `readFileSync` 常量，收益抵不上成本。记在这里，不硬拆。
+
+### D3-3 `useExplorerComposer`：安全网不足，不做
+
+这一簇（`draft` / `requirementDrafts` / `pendingSendPlanIds` / `failedExplorerSends`）确实内聚，
+但它的主体是 `sendTurn`——**全应用最热的路径**（乐观回合、SSE 重试、失败重发、按需求暂存草稿）。
+抽它等于把这条路径整体搬家，而当前**没有任何行为测试兜底**：
+
+- `ExplorerView.vue` 只有一个测试文件，且 `mount(` 出现 **0 次**——它全部是读源码文本做断言
+  （`expect(explorerViewSource).toContain(...)`）。搬家之后这些断言照旧全绿，**什么也没验证**。
+- 本仓没有组件级测试设施的先例，也没有可用的浏览器验收（见下面 A1b/D3 的说明）。
+
+在这种条件下搬最热的代码，风险与收益完全不成比例。它要实现的话应当**先补行为测试**（把
+ExplorerView 的发送路径挂到组件测试上），再动结构——那是另一件事，不在本次范围。
+
+### 一份需要单独安排的债
+
+`ExplorerView.test.ts` 的源码文本断言是 P7 抽取时建立的模式，它抓得住"某段代码跑到别的文件去了"
+（本次 D3-1 就是靠它发现的），但抓不住任何行为。P7 抽出的 7 个 composable 各自都有独立的行为
+测试文件；`ExplorerView.vue` 自身则一次都没有被 mount 过。这条债值得单独排期，不该塞进 D3——
+本次新增的 `usePlanDetailDrawer` 同样还没有测试文件，理由与 D3-3 相同：给它写"源码文本断言"
+只会复制这个模式，写真正的行为测试才是该做的事，而那是独立的一件事。
+
 ## 2026-09-28 — D3-1 抽出 usePlanDetailDrawer（共享抽屉的 Plan 详情）
 
 ### Changed
