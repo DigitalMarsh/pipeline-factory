@@ -25,7 +25,12 @@
  *      并发重放时只有 INSERT OR IGNORE 语义才能保证重放拿到**原来**那条结果。
  *      内存实现曾用 Map.set（后写覆盖），与 SQLite 的 INSERT OR IGNORE 语义相反——
  *      已按首次写入生效对齐，不要再退回后者。
+ *   7) pruneEvents **只**能删除 PRUNABLE_EVENT_TYPES 与 MODEL_OUTPUT 那批 run.executor.event，
+ *      且每个聚合要留够保底条数。白名单是"这一条事件是不是某段事实的中间态、最终态是否另有
+ *      持久化副本"的判定结果，不是"看起来不重要"。往白名单里加类型之前先回答那个问题，
+ *      见 PRUNABLE_EVENT_TYPES 的注释。
  */
+import type { EventPruneInput } from "./event-retention.js";
 import type {
   AgentLoop,
   AgentLoopStep,
@@ -176,6 +181,12 @@ export type PipelineStore = {
    */
   listEvents(options?: EventQuery): DomainEvent[];
   getLastEventSequence(aggregateId?: string): number;
+  /**
+   * 回收高频事件。只动 PRUNABLE_EVENT_TYPES（与 MODEL_OUTPUT 的 run.executor.event），
+   * 返回实际删除条数。规则与白名单见 store/event-retention.ts——那是**唯一**定义，
+   * SQLite 实现的白名单 SQL 必须与它逐条对应。
+   */
+  pruneEvents(input: EventPruneInput): { deleted: number };
   deleteExplorerCascade(input: ExplorerDeletionInput): ExplorerDeletionSummary;
   getIdempotency(scope: string, key: string): Record<string, unknown> | undefined;
   saveIdempotency(scope: string, key: string, result: Record<string, unknown>): void;

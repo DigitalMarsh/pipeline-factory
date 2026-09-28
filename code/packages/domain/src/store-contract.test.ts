@@ -69,7 +69,7 @@ const REQUIRED_PORT_METHOD_NAMES = [
   "saveAgentLoop", "getAgentLoop", "listAgentLoops", "updateAgentLoop",
   "appendAgentLoopStep", "listAgentLoopSteps", "getLastAgentLoopStepSequence", "recoverAgentLoops",
   "saveToolCall", "getToolCall", "listToolCalls", "updateToolCall",
-  "appendEvent", "listEvents", "getLastEventSequence",
+  "appendEvent", "listEvents", "getLastEventSequence", "pruneEvents",
   "deleteExplorerCascade",
   "getIdempotency", "saveIdempotency",
 ] as const satisfies readonly (keyof PipelineStore)[];
@@ -201,6 +201,79 @@ describe("store contract: 事件追加与查询", () => {
       unsubscribe?.();
 
       expect(seen.map((event) => event.type)).toEqual(["plan.confirmed"]);
+    });
+  });
+});
+
+// ─────────────────────────── 2b. 事件回收 ───────────────────────────
+
+/**
+ * 回收是唯一会**删除已持久化数据**的端口方法，两个实现在同一份数据上删出的结果必须一样。
+ * SQLite 侧用一条带窗口函数的 DELETE 表达规则，内存侧用 store/event-retention.ts 的纯函数——
+ * 两套机制表达同一条规格，所以这一节就是那条规格的执行版本。
+ *
+ * 时间点由入参给：appendEvent 的 occurredAt 由存储层生成，调用方造不出"过去的事件"，
+ * 所以测试用"很远的将来 / 很远的过去"两个 cutoff 来表达"全删 / 全留"。
+ */
+const FAR_FUTURE = "2999-01-01T00:00:00.000Z";
+const FAR_PAST = "2000-01-01T00:00:00.000Z";
+
+describe("store contract: 事件回收", () => {
+  it("deletes nothing when the cutoff is in the past", () => {
+    assertBothStores((store) => {
+      store.appendEvent({ type: "explorer.turn.text.delta", aggregateId: "thread-a", payload: { text: "a" } });
+      store.appendEvent({ type: "agent.step.model_text_delta", aggregateId: "loop-a", payload: { text: "b" } });
+
+      expect(store.pruneEvents({ cutoff: FAR_PAST, minPerAggregate: 0 })).toEqual({ deleted: 0 });
+      expect(store.listEvents({})).toHaveLength(2);
+    });
+  });
+
+  it("never deletes event types outside the prunable whitelist", () => {
+    // 这条是整件事的安全底线：白名单之外的每一条都可能是状态机的输入。
+    assertBothStores((store) => {
+      store.appendEvent({ type: "plan.confirmed", aggregateId: "plan-a", payload: {} });
+      store.appendEvent({ type: "verification.completed", aggregateId: "run-a", payload: {} });
+      store.appendEvent({ type: "explorer.turn.text.delta", aggregateId: "thread-a", payload: { text: "gone" } });
+
+      expect(store.pruneEvents({ cutoff: FAR_FUTURE, minPerAggregate: 0 })).toEqual({ deleted: 1 });
+      expect(store.listEvents({}).map((event) => event.type)).toEqual(["plan.confirmed", "verification.completed"]);
+    });
+  });
+
+  it("keeps the newest minPerAggregate prunable events per aggregate", () => {
+    assertBothStores((store) => {
+      for (const text of ["一", "二", "三"]) store.appendEvent({ type: "explorer.turn.text.delta", aggregateId: "thread-a", payload: { text } });
+      for (const text of ["甲", "乙"]) store.appendEvent({ type: "explorer.turn.text.delta", aggregateId: "thread-b", payload: { text } });
+
+      // thread-a 有 3 条、保底 2 → 只删最旧的一条；thread-b 只有 2 条 → 一条都不删。
+      expect(store.pruneEvents({ cutoff: FAR_FUTURE, minPerAggregate: 2 })).toEqual({ deleted: 1 });
+      expect(store.listEvents({ aggregateId: "thread-a" }).map((event) => event.payload.text)).toEqual(["二", "三"]);
+      expect(store.listEvents({ aggregateId: "thread-b" })).toHaveLength(2);
+    });
+  });
+
+  it("prunes only MODEL_OUTPUT among run.executor.event payloads", () => {
+    // run.executor.event 是同一个类型名下的多种载荷，只有逐 token 的那种可回收。
+    assertBothStores((store) => {
+      store.appendEvent({ type: "run.executor.event", aggregateId: "run-a", payload: { type: "MODEL_OUTPUT", text: "token" } });
+      store.appendEvent({ type: "run.executor.event", aggregateId: "run-a", payload: { type: "TOOL_CALLED", tool: "read_file" } });
+
+      expect(store.pruneEvents({ cutoff: FAR_FUTURE, minPerAggregate: 0 })).toEqual({ deleted: 1 });
+      expect(store.listEvents({}).map((event) => event.payload.type)).toEqual(["TOOL_CALLED"]);
+    });
+  });
+
+  it("does not rewind the event sequence: later appends still get a higher number", () => {
+    // 回收只摘行，不动序号高水位。序号退回会让后续事件与已存在的行撞号
+    // （SQLite 上 domain_events.sequence 是 UNIQUE），也会让 Last-Event-ID 回放错乱。
+    assertBothStores((store) => {
+      store.appendEvent({ type: "explorer.turn.text.delta", aggregateId: "thread-a", payload: {} });
+      const before = store.getLastEventSequence();
+      store.pruneEvents({ cutoff: FAR_FUTURE, minPerAggregate: 0 });
+
+      expect(store.appendEvent({ type: "plan.confirmed", aggregateId: "plan-a", payload: {} }).sequence).toBeGreaterThan(before);
+      expect(store.getLastEventSequence()).toBeGreaterThan(before);
     });
   });
 });

@@ -71,7 +71,9 @@ export type { CommandExecutor, CommandInvocation, CommandResult, HookContext, Pr
 // DomainEvent 的 id / sequence / occurredAt 由 Store 赋值、脱敏也在 appendEvent 内完成，
 // 所以它放在 store/types.ts 而不是某个业务域。
 export type { DomainEvent } from "./store/types.js";
-export type { PipelineStore } from "./store/pipeline-store.js";
+export type { EventQuery, PipelineStore } from "./store/pipeline-store.js";
+export type { EventPruneInput } from "./store/event-retention.js";
+export { PRUNABLE_EVENT_TYPES, isPrunableEvent, prunableEventIds } from "./store/event-retention.js";
 export { InMemoryPipelineStore } from "./store/in-memory-store.js";
 export { SqlitePipelineStore } from "./store/sqlite-store.js";
 

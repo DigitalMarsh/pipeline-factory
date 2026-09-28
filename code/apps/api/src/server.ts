@@ -90,7 +90,10 @@ export type PipelineAppOptions = {
  */
 export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
   const ownsStore = !options.store;
-  const store = options.store ?? new SqlitePipelineStore(options.databasePath ?? options.config?.storage.databasePath ?? "pipeline-factory.sqlite");
+  const store = options.store ?? new SqlitePipelineStore(options.databasePath ?? options.config?.storage.databasePath ?? "pipeline-factory.sqlite", {
+    // 配置缺省是 0（不回收）；这里原样传下去，由存储层判断要不要在启动时清一次。
+    retention: { retentionDays: options.config?.storage.eventRetentionDays ?? 0, minPerAggregate: options.config?.storage.eventRetentionMinPerAggregate ?? 200 },
+  });
   new RecoveryCoordinator(store).recover();
   const projects = new ProjectService(store);
   const plans = new PlanService(store, projects);

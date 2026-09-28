@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026-09-28 — 事件回收（A2）：机制、白名单与序号高水位
+
+### Added
+
+- `PipelineStore.pruneEvents({ cutoff, minPerAggregate })`：回收高频事件，返回删除条数。规则与白名单的**唯一**定义在新增的叶子模块 `store/event-retention.ts`，两个实现都按它来——SQLite 那条带窗口函数的 DELETE 是它的规格翻译。`cutoff` 由调用方算好传进来（而不是让存储层取 `now()`），这样"删哪些"完全由入参决定，两种实现才对得齐，测试也不必去伪造历史时间戳（`appendEvent` 的 `occurredAt` 由存储层生成，调用方给不了过去的时间）。
+- 配置项 `storage.eventRetentionDays` 与 `storage.eventRetentionMinPerAggregate`，并接进 `createApp` 的 store 构造。
+- **可回收白名单**（判定标准只有一条：*这一条事件是不是某段事实的中间态，而那段事实的最终态另有持久化副本*）：`explorer.turn.text.delta`（最终正文在 `explorer_turns.content`）、`agent.step.model_text_delta`（`agent_loop_steps` 那行的事件镜像）、`agent.model.text.delta`（与上一条逐字重复，A1a 已停止写入）、`project.execution.turn.text.delta`（最终正文在 `project_execution_messages.content`），以及 `run.executor.event` 中 `payload.type === 'MODEL_OUTPUT'` 的那部分（`execution_journal` 的镜像，且 `run/dispatch-coordinator.ts` 的 `isStreamingEvent` 自己就写着这类事件"只影响展示进度"）。**任何参与业务判定的事件都不能进白名单**——`plan.*`、`run.paused`、`verification.completed` 删掉不是"少了几条历史"，是状态机少了输入。
+- `store/event-retention.ts` 里另有 `prunableEventIds`（内存实现的判定）与 `isPrunableEvent`，两者与 SQLite 的 SQL 是同一套规则的两种表达。
+
+### Fixed
+
+- **修复回收会引入的序号回退**（由本次新增的契约用例当场抓到）：SQLite 的 `appendEvent` 用 `SELECT MAX(sequence) + 1` 取号，回收删掉尾部若干行之后这个号会**退回去**，于是新事件复用了一个已经被客户端当作游标用过的号——已连接的客户端拿它去过滤（`sequence > cursor`）会把那批新事件整段静默跳过。新增单行表 `event_sequence_watermark` 记高水位，`pruneEvents` 在删行**之前**先写它（顺序不能反：崩在中间时"记了没删"只是下次重删一遍，而"删了没记"才会退号）。内存实现本来就不会退（它用独立的 `eventSequence` 计数器），这条修的是 SQLite。
+
+### Changed
+
+- 回收**默认关闭**（`eventRetentionDays: 0`），这是有意的：回收是不可逆地删除用户数据，不该在升级后第一次启动时悄悄开始。要看效果就把它设成正数，然后重启一次。启动期的回收放在**所有修复与回填之后**——那几步要读历史事件，先删再修会让它们看到一份被削过的历史。
+- 启动期回收失败不会挡住启动：它只是清理，库本身仍然可用，下次启动再试。（domain 层没有日志通道，所以明确吞掉，并在源码里写明这是有意的。）
+- 不做 `VACUUM`：它会重写整个数据库文件，对几十兆的库是秒级阻塞。回收后只做一次 `PRAGMA wal_checkpoint(TRUNCATE)`，真正的体积回收留给运维在停机窗口执行。
+
+### Changed files
+
+- Domain：`code/packages/domain/src/store/event-retention.ts`（新增）、`store/pipeline-store.ts`、`store/in-memory-store.ts`、`store/sqlite-store.ts`、`index.ts`、`store-contract.test.ts`、`store-startup-repair.test.ts`。
+- API：`code/apps/api/src/config.ts`、`code/apps/api/src/server.ts`。
+- 配置：`code/config/pipeline-factory.config.example.json`。
+
+### Verification
+
+- `pnpm --dir code verify` 通过：domain 276/276、API 72/72、Web 424/424，无新增值级循环依赖。
+- 契约套件新增 5 条用例，在两个实现上各跑一遍：cutoff 在过去时一条不删；白名单外的类型永不删；保底条数**按聚合**生效（3 条保 2 条只删最旧一条，2 条的聚合一条不删）；`run.executor.event` 只有 `MODEL_OUTPUT` 被删、`TOOL_CALLED` 留下；回收后追加的事件序号仍大于历史。
+- 最后一条**当场抓到上文的序号回退缺陷**——SQLite 实现当时还没写高水位，用例失败。这不是"补一条测试让它通过"，是守卫先红后绿。
+- 启动期接线新增 1 条用例（`store-startup-repair.test.ts`）：不配置回收时一条不删、配置后只删白名单内那条、且删完追加的事件序号仍大于历史。用独立连接直接写库造"2020 年的事件"，因为 `appendEvent` 给不出过去的时间戳。
+- `store-startup-repair.test.ts` 的 `corrupt()` 改名 `runRawSql()`：它在本文件里多数时候确实在制造损坏，但回收那组用例只是用它塞一条旧事件，用 `corrupt` 会让那句读起来像在"制造损坏"。
+
 ## 2026-09-28 — Explorer 活动取数去重，并把"产出依赖逐条增量"这个事实钉住（B1 的结论）
 
 ### 结论：B1 作为"等价优化"不成立，改为记账 + 加守卫

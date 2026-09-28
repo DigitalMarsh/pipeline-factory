@@ -21,6 +21,7 @@ import { containsAnyString, defaultExplorerPlan, defaultPlanExploration, default
 import { planQueryProjectionFor, type PlanQueryProjection } from "../plan/query.js";
 import { redactAuditPayload, redactAuditText } from "../platform/redaction.js";
 import type { EventQuery, PipelineStore } from "./pipeline-store.js";
+import { prunableEventIds, type EventPruneInput } from "./event-retention.js";
 import type { AgentLoop, AgentLoopStep, AgentLoopStepInput } from "../agent/agent-loop.js";
 import type { PlanDispatchState } from "../run/dispatch-coordinator.js";
 import type { Project, ProjectConfigRevision } from "../project/project.js";
@@ -415,6 +416,17 @@ export class InMemoryPipelineStore implements PipelineStore {
 
   getLastEventSequence(aggregateId?: string): number {
     return this.events.filter((event) => !aggregateId || event.aggregateId === aggregateId).at(-1)?.sequence ?? 0;
+  }
+
+  pruneEvents(input: EventPruneInput): { deleted: number } {
+    // 只从数组里摘掉待删的那些，**不动 eventSequence**：序号是"已经用到哪"的高水位，
+    // 回收之后又把序号退回去，会让后续追加的事件与既有行撞号（SQLite 上 sequence 是 UNIQUE）。
+    const doomed = prunableEventIds(this.events, input);
+    if (doomed.size === 0) return { deleted: 0 };
+    const kept = this.events.filter((event) => !doomed.has(event.id));
+    this.events.length = 0;
+    this.events.push(...kept);
+    return { deleted: doomed.size };
   }
 
   deleteExplorerCascade(input: ExplorerDeletionInput): ExplorerDeletionSummary {

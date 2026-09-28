@@ -1,9 +1,9 @@
 /**
- * 测试职责：验证 SqlitePipelineStore 在**构造期**跑的两条历史数据修复。
+ * 测试职责：验证 SqlitePipelineStore 在**构造期**对历史数据做的事——两条修复，以及事件回收。
  *
- * 为什么单独一个文件：这两条修复都是"打开老库时把已经损坏的事实改成可解释的状态"，它们的输入
- *   只能靠**绕过领域 API 直接改库**来构造（走 API 的路径根本产生不出这些行——这正是它们只在历史
- *   数据上生效的原因）。把它们和正常业务测试混在一起，会让读者以为那是正常可达的流程。
+ * 为什么单独一个文件：这些都是"打开库的那一刻就改变了历史数据"，它们的输入只能靠**绕过领域 API
+ *   直接改库**来构造（走 API 的路径根本产生不出这些行——这正是它们只在历史数据上生效的原因）。
+ *   把它们和正常业务测试混在一起，会让读者以为那是正常可达的流程。
  *
  * 维护提示：
  *   1) 每条修复都必须先证明它**会**修，再证明它**幂等**（重开一次不重复处理）——修复逻辑写错最常见
@@ -11,6 +11,9 @@
  *   2) 修 A 不要顺带断言 B。两条修复处理的是互斥的状态集合（见各自用例的注释）。
  *   3) 改库用独立的 DatabaseSync 连接：不借道 store 是为了绕开它的写入路径与校验，
  *      借道就构造不出"老库里的坏数据"这个前提。
+ *   4) 事件回收（第三组用例）与那两条修复的区别：修复是**纠正**，回收是**删除**，且默认关闭。
+ *      它不要求幂等（删过的行第二次本来就不在），但要求**只动白名单内的类型**——
+ *      那条断言比"删掉了该删的"更重要。
  */
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -45,7 +48,12 @@ function seedConfirmedPlan() {
 }
 
 /** 用一条独立连接改库，模拟"老库里已经存在的坏数据"；不借道 store 是为了绕开它的写入校验。 */
-function corrupt(databasePath: string, sql: string, ...parameters: Array<string | number>): void {
+/**
+ * 绕开 store 直接对库跑一条 SQL。**唯一**的写库通道——走 store 就构造不出"老库里的坏数据"这个前提。
+ * 名字不叫 corrupt：本文件里它多数时候确实是在制造损坏，但事件回收那组用例只是用它塞一条旧事件，
+ * 用 corrupt 会让那句读起来像在"制造损坏"。
+ */
+function runRawSql(databasePath: string, sql: string, ...parameters: Array<string | number>): void {
   const database = new DatabaseSync(databasePath);
   try {
     database.prepare(sql).run(...parameters);
@@ -60,8 +68,8 @@ describe("SqlitePipelineStore 构造期修复", () => {
     // plan.configuration.revised 事件，或 confirmed_at）缺失，状态却已推进到 QUEUED 之后。
     const { store, databasePath, planId } = seedConfirmedPlan();
     // 把确认的**事实与事件**一起抹掉，只留下"已推进"的状态。
-    corrupt(databasePath, "UPDATE candidate_plans SET confirmed_at = NULL, confirmed_by = NULL, status = 'QUEUED' WHERE id = ?", planId);
-    corrupt(databasePath, "DELETE FROM domain_events WHERE aggregate_id = ? AND type IN ('plan.confirmed', 'plan.revision.confirmed', 'plan.configuration.revised')", planId);
+    runRawSql(databasePath, "UPDATE candidate_plans SET confirmed_at = NULL, confirmed_by = NULL, status = 'QUEUED' WHERE id = ?", planId);
+    runRawSql(databasePath, "DELETE FROM domain_events WHERE aggregate_id = ? AND type IN ('plan.confirmed', 'plan.revision.confirmed', 'plan.configuration.revised')", planId);
     store.close();
     openStores.splice(openStores.indexOf(store), 1);
 
@@ -87,8 +95,8 @@ describe("SqlitePipelineStore 构造期修复", () => {
     // 必须先删投影再删线程：plan_query_projection.source_explorer_thread_id 对 explorer_threads
     // 有外键，而这个外键恰恰是 candidate_plans 自己没有的那一条（索引表比事实表更严，
     // 就是 savePlan 那道守卫存在的原因）。
-    corrupt(databasePath, "DELETE FROM plan_query_projection WHERE source_explorer_thread_id = ?", explorer.id);
-    corrupt(databasePath, "DELETE FROM explorer_threads WHERE id = ?", explorer.id);
+    runRawSql(databasePath, "DELETE FROM plan_query_projection WHERE source_explorer_thread_id = ?", explorer.id);
+    runRawSql(databasePath, "DELETE FROM explorer_threads WHERE id = ?", explorer.id);
 
     const reopened = new SqlitePipelineStore(databasePath);
     openStores.push(reopened);
@@ -108,5 +116,35 @@ describe("SqlitePipelineStore 构造期修复", () => {
 
     expect(reopenedAgain.getPlan(planId)?.status).toBe("BLOCKED");
     expect(reopenedAgain.getLastEventSequence(planId)).toBe(sequenceAfterFirstRepair);
+  });
+});
+
+describe("构造期的事件回收", () => {
+  it("prunes only aged high-frequency events, and only when retention is enabled", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pipeline-retention-"));
+    temporaryDirectories.push(directory);
+    const databasePath = join(directory, "factory.sqlite");
+    // 先让 store 把 schema 建出来，再直接往事件表塞"过去的事件"——appendEvent 的 occurredAt
+    // 由存储层生成，调用方造不出两周前的行，所以这一步必须绕过 store。
+    new SqlitePipelineStore(databasePath).close();
+    runRawSql(databasePath, "INSERT INTO domain_events (id, sequence, type, aggregate_id, occurred_at, payload_json) VALUES (?, ?, ?, ?, ?, ?)", "aged-delta", 1, "explorer.turn.text.delta", "thread-aged", "2020-01-01T00:00:00.000Z", "{}");
+    runRawSql(databasePath, "INSERT INTO domain_events (id, sequence, type, aggregate_id, occurred_at, payload_json) VALUES (?, ?, ?, ?, ?, ?)", "aged-plan", 2, "plan.confirmed", "plan-aged", "2020-01-01T00:00:00.000Z", "{}");
+
+    // 不配置回收（缺省）：一条都不动。这是这条用例的一半价值——回收默认是关的。
+    const plain = new SqlitePipelineStore(databasePath);
+    openStores.push(plain);
+    expect(plain.listEvents({}).map((event) => event.id)).toEqual(["aged-delta", "aged-plan"]);
+    plain.close();
+    openStores.splice(openStores.indexOf(plain), 1);
+
+    const pruning = new SqlitePipelineStore(databasePath, { retention: { retentionDays: 14, minPerAggregate: 0 } });
+    openStores.push(pruning);
+
+    // 只删白名单里的那条。plan.confirmed 是状态机的输入，无论多旧都不动——
+    // 这条断言比"删掉了该删的"更重要。
+    expect(pruning.listEvents({}).map((event) => event.id)).toEqual(["aged-plan"]);
+    // 序号不退：回收删掉了尾部行，新事件仍要拿到比历史更大的号，
+    // 否则已连接的客户端会拿它当游标把新事件整段跳过。
+    expect(pruning.appendEvent({ type: "plan.enqueued", aggregateId: "plan-aged", payload: {} }).sequence).toBeGreaterThan(2);
   });
 });

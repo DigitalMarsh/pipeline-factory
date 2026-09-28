@@ -16,6 +16,8 @@
  *      去掉它不会让任何现有测试失败，但会让"Revision 不可变"这条领域约束在运行时消失。
  *   4) 事件的 id / 序号由本层生成（appendEvent 的入参是 Omit<..., "id"|"occurredAt"|"sequence">）。
  *      这是"事件序号在聚合内单调连续"的唯一保证，不要把它上移到调用方。
+ *      取号**不只看 MAX(sequence)**，还要看 event_sequence_watermark：pruneEvents 会删掉尾部
+ *      若干行，只看 MAX 会让序号退回去并复用已被当作游标用过的号。见 pruneEvents 的注释。
  *   5) deleteExplorerCascade 的事件与事实必须在**同一事务**内完成；拆开会让级联删除只能半途
  *      完成，留下指向已删除 Explorer 的孤儿 Plan。runInTransaction 就是为它和启动恢复准备的。
  *   6) normalizeSqliteError 把 SQLITE_BUSY 归一成 "DATABASE_BUSY"：上层（调度器）靠这个字面量
@@ -35,6 +37,7 @@ import { isRecord } from "../platform/guards.js";
 import { REQUIRED_PLAN_AREAS } from "../platform/plan-requirements.js";
 import { redactAuditPayload, redactAuditText } from "../platform/redaction.js";
 import type { EventQuery, PipelineStore } from "./pipeline-store.js";
+import { PRUNABLE_EVENT_TYPES, type EventPruneInput } from "./event-retention.js";
 import type { AgentLoop, AgentLoopStep, AgentLoopStepInput } from "../agent/agent-loop.js";
 import type { ExplorerTitleSource, ExplorerTitleStatus } from "../explorer/explorer-title.js";
 import type { PlanDispatchState } from "../run/dispatch-coordinator.js";
@@ -104,6 +107,17 @@ function normalizeSqliteError(error: unknown): Error {
 /** 语句缓存条目上限。取值理由见 SqlitePipelineStore#statement 的注释。 */
 const STATEMENT_CACHE_LIMIT = 512;
 
+/**
+ * 构造选项。
+ *
+ * `retention` 缺省**关闭**，这是有意的：回收是**不可逆地删除用户数据**，不该在升级后第一次
+ *   启动时悄悄开始。要启用就把 config 的 `storage.eventRetentionDays` 设成正数，
+ *   并先看一眼它会删掉什么（白名单与判定规则见 store/event-retention.ts）。
+ */
+export type SqlitePipelineStoreOptions = {
+  retention?: { retentionDays: number; minPerAggregate: number } | undefined;
+};
+
 /** SQLite Store；启动时负责幂等 migration，并保留事件、快照和运行历史。 */
 export class SqlitePipelineStore implements PipelineStore {
   private readonly database: DatabaseSync;
@@ -114,8 +128,11 @@ export class SqlitePipelineStore implements PipelineStore {
    * listRuns……），重编译是纯粹的重复劳动。
    */
   private readonly statements = new Map<string, StatementSync>();
+  /** 启动期事件回收策略；`undefined` 表示不回收。见 SqlitePipelineStoreOptions。 */
+  private readonly retention: { retentionDays: number; minPerAggregate: number } | undefined;
 
-  constructor(databasePath: string) {
+  constructor(databasePath: string, options: SqlitePipelineStoreOptions = {}) {
+    this.retention = options.retention;
     this.database = new DatabaseSync(databasePath);
     this.database.exec("PRAGMA foreign_keys = ON;");
     this.database.exec("PRAGMA journal_mode = WAL;");
@@ -478,6 +495,14 @@ export class SqlitePipelineStore implements PipelineStore {
         payload_json TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS domain_events_aggregate_idx ON domain_events(aggregate_id, sequence);
+      -- 事件序号的高水位。**只有 pruneEvents 会写它**，用来记住"已经发到哪个号"。
+      -- 没有它的话，回收删掉尾部若干行之后 appendEvent 的 MAX(sequence)+1 会**退回去**，
+      -- 于是新事件复用了一个已经被客户端当作游标用过的号——已连接的客户端会用它去过滤
+      -- （sequence > cursor），把那批新事件整段静默跳过。单行表，id 恒为 1。
+      CREATE TABLE IF NOT EXISTS event_sequence_watermark (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        last_sequence INTEGER NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS explorer_input_requests (
         id TEXT PRIMARY KEY,
         thread_id TEXT NOT NULL,
@@ -588,6 +613,9 @@ export class SqlitePipelineStore implements PipelineStore {
     this.backfillCandidateVersions();
     this.backfillLegacyVerificationRuns();
     this.backfillPlanQueryProjection();
+    // 回收放在**所有修复与回填之后**：那几步要读历史事件（或至少要和历史状态对齐），
+    // 先删再修会让它们看到一份被削过的历史。
+    if (this.retention && this.retention.retentionDays > 0) this.pruneOnStartup(this.retention);
   }
 
   /**
@@ -1136,7 +1164,7 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   appendEvent(event: Omit<DomainEvent, "id" | "occurredAt" | "sequence">): DomainEvent {
-    const saved: DomainEvent = { ...event, payload: redactAuditPayload(event.payload), id: this.nextId("event"), sequence: Number((this.statement("SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM domain_events").get() as SqliteRow).next_sequence), occurredAt: this.now() };
+    const saved: DomainEvent = { ...event, payload: redactAuditPayload(event.payload), id: this.nextId("event"), sequence: Number((this.statement("SELECT MAX(COALESCE((SELECT MAX(sequence) FROM domain_events), 0), COALESCE((SELECT last_sequence FROM event_sequence_watermark WHERE id = 1), 0)) + 1 AS next_sequence").get() as SqliteRow).next_sequence), occurredAt: this.now() };
     this.statement("INSERT INTO domain_events (id, sequence, type, aggregate_id, occurred_at, payload_json) VALUES (?, ?, ?, ?, ?, ?)").run(saved.id, saved.sequence, saved.type, saved.aggregateId, saved.occurredAt, JSON.stringify(saved.payload));
     for (const listener of this.eventListeners) listener(saved);
     return saved;
@@ -1191,6 +1219,58 @@ export class SqlitePipelineStore implements PipelineStore {
   getLastEventSequence(aggregateId?: string): number {
     const row = this.statement(`SELECT COALESCE(MAX(sequence), 0) AS last_sequence FROM domain_events ${aggregateId ? "WHERE aggregate_id = ?" : ""}`).get(...(aggregateId ? [aggregateId] : [])) as SqliteRow;
     return Number(row.last_sequence ?? 0);
+  }
+
+  pruneEvents(input: EventPruneInput): { deleted: number } {
+    // 这条 SQL 是 store/event-retention.ts 那套规则的**规格翻译**——两处必须逐条对应，
+    // 改那边就要改这里（C2 的契约套件会在同一份数据上跑两个实现来兜住这件事）：
+    //   可回收 = type 在白名单里，或 type='run.executor.event' 且 payload.type='MODEL_OUTPUT'
+    //   每个聚合的**可回收事件**里最近的 minPerAggregate 条无条件留下
+    //   其余里 occurred_at 早于 cutoff 的才删
+    // minPerAggregate <= 0 时 `rank <= 0` 恒假、子查询为空、NOT IN (空) 恒真，等价于"不保底"，
+    // 所以这里不需要为它写分支。
+    const prunable = `(type IN (${PRUNABLE_EVENT_TYPES.map(() => "?").join(", ")}) OR (type = ? AND json_extract(payload_json, '$.type') = 'MODEL_OUTPUT'))`;
+    const scope = [...PRUNABLE_EVENT_TYPES, "run.executor.event"];
+    // **先记高水位，再删行**。顺序不能反：万一在中间崩了，"记了高水位但没删"只是下次启动
+    // 重删一遍（MAX 是幂等的），而"删了但没记"会让序号退回去。也正因为顺序本身就保证了安全，
+    // 这里**不依赖事务**——启动期的调用方虽然会把它包进 runInTransaction，但直接调用
+    // （契约测试就是这么调的）同样不会造成序号回退。
+    this.statement(`
+      INSERT INTO event_sequence_watermark (id, last_sequence)
+      VALUES (1, COALESCE((SELECT MAX(sequence) FROM domain_events), 0))
+      ON CONFLICT(id) DO UPDATE SET last_sequence = MAX(event_sequence_watermark.last_sequence, excluded.last_sequence)
+    `).run();
+    const info = this.statement(`
+      DELETE FROM domain_events
+      WHERE ${prunable}
+        AND occurred_at < ?
+        AND sequence NOT IN (
+          SELECT sequence FROM (
+            SELECT sequence, ROW_NUMBER() OVER (PARTITION BY aggregate_id ORDER BY sequence DESC) AS rank
+            FROM domain_events
+            WHERE ${prunable}
+          ) WHERE rank <= ?
+        )
+    `).run(...scope, input.cutoff, ...scope, input.minPerAggregate);
+    return { deleted: Number(info.changes) };
+  }
+
+  /**
+   * 启动期回收一次。把配置里的"保留多少天"换算成时间点放在这里做——配置说的是策略，
+   * 换算成具体时间点是存储层的职责（也让 pruneEvents 本身保持"入参决定一切"）。
+   */
+  private pruneOnStartup(policy: { retentionDays: number; minPerAggregate: number }): void {
+    const cutoff = new Date(Date.now() - policy.retentionDays * 24 * 60 * 60 * 1_000).toISOString();
+    try {
+      const { deleted } = this.runInTransaction(() => this.pruneEvents({ cutoff, minPerAggregate: policy.minPerAggregate }));
+      // VACUUM 不在这里做：它会重写整个数据库文件，对几十兆的库是秒级阻塞。WAL 截断足够
+      // 让回收后的空间在进程退出时被归还，真正的体积回收交给运维在停机窗口执行 VACUUM。
+      if (deleted > 0) this.database.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+    } catch {
+      // 回收失败**不能挡住启动**：它只是清理，库本身仍然可用，下次启动再试。
+      // 这里没有更细的上报通道（domain 层不写日志），所以明确吞掉——留着这条注释，
+      // 免得后来者以为这里漏了错误处理。
+    }
   }
 
   deleteExplorerCascade(input: ExplorerDeletionInput): ExplorerDeletionSummary {

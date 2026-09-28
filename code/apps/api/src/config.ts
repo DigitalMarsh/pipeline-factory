@@ -67,6 +67,14 @@ const configSchema = z.object({
   storage: z.object({
     databasePath: z.string().min(1).default("./var/pipeline-factory.sqlite"),
     worktreeRoot: z.string().min(1).default("./var/worktrees"),
+    /**
+     * 高频事件的保留天数。**0（缺省）表示不回收**——回收是不可逆地删除事件行，
+     * 不该在升级后第一次启动时悄悄开始。设成正数即在每次启动时清理一次。
+     * 可回收的类型白名单与判定规则见 packages/domain/src/store/event-retention.ts。
+     */
+    eventRetentionDays: z.number().int().min(0).default(0),
+    /** 每个聚合至少保留多少条可回收事件（避免正在进行的回合被删空）。仅在 eventRetentionDays > 0 时有意义。 */
+    eventRetentionMinPerAggregate: z.number().int().min(0).default(200),
   }).default({}),
   project: z.object({
     root: z.string().min(1).default(".."),
