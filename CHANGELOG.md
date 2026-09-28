@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-09-28 — D3-1 抽出 usePlanDetailDrawer（共享抽屉的 Plan 详情）
+
+### Changed
+
+- 共享右侧抽屉的 Plan 详情状态从 [ExplorerView.vue](code/apps/web/src/views/ExplorerView.vue) 抽到新的 composable [usePlanDetailDrawer.ts](code/apps/web/src/composables/usePlanDetailDrawer.ts)：抽屉开关与页签、当前展示的 Plan 版本、可切换的版本列表，以及 `openPlanDetail` / `selectPlanRevision` 两个加载流程。视图的 script 块少 110 行，且"抽屉里到底显示什么"现在能在一个文件里读完（此前 ref 声明与函数分处两段，中间隔着近 400 行别的逻辑）。
+- 抽出的顺序有约束：它必须建在 `usePlanLifecycleActions` **之前**——后者要拿这里的 `drawerOpen` / `drawerTab` / `detailPlan` 去在确认、入队之后刷新并切页签。这条写进了调用点的注释。
+- 路由跳转（把 `requirementTab=plan` 写进 query）**没有下沉**：composable 只通过 `onOpened` 回调通知"打开了"，路由形状仍由视图决定。与 `usePlanLifecycleActions` 处理 `openRunView` 的方式一致。
+- `SharedDrawerTab` 类型随 `drawerTab` 这个 ref 一起搬进 composable 并导出，视图改为 import——避免两处各写一份联合类型。
+
+### Fixed
+
+- **顺手消掉一处重复**：`resetThreadState` 里把同一组抽屉重置（`drawerOpen` / `detailPlan` / `detailRevisions` / `detailConfirmedRevisions` / `detailLatestRevision` / `detailVersionSource`）**写了两遍**，第二遍还漏了 `detailLoadError`。现在只有 `resetDetailState()` 一处。这不是行数问题：两处要保持同步的写法，下一处新增抽屉状态时必然漏一边。
+
+### Changed files
+
+- Web：`code/apps/web/src/composables/usePlanDetailDrawer.ts`（新增）、`code/apps/web/src/views/ExplorerView.vue`、`code/apps/web/src/views/ExplorerView.test.ts`。
+
+### Verification
+
+- `pnpm --dir code verify` 通过：domain 276/276、API 72/72、Web 424/424，无新增值级循环依赖。typecheck 与 build 均通过。
+- 逻辑逐字搬移，除 `planFromRevisionDraft` 改为 `deps.planFromRevisionDraft` 外无改动。
+- `ExplorerView.test.ts` 里两条用例失败过，原因值得记下来：本仓 P7 抽取时建立的模式是**读源码文本做断言**（每个 composable 都有一个 `readFileSync` 常量）。断言不是被放宽，而是**跟着搬到新文件并保持同一批性质**——包括"先把已知 Plan 落进抽屉再等接口"的顺序断言。切线程那条改为**两半都断言**（视图的 `resetThreadState` 委托 + composable 的 `resetDetailState` 执行），只测一半会让另一半能悄悄漏掉。
+- **未做浏览器验收**：抽屉是可见行为，虽然逻辑逐字未改，仍应在下一轮浏览器验收中确认详情打开、版本切换与线程切换三条路径。
+
 ## 2026-09-28 — 事件回收（A2）：机制、白名单与序号高水位
 
 ### Added

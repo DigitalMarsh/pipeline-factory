@@ -22,6 +22,7 @@ const planProjectionComposableSource = readFileSync(fileURLToPath(new URL("../co
 // 第五次出现同一类处置（P7-10）：Plan 生命周期写操作搬进了 usePlanLifecycleActions。
 // 正向断言跟随 composable；视图保留动作解构与 template 的用户界面判据，两侧都留。
 const planLifecycleActionsComposableSource = readFileSync(fileURLToPath(new URL("../composables/usePlanLifecycleActions.ts", import.meta.url)), "utf8");
+const planDetailDrawerComposableSource = readFileSync(fileURLToPath(new URL("../composables/usePlanDetailDrawer.ts", import.meta.url)), "utf8");
 // 第六次出现同一类处置（P7-11）：三条 SSE 通道与续传读侧搬进 useExplorerSse。
 // 视图保留连接/断连方法的委托，EventSource 实例与 handler 不得回流。
 const explorerSseComposableSource = readFileSync(fileURLToPath(new URL("../composables/useExplorerSse.ts", import.meta.url)), "utf8");
@@ -155,12 +156,14 @@ describe("Explorer requirement list and shared drawer", () => {
   });
 
   it("shows the selected Plan immediately while full details load and ignores stale detail responses", () => {
-    const openPlanDetailSource = explorerViewSource.match(/async function openPlanDetail\(plan: Plan\): Promise<void> \{[\s\S]*?\n\}/)?.[0] ?? "";
+    // 抽屉详情已抽到 composable（P7 第三级），断言跟着搬过去——校验的性质不变：
+    // 先把已知的 Plan 落进抽屉再等接口，以及用请求代际丢弃过期响应。
+    const openPlanDetailSource = planDetailDrawerComposableSource.match(/async function openPlanDetail\(plan: Plan\): Promise<void> \{[\s\S]*?\n  \}/)?.[0] ?? "";
     expect(openPlanDetailSource).toContain("detailPlan.value = plan");
     expect(openPlanDetailSource.indexOf("detailPlan.value = plan")).toBeLessThan(openPlanDetailSource.indexOf("await api.getPlan(planId)"));
     expect(openPlanDetailSource).toContain("requestVersion === detailRequestVersion");
     expect(openPlanDetailSource).toContain("currentRevisionDraft.status !== \"CONFIRMED\"");
-    expect(openPlanDetailSource).toContain("detailPlan.value = planFromRevisionDraft(currentRevisionDraft)");
+    expect(openPlanDetailSource).toContain("detailPlan.value = deps.planFromRevisionDraft(currentRevisionDraft)");
     expect(openPlanDetailSource).toContain("const generatedSpec = response.plan.generatedSpec ?? plan.generatedSpec");
   });
 
@@ -218,9 +221,15 @@ describe("Explorer thread and drawer state", () => {
   });
 
   it("closes and clears the drawer when switching threads", () => {
+    // 切换线程时抽屉必须清空。这条性质现在跨两个文件：视图的 resetThreadState 委托，
+    // composable 的 resetDetailState 执行——两半都要断言，只测一半会让另一半能悄悄漏掉。
     const resetSource = explorerViewSource.match(/function resetThreadState\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
-    expect(resetSource).toContain("drawerOpen.value = false");
-    expect(resetSource).toContain("detailPlan.value = null");
+    expect(resetSource).toContain("resetDetailState()");
+    const resetDetailSource = planDetailDrawerComposableSource.match(/function resetDetailState\(\): void \{[\s\S]*?\n  \}/)?.[0] ?? "";
+    expect(resetDetailSource).toContain("drawerOpen.value = false");
+    expect(resetDetailSource).toContain("detailPlan.value = null");
+    // 同时作废在途请求，否则切换线程后旧线程的响应会回填进新线程的抽屉。
+    expect(resetDetailSource).toContain("detailRequestVersion += 1");
     expect(explorerViewSource).toContain("function selectExplorer(explorerId: string)");
     expect(explorerViewSource).toContain("void reloadSelectedExplorer()");
   });

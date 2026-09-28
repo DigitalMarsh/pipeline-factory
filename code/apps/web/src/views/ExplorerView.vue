@@ -52,6 +52,7 @@ import { useExplorerSession } from "../composables/useExplorerSession";
 import { useExplorerTimeline } from "../composables/useExplorerTimeline";
 import { usePlanProjection } from "../composables/usePlanProjection";
 import { usePlanLifecycleActions } from "../composables/usePlanLifecycleActions";
+import { usePlanDetailDrawer, type SharedDrawerTab } from "../composables/usePlanDetailDrawer";
 import { useExplorerSse } from "../composables/useExplorerSse";
 import { useTimelineScroll } from "../composables/useTimelineScroll";
 
@@ -76,15 +77,6 @@ const requirementDrafts = new Map<string, string>();
 const pendingSendPlanIds = ref<Set<string>>(new Set());
 type FailedExplorerSend = { content: string; clientTurnId: string; optimisticUserId: string; assistantActivityId: string; failedAssistantTurnId: string | null };
 const failedExplorerSends = new Map<string, FailedExplorerSend>();
-const drawerOpen = ref(false);
-type SharedDrawerTab = "explorer" | "plan" | "task";
-const drawerTab = ref<SharedDrawerTab>("explorer");
-const detailPlan = ref<Plan | null>(null);
-const detailRevisions = ref<number[]>([]);
-const detailConfirmedRevisions = ref<number[]>([]);
-const detailLatestRevision = ref<number | null>(null);
-const detailVersionSource = ref<"candidate" | "confirmed" | null>(null);
-const detailLoadError = ref<string | null>(null);
 const policyOpen = ref(false);
 const renameDialogOpen = ref(false);
 const renameSaving = ref(false);
@@ -108,7 +100,6 @@ const agentLoop = ref<AgentLoop | null>(null);
 const explorerModel = ref("gpt-5.6-luna");
 const inputDialog = ref<ExplorerInputDialogHandle | null>(null);
 const mounted = ref(false);
-let detailRequestVersion = 0;
 // A delete already loads the replacement thread explicitly. Suppress the
 // route watcher for that one navigation so the old thread cannot race the
 // replacement load and overwrite the page-level error banner.
@@ -197,6 +188,21 @@ const activePlans = computed<Plan[]>(() => activeRuns.value.map((run) => {
     executionThread: { id: run.executionThreadId, runId: run.id, state: run.status },
   };
 }));
+
+/**
+ * 共享抽屉的 Plan 详情状态交给 composable。它必须建在 usePlanLifecycleActions **之前**：
+ * 后者要拿这里的 drawerOpen / drawerTab / detailPlan 去在确认、入队之后刷新并切页签。
+ * 路由形状不下沉——打开详情后的 URL 同步由 onOpened 回调留在视图里。
+ */
+const { drawerOpen, drawerTab, detailPlan, detailRevisions, detailConfirmedRevisions, detailLatestRevision, detailVersionSource, detailLoadError, openPlanDetail, selectPlanRevision, resetDetailState } = usePlanDetailDrawer({
+  projectId,
+  projectScopeToken,
+  revisionDraft,
+  planFromRevisionDraft,
+  onOpened: (plan) => {
+    void router.replace({ path: route.path, query: { ...route.query, ...(plan.explorerPlanId ? { explorerPlanId: plan.explorerPlanId } : {}), requirementTab: "plan" } });
+  },
+});
 
 /**
  * Plan 生命周期写操作（确认 / 入队 / Run / 丢弃 / 配置修订）交给 composable。
@@ -409,27 +415,15 @@ function isCandidatePlan(plan: Plan | null): boolean {
 function resetThreadState() {
   closeRequirementStatusEvents();
   resetSessionState();
-  detailRequestVersion += 1;
-  drawerOpen.value = false;
-  drawerTab.value = "explorer";
-  detailPlan.value = null;
-  detailRevisions.value = [];
-  detailConfirmedRevisions.value = [];
-  detailLatestRevision.value = null;
-  detailVersionSource.value = null;
-  detailLoadError.value = null;
+  // 抽屉详情由 composable 自己重置（同时作废在途请求）。此前这里把同一组 7 行重置写了两遍、
+  // 第二遍还漏了 detailLoadError——两处要保持同步的写法正是要消掉的东西。
+  resetDetailState();
   resetPlanProjection();
   requirementDrafts.clear();
   draft.value = "";
   planCenterCount.value = 0;
   resetInputState();
   agentLoop.value = null;
-  drawerOpen.value = false;
-  detailPlan.value = null;
-  detailRevisions.value = [];
-  detailConfirmedRevisions.value = [];
-  detailLatestRevision.value = null;
-  detailVersionSource.value = null;
   policyOpen.value = false;
   renameDialogOpen.value = false;
   renameError.value = null;
@@ -456,107 +450,6 @@ function syncHashPanel(hash: string) {
   if (hash === "#confirmed") contextPanel.value = "confirmed";
   if (hash === "#attention") contextPanel.value = "attention";
   if (hash === "#candidate" && candidate.value) openPlanDetail(candidate.value);
-}
-
-async function openPlanDetail(plan: Plan): Promise<void> {
-  const planId = plan.id ?? plan.planId;
-  if (!planId) return;
-  const requestedProjectId = projectId.value;
-  const requestToken = projectScopeToken();
-  const requestVersion = ++detailRequestVersion;
-  const isCurrentDetailRequest = () => requestVersion === detailRequestVersion && projectId.value === requestedProjectId && projectScopeToken() === requestToken;
-  drawerTab.value = "plan";
-  // Keep the already-loaded Explorer/Plan projection visible while the detail
-  // endpoint enriches it with frozen revision and dispatch metadata.
-  detailPlan.value = plan;
-  detailRevisions.value = [];
-  detailConfirmedRevisions.value = [];
-  detailLatestRevision.value = plan.revision;
-  detailVersionSource.value = plan.status === "DRAFT" ? "candidate" : "confirmed";
-  detailLoadError.value = null;
-  drawerOpen.value = true;
-  void router.replace({ path: route.path, query: { ...route.query, ...(plan.explorerPlanId ? { explorerPlanId: plan.explorerPlanId } : {}), requirementTab: "plan" } });
-  const currentRevisionDraft = revisionDraft.value;
-  if (currentRevisionDraft && planId === currentRevisionDraft.planId && currentRevisionDraft.status !== "CONFIRMED" && currentRevisionDraft.status !== "DISCARDED") {
-    detailPlan.value = planFromRevisionDraft(currentRevisionDraft);
-    detailLatestRevision.value = currentRevisionDraft.targetRevision;
-    try {
-      const history = await api.planRevisions(planId);
-      if (!isCurrentDetailRequest()) return;
-      detailRevisions.value = history.items.map((item) => item.revision);
-      detailConfirmedRevisions.value = history.items.map((item) => item.revision);
-      detailLatestRevision.value = currentRevisionDraft.targetRevision;
-      detailVersionSource.value = "confirmed";
-    } catch {
-      // The current mutable draft remains usable even if historical metadata is temporarily unavailable.
-    }
-    return;
-  }
-  const isCandidate = plan.status === "DRAFT";
-  if (!isCandidate) {
-    // Merge reconciliation can take longer than the read-only Plan fetch. Keep it
-    // in the background so a slow scheduler never leaves the shared drawer loading.
-    void api.reconcileProjectMerges(requestedProjectId).then((report) => {
-      if (projectId.value !== requestedProjectId || projectScopeToken() !== requestToken) return;
-      const diagnostic = plan.runId ? report.items.find((item) => item.runId === plan.runId && item.reason) : undefined;
-      if (diagnostic?.reason) ElMessage.warning(`Merge 状态检测：${diagnostic.reason}`);
-    }).catch((caught) => {
-      if (projectId.value === requestedProjectId && projectScopeToken() === requestToken) {
-        ElMessage.warning(`Merge 状态检测失败，已展示最近保存的状态：${caught instanceof Error ? caught.message : "暂不可用"}`);
-      }
-    });
-  }
-  try {
-    const response = await api.getPlan(planId);
-    if (!isCurrentDetailRequest()) return;
-    const resolvedContract = response.revision?.resolvedContract ?? response.plan.resolvedContract ?? plan.resolvedContract;
-    const generatedSpec = response.plan.generatedSpec ?? plan.generatedSpec;
-    detailPlan.value = { ...plan, ...response.plan, ...(generatedSpec ? { generatedSpec } : {}), ...(resolvedContract ? { resolvedContract } : {}), dispatch: response.dispatch, mergeRequest: response.mergeRequest };
-    detailLatestRevision.value = response.plan.revision;
-    if (isCandidate) {
-      detailVersionSource.value = "candidate";
-      const history = await api.candidatePlanVersions(planId).catch(() => null);
-      if (!isCurrentDetailRequest()) return;
-      detailRevisions.value = history?.items.map((item) => item.revision) ?? [];
-      detailConfirmedRevisions.value = [];
-    } else {
-      detailVersionSource.value = "confirmed";
-      try {
-        const [history, candidateHistory] = await Promise.all([api.planRevisions(planId), api.candidatePlanVersions(planId)]);
-        if (!isCurrentDetailRequest()) return;
-        const versions = resolvePlanVersionHistory(candidateHistory.items, history.items);
-        detailRevisions.value = versions.revisions;
-        detailConfirmedRevisions.value = versions.confirmedRevisions;
-      } catch {
-        // Current Plan remains readable when historical version metadata is unavailable.
-      }
-    }
-  } catch (caught) {
-    if (!isCurrentDetailRequest()) return;
-    detailLoadError.value = caught instanceof Error ? `无法加载完整 Plan：${caught.message}` : "无法加载完整 Plan";
-  }
-}
-
-async function selectPlanRevision(revisionNumber: number): Promise<void> {
-  const current = detailPlan.value;
-  const planId = current?.id ?? current?.planId;
-  if (!current || !planId || current.revision === revisionNumber) return;
-  const requestVersion = detailRequestVersion;
-  detailLoadError.value = null;
-  try {
-    if (detailVersionSource.value === "candidate" || !isConfirmedPlanRevision(revisionNumber, detailConfirmedRevisions.value)) {
-      const response = await api.getCandidatePlanVersion(planId, revisionNumber);
-      if (requestVersion !== detailRequestVersion) return;
-      detailPlan.value = response.version;
-    } else {
-      const response = await api.getPlanRevision(planId, revisionNumber);
-      if (requestVersion !== detailRequestVersion) return;
-      detailPlan.value = { ...current, revision: response.revision.revision, status: "READY", ...(response.revision.contract ? { contract: response.revision.contract } : {}), ...(response.revision.resolvedContract ? { resolvedContract: response.revision.resolvedContract } : {}) };
-    }
-  } catch (caught) {
-    if (requestVersion !== detailRequestVersion) return;
-    detailLoadError.value = caught instanceof Error ? `无法加载 V${revisionNumber}：${caught.message}` : `无法加载 V${revisionNumber}`;
-  }
 }
 
 /** 从任何 Plan 详情回到其原始 Explorer；清理确认由服务端强制，前端只负责明确告知不可逆后果。 */
