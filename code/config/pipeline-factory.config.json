@@ -11,7 +11,9 @@
   },
   "storage": {
     "databasePath": "../pipeline-factory.sqlite",
-    "worktreeRoot": "../.pipeline-worktrees"
+    "worktreeRoot": "../.pipeline-worktrees",
+    "eventRetentionDays": 14,
+    "eventRetentionMinPerAggregate": 200
   },
   "project": {
     "root": "../../",

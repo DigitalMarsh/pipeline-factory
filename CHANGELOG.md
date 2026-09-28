@@ -1,5 +1,50 @@
 # Changelog
 
+## 2026-09-28 — 开启事件回收：14 天 / 每聚合保底 200 条
+
+### Changed
+
+- 本地 [pipeline-factory.config.json](code/config/pipeline-factory.config.json) 的 `storage` 段加上 `eventRetentionDays: 14` 与 `eventRetentionMinPerAggregate: 200`。保底条数本来就有同样的默认值，这里**显式写出来**：它决定"每个聚合至少留多少条"，是这套策略的一半，读 config 的人应该在一个文件里看全，而不必去翻 `config.ts` 才知道会删到什么程度。
+
+### 开启前的实测（真实库，只读，未动一行数据）
+
+| | |
+| --- | --- |
+| 全库事件 | 159,543 行 / 22.8 MB 载荷 |
+| 事件时间范围 | 2026-09-12 → 2026-09-28（16 天） |
+| **14 天 + 保底 200 会删** | **30,238 行 / 3.9 MB（19.0%）** |
+
+- 删的全是那两个**逐字重复**的逐 token 增量类型：`agent.step.model_text_delta` 15,119 行 + `agent.model.text.delta` 15,119 行。两者各有 15,625 行早于 cutoff，其中 506 行被"每聚合保底 200 条"留下。
+- `explorer.turn.text.delta`（32,984 行）与 `project.execution.turn.text.delta`（299 行）**一行都不删**：它们最早分别是 09-17 与 09-26，全在 14 天以内。这不是白名单没生效，是这个库只比 14 天大两天。
+- `run.executor.event` 有 10,961 行早于 cutoff，**一行都不删**——按下面「A2 白名单收紧」已移出白名单。
+- 30,238 行逐行核实过"最终态另有副本"（方法与其结果见下面「A2 白名单收紧」一节）。
+
+### Verification
+
+- 配置能过 API 的加载器：`loadFactoryConfig()` 解析出 `eventRetentionDays: 14` / `eventRetentionMinPerAggregate: 200`。（`apps/api/dist` 在此之前是**旧的**——回收那几项是 A2 才加进 schema 的，旧 dist 会把它们静默丢掉。这一点是靠这次真的去解析配置、而不是只看文件内容才发现的。）
+- `pnpm --dir code verify` 通过：domain 276/276、API 72/72、Web 424/424。
+
+### 首次开启的实测结果（重启前后各取一次全量快照比对）
+
+| | 重启前 | 重启后 |
+| --- | --- | --- |
+| `domain_events` 行数 | 159,556 | 129,320 |
+| 载荷 | 22.81 MB | 18.93 MB |
+| `MAX(sequence)` | 220,322 | 220,324 |
+| 序号高水位表 | 不存在（旧 dist 建的库） | `last_sequence = 220322` |
+
+**实际删除 30,238 行 / 3.88 MB，与开启前算出的预测逐行一致**，且只动了两个类型：
+
+- `agent.model.text.delta` −15,119 行（−2.65 MB）
+- `agent.step.model_text_delta` −15,119 行（−1.23 MB）
+
+其余类型一行未动——包括 `run.executor.event`（它另有 10,961 行早于 cutoff，按上一节移出白名单后不删）。
+
+顺带核实到的两件事：
+
+- 重启后仍存在的最大序号行（220322）就是回收前的 `MAX(sequence)`——**这次没有考到序号回退那条守卫**。回收只摘旧行，被摘的行本来就在序号低位，所以存活行的 MAX 没变，有没有高水位都会得到 220,323。高水位表写对了值，但"它救了谁"要等回收真的摘掉序号最大的那批行才能验到（例如某个聚合整体变旧后）。这一点记在这里，别把它当成"守卫已验证"。
+- 重启打断了一个在途的 Explorer 回合（`thread-demo` / `turn-ff9f792d-852`，15:30:55 发起）。没有丢数据：回合被标为 `FAILED` 且 `error = EXPLORER_TURN_RECOVERY_REQUIRED`，`agent_loop_steps` 里留下 `LOOP_RESUMED / MODEL_STARTED / PROVIDER_ACTIVITY×2 / LOOP_FAILED` 共 5 步——这正是启动期"未结束的回合标记为待恢复"那条路径该有的样子。**重启前的在途检查只看了 runs / dispatch states，漏了 Explorer 回合**：那个回合是重启前 40 秒才发起的，检查时还不存在。要重启一个正在被使用的实例，这一条得算进去。
+
 ## 2026-09-28 — A2 白名单收紧：run.executor.event 移出
 
 ### 结论：那一条的依据在真实数据上不成立
