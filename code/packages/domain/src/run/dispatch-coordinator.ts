@@ -4,6 +4,7 @@
  * 协调器只负责排队、依赖/容量/冲突判断和验证唤醒，不改变 PlanRevision，也不执行合并。
  */
 import { EXECUTION_SLOT_RUN_STATUSES } from "../project/project.js";
+import { missingVerificationCommands } from "../plan/contract.js";
 import type {
   CandidatePlan,
   DomainEvent,
@@ -346,8 +347,9 @@ export class PlanDispatchCoordinator {
 
     const snapshot = revision.projectConfigSnapshot;
     if (snapshot) {
-      const registeredCommands = new Set((revision.resolvedContract ? snapshot.settings.commands.filter((command) => command.category === "verification" && command.enabled !== false) : snapshot.settings.commands).map((command) => command.commandId));
-      const missingCommands = (revision.resolvedContract?.verification.commandIds ?? revision.contract.verificationCommandIds).filter((commandId) => !registeredCommands.has(commandId));
+      // 判定规则统一在 plan/contract.ts —— 这里保留的只是"要不要抛"的差异（evaluateWait 返回等待原因，
+      // Scheduler 直接抛错），规则本身不再各写一套。
+      const missingCommands = missingVerificationCommands({ contract: revision.contract, resolvedContract: revision.resolvedContract, commands: snapshot.settings.commands });
       if (missingCommands.length > 0) return { reason: "NEEDS_CONFIGURATION", message: `Missing registered commands: ${missingCommands.join(", ")}` };
     }
 

@@ -26,6 +26,7 @@
  *      "用到未注册的验证命令"的关口。
  */
 import { updatePlanStatus } from "../plan/status-transition.js";
+import { missingVerificationCommands } from "../plan/contract.js";
 import { PlanService } from "../plan/service.js";
 import { allocateRunBranchLeaf, composeRunBranchLeaf, normalizeRunBranchSlug, runBranchName } from "./run-branch.js";
 import type { PipelineStore } from "../store/pipeline-store.js";
@@ -323,8 +324,10 @@ export class Scheduler {
   private assertVerificationCommands(revision: PlanRevisionV2): void {
     const snapshot = revision.projectConfigSnapshot;
     if (!snapshot) return;
-    const registered = new Set(snapshot.settings.commands.map((command) => command.commandId));
-    const missing = revision.contract.verificationCommandIds.filter((commandId) => !registered.has(commandId));
+    // 判定规则统一在 plan/contract.ts 的 missingVerificationCommands —— 这里曾自己实现一套，
+    // 与 PlanDispatchCoordinator.evaluateWait 的那套不一致，导致派发前放行、启动时却抛
+    // RUN_PREREQUISITES_UNSATISFIED（见该函数的模块说明）。
+    const missing = missingVerificationCommands({ contract: revision.contract, resolvedContract: revision.resolvedContract, commands: snapshot.settings.commands });
     if (missing.length > 0) throw new Error(`RUN_PREREQUISITES_UNSATISFIED: missing registered commands: ${missing.join(", ")}`);
   }
 }

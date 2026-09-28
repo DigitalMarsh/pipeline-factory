@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026-09-28 — 验证命令判定规则收敛（修复基线里挂着的那个真实缺陷）+ Plan 列表读取复杂度
+
+### Fixed
+
+- **修复 `scripts/test-baseline.json` 中长期豁免的那条真实缺陷**（原用例名 `PlanDispatchCoordinator does not treat V2 natural-language prerequisites as Plan dependencies during dispatch`，期望 `RUNNING` 实得 `WAITING/NEEDS_CONFIGURATION`）。根因不是 V2 的自然语言前置条件，而是**验证命令的判定规则被写成两套**：
+  - `run/scheduler.ts` 的 `assertVerificationCommands` 与 `PlanService.reviseConfiguration` 只读 V1 的 `contract.verificationCommandIds`，并把 `settings.commands` 里**任何**命令都算作已注册；
+  - `PlanDispatchCoordinator.evaluateWait` 在 revision 带 `resolvedContract` 时改读 V2 的 `resolvedContract.verification.commandIds`，且只把 `category === "verification"` 且 `enabled !== false` 的命令算作已注册。
+
+  两套规则让"同一个 Plan 该不该被拦"取决于**谁先问**：派发前的 `evaluateWait` 放行，`Scheduler.start` 里的同名校验却抛 `RUN_PREREQUISITES_UNSATISFIED`。典型触发是 V2 的 `verification.mode: "NONE"`——解析后 `commandIds` 为空、按 README 应当被 `SKIPPED` 而非被拦，但只要它身上带着一份陈旧的 V1 镜像 id 就会被卡住。规则已收敛到 `plan/contract.ts` 的 `missingVerificationCommands` 一处，三处调用点改用它；统一到 coordinator 的那套（已解析的 V2 契约是权威来源）。
+- 判定规则两侧语义都被测试钉住（`plan/contract.test.ts`）：V2 分支保持严格（未启用或非 verification 类别的命令不算已注册），V1 回落分支保持历史行为（不收紧，否则旧库里的历史合同会突然无法确认）。
+
+### Changed
+
+- Plan 生命周期投影改为"按请求建一次索引、沿调用链下传"（`buildPlanLifecycleIndex`）。`planEventAggregateIds` 原先**每个 Plan** 都读一遍 `listRuns()` 与 `listMergeRequests()`（各是全表 `SELECT *`），内层再对每个匹配 Run 调 `listChangeProposals`；而 `decoratePlanRows` 对查询返回的**每一行**调一次 `planProjection` —— Plan Center 的 limit 上限是 100，于是单次列表请求等于 200 次全表读。`planProjection` / `decoratePlanRows` 的 `index` 参数可省略（单 Plan 调用自建一次与原行为等价），列表路径由 `decoratePlanRows` 与 `workbenchSnapshot` 各建一次。
+- `scripts/test-baseline.json` 的 `knownFailures` 清空 —— 仓库现在没有已知失败用例。文件里保留了 `_历史` 字段记录这条缺陷的原委，因为"空清单"与"漏填"从文件本身看不出来。
+
+### Added
+
+- 新增 `apps/api/src/projections/plan-lifecycle.test.ts`：用调用计数把读取复杂度钉死（表读次数必须与行数无关），并断言"共享索引"与"逐 Plan 自建"产出**完全相同**的 lifecycle —— 否则"优化"就变成了行为变更。
+- 新增 `packages/domain/src/plan/contract.test.ts`：判定规则的纯函数级覆盖。
+
+### Changed files
+
+- Domain：`code/packages/domain/src/plan/contract.ts`、`code/packages/domain/src/plan/contract.test.ts`（新增）、`code/packages/domain/src/plan/service.ts`、`code/packages/domain/src/run/scheduler.ts`、`code/packages/domain/src/run/dispatch-coordinator.ts`。
+- API：`code/apps/api/src/projections/plan-lifecycle.ts`、`code/apps/api/src/projections/workbench.ts`、`code/apps/api/src/projections/plan-lifecycle.test.ts`（新增）。
+- 脚本：`code/scripts/test-baseline.json`。
+
+### Verification
+
+- `pnpm --dir code verify` 通过，**三包零失败**：domain 264/264、API 72/72、Web 424/424，无新增值级循环依赖。这是 `test-baseline.json` 清空后的第一次全绿。
+- 原豁免用例现在真正通过（`dispatch-coordinator.test.ts` 14/14），不是被从清单里删掉。
+- 复杂度守卫经构造验证：`decoratePlanRows` 处理 5 行时三张表各只被读 1 次；改回逐 Plan 读取会让这三个计数变成 5。
+- 未做浏览器验收：C3 改变了派发判定，属于后端行为；受影响的场景（V2 mode NONE 的 Plan 从"卡在 NEEDS_CONFIGURATION"变为"可派发并在验证阶段 SKIPPED"）应在下一轮端到端验收中确认。
+
 ## 2026-09-28 — 事件读取加界与 Plan 投影漂移可见化
 
 ### Added

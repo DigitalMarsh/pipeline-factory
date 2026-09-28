@@ -18,7 +18,7 @@
  *   本模块不持有组合根状态（这是它能被直接 import 而不是回调注入的原因）。
  */
 import type { DomainEvent, PipelineStore, ProjectService } from "@pipeline-factory/domain";
-import { planProjection } from "./plan-lifecycle.js";
+import { buildPlanLifecycleIndex, planProjection } from "./plan-lifecycle.js";
 
 /** Workbench 首次加载回放的事件尾部窗口与最终保留条数；实时增量仍由 SSE 提供。 */
 export const WORKBENCH_EVENT_TAIL_LIMIT = 4_000;
@@ -27,6 +27,8 @@ const WORKBENCH_EVENT_LIMIT = 400;
 export function workbenchSnapshot(store: PipelineStore, projects: ProjectService, projectId: string) {
   const project = projects.get(projectId);
   const projectRows = [{ ...project, summary: projects.summary(project.id) }];
+  // 索引按请求建一次并传给每个 plan：否则 planProjection 会对每个 Plan 各读一遍全表 Run/MergeRequest。
+  const lifecycleIndex = buildPlanLifecycleIndex(store);
   const plans = store.listPlans()
     .filter((plan) => plan.projectId === projectId)
     .filter((plan) => plan.status !== "DRAFT" && plan.status !== "DISCARDED")
@@ -49,7 +51,7 @@ export function workbenchSnapshot(store: PipelineStore, projects: ProjectService
       attentionReason: plan.attentionReason,
       contract: plan.contract,
       dispatch: store.getDispatchState(plan.id) ?? null,
-      ...planProjection(store, plan),
+      ...planProjection(store, plan, lifecycleIndex),
     }));
   const runs = store.listRuns().filter((run) => run.projectId === projectId).map((run) => ({
     ...run,

@@ -24,7 +24,7 @@
  */
 import { createHash } from "node:crypto";
 import { parseGeneratedPlanSpecV2, resolvePlanContractV2 } from "./plan-v2.js";
-import { validatePlanContract } from "./contract.js";
+import { missingVerificationCommands, validatePlanContract } from "./contract.js";
 import { updatePlanStatus } from "./status-transition.js";
 import { freezeRevision } from "../platform/freeze.js";
 import { verifiedProjectBaseline } from "../git/baseline.js";
@@ -556,8 +556,8 @@ export class PlanService {
     const project = this.store.getProject(plan.projectId);
     if (!project) throw new Error(`Project ${plan.projectId} not found`);
     const projectConfigSnapshot = this.projects.snapshot(project.id);
-    const registeredCommands = new Set(projectConfigSnapshot.settings.commands.map((command) => command.commandId));
-    const missingCommands = plan.contract.verificationCommandIds.filter((commandId) => !registeredCommands.has(commandId));
+    // 与 Scheduler / 调度协调器共用同一条判定规则，见 plan/contract.ts 的 missingVerificationCommands。
+    const missingCommands = missingVerificationCommands({ contract: plan.contract, resolvedContract: plan.resolvedContract, commands: projectConfigSnapshot.settings.commands });
     if (missingCommands.length) {
       throw new Error(`RUN_PREREQUISITES_UNSATISFIED: missing registered commands: ${missingCommands.join(", ")}`);
     }

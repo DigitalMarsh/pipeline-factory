@@ -22,7 +22,7 @@
  *
  * 依赖方向：本文件不依赖同目录其他投影。`workbench.ts` 单向依赖本文件的 `planProjection`。
  */
-import type { CandidatePlan, PipelineStore, PlanLifecycleEntry, PlanLifecycleStatus } from "@pipeline-factory/domain";
+import type { CandidatePlan, ChangeProposal, MergeRequest, PipelineStore, PlanLifecycleEntry, PlanLifecycleStatus, Run } from "@pipeline-factory/domain";
 
 const PLAN_LIFECYCLE_ORDER: Array<PlanLifecycleStatus> = ["DRAFT", "READY", "ENQUEUED", "DISPATCHED", "IN_PROGRESS", "VERIFYING", "MERGE_READY", "MERGED"];
 
@@ -50,6 +50,47 @@ const PLAN_LIFECYCLE_EVENT_TYPES = [
 ] as const;
 
 /**
+ * 一次请求内共享的 Plan → Run → MergeRequest/ChangeProposal 索引。
+ *
+ * 为什么需要它：`planEventAggregateIds` 需要知道"这个 Plan 有哪些 Run、每个 Run 有哪些
+ *   MergeRequest 与 ChangeProposal"，而它原先**每个 Plan 都调一次** `listMergeRequests()` 与
+ *   `listRuns()`（两个都是全表 `SELECT *`），内层再对每个匹配 Run 调 `listChangeProposals`。
+ *   而 `decoratePlanRows` 会对查询返回的**每一行**调一次 `planProjection` ——
+ *   Plan Center 的 limit 上限是 100，于是单次列表请求等于 200 次全表读 + 上百次点查。
+ *   改成"按请求建一次、沿调用链下传"后，这几张表每次都只读一遍。
+ *
+ * 维护提示：这是**一次请求的生命周期**内的快照，不要跨请求缓存——请求之间 Plan/Run 会变，
+ *   缓存会让新 Run 的 MergeRequest 归不到所属 Plan 上。
+ */
+export type PlanLifecycleIndex = {
+  runsByPlan: Map<string, Run[]>;
+  mergeRequestsByRun: Map<string, MergeRequest[]>;
+  proposalsByRun: Map<string, ChangeProposal[]>;
+};
+
+export function buildPlanLifecycleIndex(store: PipelineStore): PlanLifecycleIndex {
+  const runsByPlan = new Map<string, Run[]>();
+  for (const run of store.listRuns()) {
+    const existing = runsByPlan.get(run.planId);
+    if (existing) existing.push(run);
+    else runsByPlan.set(run.planId, [run]);
+  }
+  const mergeRequestsByRun = new Map<string, MergeRequest[]>();
+  for (const request of store.listMergeRequests()) {
+    const existing = mergeRequestsByRun.get(request.runId);
+    if (existing) existing.push(request);
+    else mergeRequestsByRun.set(request.runId, [request]);
+  }
+  const proposalsByRun = new Map<string, ChangeProposal[]>();
+  for (const proposal of store.listChangeProposals()) {
+    const existing = proposalsByRun.get(proposal.runId);
+    if (existing) existing.push(proposal);
+    else proposalsByRun.set(proposal.runId, [proposal]);
+  }
+  return { runsByPlan, mergeRequestsByRun, proposalsByRun };
+}
+
+/**
  * 与某个 Plan 相关的事件可能落在多个聚合上：Plan 自身、它的 Run、Run 的 MergeRequest
  * 与 ChangeProposal，以及产生它的 ExplorerThread。这里把聚合 ID 收集齐，
  * 交给 Store 走 aggregate_id 索引，避免为了筛出几十条事件而把整张事件表读进内存。
@@ -57,29 +98,25 @@ const PLAN_LIFECYCLE_EVENT_TYPES = [
  * 维护提示：新增"在别的聚合上写 payload.planId"的事件类型时，必须同步扩展这里，
  * 否则该事件会在 Plan 时间线中丢失（buildPlanLifecycle 的谓词只在这批候选集内筛选）。
  */
-function planEventAggregateIds(store: PipelineStore, plan: CandidatePlan): string[] {
+function planEventAggregateIds(plan: CandidatePlan, index: PlanLifecycleIndex): string[] {
   const ids = new Set<string>([plan.id]);
   if (plan.sourceExplorerThreadId) ids.add(plan.sourceExplorerThreadId);
-  const mergeRequests = store.listMergeRequests();
-  for (const run of store.listRuns()) {
-    if (run.planId !== plan.id) continue;
+  for (const run of index.runsByPlan.get(plan.id) ?? []) {
     ids.add(run.id);
-    for (const proposal of store.listChangeProposals(run.id)) ids.add(proposal.id);
-    for (const request of mergeRequests) {
-      if (request.runId === run.id) ids.add(request.id);
-    }
+    for (const proposal of index.proposalsByRun.get(run.id) ?? []) ids.add(proposal.id);
+    for (const request of index.mergeRequestsByRun.get(run.id) ?? []) ids.add(request.id);
   }
   return [...ids];
 }
 
-function buildPlanLifecycle(store: PipelineStore, plan: CandidatePlan, revision = plan.revision): PlanLifecycleEntry[] {
+function buildPlanLifecycle(store: PipelineStore, plan: CandidatePlan, revision: number, index: PlanLifecycleIndex): PlanLifecycleEntry[] {
   const run = plan.runId ? store.getRun(plan.runId) : undefined;
   const dispatch = store.getDispatchState(plan.id);
   const currentStatus = dispatch?.waitReason === "NEEDS_CONFIGURATION" ? "NEEDS_CONFIGURATION" : normalizedLifecycleStatus(plan.status);
   const entries = new Map<PlanLifecycleStatus, PlanLifecycleEntry>();
   const eventPlanId = (payload: Record<string, unknown>) => typeof payload.planId === "string" ? payload.planId : null;
   const eventRevision = (payload: Record<string, unknown>) => typeof payload.revision === "number" ? payload.revision : null;
-  const relevant = store.listEvents({ afterSequence: 0, aggregateIds: planEventAggregateIds(store, plan), types: PLAN_LIFECYCLE_EVENT_TYPES })
+  const relevant = store.listEvents({ afterSequence: 0, aggregateIds: planEventAggregateIds(plan, index), types: PLAN_LIFECYCLE_EVENT_TYPES })
     .filter((event) => event.aggregateId === plan.id || event.aggregateId === run?.id || eventPlanId(event.payload) === plan.id);
   const add = (status: PlanLifecycleStatus, occurredAt: string | null, options: { reason?: string | null; runId?: string | null; eventRevision?: number | null } = {}) => {
     if (options.eventRevision !== null && options.eventRevision !== undefined && options.eventRevision !== revision) return;
@@ -152,12 +189,16 @@ function planExecutionThread(store: PipelineStore, plan: CandidatePlan) {
   return { id: run.executionThreadId, runId: run.id, state: thread?.state ?? run.status };
 }
 
-export function planProjection(store: PipelineStore, plan: CandidatePlan) {
-  return { confirmedAt: plan.confirmedAt ?? null, lifecycle: buildPlanLifecycle(store, plan), executionThread: planExecutionThread(store, plan) };
+/**
+ * 单个 Plan 的读模型。`index` 可省略（单 Plan 调用时自建一次与原先的全表读等价）；
+ * **列表路径必须显式传**同一个 index，否则就退化成每个 Plan 建一次索引。
+ */
+export function planProjection(store: PipelineStore, plan: CandidatePlan, index: PlanLifecycleIndex = buildPlanLifecycleIndex(store)) {
+  return { confirmedAt: plan.confirmedAt ?? null, lifecycle: buildPlanLifecycle(store, plan, plan.revision, index), executionThread: planExecutionThread(store, plan) };
 }
 
 /** 将 PlanRevision 的快照版本与当前 Project 对比，供 Plan Center 显示 CURRENT/CHANGED/LEGACY。 */
-export function decoratePlanRows(store: PipelineStore, rows: Array<{ planId: string; revision: number; projectId: string }>) {
+export function decoratePlanRows(store: PipelineStore, rows: Array<{ planId: string; revision: number; projectId: string }>, index: PlanLifecycleIndex = buildPlanLifecycleIndex(store)) {
   return rows.map((row) => {
     const revision = store.getRevision(row.planId, row.revision);
     const plan = store.getPlan(row.planId);
@@ -165,7 +206,7 @@ export function decoratePlanRows(store: PipelineStore, rows: Array<{ planId: str
     const project = store.getProject(row.projectId);
     return {
       ...row,
-      ...(plan ? planProjection(store, plan) : { confirmedAt: null, lifecycle: [], executionThread: null }),
+      ...(plan ? planProjection(store, plan, index) : { confirmedAt: null, lifecycle: [], executionThread: null }),
       projectConfigVersion: revision?.projectConfigVersion ?? null,
       projectConfigHash: revision?.projectConfigHash ?? null,
       projectConfigStatus: !snapshot ? "LEGACY" : project && snapshot.configVersion === project.configVersion && snapshot.configHash === project.configHash ? "CURRENT" : "CHANGED",

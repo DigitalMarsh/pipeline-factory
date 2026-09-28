@@ -14,9 +14,46 @@
  *      语义。assessPlanArtifact 靠 try/catch 适配这个差异，改动任一侧的错误类型都会影响对方。
  *   3) 任务依赖环检测用的是 visiting/visited 双集合的 DFS。改成单集合 visited 会把"重复引用
  *      同一个前置任务"误判成环。
+ *   4) `missingVerificationCommands` 是**跨模块的判定规则**（scheduler / dispatch-coordinator /
+ *      plan service 都要用）。它放在本文件是因为本文件已在 barrel 的导出里，不必新增模块；
+ *      但它与 V1 校验器没有语义关系，不要因为同处一文件就把它们合并。
  */
 import { isNonEmptyStringArray, isStringArray } from "../platform/guards.js";
 import type { PlanContract } from "../index.js";
+import type { ResolvedPlanContractV2 } from "./plan-v2.js";
+import type { RegisteredCommandDefinition } from "../platform/commands.js";
+
+/**
+ * 判定"这个 Plan 还缺哪些已注册的验证命令"——**唯一出处**。
+ *
+ * 为什么必须唯一：这条规则原先在三处各写了一遍，而且分成两套不一致的规则：
+ *   - run/scheduler.ts 的 assertVerificationCommands 与 PlanService.reviseConfiguration
+ *     只读 V1 的 `contract.verificationCommandIds`，并把 settings.commands 里**任何**命令都算作已注册；
+ *   - PlanDispatchCoordinator.evaluateWait 在 revision 带 resolvedContract 时改读 V2 的
+ *     `resolvedContract.verification.commandIds`，且只把 `category === "verification"` 且
+ *     `enabled !== false` 的命令算作已注册。
+ * 分歧的后果是"同一个 Plan 该不该被拦"取决于**谁先问**：派发前的 evaluateWait 放行，
+ * 但 Scheduler.start 里的同名校验抛 `RUN_PREREQUISITES_UNSATISFIED`，最终表现为
+ * `WAITING / NEEDS_CONFIGURATION`。典型触发是 V2 的 `verification.mode: "NONE"`
+ * （解析后 commandIds 为空、按设计应当被 SKIPPED 而非被拦）却仍带着一份陈旧的 V1 镜像 id。
+ *
+ * 统一到 coordinator 的那套：已解析的 V2 契约是权威来源；未启用或非 verification 类别的命令
+ * 不该被当成"已注册"。传 `resolvedContract` 时以它为准，否则回落到 V1 平面。
+ */
+export function missingVerificationCommands(input: {
+  contract: Pick<PlanContract, "verificationCommandIds">;
+  resolvedContract?: Pick<ResolvedPlanContractV2, "verification"> | undefined;
+  commands: readonly RegisteredCommandDefinition[];
+}): string[] {
+  const expected = input.resolvedContract ? input.resolvedContract.verification.commandIds : input.contract.verificationCommandIds;
+  const registered = new Set(
+    (input.resolvedContract
+      ? input.commands.filter((command) => command.category === "verification" && command.enabled !== false)
+      : input.commands
+    ).map((command) => command.commandId),
+  );
+  return expected.filter((commandId) => !registered.has(commandId));
+}
 
 /** Confirm/Enqueue 前校验执行合同的结构，避免无效任务图进入不可恢复的 Run。 */
 export function validatePlanContract(contract: PlanContract): void {

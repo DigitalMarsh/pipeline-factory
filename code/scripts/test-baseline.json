@@ -1,11 +1,5 @@
 {
-  "_说明": "重构期间的测试豁免清单。verify.mjs 会断言：失败的用例必须逐条列在下面。任何不在此列的新失败都判定为该阶段未完成。",
-  "knownFailures": [
-    {
-      "package": "@pipeline-factory/domain",
-      "test": "PlanDispatchCoordinator does not treat V2 natural-language prerequisites as Plan dependencies during dispatch",
-      "location": "packages/domain/src/dispatch-coordinator.test.ts:121",
-      "reason": "P0 记录基线时即存在，与结构重构无关：用例期望确认后 status=RUNNING，实得 WAITING/NEEDS_CONFIGURATION。计划明确要求重构期间不修它——把行为变更混进结构重构会让两类风险无法归因。若某阶段想真正修好它，应单独成一个提交与一个决定。"
-    }
-  ]
+  "_说明": "重构期间的测试豁免清单。verify.mjs 会断言：失败的用例必须逐条列在下面。任何不在此列的新失败都判定为该阶段未完成。空清单是**期望状态**，不是漏填——见下面 _历史。",
+  "_历史": "曾登记的唯一一条（PlanDispatchCoordinator 的 V2 自然语言前置条件用例，原名 `does not treat V2 natural-language prerequisites as Plan dependencies during dispatch`）已于 2026-09-28 真正修复：根因是验证命令的判定规则被写成两套——run/scheduler.ts 与 PlanService.reviseConfiguration 只读 V1 的 contract.verificationCommandIds 且把任何命令都算已注册，而 PlanDispatchCoordinator.evaluateWait 在 revision 带 resolvedContract 时读 V2 的 resolvedContract.verification.commandIds 且只认 category=verification 且 enabled 的命令。两套规则让同一个 Plan「该不该被拦」取决于谁先问：派发前放行、Scheduler.start 里抛 RUN_PREREQUISITES_UNSATISFIED，最终停在 WAITING/NEEDS_CONFIGURATION。规则已收敛到 plan/contract.ts 的 missingVerificationCommands 一处。",
+  "knownFailures": []
 }
