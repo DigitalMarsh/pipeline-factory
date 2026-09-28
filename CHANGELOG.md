@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026-09-28 — Explorer 活动取数去重，并把"产出依赖逐条增量"这个事实钉住（B1 的结论）
+
+### 结论：B1 作为"等价优化"不成立，改为记账 + 加守卫
+
+原计划是"正文改取 `explorer_turns.content`，只取每个 loop 最后一条增量步骤"，理由是
+`content` 已经是增量的逐字拼接、投影真正还需要的是 `providerItemId`/`occurredAt`/排序序号。
+**这个前提是错的。** `projectExplorerActivity` 的产出确实依赖逐条 `MODEL_TEXT_DELTA`，两处：
+
+- **气泡数量**取决于增量步与非增量步的先后。相邻增量合并进同一条 `ASSISTANT_MESSAGE`，但中间只要夹了任何其它步骤（工具、门禁、Provider 活动）就会另起一条。一个回合有几个助手气泡，拿拼好的 `content` 分不出来。
+- **合并后那条气泡的 `occurredAt` 与排序序号取的是第一条增量**（它参与最终按 `occurredAt` 的排序，换成最后一条会改变该气泡与其它活动的相对顺序），而挂在气泡上的 `providerItemId` 取的是最后一条非空增量。两个值 `content` 里都没有。
+
+所以"只取最后一条增量"与"改读 `content`"都会改变可见产出，不是等价优化。真要收敛，得让**写侧**按"文本段"落一条事实（见 `agent/agent-loop.ts` 的 `flushTextDelta`），而不是在读侧猜。本次不硬做。
+
+### Changed
+
+- `routes/explorers.ts` 的两处活动取数（workspace 快照与 activity 时间线）原本是逐字重复的四行查表，抽成 `planActivityInput`。抽出来的主要目的是**给上面的结论一个落点**——两处各写一遍注释必然会漂移，而且这段代码正是下一个想"优化掉步骤读取"的人会盯上的地方，提示必须写在他看得见的位置。
+
+### Added
+
+- `explorer-activity.test.ts` 新增两条用例，把上面两个事实钉住：增量之间夹了非增量步骤会另起一条气泡（且用例把 `turn.content` 设成两段增量的完整拼接，正是为了说明"有 content 也分不出来"）；合并后气泡的时间取第一条增量、`providerItemId` 取最后一条非空增量。**这两条不是描述理想行为，而是守卫**——谁想按原计划那样优化，先让它们变绿。
+
+### Changed files
+
+- API：`code/apps/api/src/routes/explorers.ts`。
+- Domain：`code/packages/domain/src/explorer/explorer-activity.test.ts`。
+
+### Verification
+
+- `pnpm --dir code verify` 通过：domain 270/270、API 72/72、Web 424/424，无新增值级循环依赖。
+- 抽取是纯搬移：两处调用点的查表顺序、过滤条件、传参逐字未变，产出不变。
+- 新用例未做反向验证：它们断言的是**当前**行为（而非新引入的行为），构造上不存在"守卫空转"——把 `explorer-activity.ts` 改成读 `content` 就会直接失败。
+- **未做浏览器验收**：本次不含可见行为变化（抽取前后产出相同）。
+
 ## 2026-09-28 — SQLite 语句缓存（A3）
 
 ### Changed

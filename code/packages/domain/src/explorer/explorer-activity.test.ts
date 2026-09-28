@@ -107,4 +107,44 @@ describe("Explorer activity projection", () => {
     expect(items[0]?.summary).toContain("完整执行方案已生成：Latest plan");
     expect(items[0]?.details).toMatchObject({ title: "Latest plan", goal: "Use the latest valid protocol" });
   });
+
+  /**
+   * 下面两条**不是**在描述理想行为，而是在**钉住"产出依赖逐条增量"这个事实**。
+   *
+   * 背景：这两条路由每次轮询都要把整个 Plan 的所有 Loop 步骤读出来，其中绝大多数是
+   *   MODEL_TEXT_DELTA（生产库 159,523 条事件里占三分之一）。看起来"正文在 turn.content 里
+   *   已经拼好了，何必逐条读增量"，但下面两条用例正是那个想法不成立的地方——
+   *   谁想按"只取最后一条增量"或"改读 turn.content"来优化，先让这两条变绿再说。
+   */
+  it("starts a new assistant bubble when a non-delta step sits between two delta runs", () => {
+    const items = projectExplorerActivity({
+      // content 就是两段增量的拼接——即使它完整存在，也分不出"应该是一个气泡还是两个"。
+      turns: [{ id: "assistant-1", threadId: "explorer-1", role: "assistant", content: "第一段第二段", status: "COMPLETED", createdAt: "2026-08-29T10:00:00.000Z", sequence: 1 }],
+      loops: [{ id: "loop-1", ownerType: "explorer-turn", ownerId: "assistant-1", role: "explorer", mode: "provider-controlled", state: "COMPLETED", stepCount: 3, maxSteps: 40, startedAt: "2026-08-29T10:00:00.000Z", completedAt: "2026-08-29T10:00:02.000Z", providerThreadId: null, providerTurnId: null, checkpointJson: null }],
+      steps: [
+        { loopId: "loop-1", sequence: 1, stepType: "MODEL_TEXT_DELTA", status: "COMPLETED", callId: null, providerThreadId: null, providerTurnId: null, payload: { text: "第一段" }, occurredAt: "2026-08-29T10:00:01.000Z" },
+        { loopId: "loop-1", sequence: 2, stepType: "GATE_CHECKED", status: "COMPLETED", callId: null, providerThreadId: null, providerTurnId: null, payload: { action: "continue", reason: "MODEL_CONTINUES" }, occurredAt: "2026-08-29T10:00:01.100Z" },
+        { loopId: "loop-1", sequence: 3, stepType: "MODEL_TEXT_DELTA", status: "COMPLETED", callId: null, providerThreadId: null, providerTurnId: null, payload: { text: "第二段" }, occurredAt: "2026-08-29T10:00:01.200Z" },
+      ],
+    });
+
+    const assistantMessages = items.filter((item) => item.kind === "ASSISTANT_MESSAGE");
+    expect(assistantMessages.map((item) => item.summary)).toEqual(["第一段", "第二段"]);
+  });
+
+  it("takes a merged bubble's time from its first delta and providerItemId from its last non-null delta", () => {
+    const items = projectExplorerActivity({
+      turns: [{ id: "assistant-1", threadId: "explorer-1", role: "assistant", content: "Hello", status: "COMPLETED", createdAt: "2026-08-29T10:00:00.000Z", sequence: 1 }],
+      loops: [{ id: "loop-1", ownerType: "explorer-turn", ownerId: "assistant-1", role: "explorer", mode: "provider-controlled", state: "COMPLETED", stepCount: 2, maxSteps: 40, startedAt: "2026-08-29T10:00:00.000Z", completedAt: "2026-08-29T10:00:02.000Z", providerThreadId: null, providerTurnId: null, checkpointJson: null }],
+      steps: [
+        { loopId: "loop-1", sequence: 1, stepType: "MODEL_TEXT_DELTA", status: "COMPLETED", callId: null, providerThreadId: null, providerTurnId: null, payload: { text: "Hel", providerItemId: "item-first" }, occurredAt: "2026-08-29T10:00:01.000Z" },
+        { loopId: "loop-1", sequence: 2, stepType: "MODEL_TEXT_DELTA", status: "COMPLETED", callId: null, providerThreadId: null, providerTurnId: null, payload: { text: "lo", providerItemId: "item-last" }, occurredAt: "2026-08-29T10:00:01.500Z" },
+      ],
+    });
+
+    // 时间取第一条增量（不是最后一条）——它参与最终按 occurredAt 的排序，所以换成最后一条
+    // 会改变这个气泡与其它活动的相对顺序。providerItemId 相反，取最后一条非空的。
+    expect(items[0]?.occurredAt).toBe("2026-08-29T10:00:01.000Z");
+    expect(items[0]?.details).toMatchObject({ providerItemId: "item-last" });
+  });
 });

@@ -34,7 +34,7 @@
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { ExplorerDeleteBlockedError, projectExplorerActivity, type DomainEvent, type ExplorerService, type ExplorerThreadService, type PipelineStore } from "@pipeline-factory/domain";
+import { ExplorerDeleteBlockedError, projectExplorerActivity, type AgentLoop, type DomainEvent, type ExplorerActivityItem, type ExplorerPlan, type ExplorerService, type ExplorerThread, type ExplorerThreadService, type ExplorerTurn, type PipelineStore } from "@pipeline-factory/domain";
 import { projectExplorerParams, projectExplorerPlanParams, explorerActivityQuery, explorerCreateBody, explorerRenameBody, v4AnswerBody, v4InputQuery, v4ThreadQuery, v4ThreadStatusQuery, v4TurnBody } from "../schemas/explorers.js";
 import { projectThreadParams } from "../schemas/common.js";
 import { openSseChannel } from "../http/sse.js";
@@ -49,6 +49,31 @@ export type ExplorerRouteDeps = {
   /** 一次对话回合的执行（startTurn / answerInput / cancelTurn / subscribeEvents）。 */
   explorerThread: ExplorerThreadService;
 };
+
+/**
+ * 取一个 ExplorerPlan 的对话活动投影。workbench 快照与 activity 时间线两条路由共用这一套取数，
+ * 合并排序的规则由 domain 的 projectExplorerActivity 定义。
+ *
+ * 维护提示（下次想"优化掉"这里的步骤读取时先读这段）：
+ *   这里的读法看起来是"每个回合的每一步都读出来，只为拼一段正文"，很像是可以用
+ *   `turn.content` 顶掉的浪费。**它不是。**产出确实依赖逐条 MODEL_TEXT_DELTA，两处：
+ *     1) **气泡数量**：相邻的文本增量合并进同一条 ASSISTANT_MESSAGE，但中间只要夹了任何
+ *        其它步骤（工具、门禁、Provider 活动）就会另起一条。所以"一个回合有几个助手气泡"
+ *        取决于增量步与非增量步的先后——拿拼好的 content 分不出来。
+ *     2) **气泡的时间与排序序号**取的是**第一条**增量的 occurredAt/sequence，而挂在气泡上的
+ *        providerItemId 取的是**最后一条非空**增量给的。这两个值 content 里都没有。
+ *   因此"只取每个 loop 的最后一条增量"与"改读 turn.content"都会改变可见产出（气泡数量、
+ *   与其它活动的相对顺序），不是等价优化。真要收敛，得让**写侧**按"文本段"落一条事实
+ *   （见 agent-loop.ts 的 flushTextDelta），而不是在读侧猜。没有等价性测试不要改这里。
+ */
+function planActivityInput(store: PipelineStore, explorer: ExplorerThread, explorerPlan: ExplorerPlan): { turns: ExplorerTurn[]; loops: AgentLoop[]; activity: ExplorerActivityItem[] } {
+  const turns = store.listTurns(explorer.id).filter((turn) => turn.explorerPlanId === explorerPlan.id);
+  const turnIds = new Set(turns.map((turn) => turn.id));
+  const loops = store.listAgentLoops().filter((loop) => loop.ownerType === "explorer-turn" && turnIds.has(loop.ownerId));
+  const loopIds = new Set(loops.map((loop) => loop.id));
+  const steps = loops.flatMap((loop) => store.listAgentLoopSteps(loop.id)).filter((step) => loopIds.has(step.loopId));
+  return { turns, loops, activity: projectExplorerActivity({ turns, loops, steps }) };
+}
 
 export function registerExplorerRoutes(app: FastifyInstance, deps: ExplorerRouteDeps): void {
   const { store, explorers, explorerThread } = deps;
@@ -108,12 +133,7 @@ export function registerExplorerRoutes(app: FastifyInstance, deps: ExplorerRoute
     if (!explorer || explorer.projectId !== params.data.projectId || !explorerPlan || explorerPlan.explorerThreadId !== explorer.id || explorerPlan.projectId !== explorer.projectId) {
       return reply.code(404).send({ error: "ExplorerPlan not found" });
     }
-    const turns = store.listTurns(explorer.id).filter((turn) => turn.explorerPlanId === explorerPlan.id);
-    const turnIds = new Set(turns.map((turn) => turn.id));
-    const loops = store.listAgentLoops().filter((loop) => loop.ownerType === "explorer-turn" && turnIds.has(loop.ownerId));
-    const loopIds = new Set(loops.map((loop) => loop.id));
-    const steps = loops.flatMap((loop) => store.listAgentLoopSteps(loop.id)).filter((step) => loopIds.has(step.loopId));
-    const activity = projectExplorerActivity({ turns, loops, steps });
+    const { turns, loops, activity } = planActivityInput(store, explorer, explorerPlan);
     const selectedCandidate = explorerPlan.candidatePlanId ? store.getPlan(explorerPlan.candidatePlanId) : undefined;
     const legacyCandidate = !explorerPlan.newPlanRequested && !explorerPlan.candidatePlanId
       ? store.listPlans().filter((plan) => plan.projectId === explorer.projectId && plan.sourceExplorerThreadId === explorer.id && plan.explorerPlanId === explorerPlan.id && plan.status === "DRAFT").sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
@@ -204,12 +224,8 @@ export function registerExplorerRoutes(app: FastifyInstance, deps: ExplorerRoute
     if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
     const explorerPlan = store.getExplorerPlan(query.data.explorerPlanId);
     if (!explorerPlan || explorerPlan.explorerThreadId !== explorer.id || explorerPlan.projectId !== explorer.projectId) return reply.code(404).send({ error: "ExplorerPlan not found" });
-    const turns = store.listTurns(explorer.id).filter((turn) => turn.explorerPlanId === explorerPlan.id);
-    const turnIds = new Set(turns.map((turn) => turn.id));
-    const loops = store.listAgentLoops().filter((loop) => loop.ownerType === "explorer-turn" && turnIds.has(loop.ownerId));
-    const loopIds = new Set(loops.map((loop) => loop.id));
-    const steps = loops.flatMap((loop) => store.listAgentLoopSteps(loop.id)).filter((step) => loopIds.has(step.loopId));
-    const items = projectExplorerActivity({ turns, loops, steps }).filter((item) => item.explorerPlanId === explorerPlan.id).filter((item) => !query.data.afterSequence || item.sequence > query.data.afterSequence);
+    const { activity } = planActivityInput(store, explorer, explorerPlan);
+    const items = activity.filter((item) => item.explorerPlanId === explorerPlan.id).filter((item) => !query.data.afterSequence || item.sequence > query.data.afterSequence);
     return { items, lastEventSequence: store.getLastEventSequence(explorer.id) };
   });
 
