@@ -17,17 +17,26 @@
  *   - `agent.model.text.delta`：与上一条逐字重复（A1a 已停止写入，这里只清理历史行）。
  *   - `project.execution.turn.text.delta`：最终正文在 `project_execution_messages.content`，
  *     载荷里也自带 `content` 全量。
- *   - `run.executor.event` 中 `payload.type === "MODEL_OUTPUT"`：它是 `execution_journal`
- *     那一行的镜像；且 `run/dispatch-coordinator.ts` 的 `isStreamingEvent` 自己就写着
- *     这类事件"只影响展示进度，不需要逐条做全量 reconcile"。
+ *
+ * **`run.executor.event` 的 MODEL_OUTPUT 曾经也在白名单里，已移除。** 当时的依据是
+ *   "它是 execution_journal 那一行的镜像"，但那条依据在真实数据上不成立，两处：
+ *     1) 历史行的载荷里**没有 `sequence` 字段**（当前代码才写它），所以根本无法与 journal 关联；
+ *     2) 更要紧的是绝大多数待删行属于**已经被删除的 run**——journal 与 execution_thread 一起没了，
+ *        这些事件是那段模型输出的**唯一记录**。实测生产库：单个已删 run 就有 9,408 条。
+ *   它们是垃圾，但白名单的判据是"**另有**副本"，不是"看起来没用"。
+ *   `run/dispatch-coordinator.ts` 的 `isStreamingEvent` 说这类事件"只影响展示进度"——那是在说
+ *   **不需要逐条 reconcile**，与"数据有副本"是两件事，不要拿它当回收依据。
  *
  * 反过来，**任何参与业务判定的事件都不能进白名单**——例如 `plan.*`、`run.paused`、
  *   `verification.completed`：`PlanDispatchCoordinator` 靠它们推进状态，
  *   `plan-lifecycle.ts` 靠它们建 Plan 时间线。删掉不是"少了几条历史"，是状态机少了输入。
+ *
+ * 维护提示：往白名单里加类型之前，**在真实库上验证副本确实存在**（按每个聚合、逐行关联，
+ *   不是抽样），而不是只读代码。上面第 2 条就是这个动作抓出来的。
  */
 import type { DomainEvent } from "./types.js";
 
-/** 可回收的事件类型。**只有这些**（外加 MODEL_OUTPUT 的 run.executor.event）会被删除。 */
+/** 可回收的事件类型。**只有这些**会被删除。 */
 export const PRUNABLE_EVENT_TYPES = [
   "explorer.turn.text.delta",
   "agent.step.model_text_delta",
@@ -49,9 +58,7 @@ export type EventPruneInput = {
 
 /** 单条事件是否属于可回收集合。 */
 export function isPrunableEvent(event: { type: string; payload: Record<string, unknown> }): boolean {
-  if ((PRUNABLE_EVENT_TYPES as readonly string[]).includes(event.type)) return true;
-  if (event.type !== "run.executor.event") return false;
-  return event.payload.type === "MODEL_OUTPUT";
+  return (PRUNABLE_EVENT_TYPES as readonly string[]).includes(event.type);
 }
 
 /**

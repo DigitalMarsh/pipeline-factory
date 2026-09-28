@@ -253,14 +253,18 @@ describe("store contract: 事件回收", () => {
     });
   });
 
-  it("prunes only MODEL_OUTPUT among run.executor.event payloads", () => {
-    // run.executor.event 是同一个类型名下的多种载荷，只有逐 token 的那种可回收。
+  it("never prunes run.executor.event, not even its MODEL_OUTPUT payloads", () => {
+    // 这条曾经是反过来的：MODEL_OUTPUT 的 run.executor.event 进过白名单，依据是"它是
+    // execution_journal 的镜像"。在真实库上逐行验证后发现那条依据不成立——历史行的载荷没有
+    // `sequence` 字段无法与 journal 关联，且绝大多数属于**已删除的 run**（journal 与
+    // execution_thread 一起没了），事件是那段输出的唯一记录。此处按新规则钉死：
+    // 这个类型无论载荷是什么都不回收。
     assertBothStores((store) => {
       store.appendEvent({ type: "run.executor.event", aggregateId: "run-a", payload: { type: "MODEL_OUTPUT", text: "token" } });
       store.appendEvent({ type: "run.executor.event", aggregateId: "run-a", payload: { type: "TOOL_CALLED", tool: "read_file" } });
 
-      expect(store.pruneEvents({ cutoff: FAR_FUTURE, minPerAggregate: 0 })).toEqual({ deleted: 1 });
-      expect(store.listEvents({}).map((event) => event.payload.type)).toEqual(["TOOL_CALLED"]);
+      expect(store.pruneEvents({ cutoff: FAR_FUTURE, minPerAggregate: 0 })).toEqual({ deleted: 0 });
+      expect(store.listEvents({})).toHaveLength(2);
     });
   });
 

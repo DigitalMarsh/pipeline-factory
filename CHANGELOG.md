@@ -1,5 +1,44 @@
 # Changelog
 
+## 2026-09-28 — A2 白名单收紧：run.executor.event 移出
+
+### 结论：那一条的依据在真实数据上不成立
+
+A2 把 `run.executor.event` 中 `payload.type === 'MODEL_OUTPUT'` 的部分列进了可回收白名单，依据是
+"它是 `execution_journal` 那一行的镜像"。白名单的**判据只有一条**——*最终态另有持久化副本*——
+所以在真的按下开关之前，把这个类型**待删的每一行**拿去和 `execution_journal` 逐行关联（不是抽样）。
+结果是一条都关联不上，原因是两处：
+
+1. **历史行的载荷里根本没有 `sequence` 字段**（当前代码才写它）。载荷长这样：
+   `{"executionThreadId":"execution-thread-b56cb883-72e","type":"MODEL_OUTPUT","text":"I"}`。
+   没有 `sequence` 就无法定位 journal 里的对应行，副本"可能存在"但**无法证明存在**。
+2. 更要紧的是：这些行绝大多数属于**已经被删除的 run**。run 删掉时 journal 与 execution_thread 一起
+   没了，**这些事件是那段模型输出的唯一记录**。实测单个已删除的 `run-1491d6e7-70e` 就有 9,408 条，
+   它的 journal 行数、runs 行数、execution_threads 行数全是 0。
+
+它们是垃圾——这一点没错。但白名单的判据是"**另有**副本"，不是"看起来没用"。收据不成立就不能删，
+于是把这个类型整个移出白名单（`isPrunableEvent` 退回成一句纯白名单查询，SQLite 侧那条 `prunable`
+也去掉了 `json_extract`）。
+
+另一条被引用的依据也一并纠正：A2 原文引 `run/dispatch-coordinator.ts` 的 `isStreamingEvent`
+"只影响展示进度，不需要逐条 reconcile"。那是说**不需要逐条对账**，与"数据有副本"是两件事，
+不能拿来当回收依据。
+
+### Changed
+
+- [event-retention.ts](code/packages/domain/src/store/event-retention.ts)：`PRUNABLE_EVENT_TYPES` 现在是全部规则，`isPrunableEvent` 只剩一句 `includes`。模块头记下了这次的证据，并新增一条维护提示：**往白名单里加类型之前，在真实库上按聚合逐行验证副本确实存在，而不是只读代码**——上面第 2 条就是这个动作抓出来的，光读代码看不出来。
+- [sqlite-store.ts](code/packages/domain/src/store/sqlite-store.ts)：`pruneEvents` 的 `prunable` / `scope` 简化，注释同步。
+- [store-contract.test.ts](code/packages/domain/src/store-contract.test.ts)：那条 `prunes only MODEL_OUTPUT among run.executor.event payloads` **反向重写**为 `never prunes run.executor.event, not even its MODEL_OUTPUT payloads`。断言是翻过来的，不是被删掉的——它现在是"判据是副本、不是观感"这条规则在两个实现上的守卫。
+
+### Changed files
+
+- Domain：`code/packages/domain/src/store/event-retention.ts`、`store/sqlite-store.ts`、`store-contract.test.ts`。
+
+### Verification
+
+- `pnpm --dir code verify` 通过：domain 276/276、API 72/72、Web 424/424，无新增值级循环依赖。
+- 收紧后重跑逐行核实（本次 14 天配置下**实际会删的两个类型**）：`agent.step.model_text_delta` 15,119 行待删、0 行找不到副本（按 `(loop_id, sequence)` 与 `agent_loop_steps` 关联）；`agent.model.text.delta` 15,119 行待删、0 行找不到副本（它的载荷带的是 `providerTurnId` 而非 `sequence`，按"同 loop 同文本"关联，且与上一个类型条数逐字相等、A1a 已停止写入）。`run.executor.event` 现在是 0 行待删。
+
 ## 2026-09-28 — D3 结论：只做 D3-1，另两簇记账不做
 
 D3 原计划把 ExplorerView.vue 的 script 块按三簇拆成 `usePlanDetailDrawer` / `useProjectDialogs` /
@@ -66,7 +105,8 @@ ExplorerView 的发送路径挂到组件测试上），再动结构——那是�
 
 - `PipelineStore.pruneEvents({ cutoff, minPerAggregate })`：回收高频事件，返回删除条数。规则与白名单的**唯一**定义在新增的叶子模块 `store/event-retention.ts`，两个实现都按它来——SQLite 那条带窗口函数的 DELETE 是它的规格翻译。`cutoff` 由调用方算好传进来（而不是让存储层取 `now()`），这样"删哪些"完全由入参决定，两种实现才对得齐，测试也不必去伪造历史时间戳（`appendEvent` 的 `occurredAt` 由存储层生成，调用方给不了过去的时间）。
 - 配置项 `storage.eventRetentionDays` 与 `storage.eventRetentionMinPerAggregate`，并接进 `createApp` 的 store 构造。
-- **可回收白名单**（判定标准只有一条：*这一条事件是不是某段事实的中间态，而那段事实的最终态另有持久化副本*）：`explorer.turn.text.delta`（最终正文在 `explorer_turns.content`）、`agent.step.model_text_delta`（`agent_loop_steps` 那行的事件镜像）、`agent.model.text.delta`（与上一条逐字重复，A1a 已停止写入）、`project.execution.turn.text.delta`（最终正文在 `project_execution_messages.content`），以及 `run.executor.event` 中 `payload.type === 'MODEL_OUTPUT'` 的那部分（`execution_journal` 的镜像，且 `run/dispatch-coordinator.ts` 的 `isStreamingEvent` 自己就写着这类事件"只影响展示进度"）。**任何参与业务判定的事件都不能进白名单**——`plan.*`、`run.paused`、`verification.completed` 删掉不是"少了几条历史"，是状态机少了输入。
+- **可回收白名单**（判定标准只有一条：*这一条事件是不是某段事实的中间态，而那段事实的最终态另有持久化副本*）：`explorer.turn.text.delta`（最终正文在 `explorer_turns.content`）、`agent.step.model_text_delta`（`agent_loop_steps` 那行的事件镜像）、`agent.model.text.delta`（与上一条逐字重复，A1a 已停止写入）、`project.execution.turn.text.delta`（最终正文在 `project_execution_messages.content`）。**任何参与业务判定的事件都不能进白名单**——`plan.*`、`run.paused`、`verification.completed` 删掉不是"少了几条历史"，是状态机少了输入。
+- 本条原文把 `run.executor.event` 中 `payload.type === 'MODEL_OUTPUT'` 的那部分也列进了白名单，依据是"它是 `execution_journal` 的镜像"。**那条依据是错的，已在开启回收前移除**，见上面「A2 白名单收紧」一节。
 - `store/event-retention.ts` 里另有 `prunableEventIds`（内存实现的判定）与 `isPrunableEvent`，两者与 SQLite 的 SQL 是同一套规则的两种表达。
 
 ### Fixed
@@ -88,7 +128,7 @@ ExplorerView 的发送路径挂到组件测试上），再动结构——那是�
 ### Verification
 
 - `pnpm --dir code verify` 通过：domain 276/276、API 72/72、Web 424/424，无新增值级循环依赖。
-- 契约套件新增 5 条用例，在两个实现上各跑一遍：cutoff 在过去时一条不删；白名单外的类型永不删；保底条数**按聚合**生效（3 条保 2 条只删最旧一条，2 条的聚合一条不删）；`run.executor.event` 只有 `MODEL_OUTPUT` 被删、`TOOL_CALLED` 留下；回收后追加的事件序号仍大于历史。
+- 契约套件新增 5 条用例，在两个实现上各跑一遍：cutoff 在过去时一条不删；白名单外的类型永不删；保底条数**按聚合**生效（3 条保 2 条只删最旧一条，2 条的聚合一条不删）；`run.executor.event` 无论载荷是什么都不删（本条当时断言的是"只有 `MODEL_OUTPUT` 被删"，规则收紧后已改为反向断言）；回收后追加的事件序号仍大于历史。
 - 最后一条**当场抓到上文的序号回退缺陷**——SQLite 实现当时还没写高水位，用例失败。这不是"补一条测试让它通过"，是守卫先红后绿。
 - 启动期接线新增 1 条用例（`store-startup-repair.test.ts`）：不配置回收时一条不删、配置后只删白名单内那条、且删完追加的事件序号仍大于历史。用独立连接直接写库造"2020 年的事件"，因为 `appendEvent` 给不出过去的时间戳。
 - `store-startup-repair.test.ts` 的 `corrupt()` 改名 `runRawSql()`：它在本文件里多数时候确实在制造损坏，但回收那组用例只是用它塞一条旧事件，用 `corrupt` 会让那句读起来像在"制造损坏"。

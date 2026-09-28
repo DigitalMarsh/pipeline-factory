@@ -1224,13 +1224,14 @@ export class SqlitePipelineStore implements PipelineStore {
   pruneEvents(input: EventPruneInput): { deleted: number } {
     // 这条 SQL 是 store/event-retention.ts 那套规则的**规格翻译**——两处必须逐条对应，
     // 改那边就要改这里（C2 的契约套件会在同一份数据上跑两个实现来兜住这件事）：
-    //   可回收 = type 在白名单里，或 type='run.executor.event' 且 payload.type='MODEL_OUTPUT'
+    //   可回收 = type 在白名单里（`run.executor.event` 曾按 MODEL_OUTPUT 载荷进过白名单，
+    //   已在真实数据上验证不成立后移除——见 event-retention.ts 的说明）
     //   每个聚合的**可回收事件**里最近的 minPerAggregate 条无条件留下
     //   其余里 occurred_at 早于 cutoff 的才删
     // minPerAggregate <= 0 时 `rank <= 0` 恒假、子查询为空、NOT IN (空) 恒真，等价于"不保底"，
     // 所以这里不需要为它写分支。
-    const prunable = `(type IN (${PRUNABLE_EVENT_TYPES.map(() => "?").join(", ")}) OR (type = ? AND json_extract(payload_json, '$.type') = 'MODEL_OUTPUT'))`;
-    const scope = [...PRUNABLE_EVENT_TYPES, "run.executor.event"];
+    const prunable = `(type IN (${PRUNABLE_EVENT_TYPES.map(() => "?").join(", ")}))`;
+    const scope = [...PRUNABLE_EVENT_TYPES];
     // **先记高水位，再删行**。顺序不能反：万一在中间崩了，"记了高水位但没删"只是下次启动
     // 重删一遍（MAX 是幂等的），而"删了但没记"会让序号退回去。也正因为顺序本身就保证了安全，
     // 这里**不依赖事务**——启动期的调用方虽然会把它包进 runInTransaction，但直接调用
