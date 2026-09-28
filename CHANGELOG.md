@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-09-28 — Store 跨实现契约与事件写入去重
+
+### Added
+
+- 新增 `store-contract.test.ts`：PipelineStore 的跨实现契约套件，同一批断言在 `InMemoryPipelineStore` 与 `SqlitePipelineStore` 上各跑一遍。端口方法清单由 tsc 保证完整（漏一个方法编译不过），覆盖生产写路径：事件追加与查询、脱敏、步骤序号、Plan 查询投影、Run/合并/工具调用、幂等与事务回滚。
+
+### Fixed
+
+- 修复 `VerificationRun.reason` 在 SQLite 上永远读不出来的缺陷：该字段自类型引入时就存在（并被 Web 的类型 parity 守卫覆盖），但 `verification_runs` 建表语句一直漏了 `reason` 列，`saveVerificationRun` 也不写、`verificationFromRow` 也不读，于是生产上恒为 `undefined`——`NO_PROJECT_VERIFICATION_COMMANDS`（"未配置自动验证"的唯一凭据）被静默丢弃。补建表列 + `ALTER TABLE` 迁移分支 + 读写路径。
+- 修复 `saveIdempotency` 在两种存储下语义相反的缺陷：内存实现用 `Map.set`（后写覆盖），SQLite 用 `INSERT OR IGNORE`（首次写入生效）。调用方一律"先查后写"，该过程不原子，并发重放时只有首次写入生效才能保证重放拿到**原来**那条结果，因此按 SQLite 语义对齐内存实现，并在端口注释 6 中写明该契约。
+
+### Changed
+
+- Agent Loop 的单次模型文本增量不再往事件表写第二份：`agent.model.text.delta` 与 `agent.step.model_text_delta` 的 `text` 逐字相同，同一次增量此前落 1 行 `agent_loop_steps` + 2 条领域事件。`emit` 增加 `durable` 开关，`flushTextDelta` 改用它只做进程内派发——**回调与 listener 的派发时序、内容完全不变**（Explorer 的实时正文靠 thread-service 的 callback 累积，读的是 `AgentLoopEvent` 而非事件表）。实测该类型占全部事件 159,523 条中的 53,161 条（33.3%），数据库 81 MB 中 `domain_events` 占 43 MB。
+- `PipelineStore` 端口注释补充 `saveIdempotency` 的首次写入生效语义。
+
+### Changed files
+
+- Domain：`code/packages/domain/src/store-contract.test.ts`（新增）、`code/packages/domain/src/agent-loop-engine.test.ts`、`code/packages/domain/src/agent/agent-loop.ts`、`code/packages/domain/src/store/pipeline-store.ts`、`code/packages/domain/src/store/in-memory-store.ts`、`code/packages/domain/src/store/sqlite-store.ts`。
+
+### Verification
+
+- `pnpm --dir code verify` 通过：domain 253 用例（通过 252，失败 1）、API 68 用例全通过、Web 424 用例全通过，无新增值级循环依赖。
+- 那 1 个失败是 `scripts/test-baseline.json` 中已登记的既有缺陷（`dispatch-coordinator.test.ts:121` 期望 `RUNNING` 实得 `WAITING/NEEDS_CONFIGURATION`），本次未触碰，非回归。
+- 新契约套件的断言经反向验证：临时移除 `durable: false` 后 `agent-loop-engine.test.ts` 的新增用例按预期失败（`to not include 'agent.model.text.delta'`），确认守卫非空转。
+- 未做浏览器验收：本次改动不含前端可见行为变化，但 A1a 改变了事件写入，仍应在下一轮浏览器验收中确认 Explorer 流式正文实时可见。
+
 ## 2026-09-27 — Explorer 流式交互与事件查询性能
 
 ### Changed

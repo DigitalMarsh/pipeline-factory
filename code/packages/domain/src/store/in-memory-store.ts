@@ -451,5 +451,10 @@ export class InMemoryPipelineStore implements PipelineStore {
   }
 
   getIdempotency(scope: string, key: string): Record<string, unknown> | undefined { return this.idempotency.get(`${scope}:${key}`); }
-  saveIdempotency(scope: string, key: string, result: Record<string, unknown>): void { this.idempotency.set(`${scope}:${key}`, result); }
+  /** 首次写入生效（与 SQLite 实现的 INSERT OR IGNORE 一致）；幂等键重放必须拿到**原来**那条结果。 */
+  saveIdempotency(scope: string, key: string, result: Record<string, unknown>): void {
+    const composite = `${scope}:${key}`;
+    if (this.idempotency.has(composite)) return;
+    this.idempotency.set(composite, result);
+  }
 }

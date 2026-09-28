@@ -403,7 +403,8 @@ export class SqlitePipelineStore implements PipelineStore {
         status TEXT NOT NULL,
         repair_attempts INTEGER NOT NULL,
         command_results_json TEXT NOT NULL,
-        completed_at TEXT NOT NULL
+        completed_at TEXT NOT NULL,
+        reason TEXT
       );
       CREATE TABLE IF NOT EXISTS merge_requests (
         id TEXT PRIMARY KEY,
@@ -540,6 +541,10 @@ export class SqlitePipelineStore implements PipelineStore {
     try { this.database.exec("ALTER TABLE plan_dispatch_states ADD COLUMN confirmed_by TEXT"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE plan_dispatch_states ADD COLUMN revision INTEGER"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE merge_requests ADD COLUMN detected_target_commit TEXT"); } catch { /* Existing databases already have the column. */ }
+    // reason 自 VerificationRun 类型引入时就存在，但建表语句一直漏了它，于是 SQLite 上
+    // 该字段永远读不出来（内存实现却一直保留着）——同一个字段在两种存储下语义不同。
+    // 补列而不是删字段：NO_PROJECT_VERIFICATION_COMMANDS 是"没配验证命令"的唯一凭据。
+    try { this.database.exec("ALTER TABLE verification_runs ADD COLUMN reason TEXT"); } catch { /* Existing databases already have the column. */ }
     this.database.exec(`
       UPDATE candidate_plans
       SET dispatched_at = COALESCE(dispatched_at, queued_at)
@@ -947,7 +952,7 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   saveVerificationRun(verification: VerificationRun): VerificationRun {
-    this.database.prepare("INSERT OR IGNORE INTO verification_runs (id, run_id, status, repair_attempts, command_results_json, completed_at) VALUES (?, ?, ?, ?, ?, ?)").run(verification.id, verification.runId, verification.status, verification.repairAttempts, JSON.stringify(verification.commandResults), verification.completedAt);
+    this.database.prepare("INSERT OR IGNORE INTO verification_runs (id, run_id, status, repair_attempts, command_results_json, completed_at, reason) VALUES (?, ?, ?, ?, ?, ?, ?)").run(verification.id, verification.runId, verification.status, verification.repairAttempts, JSON.stringify(verification.commandResults), verification.completedAt, verification.reason ?? null);
     return this.getVerificationById(verification.id) as VerificationRun;
   }
 
@@ -1290,6 +1295,9 @@ export class SqlitePipelineStore implements PipelineStore {
       repairAttempts: Number(row.repair_attempts),
       commandResults: JSON.parse(String(row.command_results_json)) as VerificationRun["commandResults"],
       completedAt: String(row.completed_at),
+      // 老库与历史回填的行没有 reason（列为 NULL），此时不补默认值：
+      // "未记录"与"已记录为未配置验证命令"是两件事，界面要能区分。
+      ...(row.reason === "NO_PROJECT_VERIFICATION_COMMANDS" ? { reason: "NO_PROJECT_VERIFICATION_COMMANDS" as const } : {}),
     };
   }
 

@@ -19,6 +19,12 @@
  *      内存实现不需要。调用方必须容忍它不存在，不能假定一定有事务边界。
  *   5) deleteExplorerCascade 返回摘要是为了让调用方拿到级联删除的计数，
  *      不要改成 void——上层的事件载荷依赖这些计数。
+ *   6) **saveIdempotency 是"首次写入生效"**，重复的 (scope, key) **不得覆盖**已有结果。
+ *      调用方一律是"先 getIdempotency，未命中才写"（见 explorer/thread-service.ts、
+ *      plan/service.ts），所以覆盖在单进程下不会发生；但该"先查后写"不是原子的，
+ *      并发重放时只有 INSERT OR IGNORE 语义才能保证重放拿到**原来**那条结果。
+ *      内存实现曾用 Map.set（后写覆盖），与 SQLite 的 INSERT OR IGNORE 语义相反——
+ *      已按首次写入生效对齐，不要再退回后者。
  */
 import type {
   AgentLoop,

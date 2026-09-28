@@ -4,7 +4,7 @@
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  */
 import { describe, expect, it } from "vitest";
-import { AgentLoopEngine } from "./agent/agent-loop.js";
+import { AgentLoopEngine, type AgentLoopEvent } from "./agent/agent-loop.js";
 import { DurableToolRuntime } from "./tools/tool-runtime.js";
 import { InMemoryPipelineStore, ToolGateway, type ModelEvent, type ModelGateway, type ModelRequest, type TerminationGate } from "./index.js";
 
@@ -53,6 +53,44 @@ describe("AgentLoopEngine", () => {
     expect(loop).toMatchObject({ state: "COMPLETED", stepCount: 4, maxSteps: 4 });
     expect(store.listAgentLoopSteps(loop.id).filter((step) => step.stepType === "MODEL_STARTED").map((step) => step.payload.step)).toEqual([1, 2, 3, 4]);
     expect(requests.map((request) => request.continuationPrompt)).toEqual([undefined, "continue-1", "continue-2", "continue-3"]);
+  });
+
+  it("persists each model text delta once while still dispatching it in process", async () => {
+    // 同一次模型增量曾被落三份：1 行 agent_loop_steps + 2 条事件
+    // （agent.step.model_text_delta 与 agent.model.text.delta，text 逐字相同）。
+    // 现在只留步骤那一份；进程内派发必须原样保留 —— Explorer 的实时正文靠 thread-service
+    // 的 callback 累积，它读的是 AgentLoopEvent，不是事件表。这条断言同时锁住两侧。
+    const store = new InMemoryPipelineStore();
+    const inProcess: AgentLoopEvent[] = [];
+    const model: ModelGateway = {
+      configFor: () => ({ model: "explorer" }),
+      capabilities: () => ({ supportsStructuredUserInput: true, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
+      async *stream() {
+        yield { type: "text.delta", text: "hello " };
+        yield { type: "text.delta", text: "world" };
+        yield { type: "turn.completed" };
+      },
+      async answerUserInput() { return undefined; },
+      async cancel() { return undefined; },
+    };
+    const completeImmediately: TerminationGate = { evaluate: () => ({ action: "complete", reason: "DONE" }) };
+
+    const loop = await new AgentLoopEngine(store, model).run({
+      ...baseInput(completeImmediately),
+      role: "explorer",
+      ownerType: "explorer-turn",
+      ownerId: "turn-1",
+      mode: "provider-controlled",
+      onEvent: (event) => inProcess.push(event),
+    });
+
+    const dispatched = inProcess.filter((event) => event.type === "agent.model.text.delta");
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]?.payload.text).toBe("hello world");
+
+    const storedTypes = store.listEvents({ aggregateId: loop.id }).map((event) => event.type);
+    expect(storedTypes.filter((type) => type === "agent.step.model_text_delta")).toHaveLength(1);
+    expect(storedTypes).not.toContain("agent.model.text.delta");
   });
 
   it("does not resume a paused persisted loop when no live execution coroutine exists", async () => {

@@ -414,8 +414,11 @@ export class AgentLoopEngine implements AgentLoopRunner {
       if (!deltaBuffer) return;
       const text = deltaBuffer;
       deltaBuffer = "";
+      // appendStep 已经把这段文本落进 agent_loop_steps，并同时发出 agent.step.model_text_delta 事件。
+      // 下面这次派发只为把**带 providerThreadId/providerTurnId** 的增量送给进程内消费者
+      // （thread-service 靠它累积 turn 正文），不再往事件表里存第二份同样的 text。
       this.appendStep(current, "MODEL_TEXT_DELTA", "COMPLETED", { text, ...(deltaItemId ? { providerItemId: deltaItemId } : {}) });
-      this.emit(current, "agent.model.text.delta", { text, ...(deltaThreadId ? { providerThreadId: deltaThreadId } : {}), ...(deltaTurnId ? { providerTurnId: deltaTurnId } : {}), ...(deltaItemId ? { providerItemId: deltaItemId } : {}) });
+      this.emit(current, "agent.model.text.delta", { text, ...(deltaThreadId ? { providerThreadId: deltaThreadId } : {}), ...(deltaTurnId ? { providerTurnId: deltaTurnId } : {}), ...(deltaItemId ? { providerItemId: deltaItemId } : {}) }, { durable: false });
     };
     // 低速率输出时字符阈值可能迟迟达不到；定时刷新保证文本仍能即时可见，而不是等步骤结束才出现。
     const scheduleDeltaFlush = (): void => {
@@ -637,10 +640,14 @@ export class AgentLoopEngine implements AgentLoopRunner {
     return seeded;
   }
 
-  private emit(loop: AgentLoop, type: string, payload: Record<string, unknown>): void {
+  private emit(loop: AgentLoop, type: string, payload: Record<string, unknown>, options: { durable?: boolean } = {}): void {
     const event: AgentLoopEvent = { loopId: loop.id, type, sequence: this.currentStepSequence(loop.id), payload };
     this.callbacks.get(loop.id)?.(event);
     this.listeners.get(loop.id)?.forEach((listener) => listener(event));
+    // durable:false 用于"同一份事实已经以步骤形式落库"的事件，避免同一次模型增量在事件表里存两份。
+    // **进程内派发必须保留**——Explorer 的实时文本链路（thread-service 的 callback）靠它。
+    // 只跳过 appendEvent，调用方读到的事件内容与顺序完全不变。
+    if (options.durable === false) return;
     this.store.appendEvent({ type: type as import("../index.js").DomainEvent["type"], aggregateId: loop.id, payload });
   }
 
