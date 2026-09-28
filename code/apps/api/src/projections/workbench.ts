@@ -21,7 +21,7 @@ import type { DomainEvent, PipelineStore, ProjectService } from "@pipeline-facto
 import { planProjection } from "./plan-lifecycle.js";
 
 /** Workbench 首次加载回放的事件尾部窗口与最终保留条数；实时增量仍由 SSE 提供。 */
-const WORKBENCH_EVENT_TAIL_LIMIT = 4_000;
+export const WORKBENCH_EVENT_TAIL_LIMIT = 4_000;
 const WORKBENCH_EVENT_LIMIT = 400;
 
 export function workbenchSnapshot(store: PipelineStore, projects: ProjectService, projectId: string) {

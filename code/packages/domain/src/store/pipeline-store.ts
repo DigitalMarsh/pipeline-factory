@@ -60,6 +60,27 @@ import type {
   VerificationRun,
 } from "../index.js";
 
+/**
+ * 事件查询参数。`aggregateIds` / `types` 是把过滤下推到存储层的手段，
+ * 让调用方不必为了筛出少量事件而把整张事件表读进内存；空数组等同于不筛选。
+ */
+export type EventQuery = {
+  afterSequence?: number;
+  aggregateId?: string;
+  aggregateIds?: readonly string[];
+  types?: readonly string[];
+  /**
+   * 截断条数。**取哪一端由 limitFrom 决定**，缺省 `"tail"` 即"最新的 N 条"，
+   * 与引入 limitFrom 之前的行为完全一致。
+   *
+   * 游标式增量读取（"从 cursor 往后接着读"）必须显式传 `limitFrom: "head"`：
+   * 那种场景下取最新的 N 条是错的——游标停在旧位置时会一直读到最新那一批，
+   * 中间的事件被静默跳过，且因为游标推进到本批末尾而永远补不回来。
+   */
+  limit?: number;
+  limitFrom?: "head" | "tail";
+};
+
 /** Domain 的持久化端口；内存和 SQLite 实现必须保持相同的事实及事件语义。 */
 export type PipelineStore = {
   now(): string;
@@ -150,10 +171,10 @@ export type PipelineStore = {
   appendEvent(event: Omit<DomainEvent, "id" | "occurredAt" | "sequence">): DomainEvent;
   subscribeEvents?(listener: (event: DomainEvent) => void): () => void;
   /**
-   * 按序号升序读取事件。aggregateIds 与 types 是把过滤下推到存储层的手段，
-   * 让调用方不必为了筛出少量事件而把整张事件表读进内存；空数组等同于不筛选。
+   * 按序号升序读取事件。过滤与截断参数见 EventQuery —— 注意 `limit` 缺省从**尾部**取，
+   * 游标式增量读取要传 `limitFrom: "head"`。
    */
-  listEvents(options?: { afterSequence?: number; aggregateId?: string; aggregateIds?: readonly string[]; types?: readonly string[]; limit?: number }): DomainEvent[];
+  listEvents(options?: EventQuery): DomainEvent[];
   getLastEventSequence(aggregateId?: string): number;
   deleteExplorerCascade(input: ExplorerDeletionInput): ExplorerDeletionSummary;
   getIdempotency(scope: string, key: string): Record<string, unknown> | undefined;

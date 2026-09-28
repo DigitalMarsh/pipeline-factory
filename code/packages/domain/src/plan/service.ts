@@ -424,10 +424,14 @@ export class PlanService {
       .filter((row) => !keyword || `${row.planId} ${row.title} ${row.goal}`.toLowerCase().includes(keyword))
       .filter((row) => !query.from || Date.parse(row.queuedAt!) >= Date.parse(query.from))
       .filter((row) => !query.to || Date.parse(row.queuedAt!) <= Date.parse(query.to))
-      .map((row) => {
+      .flatMap((row) => {
         const plan = this.store.getPlan(row.planId);
-        if (!plan) throw new Error(`Plan query projection ${row.planId} has no source Plan`);
-        return {
+        // 投影行可能没有源 Plan（历史脏数据、手工改库、或将来某个漏删路径）。
+        // **跳过而不是抛错**：一行坏数据不该让整个 Plan Center 变成 500。
+        // 正常流程不会产生这种行——savePlan 的外键驱动守卫 + deleteExplorerCascade 的级联删除
+        // 已经覆盖了写入与清理两侧，所以这条分支只在数据已损坏时生效，不应指望测试覆盖它。
+        if (!plan) return [];
+        return [{
           planId: row.planId,
           title: row.title,
           revision: row.revision,
@@ -445,7 +449,7 @@ export class PlanService {
           lastEventAt: row.lastEventAt,
           attentionReason: row.attentionReason,
           priority: row.priority,
-        } satisfies PlanIndexRow;
+        } satisfies PlanIndexRow];
       })
       .sort((a, b) => this.comparePlanRows(a, b, query.sort));
 

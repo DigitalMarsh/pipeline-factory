@@ -30,7 +30,7 @@ import { freezeRevision } from "../platform/freeze.js";
 import { isRecord } from "../platform/guards.js";
 import { REQUIRED_PLAN_AREAS } from "../platform/plan-requirements.js";
 import { redactAuditPayload, redactAuditText } from "../platform/redaction.js";
-import type { PipelineStore } from "./pipeline-store.js";
+import type { EventQuery, PipelineStore } from "./pipeline-store.js";
 import type { AgentLoop, AgentLoopStep, AgentLoopStepInput } from "../agent/agent-loop.js";
 import type { ExplorerTitleSource, ExplorerTitleStatus } from "../explorer/explorer-title.js";
 import type { PlanDispatchState } from "../run/dispatch-coordinator.js";
@@ -569,6 +569,7 @@ export class SqlitePipelineStore implements PipelineStore {
     try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN provider_item_id TEXT"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN provenance TEXT NOT NULL DEFAULT 'LEGACY'"); } catch { /* Existing databases already have the column. */ }
     this.repairUnconfirmedProgressedPlans();
+    this.repairOrphanedPlans();
     this.backfillExplorerPlans();
     this.backfillLegacyRevisionHistory();
     this.backfillCandidateVersions();
@@ -775,6 +776,12 @@ export class SqlitePipelineStore implements PipelineStore {
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET project_id=excluded.project_id, source_explorer_thread_id=excluded.source_explorer_thread_id, explorer_plan_id=excluded.explorer_plan_id, source_turn_id=excluded.source_turn_id, provider_thread_id=excluded.provider_thread_id, provider_turn_id=excluded.provider_turn_id, provider_item_id=excluded.provider_item_id, title=excluded.title, revision=excluded.revision, status=excluded.status, confirmed_by=excluded.confirmed_by, confirmed_at=excluded.confirmed_at, queued_at=excluded.queued_at, dispatched_at=excluded.dispatched_at, run_id=excluded.run_id, last_event_at=excluded.last_event_at, attention_reason=excluded.attention_reason, contract_json=excluded.contract_json, generated_spec_json=excluded.generated_spec_json, resolved_contract_json=excluded.resolved_contract_json
     `).run(plan.id, plan.projectId, plan.sourceExplorerThreadId, plan.explorerPlanId ?? null, plan.sourceTurnId, plan.providerThreadId, plan.providerTurnId, plan.providerItemId, plan.title, plan.revision, plan.status, plan.createdAt, plan.confirmedBy, plan.confirmedAt, plan.queuedAt, plan.dispatchedAt ?? null, plan.runId, plan.lastEventAt, plan.attentionReason, JSON.stringify(plan.contract), plan.generatedSpec ? JSON.stringify(plan.generatedSpec) : null, plan.resolvedContract ? JSON.stringify(plan.resolvedContract) : null);
+    // 这道守卫是**外键驱动**的，不是业务规则：plan_query_projection 对 project_id 与
+    // source_explorer_thread_id 都建了 REFERENCES，而它所索引的 candidate_plans 自己**没有**这两条外键。
+    // 索引表比事实表更严，于是只能靠守卫避免写投影时违反外键。
+    // 因此**不要**把它"简化"成无条件写入：那会把 savePlan 从不抛错的 UPSERT 变成
+    // project/thread 缺失时抛错的方法，而内存实现没有外键会静默成功——等于制造一个新的双实现分歧。
+    // 守卫跳过的孤儿 Plan 由启动期的 repairOrphanedPlans 显式标记为 BLOCKED，不再静默消失。
     if (this.getProject(plan.projectId) && this.getThread(plan.sourceExplorerThreadId)) this.savePlanQueryProjection(planQueryProjectionFor(plan));
     return this.getPlan(plan.id) as CandidatePlan;
   }
@@ -1097,7 +1104,7 @@ export class SqlitePipelineStore implements PipelineStore {
     return () => this.eventListeners.delete(listener);
   }
 
-  listEvents(options: { afterSequence?: number; aggregateId?: string; aggregateIds?: readonly string[]; types?: readonly string[]; limit?: number } = {}): DomainEvent[] {
+  listEvents(options: EventQuery = {}): DomainEvent[] {
     // aggregateIds 用于"一次取多个聚合的事件"，走 domain_events_aggregate_idx；
     // 它替代的是"读全表再在内存里筛"，对十万级事件表是数量级的差别。
     const aggregateIds = options.aggregateIds?.length ? options.aggregateIds : null;
@@ -1118,10 +1125,14 @@ export class SqlitePipelineStore implements PipelineStore {
       params.push(...types);
     }
     const where = clauses.join(" AND ");
-    // limit 语义是“最新的 N 条”：先倒序截断再恢复升序，避免为了取尾部而加载全部历史事件。
+    // limit 语义分两端，由 limitFrom 决定：
+    //   tail（缺省）= "最新的 N 条"：先倒序截断再恢复升序，避免为了取尾部而加载全部历史。
+    //   head        = "游标之后最早的 N 条"：游标式增量读取用这个，直接 LIMIT 即可。
     const sql = options.limit === undefined
       ? `SELECT * FROM domain_events WHERE ${where} ORDER BY sequence ASC`
-      : `SELECT * FROM (SELECT * FROM domain_events WHERE ${where} ORDER BY sequence DESC LIMIT ?) ORDER BY sequence ASC`;
+      : options.limitFrom === "head"
+        ? `SELECT * FROM domain_events WHERE ${where} ORDER BY sequence ASC LIMIT ?`
+        : `SELECT * FROM (SELECT * FROM domain_events WHERE ${where} ORDER BY sequence DESC LIMIT ?) ORDER BY sequence ASC`;
     if (options.limit !== undefined) params.push(options.limit);
     const rows = this.database.prepare(sql).all(...params) as unknown as SqliteRow[];
     return rows.map((row) => ({
@@ -1425,8 +1436,40 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   private backfillPlanQueryProjection(): void {
+    // 守卫与 savePlan 里的是同一条、同样是**外键驱动**的（见 savePlan 的说明）。
+    // 被它挡下的孤儿 Plan 由 repairOrphanedPlans 标成 BLOCKED，所以"每次重启再漏一次"不再无声。
     for (const plan of this.listPlans()) {
       if (this.getProject(plan.projectId) && this.getThread(plan.sourceExplorerThreadId)) this.savePlanQueryProjection(planQueryProjectionFor(plan));
+    }
+  }
+
+  /**
+   * 把"已确认之后、却指向已不存在的 ExplorerThread"的 Plan 标成 BLOCKED。
+   *
+   * 为什么需要它：savePlan 的投影守卫会跳过这类 Plan，于是它们既不进 Plan Center（投影没写），
+   *   状态又停留在 READY/QUEUED 之类**看起来可执行**的值上——用户只看到计划"不见了"，
+   *   没有任何可追查的线索。改成 BLOCKED + attentionReason 之后走的是既有展示链路
+   *   （attentionReason 已在前端"需要关注"里），孤儿事实变得可见。
+   *
+   * **只查 source_explorer_thread_id，不查 project_id**：领域层允许"有 Plan 却没有 Project 行"
+   *   （PlanService.registerThread + createCandidatePlan 不需要先建 Project，多个领域测试正是这么用的），
+   *   所以"项目不存在"不是损坏信号，把它当孤儿会把正常数据误判成 BLOCKED。
+   *   来源线程则相反：它由 ExplorerService 与 Plan 成对创建、由 deleteExplorerCascade 成对删除，
+   *   缺失只可能来自历史脏数据或漏删路径。
+   *
+   * 与 repairUnconfirmedProgressedPlans 的分工：那条管"没有确认记录却已推进"，本条管"确认了但来源线程没了"。
+   * 幂等：修完后状态不再落在下面的集合里，重启不会重复处理。
+   */
+  private repairOrphanedPlans(): void {
+    const rows = this.database.prepare(`
+      SELECT * FROM candidate_plans
+      WHERE status IN (?, ?, ?, ?, ?, ?, ?, ?)
+        AND source_explorer_thread_id NOT IN (SELECT id FROM explorer_threads)
+    `).all("READY", "QUEUED", "ENQUEUED", "DISPATCHED", "IN_PROGRESS", "VERIFYING", "MERGE_READY", "MERGED") as unknown as SqliteRow[];
+    for (const row of rows) {
+      const plan = this.planFromRow(row);
+      const reason = "Plan source is missing: its source ExplorerThread no longer exists.";
+      updatePlanStatus(this, plan, { status: "BLOCKED", attentionReason: reason, lastEventAt: this.now() }, reason);
     }
   }
 

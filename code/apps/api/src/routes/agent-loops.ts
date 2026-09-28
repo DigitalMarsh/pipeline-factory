@@ -29,8 +29,23 @@ export type AgentLoopRouteDeps = {
   loopController: Pick<AgentLoopRunner, "pause" | "resume" | "cancel">;
 };
 
+/**
+ * 首次连接回放的事件窗口与轮询单轮上限。
+ *
+ * 为什么要窗口：web 端的 `api.agentLoopEventsUrl(loopId)` **不传游标**，于是建连即 from 0 回放。
+ * 一个长回合的 Loop 有数万条事件（文本增量占绝大多数，见 agent/agent-loop.ts 模块头），
+ * 全量回放意味着建连时把整段历史读出来并逐条拼帧。诊断面板只看尾部，窗口足够。
+ */
+const AGENT_LOOP_INITIAL_REPLAY_LIMIT = 2_000;
+const AGENT_LOOP_POLL_LIMIT = 500;
+
 export function registerAgentLoopRoutes(app: FastifyInstance, deps: AgentLoopRouteDeps): void {
   const { store, loopController } = deps;
+
+  /** 游标为 0 = 首次连接取尾部窗口；其余情况从游标向前读（详见 routes/workbench.ts 的同类说明）。 */
+  const batchOptions = (loopId: string, afterSequence: number) => afterSequence === 0
+    ? { aggregateId: loopId, limit: AGENT_LOOP_INITIAL_REPLAY_LIMIT, limitFrom: "tail" as const }
+    : { aggregateId: loopId, afterSequence, limit: AGENT_LOOP_POLL_LIMIT, limitFrom: "head" as const };
 
   app.get("/api/v4/agent-loops/:loopId", async (request, reply) => {
     const params = agentLoopParams.safeParse(request.params);
@@ -65,12 +80,12 @@ export function registerAgentLoopRoutes(app: FastifyInstance, deps: AgentLoopRou
     const acceptsSse = query.data.format === "sse" || (request.headers.accept ?? "").includes("text/event-stream");
     if (!acceptsSse) {
       const current = store.getAgentLoop(params.data.loopId)!;
-      return { items: store.listEvents({ aggregateId: params.data.loopId, afterSequence }), diagnostics: loopDiagnostics(store, current) };
+      return { items: store.listEvents(batchOptions(params.data.loopId, afterSequence)), diagnostics: loopDiagnostics(store, current) };
     }
     let cursor = afterSequence;
     const sse = openSseChannel(request, reply, { poll: () => send() });
     const send = () => {
-      const events = store.listEvents({ aggregateId: params.data.loopId, afterSequence: cursor });
+      const events = store.listEvents(batchOptions(params.data.loopId, cursor));
       // 无新事件时不计算诊断：轮询在 Loop 静默期不应产生任何读取。
       if (events.length === 0) return;
       const current = store.getAgentLoop(params.data.loopId);

@@ -74,4 +74,18 @@ describe("PlanService.query", () => {
     expect(plans.query({ projectId: "project-1", explorerThreadId: "explorer-child", includeLineage: true, limit: 20, sort: "last_event_at" }).items.map((item) => item.title)).toEqual(["Parent dispatched"]);
     expect(draft.status).toBe("DRAFT");
   });
+
+  it("skips a projection row whose source Plan is gone instead of failing the whole query", () => {
+    // 历史脏数据只可能出现在内存实现里：SQLite 的 plan_query_projection 对 plan_id 建了外键，
+    // 写不出没有源 Plan 的行（正常流程也不会产生——savePlan 的守卫与 deleteExplorerCascade
+    // 的级联删除覆盖了写入和清理两侧）。这里手工写一条，锁住"一行坏数据不该让 Plan Center 500"。
+    const { store, plans } = setup();
+    enqueue(plans, "explorer-parent", "Healthy plan", 1);
+    const now = store.now();
+    store.savePlanQueryProjection({ planId: "plan-orphan", projectId: "project-1", sourceExplorerThreadId: "explorer-parent", sourceTurnId: null, title: "Orphan", goal: "orphan goal", revision: 1, status: "QUEUED", priority: 0, createdAt: now, queuedAt: now, lastEventAt: now, runId: null, attentionReason: null });
+
+    const result = plans.query({ projectId: "project-1", includeLineage: true, limit: 20, sort: "queued_at" });
+
+    expect(result.items.map((item) => item.title)).toEqual(["Healthy plan"]);
+  });
 });

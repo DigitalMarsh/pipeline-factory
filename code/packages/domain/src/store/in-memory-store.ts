@@ -20,7 +20,7 @@
 import { containsAnyString, defaultExplorerPlan, defaultPlanExploration, defaultThreadContextSummary, threadTitleMetadata } from "./records.js";
 import { planQueryProjectionFor, type PlanQueryProjection } from "../plan/query.js";
 import { redactAuditPayload, redactAuditText } from "../platform/redaction.js";
-import type { PipelineStore } from "./pipeline-store.js";
+import type { EventQuery, PipelineStore } from "./pipeline-store.js";
 import type { AgentLoop, AgentLoopStep, AgentLoopStepInput } from "../agent/agent-loop.js";
 import type { PlanDispatchState } from "../run/dispatch-coordinator.js";
 import type { Project, ProjectConfigRevision } from "../project/project.js";
@@ -222,6 +222,10 @@ export class InMemoryPipelineStore implements PipelineStore {
 
   savePlan(plan: CandidatePlan): CandidatePlan {
     this.plans.set(plan.id, plan);
+    // 守卫是**外键驱动**的：SQLite 的 plan_query_projection 对 project_id / source_explorer_thread_id
+    // 建了 REFERENCES，而 candidate_plans 自己没建。内存实现没有外键，这里跟着守卫纯粹是为了
+    // 与 SQLite 保持**同一套可观测行为**（同一份业务代码在两种存储下 Plan Center 的可见集合必须相同）。
+    // 不要单方面去掉——那正是本仓 C2 契约套件要防的"双实现漂移"。详见 sqlite-store.ts 的 savePlan。
     if (this.getProject(plan.projectId) && this.getThread(plan.sourceExplorerThreadId)) this.savePlanQueryProjection(planQueryProjectionFor(plan));
     return plan;
   }
@@ -239,6 +243,7 @@ export class InMemoryPipelineStore implements PipelineStore {
       throw new Error(`Plan ${plan.id} does not exist`);
     }
     this.plans.set(plan.id, plan);
+    // 与 savePlan 同一条外键驱动的守卫，理由见那里。
     if (this.getProject(plan.projectId) && this.getThread(plan.sourceExplorerThreadId)) this.savePlanQueryProjection(planQueryProjectionFor(plan));
     return plan;
   }
@@ -396,7 +401,7 @@ export class InMemoryPipelineStore implements PipelineStore {
     return () => this.eventListeners.delete(listener);
   }
 
-  listEvents(options: { afterSequence?: number; aggregateId?: string; aggregateIds?: readonly string[]; types?: readonly string[]; limit?: number } = {}): DomainEvent[] {
+  listEvents(options: EventQuery = {}): DomainEvent[] {
     if (options.aggregateId && options.aggregateIds?.length) throw new Error("listEvents accepts either aggregateId or aggregateIds, not both");
     const aggregateIds = options.aggregateIds?.length ? new Set(options.aggregateIds) : null;
     const types = options.types?.length ? new Set<string>(options.types) : null;
@@ -404,7 +409,8 @@ export class InMemoryPipelineStore implements PipelineStore {
       && (!options.aggregateId || event.aggregateId === options.aggregateId)
       && (!aggregateIds || aggregateIds.has(event.aggregateId))
       && (!types || types.has(event.type)));
-    return options.limit === undefined ? matched : matched.slice(-options.limit);
+    if (options.limit === undefined) return matched;
+    return options.limitFrom === "head" ? matched.slice(0, options.limit) : matched.slice(-options.limit);
   }
 
   getLastEventSequence(aggregateId?: string): number {

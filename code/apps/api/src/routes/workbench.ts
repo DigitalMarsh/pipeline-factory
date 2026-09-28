@@ -15,13 +15,20 @@
  *      过滤只影响"发不发帧"，不影响"游标走不走"。
  *   2) **归属索引每次 send 都按需重建**（而不是建连接时算一次并持有）。原因是连接期间会新建
  *      Plan / Run / Loop，缓存下来的索引会把它们判成"不属于本项目"。重建的代价由 1) 的游标
- *      推进控制住了：每轮只看新增的那几个事件。
+ *      推进控制住了：每轮只看新增的那几个事件。**不要把它挪出 send**——那会引入"新 Plan 的
+ *      事件被判成不属于本项目、而游标已经越过它们"的静默丢事件，且丢掉的补不回来。
+ *   3) **每一次读取都必须带 limit**（`batchOptions`）。缺 limit 时 `afterSequence: 0`
+ *      会把整张事件表读进内存再逐条 JSON.parse；生产库已有十几万条事件，
+ *      其中绝大多数与当前 Project 无关。首次连接取尾部窗口，之后从游标向前读。
  */
 import type { FastifyInstance } from "fastify";
 import type { PipelineStore, ProjectService } from "@pipeline-factory/domain";
 import { workbenchQuery } from "../schemas/workbench.js";
 import { openSseChannel } from "../http/sse.js";
-import { createProjectEventScope, workbenchSnapshot } from "../projections/workbench.js";
+import { WORKBENCH_EVENT_TAIL_LIMIT, createProjectEventScope, workbenchSnapshot } from "../projections/workbench.js";
+
+/** 轮询一轮最多读取的事件条数；游标式增量读取用它给单轮兜底，避免突发写入时单轮读爆。 */
+const WORKBENCH_EVENT_POLL_LIMIT = 500;
 
 export type WorkbenchRouteDeps = {
   store: PipelineStore;
@@ -43,8 +50,14 @@ export function registerWorkbenchRoutes(app: FastifyInstance, deps: WorkbenchRou
     const query = workbenchQuery.safeParse(request.query ?? {});
     if (!query.success) return reply.code(400).send({ error: "Invalid Workbench event query" });
     if (!store.getProject(query.data.projectId)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `PROJECT_NOT_FOUND: ${query.data.projectId}` });
+    // 游标为 0 = 首次连接：只取尾部窗口（与 workbenchSnapshot 的窗口语义一致）。
+    // 其余情况是"从游标接着读"，必须用 head —— 用 tail 会在游标落后时反复读到最新那一批，
+    // 而游标又推进到本批末尾，中间的事件被永久跳过。
+    const batchOptions = (afterSequence: number) => afterSequence === 0
+      ? { limit: WORKBENCH_EVENT_TAIL_LIMIT, limitFrom: "tail" as const }
+      : { afterSequence, limit: WORKBENCH_EVENT_POLL_LIMIT, limitFrom: "head" as const };
     const eventsForProject = (afterSequence: number) => {
-      const pending = store.listEvents({ afterSequence });
+      const pending = store.listEvents(batchOptions(afterSequence));
       if (pending.length === 0) return pending;
       // 归属索引按需重建，保证连接期间新建的 Plan/Run/Loop 也能被正确归类。
       const belongsToProject = createProjectEventScope(store, query.data.projectId);
@@ -55,7 +68,7 @@ export function registerWorkbenchRoutes(app: FastifyInstance, deps: WorkbenchRou
     // poll 传的是"延迟取 send"的壳：send 里要用返回的通道，只能等通道建好再定义它。
     const sse = openSseChannel(request, reply, { poll: () => send() });
     const send = () => {
-      const pending = store.listEvents({ afterSequence: cursor });
+      const pending = store.listEvents(batchOptions(cursor));
       if (pending.length === 0) return;
       const belongsToProject = createProjectEventScope(store, query.data.projectId);
       // 游标无条件推进到本批末尾：不属于本项目的中间事件不应每 250ms 被重复扫描。

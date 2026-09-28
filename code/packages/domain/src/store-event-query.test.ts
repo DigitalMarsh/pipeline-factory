@@ -69,6 +69,29 @@ describe("listEvents filtering", () => {
     });
   });
 
+  it("defaults limitFrom to tail so existing callers keep reading the newest events", () => {
+    assertBothStores((store) => {
+      expect(store.listEvents({ limit: 2 }).map((event) => event.type)).toEqual(["verification.completed", "merge.detected"]);
+    });
+  });
+
+  it("takes limit from the cursor forward when limitFrom is head", () => {
+    // 游标式增量读取（Workbench / Agent Loop 的 SSE 轮询）必须用 head。
+    // 用 tail 的后果不是"少读几条"：游标停在旧位置时会反复读到最新那一批，
+    // 而游标又推进到本批末尾，于是中间的事件被永久跳过——静默丢事件，不报错。
+    assertBothStores((store) => {
+      const first = store.listEvents({ limit: 2, limitFrom: "head" });
+      expect(first.map((event) => event.type)).toEqual(["plan.confirmed", "plan.enqueued"]);
+
+      // 从本批末尾继续往前，既不重复也不跳过。
+      const second = store.listEvents({ afterSequence: first.at(-1)!.sequence, limit: 2, limitFrom: "head" });
+      expect(second.map((event) => event.type)).toEqual(["explorer.turn.text.delta", "verification.completed"]);
+
+      // 读到尾部之后返回空数组，而不是把最后一批反复返回。
+      expect(store.listEvents({ afterSequence: store.getLastEventSequence(), limit: 2, limitFrom: "head" })).toEqual([]);
+    });
+  });
+
   it("rejects mixing aggregateId with aggregateIds", () => {
     assertBothStores((store) => {
       expect(() => store.listEvents({ aggregateId: "plan-a", aggregateIds: ["plan-a"] })).toThrow(/either aggregateId or aggregateIds/);

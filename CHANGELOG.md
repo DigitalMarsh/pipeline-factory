@@ -1,5 +1,37 @@
 # Changelog
 
+## 2026-09-28 — 事件读取加界与 Plan 投影漂移可见化
+
+### Added
+
+- `PipelineStore.listEvents` 新增 `limitFrom: "head" | "tail"`（缺省 `"tail"`，与引入前行为一致）。缺省的 tail 语义是"最新的 N 条"，而轮询式增量读取需要的是"游标之后最早的 N 条"——两者混用会在游标落后时反复读到最新那一批，而游标又推进到本批末尾，中间事件被**永久跳过且不报错**。新增 `EventQuery` 类型承载过滤与截断参数，两个实现同步。
+- `SqlitePipelineStore` 新增构造期修复 `repairOrphanedPlans`：把"已确认之后、来源 ExplorerThread 已不存在"的 Plan 标成 `BLOCKED` + `attentionReason`，复用既有前端"需要关注"展示链路。此前这类 Plan 会被投影守卫跳过而**无声消失**，状态却停留在 `READY`/`QUEUED` 之类看起来可执行的值上。
+- 新增 `store-startup-repair.test.ts`：覆盖 `repairUnconfirmedProgressedPlans` 与 `repairOrphanedPlans` 的生效与**幂等**（重开库不重复处理、不重复写 `plan.status.changed`）。两条修复的输入都只能用独立连接直接改库来构造——走领域 API 产生不出这些行，那正是它们只对历史数据生效的原因。
+
+### Fixed
+
+- `PlanService.query` 遇到"投影行没有源 Plan"时不再抛错，改为跳过该行。此前一行坏数据会让整个 Plan Center 变成 500。该分支在正常流程不可达（写侧有守卫、`deleteExplorerCascade` 会级联删投影），属防御性修复。
+
+### Changed
+
+- Workbench 事件路由的每一次 `listEvents` 都带 limit：首次连接取尾部窗口（与 `workbenchSnapshot` 的 `WORKBENCH_EVENT_TAIL_LIMIT` 同一常量），之后从游标向前读、单轮上限 500。此前该路由缺 limit，`afterSequence=0` 会把整张事件表读进内存并逐条 `JSON.parse`，而生产库已有十几万条事件、绝大多数与本 Project 无关。
+- Agent Loop 事件路由同上：首次回放窗口 2000、单轮上限 500。此前 web 端 `agentLoopEventsUrl` 不传游标，建连即 from 0 全量回放。
+- 在 `savePlan` / `backfillPlanQueryProjection` / 内存实现三处注明：投影守卫是**外键驱动**的，不是业务规则——`plan_query_projection` 对 `project_id` 与 `source_explorer_thread_id` 建了外键，而它所索引的 `candidate_plans` 自己没有。**不要把它改成无条件写入**：那会把 `savePlan` 从不抛错的 UPSERT 变成 project/thread 缺失时抛错的方法，而内存实现没有外键会静默成功，等于制造新的双实现分歧。
+- `repairOrphanedPlans` **只查来源线程，不查 Project**：领域层允许"有 Plan 却没有 Project 行"（`PlanService.registerThread` + `createCandidatePlan` 不需要先建 Project，多个领域测试正是这么用），把"项目不存在"当孤儿会把正常数据误判成 BLOCKED。这条是在 `pnpm verify` 抓到 `m0-m1.test.ts` 的真实回归后收窄的。
+
+### Changed files
+
+- Domain：`code/packages/domain/src/store/pipeline-store.ts`、`code/packages/domain/src/store/sqlite-store.ts`、`code/packages/domain/src/store/in-memory-store.ts`、`code/packages/domain/src/plan/service.ts`、`code/packages/domain/src/store-startup-repair.test.ts`（新增）、`code/packages/domain/src/store-event-query.test.ts`、`code/packages/domain/src/plan-query.test.ts`。
+- API：`code/apps/api/src/routes/workbench.ts`、`code/apps/api/src/routes/agent-loops.ts`、`code/apps/api/src/projections/workbench.ts`、`code/apps/api/src/server-sse.test.ts`。
+
+### Verification
+
+- `pnpm --dir code verify` 通过：domain 258 用例（通过 257，失败 1）、API 70 用例全通过、Web 424 用例全通过，无新增值级循环依赖。
+- 那 1 个失败仍是 `scripts/test-baseline.json` 中已登记的既有缺陷（`dispatch-coordinator.test.ts:121`），非回归。
+- 新增守卫经反向验证：临时把 Workbench 路由的读取改回无界，`server-sse.test.ts` 的新增用例按预期失败（`expected undefined to deeply equal Any<Number>`），确认它抓的是"路由传了什么参数"而非帧数——无界读取的帧数完全正常，代价全在服务端。
+- **中途 `pnpm verify` 抓到一次真实回归**：`repairOrphanedPlans` 初版把"Project 不存在"也当孤儿，导致 `m0-m1.test.ts` 的 `restores plans and append-only events after a service restart` 从 `ENQUEUED` 变 `BLOCKED`。收窄后恢复绿灯——这条正说明该门禁有效。
+- 未做浏览器验收：本次改动未触及前端可见行为（Workbench/Agent Loop 面板看的是事件尾部，与窗口语义一致），但窗口化改变了首屏回放条数，仍应在下一轮浏览器验收中确认两个面板内容完整。
+
 ## 2026-09-28 — Store 跨实现契约与事件写入去重
 
 ### Added

@@ -10,11 +10,13 @@
  *   onClose 订阅清理，所以必须各测一条。**
  *
  * 维护提示：新增 SSE 路由时在下面各形态里补一条；改动 openSseChannel 的选项语义时同步本文件。
+ *   另有 `有限读取` 一组：它锁的不是帧格式，而是"这条路由不许做无界事件读取"——
+ *   SSE 是轮询式的，缺 limit 的 listEvents 会每 250ms 把整张事件表读一遍。
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { get as httpGet, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
-import { ExplorerService, InMemoryPipelineStore, ProjectService } from "@pipeline-factory/domain";
+import { ExplorerService, InMemoryPipelineStore, ProjectService, type PipelineStore } from "@pipeline-factory/domain";
 import { createApp } from "./server.js";
 
 const apps: Array<Awaited<ReturnType<typeof createApp>>> = [];
@@ -25,6 +27,18 @@ vi.setConfig({ testTimeout: 15_000 });
 afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
 });
+
+/**
+ * 记录每次 listEvents 的入参。用子类而不是 Proxy：这里要断言的是"路由传了什么参数"，
+ * 子类重写能保持完整类型，Proxy 会让 this 绑定的问题混进来。
+ */
+class RecordingStore extends InMemoryPipelineStore {
+  readonly listEventCalls: Array<Parameters<PipelineStore["listEvents"]>[0]> = [];
+  override listEvents(options?: Parameters<PipelineStore["listEvents"]>[0]) {
+    this.listEventCalls.push(options);
+    return super.listEvents(options);
+  }
+}
 
 async function listen(app: Awaited<ReturnType<typeof createApp>>): Promise<number> {
   await app.listen({ host: "127.0.0.1", port: 0 });
@@ -127,5 +141,46 @@ describe("SSE 路由（真实 HTTP）", () => {
 
     const sameOrigin = await readSse(port, "/api/v4/runs/run-cors/events");
     expect(sameOrigin.headers["access-control-allow-origin"]).toBe("*");
+  });
+});
+
+describe("SSE 路由的事件读取必须是有界的", () => {
+  /**
+   * 断言方式说明：这里锁的是"路由传了什么参数"，不是"发了几帧"。
+   * 无界读取的症状不是多发帧——Workbench 会把不属于本项目的帧全过滤掉，帧数完全正常，
+   * 代价全在服务端（整张事件表读进内存 + 逐条 JSON.parse）。所以只有查入参才抓得住它。
+   */
+  it("workbench/events 每一次 listEvents 都带 limit，且首次连接取尾部窗口", async () => {
+    const store = new RecordingStore();
+    await seedProject(store);
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+    const port = await listen(app);
+
+    const response = await readSse(port, "/api/v4/workbench/events?projectId=project-1&format=sse");
+
+    expect(response.status).toBe(200);
+    expect(response.frames.at(-1)).toMatch(/^id: \d+\nevent: stream\.ready\ndata: /);
+    expect(store.listEventCalls.length).toBeGreaterThan(0);
+    for (const call of store.listEventCalls) expect(call?.limit).toEqual(expect.any(Number));
+    expect(store.listEventCalls[0]).toMatchObject({ limitFrom: "tail" });
+  });
+
+  it("agent-loops/:loopId/events 每一次 listEvents 都带 limit，且首次连接取尾部窗口", async () => {
+    const store = new RecordingStore();
+    store.saveAgentLoop({ id: "loop-sse", ownerType: "run", ownerId: "run-sse", role: "executor", mode: "provider-controlled", state: "RUNNING", stepCount: 0, maxSteps: 4, startedAt: store.now(), completedAt: null, providerThreadId: null, providerTurnId: null, checkpointJson: null });
+    store.appendEvent({ type: "agent.loop.started", aggregateId: "loop-sse", payload: { role: "executor" } });
+    store.appendEvent({ type: "agent.step.gate_checked", aggregateId: "loop-sse", payload: { action: "continue" } });
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+    const port = await listen(app);
+
+    const response = await readSse(port, "/api/v4/agent-loops/loop-sse/events");
+
+    expect(response.status).toBe(200);
+    expect(response.frames.at(-1)).toMatch(/^id: \d+\nevent: stream\.ready\ndata: /);
+    expect(store.listEventCalls.length).toBeGreaterThan(0);
+    for (const call of store.listEventCalls) expect(call?.limit).toEqual(expect.any(Number));
+    expect(store.listEventCalls[0]).toMatchObject({ limitFrom: "tail", aggregateId: "loop-sse" });
   });
 });
