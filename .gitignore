@@ -1,1 +1,6 @@
 .runtime/
+
+# 隔离工作树（EnterWorktree / worktree-agent-* 分支的落地目录）。
+# 它们各自是完整 checkout，进索引后会以旧快照污染全仓代码检索。
+.claude/worktrees/
+.claude/settings.local.json
