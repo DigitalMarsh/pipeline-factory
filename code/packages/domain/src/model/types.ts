@@ -34,9 +34,12 @@
  *      `collaborationMode.mode`、Claude Agent SDK 的 `permissionMode` 是同一件事的两处投影：
  *      加一个后端时不要各自另造字段，否则"配置里写了 plan、实际按角色硬编码"这类分歧会再次出现
  *      （P9 前 codex 实现就是硬编码按角色决定 plan，roleConfig.mode 整个是死配置）。
- *   8) **readRateLimits 返回的是 Provider 无关快照**：这里曾经直接返回 MappedCodexRateLimits，
- *      于是 stub 与 openai 两个实现都被迫返回 Codex 形状的"不可用"。Claude 侧没有账号级额度
- *      接口，用不到某个窗口就留 null，不要为了填满字段去猜。
+ *   8) **本端口不提供账号级用量/额度**：这里曾经有一个 `readRateLimits()` 与
+ *      `ProviderUsageSnapshot`，它们唯一的数据源是 Codex App Server 的账号额度接口。
+ *      删掉的理由不是"Claude 侧暂时没有"，而是**账号额度与端口语义不相称**：这个端口描述的是
+ *      "一次模型调用"，而额度是账号级、跨会话、且取不到时无法用事件表达的东西。
+ *      要用量，读 `model.usage` 事件（按回合/累计，见 model/usage.ts）；要加回账号额度，
+ *      先回答"没有该接口的后端显示什么"，不要退回到静默的 `available:false`。
  */
 import type { ModelInputAnswers, ModelInputRequest } from "../explorer/types.js";
 import type { ToolCall, ToolName } from "../tools/types.js";
@@ -98,20 +101,6 @@ export type ModelEvent =
   | { type: "turn.failed"; error: string }
   | { type: "turn.cancelled" };
 
-/** 一个额度窗口的展示值：剩余百分比与 ISO 重置时间。 */
-export type ProviderUsageWindow = {
-  remainingPercent: number;
-  resetAt: string;
-};
-
-/** Provider 账号额度快照；与具体 Provider 无关，不可用时由 available/reason 显式表达。 */
-export type ProviderUsageSnapshot = {
-  available: boolean;
-  fiveHour: ProviderUsageWindow | null;
-  sevenDay: ProviderUsageWindow | null;
-  reason: string | null;
-};
-
 /**
  * 一次 Run 生效的 Provider 端点指纹：模型请求实际打到哪里、端点与凭据由谁解析，
  * 以及 Provider 自己上报的 CLI 版本与模型名。**只记来源标识，不含任何凭据**。
@@ -145,7 +134,6 @@ export interface ModelGateway {
   /** 返回指定角色当前生效的模型配置。 */
   configFor(role: ModelRole): ModelRoleConfig;
   capabilities?(role: ModelRole): ModelCapabilities;
-  readRateLimits?(): Promise<ProviderUsageSnapshot>;
   /** 返回本实现当前生效的端点指纹，供 Loop 记进 Run 事件；未知字段用 null 而不是猜。 */
   describeEndpoint?(): ProviderEndpoint;
 }

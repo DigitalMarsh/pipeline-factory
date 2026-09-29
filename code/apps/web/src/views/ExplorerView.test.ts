@@ -78,14 +78,18 @@ describe("Explorer thread actions", () => {
 });
 
 describe("Provider usage footer wiring", () => {
-  it("uses the shared footer and keeps the Explorer Status surface focused on limits", () => {
+  it("uses the shared footer and shows only model/context facts", () => {
     expect(explorerViewSource).toContain('import ProviderUsageFooter from "../components/ProviderUsageFooter.vue"');
     expect(explorerViewSource).toContain('<ProviderUsageFooter :model="explorerModel" :context="contextUsage" context-note="estimated" />');
     expect(explorerViewSource).not.toContain('class="codex-status-popover"');
     expect(explorerViewSource).not.toContain("formatConversationId");
-    expect(providerUsageFooterSource).toContain("5 小时限额");
-    expect(providerUsageFooterSource).toContain("7 天限额");
-    expect(providerUsageFooterSource).toContain('class="provider-usage-limits"');
+    // 5 小时 / 7 天额度已从页面与后端两侧移除，页面上不该再有它的任何痕迹（防回归）。
+    // 先剥掉注释再断言：组件里那段"为什么删"的说明**故意**写着"5 小时限额 / 7 天限额"，
+    // 它是要留下的事实，不能算痕迹；真正的痕迹在模板与脚本里。
+    const providerUsageFooterMarkup = providerUsageFooterSource.replace(/\/\*[\s\S]*?\*\//g, "");
+    expect(providerUsageFooterMarkup).not.toContain("限额");
+    expect(providerUsageFooterMarkup).not.toContain("codexRateLimits");
+    expect(providerUsageFooterSource).not.toContain('class="provider-usage-limits"');
     expect(providerUsageFooterSource).not.toContain("provider-usage-status-trigger");
     expect(providerUsageFooterSource).not.toContain("el-popover");
     expect(providerUsageFooterSource).not.toContain("会话/对话串");

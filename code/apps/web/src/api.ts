@@ -3,7 +3,7 @@
  *
  * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
  */
-import type { AgentLoop, AgentLoopStep, CodexRateLimitsStatus, ExecutionThread, ExplorerActivityItem, ExplorerInputRequest, ExplorerPlan, ExplorerThread, ExplorerTurn, MergeRequest, Plan, PlanDetail, PlanDispatchState, PlanRevisionDraft, Project, ProjectCatalogItem, ProjectExecutionThread, ProjectExecutionThreadSnapshot, ProjectSummary, Run, ToolCall, VerificationRun, WorkbenchSnapshot, WorkbenchEvent } from "./types";
+import type { AgentLoop, AgentLoopStep, ExecutionThread, ExplorerActivityItem, ExplorerInputRequest, ExplorerPlan, ExplorerThread, ExplorerTurn, MergeRequest, Plan, PlanDetail, PlanDispatchState, PlanRevisionDraft, Project, ProjectCatalogItem, ProjectExecutionThread, ProjectExecutionThreadSnapshot, ProjectSummary, Run, ToolCall, VerificationRun, WorkbenchSnapshot, WorkbenchEvent } from "./types";
 
 export class ApiRequestError extends Error {
   constructor(message: string, readonly status: number) {
@@ -45,7 +45,6 @@ export const api = {
   workbenchEventsUrl: (projectId: string, afterSequence?: number) => `/api/v4/workbench/events?format=sse&projectId=${encodeURIComponent(projectId)}${afterSequence === undefined ? "" : `&afterSequence=${afterSequence}`}`,
   workbenchEvents: (projectId: string, afterSequence?: number) => request<{ items: WorkbenchEvent[]; cursor: number }>(`/api/v4/workbench/events?projectId=${encodeURIComponent(projectId)}&afterSequence=${afterSequence ?? 0}`),
   agentLoopTools: (loopId: string) => request<{ items: ToolCall[] }>("/api/v4/agent-loops/" + encodeURIComponent(loopId) + "/tools"),
-  codexRateLimits: () => request<{ rateLimits: CodexRateLimitsStatus }>("/api/v4/codex/rate-limits"),
   explorerPlanRequirements: () => request<{ requirements: { requirementsVersion: number; schemaVersion: number; areas: Array<{ key: string; label: string; requiredFields: string[]; optionalFields: string[]; factoryOwnedFields?: string[] }>; artifactModes: Array<{ mode: "CONVERSATION" | "REPOSITORY_FILE"; label: string; includePaths: string; verificationMode: string; executable: boolean }>; factoryOwnedFields: string[] } }>("/api/v4/explorer-plan-requirements"),
   explorers: (projectId: string) => request<{ items: ExplorerThread[] }>(`/api/v4/projects/${projectId}/explorers`),
   createExplorer: (projectId: string, title?: string, originThreadId?: string) => request<{ explorer: ExplorerThread }>(`/api/v4/projects/${projectId}/explorers`, { method: "POST", body: JSON.stringify({ ...(title ? { title } : {}), ...(originThreadId ? { originThreadId } : {}) }) }),

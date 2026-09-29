@@ -138,8 +138,6 @@ export type { ClaudeAgentSdkGatewayOptions, ClaudeQueryFactory, ClaudeQueryHandl
 export { OpenAIModelGateway } from "./model/gateway-openai.js";
 export type { ModelFetch, ModelFetchResponse, ModelResult, OpenAIModelGatewayOptions } from "./model/gateway-openai.js";
 export { StubModelGateway } from "./model/stub-gateway.js";
-export { mapCodexRateLimits } from "./model/codex-rate-limits.js";
-export type { CodexRateLimitBucket, CodexRateLimitWindow, CodexRateLimitsResponse } from "./model/codex-rate-limits.js";
 
 // ─────────────────────────── tools/：工具端口、运行时与各来源的工具 ───────────────────────────
 export type { DurableToolCallStatus, PersistedToolCall, ToolCall, ToolCallResult, ToolName, ToolRole } from "./tools/types.js";

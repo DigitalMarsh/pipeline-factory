@@ -1,5 +1,101 @@
 # Changelog
 
+## 2026-09-29 — 移除 5 小时 / 7 天额度（页面与后端服务两侧一起）
+
+### 为什么删
+
+那两格的唯一数据源是 Codex App Server 的**账号级**额度接口（`account/rateLimits/read` 与
+`account/rateLimits/updated` 两条 JSON-RPC）。它与用量栏要回答的问题不是一类事实：一个是
+**账号级、跨会话**，一个是**本次调用**用了哪个模型、上下文占了多少。
+
+更要紧的是另一侧：Claude Agent SDK **根本没有**这个接口（SDK 只在会话内提示限流）。原实现
+让不具备该接口的后端返回 `available: false` + reason ——"宁可显式报取不到也不编一个数字"
+这个立场是对的，但代价是每个后端都要为一个与自己无关的窗口维护一份"不可用"。
+`ModelGateway` 描述的是"一次模型调用"，账号额度不属于它。
+
+于是按"数据源在哪、消费者有几个"处理：这条链路的消费者只有页面用量栏一个，两侧一起删，
+而不是留一条**恒为"不可用"**的路由。
+
+### Changed
+
+后端服务侧：
+
+- 删 `GET /api/v4/codex/rate-limits`（[platform.ts](code/apps/api/src/routes/platform.ts)）。
+  模块头的路由计数从 5 条改为 4 条，那条"它怎么吞异常退化成 `available:false`"的维护提示
+  换成"这里为什么不再有额度路由、加回来之前先回答什么"——旧注释留着会让下一个人照着加回去。
+- `ModelGateway` 删 `readRateLimits()`，以及只为它存在的 `ProviderUsageSnapshot` /
+  `ProviderUsageWindow`（[types.ts](code/packages/domain/src/model/types.ts)）。
+  **`ProviderEndpoint` 保留**：端点指纹是另一件事，`agent.loop.started` 的 `provider` 字段在用。
+- 各实现同步删：[stub-gateway.ts](code/packages/domain/src/model/stub-gateway.ts)、
+  [claude-agent-sdk.ts](code/packages/domain/src/model/claude-agent-sdk.ts)，
+  以及 Codex 侧的**整条**链路——客户端的 `readRateLimits` / `onRateLimitsUpdated` /
+  `rateLimitListeners` / `account/rateLimits/updated` 通知分支，网关的 `rateLimitUnsubscribers` /
+  `cachedRateLimits` / `readRateLimits`，以及会话端口上的两个可选方法。
+- 删 [model/codex-rate-limits.ts](code/packages/domain/src/model/codex-rate-limits.ts)（Codex
+  响应形状与 `mapCodexRateLimits`）及其单测，`index.ts` 上的三个类型导出一并去掉。
+
+页面侧：
+
+- [ProviderUsageFooter.vue](code/apps/web/src/components/ProviderUsageFooter.vue) 只留
+  MODEL / CONTEXT 两格：删掉账号额度那一块、它的取数（`api.codexRateLimits()`）与
+  加载/错误态。**`props` 形状没变**，ExplorerView 与 RunDetailView 的调用点一行没改。
+- [api.ts](code/apps/web/src/api.ts) 删 `codexRateLimits()`、[types.ts](code/apps/web/src/types.ts)
+  删 `CodexRateLimitValue` / `CodexRateLimitsStatus`、
+  [explorerStatus.ts](code/apps/web/src/utils/explorerStatus.ts) 删 `formatRateLimit`
+  （`formatContextUsage` 保留——上下文占用是 provider 无关的指标）、
+  [styles.css](code/apps/web/src/styles.css) 删 `.provider-usage-limits` / `.provider-usage-limit`
+  两条已成无主的规则（含 720px 断点里那三条）。
+
+### 留下的不是删除动作，而是理由
+
+- 五处维护提示写的是"**再要加回来，先回答什么**"，不是"这里曾经有什么"：
+  `ProviderUsageFooter.vue`、`explorerStatus.ts`、`model/types.ts`、`model/stub-gateway.ts`、
+  `platform.ts`。README 的用量栏说明同步改写，`待办事项.md` 里那条已勾选的额度修复下补一行
+  "该链路已整体删除"（那条记录本身不动——它是当时的决策）。
+- "宁可显式报取不到也不编一个数字"这条立场**没有随代码消失**：它写进了
+  `model/types.ts` 的维护提示 8 与 README，成为下次有人要加任何用量面时的判据。
+
+### 防回归断言（两条原先的**正向**断言翻成了负向）
+
+- `ProviderUsageFooter.test.ts` 新增一条"不渲染任何账号级额度"：`.provider-usage-limits` 为
+  `null`、`.provider-usage-limit` 长度为 0、正文不含"限额"与"剩余"。
+- `ExplorerView.test.ts` 原有的两条 `toContain("5 小时限额")` / `toContain("7 天限额")` 翻成
+  `not.toContain`。**翻的时候踩了一次**：直接断言"源码不含『限额』"会撞上组件里那段"为什么删"
+  的注释（注释里正写着"5 小时限额 / 7 天限额"），于是先剥掉注释再断言，并把"剥的是注释、
+  不是放宽断言"写进注释本身。
+
+### Changed files
+
+- 后端：`code/apps/api/src/routes/platform.ts`、`code/apps/api/src/server.test.ts`。
+- 域：`code/packages/domain/src/model/types.ts`、`model/stub-gateway.ts`、
+  `model/claude-agent-sdk.ts`、`model/codex-app-server.ts`、`model/codex-app-server.test.ts`、
+  `codex-app-server-client.test.ts`、`index.ts`；
+  **删除** `model/codex-rate-limits.ts`、`model/codex-rate-limits.test.ts`。
+- 页面：`code/apps/web/src/components/ProviderUsageFooter.vue`、`ProviderUsageFooter.test.ts`、
+  `api.ts`、`types.ts`、`utils/explorerStatus.ts`、`utils/explorerStatus.test.ts`、
+  `views/ExplorerView.test.ts`、`styles.css`。
+- 文档：`code/README.md`、`待办事项.md`。
+
+### Verification
+
+- `pnpm --dir code verify` 通过：domain 289/289、API 73/73、Web 421/421，无新增值级循环依赖。
+- **路由真的没了**（重建 `apps/api/dist` 后，在隔离实例上验证）：`curl /api/v4/codex/rate-limits`
+  → **404** `{"code":"NOT_FOUND"}`；同文件的另外三条平台路由 `/health`、`/api/v4/mcp/tools`、
+  `/api/v4/plugins/tools`、`/api/v4/explorer-plan-requirements` 仍全部 200 —— 删的是那一条，
+  不是把 `platform.ts` 删塌了。
+- **浏览器实测**（隔离实例，指向快照库，不碰正在跑的服务）：重建 `apps/web/dist` 后打开 Explorer
+  需求页，用量栏渲染为 `MODEL gpt-5.6-luna` + `CONTEXT ~0 tokens` 两格；
+  `.provider-usage-limits` / `.provider-usage-limit` 命中 0 个；页面正文不含"限额"；
+  **控制台无任何报错**；`performance.getEntriesByType("resource")` 里匹配 `rate|limit` 的请求
+  **0 条**——面板没了，取数也真的没了，不是渲染时被藏起来。
+  （截图见过一次 `gpt-5.6-luna`：那是隔离实例的配置，模型名随 E4 收敛，与本次无关。）
+- 全仓 grep `ratelimit|限额|fiveHour|sevenDay|额度`：除 CHANGELOG、`docs/` 下的历史设计文档与
+  `pnpm-lock.yaml` 里的 `express-rate-limit`（无关依赖）外，剩余命中**全部是上面那批"说明它
+  已删除"的注释与文档**。`待办事项.md` 与历史设计文档按惯例只做记账，不改写。
+- **未重启线上服务**：`pnpm start` 跑的那个进程仍持有旧 `dist`，`/api/v4/codex/rate-limits` 在
+  它上面还会 200 到下次重启为止。本次只重建了 `dist`，重启留到后端收敛那一轮一起做（那轮还要
+  把 `backend` 换成 `claude-agent-sdk`，重启一次就够）。
+
 ## 2026-09-28 — 开启事件回收：14 天 / 每聚合保底 200 条
 
 ### Changed

@@ -363,12 +363,7 @@ a { color: inherit; text-decoration: none; }
 .provider-usage-fact small { color: #a1adbb; font-size: 8px; font-weight: 800; letter-spacing: .1em; }
 .provider-usage-fact strong { max-width: 180px; overflow: hidden; color: #60718a; font-size: 10px; font-weight: 600; text-overflow: ellipsis; }
 .provider-usage-fact em { color: #a9b3bf; font-size: 8px; font-style: normal; }
-.provider-usage-limits { display: flex; min-width: 0; flex: 1 1 420px; flex-wrap: wrap; align-items: center; gap: 10px 18px; overflow: hidden; color: #7f8da2; }
-.provider-usage-limit { display: grid; min-width: 0; grid-template-columns: auto auto minmax(0, 1fr); align-items: baseline; gap: 5px; }
-.provider-usage-limit small { color: #8f9cac; font-size: 8px; font-weight: 800; white-space: nowrap; }
-.provider-usage-limit strong { color: #60718a; font-size: 10px; font-weight: 700; white-space: nowrap; }
-.provider-usage-limit time { min-width: 0; overflow: hidden; color: #a1adbb; font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
-@media (max-width: 720px) { .provider-usage-footer { gap: 8px; align-items: flex-start; }.provider-usage-fact em { display: none !important; }.provider-usage-fact small { font-size: 7px; }.provider-usage-fact strong { max-width: 132px; }.provider-usage-limits { flex-basis: 100%; gap: 5px 12px; }.provider-usage-limit { grid-template-columns: auto auto; }.provider-usage-limit time { grid-column: 1 / -1; }.composer-footer { gap: 7px; } }
+@media (max-width: 720px) { .provider-usage-footer { gap: 8px; align-items: flex-start; }.provider-usage-fact em { display: none !important; }.provider-usage-fact small { font-size: 7px; }.provider-usage-fact strong { max-width: 132px; }.composer-footer { gap: 7px; } }
 @media (max-width: 720px) { .explorer-tree-task-title em { display: none; } }
 .agent-loop-strip { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 14px; row-gap: 7px; margin: 14px 35px 0; padding: 10px 12px; border: 1px solid #e2e9f5; border-radius: 7px; background: #fbfdff; color: #687995; font-size: 10px; }
 .agent-loop-strip .agent-loop-summary { display: grid; min-width: 0; gap: 3px; }

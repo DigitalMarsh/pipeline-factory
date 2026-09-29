@@ -39,7 +39,7 @@ import { EXPLORER_PLAN_INSTRUCTIONS } from "../platform/plan-requirements.js";
 import { replayConversation, resolveModelMode } from "./provider-session.js";
 import { normalizeModelUsage } from "./usage.js";
 import type { ModelInputAnswers, ModelInputQuestion, ModelInputRequest } from "../explorer/types.js";
-import type { ModelCapabilities, ModelEvent, ModelGateway, ModelMessage, ModelRequest, ModelMode, ModelRole, ModelRoleConfig, ProviderEndpoint, ProviderUsageSnapshot } from "./types.js";
+import type { ModelCapabilities, ModelEvent, ModelGateway, ModelMessage, ModelRequest, ModelMode, ModelRole, ModelRoleConfig, ProviderEndpoint } from "./types.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -174,12 +174,6 @@ export class ClaudeAgentSdkGateway implements ModelGateway {
     // 结构化提问只有 Explorer 有回传通道（见维护提示 3）；工具循环归 Claude 引擎自己管，
     // 与 Codex 一样只支持 provider-controlled，能力不足时不静默降级成 factory-controlled。
     return { supportsStructuredUserInput: role === "explorer", supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] };
-  }
-
-  async readRateLimits(): Promise<ProviderUsageSnapshot> {
-    // Claude 侧没有账号级额度查询接口（SDK 只有会话内的限流提醒事件）。宁可显式报"取不到"，
-    // 也不要按 5 小时/7 天窗口去编一个数字。
-    return { available: false, fiveHour: null, sevenDay: null, reason: "Claude Agent SDK does not expose account rate limits" };
   }
 
   /** 端点指纹：配置里写到哪一层，加上 init 消息自报的 CLI 版本/凭据来源/模型名。 */

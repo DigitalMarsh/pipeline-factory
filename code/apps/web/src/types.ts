@@ -160,18 +160,6 @@ export type ExplorerPlan = {
   runtimeStatus?: "QUEUED" | "RUNNING" | "WAITING_FOR_INPUT" | "PAUSED" | "COMPLETED" | "FAILED" | "CANCELLED";
 };
 
-export type CodexRateLimitValue = {
-  remainingPercent: number;
-  resetAt: string;
-};
-
-export type CodexRateLimitsStatus = {
-  available: boolean;
-  fiveHour: CodexRateLimitValue | null;
-  sevenDay: CodexRateLimitValue | null;
-  reason: string | null;
-};
-
 export type ExplorerActivityKind = "USER_MESSAGE" | "ASSISTANT_MESSAGE" | "REASONING_SUMMARY" | "INPUT_REQUIRED" | "INPUT_RESOLVED" | "TOOL_STARTED" | "TOOL_COMPLETED" | "TOOL_DENIED" | "MCP_ACTIVITY" | "CONTEXT_COMPACTED" | "GATE_CHECKED" | "TURN_STATUS";
 
 export type ExplorerActivityItem = {
