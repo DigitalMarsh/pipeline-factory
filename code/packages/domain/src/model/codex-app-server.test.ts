@@ -8,9 +8,14 @@ import {
   CodexAppServerGateway,
   type CodexAppServerSession,
   type CodexAppServerSessionFactory,
+  type ModelRoleConfig,
 } from "../index.js";
 
-function createSessionFactory(events: Array<{ id?: string | number; method: string; params: Record<string, unknown> }>, calls: Array<{ method: string; params: unknown }>): CodexAppServerSessionFactory {
+function createSessionFactory(
+  events: Array<{ id?: string | number; method: string; params: Record<string, unknown> }>,
+  calls: Array<{ method: string; params: unknown }>,
+  options: { failResume?: boolean } = {},
+): CodexAppServerSessionFactory {
   const session: CodexAppServerSession = {
     startThread: async (params) => {
       calls.push({ method: "thread/start", params });
@@ -18,6 +23,7 @@ function createSessionFactory(events: Array<{ id?: string | number; method: stri
     },
     resumeThread: async (threadId) => {
       calls.push({ method: "thread/resume", params: { threadId } });
+      if (options.failResume) throw new Error(`thread/resume failed for ${threadId}`);
     },
     streamTurn: async function* (params) {
       calls.push({ method: "turn/start", params });
@@ -58,6 +64,25 @@ describe("CodexAppServerGateway", () => {
       sevenDay: { remainingPercent: 45 },
     });
     expect(calls).toEqual([]);
+  });
+
+  it("describes the Codex CLI it launched, without pretending to know the upstream endpoint", async () => {
+    const gateway = new CodexAppServerGateway({
+      roles: { explorer: { model: "explorer-model" }, executor: { model: "executor-model" } },
+      command: "codex",
+      args: ["app-server", "--stdio"],
+      sessionFactory: createSessionFactory([], []),
+    });
+
+    // Codex 没有可配的 baseUrl：能担保的只有"启动了哪个 CLI"，上游端点在 Codex 自己的登录态里。
+    expect(gateway.describeEndpoint()).toEqual({
+      backend: "codex-app-server",
+      endpoint: "codex app-server --stdio",
+      source: "provider-settings",
+      cliVersion: null,
+      credentialSource: null,
+      providerModel: null,
+    });
   });
 
   it("creates a read-only Explorer thread and maps App Server stream events", async () => {
@@ -112,6 +137,8 @@ describe("CodexAppServerGateway", () => {
     for await (const _event of gateway.stream({
       role: "explorer",
       purpose: "title",
+      // 起标题的调用方显式要 default 模式：网关不再从 purpose 反推模式（P9 之前那两处特例已删）。
+      mode: "default",
       conversationId: "title-explorer-1",
       messages: [{ role: "user", content: "请给这条需求生成标题" }],
     })) { /* consume the stream */ }
@@ -120,6 +147,57 @@ describe("CodexAppServerGateway", () => {
     expect((calls[0]?.params as { collaborationMode?: unknown } | undefined)?.collaborationMode).toMatchObject({ mode: "default", settings: { model: "explorer-model" } });
     expect(calls[0]?.params).not.toHaveProperty("developerInstructions");
     expect(calls[1]).toMatchObject({ method: "turn/start", params: { collaborationMode: { mode: "default" } } });
+  });
+
+  it("resolves the run mode from request, then role config, then the per-role default", async () => {
+    const startCall = async (input: { roles: Record<string, ModelRoleConfig>; mode?: "plan" | "default" }): Promise<{ collaborationMode?: unknown; developerInstructions?: unknown }> => {
+      const calls: Array<{ method: string; params: unknown }> = [];
+      const gateway = new CodexAppServerGateway({
+        roles: input.roles,
+        sessionFactory: createSessionFactory([{ method: "turn/completed", params: { turn: { id: "turn-mode", status: "completed" } } }], calls),
+      });
+      for await (const _event of gateway.stream({ role: "explorer", conversationId: "mode-thread", messages: [{ role: "user", content: "hi" }], ...(input.mode ? { mode: input.mode } : {}) })) { /* consume */ }
+      return (calls[0]?.params ?? {}) as { collaborationMode?: unknown; developerInstructions?: unknown };
+    };
+
+    // 请求级覆盖优先：角色配置说 plan，但这次调用明确要 default。
+    expect((await startCall({ roles: { explorer: { model: "explorer-model", mode: "plan" }, executor: { model: "executor-model" } }, mode: "default" })).collaborationMode).toMatchObject({ mode: "default" });
+    // 其次才是角色配置：没有请求级覆盖时 roleConfig.mode 真的生效（旧实现忽略它，恒按角色取 plan）。
+    expect((await startCall({ roles: { explorer: { model: "explorer-model", mode: "default" }, executor: { model: "executor-model" } } })).collaborationMode).toMatchObject({ mode: "default" });
+    // 最后才是按角色默认：两者都没写时 Explorer 仍是 plan，且带上探索指令。
+    const fallback = await startCall({ roles: { explorer: { model: "explorer-model" }, executor: { model: "executor-model" } } });
+    expect(fallback.collaborationMode).toMatchObject({ mode: "plan" });
+    expect(typeof fallback.developerInstructions).toBe("string");
+  });
+
+  it("rebuilds a lost provider thread from the persisted transcript instead of failing the turn", async () => {
+    const calls: Array<{ method: string; params: unknown }> = [];
+    const gateway = new CodexAppServerGateway({
+      roles: { explorer: { model: "explorer-model" }, executor: { model: "executor-model" } },
+      sessionFactory: createSessionFactory(
+        [{ method: "turn/completed", params: { turn: { id: "turn-rebuilt", status: "completed" } } }],
+        calls,
+        { failResume: true },
+      ),
+    });
+    const events = [];
+    for await (const event of gateway.stream({
+      role: "explorer",
+      conversationId: "rebuild-thread",
+      providerThreadId: "codex-thread-gone",
+      messages: [
+        { role: "user", content: "先看看订单模块" },
+        { role: "assistant", content: "订单模块有三个入口" },
+        { role: "user", content: "那取消流程呢" },
+      ],
+    })) events.push(event);
+
+    // 续接失败 → 重建新线程，并把本地整段对话回放进去，而不是把可恢复的丢失升级成回合失败。
+    expect(calls.map((call) => call.method)).toEqual(["thread/resume", "thread/start", "turn/start"]);
+    expect((calls[2]?.params as { input?: Array<{ text: string }> })?.input?.[0]?.text).toContain("订单模块有三个入口");
+    expect(events.some((event) => event.type === "thread.started")).toBe(true);
+    expect(events.some((event) => event.type === "turn.failed")).toBe(false);
+    expect(events.some((event) => event.type === "provider.activity" && event.itemType === "providerSession")).toBe(true);
   });
 
   it("reuses a persisted provider thread and maps an interrupted turn", async () => {

@@ -33,6 +33,9 @@ export class ModelExplorerTitleGenerator implements ExplorerTitleGenerator {
     for await (const event of this.model.stream({
       role: "explorer",
       purpose: "title",
+      // 起标题借用 explorer 角色，但不是探索：显式要 default 模式，避免套上只读 plan 的
+      // 探索指令与 plan 门禁（P9 前这一步靠网关里 `purpose === "title"` 的特例完成）。
+      mode: "default",
       conversationId: `title-${input.threadId}`,
       messages: [{ role: "user", content: `${titleGenerationPrompt}\n<user-request>\n${input.content}\n</user-request>` }],
       ...(input.signal ? { signal: input.signal } : {}),

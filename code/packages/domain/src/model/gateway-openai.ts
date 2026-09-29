@@ -30,7 +30,7 @@
  *      这是一条 type-only 边，本文件与 model/types.ts 之间不构成值级环。
  */
 import { normalizeModelUsage, type ModelUsage } from "./usage.js";
-import type { ModelCapabilities, ModelEvent, ModelGateway, ModelRequest, ModelRole, ModelRoleConfig } from "./types.js";
+import type { ModelCapabilities, ModelEvent, ModelGateway, ModelRequest, ModelRole, ModelRoleConfig, ProviderEndpoint } from "./types.js";
 
 /** 非流式模型调用的规范化结果。 */
 export type ModelResult = { text: string; requestId: string | null; model: string; usage: ModelUsage | null };
@@ -58,6 +58,21 @@ export class OpenAIModelGateway implements ModelGateway {
   }
 
   configFor(role: ModelRole): ModelRoleConfig { return this.options.roles[role]; }
+
+  /**
+   * 端点指纹：本后端的端点是配置里写死的 URL，凭据是 config 里的 apiKey（只记"来自哪个配置项"）。
+   * 与 OpenAI 兼容端点一样，这里不做任何探测，只如实转述配置事实。
+   */
+  describeEndpoint(): ProviderEndpoint {
+    return {
+      backend: "openai-responses",
+      endpoint: hostOf(this.baseUrl),
+      source: "config",
+      cliVersion: null,
+      credentialSource: "model.openai.apiKey",
+      providerModel: null,
+    };
+  }
 
   capabilities(_role: ModelRole): ModelCapabilities {
     return { supportsStructuredUserInput: false, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] };
@@ -94,6 +109,15 @@ export class OpenAIModelGateway implements ModelGateway {
   }
 
   async cancel(): Promise<void> { return undefined; }
+}
+
+/** 端点指纹只取 host[:port]：URL 里可能带查询串或路径参数，不记进事件。 */
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host;
+  } catch {
+    return url;
+  }
 }
 
 function extractResponseText(payload: Record<string, unknown>): string {

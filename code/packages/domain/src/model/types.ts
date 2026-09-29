@@ -3,9 +3,9 @@
  *   以及 ModelGateway 端口本身和它的输出事件 ModelEvent。
  *
  * 为什么从 index.ts 抽出来（批 E）：ModelGateway 是"换一个模型后端"的唯一集成点，
- *   而它的契约与三个实现（model/codex-app-server.ts、model/gateway-openai.ts、
- *   model/stub-gateway.ts）此前分散在 index.ts 与 model/ 两处。搬到一起后，
- *   "接口要求什么、各实现给到什么"可以在同一目录里逐个对照。
+ *   而它的契约与四个实现（model/codex-app-server.ts、model/claude-agent-sdk.ts、
+ *   model/gateway-openai.ts、model/stub-gateway.ts）此前分散在 index.ts 与 model/ 两处。
+ *   搬到一起后，"接口要求什么、各实现给到什么"可以在同一目录里逐个对照。
  *
  * 维护提示：
  *   1) **ModelEvent 的每一种都是 Agent Loop 的输入，增删即改状态机。** 新增一种事件要同时
@@ -27,20 +27,29 @@
  *   5) **answerUserInput 只对 supportsStructuredUserInput 为 true 的后端可用**；
  *      model/gateway-openai.ts 的实现是**故意抛错**而不是空实现，与它 capabilities() 的
  *      返回值配套。改成 no-op 会让上层以为答案已送达 Provider。
- *   6) ModelRequest.purpose 目前只有 "exploration" / "title" 两个值，用于让实现区分
- *      探索与自动起标题两种调用；新增用途时同步检查各实现是否真的按 purpose 分支。
+ *   6) ModelRequest.purpose 目前只有 "exploration" / "title" 两个值，**只表达"这次调用是干什么用的"**，
+ *      不再被任何实现用来推断运行模式 —— 起标题要不要进 plan 模式由调用方显式传 `mode: "default"`
+ *      （见下一条）。新增用途时同步检查各实现是否真的按 purpose 分支。
+ *   7) **ModelRequest.mode 是唯一一次调用级的模式覆盖**，优先于 roleConfig.mode。它与 Codex 的
+ *      `collaborationMode.mode`、Claude Agent SDK 的 `permissionMode` 是同一件事的两处投影：
+ *      加一个后端时不要各自另造字段，否则"配置里写了 plan、实际按角色硬编码"这类分歧会再次出现
+ *      （P9 前 codex 实现就是硬编码按角色决定 plan，roleConfig.mode 整个是死配置）。
+ *   8) **readRateLimits 返回的是 Provider 无关快照**：这里曾经直接返回 MappedCodexRateLimits，
+ *      于是 stub 与 openai 两个实现都被迫返回 Codex 形状的"不可用"。Claude 侧没有账号级额度
+ *      接口，用不到某个窗口就留 null，不要为了填满字段去猜。
  */
-import type { MappedCodexRateLimits } from "./codex-rate-limits.js";
 import type { ModelInputAnswers, ModelInputRequest } from "../explorer/types.js";
 import type { ToolCall, ToolName } from "../tools/types.js";
 import type { ModelUsage, ModelUsageScope } from "./usage.js";
 
 /** 模型职责角色；Explorer 只读分析，Executor 在 Run Worktree 中执行。 */
 export type ModelRole = "explorer" | "executor";
+/** 模型运行模式；plan 只读分析、default 允许按权限策略执行。 */
+export type ModelMode = "plan" | "default";
 /** 一个角色的模型和推理/循环策略，来源可为全局默认或 Project 快照。 */
 export type ModelRoleConfig = {
   model: string;
-  mode?: "plan" | "default" | undefined;
+  mode?: ModelMode | undefined;
   loopMode?: "provider-controlled" | "factory-controlled" | undefined;
   temperature?: number | undefined;
   maxOutputTokens?: number | undefined;
@@ -67,6 +76,8 @@ export type ModelRequest = {
   role: ModelRole;
   modelConfig?: ModelRoleConfig | undefined;
   purpose?: "exploration" | "title" | undefined;
+  /** 本次调用的模式覆盖，优先于 roleConfig.mode；缺省时由实现按角色取默认。 */
+  mode?: ModelMode | undefined;
   messages: ModelMessage[];
   conversationId?: string | undefined;
   providerThreadId?: string | undefined;
@@ -77,7 +88,7 @@ export type ModelRequest = {
 };
 /** ModelGateway 输出的统一流事件，供 Agent Loop 和消息流共同消费。 */
 export type ModelEvent =
-  | { type: "thread.started"; threadId: string }
+  | { type: "thread.started"; threadId: string; endpoint?: ProviderEndpoint | undefined }
   | { type: "text.delta"; text: string; providerThreadId?: string | undefined; providerTurnId?: string | undefined; providerItemId?: string | undefined }
   | { type: "provider.activity"; phase: "started" | "completed"; itemId: string; itemType: string; title: string | null; summary: string | null; toolName?: string | undefined; serverName?: string | undefined; status?: string | undefined; error?: string | undefined; providerThreadId?: string | undefined; providerTurnId?: string | undefined; providerItemId?: string | undefined }
   | { type: "model.usage"; usage: ModelUsage; scope: ModelUsageScope; providerThreadId?: string | undefined; providerTurnId?: string | undefined }
@@ -86,6 +97,43 @@ export type ModelEvent =
   | { type: "turn.completed" }
   | { type: "turn.failed"; error: string }
   | { type: "turn.cancelled" };
+
+/** 一个额度窗口的展示值：剩余百分比与 ISO 重置时间。 */
+export type ProviderUsageWindow = {
+  remainingPercent: number;
+  resetAt: string;
+};
+
+/** Provider 账号额度快照；与具体 Provider 无关，不可用时由 available/reason 显式表达。 */
+export type ProviderUsageSnapshot = {
+  available: boolean;
+  fiveHour: ProviderUsageWindow | null;
+  sevenDay: ProviderUsageWindow | null;
+  reason: string | null;
+};
+
+/**
+ * 一次 Run 生效的 Provider 端点指纹：模型请求实际打到哪里、端点与凭据由谁解析，
+ * 以及 Provider 自己上报的 CLI 版本与模型名。**只记来源标识，不含任何凭据**。
+ *
+ * `endpoint: null` 是一个有信息量的事实而不是缺省值：它表示端点由 Provider 自己的设置解析
+ * （例如 cc-switch 写进 ~/.claude/settings.json 的 ANTHROPIC_BASE_URL）—— Factory 无法为
+ * 这次 Run 担保端点，换供应商会同时影响所有在跑的 Run（见 README「接入 Claude Agent」）。
+ */
+export type ProviderEndpoint = {
+  /** 后端标识：codex-app-server / claude-agent-sdk / openai-responses / stub。 */
+  backend: string;
+  /** 生效端点（host[:port]）或该后端自己的 CLI 命令；由 Provider 自行解析时为 null。 */
+  endpoint: string | null;
+  /** 端点来源：config = 本配置文件显式给出；provider-settings = Provider 自己的设置/登录态。 */
+  source: "config" | "provider-settings";
+  /** Provider 上报的 CLI 版本；尚未上报或该后端没有 CLI 时为 null。 */
+  cliVersion: string | null;
+  /** 凭据来源标识（如 ANTHROPIC_API_KEY、none、model.openai.apiKey）；未知为 null。 */
+  credentialSource: string | null;
+  /** Provider 上报的实际模型名；与控制面请求的 slug 可能不同（网关或代理会做映射）。 */
+  providerModel: string | null;
+};
 
 export interface ModelGateway {
   /** 流式调用模型并按事件顺序返回文本、工具和输入请求。 */
@@ -97,5 +145,7 @@ export interface ModelGateway {
   /** 返回指定角色当前生效的模型配置。 */
   configFor(role: ModelRole): ModelRoleConfig;
   capabilities?(role: ModelRole): ModelCapabilities;
-  readRateLimits?(): Promise<MappedCodexRateLimits>;
+  readRateLimits?(): Promise<ProviderUsageSnapshot>;
+  /** 返回本实现当前生效的端点指纹，供 Loop 记进 Run 事件；未知字段用 null 而不是猜。 */
+  describeEndpoint?(): ProviderEndpoint;
 }

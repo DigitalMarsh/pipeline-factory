@@ -80,4 +80,39 @@ describe("Factory configuration", () => {
 
     expect(resolveConfigPath("./config/pipeline-factory.config.json", join(directory, "apps/api"))).toBe(join(directory, "config/pipeline-factory.config.json"));
   });
+
+  it("accepts the Claude Agent SDK backend with an optional endpoint override", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pipeline-factory-config-"));
+    directories.push(directory);
+    const configPath = join(directory, "claude.json");
+    writeFileSync(configPath, JSON.stringify({
+      model: {
+        backend: "claude-agent-sdk",
+        claudeAgent: { baseUrl: "http://127.0.0.1:15721", authToken: "token", settingsPath: "./claude-settings.json", env: { CLAUDE_CODE_USE_BEDROCK: "0" }, maxTurns: 12 },
+        roles: { explorer: { model: "claude-opus-5", mode: "plan" }, executor: { model: "claude-opus-5", mode: "default" } },
+      },
+    }), "utf8");
+
+    const config = loadFactoryConfig(configPath);
+
+    expect(config.model.backend).toBe("claude-agent-sdk");
+    expect(config.model.claudeAgent?.baseUrl).toBe("http://127.0.0.1:15721");
+    // settingsPath 与其它路径字段一致，按配置文件所在目录解析。
+    expect(config.model.claudeAgent?.settingsPath).toBe(join(directory, "claude-settings.json"));
+    expect(config.model.claudeAgent?.maxTurns).toBe(12);
+    expect(config.model.roles.explorer.mode).toBe("plan");
+  });
+
+  it("keeps the Claude Agent SDK block optional so the CLI resolves its own credentials", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pipeline-factory-config-"));
+    directories.push(directory);
+    const configPath = join(directory, "claude-default.json");
+    writeFileSync(configPath, JSON.stringify({ model: { backend: "claude-agent-sdk" } }), "utf8");
+
+    const config = loadFactoryConfig(configPath);
+
+    // 不给 claudeAgent 是合法用法：端点与凭据交给 CLI 自己解析（~/.claude/settings.json）。
+    expect(config.model.claudeAgent).toBeUndefined();
+    expect(config.model.backend).toBe("claude-agent-sdk");
+  });
 });

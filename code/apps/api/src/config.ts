@@ -86,7 +86,7 @@ const configSchema = z.object({
   plugins: pluginsSchema,
   computerUse: computerUseSchema,
   model: z.object({
-    backend: z.enum(["codex-app-server", "openai-responses", "stub"]).default("codex-app-server"),
+    backend: z.enum(["codex-app-server", "claude-agent-sdk", "openai-responses", "stub"]).default("codex-app-server"),
     codexAppServer: z.object({
       command: z.string().min(1).default("codex"),
       args: z.array(z.string()).default(["app-server", "--stdio", "--enable", "default_mode_request_user_input"]),
@@ -96,6 +96,20 @@ const configSchema = z.object({
       maxRestarts: z.number().int().min(0).default(3),
       clientName: z.string().min(1).default("pipeline-factory"),
       clientVersion: z.string().min(1).default("4.0.0"),
+    }).optional(),
+    /**
+     * Claude Agent SDK 后端的可选覆盖。**整块缺省是完全合法的用法**：不传 env、不读密钥，
+     * 端点与凭据都由 CLI 自己解析（~/.claude/settings.json，cc-switch 就作用在这一层）。
+     * 只有需要把端点写死在配置里时才填 baseUrl/authToken。
+     */
+    claudeAgent: z.object({
+      baseUrl: z.string().url().optional(),
+      authToken: z.string().min(1).optional(),
+      /** 等价于 CLI 的 --settings；相对路径按配置文件所在目录解析。 */
+      settingsPath: z.string().min(1).optional(),
+      env: z.record(z.string()).default({}),
+      /** 单次 query 的回合上限；缺省不限制，由 model.loop.maxSteps 兜住步数。 */
+      maxTurns: z.number().int().positive().optional(),
     }).optional(),
     openai: z.object({
       apiKey: z.string().min(1).optional(),
@@ -182,6 +196,10 @@ export function loadFactoryConfig(configPath = resolveConfigPath(undefined)): Fa
       codexAppServer: parsed.data.model.codexAppServer ? {
         ...parsed.data.model.codexAppServer,
         cwd: resolveFromConfig(baseDirectory, parsed.data.model.codexAppServer.cwd),
+      } : undefined,
+      claudeAgent: parsed.data.model.claudeAgent ? {
+        ...parsed.data.model.claudeAgent,
+        ...(parsed.data.model.claudeAgent.settingsPath ? { settingsPath: resolveFromConfig(baseDirectory, parsed.data.model.claudeAgent.settingsPath) } : {}),
       } : undefined,
     },
   };

@@ -335,4 +335,39 @@ describe("ProjectService legacy model migration", () => {
     expect(projects.migrateLegacyModels(codexModels).map((project) => project.id)).toEqual(["project-legacy"]);
     expect(store.getProject("project-legacy")!.settings.models.executor.model).toBe("gpt-5.6-luna");
   });
+
+  it("rewrites slugs left over from the other provider family and keeps everything else", () => {
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    const before = createLegacyProject(store, projects, "project-switch");
+    projects.update("project-switch", { settings: { models: { explorer: { model: "gpt-5.6-luna" }, executor: { model: "gpt-5.6-luna" } } } });
+
+    // 切到 Claude 后端：gpt-* 是上一个家族留下的 slug，按角色配置的模型替换；mode 等其余字段保留。
+    expect(projects.migrateForeignFamilyModels({ family: "claude", models: { explorer: "claude-opus-5", executor: "claude-sonnet-5" } }).map((project) => project.id)).toEqual(["project-switch"]);
+
+    const after = store.getProject("project-switch")!;
+    expect(after.settings.models.explorer).toMatchObject({ model: "claude-opus-5", mode: "plan" });
+    expect(after.settings.models.executor).toMatchObject({ model: "claude-sonnet-5", mode: "default" });
+    expect(after.configVersion).toBeGreaterThan(before.configVersion);
+    // 幂等：第二次没有可迁移的 slug。
+    expect(projects.migrateForeignFamilyModels({ family: "claude", models: { explorer: "claude-opus-5", executor: "claude-sonnet-5" } })).toEqual([]);
+  });
+
+  it("leaves unknown model slugs and same-family slugs alone", () => {
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    // 本地别名/自建网关的名字不是任何一种已知家族：宁可让 provider 侧报错，也不要静默替换。
+    projects.create({
+      id: "project-custom",
+      name: "Custom",
+      repoRoot: "/repo/custom",
+      defaultBranch: "main",
+      worktreeRoot: "/tmp/custom-worktrees",
+      settings: { models: { explorer: { model: "my-local-alias" }, executor: { model: "claude-sonnet-5" } } },
+    });
+
+    expect(projects.migrateForeignFamilyModels({ family: "claude", models: { explorer: "claude-opus-5", executor: "claude-opus-5" } })).toEqual([]);
+    expect(store.getProject("project-custom")!.settings.models.explorer.model).toBe("my-local-alias");
+    expect(store.getProject("project-custom")!.settings.models.executor.model).toBe("claude-sonnet-5");
+  });
 });

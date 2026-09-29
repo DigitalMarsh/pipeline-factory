@@ -381,7 +381,9 @@ export class AgentLoopEngine implements AgentLoopRunner {
     this.store.updateAgentLoop(loop);
     this.appendStep(loop, "LOOP_RESUMED", "RUNNING", { role: input.role, mode: input.mode });
     const effectiveModelConfig = { ...this.model.configFor(input.role), ...(input.modelRequest.modelConfig ?? {}) };
-    this.emit(loop, "agent.loop.started", { role: input.role, mode: input.mode, model: effectiveModelConfig.model, reasoningEffort: effectiveModelConfig.reasoningEffort ?? null, startedAt: loop.startedAt });
+    // 端点指纹随 Loop 起点一起落库：Run 事后能回答"这次请求实际打到了哪里、谁担保这个端点"。
+    // 组合根没提供 describeEndpoint 时记 null，而不是编一个默认后端名。
+    this.emit(loop, "agent.loop.started", { role: input.role, mode: input.mode, model: effectiveModelConfig.model, reasoningEffort: effectiveModelConfig.reasoningEffort ?? null, provider: this.model.describeEndpoint?.() ?? null, startedAt: loop.startedAt });
     const messages: ModelMessage[] = [...input.modelRequest.messages];
     let fullText = "";
     let continuationPrompt: string | undefined;
@@ -454,7 +456,7 @@ export class AgentLoopEngine implements AgentLoopRunner {
             // 任何非文本事件都必须排在已缓冲文本之后，否则时间线上的文本与工具/用量事件会换序。
             if (event.type !== "text.delta") flushTextDelta(loop);
             if (isTerminal(loop.state)) return;
-            if (event.type === "thread.started") { loop = { ...loop, providerThreadId: event.threadId }; this.store.updateAgentLoop(loop); this.emit(loop, "agent.provider.thread.started", { threadId: event.threadId }); }
+            if (event.type === "thread.started") { loop = { ...loop, providerThreadId: event.threadId }; this.store.updateAgentLoop(loop); this.emit(loop, "agent.provider.thread.started", { threadId: event.threadId, ...(event.endpoint ? { provider: event.endpoint } : {}) }); }
             if (event.type === "text.delta") {
               stepText += event.text;
               fullText += event.text;

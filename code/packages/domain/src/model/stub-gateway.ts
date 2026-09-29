@@ -22,8 +22,7 @@
  *      （type-only 边；批 D 当时从 ../index.js 取）。至此 model/ 下三个 ModelGateway 实现
  *      都直接从同一处契约取类型，接口边界不再需要经由 barrel 绕一圈。
  */
-import type { MappedCodexRateLimits } from "./codex-rate-limits.js";
-import type { ModelCapabilities, ModelEvent, ModelGateway, ModelRequest, ModelRole, ModelRoleConfig } from "./types.js";
+import type { ModelCapabilities, ModelEvent, ModelGateway, ModelRequest, ModelRole, ModelRoleConfig, ProviderEndpoint, ProviderUsageSnapshot } from "./types.js";
 
 /** 测试用 ModelGateway；保持事件协议但不访问外部模型。 */
 export class StubModelGateway implements ModelGateway {
@@ -46,5 +45,8 @@ export class StubModelGateway implements ModelGateway {
 
   async answerUserInput(): Promise<void> { return undefined; }
   async cancel(): Promise<void> { return undefined; }
-  async readRateLimits(): Promise<MappedCodexRateLimits> { return { available: false, fiveHour: null, sevenDay: null, reason: "Codex rate-limit telemetry is unavailable" }; }
+  async readRateLimits(): Promise<ProviderUsageSnapshot> { return { available: false, fiveHour: null, sevenDay: null, reason: "Stub backend does not report provider usage" }; }
+
+  /** 替身没有端点可担保：如实报"没有 Provider"，而不是编一个看起来像真的端点。 */
+  describeEndpoint(): ProviderEndpoint { return { backend: "stub", endpoint: null, source: "config", cliVersion: null, credentialSource: null, providerModel: null }; }
 }

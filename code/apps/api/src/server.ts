@@ -50,6 +50,7 @@ import {
   type PipelineStore,
   type VerificationCommandExecutor,
   type ModelGateway,
+  type ModelFamily,
   type AgentLoop,
   type AgentLoopRunner,
 } from "@pipeline-factory/domain";
@@ -215,10 +216,19 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
         },
       },
     });
-    // 历史 Project 可能仍保存着 DeepSeek 默认模型 slug；这里统一迁移到当前 Codex 模型。
+    // 历史 Project 可能仍保存着 DeepSeek 默认模型 slug；这里统一迁移到当前配置的模型。
     projects.migrateLegacyModels({
       explorer: options.config.model.roles.explorer.model,
       executor: options.config.model.roles.executor.model,
+    });
+    // 再处理"换了一家 provider"的情况：Claude 后端下的 gpt-* 与 Codex/OpenAI 后端下的 claude-*
+    // 都是上一个家族留下的 slug，不迁移的话第一个回合会在 Provider 侧直接失败。
+    projects.migrateForeignFamilyModels({
+      family: modelFamilyForBackend(options.config.model.backend),
+      models: {
+        explorer: options.config.model.roles.explorer.model,
+        executor: options.config.model.roles.executor.model,
+      },
     });
   }
 
@@ -269,4 +279,9 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
   if (options.config?.server.serveWeb) registerWebHosting(app, options.config);
 
   return app;
+}
+
+/** backend 到模型家族的映射；只有它需要知道 backend 的具体名字，Domain 侧只认家族。 */
+function modelFamilyForBackend(backend: FactoryConfig["model"]["backend"]): ModelFamily {
+  return backend === "claude-agent-sdk" ? "claude" : "openai";
 }

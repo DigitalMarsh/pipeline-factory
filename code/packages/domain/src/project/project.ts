@@ -298,6 +298,19 @@ function hasActiveRun(store: PipelineStore, projectId: string): boolean {
 /** 历史 DeepSeek 默认模型 slug；仅迁移 Factory 之前写入的默认值。 */
 const LEGACY_DEEPSEEK_MODEL_SLUG = "deepseek-v4-flash";
 
+/** 模型 slug 的 provider 家族；切换 backend 时用来识别"上一个家族留下的 slug"。 */
+export type ModelFamily = "claude" | "openai";
+
+/**
+ * 按前缀判断 slug 属于哪个家族。**只认这两个前缀**：本地别名、自建网关名字一律返回 null，
+ * 于是迁移不会把用户有意写下的名字改掉 —— 那种名字该由 provider 侧报错暴露，不该被静默替换。
+ */
+export function knownModelFamily(slug: string): ModelFamily | null {
+  if (slug.startsWith("claude-")) return "claude";
+  if (slug.startsWith("gpt-") || slug.startsWith("codex-")) return "openai";
+  return null;
+}
+
 /**
  * 管理 Project 的生命周期、配置版本和执行快照。
  * 所有高风险路径或运行策略变更都会递增 configVersion，并为历史 Plan 保留旧快照。
@@ -387,6 +400,33 @@ export class ProjectService {
         const currentModel = project.settings.models[role].model;
         if (currentModel !== LEGACY_DEEPSEEK_MODEL_SLUG) continue;
         const replacement = models[role].trim();
+        if (!replacement || replacement === currentModel) continue;
+        replacements[role] = { model: replacement };
+      }
+      if (!replacements.explorer && !replacements.executor) continue;
+      if (hasActiveRun(this.store, project.id)) continue;
+      migrated.push(this.update(project.id, { settings: { models: replacements }, expectedConfigVersion: project.configVersion }));
+    }
+    return migrated;
+  }
+
+  /**
+   * 把历史 Project 里**属于另一个 provider 家族**的模型 slug 迁移到当前配置的模型。
+   *
+   * 为什么需要：Project settings 存的是具体 slug（默认 gpt-5.6-luna）。切换到 Claude backend 后
+   * 这类 slug 在 Anthropic 一侧无效，第一个回合会直接在 Provider 侧失败，而错误离配置很远。
+   * 只在后端家族真的换了的时候才动，且只替换 `model` 字段，保留 mode/temperature/loopMode。
+   * 有活动 Run 的 Project 跳过，等下次启动重试（与 migrateLegacyModels 同一套保守策略）。
+   */
+  migrateForeignFamilyModels(input: { family: ModelFamily; models: { explorer: string; executor: string } }): Project[] {
+    const migrated: Project[] = [];
+    for (const project of this.list("ACTIVE")) {
+      const replacements: ProjectSettingsInput["models"] = {};
+      for (const role of ["explorer", "executor"] as const) {
+        const currentModel = project.settings.models[role].model;
+        const family = knownModelFamily(currentModel);
+        if (!family || family === input.family) continue;
+        const replacement = input.models[role].trim();
         if (!replacement || replacement === currentModel) continue;
         replacements[role] = { model: replacement };
       }

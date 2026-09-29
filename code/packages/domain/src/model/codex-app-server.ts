@@ -5,13 +5,14 @@
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EXPLORER_PLAN_INSTRUCTIONS } from "../platform/plan-requirements.js";
+import { replayConversation, resolveModelMode } from "./provider-session.js";
 import { normalizeModelUsage } from "./usage.js";
 // 用 import type 而不是"具名绑定带 type 前缀"：这样"本模块对模型契约只剩类型依赖"是显式的，
 // check-cycles.mjs 也据此判定这条边已被切断。P2 期间它指向 ../index.js；批 E 建 model/types.ts
-// 后改指 ./types.js（边仍是 type-only，判定不变）—— 至此 model/ 下三个 ModelGateway 实现
+// 后改指 ./types.js（边仍是 type-only，判定不变）—— 至此 model/ 下四个 ModelGateway 实现
 // 都直接从同一处契约取类型，不再有实现经由 barrel 绕一圈。
-import type { ModelCapabilities, ModelEvent, ModelGateway, ModelMessage, ModelRequest, ModelRole, ModelRoleConfig } from "./types.js";
-import { mapCodexRateLimits, type CodexRateLimitsResponse, type MappedCodexRateLimits } from "./codex-rate-limits.js";
+import type { ModelCapabilities, ModelEvent, ModelGateway, ModelMessage, ModelRequest, ModelRole, ModelRoleConfig, ProviderEndpoint, ProviderUsageSnapshot } from "./types.js";
+import { mapCodexRateLimits, type CodexRateLimitsResponse } from "./codex-rate-limits.js";
 
 type JsonObject = Record<string, unknown>;
 /** JSON-RPC 请求和通知使用的 Provider request id。 */
@@ -378,7 +379,7 @@ export class CodexAppServerGateway implements ModelGateway {
   private readonly providerThreads = new Map<string, string>();
   private readonly pendingInputSessions = new Map<string, CodexAppServerSession>();
   private readonly rateLimitUnsubscribers = new Map<CodexAppServerSession, () => void>();
-  private cachedRateLimits: MappedCodexRateLimits | null = null;
+  private cachedRateLimits: ProviderUsageSnapshot | null = null;
 
   constructor(private readonly options: CodexAppServerGatewayOptions) {
     this.sessionFactory = options.sessionFactory ?? (async () => new CodexAppServerClient({
@@ -395,7 +396,23 @@ export class CodexAppServerGateway implements ModelGateway {
 
   configFor(role: ModelRole): ModelRoleConfig { return this.options.roles[role]; }
 
-  async readRateLimits(): Promise<MappedCodexRateLimits> {
+  /**
+   * 端点指纹：Codex 侧没有可配的 baseUrl，能担保的只有"我们启动了哪个 CLI"，
+   * 上游端点与凭据由 Codex 自己的登录态决定 —— 因此 endpoint 记命令、source 记 provider-settings。
+   * CLI 版本不在这里编：App Server 的 initialize 响应本适配器不消费版本字段，如实留 null。
+   */
+  describeEndpoint(): ProviderEndpoint {
+    return {
+      backend: "codex-app-server",
+      endpoint: [this.options.command ?? "codex", ...(this.options.args ?? ["app-server", "--stdio"])].join(" "),
+      source: "provider-settings",
+      cliVersion: null,
+      credentialSource: null,
+      providerModel: null,
+    };
+  }
+
+  async readRateLimits(): Promise<ProviderUsageSnapshot> {
     const session = await this.getSession("__account-status__");
     if (!this.rateLimitUnsubscribers.has(session)) {
       const unsubscribe = session.onRateLimitsUpdated?.((response) => { this.cachedRateLimits = mapCodexRateLimits(response); });
@@ -418,16 +435,27 @@ export class CodexAppServerGateway implements ModelGateway {
     try {
       const session = await this.getSession(request.conversationId ?? request.role);
       const roleConfig = { ...this.configFor(request.role), ...(request.modelConfig ?? {}) };
+      const mode = resolveModelMode(request, roleConfig);
       let providerThreadId = request.providerThreadId ?? (request.conversationId ? this.providerThreads.get(request.conversationId) : undefined);
+      let rebuilt = false;
       if (providerThreadId) {
         if (request.conversationId) this.providerThreads.set(request.conversationId, providerThreadId);
         if (!this.resumedThreads.has(providerThreadId)) {
-          await session.resumeThread(providerThreadId);
-          this.resumedThreads.add(providerThreadId);
+          try {
+            await session.resumeThread(providerThreadId);
+            this.resumedThreads.add(providerThreadId);
+          } catch {
+            // Provider 侧会话可能已经消失（App Server 重启、换供应商、会话过期）。这不是回合失败：
+            // request.messages 里带着完整历史，重建一条新线程继续即可，否则一次可恢复的丢失会
+            // 被升级成"这次探索挂了"，用户看到的错误也解释不了原因。
+            this.resumedThreads.delete(providerThreadId);
+            providerThreadId = undefined;
+            rebuilt = true;
+          }
         }
-      } else {
-        const isTitleRequest = request.purpose === "title";
-        const developerInstructions = request.role === "explorer" && !isTitleRequest
+      }
+      if (!providerThreadId) {
+        const developerInstructions = request.role === "explorer" && mode === "plan"
           ? [EXPLORER_PLAN_INSTRUCTIONS, roleConfig.developerInstructions].filter(Boolean).join("\n\n")
           : roleConfig.developerInstructions;
         providerThreadId = await session.startThread({
@@ -437,19 +465,25 @@ export class CodexAppServerGateway implements ModelGateway {
           approvalPolicy: request.role === "explorer" ? "never" : "on-request",
           ...(systemInstructions(request.messages) ? { baseInstructions: systemInstructions(request.messages) } : {}),
           ...(developerInstructions ? { developerInstructions } : {}),
-          collaborationMode: { mode: request.role === "explorer" && !isTitleRequest ? "plan" : "default", settings: { model: roleConfig.model, reasoning_effort: roleConfig.reasoningEffort ?? null, developer_instructions: roleConfig.developerInstructions ?? null } },
+          collaborationMode: { mode, settings: { model: roleConfig.model, reasoning_effort: roleConfig.reasoningEffort ?? null, developer_instructions: roleConfig.developerInstructions ?? null } },
         });
         if (request.conversationId) this.providerThreads.set(request.conversationId, providerThreadId);
         yield { type: "thread.started", threadId: providerThreadId };
+        if (rebuilt) {
+          // 让时间线上能看出"线程 id 为什么变了"，而不是静默换一条线程。
+          yield { type: "provider.activity", phase: "completed", itemId: providerThreadId, itemType: "providerSession", title: "Provider session rebuilt", summary: "The previous provider session was gone; the local transcript was replayed into a new one.", providerItemId: providerThreadId };
+        }
       }
-      const text = latestUserMessage(request.messages);
+      // 常规续接只发最新一条用户消息（历史在 Provider 侧）；重建出来的线程没有那份历史，
+      // 必须回放本地对话，否则模型只看到最后一句。
+      const text = rebuilt ? replayConversation(request.messages) : latestUserMessage(request.messages);
       for await (const event of session.streamTurn({
         threadId: providerThreadId,
         input: [{ type: "text", text: request.continuationPrompt ?? text }],
         model: roleConfig.model,
         ...(roleConfig.reasoningEffort ? { effort: roleConfig.reasoningEffort } : {}),
         ...(request.cwd ? { cwd: request.cwd } : {}),
-        collaborationMode: { mode: request.role === "explorer" && request.purpose !== "title" ? "plan" : "default", settings: { model: roleConfig.model, reasoning_effort: roleConfig.reasoningEffort ?? null, developer_instructions: roleConfig.developerInstructions ?? null } },
+        collaborationMode: { mode, settings: { model: roleConfig.model, reasoning_effort: roleConfig.reasoningEffort ?? null, developer_instructions: roleConfig.developerInstructions ?? null } },
         ...(request.signal ? { signal: request.signal } : {}),
       })) {
         const eventTurnId = getEventTurnId(event.params);

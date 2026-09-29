@@ -126,18 +126,20 @@ export { PROJECT_EXECUTION_MODELS, PROJECT_EXECUTION_REASONING_EFFORTS, ProjectE
 export type { ProjectExecutionThreadServiceOptions, ProjectExecutionThreadSnapshot } from "./agent/project-execution-thread.js";
 
 // ─────────────────────────── model/：ModelGateway 端口与三个实现 ───────────────────────────
-export type { ModelCapabilities, ModelEvent, ModelGateway, ModelMessage, ModelRequest, ModelRole, ModelRoleConfig, ModelToolDefinition } from "./model/types.js";
+export type { ModelCapabilities, ModelEvent, ModelGateway, ModelMessage, ModelRequest, ModelRole, ModelRoleConfig, ModelToolDefinition, ProviderEndpoint } from "./model/types.js";
 export { mergeModelUsage, normalizeModelUsage } from "./model/usage.js";
 export type { ModelUsage, ModelUsageScope } from "./model/usage.js";
 // 三个 ModelGateway 实现并列：codex-app-server（生产，真流式）、gateway-openai（HTTP 适配器）、
 // stub-gateway（测试替身）。apiKey 一律由组合根注入，本目录不读任何环境变量、不落库。
 export { CodexAppServerClient, CodexAppServerGateway } from "./model/codex-app-server.js";
 export type { CodexAppServerClientOptions, CodexAppServerEvent, CodexAppServerGatewayOptions, CodexAppServerSession, CodexAppServerSessionFactory, CodexSpawnProcess, CodexThreadStartParams, CodexTurnStartParams } from "./model/codex-app-server.js";
+export { ClaudeAgentSdkGateway } from "./model/claude-agent-sdk.js";
+export type { ClaudeAgentSdkGatewayOptions, ClaudeQueryFactory, ClaudeQueryHandle } from "./model/claude-agent-sdk.js";
 export { OpenAIModelGateway } from "./model/gateway-openai.js";
 export type { ModelFetch, ModelFetchResponse, ModelResult, OpenAIModelGatewayOptions } from "./model/gateway-openai.js";
 export { StubModelGateway } from "./model/stub-gateway.js";
 export { mapCodexRateLimits } from "./model/codex-rate-limits.js";
-export type { CodexRateLimitBucket, CodexRateLimitWindow, CodexRateLimitsResponse, MappedCodexRateLimits, MappedRateLimit } from "./model/codex-rate-limits.js";
+export type { CodexRateLimitBucket, CodexRateLimitWindow, CodexRateLimitsResponse } from "./model/codex-rate-limits.js";
 
 // ─────────────────────────── tools/：工具端口、运行时与各来源的工具 ───────────────────────────
 export type { DurableToolCallStatus, PersistedToolCall, ToolCall, ToolCallResult, ToolName, ToolRole } from "./tools/types.js";
@@ -165,5 +167,5 @@ export { localGitMergeInspector } from "./git/merge-inspector.js";
 export type { GitMergeInspector } from "./git/merge-inspector.js";
 
 // ─────────────────────────── project/：项目聚合与配置快照 ───────────────────────────
-export { EXECUTION_SLOT_RUN_STATUSES, ProjectService } from "./project/project.js";
-export type { CreateProjectInput, Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings, ProjectSettingsInput, ProjectStatus, ProjectSummary, UpdateProjectInput } from "./project/project.js";
+export { EXECUTION_SLOT_RUN_STATUSES, knownModelFamily, ProjectService } from "./project/project.js";
+export type { CreateProjectInput, ModelFamily, Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings, ProjectSettingsInput, ProjectStatus, ProjectSummary, UpdateProjectInput } from "./project/project.js";

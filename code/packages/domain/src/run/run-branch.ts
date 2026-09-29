@@ -88,6 +88,8 @@ export class ModelRunBranchNameGenerator implements RunBranchNameGenerator {
       for await (const event of this.model.stream({
         role: "explorer",
         purpose: "title",
+        // 与起标题同理：借用 explorer 角色的命名调用必须是 default 模式，不能继承探索的 plan 语义。
+        mode: "default",
         conversationId: `run-branch-${input.createdAt}`,
         messages: [{
           role: "user",

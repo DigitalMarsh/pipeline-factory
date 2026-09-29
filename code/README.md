@@ -1,6 +1,6 @@
 # AI Software Pipeline Factory v4
 
-这是 v4 设计对应的 TypeScript/Vue 最小可运行实现，代码范围限定在本目录。v4 是唯一的 HTTP API、Web 客户端调用方式和测试协议，并通过 Codex App Server 支持异步 Plan Mode 结构化提问。
+这是 v4 设计对应的 TypeScript/Vue 最小可运行实现，代码范围限定在本目录。v4 是唯一的 HTTP API、Web 客户端调用方式和测试协议，并通过 Codex App Server 或 Claude Agent SDK 支持异步 Plan Mode 结构化提问。
 
 ## 目录
 
@@ -94,6 +94,32 @@ workspace domain 包，避免 API 加载旧的 `dist` 类型；如果看到 `EAD
 
 `roles.*.model` 必须匹配所配 provider 支持的模型名称：默认示例使用本机 Codex CLI 的 `gpt-5.6-luna`。传入 provider 不认识的模型名时，回合会在 Provider 侧直接失败。
 
+## 接入 Claude Agent（`model.backend = "claude-agent-sdk"`）
+
+`model.backend` 除 `codex-app-server` / `openai-responses` / `stub` 外还有 `claude-agent-sdk`：由官方 `@anthropic-ai/claude-agent-sdk` 的 `query()` 驱动 Claude Code。它与 Codex 后端**同构** —— 同一个 `ModelGateway` 端口、同一套 `ModelEvent`、同一套 Agent Loop 与门禁，两个后端可并存并按 Project 切换。
+
+最小切换（端点与凭据交给 CLI 自己解析）：
+
+```json
+{ "model": { "backend": "claude-agent-sdk", "roles": { "explorer": { "model": "claude-opus-5", "mode": "plan" }, "executor": { "model": "claude-opus-5", "mode": "default" } } } }
+```
+
+需要把端点写死在配置里时（例如 cc-switch 的本地代理、或 DeepSeek 的 Anthropic 兼容端点 `https://api.deepseek.com/anthropic`）：
+
+```json
+{ "model": { "backend": "claude-agent-sdk", "claudeAgent": { "baseUrl": "http://127.0.0.1:15721", "authToken": "…", "settingsPath": "./claude-settings.json", "maxTurns": 40 } } }
+```
+
+- **不写 `claudeAgent` 是常规用法**：与 Codex 后端一样，Factory 不读环境变量、不存密钥，端点与凭据由 CLI 读自己的设置（`~/.claude/settings.json`；cc-switch 正是把 `ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN` 和模型映射写在这里）。`baseUrl`/`authToken` 是唯一显式覆盖点，集中在组合根读一次。
+- **子进程环境是净化过的**：启动 Claude 时会剥掉全部 `ANTHROPIC_*`，以及"父进程本身是一个 Claude Code 会话"的标记（`CLAUDECODE`、`CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST`、`CLAUDE_CODE_HOST_AUTH_ENV_VAR` 等）。后者的实际影响很具体：带着这些标记启动的子会话会认为自己由宿主注入凭据，于是不去读 settings，直接以 `Not logged in` 收场。
+- **配了 `baseUrl` 就在启动期探活**：探不通不起服务，错误里给出 URL 与"检查代理是否在跑"的提示，而不是等第一个探索回合跑到一半才失败。
+- **每个 Loop 记一条端点指纹**：`agent.loop.started` 事件的 `provider` 字段记下 backend、端点 host（不含路径与令牌）、端点来源（`config` / `provider-settings`）、CLI 自报的版本、凭据来源标识与实际模型名（`agent.provider.thread.started` 会再补一次初始化后的完整指纹）。`endpoint: null` + `source: "provider-settings"` 是一个有用的事实而不是缺失：它明确表示**端点由 CLI 的设置（cc-switch）解析，Factory 不为这次 Run 担保端点**。注意由此带来的边界 —— 走 cc-switch 时真实上游（DeepSeek / Codex / 官方）对 Factory 不可见，指纹能证明"用的是哪个 CLI、哪个模型名、凭据从哪来"，但证明不了"上游是谁"。
+- **模型名要换成 Anthropic 一侧的**（如 `claude-opus-5`）。启动时会自动迁移上一个 provider 家族留下的 slug：Claude 后端下的 `gpt-*` 与 Codex/OpenAI 后端下的 `claude-*`，只替换 `model` 字段、保留 mode 等设置；本地别名这类无法判定的名字不动（让 Provider 侧报错，而不是静默替换）。有活动 Run 的 Project 跳过迁移，下次启动重试。
+- **能力差异**：结构化提问只有 Explorer 可用（Claude 侧走 `AskUserQuestion` → `canUseTool` 权限回调，答案经 `updatedInput` 回传，Web 侧的弹窗与答案流程完全复用），Executor 的工具集里不含它 —— Executor 没有答案回传通道，模型提问会卡到截止时间。Loop 模式仍只支持 `provider-controlled`。Claude 没有账号级额度接口，`/api/v4/codex/rate-limits` 会返回"取不到 + 原因"，面板显示为空而不是编一个数字。
+- **沙箱边界是会话 cwd**：Explorer 恒为 plan（只读）并把 `EXPLORER_PLAN_INSTRUCTIONS` 作为 plan 模式正文，Executor 为 `acceptEdits` 且 cwd 是 Run Worktree；任何要越出会话目录的请求由权限回调直接拒绝，也不申请 `additionalDirectories`。
+- **会话记录落在 `~/.claude/projects/` 下**，这是多轮 Explorer 能续接的前提。换供应商、清目录、换机器后记录会消失，此时 Factory 用已持久化的 turns 重建一条新会话并回放对话（时间线上出现 `Provider session rebuilt`），而不是把一次可恢复的丢失判成回合失败。
+- **cc-switch 这类"全局切换供应商"的工具会同时影响所有在跑的 Run**（它改的是 `~/.claude/settings.json`，而这是所有会话共享的端点来源）。切换前请停服，或确认没有活动 Run。
+
 v4 的 `POST /api/v4/projects/:projectId/explorer-thread/turns` 会立即返回 `202`，用户消息和 assistant `RUNNING` 占位先进入时间线；随后通过 `/events` SSE 接收文本增量、`turn.input_required`、完成和取消事件。选择答案通过 `/input-requests/:requestId/answer` 回传到同一个 Provider Turn。Explorer 不会把一次 `turn.completed` 直接当作设计完成：模型回合结束后会经过计划完整性门禁，缺少关键项时自动发起内部续探索，只有收到并校验 `pipeline-factory-plan` 完整契约后才自动生成 CandidatePlan。
 
 核心 v4 资源路径保持稳定且唯一：
@@ -120,7 +146,7 @@ Plan 列表接口只返回轻量 Summary；`GET /api/v4/plans/:planId` 返回 Pl
 
 SSE 使用数据库事件序列和 `Last-Event-ID` 回放。Explorer 首次加载 turns 时取得当前事件游标，再从该游标订阅 SSE，避免重复回放历史消息；断线重连仍按 `Last-Event-ID` 补发遗漏事件。App Server 重启或答案响应不确定时，输入请求进入 `RECOVERY_REQUIRED`，Factory 不自动重复提交。敏感答案只在内存中传给 App Server，持久化的仅是题目状态和答案数量摘要；普通 assistant 文本中的“请选择”不会触发弹窗。
 
-可选后端也在配置文件中声明：`stub`，或 `openai-responses`（需要在配置文件的 `model.openai.apiKey` 提供密钥）。
+可选后端也在配置文件中声明：`stub`、`openai-responses`（需要在配置文件的 `model.openai.apiKey` 提供密钥），或 `claude-agent-sdk`（见上文「接入 Claude Agent」）。示例配置只保留可用的 `codex-app-server` 形态：`claudeAgent` 的 `baseUrl`/`settingsPath` 一旦写错就会在启动期失败，不适合作为"复制即用"的默认值放进示例。
 
 Explorer 的持续探索参数也来自配置文件：`runtime.maxAutoContinuationTurns` 默认值为 4，表示一次用户消息最多自动续探索 4 次。达到上限仍未形成完整契约时，线程保持 `INCOMPLETE`，页面会显示尚未确认的设计区域，用户可以继续发送下一轮说明；不会生成可确认的 CandidatePlan。
 

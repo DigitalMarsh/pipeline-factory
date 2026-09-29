@@ -55,6 +55,28 @@ describe("AgentLoopEngine", () => {
     expect(requests.map((request) => request.continuationPrompt)).toEqual([undefined, "continue-1", "continue-2", "continue-3"]);
   });
 
+  it("records the provider endpoint fingerprint on the loop start event", async () => {
+    const store = new InMemoryPipelineStore();
+    const fingerprint = { backend: "claude-agent-sdk", endpoint: "127.0.0.1:15721", source: "config" as const, cliVersion: "2.1.283", credentialSource: "none", providerModel: "claude-opus-5" };
+    const gateway = (describeEndpoint?: ModelGateway["describeEndpoint"]): ModelGateway => ({
+      configFor: () => ({ model: "claude-opus-5" }),
+      ...(describeEndpoint ? { describeEndpoint } : {}),
+      async *stream() { yield { type: "text.delta", text: "done" }; yield { type: "turn.completed" }; },
+      async answerUserInput() { return undefined; },
+      async cancel() { return undefined; },
+    });
+
+    const loop = await new AgentLoopEngine(store, gateway(() => fingerprint)).run({ ...baseInput(), mode: "provider-controlled" });
+    const started = store.listEvents({ aggregateId: loop.id }).find((event) => event.type === "agent.loop.started");
+
+    // 端点指纹随 Loop 起点落库，Run 事后可以回答"这次请求打到哪、谁担保端点"。
+    expect(started?.payload).toMatchObject({ model: "claude-opus-5", provider: fingerprint });
+
+    // 没有 describeEndpoint 的网关（如旧实现或测试替身）记 null —— 不编一个默认后端名糊过去。
+    const bare = await new AgentLoopEngine(store, gateway()).run({ ...baseInput(), ownerId: "run-2", mode: "provider-controlled" });
+    expect(store.listEvents({ aggregateId: bare.id }).find((event) => event.type === "agent.loop.started")?.payload).toMatchObject({ provider: null });
+  });
+
   it("persists each model text delta once while still dispatching it in process", async () => {
     // 同一次模型增量曾被落三份：1 行 agent_loop_steps + 2 条事件
     // （agent.step.model_text_delta 与 agent.model.text.delta，text 逐字相同）。
