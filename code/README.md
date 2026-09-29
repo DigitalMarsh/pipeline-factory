@@ -156,14 +156,35 @@ v4 的 `POST /api/v4/projects/:projectId/explorer-thread/turns` 会立即返回 
 ```text
 GET      /api/v4/plans/:planId                 # 详情
 POST     /api/v4/plans/:planId/{confirm,discard,enqueue,run}
+PUT      /api/v4/plans/:planId/dependencies     # 前置 Plan（Factory-owned：模型不能填，只能由人挑）
 GET      /api/v4/runs/:runId                  # 详情
 POST     /api/v4/runs/:runId/{cancel,pause,resume,guidance,verify}
 GET      /api/v4/merge-requests/:mergeRequestId # 查询
 POST     /api/v4/merge-requests/:mergeRequestId/confirm-merged
 GET      /api/v4/projects/:projectId/runs
+GET      /api/v4/projects/:projectId/activity   # 今日活动：执行完成 / 已合并 / 失败阻塞 / 跨日运行
+GET      /api/v4/model-backends                 # 可用 agent 目录（见上文「多后端」）
 GET/PUT  /api/v4/projects/:projectId/settings/hooks
 GET      /api/v4/execution-threads/:threadId
 ```
+
+### 调度闸门与并发
+
+派发**之前**由 `PlanDispatchCoordinator.evaluateWait` 按固定顺序判定，命中的哪一条就是界面上显示的
+等待原因：**依赖 → 缺命令 → 全局容量 → 项目容量 → 冲突**。
+
+- **依赖**：前置 Plan 未达到 `MERGED` 时停在 `WAITING_DEPENDENCY`。依赖只能由人在 Plan 详情里设置
+  （`PUT /plans/:planId/dependencies`），因为模型不知道 plan id，而这是调度用的真实 id 引用。
+- **容量**：全局上限是 `runtime.globalConcurrency`，Project 上限是冻结快照里的
+  `concurrency.maxParallelRuns`。**只算占槽位的状态**（`STARTING` / `IN_PROGRESS` / `VERIFYING`）——
+  `READY_FOR_VERIFY` 与 `MERGE_READY` 已经在等人，不算在容量里；同一个 Plan 同一 Revision 的既有 Run
+  是重试/续跑，也不与自己抢名额。**这是 2026-09-29 恢复的行为**：在此之前这两级上限声明了却从不判定，
+  确认即并发跑；现在会按配置排队，Plan Center 显示等待原因。
+- **冲突**：`conflicts`（模型声明的语义键）与在跑 Run 取交集，命中则停在 `WAITING_CONFLICT`。
+
+Run 终态会触发协调器重新评估，排队的 Plan 因此自动让位。**合并不会自动发生**：`MERGE_READY` 之后
+由人 review 并在 Git 侧合并，再调 `confirm-merged`；那一步会顺带回收该 Run 的 Worktree（**分支保留**）
+并跑一次 cleanup hook。
 
 ## Plan V2 与项目验证
 
