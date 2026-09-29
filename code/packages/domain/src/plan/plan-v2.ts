@@ -10,6 +10,14 @@ export type PlanArtifactMode = "CONVERSATION" | "REPOSITORY_FILE";
 export type PlanValidationIssueCode = "REQUIRED" | "INVALID" | "FORBIDDEN" | "MODE_CONFLICT" | "DUPLICATE";
 export type PlanValidationIssue = { path: string; code: PlanValidationIssueCode; area: string; message: string };
 
+/**
+ * 计划里的一个执行步骤。`status` 是**计划态**（"这一步在计划里是否可开工"），不是运行时状态：
+ * 每一步真正的进度来自 Run 的 journal（`TASK_PROGRESS` 条目），由执行侧推进。
+ * 它曾是模型可填字段，但从来没有任何代码推进过它，界面却按"实时状态"显示恒定的 READY —— 所以
+ * prompt 不再示范、界面不再当实时状态用；为了兼容库里已有的 CandidatePlan，校验器仍接受这个键。
+ */
+export type PlanTaskShape = { id: string; title: string; dependencies: string[]; status?: "PENDING" | "READY" | "DONE" };
+
 export type GeneratedPlanSpecV2 = {
   schemaVersion: 2;
   title: string;
@@ -17,11 +25,17 @@ export type GeneratedPlanSpecV2 = {
   objective: { goal: string; audience: string[]; acceptanceCriteria: string[]; outOfScope: string[] };
   design: { technicalConstraints: string[]; dataSecurity: string[]; failureHandling: string[] };
   scope: { includePaths: string[]; excludePaths: string[] };
-  tasks: Array<{ id: string; title: string; dependencies: string[]; status?: "PENDING" | "READY" | "DONE" }>;
+  tasks: PlanTaskShape[];
   /** Human-readable execution prerequisites; these are not CandidatePlan IDs. */
   dependencies: string[];
   conflicts: string[];
-  execution: { executorModelRole?: string | undefined; toolPolicy?: string | undefined; maxRepairAttempts?: number | undefined };
+  /**
+   * **只有 Factory 能决定的部分**。这里曾经还有 `executorModelRole` 与 `toolPolicy`，模型可以填、
+   * 却没有任何消费方（执行侧读的是 Project 快照里的 executor 配置），于是它们在界面上显示成
+   * "执行策略"而实际不生效。会撒谎的字段不如没有：这两个值现在由 Factory 固定填进
+   * `ResolvedPlanContractV2.execution`，模型不再有机会声明它们。
+   */
+  execution: { maxRepairAttempts?: number | undefined };
   verification: { mode: "PROJECT_DEFAULT" | "NONE" };
   merge: { strategy: "manual" | "fast-forward" | "squash"; requireHumanMerge: true };
 };
@@ -34,6 +48,7 @@ export type ResolvedPlanContractV2 = {
   conflicts: string[];
   repository: { projectId: string; name: string; repoRoot: string; baseBranch: string; baseCommit: string; configVersion: number; configHash: string };
   scope: GeneratedPlanSpecV2["scope"];
+  /** 冻结后的步骤清单；`status` 恒为计划态（见 PlanTaskShape 的说明）。 */
   tasks: Array<{ id: string; title: string; dependencies: string[]; status: "PENDING" | "READY" | "DONE" }>;
   /** Human-readable execution prerequisites; these are not CandidatePlan IDs. */
   dependencies: string[];
@@ -43,6 +58,13 @@ export type ResolvedPlanContractV2 = {
 };
 
 export type GitBaseline = { baseBranch: string; baseCommit: string };
+
+/**
+ * 执行角色与工具策略由 Factory 固定，**不是模型可填的字段**（见 GeneratedPlanSpecV2.execution 的说明）。
+ * 取这两个具体值是历史兼容：下游 `PlanContract` 投影、审计视图与既有 Run 的 journal 都在读它们。
+ */
+export const EXECUTOR_ROLE = "executor";
+export const EXECUTOR_TOOL_POLICY = "executor-scoped-write";
 
 export class GeneratedPlanSpecV2ValidationError extends Error {
   constructor(readonly issues: PlanValidationIssue[]) {
@@ -98,13 +120,6 @@ function safePaths(paths: string[], path: string, area: string, issues: PlanVali
   });
 }
 
-function optionalExecutionString(source: Record<string, unknown>, key: "executorModelRole" | "toolPolicy", issues: PlanValidationIssue[]): string | undefined {
-  const value = source[key];
-  if (value === undefined) return undefined;
-  if (typeof value !== "string" || !value.trim()) { issue(issues, `execution.${key}`, "INVALID", "实施任务、依赖与冲突", "如填写，必须是非空字符串。"); return undefined; }
-  return value.trim();
-}
-
 /** Returns every structural violation so continuation can repair the full artifact at once. */
 export function validateGeneratedPlanSpecV2(value: unknown): PlanValidationIssue[] {
   const issues: PlanValidationIssue[] = [];
@@ -157,8 +172,8 @@ export function validateGeneratedPlanSpecV2(value: unknown): PlanValidationIssue
   stringsAt(source, "conflicts", "conflicts", "实施任务、依赖与冲突", issues);
 
   const execution = objectAt(source, "execution", "实施任务、依赖与冲突", issues);
-  optionalExecutionString(execution, "executorModelRole", issues);
-  optionalExecutionString(execution, "toolPolicy", issues);
+  // `execution.executorModelRole` / `execution.toolPolicy` 不再被读取，但**故意不报 FORBIDDEN**：
+  // 库里已有的 CandidatePlan 带着这两个键，报错会让它们连 confirm 都过不去。忽略是这里的正确语义。
   if (execution.maxRepairAttempts !== undefined && (!Number.isInteger(execution.maxRepairAttempts) || Number(execution.maxRepairAttempts) < 0)) issue(issues, "execution.maxRepairAttempts", "INVALID", "实施任务、依赖与冲突", "如填写，必须是非负整数。");
 
   const verification = objectAt(source, "verification", "验收标准与验证命令", issues);
@@ -196,7 +211,7 @@ export function parseGeneratedPlanSpecV2(value: unknown): GeneratedPlanSpecV2 {
     tasks: (source.tasks as Array<Record<string, unknown>>).map((task) => ({ id: String(task.id).trim(), title: String(task.title).trim(), dependencies: normalize(task.dependencies), status: (task.status as "PENDING" | "READY" | "DONE" | undefined) ?? "READY" })),
     dependencies: normalize(source.dependencies),
     conflicts: normalize(source.conflicts),
-    execution: { executorModelRole: typeof execution.executorModelRole === "string" ? execution.executorModelRole.trim() : undefined, toolPolicy: typeof execution.toolPolicy === "string" ? execution.toolPolicy.trim() : undefined, maxRepairAttempts: typeof execution.maxRepairAttempts === "number" ? execution.maxRepairAttempts : undefined },
+    execution: { maxRepairAttempts: typeof execution.maxRepairAttempts === "number" ? execution.maxRepairAttempts : undefined },
     verification: { mode: verification.mode as "PROJECT_DEFAULT" | "NONE" },
     merge: { strategy: merge.strategy as GeneratedPlanSpecV2["merge"]["strategy"], requireHumanMerge: true },
   };
@@ -210,5 +225,5 @@ export function resolvePlanContractV2(specValue: unknown, project: ProjectExecut
   if (defaults.some((id) => !enabledVerification.has(id))) throw new Error("Project default verification commands are invalid");
   const mode = spec.verification.mode === "NONE" || defaults.length === 0 ? "NONE" : "PROJECT_DEFAULT";
   const technicalConstraints = [...new Set([...spec.design.technicalConstraints, ...spec.dependencies])];
-  return { schemaVersion: 2, artifact: spec.artifact, objective: spec.objective, design: { ...spec.design, technicalConstraints }, conflicts: spec.conflicts, repository: { projectId: project.projectId, name: project.name, repoRoot: project.repoRoot, baseBranch: baseline.baseBranch, baseCommit: baseline.baseCommit, configVersion: project.configVersion, configHash: project.configHash }, scope: spec.scope, tasks: spec.tasks.map((task) => ({ ...task, status: task.status ?? "READY" })), dependencies: spec.dependencies, execution: { executorModelRole: spec.execution.executorModelRole?.trim() || "executor", toolPolicy: spec.execution.toolPolicy?.trim() || "executor-scoped-write", maxRepairAttempts: Number.isInteger(spec.execution.maxRepairAttempts) && spec.execution.maxRepairAttempts! >= 0 ? spec.execution.maxRepairAttempts! : project.settings.concurrency.maxRepairAttempts }, verification: { mode, commandIds: mode === "PROJECT_DEFAULT" ? [...defaults] : [] }, merge: { strategy: spec.merge.strategy, requireHumanMerge: true } };
+  return { schemaVersion: 2, artifact: spec.artifact, objective: spec.objective, design: { ...spec.design, technicalConstraints }, conflicts: spec.conflicts, repository: { projectId: project.projectId, name: project.name, repoRoot: project.repoRoot, baseBranch: baseline.baseBranch, baseCommit: baseline.baseCommit, configVersion: project.configVersion, configHash: project.configHash }, scope: spec.scope, tasks: spec.tasks.map((task) => ({ ...task, status: task.status ?? "READY" })), dependencies: spec.dependencies, execution: { executorModelRole: EXECUTOR_ROLE, toolPolicy: EXECUTOR_TOOL_POLICY, maxRepairAttempts: Number.isInteger(spec.execution.maxRepairAttempts) && spec.execution.maxRepairAttempts! >= 0 ? spec.execution.maxRepairAttempts! : project.settings.concurrency.maxRepairAttempts }, verification: { mode, commandIds: mode === "PROJECT_DEFAULT" ? [...defaults] : [] }, merge: { strategy: spec.merge.strategy, requireHumanMerge: true } };
 }

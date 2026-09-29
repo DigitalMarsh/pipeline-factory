@@ -74,6 +74,7 @@ export type DomainEvent = {
     | "plan.status.changed"
     | "plan.discarded"
     | "plan.confirmed"
+    | "plan.dependencies.updated"
     | "plan.enqueued"
     | "plan.dispatched"
     | "plan.configuration.revised"

@@ -319,6 +319,28 @@ export class PlanService {
 
   listRevisions(planId: string): PlanRevisionV2[] { this.get(planId); return this.store.listRevisions(planId); }
 
+  /**
+   * 设置这个 Plan 的前置 Plan。**Factory-owned 字段，模型不能填写。**
+   *
+   * 为什么只能由人设置：模型不知道 CandidatePlan 的 id（它只见过自然语言的先决条件），而
+   * `dependsOnPlanIds` 是调度用的**真实 id 引用** —— dispatch 拿它做 `WAITING_DEPENDENCY` 判定
+   * （要求前置 Plan 达到 MERGED）。V2 契约里没有对应字段，所以这里是"依赖"从一个不可达状态
+   * 变成可达状态的唯一入口。
+   *
+   * 只在 Confirm 之前可改：确认后依赖随 Revision 一起冻结，改它等于改执行语义。
+   * 合法性（未知 id、自环、环）由 `validatePlanDependencies` 判定，与 Confirm 时同一套规则。
+   */
+  setDependencies(planId: string, dependsOnPlanIds: string[], actorId: string): CandidatePlan {
+    const plan = this.get(planId);
+    if (!["DRAFT", "DESIGNED", "PLANNED"].includes(plan.status)) throw new Error(`Plan ${planId} dependencies cannot change from ${plan.status}`);
+    const normalized = [...new Set(dependsOnPlanIds.map((id) => id.trim()).filter(Boolean))];
+    const updated: CandidatePlan = { ...plan, contract: { ...plan.contract, dependsOnPlanIds: normalized } };
+    this.validatePlanDependencies(updated);
+    const saved = this.store.updatePlan(updated);
+    this.store.appendEvent({ type: "plan.dependencies.updated", aggregateId: planId, payload: { actorId, dependsOnPlanIds: normalized } });
+    return saved;
+  }
+
   /** 丢弃仍处于 DRAFT 的候选计划；记录审计事件且不生成后续执行事实。 */
   discard(planId: string, actorId: string): CandidatePlan {
     const plan = this.get(planId);
@@ -345,17 +367,12 @@ export class PlanService {
     }
     if (plan.generatedSpec && plan.resolvedContract) {
       const prerequisites = [...new Set([...plan.generatedSpec.dependencies, ...plan.resolvedContract.dependencies])];
-      const prerequisiteSet = new Set(prerequisites);
-      const currentPlanDependencies = plan.contract.dependsOnPlanIds ?? [];
-      const dependsOnPlanIds = currentPlanDependencies.filter((dependencyId) => !prerequisiteSet.has(dependencyId));
       const currentTechnicalConstraints = plan.resolvedContract.design.technicalConstraints;
       const technicalConstraints = [...new Set([...currentTechnicalConstraints, ...prerequisites])];
-      const dependenciesChanged = dependsOnPlanIds.length !== currentPlanDependencies.length;
       const constraintsChanged = technicalConstraints.length !== currentTechnicalConstraints.length || technicalConstraints.some((constraint, index) => constraint !== currentTechnicalConstraints[index]);
-      if (dependenciesChanged || constraintsChanged) {
+      if (constraintsChanged) {
         plan = this.store.updatePlan({
           ...plan,
-          contract: { ...plan.contract, dependsOnPlanIds },
           resolvedContract: { ...plan.resolvedContract, design: { ...plan.resolvedContract.design, technicalConstraints } },
         });
       }

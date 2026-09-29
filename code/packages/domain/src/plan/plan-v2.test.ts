@@ -34,7 +34,7 @@ describe("Plan V2 resolution", () => {
     expect(() => parseGeneratedPlanSpecV2({ ...spec, verificationCommandIds: ["docs.file-and-section-check"] })).toThrow(/只能由 Factory/i);
   });
 
-  it("keeps natural-language prerequisites as technical constraints and repairs old draft projections on confirmation", () => {
+  it("keeps natural-language prerequisites as technical constraints, separate from plan dependencies", () => {
     const root = repository();
     try {
       const store = new InMemoryPipelineStore();
@@ -48,18 +48,41 @@ describe("Plan V2 resolution", () => {
       expect(candidate.resolvedContract?.dependencies).toEqual(generatedSpec.dependencies);
       expect(candidate.resolvedContract?.design.technicalConstraints).toEqual(expect.arrayContaining(generatedSpec.dependencies));
 
-      const oldResolvedContract = candidate.resolvedContract!;
-      store.updatePlan({
-        ...candidate,
-        contract: { ...candidate.contract, dependsOnPlanIds: generatedSpec.dependencies },
-        resolvedContract: { ...oldResolvedContract, design: { ...oldResolvedContract.design, technicalConstraints: spec.design.technicalConstraints } },
-      });
+      // 旧实现会在 confirm 时把这些自然语言先决条件从 dependsOnPlanIds 里"顺手删掉"。
+      // 那条启发式同时会删掉**用户显式设置的**依赖（id 恰好出现在先决条件里就会中招），
+      // 现在只做校验、不动数据：以下写法会因引用未知 Plan 而明确失败。
+      store.updatePlan({ ...candidate, contract: { ...candidate.contract, dependsOnPlanIds: generatedSpec.dependencies } });
+      expect(() => plans.confirm(candidate.id, "user-1")).toThrow(/unknown plan/i);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
-      const confirmed = plans.confirm(candidate.id, "user-1");
-      const revision = plans.getRevision(candidate.id, 1);
-      expect(confirmed).toMatchObject({ status: "READY", contract: { dependsOnPlanIds: [] } });
-      expect(revision.contract.dependsOnPlanIds).toEqual([]);
-      expect(revision.resolvedContract?.design.technicalConstraints).toEqual(expect.arrayContaining(generatedSpec.dependencies));
+  it("lets a human set prerequisite plans but never the model", () => {
+    const root = repository();
+    try {
+      const store = new InMemoryPipelineStore();
+      const projects = new ProjectService(store);
+      const project = projects.create({ id: "project-deps", name: "Deps", repoRoot: root, defaultBranch: "main", worktreeRoot: join(root, "worktrees") });
+      const plans = new PlanService(store, projects);
+      const upstream = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "explorer-deps", title: "Upstream", generatedSpec: { ...spec, title: "Upstream" } });
+      const downstream = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "explorer-deps", title: "Downstream", generatedSpec: { ...spec, title: "Downstream" } });
+
+      // 模型给出的 dependencies 是自然语言先决条件，**不是** plan id；依赖只能由人设置。
+      expect(downstream.contract.dependsOnPlanIds).toEqual([]);
+      const withDependency = plans.setDependencies(downstream.id, [upstream.id], "user-1");
+      expect(withDependency.contract.dependsOnPlanIds).toEqual([upstream.id]);
+      // 依赖随 Revision 冻结：confirm 后不能再改。
+      const confirmed = plans.confirm(downstream.id, "user-1");
+      expect(confirmed.contract.dependsOnPlanIds).toEqual([upstream.id]);
+      expect(plans.getRevision(downstream.id, 1)?.contract.dependsOnPlanIds).toEqual([upstream.id]);
+      expect(() => plans.setDependencies(downstream.id, [], "user-1")).toThrow(/cannot change from READY/);
+
+      // 引用未知 Plan 会被拒绝，而不是留到 dispatch 时才变成等一个不存在的依赖。
+      const other = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "explorer-deps", title: "Other", generatedSpec: { ...spec, title: "Other" } });
+      expect(() => plans.setDependencies(other.id, ["plan-does-not-exist"], "user-1")).toThrow(/unknown plan/i);
+      // 自环也被拒绝。
+      expect(() => plans.setDependencies(other.id, [other.id], "user-1")).toThrow(/cannot depend on itself/i);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

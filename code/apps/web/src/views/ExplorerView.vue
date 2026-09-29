@@ -202,11 +202,12 @@ const activePlans = computed<Plan[]>(() => activeRuns.value.map((run) => {
  * 后者要拿这里的 drawerOpen / drawerTab / detailPlan 去在确认、入队之后刷新并切页签。
  * 路由形状不下沉——打开详情后的 URL 同步由 onOpened 回调留在视图里。
  */
-const { drawerOpen, drawerTab, detailPlan, detailRevisions, detailConfirmedRevisions, detailLatestRevision, detailVersionSource, detailLoadError, openPlanDetail, selectPlanRevision, resetDetailState } = usePlanDetailDrawer({
+const { drawerOpen, drawerTab, detailPlan, detailRevisions, detailConfirmedRevisions, detailLatestRevision, detailVersionSource, detailLoadError, detailDependencyOptions, dependenciesSaving, canEditDependencies, openPlanDetail, selectPlanRevision, saveDependencies, resetDetailState } = usePlanDetailDrawer({
   projectId,
   projectScopeToken,
   revisionDraft,
   planFromRevisionDraft,
+  isReadOnly: () => Boolean(detailPlan.value && detailLatestRevision.value !== null && detailPlan.value.revision !== detailLatestRevision.value),
   onOpened: (plan) => {
     void router.replace({ path: route.path, query: { ...route.query, ...(plan.explorerPlanId ? { explorerPlanId: plan.explorerPlanId } : {}), requirementTab: "plan" } });
   },
@@ -1240,11 +1241,15 @@ onBeforeUnmount(() => { mounted.value = false; invalidateProjectScope(); closeEv
               :revisions="detailRevisions"
               :read-only="Boolean(detailPlan && detailLatestRevision !== null && detailPlan.revision !== detailLatestRevision)"
               :revision-draft-status="revisionDraft?.status ?? null"
+              :dependency-options="detailDependencyOptions"
+              :can-edit-dependencies="canEditDependencies"
+              :dependencies-saving="dependenciesSaving"
               @close="closeSharedDrawer"
               @confirm="confirmPlan"
               @discard="discardPlan"
               @keep-editing="keepEditingPlan"
               @select-revision="selectPlanRevision"
+              @update-dependencies="saveDependencies(detailPlan, $event)"
             />
           </section>
           <section v-if="drawerTab === 'task'" class="shared-drawer-pane task-detail-pane" role="tabpanel" aria-label="Run">

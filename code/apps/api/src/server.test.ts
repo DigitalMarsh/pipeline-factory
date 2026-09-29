@@ -124,6 +124,30 @@ describe("Pipeline Factory v4 API", () => {
     }
   });
 
+  it("sets Factory-owned prerequisite plans over HTTP and rejects unknown ids", async () => {
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    const project = projects.create({ id: "project-deps-api", name: "Deps API", repoRoot: "/repo/deps-api", defaultBranch: "main", worktreeRoot: "/tmp/deps-api-worktrees" });
+    const plans = new PlanService(store, projects);
+    plans.registerThread({ id: "deps-thread", projectId: project.id, parentThreadId: null });
+    const upstream = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "deps-thread", title: "Upstream" });
+    const downstream = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "deps-thread", title: "Downstream" });
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+
+    const saved = await app.inject({ method: "PUT", url: `/api/v4/plans/${downstream.id}/dependencies`, payload: { dependsOnPlanIds: [upstream.id], actorId: "tester" } });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json().plan.contract.dependsOnPlanIds).toEqual([upstream.id]);
+
+    // 未知 Plan 由 domain 拒绝，HTTP 层映射成 409 而不是 500。
+    const invalid = await app.inject({ method: "PUT", url: `/api/v4/plans/${downstream.id}/dependencies`, payload: { dependsOnPlanIds: ["plan-missing"], actorId: "tester" } });
+    expect(invalid.statusCode).toBe(409);
+    expect(invalid.json()).toMatchObject({ code: "PLAN_DEPENDENCIES_INVALID" });
+
+    const unknownPlan = await app.inject({ method: "PUT", url: "/api/v4/plans/plan-missing/dependencies", payload: { dependsOnPlanIds: [], actorId: "tester" } });
+    expect(unknownPlan.statusCode).toBe(404);
+  });
+
   it("serves only project-scoped Execute snapshots with replayable events", async () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);

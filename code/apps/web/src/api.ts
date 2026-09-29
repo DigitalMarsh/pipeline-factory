@@ -99,6 +99,8 @@ export const api = {
   enqueuePlanRevision: (planId: string, revision: number) => request<{ plan: Plan }>(`/api/v4/plans/${encodeURIComponent(planId)}/revisions/${revision}/enqueue`, { method: "POST" }),
   revisePlanConfiguration: (planId: string) => request<{ plan: Plan }>(`/api/v4/plans/${planId}/revise-configuration`, { method: "POST", body: JSON.stringify({ actorId: "local-user" }) }),
   startPlanRun: (planId: string) => request<{ plan: Plan; run: Run | null; dispatch: PlanDispatchState | null }>(`/api/v4/plans/${planId}/run`, { method: "POST" }),
+  /** 设置前置 Plan。Factory-owned 字段：模型不能填，只能由人从同项目的 Plan 里挑。 */
+  updatePlanDependencies: (planId: string, dependsOnPlanIds: string[]) => request<{ plan: Plan }>(`/api/v4/plans/${encodeURIComponent(planId)}/dependencies`, { method: "PUT", body: JSON.stringify({ dependsOnPlanIds, actorId: "local-user" }) }),
   startPlanRevisionRun: (planId: string, revision: number) => request<{ plan: Plan; run: Run | null; dispatch: PlanDispatchState | null }>(`/api/v4/plans/${encodeURIComponent(planId)}/revisions/${revision}/run`, { method: "POST" }),
   getRun: (runId: string) => request<{ run: Run; executionThread: ExecutionThread | null; verification: VerificationRun | null; mergeRequest: MergeRequest | null }>(`/api/v4/runs/${encodeURIComponent(runId)}`),
   getExecutionThread: (threadId: string) => request<{ thread: ExecutionThread }>(`/api/v4/execution-threads/${threadId}`),

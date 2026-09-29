@@ -1,13 +1,14 @@
 /**
- * 模块职责：Plan 域的 26 条路由，按资源分三组 ——
+ * 模块职责：Plan 域的 27 条路由，按资源分三组 ——
  *   A) 计划目录（9 条，路径前缀是 project / explorer）：`/projects/:projectId/plans`、
  *      `.../explorers/:explorerId/{plans,confirmed-plans,all-plans,candidate,revision-draft}`、
  *      `/projects/:projectId/{candidate-plans,tasks}`、`.../selected-plan`。
  *   B) 版本与草稿（8 条）：PlanRevision 列表 / 详情、CandidateVersion 列表 / 详情、
  *      RevisionDraft 的创建 / 详情 / confirm / discard。
- *   C) Plan 生命周期动作（9 条）：`confirm` / `revisions/:revision/confirm` / `enqueue` /
+ *   C) Plan 生命周期动作（10 条）：`confirm` / `revisions/:revision/confirm` / `enqueue` /
  *      `revisions/:revision/enqueue` / `run` / `revisions/:revision/run` / `discard` /
- *      `revise-configuration`，以及 `GET /plans/:planId` 详情。
+ *      `revise-configuration` / `dependencies`（前置 Plan，Factory-owned，模型不能填），
+ *      以及 `GET /plans/:planId` 详情。
  *
  * 与 `routes/explorers.ts` 的边界（互补的一半）：`/explorers/:explorerId/*` 下凡是资源为
  *   **CandidatePlan / PlanRevision / RevisionDraft** 的路径都归本文件，凡是资源为
@@ -391,6 +392,25 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
     } catch (error) {
       const message = error instanceof Error ? error.message : "Plan cannot be confirmed";
       return reply.code(409).send({ code: message, error: message, stage: "VALIDATION_FAILED" });
+    }
+  });
+
+  /**
+   * 设置前置 Plan。**这是 Factory-owned 字段**：模型不能填（它不知道 plan id），
+   * 由人在 Plan 详情里从同项目的 Plan 中挑选。合法性（未知 id / 自环 / 环）由 domain 判定。
+   */
+  app.put("/api/v4/plans/:planId/dependencies", async (request, reply) => {
+    const params = planIdParams.safeParse(request.params);
+    const body = z.object({ dependsOnPlanIds: z.array(z.string().min(1)), actorId: z.string().min(1).default("local-user") }).safeParse(request.body ?? {});
+    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid plan dependency request" });
+    try {
+      const plan = plans.get(params.data.planId);
+      if (ensurePlanProject(plan.projectId, reply, true) === null) return;
+      return { plan: plans.setDependencies(params.data.planId, body.data.dependsOnPlanIds, body.data.actorId) };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Plan dependencies cannot be updated";
+      if (/not found/i.test(message)) return reply.code(404).send({ code: "PLAN_NOT_FOUND", error: "Plan not found" });
+      return reply.code(409).send({ code: "PLAN_DEPENDENCIES_INVALID", error: message });
     }
   });
 

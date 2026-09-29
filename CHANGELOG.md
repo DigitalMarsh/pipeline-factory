@@ -1,5 +1,57 @@
 # Changelog
 
+## 2026-09-29 — Plan 契约去掉"会说谎的字段"，依赖闸门变成可达
+
+### 为什么做
+
+`GeneratedPlanSpecV2` 是「模型能声明什么」的契约，但其中几个字段**填了也没有消费方**：
+
+- `execution.executorModelRole` / `toolPolicy`：执行侧读的是 Project 快照里的 executor 配置
+  （`ExecutorAgent.executorModelConfig`），从不读它们；界面却把它们当 "Execution policy" 展示。
+- `tasks[].status`：从来没有任何代码推进过它，Workbench 却按实时状态显示恒定的 `READY`。
+- `dependsOnPlanIds`（V1 契约字段）：V2 的投影**恒填 `[]`**，于是 `dispatch-coordinator` 里那两道
+  真实的闸门（`WAITING_DEPENDENCY` 要求前置 Plan 已 MERGED、`WAITING_CONFLICT` 取冲突键交集）
+  **有一半从 Explorer 侧不可达**——模型不知道 plan id，V2 契约里也没有对应字段。
+
+### Changed
+
+- `GeneratedPlanSpecV2.execution` 只保留 `maxRepairAttempts`；执行角色与工具策略由
+  `resolvePlanContractV2` 以常量 `EXECUTOR_ROLE` / `EXECUTOR_TOOL_POLICY` 固定填进
+  `ResolvedPlanContractV2`（下游 `PlanContract` 投影与审计视图不受影响）。
+  校验器对这两个键**接受但忽略**（不报 FORBIDDEN）：库里已有的 CandidatePlan 带着它们，
+  报错会让旧数据连 confirm 都过不去。prompt、`EXPLORER_PLAN_REQUIREMENTS.optionalFields`
+  与 web 侧 fallback 副本三处同步更新。
+- `PlanTaskShape` 新增并注明 `status` 是**计划态**；prompt 不再示范、Workbench 的
+  "Execution tasks" 改为 "Approved plan steps" 并说明每步实际进度在 Run 日志里
+  （`Open Run` 查看），不再把一个恒为 READY 的字段显示成实时状态。
+- **跨 plan 依赖改为 Factory-owned 且可达**：新增 `PlanService.setDependencies()` 与
+  `PUT /api/v4/plans/:planId/dependencies`，只允许在 Confirm 前设置，合法性复用 Confirm 的
+  那套规则（未知 id / 自环 / 环）。界面在 Plan 详情抽屉里加 "Prerequisite plans" 选择器
+  （候选来自本项目其他 Plan），候选态且非历史版本时才可编辑。
+- **删掉 `confirm()` 里那段"净化"启发式**：它把「恰好出现在自然语言先决条件里的 id」从
+  `dependsOnPlanIds` 中剔除——那既会删掉用户显式设置的依赖，也让依赖语义取决于文本巧合。
+  现在只校验不动数据：引用未知 Plan 会在 confirm 时明确失败。**这是一处行为变化**：
+  若历史数据里 `dependsOnPlanIds` 被自然语言污染过，confirm 会报 `unknown plan`，
+  在 Plan 详情的依赖编辑器里清掉即可。
+- 新增 `utils/planContract.ts`（web）：界面读 Plan 契约的唯一入口，固定
+  `resolvedContract → generatedSpec → contract` 的取值顺序。Workbench inspector 改用
+  `planContractView()`，不再优先读那份**有损投影** `contract`（它的 `dependsOnPlanIds` 恒为 []）。
+
+### 未做（明确记账，不是遗漏）
+
+- `verification.suites`（按 tag 选验证子集）：需要 Project 命令加 `tags`、spec 加字段、
+  并把可用 suites 注入 Explorer 回合（现有 prompt 是静态常量，得走仓库上下文那条通道）。
+  半成品比没有更糟——留待下一轮。
+- `conflicts`（冲突键）由 includePaths 派生的策略：模型声明的语义键已经可用且可审计，
+  派生规则会改变串行度（保守方向），值得单独设计 + 可配置，不与本轮混在一起。
+
+### 验证
+
+- `pnpm verify` 全绿（domain 294 / api 90 / web 422）。
+- 新增 domain 用例：自然语言先决条件仍进 `design.technicalConstraints` 且**不再被静默删除**；
+  `setDependencies` 的正常路径、Confirm 后拒绝修改、未知 id 与自环被拒绝。
+- 新增 HTTP 用例：`PUT /plans/:planId/dependencies` 保存成功、未知依赖映射 409、未知 Plan 映射 404。
+
 ## 2026-09-29 — 多后端：探索与执行各用一个 agent（按角色路由）
 
 ### 为什么做

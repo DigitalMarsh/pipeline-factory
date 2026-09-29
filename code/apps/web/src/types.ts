@@ -339,7 +339,8 @@ export type GeneratedPlanSpec = {
   tasks: Array<{ id: string; title: string; dependencies: string[]; status?: "PENDING" | "READY" | "DONE" }>;
   dependencies: string[];
   conflicts: string[];
-  execution: { executorModelRole?: string; toolPolicy?: string; maxRepairAttempts?: number };
+  /** 只含 Factory 允许模型决定的项；执行角色与工具策略由 Factory 固定（见 domain 的 plan-v2.ts）。 */
+  execution: { maxRepairAttempts?: number };
   verification: { mode: "PROJECT_DEFAULT" | "NONE" };
   merge: { strategy: "manual" | "fast-forward" | "squash"; requireHumanMerge: true };
 };

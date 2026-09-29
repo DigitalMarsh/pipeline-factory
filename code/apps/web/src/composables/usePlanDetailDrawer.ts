@@ -19,7 +19,7 @@
  *      `resetThreadState` 里本来把同一组抽屉重置**写了两遍**（第二遍还漏了 `detailLoadError`），
  *      现在只有 `resetDetailState` 一处——这正是"两处要保持同步"该被消掉的理由。
  */
-import { ref, type Ref } from "vue";
+import { computed, ref, type Ref } from "vue";
 import { ElMessage } from "element-plus";
 import { api } from "../api";
 import type { Plan, PlanRevisionDraft } from "../types";
@@ -36,6 +36,8 @@ export type PlanDetailDrawerDeps = {
   planFromRevisionDraft: (draft: PlanRevisionDraft) => Plan;
   /** 打开详情后通知视图同步 URL；路由形状不下沉到本文件。 */
   onOpened: (plan: Plan) => void;
+  /** 当前是否只读（例如正在查看历史版本）：只读时不允许改前置 Plan。 */
+  isReadOnly?: (() => boolean) | undefined;
 };
 
 export function usePlanDetailDrawer(deps: PlanDetailDrawerDeps) {
@@ -60,6 +62,8 @@ export function usePlanDetailDrawer(deps: PlanDetailDrawerDeps) {
     detailLatestRevision.value = null;
     detailVersionSource.value = null;
     detailLoadError.value = null;
+    detailDependencyOptions.value = [];
+    dependenciesSaving.value = false;
   }
 
   async function openPlanDetail(plan: Plan): Promise<void> {
@@ -77,8 +81,11 @@ export function usePlanDetailDrawer(deps: PlanDetailDrawerDeps) {
     detailLatestRevision.value = plan.revision;
     detailVersionSource.value = plan.status === "DRAFT" ? "candidate" : "confirmed";
     detailLoadError.value = null;
+    detailDependencyOptions.value = [];
     drawerOpen.value = true;
     deps.onOpened(plan);
+    // 候选态才可能改依赖；依赖目录与详情并行加载，取不到不阻塞详情。
+    if (plan.status === "DRAFT") void loadDependencyOptions(requestedProjectId, planId, requestToken);
     const currentRevisionDraft = deps.revisionDraft.value;
     if (currentRevisionDraft && planId === currentRevisionDraft.planId && currentRevisionDraft.status !== "CONFIRMED" && currentRevisionDraft.status !== "DISCARDED") {
       detailPlan.value = deps.planFromRevisionDraft(currentRevisionDraft);
@@ -162,6 +169,44 @@ export function usePlanDetailDrawer(deps: PlanDetailDrawerDeps) {
     }
   }
 
+  /**
+   * 前置 Plan 的可选项：同项目里其他未丢弃的 Plan。只在**候选态**（还能改依赖）时加载。
+   * 依赖是 Factory-owned 字段（模型不能填），所以候选清单必须由界面给出而不是模型自己报。
+   */
+  const detailDependencyOptions = ref<Array<{ id: string; title: string }>>([]);
+  const dependenciesSaving = ref(false);
+  const canEditDependencies = computed(() => !deps.isReadOnly?.() && detailPlan.value?.status === "DRAFT" && Boolean(detailPlan.value?.generatedSpec || detailPlan.value?.resolvedContract));
+
+  async function loadDependencyOptions(projectId: string, planId: string, requestToken: number): Promise<void> {
+    try {
+      const response = await api.candidatePlans(projectId);
+      if (deps.projectId.value !== projectId || deps.projectScopeToken() !== requestToken) return;
+      detailDependencyOptions.value = response.items.flatMap((item) => {
+        const id = item.id ?? item.planId;
+        return id && id !== planId ? [{ id, title: item.title }] : [];
+      });
+    } catch {
+      // 目录取不到不阻塞详情：依赖区退化成"暂时无法选择"，而不是整页报错。
+      detailDependencyOptions.value = [];
+    }
+  }
+
+  /** 保存前置 Plan；失败用 ElMessage 说明原因（不可逆的调度语义，不该静默失败）。 */
+  async function saveDependencies(plan: Plan | null, planIds: string[]): Promise<void> {
+    const planId = plan?.id ?? plan?.planId;
+    if (!planId || dependenciesSaving.value) return;
+    dependenciesSaving.value = true;
+    try {
+      const response = await api.updatePlanDependencies(planId, planIds);
+      if (detailPlan.value && (detailPlan.value.id ?? detailPlan.value.planId) === planId) detailPlan.value = { ...detailPlan.value, ...response.plan };
+      ElMessage.success("前置 Plan 已保存");
+    } catch (caught) {
+      ElMessage.error(caught instanceof Error ? `前置 Plan 保存失败：${caught.message}` : "前置 Plan 保存失败");
+    } finally {
+      dependenciesSaving.value = false;
+    }
+  }
+
   return {
     drawerOpen,
     drawerTab,
@@ -171,8 +216,12 @@ export function usePlanDetailDrawer(deps: PlanDetailDrawerDeps) {
     detailLatestRevision,
     detailVersionSource,
     detailLoadError,
+    detailDependencyOptions,
+    dependenciesSaving,
+    canEditDependencies,
     openPlanDetail,
     selectPlanRevision,
+    saveDependencies,
     resetDetailState,
   };
 }
