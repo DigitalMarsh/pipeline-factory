@@ -80,7 +80,7 @@ describe("Explorer thread actions", () => {
 describe("Provider usage footer wiring", () => {
   it("uses the shared footer and shows only model/context facts", () => {
     expect(explorerViewSource).toContain('import ProviderUsageFooter from "../components/ProviderUsageFooter.vue"');
-    expect(explorerViewSource).toContain('<ProviderUsageFooter :model="explorerModel" :context="contextUsage" context-note="estimated" />');
+    expect(explorerViewSource).toContain('<ProviderUsageFooter :model="explorerModel" :backend="explorerBackendLabel" :context="contextUsage" context-note="estimated" />');
     expect(explorerViewSource).not.toContain('class="codex-status-popover"');
     expect(explorerViewSource).not.toContain("formatConversationId");
     // 5 小时 / 7 天额度已从页面与后端两侧移除，页面上不该再有它的任何痕迹（防回归）。

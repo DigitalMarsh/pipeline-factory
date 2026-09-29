@@ -38,8 +38,62 @@ const computerUseSchema = z.object({
   timeoutMs: z.number().int().positive().default(120_000),
 }).default({});
 
+/** 可用的模型后端种类；`model.backends` 的注册项与旧的 `model.backend` 共用这一份取值。 */
+const modelKindSchema = z.enum(["codex-app-server", "claude-agent-sdk", "openai-responses", "stub"]);
+
+// 各 kind 的端点字段拆成可复用片段：`model.codexAppServer` / `model.claudeAgent` / `model.openai`
+// 与 `model.backends.*` 的注册项共用同一份定义，避免"注册表里少一个字段"这类分叉。
+const codexAppServerShape = {
+  command: z.string().min(1).default("codex"),
+  args: z.array(z.string()).default(["app-server", "--stdio", "--enable", "default_mode_request_user_input"]),
+  cwd: z.string().min(1).default(".."),
+  startupTimeoutMs: z.number().int().positive().default(15_000),
+  requestTimeoutMs: z.number().int().positive().default(120_000),
+  maxRestarts: z.number().int().min(0).default(3),
+  clientName: z.string().min(1).default("pipeline-factory"),
+  clientVersion: z.string().min(1).default("4.0.0"),
+};
+
+const claudeAgentShape = {
+  baseUrl: z.string().url().optional(),
+  authToken: z.string().min(1).optional(),
+  /** 等价于 CLI 的 --settings；相对路径按配置文件所在目录解析。 */
+  settingsPath: z.string().min(1).optional(),
+  env: z.record(z.string()).default({}),
+  /** 单次 query 的回合上限；缺省不限制，由 model.loop.maxSteps 兜住步数。 */
+  maxTurns: z.number().int().positive().optional(),
+};
+
+const openAiShape = {
+  apiKey: z.string().min(1).optional(),
+  baseUrl: z.string().url().optional(),
+};
+
+const codexAppServerSchema = z.object(codexAppServerShape);
+const claudeAgentSchema = z.object(claudeAgentShape);
+const openAiSchema = z.object(openAiShape);
+
+/**
+ * `model.backends` 的一个注册项：一个具名后端。`kind` 决定它由哪个 Provider 实现，
+ * 其余字段按 kind 取用（同一个对象里允许同时出现三类字段，未用到的那些被忽略）。
+ * `models` 只驱动控制台的模型下拉，不参与任何后端校验——Factory 不知道 provider 支持什么。
+ */
+const backendEntrySchema = z.object({
+  kind: modelKindSchema,
+  ...codexAppServerShape,
+  ...claudeAgentShape,
+  ...openAiShape,
+  models: z.array(z.string().min(1)).default([]),
+});
+
 const roleSchema = z.object({
   model: z.string().min(1),
+  /**
+   * 本角色使用哪个后端。取值为 `model.backends` 的键，或四个 kind 名之一（由
+   * `model.codexAppServer` / `model.claudeAgent` / `model.openai` 隐式提供的后端）。
+   * 缺省时跟随 `model.backend`。**这是"探索用 Codex、执行用 Claude"的唯一开关。**
+   */
+  backend: z.string().min(1).optional(),
   mode: z.enum(["plan", "default"]).optional(),
   temperature: z.number().min(0).max(2).optional(),
   maxOutputTokens: z.number().int().positive().optional(),
@@ -86,35 +140,25 @@ const configSchema = z.object({
   plugins: pluginsSchema,
   computerUse: computerUseSchema,
   model: z.object({
-    backend: z.enum(["codex-app-server", "claude-agent-sdk", "openai-responses", "stub"]).default("codex-app-server"),
-    codexAppServer: z.object({
-      command: z.string().min(1).default("codex"),
-      args: z.array(z.string()).default(["app-server", "--stdio", "--enable", "default_mode_request_user_input"]),
-      cwd: z.string().min(1).default(".."),
-      startupTimeoutMs: z.number().int().positive().default(15_000),
-      requestTimeoutMs: z.number().int().positive().default(120_000),
-      maxRestarts: z.number().int().min(0).default(3),
-      clientName: z.string().min(1).default("pipeline-factory"),
-      clientVersion: z.string().min(1).default("4.0.0"),
-    }).optional(),
+    /** 未在角色（或 Project）上指定 backend 时使用的默认后端。 */
+    backend: modelKindSchema.default("codex-app-server"),
+    /**
+     * 具名后端注册表。**整块缺省是合法且常见的用法**：四个 kind 名本身就能当 id 用
+     * （`codex-app-server` / `claude-agent-sdk` / `openai-responses` / `stub`），端点由下面
+     * 三块兼容配置提供。只有需要"同类两个不同端点"（例如探索走官方 Claude、执行走
+     * DeepSeek 兼容端点）时才在这里注册第二个同 kind 的后端。
+     *
+     * 同名注册项会**覆盖**隐式后端（例如把 `codex-app-server` 重新指到另一个 cwd）。
+     */
+    backends: z.record(z.string().min(1), backendEntrySchema).default({}),
+    codexAppServer: codexAppServerSchema.optional(),
     /**
      * Claude Agent SDK 后端的可选覆盖。**整块缺省是完全合法的用法**：不传 env、不读密钥，
      * 端点与凭据都由 CLI 自己解析（~/.claude/settings.json，cc-switch 就作用在这一层）。
      * 只有需要把端点写死在配置里时才填 baseUrl/authToken。
      */
-    claudeAgent: z.object({
-      baseUrl: z.string().url().optional(),
-      authToken: z.string().min(1).optional(),
-      /** 等价于 CLI 的 --settings；相对路径按配置文件所在目录解析。 */
-      settingsPath: z.string().min(1).optional(),
-      env: z.record(z.string()).default({}),
-      /** 单次 query 的回合上限；缺省不限制，由 model.loop.maxSteps 兜住步数。 */
-      maxTurns: z.number().int().positive().optional(),
-    }).optional(),
-    openai: z.object({
-      apiKey: z.string().min(1).optional(),
-      baseUrl: z.string().url().optional(),
-    }).optional(),
+    claudeAgent: claudeAgentSchema.optional(),
+    openai: openAiSchema.optional(),
     roles: z.object({
       explorer: roleSchema.default({ model: "gpt-5.6-luna", temperature: 0.1 }),
       executor: roleSchema.default({ model: "gpt-5.6-luna", temperature: 0 }),
@@ -193,6 +237,7 @@ export function loadFactoryConfig(configPath = resolveConfigPath(undefined)): Fa
     },
     model: {
       ...parsed.data.model,
+      backends: Object.fromEntries(Object.entries(parsed.data.model.backends).map(([id, backend]) => [id, resolveBackendPaths(baseDirectory, backend)])),
       codexAppServer: parsed.data.model.codexAppServer ? {
         ...parsed.data.model.codexAppServer,
         cwd: resolveFromConfig(baseDirectory, parsed.data.model.codexAppServer.cwd),
@@ -203,6 +248,71 @@ export function loadFactoryConfig(configPath = resolveConfigPath(undefined)): Fa
       } : undefined,
     },
   };
+}
+
+/** 注册项里的相对路径与兼容配置块按同一规则解析，避免同一个含义出现两种基准目录。 */
+function resolveBackendPaths(baseDirectory: string, backend: z.infer<typeof backendEntrySchema>): z.infer<typeof backendEntrySchema> {
+  return {
+    ...backend,
+    cwd: resolveFromConfig(baseDirectory, backend.cwd),
+    ...(backend.settingsPath ? { settingsPath: resolveFromConfig(baseDirectory, backend.settingsPath) } : {}),
+  };
+}
+
+export type ModelBackendKind = z.infer<typeof modelKindSchema>;
+/** 一个可被角色（或 Project）引用的后端；`source` 说明它是注册表项还是兼容配置块生成的隐式后端。 */
+export type ResolvedModelBackend = {
+  id: string;
+  kind: ModelBackendKind;
+  source: "registry" | "implicit";
+  /** 控制台模型下拉用的候选模型；空数组表示"由使用方自行填写"。 */
+  models: string[];
+  codexAppServer?: z.infer<typeof codexAppServerSchema> | undefined;
+  claudeAgent?: z.infer<typeof claudeAgentSchema> | undefined;
+  openai?: z.infer<typeof openAiSchema> | undefined;
+};
+
+/**
+ * 把配置解析成"后端 id → 后端定义"的映射，并校验**每个角色引用的 id 都能解析**。
+ *
+ * 隐式 id（四个 kind 名）永远存在，端点来自 `model.codexAppServer` / `model.claudeAgent` /
+ * `model.openai`；缺块时不是在这里报错，而是由构造具体网关时按各自必需字段失败——
+ * 与"缺配置宁可起不来"同一条原则，只是换了个更靠近原因的层（见 runtime/model-gateway.ts）。
+ * 注册表项**同名覆盖**隐式项，这也让"把 codex-app-server 指到另一个 cwd"不需要新概念。
+ */
+export function resolveModelBackends(model: FactoryConfig["model"]): Map<string, ResolvedModelBackend> {
+  const backends = new Map<string, ResolvedModelBackend>();
+  const implicit = (id: ModelBackendKind): ResolvedModelBackend => ({
+    id,
+    kind: id,
+    source: "implicit",
+    models: [],
+    ...(id === "codex-app-server" ? { codexAppServer: model.codexAppServer } : {}),
+    ...(id === "claude-agent-sdk" ? { claudeAgent: model.claudeAgent } : {}),
+    ...(id === "openai-responses" ? { openai: model.openai } : {}),
+  });
+  for (const kind of modelKindSchema.options) backends.set(kind, implicit(kind));
+  for (const [id, backend] of Object.entries(model.backends)) {
+    backends.set(id, {
+      id,
+      kind: backend.kind,
+      source: "registry",
+      models: backend.models,
+      ...(backend.kind === "codex-app-server" ? { codexAppServer: backend } : {}),
+      ...(backend.kind === "claude-agent-sdk" ? { claudeAgent: backend } : {}),
+      ...(backend.kind === "openai-responses" ? { openai: backend } : {}),
+    });
+  }
+  for (const role of ["explorer", "executor"] as const) {
+    const id = model.roles[role].backend ?? model.backend;
+    if (!backends.has(id)) throw new Error(`Invalid Factory configuration: model.roles.${role}.backend "${id}" is not defined. Known backends: ${[...backends.keys()].join(", ")}.`);
+  }
+  return backends;
+}
+
+/** 某个角色（在全局配置这一层）当前生效的后端 id。Project 级覆盖在 domain 侧解析。 */
+export function roleBackendId(model: FactoryConfig["model"], role: "explorer" | "executor"): string {
+  return model.roles[role].backend ?? model.backend;
 }
 
 function resolveFromConfig(baseDirectory: string, value: string): string {

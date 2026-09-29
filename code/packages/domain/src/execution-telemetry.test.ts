@@ -8,6 +8,7 @@ import { InMemoryPipelineStore, SqlitePipelineStore, mergeModelUsage, normalizeM
 const telemetry: ExecutionTelemetry = {
   model: "gpt-5.6-luna",
   reasoningEffort: "medium",
+  backend: "codex-app-server",
   startedAt: "2026-09-06T12:00:00.000Z",
   completedAt: "2026-09-06T12:00:03.250Z",
   durationMs: 3250,

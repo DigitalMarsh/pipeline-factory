@@ -98,7 +98,7 @@ export class ExecutorAgent {
     const projectConfig = this.executorModelConfig(revision);
     const mode = projectConfig.loopMode ?? this.options.mode ?? "provider-controlled";
     const maxDurationMs = revision.projectConfigSnapshot?.settings.concurrency.executionTimeoutMs ?? this.options.maxDurationMs;
-    this.assertCapabilities(mode);
+    this.assertCapabilities(mode, projectConfig);
     const openToolCalls = new Set<string>();
     const gate = new TaskProgressGate();
     const toolRuntime = this.options.toolRuntimeFactory?.(run, revision) ?? this.defaultToolRuntime;
@@ -141,7 +141,7 @@ export class ExecutorAgent {
     const projectConfig = this.executorModelConfig(revision);
     const mode = projectConfig.loopMode ?? this.options.mode ?? "provider-controlled";
     const maxDurationMs = revision.projectConfigSnapshot?.settings.concurrency.executionTimeoutMs ?? this.options.maxDurationMs;
-    this.assertCapabilities(mode);
+    this.assertCapabilities(mode, projectConfig);
     const openToolCalls = new Set<string>();
     const gate = new TaskProgressGate();
     const toolRuntime = this.options.toolRuntimeFactory?.(run, revision) ?? this.defaultToolRuntime;
@@ -185,8 +185,13 @@ export class ExecutorAgent {
     if (!run.workspacePath) throw new Error(`Run ${run.id} has no workspace`);
   }
 
-  private assertCapabilities(mode: AgentLoopMode): void {
-    const capabilities = this.model.capabilities?.("executor");
+  /**
+   * 能力判定必须针对**这一次真正会执行的后端**：Project 可以覆盖 executor 的 backend，
+   * 而各后端支持的 Loop 模式不同（例如只有 Claude 侧是 provider-controlled 单一模式）。
+   * 按角色默认后端判定会把"覆盖之后不支持"的情况判成通过，失败被推迟到第一次模型调用。
+   */
+  private assertCapabilities(mode: AgentLoopMode, config: ModelRoleConfig): void {
+    const capabilities = this.model.capabilities?.("executor", config);
     if (mode === "factory-controlled" && (!capabilities?.supportsToolCalls || !capabilities.supportedLoopModes.includes(mode))) throw new Error("MODEL_CAPABILITY_UNAVAILABLE");
     if (mode === "provider-controlled" && capabilities && !capabilities.supportedLoopModes.includes(mode)) throw new Error("MODEL_CAPABILITY_UNAVAILABLE");
   }
@@ -281,9 +286,14 @@ export class ExecutorAgent {
       ...(providerTurnId ? { providerTurnId } : {}),
     };
     if (event.type === "agent.loop.started") {
+      // provider 是端点指纹（model/types.ts 的 ProviderEndpoint）；backend 从中取，
+      // 因为它回答"这次 Run 由哪个 agent 执行"，而 model 只回答"用了哪个模型名"。
+      const provider = payload.provider;
+      const backend = provider && typeof provider === "object" && typeof (provider as { backend?: unknown }).backend === "string" ? (provider as { backend: string }).backend : null;
       this.updateTelemetry(run.executionThreadId, {
         model: typeof payload.model === "string" ? payload.model : null,
         reasoningEffort: typeof payload.reasoningEffort === "string" ? payload.reasoningEffort : null,
+        backend,
         startedAt: typeof payload.startedAt === "string" ? payload.startedAt : this.store.now(),
       });
     }
@@ -506,7 +516,7 @@ export class ExecutorAgent {
   private updateTelemetry(threadId: string, update: Partial<ExecutionTelemetry>): void {
     const thread = this.store.getExecutionThread(threadId);
     if (!thread) return;
-    const current: ExecutionTelemetry = thread.telemetry ?? { model: null, reasoningEffort: null, startedAt: null, completedAt: null, durationMs: null, usage: null, usageSource: "not-recorded", usageScope: null };
+    const current: ExecutionTelemetry = thread.telemetry ?? { model: null, reasoningEffort: null, backend: null, startedAt: null, completedAt: null, durationMs: null, usage: null, usageSource: "not-recorded", usageScope: null };
     this.store.saveExecutionThread({ ...thread, telemetry: { ...current, ...update } });
   }
 }

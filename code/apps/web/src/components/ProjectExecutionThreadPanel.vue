@@ -5,6 +5,8 @@ import { ElMessage } from "element-plus";
 import { api } from "../api";
 import type { Project, ProjectExecutionEvent, ProjectExecutionMessage, ProjectExecutionThreadSnapshot } from "../types";
 import MarkdownMessage from "./MarkdownMessage.vue";
+import { backendLabel, modelOptionsFor, reasoningOptionsWith } from "../utils/modelCatalog";
+import { useModelBackends } from "../composables/useModelBackends";
 
 const props = defineProps<{ projectId: string; project: Project | null }>();
 const snapshot = ref<ProjectExecutionThreadSnapshot | null>(null);
@@ -27,6 +29,15 @@ const queuedCount = computed(() => messages.value.filter((message) => message.ro
 const canSend = computed(() => Boolean(props.project && props.project.status === "ACTIVE" && draft.value.trim() && !sending.value));
 const effectiveModel = computed(() => modelSelection.value || snapshot.value?.defaultModel || "");
 const effectiveReasoningEffort = computed(() => reasoningSelection.value || snapshot.value?.defaultReasoningEffort || "default");
+/**
+ * 这些模型与档位来自**该项目的 executor 后端**，不是一份全局清单：换个 agent 之后能选的东西就变了。
+ * 已保存的覆盖值始终并入选项，否则用户看不到自己配了什么、也没法清掉它。
+ */
+const { catalog: modelCatalog, load: loadModelBackends } = useModelBackends();
+const executorBackend = computed(() => snapshot.value?.backend ?? "");
+const executorBackendLabel = computed(() => backendLabel(modelCatalog.value, executorBackend.value));
+const executorModelOptions = computed(() => modelOptionsFor(modelCatalog.value, executorBackend.value, ...(snapshot.value?.modelOptions ?? [])));
+const executorReasoningOptions = computed(() => reasoningOptionsWith(modelCatalog.value, executorBackend.value, reasoningSelection.value));
 
 function closeEvents() {
   source?.close();
@@ -208,7 +219,7 @@ watch(() => props.project?.settings.models.executor, (config) => {
   snapshot.value.defaultReasoningEffort = config.reasoningEffort ?? null;
   if (!snapshot.value.modelOptions.includes(config.model)) snapshot.value.modelOptions = [...snapshot.value.modelOptions, config.model];
 });
-onMounted(() => { void load(); });
+onMounted(() => { void load(); void loadModelBackends(); });
 onBeforeUnmount(() => { requestGeneration += 1; closeEvents(); });
 </script>
 
@@ -255,8 +266,9 @@ onBeforeUnmount(() => { requestGeneration += 1; closeEvents(); });
     <footer class="project-execution-composer">
       <textarea v-model="draft" :disabled="project?.status === 'ARCHIVED' || !snapshot || loading" aria-label="项目执行请求" placeholder="描述要在项目中执行的任务…" @keydown="handleComposerKeydown" />
       <div class="project-execution-composer-footer">
-        <label class="project-execution-select"><span>模型</span><select v-model="modelSelection" :disabled="!snapshot || savingPreferences" aria-label="执行模型" @change="onModelChange"><option value="">跟随项目默认（{{ snapshot?.defaultModel ?? '加载中' }}）</option><option v-for="model in snapshot?.modelOptions ?? []" :key="model" :value="model">{{ model }}</option></select></label>
-        <label class="project-execution-select"><span>推理强度</span><select v-model="reasoningSelection" :disabled="!snapshot || savingPreferences" aria-label="推理强度" @change="onReasoningChange"><option value="">跟随项目默认（{{ snapshot?.defaultReasoningEffort ?? '默认' }}）</option><option v-for="option in snapshot?.reasoningEffortOptions.filter((item) => item.value) ?? []" :key="option.value ?? 'default'" :value="option.value ?? ''">{{ option.label }}</option></select></label>
+        <label class="project-execution-select"><span>Agent</span><output class="project-execution-agent" :title="snapshot?.backend ?? ''">{{ executorBackendLabel }}</output></label>
+        <label class="project-execution-select"><span>模型</span><select v-model="modelSelection" :disabled="!snapshot || savingPreferences" aria-label="执行模型" @change="onModelChange"><option value="">跟随项目默认（{{ snapshot?.defaultModel ?? '加载中' }}）</option><option v-for="model in executorModelOptions" :key="model" :value="model">{{ model }}</option></select></label>
+        <label class="project-execution-select"><span>推理强度</span><select v-model="reasoningSelection" :disabled="!snapshot || savingPreferences" aria-label="推理强度" @change="onReasoningChange"><option value="">跟随项目默认（{{ snapshot?.defaultReasoningEffort ?? '默认' }}）</option><option v-for="option in executorReasoningOptions" :key="option.value" :value="option.value">{{ option.label }}</option></select></label>
         <span v-if="queuedCount" class="project-execution-queue-status" role="status">{{ queuedCount }} 条请求等待按序执行</span>
         <el-button class="project-execution-send" type="primary" circle :disabled="!canSend" :loading="sending" aria-label="发送执行请求" @click="submit"><ArrowUp :size="17" /></el-button>
       </div>
@@ -302,6 +314,7 @@ onBeforeUnmount(() => { requestGeneration += 1; closeEvents(); });
 .project-execution-composer-footer { display:flex; align-items:center; flex-wrap:wrap; gap:13px; padding-top:11px; }
 .project-execution-select { display:flex; align-items:center; gap:7px; color:#96a3b6; font-size:10px; font-weight:800; letter-spacing:.06em; }
 .project-execution-select select { max-width:min(220px,28vw); height:30px; padding:0 23px 0 8px; border:1px solid #e2e8f0; border-radius:6px; background:#fff; color:#536681; font:inherit; font-size:11px; letter-spacing:0; }
+.project-execution-agent { display:inline-flex; align-items:center; height:30px; max-width:min(180px,24vw); padding:0 9px; overflow:hidden; border:1px dashed #dbe3ee; border-radius:6px; color:#6b7c94; background:#f8fafc; font-size:11px; font-weight:700; letter-spacing:0; text-overflow:ellipsis; white-space:nowrap; }
 .project-execution-queue-status { margin-left:auto; color:#8b99ae; font-size:11px; }
 .project-execution-send { margin-left:auto; }
 .project-execution-queue-status + .project-execution-send { margin-left:0; }

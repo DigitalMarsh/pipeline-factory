@@ -121,6 +121,34 @@ workspace domain 包，避免 API 加载旧的 `dist` 类型；如果看到 `EAD
 - **会话记录落在 `~/.claude/projects/` 下**，这是多轮 Explorer 能续接的前提。换供应商、清目录、换机器后记录会消失，此时 Factory 用已持久化的 turns 重建一条新会话并回放对话（时间线上出现 `Provider session rebuilt`），而不是把一次可恢复的丢失判成回合失败。
 - **cc-switch 这类"全局切换供应商"的工具会同时影响所有在跑的 Run**（它改的是 `~/.claude/settings.json`，而这是所有会话共享的端点来源）。切换前请停服，或确认没有活动 Run。
 
+## 多后端：探索与执行各用一个 agent（`model.backends` + `roles.*.backend`）
+
+Codex 与 Claude 可以**同时**跑在同一个进程里，并按角色各用一个：
+
+```json
+{
+  "model": {
+    "backend": "codex-app-server",
+    "backends": {
+      "deepseek": { "kind": "claude-agent-sdk", "models": ["deepseek-chat", "deepseek-reasoner"] }
+    },
+    "roles": {
+      "explorer": { "backend": "codex-app-server", "model": "gpt-5.6-sol", "mode": "plan", "reasoningEffort": "high" },
+      "executor": { "backend": "deepseek",         "model": "deepseek-chat", "mode": "default", "reasoningEffort": "medium" }
+    }
+  }
+}
+```
+
+- **四个 kind 名本身就是后端 id**：`codex-app-server` / `claude-agent-sdk` / `openai-responses` / `stub`。上例里 explorer 的 `backend` 完全可以省略不写（缺省跟随 `model.backend`），端点由 `model.codexAppServer` / `model.claudeAgent` / `model.openai` 三块提供。**注册表只在需要"同类两个不同端点"时才用**——例如探索走官方 Claude、执行走 DeepSeek 的 Anthropic 兼容端点。注册表项与 kind 同名时**覆盖**隐式后端。
+- **解析顺序**：请求级配置（Project 的 `settings.models.<role>.backend`）→ 角色默认（`roles.<role>.backend`）→ 全局默认（`model.backend`）。因此每个 Project 可以覆盖，见 README 下文「Project 设置」与 `GET /api/v4/model-backends`。
+- **`GET /api/v4/model-backends` 是"这个进程里能用哪些 agent"的唯一答案**：每条给出 `kind`、候选模型（注册表 `models` 或按 kind 的内置清单）、该后端**真正接受**的推理档位，以及端点指纹。控制台的 agent/模型/推理强度三个下拉全部读它。
+- **档位是接线事实而不是建议**：Claude 侧只透传 `low/medium/high/xhigh/max`，配 `minimal`/`ultra` 等于没配且没有任何提示。所以 Project 设置保存时会拒绝该后端不接受的档位（`models.<role>.reasoningEffort is not supported by backend ...`），而不是等运行期静默丢弃。
+- **`/health` 的 `modelBackend` 现在指 explorer 生效的后端**（兼容键），完整答案在 `modelBackends: { explorer, executor }`。
+- **端点指纹按角色记**：`agent.loop.started` 的 `provider.backend` 是**这一次**真正执行的后端；不传角色且两个角色指向不同后端时，`describeEndpoint()` 如实回答 `backend: "mixed"`，而不是假装成某一个。Run 详情页的 AGENT 一格读的就是这条事实（旧 Run 的遥测里没有它，显示"未记录"）。
+- **配置错误仍然在启动期失败**：角色默认后端在启动时构造，缺 `codexAppServer` 之类的必需字段会直接起不来；注册表里**没有角色引用**的后端保持懒构造，只有某个 Project 真指向它时才实例化（因此它的配置错误在第一次用到时暴露，而不是拖垮整个服务）。
+- **两个已知耦合**：1) 分支名生成借的是 **explorer 角色**（`run/run-branch.ts`），所以**派发 Run 需要 explorer 后端在线**——explorer 后端故障会连带 Run 无法启动。2) 换 `roles.*.backend` 会触发**按角色**的模型 slug 迁移：只迁移"该角色 slug 的家族 ≠ 该角色后端家族"的项；**Project 显式写了 `backend` 的角色一律不迁移**（那是用户有意的选择，该由 Provider 侧报错暴露）。
+
 v4 的 `POST /api/v4/projects/:projectId/explorer-thread/turns` 会立即返回 `202`，用户消息和 assistant `RUNNING` 占位先进入时间线；随后通过 `/events` SSE 接收文本增量、`turn.input_required`、完成和取消事件。选择答案通过 `/input-requests/:requestId/answer` 回传到同一个 Provider Turn。Explorer 不会把一次 `turn.completed` 直接当作设计完成：模型回合结束后会经过计划完整性门禁，缺少关键项时自动发起内部续探索，只有收到并校验 `pipeline-factory-plan` 完整契约后才自动生成 CandidatePlan。
 
 核心 v4 资源路径保持稳定且唯一：

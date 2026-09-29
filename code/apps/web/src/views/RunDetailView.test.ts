@@ -53,7 +53,7 @@ describe("Run detail execution conversation", () => {
     expect(runDetailSource).toContain('import ProviderUsageFooter from "../components/ProviderUsageFooter.vue"');
     expect(runDetailSource).toContain('formatProviderContextUsage');
     expect(runDetailSource).toContain('const executionContextUsage = computed(() => formatProviderContextUsage(executionTelemetry.value?.usage?.inputTokens));');
-    expect(runDetailSource).toContain('<ProviderUsageFooter :model="executionTelemetryModel" :context="executionContextUsage" context-note="provider exact" />');
+    expect(runDetailSource).toContain('<ProviderUsageFooter :model="executionTelemetryModel" :backend="executionTelemetryBackend" :context="executionContextUsage" context-note="provider exact" />');
   });
 
   it("keeps the execution title focused and opens the current Plan revision read only", () => {
@@ -104,7 +104,7 @@ describe("Run detail execution conversation", () => {
     expect(runDetailSource).toContain('function handleExecutionComposerKeydown(event: KeyboardEvent): void');
     expect(runDetailSource).toContain('class="composer-send"');
     expect(runDetailSource).toContain('aria-label="Send message"');
-    expect(runDetailSource).toContain('<ProviderUsageFooter :model="executionTelemetryModel" :context="executionContextUsage" context-note="provider exact" />');
+    expect(runDetailSource).toContain('<ProviderUsageFooter :model="executionTelemetryModel" :backend="executionTelemetryBackend" :context="executionContextUsage" context-note="provider exact" />');
     expect(runDetailSource).not.toContain("guidanceComposerOpen");
     expect(runDetailSource).not.toContain('class="execution-guidance-shell"');
     expect(runDetailSource).not.toContain("Add guidance");

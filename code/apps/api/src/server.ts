@@ -51,11 +51,13 @@ import {
   type VerificationCommandExecutor,
   type ModelGateway,
   type ModelFamily,
+  type ModelRole,
+  type Project,
   type AgentLoop,
   type AgentLoopRunner,
 } from "@pipeline-factory/domain";
 import { detectDefaultBranch } from "./runtime/git.js";
-import type { FactoryConfig } from "./config.js";
+import { resolveModelBackends, roleBackendId, type FactoryConfig, type ModelBackendKind } from "./config.js";
 import { RepositoryContextCache } from "./repository-context-cache.js";
 import { registerWebHosting } from "./web-hosting.js";
 import { registerApiRoutes } from "./routes/index.js";
@@ -63,6 +65,7 @@ import { persistLoopControl } from "./runtime/loop-control.js";
 import { createDefaultScheduler } from "./runtime/scheduler.js";
 import { createDefaultVerificationExecutor } from "./runtime/verification.js";
 import { createModelGateway } from "./runtime/model-gateway.js";
+import { createModelCatalog } from "./runtime/model-catalog.js";
 // 全部 97 条路由已分域搬进 `routes/`，组合根不再直接持有任何 zod schema、任何投影函数、
 // 任何 SSE 传输件——它们的 import 随各自的 route 文件走了。**本文件剩余的 import 只服务于
 // 组装**（构造 Service / 起 store / 接管静态托管）。
@@ -96,7 +99,8 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     retention: { retentionDays: options.config?.storage.eventRetentionDays ?? 0, minPerAggregate: options.config?.storage.eventRetentionMinPerAggregate ?? 200 },
   });
   new RecoveryCoordinator(store).recover();
-  const projects = new ProjectService(store);
+  const modelCatalog = options.config ? createModelCatalog(options.config) : undefined;
+  const projects = new ProjectService(store, modelCatalog);
   const plans = new PlanService(store, projects);
   const explorers = new ExplorerService(store);
   const changeProposals = new ChangeProposalService(store);
@@ -148,6 +152,12 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
           ...(options.computerUse ? { computerUseExecutor: (input: Record<string, unknown>) => options.computerUse!.call({ action: input.action as import("@pipeline-factory/domain").ComputerUseAction, ...(typeof input.requestId === "string" ? { requestId: input.requestId } : {}), ...(typeof input.timeoutMs === "number" ? { timeoutMs: input.timeoutMs } : {}) }) } : {}),
         },
       }));
+    },
+    // 项目级执行会话的模型与档位跟随该项目 executor 的后端：跨后端不通用，不能拿一份全局清单糊弄。
+    modelCatalogForProject: (project) => {
+      if (!modelCatalog) return undefined;
+      const backendId = executorBackendId(project, options.config!);
+      return { models: modelCatalog.modelsFor(backendId), reasoningEfforts: modelCatalog.effortLevelsFor(backendId) };
     } } : {}),
   });
   projectExecution.recoverQueuedTurns();
@@ -194,6 +204,8 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     const projectRoot = options.config.project.root;
     const projectName = basename(projectRoot);
     const defaultBranch = detectDefaultBranch(projectRoot);
+    const backends = resolveModelBackends(options.config.model);
+    const kindForRole = (role: ModelRole): ModelBackendKind => backends.get(roleBackendId(options.config!.model, role))?.kind ?? options.config!.model.backend;
     projects.bootstrapLegacy({
       id: "project-demo",
         name: projectName,
@@ -208,7 +220,9 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
           maxAutoContinuationTurns: options.config.runtime.maxAutoContinuationTurns,
           maxRepairAttempts: 2,
         },
-        models: options.config.model.roles,
+        // 只播种模型与策略，**不播种 backend**：把全局默认抄进 Project 会让这个 Project 从此
+        // 脱离"跟随全局配置"，连下面的家族迁移都跳过它。缺省即跟随，正是我们要的语义。
+        models: { explorer: withoutBackend(options.config.model.roles.explorer), executor: withoutBackend(options.config.model.roles.executor) },
         toolPolicy: {
           allowedMcpTools: options.config.mcp.servers.flatMap((server) => server.allowedTools.map((tool) => `mcp:${server.name}:${tool}`)),
           allowedPluginTools: options.config.plugins.allowedTools,
@@ -223,8 +237,10 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     });
     // 再处理"换了一家 provider"的情况：Claude 后端下的 gpt-* 与 Codex/OpenAI 后端下的 claude-*
     // 都是上一个家族留下的 slug，不迁移的话第一个回合会在 Provider 侧直接失败。
+    // **按角色各自的家族判定**：explorer 与 executor 可以指向不同后端（探索 Codex、执行 Claude），
+    // 用单一家族判定会把其中一个角色正确的 slug 改坏。
     projects.migrateForeignFamilyModels({
-      family: modelFamilyForBackend(options.config.model.backend),
+      familyForRole: { explorer: modelFamilyForKind(kindForRole("explorer")), executor: modelFamilyForKind(kindForRole("executor")) },
       models: {
         explorer: options.config.model.roles.explorer.model,
         executor: options.config.model.roles.executor.model,
@@ -282,6 +298,17 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
 }
 
 /** backend 到模型家族的映射；只有它需要知道 backend 的具体名字，Domain 侧只认家族。 */
-function modelFamilyForBackend(backend: FactoryConfig["model"]["backend"]): ModelFamily {
-  return backend === "claude-agent-sdk" ? "claude" : "openai";
+function modelFamilyForKind(kind: ModelBackendKind): ModelFamily {
+  return kind === "claude-agent-sdk" ? "claude" : "openai";
+}
+
+/** 某 Project 的 executor 生效后端：Project 覆盖 → 角色默认 → 全局默认。与路由网关的解析顺序一致。 */
+function executorBackendId(project: Project, config: FactoryConfig): string {
+  return project.settings.models.executor.backend ?? config.model.roles.executor.backend ?? config.model.backend;
+}
+
+/** 播种 Project 设置时去掉 backend：缺省即"跟随全局"，抄进来反而会让该项目脱离全局配置与家族迁移。 */
+function withoutBackend(role: FactoryConfig["model"]["roles"]["explorer"]): FactoryConfig["model"]["roles"]["explorer"] {
+  const { backend: _omitted, ...rest } = role;
+  return rest;
 }

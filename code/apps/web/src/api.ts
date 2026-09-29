@@ -3,7 +3,7 @@
  *
  * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
  */
-import type { AgentLoop, AgentLoopStep, ExecutionThread, ExplorerActivityItem, ExplorerInputRequest, ExplorerPlan, ExplorerThread, ExplorerTurn, MergeRequest, Plan, PlanDetail, PlanDispatchState, PlanRevisionDraft, Project, ProjectCatalogItem, ProjectExecutionThread, ProjectExecutionThreadSnapshot, ProjectSummary, Run, ToolCall, VerificationRun, WorkbenchSnapshot, WorkbenchEvent } from "./types";
+import type { AgentLoop, AgentLoopStep, ExecutionThread, ExplorerActivityItem, ExplorerInputRequest, ExplorerPlan, ExplorerThread, ExplorerTurn, MergeRequest, ModelBackendsResponse, Plan, PlanDetail, PlanDispatchState, PlanRevisionDraft, Project, ProjectCatalogItem, ProjectExecutionThread, ProjectExecutionThreadSnapshot, ProjectSummary, Run, ToolCall, VerificationRun, WorkbenchSnapshot, WorkbenchEvent } from "./types";
 
 export class ApiRequestError extends Error {
   constructor(message: string, readonly status: number) {
@@ -25,7 +25,8 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
  * Web 端 API facade。方法按业务域分组，路径拼接集中在此处，避免各页面自行构造 Project/Thread/Run URL。
  */
 export const api = {
-  health: () => request<{ status: string; model: string }>("/health"),
+  health: () => request<{ status: string; model: string; modelBackend?: string; modelBackends?: { explorer: string; executor: string } }>("/health"),
+  modelBackends: () => request<ModelBackendsResponse>("/api/v4/model-backends"),
   projects: (status?: string) => request<{ items: ProjectCatalogItem[] }>(`/api/v4/projects${status ? `?status=${encodeURIComponent(status)}` : ""}`),
   project: (projectId: string) => request<{ project: Project; summary: ProjectSummary }>(`/api/v4/projects/${encodeURIComponent(projectId)}`),
   createProject: (input: { name: string; shortName?: string; repoRoot: string; defaultBranch?: string; worktreeRoot?: string; settings?: Record<string, unknown> }) => request<{ project: Project; explorer: ExplorerThread }>("/api/v4/projects", { method: "POST", body: JSON.stringify(input) }),

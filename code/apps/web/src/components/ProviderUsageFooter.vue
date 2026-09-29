@@ -5,12 +5,19 @@ const props = withDefaults(defineProps<{
   model: string;
   context: string;
   contextNote?: string;
+  /** 这一轮由哪个 agent 执行；缺省或"未记录"时该格显示占位而不是留空。 */
+  backend?: string;
 }>(), {
   contextNote: "",
+  backend: "",
 });
 
 /**
- * 用量栏只呈现两件 provider 无关的事实：这一轮用的是哪个模型、上下文占了多少。
+ * 用量栏只呈现三件 provider 无关的事实：这一轮是哪个 agent、哪个模型、上下文占了多少。
+ *
+ * **"哪个 agent"必须与模型名分开显示**：同一个模型名可能来自不同后端（官方 Claude、DeepSeek 兼容
+ * 端点、cc-switch 代理映射），只显示 MODEL 时"这一轮到底是谁跑的"在页面上没有答案。这与
+ * `agent.loop.started` 里记的端点指纹是同一件事在界面上的投影。
  *
  * **这里曾经还有"5 小时限额 / 7 天限额"两格**，数据来自 `/api/v4/codex/rate-limits`。它被移除是因为
  * 那份数据的唯一来源是 Codex App Server 的账号额度接口，而账号额度是**按账号**而非按会话的，
@@ -22,6 +29,10 @@ const contextNoteText = computed(() => props.contextNote);
 
 <template>
   <div class="provider-usage-footer" aria-label="模型与上下文信息">
+    <span v-if="props.backend" class="provider-usage-fact">
+      <small>AGENT</small>
+      <strong :title="props.backend">{{ props.backend }}</strong>
+    </span>
     <span class="provider-usage-fact">
       <small>MODEL</small>
       <strong :title="props.model">{{ props.model }}</strong>

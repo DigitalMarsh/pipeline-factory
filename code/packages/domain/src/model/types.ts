@@ -40,6 +40,12 @@
  *      "一次模型调用"，而额度是账号级、跨会话、且取不到时无法用事件表达的东西。
  *      要用量，读 `model.usage` 事件（按回合/累计，见 model/usage.ts）；要加回账号额度，
  *      先回答"没有该接口的后端显示什么"，不要退回到静默的 `available:false`。
+ *   9) **`ModelRoleConfig.backend` 只在组合根被消费，Provider 实现一律不读它。** 它标识
+ *      "这次调用该交给哪个后端"，由 apps/api 的路由网关按"请求覆盖 → 角色默认"解析后委派给
+ *      具体实现；某个实现自己再看这个字段，等于把"谁来路由"这件事分裂成两处。
+ *      `capabilities(role, config?)` 与 `describeEndpoint(role?)` 之所以多了可选参数，是因为
+ *      路由之后"哪个后端生效"取决于调用点带来的角色配置（Project 可以覆盖）——不传就是
+ *      用角色默认值判定，传了就必须按传进来的那个后端回答。
  */
 import type { ModelInputAnswers, ModelInputRequest } from "../explorer/types.js";
 import type { ToolCall, ToolName } from "../tools/types.js";
@@ -52,6 +58,11 @@ export type ModelMode = "plan" | "default";
 /** 一个角色的模型和推理/循环策略，来源可为全局默认或 Project 快照。 */
 export type ModelRoleConfig = {
   model: string;
+  /**
+   * 本角色使用哪个后端（后端 id）。**由组合根的路由网关消费，Provider 实现不读。**
+   * 缺省表示跟随全局默认；Project 的同名字段可以覆盖它。
+   */
+  backend?: string | undefined;
   mode?: ModelMode | undefined;
   loopMode?: "provider-controlled" | "factory-controlled" | undefined;
   temperature?: number | undefined;
@@ -133,7 +144,15 @@ export interface ModelGateway {
   cancel(request: { conversationId: string; providerThreadId: string; providerTurnId?: string }): Promise<void>;
   /** 返回指定角色当前生效的模型配置。 */
   configFor(role: ModelRole): ModelRoleConfig;
-  capabilities?(role: ModelRole): ModelCapabilities;
-  /** 返回本实现当前生效的端点指纹，供 Loop 记进 Run 事件；未知字段用 null 而不是猜。 */
-  describeEndpoint?(): ProviderEndpoint;
+  /**
+   * 返回指定角色的 Provider 能力声明。
+   * `config` 是调用点已合并的**有效**角色配置（含 Project 覆盖）：路由之后不同后端的能力不同，
+   * 判定必须针对真正会执行这一次调用的那个后端；不传则按角色默认后端回答。
+   */
+  capabilities?(role: ModelRole, config?: ModelRoleConfig): ModelCapabilities;
+  /**
+   * 返回本实现当前生效的端点指纹，供 Loop 记进 Run 事件；未知字段用 null 而不是猜。
+   * `role` 用于多后端路由：同一进程内不同角色可能打向不同后端。
+   */
+  describeEndpoint?(role?: ModelRole): ProviderEndpoint;
 }

@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ExecutorAgent, inspectWorkspaceScope, parseExecutorReport } from "./executor-agent.js";
 import { resolveExecutorWorkingDirectory } from "../tools/executor-working-directory.js";
 import { InMemoryPipelineStore, LifecycleHookRunner, PlanService, Scheduler, ToolGateway, type AgentLoop, type ModelEvent, type ModelGateway, type ModelRequest } from "../index.js";
+import { DEFAULT_PROJECT_SETTINGS } from "../project/project.js";
 import { DurableToolRuntime } from "../tools/tool-runtime.js";
 
 const executionReport = (taskId: string) => `<pipeline-factory-execution-report>${JSON.stringify({
@@ -284,6 +285,44 @@ describe("ExecutorAgent", () => {
     } finally {
       await rm(workspace, { recursive: true, force: true });
     }
+  });
+
+  it("judges capabilities against the backend the Project actually configured", async () => {
+    const { store, plan, run } = await createQueuedRun();
+    // 角色默认后端支持 factory-controlled；项目把 executor 覆盖到一个**只支持 provider-controlled**
+    // 的后端。判定必须按覆盖后的那个后端来，否则失败会被推迟到第一次模型调用。
+    const snapshot = {
+      projectId: "project-1",
+      name: "Project",
+      shortName: "Project",
+      repoRoot: "/tmp/project-1",
+      defaultBranch: "main",
+      worktreeRoot: "/tmp/project-1-worktrees",
+      configVersion: 1,
+      configHash: "sha256:snapshot",
+      settings: {
+        ...DEFAULT_PROJECT_SETTINGS,
+        models: {
+          explorer: { ...DEFAULT_PROJECT_SETTINGS.models.explorer },
+          executor: { ...DEFAULT_PROJECT_SETTINGS.models.executor, backend: "claude-agent-sdk", loopMode: "factory-controlled" as const },
+        },
+      },
+    };
+    const revision = { ...plan, projectConfigSnapshot: snapshot };
+    const observedConfigs: Array<{ backend?: string | undefined } | undefined> = [];
+    const model: ModelGateway = {
+      configFor: () => ({ model: "executor" }),
+      capabilities: (_role, config) => {
+        observedConfigs.push(config);
+        return { supportsStructuredUserInput: false, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] };
+      },
+      async *stream() { yield { type: "turn.completed" }; },
+      async answerUserInput() { return undefined; },
+      async cancel() { return undefined; },
+    };
+
+    await expect(new ExecutorAgent(store, model, undefined, { maxSteps: 1 }).run(run, revision)).rejects.toThrow("MODEL_CAPABILITY_UNAVAILABLE");
+    expect(observedConfigs).toMatchObject([{ backend: "claude-agent-sdk", loopMode: "factory-controlled" }]);
   });
 
   it("starts the Executor Loop only after the workspace and start hook succeed", async () => {

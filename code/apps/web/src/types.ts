@@ -55,8 +55,8 @@ export type ProjectSettings = {
     cleanup?: { commandId: string; enabled?: boolean; timeoutMs?: number; maxAttempts?: number };
   };
   models: {
-    explorer: { model: string; mode?: string; loopMode?: string; temperature?: number; maxOutputTokens?: number; reasoningEffort?: string; developerInstructions?: string };
-    executor: { model: string; mode?: string; loopMode?: string; temperature?: number; maxOutputTokens?: number; reasoningEffort?: string; developerInstructions?: string };
+    explorer: { model: string; backend?: string; mode?: string; loopMode?: string; temperature?: number; maxOutputTokens?: number; reasoningEffort?: string; developerInstructions?: string };
+    executor: { model: string; backend?: string; mode?: string; loopMode?: string; temperature?: number; maxOutputTokens?: number; reasoningEffort?: string; developerInstructions?: string };
   };
   toolPolicy: { allowedMcpTools: string[]; allowedPluginTools: string[]; computerUseEnabled: boolean };
 };
@@ -234,6 +234,25 @@ export type ProjectExecutionThreadSnapshot = {
   defaultReasoningEffort: string | null;
   modelOptions: string[];
   reasoningEffortOptions: Array<{ value: string | null; label: string }>;
+  /** 这个会话由哪个 agent（后端 id）驱动；Project 级决定，会话面板只展示不可改。 */
+  backend: string;
+};
+
+/** 一个可用后端：控制台的"选 agent / 选模型 / 选推理强度"三件事都读它。 */
+export type ModelBackendDescriptor = {
+  id: string;
+  kind: "codex-app-server" | "claude-agent-sdk" | "openai-responses" | "stub";
+  source: "registry" | "implicit";
+  models: string[];
+  reasoningEfforts: string[];
+  endpoint: string | null;
+  endpointSource: "config" | "provider-settings";
+};
+
+export type ModelBackendsResponse = {
+  backends: ModelBackendDescriptor[];
+  roles: { explorer: string; executor: string };
+  defaultBackend: string;
 };
 
 export type ModelInputQuestion = {
@@ -443,6 +462,8 @@ export type ModelUsage = {
 export type ExecutionTelemetry = {
   model: string | null;
   reasoningEffort: string | null;
+  /** 执行这次 Run 的 agent（后端 id）；旧数据没有这个字段，读路径要容忍 undefined。 */
+  backend?: string | null;
   startedAt: string | null;
   completedAt: string | null;
   durationMs: number | null;

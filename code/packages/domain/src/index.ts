@@ -166,4 +166,4 @@ export type { GitMergeInspector } from "./git/merge-inspector.js";
 
 // ─────────────────────────── project/：项目聚合与配置快照 ───────────────────────────
 export { EXECUTION_SLOT_RUN_STATUSES, knownModelFamily, ProjectService } from "./project/project.js";
-export type { CreateProjectInput, ModelFamily, Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings, ProjectSettingsInput, ProjectStatus, ProjectSummary, UpdateProjectInput } from "./project/project.js";
+export type { CreateProjectInput, ModelBackendCatalog, ModelFamily, Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings, ProjectSettingsInput, ProjectStatus, ProjectSummary, UpdateProjectInput } from "./project/project.js";

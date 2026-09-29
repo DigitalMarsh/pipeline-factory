@@ -1,5 +1,84 @@
 # Changelog
 
+## 2026-09-29 — 多后端：探索与执行各用一个 agent（按角色路由）
+
+### 为什么做
+
+「探索用强模型、执行用便宜模型」这件事此前**只能表达一半**：`model.backend` 是进程级单选，
+一个 `ModelGateway` 实例被 Explorer、Scheduler/Executor、ProjectExecutionThread 和分支名生成器
+共用（`server.ts` 一处构造、四处消费）。想「探索走 Codex、执行走 Claude（DeepSeek 兼容端点）」，
+在旧结构里没有第二种写法。Project 级的 `settings.models.<role>` 也只能改模型名与推理强度，
+改不了 agent。
+
+### Changed
+
+配置层（`apps/api/src/config.ts`）：
+
+- `model.roles.<role>.backend` 新增：**这是"探索用 Codex、执行用 Claude"的唯一开关**，取值是
+  后端 id（字符串，不是 enum）。缺省跟随 `model.backend`。
+- `model.backends` 新增具名后端注册表；`backendEntrySchema` 与 `codexAppServer` / `claudeAgent` /
+  `openai` 共用同一份字段定义，避免"注册表里少一个字段"这类分叉。**整块缺省是合法且常见的用法**：
+  四个 kind 名本身就能当 id 用，端点由那三块兼容配置提供。注册表只在需要「同类两个不同端点」时才用。
+- `resolveModelBackends()` / `roleBackendId()` 新增：把配置解析成"id → 后端定义"，并校验
+  **每个角色引用的 id 都能解析**，不可解析则启动期抛错并列出可用 id。
+- **迁移改成按角色各自判定**（`migrateForeignFamilyModels` 的 `familyForRole`）：旧实现用单一家族
+  判定，在 explorer=codex + executor=claude 下会把其中一个角色**正确**的 slug 改坏。另外，
+  **Project 显式写了 `backend` 的角色一律不迁移**——那是用户有意的选择，该由 Provider 侧报错暴露。
+- server 的 `bootstrapLegacy` **不再把 `backend` 抄进种子 Project**：抄进去等于让该项目从此脱离
+  "跟随全局"，连家族迁移都会跳过它。
+
+领域层（`packages/domain`）：
+
+- `ModelRoleConfig.backend` 新增。**这是让"项目级覆盖 agent"零管道生效的支点**：explorer 侧已经
+  `modelConfigForProject` 整块传入项目设置、executor 侧已经 `{...configFor("executor"), ...snapshot.settings.models.executor}`
+  合并，所以覆盖不需要新的传递路径。
+- `ModelGateway.capabilities(role, config?)` 与 `describeEndpoint(role?)` 加可选参数。**不修的后果很具体**：
+  全局 executor=codex（支持两种 Loop 模式）、某 Project 覆盖为 claude（只支持 provider-controlled）时，
+  按角色默认判定会放过 factory-controlled 配置，失败被推迟到第一次模型调用。
+- `ProjectSettings.models.<role>.backend` 与 `ModelBackendCatalog` 新增；有目录时校验后端 id 与
+  该后端的推理档位。**`backend: null` 表示"清除覆盖、跟随全局"**——不区分它的话，控制台第一次保存
+  就会把当前全局后端固化进 Project。
+- `ExecutionTelemetry.backend` 新增（可选，旧行为 null）：这次 Run 由哪个 agent 执行，取自
+  `agent.loop.started` 的端点指纹。与 `model` 是两件事——同一个模型名可能来自不同后端。
+- `ProjectExecutionThreadSnapshot.backend` 新增（只读展示）与其模型/档位目录改为**按该项目 executor
+  后端**提供（`modelCatalogForProject`）；`updatePreferences` 的校验与给出的选项**同源**，
+  消掉"下拉里有、选了却被拒"的死路。
+
+组合根（`apps/api`）：
+
+- `RoutingModelGateway` 新增：按"请求覆盖 → 角色默认 → 全局默认"解析后端并委派。
+  `answerUserInput` 按 Provider 发出的 requestId 反查归属，**查不到就抛错**（静默丢弃会让模型一直等输入）；
+  `cancel` 查不到归属则**广播**给已实例化的后端（漏掉一次取消会留下还在跑的 Provider turn）。
+  `describeEndpoint()` 不传角色且两角色指不同后端时返回 `backend: "mixed"`——**如实回答，不假装成某一个**。
+- **角色默认后端在启动期构造**（`warmUp`），注册表里没被引用的后端保持懒构造。这条是启动验证时
+  现场发现的回归：懒构造单独用会把"缺 `codexAppServer` 块"从启动期失败推迟成第一次 `/health` 500。
+- `apps/api/src/runtime/model-catalog.ts` 新增：`GET /api/v4/model-backends` 的投影与
+  `ModelBackendCatalog` 的数据源。模型清单只驱动控制台下拉（Factory 不知道 provider 支持什么），
+  推理档位是**接线事实**（Claude 侧只透传 5 档）。`/health` 增加 `modelBackends`，`modelBackend`
+  保留为 explorer 生效后端的兼容键。
+
+控制台（`apps/web`）：
+
+- Project 设置页与设置弹窗各加一个 **Agent 选择器**（`Explorer agent` / `Executor agent`），
+  模型与推理强度的候选项跟着所选后端变；空值显示为"跟随全局（<生效后端>）"，保存为 `backend: null`。
+- `utils/modelOptions.ts`（一份写死的 Codex 模型清单）删除，换成 `utils/modelCatalog.ts`
+  + `composables/useModelBackends.ts`（模块级缓存一次目录）。未知的已配置模型**永远保持可选**。
+- 用量栏新增 **AGENT** 一格（`ProviderUsageFooter` 的可选 `backend` prop）：Explorer 侧取
+  Project 覆盖后的探索后端，Run 侧取遥测里的 `backend`。"这一轮到底是谁跑的"在页面上第一次有了答案。
+
+### 验证
+
+- `pnpm verify` 全绿（domain 293 / api 85 / web 421，无新增失败，无新增值级环）。
+- 新增 `RoutingModelGateway` 单测 12 条（分派、请求覆盖、输入/取消归属、mixed 指纹、懒构造与释放、
+  启动期失败与"未被引用的后端不拖垮启动"）。
+- 新增 `apps/api/src/server.test.ts` 的 HTTP 集成用例：双后端配置下 `/health` 返回
+  `modelBackends: { explorer: codex-app-server, executor: deepseek }`、`/api/v4/model-backends`
+  给出注册表后端的模型与档位。
+- 真机启动验证：用 `/tmp/pf-routing/config.json`（explorer=codex、executor=deepseek）启动，
+  `/api/v4/model-backends` 输出符合预期；把 `codexAppServer` 块去掉后**启动即失败**（与改动前一致）。
+- **未做真机模型调用**：本机 Codex 刷新令牌已过期、DeepSeek 端点也没有可用凭据，因此
+  "一次探索回合真的打到 Codex、一次 Run 真的打到 DeepSeek"这条链路没有实测，只有分派逻辑的单测。
+
 ## 2026-09-29 — 移除 5 小时 / 7 天额度（页面与后端服务两侧一起）
 
 ### 为什么删

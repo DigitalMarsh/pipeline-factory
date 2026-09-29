@@ -28,6 +28,11 @@ export type ProjectExecutionThreadSnapshot = {
   defaultReasoningEffort: string | null;
   modelOptions: string[];
   reasoningEffortOptions: Array<{ value: string | null; label: string }>;
+  /**
+   * 这个会话的 executor 实际由哪个 agent（后端 id）驱动。**是展示事实，不是可覆盖项**：
+   * 覆盖 backend 属于 Project 级决定（settings.models.executor.backend），不该从一个会话面板改。
+   */
+  backend: string;
 };
 
 export type ProjectExecutionThreadServiceOptions = {
@@ -37,6 +42,16 @@ export type ProjectExecutionThreadServiceOptions = {
   maxNoProgressSteps?: number;
   providerCommandTimeoutMs?: number;
   toolRuntimeForProject?: (project: Project) => ToolRuntime | undefined;
+  /**
+   * 这个项目的执行会话可选的模型与推理档位；由组合根按该项目的 **executor 后端**提供。
+   * 缺省时退回内置清单（`PROJECT_EXECUTION_MODELS` / `PROJECT_EXECUTION_REASONING_EFFORTS`）。
+   *
+   * 为什么必须由外部提供：模型名与档位是 provider 事实，跨后端不通用（Claude 侧只认 5 档
+   * effort）。缺省清单的意义只是"没有目录信息时仍然能用"，不是权威取值。
+   * **给的清单要与 `updatePreferences` 的校验同源**（这里给的正是校验用的那一份），
+   * 否则会出现"下拉里有、选了却被拒"的死路。
+   */
+  modelCatalogForProject?: (project: Project) => { models: string[]; reasoningEfforts: string[] } | undefined;
 };
 
 /** 管理每个项目唯一的长期执行会话，并以单项目 FIFO 队列运行请求。 */
@@ -59,26 +74,36 @@ export class ProjectExecutionThreadService {
     const project = this.requireProject(projectId);
     const thread = this.getOrCreate(project);
     const executor = project.settings.models.executor;
+    const catalog = this.options.modelCatalogForProject?.(project);
+    const models = catalog?.models ?? PROJECT_EXECUTION_MODELS;
+    const efforts = catalog ? catalog.reasoningEfforts : PROJECT_EXECUTION_REASONING_EFFORTS;
+    // 当前覆盖值一定要在选项里，否则用户看不到自己配了什么、也没法清掉它。
+    const effortValues = [...new Set([...efforts, ...(thread.reasoningEffortOverride ? [thread.reasoningEffortOverride] : [])])];
     return {
       thread,
       messages: this.store.listProjectExecutionMessages(thread.id),
       lastEventSequence: this.store.getLastEventSequence(thread.id),
       defaultModel: executor.model,
       defaultReasoningEffort: executor.reasoningEffort ?? null,
-      modelOptions: [...new Set([...PROJECT_EXECUTION_MODELS, executor.model, this.model.configFor("executor").model, ...(thread.modelOverride ? [thread.modelOverride] : [])])],
+      modelOptions: [...new Set([...models, executor.model, this.model.configFor("executor").model, ...(thread.modelOverride ? [thread.modelOverride] : [])])],
       reasoningEffortOptions: [
         { value: null, label: "跟随项目默认" },
-        ...PROJECT_EXECUTION_REASONING_EFFORTS.map((value) => ({ value, label: value })),
+        ...effortValues.map((value) => ({ value, label: value })),
       ],
+      // Project 没写 backend 时它就是这个角色在全局配置里的后端（路由网关已把 id 放进 configFor）。
+      backend: executor.backend ?? this.model.configFor("executor").backend ?? "unknown",
     };
   }
 
   updatePreferences(projectId: string, preferences: { model: string | null; reasoningEffort: string | null }): ProjectExecutionThread {
     const project = this.requireProject(projectId);
     const thread = this.getOrCreate(project);
-    const allowedModels = new Set([...this.get(projectId).modelOptions, ...(thread.modelOverride ? [thread.modelOverride] : [])]);
+    const snapshot = this.get(projectId);
+    const allowedModels = new Set(snapshot.modelOptions);
     if (preferences.model !== null && !allowedModels.has(preferences.model)) throw new Error("PROJECT_EXECUTION_MODEL_INVALID");
-    if (preferences.reasoningEffort !== null && !PROJECT_EXECUTION_REASONING_EFFORTS.includes(preferences.reasoningEffort as typeof PROJECT_EXECUTION_REASONING_EFFORTS[number])) throw new Error("PROJECT_EXECUTION_REASONING_EFFORT_INVALID");
+    // 档位校验与上面给出的选项同源：能选的一定能存，存过的一定还能再存。
+    const allowedEfforts = new Set(snapshot.reasoningEffortOptions.map((option) => option.value).filter((value): value is string => value !== null));
+    if (preferences.reasoningEffort !== null && !allowedEfforts.has(preferences.reasoningEffort)) throw new Error("PROJECT_EXECUTION_REASONING_EFFORT_INVALID");
     const updated = this.store.updateProjectExecutionThread({
       ...thread,
       modelOverride: preferences.model,

@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadFactoryConfig, resolveConfigPath } from "./config.js";
+import { loadFactoryConfig, resolveConfigPath, resolveModelBackends, roleBackendId } from "./config.js";
 
 const directories: string[] = [];
 
@@ -114,5 +114,63 @@ describe("Factory configuration", () => {
     // 不给 claudeAgent 是合法用法：端点与凭据交给 CLI 自己解析（~/.claude/settings.json）。
     expect(config.model.claudeAgent).toBeUndefined();
     expect(config.model.backend).toBe("claude-agent-sdk");
+  });
+
+  it("routes explorer and executor to different agents through named backends", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pipeline-factory-config-"));
+    directories.push(directory);
+    const configPath = join(directory, "split.json");
+    writeFileSync(configPath, JSON.stringify({
+      model: {
+        backend: "codex-app-server",
+        codexAppServer: { cwd: "./project" },
+        backends: {
+          deepseek: { kind: "claude-agent-sdk", baseUrl: "https://api.deepseek.com/anthropic", authToken: "t", settingsPath: "./claude.json", models: ["deepseek-chat"] },
+        },
+        roles: {
+          explorer: { model: "gpt-5.6-sol", backend: "codex-app-server" },
+          executor: { model: "deepseek-chat", backend: "deepseek" },
+        },
+      },
+    }), "utf8");
+
+    const config = loadFactoryConfig(configPath);
+    const backends = resolveModelBackends(config.model);
+
+    expect(roleBackendId(config.model, "explorer")).toBe("codex-app-server");
+    expect(roleBackendId(config.model, "executor")).toBe("deepseek");
+    expect(backends.get("deepseek")).toMatchObject({ kind: "claude-agent-sdk", source: "registry", models: ["deepseek-chat"] });
+    // 注册项里的相对路径与 codexAppServer/claudeAgent 同一基准目录，不引入第二种解析规则。
+    expect(backends.get("deepseek")?.claudeAgent?.settingsPath).toBe(join(directory, "claude.json"));
+    expect(backends.get("codex-app-server")?.codexAppServer?.cwd).toBe(join(directory, "project"));
+  });
+
+  it("keeps the four kind names usable as backend ids without a registry", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pipeline-factory-config-"));
+    directories.push(directory);
+    const configPath = join(directory, "implicit.json");
+    // 一个注册表项都不写：两个角色仍可各选一个 agent —— 这是"探索 Codex、执行 Claude"的最小写法。
+    writeFileSync(configPath, JSON.stringify({
+      model: { backend: "codex-app-server", roles: { explorer: { model: "gpt-5.6-sol" }, executor: { model: "claude-opus-5", backend: "claude-agent-sdk" } } },
+    }), "utf8");
+
+    const config = loadFactoryConfig(configPath);
+    const backends = resolveModelBackends(config.model);
+
+    expect(backends.get("claude-agent-sdk")).toMatchObject({ kind: "claude-agent-sdk", source: "implicit" });
+    expect(roleBackendId(config.model, "executor")).toBe("claude-agent-sdk");
+    // 没写 backend 的角色跟随全局默认。
+    expect(roleBackendId(config.model, "explorer")).toBe("codex-app-server");
+  });
+
+  it("fails at startup when a role references an unknown backend", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pipeline-factory-config-"));
+    directories.push(directory);
+    const configPath = join(directory, "unknown-backend.json");
+    writeFileSync(configPath, JSON.stringify({ model: { roles: { executor: { model: "x", backend: "typo" } } } }), "utf8");
+
+    const config = loadFactoryConfig(configPath);
+    // 启动期失败而不是等第一个回合：错误信息直接列出可用 id。
+    expect(() => resolveModelBackends(config.model)).toThrow(/model\.roles\.executor\.backend "typo" is not defined.*Known backends: codex-app-server, claude-agent-sdk, openai-responses, stub/s);
   });
 });

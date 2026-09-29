@@ -5,11 +5,12 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryPipelineStore, LifecycleHookRunner, MergeService, PlanService, ProjectService, Scheduler, type AgentLoop, type DomainEvent, type ExecutionTelemetry, type ModelEvent, type ModelGateway, type ModelRequest, type VerificationCommandExecutor } from "@pipeline-factory/domain";
 import { createApp } from "./server.js";
+import { loadFactoryConfig } from "./config.js";
 import { sanitizeExplorerRequirementStatusEvent } from "./projections/explorer.js";
 
 const apps: Array<Awaited<ReturnType<typeof createApp>>> = [];
@@ -28,6 +29,43 @@ afterEach(async () => {
 });
 
 describe("Pipeline Factory v4 API", () => {
+  it("routes explorer and executor to different agents and reports both over HTTP", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "pipeline-factory-routing-"));
+    const configPath = join(directory, "config.json");
+    writeFileSync(configPath, JSON.stringify({
+      storage: { databasePath: join(directory, "factory.sqlite"), worktreeRoot: join(directory, "worktrees") },
+      project: { root: directory },
+      model: {
+        backend: "codex-app-server",
+        codexAppServer: { cwd: directory },
+        backends: { deepseek: { kind: "claude-agent-sdk", models: ["deepseek-chat"] } },
+        roles: { explorer: { model: "gpt-5.6-sol" }, executor: { model: "deepseek-chat", backend: "deepseek" } },
+      },
+    }), "utf8");
+    const app = createApp({ store: new InMemoryPipelineStore(), config: loadFactoryConfig(configPath), seed: false });
+    apps.push(app);
+
+    try {
+      // /health 会读 explorer 生效的后端配置：多后端下这一步曾经在懒构造里 500。
+      const health = await app.inject({ method: "GET", url: "/health" });
+      expect(health.statusCode).toBe(200);
+      expect(health.json()).toMatchObject({ modelBackend: "codex-app-server", modelBackends: { explorer: "codex-app-server", executor: "deepseek" }, model: "gpt-5.6-sol" });
+
+      const catalog = await app.inject({ method: "GET", url: "/api/v4/model-backends" });
+      expect(catalog.statusCode).toBe(200);
+      expect(catalog.json()).toMatchObject({ roles: { explorer: "codex-app-server", executor: "deepseek" }, defaultBackend: "codex-app-server" });
+      // 注册表后端用它自己的模型清单；档位按 kind 给（Claude 侧没有 minimal/ultra）。
+      expect(catalog.json().backends.find((backend: { id: string }) => backend.id === "deepseek")).toMatchObject({
+        kind: "claude-agent-sdk",
+        source: "registry",
+        models: ["deepseek-chat"],
+        reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
   it("publishes the Explorer plan requirements used by the prompt and UI", async () => {
     const app = createApp({ store: new InMemoryPipelineStore(), seed: false });
     apps.push(app);

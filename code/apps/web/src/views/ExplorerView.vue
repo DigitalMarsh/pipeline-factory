@@ -33,6 +33,8 @@ import ProviderUsageFooter from "../components/ProviderUsageFooter.vue";
 import RunDetailView from "./RunDetailView.vue";
 import scrollToLatestIcon from "../assets/scroll-to-latest.png";
 import { normalizePlanProjection } from "../utils/planProjection";
+import { backendLabel } from "../utils/modelCatalog";
+import { useModelBackends } from "../composables/useModelBackends";
 import { isCandidatePlan as isCandidatePlanFor } from "../utils/planControls";
 import { readableAssistantText } from "../utils/planProtocolDisplay";
 import { detachedPlanAnchorId, planAnchorId, planAnchorKey, planForActivity as planForActivityIn, planIdentity } from "../utils/planTimeline";
@@ -98,6 +100,12 @@ const projectActionId = ref<string | null>(null);
 const timeline = ref<HTMLElement | null>(null);
 const agentLoop = ref<AgentLoop | null>(null);
 const explorerModel = ref("gpt-5.6-luna");
+/**
+ * 探索侧生效的 agent：Project 覆盖优先，否则是该角色在全局配置里的后端。
+ * 与 `explorerModel`（来自 /health 的全局模型名）分开算，但同样只用于展示"这一轮是谁在跑"。
+ */
+const { catalog: modelCatalog, load: loadModelBackends } = useModelBackends();
+const explorerBackendLabel = computed(() => backendLabel(modelCatalog.value, project.value?.settings.models.explorer.backend || modelCatalog.value?.roles.explorer));
 const inputDialog = ref<ExplorerInputDialogHandle | null>(null);
 const mounted = ref(false);
 // A delete already loads the replacement thread explicitly. Suppress the
@@ -1144,7 +1152,7 @@ watch(() => route.query.requirementTab, (tab) => {
   drawerTab.value = tab;
   drawerOpen.value = true;
 });
-onMounted(() => { mounted.value = true; syncPanelStateFromRoute(); void load().then((loaded) => { if (loaded) connectEvents(); }); syncHashPanel(route.hash); });
+onMounted(() => { mounted.value = true; syncPanelStateFromRoute(); void loadModelBackends(); void load().then((loaded) => { if (loaded) connectEvents(); }); syncHashPanel(route.hash); });
 onBeforeUnmount(() => { mounted.value = false; invalidateProjectScope(); closeEvents(); closeRequirementStatusEvents(); });
 </script>
 
@@ -1342,7 +1350,7 @@ onBeforeUnmount(() => { mounted.value = false; invalidateProjectScope(); closeEv
       <button v-if="showScrollToLatest" class="scroll-to-latest" type="button" aria-label="Scroll to latest message" title="Scroll to latest message" @click="jumpToLatest"><img class="scroll-to-latest-image" :src="scrollToLatestIcon" alt="" /></button>
       </div>
       </div>
-      <div v-if="!activeRunId" class="composer"><div class="composer-input"><textarea v-model="draft" :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || explorerPaused" aria-label="Explorer message" placeholder="继续探索，或提出修改…" @keydown="handleComposerKeydown" /><span class="composer-mode">Plan Mode</span></div><div class="composer-footer"><ProviderUsageFooter :model="explorerModel" :context="contextUsage" context-note="estimated" /><span v-if="inputAnswerInFlight || inputCardRequest?.status === 'SUBMITTING'" class="composer-status" role="status" aria-live="polite">正在提交结构化答案，确认后本轮会继续…</span><span v-else-if="pendingInput" class="composer-status" role="status" aria-live="polite">请先回答上方结构化问题，再继续探索。</span><span v-else-if="sendingCurrentPlan" class="composer-status" role="status" aria-live="polite">Message sent · waiting for Plan Explorer…</span><el-button class="composer-send" type="primary" circle :loading="activePlanBusy && !activePlanWaitingForInput || sendingCurrentPlan" :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || !draft.trim() || explorerPaused || activePlanBusy || sendingCurrentPlan || busy" aria-label="Send message" :title="pendingInput ? '请先回答上方结构化问题' : activePlanBusy ? '当前需求回合执行中，完成后可继续' : 'Send message'" @click="sendTurn"><ArrowUp :size="18" /></el-button></div></div>
+      <div v-if="!activeRunId" class="composer"><div class="composer-input"><textarea v-model="draft" :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || explorerPaused" aria-label="Explorer message" placeholder="继续探索，或提出修改…" @keydown="handleComposerKeydown" /><span class="composer-mode">Plan Mode</span></div><div class="composer-footer"><ProviderUsageFooter :model="explorerModel" :backend="explorerBackendLabel" :context="contextUsage" context-note="estimated" /><span v-if="inputAnswerInFlight || inputCardRequest?.status === 'SUBMITTING'" class="composer-status" role="status" aria-live="polite">正在提交结构化答案，确认后本轮会继续…</span><span v-else-if="pendingInput" class="composer-status" role="status" aria-live="polite">请先回答上方结构化问题，再继续探索。</span><span v-else-if="sendingCurrentPlan" class="composer-status" role="status" aria-live="polite">Message sent · waiting for Plan Explorer…</span><el-button class="composer-send" type="primary" circle :loading="activePlanBusy && !activePlanWaitingForInput || sendingCurrentPlan" :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || !draft.trim() || explorerPaused || activePlanBusy || sendingCurrentPlan || busy" aria-label="Send message" :title="pendingInput ? '请先回答上方结构化问题' : activePlanBusy ? '当前需求回合执行中，完成后可继续' : 'Send message'" @click="sendTurn"><ArrowUp :size="18" /></el-button></div></div>
       </template>
     </section>
         </div>

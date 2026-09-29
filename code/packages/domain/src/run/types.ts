@@ -69,6 +69,12 @@ export type ExecutionJournalEntry = {
 export type ExecutionTelemetry = {
   model: string | null;
   reasoningEffort: string | null;
+  /**
+   * 这次 Run 由哪个 agent（后端 id）执行 —— 取自 `agent.loop.started` 的端点指纹。
+   * 与 model 是两件事：同一个模型名可能来自不同后端，而"这一轮到底是谁跑的"是排障第一问。
+   * **可选**：遥测是以 JSON 落库的，本字段引入之前的历史行没有这个键。
+   */
+  backend?: string | null;
   startedAt: string | null;
   completedAt: string | null;
   durationMs: number | null;

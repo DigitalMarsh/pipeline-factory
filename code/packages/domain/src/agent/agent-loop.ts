@@ -368,7 +368,10 @@ export class AgentLoopEngine implements AgentLoopRunner {
   private async execute(input: AgentLoopInput, initial: AgentLoop): Promise<void> {
     const controller = new AbortController();
     this.controllers.set(initial.id, controller);
-    const capabilities = this.model.capabilities?.(input.role);
+    // 有效配置要在能力判定**之前**算出来：多后端下"哪个后端会跑这次调用"取决于调用点带来的
+    // 角色配置（Project 可覆盖），按角色默认值判定会把 Project 覆盖掉的差异判错。
+    const effectiveModelConfig = { ...this.model.configFor(input.role), ...(input.modelRequest.modelConfig ?? {}) };
+    const capabilities = this.model.capabilities?.(input.role, effectiveModelConfig);
     if (input.mode === "factory-controlled" && (!capabilities?.supportsToolCalls || !capabilities.supportedLoopModes.includes(input.mode))) {
       this.block(initial.id, "MODEL_CAPABILITY_UNAVAILABLE");
       return;
@@ -380,10 +383,10 @@ export class AgentLoopEngine implements AgentLoopRunner {
     let loop: AgentLoop = { ...initial, state: "RUNNING", startedAt: this.store.now() };
     this.store.updateAgentLoop(loop);
     this.appendStep(loop, "LOOP_RESUMED", "RUNNING", { role: input.role, mode: input.mode });
-    const effectiveModelConfig = { ...this.model.configFor(input.role), ...(input.modelRequest.modelConfig ?? {}) };
     // 端点指纹随 Loop 起点一起落库：Run 事后能回答"这次请求实际打到了哪里、谁担保这个端点"。
-    // 组合根没提供 describeEndpoint 时记 null，而不是编一个默认后端名。
-    this.emit(loop, "agent.loop.started", { role: input.role, mode: input.mode, model: effectiveModelConfig.model, reasoningEffort: effectiveModelConfig.reasoningEffort ?? null, provider: this.model.describeEndpoint?.() ?? null, startedAt: loop.startedAt });
+    // 组合根没提供 describeEndpoint 时记 null，而不是编一个默认后端名。传角色是因为多后端下
+    // 同一进程内 explorer 与 executor 可能打向不同端点，不传会把两个后端的事实混成一个。
+    this.emit(loop, "agent.loop.started", { role: input.role, mode: input.mode, model: effectiveModelConfig.model, reasoningEffort: effectiveModelConfig.reasoningEffort ?? null, provider: this.model.describeEndpoint?.(input.role) ?? null, startedAt: loop.startedAt });
     const messages: ModelMessage[] = [...input.modelRequest.messages];
     let fullText = "";
     let continuationPrompt: string | undefined;

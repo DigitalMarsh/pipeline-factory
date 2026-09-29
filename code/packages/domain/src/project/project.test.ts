@@ -54,6 +54,29 @@ describe("ProjectService", () => {
     expect(() => projects.create({ ...base, id: "project-settings-hook", settings: { hooks: { start: { commandId: "hook", maxAttempts: 0 } } } })).toThrow(/maxAttempts/i);
   });
 
+  it("validates the role backend and its reasoning levels when a catalog is provided", () => {
+    const store = new InMemoryPipelineStore();
+    // catalog 由组合根按配置注入；domain 默认不持有配置，所以没有 catalog 时不校验取值。
+    const projects = new ProjectService(store, {
+      has: (id) => id === "codex-app-server" || id === "deepseek",
+      effortLevelsFor: (id) => (id === "codex-app-server" ? ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"] : ["low", "medium", "high", "xhigh", "max"]),
+    });
+    const base = { id: "project-backend", name: "Backend", repoRoot: "/repo/backend", defaultBranch: "main", worktreeRoot: "/tmp/backend-worktrees" };
+
+    expect(() => projects.create({ ...base, settings: { models: { explorer: { model: "x", backend: "typo" } } } })).toThrow(/models\.explorer\.backend "typo" is not a configured model backend/);
+    // Claude 侧只认 5 档：配 minimal 会被后端静默丢弃，所以在保存时就拒绝，而不是等到运行期。
+    expect(() => projects.create({ ...base, id: "project-effort", settings: { models: { executor: { model: "x", backend: "deepseek", reasoningEffort: "minimal" } } } })).toThrow(/reasoningEffort "minimal" is not supported by backend deepseek; supported: low, medium, high, xhigh, max/);
+
+    const created = projects.create({ ...base, id: "project-ok", settings: { models: { executor: { model: "deepseek-chat", backend: "deepseek", reasoningEffort: "high" } } } });
+    expect(created.settings.models.executor).toMatchObject({ backend: "deepseek", reasoningEffort: "high" });
+
+    // backend: null 表示"清除覆盖、跟随全局"：不区分它的话，控制台第一次保存就会把当前全局后端固化进
+    // Project，之后既不再跟随全局，也会被家族迁移跳过。
+    const cleared = projects.update("project-ok", { settings: { models: { executor: { model: "gpt-5.6-luna", backend: null } } } });
+    expect(cleared.settings.models.executor).not.toHaveProperty("backend");
+    expect(cleared.settings.models.executor.model).toBe("gpt-5.6-luna");
+  });
+
   it("increments the configuration version when project settings change", () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);
@@ -343,14 +366,53 @@ describe("ProjectService legacy model migration", () => {
     projects.update("project-switch", { settings: { models: { explorer: { model: "gpt-5.6-luna" }, executor: { model: "gpt-5.6-luna" } } } });
 
     // 切到 Claude 后端：gpt-* 是上一个家族留下的 slug，按角色配置的模型替换；mode 等其余字段保留。
-    expect(projects.migrateForeignFamilyModels({ family: "claude", models: { explorer: "claude-opus-5", executor: "claude-sonnet-5" } }).map((project) => project.id)).toEqual(["project-switch"]);
+    expect(projects.migrateForeignFamilyModels({ familyForRole: { explorer: "claude", executor: "claude" }, models: { explorer: "claude-opus-5", executor: "claude-sonnet-5" } }).map((project) => project.id)).toEqual(["project-switch"]);
 
     const after = store.getProject("project-switch")!;
     expect(after.settings.models.explorer).toMatchObject({ model: "claude-opus-5", mode: "plan" });
     expect(after.settings.models.executor).toMatchObject({ model: "claude-sonnet-5", mode: "default" });
     expect(after.configVersion).toBeGreaterThan(before.configVersion);
     // 幂等：第二次没有可迁移的 slug。
-    expect(projects.migrateForeignFamilyModels({ family: "claude", models: { explorer: "claude-opus-5", executor: "claude-sonnet-5" } })).toEqual([]);
+    expect(projects.migrateForeignFamilyModels({ familyForRole: { explorer: "claude", executor: "claude" }, models: { explorer: "claude-opus-5", executor: "claude-sonnet-5" } })).toEqual([]);
+  });
+
+  it("migrates each role against its own family so a split-backend project keeps both slugs", () => {
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    // 探索用 Codex、执行用 Claude：两个角色各自的 slug 都属于**自己那个后端**的家族。
+    projects.create({
+      id: "project-split",
+      name: "Split",
+      repoRoot: "/repo/split",
+      defaultBranch: "main",
+      worktreeRoot: "/tmp/split-worktrees",
+      settings: { models: { explorer: { model: "gpt-5.6-sol" }, executor: { model: "claude-sonnet-5" } } },
+    });
+
+    // 用单一家族判定的旧实现会把其中一个角色正确的 slug 改坏；逐角色判定必须两个都不动。
+    expect(projects.migrateForeignFamilyModels({ familyForRole: { explorer: "openai", executor: "claude" }, models: { explorer: "gpt-5.6-luna", executor: "claude-opus-5" } })).toEqual([]);
+    expect(store.getProject("project-split")!.settings.models.explorer.model).toBe("gpt-5.6-sol");
+    expect(store.getProject("project-split")!.settings.models.executor.model).toBe("claude-sonnet-5");
+  });
+
+  it("never rewrites a role whose Project explicitly picked a backend", () => {
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    // 项目显式选了后端的角色：slug 是用户有意写的，该由 Provider 侧报错暴露，不该被静默替换。
+    projects.create({
+      id: "project-pinned",
+      name: "Pinned",
+      repoRoot: "/repo/pinned",
+      defaultBranch: "main",
+      worktreeRoot: "/tmp/pinned-worktrees",
+      settings: { models: { explorer: { model: "gpt-5.6-luna" }, executor: { model: "gpt-5.6-luna", backend: "claude-agent-sdk" } } },
+    });
+
+    expect(projects.migrateForeignFamilyModels({ familyForRole: { explorer: "claude", executor: "claude" }, models: { explorer: "claude-opus-5", executor: "claude-opus-5" } }).map((project) => project.id)).toEqual(["project-pinned"]);
+    const after = store.getProject("project-pinned")!;
+    // explorer 没固定后端 → 按全局家族迁移；executor 固定了后端 → 原样保留。
+    expect(after.settings.models.explorer.model).toBe("claude-opus-5");
+    expect(after.settings.models.executor).toMatchObject({ model: "gpt-5.6-luna", backend: "claude-agent-sdk" });
   });
 
   it("leaves unknown model slugs and same-family slugs alone", () => {
@@ -366,7 +428,7 @@ describe("ProjectService legacy model migration", () => {
       settings: { models: { explorer: { model: "my-local-alias" }, executor: { model: "claude-sonnet-5" } } },
     });
 
-    expect(projects.migrateForeignFamilyModels({ family: "claude", models: { explorer: "claude-opus-5", executor: "claude-opus-5" } })).toEqual([]);
+    expect(projects.migrateForeignFamilyModels({ familyForRole: { explorer: "claude", executor: "claude" }, models: { explorer: "claude-opus-5", executor: "claude-opus-5" } })).toEqual([]);
     expect(store.getProject("project-custom")!.settings.models.explorer.model).toBe("my-local-alias");
     expect(store.getProject("project-custom")!.settings.models.executor.model).toBe("claude-sonnet-5");
   });

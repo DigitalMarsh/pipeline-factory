@@ -11,6 +11,7 @@ const { apiMocks } = vi.hoisted(() => ({
     submitProjectExecutionTurn: vi.fn(),
     cancelProjectExecutionTurn: vi.fn(),
     projectExecutionEventsUrl: vi.fn(() => "/events"),
+    modelBackends: vi.fn(async () => ({ backends: [], roles: { explorer: "codex-app-server", executor: "codex-app-server" }, defaultBackend: "codex-app-server" })),
   },
 }));
 vi.mock("../api", () => ({ api: apiMocks }));
@@ -37,6 +38,7 @@ function makeSnapshot(projectId: string, messages: ProjectExecutionMessage[] = [
     defaultReasoningEffort: "low",
     modelOptions: ["gpt-5.6-luna", "gpt-5.6-sol"],
     reasoningEffortOptions: [{ value: null, label: "跟随项目默认" }, { value: "low", label: "low" }, { value: "high", label: "high" }],
+    backend: "codex-app-server",
   } as ProjectExecutionThreadSnapshot;
 }
 

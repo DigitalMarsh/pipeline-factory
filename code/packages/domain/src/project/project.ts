@@ -19,6 +19,17 @@ import type {
 export type ProjectStatus = "ACTIVE" | "ARCHIVED";
 
 /** Project 的项目级运行策略；确认 Plan 时会深拷贝进不可变执行快照。 */
+/** 后端目录：由组合根（唯一读配置的那一层）注入；domain 默认不持有配置，测试因此不受影响。 */
+export type ModelBackendCatalog = {
+  /** 该 id 是否是已配置的模型后端。 */
+  has(id: string): boolean;
+  /**
+   * 该后端**真正接受**的推理档位。空数组表示"这个后端不消费 reasoningEffort"，
+   * 此时不校验——把"没有词表"当成"什么都不接受"会让所有 openai/stub 后端无法配这个字段。
+   */
+  effortLevelsFor(id: string): string[];
+};
+
 export type ProjectSettings = {
   concurrency: {
     /** @deprecated Kept for persisted configuration compatibility; Runs are no longer concurrency-limited. */
@@ -47,6 +58,23 @@ export type ProjectSettings = {
   };
 };
 
+/**
+ * 角色模型的可写字段（逐个列出而不是 `Partial<ModelRoleConfig>`：这是**客户端可以写什么**的
+ * 契约，多一个字段就是一个新的可写面，不该随 ModelRoleConfig 的变化悄悄扩大）。
+ * `backend: null`（或空串）表示**清除本项目的覆盖、跟随全局配置** —— 这是"删掉一个覆盖"
+ * 在 JSON 里的标准写法；不区分它的话，控制台就无法表达"我不要固定这个后端"，只能一路固定下去。
+ */
+export type ModelRoleConfigInput = {
+  backend?: string | null | undefined;
+  model?: string | undefined;
+  mode?: ModelRoleConfig["mode"];
+  loopMode?: ModelRoleConfig["loopMode"];
+  temperature?: number | undefined;
+  maxOutputTokens?: number | undefined;
+  reasoningEffort?: string | undefined;
+  developerInstructions?: string | undefined;
+};
+
 /** Project Settings 的局部更新输入；未提供的字段沿用当前配置。 */
 export type ProjectSettingsInput = {
   concurrency?: Partial<ProjectSettings["concurrency"]>;
@@ -54,8 +82,8 @@ export type ProjectSettingsInput = {
   defaultVerificationCommandIds?: string[];
   hooks?: ProjectSettings["hooks"];
   models?: {
-    explorer?: Partial<ModelRoleConfig> & Pick<ModelRoleConfig, "model">;
-    executor?: Partial<ModelRoleConfig> & Pick<ModelRoleConfig, "model">;
+    explorer?: ModelRoleConfigInput & { model: string };
+    executor?: ModelRoleConfigInput & { model: string };
   };
   toolPolicy?: Partial<ProjectSettings["toolPolicy"]>;
 };
@@ -180,7 +208,28 @@ function assertStringArray(value: unknown, field: string, allowEmpty = true): as
   }
 }
 
-function validateProjectSettings(settings: ProjectSettings): void {
+/**
+ * 合并一个角色的模型配置。**`backend: null` / `""` 是"清除覆盖"而不是一个取值**：
+ * 先删掉这个键，让"跟随全局"成为缺省状态；不这样做，控制台第一次保存就会把当前全局后端
+ * 固化进 Project，之后既不再跟随全局，也会被家族迁移跳过。
+ */
+function mergeRoleModels<T extends ModelRoleConfig>(base: T, override: ModelRoleConfigInput | undefined): T {
+  const merged = { ...base, ...(override ?? {}) } as Record<string, unknown>;
+  if (override && "backend" in override && (override.backend === null || override.backend === "")) delete merged.backend;
+  return merged as T;
+}
+
+/** 校验并归一化一个角色的推理档位与后端引用；取值以外的判断都交给调用方。 */
+function validateRoleBackend(model: ModelRoleConfig, role: "explorer" | "executor", catalog: ModelBackendCatalog): void {
+  if (!model.backend) return;
+  if (!catalog.has(model.backend)) throw new Error(`models.${role}.backend "${model.backend}" is not a configured model backend`);
+  const levels = catalog.effortLevelsFor(model.backend);
+  if (model.reasoningEffort && levels.length > 0 && !levels.includes(model.reasoningEffort)) {
+    throw new Error(`models.${role}.reasoningEffort "${model.reasoningEffort}" is not supported by backend ${model.backend}; supported: ${levels.join(", ")}`);
+  }
+}
+
+function validateProjectSettings(settings: ProjectSettings, catalog?: ModelBackendCatalog | undefined): void {
   assertFiniteInteger(settings.concurrency.maxParallelRuns, "concurrency.maxParallelRuns", 1);
   assertFiniteInteger(settings.concurrency.defaultTimeoutMs, "concurrency.defaultTimeoutMs", 1);
   assertFiniteInteger(settings.concurrency.executionTimeoutMs, "concurrency.executionTimeoutMs", 1);
@@ -224,6 +273,10 @@ function validateProjectSettings(settings: ProjectSettings): void {
     if (!isRecord(model) || typeof model.model !== "string" || model.model.trim() === "") throw new Error(`models.${role}.model must be a non-empty string`);
     if (model.temperature !== undefined && (typeof model.temperature !== "number" || !Number.isFinite(model.temperature) || model.temperature < 0 || model.temperature > 2)) throw new Error(`models.${role}.temperature must be between 0 and 2`);
     if (model.maxOutputTokens !== undefined) assertFiniteInteger(model.maxOutputTokens, `models.${role}.maxOutputTokens`, 1);
+    if (model.backend !== undefined && (typeof model.backend !== "string" || !model.backend.trim())) throw new Error(`models.${role}.backend must be a non-empty string`);
+    // 有目录时才校验取值：domain 不认识"有哪些后端"，那是配置层的事实。
+    // 校验放在这里而不是路由层，是因为 settings 只有这一条校验入口（见 normalizeProjectSettings）。
+    if (catalog) validateRoleBackend(model, role, catalog);
   }
 
   assertStringArray(settings.toolPolicy.allowedMcpTools, "toolPolicy.allowedMcpTools");
@@ -232,7 +285,7 @@ function validateProjectSettings(settings: ProjectSettings): void {
 }
 
 /** 合并并校验局部 Settings，返回可安全保存和快照的完整配置。 */
-export function normalizeProjectSettings(input?: ProjectSettingsInput, base: ProjectSettings = DEFAULT_PROJECT_SETTINGS): ProjectSettings {
+export function normalizeProjectSettings(input?: ProjectSettingsInput, base: ProjectSettings = DEFAULT_PROJECT_SETTINGS, catalog?: ModelBackendCatalog | undefined): ProjectSettings {
   const value = input ?? {};
   if (!isRecord(value)) throw new Error("settings must be an object");
   if (value.concurrency !== undefined && !isRecord(value.concurrency)) throw new Error("concurrency must be an object");
@@ -247,8 +300,8 @@ export function normalizeProjectSettings(input?: ProjectSettingsInput, base: Pro
     defaultVerificationCommandIds: value.defaultVerificationCommandIds ? [...value.defaultVerificationCommandIds] : [...base.defaultVerificationCommandIds],
     hooks: { ...base.hooks, ...value.hooks },
     models: {
-      explorer: { ...base.models.explorer, ...value.models?.explorer },
-      executor: { ...base.models.executor, ...value.models?.executor },
+      explorer: mergeRoleModels(base.models.explorer, value.models?.explorer),
+      executor: mergeRoleModels(base.models.executor, value.models?.executor),
     },
     toolPolicy: {
       ...base.toolPolicy,
@@ -257,7 +310,7 @@ export function normalizeProjectSettings(input?: ProjectSettingsInput, base: Pro
       allowedPluginTools: value.toolPolicy?.allowedPluginTools ? [...value.toolPolicy.allowedPluginTools] : [...base.toolPolicy.allowedPluginTools],
     },
   };
-  validateProjectSettings(settings);
+  validateProjectSettings(settings, catalog);
   return settings;
 }
 
@@ -316,7 +369,7 @@ export function knownModelFamily(slug: string): ModelFamily | null {
  * 所有高风险路径或运行策略变更都会递增 configVersion，并为历史 Plan 保留旧快照。
  */
 export class ProjectService {
-  constructor(private readonly store: PipelineStore) {}
+  constructor(private readonly store: PipelineStore, private readonly modelCatalog?: ModelBackendCatalog | undefined) {}
 
   /** 创建唯一绑定一个 Git 根目录的 Project，并保存初始配置版本。 */
   create(input: CreateProjectInput): Project {
@@ -328,7 +381,7 @@ export class ProjectService {
     assertProjectPaths(repoRoot, worktreeRoot);
     if (this.store.listProjects().some((project) => project.repoRoot === repoRoot)) throw new Error(`A project already uses repoRoot ${repoRoot}`);
     const createdAt = this.store.now();
-    const settings = normalizeProjectSettings(input.settings);
+    const settings = normalizeProjectSettings(input.settings, DEFAULT_PROJECT_SETTINGS, this.modelCatalog);
     const project: Project = {
       id: input.id ?? this.store.nextId("project"),
       name,
@@ -415,17 +468,25 @@ export class ProjectService {
    *
    * 为什么需要：Project settings 存的是具体 slug（默认 gpt-5.6-luna）。切换到 Claude backend 后
    * 这类 slug 在 Anthropic 一侧无效，第一个回合会直接在 Provider 侧失败，而错误离配置很远。
-   * 只在后端家族真的换了的时候才动，且只替换 `model` 字段，保留 mode/temperature/loopMode。
-   * 有活动 Run 的 Project 跳过，等下次启动重试（与 migrateLegacyModels 同一套保守策略）。
+   *
+   * 为什么**逐角色**判定（而不是用一个全局家族）：`explorer` 与 `executor` 可以指向不同后端
+   * （探索用 Codex、执行用 Claude）。用单一家族判定会把其中一个角色**正确**的 slug 改掉——
+   * 那不是迁移，是破坏。
+   *
+   * 为什么**项目显式写了 backend 的角色的 slug 一律不动**：那是用户有意为该项目选的后端，
+   * slug 该由 Provider 侧报错暴露，不该被静默替换（与 knownModelFamily 的立场一致）。
+   * 只替换 `model` 字段并保留 mode/temperature/loopMode/backend；有活动 Run 的 Project 跳过，
+   * 等下次启动重试（与 migrateLegacyModels 同一套保守策略）。
    */
-  migrateForeignFamilyModels(input: { family: ModelFamily; models: { explorer: string; executor: string } }): Project[] {
+  migrateForeignFamilyModels(input: { familyForRole: Record<"explorer" | "executor", ModelFamily>; models: { explorer: string; executor: string } }): Project[] {
     const migrated: Project[] = [];
     for (const project of this.list("ACTIVE")) {
       const replacements: ProjectSettingsInput["models"] = {};
       for (const role of ["explorer", "executor"] as const) {
+        if (project.settings.models[role].backend) continue;
         const currentModel = project.settings.models[role].model;
         const family = knownModelFamily(currentModel);
-        if (!family || family === input.family) continue;
+        if (!family || family === input.familyForRole[role]) continue;
         const replacement = input.models[role].trim();
         if (!replacement || replacement === currentModel) continue;
         replacements[role] = { model: replacement };
@@ -461,7 +522,7 @@ export class ProjectService {
     const worktreeRoot = input.worktreeRoot === undefined ? project.worktreeRoot : normalizeAbsolutePath(input.worktreeRoot, "worktreeRoot");
     assertProjectPaths(repoRoot, worktreeRoot);
     if (repoRoot !== project.repoRoot && this.store.listProjects().some((item) => item.id !== projectId && item.repoRoot === repoRoot)) throw new Error(`A project already uses repoRoot ${repoRoot}`);
-    const nextSettings = input.settings ? normalizeProjectSettings(input.settings, project.settings) : clone(project.settings);
+    const nextSettings = input.settings ? normalizeProjectSettings(input.settings, project.settings, this.modelCatalog) : clone(project.settings);
     const defaultBranch = input.defaultBranch === undefined ? project.defaultBranch : input.defaultBranch.trim();
     if (!defaultBranch) throw new Error("defaultBranch is required");
     const changed = name !== project.name || shortName !== project.shortName || repoRoot !== project.repoRoot || worktreeRoot !== project.worktreeRoot || defaultBranch !== project.defaultBranch || JSON.stringify(nextSettings) !== JSON.stringify(project.settings);

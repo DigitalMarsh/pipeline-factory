@@ -10,6 +10,15 @@ vi.mock("../api", () => ({
     project: vi.fn(),
     updateProject: vi.fn(),
     validateRepository: vi.fn(),
+    // 后端目录：两个后端、各自一组模型与档位。控制台的 agent/模型/推理强度三个下拉全部由它驱动。
+    modelBackends: vi.fn(async () => ({
+      backends: [
+        { id: "codex-app-server", kind: "codex-app-server", source: "implicit", models: ["gpt-6-sol", "gpt-5.6-luna"], reasoningEfforts: ["low", "high"], endpoint: "codex app-server --stdio", endpointSource: "provider-settings" },
+        { id: "deepseek", kind: "claude-agent-sdk", source: "registry", models: ["deepseek-chat"], reasoningEfforts: ["low", "medium", "high", "xhigh", "max"], endpoint: "api.deepseek.com", endpointSource: "config" },
+      ],
+      roles: { explorer: "codex-app-server", executor: "codex-app-server" },
+      defaultBackend: "codex-app-server",
+    })),
   },
 }));
 
@@ -125,7 +134,7 @@ describe("ProjectSettingsDialog", () => {
     mounted.host.remove();
   });
 
-  it("uses dropdowns for both model roles and reasoning effort", async () => {
+  it("uses dropdowns for both agents, model roles and reasoning effort", async () => {
     vi.mocked(api.project).mockResolvedValue({ project: project(), summary: {} as never });
     vi.mocked(api.updateProject).mockResolvedValue({ project: project() });
     const mounted = mountDialog();
@@ -135,22 +144,40 @@ describe("ProjectSettingsDialog", () => {
     const modelsTab = [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Models & Tools"));
     modelsTab?.click();
     await nextTick();
+    // 顺序：Explorer agent / model / reasoning，然后 Executor 三项。agent 是本次新增的那一列。
     const selects = mounted.host.querySelectorAll<HTMLSelectElement>(".settings-form-grid select");
-    expect(selects).toHaveLength(4);
-    expect([...selects[0]!.options].some((option) => option.value === "gpt-6-sol")).toBe(true);
-    expect([...selects[1]!.options].some((option) => option.value === "high")).toBe(true);
+    expect(selects).toHaveLength(6);
+    // 未固定后端时默认项写的是"跟随全局（<生效后端>）"，而不是一个空字符串标签。
+    expect(selects[0]!.options[0]!.textContent).toContain("跟随全局");
+    expect([...selects[0]!.options].some((option) => option.value === "deepseek")).toBe(true);
+    // 模型与档位跟着所选 agent 走：codex 的档位里没有 xhigh，deepseek（Claude 侧）的有。
+    expect([...selects[1]!.options].some((option) => option.value === "gpt-6-sol")).toBe(true);
+    expect([...selects[2]!.options].some((option) => option.value === "high")).toBe(true);
+    expect([...selects[2]!.options].some((option) => option.value === "xhigh")).toBe(false);
 
-    selects[0]!.value = "gpt-6-sol";
-    selects[0]!.dispatchEvent(new Event("change", { bubbles: true }));
-    selects[1]!.value = "high";
+    selects[1]!.value = "gpt-6-sol";
     selects[1]!.dispatchEvent(new Event("change", { bubbles: true }));
+    selects[2]!.value = "high";
+    selects[2]!.dispatchEvent(new Event("change", { bubbles: true }));
+    // 换个 agent（index 3 = executor agent）：模型候选随之换成该后端的清单（index 4 = executor model）。
+    selects[3]!.value = "deepseek";
+    selects[3]!.dispatchEvent(new Event("change", { bubbles: true }));
     await nextTick();
+    const executorModelOptions = [...mounted.host.querySelectorAll<HTMLSelectElement>(".settings-form-grid select")[4]!.options].map((option) => option.value);
+    expect(executorModelOptions).toContain("deepseek-chat");
     const save = [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Save Project configuration"));
     save?.click();
     await nextTick();
     await nextTick();
 
-    expect(api.updateProject).toHaveBeenCalledWith("project-1", expect.objectContaining({ settings: expect.objectContaining({ models: expect.objectContaining({ explorer: expect.objectContaining({ model: "gpt-6-sol", reasoningEffort: "high" }) }) }) }));
+    expect(api.updateProject).toHaveBeenCalledWith("project-1", expect.objectContaining({
+      settings: expect.objectContaining({
+        models: expect.objectContaining({
+          explorer: expect.objectContaining({ model: "gpt-6-sol", reasoningEffort: "high", backend: null }),
+          executor: expect.objectContaining({ backend: "deepseek" }),
+        }),
+      }),
+    }));
     mounted.app.unmount();
     mounted.host.remove();
   });

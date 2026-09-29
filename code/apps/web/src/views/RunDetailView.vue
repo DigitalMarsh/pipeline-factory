@@ -14,7 +14,8 @@ import { api } from "../api";
 import MarkdownMessage from "../components/MarkdownMessage.vue";
 import type { AgentLoopStep, ExecutionTask, ExecutionThread, MergeRequest, Plan, PlanTask, Run, RunJournalEvent, VerificationRun } from "../types";
 import { projectExecutionJournal, type ExecutionJournalEntry, type ExecutionPlanSnapshot, type ExecutionStreamItem } from "../utils/executionStream";
-import { formatProviderContextUsage, telemetryModel } from "../utils/executionTelemetry";
+import { formatProviderContextUsage, telemetryBackend, telemetryModel } from "../utils/executionTelemetry";
+import { useModelBackends } from "../composables/useModelBackends";
 import { executionTaskStatusLabel, executionTaskSummary, projectExecutionTasks } from "../utils/executionTasks";
 import { canTerminateRun } from "../utils/runControls";
 import { describeRunLoadError } from "../utils/runLoadError";
@@ -33,6 +34,8 @@ const runId = computed(() => props.runId ?? String(route.params.runId ?? ""));
 const requestScope = createProjectRequestScope();
 const run = ref<Run | null>(null);
 const thread = ref<ExecutionThread | null>(null);
+/** 只用于把后端 id 翻成可读标签（AGENT 那一格）；取不到就显示 id 本身。 */
+const { catalog: modelCatalog, load: loadModelBackends } = useModelBackends();
 const verification = ref<VerificationRun | null>(null);
 const mergeRequest = ref<MergeRequest | null>(null);
 const loading = ref(true);
@@ -88,6 +91,8 @@ const executionConversationGroups = computed<ExecutionConversationGroup[]>(() =>
 });
 const executionTelemetry = computed(() => thread.value?.telemetry ?? null);
 const executionTelemetryModel = computed(() => telemetryModel(executionTelemetry.value));
+/** 执行这次 Run 的 agent；旧 Run 的遥测里没有这个字段，此时显示"未记录"而不是猜。 */
+const executionTelemetryBackend = computed(() => telemetryBackend(executionTelemetry.value, modelCatalog.value));
 const executionContextUsage = computed(() => formatProviderContextUsage(executionTelemetry.value?.usage?.inputTokens));
 const canSendExecutionMessage = computed(() => Boolean(thread.value && !["CANCELLED", "COMPLETED"].includes(thread.value.state)));
 
@@ -410,7 +415,7 @@ function updateTargetCommit(value: string): void {
   targetCommit.value = value;
 }
 watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load().then(() => { if (run.value) connectRunEvents(); }); });
-  onMounted(async () => { telemetryTimer = setInterval(() => { if (executionTelemetry.value?.completedAt === null || executionTelemetry.value?.durationMs === null) telemetryNow.value = Date.now(); }, 1000); await load(); connectRunEvents(); scrollExecutionToLatest(); });
+  onMounted(async () => { telemetryTimer = setInterval(() => { if (executionTelemetry.value?.completedAt === null || executionTelemetry.value?.durationMs === null) telemetryNow.value = Date.now(); }, 1000); void loadModelBackends(); await load(); connectRunEvents(); scrollExecutionToLatest(); });
   onBeforeUnmount(() => { requestScope.invalidate(); closeRunEvents(); if (telemetryTimer) clearInterval(telemetryTimer); });
 </script>
 
@@ -505,7 +510,7 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
             <span class="composer-mode">Run Mode</span>
           </div>
           <div class="composer-footer">
-            <ProviderUsageFooter :model="executionTelemetryModel" :context="executionContextUsage" context-note="provider exact" />
+            <ProviderUsageFooter :model="executionTelemetryModel" :backend="executionTelemetryBackend" :context="executionContextUsage" context-note="provider exact" />
             <span v-if="sendingExecutionMessage" class="composer-status" role="status" aria-live="polite">Message sent · waiting for Executor…</span>
             <el-button class="composer-send" type="primary" circle :loading="sendingExecutionMessage" :disabled="!executionDraft.trim() || !canSendExecutionMessage || actionBusy" aria-label="Send message" :title="actionBusy ? '正在发送消息' : 'Send message'" @click="sendExecutionMessage"><ArrowUp :size="18" /></el-button>
           </div>
