@@ -531,6 +531,28 @@ export type WorkbenchPlan = Plan & {
   contract: NonNullable<Plan["contract"]>;
 };
 
+/** 项目「今日活动」一条事实；`reason` 只在失败/阻塞那组出现。 */
+export type DailyActivityEntry = {
+  planId: string;
+  planTitle: string;
+  runId: string | null;
+  at: string;
+  reason?: string | null;
+};
+
+/** 执行完成与人工合并是两个时点，界面必须分开显示，不能只说"今日已合并"。 */
+export type DailyActivity = {
+  projectId: string;
+  date: string;
+  timeZone: string;
+  /** 事件保留窗口；日报受它限制，界面据此说明"更早的记录已被回收"。 */
+  retentionDays: number;
+  executedToday: DailyActivityEntry[];
+  mergedToday: DailyActivityEntry[];
+  failedToday: DailyActivityEntry[];
+  runningAcrossDays: DailyActivityEntry[];
+};
+
 export type WorkbenchRun = Run & {
   planTitle: string;
   dispatch: PlanDispatchState | null;

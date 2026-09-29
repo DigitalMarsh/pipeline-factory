@@ -4,6 +4,9 @@
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  */
 import { describe, expect, it } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { InMemoryPipelineStore, LifecycleHookRunner, LocalGitWorktreeAdapter, PlanService, ProjectService, Scheduler, type RunBranchNameGenerator } from "./index.js";
 
 describe("Scheduler and ExecutionThread", () => {
@@ -162,6 +165,43 @@ describe("Scheduler and ExecutionThread", () => {
     expect(store.getPlan(plan.id)?.attentionReason).toMatch(/cleanup/i);
   });
 
+  it("releases a merged Run's worktree once and keeps the branch", async () => {
+    const store = new InMemoryPipelineStore();
+    const planService = new PlanService(store);
+    const plan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Merged plan" });
+    planService.confirm(plan.id, "user-1");
+    planService.enqueue(plan.id);
+    planService.dispatch(plan.id);
+    // 真目录：releaseWorkspace 以"目录还在不在"判断要不要调 git，用假路径会走"已回收"分支。
+    const workspacePath = mkdtempSync(join(tmpdir(), "pipeline-merged-worktree-"));
+    const removed: string[] = [];
+    const cleanupRuns: string[] = [];
+    const scheduler = new Scheduler({
+      store,
+      workspace: { create: async () => ({ path: workspacePath, branch: "factory/run-merged", baseCommit: "abc" }), remove: async (workspace) => { removed.push(workspace.path); } },
+      hooks: new LifecycleHookRunner(async (command) => { cleanupRuns.push(command.commandId); return { exitCode: 0, stdout: "", stderr: "" }; }),
+    });
+    try {
+      const run = await scheduler.start(plan.id);
+      const branchBefore = store.getRun(run.id)!.branch;
+
+      // hook 由调用方传入（与 routes/merge-requests.ts 一致）：冻结快照优先，其次才是当前 Project 设置。
+      const released = await scheduler.releaseWorkspace(run.id, { cleanup: { commandId: "project.cleanup" } });
+      expect(released).toMatchObject({ released: true, worktreeRemoved: true, cleanupNeedsAttention: false });
+      expect(removed).toEqual([workspacePath]);
+      expect(cleanupRuns).toEqual(["project.cleanup"]);
+      // 幂等：目录已回收，再调一次不会重复删、也不会重复跑 cleanup。
+      expect(await scheduler.releaseWorkspace(run.id, { cleanup: { commandId: "project.cleanup" } })).toMatchObject({ released: false });
+      expect(removed).toEqual([workspacePath]);
+      expect(cleanupRuns).toEqual(["project.cleanup"]);
+      // 状态不被这次回收改动：Plan 仍是 DISPATCHED，Run 仍按原状态存在（分支保留给人工审计）。
+      expect(store.getRun(run.id)?.workspacePath).toBeNull();
+      expect(store.getRun(run.id)?.branch).toBe(branchBefore);
+    } finally {
+      rmSync(workspacePath, { recursive: true, force: true });
+    }
+  });
+
   it("validates the base commit before creating a real Git worktree", async () => {
     const commands: string[][] = [];
     const adapter = new LocalGitWorktreeAdapter({ projectRoot: "/repo", worktreeRoot: "/worktrees", runGit: async (args) => { commands.push(args); return { exitCode: 0, stdout: "abc", stderr: "" }; } });
@@ -210,6 +250,8 @@ describe("Scheduler and ExecutionThread", () => {
     expect(store.getPlan(plan.id)).toMatchObject({ status: "BLOCKED", attentionReason: "Run cancelled: stale_run" });
   });
 
+  // 槽位语义（哪些状态占执行名额）现在由 PlanDispatchCoordinator 的容量判定决定，
+  // 见 dispatch-coordinator.test.ts；本用例只验证 Scheduler.start 不会因为另一个 Run 在跑而拒绝。
   it.each(["READY_FOR_VERIFY", "MERGE_READY"] as const)("does not count %s as an execution slot", async (status) => {
     const store = new InMemoryPipelineStore();
     const planService = new PlanService(store);
@@ -219,7 +261,6 @@ describe("Scheduler and ExecutionThread", () => {
     planService.dispatch(firstPlan.id);
     const scheduler = new Scheduler({
       store,
-      globalConcurrency: 1,
       workspace: { create: async ({ runId }) => ({ path: `/tmp/${runId}`, branch: `factory/${runId}`, baseCommit: "abc" }), remove: async () => undefined },
       hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
     });

@@ -1,9 +1,12 @@
 /**
- * 模块职责：Workbench 的 2 条路由 —— 项目快照（JSON）与项目事件流（JSON 或 SSE）。
+ * 模块职责：Workbench 的 3 条路由 —— 项目快照（JSON）、项目事件流（JSON 或 SSE），
+ *   以及项目「今日活动」`/api/v4/projects/:projectId/activity`。
  *
  * 为什么这一组单独成文件：它们是 `/api/v4/workbench*` 的全部面，且**是唯一一处同时提供
  *   "轮询式 SSE"与"同一路径的 JSON 返回"的地方**。两条路由共用 `workbenchQuery`，差别只在
  *   `format`——放在一起，才能一眼看出两条分支对同一个 query 的处理必须保持一致。
+ *   今日活动放在这里是因为它服务的正是同一个页面（Workbench 的"今日"面板）；它的路径挂在
+ *   projects 下是按资源归属（读 Project 的历史），而不是按页面归属。
  *
  * 本文件曾经用两个**回调 dep**（`snapshot` / `projectEventScope`）注入投影，因为那时它们还住在
  *   组合根，直接 import 会形成 route ↔ 组合根的类型环。P5 的 `projections/` 落地后这两个函数
@@ -22,18 +25,27 @@
  *      其中绝大多数与当前 Project 无关。首次连接取尾部窗口，之后从游标向前读。
  */
 import type { FastifyInstance } from "fastify";
+import { z } from "zod";
 import type { PipelineStore, ProjectService } from "@pipeline-factory/domain";
+import type { FactoryConfig } from "../config.js";
 import { workbenchQuery } from "../schemas/workbench.js";
 import { openSseChannel } from "../http/sse.js";
 import { WORKBENCH_EVENT_TAIL_LIMIT, createProjectEventScope, workbenchSnapshot } from "../projections/workbench.js";
+import { dailyActivity, localToday } from "../projections/activity.js";
 
 /** 轮询一轮最多读取的事件条数；游标式增量读取用它给单轮兜底，避免突发写入时单轮读爆。 */
 const WORKBENCH_EVENT_POLL_LIMIT = 500;
+
+const activityParams = z.object({ projectId: z.string().min(1) });
+/** `date` 由投影校验（必须是真实存在的本地日历日）；这里只约束形状。 */
+const activityQuery = z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() });
 
 export type WorkbenchRouteDeps = {
   store: PipelineStore;
   /** `workbenchSnapshot` 需要它算 summary；投影本身无状态，由这里显式传入。 */
   projects: ProjectService;
+  /** 只用于把事件保留窗口透给"今日活动"（那组数据受回收影响）；缺省视为不回收。 */
+  config?: FactoryConfig | undefined;
 };
 
 export function registerWorkbenchRoutes(app: FastifyInstance, deps: WorkbenchRouteDeps): void {
@@ -44,6 +56,24 @@ export function registerWorkbenchRoutes(app: FastifyInstance, deps: WorkbenchRou
     if (!query.success) return reply.code(400).send({ error: "Invalid Workbench query" });
     if (!store.getProject(query.data.projectId)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${query.data.projectId} not found` });
     return workbenchSnapshot(store, projects, query.data.projectId);
+  });
+
+  /**
+   * 项目「今日活动」：执行完成 / 已合并 / 失败或阻塞 / 跨日仍在跑 四组。
+   * 与 Workbench 快照分开：那是"现在有什么"，这是"这一天做了什么"，两者的时间语义不同
+   * （见 projections/activity.ts 维护提示 1）。date 缺省是**服务器本地时区**的今天。
+   */
+  app.get("/api/v4/projects/:projectId/activity", async (request, reply) => {
+    const params = activityParams.safeParse(request.params);
+    const query = activityQuery.safeParse(request.query ?? {});
+    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid activity query" });
+    try {
+      return dailyActivity(store, projects, params.data.projectId, query.data.date ?? localToday(), deps.config?.storage.eventRetentionDays ?? 0);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Activity unavailable";
+      if (/not found/i.test(message)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: message });
+      return reply.code(400).send({ code: "ACTIVITY_DATE_INVALID", error: message });
+    }
   });
 
   app.get("/api/v4/workbench/events", async (request, reply) => {

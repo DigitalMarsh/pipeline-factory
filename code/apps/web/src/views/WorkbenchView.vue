@@ -9,7 +9,7 @@ import { ElMessage } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 import { api } from "../api";
 import { planContractView } from "../utils/planContract";
-import type { Plan, PlanDispatchState, WorkbenchPlan, WorkbenchSnapshot } from "../types";
+import type { DailyActivity, Plan, PlanDispatchState, WorkbenchPlan, WorkbenchSnapshot } from "../types";
 import { createProjectRequestScope } from "../utils/projectRoutes";
 import { statusVisualFor } from "../utils/statusVisual";
 
@@ -49,6 +49,33 @@ const evidence = computed(() => (snapshot.value?.events ?? []).filter((event) =>
 const pageTitle = "Execute";
 const pageKicker = computed(() => "PROJECT · " + (selectedProject.value?.name ?? projectId.value));
 
+/**
+ * 今日活动。与 Workbench 快照分开取：快照回答"现在有什么"，它回答"这一天做了什么"。
+ * 取不到时**不阻塞页面**（快照仍然可用），只在条上显示"今日数据暂不可用"。
+ */
+const activity = ref<DailyActivity | null>(null);
+const activityError = ref<string | null>(null);
+const activityCells = computed(() => [
+  { key: "executedToday", label: "今日执行完成", entries: activity.value?.executedToday ?? [], tone: "done" },
+  { key: "mergedToday", label: "今日已合并", entries: activity.value?.mergedToday ?? [], tone: "merged" },
+  { key: "failedToday", label: "今日失败 / 阻塞", entries: activity.value?.failedToday ?? [], tone: "blocked" },
+  { key: "runningAcrossDays", label: "跨日运行中", entries: activity.value?.runningAcrossDays ?? [], tone: "running" },
+] as const);
+const activityHasFacts = computed(() => activityCells.value.some((cell) => cell.entries.length > 0));
+async function loadActivity(): Promise<void> {
+  const requestProjectId = projectId.value;
+  try {
+    const response = await api.projectActivity(requestProjectId);
+    if (projectId.value !== requestProjectId) return;
+    activity.value = response;
+    activityError.value = null;
+  } catch (caught) {
+    if (projectId.value !== requestProjectId) return;
+    activity.value = null;
+    activityError.value = caught instanceof Error ? caught.message : "今日活动加载失败";
+  }
+}
+
 function planStatus(plan: Plan | null) {
   return statusVisualFor(plan?.dispatch?.waitReason ?? plan?.dispatch?.status ?? plan?.status ?? "EMPTY");
 }
@@ -75,7 +102,8 @@ async function load() {
 
 function scheduleRefresh() {
   if (refreshTimer) clearTimeout(refreshTimer);
-  refreshTimer = setTimeout(() => { refreshTimer = null; void load(); }, 80);
+  // 今日活动跟着刷新：派发状态一变就可能改变"执行完成/失败"两组，但不必比快照更频繁。
+  refreshTimer = setTimeout(() => { refreshTimer = null; void load(); void loadActivity(); }, 80);
 }
 
 function connectEvents() {
@@ -98,6 +126,12 @@ function closeEvents() {
 function selectPlan(plan: WorkbenchPlan) {
   selectedPlanId.value = plan.planId;
   void router.replace({ query: { ...route.query, plan: plan.planId } });
+}
+
+/** 今日活动条里点一条事实 → 选中左侧对应的 Plan（含 URL，便于分享这一条）。 */
+function selectPlanById(planId: string) {
+  if (!plans.value.some((plan) => plan.planId === planId)) return;
+  selectPlan(plans.value.find((plan) => plan.planId === planId)!);
 }
 
 async function enqueuePlan() {
@@ -144,9 +178,10 @@ watch(projectId, () => {
   closeEvents();
   selectedPlanId.value = typeof route.query.plan === "string" ? route.query.plan : null;
   void load().then(connectEvents);
+  void loadActivity();
 });
 watch(() => route.query.plan, (value) => { if (typeof value === "string") selectedPlanId.value = value; });
-onMounted(() => { void load().then(connectEvents); });
+onMounted(() => { void load().then(connectEvents); void loadActivity(); });
 onBeforeUnmount(() => { requestScope.invalidate(); closeEvents(); });
 </script>
 
@@ -165,6 +200,26 @@ onBeforeUnmount(() => { requestScope.invalidate(); closeEvents(); });
     </header>
 
     <div v-if="error" class="workbench-alert danger"><Warning :size="15" /><span>{{ error }}</span><el-button text @click="load">Retry</el-button></div>
+
+    <section class="workbench-today" aria-label="今日活动">
+      <header class="today-heading"><span class="eyebrow">TODAY</span><strong>{{ activity?.date ?? "—" }}</strong><small v-if="activity">{{ activity.timeZone }}</small><small v-if="activity && activity.retentionDays === 0">保留窗口：不回收</small><small v-else-if="activity">保留窗口：{{ activity.retentionDays }} 天</small></header>
+      <div v-if="activityError" class="today-empty"><Warning :size="13" /> 今日数据暂不可用：{{ activityError }}</div>
+      <div v-else-if="!activity" class="today-empty">正在加载今日活动…</div>
+      <div v-else class="today-grid">
+        <article v-for="cell in activityCells" :key="cell.key" :class="['today-cell', `tone-${cell.tone}`]">
+          <div class="today-cell-head"><span>{{ cell.label }}</span><strong>{{ cell.entries.length }}</strong></div>
+          <ul v-if="cell.entries.length" class="today-list">
+            <li v-for="entry in cell.entries.slice(0, 5)" :key="cell.key + entry.planId + entry.at">
+              <button type="button" class="today-link" :title="entry.reason ?? entry.planTitle" @click="selectPlanById(entry.planId)">{{ entry.planTitle }}</button>
+              <small>{{ relativeTime(entry.at) }}</small>
+            </li>
+          </ul>
+          <p v-else class="today-cell-empty">—</p>
+          <p v-if="cell.entries.length > 5" class="today-more">还有 {{ cell.entries.length - 5 }} 条</p>
+        </article>
+      </div>
+      <p v-if="activity && !activityHasFacts" class="today-note">今天还没有执行完成、合并或阻塞的记录。事件保留窗口之外的历史不在统计范围内。</p>
+    </section>
 
     <nav class="workbench-mobile-tabs" aria-label="Workbench panels">
       <button type="button" :class="{ active: mobilePanel === 'history' }" @click="mobilePanel = 'history'">History</button>
@@ -219,6 +274,16 @@ onBeforeUnmount(() => { requestScope.invalidate(); closeEvents(); });
 .workbench-header { display: flex; justify-content: space-between; align-items: flex-end; max-width: 1380px; margin: 0 auto 22px; }
 .workbench-header h1 { margin: 6px 0 5px; font-size: 26px; letter-spacing: -.05em; }.workbench-header p { margin: 0; color: #8490a2; font-size: 11px; }.workbench-header-actions { display: flex; align-items: center; gap: 12px; }.workbench-header-actions .el-button { font-size: 11px; }.workbench-sync { display: flex; align-items: center; gap: 6px; color: #72917f; font-size: 10px; }.workbench-sync i { width: 6px; height: 6px; border-radius: 50%; background: #42b77e; box-shadow: 0 0 0 4px #e3f5eb; }
 .workbench-alert { display: flex; align-items: center; gap: 8px; max-width: 1380px; margin: 0 auto 12px; padding: 10px 12px; border: 1px solid #e6d9b8; border-radius: 7px; background: #fffaf0; color: #906e28; font-size: 11px; }.workbench-alert.danger { border-color: #f0cdd1; background: #fff6f7; color: #a84d59; }.workbench-alert .el-button { margin-left: auto; padding: 0; font-size: 10px; }
+.workbench-today { max-width: 1380px; margin: 0 auto 14px; padding: 13px 15px; border: 1px solid #e1e7ef; border-radius: 9px; background: #fff; }
+.today-heading { display: flex; align-items: baseline; gap: 9px; margin-bottom: 11px; }.today-heading .eyebrow { color: #8492a8; font-size: 9px; font-weight: 800; letter-spacing: .16em; }.today-heading strong { color: #3d4d65; font-size: 13px; }.today-heading small { color: #a3aebb; font-size: 9px; }
+.today-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.today-cell { min-width: 0; padding: 9px 10px; border: 1px solid #edf0f4; border-radius: 7px; background: #fbfcfe; }.today-cell-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #7c8ba1; font-size: 9px; font-weight: 800; letter-spacing: .04em; }.today-cell-head strong { color: #4d5f7a; font-size: 14px; }
+.today-cell.tone-done { border-color: #d8ecdf; background: #f7fdf9; }.today-cell.tone-merged { border-color: #d9e5fb; background: #f7faff; }.today-cell.tone-blocked { border-color: #f2dade; background: #fff8f9; }
+.today-list { display: grid; gap: 5px; margin: 9px 0 0; padding: 0; list-style: none; }.today-list li { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+.today-link { overflow: hidden; padding: 0; border: 0; background: none; color: #5b83cf; cursor: pointer; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }.today-link:hover { text-decoration: underline; }
+.today-list small { flex: 0 0 auto; color: #a8b2c0; font-size: 8px; }.today-cell-empty { margin: 9px 0 0; color: #b5bfca; font-size: 10px; }.today-more { margin: 6px 0 0; color: #9aa6b5; font-size: 8px; }
+.today-empty, .today-note { margin: 0; color: #98a4b3; font-size: 10px; }.today-empty { display: flex; align-items: center; gap: 6px; }.today-note { margin-top: 11px; }
+@media (max-width: 900px) { .today-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .workbench-layout { display: grid; grid-template-columns: 260px minmax(500px, 1fr) 280px; min-height: calc(100vh - 175px); max-width: 1380px; margin: auto; border: 1px solid #e1e7ef; border-radius: 10px; overflow: hidden; background: #fff; box-shadow: 0 8px 28px rgba(30, 48, 78, .045); }
 .workbench-history { min-width: 0; padding: 18px 12px; border-right: 1px solid #e8edf3; background: #fafbfd; }.workbench-panel-heading { display: flex; align-items: flex-start; justify-content: space-between; padding: 0 7px 14px; border-bottom: 1px solid #e8edf3; }.workbench-panel-heading h2 { margin: 5px 0 0; color: #3b4a61; font-size: 14px; }.history-count { min-width: 22px; padding: 4px 6px; border-radius: 10px; background: #eaf1ff; color: #5277c7; font-size: 9px; text-align: center; }.history-list { display: grid; gap: 5px; padding-top: 12px; }.history-item, .workspace-project { display: flex; align-items: center; width: 100%; gap: 8px; padding: 9px 7px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: #607087; cursor: pointer; text-align: left; }.history-item:hover, .history-item.selected { border-color: #d8e3f8; background: #f1f6ff; }.history-icon { display: grid; place-items: center; width: 25px; height: 25px; flex: 0 0 25px; border-radius: 5px; background: #edf3ff; color: #5b80d9; }.history-copy { min-width: 0; flex: 1; }.history-copy strong, .history-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.history-copy strong { color: #4b5b72; font-size: 10px; }.history-copy small { margin-top: 3px; color: #9ba6b5; font-size: 8px; }.history-status { width: 6px; height: 6px; flex: 0 0 6px; border-radius: 50%; background: #a8b2c0; }.history-status.tone-info { background: #5684ed; }.history-status.tone-warning { background: #d5a33b; }.history-status.tone-success { background: #3db27d; }.history-status.tone-danger { background: #d65c67; }.workspace-project-list { display: grid; gap: 5px; padding: 12px 0 8px; border-bottom: 1px solid #e8edf3; }.workspace-project { padding: 7px; }.workspace-project > span:nth-child(2) { min-width: 0; flex: 1; }.workspace-project strong, .workspace-project small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.workspace-project strong { color: #52647e; font-size: 10px; }.workspace-project small { margin-top: 3px; color: #9da8b7; font-size: 8px; }.workspace-project-icon { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 5px; background: #edf3ff; color: #5a80dd; }
 .plan-inspector { min-width: 0; padding: 25px 35px 30px; overflow: auto; }.inspector-content { max-width: 760px; margin: auto; }.inspector-topline { display: flex; align-items: center; justify-content: space-between; }.inspector-title { display: flex; align-items: center; gap: 12px; margin: 18px 0 10px; }.inspector-plan-icon { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 9px; background: #eaf1ff; color: #4d7ce4; }.inspector-title h2 { margin: 0 0 5px; color: #26354b; font-size: 18px; letter-spacing: -.03em; }.inspector-title code, .inspector-scope-grid code, .context-facts code { color: #7185a7; font: 9px ui-monospace, monospace; }.inspector-summary { display: flex; flex-wrap: wrap; gap: 13px; padding: 11px 0 19px; border-bottom: 1px solid #edf0f4; color: #98a4b4; font-size: 9px; }.inspector-summary span { display: flex; align-items: center; gap: 5px; }.inspector-section { padding: 19px 0; border-bottom: 1px solid #edf0f4; }.inspector-section-heading { display: flex; align-items: center; gap: 8px; margin-bottom: 11px; }.inspector-section-heading > span { color: #85a0dc; font-size: 9px; font-weight: 800; letter-spacing: .1em; }.inspector-section-heading strong { color: #56657b; font-size: 11px; }.inspector-section-heading small { margin-left: auto; color: #a3aebb; font-size: 9px; }.inspector-goal { margin: 0; color: #627188; font-size: 11px; line-height: 1.65; }.inspector-check-list { display: grid; gap: 6px; padding: 0; margin: 12px 0 0; list-style: none; }.inspector-check-list li { display: flex; align-items: flex-start; gap: 6px; color: #7a8798; font-size: 10px; line-height: 1.45; }.inspector-check-list svg { flex: 0 0 auto; margin-top: 1px; color: #38ad7c; }.inspector-task-list { display: grid; gap: 6px; }.inspector-task { display: flex; align-items: center; gap: 9px; padding: 9px; border: 1px solid #edf0f4; border-radius: 6px; }.inspector-task > span { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: #f0f4fa; color: #7890b1; font-size: 9px; }.inspector-task div { min-width: 0; }.inspector-task strong, .inspector-task small { display: block; }.inspector-task strong { color: #64748a; font-size: 10px; }.inspector-task small { margin-top: 3px; color: #a2adba; font-size: 9px; }.inspector-note { margin: 11px 0 0; color: #98a4b4; font-size: 9px; line-height: 1.6; }.inspector-note strong { color: #64748a; }.inspector-scope-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }.inspector-scope-grid label, .context-facts span { display: block; margin-bottom: 7px; color: #a3acb9; font-size: 8px; font-weight: 800; letter-spacing: .1em; }.inspector-scope-grid code { display: block; margin-bottom: 5px; padding: 5px 7px; border-radius: 3px; background: #f5f7fb; }.inspector-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 20px; }.inspector-actions .el-button { font-size: 10px; }.action-note { display: flex; align-items: center; gap: 5px; color: #a27b2b; font-size: 10px; }

@@ -32,7 +32,7 @@ export type ModelBackendCatalog = {
 
 export type ProjectSettings = {
   concurrency: {
-    /** @deprecated Kept for persisted configuration compatibility; Runs are no longer concurrency-limited. */
+    /** 同一 Project 同时可跑的 Run 上限（占执行槽位的状态见 EXECUTION_SLOT_RUN_STATUSES）；由 dispatcher 在派发前判定。 */
     maxParallelRuns: number;
     defaultTimeoutMs: number;
     executionTimeoutMs: number;

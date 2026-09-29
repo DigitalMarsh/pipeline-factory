@@ -13,9 +13,9 @@
  *      顺手把 snapshot 换成 live project 会让历史 Plan 悄悄改用新配置。
  *   2) PlanService 是在构造函数里 **new** 出来的（不是注入）。它的 store 来自 options.store。
  *      改 PlanService 的构造签名要同时改这里与 ExplorerThreadService。
- *   3) 并发上限走 globalConcurrency，默认值在构造函数里；Capacity 相关的判定决定了
- *      Plan 是留在 ENQUEUED 还是被派发。调整上限时注意它同时影响"同一 Project 的并发"与
- *      "全局并发"两层。
+ *   3) **Scheduler 本身不做并发判定**：容量、依赖与冲突都在 PlanDispatchCoordinator 的
+ *      evaluateWait 里于派发**之前**决定，Scheduler.start 只负责"已经被允许的这一次派发"。
+ *      在这里再加一道上限会让同一个规则有两处实现（历史上就是那样，结果两处都不生效）。
  *   4) status → 状态的推进一律走 updatePlanStatus（先写事实再追加事件）。这里出现的几处
  *      BLOCKED 是 Hook 失败、取消、前置条件不满足三条路径，各自带不同的 attentionReason——
  *      文案是排障线索，不要统一。
@@ -25,6 +25,7 @@
  *   6) 前置条件校验（RUN_PREREQUISITES_UNSATISFIED）在派发**之前**抛出，是唯一阻止
  *      "用到未注册的验证命令"的关口。
  */
+import { existsSync } from "node:fs";
 import { updatePlanStatus } from "../plan/status-transition.js";
 import { missingVerificationCommands } from "../plan/contract.js";
 import { PlanService } from "../plan/service.js";
@@ -53,7 +54,6 @@ export type SchedulerOptions = {
   store: PipelineStore;
   workspace: WorkspaceAdapter;
   hooks: LifecycleHookRunner;
-  globalConcurrency?: number;
   workspaceFactory?: (snapshot: ProjectExecutionSnapshot) => WorkspaceAdapter;
   hookRunnerFactory?: (snapshot: ProjectExecutionSnapshot) => LifecycleHookRunner;
   branchNameGenerator?: RunBranchNameGenerator;
@@ -76,11 +76,6 @@ export class Scheduler {
 
   constructor(private readonly options: SchedulerOptions) {
     this.planService = new PlanService(options.store);
-  }
-
-  /** @deprecated Capacity limits are ignored; this remains for old configuration readers. */
-  globalConcurrency(): number | undefined {
-    return undefined;
   }
 
   /** 暴露 Executor Loop 的控制端口，供 API 的暂停、恢复和终止按钮调用。 */
@@ -213,6 +208,56 @@ export class Scheduler {
       if (plan) updatePlanStatus(this.options.store, plan, { status: "BLOCKED", attentionReason: `Run cancelled: ${cancellationReason}`, lastEventAt: this.options.store.now() }, `Run cancelled: ${cancellationReason}`);
     }
     return run;
+  }
+
+  /**
+   * 释放某个 Run 的 Worktree 并执行一次 cleanup hook，**不改任何状态**。
+   *
+   * 为什么需要它：`finish()` 只在取消/显式退出时被调用，而"人工合并完成"这条路以前只翻 Plan
+   * 状态（`MergeService.confirmMerged`）——于是合并后的 Worktree 永远留在磁盘上，
+   * `storage.worktreeRoot` 只增不减。合并是"这个 Run 的代码已经进主干"的确定信号，此刻回收目录
+   * 是安全的；**分支保留**（审计与回滚要看它）。
+   *
+   * 三条语义：
+   *   1) **幂等**：成功后把 `run.workspacePath` 清空，重复调用（或之后的 finish）不会再删一次；
+   *      目录本来就不存在时直接算作已回收，不报错（`finish()` 可能先删过）。
+   *   2) **失败不回滚任何状态**，只记 `attentionReason` 与 journal —— 与 cleanup hook 既有的
+   *      "失败=提醒，不=阻塞"一致（见 run/hooks.ts 维护提示 1）。
+   *   3) cleanup hook **只在这里或 finish() 里跑一次**：两条路径都以 `workspacePath` 是否还在为准。
+   */
+  async releaseWorkspace(runId: string, hooks: { cleanup?: HookDefinition | undefined } = {}): Promise<{ released: boolean; worktreeRemoved: boolean; cleanupNeedsAttention: boolean; error?: string }> {
+    const run = this.run(runId);
+    if (!run.workspacePath) return { released: false, worktreeRemoved: false, cleanupNeedsAttention: false };
+    const revision = this.options.store.getRevision(run.planId, run.planRevision);
+    const workspaceAdapter = this.workspaceAdapterFor(revision);
+    const hookRunner = this.hookRunnerFor(revision);
+    // 与 finish() 同一条优先级：冻结快照里的 hook 优先，其次才是调用方传进来的当前 Project 设置。
+    const executionHooks = revision?.projectConfigSnapshot?.settings.hooks ?? hooks;
+    const thread = this.options.store.getExecutionThread(run.executionThreadId);
+
+    let worktreeRemoved = false;
+    let error: string | undefined;
+    if (!existsSync(run.workspacePath)) {
+      worktreeRemoved = true;
+    } else {
+      try {
+        await workspaceAdapter.remove({ path: run.workspacePath, branch: run.branch, baseCommit: run.baseCommit });
+        worktreeRemoved = true;
+      } catch (caught) {
+        error = caught instanceof Error ? caught.message : String(caught);
+      }
+    }
+    if (worktreeRemoved) this.options.store.saveRun({ ...run, workspacePath: null });
+    if (thread) this.append(thread.id, worktreeRemoved ? "HOOK_COMPLETED" : "HOOK_FAILED", { hook: "worktree-release", exitReason: "merged", worktreeRemoved, ...(error ? { error } : {}) });
+
+    const cleanupResult = await hookRunner.runCleanup(executionHooks.cleanup, { projectId: run.projectId, runId: run.id, workspacePath: run.workspacePath, branch: run.branch, baseCommit: run.baseCommit, exitReason: "merged" });
+    this.recordHookExecutions(run.id, cleanupResult);
+    if (thread) this.append(thread.id, cleanupResult.status === "failed" ? "HOOK_FAILED" : cleanupResult.status === "skipped" ? "HOOK_SKIPPED" : "HOOK_COMPLETED", { hook: "cleanup", exitReason: "merged" });
+    if (cleanupResult.needsAttention) {
+      const plan = this.options.store.getPlan(run.planId);
+      if (plan) this.options.store.updatePlan({ ...plan, attentionReason: "cleanup hook failed after merge", lastEventAt: this.options.store.now() });
+    }
+    return { released: true, worktreeRemoved, cleanupNeedsAttention: Boolean(cleanupResult.needsAttention), ...(error ? { error } : {}) };
   }
 
   private workspaceAdapterFor(revision: PlanRevisionV2 | undefined): WorkspaceAdapter {

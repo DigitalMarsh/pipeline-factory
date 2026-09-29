@@ -779,7 +779,8 @@ describe("Pipeline Factory v4 API", () => {
     plans.enqueue(first.id);
     plans.confirm(second.id, "user-1");
     plans.enqueue(second.id);
-    const scheduler = new Scheduler({ globalConcurrency: 1, store, workspace: { create: async ({ runId }) => ({ path: `/tmp/${runId}`, branch: `factory/${runId}`, baseCommit: "abc" }), remove: async () => undefined }, hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })) });
+    // 没有 config 时全局容量不限（缺省=不限制）；容量语义的用例在 dispatch-coordinator.test.ts。
+    const scheduler = new Scheduler({ store, workspace: { create: async ({ runId }) => ({ path: `/tmp/${runId}`, branch: `factory/${runId}`, baseCommit: "abc" }), remove: async () => undefined }, hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })) });
     const app = createApp({ store, scheduler, seed: false });
     apps.push(app);
 

@@ -2,6 +2,17 @@
  * 模块职责：把已确认并入队的 Plan 转换为可恢复的自动调度状态。
  *
  * 协调器只负责排队、依赖/容量/冲突判断和验证唤醒，不改变 PlanRevision，也不执行合并。
+ *
+ * 维护提示：
+ *   1) **等待原因的顺序就是优先级**：依赖 → 缺命令 → 全局容量 → 项目容量 → 冲突。
+ *      判定顺序决定了界面显示哪一条，也决定了"谁先被放行"；改顺序要同时想清楚这两件事。
+ *   2) **容量只算占槽位的状态**（EXECUTION_SLOT_RUN_STATUSES）。READY_FOR_VERIFY / MERGE_READY
+ *      已经在等人，把它们算进容量会让"验证完等合并"的 Run 一直堵着后面的 Plan。
+ *   3) **同一个 Plan 同一 Revision 的既有 Run 不与自己抢名额**：那条路径是重试/续跑，
+ *      算进去会让重试永远等不到空位。
+ *   4) 容量上限的缺省是"不限制"：`globalConcurrency` 未传即不限，`projectConfigSnapshot`
+ *      缺失（旧 Revision）时不做 Project 级判定。**不要给缺省编一个数字**——那会在升级后
+ *      悄悄改变历史行为的可重跑性。
  */
 import { EXECUTION_SLOT_RUN_STATUSES } from "../project/project.js";
 import { missingVerificationCommands } from "../plan/contract.js";
@@ -72,6 +83,11 @@ export type PlanDispatchCoordinatorOptions = {
   store: PipelineStore;
   plans: PlanService;
   scheduler: Scheduler;
+  /**
+   * 全局同时可跑多少个 Run（占执行槽位的状态见 EXECUTION_SLOT_RUN_STATUSES）。
+   * 缺省 `undefined` 表示**不限制**——这与"配置里没写就等于不限"一致，不要把缺省当成某个数字。
+   * Project 级上限来自冻结快照的 `settings.concurrency.maxParallelRuns`（快照缺失时不判定）。
+   */
   globalConcurrency?: number;
   verify?: (run: Run, revision: PlanRevisionV2) => Promise<VerificationRun>;
 };
@@ -321,11 +337,11 @@ export class PlanDispatchCoordinator {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       const refreshed = this.options.store.getPlan(plan.id) ?? plan;
+      // 只有"缺命令"这一条会在 start 时才暴露（它依赖冻结快照的校验）。容量与冲突都在
+      // evaluateWait 里**派发前**判定，所以这里不再需要匹配 Scheduler 的并发错误文本。
       const waitAfterFailure = /RUN_PREREQUISITES_UNSATISFIED|missing registered commands/i.test(message)
         ? { reason: "NEEDS_CONFIGURATION" as const, message }
-        : /concurrency limit reached/i.test(message)
-          ? this.evaluateWait(refreshed, revision)
-          : undefined;
+        : undefined;
       if (waitAfterFailure) {
         this.saveState({ ...this.stateForPlan(current, "WAITING", waitAfterFailure.reason, waitAfterFailure.message), phase: "WAITING" });
       } else {
@@ -353,10 +369,25 @@ export class PlanDispatchCoordinator {
       if (missingCommands.length > 0) return { reason: "NEEDS_CONFIGURATION", message: `Missing registered commands: ${missingCommands.join(", ")}` };
     }
 
+    // 活跃 Run 只算**占用执行槽位**的状态（STARTING / IN_PROGRESS / VERIFYING，见 EXECUTION_SLOT_RUN_STATUSES）：
+    // READY_FOR_VERIFY 与 MERGE_READY 已经在等人，不该继续占着名额。
     const activeRuns = this.options.store.listRuns().filter((run) => EXECUTION_SLOT_RUN_STATUSES.has(run.status));
+    // 同一个 Plan 同一 Revision 的既有 Run 属于"重试/续跑"，不与自己抢名额，否则重试会被自己的 Run 卡死。
+    const otherActiveRuns = activeRuns.filter((run) => !(run.planId === plan.id && run.planRevision === revision.revision));
+
+    const globalLimit = this.options.globalConcurrency;
+    if (globalLimit !== undefined && otherActiveRuns.length >= globalLimit) {
+      return { reason: "WAITING_GLOBAL_CAPACITY", message: `Waiting for a free execution slot (${otherActiveRuns.length}/${globalLimit} in use)` };
+    }
+    const projectLimit = snapshot?.settings.concurrency.maxParallelRuns;
+    const projectActive = otherActiveRuns.filter((run) => run.projectId === plan.projectId).length;
+    if (projectLimit !== undefined && projectActive >= projectLimit) {
+      return { reason: "WAITING_PROJECT_CAPACITY", message: `Waiting for a free slot in this Project (${projectActive}/${projectLimit} in use)` };
+    }
+
     const conflictKeys = new Set(revision.contract.conflictKeys);
     if (conflictKeys.size > 0) {
-      const conflictingRun = activeRuns.find((run) => {
+      const conflictingRun = otherActiveRuns.find((run) => {
         if (run.planId === plan.id) return false;
         const runRevision = this.options.store.getRevision(run.planId, run.planRevision);
         return Boolean(runRevision?.contract.conflictKeys.some((key) => conflictKeys.has(key)));

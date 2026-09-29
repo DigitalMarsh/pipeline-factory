@@ -113,6 +113,21 @@ export function parsePlanValidationIssues(value: unknown): PlanValidationIssue[]
 
 const LEGACY_AUTO_TITLES = new Set(["New Explorer", "Previous exploration", "ExplorerThread"]);
 
+/**
+ * 探索线程的默认标题：**创建时刻**（本地时间，分钟精度）。
+ *
+ * 为什么用时间而不是"内容摘要"：探索线程是"一天里开的一轮探索"这个管理单位，用户要能一眼看出
+ * 它是哪天哪一刻开的（见 ExplorerService.create）。内容摘要退到副标题位置，由界面另行展示。
+ * 生成出来的标题走 `MANUAL/GENERATED`（见 threadTitleMetadata），因此**不会再被自动起标题覆盖**——
+ * 这是有意的：时间就是它的名字，不是占位符。
+ */
+export function explorerTimestampTitle(createdAt: string): string {
+  const date = new Date(createdAt);
+  if (Number.isNaN(date.getTime())) return createdAt;
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
 /** 判定标题来源：空标题与历史自动标题都归为 AUTO/PLACEHOLDER，其余视为用户手填。 */
 export function threadTitleMetadata(title: string | undefined, createdAt: string): { title: string; titleSource: ExplorerTitleSource; titleStatus: ExplorerTitleStatus } {
   const normalized = title?.trim();

@@ -23,7 +23,7 @@
  *      对应"新线程成为当前"和"删除后指针回退"。
  */
 import { projectPlaceholderExplorerTitle, selectCurrentExplorer } from "./thread-selection.js";
-import { defaultExplorerPlan, defaultThreadContextSummary } from "../store/records.js";
+import { defaultExplorerPlan, defaultThreadContextSummary, explorerTimestampTitle } from "../store/records.js";
 import type { PipelineStore } from "../store/pipeline-store.js";
 import type { Project } from "../project/project.js";
 import type { CreateExplorerInput, ExplorerDeletionInput, ExplorerDeletionSummary, ExplorerPlan, ExplorerThread, Run } from "../index.js";
@@ -47,14 +47,17 @@ export class ExplorerService {
   create(input: CreateExplorerInput): ExplorerThread {
     const origin = input.originThreadId ? this.store.getThread(input.originThreadId) : undefined;
     if (input.originThreadId && (!origin || origin.projectId !== input.projectId)) throw new Error("Origin Explorer does not belong to this project");
+    // 默认标题是**创建时刻**（见 explorerTimestampTitle）：时间就是它的名字，因此按 MANUAL 落库、
+    // 不再被自动起标题覆盖。显式传入的标题优先（用户手填或从别的线程继承而来）。
+    const createdAt = input.createdAt ?? this.store.now();
     let thread = this.store.saveThread({
       id: this.store.nextId("explorer"),
       projectId: input.projectId,
       parentThreadId: null,
-      title: input.title?.trim() || "New Explorer",
+      title: input.title?.trim() || explorerTimestampTitle(createdAt),
       contextMode: origin ? "EXPLICIT_CONTINUATION" : "FRESH",
       originThreadId: origin?.id ?? null,
-      createdAt: input.createdAt,
+      createdAt,
     });
     if (thread.titleSource === "AUTO" && thread.titleStatus === "PLACEHOLDER") {
       thread = this.store.updateThread({ ...thread, title: projectPlaceholderExplorerTitle(this.store, thread), titleStatus: "GENERATED" });

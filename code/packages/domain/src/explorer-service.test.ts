@@ -27,6 +27,19 @@ describe("ExplorerService", () => {
     expect(explorers.list("project-1").map((item) => item.id)).toEqual([fresh.id, oldExplorer.id]);
   });
 
+  it("names a new Explorer after its creation time instead of a placeholder", () => {
+    const store = new InMemoryPipelineStore();
+    const explorers = new ExplorerService(store);
+
+    // 默认标题是创建时刻（本地时间、分钟精度），且按 MANUAL 落库 → 不会被自动起标题覆盖。
+    const explorer = explorers.create({ projectId: "project-1" });
+    expect(explorer.title).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+    expect(explorer).toMatchObject({ titleSource: "MANUAL", titleStatus: "GENERATED" });
+
+    // 显式标题优先（用户手填或从别的线程继承）。
+    expect(explorers.create({ projectId: "project-1", title: "  手填标题  " }).title).toBe("手填标题");
+  });
+
   it("keeps multiple active Explorers and updates only the selected Explorer", () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);

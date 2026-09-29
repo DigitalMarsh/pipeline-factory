@@ -1,5 +1,75 @@
 # Changelog
 
+## 2026-09-29 — 容量闸门接回活路径、今日活动、合并后回收 Worktree、探索线程按时间命名
+
+### 为什么做
+
+调度里有两类"死状态"和两处"只增不减"：
+
+- `WAITING_PROJECT_CAPACITY` / `WAITING_GLOBAL_CAPACITY` 在联合类型里声明、在前端有文案与测试
+  （`statusVisual.ts`），但 `PlanDispatchCoordinator.evaluateWait` **从来没有容量判定**，
+  也没有任何代码抛 `concurrency limit reached`；`Scheduler.globalConcurrency()` 恒返回 `undefined`
+  且被标 deprecated，`maxParallelRuns` 也标了 deprecated。选项 `globalConcurrency` 声明了却没人读。
+- 合并后不回收 Worktree：`Scheduler.finish()` 只在取消/显式退出时被调用，而 `confirmMerged`
+  只翻 Plan 状态——`storage.worktreeRoot` 因此只增不减。
+- Workbench 只能回答"现在有什么"，回答不了"今天做了什么"（原始需求里那条"今日已完成任务清单"）。
+
+### Changed
+
+**容量闸门（行为变化，请留意）**
+
+- `evaluateWait` 新增两段判定：全局活跃 Run ≥ `runtime.globalConcurrency` → `WAITING_GLOBAL_CAPACITY`；
+  同 Project 活跃 Run ≥ 冻结快照的 `settings.concurrency.maxParallelRuns` → `WAITING_PROJECT_CAPACITY`。
+- 判定顺序（即优先级）固定为：依赖 → 缺命令 → 全局容量 → 项目容量 → 冲突，写进了文件头维护提示。
+- **只算占槽位的状态**（`EXECUTION_SLOT_RUN_STATUSES`）：`READY_FOR_VERIFY` / `MERGE_READY` 已经在等人，
+  不算在容量内，否则"验证完等合并"的 Run 会堵住后面的 Plan。
+- **同一 Plan 同一 Revision 的既有 Run 不与自己抢名额**：那条路径是重试/续跑，算进去会让重试永远排队。
+- 缺省的语义是"不限制"：`globalConcurrency` 未传即不限，`revision.projectConfigSnapshot` 缺失
+  （旧 Revision）时不做 Project 级判定——**不给缺省编一个数字**，否则升级会悄悄改变历史行为的可重跑性。
+- 删掉 `Scheduler.globalConcurrency()` 与 `SchedulerOptions.globalConcurrency`（声明了却没人用），
+  以及 `dispatchOne` 里匹配 `concurrency limit reached` 的死分支；`maxParallelRuns` 的
+  `@deprecated` 注释改回真实语义。
+- **行为变化**：原本"确认即并发跑"，现在会按配置排队。两个用例因此**翻转**——原来断言
+  "不设上限"，现在断言"等待并让位"（`dispatch-coordinator.test.ts`）。
+
+**今日活动（新增）**
+
+- `projections/activity.ts` + `GET /api/v4/projects/:projectId/activity?date=`：四组事实 ——
+  **今日执行完成**（当天首次进入 MERGE_READY）、**今日已合并**（当天进入 MERGED）、
+  **今日失败或阻塞**、**跨日仍在运行**。只读事件与 Run，**不新增表**。
+- 执行完成与人工合并是两个时点，界面上分开显示——只统计"今日已合并"会把"跑了但没合"整个漏掉。
+- 按**本地时区**切天；`2026-02-31` 这类会被 `Date` 静默滚动的输入被拒绝，而不是汇报一个别的一天。
+- Workbench 顶部加「今日」条（四格 + 前 5 条可点进对应 Plan）；取不到时降级为一行提示，不阻塞整页。
+
+**合并后回收 Worktree（新增）**
+
+- `Scheduler.releaseWorkspace(runId, hooks)`：删 Worktree（**分支保留**）+ 跑一次 cleanup hook，
+  **不改任何状态**；失败只写 `attentionReason` 与 journal。
+- `confirmMerged` 成功后由 Merge 路由调用它，回收结果随响应返回。
+- 幂等：成功后清空 `run.workspacePath`；目录本就不存在时算作已回收（`finish()` 可能先删过），
+  不会把"已经没了"报成失败。
+
+**探索线程按时间命名（新增）**
+
+- `explorerTimestampTitle()` + `ExplorerService.create` 的默认标题改为**创建时刻**
+  （本地 `YYYY-MM-DD HH:mm`），并按 `MANUAL` 落库——时间就是它的名字，不再被自动起标题覆盖。
+  显式传入的标题仍然优先。
+- 保留 `projectPlaceholderExplorerTitle` 那条路径：历史/注册线程仍可能是 PLACEHOLDER。
+
+### 未做（明确记账）
+
+- 3.4 的界面部分（ThreadRail 按"今天 / 昨天 / 更早"分组）与 3.5 术语统一、3.6 任务中心四分区：
+  均为纯界面改动，本轮未做。
+- 2.4 冲突键派生策略、2.5 `verification.suites` 按 tag 选验证子集：见上一条 CHANGELOG 的记账。
+
+### 验证
+
+- 定向用例全绿：`dispatch-coordinator.test.ts`（15，含 3 条新容量用例）、`m3-run.test.ts`（13，
+  含 `releaseWorkspace` 的回收/幂等/分支保留）、`projections/activity.test.ts`（4）、
+  `explorer-service.test.ts`（6，含时间命名）、`apps/api/src/server.test.ts`（47）。
+- `pnpm verify` 本轮**未能运行**（命令被权限分类器拦截，见会话记录）；`tsc -p packages/domain`、
+  `tsc -p apps/api`、`vue-tsc -p apps/web` 单独跑均无错误。
+
 ## 2026-09-29 — Plan 契约去掉"会说谎的字段"，依赖闸门变成可达
 
 ### 为什么做

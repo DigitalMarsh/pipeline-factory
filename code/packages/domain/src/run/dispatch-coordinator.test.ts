@@ -22,10 +22,10 @@ const coordinatorModule = domain as unknown as {
   };
 };
 
-function schedulerFor(store: domain.PipelineStore, globalConcurrency?: number): Scheduler {
+function schedulerFor(store: domain.PipelineStore): Scheduler {
+  // 容量不再由 Scheduler 判定（见 run/scheduler.ts 维护提示 3）：这里只造一个能建 worktree 的 Scheduler。
   return new Scheduler({
     store,
-    ...(globalConcurrency === undefined ? {} : { globalConcurrency }),
     workspace: { create: async ({ runId }) => ({ path: `/tmp/${runId}`, branch: `factory/${runId}`, baseCommit: "abc" }), remove: async () => undefined },
     hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
   });
@@ -125,20 +125,29 @@ describe("PlanDispatchCoordinator", () => {
     }
   });
 
-  it("starts Runs without applying a global concurrency cap", async () => {
+  // 容量闸门本轮**重新接通**（此前 PlanDispatchCoordinator 声明了 WAITING_*_CAPACITY 却从不判定，
+  // 前端也一直在渲染这两个状态）。这两条用例原先断言"不设上限"，现在断言上限生效。
+  it("waits for a free global execution slot instead of exceeding the cap", async () => {
     const store = new InMemoryPipelineStore();
     const plans = new PlanService(store);
     const first = createPlan(store, plans, "First");
     const second = createPlan(store, plans, "Second");
-    const coordinator = new coordinatorModule.PlanDispatchCoordinator({ store, plans, scheduler: schedulerFor(store, 1), globalConcurrency: 1 });
+    const coordinator = new coordinatorModule.PlanDispatchCoordinator({ store, plans, scheduler: schedulerFor(store), globalConcurrency: 1 });
 
     await dispatch(coordinator, plans, first.id);
+    const waiting = await dispatch(coordinator, plans, second.id);
+    expect(waiting.state).toMatchObject({ status: "WAITING", waitReason: "WAITING_GLOBAL_CAPACITY" });
+    expect(store.listRuns()).toHaveLength(1);
+
+    // 槽位释放后重新唤醒：Run 进入终态（不再是 EXECUTION_SLOT_RUN_STATUSES 的一员）即可放行。
+    const activeRun = store.listRuns()[0]!;
+    store.saveRun({ ...activeRun, status: "READY_FOR_VERIFY" });
     const started = await dispatch(coordinator, plans, second.id);
     expect(started.state).toMatchObject({ status: "RUNNING", waitReason: null });
     expect(store.listRuns()).toHaveLength(2);
   });
 
-  it("starts Runs without applying a Project concurrency cap", async () => {
+  it("waits for a free slot in the Project instead of exceeding maxParallelRuns", async () => {
     const store = new InMemoryPipelineStore();
     new ProjectService(store).create({ id: "project-1", name: "Project", repoRoot: "/repo/project-1", defaultBranch: "main", worktreeRoot: "/tmp/project-1-worktrees", settings: { concurrency: { maxParallelRuns: 1 }, commands: [{ commandId: "project.test", argv: ["true"] }, { commandId: "project.typecheck", argv: ["true"] }] } });
     const plans = new PlanService(store);
@@ -147,9 +156,23 @@ describe("PlanDispatchCoordinator", () => {
     const coordinator = new coordinatorModule.PlanDispatchCoordinator({ store, plans, scheduler: schedulerFor(store) });
 
     await dispatch(coordinator, plans, first.id);
-    const started = await dispatch(coordinator, plans, second.id);
-    expect(started.state).toMatchObject({ status: "RUNNING", waitReason: null });
-    expect(store.listRuns()).toHaveLength(2);
+    const waiting = await dispatch(coordinator, plans, second.id);
+    expect(waiting.state).toMatchObject({ status: "WAITING", waitReason: "WAITING_PROJECT_CAPACITY" });
+    expect(store.listRuns()).toHaveLength(1);
+  });
+
+  it("does not let a Run block its own retry on the same revision", async () => {
+    const store = new InMemoryPipelineStore();
+    const plans = new PlanService(store);
+    const plan = createPlan(store, plans, "Retryable");
+    const coordinator = new coordinatorModule.PlanDispatchCoordinator({ store, plans, scheduler: schedulerFor(store), globalConcurrency: 1 });
+
+    const started = await dispatch(coordinator, plans, plan.id);
+    expect(started.state).toMatchObject({ status: "RUNNING" });
+    // 同一 Plan 同一 Revision 的既有 Run 属于续跑：容量已满也不该把它自己卡在等待里。
+    const again = await dispatch(coordinator, plans, plan.id);
+    expect(again.state).toMatchObject({ status: "RUNNING", waitReason: null });
+    expect(store.listRuns()).toHaveLength(1);
   });
 
   it("revises a configuration-blocked dispatch with the current Project snapshot", async () => {
@@ -183,7 +206,7 @@ describe("PlanDispatchCoordinator", () => {
       const firstStore = new SqlitePipelineStore(databasePath);
       const plans = new PlanService(firstStore);
       const plan = createPlan(firstStore, plans, "Persist dispatch");
-      const coordinator = new coordinatorModule.PlanDispatchCoordinator({ store: firstStore, plans, scheduler: schedulerFor(firstStore, 0), globalConcurrency: 0 });
+      const coordinator = new coordinatorModule.PlanDispatchCoordinator({ store: firstStore, plans, scheduler: schedulerFor(firstStore) });
       const result = await dispatch(coordinator, plans, plan.id);
       expect(result.state).toMatchObject({ status: "RUNNING", phase: "RUN_STARTED" });
       firstStore.close();

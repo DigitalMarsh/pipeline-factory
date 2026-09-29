@@ -3,7 +3,7 @@
  *   注册路由、接管静态托管。
  *
  * 本文件之外的分工（`createApp` 读起来就是这份清单）：
- *   - `routes/index.ts` —— 98 条路由的唯一注册入口；每个域的 HTTP 处理器在 `routes/<域>.ts`。
+ *   - `routes/index.ts` —— 99 条路由的唯一注册入口；每个域的 HTTP 处理器在 `routes/<域>.ts`。
  *   - `projections/` —— 无 IO 的投影函数（计划生命周期、workbench、运行遥测、agent loop、explorer）。
  *   - `runtime/` —— 默认组件的构造与需要 IO 的适配：`git.ts`（子进程）、`scheduler.ts`、
  *     `verification.ts`、`model-gateway.ts`、`commands.ts`、`loop-control.ts`。
@@ -66,7 +66,7 @@ import { createDefaultScheduler } from "./runtime/scheduler.js";
 import { createDefaultVerificationExecutor } from "./runtime/verification.js";
 import { createModelGateway } from "./runtime/model-gateway.js";
 import { createModelCatalog } from "./runtime/model-catalog.js";
-// 全部 98 条路由已分域搬进 `routes/`，组合根不再直接持有任何 zod schema、任何投影函数、
+// 全部 99 条路由已分域搬进 `routes/`，组合根不再直接持有任何 zod schema、任何投影函数、
 // 任何 SSE 传输件——它们的 import 随各自的 route 文件走了。**本文件剩余的 import 只服务于
 // 组装**（构造 Service / 起 store / 接管静态托管）。
 // 检查死 import 的唯一手段是 grep（本仓未开 `noUnusedLocals`，tsc 看不见）；
@@ -166,6 +166,8 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     store,
     plans,
     scheduler,
+    // 全局容量上限：配置里写多少就是多少（不写则 config 的缺省值 4 生效）。
+    ...(options.config ? { globalConcurrency: options.config.runtime.globalConcurrency } : {}),
     ...(verificationExecutor ? { verify: (run, revision) => verifier.verify(run, revision, verificationExecutor) } : {}),
   }) : undefined;
   if (dispatchCoordinator) void dispatchCoordinator.wake();
@@ -271,7 +273,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (!options.mcpRegistry) await mcpRegistry?.close();
   });
 
-  // ── 全部 98 条路由经一个入口按域注册（11 个 routes/*.ts + routes/index.ts）────────────
+  // ── 全部 99 条路由经一个入口按域注册（11 个 routes/*.ts + routes/index.ts）────────────
   // 每个域自己的 deps 类型在它自己的文件里（**显式 deps**：想知道 runs 依赖到 loopController 的
   // 哪一步，看 `RunRouteDeps` 就行）。这里只负责凑齐并集，不做任何变换。
   // 唯一的注入期改名是 `explorerThread: explorer`：组合根里 ExplorerThreadService 的变量名叫

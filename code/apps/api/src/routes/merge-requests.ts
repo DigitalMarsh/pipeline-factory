@@ -22,7 +22,7 @@
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import type { MergeService, PipelineStore, PlanDispatchCoordinator } from "@pipeline-factory/domain";
+import type { MergeRequest, MergeService, PipelineStore, PlanDispatchCoordinator, Scheduler } from "@pipeline-factory/domain";
 import { sourceCommitBody, targetCommitBody } from "../schemas/merge-requests.js";
 import { projectThreadParams } from "../schemas/common.js";
 
@@ -31,10 +31,29 @@ export type MergeRequestRouteDeps = {
   merger: MergeService;
   /** 可缺省：测试与只读实例不装协调器。缺省时写路径不唤醒，但库已更新。 */
   dispatchCoordinator?: PlanDispatchCoordinator | undefined;
+  /** 可缺省：缺省时合并后不回收 Worktree（只读实例与测试）。 */
+  scheduler?: Scheduler | undefined;
 };
 
+/**
+ * 合并后回收 Worktree。**只在这里做**：合并是"代码已进主干"的确定信号，而 Run 正常走完
+ * MERGE_READY 时 `Scheduler.finish()` 并不会被调用，Worktree 因此会一直留在磁盘上。
+ * 任何异常都被降级成返回值里的一条 error，不影响 MERGED 这个事实。
+ */
+async function releaseMergedWorkspace(scheduler: Scheduler, store: PipelineStore, mergeRequest: MergeRequest): Promise<{ worktreeRemoved: boolean; cleanupNeedsAttention: boolean; error?: string } | null> {
+  const run = store.getRun(mergeRequest.runId);
+  if (!run) return null;
+  try {
+    // hook 的优先级与 Scheduler.finish 一致：冻结快照优先，这里给的是当前 Project 的 cleanup 设置。
+    const result = await scheduler.releaseWorkspace(run.id, store.getProject(run.projectId)?.settings.hooks ?? {});
+    return { worktreeRemoved: result.worktreeRemoved, cleanupNeedsAttention: result.cleanupNeedsAttention, ...(result.error ? { error: result.error } : {}) };
+  } catch (error) {
+    return { worktreeRemoved: false, cleanupNeedsAttention: false, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 export function registerMergeRequestRoutes(app: FastifyInstance, deps: MergeRequestRouteDeps): void {
-  const { store, merger, dispatchCoordinator } = deps;
+  const { store, merger, dispatchCoordinator, scheduler } = deps;
 
   app.post("/api/v4/runs/:runId/merge-request", async (request, reply) => {
     const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
@@ -74,10 +93,13 @@ export function registerMergeRequestRoutes(app: FastifyInstance, deps: MergeRequ
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid merge confirmation" });
     try {
       const mergeRequest = merger.confirmMerged(params.data.mergeRequestId, body.data.targetCommit);
+      // 合并是"这个 Run 的代码已进主干"的确定信号：此时回收 Worktree（分支保留）。
+      // 失败只作为提醒返回，不回滚 MERGED 事实——与 cleanup hook 的既有语义一致。
+      const workspace = scheduler ? await releaseMergedWorkspace(scheduler, store, mergeRequest) : null;
       // MergeService owns the durable Plan transition; wake the coordinator before
       // responding so the UI never observes a stale NEEDS_REVIEW dispatch projection.
       if (dispatchCoordinator) await dispatchCoordinator.wake();
-      return { mergeRequest };
+      return { mergeRequest, ...(workspace ? { workspace } : {}) };
     }
     catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "MergeRequest cannot be confirmed" }); }
   });
