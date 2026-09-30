@@ -11,6 +11,11 @@ const commandSchema = z.object({
   commandId: z.string().min(1),
   argv: z.array(z.string().min(1)).min(1),
   environment: z.record(z.string()).default({}),
+  /**
+   * 验证 tag 词表（只对 verification 命令有意义）：Plan 的 `verification.suites` 用它挑验证子集。
+   * 播种到 Project 设置后即可在控制台里编辑；命令 ID 永远不进模型提示词。
+   */
+  tags: z.array(z.string().min(1)).default([]),
 });
 
 const mcpServerSchema = z.object({

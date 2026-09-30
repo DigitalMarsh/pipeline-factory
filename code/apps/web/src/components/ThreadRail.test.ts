@@ -352,6 +352,27 @@ describe("ThreadRail left workspace navigation", () => {
     expect(styles).toMatch(/\.explorer-list-row\s*\{[^}]*flex:\s*0 0 auto;/s);
   });
 
+  it("groups explorer threads by their creation day", async () => {
+    const now = new Date();
+    const todayAt = (hour: number) => new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, 5).toISOString();
+    const yesterdayAt = (hour: number) => new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, hour, 5).toISOString();
+    const mounted = mountRail("explorers", false, null, false, false, false, null, [
+      { id: "explorer-today", projectId: "project-1", title: "今天开的", state: "ACTIVE", contextMode: "FRESH", messageCount: 1, createdAt: todayAt(9), lastActivityAt: todayAt(9) },
+      { id: "explorer-yesterday", projectId: "project-1", title: "昨天开的", state: "COMPLETED", contextMode: "FRESH", messageCount: 2, createdAt: yesterdayAt(21), lastActivityAt: yesterdayAt(21) },
+    ] as unknown as ExplorerThread[]);
+
+    // 分组按**创建日**：线程标题本身就是创建时刻，按活动日分组会与它显示的名字自相矛盾。
+    const headings = [...mounted.host.querySelectorAll<HTMLElement>("[data-explorer-day]")];
+    expect(headings.map((heading) => heading.querySelector("span")?.textContent)).toEqual(["今天", "昨天"]);
+    expect(headings[0]?.querySelector("small")?.textContent).toBe("1");
+    // 日期头是展示层，不能顶替线程行：两行仍然可选中。
+    expect(mounted.host.querySelector('[data-explorer-id="explorer-today"]')).not.toBeNull();
+    expect(mounted.host.querySelector('[data-explorer-id="explorer-yesterday"]')).not.toBeNull();
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
   it("hides archived Explorers by default and toggles them into the list", async () => {
     const mounted = mountRail("explorers", false, null, true);
     const toggle = mounted.host.querySelector<HTMLButtonElement>("[data-explorer-filter=archived]");

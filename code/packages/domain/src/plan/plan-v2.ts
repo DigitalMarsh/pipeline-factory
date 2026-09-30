@@ -4,6 +4,7 @@
  * command id, repository identity, branch, commit or Project configuration.
  */
 import type { ProjectExecutionSnapshot } from "../project/project.js";
+import type { RegisteredCommandDefinition } from "../platform/commands.js";
 import { isRecord } from "../platform/guards.js";
 
 export type PlanArtifactMode = "CONVERSATION" | "REPOSITORY_FILE";
@@ -36,7 +37,15 @@ export type GeneratedPlanSpecV2 = {
    * `ResolvedPlanContractV2.execution`，模型不再有机会声明它们。
    */
   execution: { maxRepairAttempts?: number | undefined };
-  verification: { mode: "PROJECT_DEFAULT" | "NONE" };
+  verification: {
+    mode: "PROJECT_DEFAULT" | "NONE";
+    /**
+     * 可选：只要**项目声明过的验证 tag**（如 ["docs"]），Factory 解析成命中的命令 ID 子集。
+     * 模型仍然不能指定命令 ID——它声明的是"哪一类验证"，映射由 Factory 做。
+     * 与 mode: "NONE" 互斥（NONE 意味着不跑验证，再声明 suites 就是自相矛盾）。
+     */
+    suites?: string[] | undefined;
+  };
   merge: { strategy: "manual" | "fast-forward" | "squash"; requireHumanMerge: true };
 };
 
@@ -178,6 +187,9 @@ export function validateGeneratedPlanSpecV2(value: unknown): PlanValidationIssue
 
   const verification = objectAt(source, "verification", "验收标准与验证命令", issues);
   if (verification.mode !== "PROJECT_DEFAULT" && verification.mode !== "NONE") issue(issues, "verification.mode", verification.mode === undefined ? "REQUIRED" : "INVALID", "验收标准与验证命令", "必须为 PROJECT_DEFAULT 或 NONE。");
+  const suites = verification.suites === undefined ? [] : stringsAt(verification, "suites", "verification.suites", "验收标准与验证命令", issues);
+  if (verification.suites !== undefined && suites.length === 0) issue(issues, "verification.suites", "INVALID", "验收标准与验证命令", "如填写，必须是至少一项的字符串数组；不要用空数组表达“全部”。");
+  if (verification.suites !== undefined && verification.mode === "NONE") issue(issues, "verification.suites", "MODE_CONFLICT", "验收标准与验证命令", "verification.mode 为 NONE 时不能声明 suites。");
   if (mode === "CONVERSATION" && verification.mode !== "NONE") issue(issues, "verification.mode", "MODE_CONFLICT", "验收标准与验证命令", "CONVERSATION 模式必须为 NONE。");
 
   const merge = objectAt(source, "merge", "合并策略与人工确认", issues);
@@ -212,9 +224,34 @@ export function parseGeneratedPlanSpecV2(value: unknown): GeneratedPlanSpecV2 {
     dependencies: normalize(source.dependencies),
     conflicts: normalize(source.conflicts),
     execution: { maxRepairAttempts: typeof execution.maxRepairAttempts === "number" ? execution.maxRepairAttempts : undefined },
-    verification: { mode: verification.mode as "PROJECT_DEFAULT" | "NONE" },
+    verification: { mode: verification.mode as "PROJECT_DEFAULT" | "NONE", ...(verification.suites === undefined ? {} : { suites: normalize(verification.suites) }) },
     merge: { strategy: merge.strategy as GeneratedPlanSpecV2["merge"]["strategy"], requireHumanMerge: true },
   };
+}
+
+/**
+ * 把 Plan 声明的 suites（**tag 词表**）解析成命令 ID 子集。
+ *
+ * 三条规则都是"宁可失败也不静默改变语义"：
+ *   1) 没声明 suites → 项目默认全集（与引入 suites 之前逐字相同）。
+ *   2) 声明了项目未登记过的 tag → 抛错并列出**已登记的 tag**，让模型/用户按词表改。
+ *   3) 声明了合法 tag 但一条默认命令都没命中 → 抛错，而不是退化成一个空的验证集
+ *      （那会被记成"验证通过"式的假象）。
+ */
+function selectVerificationCommands(defaults: string[], enabledVerification: Map<string, RegisteredCommandDefinition>, suites: string[]): string[] {
+  if (suites.length === 0) return [...defaults];
+  const knownTags = new Set([...enabledVerification.values()].flatMap((command) => command.tags ?? []));
+  const unknown = suites.filter((suite) => !knownTags.has(suite));
+  if (unknown.length > 0) {
+    const declared = [...knownTags].sort().join(", ");
+    throw new Error(`Plan verification suites are not declared by this Project: ${unknown.join(", ")}. Declared tags: ${declared || "(none)"}`);
+  }
+  const selected = defaults.filter((commandId) => {
+    const tags = enabledVerification.get(commandId)?.tags ?? [];
+    return suites.some((suite) => tags.includes(suite));
+  });
+  if (selected.length === 0) throw new Error(`Plan verification suites ${suites.join(", ")} match none of the Project default verification commands (${defaults.join(", ")})`);
+  return selected;
 }
 
 export function resolvePlanContractV2(specValue: unknown, project: ProjectExecutionSnapshot, baseline: GitBaseline): ResolvedPlanContractV2 {
@@ -224,6 +261,8 @@ export function resolvePlanContractV2(specValue: unknown, project: ProjectExecut
   const enabledVerification = new Map(project.settings.commands.filter((command) => command.category === "verification" && command.enabled !== false).map((command) => [command.commandId, command]));
   if (defaults.some((id) => !enabledVerification.has(id))) throw new Error("Project default verification commands are invalid");
   const mode = spec.verification.mode === "NONE" || defaults.length === 0 ? "NONE" : "PROJECT_DEFAULT";
+  // 解析后的 commandIds 才是执行事实；请求过的 suites 留在 generatedSpec 里可审计。
+  const commandIds = mode === "PROJECT_DEFAULT" ? selectVerificationCommands(defaults, enabledVerification, spec.verification.suites ?? []) : [];
   const technicalConstraints = [...new Set([...spec.design.technicalConstraints, ...spec.dependencies])];
-  return { schemaVersion: 2, artifact: spec.artifact, objective: spec.objective, design: { ...spec.design, technicalConstraints }, conflicts: spec.conflicts, repository: { projectId: project.projectId, name: project.name, repoRoot: project.repoRoot, baseBranch: baseline.baseBranch, baseCommit: baseline.baseCommit, configVersion: project.configVersion, configHash: project.configHash }, scope: spec.scope, tasks: spec.tasks.map((task) => ({ ...task, status: task.status ?? "READY" })), dependencies: spec.dependencies, execution: { executorModelRole: EXECUTOR_ROLE, toolPolicy: EXECUTOR_TOOL_POLICY, maxRepairAttempts: Number.isInteger(spec.execution.maxRepairAttempts) && spec.execution.maxRepairAttempts! >= 0 ? spec.execution.maxRepairAttempts! : project.settings.concurrency.maxRepairAttempts }, verification: { mode, commandIds: mode === "PROJECT_DEFAULT" ? [...defaults] : [] }, merge: { strategy: spec.merge.strategy, requireHumanMerge: true } };
+  return { schemaVersion: 2, artifact: spec.artifact, objective: spec.objective, design: { ...spec.design, technicalConstraints }, conflicts: spec.conflicts, repository: { projectId: project.projectId, name: project.name, repoRoot: project.repoRoot, baseBranch: baseline.baseBranch, baseCommit: baseline.baseCommit, configVersion: project.configVersion, configHash: project.configHash }, scope: spec.scope, tasks: spec.tasks.map((task) => ({ ...task, status: task.status ?? "READY" })), dependencies: spec.dependencies, execution: { executorModelRole: EXECUTOR_ROLE, toolPolicy: EXECUTOR_TOOL_POLICY, maxRepairAttempts: Number.isInteger(spec.execution.maxRepairAttempts) && spec.execution.maxRepairAttempts! >= 0 ? spec.execution.maxRepairAttempts! : project.settings.concurrency.maxRepairAttempts }, verification: { mode, commandIds }, merge: { strategy: spec.merge.strategy, requireHumanMerge: true } };
 }

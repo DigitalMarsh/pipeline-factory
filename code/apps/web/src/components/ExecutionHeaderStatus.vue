@@ -175,7 +175,7 @@ watch(() => props.run.id, () => {
               <el-tag size="small" effect="light" :type="executionTaskStatusType(task.status)">{{ executionTaskStatusLabel(task.status) }}</el-tag>
             </button>
           </div>
-          <div v-else class="explorer-header-status-empty" role="status"><strong>暂无执行任务</strong><span>当前 Run 没有可展示的 Plan task。</span></div>
+          <div v-else class="explorer-header-status-empty" role="status"><strong>暂无执行步骤</strong><span>当前 Run 没有可展示的执行步骤。</span></div>
           <div v-if="verificationStatusSummary" class="execution-steps-evidence"><span class="execution-evidence-dot" :class="{ failed: verification?.status === 'FAILED' || verification?.status === 'BLOCKED' }" /> {{ verificationStatusSummary }}</div>
         </section>
       </el-popover>

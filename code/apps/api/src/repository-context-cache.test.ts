@@ -27,6 +27,28 @@ function repositoryProject(): Project {
 }
 
 describe("RepositoryContextCache", () => {
+  it("injects only the declared verification tag vocabulary, never command ids", () => {
+    const project = repositoryProject();
+    const withCommands = {
+      ...project,
+      settings: {
+        commands: [
+          { commandId: "project.test", category: "verification", enabled: true, argv: ["pnpm", "test"], tags: ["unit", "types"] },
+          { commandId: "docs.validate", category: "verification", enabled: true, argv: ["pnpm", "docs"], tags: ["docs"] },
+          { commandId: "project.lint", category: "verification", enabled: false, argv: ["pnpm", "lint"], tags: ["lint"] },
+          { commandId: "project.start", category: "lifecycle", enabled: true, argv: ["node", "start.mjs"], tags: ["ignored"] },
+        ],
+      },
+    } as unknown as Project;
+    const summary = new RepositoryContextCache().get(withCommands).summary;
+
+    // 只有启用中的 verification 命令的 tag 进入词表；禁用的与 lifecycle 命令的 tag 不算。
+    expect(summary).toContain("Verification tags: docs, types, unit");
+    // 命令 ID 不进提示词：模型声明"要哪一类验证"，解析成 ID 是 Factory 的事。
+    expect(summary).not.toContain("project.test");
+    expect(summary).not.toContain("docs.validate");
+  });
+
   it("reuses the project index and invalidates on working-tree, Git baseline, or config changes", () => {
     const project = repositoryProject();
     const cache = new RepositoryContextCache();

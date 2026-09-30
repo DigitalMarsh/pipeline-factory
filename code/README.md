@@ -190,7 +190,14 @@ Run 终态会触发协调器重新评估，排队的 Plan 因此自动让位。*
 
 新 Explorer 只能产出 `GeneratedPlanSpecV2`（`schemaVersion: 2`）。模型可以声明目标、范围、任务、验证模式和合并意图，但不能提供项目 ID、仓库路径、Git branch/commit、配置版本/哈希或任何命令 ID。Factory 在候选生成时用已绑定 Project、真实 Git 基线和冻结的 Project 配置解析为 `ResolvedPlanContractV2`；绝对路径、`..` 路径穿越和概念性 scope 会被拒绝。Project 配置在 Confirm 前变化会使 Candidate 过期，已 Confirm 的 Revision 始终使用冻结快照。
 
-Project Commands 分为 `verification`、`lifecycle` 和 `executor-tool`。每条命令都有受控 argv、说明、enabled、环境与默认超时；`defaultVerificationCommandIds` 是 Project 管理员维护的有序集合，模型不能选择或发明其中任何 ID。集合为空时 V2 解析为 `verification.mode=NONE`：Verifier 持久化 `SKIPPED / NO_PROJECT_VERIFICATION_COMMANDS`，随后进入 `MERGE_READY`，界面会明确显示“未配置自动验证”，不会显示为通过。旧 flat V1 artifact 仅保留为历史记录，不能由 V2 Explorer 流程重新执行。
+Project Commands 分为 `verification`、`lifecycle` 和 `executor-tool`。每条命令都有受控 argv、说明、enabled、环境与默认超时；
+
+**按 tag 选验证子集**：verification 命令还可以声明 `tags`（如 `unit` / `types` / `docs`），
+Plan 的 `verification.suites` 用这些 tag 挑一个子集——模型声明"要哪一类验证"，
+**命令 ID 始终由 Factory 解析**（模型既看不到也不能填 ID）。解析规则宁可失败也不静默改语义：
+声明了项目未登记的 tag、或合法 tag 一条默认命令都没命中，方案都会被拒绝并列出已登记词表。
+tag 词表通过仓库上下文注入 Explorer 回合（只有 tag，没有命令 ID）。
+`defaultVerificationCommandIds` 是 Project 管理员维护的有序集合，模型不能选择或发明其中任何 ID。集合为空时 V2 解析为 `verification.mode=NONE`：Verifier 持久化 `SKIPPED / NO_PROJECT_VERIFICATION_COMMANDS`，随后进入 `MERGE_READY`，界面会明确显示“未配置自动验证”，不会显示为通过。旧 flat V1 artifact 仅保留为历史记录，不能由 V2 Explorer 流程重新执行。
 
 Plan 列表接口只返回轻量 Summary；`GET /api/v4/plans/:planId` 返回 Plan、冻结 Revision、Project 快照和调度状态。Web 的 Full Plan 抽屉始终按 ID 获取该详情，加载失败会显示错误而不是呈现演示性 scope、命令或 artifact hash。
 

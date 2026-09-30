@@ -247,6 +247,12 @@ function validateProjectSettings(settings: ProjectSettings, catalog?: ModelBacke
     if (command.description !== undefined && (typeof command.description !== "string" || !command.description.trim())) throw new Error(`command ${command.commandId}.description must be a non-empty string`);
     if (command.timeoutMs !== undefined) assertFiniteInteger(command.timeoutMs, `command ${command.commandId}.timeoutMs`, 1);
     assertStringArray(command.argv, `command ${command.commandId}.argv`, false);
+    // tags 是 Plan 选验证子集用的词表；空标签没有意义（选不出任何东西），直接拒绝。
+    if (command.tags !== undefined) {
+      assertStringArray(command.tags, `command ${command.commandId}.tags`);
+      if (command.tags.some((tag) => tag !== tag.trim())) throw new Error(`command ${command.commandId}.tags must not contain surrounding whitespace`);
+      if (new Set(command.tags).size !== command.tags.length) throw new Error(`command ${command.commandId}.tags must not contain duplicates`);
+    }
     if (command.environment !== undefined) {
       if (!isRecord(command.environment) || Object.entries(command.environment).some(([key, value]) => !key.trim() || typeof value !== "string")) throw new Error(`command ${command.commandId}.environment must contain string values`);
     }
@@ -296,7 +302,7 @@ export function normalizeProjectSettings(input?: ProjectSettingsInput, base: Pro
   if (value.toolPolicy !== undefined && !isRecord(value.toolPolicy)) throw new Error("toolPolicy must be an object");
   const settings: ProjectSettings = {
     concurrency: { ...base.concurrency, ...value.concurrency },
-    commands: value.commands ? value.commands.map((command) => ({ ...command, category: command.category ?? "unclassified", enabled: command.enabled ?? false, argv: [...command.argv] as [string, ...string[]], ...(command.environment ? { environment: { ...command.environment } } : {}) })) : clone(base.commands).map((command) => ({ ...command, category: command.category ?? "unclassified", enabled: command.enabled ?? false })),
+    commands: value.commands ? value.commands.map((command) => ({ ...command, category: command.category ?? "unclassified", enabled: command.enabled ?? false, argv: [...command.argv] as [string, ...string[]], ...(command.environment ? { environment: { ...command.environment } } : {}), ...(command.tags ? { tags: [...command.tags] } : {}) })) : clone(base.commands).map((command) => ({ ...command, category: command.category ?? "unclassified", enabled: command.enabled ?? false })),
     defaultVerificationCommandIds: value.defaultVerificationCommandIds ? [...value.defaultVerificationCommandIds] : [...base.defaultVerificationCommandIds],
     hooks: { ...base.hooks, ...value.hooks },
     models: {

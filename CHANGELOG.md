@@ -1,5 +1,84 @@
 # Changelog
 
+## 2026-10-01 — 线程按天分组、术语统一、任务中心四分区、按 tag 选验证子集
+
+### 为什么做
+
+上一轮记了四项"未做"，本轮补齐。过程中发现两件事值得单独说明：
+
+1. **`explorerTimestampTitle` 是多余的**（同日回退）。加它之前我以为"以创建时间命名"没实现，
+   实际上 `placeholderExplorerTitle` / `composeExplorerTitle` **本来就是"项目简称-日期-时间"**，
+   首条消息后还会升级成"时间-内容摘要"。我的改动反而把内容摘要那一半关掉了，所以整个回退，
+   只在 `ExplorerService.create` 里保留原样。**需求本来就满足，且比我的实现更好。**
+2. **Project 设置页保存会丢命令字段**：`ProjectSettingsView.settingsPayload` 只回传
+   `commandId/argv/environment`，于是 `category`/`enabled`/`description`/`timeoutMs` 在保存时被抹掉，
+   而 `defaultVerificationCommandIds` 仍指向那些命令 → domain 校验直接 409
+   （"must be an enabled verification command"）。顺带修掉，否则新加的 tags 也会被同样抹掉。
+
+### Changed
+
+**任务中心四分区（共享一份定义）**
+- 新增 `utils/taskBuckets.ts`：`taskBucketFor` / `countTaskBuckets` / `filterTasksByBucket` +
+  `TASK_BUCKETS`（待执行 / 执行中 / 已完成 / 待处理）。判定**同时看 Plan 状态与 dispatch 状态**
+  （排队等容量时 Plan 仍是 DISPATCHED，只看 `status` 会错报成"待执行"）。
+- `PlanCenterPanel`：原来是**藏在下拉里**的状态筛选，现在是四个**看得见的**分区按钮（带数量），
+  与 `全部` 并列。
+- `WorkbenchView`：左侧列表加同一组分区按钮（此前没有任何分区），列表与计数一起按档过滤；
+  空状态文案区分"这一档为空"与"还没有任务"。
+
+**ThreadRail 按天分组**
+
+- `utils/explorerGroups.ts`：按**创建日**分组（今天 / 昨天 / 具体日期；缺失或坏时间戳归"创建时间未知"），
+  摊平成"日期头 + 行"供模板一次渲染。按本地日期算日键（不用 UTC 的 `toISOString().slice(0,10)`，
+  东八区晚上会把"今天"算成"昨天"）。
+- **组按日期倒序、组内保持原顺序**：线程列表按最近活动倒序、组名却是创建日，不排组会出现
+  "9-26、9-25、9-27" 这种看着像坏了的顺序。**这条是浏览器实测发现的**（DOM 断言拿到的组序不对），
+  单测当时只覆盖了"组内顺序"，没有覆盖"组间顺序"——已补用例。
+
+**术语统一（web 文案与注释，不动 API / 领域命名）**
+
+- 三层命名固化在 `utils/taskTree.ts` 的文件头：**需求**（ExplorerPlan）/ **方案**（Plan、Revision）/
+  **任务**（已确认并进入调度的方案）/ **执行步骤**（契约里的 `contract.tasks`）。
+- 逐处改掉的混用：`Tasks & dependencies` → 执行步骤与依赖、`暂无执行任务`/`Plan task` →
+  执行步骤、`任务关联未记录` → 未关联执行步骤、需求清单表头 `Plan 状态`/`结构化 Plan` →
+  方案状态/方案契约、候选卡的 `Tasks` 计数 → 执行步骤、项目执行会话标题不再叫"项目任务"。
+
+**`verification.suites`：按 tag 选验证子集**
+
+- `RegisteredCommandDefinition.tags` 新增（只对 verification 命令有意义）；Project 设置与
+  `config.project.commands` 都能声明；domain 校验拒绝重复、带空白和空字符串的 tag。
+- `GeneratedPlanSpecV2.verification.suites?: string[]` 新增：**模型只能声明 tag 词表**，
+  仍然不能指定命令 ID。与 `mode: "NONE"` 互斥（MODE_CONFLICT），空数组也是无效写法。
+- Factory 解析规则（`selectVerificationCommands`）三条都是"宁可失败也不静默改语义"：
+  没声明 → 项目默认全集；声明了未登记的 tag → 抛错并列出已登记词表；命中为空 → 抛错，
+  而不是退化成一个空的验证集。**解析后的 `commandIds` 才是执行事实**，请求过的 suites
+  留在 `generatedSpec` 里可审计。
+- tag 词表通过**仓库上下文**注入 Explorer 回合（`RepositoryContextCache` 新增
+  `Verification tags: …` 一行，只给 tag、不给命令 ID），缓存键含 configHash，改配置即失效。
+- 控制台：两个设置入口的命令编辑器都加 `Verification tags`（逗号分隔）；Plan 详情在
+  VERIFICATION 一格上标出"按 tag 选子集"。
+
+### 未做
+
+- 「Explore 的 Plan 详情里直接编辑 suites」没做：那需要浏览器端的 Plan 草稿编辑能力（当前只有
+  Confirm 前的 RevisionDraft 流程），超出本轮范围。要改 suites 目前是让 Explorer 重新产出方案。
+
+### 验证
+
+- `vitest run packages/domain` **303 通过**；`vitest run apps/api` **95 通过**；
+  `apps/web` 下 `vitest run` **433 通过**；三个 typecheck（domain / api / vue-tsc）无错误。
+- **浏览器实测**（`apps/web/dist` + 验收库 / Project3 的真实数据）：Workbench 任务中心四档计数
+  `全部 8 / 待执行 0 / 执行中 0 / 已完成 0 / 待处理 8`，点"已完成"后列表清空并显示新文案；
+  Explorer 线程列表按 `2026-09-27 (2) / 2026-09-26 (1) / 2026-09-25 (1)` 分组；需求清单表头为
+  需求名称 / 方案状态 / 方案契约 / 任务状态；375px 窄屏下分区按钮不溢出。
+- 新增用例：`utils/taskBuckets.test.ts`（4）、`utils/explorerGroups.test.ts`（6）、
+  线程按天分组的组件用例、任务中心四分区的组件用例（数量 + 点筛选）、
+  `plan-v2.test.ts` 的 suites 解析（子集/顺序/未知 tag/命中为空/空数组/NONE 冲突）、
+  `project.test.ts` 的 tag 校验、`repository-context-cache.test.ts` 的词表注入（且不含命令 ID）。
+- **本轮抓到并修正一处被 stale dist 掩盖的回归**：上一轮改了 `ExplorerService.create` 的标题规则，
+  但 API 测试跑的是未重建的 domain `dist`，所以当时"47 通过"是假象；重建后才暴露。
+  该改动已随本轮回退，API 用例恢复原断言。
+
 ## 2026-09-29 — 容量闸门接回活路径、今日活动、合并后回收 Worktree、探索线程按时间命名
 
 ### 为什么做
@@ -49,12 +128,14 @@
 - 幂等：成功后清空 `run.workspacePath`；目录本就不存在时算作已回收（`finish()` 可能先删过），
   不会把"已经没了"报成失败。
 
-**探索线程按时间命名（新增）**
+**探索线程按时间命名（已回退，见 2026-10-01 条目）**
 
 - `explorerTimestampTitle()` + `ExplorerService.create` 的默认标题改为**创建时刻**
   （本地 `YYYY-MM-DD HH:mm`），并按 `MANUAL` 落库——时间就是它的名字，不再被自动起标题覆盖。
   显式传入的标题仍然优先。
-- 保留 `projectPlaceholderExplorerTitle` 那条路径：历史/注册线程仍可能是 PLACEHOLDER。
+- **同日回退**：既有机制本来就是「项目简称-日期-时间」，首条消息后升级成「时间-内容摘要」；
+  这次改动把内容摘要那一半关掉了，属于把已满足的需求改坏。现已还原为原样，只在
+  `ExplorerService.create` 里保留不变。ThreadRail 的按天分组（下一轮）与它无关，保留。
 
 ### 未做（明确记账）
 

@@ -38,11 +38,18 @@ export class RepositoryContextCache {
       extensions.set(extension, (extensions.get(extension) ?? 0) + 1);
     }
     const largest = (values: Map<string, number>, count: number) => [...values.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, count).map(([name, total]) => `${name} (${total})`).join(", ") || "none";
+    // 验证 tag 词表：Plan 的 verification.suites 只能用这里列出的词。**只给 tag，不给命令 ID**——
+    // 模型声明"要哪一类验证"，命令 ID 由 Factory 解析（见 plan/plan-v2.ts 的 selectVerificationCommands）。
+    // `settings` 用可选链读：只读投影与测试替身可能不带它，缺了就是"没登记 tag"，不是错误。
+    const declaredTags = [...new Set((project.settings?.commands ?? [])
+      .filter((command) => command.category === "verification" && command.enabled !== false)
+      .flatMap((command) => command.tags ?? []))].sort();
     const summary = [
       `Project: ${project.name} (${project.id})`,
       `Repository root: ${root}`,
       `Git branch and baseline: ${branch} @ ${head} (default ${project.defaultBranch})`,
       `Project configuration: version ${project.configVersion}, ${project.configHash}`,
+      `Verification tags: ${declaredTags.join(", ") || "(none declared)"}`,
       `Tracked files: ${files.length}; changed paths: ${status.split("\n").filter(Boolean).length}; untracked paths: ${untracked.length}`,
       `Top-level areas: ${largest(topLevels, 12)}`,
       `Common file types: ${largest(extensions, 10)}`,

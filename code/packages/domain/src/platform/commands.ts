@@ -69,6 +69,14 @@ export type RegisteredCommandDefinition = {
   argv: readonly [string, ...string[]];
   environment?: Readonly<Record<string, string>> | undefined;
   timeoutMs?: number;
+  /**
+   * 这条命令证明什么（如 `docs`、`unit`、`types`）。**只对 verification 命令有意义**：
+   * Plan 的 `verification.suites` 用 tag 词表挑验证子集，Factory 负责把 tag 解析成命令 ID。
+   *
+   * 模型**永远看不到也不需要看到命令 ID**，它只声明"我要哪一类验证"；tag 词表由 Project 维护，
+   * 并通过 Explorer 回合的仓库上下文注入（见 apps/api 的 RepositoryContextCache）。
+   */
+  tags?: readonly string[];
 };
 export type ProcessRunner = (argv: string[], cwd: string, timeoutMs: number, env: Record<string, string>) => Promise<CommandResult>;
 

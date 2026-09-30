@@ -27,14 +27,17 @@ describe("ExplorerService", () => {
     expect(explorers.list("project-1").map((item) => item.id)).toEqual([fresh.id, oldExplorer.id]);
   });
 
-  it("names a new Explorer after its creation time instead of a placeholder", () => {
+  it("names a new Explorer with its creation timestamp and lets an explicit title win", () => {
     const store = new InMemoryPipelineStore();
     const explorers = new ExplorerService(store);
 
-    // 默认标题是创建时刻（本地时间、分钟精度），且按 MANUAL 落库 → 不会被自动起标题覆盖。
+    // 默认标题**本来就带创建时刻**（"探索-YYYYMMDD-HH:MM:SS"，见 explorer-title.ts 的
+    // placeholderExplorerTitle）：线程按天分组、按时间找人靠的就是它。首条消息之后模型会把它
+    // 升级成"时间-内容摘要"，那是增强而不是改名。
     const explorer = explorers.create({ projectId: "project-1" });
-    expect(explorer.title).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
-    expect(explorer).toMatchObject({ titleSource: "MANUAL", titleStatus: "GENERATED" });
+    expect(explorer.title).toMatch(/^探索-\d{8}-\d{2}:\d{2}:\d{2}$/);
+    // 项目存在时前缀会换成项目简称（"P1-20261001-…"），这里没建项目，所以是通用前缀。
+    expect(explorer).toMatchObject({ titleSource: "AUTO", titleStatus: "GENERATED" });
 
     // 显式标题优先（用户手填或从别的线程继承）。
     expect(explorers.create({ projectId: "project-1", title: "  手填标题  " }).title).toBe("手填标题");

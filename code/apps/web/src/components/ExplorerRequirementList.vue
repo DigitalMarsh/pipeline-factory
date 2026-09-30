@@ -37,8 +37,8 @@ const emit = defineEmits<{
       <div class="requirement-table" role="table" aria-label="当前探索线程的需求清单">
         <div class="requirement-table-head" role="row">
           <span role="columnheader">需求名称</span>
-          <span role="columnheader">Plan 状态</span>
-          <span role="columnheader">结构化 Plan</span>
+          <span role="columnheader">方案状态</span>
+          <span role="columnheader">方案契约</span>
           <span role="columnheader">任务状态</span>
         </div>
         <article

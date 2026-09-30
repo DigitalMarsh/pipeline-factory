@@ -110,3 +110,58 @@ describe("Plan V2 resolution", () => {
     expect(run.status).toBe("MERGE_READY");
   });
 });
+
+describe("Plan V2 verification suites", () => {
+  /** 三条默认验证命令各自带 tag，外加一条**不在默认集合里**的 lint 命令。 */
+  function taggedSnapshot(defaultVerificationCommandIds = ["project.test", "project.typecheck", "docs.validate"]): ProjectExecutionSnapshot {
+    return {
+      projectId: "project-tags", name: "Tags", shortName: "T", repoRoot: "/repo/tags", defaultBranch: "main", worktreeRoot: "/tmp/tags-worktrees", configVersion: 1, configHash: "sha256:tags",
+      settings: {
+        concurrency: { maxParallelRuns: 1, defaultTimeoutMs: 1_000, executionTimeoutMs: 1_000, maxAutoContinuationTurns: 0, maxRepairAttempts: 2 },
+        commands: [
+          { commandId: "project.test", category: "verification", enabled: true, argv: ["pnpm", "test"], tags: ["unit"] },
+          { commandId: "project.typecheck", category: "verification", enabled: true, argv: ["pnpm", "typecheck"], tags: ["types"] },
+          { commandId: "docs.validate", category: "verification", enabled: true, argv: ["pnpm", "docs:check"], tags: ["docs"] },
+          { commandId: "project.lint", category: "verification", enabled: true, argv: ["pnpm", "lint"], tags: ["lint"] },
+        ],
+        defaultVerificationCommandIds,
+        hooks: {},
+        models: { explorer: { model: "test" }, executor: { model: "test" } },
+        toolPolicy: { allowedMcpTools: [], allowedPluginTools: [], computerUseEnabled: false },
+      },
+    };
+  }
+
+  const baseline = { baseBranch: "main", baseCommit: "a".repeat(40) };
+
+  it("keeps the full default set when the Plan declares no suites", () => {
+    expect(resolvePlanContractV2(spec, taggedSnapshot(), baseline).verification).toEqual({ mode: "PROJECT_DEFAULT", commandIds: ["project.test", "project.typecheck", "docs.validate"] });
+  });
+
+  it("resolves requested tags into a subset of the Project default commands, in default order", () => {
+    const single = resolvePlanContractV2({ ...spec, verification: { mode: "PROJECT_DEFAULT", suites: ["docs"] } }, taggedSnapshot(), baseline);
+    expect(single.verification).toEqual({ mode: "PROJECT_DEFAULT", commandIds: ["docs.validate"] });
+
+    const multiple = resolvePlanContractV2({ ...spec, verification: { mode: "PROJECT_DEFAULT", suites: ["types", "unit"] } }, taggedSnapshot(), baseline);
+    // 顺序跟项目默认集合，不跟 Plan 里写的顺序——命令执行顺序是 Project 的配置。
+    expect(multiple.verification.commandIds).toEqual(["project.test", "project.typecheck"]);
+  });
+
+  it("rejects tags the Project never declared instead of silently running something else", () => {
+    expect(() => resolvePlanContractV2({ ...spec, verification: { mode: "PROJECT_DEFAULT", suites: ["documentation"] } }, taggedSnapshot(), baseline))
+      .toThrow(/not declared by this Project: documentation.*Declared tags: docs, lint, types, unit/s);
+  });
+
+  it("rejects a declared tag that matches none of the default commands", () => {
+    // lint 是已登记 tag，但那条命令不在默认集合里：命中为空必须报错，而不是退化成"空验证集"。
+    expect(() => resolvePlanContractV2({ ...spec, verification: { mode: "PROJECT_DEFAULT", suites: ["lint"] } }, taggedSnapshot(), baseline))
+      .toThrow(/match none of the Project default verification commands/);
+  });
+
+  it("validates the suites shape and its conflict with mode NONE", () => {
+    expect(validateGeneratedPlanSpecV2({ ...spec, verification: { mode: "PROJECT_DEFAULT", suites: [] } })).toEqual([expect.objectContaining({ path: "verification.suites", code: "INVALID" })]);
+    expect(validateGeneratedPlanSpecV2({ ...spec, verification: { mode: "NONE", suites: ["docs"] } })).toEqual([expect.objectContaining({ path: "verification.suites", code: "MODE_CONFLICT" })]);
+    expect(validateGeneratedPlanSpecV2({ ...spec, verification: { mode: "PROJECT_DEFAULT", suites: ["docs", ""] } })).toEqual([expect.objectContaining({ path: "verification.suites", code: "INVALID" })]);
+    expect(validateGeneratedPlanSpecV2({ ...spec, verification: { mode: "PROJECT_DEFAULT", suites: ["docs"] } })).toEqual([]);
+  });
+});

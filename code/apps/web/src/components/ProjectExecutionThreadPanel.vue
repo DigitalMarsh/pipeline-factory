@@ -243,7 +243,7 @@ onBeforeUnmount(() => { requestGeneration += 1; closeEvents(); });
       <div v-if="loading" class="project-execution-empty">正在加载项目执行线程…</div>
       <div v-else-if="!messages.length" class="project-execution-empty">
         <Connection :size="25" />
-        <strong>直接从项目任务开始</strong>
+        <strong>直接开始项目级执行</strong>
         <span>模型会在项目仓库根目录执行请求，后续消息会沿用本线程上下文。</span>
       </div>
       <article v-for="message in messages" :key="message.id" :class="['project-execution-message', `${message.role}-message`, { failed: message.status === 'FAILED' || message.status === 'RECOVERY_REQUIRED' }]" :data-execution-message="message.id">

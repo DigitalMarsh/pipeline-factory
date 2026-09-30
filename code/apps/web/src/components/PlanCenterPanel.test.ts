@@ -123,4 +123,37 @@ describe("PlanCenterPanel", () => {
     app.unmount();
     host.remove();
   });
+
+  it("shows the four task buckets as counts and filters the list by them", async () => {
+    const pending = { ...plan(), id: "plan-pending", planId: "plan-pending", title: "Pending plan", status: "READY" as const };
+    const merged = { ...plan(), id: "plan-merged", planId: "plan-merged", title: "Merged plan", status: "MERGED" as const };
+    vi.mocked(api.candidatePlans).mockResolvedValue({ items: [] });
+    vi.mocked(api.projectTasks).mockResolvedValue({ items: [pending, merged] });
+    const mounted = mountPanel(pending);
+    await nextTick();
+    await nextTick();
+    await nextTick();
+    await nextTick();
+
+    [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("任务"))?.click();
+    await nextTick();
+
+    // 四档是**看得见的**（不是藏在下拉里），并且带数量——这就是"任务中心"该有的样子。
+    const buckets = [...mounted.host.querySelectorAll<HTMLElement>("[data-task-bucket]")];
+    expect(buckets.map((button) => [button.dataset.taskBucket, button.querySelector("span")?.textContent])).toEqual([
+      ["all", "2"],
+      ["pending", "1"],
+      ["running", "0"],
+      ["completed", "1"],
+      ["attention", "0"],
+    ]);
+
+    buckets.find((button) => button.dataset.taskBucket === "completed")?.click();
+    await nextTick();
+    expect(mounted.host.textContent).toContain("Merged plan");
+    expect(mounted.host.textContent).not.toContain("Pending plan");
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
 });

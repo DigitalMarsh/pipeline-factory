@@ -48,7 +48,8 @@ export type ProjectSettings = {
     maxAutoContinuationTurns: number;
     maxRepairAttempts: number;
   };
-  commands: Array<{ commandId: string; category?: "verification" | "lifecycle" | "executor-tool" | "unclassified"; description?: string; enabled?: boolean; argv: string[]; environment?: Record<string, string>; timeoutMs?: number }>;
+  /** 命令定义。`tags` 只对 verification 命令有意义：Plan 的 `verification.suites` 用它选验证子集。 */
+  commands: Array<{ commandId: string; category?: "verification" | "lifecycle" | "executor-tool" | "unclassified"; description?: string; enabled?: boolean; argv: string[]; environment?: Record<string, string>; timeoutMs?: number; tags?: string[] }>;
   defaultVerificationCommandIds?: string[];
   hooks: {
     start?: { commandId: string; enabled?: boolean; timeoutMs?: number; maxAttempts?: number };
@@ -341,7 +342,8 @@ export type GeneratedPlanSpec = {
   conflicts: string[];
   /** 只含 Factory 允许模型决定的项；执行角色与工具策略由 Factory 固定（见 domain 的 plan-v2.ts）。 */
   execution: { maxRepairAttempts?: number };
-  verification: { mode: "PROJECT_DEFAULT" | "NONE" };
+  /** `suites` 是模型请求的验证 tag 词表（可选）；Factory 解析成 resolvedContract 里的 commandIds。 */
+  verification: { mode: "PROJECT_DEFAULT" | "NONE"; suites?: string[] };
   merge: { strategy: "manual" | "fast-forward" | "squash"; requireHumanMerge: true };
 };
 

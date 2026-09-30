@@ -471,7 +471,7 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
               <small v-if="group.task.blockedReason">{{ group.task.blockedReason }}</small>
             </header>
             <header v-else-if="group.kind === 'unassigned'" class="execution-task-stream-heading execution-unassigned-heading">
-              <span class="execution-task-stream-step">RUN ACTIVITY</span><strong>任务关联未记录</strong><small>此处保留旧 Run 或未提供任务标识的事件。</small>
+              <span class="execution-task-stream-step">RUN ACTIVITY</span><strong>未关联执行步骤</strong><small>此处保留旧 Run 或未提供执行步骤标识的事件。</small>
             </header>
             <p v-if="group.task && !group.items.length" class="execution-task-stream-empty">{{ taskGroupEmptyNote(group.task) }}</p>
             <article v-for="item in group.items" :key="item.id" :data-sequence="item.sequence" :data-task-id="item.taskId" :data-model-step="item.modelStep" :class="['execution-message', `execution-message-${item.kind}`, { failed: item.status === 'FAILED', waiting: item.status === 'WAITING', running: item.status === 'RUNNING', unknown: item.status === 'UNKNOWN' }]">

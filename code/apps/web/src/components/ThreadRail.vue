@@ -6,6 +6,7 @@
 import { ArrowDown, ArrowRight, Connection, Delete, EditPen, FolderOpened, MoreFilled, Plus, Refresh, Setting, VideoPause, VideoPlay, View } from "@element-plus/icons-vue";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import type { ExplorerThread, Project } from "../types";
+import { explorerListRows } from "../utils/explorerGroups";
 
 type LeftPanel = "projects" | "explorers";
 type ThreadActionCommand = "toggle-pause" | "rename" | "policy" | "refresh" | "delete";
@@ -96,6 +97,13 @@ function explorerStatusLabel(state: ExplorerThread["state"]): string {
 }
 
 const visibleExplorers = computed(() => props.showArchived ? props.explorers : props.explorers.filter((explorer) => explorer.state !== "ARCHIVED"));
+
+/**
+ * 线程按**创建日**分组（今天 / 昨天 / 日期）。摊平成"日期头 + 行"，模板一次 v-for 渲染
+ * （见 utils/explorerGroups.ts 的 ExplorerListRow）。分组只影响展示顺序与标题，
+ * 不改任何线程事实。
+ */
+const explorerRows = computed(() => explorerListRows(visibleExplorers.value));
 
 function explorerArchiveLabel(explorer: ExplorerThread): string {
   return explorer.state === "ARCHIVED" ? "Activate" : "Archive";
@@ -273,27 +281,31 @@ function emitThreadAction(command: string | number): void {
           <strong>暂无 Explorer 线程</strong>
           <span>点击上方按钮开始一次全新的探索。</span>
         </div>
+        <template v-for="row in explorerRows" :key="row.key">
+        <div v-if="row.kind === 'day'" class="explorer-day-heading" :data-explorer-day="row.day">
+          <span>{{ row.label }}</span>
+          <small>{{ row.count }}</small>
+        </div>
         <article
-          v-for="availableExplorer in visibleExplorers"
-          :key="availableExplorer.id"
+          v-else-if="row.explorer"
           class="explorer-list-row"
-          :class="{ active: availableExplorer.id === props.thread?.id }"
-          :data-explorer-id="availableExplorer.id"
+          :class="{ active: row.explorer.id === props.thread?.id }"
+          :data-explorer-id="row.explorer.id"
         >
           <div class="explorer-thread-row-head">
             <button
               class="explorer-list-item"
-              :class="{ active: availableExplorer.id === props.thread?.id }"
+              :class="{ active: row.explorer.id === props.thread?.id }"
               type="button"
-              :data-explorer-id="availableExplorer.id"
-              :aria-label="`Explorer Thread：${availableExplorer.title}`"
-              :aria-current="availableExplorer.id === props.thread?.id ? 'page' : undefined"
-              @click="emit('select-explorer', availableExplorer.id)"
+              :data-explorer-id="row.explorer.id"
+              :aria-label="`Explorer Thread：${row.explorer.title}`"
+              :aria-current="row.explorer.id === props.thread?.id ? 'page' : undefined"
+              @click="emit('select-explorer', row.explorer.id)"
             >
-              <span class="left-list-copy"><strong>{{ availableExplorer.title }}</strong></span>
-              <span :class="['left-list-status', { archived: availableExplorer.state === 'ARCHIVED' }]">{{ explorerStatusLabel(availableExplorer.state) }}</span>
+              <span class="left-list-copy"><strong>{{ row.explorer.title }}</strong></span>
+              <span :class="['left-list-status', { archived: row.explorer.state === 'ARCHIVED' }]">{{ explorerStatusLabel(row.explorer.state) }}</span>
             </button>
-            <div v-if="availableExplorer.id === props.thread?.id" class="explorer-thread-row-actions" @click.stop>
+            <div v-if="row.explorer.id === props.thread?.id" class="explorer-thread-row-actions" @click.stop>
               <el-dropdown placement="bottom-end" popper-class="thread-action-popper" :disabled="Boolean(props.explorerActionId)" @command="emitThreadAction">
                 <el-button text circle class="explorer-thread-menu-trigger" aria-label="线程操作" title="线程操作"><MoreFilled :size="16" /></el-button>
                 <template #dropdown>
@@ -318,17 +330,18 @@ function emitThreadAction(command: string | number): void {
           <div class="explorer-list-actions">
             <button
               type="button"
-              :class="['explorer-list-action', { archived: availableExplorer.state === 'ARCHIVED' }]"
-              :data-explorer-action="availableExplorer.state === 'ARCHIVED' ? 'activate' : 'archive'"
-              :disabled="props.explorerActionId === availableExplorer.id || (availableExplorer.state !== 'ARCHIVED' && availableExplorer.id === props.thread?.id)"
-              :aria-busy="props.explorerActionId === availableExplorer.id ? 'true' : undefined"
-              :aria-label="explorerArchiveAriaLabel(availableExplorer)"
-              @click.stop="emit('archive-explorer', availableExplorer.id)"
+              :class="['explorer-list-action', { archived: row.explorer.state === 'ARCHIVED' }]"
+              :data-explorer-action="row.explorer.state === 'ARCHIVED' ? 'activate' : 'archive'"
+              :disabled="props.explorerActionId === row.explorer.id || (row.explorer.state !== 'ARCHIVED' && row.explorer.id === props.thread?.id)"
+              :aria-busy="props.explorerActionId === row.explorer.id ? 'true' : undefined"
+              :aria-label="explorerArchiveAriaLabel(row.explorer)"
+              @click.stop="emit('archive-explorer', row.explorer.id)"
             >
-              {{ explorerArchiveLabel(availableExplorer) }}
+              {{ explorerArchiveLabel(row.explorer) }}
             </button>
           </div>
         </article>
+        </template>
       </div>
     </section>
   </aside>

@@ -6,6 +6,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { api } from "../api";
 import type { Plan, Project } from "../types";
 import { canTerminateRun } from "../utils/runControls";
+import { TASK_BUCKETS, countTaskBuckets, filterTasksByBucket, type TaskBucketKey } from "../utils/taskBuckets";
 import { parseMissingRunCommands } from "../utils/runPrerequisites";
 
 const props = defineProps<{ projectId: string; project: Project | null }>();
@@ -14,23 +15,21 @@ const candidates = ref<Plan[]>([]);
 const tasks = ref<Plan[]>([]);
 const search = ref("");
 const section = ref<"plans" | "tasks">("plans");
-const taskStatus = ref<"all" | "pending" | "running" | "completed" | "attention">("all");
+/** 任务中心的分区筛选；"all" 表示不筛。四档定义在 utils/taskBuckets.ts（与 Workbench 共用）。 */
+const taskBucket = ref<TaskBucketKey | "all">("all");
 const loading = ref(false);
 const error = ref<string | null>(null);
 const reconciliationError = ref<string | null>(null);
 const missingRunCommands = ref<string[]>([]);
 const actionPlanId = ref<string | null>(null);
 
+/** 各档数量：分区按钮上的数字与列表来自同一份判定，不会出现"数字 3、列表 2 条"。 */
+const taskCounts = computed(() => countTaskBuckets(tasks.value));
 const filtered = computed(() => {
-  const source = section.value === "plans" ? candidates.value : tasks.value;
-  return source.filter((plan) => {
-    const category = plan.status === "MERGED" ? "completed"
-      : ["IN_PROGRESS", "VERIFYING"].includes(plan.status) || ["RUNNING", "VERIFYING"].includes(plan.dispatch?.status ?? "") ? "running"
-        : ["MERGE_READY", "BLOCKED", "NEEDS_PLAN_CHANGE"].includes(plan.status) || ["NEEDS_REVIEW", "BLOCKED"].includes(plan.dispatch?.status ?? "") ? "attention"
-          : "pending";
-    return (section.value === "plans" || taskStatus.value === "all" || category === taskStatus.value) &&
-      (!search.value.trim() || `${plan.title} ${plan.planId ?? plan.id ?? ""}`.toLowerCase().includes(search.value.trim().toLowerCase()));
-  });
+  // 待确认区（候选 Plan）不分区：四档说的是"已确认的任务走到哪一步"。
+  const bucketed = section.value === "plans" ? candidates.value : filterTasksByBucket(tasks.value, taskBucket.value);
+  const keyword = search.value.trim().toLowerCase();
+  return keyword ? bucketed.filter((plan) => `${plan.title} ${plan.planId ?? plan.id ?? ""}`.toLowerCase().includes(keyword)) : bucketed;
 });
 
 function label(statusValue: string): string {
@@ -197,12 +196,13 @@ onMounted(() => { void load(); });
       <button type="button" role="tab" :aria-selected="section === 'plans'" :class="{ active: section === 'plans' }" @click="section = 'plans'">待确认 Plans <span>{{ candidates.length }}</span></button>
       <button type="button" role="tab" :aria-selected="section === 'tasks'" :class="{ active: section === 'tasks' }" @click="section = 'tasks'">任务 <span>{{ tasks.length }}</span></button>
     </div>
+    <div v-if="section === 'tasks'" class="plan-center-buckets" role="group" aria-label="任务分区">
+      <button type="button" :class="['plan-center-bucket', { active: taskBucket === 'all' }]" data-task-bucket="all" :aria-pressed="taskBucket === 'all'" @click="taskBucket = 'all'">全部 <span>{{ tasks.length }}</span></button>
+      <button v-for="bucket in TASK_BUCKETS" :key="bucket.key" type="button" :class="['plan-center-bucket', `tone-${bucket.key}`, { active: taskBucket === bucket.key }]" :data-task-bucket="bucket.key" :aria-pressed="taskBucket === bucket.key" @click="taskBucket = bucket.key">{{ bucket.label }} <span>{{ taskCounts[bucket.key] }}</span></button>
+    </div>
     <div class="plan-center-toolbar">
       <label class="plan-center-search"><Search :size="14" /><input v-model="search" aria-label="Search project work items" :placeholder="section === 'plans' ? 'Search pending Plans' : 'Search tasks'" /></label>
-      <el-select v-if="section === 'tasks'" v-model="taskStatus" size="small" aria-label="Filter task status">
-        <el-option label="全部" value="all" /><el-option label="待执行" value="pending" /><el-option label="执行中" value="running" /><el-option label="已完成" value="completed" /><el-option label="待处理" value="attention" />
-      </el-select>
-      <span v-else class="plan-center-scope-label">仅待确认</span>
+      <span v-if="section === 'plans'" class="plan-center-scope-label">仅待确认</span>
       <el-button text circle aria-label="刷新计划中心" @click="load"><Refresh :size="15" /></el-button>
     </div>
     <div v-if="error" class="plan-center-notice"><Warning :size="14" />{{ error }}</div>
@@ -225,7 +225,15 @@ onMounted(() => { void load(); });
 </template>
 
 <style scoped>
-.plan-center-panel { display: grid; gap: 12px; min-width: 0; }.plan-center-sections { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 3px; border: 1px solid #2d4260; border-radius: 8px; background: #101d31; }.plan-center-sections button { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 31px; border: 0; border-radius: 6px; background: transparent; color: #8fa5c3; font-size: 10px; cursor: pointer; }.plan-center-sections button.active { background: #213b5d; color: #e9f4ff; }.plan-center-sections span { padding: 1px 5px; border-radius: 10px; background: #13223a; font-size: 9px; }.plan-center-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) 100px auto; gap: 7px; align-items: center; }.plan-center-search { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 0 8px; border: 1px solid #334764; border-radius: 6px; background: #13223a; color: #8fa5c3; }.plan-center-search input { width: 100%; min-width: 0; height: 29px; border: 0; outline: 0; background: transparent; color: #e8f1ff; font-size: 11px; }.plan-center-search input::placeholder { color: #7185a3; }.plan-center-toolbar :deep(.el-select__wrapper) { min-height: 30px; border: 1px solid #334764; background: #13223a; box-shadow: none; }.plan-center-toolbar :deep(.el-select__selected-item), .plan-center-toolbar :deep(.el-select__placeholder) { color: #bdd0ea; font-size: 10px; }.plan-center-toolbar :deep(.el-button) { color: #9fc8ff; }.plan-center-scope-label { color: #8fa5c3; font-size: 10px; text-align: center; }.plan-center-notice { display: flex; align-items: flex-start; gap: 6px; padding: 8px; border: 1px solid #765d38; border-radius: 6px; background: #2d2730; color: #f0cf8e; font-size: 10px; line-height: 1.45; }.plan-center-notice.merge-detected-notice { border-color: #3c6e55; background: #1d3a32; color: #b8eccd; }.plan-center-list { display: grid; gap: 8px; min-height: 110px; }.plan-center-card { display: grid; gap: 8px; padding: 10px; border: 1px solid #2d4260; border-radius: 8px; background: #14233a; }.plan-center-card-head { display: grid; grid-template-columns: 27px minmax(0, 1fr) auto; gap: 7px; align-items: center; }.plan-center-card-head .mini-icon { display: grid; place-items: center; width: 27px; height: 27px; border-radius: 6px; background: #234970; color: #9bd6ff; }.plan-center-card-head div { min-width: 0; }.plan-center-card-head strong, .plan-center-card-head small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.plan-center-card-head strong { color: #eff6ff; font-size: 12px; }.plan-center-card-head small { margin-top: 3px; color: #90a6c4; font: 9px ui-monospace, monospace; }.plan-center-card-meta { display: grid; grid-template-columns: 54px minmax(0, 1fr); gap: 8px; color: #a5b8d0; font-size: 10px; }.plan-center-card-meta > span:first-child { color: #7188a8; }.plan-center-card-meta code, .plan-center-card-meta a, .plan-center-card-meta > span:last-child { overflow: hidden; color: #b9dfff; text-overflow: ellipsis; white-space: nowrap; }.plan-center-card-meta a { display: inline-flex; align-items: center; gap: 2px; }.plan-center-attention { display: flex; gap: 5px; color: #f0b3b7; font-size: 10px; line-height: 1.4; }.plan-center-card footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 8px; border-top: 1px solid #293c58; color: #8ea4c0; font-size: 9px; }.plan-center-card footer > span { display: inline-flex; align-items: center; gap: 4px; }.plan-center-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }.plan-center-card footer :deep(.el-button) { font-size: 10px; }
+.plan-center-panel { display: grid; gap: 12px; min-width: 0; }.plan-center-sections { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 3px; border: 1px solid #2d4260; border-radius: 8px; background: #101d31; }.plan-center-sections button { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 31px; border: 0; border-radius: 6px; background: transparent; color: #8fa5c3; font-size: 10px; cursor: pointer; }.plan-center-sections button.active { background: #213b5d; color: #e9f4ff; }.plan-center-sections span { padding: 1px 5px; border-radius: 10px; background: #13223a; font-size: 9px; }.plan-center-toolbar { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 7px; align-items: center; }
+.plan-center-buckets { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; padding: 3px; border: 1px solid #2d4260; border-radius: 8px; background: #101d31; }
+.plan-center-bucket { display: flex; align-items: center; justify-content: center; gap: 5px; min-height: 27px; padding: 0 6px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: #8fa5c3; cursor: pointer; font-size: 10px; }
+.plan-center-bucket:hover { border-color: #33507a; color: #d8e7fb; }
+.plan-center-bucket.active { background: #213b5d; color: #e9f4ff; font-weight: 700; }
+.plan-center-bucket span { padding: 1px 5px; border-radius: 10px; background: #13223a; font-size: 9px; }
+.plan-center-bucket.tone-running.active { border-color: #3f6f9e; background: #1d3a5c; }
+.plan-center-bucket.tone-completed.active { border-color: #3c6e55; background: #1d3a32; }
+.plan-center-bucket.tone-attention.active { border-color: #765d38; background: #2d2730; }.plan-center-search { display: flex; align-items: center; gap: 6px; min-width: 0; padding: 0 8px; border: 1px solid #334764; border-radius: 6px; background: #13223a; color: #8fa5c3; }.plan-center-search input { width: 100%; min-width: 0; height: 29px; border: 0; outline: 0; background: transparent; color: #e8f1ff; font-size: 11px; }.plan-center-search input::placeholder { color: #7185a3; }.plan-center-toolbar :deep(.el-select__wrapper) { min-height: 30px; border: 1px solid #334764; background: #13223a; box-shadow: none; }.plan-center-toolbar :deep(.el-select__selected-item), .plan-center-toolbar :deep(.el-select__placeholder) { color: #bdd0ea; font-size: 10px; }.plan-center-toolbar :deep(.el-button) { color: #9fc8ff; }.plan-center-scope-label { color: #8fa5c3; font-size: 10px; text-align: center; }.plan-center-notice { display: flex; align-items: flex-start; gap: 6px; padding: 8px; border: 1px solid #765d38; border-radius: 6px; background: #2d2730; color: #f0cf8e; font-size: 10px; line-height: 1.45; }.plan-center-notice.merge-detected-notice { border-color: #3c6e55; background: #1d3a32; color: #b8eccd; }.plan-center-list { display: grid; gap: 8px; min-height: 110px; }.plan-center-card { display: grid; gap: 8px; padding: 10px; border: 1px solid #2d4260; border-radius: 8px; background: #14233a; }.plan-center-card-head { display: grid; grid-template-columns: 27px minmax(0, 1fr) auto; gap: 7px; align-items: center; }.plan-center-card-head .mini-icon { display: grid; place-items: center; width: 27px; height: 27px; border-radius: 6px; background: #234970; color: #9bd6ff; }.plan-center-card-head div { min-width: 0; }.plan-center-card-head strong, .plan-center-card-head small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.plan-center-card-head strong { color: #eff6ff; font-size: 12px; }.plan-center-card-head small { margin-top: 3px; color: #90a6c4; font: 9px ui-monospace, monospace; }.plan-center-card-meta { display: grid; grid-template-columns: 54px minmax(0, 1fr); gap: 8px; color: #a5b8d0; font-size: 10px; }.plan-center-card-meta > span:first-child { color: #7188a8; }.plan-center-card-meta code, .plan-center-card-meta a, .plan-center-card-meta > span:last-child { overflow: hidden; color: #b9dfff; text-overflow: ellipsis; white-space: nowrap; }.plan-center-card-meta a { display: inline-flex; align-items: center; gap: 2px; }.plan-center-attention { display: flex; gap: 5px; color: #f0b3b7; font-size: 10px; line-height: 1.4; }.plan-center-card footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-top: 8px; border-top: 1px solid #293c58; color: #8ea4c0; font-size: 9px; }.plan-center-card footer > span { display: inline-flex; align-items: center; gap: 4px; }.plan-center-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }.plan-center-card footer :deep(.el-button) { font-size: 10px; }
 .plan-center-run-link { display: inline-flex; align-items: center; gap: 2px; padding: 0; border: 0; background: transparent; color: #b9dfff; cursor: pointer; font: inherit; text-align: left; }
 .plan-center-run-link:hover, .plan-center-run-link:focus-visible { color: #fff; outline: 0; }
 </style>

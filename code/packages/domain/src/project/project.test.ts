@@ -77,6 +77,20 @@ describe("ProjectService", () => {
     expect(cleared.settings.models.executor.model).toBe("gpt-5.6-luna");
   });
 
+  it("rejects command tags that are empty, duplicated, or padded with whitespace", () => {
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    const base = { id: "project-tags", name: "Tags", repoRoot: "/repo/tags", defaultBranch: "main", worktreeRoot: "/tmp/tags-worktrees" };
+
+    // tag 是 Plan 选验证子集的词表：空白与重复会让"命中哪条命令"变得不可预测，直接拒绝。
+    expect(() => projects.create({ ...base, settings: { commands: [{ commandId: "project.test", argv: ["true"], tags: ["unit", "unit"] }] } })).toThrow(/must not contain duplicates/);
+    expect(() => projects.create({ ...base, id: "project-tags-pad", settings: { commands: [{ commandId: "project.test", argv: ["true"], tags: [" unit "] }] } })).toThrow(/must not contain surrounding whitespace/);
+    expect(() => projects.create({ ...base, id: "project-tags-empty", settings: { commands: [{ commandId: "project.test", argv: ["true"], tags: [""] }] } })).toThrow(/non-empty strings/);
+
+    const created = projects.create({ ...base, id: "project-tags-ok", settings: { commands: [{ commandId: "project.test", argv: ["true"], tags: ["unit", "docs"] }] } });
+    expect(created.settings.commands[0]?.tags).toEqual(["unit", "docs"]);
+  });
+
   it("increments the configuration version when project settings change", () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);

@@ -111,6 +111,6 @@ describe("ProjectExecutionThreadPanel", () => {
     await nextTick();
     expect(mountedPanel.host.textContent).not.toContain("only project one");
     await waitUntil(() => apiMocks.projectExecutionThread.mock.calls.some(([projectId]) => projectId === "project-2"));
-    await waitUntil(() => mountedPanel.host.textContent?.includes("直接从项目任务开始") === true);
+    await waitUntil(() => mountedPanel.host.textContent?.includes("直接开始项目级执行") === true);
   });
 });
