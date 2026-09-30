@@ -75,7 +75,7 @@
   线程按天分组的组件用例、任务中心四分区的组件用例（数量 + 点筛选）、
   `plan-v2.test.ts` 的 suites 解析（子集/顺序/未知 tag/命中为空/空数组/NONE 冲突）、
   `project.test.ts` 的 tag 校验、`repository-context-cache.test.ts` 的词表注入（且不含命令 ID）。
-- **本轮抓到并修正一处被 stale dist 掩盖的回归**：上一轮改了 `ExplorerService.create` 的标题规则，
+- `pnpm verify` 全绿（domain 303 / api 95 / web 434）。**本轮抓到并修正一处被 stale dist 掩盖的回归**：上一轮改了 `ExplorerService.create` 的标题规则，
   但 API 测试跑的是未重建的 domain `dist`，所以当时"47 通过"是假象；重建后才暴露。
   该改动已随本轮回退，API 用例恢复原断言。
 
@@ -148,8 +148,8 @@
 - 定向用例全绿：`dispatch-coordinator.test.ts`（15，含 3 条新容量用例）、`m3-run.test.ts`（13，
   含 `releaseWorkspace` 的回收/幂等/分支保留）、`projections/activity.test.ts`（4）、
   `explorer-service.test.ts`（6，含时间命名）、`apps/api/src/server.test.ts`（47）。
-- `pnpm verify` 本轮**未能运行**（命令被权限分类器拦截，见会话记录）；`tsc -p packages/domain`、
-  `tsc -p apps/api`、`vue-tsc -p apps/web` 单独跑均无错误。
+- 当时 `pnpm verify` 被权限分类器拦截，改为逐项跑（三个 typecheck + 三个测试包）；**后经用户授权
+  重跑聚合命令，同一份代码全绿**：domain 303 / api 95 / web 434，无新增值级环。
 
 ## 2026-09-29 — Plan 契约去掉"会说谎的字段"，依赖闸门变成可达
 
