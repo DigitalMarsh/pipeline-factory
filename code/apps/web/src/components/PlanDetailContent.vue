@@ -1,14 +1,21 @@
 <!-- PlanDetailDrawer 的结构化 Plan 正文，可放入共享抽屉。 -->
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { Close, DocumentChecked, Lock, Right } from "@element-plus/icons-vue";
+import { Close, DocumentChecked, Lock, Right, Warning } from "@element-plus/icons-vue";
 import type { Plan, PlanTask } from "../types";
 import { canDiscardPlan } from "../utils/planControls";
+import { isConversationArtifactPlan } from "../utils/explorerRequirementRows";
 
 const props = defineProps<{ plan: Plan | null; error?: string | null | undefined; revisions?: number[] | undefined; revisionDraftStatus?: "EDITING" | "READY_TO_CONFIRM" | "CONFIRMED" | "DISCARDED" | "BASE_CHANGED" | null | undefined; readOnly?: boolean | undefined; dependencyOptions?: Array<{ id: string; title: string }> | undefined; canEditDependencies?: boolean | undefined; dependenciesSaving?: boolean | undefined; verificationSuiteOptions?: string[] | undefined; canEditVerificationSuites?: boolean | undefined; verificationSuitesSaving?: boolean | undefined }>();
 const emit = defineEmits<{ close: []; confirm: []; discard: []; "keep-editing": [plan: Plan]; "select-revision": [revision: number]; "update-dependencies": [planIds: string[]]; "update-verification-suites": [suites: string[]] }>();
 const planId = computed(() => props.plan?.planId ?? props.plan?.id ?? "—");
 const canConfirm = computed(() => !props.readOnly && props.plan?.status === "DRAFT" && (!props.revisionDraftStatus || props.revisionDraftStatus === "READY_TO_CONFIRM"));
+/**
+ * 对话产物（CONVERSATION）的**确认是终点而不是起点**：它是合法契约、也允许确认，
+ * 但确认后既不能入队也不能启动 Run（服务端抛 CONVERSATION_ARTIFACT_NOT_EXECUTABLE）。
+ * 所以在确认按钮上方明说一次，别让人确认完、切到 Run 页签才发现。
+ */
+const conversationArtifact = computed(() => isConversationArtifactPlan(props.plan));
 const canDiscard = computed(() => !props.readOnly && canDiscardPlan(props.plan?.status));
 const contract = computed(() => props.plan?.contract);
 const resolved = computed(() => props.plan?.resolvedContract);
@@ -106,6 +113,7 @@ const mergeRequest = computed(() => props.plan?.mergeRequest ?? null);
       <section v-if="mergeRequest?.status === 'OPEN' && mergeRequest.detectedTargetCommit" class="contract-section merge-detected-section"><div class="section-heading"><span>03E</span><strong>Merge detection</strong><el-tag size="small" type="warning" effect="light">待人工确认</el-tag></div><p class="merge-detected-copy">已检测到目标分支包含此 Run 的 source commit。Plan 会在人工确认前保持 MERGE_READY。</p><div class="policy-grid"><div><label>SOURCE COMMIT</label><code>{{ mergeRequest.sourceCommit }}</code></div><div><label>TARGET</label><code>{{ mergeRequest.targetBranch }} · {{ mergeRequest.detectedTargetCommit }}</code></div></div><RouterLink v-if="plan.runId" class="merge-detected-link" :to="runPath(plan)">Open run to confirm</RouterLink></section>
       <section class="contract-section"><div class="section-heading"><span>04</span><strong>Execution policy</strong></div><div class="policy-grid"><div><label>FROZEN PROJECT</label><strong>{{ resolved?.repository.repoRoot ?? 'Not frozen' }} · config v{{ resolved?.repository.configVersion ?? '—' }}</strong></div><div><label>BASE</label><strong>{{ resolved?.repository.baseBranch ?? contract?.baseBranch ?? '—' }} · {{ resolved?.repository.baseCommit ?? contract?.baseCommit ?? '—' }}</strong></div><div><label>VERIFICATION</label><em v-if="generated?.verification.suites?.length" class="policy-note">按 tag 选子集：{{ generated.verification.suites.join(" · ") }}</em><strong>{{ resolved?.verification.mode === 'NONE' || generated?.verification.mode === 'NONE' ? '未配置自动验证（将记录为 SKIPPED）' : (resolved?.verification.commandIds ?? contract?.verificationCommandIds ?? plan.verificationCommands ?? []).join(' · ') || (generated?.verification ? '项目默认验证命令' : '—') }}</strong></div><div><label>EXECUTOR</label><strong>{{ resolved?.execution.executorModelRole ?? contract?.executorModelRole ?? '—' }} · Factory 固定</strong></div><div><label>TOOL POLICY</label><strong>{{ resolved?.execution.toolPolicy ?? contract?.toolPolicy ?? '—' }} · Factory 固定</strong></div><div><label>REPAIR LIMIT</label><strong>{{ resolved?.execution.maxRepairAttempts ?? generated?.execution.maxRepairAttempts ?? contract?.maxRepairAttempts ?? '—' }} attempts</strong></div><div><label>MERGE</label><strong>{{ resolved?.merge.strategy ?? generated?.merge.strategy ?? contract?.mergeStrategy ?? '—' }} · {{ (resolved?.merge.requireHumanMerge ?? generated?.merge.requireHumanMerge ?? contract?.requireHumanMerge) ? 'human review required' : '—' }}</strong></div></div></section>
       <section class="contract-section source-section"><div class="section-heading"><span>05</span><strong>Source evidence</strong></div><div class="source-row"><span>ExplorerThread</span><code>{{ plan.sourceExplorerThreadId }}</code></div><div class="source-row"><span>Contract</span><code>{{ resolved ? 'Resolved V2' : generated ? 'Generated V2' : 'Legacy V1 · read only' }}</code></div></section>
+      <div v-if="!readOnly && canConfirm && conversationArtifact" class="drawer-confirm-warning" role="status"><Warning :size="14" /><span><strong>此 Plan 是对话产物（CONVERSATION）。</strong>确认后仍不能入队或启动 Run，执行线程也不会产生仓库改动。要执行请在探索对话里改成“仓库文件”产物（REPOSITORY_FILE），确认新版本。</span></div>
       <div v-if="readOnly" class="drawer-readonly-note" role="status"><Lock :size="14" /><span>执行线程使用此冻结 Revision；Plan 生命周期操作已在此处隐藏。</span></div>
       <div v-else class="drawer-actions"><el-button v-if="canDiscard" type="danger" plain @click="emit('discard')">Discard plan</el-button><el-button v-if="!readOnly && !revisionDraftStatus && plan.status !== 'DISCARDED'" @click="emit('keep-editing', plan)">{{ plan.status === 'DRAFT' ? 'Edit this Plan' : `Continue editing V${plan.revision + 1}` }}</el-button><el-button v-if="canConfirm" type="primary" @click="emit('confirm')">Confirm V{{ plan.revision }} <Right /></el-button><div v-if="readOnly || (!canConfirm && !revisionDraftStatus)" class="locked-action"><Lock :size="14" /> {{ plan.status === 'DISCARDED' ? 'Discarded · No further actions' : 'Historical contract is read only' }}</div><div v-else-if="revisionDraftStatus" class="locked-action"><Lock :size="14" /> {{ revisionDraftStatus === 'EDITING' ? 'Revision draft is still being edited' : revisionDraftStatus === 'BASE_CHANGED' ? 'Default branch changed · rebase required' : 'Revision is ready to confirm' }}</div></div>
     </div><div v-else-if="props.error" class="drawer-shell"><div class="settings-error">{{ props.error }}</div></div><div v-else class="drawer-shell"><p>正在加载完整 Plan…</p></div>
@@ -115,6 +123,9 @@ const mergeRequest = computed(() => props.plan?.mergeRequest ?? null);
 <style scoped>
 .drawer-readonly-note { display: flex; align-items: flex-start; gap: 8px; margin-top: 15px; padding: 11px 12px; border: 1px solid #dfe7f2; border-radius: 7px; background: #f7faff; color: #6c7f9b; font-size: 10px; line-height: 1.5; }
 .drawer-readonly-note svg { flex: 0 0 auto; margin-top: 1px; color: #7c96bd; }
+.drawer-confirm-warning { display: flex; align-items: flex-start; gap: 8px; margin-top: 15px; padding: 11px 12px; border: 1px solid #f0dfb7; border-radius: 7px; background: #fffaf0; color: #7c6a4b; font-size: 10px; line-height: 1.6; }
+.drawer-confirm-warning svg { flex: 0 0 auto; margin-top: 1px; color: #c99a3f; }
+.drawer-confirm-warning strong { color: #a5761f; }
 .merge-detected-section { padding: 14px; border: 1px solid #f0dfb7; border-radius: 7px; background: #fffaf0; }
 .merge-detected-section .section-heading { margin-bottom: 8px; }
 .merge-detected-copy { margin: 0 0 12px; color: #7c6a4b; font-size: 10px; line-height: 1.6; }

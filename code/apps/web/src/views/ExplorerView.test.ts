@@ -31,7 +31,6 @@ const threadRailSource = readFileSync(fileURLToPath(new URL("../components/Threa
 const explorerHeaderStatusSource = readFileSync(fileURLToPath(new URL("../components/ExplorerHeaderStatus.vue", import.meta.url)), "utf8");
 const providerUsageFooterSource = readFileSync(fileURLToPath(new URL("../components/ProviderUsageFooter.vue", import.meta.url)), "utf8");
 const projectCatalogSource = readFileSync(fileURLToPath(new URL("./ProjectCatalogView.vue", import.meta.url)), "utf8");
-const planCenterSource = readFileSync(fileURLToPath(new URL("../components/PlanCenterPanel.vue", import.meta.url)), "utf8");
 
 describe("Explorer thread actions", () => {
   it("uses a real dropdown menu with pause, rename, policy and refresh actions", () => {
@@ -139,6 +138,8 @@ describe("Explorer requirement list and shared drawer", () => {
     expect(explorerViewSource).toContain('@view-plan="openRequirementPlan"');
     expect(explorerViewSource).toContain('@open-task="openRequirementTask"');
     expect(explorerViewSource).toContain("projectExplorerRequirementRows(");
+    // ac4d794 把独立的 Plan Center 面板并进了需求工作区；那个组件本身已经删除，
+    // 这条守卫现在的意思是**不要再长出第二套 Plan 中心**（与下面两条旧上下文面板同理）。
     expect(explorerViewSource).not.toContain("<PlanCenterPanel");
     expect(explorerViewSource).not.toContain('class="context-panel-shell"');
     expect(explorerViewSource).not.toContain('class="context-entry-rail"');
@@ -179,6 +180,12 @@ describe("Explorer requirement list and shared drawer", () => {
     expect(explorerViewSource).toContain("failedExplorerSends");
     expect(explorerViewSource).toContain("clientTurnId");
     expect(explorerViewSource).toContain("draft.value = content");
+  });
+
+  it("warns inline when the card is a conversation artifact", () => {
+    // 对话产物确认后进不了执行：卡片上（两张内联卡各一处）在按钮旁边就说清，而不是等人切到 Run 页签。
+    expect(explorerViewSource).toContain('<p v-if="isConversationArtifactPlan(item.plan)" class="candidate-notice">');
+    expect(explorerViewSource).toContain('<p v-if="isConversationArtifactPlan(planForActivity(item.activity))" class="candidate-notice">');
   });
 
   it("preserves confirm and enqueue order while opening the task tab", () => {

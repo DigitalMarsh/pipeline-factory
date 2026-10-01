@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 /**
  * 测试职责：验证 Plan 详情里两个"Factory-owned、由人来设"的编辑器 —— 前置 Plan 与验证子集 ——
- *   在候选态可改、在只读/非候选态只展示，并且**勾选项只来自传入的词表**。
+ *   在候选态可改、在只读/非候选态只展示，并且**勾选项只来自传入的词表**；
+ *   另外锁住"对话产物确认前必须给出不可执行警告"（警告不是拦截，Confirm 仍在）。
  * 设计说明：这里挂真实组件（不是读源码），因为这两块的交互（勾选 → 保存 → 抛事件）才是要保的东西。
  * 维护提示：新增这类"人来设的调度字段"时，照抄这里的三个场景：可选、不脏时禁用、保存抛出选择结果。
  */
@@ -46,6 +47,17 @@ function candidatePlan(overrides: Partial<Plan> = {}): Plan {
     },
     ...overrides,
   } as Plan;
+}
+
+function conversationPlan(): Plan {
+  const base = candidatePlan();
+  // 对话产物三处声明都要改：投影可能来自 contract / generatedSpec / resolvedContract 任一份。
+  return {
+    ...base,
+    contract: { ...base.contract!, artifactMode: "CONVERSATION" },
+    generatedSpec: { ...base.generatedSpec!, artifact: { mode: "CONVERSATION" }, scope: { includePaths: [], excludePaths: [] }, verification: { mode: "NONE" } },
+    resolvedContract: { ...base.resolvedContract!, artifact: { mode: "CONVERSATION" }, scope: { includePaths: [], excludePaths: [] }, verification: { mode: "NONE", commandIds: [] } },
+  };
 }
 
 function mount(props: Record<string, unknown>) {
@@ -111,5 +123,27 @@ describe("PlanDetailContent scheduling editors", () => {
     await nextTick();
     [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("保存前置 Plan"))?.click();
     expect(emitted.dependencies).toEqual([["plan-0"]]);
+  });
+});
+
+describe("PlanDetailContent conversation artifact warning", () => {
+  const confirmButton = (host: HTMLElement) => [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Confirm V"));
+
+  it("warns before confirming a conversation artifact, and still allows confirming it", () => {
+    const { host } = mount({ plan: conversationPlan() });
+
+    // 确认是终点：要说清"确认后仍不能执行"以及出路，而不是让人到 Run 页签才发现。
+    expect(host.textContent).toContain("此 Plan 是对话产物（CONVERSATION）");
+    expect(host.textContent).toContain("确认后仍不能入队或启动 Run");
+    expect(host.textContent).toContain("REPOSITORY_FILE");
+    // 警告不是拦截：对话产物仍可确认（它本来就是合法契约）。
+    expect(confirmButton(host)).toBeDefined();
+  });
+
+  it("keeps the warning off executable plans", () => {
+    const { host } = mount({});
+
+    expect(host.textContent).not.toContain("此 Plan 是对话产物");
+    expect(confirmButton(host)).toBeDefined();
   });
 });

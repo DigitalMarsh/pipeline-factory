@@ -1,5 +1,66 @@
 # Changelog
 
+## 2026-10-01（其三）— 对话产物的确认边界、Explorer 指令与一处死代码清理
+
+### 为什么做
+
+从一次用户报障开始："需求7 确认了 V2 之后，执行页签点不动。"查下去是三件独立的事叠在一起，
+最后顺手清掉一处死代码。三件事都绕着同一条边界：**对话产物（CONVERSATION）可以被确认，但不能被执行。**
+
+### Changed
+
+**1. 抽屉里的 "Confirm V2" 点了没反应**
+
+- 根因不在按钮，而在"确认哪一版"。工作区投影**只把 DRAFT 的 Plan 当候选**：已确认 Plan 上挂着修订草稿时
+  `candidate` 是 `null`，而 `confirmPlan` 第一行就固定读它——于是直接早退，没有请求、没有报错、没有提示。
+  抽屉却照常渲染出草稿投影的 "Confirm V2"（它走的是 `detailPlan`），**两边认的不是同一份 Plan**。
+- 改法：`confirmPlan` / `discardPlan` 的**目标由调用方给**（抽屉传 `detailPlan`，时间线内联卡传卡片自己那份），
+  缺省才回落到 `candidate`——与 `enqueuePlan(plan)` 一直以来的写法一致。
+- 顺带修掉一处同类缺陷：内联卡的 `@click="enqueuePlan"` 会把 MouseEvent 当 Plan 传进去，
+  `plan.status !== "READY"` 直接早退——**那个 "Enqueue plan" 按钮此前同样是死的**。
+- 一并发现："Discard plan" 在同样的状态下也点不动（同一个读 `candidate` 的守卫）。
+
+**2. Explorer 不再把 CONVERSATION 标成"推荐"**
+
+- `EXPLORER_PLAN_INSTRUCTIONS` 补一条：不得把 CONVERSATION 标成推荐、默认项或首选；需求要改仓库里的文件时
+  只有 REPOSITORY_FILE 能被执行；只有"只要一份对话内的结论、不落盘"的需求才适合 CONVERSATION。
+  起因是需求7 那次提问把 CONVERSATION 标成"（推荐）"，而同一组回答里用户选的目标与范围
+  （补充/修改作品集 + 仅 `code/personal-site/**`）明明是仓库改动——**模型推荐错了模式，系统也没提示这个矛盾**。
+- **生效范围**：这段指令只在 `role === "explorer" && mode === "plan"` 且**新建 provider thread** 时注入
+  （`codex-app-server.ts`），所以**已存在的探索线程拿不到新提示词**，要新建线程/需求才会用上。
+
+**3. 确认前给警告（只警告、不拦截）**
+
+- Plan 详情抽屉：确认按钮上方说明"确认后仍不能入队或启动 Run"以及出路（改成 REPOSITORY_FILE 并确认新版本）。
+- 时间线内联卡（PLAN CREATED 卡与 assistant 活动卡各一处）：同一句话的紧凑版。
+- 之所以只警告不拦截：对话产物是**合法契约**（设计文档 §14：两种模式都可 Confirm，只是禁止 Enqueue/Dispatch/Start Run），
+  确认入口不该被拿掉；要拦的是"不知道自己正在确认什么"。
+
+**4. 删除死代码 `PlanCenterPanel`**
+
+- 它在 ac4d794（consolidate explorer requirement workspace）之后就没有任何地方渲染了：全仓库只剩它自己、
+  它自己的测试，以及 `ExplorerView.test.ts` 里一个从未被使用的 `planCenterSource` 声明。
+  它做过的事已由 Explorer 的需求工作区承接（配置项目命令、创建更新版本都在任务面板里）。
+- 同时删掉它的测试与那个未使用的声明；保留 `not.toContain("<PlanCenterPanel")` 守卫并注明新含义——
+  **不要再长出第二套 Plan 中心**（与它并列的两条旧上下文面板守卫同理）。
+- 两条账要记：
+  - `utils/runPrerequisites.ts` 的 `parseMissingRunCommands` 现在只剩测试在调它（面板是唯一生产调用方）。
+    **本轮没动它**——删不删取决于还要不要那个提示文案。
+  - 面板里的 **"Retry dispatch"（自动派发失败后重试）目前界面上没有入口**：它只存在于这个面板，
+    随 ac4d794 一起失去可达性。删死代码不会让它更差，但这是真实的能力缺口，需要时得在需求工作区补一个。
+
+### 验证
+
+- `pnpm verify` 全绿：domain **308** / api **96** / web **441**（比上一轮少 4 条 = 随面板删掉的用例）。
+- 新增/更新用例：`usePlanLifecycleActions.test.ts`（候选为 null 时确认与丢弃仍走草稿端点）、
+  `ExplorerView.test.ts`（抽屉 `@confirm` 传 `detailPlan`、两张内联卡的警告句）、
+  `PlanDetailContent.test.ts`（**挂真实组件**：对话产物有警告且仍可确认、可执行方案没有警告）、
+  `plan-requirements.test.ts`（锁住"不得标成推荐"那句，并与 `artifactModes` 交叉校验）。
+- 浏览器实测（dev server 5173，代理到同一个 4310 API）：需求7 的 V2 草稿点 "Confirm V2" 会发出
+  `POST /api/v4/plans/plan-f8801424-f30/revision-drafts/revision-draft-c535f61f-0b1/confirm`
+  （用 fetch 拦截器拦下记录，**未真的落库**，草稿确认是用户自己点的）；对话产物草稿上抽屉与内联卡都出现警告、
+  按钮仍在；REPOSITORY_FILE 的方案没有警告。
+
 ## 2026-10-01（其二）— 冲突判定范围可选、验证子集可人工重挑
 
 ### 为什么做
