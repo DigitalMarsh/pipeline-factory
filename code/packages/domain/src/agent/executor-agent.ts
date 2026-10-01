@@ -372,6 +372,7 @@ export class ExecutorAgent {
       const toolName = toolLike ? safeProviderName(payload.toolName) ?? safeProviderName(payload.title) : undefined;
       const serverName = safeProviderName(payload.serverName);
       const providerStatus = normalizeProviderStatus(payload.status);
+      const summary = boundedText(payload.summary, 600);
       const reason = boundedText(payload.error, 600);
       const providerItemId = typeof payload.itemId === "string" ? payload.itemId : typeof payload.providerItemId === "string" ? payload.providerItemId : undefined;
       this.append(run.executionThreadId, "PROVIDER_ACTIVITY", {
@@ -380,6 +381,10 @@ export class ExecutorAgent {
         itemType,
         activityKind,
         outcome,
+        // **记下"这一条活动到底是什么"**：命令行的原文、被改动的文件路径都由 Provider 放在 summary 里。
+        // 不记它，执行会话就只能显示「命令 · 已完成 · Provider reported success」——说了等于没说，
+        // 用户看不懂"它在干什么、为什么"。这是执行线程可读性的关键一条。
+        ...(summary ? { summary } : {}),
         ...(toolName ? { toolName } : {}),
         ...(serverName ? { serverName } : {}),
         ...(providerStatus ? { providerStatus } : {}),

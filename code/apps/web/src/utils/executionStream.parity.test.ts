@@ -51,7 +51,7 @@ describe("Provider 活动在页面上的成败呈现", () => {
 
     expect(items).toHaveLength(1);
     expect(items[0]?.status).toBe("COMPLETED");
-    expect(items[0]?.detail).toBe("Provider reported success");
+    expect(items[0]?.detail).toBe("执行成功");
     // 成功不再被记成"未记录项"。
     expect(items[0]?.unrecordedFields ?? []).not.toContain("调用结束状态未记录");
   });

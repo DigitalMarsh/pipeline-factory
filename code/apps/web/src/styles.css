@@ -273,15 +273,15 @@ a { color: inherit; text-decoration: none; }
 .execution-pending-steps strong { color: #6b7c93; font-size: 11px; }
 .execution-pending-steps small { flex: 1 0 100%; color: #a9b4c2; font-size: 9px; line-height: 1.5; }
 .execution-task-stream-quiet { color: #b3bdc9; font-size: 9px; }
-/* 没有成败概念的活动记录：默认收起，展开是一行一条的紧凑列表。 */
-.execution-activity-noise { margin: 6px 0 0; }
-.execution-activity-noise > summary { color: #9aa6b6; cursor: pointer; font-size: 10px; }
-.execution-activity-noise > summary:hover { color: #627aa8; }
-.execution-activity-noise-list { display: grid; gap: 2px; margin: 6px 0 0; padding: 8px 11px; border-radius: 6px; background: #fafbfd; list-style: none; }
-.execution-activity-noise-list li { display: grid; grid-template-columns: 62px auto minmax(0, 1fr); align-items: baseline; gap: 8px; color: #8b98a9; font-size: 10px; }
+/* 档位为 `folded` 的过程记录：默认收起，展开是一行一条的紧凑列表。 */
+.execution-folded-log { margin: 6px 0 0; }
+.execution-folded-log > summary { color: #9aa6b6; cursor: pointer; font-size: 10px; }
+.execution-folded-log > summary:hover { color: #627aa8; }
+.execution-folded-list { display: grid; gap: 2px; margin: 6px 0 0; padding: 8px 11px; border-radius: 6px; background: #fafbfd; list-style: none; }
+.execution-folded-list li { display: grid; grid-template-columns: 62px auto minmax(0, 1fr); align-items: baseline; gap: 8px; color: #8b98a9; font-size: 10px; }
 .execution-noise-time { color: #b3bdc9; font: 10px ui-monospace, monospace; }
 .execution-noise-title { color: #7b8899; }
-.execution-activity-noise-list small { color: #a9b4c2; }
+.execution-folded-list small { color: #a9b4c2; }
 /* Run 级活动的列表：与 execution-context-grid 同一种"格子"语言，但一行一条事件，可滚动。 */
 .run-activity-block { display: grid; gap: 8px; }
 .run-activity-count { color: #9aa6b6; font-size: 10px; }

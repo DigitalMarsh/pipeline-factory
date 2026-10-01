@@ -117,6 +117,7 @@ function runActivityItem(overrides: Partial<ExecutionStreamItem> = {}): Executio
     status: "INFO",
     occurredAt: "2026-10-01T02:55:40.000Z",
     sequence: 1,
+    messageType: "run-activity",
     ...overrides,
   };
 }

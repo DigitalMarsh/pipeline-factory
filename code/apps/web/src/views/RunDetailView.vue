@@ -13,7 +13,7 @@ import ProviderUsageFooter from "../components/ProviderUsageFooter.vue";
 import { api } from "../api";
 import MarkdownMessage from "../components/MarkdownMessage.vue";
 import type { AgentLoopStep, ExecutionTask, ExecutionThread, MergeRequest, Plan, PlanTask, Run, RunJournalEvent, VerificationRun } from "../types";
-import { projectExecutionJournal, type ExecutionJournalEntry, type ExecutionPlanSnapshot, type ExecutionStreamItem } from "../utils/executionStream";
+import { executionDisplayMode, projectExecutionJournal, type ExecutionJournalEntry, type ExecutionPlanSnapshot, type ExecutionStreamItem } from "../utils/executionStream";
 import { executionMessageDetails, executionMessageDiagnosticsTitle } from "../utils/executionMessageDetails";
 import { executionModelSourceNote as executionModelSourceNoteFor, formatProviderContextUsage, resolveExecutionModelIdentity } from "../utils/executionTelemetry";
 import { useModelBackends } from "../composables/useModelBackends";
@@ -135,15 +135,19 @@ function collapsePendingTaskGroups(groups: ExecutionConversationGroup[]): Execut
   return collapsed;
 }
 
-/** 没有成败概念的活动（推理流、Provider 消息、会话重建）——默认折叠，不让它们淹没真正发生的事。 */
-function isActivityNoise(item: ExecutionStreamItem): boolean {
-  return item.outcome === "not-applicable";
-}
+/**
+ * 按**呈现档位**分流（档位表在 utils/executionStream.ts 的 `EXECUTION_DISPLAY_MODES`）。
+ * 视图不自己判断"这条该不该显示"：档位是产品决定，集中在一张表里，改那里即可。
+ * `hidden` 的条目连计数都不进——它们不是内容，只是 Provider 的机制回显。
+ */
 function visibleItems(group: ExecutionConversationGroup): ExecutionStreamItem[] {
-  return group.items.filter((item) => !isActivityNoise(item));
+  return group.items.filter((item) => {
+    const mode = executionDisplayMode(item);
+    return mode === "card" || mode === "line";
+  });
 }
-function noiseItems(group: ExecutionConversationGroup): ExecutionStreamItem[] {
-  return group.items.filter(isActivityNoise);
+function foldedItems(group: ExecutionConversationGroup): ExecutionStreamItem[] {
+  return group.items.filter((item) => executionDisplayMode(item) === "folded");
 }
 
 /**
@@ -610,7 +614,7 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
               <strong>{{ group.task.title }}</strong>
               <span :class="['execution-task-stream-status', `tone-${group.task.status.toLowerCase()}`]">{{ executionTaskStatusLabel(group.task.status) }}</span>
               <span class="execution-task-stream-count">{{ visibleItems(group).length }} 条</span>
-              <span v-if="noiseItems(group).length" class="execution-task-stream-quiet">{{ noiseItems(group).length }} 条活动</span>
+              <span v-if="foldedItems(group).length" class="execution-task-stream-quiet">{{ foldedItems(group).length }} 条过程记录</span>
               <ArrowUp v-if="!isTaskGroupCollapsed(group.id)" :size="14" /><ArrowDown v-else :size="14" />
               <small v-if="group.task.blockedReason">{{ group.task.blockedReason }}</small>
             </button>
@@ -623,7 +627,7 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
               <small>{{ (group.tasks ?? []).map((task) => task.title).join(" · ") }}</small>
             </div>
             <div v-if="group.kind !== 'pending' && !isTaskGroupCollapsed(group.id)" :id="`execution-task-stream-${group.id}`" class="execution-task-stream-items">
-            <p v-if="group.task && !visibleItems(group).length && !noiseItems(group).length" class="execution-task-stream-empty">{{ taskGroupEmptyNote(group.task) }}</p>
+            <p v-if="group.task && !visibleItems(group).length && !foldedItems(group).length" class="execution-task-stream-empty">{{ taskGroupEmptyNote(group.task) }}</p>
             <article v-for="item in visibleItems(group)" :key="item.id" :data-sequence="item.sequence" :data-task-id="item.taskId" :data-model-step="item.modelStep" :title="executionMessageDiagnosticsTitle(item)" :class="['execution-message', `execution-message-${item.kind}`, { failed: item.status === 'FAILED', waiting: item.status === 'WAITING', running: item.status === 'RUNNING', unknown: item.status === 'UNKNOWN', mine: item.role === 'user' }]">
               <div class="execution-message-avatar">{{ item.role === 'user' ? 'LS' : item.kind === 'plan' ? 'PL' : item.kind === 'model' ? 'EX' : item.kind === 'tool' ? 'TL' : '·' }}</div>
               <div class="execution-message-body">
@@ -651,12 +655,11 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
                 </template>
               </div>
             </article>
-            <!-- 推理流 / Provider 消息 / 会话重建**没有成败概念**，一条一张卡只会淹没真正发生的事。
-                 保留在可展开的一行里：默认不占视线，需要时仍可回溯。 -->
-            <details v-if="noiseItems(group).length" class="execution-activity-noise">
-              <summary>{{ noiseItems(group).length }} 条活动记录（推理 / 消息）</summary>
-              <ul class="execution-activity-noise-list">
-                <li v-for="item in noiseItems(group)" :key="item.id" :data-sequence="item.sequence"><span class="execution-noise-time">{{ new Date(item.occurredAt).toLocaleTimeString("zh-CN") }}</span><span class="execution-noise-title">{{ item.title }}</span><small v-if="item.detail">{{ item.detail }}</small></li>
+            <!-- 档位为 `folded` 的过程记录（推理、门禁、机制提示）：默认不占视线，需要时仍可回溯。 -->
+            <details v-if="foldedItems(group).length" class="execution-folded-log">
+              <summary>{{ foldedItems(group).length }} 条过程记录</summary>
+              <ul class="execution-folded-list">
+                <li v-for="item in foldedItems(group)" :key="item.id" :data-sequence="item.sequence"><span class="execution-noise-time">{{ new Date(item.occurredAt).toLocaleTimeString("zh-CN") }}</span><span class="execution-noise-title">{{ item.title }}</span><small v-if="item.detail">{{ item.detail }}</small></li>
               </ul>
             </details>
             </div>

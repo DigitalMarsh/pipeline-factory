@@ -48,8 +48,107 @@ export type ExecutionStreamItem = {
   /** Provider 活动的中立类别与成败（见下方 ACTIVITY_KIND_LABELS 的说明）；非 Provider 活动条目为空。 */
   activityKind?: ProviderActivityKind | undefined;
   outcome?: ProviderActivityOutcome | undefined;
+  /** 这条消息属于哪一类（见 EXECUTION_DISPLAY_MODES）。呈现方式只由它决定。 */
+  messageType: ExecutionMessageType;
   plan?: ExecutionPlanSnapshot;
 };
+
+/**
+ * 执行会话里的消息类型。**这张联合类型就是"消息清单"**——每一种在聊天框里怎么呈现，
+ * 由下面 `EXECUTION_DISPLAY_MODES` 一张表决定；要调整呈现方式，改表即可，不用翻模板。
+ *
+ * 为什么把它显式化：此前呈现方式是散在投影与模板里的——有的按 `kind` 分支、有的按 `outcome` 猜、
+ * 有的靠标题字符串相等（`title === "Executor report"`）。于是"这类消息要不要显示、显示成什么样"
+ * 没有一个地方能一眼看全，改一处就会漏另一处。
+ */
+export type ExecutionMessageType =
+  /** 冻结方案的摘要（每个 Run 一条） */
+  | "plan"
+  /** Executor 的正文：它在做什么、发现了什么 */
+  | "model-prose"
+  /** Executor 的结构化完成报告（完成了哪几步、改了哪些文件） */
+  | "model-report"
+  /** 你在执行线程里发的消息 */
+  | "guidance"
+  /** 跑了一条命令 */
+  | "command"
+  /** 改动了文件 */
+  | "file-change"
+  /** 工具 / MCP 调用 */
+  | "tool"
+  /** 模型的推理摘要 */
+  | "reasoning"
+  /** Provider 回显的输入（不是模型说的话） */
+  | "provider-message"
+  /** Provider 会话重建 */
+  | "session"
+  /** 执行步骤开始 / 完成 */
+  | "task-lifecycle"
+  /** 门禁判定与暂停 / 恢复 */
+  | "gate"
+  /** 上下文压缩、旧版修订提示 */
+  | "context"
+  /** Executor 循环建好 */
+  | "loop"
+  /** Run 级事件：创建、生命周期钩子、验证（当前承载在顶部 RUN CONTEXT 卡片） */
+  | "run-activity"
+  /** 认不出来的活动：宁可显示成"未识别"，也不要让它伪装成某个已知类别 */
+  | "unclassified"
+  /** 阻塞、取消、需要恢复 —— 异常，必须显眼 */
+  | "recovery";
+
+/**
+ * 呈现档位：
+ * - `card`：完整卡片（可读正文 + 详情）
+ * - `line`：一行（紧凑活动行，不展开正文）
+ * - `folded`：折进所属执行步骤的「N 条活动」，点开才看
+ * - `hidden`：不渲染
+ */
+export type ExecutionDisplayMode = "card" | "line" | "folded" | "hidden";
+
+/**
+ * **消息类型 → 呈现档位。这张表就是"清单"本身。**
+ * 依据是每条消息对"搞清楚 Executor 在干什么"的贡献：
+ * 正文与结论是 `card`；动作（命令 / 文件 / 工具 / 步骤）是 `line`；
+ * 过程性噪音（推理、门禁）`folded`；Provider 的回显与会话机制 `hidden`。
+ */
+export const EXECUTION_DISPLAY_MODES: Record<ExecutionMessageType, ExecutionDisplayMode> = {
+  plan: "card",
+  "model-prose": "card",
+  "model-report": "card",
+  guidance: "card",
+  command: "line",
+  "file-change": "line",
+  tool: "line",
+  "task-lifecycle": "line",
+  reasoning: "folded",
+  gate: "folded",
+  // 机制信息（循环建好、模型轮次占位、上下文压缩）：默认收起而不是彻底隐藏——
+  // 它们平时无用，但排查"这一轮到底有没有开始"时是唯一线索。
+  loop: "folded",
+  context: "folded",
+  unclassified: "folded",
+  "provider-message": "hidden",
+  session: "hidden",
+  "run-activity": "card",
+  recovery: "card",
+};
+
+/**
+ * 这条消息是否只是"机制记录"——它不构成内容，因此不改变"报告是否重复"的判断
+ * （见 flushModel 里合并重复完成报告的那段）。
+ * 此前这里比的是**标题字符串**（`["Task progress", "Execution activity", "任务完成"].includes(title)`），
+ * 改一个文案就会静默失效。
+ */
+function isMechanismOnly(item: ExecutionStreamItem): boolean {
+  return item.messageType === "loop" || item.messageType === "task-lifecycle" || item.messageType === "gate" || item.messageType === "context" || item.messageType === "unclassified";
+}
+
+/** 这条消息该怎么呈现。视图与分组都只问它，不再各自判断。 */
+export function executionDisplayMode(item: ExecutionStreamItem): ExecutionDisplayMode {
+  return EXECUTION_DISPLAY_MODES[item.messageType];
+}
+
 
 type PendingModelText = {
   text: string;
@@ -83,15 +182,20 @@ export function projectExecutionJournal(journal: ExecutionJournalEntry[], thread
       return;
     }
     const display = humanizeModelOutput(pendingModel.text);
+    // 正文被清空（例如整条输出只有一段任务标记）时**不产生卡片**：只剩标题和时间的空卡片是纯噪音。
+    if (!display || !display.body.trim()) {
+      pendingModel = null;
+      return;
+    }
     if (display) {
       let previousIndex = -1;
-      if (display.title === "Executor report") {
+      if (display.report) {
         for (let index = items.length - 1; index >= 0; index -= 1) {
-          if (items[index]?.kind === "model" && items[index]?.title === "Executor report") { previousIndex = index; break; }
+          if (items[index]?.messageType === "model-report") { previousIndex = index; break; }
         }
       }
       const previous = previousIndex >= 0 ? items[previousIndex] : undefined;
-      const onlyProgressBetween = previousIndex >= 0 && items.slice(previousIndex + 1).every((item) => item.kind === "activity" && (item.title.startsWith("模型轮次") || ["Task progress", "Execution activity", "任务完成"].includes(item.title)));
+      const onlyProgressBetween = previousIndex >= 0 && items.slice(previousIndex + 1).every(isMechanismOnly);
       if (previous && onlyProgressBetween && sameReportProgress(previous.content, display.body)) {
         previous.content = display.body;
         previous.sequence = pendingModel.lastSequence;
@@ -109,6 +213,7 @@ export function projectExecutionJournal(journal: ExecutionJournalEntry[], thread
         role: "assistant",
         title: display.title,
         content: display.body,
+        messageType: display.report ? "model-report" : "model-prose",
         detail: missing.join(" · "),
         status: "COMPLETED",
         occurredAt: pendingModel.occurredAt,
@@ -259,6 +364,7 @@ export function projectExecutionJournal(journal: ExecutionJournalEntry[], thread
             completed ? "模型轮次已结束" : "模型正在处理此轮任务",
             completed ? "COMPLETED" : "RUNNING",
             {
+              messageType: "loop",
               ...(taskId ? { taskId } : {}),
               ...(modelStep === undefined ? {} : { modelStep }),
               ...(currentLoopId ? { loopId: currentLoopId } : {}),
@@ -286,7 +392,7 @@ export function projectExecutionJournal(journal: ExecutionJournalEntry[], thread
           if (lifecycleState === "DONE") seenCompletedTasks.add(lifecycleTaskId);
           const title = lifecycleState === "IN_PROGRESS" ? "任务开始" : lifecycleState === "DONE" ? "任务完成" : "任务阻塞";
           const detail = lifecycleState === "BLOCKED" ? stringValue(payload.reason) ?? "阻塞原因未记录。" : taskTitle(plan, lifecycleTaskId);
-          items.push(activity(entry, title, detail, lifecycleState === "IN_PROGRESS" ? "RUNNING" : lifecycleState === "DONE" ? "COMPLETED" : "FAILED", { taskId: lifecycleTaskId, ...(step === undefined ? {} : { modelStep: step }), ...(loopId ? { loopId } : {}), ...(stringValue(payload.providerThreadId) ? { providerThreadId: stringValue(payload.providerThreadId) } : {}), ...(stringValue(payload.providerTurnId) ? { providerTurnId: stringValue(payload.providerTurnId) } : {}) }));
+          items.push(activity(entry, title, detail, lifecycleState === "IN_PROGRESS" ? "RUNNING" : lifecycleState === "DONE" ? "COMPLETED" : "FAILED", { messageType: "task-lifecycle", taskId: lifecycleTaskId, ...(step === undefined ? {} : { modelStep: step }), ...(loopId ? { loopId } : {}), ...(stringValue(payload.providerThreadId) ? { providerThreadId: stringValue(payload.providerThreadId) } : {}), ...(stringValue(payload.providerTurnId) ? { providerTurnId: stringValue(payload.providerTurnId) } : {}) }));
         }
         continue;
       }
@@ -411,6 +517,7 @@ function planMessage(plan: ExecutionPlanSnapshot): ExecutionStreamItem {
     role: "assistant",
     title: "Plan received",
     content: plan.goal,
+    messageType: "plan",
     detail: "",
     status: "COMPLETED",
     occurredAt: plan.occurredAt,
@@ -429,6 +536,7 @@ function projectTaskStatus(entry: ExecutionJournalEntry, plan: ExecutionPlanSnap
   const providerTurnId = stringValue(payload.providerTurnId);
   const result: ExecutionStreamItem[] = [];
   const metadata = {
+    messageType: "task-lifecycle" as const,
     ...(modelStep === undefined ? {} : { modelStep }),
     ...(loopId ? { loopId } : {}),
     ...(providerThreadId ? { providerThreadId } : {}),
@@ -460,8 +568,9 @@ function projectToolCall(entry: ExecutionJournalEntry, taskId: string | undefine
       : action === "status-unknown" ? "UNKNOWN"
         : callId ? "RUNNING" : "UNKNOWN";
   const sourceLabel = source === "provider" ? "Provider" : source === "factory" ? "Factory" : "来源未记录";
-  const title = /mcp/i.test(tool ?? "") ? "MCP tool call" : source === "provider" ? "Provider tool call" : "Tool call";
-  const detailParts = [sourceLabel, tool ?? "工具名称未记录"];
+  // 中文标签，与 Provider 活动的中立词表一致（此前是 "Provider tool call" 这类英文分类名）。
+  const title = /mcp/i.test(tool ?? "") ? "MCP 调用" : "工具调用";
+  const detailParts = [tool ?? "工具名称未记录", sourceLabel];
   const reason = stringValue(payload.reason);
   if (reason) detailParts.push(reason);
   else if (!callId) detailParts.push("调用标识未记录");
@@ -473,6 +582,7 @@ function projectToolCall(entry: ExecutionJournalEntry, taskId: string | undefine
     title,
     content: "",
     detail: detailParts.join(" · "),
+    messageType: "tool",
     status,
     occurredAt: entry.occurredAt,
     sequence: entry.sequence,
@@ -516,6 +626,21 @@ const ACTIVITY_KIND_LABELS: Record<ProviderActivityKind, string> = {
 function isActivityKind(value: unknown): value is ProviderActivityKind {
   return typeof value === "string" && (ACTIVITY_KINDS as readonly string[]).includes(value);
 }
+
+/**
+ * Provider 活动的中立类别 → 消息类型。`other` 归到"未识别"，**不伪装成已知类别**——
+ * 认不出来就说认不出来，比塞进"命令"里更诚实。
+ */
+const ACTIVITY_MESSAGE_TYPES: Record<ProviderActivityKind, ExecutionMessageType> = {
+  command: "command",
+  "file-change": "file-change",
+  tool: "tool",
+  mcp: "tool",
+  reasoning: "reasoning",
+  message: "provider-message",
+  session: "session",
+  other: "unclassified",
+};
 
 function isActivityOutcome(value: unknown): value is ProviderActivityOutcome {
   return typeof value === "string" && (ACTIVITY_OUTCOMES as readonly string[]).includes(value);
@@ -576,12 +701,32 @@ function outcomeToItemStatus(outcome: ProviderActivityOutcome): ExecutionStreamI
 }
 
 function activityOutcomeDetail(outcome: ProviderActivityOutcome): string {
-  if (outcome === "running") return "Provider activity started";
-  if (outcome === "succeeded") return "Provider reported success";
-  if (outcome === "failed") return "Provider activity failed";
+  // 中文、说人话。此前是 "Provider reported success" / "Provider activity started" ——
+  // 那是 Provider 的机械话，读起来像日志，不像"它刚才做了什么"。
+  if (outcome === "running") return "执行中";
+  if (outcome === "succeeded") return "执行成功";
+  if (outcome === "failed") return "执行失败";
   // 没有成败概念的活动不编一句状态文案——它本来就没有状态可报。
   if (outcome === "not-applicable") return "";
-  return "Provider 未提供调用结果状态。";
+  return "结束状态未记录";
+}
+
+/** 标题里放不下整条命令，截断到可读长度；完整内容仍可在那条活动上展开。 */
+function truncateSummary(summary: string | undefined): string | undefined {
+  if (!summary) return undefined;
+  const single = summary.replaceAll(/\s+/g, " ").trim();
+  if (!single) return undefined;
+  return single.length > 80 ? `${single.slice(0, 79)}…` : single;
+}
+
+/**
+ * 把 Provider 的英文诊断翻成人话。**只在显示层做**：journal 里保留原文（那是审计事实），
+ * 认不出来的形状原样返回——宁可显示英文，也不要猜错意思。
+ */
+function localizeProviderReason(reason: string): string {
+  const exitCode = /exited with code (\d+)/i.exec(reason);
+  if (exitCode?.[1]) return `命令退出码 ${exitCode[1]}`;
+  return reason;
 }
 
 function projectProviderActivity(entry: ExecutionJournalEntry, taskId: string | undefined, modelStep: number | undefined, loopId: string | undefined): ExecutionStreamItem {
@@ -601,8 +746,11 @@ function projectProviderActivity(entry: ExecutionJournalEntry, taskId: string | 
   const toolLike = activityKind === "tool" || activityKind === "mcp";
   const status = outcomeToItemStatus(outcome);
   const category = ACTIVITY_KIND_LABELS[activityKind];
-  const name = toolName ? `${serverName ? `${serverName}/` : ""}${toolName}` : serverName;
-  const detail = reason ?? activityOutcomeDetail(outcome);
+  // **说清"这一条到底是什么"**：工具名优先，否则用 Provider 给的 summary（命令原文 / 被改的文件路径）。
+  // 没有它，卡片只能显示「命令 · 已完成 · Provider reported success」——说了等于没说，
+  // 用户看不出它在干什么。summary 从 2026-10-01 起才记进 journal，老事件仍然只有类别标签。
+  const name = toolName ? `${serverName ? `${serverName}/` : ""}${toolName}` : serverName ?? truncateSummary(stringValue(payload.summary));
+  const detail = reason ? localizeProviderReason(reason) : activityOutcomeDetail(outcome);
   const missing: string[] = [];
   if (!providerItemId) missing.push("Provider 调用标识未记录");
   if (!itemType) missing.push("Provider 活动类型未记录");
@@ -615,6 +763,7 @@ function projectProviderActivity(entry: ExecutionJournalEntry, taskId: string | 
     title: name ? `${category} · ${name}` : category,
     content: "",
     detail,
+    messageType: ACTIVITY_MESSAGE_TYPES[activityKind],
     status,
     occurredAt: entry.occurredAt,
     sequence: entry.sequence,
@@ -639,7 +788,7 @@ function projectExecutionActivity(entry: ExecutionJournalEntry, taskId?: string,
     ...(modelStep === undefined ? {} : { modelStep }),
     ...(loopId ? { loopId } : {}),
   };
-  if (entry.type === "USER_GUIDANCE") return { id: `execution-guidance-${entry.sequence}`, kind: "guidance", role: "user", title: "你补充了要求", content: stringValue(payload.content) ?? "", detail: "", status: "COMPLETED", occurredAt: entry.occurredAt, sequence: entry.sequence, ...association };
+  if (entry.type === "USER_GUIDANCE") return { id: `execution-guidance-${entry.sequence}`, kind: "guidance", role: "user", title: "你补充了要求", content: stringValue(payload.content) ?? "", detail: "", status: "COMPLETED", occurredAt: entry.occurredAt, sequence: entry.sequence, messageType: "guidance", ...association };
   if (entry.type === "RUN_CREATED") return activity(entry, "Run created", `Plan ${stringValue(payload.planId) ?? "未记录"} · Revision ${stringValue(payload.revision) ?? "—"}`, "INFO", association);
   if (entry.type === "HOOK_SKIPPED") return activity(entry, "Hook skipped", stringValue(payload.hook) ?? "Hook name not recorded", "INFO", association);
   if (entry.type === "HOOK_COMPLETED") return activity(entry, "Hook completed", stringValue(payload.hook) ?? "Lifecycle hook", "COMPLETED", association);
@@ -649,29 +798,31 @@ function projectExecutionActivity(entry: ExecutionJournalEntry, taskId?: string,
     const reason = stringValue(payload.reason);
     return activity(entry, "Verification", reason ?? status, status === "PASSED" ? "COMPLETED" : status === "SKIPPED" ? "INFO" : "FAILED", association);
   }
-  if (entry.type === "RECOVERY") return activity(entry, "需要恢复", stringValue(payload.reason) ?? stringValue(payload.error) ?? "阻塞原因未记录", "FAILED", association);
+  if (entry.type === "RECOVERY") return activity(entry, "需要恢复", stringValue(payload.reason) ?? stringValue(payload.error) ?? "阻塞原因未记录", "FAILED", { ...association, messageType: "recovery" });
   if (entry.type === "TASK_PROGRESS") {
     const state = stringValue(payload.state);
-    if (state === "BLOCKED") return activity(entry, "Run blocked", stringValue(payload.reason) ?? "Blocking reason not recorded", "FAILED", association);
-    if (state === "CANCELLED") return activity(entry, "Run cancelled", stringValue(payload.reason) ?? "Cancelled", "FAILED", association);
+    // 阻塞与取消是**异常**：无论呈现档位怎么调，它们都要显眼。
+    if (state === "BLOCKED") return activity(entry, "Run blocked", stringValue(payload.reason) ?? "Blocking reason not recorded", "FAILED", { ...association, messageType: "recovery" });
+    if (state === "CANCELLED") return activity(entry, "Run cancelled", stringValue(payload.reason) ?? "Cancelled", "FAILED", { ...association, messageType: "recovery" });
     if (payload.action === "task-status") return null;
     const event = stringValue(payload.event) ?? "";
     if (event === "continue") return null;
-    if (event === "agent.context.compacted") return activity(entry, "Context compacted", "Model context was refreshed", "INFO", association);
-    if (event === "agent.gate.checked") return activity(entry, "Execution gate", `${stringValue(payload.action) ?? "unknown"}${stringValue(payload.reason) ? ` · ${stringValue(payload.reason)}` : ""}`, payload.action === "blocked" ? "FAILED" : "INFO", association);
-    if (event === "agent.loop.created" || payload.action === "executor_loop_created") return activity(entry, "Executor started", stringValue(payload.loopId) ?? "", "RUNNING", association);
-    if (payload.action === "legacy_plan_revision") return activity(entry, "Legacy Plan revision", stringValue(payload.reason) ?? "Using legacy runtime settings", "INFO", association);
-    if (payload.action === "paused") return activity(entry, "Execution paused", "Waiting for resume", "WAITING", association);
-    if (payload.action === "resumed") return activity(entry, "Execution resumed", "", "RUNNING", association);
+    if (event === "agent.context.compacted") return activity(entry, "Context compacted", "Model context was refreshed", "INFO", { ...association, messageType: "context" });
+    if (event === "agent.gate.checked") return activity(entry, "Execution gate", `${stringValue(payload.action) ?? "unknown"}${stringValue(payload.reason) ? ` · ${stringValue(payload.reason)}` : ""}`, payload.action === "blocked" ? "FAILED" : "INFO", { ...association, messageType: "gate" });
+    if (event === "agent.loop.created" || payload.action === "executor_loop_created") return activity(entry, "Executor started", stringValue(payload.loopId) ?? "", "RUNNING", { ...association, messageType: "loop" });
+    if (payload.action === "legacy_plan_revision") return activity(entry, "Legacy Plan revision", stringValue(payload.reason) ?? "Using legacy runtime settings", "INFO", { ...association, messageType: "context" });
+    if (payload.action === "paused") return activity(entry, "Execution paused", "Waiting for resume", "WAITING", { ...association, messageType: "gate" });
+    if (payload.action === "resumed") return activity(entry, "Execution resumed", "", "RUNNING", { ...association, messageType: "gate" });
     if (["agent.model.completed", "agent.step.started"].includes(event)) return null;
-    return activity(entry, "Execution activity", event || stringValue(payload.reason) || stringValue(payload.action) || "Activity details not recorded", "INFO", association);
+    return activity(entry, "Execution activity", event || stringValue(payload.reason) || stringValue(payload.action) || "Activity details not recorded", "INFO", { ...association, messageType: "unclassified" });
   }
   if (["MODEL_OUTPUT", "PROVIDER_ACTIVITY", "TOOL_CALL"].includes(entry.type)) return null;
-  return activity(entry, entry.type.replaceAll("_", " "), "未记录可展示的执行摘要。", "UNKNOWN", { ...association, unrecordedFields: ["执行摘要未记录"] });
+  return activity(entry, entry.type.replaceAll("_", " "), "未记录可展示的执行摘要。", "UNKNOWN", { ...association, messageType: "unclassified", unrecordedFields: ["执行摘要未记录"] });
 }
 
 function activity(entry: ExecutionJournalEntry, title: string, detail: string, status: ExecutionStreamItem["status"], metadata: Partial<ExecutionStreamItem> = {}): ExecutionStreamItem {
-  return { id: `execution-activity-${entry.sequence}`, kind: "activity", role: "system", title, content: "", detail, status, occurredAt: entry.occurredAt, sequence: entry.sequence, ...metadata };
+  // 默认按 Run 级活动处理（创建、钩子、验证）；其余类别由调用点通过 metadata 覆盖。
+  return { id: `execution-activity-${entry.sequence}`, kind: "activity", role: "system", title, content: "", detail, status, occurredAt: entry.occurredAt, sequence: entry.sequence, messageType: "run-activity", ...metadata };
 }
 
 function taskTitle(plan: ExecutionPlanSnapshot | undefined, taskId: string): string {
@@ -696,23 +847,30 @@ function sameReportProgress(previous: string, next: string): boolean {
   return progress(previous) !== null && progress(previous) === progress(next);
 }
 
-function humanizeModelOutput(content: string): { title: string; body: string } | null {
+/**
+ * 把模型输出拆成标题与正文。
+ * `report` 是**判别标志**而不是靠标题字符串判断（此前调用方写的是 `display.title === "Executor report"`，
+ * 改一个标题文案就会静默失效）。
+ */
+function humanizeModelOutput(content: string): { title: string; body: string; report: boolean } | null {
   content = stripTaskProgressMarkers(content);
   const startMarker = "<pipeline-factory-execution-report>";
   const endMarker = "</pipeline-factory-execution-report>";
   const start = content.lastIndexOf(startMarker);
-  if (start < 0) return { title: "Executor", body: content };
+  // 普通正文。标题写「执行说明」而不是角色名「Executor」——角色名不告诉读者任何内容，
+  // 而这张卡片里放的正是"Executor 在做什么、发现了什么"。
+  if (start < 0) return { title: "执行说明", body: content, report: false };
   const jsonStart = start + startMarker.length;
   const end = content.indexOf(endMarker, jsonStart);
-  if (end < 0) return { title: "Executor report", body: content.slice(0, start).trim() || "Execution report is still streaming." };
+  if (end < 0) return { title: "执行报告", body: content.slice(0, start).trim() || "Execution report is still streaming.", report: true };
   try {
     const report = JSON.parse(content.slice(jsonStart, end).trim()) as { completedTaskIds?: unknown; changedPaths?: unknown; report?: unknown };
     const completed = Array.isArray(report.completedTaskIds) ? report.completedTaskIds.filter((id): id is string => typeof id === "string") : [];
     const changedPaths = Array.isArray(report.changedPaths) ? report.changedPaths.filter((path): path is string => typeof path === "string") : [];
     const summary = typeof report.report === "string" ? report.report : "Execution report recorded.";
-    return { title: "Executor report", body: `${summary}\n\nCompleted ${completed.length} task(s) · ${changedPaths.length} changed path(s)` };
+    return { title: "执行报告", body: `${summary}\n\nCompleted ${completed.length} task(s) · ${changedPaths.length} changed path(s)`, report: true };
   } catch {
-    return { title: "Executor report", body: content.slice(0, start).trim() || "Execution report could not be parsed." };
+    return { title: "执行报告", body: content.slice(0, start).trim() || "Execution report could not be parsed.", report: true };
   }
 }
 
@@ -728,5 +886,31 @@ function stripTaskProgressMarkers(content: string): string {
       break;
     }
   }
+  // **开头是残留的标记尾巴**：标记跨了两条事件——上一条的尾巴被上面的规则削掉，剩下的一半就落在
+  // 这一条的开头（实见：正文第一行直接铺着 `-progress>{"taskId":"task-1","state":"started"}`）。
+  // 上面三条规则只管"结尾"，管不到这种情况。
+  // 判据：开头到第一个 `<` 为止的这一截，**以标记的某一段后缀打头**。正常正文几乎不可能命中。
+  const firstTagIndex = visible.indexOf("<");
+  const head = visible.slice(0, firstTagIndex === -1 ? visible.length : firstTagIndex);
+  const fragmentLength = markerFragmentLength(head);
+  if (fragmentLength > 0) {
+    const afterFragment = head.slice(fragmentLength);
+    const rest = visible.slice(head.length);
+    // 尾巴后面跟的是标记自带的载荷（JSON，或什么都不剩）→ 连同可能的闭合标记一起去掉；
+    // 跟的是正文（实测：`factory-task-progress>` 后直接接"开始执行 task-1…"）→ 只削掉那段尾巴。
+    // 两种都得处理：只认"尾巴+JSON"会漏掉后者，而后者正是正文里最扎眼的一行。
+    const payloadLike = afterFragment.trim() === "" || afterFragment.trim().startsWith("{");
+    if (payloadLike) visible = rest.startsWith(endMarker) ? rest.slice(endMarker.length) : rest;
+    else visible = `${afterFragment}${rest}`;
+  }
   return visible;
+}
+
+/** `head` 开头有多少个字符是任务标记的一段后缀；没有则返回 0。 */
+function markerFragmentLength(head: string): number {
+  const marker = "<pipeline-factory-task-progress>";
+  for (let length = Math.min(head.length, marker.length - 1); length > 0; length -= 1) {
+    if (marker.endsWith(head.slice(0, length))) return length;
+  }
+  return 0;
 }

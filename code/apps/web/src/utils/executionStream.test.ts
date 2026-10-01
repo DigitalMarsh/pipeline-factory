@@ -4,7 +4,7 @@
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  */
 import { describe, expect, it } from "vitest";
-import { projectExecutionJournal, type ExecutionPlanSnapshot } from "./executionStream";
+import { EXECUTION_DISPLAY_MODES, executionDisplayMode, projectExecutionJournal, type ExecutionPlanSnapshot } from "./executionStream";
 
 describe("projectExecutionJournal", () => {
   const plan: ExecutionPlanSnapshot = {
@@ -46,7 +46,7 @@ describe("projectExecutionJournal", () => {
     expect(items).toHaveLength(6);
     expect(items[1]).toMatchObject({ kind: "model", role: "assistant", content: "正在读取计划", status: "COMPLETED" });
     expect(items[2]).toMatchObject({ kind: "activity", status: "COMPLETED", title: "模型轮次 · #1" });
-    expect(items[3]).toMatchObject({ kind: "tool", status: "UNKNOWN", title: "Tool call", callId: "call-1" });
+    expect(items[3]).toMatchObject({ kind: "tool", status: "UNKNOWN", title: "工具调用", callId: "call-1" });
     expect(items[4]).toMatchObject({ kind: "guidance", role: "user", content: "只修改批准范围内的文件" });
     expect(items[5]).toMatchObject({ kind: "activity", status: "FAILED", title: "Run blocked", detail: "MAX_DURATION_EXCEEDED" });
   });
@@ -65,7 +65,7 @@ describe("projectExecutionJournal", () => {
       { sequence: 2, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:01.000Z", payload: { action: "task-status", completedTaskIds: ["task-1", "task-2"] } },
     ], "BLOCKED");
 
-    expect(items[0]).toMatchObject({ kind: "model", title: "Executor report", content: "已完成内容与格式复核\n\nCompleted 2 task(s) · 1 changed path(s)" });
+    expect(items[0]).toMatchObject({ kind: "model", title: "执行报告", content: "已完成内容与格式复核\n\nCompleted 2 task(s) · 1 changed path(s)" });
     expect(items.some((item) => item.detail.includes("<pipeline-factory-execution-report>"))).toBe(false);
   });
 
@@ -87,13 +87,128 @@ describe("projectExecutionJournal", () => {
     const report = (text: string, sequence: number) => ({ sequence, type: "MODEL_OUTPUT", occurredAt: `2026-08-30T07:00:0${sequence}.000Z`, payload: { text: `<pipeline-factory-execution-report>${JSON.stringify({ completedTaskIds: ["task-1"], changedPaths: [], report: text })}</pipeline-factory-execution-report>` } });
     const items = projectExecutionJournal([report("第一轮完成", 1), { sequence: 2, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:02.000Z", payload: { action: "task-status", completedTaskIds: ["task-1"] } }, { sequence: 2.5, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:02.500Z", payload: { event: "agent.model.completed", step: 1 } }, report("没有新的可执行内容", 3), { sequence: 4, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:04.000Z", payload: { action: "task-status", completedTaskIds: ["task-1"] } }], "BLOCKED");
 
-    expect(items.filter((item) => item.title === "Executor report")).toHaveLength(1);
-    expect(items.find((item) => item.title === "Executor report")?.repetitionCount).toBe(2);
+    expect(items.filter((item) => item.title === "执行报告")).toHaveLength(1);
+    expect(items.find((item) => item.title === "执行报告")?.repetitionCount).toBe(2);
   });
 
   it("does not leak an incomplete report protocol into the conversation", () => {
     const items = projectExecutionJournal([{ sequence: 1, type: "MODEL_OUTPUT", occurredAt: "2026-08-30T07:00:00.000Z", payload: { text: "<pipeline-factory-execution-report>{\"completedTaskIds\":[\"task-1\"]" } }], "ACTIVE");
 
-    expect(items[0]).toMatchObject({ title: "Executor report", content: "Execution report is still streaming." });
+    expect(items[0]).toMatchObject({ title: "执行报告", content: "Execution report is still streaming." });
+  });
+
+  it("动作类消息说清「做的是什么」：标题用 Provider 给的 summary", () => {
+    const items = projectExecutionJournal([
+      { sequence: 1, type: "PROVIDER_ACTIVITY", occurredAt: "2026-08-30T07:00:00.000Z", payload: { phase: "completed", itemId: "exec-1", providerItemId: "exec-1", itemType: "commandExecution", activityKind: "command", outcome: "succeeded", summary: "npm install --ignore-scripts" } },
+    ]);
+
+    // 没有 summary 时卡片只能写「命令 · 已完成 · Provider reported success」——等于没说。
+    expect(items[0]).toMatchObject({ title: "命令 · npm install --ignore-scripts", detail: "执行成功", messageType: "command" });
+  });
+
+  it("老事件没有 summary 时退回类别标签，不编造内容", () => {
+    const items = projectExecutionJournal([
+      { sequence: 1, type: "PROVIDER_ACTIVITY", occurredAt: "2026-08-30T07:00:00.000Z", payload: { phase: "completed", itemId: "exec-1", providerItemId: "exec-1", itemType: "commandExecution", providerStatus: "completed" } },
+    ]);
+
+    expect(items[0]).toMatchObject({ title: "命令", detail: "执行成功", messageType: "command" });
+  });
+
+  it("标题里的命令截断到可读长度，不把整行长命令铺出来", () => {
+    const items = projectExecutionJournal([
+      { sequence: 1, type: "PROVIDER_ACTIVITY", occurredAt: "2026-08-30T07:00:00.000Z", payload: { phase: "started", itemId: "exec-1", providerItemId: "exec-1", itemType: "commandExecution", activityKind: "command", outcome: "running", summary: `npm run ${"x".repeat(200)}` } },
+    ]);
+
+    expect(items[0]?.title.length).toBeLessThanOrEqual("命令 · ".length + 80);
+    expect(items[0]?.title).toContain("…");
+  });
+});
+
+describe("消息清单的呈现档位", () => {
+  it("**档位表是唯一落点**：卡片 / 一行 / 折叠 / 不显示，一眼看全", () => {
+    expect(EXECUTION_DISPLAY_MODES["model-prose"]).toBe("card");
+    expect(EXECUTION_DISPLAY_MODES["model-report"]).toBe("card");
+    expect(EXECUTION_DISPLAY_MODES.plan).toBe("card");
+    expect(EXECUTION_DISPLAY_MODES.command).toBe("line");
+    expect(EXECUTION_DISPLAY_MODES["file-change"]).toBe("line");
+    expect(EXECUTION_DISPLAY_MODES.tool).toBe("line");
+    expect(EXECUTION_DISPLAY_MODES["task-lifecycle"]).toBe("line");
+    expect(EXECUTION_DISPLAY_MODES.reasoning).toBe("folded");
+    expect(EXECUTION_DISPLAY_MODES.gate).toBe("folded");
+    expect(EXECUTION_DISPLAY_MODES["provider-message"]).toBe("hidden");
+    expect(EXECUTION_DISPLAY_MODES.session).toBe("hidden");
+  });
+
+  it("**异常类消息永远是卡片**：档位怎么调，阻塞与恢复都不能被藏起来", () => {
+    expect(EXECUTION_DISPLAY_MODES.recovery).toBe("card");
+    expect(EXECUTION_DISPLAY_MODES.guidance).toBe("card");
+
+    const items = projectExecutionJournal([
+      { sequence: 1, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:00.000Z", payload: { state: "BLOCKED", reason: "MAX_DURATION_EXCEEDED" } },
+    ]);
+    expect(items[0]).toMatchObject({ messageType: "recovery", status: "FAILED" });
+    expect(executionDisplayMode(items[0]!)).toBe("card");
+  });
+
+  it("**跨事件被切断的任务标记不会漏进正文**（回归：正文第一行曾是 `-progress>{...}`）", () => {
+    const items = projectExecutionJournal([
+      // 两条事件的 providerItemId 不同 → 投影成两张卡片，标记正好被切在中间。
+      // 上一条的尾巴被"结尾未闭合"的规则削掉了，剩下的一半本会原样铺在下一条的正文里。
+      { sequence: 1, type: "MODEL_OUTPUT", occurredAt: "2026-08-30T07:00:00.000Z", payload: { text: "开始执行 <pipeline-factory-task", providerItemId: "item-a" } },
+      { sequence: 2, type: "MODEL_OUTPUT", occurredAt: "2026-08-30T07:00:01.000Z", payload: { text: '-progress>{"taskId":"task-1","state":"started"}</pipeline-factory-task-progress>已完成第一步。', providerItemId: "item-b" } },
+    ]);
+
+    const bodies = items.filter((item) => item.kind === "model").map((item) => item.content).join("\n");
+    expect(bodies).not.toContain("progress>");
+    expect(bodies).not.toContain("taskId");
+    expect(bodies).toContain("已完成第一步。");
+  });
+
+  it("**标记尾巴后面直接接正文时也只削尾巴**（实测形态：`factory-task-progress>` 后就是「开始执行…」）", () => {
+    const items = projectExecutionJournal([
+      { sequence: 1, type: "MODEL_OUTPUT", occurredAt: "2026-08-30T07:00:00.000Z", payload: { text: "开始执行 <pipeline-factory-task", providerItemId: "item-a" } },
+      { sequence: 2, type: "MODEL_OUTPUT", occurredAt: "2026-08-30T07:00:01.000Z", payload: { text: "actory-task-progress>\n开始执行 task-1：核对现有路由与校验链路。", providerItemId: "item-b" } },
+    ]);
+
+    const bodies = items.filter((item) => item.kind === "model").map((item) => item.content).join("\n");
+    expect(bodies).not.toContain("progress>");
+    expect(bodies).toContain("开始执行 task-1：核对现有路由与校验链路。");
+  });
+
+  it("普通正文不会被标记清理误伤", () => {
+    const items = projectExecutionJournal([
+      { sequence: 1, type: "MODEL_OUTPUT", occurredAt: "2026-08-30T07:00:00.000Z", payload: { text: "读取 src/App.vue 并在 100ms 内完成——这行没有标记。" } },
+    ]);
+
+    expect(items[0]?.content).toBe("读取 src/App.vue 并在 100ms 内完成——这行没有标记。");
+  });
+
+  it("失败原因翻成人话，但认不出来就原样显示（不猜意思）", () => {
+    const exitCode = projectExecutionJournal([
+      { sequence: 1, type: "PROVIDER_ACTIVITY", occurredAt: "2026-08-30T07:00:00.000Z", payload: { phase: "completed", itemId: "exec-1", providerItemId: "exec-1", itemType: "commandExecution", activityKind: "command", outcome: "failed", providerStatus: "failed", reason: "Provider command exited with code 1" } },
+    ]);
+    const unknown = projectExecutionJournal([
+      { sequence: 1, type: "PROVIDER_ACTIVITY", occurredAt: "2026-08-30T07:00:00.000Z", payload: { phase: "completed", itemId: "exec-2", providerItemId: "exec-2", itemType: "commandExecution", activityKind: "command", outcome: "failed", providerStatus: "failed", reason: "workspace is not writable" } },
+    ]);
+
+    expect(exitCode[0]?.detail).toBe("命令退出码 1");
+    expect(unknown[0]?.detail).toBe("workspace is not writable");
+  });
+
+  it("正文被清空时不产生空卡片（只剩标题与时间的卡片是纯噪音）", () => {
+    const items = projectExecutionJournal([
+      { sequence: 1, type: "MODEL_OUTPUT", occurredAt: "2026-08-30T07:00:00.000Z", payload: { text: "actory-task-progress>", providerItemId: "item-b" } },
+    ]);
+
+    expect(items.filter((item) => item.kind === "model")).toHaveLength(0);
+  });
+
+  it("认不出来的活动标成「未识别」，不伪装成已知类别", () => {
+    const items = projectExecutionJournal([
+      { sequence: 1, type: "PROVIDER_ACTIVITY", occurredAt: "2026-08-30T07:00:00.000Z", payload: { phase: "completed", itemId: "x-1", providerItemId: "x-1", itemType: "somethingBrandNew", activityKind: "other", outcome: "unknown" } },
+    ]);
+
+    expect(items[0]).toMatchObject({ messageType: "unclassified" });
+    expect(executionDisplayMode(items[0]!)).toBe("folded");
   });
 });

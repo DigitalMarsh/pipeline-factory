@@ -253,6 +253,29 @@ describe("ExecutorAgent", () => {
     expect(store.getExecutionThread(run.executionThreadId)?.state).toBe("BLOCKED");
   });
 
+  it("**把 Provider 活动的原文记进 journal** —— 否则执行会话只能写「命令 · Provider reported success」", async () => {
+    const { store, plan, run } = await createQueuedRun();
+    const model: ModelGateway = {
+      configFor: () => ({ model: "gpt-5.6-luna", loopMode: "provider-controlled" }),
+      capabilities: () => ({ supportsStructuredUserInput: false, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
+      async *stream() {
+        // summary 就是"这条活动到底是什么"：命令原文、被改动的文件路径。UI 的标题靠它。
+        yield { type: "provider.activity", phase: "started", itemId: "exec-1", itemType: "commandExecution", activityKind: "command", outcome: "running", title: null, summary: "npm install --ignore-scripts", providerItemId: "exec-1" };
+        yield { type: "provider.activity", phase: "completed", itemId: "exec-1", itemType: "commandExecution", activityKind: "command", outcome: "succeeded", title: null, summary: "npm install --ignore-scripts", providerItemId: "exec-1" };
+        yield { type: "text.delta", text: "done" };
+        yield { type: "turn.completed" };
+      },
+      async answerUserInput() { return undefined; },
+      async cancel() { return undefined; },
+    };
+
+    await new ExecutorAgent(store, model, undefined, { maxSteps: 1 }).run(run, plan);
+
+    const recorded = (store.getExecutionThread(run.executionThreadId)?.journal ?? []).filter((entry) => entry.type === "PROVIDER_ACTIVITY");
+    expect(recorded[0]?.payload).toMatchObject({ activityKind: "command", outcome: "running", summary: "npm install --ignore-scripts" });
+    expect(recorded[1]?.payload).toMatchObject({ outcome: "succeeded", summary: "npm install --ignore-scripts" });
+  });
+
   it("injects a durable built-in ToolRuntime for Factory-controlled execution", async () => {
     const { store, plan, run } = await createQueuedRun();
     const workspace = await mkdtemp(join(tmpdir(), "pipeline-executor-"));

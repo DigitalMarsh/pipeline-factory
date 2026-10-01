@@ -164,18 +164,20 @@ describe("Run detail execution conversation", () => {
     expect(runDetailStyles).toContain(".execution-conversation-group-guidance");
   });
 
-  it("执行过程有阶段感、且不再被活动噪音淹没", () => {
+  it("执行过程有阶段感，且呈现方式由一张档位表统一决定", () => {
     // 四阶段条：回答"现在在干什么、下一步是什么"——此前页面最缺的就是这一句。
     expect(runDetailSource).toContain('class="execution-phase-strip"');
     expect(runDetailSource).toContain("executionPhaseSteps");
     expect(runDetailStyles).toContain(".execution-phase.current");
-    // 没有成败概念的活动（推理流 / Provider 消息 / 会话重建）不再各占一张卡。
-    expect(runDetailSource).toContain("function isActivityNoise(item: ExecutionStreamItem): boolean");
-    expect(runDetailSource).toContain('item.outcome === "not-applicable"');
-    expect(runDetailSource).toContain('v-for="item in visibleItems(group)"');
-    expect(runDetailSource).toContain('class="execution-activity-noise"');
-    // 但也没有丢：它们进了一个可展开的一行。
-    expect(runDetailSource).toContain("条活动记录（推理 / 消息）");
+    // **呈现方式不再散在视图里**：视图只问档位表，档位表是那个"消息清单"的唯一落点。
+    expect(runDetailSource).toContain("function visibleItems(group: ExecutionConversationGroup)");
+    expect(runDetailSource).toContain("function foldedItems(group: ExecutionConversationGroup)");
+    expect(runDetailSource).toContain("executionDisplayMode(item)");
+    expect(runDetailSource).not.toContain("isActivityNoise");
+    expect(runDetailStyles).toContain(".execution-folded-log");
+    expect(runDetailStyles).not.toContain(".execution-activity-noise");
+    // 折叠区是"过程记录"，不是"活动噪音"——措辞跟着语义走。
+    expect(runDetailSource).toContain("条过程记录");
     // 连续的空执行步骤折成一行，只在**连续**时合并（中间夹着有内容的步骤要分开）。
     expect(runDetailSource).toContain("function collapsePendingTaskGroups");
     expect(runDetailSource).toContain('group.kind === "task" && group.task && group.items.length === 0');

@@ -1,5 +1,68 @@
 # Changelog
 
+## 2026-10-01（其十四）— 执行会话：消息类型清单化、说人话、修掉漏进正文的标记
+
+### 为什么做
+
+用户报"执行线程的消息我看不懂"，并给了截图。把截图里那几条逐条翻译之后，问题分成三类，
+都不是"结构错了"：
+
+- **说的是 Provider 的机械话**：「命令 · 已完成 · **Provider reported success**」——跑的是什么、为什么跑，一个字没说。
+- **标题只写角色名**：模型正文的卡片标题是「**Executor**」，那不是内容。
+- **同一件事说了两遍**：「任务 开始 · 新增项目级任务创建接口…」与它上方步骤头说的是同一件事。
+
+用户还要求"把大模型的消息类型列个清单，我来决定每种怎么呈现"。清单按真实数据做，
+结论落成**一张档位表**（见下）。
+
+### Changed
+
+**1. 消息类型清单 → 一张档位表**（`apps/web/src/utils/executionStream.ts`）
+
+新增 `ExecutionMessageType`（17 类）与 `EXECUTION_DISPLAY_MODES`：每类映射到
+`card` / `line` / `folded` / `hidden` 四档。**视图只问 `executionDisplayMode(item)`**，
+不再自己判断——此前判断散在三处：按 `kind` 分支、按 `outcome` 猜、按标题字符串相等
+（`title === "Executor report"`）。改呈现方式从此只改这张表。
+
+实际落到界面上：推理与门禁 → 折叠（`N 条过程记录`）；Provider 回显、会话重建、
+上下文压缩、循环启动 → 不显示；命令 / 文件变更 / 工具 / 步骤 → 一行；正文与结论 → 卡片。
+**异常类（阻塞、取消、恢复、你的插话）无论档位怎么调都是卡片。**
+
+**2. 说人话：动作卡片说清"做的是什么"**
+
+- **journal 记下 `summary`**（`executor-agent.ts`）：命令原文、被改动的文件路径都在里面。
+  不记它，卡片只能写「命令 · Provider reported success」。这是可读性的关键一条，
+  老事件没有这个字段，仍退回类别标签（不编内容）。
+- 文案中文化：`Provider reported success` → 「执行成功」、`Provider activity started` → 「执行中」、
+  失败原因 `Provider command exited with code 1` → 「命令退出码 1」（**只在显示层翻译**，
+  journal 保留原文；认不出来的形状原样显示，不猜意思）。
+- 模型正文标题 `Executor` → 「执行说明」；完成报告 `Executor report` → 「执行报告」；
+  工具卡片 `Provider tool call` → 「工具调用」。标题里的长命令截断到 80 字。
+
+**3. 修掉漏进正文的任务标记**（实见缺陷）
+
+截图里有一张卡片的正文第一行是 `actory-task-progress>{"taskId":"task-1","state":"started"}`——
+任务标记跨了两条事件，上一条的尾巴被"结尾未闭合"规则削掉，剩下的一半落在下一条的**开头**，
+而清理只处理结尾。现在按"开头这一截是标记的任意一段后缀"识别并削掉，两种后续形态都覆盖：
+后面接标记的 JSON 载荷（连闭合标记一起去掉）、后面直接接正文（只削尾巴）。
+正文被清空时**不产生卡片**——只剩标题与时间的空卡片是纯噪音。
+
+### 未做
+
+- **方案结构（第 3 件）另立计划**：参考 Claude Code 的 plan 结构给契约补
+  `objective.context` / `tasks[].changes` / `design.risks`，属于契约变更，不混在本轮。
+
+### 验证
+
+- `pnpm verify` 全绿：domain **358** / api **111** / web **496**，无新增值级环。
+- 新增/更新用例：`executionStream.test.ts`（档位表抽查、"异常永远是卡片"、"认不出来的活动标成未识别"、
+  `summary` 决定标题、老事件退回类别标签、长命令截断、失败原因翻译、**跨事件切断的标记两种形态**、
+  空正文不产生卡片、普通正文不被误伤）；`executor-agent.test.ts`（**journal 确实记下 summary**）；
+  `RunDetailView.test.ts`（视图只问档位表，`isActivityNoise` 已移除）。
+- 浏览器实测同一个 Run：卡片从 16 张降到 10 张，`Provider reported success` 与
+  `Provider activity started` 均已消失，正文里不再有标记残留，折叠区显示「9 条过程记录」。
+- ⚠️ **`summary` 只对新事件生效**：这次实测里命令卡还没显示命令原文（那些事件写在改动之前）。
+  新 Run 才会带上。
+
 ## 2026-10-01（其十三）— 「Confirm Plan 慢」：先量化，再收掉两处潜伏阻塞
 
 ### 为什么做
