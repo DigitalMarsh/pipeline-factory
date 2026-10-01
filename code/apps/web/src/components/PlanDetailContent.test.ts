@@ -29,19 +29,19 @@ function candidatePlan(overrides: Partial<Plan> = {}): Plan {
     contract: { goal: "goal", acceptanceCriteria: ["ok"], include: ["docs/guide.md"], exclude: [], baseBranch: "main", baseCommit: "abc", tasks: [], conflictKeys: [], executorModelRole: "executor", toolPolicy: "executor-scoped-write", verificationCommandIds: ["project.test", "docs.validate"], maxRepairAttempts: 1, mergeStrategy: "manual", requireHumanMerge: true, dependsOnPlanIds: [] },
     generatedSpec: {
       schemaVersion: 2, title: "Candidate", artifact: { mode: "REPOSITORY_FILE", path: "docs/guide.md" },
-      objective: { goal: "goal", audience: ["devs"], acceptanceCriteria: ["ok"], outOfScope: [] },
-      design: { technicalConstraints: ["markdown"], dataSecurity: ["none"], failureHandling: ["keep"] },
+      objective: { goal: "goal", context: ["现有详情页已经返回日期字段。"], audience: ["devs"], acceptanceCriteria: ["ok"], outOfScope: [] },
+      design: { technicalConstraints: ["markdown"], dataSecurity: ["none"], failureHandling: ["keep"], risks: ["旧浏览器样式兼容；失败时保留列表视图。"] },
       scope: { includePaths: ["docs/guide.md"], excludePaths: [] },
-      tasks: [{ id: "docs", title: "Update guide", dependencies: [] }],
+      tasks: [{ id: "docs", title: "Update guide", dependencies: [], changes: [{ path: "docs/guide.md", action: "modify", detail: "更新使用说明示例。" }] }],
       dependencies: [], conflicts: [], execution: {}, verification: { mode: "PROJECT_DEFAULT", suites: ["docs"] }, merge: { strategy: "manual", requireHumanMerge: true },
     },
     resolvedContract: {
       schemaVersion: 2, artifact: { mode: "REPOSITORY_FILE", path: "docs/guide.md" },
-      objective: { goal: "goal", audience: ["devs"], acceptanceCriteria: ["ok"], outOfScope: [] },
-      design: { technicalConstraints: ["markdown"], dataSecurity: ["none"], failureHandling: ["keep"] },
+      objective: { goal: "goal", context: ["现有详情页已经返回日期字段。"], audience: ["devs"], acceptanceCriteria: ["ok"], outOfScope: [] },
+      design: { technicalConstraints: ["markdown"], dataSecurity: ["none"], failureHandling: ["keep"], risks: ["旧浏览器样式兼容；失败时保留列表视图。"] },
       conflicts: [], repository: { projectId: "project-1", name: "P", repoRoot: "/repo", baseBranch: "main", baseCommit: "abc", configVersion: 1, configHash: "h" },
       scope: { includePaths: ["docs/guide.md"], excludePaths: [] },
-      tasks: [{ id: "docs", title: "Update guide", dependencies: [], status: "READY" }],
+      tasks: [{ id: "docs", title: "Update guide", dependencies: [], status: "READY", changes: [{ path: "docs/guide.md", action: "modify", detail: "更新使用说明示例。" }] }],
       dependencies: [], execution: { executorModelRole: "executor", toolPolicy: "executor-scoped-write", maxRepairAttempts: 1 },
       verification: { mode: "PROJECT_DEFAULT", commandIds: ["docs.validate"] }, merge: { strategy: "manual", requireHumanMerge: true },
     },
@@ -126,6 +126,19 @@ describe("PlanDetailContent scheduling editors", () => {
   });
 });
 
+describe("PlanDetailContent plan design details", () => {
+  it("shows context findings, risks, and per-task file changes", () => {
+    const { host } = mount({});
+
+    expect(host.textContent).toContain("现状与发现");
+    expect(host.textContent).toContain("现有详情页已经返回日期字段");
+    expect(host.textContent).toContain("技术方案与风险");
+    expect(host.textContent).toContain("旧浏览器样式兼容");
+    expect(host.textContent).toContain("修改");
+    expect(host.textContent).toContain("docs/guide.md");
+    expect(host.textContent).toContain("更新使用说明示例");
+  });
+});
 describe("PlanDetailContent conversation artifact warning", () => {
   const confirmButton = (host: HTMLElement) => [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Confirm V"));
 

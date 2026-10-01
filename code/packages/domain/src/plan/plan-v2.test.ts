@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { InMemoryPipelineStore, PlanService, ProjectService, VerificationService, parseGeneratedPlanSpecV2, resolvePlanContractV2, validateGeneratedPlanSpecV2, type PlanRevisionV2, type ProjectExecutionSnapshot, type Run } from "../index.js";
+import { InMemoryPipelineStore, PlanService, ProjectService, VerificationService, assessPlanCompletion, parseGeneratedPlanSpecV2, resolvePlanContractV2, validateGeneratedPlanSpecV2, type PlanRevisionV2, type ProjectExecutionSnapshot, type Run } from "../index.js";
 
 function repository(): string {
   const root = mkdtempSync(join(tmpdir(), "pipeline-plan-dependencies-"));
@@ -28,6 +28,27 @@ function snapshot(defaultVerificationCommandIds: string[] = []): ProjectExecutio
 }
 
 describe("Plan V2 resolution", () => {
+  it("accepts historical V2 specs without the new detail fields", () => {
+    expect(() => parseGeneratedPlanSpecV2(spec)).not.toThrow();
+    const contract = resolvePlanContractV2(spec, snapshot(["project.test"]), { baseBranch: "main", baseCommit: "a".repeat(40) });
+    expect(contract).toMatchObject({ schemaVersion: 2, tasks: [{ id: "docs" }] });
+  });
+
+  it("requires the new detail fields at the Explorer completion gate", () => {
+    const protocol = (artifact: unknown) => `<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>${JSON.stringify(artifact)}</pipeline-factory-plan>`;
+    const incomplete = assessPlanCompletion(protocol(spec));
+    expect(incomplete.status).toBe("INCOMPLETE");
+    expect(incomplete.diagnostics.map((item) => item.path)).toEqual(expect.arrayContaining(["objective.context", "design.risks", "tasks[0].changes"]));
+
+    const detailed = { ...spec, objective: { ...spec.objective, context: ["Existing docs entrypoint is the current source of truth."] }, design: { ...spec.design, risks: ["Keep the previous docs section intact if validation fails."] }, tasks: [{ ...spec.tasks[0]!, changes: [{ path: "docs/vue-usage.md", action: "modify" as const, detail: "Update the usage example without changing the runtime API." }] }] };
+    const complete = assessPlanCompletion(protocol(detailed));
+    expect(complete.status).toBe("READY");
+  });
+
+  it("validates task change records when they are present", () => {
+    const invalid = validateGeneratedPlanSpecV2({ ...spec, tasks: [{ ...spec.tasks[0], changes: [{ path: "../escape", action: "rename", detail: "bad" }] }] });
+    expect(invalid.map((item) => item.path)).toEqual(expect.arrayContaining(["tasks[0].changes[0].path", "tasks[0].changes[0].action"]));
+  });
   it("derives Project verification order and never accepts model command ids", () => {
     const contract = resolvePlanContractV2(spec, snapshot(["project.test"]), { baseBranch: "main", baseCommit: "a".repeat(40) });
     expect(contract).toMatchObject({ schemaVersion: 2, repository: { projectId: "project-test", configVersion: 3 }, scope: { includePaths: ["docs/vue-usage.md"] }, verification: { mode: "PROJECT_DEFAULT", commandIds: ["project.test"] } });

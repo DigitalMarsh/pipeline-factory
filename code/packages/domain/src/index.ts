@@ -86,7 +86,7 @@ export { validatePlanContract } from "./plan/contract.js";
 export { assessPlanCompletion } from "./plan/completion.js";
 export type { PlanArtifact, PlanCompletionAssessment } from "./plan/completion.js";
 export { assertSafeProjectRelativeGlob, parseGeneratedPlanSpecV2, resolvePlanContractV2, validateGeneratedPlanSpecV2 } from "./plan/plan-v2.js";
-export type { GeneratedPlanSpecV2, GitBaseline, PlanArtifactMode, PlanValidationIssue, PlanValidationIssueCode, ResolvedPlanContractV2 } from "./plan/plan-v2.js";
+export type { GeneratedPlanSpecV2, GitBaseline, PlanArtifactMode, PlanTaskChange, PlanValidationIssue, PlanValidationIssueCode, ResolvedPlanContractV2 } from "./plan/plan-v2.js";
 export type { PlanIndexRow, PlanQuery, PlanQueryProjection, PlanQueryResult, PlanQuerySort } from "./plan/query.js";
 export { PlanService } from "./plan/service.js";
 // Plan 落盘目录的唯一定义（缺省 docs/pipeline/plans）：组合根拿它同时喂给"写盘"与"工作区干净检查的

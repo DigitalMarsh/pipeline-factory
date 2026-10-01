@@ -14,6 +14,7 @@ import { planDocumentFileName, renderPlanDocument, writePlanDocument } from "./p
 import { InMemoryPipelineStore } from "../store/in-memory-store.js";
 import { ProjectService } from "../project/project.js";
 import type { PlanContract } from "./types.js";
+import type { ResolvedPlanContractV2 } from "./plan-v2.js";
 
 const contract: PlanContract = {
   schemaVersion: 1,
@@ -63,6 +64,32 @@ describe("Plan 文档渲染", () => {
     const markdown = renderPlanDocument({ ...document, contract: { ...document.contract, acceptanceCriteria: [], verificationCommandIds: [] } });
 
     expect(markdown).toContain("（未声明）");
+  });
+
+  it("V2 文档写出现状、每步文件变更和风险", () => {
+    const resolvedContract: ResolvedPlanContractV2 = {
+      schemaVersion: 2,
+      artifact: { mode: "REPOSITORY_FILE", path: "src/views/GanttView.vue" },
+      objective: { goal: "在项目详情页展示甘特图", context: ["现有详情页只有列表视图，日期数据已由 API 返回。"], audience: ["项目成员"], acceptanceCriteria: ["能按日期排布"], outOfScope: ["不改后端数据模型"] },
+      design: { technicalConstraints: ["复用现有 Vue 组件边界"], dataSecurity: ["不新增敏感数据"], failureHandling: ["数据缺失时显示空状态"], risks: ["旧浏览器样式兼容风险；失败时保留原列表视图。"] },
+      conflicts: [],
+      repository: { projectId: "project-1", name: "Project", repoRoot: "/repo", baseBranch: "main", baseCommit: "abc123", configVersion: 1, configHash: "sha256:config" },
+      scope: { includePaths: ["src/views/**"], excludePaths: [] },
+      tasks: [{ id: "task-1", title: "实现时间轴", dependencies: [], status: "READY", changes: [{ path: "src/views/GanttView.vue", action: "create", detail: "新增甘特图视图并复用详情页布局。" }] }],
+      dependencies: [],
+      execution: { executorModelRole: "executor", toolPolicy: "executor-scoped-write", maxRepairAttempts: 2 },
+      verification: { mode: "PROJECT_DEFAULT", commandIds: ["project.test"] },
+      merge: { strategy: "manual", requireHumanMerge: true },
+    };
+    const markdown = renderPlanDocument({ ...document, resolvedContract });
+
+    expect(markdown).toContain("## 现状与发现");
+    expect(markdown).toContain("现有详情页只有列表视图");
+    expect(markdown).toContain("新建");
+    expect(markdown).toContain("src/views/GanttView.vue");
+    expect(markdown).toContain("新增甘特图视图并复用详情页布局");
+    expect(markdown).toContain("## 风险与回滚");
+    expect(markdown).toContain("旧浏览器样式兼容风险");
   });
 
   it("文件名的形态是 <planId>-v<revision>.md", () => {

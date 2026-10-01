@@ -37,6 +37,27 @@ export type PlanCompletionAssessment = {
 };
 
 /** 解析模型协议块并检查 Plan 是否具备可执行的完整契约。 */
+/**
+ * 新方案必须具备的"细节"：现状与发现、每一步动哪些文件、风险。
+ *
+ * 为什么单独列在这里而不是塞进校验器：**校验器必须继续接受历史 spec**（它们会被
+ * reviseConfiguration / setVerificationSuites 重新解析），把这三个字段设成必填会让老 Plan 直接不可用。
+ * 门禁只跑新产物，所以"必须写清楚"这条要求放在这里是安全的。
+ *
+ * 直接动机：任务此前只有一个标题，Executor 拿到后得对着标题重新探索一遍；而计划里的
+ * `design.technicalConstraints`（含 dependencies）**根本没有进到执行者的提示词**——
+ * 库里反复出现的 `package.json remains missing` 就是这么来的。
+ */
+function missingExplorerDetail(spec: GeneratedPlanSpecV2): PlanValidationIssue[] {
+  const issues: PlanValidationIssue[] = [];
+  if (!spec.objective.context?.length) issues.push({ path: "objective.context", code: "REQUIRED", area: "目标与用户范围", message: "必须写出现状与调查发现：在仓库里看到了什么、依据是什么。" });
+  if (!spec.design.risks?.length) issues.push({ path: "design.risks", code: "REQUIRED", area: "技术方案与关键约束", message: "必须写出风险与回滚。" });
+  spec.tasks.forEach((task, index) => {
+    if (!task.changes?.length) issues.push({ path: `tasks[${index}].changes`, code: "REQUIRED", area: "实施任务、依赖与冲突", message: `任务 ${task.id} 必须写明要动哪些文件、怎么动。` });
+  });
+  return issues;
+}
+
 export function assessPlanCompletion(content: string): PlanCompletionAssessment {
   const candidates = planProtocolCandidates(content);
   if (candidates.length === 0) return { status: "INCOMPLETE", missing: [...REQUIRED_PLAN_AREAS], completed: [], diagnostics: [], artifact: null };
@@ -82,6 +103,15 @@ function assessPlanArtifact(artifactText: string): PlanCompletionAssessment {
   if (parsed.schemaVersion === 2) {
     try {
       const generatedSpec = parseGeneratedPlanSpecV2(parsed);
+      // **只对新产物强制这些"细节"字段**。校验器那边它们是可选的——库里已有的 spec 会被
+      // reviseConfiguration / setVerificationSuites 重新解析，必填会让老 Plan 直接不可用
+      // （plan-v2.ts 的"过时键故意不报 FORBIDDEN"是同一条理由）。门禁只跑新产物，所以在这里
+      // 提要求是安全的，而且诊断会像其他缺失项一样触发 Explorer 自动续跑补齐。
+      const detailIssues = missingExplorerDetail(generatedSpec);
+      if (detailIssues.length > 0) {
+        const missing = [...new Set(detailIssues.map((item) => item.area))];
+        return { status: "INCOMPLETE", missing, completed: REQUIRED_PLAN_AREAS.filter((area) => !missing.includes(area)), diagnostics: detailIssues, artifact: null };
+      }
       return { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], diagnostics: [], artifact: { title: generatedSpec.title, generatedSpec } };
     } catch (error) {
       const diagnostics = error instanceof GeneratedPlanSpecV2ValidationError ? error.issues : validateGeneratedPlanSpecV2(parsed);

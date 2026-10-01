@@ -1,5 +1,56 @@
 # Changelog
 
+## 2026-10-01（其十五）— Plan 结构对齐 Claude Code：现状、风险、文件变更真正传给 Executor
+
+### 为什么做
+
+对比 Claude Code 的 Plan 后发现，项目当前的 Plan **有目标、有任务标题，但没有"为什么这么做、具体动哪些文件"**。
+更严重的是：Executor 的 system prompt 嵌的是 `revision.contract` 的 V1 投影，V2 的 `design` 整节在
+`executionContractFromResolvedV2`（`plan/service.ts`）里被丢掉了——`technicalConstraints`、
+`dataSecurity`、`failureHandling`，以及 `dependencies` 并入的技术约束，**从未到达执行者**。
+
+这与真实阻塞原因直接对上：`package.json remains missing in expected project directory` 反复出现，
+而 Plan 的 dependencies 里明明写着「需要在 code/ 目录使用仓库现有 package.json 和锁文件安装依赖」。
+执行者没见过这句话，只能对着一个任务标题重新探索。
+
+### Changed
+
+**1. V2 Plan 增加三个结构字段（不升 schemaVersion）**
+
+- `objective.context`：现状与调查发现（Explorer 在仓库里看到了什么、依据是什么）。
+- `design.risks`：风险与回滚。
+- `tasks[].changes[]`：这一步要动哪些文件、怎么动；每项包含 `path`、`action`（`create` /
+  `modify` / `delete`）、`detail`。
+
+三个字段在底层校验器里**保持可选**，确保历史 V2 spec 能继续被
+`reviseConfiguration` / `setVerificationSuites` 重新解析；但新 Explorer 产物在 `assessPlanCompletion`
+门禁里必须提供这三类细节，缺失会生成逐字段诊断并自动续探索补齐。这样兼顾了新计划质量与旧数据兼容。
+
+`tasks[].changes[].path` 复用已有 `safePaths`，不另写路径安全规则；非法 action、空 detail、空数组都会
+被具体指出。
+
+**2. Executor 拿到完整的 V2 精选视图**
+
+有 `resolvedContract` 的 V2 Revision 现在给 Executor 的 system prompt 包含：
+`objective`、`design`、`scope`、`tasks`（含 changes）、`dependencies`、`conflicts`、产物和验证信息。
+不再把 `repository` 哈希等无关元数据塞进提示词；历史 V1 Revision 仍原样使用旧 contract。
+
+**3. Plan 文档与 Plan 详情抽屉同步展示**
+
+- 落盘 Markdown 新增「现状与发现」「风险与回滚」，每个实施步骤列出动作、路径和 detail。
+- Plan 详情抽屉新增同样的现状、风险、文件变更展示：动作以新建 / 修改 / 删除标签区分，
+  不再只有任务标题。
+- Explorer requirements manifest 与 web fallback 镜像同步更新，明确三项为新产物必填。
+
+### 验证
+
+- `pnpm verify` 全绿：domain **362** / api **111** / web **497**，无新增 value 级环。
+- 向后兼容：历史 V2 spec 没有新字段仍能 parse / resolve；新门禁会明确指出
+  `objective.context`、`design.risks`、`tasks[n].changes` 的缺失。
+- Executor 测试断言 system prompt 真包含调查上下文、风险、dependencies、changes 路径与 detail，
+  防止新字段只停留在页面/数据库而没有真正进入执行。
+- Plan archive 与 PlanDetailContent 测试覆盖新字段渲染。
+
 ## 2026-10-01（其十四）— 执行会话：消息类型清单化、说人话、修掉漏进正文的标记
 
 ### 为什么做

@@ -135,6 +135,34 @@ describe("ExecutorAgent", () => {
 
   it("sends the complete approved Plan contract to the executor model", async () => {
     const { store, plan, run } = await createQueuedRun();
+    const detailedRevision = {
+      ...plan,
+      resolvedContract: {
+        schemaVersion: 2 as const,
+        artifact: { mode: "REPOSITORY_FILE" as const, path: "src/implemented.ts" },
+        objective: {
+          goal: "Implement the feature",
+          context: ["The current endpoint omits the project id; the server validator rejects the request."],
+          audience: ["Project users"],
+          acceptanceCriteria: ["The feature works"],
+          outOfScope: ["No redesign"],
+        },
+        design: {
+          technicalConstraints: ["Reuse the current API contract"],
+          dataSecurity: ["Do not expose tokens"],
+          failureHandling: ["Keep the form values on failure"],
+          risks: ["Old clients may still call the legacy endpoint; keep a compatibility route."],
+        },
+        repository: { projectId: "project-1", name: "Test", repoRoot: "/repo", baseBranch: "main", baseCommit: "abc", configVersion: 1, configHash: "sha256:test" },
+        scope: { includePaths: ["src/**"], excludePaths: [".env"] },
+        tasks: [{ id: "task-1", title: "Implement the feature", dependencies: [], status: "READY" as const, changes: [{ path: "src/implemented.ts", action: "modify" as const, detail: "Update the handler to pass the current project id." }] }],
+        dependencies: ["Use the existing package manager and lockfile."],
+        conflicts: [],
+        execution: { executorModelRole: "executor", toolPolicy: "executor-scoped-write", maxRepairAttempts: 1 },
+        verification: { mode: "PROJECT_DEFAULT" as const, commandIds: ["project.test"] },
+        merge: { strategy: "manual" as const, requireHumanMerge: true as const },
+      },
+    };
     let receivedMessages: ModelRequest["messages"] = [];
     const model: ModelGateway = {
       configFor: () => ({ model: "gpt-5.6-luna", loopMode: "provider-controlled" }),
@@ -148,12 +176,19 @@ describe("ExecutorAgent", () => {
       async cancel() { return undefined; },
     };
 
-    await new ExecutorAgent(store, model).run(run, plan);
+    await new ExecutorAgent(store, model).run(run, detailedRevision);
 
     const systemMessage = receivedMessages.find((message) => message.role === "system");
     expect(systemMessage?.content).toContain("The approved Plan contract is the source of truth");
     expect(systemMessage?.content).toContain("Implement the feature");
-    expect(systemMessage?.content).toContain('"id": "task-1"');
+    expect(systemMessage?.content).toContain('"context":');
+    expect(systemMessage?.content).toContain("The current endpoint omits the project id; the server validator rejects the request.");
+    expect(systemMessage?.content).toContain('"risks":');
+    expect(systemMessage?.content).toContain("Old clients may still call the legacy endpoint; keep a compatibility route.");
+    expect(systemMessage?.content).toContain('"path": "src/implemented.ts"');
+    expect(systemMessage?.content).toContain("Update the handler to pass the current project id.");
+    expect(systemMessage?.content).toContain('"dependencies":');
+    expect(systemMessage?.content).toContain("Use the existing package manager and lockfile.");
   });
 
   it("uses the declared artifact directory when include scope spans multiple paths", async () => {

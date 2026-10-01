@@ -17,14 +17,37 @@ export type PlanValidationIssue = { path: string; code: PlanValidationIssueCode;
  * 它曾是模型可填字段，但从来没有任何代码推进过它，界面却按"实时状态"显示恒定的 READY —— 所以
  * prompt 不再示范、界面不再当实时状态用；为了兼容库里已有的 CandidatePlan，校验器仍接受这个键。
  */
-export type PlanTaskShape = { id: string; title: string; dependencies: string[]; status?: "PENDING" | "READY" | "DONE" };
+/**
+ * 一步实施要动的**具体文件**。
+ * 这是"任务标题"与"真正动手"之间的那层：只有标题时，Executor 得对着标题重新探索一遍
+ * （反复读文件、偶尔跑偏）；写清动哪个文件、怎么动，它才有靶子。
+ */
+export type PlanTaskChange = {
+  /** 项目根相对路径；与 `scope.includePaths` 同一套路径安全规则。 */
+  path: string;
+  action: "create" | "modify" | "delete";
+  /** 这一步在这个文件上做什么。 */
+  detail: string;
+};
+
+export type PlanTaskShape = { id: string; title: string; dependencies: string[]; status?: "PENDING" | "READY" | "DONE"; changes?: PlanTaskChange[] | undefined };
 
 export type GeneratedPlanSpecV2 = {
   schemaVersion: 2;
   title: string;
   artifact: { mode: PlanArtifactMode; path?: string | undefined };
-  objective: { goal: string; audience: string[]; acceptanceCriteria: string[]; outOfScope: string[] };
-  design: { technicalConstraints: string[]; dataSecurity: string[]; failureHandling: string[] };
+  objective: {
+    goal: string;
+    /**
+     * 现状与调查发现：Explorer 在仓库里**看到了什么、依据是什么**。
+     * 此前这些只能塞进 goal 的散文里，于是"为什么这么改"在计划里没有位置。
+     */
+    context?: string[] | undefined;
+    audience: string[];
+    acceptanceCriteria: string[];
+    outOfScope: string[];
+  };
+  design: { technicalConstraints: string[]; dataSecurity: string[]; failureHandling: string[]; risks?: string[] | undefined };
   scope: { includePaths: string[]; excludePaths: string[] };
   tasks: PlanTaskShape[];
   /** Human-readable execution prerequisites; these are not CandidatePlan IDs. */
@@ -58,7 +81,7 @@ export type ResolvedPlanContractV2 = {
   repository: { projectId: string; name: string; repoRoot: string; baseBranch: string; baseCommit: string; configVersion: number; configHash: string };
   scope: GeneratedPlanSpecV2["scope"];
   /** 冻结后的步骤清单；`status` 恒为计划态（见 PlanTaskShape 的说明）。 */
-  tasks: Array<{ id: string; title: string; dependencies: string[]; status: "PENDING" | "READY" | "DONE" }>;
+  tasks: Array<{ id: string; title: string; dependencies: string[]; status: "PENDING" | "READY" | "DONE"; changes?: PlanTaskChange[] | undefined }>;
   /** Human-readable execution prerequisites; these are not CandidatePlan IDs. */
   dependencies: string[];
   execution: { executorModelRole: string; toolPolicy: string; maxRepairAttempts: number };
@@ -129,6 +152,41 @@ function safePaths(paths: string[], path: string, area: string, issues: PlanVali
   });
 }
 
+/**
+ * 可选字符串数组：**不存在就跳过**（历史 spec 没有这些键），存在时必须是至少一项的字符串数组。
+ * 空数组一律拒绝——它是自相矛盾的声明（"有风险"却一条不写），与 `verification.suites` 同一条约定。
+ */
+function optionalStringsAt(source: Record<string, unknown>, key: string, path: string, area: string, issues: PlanValidationIssue[]): string[] | undefined {
+  if (source[key] === undefined) return undefined;
+  const value = stringsAt(source, key, path, area, issues);
+  if (value.length === 0) issue(issues, path, "INVALID", area, "如填写，必须是至少一项的字符串数组。");
+  return value;
+}
+
+/** 一步实施要动的文件清单；同样可选，出现时逐项校验形状。 */
+function optionalTaskChanges(rawTask: Record<string, unknown>, path: string, issues: PlanValidationIssue[]): PlanTaskChange[] | undefined {
+  const value = rawTask.changes;
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length === 0) {
+    issue(issues, `${path}.changes`, "INVALID", "实施任务、依赖与冲突", "如填写，必须是至少一项的数组，每项形如 { path, action, detail }。");
+    return undefined;
+  }
+  const changes: PlanTaskChange[] = [];
+  value.forEach((rawChange, index) => {
+    const changePath = `${path}.changes[${index}]`;
+    if (!isRecord(rawChange)) { issue(issues, changePath, "INVALID", "实施任务、依赖与冲突", "必须是对象。"); return; }
+    const filePath = stringAt(rawChange, "path", `${changePath}.path`, "实施任务、依赖与冲突", issues);
+    const detail = stringAt(rawChange, "detail", `${changePath}.detail`, "实施任务、依赖与冲突", issues);
+    const action = rawChange.action;
+    const validAction = action === "create" || action === "modify" || action === "delete";
+    if (!validAction) issue(issues, `${changePath}.action`, action === undefined ? "REQUIRED" : "INVALID", "实施任务、依赖与冲突", "必须为 create、modify 或 delete。");
+    if (filePath) safePaths([filePath], `${changePath}.path`, "实施任务、依赖与冲突", issues);
+    if (!filePath || !detail || !validAction) return;
+    changes.push({ path: filePath, action, detail });
+  });
+  return changes;
+}
+
 /** Returns every structural violation so continuation can repair the full artifact at once. */
 export function validateGeneratedPlanSpecV2(value: unknown): PlanValidationIssue[] {
   const issues: PlanValidationIssue[] = [];
@@ -146,6 +204,8 @@ export function validateGeneratedPlanSpecV2(value: unknown): PlanValidationIssue
 
   const objective = objectAt(source, "objective", "目标与用户范围", issues);
   stringAt(objective, "goal", "objective.goal", "目标与用户范围", issues);
+  // 可选：历史 spec 没有这两个键（见文件头关于"不报 FORBIDDEN"的说明），存在时才校验。
+  optionalStringsAt(objective, "context", "objective.context", "目标与用户范围", issues);
   stringsAt(objective, "audience", "objective.audience", "目标与用户范围", issues, true);
   stringsAt(objective, "acceptanceCriteria", "objective.acceptanceCriteria", "验收标准与验证命令", issues, true);
   stringsAt(objective, "outOfScope", "objective.outOfScope", "功能范围与排除项", issues);
@@ -154,6 +214,7 @@ export function validateGeneratedPlanSpecV2(value: unknown): PlanValidationIssue
   stringsAt(design, "technicalConstraints", "design.technicalConstraints", "技术方案与关键约束", issues, true);
   stringsAt(design, "dataSecurity", "design.dataSecurity", "数据、安全与异常处理", issues, true);
   stringsAt(design, "failureHandling", "design.failureHandling", "数据、安全与异常处理", issues, true);
+  optionalStringsAt(design, "risks", "design.risks", "技术方案与关键约束", issues);
 
   const scope = objectAt(source, "scope", "功能范围与排除项", issues);
   const includePaths = safePaths(stringsAt(scope, "includePaths", "scope.includePaths", "功能范围与排除项", issues, mode === "REPOSITORY_FILE"), "scope.includePaths", "功能范围与排除项", issues);
@@ -171,6 +232,7 @@ export function validateGeneratedPlanSpecV2(value: unknown): PlanValidationIssue
     const id = stringAt(rawTask, "id", `${path}.id`, "实施任务、依赖与冲突", issues);
     stringAt(rawTask, "title", `${path}.title`, "实施任务、依赖与冲突", issues);
     const dependencies = stringsAt(rawTask, "dependencies", `${path}.dependencies`, "实施任务、依赖与冲突", issues);
+    optionalTaskChanges(rawTask, path, issues);
     if (rawTask.status !== undefined && rawTask.status !== "PENDING" && rawTask.status !== "READY" && rawTask.status !== "DONE") issue(issues, `${path}.status`, "INVALID", "实施任务、依赖与冲突", "只能为 PENDING、READY 或 DONE。");
     if (id) { taskIds.push(id); taskDependencies.push({ id, dependencies }); }
   });
@@ -217,10 +279,10 @@ export function parseGeneratedPlanSpecV2(value: unknown): GeneratedPlanSpecV2 {
     schemaVersion: 2,
     title: String(source.title).trim(),
     artifact: { mode: artifact.mode as PlanArtifactMode, ...(typeof artifact.path === "string" ? { path: assertSafeProjectRelativeGlob(artifact.path, "artifact.path") } : {}) },
-    objective: { goal: String(objective.goal).trim(), audience: normalize(objective.audience), acceptanceCriteria: normalize(objective.acceptanceCriteria), outOfScope: normalize(objective.outOfScope) },
-    design: { technicalConstraints: normalize(design.technicalConstraints), dataSecurity: normalize(design.dataSecurity), failureHandling: normalize(design.failureHandling) },
+    objective: { goal: String(objective.goal).trim(), ...(objective.context === undefined ? {} : { context: normalize(objective.context) }), audience: normalize(objective.audience), acceptanceCriteria: normalize(objective.acceptanceCriteria), outOfScope: normalize(objective.outOfScope) },
+    design: { technicalConstraints: normalize(design.technicalConstraints), dataSecurity: normalize(design.dataSecurity), failureHandling: normalize(design.failureHandling), ...(design.risks === undefined ? {} : { risks: normalize(design.risks) }) },
     scope: { includePaths: normalize(scope.includePaths).map((path) => assertSafeProjectRelativeGlob(path, "scope.includePaths")), excludePaths: normalize(scope.excludePaths).map((path) => assertSafeProjectRelativeGlob(path, "scope.excludePaths")) },
-    tasks: (source.tasks as Array<Record<string, unknown>>).map((task) => ({ id: String(task.id).trim(), title: String(task.title).trim(), dependencies: normalize(task.dependencies), status: (task.status as "PENDING" | "READY" | "DONE" | undefined) ?? "READY" })),
+    tasks: (source.tasks as Array<Record<string, unknown>>).map((task) => ({ id: String(task.id).trim(), title: String(task.title).trim(), dependencies: normalize(task.dependencies), status: (task.status as "PENDING" | "READY" | "DONE" | undefined) ?? "READY", ...(task.changes === undefined ? {} : { changes: (task.changes as Array<Record<string, unknown>>).map((change) => ({ path: assertSafeProjectRelativeGlob(String(change.path), "tasks.changes.path"), action: change.action as PlanTaskChange["action"], detail: String(change.detail).trim() })) } ) })),
     dependencies: normalize(source.dependencies),
     conflicts: normalize(source.conflicts),
     execution: { maxRepairAttempts: typeof execution.maxRepairAttempts === "number" ? execution.maxRepairAttempts : undefined },

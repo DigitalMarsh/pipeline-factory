@@ -237,7 +237,7 @@ export class ExecutorAgent {
       planId: revision.planId,
       revision: revision.revision,
       executionContext: { worktreeRoot: workspaceRoot, commandWorkingDirectory },
-      contract: revision.contract,
+      contract: executorPlanView(revision),
       projectConfig: revision.projectConfigSnapshot
         ? { version: revision.projectConfigVersion, hash: revision.projectConfigHash, snapshot: revision.projectConfigSnapshot }
         : { legacy: true, note: "This revision predates Project configuration snapshots; use the embedded contract and the runtime settings supplied by the Factory." },
@@ -530,6 +530,35 @@ export class ExecutorAgent {
     const current: ExecutionTelemetry = thread.telemetry ?? { model: null, reasoningEffort: null, backend: null, startedAt: null, completedAt: null, durationMs: null, usage: null, usageSource: "not-recorded", usageScope: null };
     this.store.saveExecutionThread({ ...thread, telemetry: { ...current, ...update } });
   }
+}
+
+/**
+ * 交给执行者的计划视图。
+ *
+ * V2 revision 走**精选视图**，而不是 `revision.contract`（V1 投影）：那个投影
+ * （`plan/service.ts` 的 `executionContractFromResolvedV2`）**丢掉了 `design` 整节**——
+ * 技术约束、数据安全、失败处理，以及被 `resolvePlanContractV2` 并进 `technicalConstraints` 的
+ * `dependencies`，**从未到达执行者**。代价是具体的：库里反复出现
+ * `package.json remains missing in expected project directory`，而那些 Plan 的 dependencies 里
+ * 明明写着"需要在 code/ 目录使用仓库现有 package.json 和锁文件安装依赖"——执行者没见过这句话。
+ *
+ * 只取执行需要的部分：不把 `repository`（路径、哈希）与 `execution`（Factory 固定的角色与工具策略）
+ * 塞进提示词，那既无用又费 token。历史 V1 revision 没有 `resolvedContract`，原样退回，行为不变。
+ */
+function executorPlanView(revision: PlanRevisionV2): unknown {
+  const resolved = revision.resolvedContract;
+  if (!resolved) return revision.contract;
+  return {
+    objective: resolved.objective,
+    design: resolved.design,
+    scope: resolved.scope,
+    tasks: resolved.tasks,
+    dependencies: resolved.dependencies,
+    conflicts: resolved.conflicts,
+    artifact: resolved.artifact,
+    verification: { commandIds: resolved.verification.commandIds },
+    merge: resolved.merge,
+  };
 }
 
 /** 从模型输出提取结构化完成报告；缺失协议块时返回 null 触发完成门禁继续。 */

@@ -19,7 +19,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PlanContract } from "./types.js";
-import type { ResolvedPlanContractV2 } from "./plan-v2.js";
+import type { PlanTaskChange, ResolvedPlanContractV2 } from "./plan-v2.js";
 
 /** 落盘所需的事实；V2 契约优先（它更完整），缺失时回落到 V1 投影。 */
 export type PlanDocumentInput = {
@@ -38,6 +38,9 @@ export function planDocumentFileName(planId: string, revision: number): string {
   return `${planId}-v${revision}.md`;
 }
 
+/** 一步实施对某个文件的动作；中文化只在这一处，避免每处渲染各写一遍。 */
+const CHANGE_ACTION_LABELS: Record<PlanTaskChange["action"], string> = { create: "新建", modify: "修改", delete: "删除" };
+
 /**
  * 渲染 Markdown。**不写文件**，便于直接断言内容。
  * 空字段不编占位符——"没有"就写"（未声明）"，好过留一行空白让人以为渲染坏了。
@@ -50,7 +53,9 @@ export function renderPlanDocument(input: PlanDocumentInput): string {
   const audience = resolved?.objective.audience ?? [];
   const include = resolved?.scope.includePaths ?? input.contract.include;
   const exclude = resolved?.scope.excludePaths ?? input.contract.exclude;
-  const tasks = resolved?.tasks ?? input.contract.tasks;
+  // 显式标注结构而不是取联合类型：V1 的 PlanTask 没有 `changes`（它只有 title/dependencies），
+  // 联合类型会让 `task.changes` 变成不存在的属性。历史 Revision 因此渲染成"只有标题"的步骤，符合事实。
+  const tasks: Array<{ title: string; dependencies: string[]; changes?: PlanTaskChange[] | undefined }> = resolved?.tasks ?? input.contract.tasks;
   const verification = resolved?.verification.commandIds ?? input.contract.verificationCommandIds;
   const design = resolved?.design;
   const artifactPath = resolved?.artifact.path ?? input.contract.artifactPath;
@@ -72,15 +77,23 @@ export function renderPlanDocument(input: PlanDocumentInput): string {
 
   lines.push("## 目标", "", goal || "（未声明）", "");
   if (audience.length > 0) lines.push(`面向：${audience.join("、")}`, "");
+  // 现状与发现：Explorer 在仓库里看到了什么、依据是什么。此前这些只能塞进目标那段散文里。
+  const context = resolved?.objective.context ?? [];
+  if (context.length > 0) lines.push("## 现状与发现", "", ...bullets(context), "");
 
   lines.push("## 验收标准", "", ...bullets(acceptance), "");
   lines.push("## 功能范围", "", "**包含**", "", ...bullets(include), "", "**排除**", "", ...bullets(exclude), "");
   if (outOfScope.length > 0) lines.push("## 明确不做", "", ...bullets(outOfScope), "");
 
   lines.push("## 实施步骤", "");
-  for (const task of tasks) {
+  for (const [index, task] of tasks.entries()) {
     const dependencies = task.dependencies.length > 0 ? `（依赖：${task.dependencies.join("、")}）` : "";
-    lines.push(`1. **${task.title}** ${dependencies}`.trimEnd());
+    lines.push(`${index + 1}. **${task.title}** ${dependencies}`.trimEnd());
+    // 每一步动哪些文件、怎么动——这是"任务标题"与"真正动手"之间的那层，
+    // 也是 Executor 的靶子（见 executor-agent.ts 的 executorPlanView）。
+    for (const change of task.changes ?? []) {
+      lines.push(`   - \`${change.path}\`（${CHANGE_ACTION_LABELS[change.action]}）：${change.detail}`);
+    }
   }
   if (tasks.length === 0) lines.push("（未声明）");
   lines.push("");
@@ -89,6 +102,7 @@ export function renderPlanDocument(input: PlanDocumentInput): string {
     lines.push("## 技术约束", "", ...bullets(design.technicalConstraints), "");
     lines.push("## 数据与安全", "", ...bullets(design.dataSecurity), "");
     lines.push("## 失败处理", "", ...bullets(design.failureHandling), "");
+    if (design.risks?.length) lines.push("## 风险与回滚", "", ...bullets(design.risks), "");
   }
 
   lines.push("## 验证", "", verification.length > 0 ? `项目验证命令：${verification.map((id) => `\`${id}\``).join("、")}` : "（无验证命令，或由项目默认值决定）", "");
