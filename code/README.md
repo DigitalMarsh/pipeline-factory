@@ -71,6 +71,7 @@ Git 根目录的 `.runtime/`（API 为 `.runtime/api.pid` / `.runtime/api.log`�
 {
   "project": {
     "root": "/absolute/path/to/your/project",
+    "planDirectory": "docs/pipeline/plans",
     "commands": [
       { "commandId": "project.start", "argv": ["/absolute/path/to/node", "scripts/start.mjs"], "environment": { "PATH": "/absolute/path/to/bin:/usr/bin:/bin" } },
       { "commandId": "project.cleanup", "argv": ["/absolute/path/to/node", "scripts/cleanup.mjs"], "environment": { "PATH": "/absolute/path/to/bin:/usr/bin:/bin" } }
@@ -78,6 +79,17 @@ Git 根目录的 `.runtime/`（API 为 `.runtime/api.pid` / `.runtime/api.log`�
   }
 }
 ```
+
+`project.planDirectory` 决定**确认 Plan 时落盘副本写到哪里**：相对受管工程根目录解析（缺省
+`docs/pipeline/plans`），也接受绝对路径；目录不存在会自动创建。每个 Revision 一个文件
+（`<planId>-v<revision>.md`），**不覆盖旧版本**。这些文件会出现在受管仓库的 `git status` 里——
+这正是"让方案与代码在同一个仓库里被审阅、被 diff"的用意。它们**不会**阻塞派发：工作区干净检查
+对该目录放行（见下一条）。
+
+**派发 Run 要求受管工程的工作区是干净的**（`git status` 全空，含未跟踪文件）。Run 的 worktree 基线
+恒等于 `baseCommit`——工作区里未提交的改动**不会**被搬进工作树，否则"你本地看到的代码"与"Agent
+改的代码"就是两棵不同的树。不干净时：确认 Plan 会给出提示（不阻断），派发则被硬阻断并列出具体
+文件，处置办法是先提交或 stash。计划目录（`project.planDirectory`）是唯一被放行的例外。
 
 API 的运行参数全部来自 `config/pipeline-factory.config.json`，也可以通过 `--config` 指定
 其他配置文件；不读取环境变量。dev 下的 API 通过 `--conditions=pipeline-dev` 解析

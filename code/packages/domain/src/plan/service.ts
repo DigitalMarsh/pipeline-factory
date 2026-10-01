@@ -25,6 +25,9 @@
 import { createHash } from "node:crypto";
 import { parseGeneratedPlanSpecV2, resolvePlanContractV2 } from "./plan-v2.js";
 import { missingVerificationCommands, validatePlanContract } from "./contract.js";
+import { writePlanDocument } from "./plan-archive.js";
+import { emptyPlanPreflight } from "./preflight.js";
+import type { PlanPreflightInspector } from "./preflight.js";
 import { updatePlanStatus } from "./status-transition.js";
 import { freezeRevision } from "../platform/freeze.js";
 import { verifiedProjectBaseline } from "../git/baseline.js";
@@ -111,8 +114,57 @@ function executionContractFromResolvedV2(contract: ResolvedPlanContractV2): Plan
 export class PlanService {
   private readonly projects: ProjectService;
 
-  constructor(private readonly store: PipelineStore, projects?: ProjectService) {
+  constructor(
+    private readonly store: PipelineStore,
+    projects?: ProjectService,
+    private readonly preflight: PlanPreflightInspector = emptyPlanPreflight,
+    /** 解析某个受管工程的计划落盘目录（绝对路径）；由组合根按配置注入，**缺省不落盘**。 */
+    private readonly planDirectory?: ((projectRoot: string) => string) | undefined,
+  ) {
     this.projects = projects ?? new ProjectService(store);
+  }
+
+  /**
+   * 把 Revision 落盘到受管工程的计划目录：**只在确认时写，每版一个文件**。
+   * 未注入目录解析器时跳过——测试与不写盘的部署不该被这个副作用影响。
+   *
+   * 写盘先于冻结（调用点保证顺序）：写失败就阻断确认、可重试且无副作用；反过来先冻结再写，
+   * 会留下"确认成功了但文件没写成"的中间态。
+   */
+  private archiveRevision(input: {
+    projectId: string;
+    planId: string;
+    revision: number;
+    title: string;
+    contract: PlanContract;
+    resolvedContract?: ResolvedPlanContractV2 | undefined;
+    artifactHash: string;
+    confirmedBy: string;
+    confirmedAt: string;
+  }): string | undefined {
+    if (!this.planDirectory) return undefined;
+    const directory = this.planDirectory(this.projects.snapshot(input.projectId).repoRoot);
+    return writePlanDocument({ ...input, directory });
+  }
+
+  /**
+   * 派发前预检的确认闸门（见 plan/preflight.ts）。
+   * **放在 service 而不是 route**：`routes/plans.ts` 有 `confirmAndDispatch` 与 `plans.confirm`
+   * 两条路径，service 是唯一必经点——放在 route 上，另一条路就绕过去了。
+   *
+   * 只阻断 `blocking` 级问题（计划要处理的文件在基线里不存在）。工作区不干净属于**警告**：
+   * 它由建 worktree 时的那道硬闸门负责，确认计划与工作区干净是两件事，绑在一起会让只想看方案的人也被卡住。
+   */
+  private assertPreflightPasses(projectId: string, contract: { baseCommit: string; include: string[]; artifactPath?: string | undefined }): void {
+    const project = this.store.getProject(projectId);
+    if (!project) return;
+    const result = this.preflight({
+      repoRoot: this.projects.snapshot(projectId).repoRoot,
+      baseCommit: contract.baseCommit,
+      includePaths: contract.include,
+      ...(contract.artifactPath ? { artifactPath: contract.artifactPath } : {}),
+    });
+    if (result.blocking.length > 0) throw new Error(`PLAN_PREFLIGHT_FAILED: ${result.blocking.map((issue) => issue.message).join(" ")}`);
   }
 
   /** 注册与 Project 绑定的本地线程，并追加创建事件。 */
@@ -289,10 +341,14 @@ export class PlanService {
       this.store.saveRevisionLifecycleProjection({ planId: changed.planId, revision: changed.targetRevision, projectId: changed.projectId, title: changed.title, status: changed.status, sourceExplorerThreadId: changed.sourceExplorerThreadId, runId: null, lastEventAt: changed.updatedAt });
       throw new Error("BASE_CHANGED");
     }
+    // 与 confirm 同一道闸门：修订版冻结前也要过预检——否则"改一版再确认"就是绕过它的后门。
+    this.assertPreflightPasses(draft.projectId, draft.contract);
     validatePlanContract(draft.contract);
     const snapshot = this.projects.snapshot(project.id);
     const confirmedAt = this.store.now();
-    const revision = freezeRevision({ planId: plan.id, revision: draft.targetRevision, contract: draft.contract, ...(draft.resolvedContract ? { resolvedContract: draft.resolvedContract } : {}), artifactHash: `sha256:${createHash("sha256").update(JSON.stringify({ contract: draft.contract, projectConfigSnapshot: snapshot })).digest("hex")}`, confirmedBy, confirmedAt, sourceExplorerThreadId: draft.sourceExplorerThreadId, ...(draft.explorerPlanId ? { explorerPlanId: draft.explorerPlanId } : {}), sourceTurnId: draft.sourceTurnId, providerThreadId: draft.providerThreadId, providerTurnId: draft.providerTurnId, providerItemId: draft.providerItemId, provenance: "CURRENT", projectConfigVersion: snapshot.configVersion, projectConfigHash: snapshot.configHash, projectConfigSnapshot: snapshot });
+    const artifactHash = `sha256:${createHash("sha256").update(JSON.stringify({ contract: draft.contract, projectConfigSnapshot: snapshot })).digest("hex")}`;
+    const planDocumentPath = this.archiveRevision({ projectId: plan.projectId, planId: plan.id, revision: draft.targetRevision, title: draft.title, contract: draft.contract, ...(draft.resolvedContract ? { resolvedContract: draft.resolvedContract } : {}), artifactHash, confirmedBy, confirmedAt });
+    const revision = freezeRevision({ planId: plan.id, revision: draft.targetRevision, contract: draft.contract, ...(draft.resolvedContract ? { resolvedContract: draft.resolvedContract } : {}), artifactHash, ...(planDocumentPath ? { planDocumentPath } : {}), confirmedBy, confirmedAt, sourceExplorerThreadId: draft.sourceExplorerThreadId, ...(draft.explorerPlanId ? { explorerPlanId: draft.explorerPlanId } : {}), sourceTurnId: draft.sourceTurnId, providerThreadId: draft.providerThreadId, providerTurnId: draft.providerTurnId, providerItemId: draft.providerItemId, provenance: "CURRENT", projectConfigVersion: snapshot.configVersion, projectConfigHash: snapshot.configHash, projectConfigSnapshot: snapshot });
     this.store.saveRevision(revision);
     const updatedPlan = updatePlanStatus(this.store, plan, { title: draft.title, revision: draft.targetRevision, status: "READY", contract: draft.contract, ...(draft.generatedSpec ? { generatedSpec: draft.generatedSpec } : {}), ...(draft.resolvedContract ? { resolvedContract: draft.resolvedContract } : {}), sourceExplorerThreadId: draft.sourceExplorerThreadId, sourceTurnId: draft.sourceTurnId, providerThreadId: draft.providerThreadId, providerTurnId: draft.providerTurnId, providerItemId: draft.providerItemId, confirmedBy, confirmedAt, queuedAt: null, dispatchedAt: null, runId: null, attentionReason: null, lastEventAt: confirmedAt });
     this.store.updateRevisionDraft(Object.freeze({ ...draft, status: "CONFIRMED", confirmedAt, updatedAt: confirmedAt }));
@@ -407,17 +463,22 @@ export class PlanService {
         });
       }
     }
+    // 预检排在冻结之前：先把"计划假设的文件根本不存在"挡在门外，再写不可变的 Revision。
+    this.assertPreflightPasses(plan.projectId, plan.contract);
     validatePlanContract(plan.contract);
     this.validatePlanDependencies(plan);
     const confirmedAt = this.store.now();
     const project = this.store.getProject(plan.projectId);
     const projectConfigSnapshot = project ? this.projects.snapshot(project.id) : undefined;
+    const artifactHash = `sha256:${createHash("sha256").update(JSON.stringify({ contract: plan.contract, projectConfigSnapshot })).digest("hex")}`;
+    const planDocumentPath = this.archiveRevision({ projectId: plan.projectId, planId: plan.id, revision: plan.revision, title: plan.title, contract: plan.contract, ...(plan.resolvedContract ? { resolvedContract: plan.resolvedContract } : {}), artifactHash, confirmedBy, confirmedAt });
     const revision = freezeRevision({
       planId: plan.id,
       revision: plan.revision,
       contract: plan.contract,
       ...(plan.resolvedContract ? { resolvedContract: plan.resolvedContract } : {}),
-      artifactHash: `sha256:${createHash("sha256").update(JSON.stringify({ contract: plan.contract, projectConfigSnapshot })).digest("hex")}`,
+      ...(planDocumentPath ? { planDocumentPath } : {}),
+      artifactHash,
       confirmedBy,
       confirmedAt,
       sourceExplorerThreadId: plan.sourceExplorerThreadId,
@@ -611,11 +672,15 @@ export class PlanService {
 
     const confirmedAt = this.store.now();
     const revisionNumber = plan.revision + 1;
+    // 这是**新的一版 Revision**（plan.revision + 1），所以同样落一份盘：每版一个文件，不覆盖旧版。
+    const artifactHash = `sha256:${createHash("sha256").update(JSON.stringify({ contract: plan.contract, projectConfigSnapshot })).digest("hex")}`;
+    const planDocumentPath = this.archiveRevision({ projectId: plan.projectId, planId: plan.id, revision: revisionNumber, title: plan.title, contract: plan.contract, ...(plan.resolvedContract ? { resolvedContract: plan.resolvedContract } : {}), artifactHash, confirmedBy, confirmedAt });
     const revision = freezeRevision({
       planId: plan.id,
       revision: revisionNumber,
       contract: plan.contract,
-      artifactHash: `sha256:${createHash("sha256").update(JSON.stringify({ contract: plan.contract, projectConfigSnapshot })).digest("hex")}`,
+      artifactHash,
+      ...(planDocumentPath ? { planDocumentPath } : {}),
       confirmedBy,
       confirmedAt,
       sourceExplorerThreadId: plan.sourceExplorerThreadId,

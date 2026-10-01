@@ -1,5 +1,106 @@
 # Changelog
 
+## 2026-10-01（其十）— agent 词表中立化、工作区干净闸门、路径预检、Plan 落盘
+
+### 为什么做
+
+三件事都由使用中的事实推动，不是重构偏好：
+
+**1）执行成功率低，且原因高度集中。** 全库 Run 结局 `MERGE_READY` 10 / `CANCELLED` 3 / `BLOCKED` 3，
+阻塞原因里 `PROVIDER_COMMAND_TIMEOUT` 6 次、`package.json remains missing in expected project directory`
+4 次、各种"目标文件缺失 / 工作树为空"8 次以上。**没有一条是"模型不会写代码"**——全是计划假设的
+前置条件与现实不符。而 Explorer 是只读的、读得到仓库，这些事实在生成 Plan 时就能查出来。
+仓库里的 `docs/execution-preflight-and-recovery.md` 正是上次同类事故的人工复盘，但**它只是文档**。
+
+**2）同一个动作换个 agent 就换个名字，成败基本读不出来。** 两个 Provider 的原生词表完全不通用
+（Codex：`reasoning`/`commandExecution`/`fileChange`/`userMessage`/`mcpToolCall` + `completed`/`failed`；
+Claude：`tool_use`/`tool_result`/`providerSession` + `started`/`succeeded`/`failed`），而消费方此前
+各自正则猜标签、各自维护成败白名单。后果：全库 `PROVIDER_ACTIVITY` **343 条"状态未知"、11 条失败、
+0 条成功**——Codex 的成功词 `completed` 不在成功白名单里，成功从未被识别过；其中 210 条是 `reasoning`
+与 `userMessage`，它们**本来就没有成败概念**。
+
+**3）Plan 只存在于页面里。** 落不到盘上，就无法随工程被审阅、被 diff、被版本化。
+
+### Changed
+
+**1. Provider 活动语义中立化**（`model/provider-activity.ts` 新增）
+
+- 中立词表：`activityKind`（command / file-change / tool / mcp / reasoning / message / session / other）
+  与 `outcome`（running / succeeded / failed / unknown / **not-applicable**）。
+- **`not-applicable` 与 `unknown` 分开是这次的关键**：前者是"这类活动没有成败概念"（推理流、用户消息、
+  会话重建，UI 不再给它们挂状态 chip），后者是"应该有成败但 Provider 没给"。两者此前混成同一个
+  "状态未知"，是 210/343 条噪音的来源。
+- 两个 Provider 的映射表**集中在一处、并排写**，"同一逻辑活动 → 同一类别 + 同一成败"因此可读可测；
+  `ModelEvent.provider.activity` 的两个新字段**必填**，编译器会指到所有需要更新的夹具。
+- 顺带修掉两处**只认 Codex 词表**的判定：`agent-loop.ts` 的单条命令超时此前判
+  `itemType === "commandExecution"`，于是**执行器跑在 Claude 上时 Bash 命令根本没有单条超时**，
+  只能等整个 Loop 超时（`PROVIDER_COMMAND_TIMEOUT` 那一类阻塞有一半来自这个盲区）；
+  `executor-agent.ts` 的 TOOL_CALL 账本现在与 UI 共用同一个 outcome。
+- Claude 侧顺带修掉一个显示缺陷：`tool_result` 不带工具名，合并后标题会退化成 `toolUseId`——
+  现在由 gateway 记住本轮的工具名，标题与类别都与它的 `tool_use` 一致。
+- **向后兼容**：旧 journal 事件没有这两个字段，web 投影保留回退路径（同样修掉 `completed → 成功`），
+  `executionStream.parity.test.ts` 用同一批样例断言"镜像与领域实现给出相同结论"。
+
+**2. 派发前的工作区干净闸门**（`git/working-tree.ts` 新增）
+
+- 判据：`git status --porcelain -uall -- . ':(exclude)<planDirectory>'` 为空。白名单用 **git pathspec
+  magic** 而不是自己解析 porcelain——后者要处理 rename 的 `old -> new` 与引号转义，漏一个就会把
+  Factory 自己写的计划文件算成脏。
+- 闸门在建 worktree 时**硬阻断**（`LocalGitWorktreeAdapter.create`，位置在 `worktree add` **之前**：
+  顺序颠倒会白建一个工作树再回滚），由 `Scheduler` 落成 Run 的 BLOCKED 原因；确认 Plan 时只**提示**
+  不阻断（确认计划与工作区干净是两件事）。
+- **基线因此恒等于 `baseCommit`**：`snapshotProjectWorkingTree` 的"把未提交改动铺进工作树"随之删除
+  （模块一并移除），`git/worktree.ts` 的维护提示第 2、3 条与它相反的事实一起改掉。
+  理由：那会让"你本地看到的树"与"Agent 改的树"成为两棵不同的树，"我本地明明是好的"这类纠纷
+  无法收敛。未提交改动被挡在门外是**有意**的。
+
+**3. 派发前的路径预检**（`plan/preflight.ts` 新增，`PlanService.confirm` / `confirmRevisionDraft` 落闸门）
+
+- 只查 **include 里带扩展名的具体文件**：`artifact.path` 与通配范围都不查——产物天然可能是要新建的
+  文件（"添加甘特图"就要新建组件），通配描述的是"在哪个范围里干活"。具体的**输入文件**不存在，
+  才是"计划建立在幻觉上"。
+- 判定用 `git cat-file -e <baseCommit>:<path>`（一条命令同时覆盖文件与目录），**同步实现**——
+  它跑在 `confirm` 这条同步短路径上，与 `git/merge-inspector.ts` 同样的理由。
+- 闸门放在 **service 而不是 route**：`routes/plans.ts` 有 `confirmAndDispatch` 与 `plans.confirm`
+  两条路径，service 是唯一必经点。`PLAN_PREFLIGHT_FAILED` 由路由拆成 `code` + `error` 返回 409。
+- **Explorer 侧闭环**（不做的话用户会"生成 → 阻断 → 再生成"空转）：`EXPLORER_PLAN_INSTRUCTIONS`
+  补一条——声明方案前必须自行核对具体文件是否存在；要新建文件就写目录范围。闸门是兜底，不是主交互。
+
+**4. Plan 落盘**（`plan/plan-archive.ts` 新增，`project.planDirectory` 新增配置）
+
+- **只在确认时写**，每版一个文件 `<planId>-v<revision>.md`，**不覆盖旧版**；目录不存在自动创建。
+- 内容是人读的 Markdown：目标、验收标准、范围、实施步骤与依赖、验证命令、产物路径、基线、
+  契约哈希、确认人与时间。
+- **写盘先于冻结 Revision**：写失败就阻断确认（可重试、无副作用）；反过来先冻结再写，会留下
+  "确认成功了但文件没写成"的中间态。
+- 落盘路径**持久化**进 Revision（`plan_document_path`，按仓库既有 `ALTER TABLE` 迁移惯例加列）
+  而不是运行时推算——推算值会随配置漂移，"文件在哪"就成了一条会变的事实。
+- 这些文件会出现在受管仓库的 `git status` 里（这正是"随工程版本化"的用意），且**不会**阻断派发：
+  干净检查对该目录放行。两条规则共用 `plan/plan-directory.ts` 的同一处解析，避免"确认时不脏、
+  建 worktree 时脏"。
+
+### 未做
+
+- **执行线程页面重做（四阶段 + 降噪）尚未开始**：本条目只交付了它依赖的数据层与闸门。
+  页面改版是下一轮。
+- 命令 / manifest 缺失**不做硬阻断**（可能由 Agent 自行创建），只作信息级提示。
+- `docs/execution-preflight-and-recovery.md` 的人工流程未改（其第 6、7 条在"工作区必须干净"之后
+  语义已变），本轮只更新了代码注释。
+
+### 验证
+
+- `pnpm verify` 全绿：domain **353** / api **111** / web **474**，无新增值级环。
+- 新增用例：`model/provider-activity.test.ts`（跨 Provider 等价：同一条命令 / 失败 / 文件修改
+  两个 Provider 给出同一类别与同一成败；Codex 的 `completed` 就是成功；没有成败概念的类别返回
+  not-applicable）、`git/working-tree.test.ts`（判据、白名单路径、**先检查再建树**的顺序、
+  基线恒等于 baseCommit、porcelain 解析含 rename 与引号路径）、`plan/plan-directory.test.ts`
+  （缺省位置、仓库外返回 null、前缀相似的兄弟目录不算"之内"）、`plan/preflight.test.ts`
+  （通配不查 / 产物缺失只警告 / 绝对路径与 `..` 不查 / 仓库读不到时不做判断 / 阻断时**没有冻结
+  Revision**）、`plan/plan-archive.test.ts`（渲染内容、目录自动创建、**每版一个文件不覆盖**、
+  同一版幂等、路径记进 Revision）。
+- `m3-run.test.ts` 的 git 调用序列守卫随之更新（那条断言钉的是旧的三步序列，属**有意的行为变更**，
+  不是回归，故改测试而非登记基线）。
+
 ## 2026-10-01（其九）— 把「Run 级活动」移出执行会话，并给归因缺口正名
 
 ### 为什么做

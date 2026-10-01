@@ -207,7 +207,14 @@ describe("Scheduler and ExecutionThread", () => {
     const adapter = new LocalGitWorktreeAdapter({ projectRoot: "/repo", worktreeRoot: "/worktrees", runGit: async (args) => { commands.push(args); return { exitCode: 0, stdout: "abc", stderr: "" }; } });
     await adapter.create({ projectId: "project-1", runId: "run-1", branch: "factory/20260906-vue-intro", baseCommit: "abc" });
     await adapter.remove({ path: "/worktrees/20260906-vue-intro", branch: "factory/20260906-vue-intro", baseCommit: "abc" });
-    expect(commands).toEqual([["rev-parse", "--verify", "abc"], ["worktree", "add", "-b", "factory/20260906-vue-intro", "/worktrees/20260906-vue-intro", "abc"], ["worktree", "remove", "--force", "/worktrees/20260906-vue-intro"]]);
+    // 第二条是"工作区必须干净"的检查（见 git/working-tree.ts）：基线恒等于 baseCommit 之后，
+    // 工作区里未提交的改动不再被搬进新工作树，而是被这道检查挡在门外。
+    expect(commands).toEqual([
+      ["rev-parse", "--verify", "abc"],
+      ["status", "--porcelain", "-uall", "--", "."],
+      ["worktree", "add", "-b", "factory/20260906-vue-intro", "/worktrees/20260906-vue-intro", "abc"],
+      ["worktree", "remove", "--force", "/worktrees/20260906-vue-intro"],
+    ]);
   });
 
   it("uses the persisted run status after verification changes it", async () => {

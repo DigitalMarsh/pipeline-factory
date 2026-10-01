@@ -6,6 +6,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EXPLORER_PLAN_INSTRUCTIONS } from "../platform/plan-requirements.js";
 import { replayConversation, resolveModelMode } from "./provider-session.js";
+import { classifyCodexActivity } from "./provider-activity.js";
 import { normalizeModelUsage } from "./usage.js";
 // 用 import type 而不是"具名绑定带 type 前缀"：这样"本模块对模型契约只剩类型依赖"是显式的，
 // check-cycles.mjs 也据此判定这条边已被切断。P2 期间它指向 ../index.js；批 E 建 model/types.ts
@@ -441,7 +442,7 @@ export class CodexAppServerGateway implements ModelGateway {
         yield { type: "thread.started", threadId: providerThreadId };
         if (rebuilt) {
           // 让时间线上能看出"线程 id 为什么变了"，而不是静默换一条线程。
-          yield { type: "provider.activity", phase: "completed", itemId: providerThreadId, itemType: "providerSession", title: "Provider session rebuilt", summary: "The previous provider session was gone; the local transcript was replayed into a new one.", providerItemId: providerThreadId };
+          yield { type: "provider.activity", phase: "completed", itemId: providerThreadId, itemType: "providerSession", ...classifyCodexActivity({ itemType: "providerSession", phase: "completed" }), title: "Provider session rebuilt", summary: "The previous provider session was gone; the local transcript was replayed into a new one.", providerItemId: providerThreadId };
         }
       }
       // 常规续接只发最新一条用户消息（历史在 Provider 侧）；重建出来的线程没有那份历史，
@@ -541,7 +542,11 @@ function mapCodexEvent(event: CodexAppServerEvent, source: { providerThreadId?: 
       ?? (exitCode !== undefined && exitCode !== 0 ? `Provider command exited with code ${exitCode}` : undefined);
     const providerThreadId = getString(event.params, "threadId") ?? source.providerThreadId;
     const providerTurnId = getEventTurnId(event.params) ?? source.providerTurnId;
-    return { type: "provider.activity", phase: event.method === "item/started" ? "started" : "completed", itemId, itemType, title, summary, ...(toolName ? { toolName } : {}), ...(serverName ? { serverName } : {}), ...(status ? { status } : {}), ...(error ? { error } : {}), ...(providerThreadId ? { providerThreadId } : {}), ...(providerTurnId ? { providerTurnId } : {}), providerItemId: itemId };
+    const phase = event.method === "item/started" ? "started" : "completed";
+    // 中立词表在**这里**翻译，而不是留给消费方：`itemType` / `status` 是 Codex 的原生词，
+    // 只有本文件知道它们的含义（见 model/provider-activity.ts 的模块注释）。
+    const classification = classifyCodexActivity({ itemType, phase, ...(status === undefined ? {} : { status }), ...(error === undefined ? {} : { error }) });
+    return { type: "provider.activity", phase, itemId, itemType, ...classification, title, summary, ...(toolName ? { toolName } : {}), ...(serverName ? { serverName } : {}), ...(status ? { status } : {}), ...(error ? { error } : {}), ...(providerThreadId ? { providerThreadId } : {}), ...(providerTurnId ? { providerTurnId } : {}), providerItemId: itemId };
   }
   if (event.method === "item/tool/requestUserInput") {
     const request = event.params;

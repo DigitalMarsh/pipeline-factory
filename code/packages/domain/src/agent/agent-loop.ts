@@ -484,15 +484,18 @@ export class AgentLoopEngine implements AgentLoopRunner {
               progress = true;
               loop = { ...loop, ...(event.providerThreadId ? { providerThreadId: event.providerThreadId } : {}), ...(event.providerTurnId ? { providerTurnId: event.providerTurnId } : {}) };
               this.store.updateAgentLoop(loop);
-              if (event.itemType === "commandExecution") {
+              // 判据用**中立类别**而不是 `itemType === "commandExecution"`：那是 Codex 的原生词，
+              // 拿它做判定会让 Claude 后端执行的 Bash 命令**完全没有单条超时**，只能等整个 Loop 超时
+              // （阻塞原因里的 PROVIDER_COMMAND_TIMEOUT 有一半来自这个盲区）。
+              if (event.activityKind === "command") {
                 if (event.phase === "completed") this.clearProviderCommandTimeout(initial.id, event.itemId);
                 else if (input.providerCommandTimeoutMs !== undefined) this.startProviderCommandTimeout(initial.id, event.itemId, input.providerCommandTimeoutMs, input.modelRequest.cwd ?? process.cwd(), controller);
               }
-              const commandContext = event.itemType === "commandExecution"
+              const commandContext = event.activityKind === "command"
                 ? { cwd: input.modelRequest.cwd ?? process.cwd(), timeoutMs: input.providerCommandTimeoutMs ?? null }
                 : {};
-              this.appendStep(loop, "PROVIDER_ACTIVITY", event.phase === "completed" ? "COMPLETED" : "RUNNING", { phase: event.phase, itemId: event.itemId, itemType: event.itemType, title: event.title, summary: event.summary, ...commandContext, providerItemId: event.providerItemId ?? event.itemId, providerControlled: true });
-              this.emit(loop, "agent.provider.activity", { phase: event.phase, itemId: event.itemId, itemType: event.itemType, title: event.title, summary: event.summary, ...commandContext, ...(event.toolName ? { toolName: event.toolName } : {}), ...(event.serverName ? { serverName: event.serverName } : {}), ...(event.status ? { status: event.status } : {}), ...(event.error ? { error: event.error } : {}), ...(event.providerThreadId ? { providerThreadId: event.providerThreadId } : {}), ...(event.providerTurnId ? { providerTurnId: event.providerTurnId } : {}), ...(event.providerItemId ? { providerItemId: event.providerItemId } : {}) });
+              this.appendStep(loop, "PROVIDER_ACTIVITY", event.phase === "completed" ? "COMPLETED" : "RUNNING", { phase: event.phase, itemId: event.itemId, itemType: event.itemType, activityKind: event.activityKind, outcome: event.outcome, title: event.title, summary: event.summary, ...commandContext, providerItemId: event.providerItemId ?? event.itemId, providerControlled: true });
+              this.emit(loop, "agent.provider.activity", { phase: event.phase, itemId: event.itemId, itemType: event.itemType, activityKind: event.activityKind, outcome: event.outcome, title: event.title, summary: event.summary, ...commandContext, ...(event.toolName ? { toolName: event.toolName } : {}), ...(event.serverName ? { serverName: event.serverName } : {}), ...(event.status ? { status: event.status } : {}), ...(event.error ? { error: event.error } : {}), ...(event.providerThreadId ? { providerThreadId: event.providerThreadId } : {}), ...(event.providerTurnId ? { providerTurnId: event.providerTurnId } : {}), ...(event.providerItemId ? { providerItemId: event.providerItemId } : {}) });
             }
             if (event.type === "model.usage") {
               loop = { ...loop, ...(event.providerThreadId ? { providerThreadId: event.providerThreadId } : {}), ...(event.providerTurnId ? { providerTurnId: event.providerTurnId } : {}) };

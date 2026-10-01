@@ -47,6 +47,7 @@ import type {
   PlanRevisionV2,
   Project,
   Run,
+  Workspace,
   WorkspaceAdapter,
 } from "../index.js";
 
@@ -123,7 +124,22 @@ export class Scheduler {
     const executionHooks = revision.projectConfigSnapshot?.settings.hooks ?? hooks;
     // Worktree、Start Hook 和 Executor 按顺序执行：任何前置阶段失败都阻止模型写入，
     // 同时把 BLOCKED 事实写回 Plan 和 ExecutionThread，便于 UI 显示可诊断原因。
-    const workspace = await workspaceAdapter.create({ projectId: plan.projectId, runId: run.id, branch: run.branch, baseCommit: run.baseCommit });
+    let workspace: Workspace;
+    try {
+      workspace = await workspaceAdapter.create({ projectId: plan.projectId, runId: run.id, branch: run.branch, baseCommit: run.baseCommit });
+    } catch (error) {
+      // 工作区不干净（PROJECT_WORKING_TREE_DIRTY）、baseCommit 不存在、git 不可用都走这里。
+      // **不能让它变成未捕获异常**：那样 Run 会停在"已创建但没有 worktree"的半状态，
+      // 用户只看到派发没成功，却看不到原因，还得去翻日志。
+      const reason = error instanceof Error ? error.message : String(error);
+      run.status = "BLOCKED";
+      thread.state = "BLOCKED";
+      this.setThreadState(thread.id, "BLOCKED");
+      this.append(thread.id, "TASK_PROGRESS", { state: "BLOCKED", reason });
+      updatePlanStatus(this.options.store, plan, { runId: run.id, status: "BLOCKED", attentionReason: reason, lastEventAt: this.options.store.now() }, reason);
+      this.options.store.saveRun(run);
+      return run;
+    }
     run.workspacePath = workspace.path;
     run.baseCommit = workspace.baseCommit;
     this.options.store.saveRun(run);

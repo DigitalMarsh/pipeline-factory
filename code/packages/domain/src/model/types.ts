@@ -49,6 +49,7 @@
  */
 import type { ModelInputAnswers, ModelInputRequest } from "../explorer/types.js";
 import type { ToolCall, ToolName } from "../tools/types.js";
+import type { ProviderActivityKind, ProviderActivityOutcome } from "./provider-activity.js";
 import type { ModelUsage, ModelUsageScope } from "./usage.js";
 
 /** 模型职责角色；Explorer 只读分析，Executor 在 Run Worktree 中执行。 */
@@ -104,7 +105,13 @@ export type ModelRequest = {
 export type ModelEvent =
   | { type: "thread.started"; threadId: string; endpoint?: ProviderEndpoint | undefined }
   | { type: "text.delta"; text: string; providerThreadId?: string | undefined; providerTurnId?: string | undefined; providerItemId?: string | undefined }
-  | { type: "provider.activity"; phase: "started" | "completed"; itemId: string; itemType: string; title: string | null; summary: string | null; toolName?: string | undefined; serverName?: string | undefined; status?: string | undefined; error?: string | undefined; providerThreadId?: string | undefined; providerTurnId?: string | undefined; providerItemId?: string | undefined }
+  /**
+   * `provider.activity` 的 `itemType` / `status` 是 **Provider 的原生词表**（Codex 与 Claude 完全不同），
+   * 消费方不得直接拿它们判断语义。`activityKind` / `outcome` 是翻译后的中立词表，**必填**：
+   * 每个 gateway 都必须能回答"这是什么活动、成没成"，回答不了就显式给 `unknown` / `other`。
+   * 字段可选会让某个 Provider 悄悄漏填，而漏填的后果是 UI 退回到"状态未知"——那正是本次要修的缺陷。
+   */
+  | { type: "provider.activity"; phase: "started" | "completed"; itemId: string; itemType: string; activityKind: ProviderActivityKind; outcome: ProviderActivityOutcome; title: string | null; summary: string | null; toolName?: string | undefined; serverName?: string | undefined; status?: string | undefined; error?: string | undefined; providerThreadId?: string | undefined; providerTurnId?: string | undefined; providerItemId?: string | undefined }
   | { type: "model.usage"; usage: ModelUsage; scope: ModelUsageScope; providerThreadId?: string | undefined; providerTurnId?: string | undefined }
   | { type: "tool.call"; call: ToolCall }
   | { type: "turn.input_required"; request: ModelInputRequest }

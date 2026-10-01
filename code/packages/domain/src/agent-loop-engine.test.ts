@@ -39,8 +39,8 @@ describe("AgentLoopEngine", () => {
       async *stream(request) {
         requests.push(request);
         const turn = requests.length;
-        yield { type: "provider.activity", phase: "started", itemId: `activity-${turn}`, itemType: "reasoning", title: "Reasoning", summary: "working" };
-        yield { type: "provider.activity", phase: "completed", itemId: `activity-${turn}`, itemType: "reasoning", title: "Reasoning", summary: "working" };
+        yield { type: "provider.activity", phase: "started", itemId: `activity-${turn}`, itemType: "reasoning", activityKind: "reasoning", outcome: "not-applicable", title: "Reasoning", summary: "working" };
+        yield { type: "provider.activity", phase: "completed", itemId: `activity-${turn}`, itemType: "reasoning", activityKind: "reasoning", outcome: "not-applicable", title: "Reasoning", summary: "working" };
         yield { type: "text.delta", text: `turn-${turn}` };
         yield { type: "turn.completed" };
       },
@@ -208,9 +208,9 @@ describe("AgentLoopEngine", () => {
       configFor: () => ({ model: "executor" }),
       capabilities: () => ({ supportsStructuredUserInput: false, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
       async *stream(request: ModelRequest) {
-        yield { type: "provider.activity", phase: "started", itemId: "command-1", itemType: "commandExecution", title: "npm install", summary: "npm install", providerThreadId: "provider-thread", providerTurnId: "provider-turn" };
+        yield { type: "provider.activity", phase: "started", itemId: "command-1", itemType: "commandExecution", activityKind: "command", outcome: "running", title: "npm install", summary: "npm install", providerThreadId: "provider-thread", providerTurnId: "provider-turn" };
         await new Promise<void>((resolve) => request.signal?.addEventListener("abort", () => { aborted = true; resolve(); }, { once: true }));
-        yield { type: "provider.activity", phase: "completed", itemId: "command-1", itemType: "commandExecution", title: "npm install", summary: "npm install", providerThreadId: "provider-thread", providerTurnId: "provider-turn" };
+        yield { type: "provider.activity", phase: "completed", itemId: "command-1", itemType: "commandExecution", activityKind: "command", outcome: "succeeded", title: "npm install", summary: "npm install", providerThreadId: "provider-thread", providerTurnId: "provider-turn" };
         yield { type: "turn.cancelled" };
       },
       async answerUserInput() { return undefined; },

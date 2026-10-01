@@ -9,6 +9,7 @@ import { AgentLoopEngine, type AgentLoop, type AgentLoopEvent, type AgentLoopMod
 import { resolveExecutorWorkingDirectory } from "../tools/executor-working-directory.js";
 import { TaskProgressGate } from "./termination-gates.js";
 import { mergeModelUsage, normalizeModelUsage } from "../model/usage.js";
+import { isProviderActivityKind, isProviderActivityOutcome } from "../model/provider-activity.js";
 import { updatePlanStatus } from "../plan/status-transition.js";
 // 用 import type 而不是"具名绑定带 type 前缀"：这样"本模块对 index.js 只剩类型依赖"是显式的，
 // check-cycles.mjs 也据此判定这条回流边已被切断。
@@ -363,7 +364,11 @@ export class ExecutorAgent {
     }
     if (event.type === "agent.provider.activity") {
       const itemType = typeof payload.itemType === "string" ? payload.itemType : "provider activity";
-      const toolLike = /tool|mcp/i.test(itemType);
+      // 中立词表由 gateway 翻译好传上来（见 model/provider-activity.ts）。这里**不重新推断**：
+      // 拿不到就显式记 other / unknown，而不是照着 Provider 原生词猜一个像样的答案。
+      const activityKind = isProviderActivityKind(payload.activityKind) ? payload.activityKind : "other";
+      const outcome = isProviderActivityOutcome(payload.outcome) ? payload.outcome : "unknown";
+      const toolLike = activityKind === "tool" || activityKind === "mcp";
       const toolName = toolLike ? safeProviderName(payload.toolName) ?? safeProviderName(payload.title) : undefined;
       const serverName = safeProviderName(payload.serverName);
       const providerStatus = normalizeProviderStatus(payload.status);
@@ -373,6 +378,8 @@ export class ExecutorAgent {
         phase: payload.phase === "completed" ? "completed" : "started",
         ...(providerItemId ? { itemId: providerItemId } : {}),
         itemType,
+        activityKind,
+        outcome,
         ...(toolName ? { toolName } : {}),
         ...(serverName ? { serverName } : {}),
         ...(providerStatus ? { providerStatus } : {}),
@@ -384,9 +391,8 @@ export class ExecutorAgent {
       const matchingCalls = modelStep === undefined ? undefined : this.providerCallsByStep.get(run.id)?.get(modelStep);
       const matchingTool = providerItemId ? matchingCalls?.get(providerItemId) : undefined;
       if (providerItemId && matchingCalls && matchingTool !== undefined) {
-        const failed = Boolean(reason) || ["failed", "error", "denied", "cancelled", "canceled"].includes(providerStatus ?? "");
-        const succeeded = ["success", "succeeded"].includes(providerStatus ?? "");
-        const action = failed ? "failed" : succeeded ? "completed" : "status-unknown";
+        // 账本的成败判定与 UI 共用同一个 outcome，不再各自维护一份词表（它们的成功词曾经不一致）。
+        const action = outcome === "failed" ? "failed" : outcome === "succeeded" ? "completed" : "status-unknown";
         this.append(run.executionThreadId, "TOOL_CALL", { action, callId: providerItemId, tool: matchingTool || toolName || "", source: "provider", ...(reason ? { reason } : action === "status-unknown" ? { reason: "Provider 未提供此调用的结果状态。" } : {}), ...association });
         matchingCalls.delete(providerItemId);
       }

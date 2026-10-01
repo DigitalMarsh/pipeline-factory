@@ -5,6 +5,7 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
+import { DEFAULT_PLAN_DIRECTORY } from "@pipeline-factory/domain";
 import { z } from "zod";
 
 const commandSchema = z.object({
@@ -137,6 +138,13 @@ const configSchema = z.object({
   }).default({}),
   project: z.object({
     root: z.string().min(1).default(".."),
+    /**
+     * Plan 落盘目录，**相对受管工程根目录**（缺省 `docs/pipeline/plans`），也接受绝对路径。
+     * 这是**唯一不按配置目录解析**的路径字段：它描述的是"每个受管工程自己的 docs 目录"，
+     * 而不是 Factory 自己的目录树——解析放在 runtime/plan-directory.ts，因为那里才知道
+     * 当前工程的 repoRoot（每个 Project 可以有不同的根）。见 domain 的 plan/plan-directory.ts。
+     */
+    planDirectory: z.string().min(1).default(DEFAULT_PLAN_DIRECTORY),
     commands: z.array(commandSchema).default([]),
   }).default({}),
   mcp: z.object({

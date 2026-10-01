@@ -20,6 +20,7 @@ import { DurableToolRuntime, ExecutorAgent, LifecycleHookRunner, LocalGitWorktre
 import type { ComputerUseBridge, McpToolRegistry, ModelGateway, PipelineStore, PluginRegistry, ProjectExecutionSnapshot } from "@pipeline-factory/domain";
 import type { FactoryConfig } from "../config.js";
 import { readCommandDefinitions } from "./commands.js";
+import { planStorageFor } from "./plan-directory.js";
 
 /** 用全局配置组装默认 Scheduler；每个 Run 启动后再由 Revision 快照解析项目级适配器。 */
 export function createDefaultScheduler(store: PipelineStore, config: FactoryConfig, model: ModelGateway, mcpRegistry?: McpToolRegistry, pluginRegistry?: PluginRegistry, computerUse?: ComputerUseBridge): Scheduler {
@@ -32,9 +33,9 @@ export function createDefaultScheduler(store: PipelineStore, config: FactoryConf
   return new Scheduler({
     store,
     branchNameGenerator: new ModelRunBranchNameGenerator(model),
-    workspace: new LocalGitWorktreeAdapter({ projectRoot: config.project.root, worktreeRoot: config.storage.worktreeRoot }),
+    workspace: new LocalGitWorktreeAdapter({ projectRoot: config.project.root, worktreeRoot: config.storage.worktreeRoot, ignoreDirtyPaths: planStorageFor(config, config.project.root).ignoreDirtyPaths }),
     hooks: new LifecycleHookRunner(commands.execute.bind(commands), { cleanupCwd: config.project.root }),
-    workspaceFactory: (snapshot) => new LocalGitWorktreeAdapter({ projectRoot: snapshot.repoRoot, worktreeRoot: snapshot.worktreeRoot }),
+    workspaceFactory: (snapshot) => new LocalGitWorktreeAdapter({ projectRoot: snapshot.repoRoot, worktreeRoot: snapshot.worktreeRoot, ignoreDirtyPaths: planStorageFor(config, snapshot.repoRoot).ignoreDirtyPaths }),
     hookRunnerFactory: (snapshot) => {
       const snapshotCommands = projectCommands(snapshot);
       return new LifecycleHookRunner(snapshotCommands.execute.bind(snapshotCommands), { cleanupCwd: snapshot.repoRoot });

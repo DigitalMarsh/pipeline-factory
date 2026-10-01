@@ -161,6 +161,13 @@ export type PlanRevisionV2 = Readonly<{
   contract: Readonly<PlanContract>;
   resolvedContract?: Readonly<ResolvedPlanContractV2>;
   artifactHash: string;
+  /**
+   * 本 Revision 的落盘副本位置（确认时写入受管工程的计划目录）。
+   * **持久化而不是运行时推算**：推算出来的路径会随 `project.directory` 配置漂移，
+   * 于是"文件在哪"这个事实会随着改配置而变——那是会撒谎的字段。
+   * 缺省为空：未配置落盘目录的调用方（测试、以及不写盘的部署）不产生该值。
+   */
+  planDocumentPath?: string;
   confirmedBy: string;
   confirmedAt: string;
   sourceExplorerThreadId: string;

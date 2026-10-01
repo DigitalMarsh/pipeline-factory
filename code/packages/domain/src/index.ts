@@ -42,15 +42,17 @@
  *      isRecord / isStringArray / isNonEmptyStringArray（platform/guards.ts）、
  *      store/records.ts 的 11 个辅助、selectCurrentExplorer / projectPlaceholderExplorerTitle
  *      （explorer/thread-selection.ts）、freezeDeep / freezeRevision（platform/freeze.ts）、
- *      snapshotProjectWorkingTree（git/worktree-snapshot.ts，只被 git/worktree.ts 使用）、
+ *      isInsideRoot（platform/paths.ts）、inspectWorkingTree / workingTreeDirtyError /
+ *      WORKING_TREE_DIRTY（git/working-tree.ts，只被 git/worktree.ts 使用）、
  *      resolveExecutorWorkingDirectory（tools/executor-working-directory.ts，只被
- *      agent/executor-agent.ts 使用）。按模块看，内部模块恰好是这 7 个：
- *      explorer/thread-selection.ts、git/baseline.ts、git/worktree-snapshot.ts、
- *      platform/freeze.ts、platform/guards.ts、store/records.ts、
- *      tools/executor-working-directory.ts。
+ *      agent/executor-agent.ts 使用）。按模块看，内部模块恰好是这 8 个：
+ *      explorer/thread-selection.ts、git/baseline.ts、git/working-tree.ts、
+ *      platform/freeze.ts、platform/guards.ts、platform/paths.ts、store/records.ts、
+ *      tools/executor-working-directory.ts。（git/worktree-snapshot.ts 曾在此列，随"派发要求
+ *      工作区干净"删除：基线恒等于 baseCommit 之后它已无事可做。）
  *      **"没被外部引用"不等于"该公开"**：批 F 曾计划把 executor-working-directory.ts
  *      补进本文件，实测后否决 —— 它从未在导出契约里（253 个符号从来不含它），apps/ 零引用，
- *      是上述 7 个内部模块之一。给零外部消费者的符号增加公共面，只会让 P8 的类型共享多背
+ *      是上述 8 个内部模块之一。给零外部消费者的符号增加公共面，只会让 P8 的类型共享多背
  *      一个无意义的契约。**判据：不是"它够不够得着"，而是"外部有没有人要它"。**
  *   4) 值的导出与类型的导出**分开写**（`export {}` / `export type {}`），不要混在一行 ——
  *      混写会让"哪些是运行时绑定"难以速查。
@@ -87,6 +89,16 @@ export { assertSafeProjectRelativeGlob, parseGeneratedPlanSpecV2, resolvePlanCon
 export type { GeneratedPlanSpecV2, GitBaseline, PlanArtifactMode, PlanValidationIssue, PlanValidationIssueCode, ResolvedPlanContractV2 } from "./plan/plan-v2.js";
 export type { PlanIndexRow, PlanQuery, PlanQueryProjection, PlanQueryResult, PlanQuerySort } from "./plan/query.js";
 export { PlanService } from "./plan/service.js";
+// Plan 落盘目录的唯一定义（缺省 docs/pipeline/plans）：组合根拿它同时喂给"写盘"与"工作区干净检查的
+// 白名单"——两处必须对同一个目录得出同一个结论，见 plan/plan-directory.ts 的模块注释。
+export { DEFAULT_PLAN_DIRECTORY, planDirectoryRepoPath, resolvePlanDirectory } from "./plan/plan-directory.js";
+// 派发前预检：确认 Plan 之前先问"计划要处理的文件在基线里存在吗"。判定规则与边界见
+// plan/preflight.ts 的模块注释（为什么只查具体文件、为什么产物路径只警告）。
+export { createLocalPlanPreflightInspector, emptyPlanPreflight } from "./plan/preflight.js";
+export type { PlanPreflightInput, PlanPreflightInspector, PlanPreflightIssue, PlanPreflightResult } from "./plan/preflight.js";
+// Plan 落盘：确认时把 Revision 写成人读的 Markdown（每版一个文件）。渲染是纯函数，便于直接断言内容。
+export { planDocumentFileName, renderPlanDocument, writePlanDocument } from "./plan/plan-archive.js";
+export type { PlanDocumentInput } from "./plan/plan-archive.js";
 
 // ─────────────────────────── explorer/：探索会话、需求分区与结构化追问 ───────────────────────────
 export type { CreateExplorerInput, ExplorerDeletionInput, ExplorerDeletionSummary, ExplorerInputRequest, ExplorerInputRequestStatus, ExplorerPlan, ExplorerThread, ExplorerThreadContextSummary, ExplorerThreadState, ExplorerTurn, ModelInputAnswers, ModelInputQuestion, ModelInputRequest, PlanExploration, PlanExplorationStatus, RegisterThreadInput } from "./explorer/types.js";
@@ -129,6 +141,10 @@ export type { ProjectExecutionThreadServiceOptions, ProjectExecutionThreadSnapsh
 export type { ModelCapabilities, ModelEvent, ModelGateway, ModelMessage, ModelRequest, ModelRole, ModelRoleConfig, ModelToolDefinition, ProviderEndpoint } from "./model/types.js";
 export { mergeModelUsage, normalizeModelUsage } from "./model/usage.js";
 export type { ModelUsage, ModelUsageScope } from "./model/usage.js";
+// 中立的活动词表：`provider.activity` 的消费方（Agent Loop、执行会话投影）一律读 activityKind / outcome，
+// 不要回到 `itemType` / `status` 这两个 Provider 原生字符串上做判断（见 model/provider-activity.ts）。
+export { activityOutcome, classifyClaudeActivity, classifyCodexActivity, claudeActivityKind, codexActivityKind, isOutcomeFreeKind, isProviderActivityKind, isProviderActivityOutcome } from "./model/provider-activity.js";
+export type { ProviderActivityInput, ProviderActivityKind, ProviderActivityOutcome } from "./model/provider-activity.js";
 // 三个 ModelGateway 实现并列：codex-app-server（生产，真流式）、gateway-openai（HTTP 适配器）、
 // stub-gateway（测试替身）。apiKey 一律由组合根注入，本目录不读任何环境变量、不落库。
 export { CodexAppServerClient, CodexAppServerGateway } from "./model/codex-app-server.js";

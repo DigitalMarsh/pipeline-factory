@@ -36,10 +36,9 @@
  *      不查 cleanup hook，会落库一个"草稿已建但工作区没清干净"的中间态。
  *   5) 状态过滤是**逗号分隔字符串**（`status: "DRAFT,READY"`），`as PlanStatus[]` 是无校验断言，
  *      非法状态会一路传到 `plans.query`。加成员时两处（web 与 domain）都要看。
- *   6) `POST /revisions/:revision/confirm` 的错误分支写成 `message === "REVISION_NOT_LATEST" ? 409 : 409`
- *      ——两个分支同码，行为上等价于常量 409，差异只在 `stage` 字段
- *      （`message.includes("not found") ? "VALIDATING" : "VALIDATION_FAILED"`）。
- *      **没有顺手简化成 409**：本步的判据是零行为变化，这类等价简化留给后续可选收尾。
+ *   6) `POST /revisions/:revision/confirm` 的错误分支曾写成 `message === "REVISION_NOT_LATEST" ? 409 : 409`
+ *      ——两个分支同码，差异只在 `stage` 字段（`message.includes("not found") ? "VALIDATING" : "VALIDATION_FAILED"`）。
+ *      拆分 `code` / `error` 时顺手收敛成常量 409 + `domainErrorReply`：**行为不变**，`stage` 取值不变。
  */
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
@@ -89,6 +88,18 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
     const plan = plans.confirm(planId, actorId, revision);
     return { plan, run: null, dispatch: null, confirmation: { stage: "FROZEN", attempt: 1, retryable: true } };
   };
+
+  /**
+   * 领域层用 `CODE: 说明` 的形式抛错（`PLAN_PREFLIGHT_FAILED`、`PROJECT_WORKING_TREE_DIRTY`、
+   * `BASE_CHANGED`…）。整串塞进 `code` 会让前端拿到一个几百字的"错误码"，所以按约定拆开：
+   * `code` 只留机器可读的那半（全大写下划线），`error` 保留完整说明给人看。
+   */
+  function domainErrorReply(error: unknown, fallback: string, stage: string): { code: string; error: string; stage: string } {
+    const message = error instanceof Error ? error.message : fallback;
+    const separator = message.indexOf(": ");
+    const code = separator > 0 && /^[A-Z][A-Z0-9_]*$/.test(message.slice(0, separator)) ? message.slice(0, separator) : message;
+    return { code, error: message, stage };
+  }
 
   app.get("/api/v4/projects/:projectId/plans", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
@@ -375,8 +386,8 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
       if (plan.revision !== params.data.revision) return reply.code(409).send({ code: "REVISION_NOT_LATEST", error: "Only the latest candidate version can be confirmed" });
       return await confirmPlanFlow(plan.id, params.data.revision, body.data.actorId);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Plan cannot be confirmed";
-      return reply.code(message === "REVISION_NOT_LATEST" ? 409 : 409).send({ code: message, error: message, stage: message.includes("not found") ? "VALIDATING" : "VALIDATION_FAILED" });
+      const stage = error instanceof Error && error.message.includes("not found") ? "VALIDATING" : "VALIDATION_FAILED";
+      return reply.code(409).send(domainErrorReply(error, "Plan cannot be confirmed", stage));
     }
   });
 
@@ -391,8 +402,7 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
       if (plan.revision !== revision) return reply.code(409).send({ code: "REVISION_NOT_LATEST", error: "Only the latest candidate version can be confirmed" });
       return await confirmPlanFlow(plan.id, revision, body.data.actorId);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Plan cannot be confirmed";
-      return reply.code(409).send({ code: message, error: message, stage: "VALIDATION_FAILED" });
+      return reply.code(409).send(domainErrorReply(error, "Plan cannot be confirmed", "VALIDATION_FAILED"));
     }
   });
 

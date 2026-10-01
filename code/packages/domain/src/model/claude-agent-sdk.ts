@@ -37,6 +37,7 @@
 import { getSessionInfo, query, type CanUseTool, type Options, type PermissionMode, type PermissionResult, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { EXPLORER_PLAN_INSTRUCTIONS } from "../platform/plan-requirements.js";
 import { replayConversation, resolveModelMode } from "./provider-session.js";
+import { classifyClaudeActivity } from "./provider-activity.js";
 import { normalizeModelUsage } from "./usage.js";
 import type { ModelInputAnswers, ModelInputQuestion, ModelInputRequest } from "../explorer/types.js";
 import type { ModelCapabilities, ModelEvent, ModelGateway, ModelMessage, ModelRequest, ModelMode, ModelRole, ModelRoleConfig, ProviderEndpoint } from "./types.js";
@@ -214,13 +215,17 @@ export class ClaudeAgentSdkGateway implements ModelGateway {
       const resume = await this.resolveResume(request, cwd);
       if (resume.rebuilt) {
         // 让时间线上能看出"会话为什么换了"，而不是静默开一条新会话。
-        events.push({ type: "provider.activity", phase: "completed", itemId: resume.sessionId ?? "provider-session", itemType: "providerSession", title: "Provider session rebuilt", summary: "The previous provider session was no longer on disk; the local transcript was replayed into a new one.", providerItemId: resume.sessionId ?? "provider-session" });
+        // 会话重建没有成败概念 → activityKind: "session"，outcome 由分类器判为 not-applicable（UI 不显示状态）。
+        events.push({ type: "provider.activity", phase: "completed", itemId: resume.sessionId ?? "provider-session", itemType: "providerSession", ...classifyClaudeActivity({ itemType: "providerSession", phase: "completed" }), title: "Provider session rebuilt", summary: "The previous provider session was no longer on disk; the local transcript was replayed into a new one.", providerItemId: resume.sessionId ?? "provider-session" });
       }
       const prompt = resume.rebuilt ? replayConversation(request.messages) : (request.continuationPrompt ?? latestUserMessage(request.messages));
       const handle = await this.queryFactory({ prompt, options: this.buildOptions(request, roleConfig, mode, controller, conversationId, cwd, resume, events, stderrTail) });
       this.activeTurns.set(conversationId, { handle, controller });
+      // tool_use 带工具名、tool_result 不带。这张表让两者归到**同一个类别**、并让合并后的标题保持
+      // 工具名而不是退化成 toolUseId。**每轮一张**（不是实例级）：随流结束一起释放，不跨轮泄漏。
+      const toolCalls = new Map<string, string>();
       for await (const message of handle.stream()) {
-        for (const event of mapMessage(message, { role: request.role, resumedSessionId: resume.rebuilt ? undefined : resume.sessionId, conversationId, sessionIds: this.sessionIds, reported: this.reported, endpoint: () => this.describeEndpoint() })) events.push(event);
+        for (const event of mapMessage(message, { role: request.role, resumedSessionId: resume.rebuilt ? undefined : resume.sessionId, conversationId, sessionIds: this.sessionIds, reported: this.reported, toolCalls, endpoint: () => this.describeEndpoint() })) events.push(event);
       }
     })();
 
@@ -369,6 +374,8 @@ type MapContext = {
   resumedSessionId?: string | undefined;
   conversationId: string;
   sessionIds: Map<string, string>;
+  /** 本轮 toolUseId → 工具名；让 tool_result 能与它的 tool_use 归到同一类别（见 stream() 里的说明）。 */
+  toolCalls: Map<string, string>;
   reported: ReportedEndpoint;
   endpoint: () => ProviderEndpoint;
 };
@@ -405,13 +412,20 @@ function* mapMessage(message: SDKMessage, context: MapContext): Generator<ModelE
     }
     for (const block of message.message.content) {
       if (block.type !== "tool_use") continue;
-      yield { type: "provider.activity", phase: "started", itemId: block.id, itemType: "tool_use", title: block.name, summary: summarizeToolInput(block.name, block.input as JsonObject), toolName: block.name, status: "started", providerItemId: block.id, providerThreadId: message.session_id };
+      context.toolCalls.set(block.id, block.name);
+      yield { type: "provider.activity", phase: "started", itemId: block.id, itemType: "tool_use", ...classifyClaudeActivity({ itemType: "tool_use", phase: "started", status: "started", toolName: block.name }), title: block.name, summary: summarizeToolInput(block.name, block.input as JsonObject), toolName: block.name, status: "started", providerItemId: block.id, providerThreadId: message.session_id };
     }
     return;
   }
   if (message.type === "user") {
     for (const block of readToolResults(message.message.content)) {
-      yield { type: "provider.activity", phase: "completed", itemId: block.toolUseId, itemType: "tool_result", title: block.toolUseId, summary: block.summary, status: block.isError ? "failed" : "succeeded", ...(block.isError ? { error: block.summary ?? "Tool call failed" } : {}), providerItemId: block.toolUseId, providerThreadId: message.session_id };
+      // 工具名在这一侧拿不到（SDK 的 tool_result 只有 toolUseId），从本轮的表里取回来：
+      // 标题用工具名而不是 toolUseId，类别也与它的 tool_use 保持一致。
+      const toolName = context.toolCalls.get(block.toolUseId);
+      context.toolCalls.delete(block.toolUseId);
+      const status = block.isError ? "failed" : "succeeded";
+      const error = block.isError ? (block.summary ?? "Tool call failed") : undefined;
+      yield { type: "provider.activity", phase: "completed", itemId: block.toolUseId, itemType: "tool_result", ...classifyClaudeActivity({ itemType: "tool_result", phase: "completed", status, ...(toolName === undefined ? {} : { toolName }), ...(error === undefined ? {} : { error }) }), title: toolName ?? block.toolUseId, summary: block.summary, status, ...(toolName === undefined ? {} : { toolName }), ...(error === undefined ? {} : { error }), providerItemId: block.toolUseId, providerThreadId: message.session_id };
     }
     return;
   }

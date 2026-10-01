@@ -27,6 +27,7 @@ import cors from "@fastify/cors";
 import Fastify, { type FastifyInstance } from "fastify";
 import {
   PlanService,
+  createLocalPlanPreflightInspector,
   MergeService,
   localGitMergeInspector,
   SqlitePipelineStore,
@@ -62,6 +63,7 @@ import { RepositoryContextCache } from "./repository-context-cache.js";
 import { registerWebHosting } from "./web-hosting.js";
 import { registerApiRoutes } from "./routes/index.js";
 import { persistLoopControl } from "./runtime/loop-control.js";
+import { planStorageFor } from "./runtime/plan-directory.js";
 import { createDefaultScheduler } from "./runtime/scheduler.js";
 import { createDefaultVerificationExecutor } from "./runtime/verification.js";
 import { createModelGateway } from "./runtime/model-gateway.js";
@@ -104,7 +106,13 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
   new RecoveryCoordinator(store).recover();
   const modelCatalog = options.config ? createModelCatalog(options.config) : undefined;
   const projects = new ProjectService(store, modelCatalog);
-  const plans = new PlanService(store, projects);
+  // 预检与 Plan 落盘都要知道"计划目录"（预检拿它做工区干净检查的白名单，落盘拿它写文件），
+  // 而目录相对的是**受管工程**根目录——所以只能在这里按配置装配成一个按 repoRoot 解析的函数。
+  // 没有配置时：预检用空实现、落盘跳过。本文件被大量测试以最小参数构造，不该因缺配置拒绝启动。
+  const factoryConfig = options.config;
+  const plans = factoryConfig
+    ? new PlanService(store, projects, createLocalPlanPreflightInspector({ configuredPlanDirectory: factoryConfig.project.planDirectory }), (repoRoot: string) => planStorageFor(factoryConfig, repoRoot).directory)
+    : new PlanService(store, projects);
   const explorers = new ExplorerService(store);
   const changeProposals = new ChangeProposalService(store);
   const verifier = new VerificationService(store);

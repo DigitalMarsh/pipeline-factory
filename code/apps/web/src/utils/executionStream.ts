@@ -45,6 +45,9 @@ export type ExecutionStreamItem = {
   serverName?: string | undefined;
   unrecordedFields?: string[] | undefined;
   repetitionCount?: number;
+  /** Provider 活动的中立类别与成败（见下方 ACTIVITY_KIND_LABELS 的说明）；非 Provider 活动条目为空。 */
+  activityKind?: ProviderActivityKind | undefined;
+  outcome?: ProviderActivityOutcome | undefined;
   plan?: ExecutionPlanSnapshot;
 };
 
@@ -482,28 +485,129 @@ function projectToolCall(entry: ExecutionJournalEntry, taskId: string | undefine
   };
 }
 
+/**
+ * Provider 活动的中立词表。**这是 packages/domain/src/model/provider-activity.ts 的一份镜像**——
+ * web 不能运行时依赖领域层（会把整个领域打进浏览器包），而 journal 载荷里的字段是无类型的字符串。
+ * 两边必须一致：`executionStream.parity.test.ts` 用同一批样例断言镜像与领域实现给出相同结论，
+ * 改这里就要同步改那边，测试会拦住漂移。
+ */
+export type ProviderActivityKind = "command" | "file-change" | "tool" | "mcp" | "reasoning" | "message" | "session" | "other";
+export type ProviderActivityOutcome = "running" | "succeeded" | "failed" | "unknown" | "not-applicable";
+
+const ACTIVITY_KINDS: readonly ProviderActivityKind[] = ["command", "file-change", "tool", "mcp", "reasoning", "message", "session", "other"];
+const ACTIVITY_OUTCOMES: readonly ProviderActivityOutcome[] = ["running", "succeeded", "failed", "unknown", "not-applicable"];
+
+/**
+ * 类别 → 展示词。**中立标签表只有这一处**：以前是拿 `itemType` 正则现猜（`/command/` → "Command"，
+ * 其余一律 "Provider activity"），于是同一个动作换个 agent 就换个名字，而 "Provider activity"
+ * 这种标签等于没说。
+ */
+const ACTIVITY_KIND_LABELS: Record<ProviderActivityKind, string> = {
+  command: "命令",
+  "file-change": "文件变更",
+  tool: "工具调用",
+  mcp: "MCP 调用",
+  reasoning: "推理",
+  message: "消息",
+  session: "会话",
+  other: "活动",
+};
+
+function isActivityKind(value: unknown): value is ProviderActivityKind {
+  return typeof value === "string" && (ACTIVITY_KINDS as readonly string[]).includes(value);
+}
+
+function isActivityOutcome(value: unknown): value is ProviderActivityOutcome {
+  return typeof value === "string" && (ACTIVITY_OUTCOMES as readonly string[]).includes(value);
+}
+
+/**
+ * 老 journal 事件的类别兜底（本次改动之前写入的条目没有 activityKind）。
+ * **只按 Codex 的词表判**：带 Claude 字段的事件都在本次改动之后写入，不会走到这里。
+ * 表与顺序必须与 `codexActivityKind` 逐字一致——`tool` 排在 `mcp` 之后，否则 `mcpToolCall`
+ * 会被"tool"抢走；parity 测试会拦下任何分叉。
+ */
+export function legacyActivityKind(itemType: string): ProviderActivityKind {
+  const value = itemType.trim().toLowerCase();
+  const table: Array<[ProviderActivityKind, readonly string[]]> = [
+    ["mcp", ["mcp"]],
+    ["command", ["command", "exec"]],
+    ["file-change", ["file", "patch"]],
+    ["reasoning", ["reason"]],
+    ["message", ["message"]],
+    ["session", ["session"]],
+    ["tool", ["tool"]],
+  ];
+  for (const [kind, needles] of table) {
+    if (needles.some((needle) => value.includes(needle))) return kind;
+  }
+  return "other";
+}
+
+/**
+ * 老 journal 事件的成败兜底。**与领域实现同一张词表**，包括那条关键修正：
+ * Codex 的 `completed` 就是成功——曾经成功白名单只有 success|succeeded，于是成功的调用
+ * 全被显示成"状态未知"。另外 `reasoning` / `message` / `session` 没有成败概念，返回 not-applicable，
+ * UI 不再给它们挂状态 chip。
+ */
+export function legacyActivityOutcome(input: { kind: ProviderActivityKind; phase: "started" | "completed"; status?: string | undefined; reason?: string | undefined }): ProviderActivityOutcome {
+  if (input.kind === "reasoning" || input.kind === "message" || input.kind === "session") return "not-applicable";
+  const status = input.status?.trim().toLowerCase();
+  if (input.reason || status === "failed" || status === "error" || status === "denied" || status === "cancelled" || status === "canceled") return "failed";
+  if (status === "success" || status === "succeeded" || status === "completed" || status === "complete") return "succeeded";
+  return input.phase === "started" ? "running" : "unknown";
+}
+
+function readActivityKind(value: unknown, itemType: string | undefined): ProviderActivityKind {
+  return isActivityKind(value) ? value : legacyActivityKind(itemType ?? "");
+}
+
+function readActivityOutcome(value: unknown, fallback: { kind: ProviderActivityKind; phase: "started" | "completed"; status?: string | undefined; reason?: string | undefined }): ProviderActivityOutcome {
+  return isActivityOutcome(value) ? value : legacyActivityOutcome(fallback);
+}
+
+/** 中立成败 → 条目的展示状态。`not-applicable` 落到 INFO，模板据此**不渲染状态 chip**。 */
+function outcomeToItemStatus(outcome: ProviderActivityOutcome): ExecutionStreamItem["status"] {
+  if (outcome === "not-applicable") return "INFO";
+  if (outcome === "running") return "RUNNING";
+  if (outcome === "succeeded") return "COMPLETED";
+  if (outcome === "failed") return "FAILED";
+  return "UNKNOWN";
+}
+
+function activityOutcomeDetail(outcome: ProviderActivityOutcome): string {
+  if (outcome === "running") return "Provider activity started";
+  if (outcome === "succeeded") return "Provider reported success";
+  if (outcome === "failed") return "Provider activity failed";
+  // 没有成败概念的活动不编一句状态文案——它本来就没有状态可报。
+  if (outcome === "not-applicable") return "";
+  return "Provider 未提供调用结果状态。";
+}
+
 function projectProviderActivity(entry: ExecutionJournalEntry, taskId: string | undefined, modelStep: number | undefined, loopId: string | undefined): ExecutionStreamItem {
   const payload = entry.payload;
   const itemType = stringValue(payload.itemType);
   const providerItemId = stringValue(payload.providerItemId) ?? stringValue(payload.itemId);
-  const toolLike = /tool|mcp/i.test(itemType ?? "");
   const serverName = stringValue(payload.serverName);
   const toolName = stringValue(payload.toolName);
-  const providerStatus = stringValue(payload.providerStatus)?.toLowerCase();
   const reason = stringValue(payload.reason);
   const phase = payload.phase === "completed" ? "completed" : "started";
-  const status = phase === "started" ? "RUNNING"
-    : reason || ["failed", "error", "denied", "cancelled", "canceled"].includes(providerStatus ?? "") ? "FAILED"
-      : ["success", "succeeded"].includes(providerStatus ?? "") ? "COMPLETED"
-        : "UNKNOWN";
-  const category = /mcp/i.test(itemType ?? "") ? "MCP call" : /command/i.test(itemType ?? "") ? "Command" : toolLike ? "Provider tool" : "Provider activity";
+  const providerStatus = stringValue(payload.providerStatus)?.toLowerCase();
+  // 中立词表由 gateway 翻译后写进 journal。**消费方不再拿 itemType / providerStatus 判断语义**：
+  // 那两个是 Provider 的原生词（Codex 用 completed 表示成功、Claude 用 succeeded），照它们判断
+  // 正是"343 条状态未知、0 条成功"的成因。
+  const activityKind = readActivityKind(payload.activityKind, itemType);
+  const outcome = readActivityOutcome(payload.outcome, { kind: activityKind, phase, status: providerStatus, reason });
+  const toolLike = activityKind === "tool" || activityKind === "mcp";
+  const status = outcomeToItemStatus(outcome);
+  const category = ACTIVITY_KIND_LABELS[activityKind];
   const name = toolName ? `${serverName ? `${serverName}/` : ""}${toolName}` : serverName;
-  const detail = reason
-    ?? (phase === "started" ? "Provider activity started" : status === "UNKNOWN" ? (providerStatus === "completed" || providerStatus === "complete" ? "Provider 已结束调用，但成败状态未记录。" : "Provider 未提供调用结果状态。") : status === "COMPLETED" ? "Provider reported success" : "Provider activity failed");
+  const detail = reason ?? activityOutcomeDetail(outcome);
   const missing: string[] = [];
   if (!providerItemId) missing.push("Provider 调用标识未记录");
   if (!itemType) missing.push("Provider 活动类型未记录");
-  if (phase === "completed" && status === "UNKNOWN") missing.push("调用结束状态未记录");
+  // 只有"本该有成败却拿不到"才值得标注；`not-applicable`（推理流 / 消息 / 会话）不该被标。
+  if (outcome === "unknown") missing.push("调用结束状态未记录");
   return {
     id: providerItemId ? `execution-provider-${providerItemId}` : `execution-provider-missing-${entry.sequence}`,
     kind: toolLike ? "tool" : "activity",
@@ -514,6 +618,8 @@ function projectProviderActivity(entry: ExecutionJournalEntry, taskId: string | 
     status,
     occurredAt: entry.occurredAt,
     sequence: entry.sequence,
+    activityKind,
+    outcome,
     ...(taskId ? { taskId } : {}),
     ...(modelStep === undefined ? {} : { modelStep }),
     ...(loopId ? { loopId } : {}),
