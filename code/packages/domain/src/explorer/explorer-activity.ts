@@ -56,8 +56,14 @@ const PLAN_TAG = /<pipeline-factory-plan>\s*([\s\S]*?)\s*<\/pipeline-factory-pla
 const STATUS_OPEN_TAG = /<pipeline-factory-plan-status>/i;
 const PLAN_OPEN_TAG = /<pipeline-factory-plan>/i;
 
-function countArray(record: Record<string, unknown>, key: string): number {
-  return Array.isArray(record[key]) ? record[key].length : 0;
+function countArray(record: Record<string, unknown>, key: string): number | undefined {
+  const value = record[key];
+  return Array.isArray(value) ? value.length : undefined;
+}
+
+function stringAt(record: Record<string, unknown> | undefined, key: string): string | undefined {
+  const value = record?.[key];
+  return typeof value === "string" ? value : undefined;
 }
 
 function stripPlanProtocol(content: string): string {
@@ -82,17 +88,7 @@ function formatPlanActivity(content: string, providerItemId: string | null = nul
     const parsed = parsePlanArtifact(displayable.artifactText)!;
     return {
       summary: [prose, `完整执行方案已生成：${parsed.title}`].filter(Boolean).join(" "),
-      details: withProviderItem({
-        planProtocol: true,
-        status: "READY",
-        title: parsed.title,
-        goal: parsed.goal,
-        includeCount: countArray(parsed, "include"),
-        excludeCount: countArray(parsed, "exclude"),
-        taskCount: countArray(parsed, "tasks"),
-        acceptanceCount: countArray(parsed, "acceptanceCriteria"),
-        verificationCount: countArray(parsed, "verificationCommandIds"),
-      }),
+      details: withProviderItem({ planProtocol: true, status: "READY", ...parsed }),
     };
   }
   if (latest?.status !== "READY" || !latest.artifactText) {
@@ -116,10 +112,47 @@ function planProtocolCandidates(content: string): Array<{ status: string; artifa
 function parsePlanArtifact(artifactText: string): Record<string, unknown> | null {
   try {
     const parsed: unknown = JSON.parse(artifactText);
-    return isRecord(parsed) && typeof parsed.title === "string" && typeof parsed.goal === "string" ? parsed : null;
+    return isRecord(parsed) ? summarizePlanArtifact(parsed) : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * 从 Plan 契约里取界面要的摘要，**同时认两种形状**：
+ * - **V2（当前）**：`objective.goal` / `scope.includePaths` / `scope.excludePaths` /
+ *   `objective.acceptanceCriteria` / `verification.commandIds`；
+ * - **V1（历史消息）**：顶层 `goal` / `include` / `exclude` / `acceptanceCriteria` / `verificationCommandIds`。
+ *
+ * 只认 V1 就是这里修掉的缺陷：模型产出的是 V2（`schemaVersion: 2`），顶层没有 `goal`，
+ * 于是**每一份合法方案**都被判为非法、活动摘要写成"结构化计划校验失败，请继续完善。"——
+ * 而同一屏下方紧跟着 PLAN_CREATED 卡片，用户会以为模型没做对。
+ *
+ * **这份实现与 `apps/web/src/utils/planProtocolDisplay.ts` 是一对镜像**，不是重复代码：
+ * web 不能运行时依赖领域层（会把整个领域打进浏览器包），所以它必须自己解析一遍**流式**消息
+ * （活动摘要要等回合结束才落库）。两边的判定必须一致，
+ * `apps/web/src/utils/planProtocolDisplay.parity.test.ts` 用同一批夹具断言它们结论相同；
+ * 改这里就要同步改那边，否则测试会红。
+ */
+function summarizePlanArtifact(parsed: Record<string, unknown>): Record<string, unknown> | null {
+  const objective = isRecord(parsed.objective) ? parsed.objective : undefined;
+  const scope = isRecord(parsed.scope) ? parsed.scope : undefined;
+  const verification = isRecord(parsed.verification) ? parsed.verification : undefined;
+
+  const title = stringAt(parsed, "title");
+  const goal = stringAt(objective, "goal") ?? stringAt(parsed, "goal");
+  // 用 undefined 判空（而不是真值判断）：空字符串在旧实现里算合法，这里不改那条语义。
+  if (title === undefined || goal === undefined) return null;
+
+  return {
+    title,
+    goal,
+    includeCount: countArray(scope ?? {}, "includePaths") ?? countArray(parsed, "include") ?? 0,
+    excludeCount: countArray(scope ?? {}, "excludePaths") ?? countArray(parsed, "exclude") ?? 0,
+    acceptanceCount: countArray(objective ?? {}, "acceptanceCriteria") ?? countArray(parsed, "acceptanceCriteria") ?? 0,
+    verificationCount: countArray(verification ?? {}, "commandIds") ?? countArray(parsed, "verificationCommandIds") ?? 0,
+    taskCount: countArray(parsed, "tasks") ?? 0,
+  };
 }
 
 /** 把 Turn、Loop Step 和 Provider activity 合并为稳定排序的 Explorer 消息流。 */

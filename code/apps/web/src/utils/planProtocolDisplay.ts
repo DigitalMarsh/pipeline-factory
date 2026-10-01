@@ -34,8 +34,52 @@ function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function countArray(record: JsonRecord, key: string): number {
-  return Array.isArray(record[key]) ? record[key].length : 0;
+function stringAt(record: JsonRecord | undefined, key: string): string | undefined {
+  const value = record?.[key];
+  return typeof value === "string" ? value : undefined;
+}
+
+/** 数组长度；键不存在或不是数组时返回 undefined（调用方据此回落到另一种形状）。 */
+function countAt(record: JsonRecord | undefined, key: string): number | undefined {
+  const value = record?.[key];
+  return Array.isArray(value) ? value.length : undefined;
+}
+
+/** 界面要从一份 Plan 契约里取的摘要字段。 */
+type PlanSummary = { title: string; goal: string; includeCount: number; excludeCount: number; taskCount: number; acceptanceCount: number; verificationCount: number };
+
+/**
+ * 从 Plan 契约里取摘要，**同时认两种形状**：
+ * - **V2（当前）**：`objective.goal` / `scope.includePaths` / `scope.excludePaths` /
+ *   `objective.acceptanceCriteria` / `verification.commandIds`；
+ * - **V1（历史消息）**：顶层 `goal` / `include` / `exclude` / `acceptanceCriteria` / `verificationCommandIds`。
+ *
+ * 两种都要认，缺一不可：Plan V2 落地之前落库的助手文本仍是 V1 形状，只认 V2 会让那些线程的卡片
+ * 变成"校验失败"。反过来**只认 V1 就是这里修掉的缺陷**——每一份 V2 方案都被判为非法、显示
+ * "结构化计划校验失败，请继续完善。"，而同一屏下方紧跟着 "PLAN CREATED" 卡片，页面自相矛盾，
+ * 用户会以为模型没做对。判据必须跟着**当前**契约走，历史形状只作兼容。
+ *
+ * 认不出来返回 null（缺少 title 或 goal，或根本不是对象）。
+ */
+function summarizePlan(parsed: JsonRecord): PlanSummary | null {
+  const objective = isRecord(parsed.objective) ? parsed.objective : undefined;
+  const scope = isRecord(parsed.scope) ? parsed.scope : undefined;
+  const verification = isRecord(parsed.verification) ? parsed.verification : undefined;
+
+  const title = stringAt(parsed, "title");
+  const goal = stringAt(objective, "goal") ?? stringAt(parsed, "goal");
+  // 用 undefined 判空（而不是真值判断）：空字符串在旧实现里算合法，这里不改那条语义。
+  if (title === undefined || goal === undefined) return null;
+
+  return {
+    title,
+    goal,
+    includeCount: countAt(scope, "includePaths") ?? countAt(parsed, "include") ?? 0,
+    excludeCount: countAt(scope, "excludePaths") ?? countAt(parsed, "exclude") ?? 0,
+    acceptanceCount: countAt(objective, "acceptanceCriteria") ?? countAt(parsed, "acceptanceCriteria") ?? 0,
+    verificationCount: countAt(verification, "commandIds") ?? countAt(parsed, "verificationCommandIds") ?? 0,
+    taskCount: countAt(parsed, "tasks") ?? 0,
+  };
 }
 
 function visibleProse(content: string): string {
@@ -67,21 +111,10 @@ export function parsePlanProtocolDisplay(content: string): PlanProtocolDisplay {
   } catch {
     return { kind: "invalid", text: withMessage(prose, "结构化计划校验失败，请继续完善。") };
   }
-  if (!isRecord(parsed) || typeof parsed.title !== "string" || typeof parsed.goal !== "string") {
-    return { kind: "invalid", text: withMessage(prose, "结构化计划校验失败，请继续完善。") };
-  }
+  const summary = isRecord(parsed) ? summarizePlan(parsed) : null;
+  if (!summary) return { kind: "invalid", text: withMessage(prose, "结构化计划校验失败，请继续完善。") };
 
-  return {
-    kind: "ready",
-    prose,
-    title: parsed.title,
-    goal: parsed.goal,
-    includeCount: countArray(parsed, "include"),
-    excludeCount: countArray(parsed, "exclude"),
-    taskCount: countArray(parsed, "tasks"),
-    acceptanceCount: countArray(parsed, "acceptanceCriteria"),
-    verificationCount: countArray(parsed, "verificationCommandIds"),
-  };
+  return { kind: "ready", prose, ...summary };
 }
 
 /**

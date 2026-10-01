@@ -76,6 +76,49 @@ describe("Explorer activity projection", () => {
     expect(items[0]?.details).toMatchObject({ planProtocol: true, status: "READY", title: "Personal information manager", taskCount: 1, verificationCount: 1 });
   });
 
+  it("**当前的 V2 契约同样渲染为完整方案**（回归：曾经每一份 V2 方案都显示「校验失败」）", () => {
+    // 字段取自一次真实输出（需求5）。顶层没有 goal——这正是旧实现判它非法的原因。
+    const artifactV2 = {
+      schemaVersion: 2,
+      title: "需求5：修复现有项目添加任务时所属项目不合法",
+      artifact: { mode: "REPOSITORY_FILE", path: "doc/需求5-任务归属修复方案.md" },
+      objective: {
+        goal: "修复现有项目详情中新增任务因未传递所属项目 ID 而被服务端判为不合法的问题",
+        audience: ["项目使用者"],
+        acceptanceCriteria: ["缺少项目 ID 时返回 400 VALIDATION_ERROR", "项目不存在时返回 404 NOT_FOUND"],
+        outOfScope: ["不重构任务列表页"],
+      },
+      design: { technicalConstraints: [], dataSecurity: [], failureHandling: [] },
+      scope: { includePaths: ["code/src/App.vue", "code/server/routes/tasks.js", "doc/**"], excludePaths: ["code/data/**", "node_modules/**"] },
+      tasks: [{ id: "task-1", title: "新增项目级任务创建接口并迁移任务归属校验", dependencies: [] }],
+      dependencies: [],
+      conflicts: [],
+      execution: {},
+      verification: { mode: "PROJECT_DEFAULT" },
+      merge: { strategy: "manual", requireHumanMerge: true },
+    };
+    const rawProtocol = `<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>${JSON.stringify(artifactV2)}</pipeline-factory-plan>`;
+    const items = projectExplorerActivity({
+      turns: [{ id: "assistant-1", threadId: "explorer-1", role: "assistant", content: "", status: "COMPLETED", createdAt: "2026-08-29T10:00:00.000Z", sequence: 1 }],
+      loops: [{ id: "loop-1", ownerType: "explorer-turn", ownerId: "assistant-1", role: "explorer", mode: "provider-controlled", state: "COMPLETED", stepCount: 1, maxSteps: 40, startedAt: "2026-08-29T10:00:00.000Z", completedAt: "2026-08-29T10:00:02.000Z", providerThreadId: null, providerTurnId: null, checkpointJson: null }],
+      steps: [{ loopId: "loop-1", sequence: 1, stepType: "MODEL_TEXT_DELTA", status: "COMPLETED", callId: null, providerThreadId: null, providerTurnId: null, payload: { text: rawProtocol }, occurredAt: "2026-08-29T10:00:01.000Z" }],
+    });
+
+    expect(items[0]?.summary).toContain("完整执行方案已生成：需求5：修复现有项目添加任务时所属项目不合法");
+    expect(items[0]?.summary).not.toContain("校验失败");
+    expect(items[0]?.details).toMatchObject({
+      planProtocol: true,
+      status: "READY",
+      goal: "修复现有项目详情中新增任务因未传递所属项目 ID 而被服务端判为不合法的问题",
+      includeCount: 3,
+      excludeCount: 2,
+      taskCount: 1,
+      acceptanceCount: 2,
+      // 模型只声明 mode，命令 ID 由 Factory 解析——0 是正确值，不是"没解析出来"。
+      verificationCount: 0,
+    });
+  });
+
   it("keeps the final plan text provider item ID when one turn has multiple assistant message segments", () => {
     const artifact = { title: "Provider-bound plan", goal: "Bind the exact generated message" };
     const rawProtocol = `<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>${JSON.stringify(artifact)}</pipeline-factory-plan>`;

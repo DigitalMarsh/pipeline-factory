@@ -1,5 +1,61 @@
 # Changelog
 
+## 2026-10-01（其十二）— 「结构化计划校验失败」是解析器的误报，不是模型的问题
+
+### 为什么做
+
+用户看到探索时间线上写着 **"结构化计划校验失败，请继续完善。"**，问"模型做了什么事情？"。
+
+查下来**模型没有问题**。那一轮（需求5，`turn-aafb90bb-a42`）它：读了仓库定位到根因
+（任务新增表单不传 `project_id`，`POST /api/tasks` 于是报"所属项目不合法"）、两次结构化提问锁定
+产物模式与路径、第一次门禁因 `MODE_CONFLICT` 没过、补齐后第二次 `PLAN_READY` 并生成了
+`plan-b2734ed8-224`。**方案是完整合法的**——同一屏下方紧跟着 PLAN_CREATED 卡片，页面自相矛盾。
+
+问题在解析器：它判的是 **V1 的字段形状**。
+
+| | 模型给的（V2） | 解析器找的（V1） |
+|---|---|---|
+| 目标 | `objective.goal` | 顶层 `goal` ← 不存在 |
+| 范围 | `scope.includePaths` | 顶层 `include` |
+| 验收 | `objective.acceptanceCriteria` | 顶层 `acceptanceCriteria` |
+| 验证命令 | `verification.commandIds` | 顶层 `verificationCommandIds` |
+
+顶层没有 `goal` → 直接落到"校验失败"。**从 Plan V2 落地起，每一份新方案都会这样显示。**
+
+### Changed
+
+**1. 两份实现都要改——这是本次最值得记的一点**
+
+解析 Plan 协议的逻辑有**两份必要的镜像**，而**两份都只认 V1**：
+
+- `packages/domain/src/explorer/explorer-activity.ts` 的 `parsePlanArtifact`（活动摘要落库用）；
+- `apps/web/src/utils/planProtocolDisplay.ts`（流式期间 web 必须自己解析一遍，因为活动摘要要等回合
+  结束才落库；而 web 不能运行时依赖领域层，那会把整个领域打进浏览器包）。
+
+镜像的存在是必要的，但**两边的测试夹具当时也全是 V1**——所以两边同时错、谁也没暴露谁。
+两份都改成同时认 V1 与 V2（V1 只用于读历史消息），并在两处都补了 **V2 夹具**，
+字段直接取自那次真实输出。
+
+**2. 新增跨实现一致性测试**
+
+`apps/web/src/utils/planProtocolDisplay.parity.test.ts`：同一批夹具同时喂给领域层与 web 两份实现，
+断言 READY / INVALID / GENERATING / plain 四种结论与全部摘要字段一致。任何一边改了判定都会红。
+（与 `executionStream.parity.test.ts` 同一手法，理由也相同。）
+
+**3. 消除歧义的两条边界**
+
+- 用 `undefined` 判空而不是真值判断：空字符串在旧实现里算合法，不改那条语义。
+- `verificationCount` 为 0 是**正确值**：模型只声明 `verification.mode`，命令 ID 由 Factory 解析。
+
+### 验证
+
+- `pnpm verify` 全绿：domain **354** / api **111** / web **485**，无新增值级环。
+- **活动摘要是读时投影**，所以修复对历史线程同样生效。已用真实数据核对：
+  `GET /explorers/explorer-36c7fd77-f5f/activity?explorerPlanId=explorer-plan-ba2db4ca-5ac`
+  里两条原本 `status: INVALID` 的助手活动，现在返回 `status: READY` 与
+  「完整执行方案已生成：需求5：修复现有项目添加任务时所属项目不合法」；
+  浏览器打开同一线程，"校验失败"已消失、两处都显示方案标题。
+
 ## 2026-10-01（其十一）— 执行会话的阶段感与降噪
 
 ### 为什么做
