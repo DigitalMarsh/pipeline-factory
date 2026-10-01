@@ -20,8 +20,12 @@ pnpm dev
 ```
 
 开发模式仍是两个进程：API 默认监听 `http://127.0.0.1:4310`，Web/Vite 默认监听
-`http://127.0.0.1:5173`，Vite proxy 负责把 API 与 SSE 请求转发到 4310。也可以只启动或
-停止其中一个进程：
+`http://127.0.0.1:5173`，Vite proxy 负责把 API 与 SSE 请求转发到 4310。API 带热重载：
+它以 `node --watch` 运行，监听**已加载的源码模块**，改 `apps/api/src` 或 `packages/domain/src`
+都会自动重启，不需要手动重启、也不需要重新构建。代价是重启会切断进程内的 SSE 连接并重置
+调度器内存状态（数据库与事件流本身是持久的），正在执行的 Run 期间改代码请自己权衡时机。
+
+也可以只启动或停止其中一个进程：
 
 ```bash
 node scripts/service.mjs start --mode dev --only api
@@ -76,9 +80,13 @@ Git 根目录的 `.runtime/`（API 为 `.runtime/api.pid` / `.runtime/api.log`�
 ```
 
 API 的运行参数全部来自 `config/pipeline-factory.config.json`，也可以通过 `--config` 指定
-其他配置文件；不读取环境变量。`@pipeline-factory/api` 的 `dev` 命令会先自动构建
-workspace domain 包，避免 API 加载旧的 `dist` 类型；如果看到 `EADDRINUSE 127.0.0.1:4310`，
-表示 API 已经在运行，不要重复启动同一实例。
+其他配置文件；不读取环境变量。dev 下的 API 通过 `--conditions=pipeline-dev` 解析
+`@pipeline-factory/domain`，命中 `packages/domain/package.json` 的 exports 条件
+`"pipeline-dev": "./src/index.ts"`，因此运行时加载的是 domain 的**源码**而不是 `dist`——
+热重载没有"忘了重新构建"这一环。这个条件只在 `apps/api` 的 `dev` 脚本里打开，`tsc` 与
+`pnpm build && pnpm start` 走的仍是 `types`/`import`（`dist/`），两条路径互不影响。
+`dev` 前置的 `predev` 仍会构建一次 domain，那是给 `tsc` 和编辑器解析类型用的，不是运行时依赖。
+如果看到 `EADDRINUSE 127.0.0.1:4310`，表示 API 已经在运行，不要重复启动同一实例。
 
 默认配置通过 `codex app-server --stdio` 接入本机 Codex App Server。Codex 的登录态和认证由 Codex 自身管理，Factory 不读取或保存 API Key。Explorer 会以 `read-only`/`never approval` 创建线程；Executor 使用独立角色配置和受控工作区策略。
 

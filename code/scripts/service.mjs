@@ -7,8 +7,12 @@
  *   导致 code/ 无法自洽描述"这个项目怎么跑起来"。搬进来之后 code/ 是自闭环的。
  *
  * 两种模式（对应 P1 的单进程托管）：
- *   - dev ：API(dev, tsx) + Web(vite dev server)，两个进程、两个 PID、互不影响。
+ *   - dev ：API(dev, tsx + node --watch) + Web(vite dev server)，两个进程、两个 PID、互不影响。
  *           前端同源由 vite proxy 提供。这是原 bash 脚本的语义。
+ *           API 带热重载，监听范围是"已加载的源码模块"：改 apps/api/src 或 packages/domain/src
+ *           都会自动重启。domain 能直接跑源码，是因为 dev 脚本开了 --conditions=pipeline-dev，
+ *           命中 packages/domain/package.json 的 exports 条件 → src/index.ts；prod 不传这个条件，
+ *           仍走 dist。**因此 domain 的改动在 dev 下不需要重新构建，也不存在 dist 陈旧的问题。**
  *   - prod：只有 API 一个进程。它按 config 的 server.serveWeb 直接把 apps/web/dist
  *           托管在同一端口上，前端同源由 @fastify/static 提供（见 apps/api/src/web-hosting.ts）。
  *

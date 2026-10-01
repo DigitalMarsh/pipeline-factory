@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": {
+      "pipeline-dev": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     }

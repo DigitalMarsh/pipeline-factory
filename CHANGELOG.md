@@ -1,5 +1,62 @@
 # Changelog
 
+## 2026-10-01（其四）— dev 下 API 热重载，改 domain 不再需要重建
+
+### 为什么做
+
+dev 模式下 API 跑的是 `src/main.ts`（tsx），但 `@pipeline-factory/domain` 是通过包的
+`exports` 解析到 `packages/domain/dist/index.js` 的。于是"改 domain"实际上要走三步：
+`tsc` 重新构建 domain → 停掉 API → 再启动，中间任何一步漏掉，跑的就是旧代码，而且**没有任何
+提示**——进程活着、健康检查通过、行为却是上一版。这正好是本地调试最费时间的那类假象。
+
+### Changed
+
+**1. dev 下 domain 走源码，不再经过 dist**
+
+- `packages/domain/package.json` 的 `exports["."]` 增加最高优先级条件
+  `"pipeline-dev": "./src/index.ts"`；`apps/api` 的 `dev` 脚本加 `--conditions=pipeline-dev`，
+  于是运行时命中该条件，直接加载 `packages/domain/src/index.ts`，由 tsx 现场编译。
+- 条件名取 `pipeline-dev` 而不是通用的 `development`：后者可能被依赖树里别的包或工具默认打开，
+  污染面不可控；自定义名只有显式传 `--conditions` 才会命中。
+- **没有用 tsconfig `paths` 指向源码**：那样 `apps/api` 的 `tsc --outDir dist` 会把
+  `packages/domain/src/**` 拉进 program，而它不在 `rootDir`（`apps/api/src`）之内，
+  构建会以 TS6059 失败。exports 条件只作用于运行时解析，`tsc` 看不见，构建链路零改动。
+- `predev` 仍然构建 domain——那是给 `tsc` 与编辑器解析 `types` 用的，已经不是运行时依赖。
+
+**2. API 以 `node --watch` 启动**
+
+- `dev` 脚本由 `node --import tsx/esm src/main.ts` 改为
+  `node --watch --conditions=pipeline-dev --import tsx/esm src/main.ts`。
+  `--watch` 监听**已加载的源码模块**，因此改 `apps/api/src` 与 `packages/domain/src` 都会自动重启；
+  它默认跳过 `node_modules`，而 domain 源码解析出的是真实路径 `packages/domain/src/`，
+  不在 `node_modules` 下，不会被漏掉。
+- 用 `node --watch` 而不是 `tsx watch`：条件解析要的是 Node 自己的 `--conditions`（否则得退化成
+  `NODE_OPTIONS` 环境变量），而 `--watch` 与 `--import tsx/esm` 本就配套。
+- 代价写进了 `code/README.md`：重启会切断 SSE 连接、重置调度器内存状态，数据库与事件流本身是持久的。
+
+**3. `apps/web` 不动**
+
+- web 只在 `*.test.ts` 里引用 domain（`type-parity.test.ts`、`explorerPlanRequirements.test.ts`），
+  运行时不依赖它，所以 vite 侧不需要任何 alias 或条件。
+
+### 未做
+
+- **prod 不受影响，也没有改动**：`pnpm build && pnpm start` 不传 `--conditions`，仍加载 `dist/`。
+  两条路径（源码 / 产物）按设计并存，不是"临时绕过"。
+- 没给 web 加 HMR 相关配置：vite 本来就带，问题只在 API 这一侧。
+
+### 验证
+
+- **源码 vs 产物的直接证据**：临时在 `packages/domain/src/index.ts` 顶部插入
+  `throw new Error("WATCH-PROBE: domain src 被加载")`，API 自动重启后崩溃，栈顶为
+  `at <anonymous> (/Users/Bill/Downloads/pipeline-factory/code/packages/domain/src/index.ts:62:7)`
+  ——加载的确实是源码，且**改动是被自动发现的**。随后删除探针，日志出现
+  `Restarting 'src/main.ts ...'`，`GET /health` 恢复 `{"status":"ok",...}`。
+- `touch apps/api/src/server.ts` 同样触发重启（PID 换新），确认 api 侧源码也在监听范围内。
+- `pnpm build` 与 `pnpm typecheck` 全绿（domain / api / web 三包），确认新增 exports 条件没有
+  影响 `tsc` 的 `types` 解析与产物构建。
+- 服务以 `node scripts/service.mjs start --mode dev` 正常起停，`stop` 的进程树清理未受影响。
+
 ## 2026-10-01（其三）— 对话产物的确认边界、Explorer 指令与一处死代码清理
 
 ### 为什么做

@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "predev": "pnpm --filter @pipeline-factory/domain build",
-    "dev": "node --import tsx/esm src/main.ts",
+    "dev": "node --watch --conditions=pipeline-dev --import tsx/esm src/main.ts",
     "start": "node dist/main.js --config ../../config/pipeline-factory.config.json",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
