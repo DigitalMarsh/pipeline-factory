@@ -14,7 +14,8 @@ import { api } from "../api";
 import MarkdownMessage from "../components/MarkdownMessage.vue";
 import type { AgentLoopStep, ExecutionTask, ExecutionThread, MergeRequest, Plan, PlanTask, Run, RunJournalEvent, VerificationRun } from "../types";
 import { projectExecutionJournal, type ExecutionJournalEntry, type ExecutionPlanSnapshot, type ExecutionStreamItem } from "../utils/executionStream";
-import { formatProviderContextUsage, telemetryBackend, telemetryModel } from "../utils/executionTelemetry";
+import { executionMessageDetails, executionMessageDiagnosticsTitle } from "../utils/executionMessageDetails";
+import { formatProviderContextUsage, resolveExecutionModelIdentity } from "../utils/executionTelemetry";
 import { useModelBackends } from "../composables/useModelBackends";
 import { executionTaskStatusLabel, executionTaskSummary, projectExecutionTasks } from "../utils/executionTasks";
 import { canTerminateRun } from "../utils/runControls";
@@ -90,10 +91,37 @@ const executionConversationGroups = computed<ExecutionConversationGroup[]>(() =>
   return groups;
 });
 const executionTelemetry = computed(() => thread.value?.telemetry ?? null);
-const executionTelemetryModel = computed(() => telemetryModel(executionTelemetry.value));
-/** 执行这次 Run 的 agent；旧 Run 的遥测里没有这个字段，此时显示"未记录"而不是猜。 */
-const executionTelemetryBackend = computed(() => telemetryBackend(executionTelemetry.value, modelCatalog.value));
+/**
+ * 这次 Run 该用哪个 executor（Revision 快照优先，API 的 `executorConfig`）。
+ * 遥测要**这一轮跑完**才落库，所以"现在用的是什么模型"在执行中只能由它回答。
+ */
+const executorConfig = ref<{ model: string | null; backend: string | null } | null>(null);
+/**
+ * 后端可能只给到一半：项目没覆盖 `backend` 时快照里就是 null，而此时**生效的是该角色的全局后端**
+ * （同一个值 `GET /model-backends` 的 roles 里就有）。不回退这一步，运行中的 AGENT 一栏会空着。
+ */
+const executionExecutorConfig = computed(() => {
+  const configured = executorConfig.value;
+  const roleBackend = modelCatalog.value?.roles.executor ?? null;
+  if (!configured && !roleBackend) return null;
+  return { model: configured?.model ?? null, backend: configured?.backend ?? roleBackend };
+});
+const executionModelIdentity = computed(() => resolveExecutionModelIdentity(executionTelemetry.value, executionExecutorConfig.value, modelCatalog.value));
+/** 值是哪来的：跑过的记录，还是配置里写着要用的。不说清就等于把配置当事实展示。 */
+const executionModelSourceNote = computed(() => executionModelIdentity.value.source === "recorded" ? "本次执行记录" : executionModelIdentity.value.source === "configured" ? "按本 Run 冻结的项目配置" : "");
 const executionContextUsage = computed(() => formatProviderContextUsage(executionTelemetry.value?.usage?.inputTokens));
+/**
+ * 展开的是**诊断细节**（Turn #、调用 id、provider 会话），不是正文：正文永远可见。
+ * 见 utils/executionMessageDetails.ts 的模块头——那行"什么该收"的规则在那边有单测。
+ */
+const expandedExecutionItems = ref<Set<string>>(new Set());
+function isExecutionItemExpanded(id: string): boolean { return expandedExecutionItems.value.has(id); }
+function toggleExecutionItem(id: string): void {
+  const next = new Set(expandedExecutionItems.value);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  expandedExecutionItems.value = next;
+}
 const canSendExecutionMessage = computed(() => Boolean(thread.value && !["CANCELLED", "COMPLETED"].includes(thread.value.state)));
 
 function rebuildExecutionMessages(): void {
@@ -291,6 +319,7 @@ async function load() {
     if (!requestScope.isCurrent(requestToken, `${requestProjectId}:${requestRunId}`)) return;
     run.value = response.run;
     setExecutionThread(response.executionThread);
+    executorConfig.value = response.executorConfig;
     verification.value = response.verification;
     mergeRequest.value = response.mergeRequest;
     try {
@@ -474,10 +503,11 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
               <span class="execution-task-stream-step">RUN ACTIVITY</span><strong>未关联执行步骤</strong><small>此处保留旧 Run 或未提供执行步骤标识的事件。</small>
             </header>
             <p v-if="group.task && !group.items.length" class="execution-task-stream-empty">{{ taskGroupEmptyNote(group.task) }}</p>
-            <article v-for="item in group.items" :key="item.id" :data-sequence="item.sequence" :data-task-id="item.taskId" :data-model-step="item.modelStep" :class="['execution-message', `execution-message-${item.kind}`, { failed: item.status === 'FAILED', waiting: item.status === 'WAITING', running: item.status === 'RUNNING', unknown: item.status === 'UNKNOWN' }]">
+            <article v-for="item in group.items" :key="item.id" :data-sequence="item.sequence" :data-task-id="item.taskId" :data-model-step="item.modelStep" :title="executionMessageDiagnosticsTitle(item)" :class="['execution-message', `execution-message-${item.kind}`, { failed: item.status === 'FAILED', waiting: item.status === 'WAITING', running: item.status === 'RUNNING', unknown: item.status === 'UNKNOWN', mine: item.role === 'user' }]">
               <div class="execution-message-avatar">{{ item.role === 'user' ? 'LS' : item.kind === 'plan' ? 'PL' : item.kind === 'model' ? 'EX' : item.kind === 'tool' ? 'TL' : '·' }}</div>
               <div class="execution-message-body">
-                <div class="execution-message-meta"><strong>{{ item.title }}</strong><span v-if="item.status !== 'INFO'" class="agent-chip">{{ executionMessageStatusLabel(item.status) }}</span><span v-if="item.modelStep !== undefined">Turn #{{ item.modelStep }}</span><span v-if="item.callId">Call {{ item.callId }}</span><span v-else-if="item.providerItemId">Provider item {{ item.providerItemId }}</span><span v-if="item.providerThreadId || item.providerTurnId" :title="`Thread ${item.providerThreadId ?? '未记录'} · Turn ${item.providerTurnId ?? '未记录'}`">Provider session linked</span><span>{{ new Date(item.occurredAt).toLocaleTimeString('zh-CN') }}</span></div>
+                <div class="execution-message-meta"><strong>{{ item.title }}</strong><span v-if="item.status !== 'INFO'" class="agent-chip">{{ executionMessageStatusLabel(item.status) }}</span><span class="execution-message-time">{{ new Date(item.occurredAt).toLocaleTimeString('zh-CN') }}</span><button v-if="executionMessageDetails(item).length" type="button" class="execution-message-toggle" :aria-expanded="isExecutionItemExpanded(item.id)" @click="toggleExecutionItem(item.id)">{{ isExecutionItemExpanded(item.id) ? '收起详情' : '详情' }}</button></div>
+                <div v-if="isExecutionItemExpanded(item.id)" class="execution-message-details"><span v-for="detail in executionMessageDetails(item)" :key="detail">{{ detail }}</span></div>
                 <template v-if="item.kind === 'plan' && item.plan">
                   <div class="execution-plan-message">
                     <div class="execution-plan-message-summary"><MarkdownMessage :source="item.plan.goal" /></div>
@@ -510,7 +540,7 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
             <span class="composer-mode">Run Mode</span>
           </div>
           <div class="composer-footer">
-            <ProviderUsageFooter :model="executionTelemetryModel" :backend="executionTelemetryBackend" :context="executionContextUsage" context-note="provider exact" />
+            <ProviderUsageFooter :model="executionModelIdentity.model" :backend="executionModelIdentity.backend" :context="executionContextUsage" context-note="仅结束时由 provider 上报" :source-note="executionModelSourceNote" />
             <span v-if="sendingExecutionMessage" class="composer-status" role="status" aria-live="polite">Message sent · waiting for Executor…</span>
             <el-button class="composer-send" type="primary" circle :loading="sendingExecutionMessage" :disabled="!executionDraft.trim() || !canSendExecutionMessage || actionBusy" aria-label="Send message" :title="actionBusy ? '正在发送消息' : 'Send message'" @click="sendExecutionMessage"><ArrowUp :size="18" /></el-button>
           </div>

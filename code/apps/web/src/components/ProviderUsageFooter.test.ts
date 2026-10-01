@@ -1,49 +1,49 @@
 // @vitest-environment jsdom
-import { createApp, defineComponent, h } from "vue";
+/**
+ * 测试职责：锁住用量栏的三件事 —— **agent 与模型分开显示**、缺 agent 时不留空占位、
+ *   以及"这行值是哪来的"来源说明只在该说的时候出现。
+ *
+ * 为什么值得挂真实组件测："哪个 agent + 哪个模型 + 上下文占了多少"是排障第一问，而这三格
+ *   很容易在改版里悄悄合并或留空。执行页还要靠 `sourceNote` 区分"跑过的记录"与"配置里要用的"——
+ *   不标来源就等于把配置当事实展示。
+ */
+import { createApp, h } from "vue";
 import { afterEach, describe, expect, it } from "vitest";
 import ProviderUsageFooter from "./ProviderUsageFooter.vue";
 
-function mountFooter() {
+const mounted: Array<{ app: ReturnType<typeof createApp>; host: HTMLElement }> = [];
+afterEach(() => { mounted.splice(0).forEach(({ app, host }) => { app.unmount(); host.remove(); }); });
+
+function mount(props: Record<string, unknown>) {
   const host = document.createElement("div");
   document.body.appendChild(host);
-  const app = createApp(defineComponent({
-    setup() {
-      return () => h(ProviderUsageFooter, {
-        model: "claude-opus-5",
-        context: "1,234 tokens",
-        contextNote: "provider exact",
-      });
-    },
-  }));
+  const app = createApp({ render: () => h(ProviderUsageFooter, { model: "gpt-5.6-luna", context: "191,197 tokens", ...props }) });
   app.mount(host);
-  return { app, host };
+  mounted.push({ app, host });
+  return host;
 }
 
-afterEach(() => {
-  document.body.innerHTML = "";
-});
-
 describe("ProviderUsageFooter", () => {
-  it("renders the thread's model and context facts", () => {
-    const mounted = mountFooter();
+  it("keeps agent and model as separate facts", () => {
+    const host = mount({ backend: "codex-app-server" });
 
-    expect(mounted.host.querySelector(".provider-usage-fact")?.textContent).toContain("claude-opus-5");
-    expect(mounted.host.textContent).toContain("1,234 tokens");
-    expect(mounted.host.textContent).toContain("provider exact");
-
-    mounted.app.unmount();
+    expect(host.textContent).toContain("AGENT");
+    expect(host.textContent).toContain("codex-app-server");
+    expect(host.textContent).toContain("MODEL");
+    expect(host.textContent).toContain("gpt-5.6-luna");
+    expect(host.textContent).toContain("CONTEXT");
+    expect(host.textContent).toContain("191,197 tokens");
   });
 
-  it("renders no account-level quota at all", () => {
-    // 5 小时 / 7 天额度已从页面与后端两侧移除（唯一数据源是 Codex 的账号额度接口）。
-    // 这条断言防的是"顺手把面板加回来"：本组件不该再有任何按账号的窗口。
-    const mounted = mountFooter();
+  it("drops the agent cell instead of leaving an empty one", () => {
+    const host = mount({});
 
-    expect(mounted.host.querySelector(".provider-usage-limits")).toBeNull();
-    expect(mounted.host.querySelectorAll(".provider-usage-limit")).toHaveLength(0);
-    expect(mounted.host.textContent).not.toContain("限额");
-    expect(mounted.host.textContent).not.toContain("剩余");
+    expect(host.textContent).not.toContain("AGENT");
+    expect(host.querySelectorAll(".provider-usage-fact")).toHaveLength(2);
+  });
 
-    mounted.app.unmount();
+  it("only claims a source when the caller says the value did not come from a run", () => {
+    expect(mount({}).querySelector(".provider-usage-source")).toBeNull();
+    expect(mount({ sourceNote: "按本 Run 冻结的项目配置" }).querySelector(".provider-usage-source")?.textContent).toBe("按本 Run 冻结的项目配置");
   });
 });

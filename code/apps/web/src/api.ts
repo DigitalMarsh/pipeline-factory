@@ -27,6 +27,12 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 export const api = {
   health: () => request<{ status: string; model: string; modelBackend?: string; modelBackends?: { explorer: string; executor: string } }>("/health"),
   modelBackends: () => request<ModelBackendsResponse>("/api/v4/model-backends"),
+  /**
+   * 让**本地 API** 弹系统"选择文件夹"对话框，拿回本机绝对路径。浏览器自己做不到：
+   * `showDirectoryPicker()` 只有目录句柄、`<input webkitdirectory>` 只有相对路径。
+   * `cancelled: true` 是用户在对话框里点了取消——**正常结果**，调用方什么都不该做。
+   */
+  selectDirectory: () => request<{ cancelled: boolean; path: string | null }>("/api/v4/dialogs/select-directory", { method: "POST" }),
   projects: (status?: string) => request<{ items: ProjectCatalogItem[] }>(`/api/v4/projects${status ? `?status=${encodeURIComponent(status)}` : ""}`),
   project: (projectId: string) => request<{ project: Project; summary: ProjectSummary }>(`/api/v4/projects/${encodeURIComponent(projectId)}`),
   createProject: (input: { name: string; shortName?: string; repoRoot: string; defaultBranch?: string; worktreeRoot?: string; settings?: Record<string, unknown> }) => request<{ project: Project; explorer: ExplorerThread }>("/api/v4/projects", { method: "POST", body: JSON.stringify(input) }),
@@ -106,7 +112,11 @@ export const api = {
   /** 设置前置 Plan。Factory-owned 字段：模型不能填，只能由人从同项目的 Plan 里挑。 */
   updatePlanDependencies: (planId: string, dependsOnPlanIds: string[]) => request<{ plan: Plan }>(`/api/v4/plans/${encodeURIComponent(planId)}/dependencies`, { method: "PUT", body: JSON.stringify({ dependsOnPlanIds, actorId: "local-user" }) }),
   startPlanRevisionRun: (planId: string, revision: number) => request<{ plan: Plan; run: Run | null; dispatch: PlanDispatchState | null }>(`/api/v4/plans/${encodeURIComponent(planId)}/revisions/${revision}/run`, { method: "POST" }),
-  getRun: (runId: string) => request<{ run: Run; executionThread: ExecutionThread | null; verification: VerificationRun | null; mergeRequest: MergeRequest | null }>(`/api/v4/runs/${encodeURIComponent(runId)}`),
+  /**
+   * Run 详情。`executorConfig` 是"这次 Run 该用哪个 executor"（Revision 快照优先）——
+   * 遥测要这一轮跑完才有值，运行中的界面靠它回答"现在用的是什么模型"。
+   */
+  getRun: (runId: string) => request<{ run: Run; executionThread: ExecutionThread | null; executorConfig: { model: string | null; backend: string | null; reasoningEffort: string | null } | null; verification: VerificationRun | null; mergeRequest: MergeRequest | null }>(`/api/v4/runs/${encodeURIComponent(runId)}`),
   getExecutionThread: (threadId: string) => request<{ thread: ExecutionThread }>(`/api/v4/execution-threads/${threadId}`),
   cancelRun: (runId: string, reason = "user_requested") => request<{ run: Run }>(`/api/v4/runs/${runId}/cancel`, { method: "POST", body: JSON.stringify({ reason }) }),
   pauseRun: (runId: string) => request<{ run: Run; thread: ExecutionThread }>(`/api/v4/runs/${runId}/pause`, { method: "POST" }),

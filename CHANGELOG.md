@@ -1,5 +1,123 @@
 # Changelog
 
+## 2026-10-01（其六）— 执行线程改成对话观感；底部回答"现在用的是什么模型"
+
+### 为什么做
+
+两条反馈，都在执行页签（抽屉里的 Run）里：
+
+1. **"内容结构混乱"**：一屏都是卡片墙，`Turn #1`、`Call …`、`Provider item msg_…`、
+   `Provider session linked` 全挤在每条消息的标题行上，像日志不像对话。期望"我和大模型沟通"的观感：
+   我的消息在右、执行者的在左。
+2. **"底部不知道当前用的是什么模型"**：底部那条 `AGENT / MODEL / CONTEXT` 三格都是"未记录"。
+
+### Changed
+
+**执行对话：左右分栏 + 降噪（只改渲染与样式，不动 journal 投影）**
+
+- 我的消息（`role === 'user'`，即 guidance）靠右、执行者的靠左。原来 `flex-basis: 92%` 几乎占满整行，
+  右对齐等于没做——现在收到 `min(620px, 78%)`。
+- 诊断字段收进"详情"：常驻只留 **标题 · 状态 · 时间**；`Turn #`/`Call`/`Provider item`/`Provider session`
+  移到 hover（`title`）与"详情"折叠里。规则抽成 `utils/executionMessageDetails.ts` 并单测——
+  它同时是安全边界的外沿：**只排版已有字段，不新增暴露面**（`executionStream.ts` 定过：不出工具参数、
+  成功结果与思维链）。
+- `状态未知` 不再整卡染黄（截图里三张黄卡很扎眼），改成中性卡片 + 状态 chip。
+
+**探索线程：同一套读法（靠右 + 右侧身份标识）**
+
+- `.user-message` 从"整块左对齐卡片"改成靠右：`display: flex; flex-direction: row-reverse; margin-left: auto`，
+  并补上右侧的 `LS` 头像（`title="我"`）。左边 assistant 有头像、右边什么都没有的话，
+  一眼看不出那句是谁说的。右上角收一点圆角作为"这是我说的"记号，与执行线程一致。
+- 记账：**"探索线程本来就是我的消息在右"这个印象与代码不符**。早先那套 `row-reverse` 右对齐规则还在
+  文件里，但被后面那次"Codex Desktop 风格"改造的 `.user-message { display: block; max-width: 760px }`
+  压在下面，早已失效——两条规则同时存在、只有一条生效，是本轮最容易误判的地方。
+
+**底部：模型与 agent 必须有答案**
+- **修一个真缺陷**：`projectRunThreadTelemetry` 重建 telemetry 对象时漏搬 `backend`，于是库里记着
+  `codex-app-server`、界面上 AGENT 一栏**永远是"未记录"**。现在 `existing` 有的字段逐个带过去，
+  缺失时才回退 Revision 快照。
+- **运行中也要有答案**：遥测是**每一轮结束时**才落库的，所以"正在跑"时三格必然空白——而这正是
+  想问"现在用什么模型"的时刻。新增 `resolveRunExecutorConfig`（Revision 快照优先、否则当前项目设置），
+  `GET /api/v4/runs/:runId` 把它作为 `executorConfig` 单独返回，前端在"本次没有记录"时用它，
+  并标注来源（`本次执行记录` / `按本 Run 冻结的项目配置`）。项目没覆盖 backend 时再回退该角色生效的
+  全局后端（`/model-backends` 的 roles），否则 AGENT 一栏仍会空着。
+- `context-note` 从 `provider exact` 改成 `仅结束时由 provider 上报`：运行中拿不到就是拿不到，
+  说清楚比让人以为坏了强。
+- **本次记录整份优先、不与配置混搭**：model 与 backend 是同一次写入的一对事实，
+  混搭会造出一个从未存在过的组合。所以 09-26 那类"遥测里还没有 backend 字段"的老 Run 仍显示
+  `未记录` —— 那是诚实的，不是漏修。
+
+### 验证
+
+- `pnpm verify` 全绿：domain 308 / api **110** / web **453**。新增/更新用例：
+  `projections/run-telemetry.test.ts`（新文件：existing 优先、backend 被保留、快照兜底、都没有时为 null）、
+  `server.test.ts`（`executorConfig` 与 telemetry.backend 的 HTTP 断言）、
+  `utils/executionTelemetry.test.ts`（记录优先 / 配置兜底 / 都没有）、
+  `utils/executionMessageDetails.test.ts`（新文件）、`components/ProviderUsageFooter.test.ts`（新文件，
+  挂真实组件）、`RunDetailView.test.ts`（源码级断言跟着新模板走）。
+- 浏览器实测（用**数据库副本**在 4313 起独立实例，不动正在跑的 4310）：
+  - 用户给的 Run `run-62e320ce-d60` 底部从"三格未记录"变成
+    `AGENT Codex App Server · MODEL gpt-5.6-luna · CONTEXT 191,197 tokens · 本次执行记录`。
+  - `GET /api/v4/runs/run-62e320ce-d60` 的 telemetry 里 `backend` 回来了（修前被投影丢掉）。
+  - 另一条带 guidance 的 Run：我的消息在右侧、矮而窄（body 左 1803/右 2382，其余消息左 1731/右 2408），
+    每条活动只剩"标题 · 状态 · 时间 · 详情"，点"详情"展开 `Turn #1` 且 `aria-expanded=true`，
+    hover 有 `Turn #1` 提示。
+  - 探索线程：用户消息从"左 224 起、852 宽"变成"右贴边、760 宽"（左 316 → 右 1076），
+    右侧 `LS` 头像落在 951→976，与左侧 assistant 头像（124→149）对称；抽屉里的探索对话同一套 class，同样生效。
+- **未实测**：`executorConfig` 那条"运行中"回退路径只跑过单测——真实数据库里所有 Run 都已有遥测，
+  我改副本数据库后又想重起实例时被权限拦下了。要用真实数据看这一条，把某个 Run 的
+  `execution_threads.telemetry_json` 置空再打开页面即可。
+
+## 2026-10-01（其五）— 新建 Project 时用系统对话框选目录
+
+### 为什么做
+
+反馈很直接："Git repository root 能不能改成选择文件夹？我不想输入路径，容易输错。"
+
+**浏览器给不了这个能力，不是没做而是故意不做**：`showDirectoryPicker()` 只返回目录句柄（拿不到
+`/Users/...` 这种绝对路径，且 Firefox 没有这个接口）；`<input webkitdirectory>` 只给
+`webkitRelativePath`（相对路径）；拖拽文件夹的 `webkitGetAsEntry()` 同样只有相对 `fullPath`。
+规范刻意不暴露路径，否则任意网页都能刺探本地目录结构。而 `repoRoot` 必须是本机绝对路径
+（服务端要拿它跑 git、建 Worktree），所以**只能由跑在同一台机器上的本地 API 去问操作系统**。
+
+### Changed
+
+**后端：一处系统对话框，三种结果都当正常响应**
+
+- 新增 `runtime/directory-dialog.ts`：macOS 用 `osascript` 的 `choose folder`，Windows 用
+  PowerShell 的 WinForms `FolderBrowserDialog`，Linux 用 `zenity` / `kdialog`（zenity 没装才轮到
+  kdialog——只有 ENOENT 才算"没装"，装了的那个报错就如实上报，不静默换一个再弹）。
+- 新增 `POST /api/v4/dialogs/select-directory`。**它是 POST 不是 GET**：会在服务端弹 GUI，
+  不是可以缓存或预取的读。**只接受回环地址**的调用（否则 403）——服务将来若被配成监听
+  `0.0.0.0`，不该由远端决定什么时候在你屏幕上弹东西。
+- 结果语义分开且都可断言：`{ cancelled: true }`（用户点了取消，**200，不是错误**）、
+  `{ cancelled: false, path }`、501（平台不支持，提示手输）、504（等超时）、502（命令失败）。
+- 平台命令都缺时抛 `DIALOG_UNSUPPORTED` 而不是静默返回空——"点了没反应"在这一轮里已经反复
+  被判定为缺陷，不该在新按钮上重演。
+
+**前端：两个新建入口共用一段交互**
+
+- `api.selectDirectory()` + `composables/useDirectoryPicker.ts`（点按钮 → 弹框 → 回填；
+  取消什么都不做，失败把后端那句话原样显示在弹框里）。
+- `ProjectCreateDialog` 与 `ProjectManagementDialog` 的创建态各加一个 `选择文件夹…` 按钮，
+  输入框保留（手输与粘贴照旧）。
+
+### 验证
+
+- `pnpm verify` 全绿：domain 308 / api **104** / web **444**。新增用例：三个平台各自的"取消长什么样"
+  （含**中文系统**的 AppleScript 文案）、成功的路径取用、真失败与"被信号打断"的区分、
+  路由的 200 取消 / 200 选到 / 501。
+- 浏览器 + 系统实测（独立测试实例 4312，不碰正在跑的 4310）：点按钮后请求**一直挂起**，
+  在 `ps` 里能看到 API 进程下的 `osascript -e POSIX path of (choose folder …)` 子进程
+  —— 对话框确实弹出来了；杀掉该子进程后，页面显示
+  `打开文件夹选择框失败：osascript 未能返回目录：进程被信号中断（SIGTERM）`（502 / `DIALOG_FAILED`）；
+  从局域网地址（`192.168.2.107`）请求得到 **403 `DIALOG_LOCAL_ONLY`**，且不弹窗。
+- **实测中修掉一个错误**：第一版把"子进程被外部杀掉"和"等超时"都算成 504 `DIALOG_TIMEOUT`，
+  于是页面会写"等待选择超时（300 秒）"——当时只过了 16 秒。现在只有 Node 自己按 timeout 杀的
+  （`error.killed`）才算超时，别的信号如实报 `DIALOG_FAILED` 并带上信号名。
+- **未验证**：Windows / Linux 的命令是照各自文档写的，本机（macOS）无法实测；"用户真的选中一个
+  目录 → 路径回填"这一步需要真人点对话框，由使用者验收（取消/失败两条路已实测）。
+
 ## 2026-10-01（其四）— dev 下 API 热重载，改 domain 不再需要重建
 
 ### 为什么做

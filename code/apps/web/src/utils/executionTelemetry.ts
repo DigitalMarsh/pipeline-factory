@@ -53,6 +53,30 @@ export function telemetryReasoning(telemetry: ExecutionTelemetry | null | undefi
   return telemetry?.reasoningEffort || "默认";
 }
 
+/** "现在用的是什么模型"的来源：本次跑过并记下来的、还是配置里写着要用的。 */
+export type ExecutionModelSource = "recorded" | "configured" | "unknown";
+export type ExecutionModelIdentity = { model: string; backend: string; source: ExecutionModelSource };
+
+/**
+ * "现在用的是什么模型 / 哪个 agent"的答案 —— **本次记录优先，没记录时用这次 Run 的执行配置**。
+ *
+ * 为什么需要它：遥测是**每一轮结束时**才落库的，运行中三格全是"未记录"——而"现在用的是什么模型"
+ * 恰恰是运行中才想问的问题。配置那份来自 Revision 快照（Plan Confirm 时冻结；没有快照的老 Run
+ * 由 API 回退当前项目设置），**是"这次执行会用什么"，不是"上一轮用了什么"**。
+ *
+ * `source` 让界面说清这个值是哪来的：不要把配置值当成跑过的记录展示。
+ * `model` 与 `backend` 不拆开混搭——它们是同一次写入的一对事实，混搭会造出一个从未存在过的组合。
+ */
+export function resolveExecutionModelIdentity(telemetry: ExecutionTelemetry | null | undefined, executorConfig: { model: string | null; backend: string | null } | null | undefined, catalog: ModelBackendsResponse | null = null): ExecutionModelIdentity {
+  if (telemetry?.model || telemetry?.backend) {
+    return { model: telemetry.model || "未记录", backend: telemetry.backend ? backendLabel(catalog, telemetry.backend) : "未记录", source: "recorded" };
+  }
+  if (executorConfig?.model || executorConfig?.backend) {
+    return { model: executorConfig.model || "未记录", backend: executorConfig.backend ? backendLabel(catalog, executorConfig.backend) : "未记录", source: "configured" };
+  }
+  return { model: "未记录", backend: "未记录", source: "unknown" };
+}
+
 export function usageDetailRows(usage: ModelUsage | null | undefined): Array<{ label: string; value: string }> {
   return [
     { label: "输入 token", value: formatTokenCount(usage?.inputTokens) },

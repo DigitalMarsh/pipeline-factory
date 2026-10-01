@@ -8,9 +8,10 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { InMemoryPipelineStore, LifecycleHookRunner, MergeService, PlanService, ProjectService, Scheduler, type AgentLoop, type DomainEvent, type ExecutionTelemetry, type ModelEvent, type ModelGateway, type ModelRequest, type VerificationCommandExecutor } from "@pipeline-factory/domain";
+import { ExplorerService, InMemoryPipelineStore, LifecycleHookRunner, MergeService, PlanService, ProjectService, Scheduler, type AgentLoop, type DomainEvent, type ExecutionTelemetry, type ModelEvent, type ModelGateway, type ModelRequest, type PlanRevisionV2, type VerificationCommandExecutor } from "@pipeline-factory/domain";
 import { createApp } from "./server.js";
 import { loadFactoryConfig } from "./config.js";
+import { DirectoryDialogError } from "./runtime/directory-dialog.js";
 import { sanitizeExplorerRequirementStatusEvent } from "./projections/explorer.js";
 
 const apps: Array<Awaited<ReturnType<typeof createApp>>> = [];
@@ -77,6 +78,28 @@ describe("Pipeline Factory v4 API", () => {
       areas: expect.arrayContaining([expect.objectContaining({ label: "目标与用户范围" })]),
       artifactModes: expect.arrayContaining([expect.objectContaining({ mode: "CONVERSATION", executable: false }), expect.objectContaining({ mode: "REPOSITORY_FILE", executable: true })]),
     });
+  });
+
+  it("asks the local OS for a directory and reports cancel as a normal answer", async () => {
+    // 对话框由注入的实现替代：测试机上不能真的弹窗（也就不可能在 CI 里挂住）。
+    const picked = createApp({ store: new InMemoryPipelineStore(), seed: false, chooseDirectory: async () => ({ path: "/Users/local/repo" }) });
+    const cancelled = createApp({ store: new InMemoryPipelineStore(), seed: false, chooseDirectory: async () => ({ cancelled: true }) });
+    const unsupported = createApp({ store: new InMemoryPipelineStore(), seed: false, chooseDirectory: async () => { throw new DirectoryDialogError("DIALOG_UNSUPPORTED", "当前平台不支持弹出系统目录选择框，请手动输入绝对路径。"); } });
+    apps.push(picked, cancelled, unsupported);
+
+    const ok = await picked.inject({ method: "POST", url: "/api/v4/dialogs/select-directory" });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json()).toEqual({ cancelled: false, path: "/Users/local/repo" });
+
+    // 用户点取消是正常结果，不是错误码——前端据此"什么都不做"，不该报红。
+    const cancel = await cancelled.inject({ method: "POST", url: "/api/v4/dialogs/select-directory" });
+    expect(cancel.statusCode).toBe(200);
+    expect(cancel.json()).toEqual({ cancelled: true, path: null });
+
+    // 平台不支持要**说得出原因**（501），前端把这句话展示出来并让人手输。
+    const unsupportedResponse = await unsupported.inject({ method: "POST", url: "/api/v4/dialogs/select-directory" });
+    expect(unsupportedResponse.statusCode).toBe(501);
+    expect(unsupportedResponse.json()).toMatchObject({ code: "DIALOG_UNSUPPORTED" });
   });
 
   it("lists Project configuration and summary data", async () => {
@@ -433,7 +456,7 @@ describe("Pipeline Factory v4 API", () => {
 
   it("returns persisted Run execution telemetry", async () => {
     const store = new InMemoryPipelineStore();
-    const telemetry: ExecutionTelemetry = { model: "gpt-5.6-luna", reasoningEffort: "medium", startedAt: "2026-09-06T12:00:00.000Z", completedAt: "2026-09-06T12:00:03.000Z", durationMs: 3000, usage: { inputTokens: 100, outputTokens: 40, reasoningTokens: 10, totalTokens: 140 }, usageSource: "provider", usageScope: "turn" };
+    const telemetry: ExecutionTelemetry = { model: "gpt-5.6-luna", reasoningEffort: "medium", backend: "codex-app-server", startedAt: "2026-09-06T12:00:00.000Z", completedAt: "2026-09-06T12:00:03.000Z", durationMs: 3000, usage: { inputTokens: 100, outputTokens: 40, reasoningTokens: 10, totalTokens: 140 }, usageSource: "provider", usageScope: "turn" };
     store.saveRun({ id: "run-telemetry", projectId: "project-1", planId: "plan-1", planRevision: 1, status: "READY_FOR_VERIFY", branch: "factory/run-telemetry", workspacePath: "/tmp/run-telemetry", baseCommit: "abc", executionThreadId: "execution-telemetry", createdAt: store.now(), startedAt: telemetry.startedAt });
     store.saveExecutionThread({ id: "execution-telemetry", runId: "run-telemetry", state: "COMPLETED", journal: [], telemetry });
     const app = createApp({ store, seed: false });
@@ -442,7 +465,37 @@ describe("Pipeline Factory v4 API", () => {
     const response = await app.inject({ method: "GET", url: "/api/v4/runs/run-telemetry" });
 
     expect(response.statusCode).toBe(200);
+    // `backend` 必须原样带出来：投影重建 telemetry 时漏搬过它，界面因此永远显示"未记录"。
     expect(response.json().executionThread.telemetry).toEqual(telemetry);
+    // 这个 Run 既没有 Revision 快照、项目也不存在：配置侧只能是 null，**不编造**模型名。
+    expect(response.json().executorConfig).toBeNull();
+  });
+
+  it("answers which executor a Run uses even before it has recorded telemetry", async () => {
+    // 遥测要这一轮跑完才落库；运行中的界面只能靠 executorConfig 回答"现在用的是什么模型"。
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    const project = projects.create({ id: "project-telemetry", name: "Telemetry", repoRoot: "/repo/telemetry", defaultBranch: "main", worktreeRoot: "/tmp/telemetry-worktrees" });
+    const explorer = new ExplorerService(store).create({ projectId: project.id, title: "Telemetry explorer" });
+    const candidate = new PlanService(store, projects).createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: explorer.id, title: "Telemetry plan" });
+    const snapshot = projects.snapshot(project.id);
+    store.saveRevision({
+      planId: candidate.id, revision: 1, contract: candidate.contract, artifactHash: "sha256:test",
+      confirmedBy: "tester", confirmedAt: store.now(), sourceExplorerThreadId: explorer.id, provenance: "CURRENT",
+      projectConfigVersion: snapshot.configVersion, projectConfigHash: snapshot.configHash,
+      projectConfigSnapshot: { ...snapshot, settings: { ...snapshot.settings, models: { ...snapshot.settings.models, executor: { ...snapshot.settings.models.executor, model: "frozen-model", backend: "claude-agent-sdk" } } } },
+    } as unknown as PlanRevisionV2);
+    store.saveRun({ id: "run-fresh", projectId: project.id, planId: candidate.id, planRevision: 1, status: "IN_PROGRESS", branch: "factory/run-fresh", workspacePath: "/tmp/run-fresh", baseCommit: "abc", executionThreadId: "execution-fresh", createdAt: store.now(), startedAt: null });
+    store.saveExecutionThread({ id: "execution-fresh", runId: "run-fresh", state: "ACTIVE", journal: [], telemetry: null });
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+
+    const response = await app.inject({ method: "GET", url: "/api/v4/runs/run-fresh" });
+
+    expect(response.statusCode).toBe(200);
+    // 冻结快照优先（项目当前设置不是这个值），模型与 agent 一起回答。
+    expect(response.json().executorConfig).toEqual({ model: "frozen-model", backend: "claude-agent-sdk", reasoningEffort: null });
+    expect(response.json().executionThread.telemetry).toMatchObject({ model: "frozen-model", backend: "claude-agent-sdk", usage: null, usageSource: "not-recorded" });
   });
 
   it("maps terminal database errors to safe Agent Loop diagnostics", async () => {

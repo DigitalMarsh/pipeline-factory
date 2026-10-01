@@ -11,6 +11,7 @@ vi.mock("../api", () => ({
     createProject: vi.fn(),
     archiveProject: vi.fn(),
     activateProject: vi.fn(),
+    selectDirectory: vi.fn(),
   },
 }));
 
@@ -162,6 +163,24 @@ describe("ProjectManagementDialog", () => {
     expect(api.createProject).toHaveBeenCalledWith({ name: "Project 3", repoRoot: "/tmp/project-3" });
     expect(mounted.created).toHaveLength(1);
     expect(mounted.updates).toEqual([false]);
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  it("fills the repository root from the OS folder dialog in the create form", async () => {
+    vi.mocked(api.selectDirectory).mockResolvedValueOnce({ cancelled: false, path: "/Users/bill/Project/y" });
+    const mounted = mountDialog();
+    await nextTick();
+
+    [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("New Project"))?.click();
+    await nextTick();
+    mounted.host.querySelector<HTMLButtonElement>("button[data-pick-directory]")?.click();
+    await nextTick();
+    await nextTick();
+    await nextTick();
+
+    expect(mounted.host.querySelector<HTMLInputElement>('input[placeholder="/Users/you/Project/repository"]')?.value).toBe("/Users/bill/Project/y");
 
     mounted.app.unmount();
     mounted.host.remove();

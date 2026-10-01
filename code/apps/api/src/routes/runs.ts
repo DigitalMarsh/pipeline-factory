@@ -19,6 +19,9 @@
  *      这是"本实例没配这个能力"，属于服务不可用语义。
  *   5) 遥测投影 `projectRunThreadTelemetry` 已搬进 `projections/` 并改为普通 import；
  *      它此前是回调 dep（理由同 `routes/agent-loops.ts` 的第 4 条），现在不需要了。
+ *      同文件的 `resolveRunExecutorConfig` 是"这次 Run 该用哪个 executor"的唯一答案：`GET /runs/:runId`
+ *      把它单独返回（`executorConfig`），因为**遥测要这一轮跑完才有值**，运行中的界面只能靠它
+ *      回答"现在用的是什么模型"。别把它塞进 telemetry —— 那是"已经发生了什么"，这是"配置是什么"。
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -27,7 +30,7 @@ import { guidanceBody } from "../schemas/runs.js";
 import { loopEventsQuery } from "../schemas/agent-loops.js";
 import { loopReasonBody, projectThreadParams } from "../schemas/common.js";
 import { openSseChannel } from "../http/sse.js";
-import { projectRunThreadTelemetry } from "../projections/run-telemetry.js";
+import { projectRunThreadTelemetry, resolveRunExecutorConfig } from "../projections/run-telemetry.js";
 
 export type RunRouteDeps = {
   store: PipelineStore;
@@ -192,7 +195,9 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
     const run = store.getRun(params.data.runId);
     if (!run) return reply.code(404).send({ error: "Run not found" });
     const executionThread = store.getExecutionThread(run.executionThreadId);
-    return { run: { ...run, agentLoops: store.listAgentLoops(run.id) }, executionThread: executionThread ? projectRunThreadTelemetry(store, run, executionThread) : null, verification: store.getVerificationRun(run.id) ?? null, mergeRequest: merger.findByRun(run.id) ?? null };
+    // `executorConfig` 是"这次 Run 该用哪个 executor"的答案（Revision 快照优先）。
+    // 遥测要**这一轮跑完**才有值，界面在运行中只能靠它回答"现在用的是什么模型"。
+    return { run: { ...run, agentLoops: store.listAgentLoops(run.id) }, executionThread: executionThread ? projectRunThreadTelemetry(store, run, executionThread) : null, executorConfig: resolveRunExecutorConfig(store, run), verification: store.getVerificationRun(run.id) ?? null, mergeRequest: merger.findByRun(run.id) ?? null };
   });
 
   app.get("/api/v4/execution-threads/:threadId", async (request, reply) => {

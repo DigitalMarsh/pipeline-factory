@@ -53,7 +53,25 @@ describe("Run detail execution conversation", () => {
     expect(runDetailSource).toContain('import ProviderUsageFooter from "../components/ProviderUsageFooter.vue"');
     expect(runDetailSource).toContain('formatProviderContextUsage');
     expect(runDetailSource).toContain('const executionContextUsage = computed(() => formatProviderContextUsage(executionTelemetry.value?.usage?.inputTokens));');
-    expect(runDetailSource).toContain('<ProviderUsageFooter :model="executionTelemetryModel" :backend="executionTelemetryBackend" :context="executionContextUsage" context-note="provider exact" />');
+    // 模型/agent 由"本次记录优先、否则用这次 Run 冻结的配置"回答——遥测要这一轮跑完才有值，
+    // 运行中只读 telemetry 会得到一片"未记录"。
+    expect(runDetailSource).toContain('resolveExecutionModelIdentity(executionTelemetry.value, executionExecutorConfig.value, modelCatalog.value)');
+    // 项目没覆盖 backend 时快照里是 null，生效的是该角色的全局后端——不回退这步运行中 AGENT 一栏是空的。
+    expect(runDetailSource).toContain('backend: configured?.backend ?? roleBackend');
+    expect(runDetailSource).toContain('<ProviderUsageFooter :model="executionModelIdentity.model" :backend="executionModelIdentity.backend" :context="executionContextUsage" context-note="仅结束时由 provider 上报" :source-note="executionModelSourceNote" />');
+  });
+
+  it("puts my messages on the right and collapses provider diagnostics", () => {
+    // 左右分栏：我的消息（role=user）靠右，执行者的靠左。
+    expect(runDetailSource).toContain("mine: item.role === 'user'");
+    // 诊断字段默认收起（Turn #/Call/Provider item/Provider session），hover 与"详情"里才看得到。
+    expect(runDetailSource).toContain(':title="executionMessageDiagnosticsTitle(item)"');
+    expect(runDetailSource).toContain('v-if="executionMessageDetails(item).length"');
+    expect(runDetailSource).toContain('class="execution-message-toggle"');
+    expect(runDetailSource).toContain('v-if="isExecutionItemExpanded(item.id)"');
+    // 常驻元信息里不再直接铺这些字段。
+    expect(runDetailSource).not.toContain("Turn #{{ item.modelStep }}");
+    expect(runDetailSource).not.toContain("Provider item {{ item.providerItemId }}");
   });
 
   it("keeps the execution title focused and opens the current Plan revision read only", () => {
@@ -104,7 +122,7 @@ describe("Run detail execution conversation", () => {
     expect(runDetailSource).toContain('function handleExecutionComposerKeydown(event: KeyboardEvent): void');
     expect(runDetailSource).toContain('class="composer-send"');
     expect(runDetailSource).toContain('aria-label="Send message"');
-    expect(runDetailSource).toContain('<ProviderUsageFooter :model="executionTelemetryModel" :backend="executionTelemetryBackend" :context="executionContextUsage" context-note="provider exact" />');
+    expect(runDetailSource).toContain('context-note="仅结束时由 provider 上报"');
     expect(runDetailSource).not.toContain("guidanceComposerOpen");
     expect(runDetailSource).not.toContain('class="execution-guidance-shell"');
     expect(runDetailSource).not.toContain("Add guidance");

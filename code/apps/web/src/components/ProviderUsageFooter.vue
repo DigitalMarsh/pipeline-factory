@@ -7,9 +7,15 @@ const props = withDefaults(defineProps<{
   contextNote?: string;
   /** 这一轮由哪个 agent 执行；缺省或"未记录"时该格显示占位而不是留空。 */
   backend?: string;
+  /**
+   * 整行末尾的来源说明（如"本次执行记录"/"按本 Run 冻结的配置"）。**只在真的有两种来源时传**：
+   * 执行页在"这一轮还没跑完、没有记录"时会改用配置值，不说清来源就等于把配置当事实展示。
+   */
+  sourceNote?: string;
 }>(), {
   contextNote: "",
   backend: "",
+  sourceNote: "",
 });
 
 /**
@@ -25,6 +31,7 @@ const props = withDefaults(defineProps<{
  * "额度该按谁显示、拿不到时显示什么"，而不是把这两格加回来。
  */
 const contextNoteText = computed(() => props.contextNote);
+const sourceNoteText = computed(() => props.sourceNote);
 </script>
 
 <template>
@@ -42,5 +49,6 @@ const contextNoteText = computed(() => props.contextNote);
       <strong :title="props.context">{{ props.context }}</strong>
       <em v-if="contextNoteText">{{ contextNoteText }}</em>
     </span>
+    <span v-if="sourceNoteText" class="provider-usage-source">{{ sourceNoteText }}</span>
   </div>
 </template>

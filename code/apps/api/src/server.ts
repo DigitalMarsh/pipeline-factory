@@ -66,6 +66,7 @@ import { createDefaultScheduler } from "./runtime/scheduler.js";
 import { createDefaultVerificationExecutor } from "./runtime/verification.js";
 import { createModelGateway } from "./runtime/model-gateway.js";
 import { createModelCatalog } from "./runtime/model-catalog.js";
+import type { DirectoryDialogResult } from "./runtime/directory-dialog.js";
 // 全部 100 条路由已分域搬进 `routes/`，组合根不再直接持有任何 zod schema、任何投影函数、
 // 任何 SSE 传输件——它们的 import 随各自的 route 文件走了。**本文件剩余的 import 只服务于
 // 组装**（构造 Service / 起 store / 接管静态托管）。
@@ -86,6 +87,8 @@ export type PipelineAppOptions = {
   mcpRegistry?: McpToolRegistry;
   pluginRegistry?: PluginRegistry;
   computerUse?: ComputerUseBridge;
+  /** 弹系统"选择文件夹"对话框（`POST /api/v4/dialogs/select-directory`）。测试注入假实现，别在测试机上弹窗。 */
+  chooseDirectory?: (() => Promise<DirectoryDialogResult>) | undefined;
 };
 
 /**
@@ -289,6 +292,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     merger, changeProposals, verifier, scheduler, dispatchCoordinator,
     verificationExecutor, loopController, projectExecution,
     model, mcpRegistry, pluginRegistry,
+    ...(options.chooseDirectory ? { chooseDirectory: options.chooseDirectory } : {}),
   });
 
   // 静态托管必须最后注册：setNotFoundHandler 是全局兜底，且必须在 app 启动前设置

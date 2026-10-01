@@ -142,9 +142,12 @@ a { color: inherit; text-decoration: none; }
 .assistant-message p { padding: 9px 12px; border: 1px solid #edf0f4; border-radius: 2px 12px 12px 12px; background: #fff; }
 .failed-message p { border-color: #f2d3d7; background: #fff7f7; color: #a34853; }
 
-/* Codex Desktop 风格的用户消息：默认只保留标题与摘要，正文按需展开。 */
-.user-message { display: block; max-width: 760px; margin-bottom: 18px; }
-.user-message-summary { display: flex; min-width: 0; align-items: flex-start; gap: 14px; width: 100%; padding: 14px 16px 12px; border: 1px solid #e0e7f2; border-radius: 14px; outline: 0; background: #f7f9fd; color: #35445a; cursor: pointer; font: inherit; text-align: left; transition: border-color .16s ease, background .16s ease, box-shadow .16s ease; }
+/* Codex Desktop 风格的用户消息：默认只保留标题与摘要，正文按需展开。
+   **靠右**，与执行线程的 `.execution-message.mine` 同一套读法；右上角收一点圆角作"这是我说的"记号。
+   右边那个 `LS` 头像与左侧 assistant 的头像对称——不然只有一边有身份标识。 */
+.user-message { display: flex; flex-direction: row-reverse; align-items: flex-start; gap: 11px; max-width: 800px; margin-left: auto; margin-bottom: 18px; }
+.user-message-body { min-width: 0; flex: 1 1 auto; max-width: 760px; }
+.user-message-summary { display: flex; min-width: 0; align-items: flex-start; gap: 14px; width: 100%; padding: 14px 16px 12px; border: 1px solid #e0e7f2; border-radius: 14px 3px 14px 14px; outline: 0; background: #f7f9fd; color: #35445a; cursor: pointer; font: inherit; text-align: left; transition: border-color .16s ease, background .16s ease, box-shadow .16s ease; }
 .user-message-summary:hover, .user-message-summary:focus-visible { border-color: #b9cdf4; background: #f4f8ff; box-shadow: 0 4px 12px rgba(55, 91, 151, .08); }
 .user-message-summary:focus-visible { outline: 2px solid #7ca3f4; outline-offset: 2px; }
 .user-message-summary.expanded { border-color: #cbd9f2; background: #fbfdff; box-shadow: 0 2px 8px rgba(55, 91, 151, .05); }
@@ -208,15 +211,23 @@ a { color: inherit; text-decoration: none; }
 .execution-message-body > p { margin: 6px 0 0; color: #5f7087; font-size: 11px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
 .execution-message-model .execution-message-body > p { color: #405571; }
 .execution-message-guidance .execution-message-body > p { color: #4d6d9e; }
-.execution-message-guidance { flex-direction: row-reverse; }
-.execution-message-guidance .execution-message-body { flex: 0 1 min(680px, 84%); }
-.execution-message-guidance .execution-message-meta { justify-content: flex-end; }
+/* 我的消息靠右、执行者的靠左：和模型对话的常规读法。宽度收窄才看得出"这是我说的一句话"——
+   原来 flex-basis 92% 几乎占满整行，右对齐等于没做。 */
+.execution-message.mine { flex-direction: row-reverse; }
+.execution-message.mine .execution-message-body { display: flex; flex: 0 1 min(620px, 78%); flex-direction: column; align-items: flex-end; }
+.execution-message.mine .execution-message-meta { justify-content: flex-end; }
+/* 诊断细节默认不露面（见 utils/executionMessageDetails.ts）：常驻只留标题、状态与时间。 */
+.execution-message-time { color: #b3bcc9; }
+.execution-message-toggle { padding: 0; border: 0; background: transparent; color: #6b86b8; cursor: pointer; font: inherit; font-size: 9px; }
+.execution-message-toggle:hover, .execution-message-toggle:focus-visible { color: #3d68b5; text-decoration: underline; }
+.execution-message-details { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 5px; color: #95a1b1; font-size: 9px; }
+.execution-message.mine .execution-message-details { justify-content: flex-end; }
 .execution-message-activity, .execution-message-tool { margin: 4px 0; padding: 10px 12px; border: 1px solid #edf0f4; border-radius: 7px; background: #fbfcfe; }
 .execution-message-activity .execution-message-avatar, .execution-message-tool .execution-message-avatar { margin-top: 1px; }
 .execution-message-activity.running, .execution-message-tool.running { border-color: #dbe7ff; background: #f8fbff; }
 .execution-message-activity.waiting { border-color: #f2e4c7; background: #fffaf0; }
 .execution-message-activity.failed, .execution-message-tool.failed { border-color: #f0d9dc; background: #fff8f8; }
-.execution-message-activity.unknown, .execution-message-tool.unknown { border-color: #eee4c8; background: #fffdf6; }
+.execution-message-activity.unknown, .execution-message-tool.unknown { border-color: #edf0f4; background: #fbfcfe; }
 .execution-activity-detail { color: #65768d !important; font-size: 10px !important; line-height: 1.55 !important; overflow-wrap: anywhere; }
 .execution-message-note { display: block; margin-top: 5px; color: #95a1b1; font-size: 9px; }
 .execution-message-meta .agent-chip { color: #627aa8; }
@@ -376,6 +387,8 @@ a { color: inherit; text-decoration: none; }
 .provider-usage-fact small { color: #a1adbb; font-size: 8px; font-weight: 800; letter-spacing: .1em; }
 .provider-usage-fact strong { max-width: 180px; overflow: hidden; color: #60718a; font-size: 10px; font-weight: 600; text-overflow: ellipsis; }
 .provider-usage-fact em { color: #a9b3bf; font-size: 8px; font-style: normal; }
+/* 这行值是"跑过的记录"还是"配置里写着要用的"——不标来源就等于把配置当事实展示。 */
+.provider-usage-source { margin-left: auto; padding-left: 10px; color: #a9b3bf; font-size: 8px; white-space: nowrap; }
 @media (max-width: 720px) { .provider-usage-footer { gap: 8px; align-items: flex-start; }.provider-usage-fact em { display: none !important; }.provider-usage-fact small { font-size: 7px; }.provider-usage-fact strong { max-width: 132px; }.composer-footer { gap: 7px; } }
 @media (max-width: 720px) { .explorer-tree-task-title em { display: none; } }
 .agent-loop-strip { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 14px; row-gap: 7px; margin: 14px 35px 0; padding: 10px 12px; border: 1px solid #e2e9f5; border-radius: 7px; background: #fbfdff; color: #687995; font-size: 10px; }
@@ -769,7 +782,7 @@ a { color: inherit; text-decoration: none; }
   .execution-header-detail-footer { align-items: flex-start; flex-direction: column; }
   .run-detail-page { --run-detail-gutter: 18px; --run-detail-content-gutter: 18px; padding-inline: 18px; padding-bottom: 0; }
   .execution-conversation-group-task { margin-left: 0; padding-left: 10px; }
-  .execution-message-guidance .execution-message-body { flex-basis: 92%; }
+  .execution-message.mine .execution-message-body { flex-basis: 92%; }
   .execution-plan-message-scope { grid-template-columns: 1fr; }
 }
 @media (max-width: 460px) {

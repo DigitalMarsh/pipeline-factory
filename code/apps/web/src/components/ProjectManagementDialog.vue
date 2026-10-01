@@ -7,6 +7,7 @@ import { reactive, ref, watch } from "vue";
 import { ArrowRight, Check, CircleCheck, FolderOpened, Plus, Refresh, Setting, Warning } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { api } from "../api";
+import { useDirectoryPicker } from "../composables/useDirectoryPicker";
 import type { Project } from "../types";
 
 const props = defineProps<{ modelValue: boolean; projects: Project[]; currentProjectId?: string }>();
@@ -57,6 +58,13 @@ function cancelCreate() {
   form.defaultBranch = "";
   form.worktreeRoot = "";
   error.value = null;
+}
+
+/** 选目录走本地 API 的系统对话框（浏览器拿不到绝对路径，见 useDirectoryPicker 的模块头）。 */
+const { picking, pickDirectory } = useDirectoryPicker({ onError: (message) => { error.value = message; ElMessage.error(message); } });
+async function chooseRepositoryRoot() {
+  const path = await pickDirectory();
+  if (path) form.repoRoot = path;
 }
 
 async function refreshProjects() {
@@ -155,7 +163,7 @@ function statusLabel(status: Project["status"]) {
     <form v-if="createMode" class="project-create-form" @submit.prevent="createProject">
       <div class="project-dialog-intro">新 Project 必须指向 Git 仓库根目录。创建前 API 会校验真实路径和默认分支。</div>
       <div class="project-create-grid"><label>Project name <input v-model="form.name" autofocus placeholder="例如：Pipeline Factory" /></label><label>Project short name <input v-model="form.shortName" placeholder="例如：PF" /></label></div>
-      <label>Git repository root <input v-model="form.repoRoot" placeholder="/Users/you/Project/repository" /><small>请输入本机可访问的绝对路径，不能是仓库子目录。</small></label>
+      <label>Git repository root <span class="repo-root-row"><input v-model="form.repoRoot" placeholder="/Users/you/Project/repository" /><el-button :loading="picking" data-pick-directory="true" @click="chooseRepositoryRoot">选择文件夹…</el-button></span><small>选择或直接输入本机可访问的绝对路径，不能是仓库子目录。</small></label>
       <div class="project-create-grid"><label>Default branch <input v-model="form.defaultBranch" placeholder="自动检测" /></label><label>Worktree root <input v-model="form.worktreeRoot" placeholder="自动生成" /></label></div>
     </form>
 

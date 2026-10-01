@@ -280,7 +280,13 @@ describe("Explorer inline message presentation", () => {
     expect(explorerViewSource).toContain(':aria-expanded="isUserMessageExpanded(item.activity.id)"');
     expect(explorerViewSource).toContain('@click="toggleUserMessage(item.activity.id)"');
     expect(explorerViewSource).toContain('class="user-message-content"');
+    // 右侧要有身份标识：左边 assistant 有头像，右边只有卡片就是"一边有标识、一边没有"。
+    expect(explorerViewSource).toContain('<div class="message-avatar user-avatar" title="我">LS</div>');
+    expect(explorerViewSource).toContain('class="user-message-body"');
     expect(explorerStylesSource).toContain(".user-message-summary:focus-visible");
+    // 我的消息靠右（与执行线程的 `.execution-message.mine` 同一套读法）：`margin-left: auto` 掉了
+    // 就会悄悄退回左对齐——那不是"没样式"，是读起来像两个人在同一侧说话。
+    expect(explorerStylesSource).toMatch(/\.user-message \{[^}]*margin-left: auto;/);
   });
 
   it("centers the latest-message prompt within the chat timeline", () => {
