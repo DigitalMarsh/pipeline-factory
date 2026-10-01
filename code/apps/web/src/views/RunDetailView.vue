@@ -28,7 +28,7 @@ const route = useRoute();
 const router = useRouter();
 const props = withDefaults(defineProps<{ embedded?: boolean; projectId?: string; runId?: string }>(), { embedded: false });
 const emit = defineEmits<{ (event: "close"): void; (event: "open-plan", plan: Plan): void }>();
-type ExecutionConversationGroup = { id: string; kind: "plan" | "task" | "guidance" | "unattributed"; task?: ExecutionTask; items: ExecutionStreamItem[] };
+type ExecutionConversationGroup = { id: string; kind: "plan" | "task" | "guidance" | "unattributed" | "pending"; task?: ExecutionTask; tasks?: ExecutionTask[]; items: ExecutionStreamItem[] };
 const embedded = computed(() => props.embedded);
 const projectId = computed(() => props.projectId ?? String(route.params.projectId ?? ""));
 const runId = computed(() => props.runId ?? String(route.params.runId ?? ""));
@@ -109,7 +109,61 @@ const executionConversationGroups = computed<ExecutionConversationGroup[]>(() =>
   // 现代 Run 不产生这类条目，它们集中在 2026-09-25 之前的数据里。
   const unattributed = executionMessages.value.filter((item) => item.kind !== "plan" && item.kind !== "guidance" && !isRunActivity(item) && (!item.taskId || !taskIds.has(item.taskId)));
   if (unattributed.length) groups.push({ id: "unattributed", kind: "unattributed", items: unattributed });
-  return groups;
+  return collapsePendingTaskGroups(groups);
+});
+
+/**
+ * 把**连续的**空执行步骤折成一行。
+ * 5 张各占一张卡、每张只写"尚无结构化进度事件表明此任务已开始"是纯噪音；但"哪几步还没轮到"
+ * 这个信息要保留，所以折成一行、把标题列出来，而不是整段丢掉。只在**连续**时合并：
+ * 中间夹着有内容的步骤时分开显示，"跳过第 2 步先做第 3 步"这种事实才看得出来。
+ */
+function collapsePendingTaskGroups(groups: ExecutionConversationGroup[]): ExecutionConversationGroup[] {
+  const collapsed: ExecutionConversationGroup[] = [];
+  let pending: ExecutionTask[] = [];
+  const flush = () => {
+    const first = pending[0];
+    if (first) collapsed.push({ id: `pending-${first.id}`, kind: "pending", items: [], tasks: pending });
+    pending = [];
+  };
+  for (const group of groups) {
+    if (group.kind === "task" && group.task && group.items.length === 0) { pending.push(group.task); continue; }
+    flush();
+    collapsed.push(group);
+  }
+  flush();
+  return collapsed;
+}
+
+/** 没有成败概念的活动（推理流、Provider 消息、会话重建）——默认折叠，不让它们淹没真正发生的事。 */
+function isActivityNoise(item: ExecutionStreamItem): boolean {
+  return item.outcome === "not-applicable";
+}
+function visibleItems(group: ExecutionConversationGroup): ExecutionStreamItem[] {
+  return group.items.filter((item) => !isActivityNoise(item));
+}
+function noiseItems(group: ExecutionConversationGroup): ExecutionStreamItem[] {
+  return group.items.filter(isActivityNoise);
+}
+
+/**
+ * 这个 Run 现在走到哪一步了。四阶段是**执行过程的骨架**：准备（另见顶部 RUN CONTEXT）、
+ * 执行、验证、合并。它回答的是"现在在干什么、下一步是什么"——这正是之前页面最缺的一句话。
+ */
+const executionPhaseSteps = computed(() => {
+  const counts = executionTaskCounts.value;
+  const status = run.value?.status ?? "";
+  const mergeStatus = mergeRequest.value?.status;
+  const verificationStatus = verification.value?.status;
+  const steps = [
+    { key: "execute", label: "执行", detail: counts.total > 0 ? `${counts.completed}/${counts.total} 步骤` : "等待派发" },
+    { key: "verify", label: "验证", detail: verificationStatus === "PASSED" ? "已通过" : verificationStatus === "FAILED" || verificationStatus === "BLOCKED" ? "未通过" : verificationStatus === "SKIPPED" ? "已跳过" : "未开始" },
+    { key: "merge", label: "合并", detail: mergeStatus === "MERGED" ? "已合并" : mergeStatus === "OPEN" ? "等待人工合并" : status === "MERGE_READY" ? "可创建 Merge request" : "未开始" },
+  ];
+  // 当前阶段由 Run 状态决定；BLOCKED / CANCELLED 停在它当时所在的那一步，不往前推。
+  const current = status === "MERGE_READY" || mergeStatus ? "merge" : verificationStatus || status === "VERIFYING" || status === "READY_FOR_VERIFY" ? "verify" : "execute";
+  const currentIndex = current === "merge" ? 2 : current === "verify" ? 1 : 0;
+  return steps.map((step, index) => ({ ...step, current: index === currentIndex, done: index < currentIndex }));
 });
 const executionTelemetry = computed(() => thread.value?.telemetry ?? null);
 /**
@@ -540,6 +594,13 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
       <div v-if="run.status === 'BLOCKED' && executionBlockReason" class="run-blocked-notice" role="alert"><Warning :size="16" /><div><strong>Why execution stopped</strong><span>{{ executionBlockReason }}</span></div></div>
       <section class="execution-conversation-panel">
         <div class="journal-heading"><div><div class="eyebrow">EXECUTION CONVERSATION</div><h2>What the Executor is doing</h2></div><div class="execution-stream-status" role="status"><i :class="{ connected: runStreamConnected }" /> {{ executionStatusLabel }}</div></div>
+        <ol class="execution-phase-strip" aria-label="执行阶段">
+          <li v-for="(phase, index) in executionPhaseSteps" :key="phase.key" :class="['execution-phase', { current: phase.current, done: phase.done }]">
+            <span class="execution-phase-mark">{{ phase.done ? "✓" : index + 1 }}</span>
+            <strong>{{ phase.label }}</strong>
+            <small>{{ phase.detail }}</small>
+          </li>
+        </ol>
         <div class="execution-conversation-stage">
           <div ref="executionTimeline" class="execution-conversation" @scroll="updateExecutionScrollState">
           <div v-if="!executionMessages.length" class="empty-state"><Document :size="28" /><h3>Waiting for executor activity</h3><p>The execution conversation will appear here when the Run starts.</p></div>
@@ -548,16 +609,22 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
               <span class="execution-task-stream-step">PLAN TASK</span>
               <strong>{{ group.task.title }}</strong>
               <span :class="['execution-task-stream-status', `tone-${group.task.status.toLowerCase()}`]">{{ executionTaskStatusLabel(group.task.status) }}</span>
-              <span class="execution-task-stream-count">{{ group.items.length }} 条</span>
+              <span class="execution-task-stream-count">{{ visibleItems(group).length }} 条</span>
+              <span v-if="noiseItems(group).length" class="execution-task-stream-quiet">{{ noiseItems(group).length }} 条活动</span>
               <ArrowUp v-if="!isTaskGroupCollapsed(group.id)" :size="14" /><ArrowDown v-else :size="14" />
               <small v-if="group.task.blockedReason">{{ group.task.blockedReason }}</small>
             </button>
             <button v-else-if="group.kind === 'unattributed'" type="button" class="execution-task-stream-heading execution-unattributed-heading" :aria-expanded="!isTaskGroupCollapsed(group.id)" :aria-controls="`execution-task-stream-${group.id}`" @click="toggleTaskGroup(group.id)">
-              <span class="execution-task-stream-step">UNATTRIBUTED</span><strong>未归属事件</strong><span class="execution-task-stream-count">{{ group.items.length }} 条</span><ArrowUp v-if="!isTaskGroupCollapsed(group.id)" :size="14" /><ArrowDown v-else :size="14" /><small>这些事件没有记录所属的执行步骤，只出现在早期 Run 的数据里。</small>
+              <span class="execution-task-stream-step">UNATTRIBUTED</span><strong>未归属事件</strong><span class="execution-task-stream-count">{{ visibleItems(group).length }} 条</span><ArrowUp v-if="!isTaskGroupCollapsed(group.id)" :size="14" /><ArrowDown v-else :size="14" /><small>这些事件没有记录所属的执行步骤，只出现在早期 Run 的数据里。</small>
             </button>
-            <div v-if="!isTaskGroupCollapsed(group.id)" :id="`execution-task-stream-${group.id}`" class="execution-task-stream-items">
-            <p v-if="group.task && !group.items.length" class="execution-task-stream-empty">{{ taskGroupEmptyNote(group.task) }}</p>
-            <article v-for="item in group.items" :key="item.id" :data-sequence="item.sequence" :data-task-id="item.taskId" :data-model-step="item.modelStep" :title="executionMessageDiagnosticsTitle(item)" :class="['execution-message', `execution-message-${item.kind}`, { failed: item.status === 'FAILED', waiting: item.status === 'WAITING', running: item.status === 'RUNNING', unknown: item.status === 'UNKNOWN', mine: item.role === 'user' }]">
+            <div v-else-if="group.kind === 'pending'" class="execution-pending-steps">
+              <span class="execution-task-stream-step">PENDING</span>
+              <strong>{{ (group.tasks ?? []).length }} 个执行步骤尚未开始</strong>
+              <small>{{ (group.tasks ?? []).map((task) => task.title).join(" · ") }}</small>
+            </div>
+            <div v-if="group.kind !== 'pending' && !isTaskGroupCollapsed(group.id)" :id="`execution-task-stream-${group.id}`" class="execution-task-stream-items">
+            <p v-if="group.task && !visibleItems(group).length && !noiseItems(group).length" class="execution-task-stream-empty">{{ taskGroupEmptyNote(group.task) }}</p>
+            <article v-for="item in visibleItems(group)" :key="item.id" :data-sequence="item.sequence" :data-task-id="item.taskId" :data-model-step="item.modelStep" :title="executionMessageDiagnosticsTitle(item)" :class="['execution-message', `execution-message-${item.kind}`, { failed: item.status === 'FAILED', waiting: item.status === 'WAITING', running: item.status === 'RUNNING', unknown: item.status === 'UNKNOWN', mine: item.role === 'user' }]">
               <div class="execution-message-avatar">{{ item.role === 'user' ? 'LS' : item.kind === 'plan' ? 'PL' : item.kind === 'model' ? 'EX' : item.kind === 'tool' ? 'TL' : '·' }}</div>
               <div class="execution-message-body">
                 <div class="execution-message-meta"><strong>{{ item.title }}</strong><span v-if="item.status !== 'INFO'" class="agent-chip">{{ executionMessageStatusLabel(item.status) }}</span><span class="execution-message-time">{{ new Date(item.occurredAt).toLocaleTimeString('zh-CN') }}</span><button v-if="executionMessageDetails(item).length" type="button" class="execution-message-toggle" :aria-expanded="isExecutionItemExpanded(item.id)" @click="toggleExecutionItem(item.id)">{{ isExecutionItemExpanded(item.id) ? '收起详情' : '详情' }}</button></div>
@@ -584,6 +651,14 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
                 </template>
               </div>
             </article>
+            <!-- 推理流 / Provider 消息 / 会话重建**没有成败概念**，一条一张卡只会淹没真正发生的事。
+                 保留在可展开的一行里：默认不占视线，需要时仍可回溯。 -->
+            <details v-if="noiseItems(group).length" class="execution-activity-noise">
+              <summary>{{ noiseItems(group).length }} 条活动记录（推理 / 消息）</summary>
+              <ul class="execution-activity-noise-list">
+                <li v-for="item in noiseItems(group)" :key="item.id" :data-sequence="item.sequence"><span class="execution-noise-time">{{ new Date(item.occurredAt).toLocaleTimeString("zh-CN") }}</span><span class="execution-noise-title">{{ item.title }}</span><small v-if="item.detail">{{ item.detail }}</small></li>
+              </ul>
+            </details>
             </div>
           </section>
           </div>
