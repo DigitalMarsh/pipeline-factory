@@ -443,25 +443,19 @@ export class PlanDispatchCoordinator {
         this.saveState({ ...this.stateForRun(current, run, "VERIFYING", null), phase: "RUN_STARTED" });
         return;
       case "READY_FOR_VERIFY": {
-        if (!this.options.verify) {
+        const verify = this.options.verify;
+        if (!verify) {
           this.saveState({ ...this.stateForRun(current, run, "NEEDS_REVIEW", null, "Verification executor is not configured"), phase: "NEEDS_REVIEW" });
           return;
         }
         if (this.verifyingRuns.has(run.id)) return;
         this.verifyingRuns.add(run.id);
         this.saveState({ ...this.stateForRun(current, run, "VERIFYING", null), phase: "RUN_STARTED" });
-        try {
-          const revision = this.options.store.getRevision(run.planId, run.planRevision);
-          if (!revision) throw new Error(`Plan revision ${run.planId}@${run.planRevision} is missing`);
-          await this.options.verify(run, revision);
-          const latest = this.options.store.getRun(run.id) ?? run;
-          await this.syncRun(latest);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          this.saveState({ ...this.stateForRun(current, run, "BLOCKED", null, message), phase: "ATTENTION" });
-        } finally {
-          this.verifyingRuns.delete(run.id);
-        }
+        // **不在调用方等待**。`syncRun` 由 `wake()` 驱动，而 `wake()` 要遍历所有 Run；它同时是
+        // `confirmAndDispatch` 与事件处理的调用链。在这里 await 会把"**另一个** Run 的验证命令"
+        // 塞进当前请求——验证跑的是项目的 build/test，分钟级，于是"确认一个 Plan"要等到别人的
+        // 验证跑完才返回。这里只要状态已经写成 VERIFYING（SSE 会推给前端），结果由后台回写。
+        void this.runVerification(run, current, verify);
         return;
       }
       case "MERGE_READY":
@@ -475,6 +469,25 @@ export class PlanDispatchCoordinator {
         return;
       default:
         if (plan?.status === "MERGED") this.saveState({ ...this.stateForRun(current, run, "COMPLETED", null), phase: "COMPLETED" });
+    }
+  }
+
+  /**
+   * 后台跑一次验证并把结果回写状态。由 `syncRun` 分离出来，**不阻塞调用方**（理由见 READY_FOR_VERIFY 分支）。
+   * 并发由 `verifyingRuns` 保证：同一个 Run 同时只会有一个验证在跑。
+   */
+  private async runVerification(run: Run, current: PlanDispatchState, verify: NonNullable<PlanDispatchCoordinatorOptions["verify"]>): Promise<void> {
+    try {
+      const revision = this.options.store.getRevision(run.planId, run.planRevision);
+      if (!revision) throw new Error(`Plan revision ${run.planId}@${run.planRevision} is missing`);
+      await verify(run, revision);
+      const latest = this.options.store.getRun(run.id) ?? run;
+      await this.syncRun(latest);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.saveState({ ...this.stateForRun(current, run, "BLOCKED", null, message), phase: "ATTENTION" });
+    } finally {
+      this.verifyingRuns.delete(run.id);
     }
   }
 

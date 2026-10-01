@@ -51,6 +51,19 @@ async function dispatch(coordinator: InstanceType<typeof coordinatorModule.PlanD
   return coordinator.dispatch(planId);
 }
 
+/**
+ * 等到调度状态落到目标值。
+ * 验证是**后台**跑的（见「不等待验证跑完就返回」那条用例），所以断言终态不能假设 `wake()` 返回时它已经跑完——
+ * 用轮询把"等一会儿"变成确定的等待，而不是靠微任务时序侥幸通过。
+ */
+async function waitForStatus(coordinator: InstanceType<typeof coordinatorModule.PlanDispatchCoordinator>, planId: string, status: string, attempts = 50): Promise<void> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (coordinator.state(planId)?.status === status) return;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  throw new Error(`dispatch state for ${planId} did not settle to ${status}（当前 ${coordinator.state(planId)?.status ?? "unknown"}）`);
+}
+
 describe("PlanDispatchCoordinator", () => {
   it("does not schedule an Enqueued plan until an explicit dispatch request", async () => {
     const store = new InMemoryPipelineStore();
@@ -307,7 +320,43 @@ describe("PlanDispatchCoordinator", () => {
     store.appendEvent({ type: "run.executor.event", aggregateId: run!.id, payload: { action: "executor_completed" } });
     await coordinator.wake();
 
+    // 验证是**后台**跑的（见下一条用例），所以这里等状态落定，而不是假设 wake 返回时它已经跑完。
+    await waitForStatus(coordinator, plan.id, "NEEDS_REVIEW");
     expect(coordinator.state(plan.id)).toMatchObject({ status: "NEEDS_REVIEW", runId: run!.id });
+  });
+
+  it("**不等待**验证跑完就返回：确认一个 Plan 不该被别的 Run 的验证命令挡住", async () => {
+    const store = new InMemoryPipelineStore();
+    const plans = new PlanService(store);
+    const plan = createPlan(store, plans, "Detached verification");
+    let releaseVerification: () => void = () => undefined;
+    const verificationGate = new Promise<void>((resolve) => { releaseVerification = resolve; });
+    let verificationStarted = false;
+    const coordinator = new coordinatorModule.PlanDispatchCoordinator({
+      store,
+      plans,
+      scheduler: schedulerFor(store),
+      verify: async (run) => {
+        verificationStarted = true;
+        await verificationGate;
+        store.saveRun({ ...run, status: "MERGE_READY" });
+        return { id: "verification-detached", runId: run.id, status: "PASSED", repairAttempts: 0, commandResults: [], completedAt: store.now() };
+      },
+    });
+
+    const result = await dispatch(coordinator, plans, plan.id);
+    const run = store.getRun(result.state.runId!)!;
+    store.saveRun({ ...run, status: "READY_FOR_VERIFY" });
+    store.appendEvent({ type: "run.executor.event", aggregateId: run.id, payload: { action: "executor_completed" } });
+
+    // 验证被 gate 卡住时 wake() 仍必须返回——`wake()` 要遍历所有 Run，而它同时在
+    // `confirmAndDispatch` 的调用链上；在这里 await 会把"另一个 Run 的 build/test"塞进确认请求。
+    await coordinator.wake();
+    expect(verificationStarted).toBe(true);
+    expect(coordinator.state(plan.id)).toMatchObject({ status: "VERIFYING" });
+
+    releaseVerification();
+    await waitForStatus(coordinator, plan.id, "NEEDS_REVIEW");
   });
 
   it("projects recovery-required Runs into Needs Attention instead of RUNNING", async () => {

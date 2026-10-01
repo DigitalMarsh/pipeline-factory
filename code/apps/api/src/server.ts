@@ -94,6 +94,12 @@ export type PipelineAppOptions = {
 };
 
 /**
+ * 超过这个耗时的请求会在日志里留一行（见 onResponse 钩子的说明）。
+ * 正常请求都在几十毫秒，1 秒只会在真正该看的时候触发。
+ */
+const SLOW_REQUEST_MS = 1000;
+
+/**
  * 创建 Fastify API。所有 Project 相关路由通过同一组 Domain Service 访问数据，
  * 这样 HTTP 错误码与 Domain 状态约束保持一致，且不会在路由中隐式创建默认 Project。
  */
@@ -276,6 +282,21 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (project.status === "ARCHIVED" && request.method !== "GET" && !path.endsWith("/activate") && !path.endsWith("/validate-repository")) {
       return reply.code(409).send({ code: "PROJECT_ARCHIVED", error: `Project ${projectId} is archived` });
     }
+  });
+  /**
+   * 慢请求留痕。
+   * 起因很具体：有人报"确认 Plan 很慢"，而逐个环节实测下来（确认→建 Run 10~20ms、刷新端点毫秒级、
+   * 整页 72ms）**复现不出来**——没有数字就只能猜。这条把"慢"变成日志里的一行：
+   * 方法、路径、耗时、状态码，直接写进 `.runtime/api.log`。
+   *
+   * 阈值取 1 秒：正常请求都在几十毫秒，只有真正该看的情况才会出现。**不要按请求全量打日志**——
+   * 那会把有价值的行淹掉，SSE 长连接也会刷屏（它天然长命，故排除）。
+   */
+  app.addHook("onResponse", async (request, reply) => {
+    const elapsed = reply.elapsedTime;
+    if (elapsed < SLOW_REQUEST_MS) return;
+    if (request.headers.accept?.includes("text/event-stream")) return;
+    console.warn(`[slow] ${request.method} ${request.url} ${Math.round(elapsed)}ms ${reply.statusCode}`);
   });
   app.addHook("onClose", async () => {
     dispatchCoordinator?.dispose();

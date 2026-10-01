@@ -53,7 +53,8 @@ export type PlanPreflightInspector = (input: PlanPreflightInput) => PlanPrefligh
 /** 未配置 inspector 时的结论：什么都没查出来（测试与 V1 遗留路径用）。 */
 export const emptyPlanPreflight: PlanPreflightInspector = () => ({ blocking: [], warnings: [] });
 
-type SyncGitRunner = (args: string[], cwd: string) => CommandResult;
+/** 同步 git 执行端口；`input` 供需要 stdin 的命令（`cat-file --batch-check`）使用。 */
+type SyncGitRunner = (args: string[], cwd: string, input?: string) => CommandResult;
 
 /**
  * 本地实现：用 `git cat-file -e <baseCommit>:<path>` 问"这个路径在基线上存在吗"。
@@ -77,23 +78,30 @@ export function createLocalPlanPreflightInspector(options: { configuredPlanDirec
     }
 
     const artifactPath = normalizeRepoPath(input.artifactPath);
-    const missing: string[] = [];
-    for (const candidate of input.includePaths) {
-      const path = normalizeRepoPath(candidate);
-      if (!path || !isConcreteFile(path) || path === artifactPath) continue;
-      if (!existsAtCommit(input.repoRoot, input.baseCommit, path, runGit)) missing.push(path);
-    }
-    if (missing.length > 0) {
-      blocking.push({
-        severity: "blocking",
-        code: "PATH_MISSING",
-        message: `计划要处理的文件在基线里不存在：${missing.join("、")}。若这些是要新建的文件，请改写成所在目录的通配范围（如 \`dir/**\`）后重新生成计划。`,
-        paths: missing,
-      });
-    }
+    // **一次进程问完所有路径**：`cat-file --batch-check` 按行读入、按行输出，顺序一一对应。
+    // 逐个 spawn 是这条同步路径上最容易被忽略的开销——每个进程 5~10ms，include 一多就是几百毫秒，
+    // 而且全都卡在事件循环上。产物路径一起问，省掉第二次 spawn。
+    const includeFiles = collectConcreteFiles(input.includePaths, artifactPath);
+    const queried = artifactPath ? [...includeFiles, artifactPath] : includeFiles;
+    const batch = existingPaths(input.repoRoot, input.baseCommit, queried, runGit);
+    if (!batch.available) {
+      // 查不出来 ≠ 不存在：宁可只出一句"本次未做路径预检"，也不要凭一次失败的 git 调用
+      // 把每个 Plan 都判成非法。工作区检查照做——它是独立的一次调用。
+      warnings.push({ severity: "warning", code: "INSPECTION_UNAVAILABLE", message: "无法读取 Git 基线内容，本次未做路径预检。", paths: [] });
+    } else {
+      const missing = includeFiles.filter((path) => !batch.existing.has(path));
+      if (missing.length > 0) {
+        blocking.push({
+          severity: "blocking",
+          code: "PATH_MISSING",
+          message: `计划要处理的文件在基线里不存在：${missing.join("、")}。若这些是要新建的文件，请改写成所在目录的通配范围（如 \`dir/**\`）后重新生成计划。`,
+          paths: missing,
+        });
+      }
 
-    if (artifactPath && !existsAtCommit(input.repoRoot, input.baseCommit, artifactPath, runGit)) {
-      warnings.push({ severity: "warning", code: "ARTIFACT_MISSING", message: `产物路径在基线里不存在，Run 会新建它：${artifactPath}`, paths: [artifactPath] });
+      if (artifactPath && !batch.existing.has(artifactPath)) {
+        warnings.push({ severity: "warning", code: "ARTIFACT_MISSING", message: `产物路径在基线里不存在，Run 会新建它：${artifactPath}`, paths: [artifactPath] });
+      }
     }
 
     const planDirectory = resolvePlanDirectory({ projectRoot: input.repoRoot, configured: options.configuredPlanDirectory });
@@ -112,19 +120,47 @@ export function createLocalPlanPreflightInspector(options: { configuredPlanDirec
   };
 }
 
-/** 路径在指定 commit 上是否存在；命令失败一律按"不存在"处理，由上层决定严重度。 */
-function existsAtCommit(repoRoot: string, baseCommit: string, path: string, runGit: SyncGitRunner): boolean {
-  return runGit(["cat-file", "-e", `${baseCommit}:${path}`], repoRoot).exitCode === 0;
+/** 去重后的"具体文件"清单（产物路径单独判、只警告，所以排除在外）。 */
+function collectConcreteFiles(includePaths: readonly string[], artifactPath: string | undefined): string[] {
+  const files = new Set<string>();
+  for (const candidate of includePaths) {
+    const path = normalizeRepoPath(candidate);
+    if (!path || !isConcreteFile(path) || path === artifactPath) continue;
+    files.add(path);
+  }
+  return [...files];
+}
+
+/**
+ * **一次进程**问出哪些路径在 `baseCommit` 上存在。
+ * `git cat-file --batch-check` 按行读入 `<commit>:<path>`、按行输出对应记录（**顺序一一对应**），
+ * 不存在的记录以 ` missing` 结尾。空清单直接返回、不 spawn 进程。
+ *
+ * `available` 是"这次查询本身有没有成功"：命令失败时**不能**把返回值当成"全都不存在"——
+ * 那会让每个 Plan 都被判成非法。调用方据此只出一句"本次未做路径预检"。
+ */
+function existingPaths(repoRoot: string, baseCommit: string, paths: readonly string[], runGit: SyncGitRunner): { available: boolean; existing: Set<string> } {
+  const existing = new Set<string>();
+  if (paths.length === 0) return { available: true, existing };
+  const result = runGit(["cat-file", "--batch-check"], repoRoot, `${paths.map((path) => `${baseCommit}:${path}`).join("\n")}\n`);
+  if (result.exitCode !== 0) return { available: false, existing };
+  const lines = result.stdout.split("\n");
+  paths.forEach((path, index) => {
+    const line = (lines[index] ?? "").trim();
+    if (line && !line.endsWith(" missing")) existing.add(path);
+  });
+  return { available: true, existing };
 }
 
 function isRepository(repoRoot: string, runGit: SyncGitRunner): boolean {
   return runGit(["rev-parse", "--is-inside-work-tree"], repoRoot).exitCode === 0;
 }
 
-/** 与 git/merge-inspector.ts 的 gitCommand 同一形态：非 0 退出码走 exitCode，不 reject。 */
-function defaultSyncGit(args: string[], cwd: string): CommandResult {
+/** 与 git/merge-inspector.ts 的 gitCommand 同一形态：非 0 退出码走 exitCode，不 reject。`input` 供 stdin 用。 */
+function defaultSyncGit(args: string[], cwd: string, input?: string): CommandResult {
   try {
-    return { exitCode: 0, stdout: execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], maxBuffer: 16 * 1024 * 1024 }), stderr: "" };
+    const stdout = execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], maxBuffer: 16 * 1024 * 1024, ...(input === undefined ? {} : { input }) });
+    return { exitCode: 0, stdout, stderr: "" };
   } catch (error) {
     const failure = error as { status?: number | null; stdout?: string; stderr?: string };
     return { exitCode: typeof failure.status === "number" ? failure.status : 1, stdout: failure.stdout ?? "", stderr: failure.stderr ?? String(error) };

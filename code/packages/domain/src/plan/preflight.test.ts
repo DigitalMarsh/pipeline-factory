@@ -13,15 +13,20 @@ import { ProjectService } from "../project/project.js";
 import type { CommandResult } from "../platform/commands.js";
 
 /** 假 git：`objects` 里登记"在 commit 上存在的路径"，`status` 是工作区输出。 */
-function fakeGit(input: { objects?: string[]; status?: string; statusExitCode?: number; isRepo?: boolean } = {}) {
+function fakeGit(input: { objects?: string[]; status?: string; statusExitCode?: number; isRepo?: boolean; batchExitCode?: number } = {}) {
   const objects = new Set(input.objects ?? []);
-  return (args: string[]): CommandResult => {
+  return (args: string[], _cwd?: string, stdin?: string): CommandResult => {
     if (args[0] === "rev-parse") return { exitCode: input.isRepo === false ? 128 : 0, stdout: "", stderr: "" };
     if (args[0] === "status") return { exitCode: input.statusExitCode ?? 0, stdout: input.status ?? "", stderr: "" };
-    if (args[0] === "cat-file") {
-      const spec = args[2] ?? "";
-      const path = spec.slice(spec.indexOf(":") + 1);
-      return { exitCode: objects.has(path) ? 0 : 1, stdout: "", stderr: "" };
+    // 如实模拟 `cat-file --batch-check`：按 stdin 的行、**顺序一一对应**地输出；
+    // 不存在的以 ` missing` 结尾。假的实现与真命令形状不一致，测试就会测到假的东西。
+    if (args[0] === "cat-file" && args[1] === "--batch-check") {
+      if (input.batchExitCode !== undefined && input.batchExitCode !== 0) return { exitCode: input.batchExitCode, stdout: "", stderr: "boom" };
+      const lines = (stdin ?? "").split("\n").filter(Boolean).map((spec) => {
+        const path = spec.slice(spec.indexOf(":") + 1);
+        return objects.has(path) ? `${"a".repeat(40)} blob 1` : `${spec} missing`;
+      });
+      return { exitCode: 0, stdout: lines.length ? `${lines.join("\n")}\n` : "", stderr: "" };
     }
     return { exitCode: 0, stdout: "", stderr: "" };
   };
@@ -90,6 +95,29 @@ describe("Plan 预检的判定边界", () => {
 
     expect(result.blocking).toEqual([]);
     expect(result.warnings.map((issue) => issue.code)).toEqual(["INSPECTION_UNAVAILABLE"]);
+  });
+
+  it("批量查询本身失败时也不阻断 —— 一次失败的 git 调用不该让每个 Plan 都非法", () => {
+    const inspect = createLocalPlanPreflightInspector({ runGit: fakeGit({ batchExitCode: 1 }) });
+    const result = inspect({ ...base, includePaths: ["src/missing.ts"] });
+
+    expect(result.blocking).toEqual([]);
+    expect(result.warnings.map((issue) => issue.code)).toContain("INSPECTION_UNAVAILABLE");
+  });
+
+  it("多个路径**只 spawn 一次** git（回归：曾经每个路径一次进程，全卡在事件循环上）", () => {
+    const calls: string[][] = [];
+    const runGit = (args: string[], _cwd?: string, stdin?: string): CommandResult => {
+      calls.push(args);
+      if (args[0] === "cat-file") {
+        const stdout = (stdin ?? "").split("\n").filter(Boolean).map((spec) => `${spec} missing`).join("\n");
+        return { exitCode: 0, stdout, stderr: "" };
+      }
+      return { exitCode: 0, stdout: "", stderr: "" };
+    };
+    createLocalPlanPreflightInspector({ runGit })({ ...base, includePaths: ["a.ts", "b.ts", "c.ts"], artifactPath: "d.ts" });
+
+    expect(calls.filter((args) => args[0] === "cat-file")).toHaveLength(1);
   });
 });
 

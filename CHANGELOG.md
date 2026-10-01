@@ -1,5 +1,64 @@
 # Changelog
 
+## 2026-10-01（其十三）— 「Confirm Plan 慢」：先量化，再收掉两处潜伏阻塞
+
+### 为什么做
+
+报障是"确认 Plan 要等很久"，并明确是**请求本身慢**（点下去要等），不是"确认后等执行开始"。
+
+按"先量不猜"逐段实测（project4 / 本机现状），结果是**复现不出来**：确认→Run 创建 10–20ms
+（真实时间戳）、Run 创建→执行循环建好 ~60ms、刷新端点 0.6–55ms、Plan 详情 1.6–32ms、
+整页 72ms（21 个请求共 290ms）、预检的 `git status -uall` 0–10ms、`git worktree add` 39ms。
+`domain_events` 已 13.7 万行但索引齐备，`candidate_plans` 只 20 行。
+
+**没有证据就不做性能改动**——那只会改坏现在正常的东西。所以这一轮交付的是两件**由构造证明、
+不依赖复现**的修复，加一件让下次不再靠猜的工具。
+
+### Changed
+
+**1. `wake()` 不再同步跑**别的** Run 的验证**（`run/dispatch-coordinator.ts`）
+
+`confirmAndDispatch` 末尾 `await this.wake()`，而 `wake()` 对**每一个 Run** 调 `syncRun`——其中
+`READY_FOR_VERIFY` 的 Run 会当场执行该项目的验证命令（build/test，**分钟级**），且是 `await` 的。
+于是"确认一个 Plan"会一直等到**另一个 Run 的验证跑完**才返回。改成后台跑
+（`runVerification`，并发仍由 `verifyingRuns` 保证）：状态在分离前已写成 `VERIFYING` 并由 SSE
+推给前端，结果由后台回写。
+
+project4 没登记任何验证命令，所以这条**现在触发不到**——但真实项目里一定会踩到。
+
+**2. 预检从"每个路径一次进程"改成"一次批量查询"**（`plan/preflight.ts`）
+
+原来对每个 include 路径 spawn 一次 `git cat-file -e`（每次 5–10ms，全部卡在事件循环上）；
+现在一次 `git cat-file --batch-check` 问完所有路径（产物路径一并问，省掉第二次 spawn）。
+顺带补一条安全边界：**批量查询本身失败时不阻断**，只出一句"本次未做路径预检"——
+一次失败的 git 调用不该让每个 Plan 都被判成非法。
+
+**3. 慢请求日志**（`apps/api/src/server.ts`）
+
+`onResponse` 钩子：超过 **1 秒**的请求往 `.runtime/api.log` 写一行
+`[slow] METHOD URL <ms> <status>`，排除 SSE（天然长命，会刷屏）。
+这是本轮**最关键**的产出：既然复现不出，就让真实场景自己留下痕迹——
+下次报"慢"时能直接拿到路径与耗时，而不是继续猜。
+
+### 未做（等证据）
+
+- **`performWake()` 的全库线性扫描没有动。** 它 `listDispatchStates()` + `listPlans()`（逐行
+  JSON.parse）+ 遍历所有 Run 调 `syncRun` + 遍历所有 `DISPATCHED` 计划，而 `handleEvent` 对每个
+  非流式事件都触发一次。**这是整条链上唯一会随使用量变慢的环节**（18 个 Run 无感，几百个 Run 时
+  会到秒级），但它落在调度热路径上，且**没有数据证明它就是这次的慢**。列入候补，等日志说话。
+- `PlanService.confirm` 里 `projects.snapshot()` 被取两次，可合并——属清理，不是性能关键。
+- UI 侧"同一批 15+ 请求连发三遍"未动：单个都是毫秒级，且没有证据说它是原因。
+
+### 验证
+
+- `pnpm verify` 全绿：domain **357** / api **111** / web **485**，无新增值级环。
+- 新增/更新用例：`dispatch-coordinator.test.ts` 增一条
+  「**不等待**验证跑完就返回」——把 `verify` 挂在 gate 上，断言 `wake()` 仍然返回且状态是
+  `VERIFYING`（旧实现下它会一直等，测试超时）。原有那条"自动验证 READY_FOR_VERIFY"改成
+  轮询等状态落定，不再靠微任务时序侥幸通过。
+- `plan/preflight.test.ts` 的假 git 改成如实模拟 `cat-file --batch-check`（按 stdin 行、
+  顺序对应、` missing` 结尾），并新增「多路径只 spawn 一次」「批量失败不阻断」两条。
+
 ## 2026-10-01（其十二）— 「结构化计划校验失败」是解析器的误报，不是模型的问题
 
 ### 为什么做
