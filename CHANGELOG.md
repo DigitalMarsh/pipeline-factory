@@ -1,5 +1,81 @@
 # Changelog
 
+## 2026-10-01（其九）— 把「Run 级活动」移出执行会话，并给归因缺口正名
+
+### 为什么做
+
+起因是一句提问："`未关联执行步骤` 是什么意思？"——**用户看不懂自己界面上的一个标题**，这本身就是结论。
+查真实数据（`execution_journal` 表）之后发现两件事：
+
+- 那个桶的日常内容是 `RUN_CREATED`(15) / `HOOK_SKIPPED`(17) / `VERIFICATION`(9) / `USER_GUIDANCE`(2)，
+  它们**结构上永远没有 `taskId`**——讲的是整个 Run，本来就不属于任何一步。这是**常态**。
+- 文案「未关联执行步骤 ← 此处保留旧 Run 或未提供执行步骤标识的事件」却在描述**异常**，
+  而且先说了少数派（老数据）。真正的老数据只有 404 条无 `modelStep` 的 `MODEL_OUTPUT`，
+  **全部集中在 2026-09-18 ~ 09-25，之后再没出现过**。
+
+还有一个更根本的展示问题：桶永远排在时间线最后，但里面的 `Run created` 永远**最早**发生。
+截图里的视线路径是：5 张「尚无结构化进度事件表明此任务已开始」的空卡片 → 才看到实际发生的两件事。
+
+### Changed
+
+**1. 判据改为一行：`kind === "activity" && !taskId`**
+
+- 即「没有归属于任何执行步骤的 Run 级事件」。原先按事件类型列举（RUN_CREATED / HOOK_* / VERIFICATION）
+  的写法每加一种 Run 级事件都要回来补一次，且同样无归属的 `Executor started` / `Execution gate`
+  会被漏在会话里名不副实。
+- 投影层（`utils/executionStream.ts`）**没有改动**——判据只用既有字段。
+
+**2. 时间线不再有 Run 级活动组，改由顶部 RUN CONTEXT 卡片承载**
+
+- `ExecutionHeaderStatus` 新增 `runActivity` prop，在 RUN CONTEXT 弹层（原本只有
+  WORKSPACE / BASE COMMIT / THREAD / STARTED）下方加一节 **RUN ACTIVITY · Run 级活动**：
+  说明改成「Run 的创建、生命周期钩子与验证等事件，属于整个 Run，不归属于任何单个执行步骤。」，
+  下面按时间列出事件。它讲的是「这个 Run 怎么起来的」，与那一格的既有字段同性质。
+- **有 Run 级活动失败时卡片本身变红**（如 `HOOK_FAILED`）——否则失败只藏在弹层里，不点开看不见。
+- 时间线由此收敛为：冻结方案 → 执行步骤 → 你说的话（＋老数据的归因缺口）。
+
+**3. 归因缺口组正名：`unassigned` → `unattributed`**
+
+- 标题「未关联执行步骤」→「**未归属事件**」，说明改成「这些事件没有记录所属的执行步骤，
+  只出现在早期 Run 的数据里。」
+- **说明文案不再需要判断"要不要显示"**：该组现在只在真有归因缺口时才存在，条件显示自然成立。
+- 模板与 CSS 一起改名（`.execution-unassigned-heading` → `.execution-unattributed-heading`），不留死样式。
+
+**4. guidance 独立成组（无组头）**
+
+- 无 `taskId` 的 guidance 自成一格 `.execution-conversation-group-guidance`，**不渲染组头**——
+  条目标题已经是「你补充了要求」，再加一层组头是重复。
+
+### 一处计划外的发现（纠正本轮计划里的假设）
+
+计划里写的是「你自己发的消息现在也被标成"未关联执行步骤"」。**实测不成立**：
+`run-8d0b9489-06d` 第 86 条的 guidance 带上了 `taskId`——投影用「当前模型轮次」给它归了因，
+所以它一直显示在对应的执行步骤组内，时序也是对的。只有**早于任何步骤归因**的 guidance
+（`run-5fd6449b-c0d` 第 5 条，前面只有 RUN_CREATED / HOOK_SKIPPED）才会落进那个桶，
+第 4 条改的正是这一种。规则本身以数据为准，不是以假设为准。
+
+### 未做
+
+- **分组模型仍按「方案 → 步骤顺序」排列，不按时间穿插。** 无 `taskId` 的 guidance 因此仍是
+  独立一组排在末尾，而不是插在它真正发生的位置。修它等于重做分组模型（任务组之间也不是严格时序），
+  属于另一件事；本次只保证它不再被错标。
+
+### 验证
+
+- `pnpm verify` 全绿：domain **309** / api **111** / web **460**，无新增值级环。
+- 新增用例：`ExecutionHeaderStatus.test.ts`（列出 Run 级活动、没有时不渲染这一节、失败时卡片变红）、
+  `RunDetailView.test.ts`（判据是 activity+无 taskId、旧标题与旧说明不再出现、模板与样式两侧同步改名、
+  guidance 独立成组）。
+- 浏览器实测四个 Run（dev 5174）：
+  - `run-88084cfe-12d`（现代 Run）：时间线**不再有** RUN ACTIVITY 组；RUN CONTEXT 弹层出现
+    「Run 级活动 2 条」，列出 `Run created 10:55:40` 与 `Hook skipped start`。
+  - `run-5fd6449b-c0d`：第 5 条的 guidance 渲染为独立一格、无组头，不再挂在旧桶下。
+  - `run-8d0b9489-06d`：带归因的 guidance 仍在任务组内、时序不变（确认第 4 条没有误伤）。
+  - `run-bbf57894-513`（老数据）：`UNATTRIBUTED 未归属事件 1 条` + 新说明正常渲染，
+    另有 7 条 Run 级活动被移到了顶部。
+- **本条补完的改动有一半先随 `bb5a6ce` 落库**（分组类型与判据两处 hunk 被那次提交一起 `git add` 了），
+  当时仓库处于"新判据已生效、模板仍判断旧 kind"的半成品状态；本条把模板、样式、测试一并补齐。
+
 ## 2026-10-01（其八）— 执行对话按步骤折叠；用横线分段取代左侧竖线
 
 ### 为什么做

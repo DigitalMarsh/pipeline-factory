@@ -235,7 +235,7 @@ a { color: inherit; text-decoration: none; }
 .execution-conversation-group { margin-bottom: 14px; }
 /* 步骤分组：**不用左侧竖线**（它把整组内容再往右推 53px，而且说的和"这是一组"是同一件事），
    改成组与组之间一条横线分段——省下横向空间，任务边界反而更醒目。 */
-.execution-conversation-group-task, .execution-conversation-group-unassigned { margin-top: 22px; border-top: 2px solid #d7e0ec; }
+.execution-conversation-group-task, .execution-conversation-group-guidance, .execution-conversation-group-unattributed { margin-top: 22px; border-top: 2px solid #d7e0ec; }
 .execution-conversation-group:first-child { margin-top: 0; border-top: 0; }
 .execution-task-stream-items { padding-top: 2px; }
 /* 步骤头是**可点的折叠开关**，所以它要长得像个控件：整条可点、有 hover/focus、带状态与条数。 */
@@ -254,7 +254,17 @@ a { color: inherit; text-decoration: none; }
 .execution-task-stream-empty { margin: 0; padding: 10px 12px; color: #9aa6b6; font-size: 10px; }
 /* 从状态卡选中的那一步：整条头部高亮，而不是靠左边一根线。 */
 .execution-conversation-group-task.selected > .execution-task-stream-heading { border-color: #bcd2f2; background: #edf3ff; }
-.execution-unassigned-heading { border: 1px dashed #e0e6ee; background: #fcfdff; }
+/* 归因缺口组：虚线边框，与实线的执行步骤头区分开——它不是一个执行步骤。 */
+.execution-unattributed-heading { border: 1px dashed #e0e6ee; background: #fcfdff; }
+/* Run 级活动的列表：与 execution-context-grid 同一种"格子"语言，但一行一条事件，可滚动。 */
+.run-activity-block { display: grid; gap: 8px; }
+.run-activity-count { color: #9aa6b6; font-size: 10px; }
+.run-activity-list { display: grid; gap: 1px; max-height: 190px; overflow-y: auto; margin: 0; padding: 0; border: 1px solid #e5ebf2; border-radius: 6px; background: #e5ebf2; list-style: none; }
+.run-activity-item { display: grid; grid-template-columns: 62px minmax(0, 1fr); align-items: baseline; gap: 4px 10px; padding: 8px 12px; background: #fff; }
+.run-activity-time { color: #9aa6b6; font: 10px ui-monospace, monospace; }
+.run-activity-item strong { min-width: 0; color: #3d4d65; font-size: 11px; }
+.run-activity-item small { grid-column: 2; color: #8b98a9; font-size: 10px; }
+.run-activity-item.tone-failed strong { color: #b34e57; }
 .execution-message.failed .execution-message-meta strong { color: #c65863; }
 .execution-message-plan { align-items: flex-start; }
 .execution-message-plan .execution-message-avatar { background: #eaf1ff; color: #4b7df0; }

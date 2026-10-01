@@ -2,6 +2,7 @@
 import { createApp, defineComponent, h, nextTick } from "vue";
 import { describe, expect, it } from "vitest";
 import type { AgentLoop, ExecutionTask, Run } from "../types";
+import type { ExecutionStreamItem } from "../utils/executionStream";
 import ExecutionHeaderStatus from "./ExecutionHeaderStatus.vue";
 
 const run: Run = {
@@ -65,7 +66,7 @@ const ElTagStub = defineComponent({
   },
 });
 
-function mountStatus(status = run.status) {
+function mountStatus(status = run.status, runActivity: ExecutionStreamItem[] = []) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const emitted: Array<{ event: string; payload?: unknown }> = [];
@@ -78,6 +79,7 @@ function mountStatus(status = run.status) {
         telemetryNow: Date.now(),
         tasks: [task],
         taskCounts: { completed: 1, total: 1, blocked: 0, active: 0 },
+        runActivity,
         selectedTaskId: null,
         executorLoop: loop,
         executorSteps: [],
@@ -104,6 +106,21 @@ function trigger(host: HTMLElement, card: string): HTMLButtonElement {
   return host.querySelector<HTMLButtonElement>(`[data-status-card="${card}"]`)!;
 }
 
+function runActivityItem(overrides: Partial<ExecutionStreamItem> = {}): ExecutionStreamItem {
+  return {
+    id: "execution-activity-1",
+    kind: "activity",
+    role: "system",
+    title: "Run created",
+    content: "",
+    detail: "Plan plan-1 · Revision 2",
+    status: "INFO",
+    occurredAt: "2026-10-01T02:55:40.000Z",
+    sequence: 1,
+    ...overrides,
+  };
+}
+
 describe("ExecutionHeaderStatus", () => {
   it("renders six compact status cards and starts closed", () => {
     const mounted = mountStatus();
@@ -113,6 +130,49 @@ describe("ExecutionHeaderStatus", () => {
     expect(mounted.host.textContent).toContain("当前状态无需操作");
     expect(trigger(mounted.host, "review").getAttribute("aria-expanded")).toBe("false");
     expect(mounted.host.querySelector("#execution-header-review-details")).toBeNull();
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  it("列出 Run 级活动：只在 RUN CONTEXT 弹层里，且没有时不渲染这一节", async () => {
+    const mounted = mountStatus("MERGED", [
+      runActivityItem(),
+      runActivityItem({ id: "execution-activity-2", title: "Hook skipped", detail: "start", sequence: 2 }),
+    ]);
+
+    // 弹层没打开时这一节不该占位置——它此前是执行会话里一个常显的分组。
+    expect(mounted.host.textContent).not.toContain("Run 级活动");
+
+    trigger(mounted.host, "context").click();
+    await nextTick();
+    expect(mounted.host.textContent).toContain("Run 级活动");
+    expect(mounted.host.textContent).toContain("属于整个 Run，不归属于任何单个执行步骤");
+    expect(mounted.host.querySelectorAll(".run-activity-item")).toHaveLength(2);
+    expect(mounted.host.textContent).toContain("Run created");
+    expect(mounted.host.textContent).toContain("Hook skipped");
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  it("没有 Run 级活动时连空状态都不渲染", async () => {
+    const mounted = mountStatus();
+
+    trigger(mounted.host, "context").click();
+    await nextTick();
+    expect(mounted.host.querySelectorAll(".run-activity-item")).toHaveLength(0);
+    expect(mounted.host.textContent).not.toContain("Run 级活动");
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  it("有 Run 级活动失败时卡片本身变红，而不是只藏在弹层里", async () => {
+    const mounted = mountStatus("MERGED", [runActivityItem({ title: "Hook failed", status: "FAILED" })]);
+
+    expect(trigger(mounted.host, "context").querySelector(".execution-header-status-card")?.className).toContain("blocked");
+    expect(mounted.host.textContent).toContain("有 Run 级活动失败");
 
     mounted.app.unmount();
     mounted.host.remove();

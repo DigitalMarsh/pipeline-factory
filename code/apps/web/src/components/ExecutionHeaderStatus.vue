@@ -2,6 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { Check, CircleCheck, InfoFilled, VideoPause, VideoPlay, Warning } from "@element-plus/icons-vue";
 import type { AgentLoop, AgentLoopStep, ExecutionTask, ExecutionTelemetry, MergeRequest, Run, VerificationRun } from "../types";
+import type { ExecutionStreamItem } from "../utils/executionStream";
 import { formatExecutionDuration, formatTokenSummary, telemetryModel, telemetryReasoning, usageDetailRows } from "../utils/executionTelemetry";
 import { executionTaskStatusLabel, executionTaskStatusType, verificationSummary } from "../utils/executionTasks";
 import { canPauseRun, canTerminateRun, hasRunControlActions } from "../utils/runControls";
@@ -17,6 +18,10 @@ const props = defineProps<{
   telemetryNow: number;
   tasks: ExecutionTask[];
   taskCounts: { completed: number; total: number; blocked: number; active: number; unknown?: number };
+  /** 没有归属于任何执行步骤的 Run 级事件（Run 创建、生命周期钩子、验证、门禁等）。
+   *  它们原先混在执行会话末尾的一个「未关联执行步骤」分组里，读起来像报错，且时序颠倒
+   *  （Run created 永远最早发生、却永远排在最后）。改由 RUN CONTEXT 卡片承载。 */
+  runActivity: ExecutionStreamItem[];
   selectedTaskId: string | null;
   executorLoop: AgentLoop | null;
   executorSteps: AgentLoopStep[];
@@ -71,6 +76,8 @@ const progressOpen = computed({ get: () => isOpen("progress"), set: (visible: bo
 const loopOpen = computed({ get: () => isOpen("loop"), set: (visible: boolean) => setCardVisibility("loop", visible) });
 const controlsOpen = computed({ get: () => isOpen("controls"), set: (visible: boolean) => setCardVisibility("controls", visible) });
 const reviewOpen = computed({ get: () => isOpen("review"), set: (visible: boolean) => setCardVisibility("review", visible) });
+/** 有 Run 级活动失败（如 HOOK_FAILED）时卡片要变色——否则失败只藏在弹层里，不点开就看不见。 */
+const runActivityFailed = computed(() => props.runActivity.some((item) => item.status === "FAILED"));
 const loopTone = computed(() => {
   if (!props.executorLoop) return "neutral";
   if (["FAILED", "BLOCKED", "RECOVERING", "NEEDS_RECONCILIATION", "CANCELLED"].includes(props.executorLoop.state)) return "danger";
@@ -121,10 +128,10 @@ watch(() => props.run.id, () => {
       <el-popover v-model:visible="contextOpen" placement="bottom-start" :width="560" trigger="click" popper-class="execution-header-status-popper" :teleported="true">
         <template #reference>
           <button class="execution-header-status-trigger" data-status-card="context" type="button" aria-label="查看 Run context 详情" aria-controls="execution-header-context-details" :aria-expanded="isOpen('context')" @keydown.enter.prevent="toggleCard('context')" @keydown.space.prevent="toggleCard('context')">
-            <span class="execution-header-status-card">
+            <span :class="['execution-header-status-card', { blocked: runActivityFailed }]">
               <span class="header-status-card-label">RUN CONTEXT</span>
               <strong class="header-status-card-value">Revision {{ run.planRevision }}</strong>
-              <small class="header-status-card-meta">{{ run.branch }}</small>
+              <small class="header-status-card-meta">{{ runActivityFailed ? "有 Run 级活动失败" : run.branch }}</small>
             </span>
           </button>
         </template>
@@ -135,6 +142,17 @@ watch(() => props.run.id, () => {
             <div><span>BASE COMMIT</span><code>{{ run.baseCommit }}</code></div>
             <div><span>THREAD</span><code>{{ run.executionThreadId }}</code></div>
             <div><span>STARTED</span><strong>{{ formatStartedAt(run.startedAt) }}</strong></div>
+          </div>
+          <div v-if="runActivity.length" class="run-activity-block">
+            <div class="evidence-heading"><div><span class="eyebrow">RUN ACTIVITY</span><strong>Run 级活动</strong></div><span class="run-activity-count">{{ runActivity.length }} 条</span></div>
+            <p class="execution-header-status-description">Run 的创建、生命周期钩子与验证等事件，属于整个 Run，不归属于任何单个执行步骤。</p>
+            <ol class="run-activity-list">
+              <li v-for="item in runActivity" :key="item.id" :class="['run-activity-item', `tone-${item.status.toLowerCase()}`]">
+                <span class="run-activity-time">{{ new Date(item.occurredAt).toLocaleTimeString("zh-CN") }}</span>
+                <strong>{{ item.title }}</strong>
+                <small v-if="item.detail">{{ item.detail }}</small>
+              </li>
+            </ol>
           </div>
           <div class="execution-header-detail-footer"><span>Plan {{ run.planId }} · Revision {{ run.planRevision }}</span><el-button size="small" @click="openPlan">View plan</el-button></div>
         </section>

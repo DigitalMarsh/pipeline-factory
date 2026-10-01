@@ -142,4 +142,25 @@ describe("Run detail execution conversation", () => {
     expect(runDetailSource).not.toContain("Add guidance");
     expect(runDetailSource).not.toContain("Guidance is read-only");
   });
+
+  it("把 Run 级活动移出执行会话：时间线只留执行步骤与你说的话", () => {
+    // 判据是 "activity 且无 taskId"——不再按事件类型列举，否则每加一种 Run 级事件都要回来补。
+    expect(runDetailSource).toContain("function isRunActivity(item: ExecutionStreamItem): boolean {");
+    expect(runDetailSource).toContain('return item.kind === "activity" && !item.taskId;');
+    // 它们改由顶部 RUN CONTEXT 卡片承载。
+    expect(runDetailSource).toContain(':run-activity="runActivityItems"');
+    // 旧标题与旧说明不再出现：它们把一个常态（Run 的创建 / 钩子 / 验证）写成了异常。
+    // 断言的是标题元素本身，不是这四个字——注释里仍会引用旧名说明改了什么。
+    expect(runDetailSource).not.toContain("<strong>未关联执行步骤</strong>");
+    expect(runDetailSource).not.toContain("此处保留旧 Run 或未提供执行步骤标识的事件。");
+    // 归因缺口组换名，模板与样式两侧一起改，不留死样式。
+    expect(runDetailSource).toContain("group.kind === 'unattributed'");
+    expect(runDetailSource).toContain("未归属事件");
+    expect(runDetailStyles).toContain(".execution-unattributed-heading");
+    expect(runDetailStyles).not.toContain(".execution-unassigned-heading");
+    // 你在执行线程里发的消息独立成组：此前它挂在「未关联执行步骤」下面，
+    // 等于把用户自己说的话标成了"没有归属的执行步骤"。
+    expect(runDetailSource).toContain('groups.push({ id: "guidance", kind: "guidance", items: guidance })');
+    expect(runDetailStyles).toContain(".execution-conversation-group-guidance");
+  });
 });

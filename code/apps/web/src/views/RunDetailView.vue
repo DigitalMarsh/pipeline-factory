@@ -517,6 +517,7 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
           :telemetry-now="telemetryNow"
           :tasks="executionTasks"
           :task-counts="executionTaskCounts"
+          :run-activity="runActivityItems"
           :selected-task-id="selectedTaskId"
           :executor-loop="executorLoop"
           :executor-steps="executorSteps"
@@ -551,8 +552,8 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
               <ArrowUp v-if="!isTaskGroupCollapsed(group.id)" :size="14" /><ArrowDown v-else :size="14" />
               <small v-if="group.task.blockedReason">{{ group.task.blockedReason }}</small>
             </button>
-            <button v-else-if="group.kind === 'unassigned'" type="button" class="execution-task-stream-heading execution-unassigned-heading" :aria-expanded="!isTaskGroupCollapsed(group.id)" :aria-controls="`execution-task-stream-${group.id}`" @click="toggleTaskGroup(group.id)">
-              <span class="execution-task-stream-step">RUN ACTIVITY</span><strong>未关联执行步骤</strong><span class="execution-task-stream-count">{{ group.items.length }} 条</span><ArrowUp v-if="!isTaskGroupCollapsed(group.id)" :size="14" /><ArrowDown v-else :size="14" /><small>此处保留旧 Run 或未提供执行步骤标识的事件。</small>
+            <button v-else-if="group.kind === 'unattributed'" type="button" class="execution-task-stream-heading execution-unattributed-heading" :aria-expanded="!isTaskGroupCollapsed(group.id)" :aria-controls="`execution-task-stream-${group.id}`" @click="toggleTaskGroup(group.id)">
+              <span class="execution-task-stream-step">UNATTRIBUTED</span><strong>未归属事件</strong><span class="execution-task-stream-count">{{ group.items.length }} 条</span><ArrowUp v-if="!isTaskGroupCollapsed(group.id)" :size="14" /><ArrowDown v-else :size="14" /><small>这些事件没有记录所属的执行步骤，只出现在早期 Run 的数据里。</small>
             </button>
             <div v-if="!isTaskGroupCollapsed(group.id)" :id="`execution-task-stream-${group.id}`" class="execution-task-stream-items">
             <p v-if="group.task && !group.items.length" class="execution-task-stream-empty">{{ taskGroupEmptyNote(group.task) }}</p>
