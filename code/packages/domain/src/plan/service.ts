@@ -341,6 +341,36 @@ export class PlanService {
     return saved;
   }
 
+  /**
+   * 设置这个 Plan 按 tag 选出的验证子集（`verification.suites`）。
+   *
+   * 为什么需要它：suites 目前只能由 Explorer 产出，想调整就得让模型重新出一版方案。这里给一个人工
+   * 入口——**仍然只让模型/人选 tag，命令 ID 由 Factory 解析**，与生成路径共用同一套规则
+   * （`resolvePlanContractV2` → `selectVerificationCommands`）。
+   *
+   * 传空数组表示"不按 tag 选子集、回到项目默认全集"（不是"什么都不跑"）。
+   * 会**重新解析** resolvedContract（用当前 Project 配置与原有 Git 基线），这样：
+   *   1) 命令 ID 跟着 tag 变；2) 候选方案与当前配置版本对齐，Confirm 时的过期校验才不会误报。
+   */
+  setVerificationSuites(planId: string, suites: string[], actorId: string): CandidatePlan {
+    let plan = this.get(planId);
+    if (!["DRAFT", "DESIGNED", "PLANNED"].includes(plan.status)) throw new Error(`Plan ${planId} verification suites cannot change from ${plan.status}`);
+    if (!plan.generatedSpec || !plan.resolvedContract) throw new Error(`Plan ${planId} has no V2 contract to re-resolve; regenerate it from Explorer`);
+    const normalized = [...new Set(suites.map((suite) => suite.trim()).filter(Boolean))];
+    const project = this.store.getProject(plan.projectId);
+    if (!project) throw new Error(`Project ${plan.projectId} not found`);
+    const snapshot = this.projects.snapshot(project.id);
+    const baseline = { baseBranch: plan.resolvedContract.repository.baseBranch, baseCommit: plan.resolvedContract.repository.baseCommit };
+    // 声明了 suites 就等于要求"跑项目验证"，所以把 mode 明确成 PROJECT_DEFAULT；项目没有默认命令时
+    // 解析结果会是 NONE，那种情况下这个请求没有意义，明确拒绝而不是当成功。
+    const generatedSpec: GeneratedPlanSpecV2 = { ...plan.generatedSpec, verification: { mode: "PROJECT_DEFAULT", ...(normalized.length ? { suites: normalized } : {}) } };
+    const resolvedContract = resolvePlanContractV2(generatedSpec, snapshot, baseline);
+    if (resolvedContract.verification.mode === "NONE") throw new Error("Project has no default verification commands; verification suites cannot be selected");
+    plan = this.store.updatePlan({ ...plan, generatedSpec, resolvedContract, contract: executionContractFromResolvedV2(resolvedContract) });
+    this.store.appendEvent({ type: "plan.verification.suites.updated", aggregateId: planId, payload: { actorId, suites: normalized, commandIds: resolvedContract.verification.commandIds } });
+    return plan;
+  }
+
   /** 丢弃仍处于 DRAFT 的候选计划；记录审计事件且不生成后续执行事实。 */
   discard(planId: string, actorId: string): CandidatePlan {
     const plan = this.get(planId);

@@ -34,6 +34,19 @@ export type ProjectSettings = {
   concurrency: {
     /** 同一 Project 同时可跑的 Run 上限（占执行槽位的状态见 EXECUTION_SLOT_RUN_STATUSES）；由 dispatcher 在派发前判定。 */
     maxParallelRuns: number;
+    /**
+     * 冲突判定看哪一层：
+     *   `declared`（默认）—— 只看模型声明的 `conflicts` 语义键取交集，与引入本字段之前逐字相同；
+     *   `overlap` —— **另外**按两个 Plan 的 `scope.includePaths` 是否重叠来判（相等或一个是另一个的父路径）。
+     *
+     * 为什么默认不开 `overlap`：它更保守（同目录下不相关的改动也会串行），而"模型声明的键是否可靠"
+     * 取决于这个项目的探索质量。由项目自己选，且**随快照冻结**，所以历史 Run 的判定依据可审。
+     * 注意 `include: ["."]` 这类笼统范围在 overlap 下会与一切冲突——那正是它该有的语义。
+     *
+     * **可选**：本字段之前落库的 Project 没有它，读路径一律按"缺省 = declared"处理（见 evaluateWait），
+     * 不为了一个新开关去改写用户已有的配置行。
+     */
+    conflictScope?: "declared" | "overlap" | undefined;
     defaultTimeoutMs: number;
     executionTimeoutMs: number;
     /** @deprecated Explorer and Executor use model.loop.maxSteps. Retained for persisted-config compatibility. */
@@ -173,6 +186,8 @@ export const EXECUTION_SLOT_RUN_STATUSES: ReadonlySet<RunStatus> = new Set<RunSt
 export const DEFAULT_PROJECT_SETTINGS: ProjectSettings = {
   concurrency: {
     maxParallelRuns: 2,
+    // 默认与引入 conflictScope 之前的行为完全一致：只看模型声明的冲突键。
+    conflictScope: "declared",
     defaultTimeoutMs: 120_000,
     executionTimeoutMs: 1_800_000,
     maxAutoContinuationTurns: 4,
@@ -231,6 +246,7 @@ function validateRoleBackend(model: ModelRoleConfig, role: "explorer" | "executo
 
 function validateProjectSettings(settings: ProjectSettings, catalog?: ModelBackendCatalog | undefined): void {
   assertFiniteInteger(settings.concurrency.maxParallelRuns, "concurrency.maxParallelRuns", 1);
+  if (settings.concurrency.conflictScope !== undefined && settings.concurrency.conflictScope !== "declared" && settings.concurrency.conflictScope !== "overlap") throw new Error("concurrency.conflictScope must be declared or overlap");
   assertFiniteInteger(settings.concurrency.defaultTimeoutMs, "concurrency.defaultTimeoutMs", 1);
   assertFiniteInteger(settings.concurrency.executionTimeoutMs, "concurrency.executionTimeoutMs", 1);
   assertFiniteInteger(settings.concurrency.maxAutoContinuationTurns, "concurrency.maxAutoContinuationTurns", 0);

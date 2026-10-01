@@ -31,6 +31,14 @@ function schedulerFor(store: domain.PipelineStore): Scheduler {
   });
 }
 
+/** 造一个带指定 include 范围的已确认 Plan（范围要在 confirm 之前写进去，Confirm 会冻结它）。 */
+function createScopedPlan(store: domain.PipelineStore, plans: PlanService, projectId: string, title: string, include: string[]): domain.CandidatePlan {
+  const plan = plans.createCandidatePlan({ projectId, sourceExplorerThreadId: "thread-1", title });
+  store.updatePlan({ ...plan, contract: { ...plan.contract, include } });
+  plans.confirm(plan.id, "user-1");
+  return plans.get(plan.id);
+}
+
 function createPlan(store: domain.PipelineStore, plans: PlanService, title: string, dependsOnPlanIds: string[] = []): domain.CandidatePlan {
   const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title });
   if (dependsOnPlanIds.length) store.updatePlan({ ...plan, contract: { ...plan.contract, dependsOnPlanIds } });
@@ -127,6 +135,48 @@ describe("PlanDispatchCoordinator", () => {
 
   // 容量闸门本轮**重新接通**（此前 PlanDispatchCoordinator 声明了 WAITING_*_CAPACITY 却从不判定，
   // 前端也一直在渲染这两个状态）。这两条用例原先断言"不设上限"，现在断言上限生效。
+  // 冲突判定分两层：模型声明的语义键（一直生效）与 scope 重叠（`conflictScope: "overlap"` 才参与）。
+  // 默认必须是 `declared`——否则升级后同目录下不相关的 Plan 会突然开始互相排队。
+  it("keeps conflict detection on declared keys unless the Project opts into scope overlap", async () => {
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    // 两个 Project 用同一组重叠范围，唯一区别是 conflictScope。
+    const declared = projects.create({ id: "project-declared", name: "Declared", repoRoot: "/repo/declared", defaultBranch: "main", worktreeRoot: "/tmp/declared-worktrees", settings: { commands: [{ commandId: "project.test", argv: ["true"] }, { commandId: "project.typecheck", argv: ["true"] }] } });
+    const overlap = projects.create({ id: "project-overlap", name: "Overlap", repoRoot: "/repo/overlap", defaultBranch: "main", worktreeRoot: "/tmp/overlap-worktrees", settings: { concurrency: { conflictScope: "overlap" }, commands: [{ commandId: "project.test", argv: ["true"] }, { commandId: "project.typecheck", argv: ["true"] }] } });
+    const plans = new PlanService(store, projects);
+    const declaredFirst = createScopedPlan(store, plans, declared.id, "Declared first", ["code/apps/web/src"]);
+    const declaredSecond = createScopedPlan(store, plans, declared.id, "Declared second", ["code/apps/web/src/checkout"]);
+    const overlapFirst = createScopedPlan(store, plans, overlap.id, "Overlap first", ["code/apps/web/src"]);
+    const overlapSecond = createScopedPlan(store, plans, overlap.id, "Overlap second", ["code/apps/web/src/checkout"]);
+    const coordinator = new coordinatorModule.PlanDispatchCoordinator({ store, plans, scheduler: schedulerFor(store) });
+
+    // 默认（declared）：父子范围重叠也不算冲突，两个都跑 —— 与引入该开关之前一致。
+    await dispatch(coordinator, plans, declaredFirst.id);
+    expect((await dispatch(coordinator, plans, declaredSecond.id)).state).toMatchObject({ status: "RUNNING", waitReason: null });
+
+    // overlap：父范围覆盖子范围 → 第二个排队，并说明是哪一个范围重叠。
+    await dispatch(coordinator, plans, overlapFirst.id);
+    const waiting = await dispatch(coordinator, plans, overlapSecond.id);
+    expect(waiting.state).toMatchObject({ status: "WAITING", waitReason: "WAITING_CONFLICT" });
+    // 等待原因里带上是哪一片范围重叠，排障时不用去猜。
+    expect(waiting.state.lastError).toContain("overlapping scope code/apps/web/src");
+    expect(store.listRuns().filter((run) => run.projectId === overlap.id)).toHaveLength(1);
+  });
+
+  it("does not treat disjoint scopes as a conflict even when overlap detection is on", async () => {
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    const project = projects.create({ id: "project-disjoint", name: "Disjoint", repoRoot: "/repo/disjoint", defaultBranch: "main", worktreeRoot: "/tmp/disjoint-worktrees", settings: { concurrency: { conflictScope: "overlap" }, commands: [{ commandId: "project.test", argv: ["true"] }, { commandId: "project.typecheck", argv: ["true"] }] } });
+    const plans = new PlanService(store, projects);
+    const docs = createScopedPlan(store, plans, project.id, "Docs plan", ["docs/guide.md"]);
+    const web = createScopedPlan(store, plans, project.id, "Web plan", ["code/apps/web/**"]);
+    const coordinator = new coordinatorModule.PlanDispatchCoordinator({ store, plans, scheduler: schedulerFor(store) });
+
+    await dispatch(coordinator, plans, docs.id);
+    expect((await dispatch(coordinator, plans, web.id)).state).toMatchObject({ status: "RUNNING", waitReason: null });
+    expect(store.listRuns()).toHaveLength(2);
+  });
+
   it("waits for a free global execution slot instead of exceeding the cap", async () => {
     const store = new InMemoryPipelineStore();
     const plans = new PlanService(store);

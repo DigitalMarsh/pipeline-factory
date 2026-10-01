@@ -184,8 +184,12 @@ describe("Explorer requirement list and shared drawer", () => {
   it("preserves confirm and enqueue order while opening the task tab", () => {
     // P7-10：写操作的正向守卫跟随 composable，视图这一侧锁住"组合根把六个动作
     // 接回来"；模板里的 task drawer 与对话产物文案仍由视图锁住。
-    expect(planLifecycleActionsComposableSource).toContain("async function confirmPlan()");
+    expect(planLifecycleActionsComposableSource).toContain("async function confirmPlan(plan: Plan | null = deps.candidate.value)");
     expect(planLifecycleActionsComposableSource).toContain("api.confirmPlan(");
+    // 抽屉里的 "Confirm V2" 必须确认**它显示的那一版**：已确认 Plan 上挂修订草稿时
+    // `candidate` 是 null，回落到 candidate 会让按钮静默失效。
+    expect(explorerViewSource).toContain("@confirm=\"confirmPlan(detailPlan)\"");
+    expect(explorerViewSource).toContain("@discard=\"discardPlan(detailPlan)\"");
     expect(planLifecycleActionsComposableSource).toContain("async function enqueuePlan(");
     expect(planLifecycleActionsComposableSource).toContain("api.enqueuePlan(id)");
     expect(planLifecycleActionsComposableSource).toContain("if (isConversationArtifactPlan(plan))");
@@ -193,7 +197,7 @@ describe("Explorer requirement list and shared drawer", () => {
     expect(planLifecycleActionsComposableSource).toContain("async function startPlanRun(plan: Plan): Promise<void>");
     expect(planLifecycleActionsComposableSource).toContain("async function revisePlanConfiguration(plan: Plan): Promise<void>");
     expect(planLifecycleActionsComposableSource).toContain("function handlePlanCenterConfigurationRevised(): void");
-    expect(planLifecycleActionsComposableSource).toContain("async function discardPlan()");
+    expect(planLifecycleActionsComposableSource).toContain("async function discardPlan(plan: Plan | null = deps.candidate.value)");
     expect(explorerViewSource).toContain("const { confirmPlan, enqueuePlan, startPlanRun, revisePlanConfiguration, handlePlanCenterConfigurationRevised, discardPlan } = usePlanLifecycleActions(");
     expect(explorerViewSource).toContain('drawerTab.value = "task"');
     expect(explorerViewSource).toContain("taskPanelPlan.status === 'READY' && isConversationArtifactPlan(taskPanelPlan)");

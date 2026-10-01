@@ -168,6 +168,29 @@ describe("confirmPlan", () => {
     expect(ElMessage.info).toHaveBeenCalledWith("Default branch changed. Rebase the revision draft before confirmation.");
   });
 
+  it("候选为空（已确认 Plan 上挂着草稿）时，抽屉传入的那一版仍然确认草稿", async () => {
+    const s = setup({ candidate: null, revisionDraft: draft() });
+    // 抽屉里显示的是草稿投影出来的 V2：id 与 revision 都来自 draft。
+    const shown = plan("plan-1", { revision: 2 });
+    vi.mocked(api.confirmRevisionDraft).mockResolvedValue({ plan: plan("plan-1", { revision: 2, status: "READY" }), confirmation: { stage: "FROZEN", attempt: 1, retryable: false } });
+
+    await s.confirmPlan(shown);
+
+    expect(api.confirmRevisionDraft).toHaveBeenCalledWith("plan-1", "draft-1");
+    expect(api.confirmPlan).not.toHaveBeenCalled();
+    expect(s.detailPlan.value?.revision).toBe(2);
+  });
+
+  it("候选为空且调用方没给目标时不发任何请求", async () => {
+    const s = setup({ candidate: null });
+
+    await s.confirmPlan();
+
+    expect(api.confirmPlan).not.toHaveBeenCalled();
+    expect(api.confirmRevisionDraft).not.toHaveBeenCalled();
+    expect(s.busy.value).toBe(false);
+  });
+
   it("服务端确认停在 DRAFT 时写入错误并保持忙碌状态已释放", async () => {
     const s = setup();
     vi.mocked(api.confirmPlan).mockResolvedValue({ plan: plan("plan-1", { status: "DRAFT" }), run: null, dispatch: { lastError: "missing verify" } as never, confirmation: { stage: "VALIDATION_FAILED", attempt: 1, retryable: true } });
@@ -274,6 +297,16 @@ describe("discardPlan", () => {
     vi.mocked(api.discardRevisionDraft).mockResolvedValue({ draft: draft({ status: "DISCARDED" }) });
 
     await s.discardPlan();
+
+    expect(api.discardRevisionDraft).toHaveBeenCalledWith("plan-1", "draft-1");
+    expect(api.discardPlan).not.toHaveBeenCalled();
+  });
+
+  it("候选为空时，丢弃抽屉传入的那一版草稿仍然走 discardRevisionDraft", async () => {
+    const s = setup({ candidate: null, revisionDraft: draft() });
+    vi.mocked(api.discardRevisionDraft).mockResolvedValue({ draft: draft({ status: "DISCARDED" }) });
+
+    await s.discardPlan(plan("plan-1", { revision: 2 }));
 
     expect(api.discardRevisionDraft).toHaveBeenCalledWith("plan-1", "draft-1");
     expect(api.discardPlan).not.toHaveBeenCalled();

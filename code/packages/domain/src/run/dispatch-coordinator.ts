@@ -92,6 +92,23 @@ export type PlanDispatchCoordinatorOptions = {
   verify?: (run: Run, revision: PlanRevisionV2) => Promise<VerificationRun>;
 };
 
+/**
+ * 把一个 scope 条目归一到"它覆盖的目录/文件"：去掉 glob 尾巴与尾部斜杠。
+ * `code/apps/web/**` 与 `code/apps/web` 因此被视为同一片范围。
+ */
+function scopeRoot(path: string): string {
+  const normalized = path.trim().replaceAll("\\", "/");
+  const globIndex = normalized.search(/[*?[]/);
+  const withoutGlob = globIndex === -1 ? normalized : normalized.slice(0, globIndex);
+  return withoutGlob.replace(/\/+$/, "");
+}
+
+/** 两个 scope 是否重叠：相等，或一个是另一个的父路径（**按路径段**比较，不是字符串前缀）。 */
+function pathsOverlap(left: string, right: string): boolean {
+  if (left === right) return true;
+  return left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
+}
+
 type WaitEvaluation = {
   reason: PlanDispatchWaitReason;
   message: string;
@@ -385,15 +402,26 @@ export class PlanDispatchCoordinator {
       return { reason: "WAITING_PROJECT_CAPACITY", message: `Waiting for a free slot in this Project (${projectActive}/${projectLimit} in use)` };
     }
 
+    // 冲突判定：模型声明的语义键永远参与；`conflictScope: "overlap"` 的项目**另外**看 scope 是否重叠。
     const conflictKeys = new Set(revision.contract.conflictKeys);
-    if (conflictKeys.size > 0) {
-      const conflictingRun = otherActiveRuns.find((run) => {
-        if (run.planId === plan.id) return false;
-        const runRevision = this.options.store.getRevision(run.planId, run.planRevision);
-        return Boolean(runRevision?.contract.conflictKeys.some((key) => conflictKeys.has(key)));
-      });
-      if (conflictingRun) return { reason: "WAITING_CONFLICT", message: `Waiting for conflicting Run ${conflictingRun.id}` };
+    const scopeRoots = revision.contract.include.map(scopeRoot).filter(Boolean);
+    const conflictScope = snapshot?.settings.concurrency.conflictScope ?? "declared";
+    let conflict: { run: Run; detail: string } | undefined;
+    for (const run of otherActiveRuns) {
+      if (run.planId === plan.id) continue;
+      const runRevision = this.options.store.getRevision(run.planId, run.planRevision);
+      if (!runRevision) continue;
+      const sharedKey = runRevision.contract.conflictKeys.find((key) => conflictKeys.has(key));
+      if (sharedKey) { conflict = { run, detail: `conflict key ${sharedKey}` }; break; }
+      if (conflictScope !== "overlap") continue;
+      // **scope 只在本 Project 内比较**：include 是项目相对路径，两个项目里都叫 `src/index.ts`
+      // 不代表它们碰同一份文件。声明的冲突键没有这个限制（那是全局语义键，跨项目同名仍算冲突）。
+      if (run.projectId !== plan.projectId) continue;
+      const otherRoots = runRevision.contract.include.map(scopeRoot).filter(Boolean);
+      const sharedPath = scopeRoots.find((scope) => otherRoots.some((other) => pathsOverlap(scope, other)));
+      if (sharedPath) { conflict = { run, detail: `overlapping scope ${sharedPath}` }; break; }
     }
+    if (conflict) return { reason: "WAITING_CONFLICT", message: `Waiting for conflicting Run ${conflict.run.id} (${conflict.detail})` };
 
     return undefined;
   }

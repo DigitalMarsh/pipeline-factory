@@ -157,6 +157,7 @@ v4 的 `POST /api/v4/projects/:projectId/explorer-thread/turns` 会立即返回 
 GET      /api/v4/plans/:planId                 # 详情
 POST     /api/v4/plans/:planId/{confirm,discard,enqueue,run}
 PUT      /api/v4/plans/:planId/dependencies     # 前置 Plan（Factory-owned：模型不能填，只能由人挑）
+PUT      /api/v4/plans/:planId/verification-suites # 按 tag 重挑验证子集（同样只让人挑 tag）
 GET      /api/v4/runs/:runId                  # 详情
 POST     /api/v4/runs/:runId/{cancel,pause,resume,guidance,verify}
 GET      /api/v4/merge-requests/:mergeRequestId # 查询
@@ -181,6 +182,11 @@ GET      /api/v4/execution-threads/:threadId
   是重试/续跑，也不与自己抢名额。**这是 2026-09-29 恢复的行为**：在此之前这两级上限声明了却从不判定，
   确认即并发跑；现在会按配置排队，Plan Center 显示等待原因。
 - **冲突**：`conflicts`（模型声明的语义键）与在跑 Run 取交集，命中则停在 `WAITING_CONFLICT`。
+  Project 可以选择 `concurrency.conflictScope: "overlap"`（默认 `"declared"`）：开启后**另外**比较两个
+  Plan 的 `scope.includePaths` 是否重叠（相等或一个是另一个的父路径），且**只在同一 Project 内比较**
+  ——include 是项目相对路径，两个项目里同名的 `src/index.ts` 不代表碰同一份文件。更保守（同目录下不相关的
+  改动也会串行），所以默认关闭；`include: ["."]` 这类笼统范围在 overlap 下会与一切冲突，那是它该有的语义。
+  等待原因里会写明是哪一片范围重叠（`overlapping scope code/apps/web/src`），排障不用猜。
 
 Run 终态会触发协调器重新评估，排队的 Plan 因此自动让位。**合并不会自动发生**：`MERGE_READY` 之后
 由人 review 并在 Git 侧合并，再调 `confirm-merged`；那一步会顺带回收该 Run 的 Worktree（**分支保留**）
@@ -194,7 +200,9 @@ Project Commands 分为 `verification`、`lifecycle` 和 `executor-tool`。每�
 
 **按 tag 选验证子集**：verification 命令还可以声明 `tags`（如 `unit` / `types` / `docs`），
 Plan 的 `verification.suites` 用这些 tag 挑一个子集——模型声明"要哪一类验证"，
-**命令 ID 始终由 Factory 解析**（模型既看不到也不能填 ID）。解析规则宁可失败也不静默改语义：
+**命令 ID 始终由 Factory 解析**（模型既看不到也不能填 ID）。候选态还可以在 Plan 详情里人工改这个子集
+（`PUT /api/v4/plans/:planId/verification-suites`，勾选项只能来自项目登记的 tag；不勾 = 回到项目默认全集），
+确认后随 Revision 冻结。解析规则宁可失败也不静默改语义：
 声明了项目未登记的 tag、或合法 tag 一条默认命令都没命中，方案都会被拒绝并列出已登记词表。
 tag 词表通过仓库上下文注入 Explorer 回合（只有 tag，没有命令 ID）。
 `defaultVerificationCommandIds` 是 Project 管理员维护的有序集合，模型不能选择或发明其中任何 ID。集合为空时 V2 解析为 `verification.mode=NONE`：Verifier 持久化 `SKIPPED / NO_PROJECT_VERIFICATION_COMMANDS`，随后进入 `MERGE_READY`，界面会明确显示“未配置自动验证”，不会显示为通过。旧 flat V1 artifact 仅保留为历史记录，不能由 V2 Explorer 流程重新执行。

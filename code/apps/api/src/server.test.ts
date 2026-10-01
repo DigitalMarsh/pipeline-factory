@@ -148,6 +148,53 @@ describe("Pipeline Factory v4 API", () => {
     expect(unknownPlan.statusCode).toBe(404);
   });
 
+  it("re-picks the verification subset over HTTP and reports unknown tags as 409", async () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), "pipeline-suite-api-"));
+    try {
+      execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "ignore" });
+      execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=t@test", "commit", "--allow-empty", "-m", "init"], { cwd: repoRoot, stdio: "ignore" });
+      const store = new InMemoryPipelineStore();
+      const projects = new ProjectService(store);
+      const project = projects.create({
+        id: "project-suite-api", name: "Suite API", repoRoot, defaultBranch: "main", worktreeRoot: join(repoRoot, "worktrees"),
+        settings: {
+          commands: [
+            { commandId: "project.test", category: "verification", enabled: true, argv: ["true"], tags: ["unit"] },
+            { commandId: "docs.validate", category: "verification", enabled: true, argv: ["true"], tags: ["docs"] },
+          ],
+          defaultVerificationCommandIds: ["project.test", "docs.validate"],
+        },
+      });
+      const plans = new PlanService(store, projects);
+      const candidate = plans.createCandidatePlan({
+        projectId: project.id, sourceExplorerThreadId: "thread-suite-api", title: "Suite candidate",
+        generatedSpec: {
+          schemaVersion: 2, title: "Suite candidate", artifact: { mode: "REPOSITORY_FILE", path: "docs/guide.md" },
+          objective: { goal: "Document it", audience: ["devs"], acceptanceCriteria: ["guide updated"], outOfScope: [] },
+          design: { technicalConstraints: ["markdown"], dataSecurity: ["no personal data"], failureHandling: ["keep old docs"] },
+          scope: { includePaths: ["docs/guide.md"], excludePaths: [] },
+          tasks: [{ id: "docs", title: "Update guide", dependencies: [] }],
+          dependencies: [], conflicts: [], execution: {}, verification: { mode: "PROJECT_DEFAULT" }, merge: { strategy: "manual", requireHumanMerge: true },
+        },
+      });
+      const app = createApp({ store, seed: false });
+      apps.push(app);
+
+      const narrowed = await app.inject({ method: "PUT", url: `/api/v4/plans/${candidate.id}/verification-suites`, payload: { suites: ["docs"], actorId: "tester" } });
+      expect(narrowed.statusCode).toBe(200);
+      expect(narrowed.json().plan.resolvedContract.verification.commandIds).toEqual(["docs.validate"]);
+
+      const unknown = await app.inject({ method: "PUT", url: `/api/v4/plans/${candidate.id}/verification-suites`, payload: { suites: ["nope"], actorId: "tester" } });
+      expect(unknown.statusCode).toBe(409);
+      expect(unknown.json()).toMatchObject({ code: "PLAN_VERIFICATION_SUITES_INVALID" });
+
+      const missingPlan = await app.inject({ method: "PUT", url: "/api/v4/plans/plan-missing/verification-suites", payload: { suites: [], actorId: "tester" } });
+      expect(missingPlan.statusCode).toBe(404);
+    } finally {
+      rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
   it("serves only project-scoped Execute snapshots with replayable events", async () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);

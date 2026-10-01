@@ -8,6 +8,9 @@
  *    不要把其中一个动作重新塞回视图。
  * 2. `confirmPlan` 有两条不同协议：有 `revisionDraft` 时确认草稿，否则确认当前
  *    Candidate Plan；两条分支的提示文案、失败状态与刷新时机都必须分别保留。
+ *    **确认哪一版由调用方传入的 Plan 决定**（缺省才是 `candidate`）：已确认 Plan 上挂着
+ *    修订草稿时，工作区投影只把 DRAFT 的 Plan 当候选，`candidate` 就是 `null`——
+ *    那时若还固定读 `candidate`，抽屉里的 "Confirm V2" 会静默失效。`discardPlan` 同此。
  * 3. `enqueuePlan` / `startPlanRun` 的 Revision 分支必须按 `revision > 1` 选择 API，
  *    普通 V1 则走无 revision 的旧端点；这是后端路由的真实契约，不要用一个端点硬合并。
  * 4. `isConversationArtifactPlan` 既有前置守卫，也有服务端失败码兜底：前者给用户即时反馈，
@@ -44,9 +47,13 @@ export type PlanLifecycleActionsDeps = {
 };
 
 export function usePlanLifecycleActions(deps: PlanLifecycleActionsDeps) {
-  async function confirmPlan() {
-    if (!deps.candidate.value || !deps.candidate.value.id && !deps.candidate.value.planId || deps.busy.value) return;
-    const id = deps.candidate.value.id ?? deps.candidate.value.planId!;
+  /**
+   * 确认哪一版：抽屉传它当前显示的那份 Plan（V1 候选，或已确认 Plan 上的 V2 修订草稿），
+   * 时间线内联卡片传卡片自己那份；都不传才回落到 `candidate`（见文件头维护提示 2）。
+   */
+  async function confirmPlan(plan: Plan | null = deps.candidate.value) {
+    const id = plan?.id ?? plan?.planId;
+    if (!plan || !id || deps.busy.value) return;
     const activeDraft = deps.revisionDraft.value;
     if (activeDraft && activeDraft.planId === id) {
       if (activeDraft.status !== "READY_TO_CONFIRM") {
@@ -70,7 +77,7 @@ export function usePlanLifecycleActions(deps: PlanLifecycleActionsDeps) {
     }
     deps.busy.value = true;
     try {
-      const response = await api.confirmPlan(id, deps.candidate.value.revision);
+      const response = await api.confirmPlan(id, plan.revision);
       await deps.refreshPlanProjection();
       if (response.plan.status === "DRAFT") {
         const failure = response.dispatch?.lastError ?? "Plan 校验未通过";
@@ -165,9 +172,9 @@ export function usePlanLifecycleActions(deps: PlanLifecycleActionsDeps) {
     deps.contextPanel.value = "confirmed";
   }
 
-  async function discardPlan() {
-    if (!deps.candidate.value || deps.candidate.value.status !== "DRAFT" || deps.busy.value) return;
-    const id = deps.candidate.value.id ?? deps.candidate.value.planId;
+  async function discardPlan(plan: Plan | null = deps.candidate.value) {
+    if (!plan || plan.status !== "DRAFT" || deps.busy.value) return;
+    const id = plan.id ?? plan.planId;
     if (!id) return;
     const activeDraft = deps.revisionDraft.value;
     if (activeDraft && activeDraft.planId === id) {
@@ -188,7 +195,7 @@ export function usePlanLifecycleActions(deps: PlanLifecycleActionsDeps) {
       return;
     }
     try {
-      await ElMessageBox.confirm(`Discard “${deps.candidate.value.title}”? This Plan will be kept as Discarded and cannot be confirmed, enqueued, or started.`, "Discard plan", { confirmButtonText: "Discard plan", cancelButtonText: "Keep editing", type: "warning" });
+      await ElMessageBox.confirm(`Discard “${plan.title}”? This Plan will be kept as Discarded and cannot be confirmed, enqueued, or started.`, "Discard plan", { confirmButtonText: "Discard plan", cancelButtonText: "Keep editing", type: "warning" });
     } catch {
       return;
     }
@@ -196,7 +203,7 @@ export function usePlanLifecycleActions(deps: PlanLifecycleActionsDeps) {
     deps.error.value = null;
     try {
       await api.discardPlan(id);
-      deps.candidate.value = null;
+      if ((deps.candidate.value?.id ?? deps.candidate.value?.planId) === id) deps.candidate.value = null;
       deps.drawerOpen.value = false;
       await deps.refreshPlanProjection();
       ElMessage.success("Plan discarded");

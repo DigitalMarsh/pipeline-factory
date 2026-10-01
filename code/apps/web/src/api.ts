@@ -101,6 +101,8 @@ export const api = {
   enqueuePlanRevision: (planId: string, revision: number) => request<{ plan: Plan }>(`/api/v4/plans/${encodeURIComponent(planId)}/revisions/${revision}/enqueue`, { method: "POST" }),
   revisePlanConfiguration: (planId: string) => request<{ plan: Plan }>(`/api/v4/plans/${planId}/revise-configuration`, { method: "POST", body: JSON.stringify({ actorId: "local-user" }) }),
   startPlanRun: (planId: string) => request<{ plan: Plan; run: Run | null; dispatch: PlanDispatchState | null }>(`/api/v4/plans/${planId}/run`, { method: "POST" }),
+  /** 按 tag 重挑验证子集；空数组 = 回到项目默认全集。命令 ID 仍由 Factory 解析。 */
+  updatePlanVerificationSuites: (planId: string, suites: string[]) => request<{ plan: Plan }>(`/api/v4/plans/${encodeURIComponent(planId)}/verification-suites`, { method: "PUT", body: JSON.stringify({ suites, actorId: "local-user" }) }),
   /** 设置前置 Plan。Factory-owned 字段：模型不能填，只能由人从同项目的 Plan 里挑。 */
   updatePlanDependencies: (planId: string, dependsOnPlanIds: string[]) => request<{ plan: Plan }>(`/api/v4/plans/${encodeURIComponent(planId)}/dependencies`, { method: "PUT", body: JSON.stringify({ dependsOnPlanIds, actorId: "local-user" }) }),
   startPlanRevisionRun: (planId: string, revision: number) => request<{ plan: Plan; run: Run | null; dispatch: PlanDispatchState | null }>(`/api/v4/plans/${encodeURIComponent(planId)}/revisions/${revision}/run`, { method: "POST" }),

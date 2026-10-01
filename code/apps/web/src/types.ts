@@ -42,6 +42,8 @@ export type AgentLoopDiagnostics = {
 export type ProjectSettings = {
   concurrency: {
     maxParallelRuns: number;
+    /** 冲突判定范围：`declared` 只看模型声明的冲突键；`overlap` 另外比较 scope 是否重叠。旧数据没有它。 */
+    conflictScope?: "declared" | "overlap";
     defaultTimeoutMs: number;
     executionTimeoutMs: number;
     /** @deprecated Legacy persisted setting; the UI no longer edits or submits it. */

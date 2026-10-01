@@ -32,4 +32,15 @@ describe("PlanDetailDrawer execution read-only mode", () => {
     // 抽屉把这次编辑原样透传给视图；视图接的是 saveDependencies。
     expect(drawerSource).toContain('@update-dependencies="emit(\'update-dependencies\', $event)"');
   });
+
+  it("offers the verification subset picker from the Project tag vocabulary", () => {
+    expect(contentSource).toContain("canEditVerificationSuites");
+    expect(contentSource).toContain("verificationSuiteOptions");
+    expect(contentSource).toContain('emit("update-verification-suites"');
+    expect(drawerSource).toContain('@update-verification-suites="emit(\'update-verification-suites\', $event)"');
+    // 勾选项只来自项目登记的 tag：那一格里唯一的输入控件是对词表的复选框（没有手填 ID 的地方）。
+    // 注意不要断言"内容里不出现 verificationCommandIds"——它在别处是**读**遗留投影，属于合法引用。
+    expect(contentSource).toContain("toggleSuite");
+    expect(contentSource).toContain('type="checkbox"');
+  });
 });

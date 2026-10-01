@@ -164,4 +164,43 @@ describe("Plan V2 verification suites", () => {
     expect(validateGeneratedPlanSpecV2({ ...spec, verification: { mode: "PROJECT_DEFAULT", suites: ["docs", ""] } })).toEqual([expect.objectContaining({ path: "verification.suites", code: "INVALID" })]);
     expect(validateGeneratedPlanSpecV2({ ...spec, verification: { mode: "PROJECT_DEFAULT", suites: ["docs"] } })).toEqual([]);
   });
+
+  it("lets a human re-pick the verification subset on a candidate and re-resolves the command ids", () => {
+    const root = repository();
+    try {
+      const store = new InMemoryPipelineStore();
+      const projects = new ProjectService(store);
+      const project = projects.create({
+        id: "project-suite-edit", name: "Suite edit", repoRoot: root, defaultBranch: "main", worktreeRoot: join(root, "worktrees"),
+        settings: {
+          commands: [
+            { commandId: "project.test", category: "verification", enabled: true, argv: ["true"], tags: ["unit"] },
+            { commandId: "docs.validate", category: "verification", enabled: true, argv: ["true"], tags: ["docs"] },
+          ],
+          defaultVerificationCommandIds: ["project.test", "docs.validate"],
+        },
+      });
+      const plans = new PlanService(store, projects);
+      const candidate = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "explorer-suite-edit", title: spec.title, generatedSpec: spec });
+      // 生成时没声明 suites → 项目默认全集。
+      expect(candidate.resolvedContract?.verification.commandIds).toEqual(["project.test", "docs.validate"]);
+
+      // 人选了 docs → 只跑命中该 tag 的命令；V1 投影（contract）跟着一起更新，两处不能分叉。
+      const narrowed = plans.setVerificationSuites(candidate.id, ["docs"], "reviewer");
+      expect(narrowed.generatedSpec?.verification).toEqual({ mode: "PROJECT_DEFAULT", suites: ["docs"] });
+      expect(narrowed.resolvedContract?.verification.commandIds).toEqual(["docs.validate"]);
+      expect(narrowed.contract.verificationCommandIds).toEqual(["docs.validate"]);
+      expect(store.listEvents({ types: ["plan.verification.suites.updated"] })).toHaveLength(1);
+
+      // 空数组 = 回到项目默认全集（不是"什么都不跑"）。
+      expect(plans.setVerificationSuites(candidate.id, [], "reviewer").resolvedContract?.verification.commandIds).toEqual(["project.test", "docs.validate"]);
+      // 未登记的 tag 仍然被拒绝，理由与生成路径一致。
+      expect(() => plans.setVerificationSuites(candidate.id, ["nope"], "reviewer")).toThrow(/not declared by this Project/);
+      // 确认之后不能再改（与依赖同一条规则：确认即冻结）。
+      plans.confirm(candidate.id, "reviewer");
+      expect(() => plans.setVerificationSuites(candidate.id, ["docs"], "reviewer")).toThrow(/cannot change from READY/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

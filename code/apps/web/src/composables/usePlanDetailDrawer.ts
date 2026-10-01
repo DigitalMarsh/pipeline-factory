@@ -64,6 +64,8 @@ export function usePlanDetailDrawer(deps: PlanDetailDrawerDeps) {
     detailLoadError.value = null;
     detailDependencyOptions.value = [];
     dependenciesSaving.value = false;
+    detailVerificationSuiteOptions.value = [];
+    verificationSuitesSaving.value = false;
   }
 
   async function openPlanDetail(plan: Plan): Promise<void> {
@@ -84,8 +86,11 @@ export function usePlanDetailDrawer(deps: PlanDetailDrawerDeps) {
     detailDependencyOptions.value = [];
     drawerOpen.value = true;
     deps.onOpened(plan);
-    // 候选态才可能改依赖；依赖目录与详情并行加载，取不到不阻塞详情。
-    if (plan.status === "DRAFT") void loadDependencyOptions(requestedProjectId, planId, requestToken);
+    // 候选态才可能改依赖/验证子集；两个目录与详情并行加载，取不到都不阻塞详情。
+    if (plan.status === "DRAFT") {
+      void loadDependencyOptions(requestedProjectId, planId, requestToken);
+      void loadVerificationSuiteOptions(requestedProjectId, requestToken);
+    }
     const currentRevisionDraft = deps.revisionDraft.value;
     if (currentRevisionDraft && planId === currentRevisionDraft.planId && currentRevisionDraft.status !== "CONFIRMED" && currentRevisionDraft.status !== "DISCARDED") {
       detailPlan.value = deps.planFromRevisionDraft(currentRevisionDraft);
@@ -174,6 +179,42 @@ export function usePlanDetailDrawer(deps: PlanDetailDrawerDeps) {
    * 依赖是 Factory-owned 字段（模型不能填），所以候选清单必须由界面给出而不是模型自己报。
    */
   const detailDependencyOptions = ref<Array<{ id: string; title: string }>>([]);
+  /**
+   * 本项目**已登记的验证 tag 词表**（启用中的 verification 命令的 tags 去重排序）。
+   * 只给词表：选项必须来自项目，用户不能在这里发明命令 ID（那条规则在 domain 侧强制）。
+   */
+  const detailVerificationSuiteOptions = ref<string[]>([]);
+  const verificationSuitesSaving = ref(false);
+  const canEditVerificationSuites = computed(() => !deps.isReadOnly?.() && detailPlan.value?.status === "DRAFT" && Boolean(detailPlan.value?.generatedSpec && detailPlan.value?.resolvedContract));
+
+  async function loadVerificationSuiteOptions(projectId: string, requestToken: number): Promise<void> {
+    try {
+      const response = await api.project(projectId);
+      if (deps.projectId.value !== projectId || deps.projectScopeToken() !== requestToken) return;
+      detailVerificationSuiteOptions.value = [...new Set(response.project.settings.commands
+        .filter((command) => command.category === "verification" && command.enabled !== false)
+        .flatMap((command) => command.tags ?? []))].sort();
+    } catch {
+      // 取不到词表不阻塞详情：编辑区退化成"暂时无法选择"，而不是整页报错。
+      detailVerificationSuiteOptions.value = [];
+    }
+  }
+
+  /** 保存验证子集；失败用 ElMessage 说明原因（它决定 Run 里实际跑哪几条验证）。 */
+  async function saveVerificationSuites(plan: Plan | null, suites: string[]): Promise<void> {
+    const planId = plan?.id ?? plan?.planId;
+    if (!planId || verificationSuitesSaving.value) return;
+    verificationSuitesSaving.value = true;
+    try {
+      const response = await api.updatePlanVerificationSuites(planId, suites);
+      if (detailPlan.value && (detailPlan.value.id ?? detailPlan.value.planId) === planId) detailPlan.value = { ...detailPlan.value, ...response.plan };
+      ElMessage.success(suites.length ? "验证子集已保存" : "已回到项目默认验证集");
+    } catch (caught) {
+      ElMessage.error(caught instanceof Error ? `验证子集保存失败：${caught.message}` : "验证子集保存失败");
+    } finally {
+      verificationSuitesSaving.value = false;
+    }
+  }
   const dependenciesSaving = ref(false);
   const canEditDependencies = computed(() => !deps.isReadOnly?.() && detailPlan.value?.status === "DRAFT" && Boolean(detailPlan.value?.generatedSpec || detailPlan.value?.resolvedContract));
 
@@ -219,9 +260,13 @@ export function usePlanDetailDrawer(deps: PlanDetailDrawerDeps) {
     detailDependencyOptions,
     dependenciesSaving,
     canEditDependencies,
+    detailVerificationSuiteOptions,
+    verificationSuitesSaving,
+    canEditVerificationSuites,
     openPlanDetail,
     selectPlanRevision,
     saveDependencies,
+    saveVerificationSuites,
     resetDetailState,
   };
 }

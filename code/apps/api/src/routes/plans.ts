@@ -1,13 +1,14 @@
 /**
- * 模块职责：Plan 域的 27 条路由，按资源分三组 ——
+ * 模块职责：Plan 域的 28 条路由，按资源分三组 ——
  *   A) 计划目录（9 条，路径前缀是 project / explorer）：`/projects/:projectId/plans`、
  *      `.../explorers/:explorerId/{plans,confirmed-plans,all-plans,candidate,revision-draft}`、
  *      `/projects/:projectId/{candidate-plans,tasks}`、`.../selected-plan`。
  *   B) 版本与草稿（8 条）：PlanRevision 列表 / 详情、CandidateVersion 列表 / 详情、
  *      RevisionDraft 的创建 / 详情 / confirm / discard。
- *   C) Plan 生命周期动作（10 条）：`confirm` / `revisions/:revision/confirm` / `enqueue` /
+ *   C) Plan 生命周期动作（11 条）：`confirm` / `revisions/:revision/confirm` / `enqueue` /
  *      `revisions/:revision/enqueue` / `run` / `revisions/:revision/run` / `discard` /
- *      `revise-configuration` / `dependencies`（前置 Plan，Factory-owned，模型不能填），
+ *      `revise-configuration` / `dependencies`（前置 Plan，Factory-owned，模型不能填）/
+ *      `verification-suites`（按 tag 重挑验证子集，同样只是人/模型选 tag），
  *      以及 `GET /plans/:planId` 详情。
  *
  * 与 `routes/explorers.ts` 的边界（互补的一半）：`/explorers/:explorerId/*` 下凡是资源为
@@ -411,6 +412,25 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
       const message = error instanceof Error ? error.message : "Plan dependencies cannot be updated";
       if (/not found/i.test(message)) return reply.code(404).send({ code: "PLAN_NOT_FOUND", error: "Plan not found" });
       return reply.code(409).send({ code: "PLAN_DEPENDENCIES_INVALID", error: message });
+    }
+  });
+
+  /**
+   * 按 tag 重挑验证子集。**仍然只让模型/人选 tag**：命令 ID 由 Factory 用同一套规则解析
+   * （见 domain 的 selectVerificationCommands）。空数组 = 回到项目默认全集。
+   */
+  app.put("/api/v4/plans/:planId/verification-suites", async (request, reply) => {
+    const params = planIdParams.safeParse(request.params);
+    const body = z.object({ suites: z.array(z.string().min(1)), actorId: z.string().min(1).default("local-user") }).safeParse(request.body ?? {});
+    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid verification suite request" });
+    try {
+      const plan = plans.get(params.data.planId);
+      if (ensurePlanProject(plan.projectId, reply, true) === null) return;
+      return { plan: plans.setVerificationSuites(params.data.planId, body.data.suites, body.data.actorId) };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Plan verification suites cannot be updated";
+      if (/not found/i.test(message)) return reply.code(404).send({ code: "PLAN_NOT_FOUND", error: "Plan not found" });
+      return reply.code(409).send({ code: "PLAN_VERIFICATION_SUITES_INVALID", error: message });
     }
   });
 

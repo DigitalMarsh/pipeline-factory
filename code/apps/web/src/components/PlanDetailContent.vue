@@ -5,8 +5,8 @@ import { Close, DocumentChecked, Lock, Right } from "@element-plus/icons-vue";
 import type { Plan, PlanTask } from "../types";
 import { canDiscardPlan } from "../utils/planControls";
 
-const props = defineProps<{ plan: Plan | null; error?: string | null | undefined; revisions?: number[] | undefined; revisionDraftStatus?: "EDITING" | "READY_TO_CONFIRM" | "CONFIRMED" | "DISCARDED" | "BASE_CHANGED" | null | undefined; readOnly?: boolean | undefined; dependencyOptions?: Array<{ id: string; title: string }> | undefined; canEditDependencies?: boolean | undefined; dependenciesSaving?: boolean | undefined }>();
-const emit = defineEmits<{ close: []; confirm: []; discard: []; "keep-editing": [plan: Plan]; "select-revision": [revision: number]; "update-dependencies": [planIds: string[]] }>();
+const props = defineProps<{ plan: Plan | null; error?: string | null | undefined; revisions?: number[] | undefined; revisionDraftStatus?: "EDITING" | "READY_TO_CONFIRM" | "CONFIRMED" | "DISCARDED" | "BASE_CHANGED" | null | undefined; readOnly?: boolean | undefined; dependencyOptions?: Array<{ id: string; title: string }> | undefined; canEditDependencies?: boolean | undefined; dependenciesSaving?: boolean | undefined; verificationSuiteOptions?: string[] | undefined; canEditVerificationSuites?: boolean | undefined; verificationSuitesSaving?: boolean | undefined }>();
+const emit = defineEmits<{ close: []; confirm: []; discard: []; "keep-editing": [plan: Plan]; "select-revision": [revision: number]; "update-dependencies": [planIds: string[]]; "update-verification-suites": [suites: string[]] }>();
 const planId = computed(() => props.plan?.planId ?? props.plan?.id ?? "—");
 const canConfirm = computed(() => !props.readOnly && props.plan?.status === "DRAFT" && (!props.revisionDraftStatus || props.revisionDraftStatus === "READY_TO_CONFIRM"));
 const canDiscard = computed(() => !props.readOnly && canDiscardPlan(props.plan?.status));
@@ -39,6 +39,24 @@ function toggleDependency(planId: string, checked: boolean): void {
   dependencySelection.value = checked ? [...new Set([...dependencySelection.value, planId])] : dependencySelection.value.filter((value) => value !== planId);
 }
 function saveDependencies(): void { emit("update-dependencies", [...dependencySelection.value]); }
+
+/**
+ * 验证子集：勾选项只能来自**本项目已登记的 tag 词表**（props.verificationSuiteOptions），
+ * 命令 ID 依旧由 Factory 解析。不勾 = 回到项目默认验证集。当前值来自 generatedSpec（请求过的词表），
+ * 而 resolvedContract 里的 commandIds 是解析结果——两者在 VERIFICATION 那格里一起显示，便于对照。
+ */
+const requestedSuites = computed(() => generated.value?.verification.suites ?? []);
+const suiteSelection = ref<string[]>([...requestedSuites.value]);
+const suiteDirty = computed(() => {
+  const current = [...suiteSelection.value].sort();
+  const saved = [...requestedSuites.value].sort();
+  return current.length !== saved.length || current.some((value, index) => value !== saved[index]);
+});
+watch(requestedSuites, (values) => { suiteSelection.value = [...values]; }, { deep: true });
+function toggleSuite(suite: string, checked: boolean): void {
+  suiteSelection.value = checked ? [...new Set([...suiteSelection.value, suite])] : suiteSelection.value.filter((value) => value !== suite);
+}
+function saveVerificationSuites(): void { emit("update-verification-suites", [...suiteSelection.value]); }
 function runPath(plan: Plan): string {
   const query = new URLSearchParams({ explorerId: plan.sourceExplorerThreadId, contextPanel: "plan-center", runId: plan.runId ?? "" });
   if (plan.explorerPlanId) query.set("explorerPlanId", plan.explorerPlanId);
@@ -74,7 +92,18 @@ const mergeRequest = computed(() => props.plan?.mergeRequest ?? null);
           <div class="dependency-actions"><el-button size="small" type="primary" :loading="dependenciesSaving" :disabled="!dependencyDirty || dependenciesSaving" @click="saveDependencies">保存前置 Plan</el-button></div>
         </template>
       </section>
-      <section v-if="mergeRequest?.status === 'OPEN' && mergeRequest.detectedTargetCommit" class="contract-section merge-detected-section"><div class="section-heading"><span>03B</span><strong>Merge detection</strong><el-tag size="small" type="warning" effect="light">待人工确认</el-tag></div><p class="merge-detected-copy">已检测到目标分支包含此 Run 的 source commit。Plan 会在人工确认前保持 MERGE_READY。</p><div class="policy-grid"><div><label>SOURCE COMMIT</label><code>{{ mergeRequest.sourceCommit }}</code></div><div><label>TARGET</label><code>{{ mergeRequest.targetBranch }} · {{ mergeRequest.detectedTargetCommit }}</code></div></div><RouterLink v-if="plan.runId" class="merge-detected-link" :to="runPath(plan)">Open run to confirm</RouterLink></section>
+      <section v-if="canEditVerificationSuites || requestedSuites.length" class="contract-section"><div class="section-heading"><span>03D</span><strong>Verification subset</strong></div>
+        <ul v-if="!canEditVerificationSuites" class="check-list"><li v-for="suite in requestedSuites" :key="suite"><span>·</span>{{ suite }}</li></ul>
+        <template v-else>
+          <p class="section-note">按 tag 选验证子集：勾选后只会跑本项目<strong>命中这些 tag 的默认验证命令</strong>；命令 ID 由 Factory 解析，模型与这里都只声明"要哪一类验证"。全不勾 = 跑项目默认全集。</p>
+          <div v-if="verificationSuiteOptions?.length" class="dependency-list">
+            <label v-for="suite in verificationSuiteOptions" :key="suite" class="dependency-option"><input type="checkbox" :checked="suiteSelection.includes(suite)" :disabled="verificationSuitesSaving" @change="toggleSuite(suite, ($event.target as HTMLInputElement).checked)" /><span>{{ suite }}</span></label>
+          </div>
+          <p v-else class="section-note">本项目还没有登记任何验证 tag（在 Project 设置的命令里加 <code>tags</code> 之后才能按 tag 选子集）。</p>
+          <div class="dependency-actions"><el-button size="small" type="primary" :loading="verificationSuitesSaving" :disabled="!suiteDirty || verificationSuitesSaving" @click="saveVerificationSuites">保存验证子集</el-button></div>
+        </template>
+      </section>
+      <section v-if="mergeRequest?.status === 'OPEN' && mergeRequest.detectedTargetCommit" class="contract-section merge-detected-section"><div class="section-heading"><span>03E</span><strong>Merge detection</strong><el-tag size="small" type="warning" effect="light">待人工确认</el-tag></div><p class="merge-detected-copy">已检测到目标分支包含此 Run 的 source commit。Plan 会在人工确认前保持 MERGE_READY。</p><div class="policy-grid"><div><label>SOURCE COMMIT</label><code>{{ mergeRequest.sourceCommit }}</code></div><div><label>TARGET</label><code>{{ mergeRequest.targetBranch }} · {{ mergeRequest.detectedTargetCommit }}</code></div></div><RouterLink v-if="plan.runId" class="merge-detected-link" :to="runPath(plan)">Open run to confirm</RouterLink></section>
       <section class="contract-section"><div class="section-heading"><span>04</span><strong>Execution policy</strong></div><div class="policy-grid"><div><label>FROZEN PROJECT</label><strong>{{ resolved?.repository.repoRoot ?? 'Not frozen' }} · config v{{ resolved?.repository.configVersion ?? '—' }}</strong></div><div><label>BASE</label><strong>{{ resolved?.repository.baseBranch ?? contract?.baseBranch ?? '—' }} · {{ resolved?.repository.baseCommit ?? contract?.baseCommit ?? '—' }}</strong></div><div><label>VERIFICATION</label><em v-if="generated?.verification.suites?.length" class="policy-note">按 tag 选子集：{{ generated.verification.suites.join(" · ") }}</em><strong>{{ resolved?.verification.mode === 'NONE' || generated?.verification.mode === 'NONE' ? '未配置自动验证（将记录为 SKIPPED）' : (resolved?.verification.commandIds ?? contract?.verificationCommandIds ?? plan.verificationCommands ?? []).join(' · ') || (generated?.verification ? '项目默认验证命令' : '—') }}</strong></div><div><label>EXECUTOR</label><strong>{{ resolved?.execution.executorModelRole ?? contract?.executorModelRole ?? '—' }} · Factory 固定</strong></div><div><label>TOOL POLICY</label><strong>{{ resolved?.execution.toolPolicy ?? contract?.toolPolicy ?? '—' }} · Factory 固定</strong></div><div><label>REPAIR LIMIT</label><strong>{{ resolved?.execution.maxRepairAttempts ?? generated?.execution.maxRepairAttempts ?? contract?.maxRepairAttempts ?? '—' }} attempts</strong></div><div><label>MERGE</label><strong>{{ resolved?.merge.strategy ?? generated?.merge.strategy ?? contract?.mergeStrategy ?? '—' }} · {{ (resolved?.merge.requireHumanMerge ?? generated?.merge.requireHumanMerge ?? contract?.requireHumanMerge) ? 'human review required' : '—' }}</strong></div></div></section>
       <section class="contract-section source-section"><div class="section-heading"><span>05</span><strong>Source evidence</strong></div><div class="source-row"><span>ExplorerThread</span><code>{{ plan.sourceExplorerThreadId }}</code></div><div class="source-row"><span>Contract</span><code>{{ resolved ? 'Resolved V2' : generated ? 'Generated V2' : 'Legacy V1 · read only' }}</code></div></section>
       <div v-if="readOnly" class="drawer-readonly-note" role="status"><Lock :size="14" /><span>执行线程使用此冻结 Revision；Plan 生命周期操作已在此处隐藏。</span></div>

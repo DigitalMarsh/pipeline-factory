@@ -1,5 +1,53 @@
 # Changelog
 
+## 2026-10-01（其二）— 冲突判定范围可选、验证子集可人工重挑
+
+### 为什么做
+
+补齐上一轮记账的最后两项。两处都不是"加功能"，而是把已经存在但只能靠模型/只能看不能改的东西
+交回人手里：
+
+- 冲突判定此前**只认模型声明的 `conflicts` 语义键**——探索产出的键不可靠时，两道并行 Run 就可能改到
+  同一片代码。派生策略的方向是有的，但"该不该保守"取决于项目，所以做**可选策略**而不是改默认。
+- `verification.suites` 只能由 Explorer 产出，想调整就得让模型重出一版方案。上一轮以为需要"浏览器端
+  方案草稿编辑能力"，实际与前置 Plan 是同一条路子（Factory-owned 字段 + 人来设 + Confirm 时冻结）。
+
+### Changed
+
+**冲突判定范围（`concurrency.conflictScope`）**
+
+- 新增 Project 设置 `concurrency.conflictScope: "declared" | "overlap"`，**默认 `declared`**——
+  与引入本字段之前逐字相同，升级不会让同目录下不相关的 Plan 突然互相排队。
+- `overlap` 时**另外**比较两个 Plan 的 `scope.includePaths`：相等或一个是另一个的父路径即视为冲突
+  （按路径段比较，不是字符串前缀；`code/apps/web/**` 与 `code/apps/web` 经 `scopeRoot` 归一后同义）。
+- **只在同一 Project 内比较**：include 是项目相对路径，跨项目同名的 `src/index.ts` 不代表碰同一份文件。
+  **这条是写测试时才发现的**——第一版没加项目过滤，测试里两个项目用了相同路径字符串，直接串到一起。
+- 等待原因带上具体是哪一片范围重叠（`Waiting for conflicting Run … (overlapping scope code/apps/web/src)`），
+  排障不用再去比对两个 Plan 的 scope。
+- 字段**可选**：本字段之前落库的 Project 没有它，读路径一律按 `declared` 处理，不为一个新开关改写用户配置行。
+- 控制台：两个设置入口的 Execution policy 各加一个 `Conflict scope` 选择器（带说明，避免误以为越保守越好）。
+
+**验证子集的人工重挑**
+
+- `PlanService.setVerificationSuites()` + `PUT /api/v4/plans/:planId/verification-suites`：
+  候选态可改，**只有 tag 可选**（词表来自项目登记的 tags），命令 ID 依旧由 Factory 用同一套规则解析。
+  空数组 = 回到项目默认全集（不是"什么都不跑"）。会**重新解析** resolvedContract 与 V1 投影
+  （用当前 Project 快照 + 原有 Git 基线），既让 commandIds 跟着 tag 变，也让候选与当前配置版本对齐。
+- 项目没有任何默认验证命令时明确拒绝，而不是把请求当成功。
+- 控制台：Plan 详情新增 `03D Verification subset`（勾选项来自项目 tag 词表；空词表时如实说明
+  "还没有登记任何验证 tag"）。顺带修正该文件里一处段落编号笔误（Merge detection 复用了 03B）。
+
+### 验证
+
+- domain **306** / api **96** / web **438** 全通过；三个 typecheck 无错误。
+- 新增用例：`dispatch-coordinator.test.ts`（overlap 生效、declared 不生效、范围不重叠不冲突）、
+  `plan-v2.test.ts`（人工改子集 → commandIds 跟着变、V1 投影同步、空数组回全集、未登记 tag 被拒、
+  Confirm 后锁定）、`server.test.ts`（HTTP 路由 200/409/404）、
+  `PlanDetailContent.test.ts`（**挂真实组件**验证两个编辑器：勾选 → 保存 → 抛事件、脏值前禁用保存、
+  只读态只展示、空词表的说明文案）。
+- 浏览器实测：Project 设置的 Execution policy 出现 `Conflict scope` 选择器与两项选项。
+- `pnpm verify` 全绿（含循环依赖检查）。
+
 ## 2026-10-01 — 线程按天分组、术语统一、任务中心四分区、按 tag 选验证子集
 
 ### 为什么做
