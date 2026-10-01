@@ -77,6 +77,22 @@ export function resolveExecutionModelIdentity(telemetry: ExecutionTelemetry | nu
   return { model: "未记录", backend: "未记录", source: "unknown" };
 }
 
+/**
+ * 底部那行值的**来源说明**：跑过的记录、还是配置里要用的；以及"配置已经改了但这份 Run 还在用旧的"。
+ *
+ * 最后一种最容易被当成 bug：用户把项目的执行模型换成 claude，回到执行线程一看还是 codex。
+ * 那不是显示错了——已确认的 Plan 与它派发的 Run 用的是**确认时冻结的**那份配置（见 executor-agent
+ * 取模型的写法），新模型要等下一个 Plan Revision 才生效。这里把这件事写在页面上，
+ * 而不是指望用户去读 Plan 详情里的冻结快照。
+ */
+export function executionModelSourceNote(identity: ExecutionModelIdentity, currentExecutor: { model: string | null } | null | undefined): string {
+  const base = identity.source === "recorded" ? "本次执行记录" : identity.source === "configured" ? "按本 Run 冻结的项目配置" : "";
+  const current = currentExecutor?.model ?? null;
+  const inUse = identity.source === "unknown" ? null : identity.model;
+  if (!base || !current || !inUse || current === inUse) return base;
+  return `${base} · 项目当前配置 ${current}（改在下一个 Plan Revision 生效）`;
+}
+
 export function usageDetailRows(usage: ModelUsage | null | undefined): Array<{ label: string; value: string }> {
   return [
     { label: "输入 token", value: formatTokenCount(usage?.inputTokens) },

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatExecutionDuration, formatProviderContextUsage, formatTokenSummary, liveDurationMs, resolveExecutionModelIdentity, telemetryReasoning, usageDetailRows } from "./executionTelemetry";
+import { executionModelSourceNote, formatExecutionDuration, formatProviderContextUsage, formatTokenSummary, liveDurationMs, resolveExecutionModelIdentity, telemetryReasoning, usageDetailRows } from "./executionTelemetry";
 
 describe("execution telemetry formatting", () => {
   it("formats exact token totals and keeps missing usage explicit", () => {
@@ -48,5 +48,22 @@ describe("execution telemetry formatting", () => {
     expect(resolveExecutionModelIdentity(null, null)).toEqual({ model: "未记录", backend: "未记录", source: "unknown" });
     // 只有一半也不编造另一半。
     expect(resolveExecutionModelIdentity(null, { model: "m", backend: null })).toEqual({ model: "m", backend: "未记录", source: "configured" });
+  });
+
+  it("says where the value came from, and calls out a config that moved on", () => {
+    const recorded = resolveExecutionModelIdentity({ model: "gpt-5.6-luna", reasoningEffort: null, backend: "codex-app-server", startedAt: null, completedAt: null, durationMs: null, usage: null, usageSource: "provider", usageScope: null }, null);
+
+    expect(executionModelSourceNote(recorded, { model: "gpt-5.6-luna" })).toBe("本次执行记录");
+    // 用户把项目模型换成 claude 之后最想问的那句：为什么这里还是旧的。
+    expect(executionModelSourceNote(recorded, { model: "claude-opus-5" })).toBe("本次执行记录 · 项目当前配置 claude-opus-5（改在下一个 Plan Revision 生效）");
+  });
+
+  it("does not invent a config note when there is nothing to compare", () => {
+    const configured = resolveExecutionModelIdentity(null, { model: "claude-opus-5", backend: "claude-agent-sdk" });
+    const unknown = resolveExecutionModelIdentity(null, null);
+
+    expect(executionModelSourceNote(configured, null)).toBe("按本 Run 冻结的项目配置");
+    expect(executionModelSourceNote(configured, { model: "claude-opus-5" })).toBe("按本 Run 冻结的项目配置");
+    expect(executionModelSourceNote(unknown, { model: "claude-opus-5" })).toBe("");
   });
 });

@@ -1,5 +1,84 @@
 # Changelog
 
+## 2026-10-01（其八）— 执行对话按步骤折叠；用横线分段取代左侧竖线
+
+### 为什么做
+
+两条反馈都关于"按 task 分组"这件事做得不够：
+
+1. **步骤的存在感弱、也不能收**。分组本身是对的，但从这一步切到那一步时，只能一路滚——想"逐个
+   看每个 task 执行得怎么样"就会乱。
+2. **每个步骤左边那根竖线占地方**。它把整组内容往右推 53px（`margin-left: 39px` + `padding-left: 14px`），
+   而它想表达的"这是一组"其实已经有分组头在说了。
+
+### Changed
+
+- **步骤头变成折叠开关**（`<header>` → `<button>`，带 `aria-expanded` / `aria-controls`）：
+  整条可点，右侧有箭头，收起的是**这一组的消息**——步骤头始终留着，它就是"这里还有一个 task"的那一行。
+  头部同时补强了可读性：`PLAN TASK` 变成小胶囊标签、标题加大、状态变成带色 chip
+  （完成绿 / 进行中蓝 / 阻塞红）、右侧显示条数（`19 条`），阻塞原因照旧在最下面一行。
+- **去掉左侧竖线**，改成**组与组之间一条 2px 横线**：省下横向空间，任务边界反而更醒目。
+  "从状态卡选中某一步"的高亮也从"竖线变蓝"改成整条头部高亮。
+- **从状态卡跳到被收起的步骤时先自动展开**（`focusExecutionTask` → `expandTaskGroup`）——
+  否则"跳过去"看起来像没反应，而这正是这个折叠功能最容易踩的坑。
+
+### 验证
+
+- `pnpm verify` 全绿：domain 309 / api 111 / web **456**。新增断言：步骤头是带 `aria-expanded`
+  的按钮、`toggleTaskGroup` 接线、条目容器存在、聚焦时先展开，以及**样式表里不再出现
+  `.execution-conversation-group-task { … border-left … }`**、且组间是 `border-top: 2px solid`
+  （竖线不许悄悄回来）。
+- 浏览器实测（真实 Run `run-14f0417a-5cb`）：
+  - 计算样式：组 `border-left: 0px none`、`border-top: 2px solid rgb(215,224,236)`、`margin-left: 0`。
+  - 头部为 `BUTTON`，`aria-expanded=true`、`aria-controls=execution-task-stream-task-task-1`，
+    文案 "PLAN TASK | … | Completed | 19 条"。
+  - 点一下：`aria-expanded=false`、组多出 `.collapsed`、条目容器从 DOM 移除、可见消息 0 条；
+    再点恢复。
+
+## 2026-10-01（其七）— 设置页改执行模型不再被"有 Run 在跑"挡住
+
+### 为什么做
+
+报障："project4 我把执行模型换成 claude 了，执行线程底部还是 codex 与 gpt-5.6-luna。"
+
+查下来是两件事叠在一起：
+
+1. **那次保存根本没成功**。`ProjectService.update` 把**任何** settings 变更都算作"高风险"，
+   而高风险变更要求没有活动 Run（`hasActiveRun`，含 `STARTING / IN_PROGRESS / VERIFYING`）。
+   project4 当时有两个 `IN_PROGRESS` 的 Run，于是返回 409 `PROJECT_HAS_ACTIVE_RUNS`——
+   而用户看到的只是一句英文 "has active runs"，很容易当成无关提示划过去。
+2. 即便存成功，**已确认的 Plan 与它派生的 Run 用的是确认时冻结的那份配置**
+   （`executor-agent` 从 `revision.projectConfigSnapshot.settings.models.executor` 取模型），
+   所以那份 Run 仍会显示 codex。这一条是设计不是 bug，但页面上没写清楚，用户第二次困惑就在这。
+
+数据库侧的佐证：project4 的 `config_version` 一直是 **1**、`project_config_revisions` 只有建项目那一条、
+`domain_events` 里今天**没有任何** `project.config.updated`——那次修改从未落库。
+
+### Changed
+
+- **`ProjectService.update`：把"高风险"收窄到真正会动到运行中 Run 脚下那块地的改动** ——
+  仓库 / Worktree 路径、默认分支，加上 hooks。模型、并发、命令、工具白名单不再被活动 Run 挡住：
+  它们在 Plan Confirm 时就冻结进 Revision 快照，运行中的 Run 只读自己那份。
+  设置页三处提示本来也是这么承诺的（General 栏"仓库目录、Worktree 和分支修改需要没有运行中的 Run"
+  vs 执行/模型栏"这些设置会在下一次 Plan Confirm 时冻结"），**是实现比文案更严**。
+  hooks 保留在守卫内：`PATCH /hooks` 那条路由本来就有同一道守卫，不能从这里开后门。
+  拒绝信息补了中文说明（哪些被挡、哪些可以随时改），不再只有一句 "has active runs"。
+- **Models & Tools 栏文案**（弹框与独立设置页各一处）：补上"已确认的 Plan 与正在跑的 Run 继续用
+  它们冻结的那份，改动从下一次 Plan Confirm 起生效"。
+- **执行线程底部的来源说明**：当项目当前配置与这份 Run 用的模型不一致时，写成
+  `本次执行记录 · 项目当前配置 claude-opus-5（改在下一个 Plan Revision 生效）`——
+  把"为什么还是旧的"直接写在页面上（`utils/executionTelemetry.ts` 的 `executionModelSourceNote`，纯函数 + 单测）。
+
+### 验证
+
+- `pnpm verify` 全绿：domain **309** / api **111** / web **455**。新增用例：
+  `project.test.ts`（活动 Run 下改模型可以存、路径/分支/hooks 仍被挡）、
+  `server.test.ts`（同一条经 HTTP 走通，`configVersion` 1→2）、
+  `executionTelemetry.test.ts`（来源说明 + 配置漂移提示）。
+- 先写了一条会失败的用例复现报障（`→ Project project-1 has active runs`），再改实现——它现在留在
+  测试里当回归守卫。
+- **没有在你的 project4 上实测保存**：那会真的改你的项目配置，我没动。修好后在设置里再存一次即可。
+
 ## 2026-10-01（其六）— 执行线程改成对话观感；底部回答"现在用的是什么模型"
 
 ### 为什么做

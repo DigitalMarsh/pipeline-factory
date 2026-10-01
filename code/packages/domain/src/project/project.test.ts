@@ -150,6 +150,29 @@ describe("ProjectService", () => {
     expect(projects.summary("project-1").activeRunCount).toBe(1);
   });
 
+  it("keeps settings editable while a run is active, and still blocks paths, branches and hooks", () => {
+    // 设置页的原话分得很清楚：General 栏说"仓库目录、Worktree 和分支修改**需要没有运行中的 Run**"，
+    // 而 Execution 栏说"这些设置会在下一次 Plan Confirm 时冻结"、Models 栏说"同样在 Plan Confirm 时冻结"。
+    // 运行中的 Run 用的是自己那份冻结快照（`executor-agent` 从 revision.projectConfigSnapshot 取模型），
+    // 所以"趁跑着把执行模型换成 claude"是安全且预期的操作。
+    //
+    // 这里曾经把**任何** settings 变更都当成高风险，于是最自然的这次操作被 409 挡下，错误还是一句
+    // 英文 "has active runs"——用户看到的现象是"我明明改了，怎么还是老模型"。
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    projects.create({ id: "project-1", name: "Demo", repoRoot: "/repo/demo", defaultBranch: "main", worktreeRoot: "/tmp/demo-worktrees", settings: { commands: [{ commandId: "project.cleanup", argv: ["true"], enabled: true, category: "lifecycle" }] } });
+    store.saveRun({ id: "run-active", projectId: "project-1", planId: "plan-1", planRevision: 1, status: "IN_PROGRESS", branch: "factory/run-active", workspacePath: "/tmp/demo-worktrees/run-active", baseCommit: "abc", executionThreadId: "execution-1", createdAt: store.now(), startedAt: store.now() });
+
+    const updated = projects.update("project-1", { settings: { models: { executor: { model: "claude-opus-5", backend: "claude-agent-sdk" } } } });
+    expect(updated.settings.models.executor).toMatchObject({ model: "claude-opus-5", backend: "claude-agent-sdk" });
+
+    // 路径、分支照旧要挡：运行中的 Worktree 就在 worktreeRoot 下，分支还牵着合并。
+    expect(() => projects.update("project-1", { repoRoot: "/repo/other" })).toThrow(/active runs/i);
+    expect(() => projects.update("project-1", { defaultBranch: "release" })).toThrow(/active runs/i);
+    // hooks 也要挡：`PATCH /hooks` 那条路由本来就有自己的活动 Run 守卫，不能从这里开后门。
+    expect(() => projects.update("project-1", { settings: { hooks: { cleanup: { commandId: "project.cleanup", enabled: true, timeoutMs: 1000, maxAttempts: 1 } } } })).toThrow(/active runs/i);
+  });
+
   it("freezes the project snapshot when a plan is confirmed", () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);

@@ -233,14 +233,27 @@ a { color: inherit; text-decoration: none; }
 .execution-message-meta .agent-chip { color: #627aa8; }
 .execution-message-unknown .execution-message-meta .agent-chip { color: #9b7b31; }
 .execution-conversation-group { margin-bottom: 14px; }
-.execution-conversation-group-task { margin-left: 39px; padding-left: 14px; border-left: 2px solid #e8edf4; }
-.execution-conversation-group-task.selected { border-left-color: #78a3ec; }
-.execution-task-stream-heading { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0 3px; padding: 9px 10px; border-radius: 6px; background: #f7f9fc; color: #52657f; }
-.execution-task-stream-heading strong { flex: 1; min-width: 0; font-size: 11px; }
-.execution-task-stream-step { color: #9aa7b8; font-size: 8px; font-weight: 800; letter-spacing: .09em; }
-.execution-task-stream-status { color: #7c8da4; font-size: 9px; }
-.execution-task-stream-heading small { flex: 1 0 100%; color: #9a7478; font-size: 9px; }
-.execution-task-stream-empty { margin: 0; padding: 8px 10px; color: #9aa6b6; font-size: 10px; }
+/* 步骤分组：**不用左侧竖线**（它把整组内容再往右推 53px，而且说的和"这是一组"是同一件事），
+   改成组与组之间一条横线分段——省下横向空间，任务边界反而更醒目。 */
+.execution-conversation-group-task, .execution-conversation-group-unassigned { margin-top: 22px; border-top: 2px solid #d7e0ec; }
+.execution-conversation-group:first-child { margin-top: 0; border-top: 0; }
+.execution-task-stream-items { padding-top: 2px; }
+/* 步骤头是**可点的折叠开关**，所以它要长得像个控件：整条可点、有 hover/focus、带状态与条数。 */
+.execution-task-stream-heading { display: flex; flex-wrap: wrap; width: 100%; align-items: center; gap: 8px; margin: 10px 0 3px; padding: 10px 12px; border: 1px solid #e3eaf4; border-radius: 8px; outline: 0; background: #f4f7fc; color: #3d4d65; cursor: pointer; font: inherit; text-align: left; }
+.execution-task-stream-heading:hover { border-color: #cdddf5; background: #eef4fd; }
+.execution-task-stream-heading:focus-visible { outline: 2px solid #7ca3f4; outline-offset: 2px; }
+.execution-task-stream-heading strong { flex: 1; min-width: 0; color: #2f3f57; font-size: 12px; }
+.execution-task-stream-step { padding: 2px 6px; border-radius: 4px; background: #e2ebfa; color: #4e6fae; font-size: 8px; font-weight: 800; letter-spacing: .09em; }
+.execution-task-stream-status { padding: 2px 7px; border-radius: 10px; background: #eef1f6; color: #6b7c93; font-size: 9px; font-weight: 700; }
+.execution-task-stream-status.tone-done { background: #e8f7f0; color: #1f9060; }
+.execution-task-stream-status.tone-in_progress { background: #eaf1ff; color: #3f74d0; }
+.execution-task-stream-status.tone-blocked { background: #fdeef0; color: #b8474f; }
+.execution-task-stream-count { color: #93a1b4; font-size: 9px; }
+.execution-task-stream-heading svg { color: #8fa3c0; }
+.execution-task-stream-heading small { flex: 1 0 100%; color: #b06a72; font-size: 9px; }
+.execution-task-stream-empty { margin: 0; padding: 10px 12px; color: #9aa6b6; font-size: 10px; }
+/* 从状态卡选中的那一步：整条头部高亮，而不是靠左边一根线。 */
+.execution-conversation-group-task.selected > .execution-task-stream-heading { border-color: #bcd2f2; background: #edf3ff; }
 .execution-unassigned-heading { border: 1px dashed #e0e6ee; background: #fcfdff; }
 .execution-message.failed .execution-message-meta strong { color: #c65863; }
 .execution-message-plan { align-items: flex-start; }
@@ -781,7 +794,6 @@ a { color: inherit; text-decoration: none; }
   .execution-header-status-details .execution-telemetry-grid-compact { grid-template-columns: 1fr; }
   .execution-header-detail-footer { align-items: flex-start; flex-direction: column; }
   .run-detail-page { --run-detail-gutter: 18px; --run-detail-content-gutter: 18px; padding-inline: 18px; padding-bottom: 0; }
-  .execution-conversation-group-task { margin-left: 0; padding-left: 10px; }
   .execution-message.mine .execution-message-body { flex-basis: 92%; }
   .execution-plan-message-scope { grid-template-columns: 1fr; }
 }

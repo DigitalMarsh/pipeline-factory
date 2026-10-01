@@ -147,6 +147,23 @@ describe("Pipeline Factory v4 API", () => {
     }
   });
 
+  it("saves execution settings while a run is active", async () => {
+    // 用户报障的复现路径：把执行模型换成 claude 时，项目里正好有 Run 在跑。
+    // 设置页承诺"仓库目录、Worktree 和分支修改需要没有运行中的 Run"——模型不在其列，
+    // 因为运行中的 Run 用的是自己那份冻结快照（见 executor-agent 取 executor 模型的写法）。
+    const store = new InMemoryPipelineStore();
+    const project = createTestProject(store, "project-settings-api");
+    store.saveRun({ id: "run-active", projectId: project.id, planId: "plan-1", planRevision: 1, status: "IN_PROGRESS", branch: "factory/run-active", workspacePath: "/tmp/run-active", baseCommit: "abc", executionThreadId: "execution-active", createdAt: store.now(), startedAt: store.now() });
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+
+    const saved = await app.inject({ method: "PATCH", url: `/api/v4/projects/${project.id}`, payload: { expectedConfigVersion: 1, settings: { models: { executor: { model: "claude-opus-5", backend: "claude-agent-sdk" } } } } });
+
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json().project.settings.models.executor).toMatchObject({ model: "claude-opus-5", backend: "claude-agent-sdk" });
+    expect(saved.json().project.configVersion).toBe(2);
+  });
+
   it("sets Factory-owned prerequisite plans over HTTP and rejects unknown ids", async () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);

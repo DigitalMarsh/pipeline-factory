@@ -4,7 +4,7 @@
 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { ArrowLeft, ArrowUp, Document, Warning } from "@element-plus/icons-vue";
+import { ArrowDown, ArrowLeft, ArrowUp, Document, Warning } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 import ExecutionHeaderStatus from "../components/ExecutionHeaderStatus.vue";
@@ -15,7 +15,7 @@ import MarkdownMessage from "../components/MarkdownMessage.vue";
 import type { AgentLoopStep, ExecutionTask, ExecutionThread, MergeRequest, Plan, PlanTask, Run, RunJournalEvent, VerificationRun } from "../types";
 import { projectExecutionJournal, type ExecutionJournalEntry, type ExecutionPlanSnapshot, type ExecutionStreamItem } from "../utils/executionStream";
 import { executionMessageDetails, executionMessageDiagnosticsTitle } from "../utils/executionMessageDetails";
-import { formatProviderContextUsage, resolveExecutionModelIdentity } from "../utils/executionTelemetry";
+import { executionModelSourceNote as executionModelSourceNoteFor, formatProviderContextUsage, resolveExecutionModelIdentity } from "../utils/executionTelemetry";
 import { useModelBackends } from "../composables/useModelBackends";
 import { executionTaskStatusLabel, executionTaskSummary, projectExecutionTasks } from "../utils/executionTasks";
 import { canTerminateRun } from "../utils/runControls";
@@ -28,7 +28,7 @@ const route = useRoute();
 const router = useRouter();
 const props = withDefaults(defineProps<{ embedded?: boolean; projectId?: string; runId?: string }>(), { embedded: false });
 const emit = defineEmits<{ (event: "close"): void; (event: "open-plan", plan: Plan): void }>();
-type ExecutionConversationGroup = { id: string; kind: "plan" | "task" | "unassigned"; task?: ExecutionTask; items: ExecutionStreamItem[] };
+type ExecutionConversationGroup = { id: string; kind: "plan" | "task" | "guidance" | "unattributed"; task?: ExecutionTask; items: ExecutionStreamItem[] };
 const embedded = computed(() => props.embedded);
 const projectId = computed(() => props.projectId ?? String(route.params.projectId ?? ""));
 const runId = computed(() => props.runId ?? String(route.params.runId ?? ""));
@@ -78,6 +78,21 @@ const executionBlockReason = computed(() => {
 });
 const executionTasks = computed<ExecutionTask[]>(() => projectExecutionTasks(planTasks.value, thread.value?.journal ?? [], run.value?.status ?? ""));
 const executionTaskCounts = computed(() => executionTaskSummary(executionTasks.value));
+/**
+ * Run 级活动：没有归属于任何执行步骤的 activity 条目——Run 的创建、生命周期钩子、验证、
+ * 门禁、上下文压缩、暂停 / 恢复。它们讲的是整个 Run，不属于任何一步，所以**不留在执行会话里**，
+ * 改由顶部 RUN CONTEXT 卡片承载（见 ExecutionHeaderStatus 的「Run 级活动」一节）。
+ *
+ * 判据只用 kind + taskId：`activity` 且无 taskId。曾经这里按"事件类型是否为 RUN_CREATED /
+ * HOOK_* / VERIFICATION"列举，但那样每加一种 Run 级事件都要回来补一次，且同样无归属的
+ * `Executor started` / `Execution gate` 会被漏在会话里名不副实。
+ */
+function isRunActivity(item: ExecutionStreamItem): boolean {
+  return item.kind === "activity" && !item.taskId;
+}
+
+const runActivityItems = computed<ExecutionStreamItem[]>(() => executionMessages.value.filter(isRunActivity));
+
 const executionConversationGroups = computed<ExecutionConversationGroup[]>(() => {
   const groups: ExecutionConversationGroup[] = [];
   const planMessages = executionMessages.value.filter((item) => item.kind === "plan");
@@ -86,8 +101,14 @@ const executionConversationGroups = computed<ExecutionConversationGroup[]>(() =>
   for (const task of executionTasks.value) {
     groups.push({ id: `task-${task.id}`, kind: "task", task, items: executionMessages.value.filter((item) => item.taskId === task.id) });
   }
-  const unassigned = executionMessages.value.filter((item) => item.kind !== "plan" && (!item.taskId || !taskIds.has(item.taskId)));
-  if (unassigned.length) groups.push({ id: "unassigned", kind: "unassigned", items: unassigned });
+  // 你在执行线程里发的消息。它不属于任何执行步骤，但也不该和 Run 级活动混在一组——
+  // 它此前就挂在「未关联执行步骤」标题下，等于把用户自己说的话标成了"没有归属的执行步骤"。
+  const guidance = executionMessages.value.filter((item) => item.kind === "guidance" && !item.taskId);
+  if (guidance.length) groups.push({ id: "guidance", kind: "guidance", items: guidance });
+  // 剩下的才是真正的归因缺口：本该落进某个执行步骤、却没有归属的模型 / 工具条目。
+  // 现代 Run 不产生这类条目，它们集中在 2026-09-25 之前的数据里。
+  const unattributed = executionMessages.value.filter((item) => item.kind !== "plan" && item.kind !== "guidance" && !isRunActivity(item) && (!item.taskId || !taskIds.has(item.taskId)));
+  if (unattributed.length) groups.push({ id: "unattributed", kind: "unattributed", items: unattributed });
   return groups;
 });
 const executionTelemetry = computed(() => thread.value?.telemetry ?? null);
@@ -107,8 +128,12 @@ const executionExecutorConfig = computed(() => {
   return { model: configured?.model ?? null, backend: configured?.backend ?? roleBackend };
 });
 const executionModelIdentity = computed(() => resolveExecutionModelIdentity(executionTelemetry.value, executionExecutorConfig.value, modelCatalog.value));
-/** 值是哪来的：跑过的记录，还是配置里写着要用的。不说清就等于把配置当事实展示。 */
-const executionModelSourceNote = computed(() => executionModelIdentity.value.source === "recorded" ? "本次执行记录" : executionModelIdentity.value.source === "configured" ? "按本 Run 冻结的项目配置" : "");
+/**
+ * 项目**当前**的执行配置。与这份 Run 用的那份不一致时说明"配置改了但这份 Run 还用着旧的"——
+ * 已确认的 Plan 及其 Run 用的是确认时冻结的配置（见 utils/executionTelemetry.ts 的说明）。
+ */
+const projectExecutorConfig = ref<{ model: string | null; backend?: string | null } | null>(null);
+const executionModelSourceNote = computed(() => executionModelSourceNoteFor(executionModelIdentity.value, projectExecutorConfig.value));
 const executionContextUsage = computed(() => formatProviderContextUsage(executionTelemetry.value?.usage?.inputTokens));
 /**
  * 展开的是**诊断细节**（Turn #、调用 id、provider 会话），不是正文：正文永远可见。
@@ -121,6 +146,24 @@ function toggleExecutionItem(id: string): void {
   if (next.has(id)) next.delete(id);
   else next.add(id);
   expandedExecutionItems.value = next;
+}
+/**
+ * 按执行步骤（task）折叠整组消息：从 task 视角逐个看时，把别的组收起来就不乱。
+ * 收起的是**这一组的消息**，步骤头本身始终在——它就是"这里还有一个 task"的那一行。
+ */
+const collapsedTaskGroups = ref<Set<string>>(new Set());
+function isTaskGroupCollapsed(groupId: string): boolean { return collapsedTaskGroups.value.has(groupId); }
+function toggleTaskGroup(groupId: string): void {
+  const next = new Set(collapsedTaskGroups.value);
+  if (next.has(groupId)) next.delete(groupId);
+  else next.add(groupId);
+  collapsedTaskGroups.value = next;
+}
+function expandTaskGroup(groupId: string): void {
+  if (!collapsedTaskGroups.value.has(groupId)) return;
+  const next = new Set(collapsedTaskGroups.value);
+  next.delete(groupId);
+  collapsedTaskGroups.value = next;
 }
 const canSendExecutionMessage = computed(() => Boolean(thread.value && !["CANCELLED", "COMPLETED"].includes(thread.value.state)));
 
@@ -173,6 +216,8 @@ function scrollExecutionToLatest(): void {
 
 function focusExecutionTask(task: ExecutionTask): void {
   selectedTaskId.value = task.id;
+  // 从状态卡跳到一个被收起的步骤时，先把它展开——否则"跳过去"看起来什么都没发生。
+  expandTaskGroup(`task-${task.id}`);
   void nextTick(() => {
     const target = (task.evidenceSequence ? executionTimeline.value?.querySelector<HTMLElement>(`[data-sequence="${task.evidenceSequence}"]`) : null)
       ?? Array.from(executionTimeline.value?.querySelectorAll<HTMLElement>("[data-task-id]") ?? []).find((element) => element.dataset.taskId === task.id);
@@ -320,6 +365,11 @@ async function load() {
     run.value = response.run;
     setExecutionThread(response.executionThread);
     executorConfig.value = response.executorConfig;
+    // 项目**当前**配置只服务于一条提示（"配置改了但这份 Run 还用旧的"）；取不到不影响 Run 本身。
+    try {
+      const snapshot = await api.project(requestProjectId);
+      if (requestScope.isCurrent(requestToken, `${requestProjectId}:${requestRunId}`)) projectExecutorConfig.value = snapshot.project.settings.models.executor ?? null;
+    } catch { /* 提示缺失不影响主流程 */ }
     verification.value = response.verification;
     mergeRequest.value = response.mergeRequest;
     try {
@@ -492,16 +542,19 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
         <div class="execution-conversation-stage">
           <div ref="executionTimeline" class="execution-conversation" @scroll="updateExecutionScrollState">
           <div v-if="!executionMessages.length" class="empty-state"><Document :size="28" /><h3>Waiting for executor activity</h3><p>The execution conversation will appear here when the Run starts.</p></div>
-          <section v-for="group in executionConversationGroups" :key="group.id" :class="['execution-conversation-group', `execution-conversation-group-${group.kind}`, { selected: selectedTaskId === group.task?.id }]" :data-task-id="group.task?.id">
-            <header v-if="group.task" class="execution-task-stream-heading">
+          <section v-for="group in executionConversationGroups" :key="group.id" :class="['execution-conversation-group', `execution-conversation-group-${group.kind}`, { selected: selectedTaskId === group.task?.id, collapsed: isTaskGroupCollapsed(group.id) }]" :data-task-id="group.task?.id">
+            <button v-if="group.task" type="button" class="execution-task-stream-heading" :aria-expanded="!isTaskGroupCollapsed(group.id)" :aria-controls="`execution-task-stream-${group.id}`" @click="toggleTaskGroup(group.id)">
               <span class="execution-task-stream-step">PLAN TASK</span>
               <strong>{{ group.task.title }}</strong>
-              <span class="execution-task-stream-status">{{ executionTaskStatusLabel(group.task.status) }}</span>
+              <span :class="['execution-task-stream-status', `tone-${group.task.status.toLowerCase()}`]">{{ executionTaskStatusLabel(group.task.status) }}</span>
+              <span class="execution-task-stream-count">{{ group.items.length }} 条</span>
+              <ArrowUp v-if="!isTaskGroupCollapsed(group.id)" :size="14" /><ArrowDown v-else :size="14" />
               <small v-if="group.task.blockedReason">{{ group.task.blockedReason }}</small>
-            </header>
-            <header v-else-if="group.kind === 'unassigned'" class="execution-task-stream-heading execution-unassigned-heading">
-              <span class="execution-task-stream-step">RUN ACTIVITY</span><strong>未关联执行步骤</strong><small>此处保留旧 Run 或未提供执行步骤标识的事件。</small>
-            </header>
+            </button>
+            <button v-else-if="group.kind === 'unassigned'" type="button" class="execution-task-stream-heading execution-unassigned-heading" :aria-expanded="!isTaskGroupCollapsed(group.id)" :aria-controls="`execution-task-stream-${group.id}`" @click="toggleTaskGroup(group.id)">
+              <span class="execution-task-stream-step">RUN ACTIVITY</span><strong>未关联执行步骤</strong><span class="execution-task-stream-count">{{ group.items.length }} 条</span><ArrowUp v-if="!isTaskGroupCollapsed(group.id)" :size="14" /><ArrowDown v-else :size="14" /><small>此处保留旧 Run 或未提供执行步骤标识的事件。</small>
+            </button>
+            <div v-if="!isTaskGroupCollapsed(group.id)" :id="`execution-task-stream-${group.id}`" class="execution-task-stream-items">
             <p v-if="group.task && !group.items.length" class="execution-task-stream-empty">{{ taskGroupEmptyNote(group.task) }}</p>
             <article v-for="item in group.items" :key="item.id" :data-sequence="item.sequence" :data-task-id="item.taskId" :data-model-step="item.modelStep" :title="executionMessageDiagnosticsTitle(item)" :class="['execution-message', `execution-message-${item.kind}`, { failed: item.status === 'FAILED', waiting: item.status === 'WAITING', running: item.status === 'RUNNING', unknown: item.status === 'UNKNOWN', mine: item.role === 'user' }]">
               <div class="execution-message-avatar">{{ item.role === 'user' ? 'LS' : item.kind === 'plan' ? 'PL' : item.kind === 'model' ? 'EX' : item.kind === 'tool' ? 'TL' : '·' }}</div>
@@ -530,6 +583,7 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
                 </template>
               </div>
             </article>
+            </div>
           </section>
           </div>
           <el-button v-if="showScrollToLatest" class="execution-scroll-latest" size="small" @click="scrollExecutionToLatest">Jump to latest</el-button>

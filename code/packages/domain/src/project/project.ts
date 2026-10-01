@@ -549,8 +549,21 @@ export class ProjectService {
     if (!defaultBranch) throw new Error("defaultBranch is required");
     const changed = name !== project.name || shortName !== project.shortName || repoRoot !== project.repoRoot || worktreeRoot !== project.worktreeRoot || defaultBranch !== project.defaultBranch || JSON.stringify(nextSettings) !== JSON.stringify(project.settings);
     if (!changed) return project;
-    const highRiskChanged = repoRoot !== project.repoRoot || worktreeRoot !== project.worktreeRoot || defaultBranch !== project.defaultBranch || JSON.stringify(nextSettings) !== JSON.stringify(project.settings);
-    if (highRiskChanged && hasActiveRun(this.store, projectId)) throw new Error(`Project ${projectId} has active runs`);
+    /**
+     * "高风险" = 会动到**正在跑的 Run 脚下那块地**的改动，只有两种：
+     *   1) 仓库 / Worktree 路径与默认分支（运行中的 Worktree 就在 worktreeRoot 下，分支还牵着合并）；
+     *   2) hooks（清理钩子在 Run 结束时执行）。
+     * **其余设置不在此列**：模型、并发、命令、工具白名单在 Plan Confirm 时已冻结进 Revision 快照，
+     * 运行中的 Run 只读自己那份快照（见 `executor-agent` 取 executor 模型的写法），改它们影响的是
+     * 后续执行。设置页的三处提示也是这么承诺的（"仓库目录、Worktree 和分支修改需要没有运行中的 Run"
+     * vs "这些设置会在下一次 Plan Confirm 时冻结"）。
+     *
+     * 这里曾经把**任何** settings 变更都算进来，于是"趁跑着把执行模型换成 claude"被 409 挡下，
+     * 用户看到的现象是"我明明改了，怎么还是老模型"——挡住了预期操作，却没说清挡住了什么。
+     */
+    const pathsChanged = repoRoot !== project.repoRoot || worktreeRoot !== project.worktreeRoot || defaultBranch !== project.defaultBranch;
+    const hooksChanged = JSON.stringify(nextSettings.hooks) !== JSON.stringify(project.settings.hooks);
+    if ((pathsChanged || hooksChanged) && hasActiveRun(this.store, projectId)) throw new Error(`Project ${projectId} has active runs（仓库路径、Worktree、默认分支与 hooks 的改动需要先等这些 Run 结束；模型与其他执行设置可以随时改）`);
     const updated: Project = {
       ...project,
       name,

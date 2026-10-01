@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const runDetailSource = readFileSync(fileURLToPath(new URL("./RunDetailView.vue", import.meta.url)), "utf8");
+const runDetailStyles = readFileSync(fileURLToPath(new URL("../styles.css", import.meta.url)), "utf8");
 
 describe("Run detail execution conversation", () => {
   it("renders executor model and guidance text through the shared Markdown component", () => {
@@ -99,6 +100,19 @@ describe("Run detail execution conversation", () => {
     expect(runDetailSource).toContain("<h1>Execution run</h1>");
     expect(runDetailSource).toContain('class="execution-plan-link"');
     expect(runDetailSource).not.toContain('class="detail-heading-copy"');
+  });
+
+  it("collapses a task group from its heading and separates tasks with a rule instead of a rail", () => {
+    // 步骤头本身是折叠开关：整条可点、带 aria-expanded，收起的是这一组的消息。
+    expect(runDetailSource).toContain('<button v-if="group.task" type="button" class="execution-task-stream-heading"');
+    expect(runDetailSource).toContain(':aria-expanded="!isTaskGroupCollapsed(group.id)"');
+    expect(runDetailSource).toContain('@click="toggleTaskGroup(group.id)"');
+    expect(runDetailSource).toContain('class="execution-task-stream-items"');
+    // 从状态卡跳到被收起的步骤时先展开，否则"跳过去"看着像没反应。
+    expect(runDetailSource).toContain("expandTaskGroup(`task-${task.id}`)");
+    // 左边那根竖线不再回来（它把整组往右推 53px）：任务之间用一条横线分段。
+    expect(runDetailStyles).not.toMatch(/\.execution-conversation-group-task \{[^}]*border-left/);
+    expect(runDetailStyles).toMatch(/\.execution-conversation-group-task[^{]*\{[^}]*border-top: 2px solid/);
   });
 
   it("projects the frozen Plan Revision as the first conversation message", () => {
