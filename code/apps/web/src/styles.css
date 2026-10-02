@@ -918,6 +918,13 @@ a { color: inherit; text-decoration: none; }
 @media (max-width: 720px) {
   .topbar { gap: 12px; padding-inline: 12px; }
   .console-layout { grid-template-columns: 58px minmax(0, 1fr); }
+  /* 58px 的左列**只装得下图标栏**，所以这里也要把 rail 的面板列一起收掉。
+     此前只改了外层列宽，而 `.thread-rail` 内部仍是 `64px minmax(0,1fr)`：面板列被挤到 0 宽，
+     内容却照常溢出——那个「项目执行线程」入口会变成十几像素宽的一条竖条，还被中栏盖住，
+     窄屏下根本点不到。项目执行模式下的左列有 168px（见 ProjectExecutionThreadPanel 的
+     `@media (max-width: 700px)`），放得下，所以用 `:not()` 把它排除在外。 */
+  .console-layout:not(.project-execution-mode) .thread-rail { grid-template-columns: minmax(0, 1fr); }
+  .console-layout:not(.project-execution-mode) .thread-rail .left-panel { display: none; }
   .requirement-workspace-header { padding: 14px 13px 12px; }
   .requirement-workspace-header h1 { font-size: 16px; }
   .requirement-workspace-header p { font-size: 9px; }

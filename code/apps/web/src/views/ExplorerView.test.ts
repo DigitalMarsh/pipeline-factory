@@ -269,6 +269,14 @@ describe("Explorer rail layout", () => {
     expect(explorerStylesSource).toContain(".timeline { flex: 1 1 auto;");
     expect(explorerStylesSource).toContain(".composer { flex: 0 0 auto;");
   });
+
+  it("narrow screens collapse the rail to its icon strip instead of squeezing the panel", () => {
+    // ≤720px 时左列只有 58px，只装得下图标栏。此前只改了外层列宽、没管 rail 内部的
+    // `64px minmax(0,1fr)`：面板列被挤到 0 宽而内容照常溢出，那条「项目执行线程」入口
+    // 变成十几像素的竖条、还被中栏盖住，窄屏下根本点不到。两条要一起在。
+    expect(explorerStylesSource).toContain(".console-layout:not(.project-execution-mode) .thread-rail { grid-template-columns: minmax(0, 1fr); }");
+    expect(explorerStylesSource).toContain(".console-layout:not(.project-execution-mode) .thread-rail .left-panel { display: none; }");
+  });
 });
 
 describe("Explorer inline message presentation", () => {
