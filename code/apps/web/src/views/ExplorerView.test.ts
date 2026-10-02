@@ -317,6 +317,18 @@ describe("Explorer inline message presentation", () => {
     expect(explorerViewSource).not.toContain("INPUT_RESOLVED");
   });
 
+  it("八类过程活动在模板里各走各的行", () => {
+    // 此前八类共用同一条 loop-activity-card 骨架，于是"正在思考""工具被拒""上下文压缩"长得一模一样。
+    expect(explorerViewSource).toContain("activityMode(item.activity) === 'reasoning'");
+    expect(explorerViewSource).toContain("activityMode(item.activity) === 'divider'");
+    expect(explorerViewSource).toContain("`activity-${activityMode(item.activity)}`");
+    // 行型与字段都出自 utils，视图不再自己翻 kind 决定显示什么。
+    expect(explorerViewSource).not.toContain("activityKindLabel");
+    expect(explorerStylesSource).toContain(".timeline-note");
+    expect(explorerStylesSource).toContain(".timeline-divider-label");
+    expect(explorerStylesSource).toContain(".activity-turn-status");
+  });
+
   it("does not infer missing Task ownership and scopes Candidate refreshes", () => {
     // P7-8：归属判据随输入请求搬进 composable，**形参改名的部分是必要的**——
     // composable 收的是"已解析"的需求 id，解析链（activeExplorerPlan → thread →
