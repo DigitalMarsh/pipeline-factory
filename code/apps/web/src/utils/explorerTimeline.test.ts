@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { ExplorerActivityItem, ExplorerInputRequest, Plan } from "../types";
-import { buildExplorerMessageTimeline, buildExplorerTimeline, explorerPlanAnchorId, explorerTimelineTarget, inputRequestTarget } from "./explorerTimeline";
+import { buildExplorerMessageTimeline, buildExplorerTimeline, explorerPlanAnchorId, explorerTimelineMessageType, explorerTimelineTarget, inputRequestTarget } from "./explorerTimeline";
 
 const activity = (id: string, kind: ExplorerActivityItem["kind"], occurredAt: string): ExplorerActivityItem => ({
   id,
@@ -123,6 +123,21 @@ describe("Explorer timeline projection", () => {
 
     expect(items.map((item) => item.kind)).toEqual(["activity", "plan", "activity"]);
     expect(items[1]).toMatchObject({ kind: "plan", plan: { id: "plan-1" } });
+  });
+});
+
+describe("时间线条目 → 消息类型", () => {
+  it("活动条目原样交出它的 kind，交给展示表去决定怎么显示", () => {
+    const item = buildExplorerTimeline([activity("turn-1", "TOOL_DENIED", "2026-09-01T10:00:00.000Z")], [])[0];
+    expect(item && explorerTimelineMessageType(item)).toBe("TOOL_DENIED");
+  });
+
+  it("输入卡与游离 Plan 翻成表里的两个非活动类型", () => {
+    const input = buildExplorerTimeline([], [inputRequest("input-2", "2026-09-01T10:02:00.000Z")])[0];
+    const plan = buildExplorerTimeline([], [], [detachedPlan()])[0];
+
+    expect(input && explorerTimelineMessageType(input)).toBe("input-request");
+    expect(plan && explorerTimelineMessageType(plan)).toBe("plan-created");
   });
 });
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { activityIconKind, activityKindLabel, activityStatusLabel, explorerDisplayTitle, formatTurnTime, inputRequestTarget, inputStatusLabel } from "./explorerPresentation";
-import type { ExplorerActivityKind, ExplorerInputRequest } from "../types";
+import { activityIconKind, activityKindLabel, activityStatusLabel, EXPLORER_DISPLAY_MODES, explorerDisplayMode, explorerDisplayTitle, formatTurnTime, inputRequestTarget, inputStatusLabel } from "./explorerPresentation";
+import type { ExplorerMessageType } from "./explorerPresentation";
+import type { ExplorerActivityItem, ExplorerActivityKind, ExplorerInputRequest } from "../types";
 
 function request(id: string, status: ExplorerInputRequest["status"]): Pick<ExplorerInputRequest, "id" | "status"> {
   return { id, status };
@@ -62,5 +63,45 @@ describe("活动条目文案", () => {
     expect(activityIconKind("INPUT_RESOLVED")).toBe("success");
     expect(activityIconKind("REASONING_SUMMARY")).toBe("info");
     expect(activityIconKind("USER_MESSAGE")).toBe("info");
+  });
+});
+
+/**
+ * 表里的键就是消息清单。活动 kind 是 SCREAMING_SNAKE，另外三类（输入卡 / 游离 Plan / 内嵌方案卡）
+ * 是 kebab-case——靠这条形状差异把两类分开，不用再手抄一份 kind 清单。
+ */
+const activityTypes = (Object.keys(EXPLORER_DISPLAY_MODES) as ExplorerMessageType[]).filter((type): type is ExplorerActivityItem["kind"] => type === type.toUpperCase());
+
+describe("探索会话的消息清单", () => {
+  it("清单覆盖 12 类活动加投影产生的 3 类非活动消息", () => {
+    // 数量钉住是有意的：新增一类消息就得回来改这里，顺带在表里做一次"怎么显示"的决定。
+    // 类型层面 `Record<ExplorerMessageType, …>` 已经强制穷尽，这条锁的是"清单本身有多大"。
+    expect(activityTypes).toHaveLength(12);
+    expect(Object.keys(EXPLORER_DISPLAY_MODES)).toHaveLength(15);
+    expect(EXPLORER_DISPLAY_MODES["input-request"]).toBe("card");
+    expect(EXPLORER_DISPLAY_MODES["plan-created"]).toBe("card");
+    expect(EXPLORER_DISPLAY_MODES["candidate-plan"]).toBe("card");
+  });
+
+  it("只有被人说的话、模型正文、方案与输入做成卡片", () => {
+    expect(new Set(activityTypes.filter((type) => explorerDisplayMode(type) === "card"))).toEqual(new Set(["USER_MESSAGE", "ASSISTANT_MESSAGE"]));
+  });
+
+  it("被结构化输入卡取代的两类生命周期行不单独渲染", () => {
+    // 投影层在存在输入卡时就已经不产出它们；漏到视图说明没有卡可点，那两行只会是死路。
+    expect(activityTypes.filter((type) => explorerDisplayMode(type) === "hidden")).toEqual(["INPUT_REQUIRED", "INPUT_RESOLVED"]);
+  });
+
+  it("每一类以活动行呈现的消息都有展示文案，不回落成原字符串", () => {
+    // 这是这张表的实际用处：把某类活动从 hidden 改成 line 时，忘了补 activityKindLabel 的文案，
+    // 页面就会直接显示 TOOL_STARTED 这种原始枚举值——这条断言在那个 PR 上拦住它。
+    for (const type of activityTypes) {
+      if (explorerDisplayMode(type) !== "line") continue;
+      expect(activityKindLabel(type)).not.toBe(type);
+    }
+  });
+
+  it("过程动作这一档正好是 8 类", () => {
+    expect(activityTypes.filter((type) => explorerDisplayMode(type) === "line")).toHaveLength(8);
   });
 });

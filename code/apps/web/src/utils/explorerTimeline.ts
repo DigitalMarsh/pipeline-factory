@@ -6,11 +6,25 @@
  */
 import type { ExplorerActivityItem, ExplorerInputRequest, Plan } from "../types";
 import { planIdentity } from "./planTimeline";
+import type { ExplorerMessageType } from "./explorerPresentation";
 
 export type ExplorerTimelineItem =
   | { key: string; kind: "activity"; activity: ExplorerActivityItem; occurredAt: string }
   | { key: string; kind: "input"; request: ExplorerInputRequest; occurredAt: string }
   | { key: string; kind: "plan"; plan: Plan; occurredAt: string };
+
+/**
+ * 时间线条目 → 消息类型。视图拿它去查 `EXPLORER_DISPLAY_MODES`
+ * （见 `explorerPresentation.ts`），于是"这一类要不要显示"只由那张表决定。
+ *
+ * 只做类型翻译，不认识任何场景：条目是活动就原样交出它的 `kind`，
+ * 是输入卡 / 游离 Plan 就翻成表里的那两个非活动类型。
+ */
+export function explorerTimelineMessageType(item: ExplorerTimelineItem): ExplorerMessageType {
+  if (item.kind === "input") return "input-request";
+  if (item.kind === "plan") return "plan-created";
+  return item.activity.kind;
+}
 
 /** 左侧消息导航的最小投影：只保留时间、类型与定位信息。 */
 export type ExplorerMessageTimelineItem = {

@@ -305,6 +305,18 @@ describe("Explorer inline message presentation", () => {
     expect(explorerViewSource).not.toContain("v-for=\"item in syntheticPlanItems\"");
   });
 
+  it("时间线的显隐与内嵌方案卡都问同一张清单表", () => {
+    // 档位表（`EXPLORER_DISPLAY_MODES`）必须是**唯一**的判据：模板里再自己写一遍
+    // "哪些 kind 要显示"，就等于把表绕过去了——改表不再生效，而且没人会发现。
+    expect(explorerViewSource).toContain('v-for="(item, index) in renderedTimelineItems"');
+    expect(explorerViewSource).toContain("explorerDisplayMode(explorerTimelineMessageType(item))");
+    expect(explorerViewSource).toContain('explorerDisplayMode("candidate-plan")');
+    expect(explorerViewSource).not.toContain('v-for="(item, index) in timelineItems"');
+    // 被输入卡取代的那两类生命周期行只写在表里（和投影层），视图不该认得它们的名字。
+    expect(explorerViewSource).not.toContain("INPUT_REQUIRED");
+    expect(explorerViewSource).not.toContain("INPUT_RESOLVED");
+  });
+
   it("does not infer missing Task ownership and scopes Candidate refreshes", () => {
     // P7-8：归属判据随输入请求搬进 composable，**形参改名的部分是必要的**——
     // composable 收的是"已解析"的需求 id，解析链（activeExplorerPlan → thread →
