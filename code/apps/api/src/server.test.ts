@@ -498,7 +498,7 @@ describe("Pipeline Factory v4 API", () => {
     const snapshot = projects.snapshot(project.id);
     store.saveRevision({
       planId: candidate.id, revision: 1, contract: candidate.contract, artifactHash: "sha256:test",
-      confirmedBy: "tester", confirmedAt: store.now(), sourceExplorerThreadId: explorer.id, provenance: "CURRENT",
+      confirmedBy: "tester", confirmedAt: store.now(), sourceExplorerThreadId: explorer.id,
       projectConfigVersion: snapshot.configVersion, projectConfigHash: snapshot.configHash,
       projectConfigSnapshot: { ...snapshot, settings: { ...snapshot.settings, models: { ...snapshot.settings.models, executor: { ...snapshot.settings.models.executor, model: "frozen-model", backend: "claude-agent-sdk" } } } },
     } as unknown as PlanRevision);

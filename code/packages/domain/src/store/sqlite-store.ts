@@ -77,7 +77,6 @@ import type {
   ProjectExecutionThread,
   ProjectExecutionTurnStatus,
   RegisterThreadInput,
-  RevisionLifecycleProjection,
   Run,
   RunStatus,
   ToolCallResult,
@@ -337,17 +336,6 @@ export class SqlitePipelineStore implements PipelineStore {
       CREATE UNIQUE INDEX IF NOT EXISTS plan_revision_drafts_active_uq
         ON plan_revision_drafts(plan_id)
         WHERE status IN ('EDITING', 'READY_TO_CONFIRM', 'BASE_CHANGED');
-      CREATE TABLE IF NOT EXISTS revision_lifecycle_projection (
-        plan_id TEXT NOT NULL,
-        revision INTEGER NOT NULL,
-        project_id TEXT NOT NULL,
-        title TEXT NOT NULL,
-        status TEXT NOT NULL,
-        source_explorer_thread_id TEXT NOT NULL,
-        run_id TEXT,
-        last_event_at TEXT NOT NULL,
-        PRIMARY KEY (plan_id, revision)
-      );
       CREATE TABLE IF NOT EXISTS change_proposals (
         id TEXT PRIMARY KEY,
         run_id TEXT NOT NULL,
@@ -608,11 +596,15 @@ export class SqlitePipelineStore implements PipelineStore {
     // Plan 落盘副本的路径（确认时写入受管工程的计划目录）。存下来而不是运行时推算：推算值会随
     // planDirectory 配置漂移，"文件在哪"就成了一条会变的事实。
     try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN plan_document_path TEXT"); } catch { /* Existing databases already have the column. */ }
-    try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN provenance TEXT NOT NULL DEFAULT 'LEGACY'"); } catch { /* Existing databases already have the column. */ }
+    // 老库的清理：这两样东西代码里已经不读不写了，留着只会让"历史遗留"在库里继续存在。
+    // `revision_lifecycle_projection` 曾经是只写不读的表（连消费方都没有），
+    // `provenance` 只区分"启动回填的只读修订"，而回填本身也删了（它会把正常确认的 Plan 标成 LEGACY）。
+    // 两条都吞异常：新库上它们本来就不存在。
+    try { this.database.exec("DROP TABLE IF EXISTS revision_lifecycle_projection"); } catch { /* 新库没有这张表。 */ }
+    try { this.database.exec("ALTER TABLE plan_revisions DROP COLUMN provenance"); } catch { /* 新库没有这一列。 */ }
     this.repairUnconfirmedProgressedPlans();
     this.repairOrphanedPlans();
     this.backfillExplorerPlans();
-    this.backfillLegacyRevisionHistory();
     this.backfillCandidateVersions();
     this.backfillLegacyVerificationRuns();
     this.backfillPlanQueryProjection();
@@ -906,14 +898,14 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   saveRevision(revision: PlanRevision): PlanRevision {
-    this.statement("INSERT OR IGNORE INTO plan_revisions (plan_id, revision, contract_json, artifact_hash, confirmed_by, confirmed_at, source_explorer_thread_id, explorer_plan_id, project_config_version, project_config_hash, project_config_snapshot_json, resolved_contract_json, source_turn_id, provider_thread_id, provider_turn_id, provider_item_id, provenance, plan_document_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(revision.planId, revision.revision, JSON.stringify(revision.contract), revision.artifactHash, revision.confirmedBy, revision.confirmedAt, revision.sourceExplorerThreadId, revision.explorerPlanId ?? null, revision.projectConfigVersion ?? null, revision.projectConfigHash ?? null, revision.projectConfigSnapshot ? JSON.stringify(revision.projectConfigSnapshot) : null, revision.resolvedContract ? JSON.stringify(revision.resolvedContract) : null, revision.sourceTurnId ?? null, revision.providerThreadId ?? null, revision.providerTurnId ?? null, revision.providerItemId ?? null, revision.provenance ?? "CURRENT", revision.planDocumentPath ?? null);
+    this.statement("INSERT OR IGNORE INTO plan_revisions (plan_id, revision, contract_json, artifact_hash, confirmed_by, confirmed_at, source_explorer_thread_id, explorer_plan_id, project_config_version, project_config_hash, project_config_snapshot_json, resolved_contract_json, source_turn_id, provider_thread_id, provider_turn_id, provider_item_id, plan_document_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(revision.planId, revision.revision, JSON.stringify(revision.contract), revision.artifactHash, revision.confirmedBy, revision.confirmedAt, revision.sourceExplorerThreadId, revision.explorerPlanId ?? null, revision.projectConfigVersion ?? null, revision.projectConfigHash ?? null, revision.projectConfigSnapshot ? JSON.stringify(revision.projectConfigSnapshot) : null, revision.resolvedContract ? JSON.stringify(revision.resolvedContract) : null, revision.sourceTurnId ?? null, revision.providerThreadId ?? null, revision.providerTurnId ?? null, revision.providerItemId ?? null, revision.planDocumentPath ?? null);
     return this.getRevision(revision.planId, revision.revision) as PlanRevision;
   }
 
   getRevision(planId: string, revision: number): PlanRevision | undefined {
     const row = this.statement("SELECT * FROM plan_revisions WHERE plan_id = ? AND revision = ?").get(planId, revision) as SqliteRow | undefined;
     if (!row) return undefined;
-    return freezeRevision({ planId: String(row.plan_id), revision: Number(row.revision), contract: JSON.parse(String(row.contract_json)) as PlanContract, ...(row.resolved_contract_json ? { resolvedContract: JSON.parse(String(row.resolved_contract_json)) as ResolvedPlanContract } : {}), artifactHash: String(row.artifact_hash), ...(row.plan_document_path === null || row.plan_document_path === undefined ? {} : { planDocumentPath: String(row.plan_document_path) }), confirmedBy: String(row.confirmed_by), confirmedAt: String(row.confirmed_at), sourceExplorerThreadId: String(row.source_explorer_thread_id), ...(row.explorer_plan_id === null || row.explorer_plan_id === undefined ? {} : { explorerPlanId: String(row.explorer_plan_id) }), sourceTurnId: row.source_turn_id === null || row.source_turn_id === undefined ? null : String(row.source_turn_id), providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id), providerTurnId: row.provider_turn_id === null || row.provider_turn_id === undefined ? null : String(row.provider_turn_id), providerItemId: row.provider_item_id === null || row.provider_item_id === undefined ? null : String(row.provider_item_id), provenance: row.provenance === "CURRENT" ? "CURRENT" : "LEGACY", ...(row.project_config_version === null || row.project_config_version === undefined ? {} : { projectConfigVersion: Number(row.project_config_version) }), ...(row.project_config_hash === null || row.project_config_hash === undefined ? {} : { projectConfigHash: String(row.project_config_hash) }), ...(row.project_config_snapshot_json === null || row.project_config_snapshot_json === undefined ? {} : { projectConfigSnapshot: JSON.parse(String(row.project_config_snapshot_json)) as ProjectExecutionSnapshot }) });
+    return freezeRevision({ planId: String(row.plan_id), revision: Number(row.revision), contract: JSON.parse(String(row.contract_json)) as PlanContract, ...(row.resolved_contract_json ? { resolvedContract: JSON.parse(String(row.resolved_contract_json)) as ResolvedPlanContract } : {}), artifactHash: String(row.artifact_hash), ...(row.plan_document_path === null || row.plan_document_path === undefined ? {} : { planDocumentPath: String(row.plan_document_path) }), confirmedBy: String(row.confirmed_by), confirmedAt: String(row.confirmed_at), sourceExplorerThreadId: String(row.source_explorer_thread_id), ...(row.explorer_plan_id === null || row.explorer_plan_id === undefined ? {} : { explorerPlanId: String(row.explorer_plan_id) }), sourceTurnId: row.source_turn_id === null || row.source_turn_id === undefined ? null : String(row.source_turn_id), providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id), providerTurnId: row.provider_turn_id === null || row.provider_turn_id === undefined ? null : String(row.provider_turn_id), providerItemId: row.provider_item_id === null || row.provider_item_id === undefined ? null : String(row.provider_item_id), ...(row.project_config_version === null || row.project_config_version === undefined ? {} : { projectConfigVersion: Number(row.project_config_version) }), ...(row.project_config_hash === null || row.project_config_hash === undefined ? {} : { projectConfigHash: String(row.project_config_hash) }), ...(row.project_config_snapshot_json === null || row.project_config_snapshot_json === undefined ? {} : { projectConfigSnapshot: JSON.parse(String(row.project_config_snapshot_json)) as ProjectExecutionSnapshot }) });
   }
 
   listRevisions(planId: string): PlanRevision[] {
@@ -936,16 +928,6 @@ export class SqlitePipelineStore implements PipelineStore {
   updateRevisionDraft(draft: PlanRevisionDraft): PlanRevisionDraft {
     this.statement("UPDATE plan_revision_drafts SET status = ?, title = ?, contract_json = ?, generated_spec_json = ?, resolved_contract_json = ?, source_explorer_thread_id = ?, explorer_plan_id = ?, source_turn_id = ?, provider_thread_id = ?, provider_turn_id = ?, provider_item_id = ?, base_branch = ?, base_commit = ?, updated_at = ?, confirmed_at = ? WHERE draft_id = ?").run(draft.status, draft.title, JSON.stringify(draft.contract), draft.generatedSpec ? JSON.stringify(draft.generatedSpec) : null, draft.resolvedContract ? JSON.stringify(draft.resolvedContract) : null, draft.sourceExplorerThreadId, draft.explorerPlanId ?? null, draft.sourceTurnId, draft.providerThreadId, draft.providerTurnId, draft.providerItemId, draft.baseBranch, draft.baseCommit, draft.updatedAt, draft.confirmedAt, draft.draftId);
     return this.getRevisionDraft(draft.draftId)!;
-  }
-  saveRevisionLifecycleProjection(projection: RevisionLifecycleProjection): RevisionLifecycleProjection {
-    this.statement("INSERT INTO revision_lifecycle_projection (plan_id, revision, project_id, title, status, source_explorer_thread_id, run_id, last_event_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(plan_id, revision) DO UPDATE SET project_id=excluded.project_id, title=excluded.title, status=excluded.status, source_explorer_thread_id=excluded.source_explorer_thread_id, run_id=excluded.run_id, last_event_at=excluded.last_event_at").run(projection.planId, projection.revision, projection.projectId, projection.title, projection.status, projection.sourceExplorerThreadId, projection.runId, projection.lastEventAt);
-    return projection;
-  }
-  listRevisionLifecycleProjections(projectId?: string, planId?: string): RevisionLifecycleProjection[] {
-    const clauses = [projectId ? "project_id = ?" : "", planId ? "plan_id = ?" : ""].filter(Boolean);
-    const values = [projectId, planId].filter((value): value is string => Boolean(value));
-    const rows = this.statement(`SELECT * FROM revision_lifecycle_projection ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""} ORDER BY plan_id ASC, revision ASC`).all(...values) as unknown as SqliteRow[];
-    return rows.map((row) => ({ planId: String(row.plan_id), revision: Number(row.revision), projectId: String(row.project_id), title: String(row.title), status: String(row.status) as RevisionLifecycleProjection["status"], sourceExplorerThreadId: String(row.source_explorer_thread_id), runId: row.run_id === null ? null : String(row.run_id), lastEventAt: String(row.last_event_at) }));
   }
 
   saveChangeProposal(proposal: ChangeProposal): ChangeProposal {
@@ -1311,7 +1293,6 @@ export class SqlitePipelineStore implements PipelineStore {
       this.statement(`DELETE FROM plan_revisions WHERE ${planIds.clause}`).run(...planIds.values);
       this.statement(`DELETE FROM plan_revision_drafts WHERE ${planIds.clause}`).run(...planIds.values);
       this.statement(`DELETE FROM candidate_plan_versions WHERE ${planIds.clause}`).run(...planIds.values);
-      this.statement(`DELETE FROM revision_lifecycle_projection WHERE ${planIds.clause}`).run(...planIds.values);
       this.statement(`DELETE FROM plan_query_projection WHERE ${planIds.clause}`).run(...planIds.values);
       if (planEntityIds) this.statement(`DELETE FROM candidate_plans WHERE ${planEntityIds.clause}`).run(...planEntityIds.values);
     }
@@ -1607,19 +1588,6 @@ export class SqlitePipelineStore implements PipelineStore {
   private backfillCandidateVersions(): void {
     for (const plan of this.listPlans()) {
       if (plan.status === "DRAFT") this.saveCandidateVersion(plan);
-    }
-  }
-
-  /** 将旧 candidate 聚合回填为只读 Revision；缺少当时快照的一律标记 LEGACY。 */
-  private backfillLegacyRevisionHistory(): void {
-    const insertRevision = this.statement("INSERT OR IGNORE INTO plan_revisions (plan_id, revision, contract_json, artifact_hash, confirmed_by, confirmed_at, source_explorer_thread_id, source_turn_id, provider_thread_id, provider_turn_id, provider_item_id, provenance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'LEGACY')");
-    const insertProjection = this.statement("INSERT OR IGNORE INTO revision_lifecycle_projection (plan_id, revision, project_id, title, status, source_explorer_thread_id, run_id, last_event_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-    for (const plan of this.listPlans()) {
-      if (!["READY", "ENQUEUED", "DISPATCHED", "QUEUED", "IN_PROGRESS", "VERIFYING", "MERGE_READY", "MERGED", "BLOCKED", "NEEDS_PLAN_CHANGE"].includes(plan.status)) continue;
-      const confirmedAt = plan.confirmedAt ?? plan.createdAt;
-      const artifactHash = `sha256:${createHash("sha256").update(JSON.stringify(plan.contract)).digest("hex")}`;
-      insertRevision.run(plan.id, plan.revision, JSON.stringify(plan.contract), artifactHash, plan.confirmedBy ?? "legacy", confirmedAt, plan.sourceExplorerThreadId, plan.sourceTurnId, plan.providerThreadId, plan.providerTurnId, plan.providerItemId);
-      insertProjection.run(plan.id, plan.revision, plan.projectId, plan.title, "LEGACY", plan.sourceExplorerThreadId, plan.runId, plan.lastEventAt);
     }
   }
 

@@ -22,7 +22,7 @@ function seed(store: InMemoryPipelineStore, telemetry: ExecutionTelemetry | null
   // 快照里的 executor 与"当前项目设置"**故意不同**：只有这样才测得出"快照优先"。
   const revision = {
     planId: candidate.id, revision: 1, contract: candidate.contract, artifactHash: "sha256:test",
-    confirmedBy: "tester", confirmedAt: store.now(), sourceExplorerThreadId: "explorer-1", provenance: "CURRENT",
+    confirmedBy: "tester", confirmedAt: store.now(), sourceExplorerThreadId: "explorer-1",
     projectConfigVersion: snapshot.configVersion, projectConfigHash: snapshot.configHash,
     projectConfigSnapshot: { ...snapshot, settings: { ...snapshot.settings, models: { ...snapshot.settings.models, executor: { ...snapshot.settings.models.executor, model: "frozen-at-confirm", backend: "claude-agent-sdk" } } } },
   } as unknown as PlanRevision;

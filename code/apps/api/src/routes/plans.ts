@@ -235,7 +235,7 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
     try {
       const plan = plans.get(params.data.planId);
       if (ensurePlanProject(plan.projectId, reply) === null) return;
-      return { plan: { ...plan, ...planProjection(store, plan) }, items: plans.listRevisions(plan.id), drafts: store.listRevisionDrafts(plan.id), lifecycle: store.listRevisionLifecycleProjections(plan.projectId, plan.id) };
+      return { plan: { ...plan, ...planProjection(store, plan) }, items: plans.listRevisions(plan.id), drafts: store.listRevisionDrafts(plan.id) };
     } catch { return reply.code(404).send({ code: "PLAN_NOT_FOUND", error: "Plan not found" }); }
   });
 

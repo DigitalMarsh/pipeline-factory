@@ -80,7 +80,7 @@ export { InMemoryPipelineStore } from "./store/in-memory-store.js";
 export { SqlitePipelineStore } from "./store/sqlite-store.js";
 
 // ─────────────────────────── plan/：Plan 类型、合同校验与状态机 ───────────────────────────
-export type { ApprovedChangeProposal, CandidatePlan, ChangeProposal, ChangeProposalStatus, CreateCandidatePlanInput, CreateChangeProposalInput, CreateRevisionDraftInput, PlanContract, PlanLifecycleEntry, PlanLifecycleStatus, PlanRevisionDraft, PlanRevisionDraftStatus, PlanRevision, PlanStatus, PlanTask, RevisionLifecycleProjection } from "./plan/types.js";
+export type { ApprovedChangeProposal, CandidatePlan, ChangeProposal, ChangeProposalStatus, CreateCandidatePlanInput, CreateChangeProposalInput, CreateRevisionDraftInput, PlanContract, PlanLifecycleEntry, PlanLifecycleStatus, PlanRevisionDraft, PlanRevisionDraftStatus, PlanRevision, PlanStatus, PlanTask } from "./plan/types.js";
 export { updatePlanStatus } from "./plan/status-transition.js";
 export { validatePlanContract } from "./plan/contract.js";
 export { assessPlanCompletion } from "./plan/completion.js";

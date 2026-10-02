@@ -23,8 +23,8 @@
  *   4) **CandidatePlan.status 的每次变化都应走 plan/status-transition.ts 的 updatePlanStatus**，
  *      它同时维护 lastEventAt / attentionReason 并追加事件；直接赋值会让生命周期时间线缺条目。
  *   5) **PlanRevision 是冻结快照**（Readonly + projectConfigSnapshot），确认之后不随
- *      Project 配置变化。provenance 为 LEGACY 表示旧数据无法补齐快照，只允许浏览、
- *      不能作为新执行来源 —— 别为了"让老 Plan 也能跑"去掉这个判断。
+ *      Project 配置变化。缺快照的历史 Revision 只允许浏览、不能作为新执行来源 ——
+ *      别为了"让老 Plan 也能跑"去掉这个判断。
  *   6) **PlanRevisionDraft 是唯一可写的工作副本，永远不能直接成为 Executor 的合同**：
  *      必须先 confirm 成 PlanRevision。BASE_CHANGED 表示基线已漂移，需要重建而不是继续编辑。
  *   7) ChangeProposal.contract 保持原值不可变（Readonly）：提案是"请求改"，不是"已经改"；
@@ -176,8 +176,6 @@ export type PlanRevision = Readonly<{
   providerThreadId?: string | null;
   providerTurnId?: string | null;
   providerItemId?: string | null;
-  /** 旧数据无法补齐快照时只允许浏览，不能作为新执行来源。 */
-  provenance?: "CURRENT" | "LEGACY";
   projectConfigVersion?: number;
   projectConfigHash?: string;
   projectConfigSnapshot?: ProjectExecutionSnapshot;
@@ -208,18 +206,6 @@ export type PlanRevisionDraft = Readonly<{
   updatedAt: string;
   confirmedAt: string | null;
 }>;
-
-/** 用复合 PlanRef 表示的版本生命周期投影；不能用 latest 隐式替代 revision。 */
-export type RevisionLifecycleProjection = {
-  planId: string;
-  revision: number;
-  projectId: string;
-  title: string;
-  status: PlanStatus | PlanRevisionDraftStatus | "LEGACY";
-  sourceExplorerThreadId: string;
-  runId: string | null;
-  lastEventAt: string;
-};
 
 /** 从 Explorer turn 创建 CandidatePlan 的最小输入。 */
 export type CreateCandidatePlanInput = {

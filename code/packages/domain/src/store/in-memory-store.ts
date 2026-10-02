@@ -48,7 +48,6 @@ import type {
   ProjectExecutionMessage,
   ProjectExecutionThread,
   RegisterThreadInput,
-  RevisionLifecycleProjection,
   Run,
   VerificationRun,
 } from "../index.js";
@@ -65,7 +64,6 @@ export class InMemoryPipelineStore implements PipelineStore {
   private readonly dispatchStates = new Map<string, PlanDispatchState>();
   private readonly revisions = new Map<string, PlanRevision>();
   private readonly revisionDrafts = new Map<string, PlanRevisionDraft>();
-  private readonly revisionLifecycleProjections = new Map<string, RevisionLifecycleProjection>();
   private readonly changeProposals = new Map<string, ChangeProposal>();
   private readonly runs = new Map<string, Run>();
   private readonly executionThreads = new Map<string, ExecutionThread>();
@@ -302,13 +300,6 @@ export class InMemoryPipelineStore implements PipelineStore {
     this.revisionDrafts.set(draft.draftId, draft);
     return draft;
   }
-  saveRevisionLifecycleProjection(projection: RevisionLifecycleProjection): RevisionLifecycleProjection {
-    this.revisionLifecycleProjections.set(`${projection.planId}:${projection.revision}`, projection);
-    return projection;
-  }
-  listRevisionLifecycleProjections(projectId?: string, planId?: string): RevisionLifecycleProjection[] {
-    return [...this.revisionLifecycleProjections.values()].filter((item) => (!projectId || item.projectId === projectId) && (!planId || item.planId === planId)).sort((a, b) => a.planId.localeCompare(b.planId) || a.revision - b.revision);
-  }
 
   saveChangeProposal(proposal: ChangeProposal): ChangeProposal {
     if (this.changeProposals.has(proposal.id)) return this.changeProposals.get(proposal.id)!;
@@ -446,7 +437,6 @@ export class InMemoryPipelineStore implements PipelineStore {
     for (const key of [...this.dispatchStates.keys()]) if (planIds.has(key)) this.dispatchStates.delete(key);
     for (const key of [...this.revisions.keys()]) if (planIds.has(key.split(":")[0] ?? "")) this.revisions.delete(key);
     for (const [key, draft] of this.revisionDrafts) if (planIds.has(draft.planId) || draft.sourceExplorerThreadId === input.explorerId) this.revisionDrafts.delete(key);
-    for (const [key, projection] of this.revisionLifecycleProjections) if (planIds.has(projection.planId) || projection.sourceExplorerThreadId === input.explorerId) this.revisionLifecycleProjections.delete(key);
     for (const [key, projection] of this.planQueryProjections) if (planIds.has(projection.planId) || projection.sourceExplorerThreadId === input.explorerId) this.planQueryProjections.delete(key);
     for (const [key, execution] of this.hookExecutions) if (runIds.has(execution.runId)) this.hookExecutions.delete(key);
     for (const [key, verification] of this.verificationRuns) if (runIds.has(verification.runId)) this.verificationRuns.delete(key);

@@ -60,7 +60,6 @@ import type {
   ProjectExecutionMessage,
   ProjectExecutionThread,
   RegisterThreadInput,
-  RevisionLifecycleProjection,
   Run,
   VerificationRun,
 } from "../index.js";
@@ -136,8 +135,6 @@ export type PipelineStore = {
   getRevisionDraft(draftId: string): PlanRevisionDraft | undefined;
   listRevisionDrafts(planId?: string): PlanRevisionDraft[];
   updateRevisionDraft(draft: PlanRevisionDraft): PlanRevisionDraft;
-  saveRevisionLifecycleProjection(projection: RevisionLifecycleProjection): RevisionLifecycleProjection;
-  listRevisionLifecycleProjections(projectId?: string, planId?: string): RevisionLifecycleProjection[];
   saveChangeProposal(proposal: ChangeProposal): ChangeProposal;
   getChangeProposal(id: string): ChangeProposal | undefined;
   listChangeProposals(runId?: string): ChangeProposal[];

@@ -58,7 +58,6 @@ const REQUIRED_PORT_METHOD_NAMES = [
   "saveDispatchState", "deleteDispatchState", "getDispatchState", "listDispatchStates",
   "saveRevision", "getRevision", "listRevisions",
   "saveRevisionDraft", "getRevisionDraft", "listRevisionDrafts", "updateRevisionDraft",
-  "saveRevisionLifecycleProjection", "listRevisionLifecycleProjections",
   "saveChangeProposal", "getChangeProposal", "listChangeProposals", "updateChangeProposal",
   "saveRun", "getRun", "listRuns",
   "saveExecutionThread", "getExecutionThread", "appendExecutionJournal",

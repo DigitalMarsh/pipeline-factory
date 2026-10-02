@@ -59,7 +59,6 @@ import type {
   PlanStatus,
   PlanTask,
   RegisterThreadInput,
-  RevisionLifecycleProjection,
 } from "../index.js";
 
 function defaultPlanContract(title: string): PlanContract {
@@ -302,7 +301,6 @@ export class PlanService {
     const saved = this.store.saveRevisionDraft(draft);
     if (thread.state === "ARCHIVED") this.store.updateThread({ ...thread, state: "ACTIVE", activeRevisionDraftId: saved.draftId, lastActivityAt: now });
     else this.store.updateThread({ ...thread, activeRevisionDraftId: saved.draftId, lastActivityAt: now });
-    this.store.saveRevisionLifecycleProjection({ planId: plan.id, revision: saved.targetRevision, projectId: plan.projectId, title: saved.title, status: saved.status, sourceExplorerThreadId: thread.id, runId: null, lastEventAt: now });
     this.store.appendEvent({ type: "plan.revision.draft.created", aggregateId: plan.id, payload: { draftId: saved.draftId, fromRevision: input.fromRevision, targetRevision: saved.targetRevision, explorerThreadId: thread.id, discardUnmergedRun: input.discardUnmergedRun } });
     this.store.saveIdempotency("revision-draft", input.clientRequestId, saved as unknown as Record<string, unknown>);
     return saved;
@@ -321,7 +319,6 @@ export class PlanService {
     const contract = resolvedContract ? executionContractFromResolved(resolvedContract) : artifact.contract ?? draft.contract;
     const updated: PlanRevisionDraft = Object.freeze({ ...draft, title: artifact.title, contract, ...(generatedSpec ? { generatedSpec } : {}), ...(resolvedContract ? { resolvedContract } : {}), sourceExplorerThreadId: draft.sourceExplorerThreadId, ...source, baseBranch: baseline.baseBranch, baseCommit: baseline.baseCommit, status: "READY_TO_CONFIRM", updatedAt: this.store.now() });
     const saved = this.store.updateRevisionDraft(updated);
-    this.store.saveRevisionLifecycleProjection({ planId: saved.planId, revision: saved.targetRevision, projectId: saved.projectId, title: saved.title, status: saved.status, sourceExplorerThreadId: saved.sourceExplorerThreadId, runId: null, lastEventAt: saved.updatedAt });
     this.store.appendEvent({ type: "plan.revision.draft.ready", aggregateId: saved.planId, payload: { draftId: saved.draftId, targetRevision: saved.targetRevision, sourceTurnId: source.sourceTurnId } });
     return saved;
   }
@@ -338,7 +335,6 @@ export class PlanService {
     const baseline = verifiedProjectBaseline(project);
     if (baseline.baseCommit !== draft.baseCommit || baseline.baseBranch !== draft.baseBranch) {
       const changed = this.store.updateRevisionDraft(Object.freeze({ ...draft, status: "BASE_CHANGED", updatedAt: this.store.now() }));
-      this.store.saveRevisionLifecycleProjection({ planId: changed.planId, revision: changed.targetRevision, projectId: changed.projectId, title: changed.title, status: changed.status, sourceExplorerThreadId: changed.sourceExplorerThreadId, runId: null, lastEventAt: changed.updatedAt });
       throw new Error("BASE_CHANGED");
     }
     // 与 confirm 同一道闸门：修订版冻结前也要过预检——否则"改一版再确认"就是绕过它的后门。
@@ -348,13 +344,12 @@ export class PlanService {
     const confirmedAt = this.store.now();
     const artifactHash = `sha256:${createHash("sha256").update(JSON.stringify({ contract: draft.contract, projectConfigSnapshot: snapshot })).digest("hex")}`;
     const planDocumentPath = this.archiveRevision({ projectId: plan.projectId, planId: plan.id, revision: draft.targetRevision, title: draft.title, contract: draft.contract, ...(draft.resolvedContract ? { resolvedContract: draft.resolvedContract } : {}), artifactHash, confirmedBy, confirmedAt });
-    const revision = freezeRevision({ planId: plan.id, revision: draft.targetRevision, contract: draft.contract, ...(draft.resolvedContract ? { resolvedContract: draft.resolvedContract } : {}), artifactHash, ...(planDocumentPath ? { planDocumentPath } : {}), confirmedBy, confirmedAt, sourceExplorerThreadId: draft.sourceExplorerThreadId, ...(draft.explorerPlanId ? { explorerPlanId: draft.explorerPlanId } : {}), sourceTurnId: draft.sourceTurnId, providerThreadId: draft.providerThreadId, providerTurnId: draft.providerTurnId, providerItemId: draft.providerItemId, provenance: "CURRENT", projectConfigVersion: snapshot.configVersion, projectConfigHash: snapshot.configHash, projectConfigSnapshot: snapshot });
+    const revision = freezeRevision({ planId: plan.id, revision: draft.targetRevision, contract: draft.contract, ...(draft.resolvedContract ? { resolvedContract: draft.resolvedContract } : {}), artifactHash, ...(planDocumentPath ? { planDocumentPath } : {}), confirmedBy, confirmedAt, sourceExplorerThreadId: draft.sourceExplorerThreadId, ...(draft.explorerPlanId ? { explorerPlanId: draft.explorerPlanId } : {}), sourceTurnId: draft.sourceTurnId, providerThreadId: draft.providerThreadId, providerTurnId: draft.providerTurnId, providerItemId: draft.providerItemId, projectConfigVersion: snapshot.configVersion, projectConfigHash: snapshot.configHash, projectConfigSnapshot: snapshot });
     this.store.saveRevision(revision);
     const updatedPlan = updatePlanStatus(this.store, plan, { title: draft.title, revision: draft.targetRevision, status: "READY", contract: draft.contract, ...(draft.generatedSpec ? { generatedSpec: draft.generatedSpec } : {}), ...(draft.resolvedContract ? { resolvedContract: draft.resolvedContract } : {}), sourceExplorerThreadId: draft.sourceExplorerThreadId, sourceTurnId: draft.sourceTurnId, providerThreadId: draft.providerThreadId, providerTurnId: draft.providerTurnId, providerItemId: draft.providerItemId, confirmedBy, confirmedAt, queuedAt: null, dispatchedAt: null, runId: null, attentionReason: null, lastEventAt: confirmedAt });
     this.store.updateRevisionDraft(Object.freeze({ ...draft, status: "CONFIRMED", confirmedAt, updatedAt: confirmedAt }));
     const thread = this.store.getThread(draft.sourceExplorerThreadId);
     if (thread?.activeRevisionDraftId === draftId) this.store.updateThread({ ...thread, activeRevisionDraftId: null, lastActivityAt: confirmedAt });
-    this.store.saveRevisionLifecycleProjection({ planId: plan.id, revision: draft.targetRevision, projectId: plan.projectId, title: draft.title, status: "READY", sourceExplorerThreadId: draft.sourceExplorerThreadId, runId: null, lastEventAt: confirmedAt });
     this.store.appendEvent({ type: "plan.revision.confirmed", aggregateId: plan.id, payload: { draftId, revision: draft.targetRevision, confirmedBy } });
     return updatedPlan;
   }
@@ -368,7 +363,6 @@ export class PlanService {
     const saved = this.store.updateRevisionDraft(Object.freeze({ ...draft, status: "DISCARDED", updatedAt: now }));
     const thread = this.store.getThread(saved.sourceExplorerThreadId);
     if (thread?.activeRevisionDraftId === saved.draftId) this.store.updateThread({ ...thread, activeRevisionDraftId: null, lastActivityAt: now });
-    this.store.saveRevisionLifecycleProjection({ planId: saved.planId, revision: saved.targetRevision, projectId: saved.projectId, title: saved.title, status: saved.status, sourceExplorerThreadId: saved.sourceExplorerThreadId, runId: null, lastEventAt: now });
     this.store.appendEvent({ type: "plan.revision.draft.discarded", aggregateId: saved.planId, payload: { draftId, actorId } });
     return saved;
   }

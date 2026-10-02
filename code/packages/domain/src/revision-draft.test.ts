@@ -31,7 +31,7 @@ describe("PlanRevisionDraft", () => {
         expect(plans.confirmRevisionDraft(draft.draftId, "user")).toMatchObject({ id: plan.id, revision: revision + 1, status: "READY" });
       }
       expect(plans.listRevisions(plan.id).map((item) => item.revision)).toEqual([1, 2, 3, 4]);
-      expect(store.listRevisionLifecycleProjections(project.id, plan.id).map((item) => item.revision)).toEqual([2, 3, 4]);
+      expect(store.listRevisionDrafts(plan.id).map((item) => item.targetRevision)).toEqual([2, 3, 4]);
       expect(() => plans.createRevisionDraft({ planId: plan.id, fromRevision: 2, explorerThreadId: "explorer-1", discardUnmergedRun: false, clientRequestId: "restore" })).not.toThrow();
       expect(store.getRevisionDraft(store.listRevisionDrafts(plan.id).at(-1)!.draftId)).toMatchObject({ basedOnRevision: 2, targetRevision: 5 });
     } finally { rmSync(root, { recursive: true, force: true }); }
