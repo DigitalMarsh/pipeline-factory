@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { InMemoryPipelineStore, PlanService, ProjectService, SqlitePipelineStore, type HookExecution } from "./index.js";
+import { planContractFixture } from "./plan/plan-fixture.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -71,7 +72,8 @@ describe("SQLite audit and query projections", () => {
     projects.create({ id: "project-1", name: "Project", repoRoot: "/repo/project", defaultBranch: "main", worktreeRoot: "/tmp/project-worktrees" });
     const plans = new PlanService(store, projects);
     plans.registerThread({ id: "explorer-1", projectId: "project-1", parentThreadId: null });
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "explorer-1", title: "Searchable plan" });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "explorer-1", title: "Searchable plan",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Searchable plan" }) });
     plans.confirm(plan.id, "local-user");
     plans.enqueue(plan.id);
 

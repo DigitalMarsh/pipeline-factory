@@ -9,6 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
+import { planContractFixture } from "./plan/plan-fixture.js";
 import {
   InMemoryPipelineStore,
   PlanService,
@@ -101,9 +102,13 @@ describe("SQLite pipeline persistence", () => {
       queued_at TEXT,
       run_id TEXT,
       last_event_at TEXT NOT NULL,
-      attention_reason TEXT
+      attention_reason TEXT,
+      resolved_contract_json TEXT
     )`);
-    legacy.prepare("INSERT INTO candidate_plans (id, project_id, source_explorer_thread_id, title, revision, status, created_at, last_event_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run("legacy-plan", "project-1", "thread-1", "Legacy plan", 1, "DRAFT", "2026-08-29T10:00:00.000Z", "2026-08-29T10:00:00.000Z");
+    // 契约列从这一版起是必填事实：没有它的 CandidatePlan 读不出来（见 store 的 resolvedContractFromRow）。
+    // 这条用例保的是"缺 source_turn_id / provider_* 这些新列的老行仍能读出来"，与契约无关。
+    const legacyContract = JSON.stringify(planContractFixture({ title: "Legacy plan" }));
+    legacy.prepare("INSERT INTO candidate_plans (id, project_id, source_explorer_thread_id, title, revision, status, created_at, last_event_at, resolved_contract_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run("legacy-plan", "project-1", "thread-1", "Legacy plan", 1, "DRAFT", "2026-08-29T10:00:00.000Z", "2026-08-29T10:00:00.000Z", legacyContract);
     legacy.close();
 
     const reopened = new SqlitePipelineStore(databasePath);
@@ -129,9 +134,11 @@ describe("SQLite pipeline persistence", () => {
       queued_at TEXT,
       run_id TEXT,
       last_event_at TEXT NOT NULL,
-      attention_reason TEXT
+      attention_reason TEXT,
+      resolved_contract_json TEXT
     )`);
-    legacy.prepare("INSERT INTO candidate_plans (id, project_id, source_explorer_thread_id, title, revision, status, created_at, queued_at, last_event_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run("legacy-queued", "project-1", "thread-1", "Legacy queued", 1, "QUEUED", "2026-08-29T10:00:00.000Z", "2026-08-29T10:02:00.000Z", "2026-08-29T10:02:00.000Z");
+    const legacyContract = JSON.stringify(planContractFixture({ title: "Legacy queued" }));
+    legacy.prepare("INSERT INTO candidate_plans (id, project_id, source_explorer_thread_id, title, revision, status, created_at, queued_at, last_event_at, resolved_contract_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run("legacy-queued", "project-1", "thread-1", "Legacy queued", 1, "QUEUED", "2026-08-29T10:00:00.000Z", "2026-08-29T10:02:00.000Z", "2026-08-29T10:02:00.000Z", legacyContract);
     legacy.close();
 
     const reopened = new SqlitePipelineStore(databasePath);
@@ -147,7 +154,8 @@ describe("SQLite pipeline persistence", () => {
     const firstStore = new SqlitePipelineStore(databasePath);
     const firstService = new PlanService(firstStore);
     firstService.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
-    const plan = firstService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Persist me" });
+    const plan = firstService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Persist me",
+      resolvedContract: planContractFixture({ store: firstStore, projectId: "project-1", title: "Persist me" }) });
     firstService.confirm(plan.id, "user-1");
     firstService.enqueue(plan.id);
     firstStore.close();
@@ -165,7 +173,8 @@ describe("SQLite pipeline persistence", () => {
     const firstStore = new SqlitePipelineStore(databasePath);
     const firstService = new PlanService(firstStore);
     firstService.registerThread({ id: "discard-thread", projectId: "project-1", parentThreadId: null });
-    const plan = firstService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "discard-thread", title: "Persist discarded" });
+    const plan = firstService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "discard-thread", title: "Persist discarded",
+      resolvedContract: planContractFixture({ store: firstStore, projectId: "project-1", title: "Persist discarded" }) });
     firstService.discard(plan.id, "user-1");
     firstStore.close();
 

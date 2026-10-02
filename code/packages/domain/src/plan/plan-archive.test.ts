@@ -13,34 +13,31 @@ import { PlanService } from "./service.js";
 import { planDocumentFileName, renderPlanDocument, writePlanDocument } from "./plan-archive.js";
 import { InMemoryPipelineStore } from "../store/in-memory-store.js";
 import { ProjectService } from "../project/project.js";
-import type { PlanContract } from "./types.js";
 import type { ResolvedPlanContract } from "./plan-spec.js";
+import { planContractFixture } from "./plan-fixture.js";
 
-const contract: PlanContract = {
-  schemaVersion: 1,
-  goal: "在项目详情页展示甘特图",
-  acceptanceCriteria: ["能按日期排布"],
-  include: ["src/views/**"],
-  exclude: [],
-  baseBranch: "main",
-  baseCommit: "abc123",
-  tasks: [{ id: "task-1", title: "实现时间轴", dependencies: [], status: "PENDING" }],
-  conflictKeys: [],
-  executorModelRole: "executor",
-  toolPolicy: "executor-scoped-write",
-  verificationCommandIds: ["project.verify"],
-  maxRepairAttempts: 2,
-  mergeStrategy: "manual",
-  requireHumanMerge: true,
-  artifactMode: "REPOSITORY_FILE",
-  artifactPath: "src/views/GanttView.vue",
+/** 契约只有 `resolvedContract` 一份（V1 扁平镜像已经删掉）。 */
+const resolvedContract: ResolvedPlanContract = {
+  schemaVersion: 2,
+  artifact: { mode: "REPOSITORY_FILE", path: "src/views/GanttView.vue" },
+  objective: { goal: "在项目详情页展示甘特图", audience: ["项目成员"], acceptanceCriteria: ["能按日期排布"], outOfScope: ["不改后端数据模型"] },
+  design: { technicalConstraints: ["复用现有 Vue 组件边界"], dataSecurity: ["不新增敏感数据"], failureHandling: ["数据缺失时显示空状态"] },
+  conflicts: [],
+  repository: { projectId: "project-1", name: "Project", repoRoot: "/repo", baseBranch: "main", baseCommit: "abc123", configVersion: 1, configHash: "sha256:config" },
+  scope: { includePaths: ["src/views/**"], excludePaths: [] },
+  tasks: [{ id: "task-1", title: "实现时间轴", dependencies: [], status: "READY" }],
+  dependencies: [],
+  dependsOnPlanIds: [],
+  execution: { executorModelRole: "executor", toolPolicy: "executor-scoped-write", maxRepairAttempts: 2 },
+  verification: { mode: "PROJECT_DEFAULT", commandIds: ["project.verify"] },
+  merge: { strategy: "manual", requireHumanMerge: true },
 };
 
 const document = {
   planId: "plan-1",
   revision: 1,
   title: "为项目添加甘特图",
-  contract,
+  resolvedContract,
   artifactHash: "sha256:deadbeef",
   confirmedBy: "local-user",
   confirmedAt: "2026-10-01T10:00:00.000Z",
@@ -61,27 +58,21 @@ describe("Plan 文档渲染", () => {
   });
 
   it("空字段写'（未声明）'而不是留白，避免被当成渲染坏了", () => {
-    const markdown = renderPlanDocument({ ...document, contract: { ...document.contract, acceptanceCriteria: [], verificationCommandIds: [] } });
+    const markdown = renderPlanDocument({ ...document, resolvedContract: { ...resolvedContract, objective: { ...resolvedContract.objective, acceptanceCriteria: [] }, scope: { includePaths: [], excludePaths: [] }, tasks: [], design: { ...resolvedContract.design, technicalConstraints: [], dataSecurity: [], failureHandling: [] }, verification: { mode: "NONE", commandIds: [] } } });
 
     expect(markdown).toContain("（未声明）");
   });
 
   it("当前形状的文档写出现状、每步文件变更和风险", () => {
-    const resolvedContract: ResolvedPlanContract = {
-      schemaVersion: 2,
-      artifact: { mode: "REPOSITORY_FILE", path: "src/views/GanttView.vue" },
-      objective: { goal: "在项目详情页展示甘特图", context: ["现有详情页只有列表视图，日期数据已由 API 返回。"], audience: ["项目成员"], acceptanceCriteria: ["能按日期排布"], outOfScope: ["不改后端数据模型"] },
-      design: { technicalConstraints: ["复用现有 Vue 组件边界"], dataSecurity: ["不新增敏感数据"], failureHandling: ["数据缺失时显示空状态"], risks: ["旧浏览器样式兼容风险；失败时保留原列表视图。"] },
-      conflicts: [],
-      repository: { projectId: "project-1", name: "Project", repoRoot: "/repo", baseBranch: "main", baseCommit: "abc123", configVersion: 1, configHash: "sha256:config" },
-      scope: { includePaths: ["src/views/**"], excludePaths: [] },
-      tasks: [{ id: "task-1", title: "实现时间轴", dependencies: [], status: "READY", changes: [{ path: "src/views/GanttView.vue", action: "create", detail: "新增甘特图视图并复用详情页布局。" }] }],
-      dependencies: [],
-      execution: { executorModelRole: "executor", toolPolicy: "executor-scoped-write", maxRepairAttempts: 2 },
-      verification: { mode: "PROJECT_DEFAULT", commandIds: ["project.test"] },
-      merge: { strategy: "manual", requireHumanMerge: true },
-    };
-    const markdown = renderPlanDocument({ ...document, resolvedContract });
+    const markdown = renderPlanDocument({
+      ...document,
+      resolvedContract: {
+        ...resolvedContract,
+        objective: { ...resolvedContract.objective, context: ["现有详情页只有列表视图，日期数据已由 API 返回。"] },
+        design: { ...resolvedContract.design, risks: ["旧浏览器样式兼容风险；失败时保留原列表视图。"] },
+        tasks: [{ id: "task-1", title: "实现时间轴", dependencies: [], status: "READY", changes: [{ path: "src/views/GanttView.vue", action: "create", detail: "新增甘特图视图并复用详情页布局。" }] }],
+      },
+    });
 
     expect(markdown).toContain("## 现状与发现");
     expect(markdown).toContain("现有详情页只有列表视图");
@@ -137,7 +128,8 @@ describe("确认时的落盘（PlanService）", () => {
     projects.create({ id: "project-1", name: "Archive Project", repoRoot: root, defaultBranch: "main", worktreeRoot: join(root, "worktrees") });
     const directory = join(root, "docs", "pipeline", "plans");
     const plans = withArchive ? new PlanService(store, projects, undefined, () => directory) : new PlanService(store, projects);
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "落盘方案" });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "落盘方案",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "落盘方案" }) });
     return { plans, plan, directory };
   }
 

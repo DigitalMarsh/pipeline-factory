@@ -5,17 +5,19 @@
  */
 import { describe, expect, it } from "vitest";
 import { InMemoryPipelineStore, PlanService, ProjectService } from "./index.js";
+import { planContractFixture } from "./plan/plan-fixture.js";
 
 describe("PlanRevision", () => {
   it("freezes the execution contract and records a stable artifact hash on confirmation", () => {
     const service = new PlanService(new InMemoryPipelineStore());
-    const candidate = service.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Freeze this plan" });
+    const candidate = service.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Freeze this plan",
+      resolvedContract: planContractFixture({ projectId: "project-1", title: "Freeze this plan" }) });
     service.confirm(candidate.id, "user-1");
 
     const revision = service.getRevision(candidate.id, 1);
     expect(revision).toMatchObject({ planId: candidate.id, revision: 1, confirmedBy: "user-1", artifactHash: expect.stringMatching(/^sha256:/) });
     expect(Object.isFrozen(revision)).toBe(true);
-    expect(Object.isFrozen(revision.contract)).toBe(true);
+    expect(Object.isFrozen(revision.resolvedContract)).toBe(true);
     expect(service.enqueue(candidate.id).revision).toBe(1);
   });
 
@@ -25,17 +27,18 @@ describe("PlanRevision", () => {
     const service = new PlanService(store);
     const thread = service.registerThread({ id: "candidate-history-thread", projectId: "project-1", parentThreadId: null });
     const requirement = store.listExplorerPlans(thread.id)[0]!;
-    const candidate = service.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: thread.id, explorerPlanId: requirement.id, title: "Plan V1" });
+    const candidate = service.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: thread.id, explorerPlanId: requirement.id, title: "Plan V1",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Plan V1", goal: "Plan V1" }) });
     const source = { sourceTurnId: "turn-2", providerThreadId: null, providerTurnId: null, providerItemId: null };
-    const second = service.reviseCandidate(candidate.id, { title: "Plan V2", contract: { ...candidate.contract, goal: "Second goal" } }, source);
-    const third = service.reviseCandidate(candidate.id, { title: "Plan V3", contract: { ...second.contract, goal: "Third goal" } }, { ...source, sourceTurnId: "turn-3" });
+    const second = service.reviseCandidate(candidate.id, { title: "Plan V2", resolvedContract: { ...candidate.resolvedContract, objective: { ...candidate.resolvedContract.objective, goal: "Second goal" } } }, source);
+    const third = service.reviseCandidate(candidate.id, { title: "Plan V3", resolvedContract: { ...second.resolvedContract, objective: { ...second.resolvedContract.objective, goal: "Third goal" } } }, { ...source, sourceTurnId: "turn-3" });
 
-    expect(store.listCandidateVersions(candidate.id).map((version) => [version.revision, version.title, version.contract.goal])).toEqual([
+    expect(store.listCandidateVersions(candidate.id).map((version) => [version.revision, version.title, version.resolvedContract.objective.goal])).toEqual([
       [1, "Plan V1", "Plan V1"], [2, "Plan V2", "Second goal"], [3, "Plan V3", "Third goal"],
     ]);
     expect(() => service.confirm(candidate.id, "user-1", 2)).toThrow("REVISION_NOT_LATEST");
     expect(service.confirm(candidate.id, "user-1", 3)).toMatchObject({ revision: 3, status: "READY" });
     expect(store.listCandidateVersions(candidate.id)[0]).toMatchObject({ revision: 1, title: "Plan V1", status: "DRAFT" });
-    expect(() => service.reviseCandidate(candidate.id, { title: "Must stay read only", contract: third.contract }, source)).toThrow("Only an unconfirmed Plan can be edited");
+    expect(() => service.reviseCandidate(candidate.id, { title: "Must stay read only", resolvedContract: third.resolvedContract }, source)).toThrow("Only an unconfirmed Plan can be edited");
   });
 });

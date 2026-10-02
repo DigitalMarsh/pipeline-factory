@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ExplorerDeleteBlockedError, ExplorerService, InMemoryPipelineStore, PlanService, ProjectService, SqlitePipelineStore, type PipelineStore } from "./index.js";
+import { planContractFixture } from "./plan/plan-fixture.js";
 
 const sqliteStores: SqlitePipelineStore[] = [];
 const sqliteDirectories: string[] = [];
@@ -35,7 +36,8 @@ describe("ExplorerService.delete", () => {
     const { project, explorer, explorers, plans } = seedThread(store);
     const replacement = explorers.create({ projectId: project.id, title: "Keep me" });
     const explorerPlanId = store.listExplorerPlans(explorer.id)[0]!.id;
-    const candidate = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: explorer.id, explorerPlanId, title: "Delete plan" });
+    const candidate = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: explorer.id, explorerPlanId, title: "Delete plan",
+      resolvedContract: planContractFixture({ store, projectId: project.id, title: "Delete plan" }) });
     const turn = store.saveTurn({ id: "delete-turn", threadId: explorer.id, role: "user", content: "delete this", status: "COMPLETED", createdAt: store.now(), sequence: 1, explorerPlanId });
     store.saveInputRequest({ id: "delete-input", threadId: explorer.id, explorerPlanId, localTurnId: turn.id, providerRequestId: "request-1", providerThreadId: "provider-thread-1", providerTurnId: "provider-turn-1", itemId: "item-1", questions: [], isBlocking: false, autoResolutionMs: null, status: "ANSWERED", createdAt: store.now(), answeredAt: store.now(), answeredBy: "test", redactedAnswerSummary: null });
     const executionThreadId = "delete-execution-thread";
@@ -74,7 +76,8 @@ describe("ExplorerService.delete", () => {
   it("rejects an active Run or Explorer Loop before deleting anything", () => {
     const store = new InMemoryPipelineStore();
     const { project, explorer, explorers, plans } = seedThread(store);
-    const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: explorer.id, title: "Active plan" });
+    const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: explorer.id, title: "Active plan",
+      resolvedContract: planContractFixture({ store, projectId: project.id, title: "Active plan" }) });
     store.saveRun({ id: "active-run", projectId: project.id, planId: plan.id, planRevision: 1, status: "IN_PROGRESS", branch: "factory/active-run", workspacePath: "/tmp/active-worktree", baseCommit: "HEAD", executionThreadId: "active-execution-thread", createdAt: store.now(), startedAt: store.now() });
 
     expect(() => explorers.delete(explorer.id)).toThrow(ExplorerDeleteBlockedError);

@@ -37,9 +37,8 @@ export class VerificationService {
     if (this.store && verifyingPlan && verifyingPlan.runId === run.id) {
       updatePlanStatus(this.store, verifyingPlan, { status: "VERIFYING", lastEventAt: this.store.now() });
     }
-    const v2Commands = revision.resolvedContract?.verification.commandIds;
-    const commandIds = v2Commands ?? revision.contract.verificationCommandIds;
-    if (revision.resolvedContract?.verification.mode === "NONE" || commandIds.length === 0) {
+    const commandIds = revision.resolvedContract.verification.commandIds;
+    if (revision.resolvedContract.verification.mode === "NONE" || commandIds.length === 0) {
       run.status = "MERGE_READY";
       const verification: VerificationRun = { id: `verification-${randomUUID().slice(0, 12)}`, runId: run.id, status: "SKIPPED", reason: "NO_PROJECT_VERIFICATION_COMMANDS", repairAttempts: 0, commandResults: [], completedAt: this.store?.now() ?? new Date().toISOString() };
       this.record(run, verification);
@@ -61,15 +60,15 @@ export class VerificationService {
         this.record(run, verification);
         return verification;
       }
-      if (!repair || repairAttempts >= revision.contract.maxRepairAttempts) {
+      if (!repair || repairAttempts >= revision.resolvedContract.execution.maxRepairAttempts) {
         run.status = "BLOCKED";
-        const verification = { id: `verification-${randomUUID().slice(0, 12)}`, runId: run.id, status: repairAttempts >= revision.contract.maxRepairAttempts ? "BLOCKED" as const : "FAILED" as const, repairAttempts, commandResults: [...commandResults], completedAt: this.store?.now() ?? new Date().toISOString() };
+        const verification = { id: `verification-${randomUUID().slice(0, 12)}`, runId: run.id, status: repairAttempts >= revision.resolvedContract.execution.maxRepairAttempts ? "BLOCKED" as const : "FAILED" as const, repairAttempts, commandResults: [...commandResults], completedAt: this.store?.now() ?? new Date().toISOString() };
         this.record(run, verification);
         return verification;
       }
       repairAttempts += 1;
       const repaired = await repair(run, repairAttempts);
-      if (!repaired && repairAttempts >= revision.contract.maxRepairAttempts) {
+      if (!repaired && repairAttempts >= revision.resolvedContract.execution.maxRepairAttempts) {
         run.status = "BLOCKED";
         const verification = { id: `verification-${randomUUID().slice(0, 12)}`, runId: run.id, status: "BLOCKED" as const, repairAttempts, commandResults: [...commandResults], completedAt: this.store?.now() ?? new Date().toISOString() };
         this.record(run, verification);

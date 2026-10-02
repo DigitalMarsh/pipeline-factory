@@ -4,6 +4,7 @@
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  */
 import { describe, expect, it } from "vitest";
+import { planContractFixture } from "./plan/plan-fixture.js";
 import {
   InMemoryPipelineStore,
   LifecycleHookRunner,
@@ -19,6 +20,7 @@ describe("PlanService", () => {
       projectId: "project-1",
       sourceExplorerThreadId: "thread-1",
       title: "Wait for an explicit start",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Wait for an explicit start" }),
     });
 
     service.confirm(plan.id, "user-1");
@@ -36,6 +38,7 @@ describe("PlanService", () => {
       projectId: "project-1",
       sourceExplorerThreadId: "thread-1",
       title: "Start only after enqueue",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Start only after enqueue" }),
     });
 
     service.confirm(plan.id, "user-1");
@@ -55,6 +58,7 @@ describe("PlanService", () => {
       projectId: "project-1",
       sourceExplorerThreadId: "thread-1",
       title: "Add audit timeline",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Add audit timeline" }),
     });
 
     expect(() => service.enqueue(plan.id)).toThrow(/confirmed/i);
@@ -67,8 +71,9 @@ describe("PlanService", () => {
   it("keeps conversation artifacts reviewable but rejects every execution entry", () => {
     const store = new InMemoryPipelineStore();
     const service = new PlanService(store);
-    const created = service.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Conversation plan" });
-    store.updatePlan({ ...created, contract: { ...created.contract, artifactMode: "CONVERSATION" } });
+    const created = service.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Conversation plan",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Conversation plan" }) });
+    store.updatePlan({ ...created, resolvedContract: { ...created.resolvedContract, artifact: { ...created.resolvedContract.artifact, mode: "CONVERSATION" } } });
     expect(service.confirm(created.id, "user-1").status).toBe("READY");
     expect(() => service.enqueue(created.id)).toThrow("CONVERSATION_ARTIFACT_NOT_EXECUTABLE");
     expect(() => service.dispatch(created.id)).toThrow("CONVERSATION_ARTIFACT_NOT_EXECUTABLE");
@@ -79,9 +84,12 @@ describe("PlanService", () => {
     const service = new PlanService(store);
     service.registerThread({ id: "root", projectId: "project-1", parentThreadId: null });
     service.registerThread({ id: "successor", projectId: "project-1", parentThreadId: "root" });
-    const confirmed = service.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "root", title: "Confirmed" });
-    const queued = service.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "successor", title: "Queued" });
-    const draft = service.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "root", title: "Draft" });
+    const confirmed = service.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "root", title: "Confirmed",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Confirmed" }) });
+    const queued = service.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "successor", title: "Queued",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Queued" }) });
+    const draft = service.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "root", title: "Draft",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Draft" }) });
     service.confirm(confirmed.id, "user-1");
     service.enqueue(confirmed.id);
     service.confirm(queued.id, "user-1");
@@ -95,8 +103,10 @@ describe("PlanService", () => {
     const store = new InMemoryPipelineStore();
     const service = new PlanService(store);
     service.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
-    const confirmed = service.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Confirmed but not queued" });
-    const queued = service.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Already queued" });
+    const confirmed = service.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Confirmed but not queued",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Confirmed but not queued" }) });
+    const queued = service.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Already queued",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Already queued" }) });
 
     service.confirm(confirmed.id, "user-1");
     service.confirm(queued.id, "user-1");
@@ -115,6 +125,7 @@ describe("PlanService", () => {
       projectId: "project-1",
       sourceExplorerThreadId: "thread-1",
       title: "Discard this plan",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Discard this plan" }),
     });
 
     const discarded = service.discard(plan.id, "user-1");

@@ -46,7 +46,6 @@ export function planFromRevisionDraft(item: PlanRevisionDraft, fallbackExplorerP
     providerThreadId: item.providerThreadId,
     providerTurnId: item.providerTurnId,
     providerItemId: item.providerItemId,
-    ...(item.contract ? { contract: item.contract } : {}),
     ...(item.resolvedContract ? { resolvedContract: item.resolvedContract } : {}),
     queuedAt: null,
     dispatchedAt: null,

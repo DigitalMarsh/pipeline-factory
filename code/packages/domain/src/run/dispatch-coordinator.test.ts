@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import * as domain from "../index.js";
 import { InMemoryPipelineStore, LifecycleHookRunner, PlanService, ProjectService, Scheduler, SqlitePipelineStore, resolvePlanContract } from "../index.js";
+import { planContractFixture } from "../plan/plan-fixture.js";
 
 const coordinatorModule = domain as unknown as {
   PlanDispatchCoordinator: new (options: {
@@ -33,15 +34,15 @@ function schedulerFor(store: domain.PipelineStore): Scheduler {
 
 /** 造一个带指定 include 范围的已确认 Plan（范围要在 confirm 之前写进去，Confirm 会冻结它）。 */
 function createScopedPlan(store: domain.PipelineStore, plans: PlanService, projectId: string, title: string, include: string[]): domain.CandidatePlan {
-  const plan = plans.createCandidatePlan({ projectId, sourceExplorerThreadId: "thread-1", title });
-  store.updatePlan({ ...plan, contract: { ...plan.contract, include } });
+  const plan = plans.createCandidatePlan({ projectId, sourceExplorerThreadId: "thread-1", title, resolvedContract: planContractFixture({ store, projectId, title }) });
+  store.updatePlan({ ...plan, resolvedContract: { ...plan.resolvedContract, scope: { ...plan.resolvedContract.scope, includePaths: include } } });
   plans.confirm(plan.id, "user-1");
   return plans.get(plan.id);
 }
 
 function createPlan(store: domain.PipelineStore, plans: PlanService, title: string, dependsOnPlanIds: string[] = []): domain.CandidatePlan {
-  const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title });
-  if (dependsOnPlanIds.length) store.updatePlan({ ...plan, contract: { ...plan.contract, dependsOnPlanIds } });
+  const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title, resolvedContract: planContractFixture({ store, projectId: "project-1", title }) });
+  if (dependsOnPlanIds.length) store.updatePlan({ ...plan, resolvedContract: { ...plan.resolvedContract, dependsOnPlanIds } });
   plans.confirm(plan.id, "user-1");
   return plans.get(plan.id);
 }
@@ -116,7 +117,8 @@ describe("PlanDispatchCoordinator", () => {
     const projects = new ProjectService(store);
     const project = projects.create({ id: "project-1", name: "Project", repoRoot: "/repo/project-1", defaultBranch: "main", worktreeRoot: "/tmp/project-1-worktrees", settings: { commands: [] } });
     const plans = new PlanService(store, projects);
-    const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "thread-1", title: "Prerequisite-bearing plan" });
+    const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "thread-1", title: "Prerequisite-bearing plan",
+      resolvedContract: planContractFixture({ store, projectId: project.id, title: "Prerequisite-bearing plan" }) });
     const generatedSpec = {
       schemaVersion: 2 as const,
       title: "Prerequisite-bearing plan",
@@ -131,7 +133,6 @@ describe("PlanDispatchCoordinator", () => {
     const resolvedContract = resolvePlanContract(generatedSpec, projects.snapshot(project.id), { baseBranch: "main", baseCommit: "a".repeat(40) });
     store.updatePlan({
       ...plan,
-      contract: { ...plan.contract, artifactMode: "REPOSITORY_FILE", dependsOnPlanIds: [] },
       generatedSpec,
       resolvedContract,
     });
@@ -154,8 +155,8 @@ describe("PlanDispatchCoordinator", () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);
     // 两个 Project 用同一组重叠范围，唯一区别是 conflictScope。
-    const declared = projects.create({ id: "project-declared", name: "Declared", repoRoot: "/repo/declared", defaultBranch: "main", worktreeRoot: "/tmp/declared-worktrees", settings: { commands: [{ commandId: "project.test", argv: ["true"] }, { commandId: "project.typecheck", argv: ["true"] }] } });
-    const overlap = projects.create({ id: "project-overlap", name: "Overlap", repoRoot: "/repo/overlap", defaultBranch: "main", worktreeRoot: "/tmp/overlap-worktrees", settings: { concurrency: { conflictScope: "overlap" }, commands: [{ commandId: "project.test", argv: ["true"] }, { commandId: "project.typecheck", argv: ["true"] }] } });
+    const declared = projects.create({ id: "project-declared", name: "Declared", repoRoot: "/repo/declared", defaultBranch: "main", worktreeRoot: "/tmp/declared-worktrees", settings: { commands: [{ commandId: "project.test", category: "verification", enabled: true, argv: ["true"] }, { commandId: "project.typecheck", category: "verification", enabled: true, argv: ["true"] }] } });
+    const overlap = projects.create({ id: "project-overlap", name: "Overlap", repoRoot: "/repo/overlap", defaultBranch: "main", worktreeRoot: "/tmp/overlap-worktrees", settings: { concurrency: { conflictScope: "overlap" }, commands: [{ commandId: "project.test", category: "verification", enabled: true, argv: ["true"] }, { commandId: "project.typecheck", category: "verification", enabled: true, argv: ["true"] }] } });
     const plans = new PlanService(store, projects);
     const declaredFirst = createScopedPlan(store, plans, declared.id, "Declared first", ["code/apps/web/src"]);
     const declaredSecond = createScopedPlan(store, plans, declared.id, "Declared second", ["code/apps/web/src/checkout"]);
@@ -179,7 +180,7 @@ describe("PlanDispatchCoordinator", () => {
   it("does not treat disjoint scopes as a conflict even when overlap detection is on", async () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);
-    const project = projects.create({ id: "project-disjoint", name: "Disjoint", repoRoot: "/repo/disjoint", defaultBranch: "main", worktreeRoot: "/tmp/disjoint-worktrees", settings: { concurrency: { conflictScope: "overlap" }, commands: [{ commandId: "project.test", argv: ["true"] }, { commandId: "project.typecheck", argv: ["true"] }] } });
+    const project = projects.create({ id: "project-disjoint", name: "Disjoint", repoRoot: "/repo/disjoint", defaultBranch: "main", worktreeRoot: "/tmp/disjoint-worktrees", settings: { concurrency: { conflictScope: "overlap" }, commands: [{ commandId: "project.test", category: "verification", enabled: true, argv: ["true"] }, { commandId: "project.typecheck", category: "verification", enabled: true, argv: ["true"] }] } });
     const plans = new PlanService(store, projects);
     const docs = createScopedPlan(store, plans, project.id, "Docs plan", ["docs/guide.md"]);
     const web = createScopedPlan(store, plans, project.id, "Web plan", ["code/apps/web/**"]);
@@ -212,7 +213,7 @@ describe("PlanDispatchCoordinator", () => {
 
   it("waits for a free slot in the Project instead of exceeding maxParallelRuns", async () => {
     const store = new InMemoryPipelineStore();
-    new ProjectService(store).create({ id: "project-1", name: "Project", repoRoot: "/repo/project-1", defaultBranch: "main", worktreeRoot: "/tmp/project-1-worktrees", settings: { concurrency: { maxParallelRuns: 1 }, commands: [{ commandId: "project.test", argv: ["true"] }, { commandId: "project.typecheck", argv: ["true"] }] } });
+    new ProjectService(store).create({ id: "project-1", name: "Project", repoRoot: "/repo/project-1", defaultBranch: "main", worktreeRoot: "/tmp/project-1-worktrees", settings: { concurrency: { maxParallelRuns: 1 }, commands: [{ commandId: "project.test", category: "verification", enabled: true, argv: ["true"] }, { commandId: "project.typecheck", category: "verification", enabled: true, argv: ["true"] }] } });
     const plans = new PlanService(store);
     const first = createPlan(store, plans, "Project first");
     const second = createPlan(store, plans, "Project second");
@@ -253,7 +254,7 @@ describe("PlanDispatchCoordinator", () => {
     expect(() => coordinator.reviseConfiguration(plan.id, "reviewer")).toThrow("RUN_PREREQUISITES_UNSATISFIED: missing registered commands: project.test, project.typecheck");
     expect(plans.get(plan.id)).toMatchObject({ revision: 1, status: "DISPATCHED" });
 
-    projects.update(project.id, { expectedConfigVersion: project.configVersion, settings: { ...project.settings, commands: [{ commandId: "project.test", argv: ["true"] }, { commandId: "project.typecheck", argv: ["true"] }] } });
+    projects.update(project.id, { expectedConfigVersion: project.configVersion, settings: { ...project.settings, commands: [{ commandId: "project.test", category: "verification", enabled: true, argv: ["true"] }, { commandId: "project.typecheck", category: "verification", enabled: true, argv: ["true"] }] } });
     const revised = coordinator.reviseConfiguration(plan.id, "reviewer");
 
     expect(revised).toMatchObject({ id: plan.id, revision: 2, status: "READY", queuedAt: null, dispatchedAt: null, runId: null, attentionReason: null });
@@ -285,14 +286,15 @@ describe("PlanDispatchCoordinator", () => {
   it("persists a failed confirmation phase and retries it without creating a second Run", async () => {
     const store = new InMemoryPipelineStore();
     const plans = new PlanService(store);
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Recoverable confirmation" });
-    store.updatePlan({ ...plan, contract: { ...plan.contract, goal: "" } });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Recoverable confirmation",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Recoverable confirmation" }) });
+    store.updatePlan({ ...plan, resolvedContract: { ...plan.resolvedContract, dependsOnPlanIds: ["plan-does-not-exist"] } });
     const coordinator = new coordinatorModule.PlanDispatchCoordinator({ store, plans, scheduler: schedulerFor(store) });
 
     const failed = await coordinator.confirmAndDispatch(plan.id, plan.revision, "user-1");
     expect(failed).toMatchObject({ plan: { status: "DRAFT" }, run: null, state: { status: "BLOCKED", phase: "VALIDATION_FAILED", attempt: 1 } });
 
-    store.updatePlan({ ...plans.get(plan.id), contract: { ...plans.get(plan.id).contract, goal: "Valid goal" } });
+    store.updatePlan({ ...plans.get(plan.id), resolvedContract: { ...plans.get(plan.id).resolvedContract, dependsOnPlanIds: [] } });
     const retried = await coordinator.confirmAndDispatch(plan.id, plan.revision, "user-1");
     const repeated = await coordinator.confirmAndDispatch(plan.id, plan.revision, "user-1");
     expect(retried).toMatchObject({ plan: { status: "IN_PROGRESS" }, run: { id: expect.any(String) }, state: { status: "RUNNING", phase: "RUN_STARTED", attempt: 2 } });
@@ -421,17 +423,17 @@ describe("Plan dependency validation", () => {
     const store = new InMemoryPipelineStore();
     const plans = new PlanService(store);
     const missing = createPlan(store, plans, "Missing");
-    store.updatePlan({ ...missing, status: "DRAFT", confirmedAt: null, confirmedBy: null, contract: { ...missing.contract, dependsOnPlanIds: ["missing-plan"] } });
+    store.updatePlan({ ...missing, status: "DRAFT", confirmedAt: null, confirmedBy: null, resolvedContract: { ...missing.resolvedContract, dependsOnPlanIds: ["missing-plan"] } });
     expect(() => plans.confirm(missing.id, "user-1")).toThrow(/unknown plan/i);
 
     const self = createPlan(store, plans, "Self");
-    store.updatePlan({ ...self, status: "DRAFT", confirmedAt: null, confirmedBy: null, contract: { ...self.contract, dependsOnPlanIds: [self.id] } });
+    store.updatePlan({ ...self, status: "DRAFT", confirmedAt: null, confirmedBy: null, resolvedContract: { ...self.resolvedContract, dependsOnPlanIds: [self.id] } });
     expect(() => plans.confirm(self.id, "user-1")).toThrow(/itself|self/i);
 
     const first = createPlan(store, plans, "Cycle A");
     const second = createPlan(store, plans, "Cycle B");
-    store.updatePlan({ ...first, status: "DRAFT", confirmedAt: null, confirmedBy: null, contract: { ...first.contract, dependsOnPlanIds: [second.id] } });
-    store.updatePlan({ ...second, status: "DRAFT", confirmedAt: null, confirmedBy: null, contract: { ...second.contract, dependsOnPlanIds: [first.id] } });
+    store.updatePlan({ ...first, status: "DRAFT", confirmedAt: null, confirmedBy: null, resolvedContract: { ...first.resolvedContract, dependsOnPlanIds: [second.id] } });
+    store.updatePlan({ ...second, status: "DRAFT", confirmedAt: null, confirmedBy: null, resolvedContract: { ...second.resolvedContract, dependsOnPlanIds: [first.id] } });
     expect(() => plans.confirm(first.id, "user-1")).toThrow(/cycle/i);
   });
 });

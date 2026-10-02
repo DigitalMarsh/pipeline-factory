@@ -49,7 +49,7 @@ export function workbenchSnapshot(store: PipelineStore, projects: ProjectService
       runId: plan.runId,
       lastEventAt: plan.lastEventAt,
       attentionReason: plan.attentionReason,
-      contract: plan.contract,
+      resolvedContract: plan.resolvedContract,
       dispatch: store.getDispatchState(plan.id) ?? null,
       ...planProjection(store, plan, lifecycleIndex),
     }));

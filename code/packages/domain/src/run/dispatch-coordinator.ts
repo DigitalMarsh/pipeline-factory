@@ -301,7 +301,7 @@ export class PlanDispatchCoordinator {
     const queuedPlans = this.options.store
       .listPlans()
       .filter((plan) => plan.status === "DISPATCHED")
-      .sort((a, b) => (b.contract.priority ?? 0) - (a.contract.priority ?? 0) || (a.queuedAt ?? a.createdAt).localeCompare(b.queuedAt ?? b.createdAt) || a.id.localeCompare(b.id));
+      .sort((a, b) => (a.queuedAt ?? a.createdAt).localeCompare(b.queuedAt ?? b.createdAt) || a.id.localeCompare(b.id));
 
     for (const plan of queuedPlans) {
       const currentState = this.state(plan.id);
@@ -369,7 +369,9 @@ export class PlanDispatchCoordinator {
   }
 
   private evaluateWait(plan: CandidatePlan, revision: PlanRevision): WaitEvaluation | undefined {
-    const dependencies = revision.contract.dependsOnPlanIds ?? [];
+    // **只读 `dependsOnPlanIds`**：`dependencies` 是模型写的自然语言先决条件（"需要 Node 22"这类），
+    // 拿它当 Plan id 会等一个永远不存在的 Plan（见 ResolvedPlanContract.dependsOnPlanIds 的说明）。
+    const dependencies = revision.resolvedContract.dependsOnPlanIds ?? [];
     const incompleteDependency = dependencies
       .map((id) => this.options.store.getPlan(id))
       .find((dependency) => !dependency || dependency.projectId !== plan.projectId || dependency.status !== "MERGED");
@@ -382,7 +384,7 @@ export class PlanDispatchCoordinator {
     if (snapshot) {
       // 判定规则统一在 plan/contract.ts —— 这里保留的只是"要不要抛"的差异（evaluateWait 返回等待原因，
       // Scheduler 直接抛错），规则本身不再各写一套。
-      const missingCommands = missingVerificationCommands({ contract: revision.contract, resolvedContract: revision.resolvedContract, commands: snapshot.settings.commands });
+      const missingCommands = missingVerificationCommands({ resolvedContract: revision.resolvedContract, commands: snapshot.settings.commands });
       if (missingCommands.length > 0) return { reason: "NEEDS_CONFIGURATION", message: `Missing registered commands: ${missingCommands.join(", ")}` };
     }
 
@@ -403,21 +405,21 @@ export class PlanDispatchCoordinator {
     }
 
     // 冲突判定：模型声明的语义键永远参与；`conflictScope: "overlap"` 的项目**另外**看 scope 是否重叠。
-    const conflictKeys = new Set(revision.contract.conflictKeys);
-    const scopeRoots = revision.contract.include.map(scopeRoot).filter(Boolean);
+    const conflictKeys = new Set(revision.resolvedContract.conflicts);
+    const scopeRoots = revision.resolvedContract.scope.includePaths.map(scopeRoot).filter(Boolean);
     const conflictScope = snapshot?.settings.concurrency.conflictScope ?? "declared";
     let conflict: { run: Run; detail: string } | undefined;
     for (const run of otherActiveRuns) {
       if (run.planId === plan.id) continue;
       const runRevision = this.options.store.getRevision(run.planId, run.planRevision);
       if (!runRevision) continue;
-      const sharedKey = runRevision.contract.conflictKeys.find((key) => conflictKeys.has(key));
+      const sharedKey = runRevision.resolvedContract.conflicts.find((key) => conflictKeys.has(key));
       if (sharedKey) { conflict = { run, detail: `conflict key ${sharedKey}` }; break; }
       if (conflictScope !== "overlap") continue;
       // **scope 只在本 Project 内比较**：include 是项目相对路径，两个项目里都叫 `src/index.ts`
       // 不代表它们碰同一份文件。声明的冲突键没有这个限制（那是全局语义键，跨项目同名仍算冲突）。
       if (run.projectId !== plan.projectId) continue;
-      const otherRoots = runRevision.contract.include.map(scopeRoot).filter(Boolean);
+      const otherRoots = runRevision.resolvedContract.scope.includePaths.map(scopeRoot).filter(Boolean);
       const sharedPath = scopeRoots.find((scope) => otherRoots.some((other) => pathsOverlap(scope, other)));
       if (sharedPath) { conflict = { run, detail: `overlapping scope ${sharedPath}` }; break; }
     }

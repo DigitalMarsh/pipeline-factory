@@ -65,14 +65,13 @@ describe("Plan spec resolution", () => {
       const generatedSpec = { ...spec, dependencies: ["Node.js 22 or compatible version", "pnpm"] };
       const candidate = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "explorer-prerequisites", title: generatedSpec.title, generatedSpec });
 
-      expect(candidate.contract.dependsOnPlanIds).toEqual([]);
-      expect(candidate.resolvedContract?.dependencies).toEqual(generatedSpec.dependencies);
+      expect(candidate.resolvedContract.dependencies).toEqual(generatedSpec.dependencies);
       expect(candidate.resolvedContract?.design.technicalConstraints).toEqual(expect.arrayContaining(generatedSpec.dependencies));
 
       // 旧实现会在 confirm 时把这些自然语言先决条件从 dependsOnPlanIds 里"顺手删掉"。
       // 那条启发式同时会删掉**用户显式设置的**依赖（id 恰好出现在先决条件里就会中招），
       // 现在只做校验、不动数据：以下写法会因引用未知 Plan 而明确失败。
-      store.updatePlan({ ...candidate, contract: { ...candidate.contract, dependsOnPlanIds: generatedSpec.dependencies } });
+      store.updatePlan({ ...candidate, resolvedContract: { ...candidate.resolvedContract, dependsOnPlanIds: generatedSpec.dependencies } });
       expect(() => plans.confirm(candidate.id, "user-1")).toThrow(/unknown plan/i);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -90,13 +89,13 @@ describe("Plan spec resolution", () => {
       const downstream = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "explorer-deps", title: "Downstream", generatedSpec: { ...spec, title: "Downstream" } });
 
       // 模型给出的 dependencies 是自然语言先决条件，**不是** plan id；依赖只能由人设置。
-      expect(downstream.contract.dependsOnPlanIds).toEqual([]);
+      expect(downstream.resolvedContract.dependsOnPlanIds).toEqual([]);
       const withDependency = plans.setDependencies(downstream.id, [upstream.id], "user-1");
-      expect(withDependency.contract.dependsOnPlanIds).toEqual([upstream.id]);
+      expect(withDependency.resolvedContract.dependsOnPlanIds).toEqual([upstream.id]);
       // 依赖随 Revision 冻结：confirm 后不能再改。
       const confirmed = plans.confirm(downstream.id, "user-1");
-      expect(confirmed.contract.dependsOnPlanIds).toEqual([upstream.id]);
-      expect(plans.getRevision(downstream.id, 1)?.contract.dependsOnPlanIds).toEqual([upstream.id]);
+      expect(confirmed.resolvedContract.dependsOnPlanIds).toEqual([upstream.id]);
+      expect(plans.getRevision(downstream.id, 1)?.resolvedContract.dependsOnPlanIds).toEqual([upstream.id]);
       expect(() => plans.setDependencies(downstream.id, [], "user-1")).toThrow(/cannot change from READY/);
 
       // 引用未知 Plan 会被拒绝，而不是留到 dispatch 时才变成等一个不存在的依赖。
@@ -125,7 +124,7 @@ describe("Plan spec resolution", () => {
   it("records empty default verification as SKIPPED and allows review", async () => {
     const store = new InMemoryPipelineStore();
     const resolvedContract = resolvePlanContract(spec, snapshot(), { baseBranch: "main", baseCommit: "c".repeat(40) });
-    const revision: PlanRevision = { planId: "plan-v2", revision: 1, contract: { goal: "x", acceptanceCriteria: ["x"], include: ["docs/vue-usage.md"], exclude: [], baseBranch: "main", baseCommit: "c".repeat(40), tasks: [{ id: "docs", title: "Update", dependencies: [], status: "READY" }], conflictKeys: [], executorModelRole: "executor", toolPolicy: "executor-scoped-write", verificationCommandIds: [], maxRepairAttempts: 2, mergeStrategy: "manual", requireHumanMerge: true }, resolvedContract, artifactHash: "sha256:test", confirmedBy: "tester", confirmedAt: store.now(), sourceExplorerThreadId: "explorer" };
+    const revision: PlanRevision = { planId: "plan-v2", revision: 1, resolvedContract, artifactHash: "sha256:test", confirmedBy: "tester", confirmedAt: store.now(), sourceExplorerThreadId: "explorer" };
     const run: Run = { id: "run-v2", projectId: "project-test", planId: "plan-v2", planRevision: 1, status: "READY_FOR_VERIFY", branch: "factory/run-v2", workspacePath: "/tmp/run-v2", baseCommit: "c".repeat(40), executionThreadId: "execution", createdAt: store.now(), startedAt: store.now() };
     await expect(new VerificationService(store).verify(run, revision, async () => ({ exitCode: 1, stdout: "", stderr: "must not run" }))).resolves.toMatchObject({ status: "SKIPPED", reason: "NO_PROJECT_VERIFICATION_COMMANDS", commandResults: [] });
     expect(run.status).toBe("MERGE_READY");
@@ -206,11 +205,10 @@ describe("Plan spec verification suites", () => {
       // 生成时没声明 suites → 项目默认全集。
       expect(candidate.resolvedContract?.verification.commandIds).toEqual(["project.test", "docs.validate"]);
 
-      // 人选了 docs → 只跑命中该 tag 的命令；V1 投影（contract）跟着一起更新，两处不能分叉。
+      // 人选了 docs → 只跑命中该 tag 的命令（重解析已解析契约，没有第二份要跟着更新的形状）。
       const narrowed = plans.setVerificationSuites(candidate.id, ["docs"], "reviewer");
       expect(narrowed.generatedSpec?.verification).toEqual({ mode: "PROJECT_DEFAULT", suites: ["docs"] });
-      expect(narrowed.resolvedContract?.verification.commandIds).toEqual(["docs.validate"]);
-      expect(narrowed.contract.verificationCommandIds).toEqual(["docs.validate"]);
+      expect(narrowed.resolvedContract.verification.commandIds).toEqual(["docs.validate"]);
       expect(store.listEvents({ types: ["plan.verification.suites.updated"] })).toHaveLength(1);
 
       // 空数组 = 回到项目默认全集（不是"什么都不跑"）。

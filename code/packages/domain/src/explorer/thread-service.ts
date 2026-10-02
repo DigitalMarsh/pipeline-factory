@@ -521,7 +521,7 @@ export class ExplorerThreadService {
         const existing = explorerPlan.candidatePlanId ? this.store.getPlan(explorerPlan.candidatePlanId) : undefined;
         const plan = existing?.status === "DRAFT" ? this.plans.reviseCandidate(existing.id, assessment.artifact, source) : this.plans.createCandidatePlan({ projectId: thread.projectId, sourceExplorerThreadId: threadId, explorerPlanId: explorerPlan.id, title: assessment.artifact.title, generatedSpec: assessment.artifact.generatedSpec, ...source });
         const planAfterCandidate = this.store.updateExplorerPlan({ ...this.store.getExplorerPlan(explorerPlan.id)!, exploration: { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], diagnostics: [], candidatePlanId: plan.id, lastAssessedTurnId: assistantId }, candidatePlanId: plan.id, newPlanRequested: false, lastAssessedTurnId: assistantId, lastActivityAt: this.store.now() });
-        this.updateThreadContextSummary(threadId, planAfterCandidate, plan.contract.goal ?? null);
+        this.updateThreadContextSummary(threadId, planAfterCandidate, plan.resolvedContract.objective.goal ?? null);
         const latestThread = this.store.getThread(threadId)!;
         if (latestThread.activeExplorerPlanId === explorerPlan.id) this.store.updateThread({ ...latestThread, exploration: planAfterCandidate.exploration, lastActivityAt: this.store.now() });
       }
@@ -562,7 +562,7 @@ export class ExplorerThreadService {
     const plans = this.store.listExplorerPlans(threadId).map((plan) => plan.id === changedPlan.id ? changedPlan : plan);
     const completedPlans = plans.filter((plan) => plan.exploration.status === "READY").map((plan) => {
       const candidate = plan.candidatePlanId ? this.store.getPlan(plan.candidatePlanId) : undefined;
-      const resolvedGoal = goal && plan.id === changedPlan.id ? goal : candidate?.contract.goal ?? null;
+      const resolvedGoal = goal && plan.id === changedPlan.id ? goal : candidate?.resolvedContract.objective.goal ?? null;
       const keyConstraints = candidate?.generatedSpec?.design.technicalConstraints ?? [];
       return { explorerPlanId: plan.id, title: plan.title, status: plan.exploration.status, goal: resolvedGoal, keyConstraints: [...keyConstraints], latestUserMessageSummary: plan.latestUserMessageSummary };
     });

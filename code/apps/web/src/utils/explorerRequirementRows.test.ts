@@ -103,13 +103,15 @@ describe("projectExplorerRequirementRows", () => {
   });
 
   it("marks confirmed conversation-only Plans as requiring attention instead of queueing", () => {
+    // 前三行分别只给 resolvedContract / generatedSpec 一层声明（旧用例里还有一层 V1 `contract`，
+    // 那份镜像已删）。第四行是仓库文件产物，作为对照。
     const rows = projectExplorerRequirementRows(
       [requirement("contract", 1), requirement("resolved", 2), requirement("generated", 3), requirement("repository", 4)],
       [
-        plan("contract", "READY", { contract: { artifactMode: "CONVERSATION" } as NonNullable<Plan["contract"]> }),
+        plan("contract", "READY", { resolvedContract: { artifact: { mode: "CONVERSATION" } } as NonNullable<Plan["resolvedContract"]> }),
         plan("resolved", "READY", { resolvedContract: { artifact: { mode: "CONVERSATION" } } as NonNullable<Plan["resolvedContract"]> }),
         plan("generated", "READY", { generatedSpec: { artifact: { mode: "CONVERSATION" } } as NonNullable<Plan["generatedSpec"]> }),
-        plan("repository", "READY", { contract: { artifactMode: "REPOSITORY_FILE" } as NonNullable<Plan["contract"]> }),
+        plan("repository", "READY", { resolvedContract: { artifact: { mode: "REPOSITORY_FILE" } } as NonNullable<Plan["resolvedContract"]> }),
       ],
       [],
     );

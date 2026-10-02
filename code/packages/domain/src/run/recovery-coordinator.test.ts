@@ -6,6 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { InMemoryPipelineStore, PlanService, ProjectService, type AgentLoop, type ExplorerInputRequest, type ExplorerTurn, type Run } from "../index.js";
 import { RecoveryCoordinator } from "./recovery-coordinator.js";
+import { planContractFixture } from "../plan/plan-fixture.js";
 
 function loop(store: InMemoryPipelineStore, id: string, state: AgentLoop["state"], providerThreadId: string | null = null, providerTurnId: string | null = null, ownerId = `run-${id}`): AgentLoop {
   const value: AgentLoop = { id, ownerType: "run", ownerId, role: "executor", mode: "provider-controlled", state, stepCount: 2, maxSteps: 40, startedAt: store.now(), completedAt: null, providerThreadId, providerTurnId, checkpointJson: null };
@@ -70,7 +71,8 @@ describe("RecoveryCoordinator", () => {
     projects.create({ id: "project-1", name: "Demo", repoRoot: "/repo/demo", defaultBranch: "main", worktreeRoot: "/tmp/demo-worktrees" });
     const plans = new PlanService(store, projects);
     plans.registerThread({ id: "explorer-1", projectId: "project-1", parentThreadId: null });
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "explorer-1", title: "Orphaned run" });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "explorer-1", title: "Orphaned run",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Orphaned run" }) });
     plans.confirm(plan.id, "user-1");
     plans.enqueue(plan.id);
     const run: Run = { id: "run-orphaned", projectId: "project-1", planId: plan.id, planRevision: 1, status: "IN_PROGRESS", branch: "factory/run-orphaned", workspacePath: "/tmp/demo-worktrees/run-orphaned", baseCommit: "abc", executionThreadId: "execution-orphaned", createdAt: store.now(), startedAt: store.now() };
@@ -90,7 +92,8 @@ describe("RecoveryCoordinator", () => {
     projects.create({ id: "project-1", name: "Demo", repoRoot: "/repo/demo", defaultBranch: "main", worktreeRoot: "/tmp/demo-worktrees" });
     const plans = new PlanService(store, projects);
     plans.registerThread({ id: "explorer-1", projectId: "project-1", parentThreadId: null });
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "explorer-1", title: "Stale plan projection" });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "explorer-1", title: "Stale plan projection",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Stale plan projection" }) });
     plans.confirm(plan.id, "user-1");
     plans.enqueue(plan.id);
     const run: Run = { id: "run-blocked", projectId: "project-1", planId: plan.id, planRevision: 1, status: "BLOCKED", branch: "factory/run-blocked", workspacePath: null, baseCommit: "abc", executionThreadId: "execution-blocked", createdAt: store.now(), startedAt: store.now() };
@@ -108,7 +111,8 @@ describe("RecoveryCoordinator", () => {
     projects.create({ id: "project-1", name: "Demo", repoRoot: "/repo/demo", defaultBranch: "main", worktreeRoot: "/tmp/demo-worktrees" });
     const plans = new PlanService(store, projects);
     plans.registerThread({ id: "explorer-1", projectId: "project-1", parentThreadId: null });
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "explorer-1", title: "Keep merged plan" });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "explorer-1", title: "Keep merged plan",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Keep merged plan" }) });
     plans.confirm(plan.id, "user-1");
     plans.enqueue(plan.id);
     const run: Run = { id: "run-merge-ready", projectId: "project-1", planId: plan.id, planRevision: 1, status: "MERGE_READY", branch: "factory/run-merge-ready", workspacePath: null, baseCommit: "abc", executionThreadId: "execution-merge-ready", createdAt: store.now(), startedAt: store.now() };

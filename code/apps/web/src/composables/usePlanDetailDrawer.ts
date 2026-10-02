@@ -166,7 +166,7 @@ export function usePlanDetailDrawer(deps: PlanDetailDrawerDeps) {
       } else {
         const response = await api.getPlanRevision(planId, revisionNumber);
         if (requestVersion !== detailRequestVersion) return;
-        detailPlan.value = { ...current, revision: response.revision.revision, status: "READY", ...(response.revision.contract ? { contract: response.revision.contract } : {}), ...(response.revision.resolvedContract ? { resolvedContract: response.revision.resolvedContract } : {}) };
+        detailPlan.value = { ...current, revision: response.revision.revision, status: "READY", ...(response.revision.resolvedContract ? { resolvedContract: response.revision.resolvedContract } : {}) };
       }
     } catch (caught) {
       if (requestVersion !== detailRequestVersion) return;

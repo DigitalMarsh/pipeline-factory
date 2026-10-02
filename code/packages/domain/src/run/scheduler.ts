@@ -108,7 +108,7 @@ export class Scheduler {
       const branchLeaf = allocateRunBranchLeaf(baseBranchLeaf, this.options.store.listRuns().map((run) => run.branch));
       const runId = this.options.store.nextId("run");
       const thread: ExecutionThread = { id: this.options.store.nextId("execution-thread"), runId, state: "ACTIVE", journal: [] };
-      const run: Run = { id: runId, projectId: plan.projectId, planId: plan.id, planRevision: revision.revision, status: "STARTING", branch: runBranchName(branchLeaf), workspacePath: null, baseCommit: revision.contract.baseCommit, executionThreadId: thread.id, createdAt, startedAt: null };
+      const run: Run = { id: runId, projectId: plan.projectId, planId: plan.id, planRevision: revision.revision, status: "STARTING", branch: runBranchName(branchLeaf), workspacePath: null, baseCommit: revision.resolvedContract.repository.baseCommit, executionThreadId: thread.id, createdAt, startedAt: null };
       this.options.store.saveRun(run);
       this.options.store.saveExecutionThread(thread);
       this.append(thread.id, "RUN_CREATED", { planId: plan.id, revision: revision.revision });
@@ -181,7 +181,7 @@ export class Scheduler {
     let summary = normalizeRunBranchSlug(plan.title) ?? "change";
     if (this.options.branchNameGenerator) {
       try {
-        summary = await this.options.branchNameGenerator.generate({ createdAt, planTitle: plan.title, goal: revision.contract.goal });
+        summary = await this.options.branchNameGenerator.generate({ createdAt, planTitle: plan.title, goal: revision.resolvedContract.objective.goal });
       } catch {
         summary = "change";
       }
@@ -388,7 +388,7 @@ export class Scheduler {
     // 判定规则统一在 plan/contract.ts 的 missingVerificationCommands —— 这里曾自己实现一套，
     // 与 PlanDispatchCoordinator.evaluateWait 的那套不一致，导致派发前放行、启动时却抛
     // RUN_PREREQUISITES_UNSATISFIED（见该函数的模块说明）。
-    const missing = missingVerificationCommands({ contract: revision.contract, resolvedContract: revision.resolvedContract, commands: snapshot.settings.commands });
+    const missing = missingVerificationCommands({ resolvedContract: revision.resolvedContract, commands: snapshot.settings.commands });
     if (missing.length > 0) throw new Error(`RUN_PREREQUISITES_UNSATISFIED: missing registered commands: ${missing.join(", ")}`);
   }
 }

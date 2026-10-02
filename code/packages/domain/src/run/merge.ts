@@ -131,7 +131,7 @@ export class MergeService {
   private createOpenRequest(run: Run, sourceCommit: string, detectedTargetCommit: string | null): MergeRequest {
     const plan = this.store.getPlan(run.planId);
     const revision = plan ? this.store.getRevision(plan.id, run.planRevision) : undefined;
-    const request: MergeRequest = { id: `merge-${randomUUID().slice(0, 12)}`, runId: run.id, planId: run.planId, sourceCommit, targetBranch: revision?.contract.baseBranch ?? "main", status: "OPEN", humanConfirmationRequired: true, createdAt: new Date().toISOString(), mergedAt: null, ...(detectedTargetCommit ? { detectedTargetCommit } : {}) };
+    const request: MergeRequest = { id: `merge-${randomUUID().slice(0, 12)}`, runId: run.id, planId: run.planId, sourceCommit, targetBranch: revision?.resolvedContract.repository.baseBranch ?? "main", status: "OPEN", humanConfirmationRequired: true, createdAt: new Date().toISOString(), mergedAt: null, ...(detectedTargetCommit ? { detectedTargetCommit } : {}) };
     this.store.saveMergeRequest(request);
     this.store.appendEvent({ type: "merge.request.created", aggregateId: request.id, payload: request });
     return request;
@@ -140,7 +140,7 @@ export class MergeService {
   private targetBranch(run: Run): string | null {
     const plan = this.store.getPlan(run.planId);
     const revision = plan ? this.store.getRevision(plan.id, run.planRevision) : undefined;
-    const branch = revision?.contract.baseBranch?.trim();
+    const branch = revision?.resolvedContract.repository.baseBranch?.trim();
     return branch || null;
   }
 

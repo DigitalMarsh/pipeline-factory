@@ -21,6 +21,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { ExplorerService, PlanService, ProjectService, SqlitePipelineStore } from "./index.js";
+import { planContractFixture } from "./plan/plan-fixture.js";
 
 const openStores: SqlitePipelineStore[] = [];
 const temporaryDirectories: string[] = [];
@@ -42,7 +43,8 @@ function seedConfirmedPlan() {
   const project = projects.create({ id: "project-repair", name: "Repair Project", repoRoot: "/repo/repair", defaultBranch: "main", worktreeRoot: "/tmp/repair-worktrees" });
   const explorer = new ExplorerService(store).create({ projectId: project.id, title: "Repair Explorer" });
   const plans = new PlanService(store, projects);
-  const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: explorer.id, title: "Repair plan" });
+  const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: explorer.id, title: "Repair plan",
+      resolvedContract: planContractFixture({ store, projectId: project.id, title: "Repair plan" }) });
   plans.confirm(plan.id, "local-user");
   return { store, databasePath, project, explorer, planId: plan.id };
 }

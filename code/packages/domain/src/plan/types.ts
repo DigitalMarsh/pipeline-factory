@@ -17,9 +17,10 @@
  *      就发生在这个层次交界处：改动这里之前先读该用例与豁免说明，不要顺手"修好"它。
  *   2) **PlanLifecycleEntry.occurredAt 为 null 表示"时间未知"，不是"刚刚"**。
  *      不要用同组其它条目的时间或 lastEventAt 去补 —— 那是猜的，会让时间线说谎。
- *   3) **PlanContract（V1 扁平合同）已标 @deprecated，只用于展示历史记录**；
- *      ），才是 Explorer 输出与调度的唯一入口。
- *      新代码不要新增读取 PlanContract 字段的路径。
+ *   3) **契约只有一份：`ResolvedPlanContract`**（`plan/plan-spec.ts`）。V1 扁平合同
+ *      （`PlanContract`）曾经以 `contract` 字段与它并存，是一份有损镜像（`dependsOnPlanIds`
+ *      填 []、`priority` 归 0），已经**整个删掉**——连同它的类型与存储列（见 docs 的 §6 B 类第二步）。
+ *      新增字段一律加在 `ResolvedPlanContract` 上，不要再造第二份形状。
  *   4) **CandidatePlan.status 的每次变化都应走 plan/status-transition.ts 的 updatePlanStatus**，
  *      它同时维护 lastEventAt / attentionReason 并追加事件；直接赋值会让生命周期时间线缺条目。
  *   5) **PlanRevision 是冻结快照**（Readonly + projectConfigSnapshot），确认之后不随
@@ -27,7 +28,7 @@
  *      别为了"让老 Plan 也能跑"去掉这个判断。
  *   6) **PlanRevisionDraft 是唯一可写的工作副本，永远不能直接成为 Executor 的合同**：
  *      必须先 confirm 成 PlanRevision。BASE_CHANGED 表示基线已漂移，需要重建而不是继续编辑。
- *   7) ChangeProposal.contract 保持原值不可变（Readonly）：提案是"请求改"，不是"已经改"；
+ *   7) ChangeProposal.resolvedContract 保持原值不可变（Readonly）：提案是"请求改"，不是"已经改"；
  *      批准后产生的是新 Revision，而不是就地改这个字段。
  *   8) CreateChangeProposalInput 只承载"请求"，因此没有 status / decidedAt 等决策字段 ——
  *      决策状态由 ChangeProposal 自己在批准/驳回时写入，不要提前塞进输入类型。
@@ -67,39 +68,6 @@ export type PlanLifecycleEntry = {
 };
 
 /** Plan 中可独立追踪的任务及其依赖状态。 */
-export type PlanTask = {
-  id: string;
-  title: string;
-  dependencies: string[];
-  status: "PENDING" | "READY" | "DONE";
-};
-
-/** Confirm 后供 Executor、Verification 和 Merge 共同消费的执行合同。 */
-/** @deprecated Flat V1 contracts are retained only to display historical records. */
-export type PlanContract = {
-  schemaVersion?: 1;
-  goal: string;
-  acceptanceCriteria: string[];
-  include: string[];
-  exclude: string[];
-  baseBranch: string;
-  baseCommit: string;
-  tasks: PlanTask[];
-  conflictKeys: string[];
-  executorModelRole: string;
-  toolPolicy: string;
-  verificationCommandIds: string[];
-  maxRepairAttempts: number;
-  mergeStrategy: "manual" | "fast-forward" | "squash";
-  requireHumanMerge: boolean;
-  /** Conversation plans are reviewable but never executable. Undefined keeps historical contracts compatible. */
-  artifactMode?: "CONVERSATION" | "REPOSITORY_FILE";
-  artifactPath?: string;
-  /** IDs of other CandidatePlans in this Project; descriptive prerequisites belong in the plan spec constraints. */
-  dependsOnPlanIds?: string[];
-  priority?: number;
-};
-
 /** 从 Explorer 对话投影出的候选 Plan；Confirm 前仍允许编辑或丢弃。 */
 export type CandidatePlan = {
   id: string;
@@ -121,10 +89,10 @@ export type CandidatePlan = {
   runId: string | null;
   lastEventAt: string;
   attentionReason: string | null;
-  contract: PlanContract;
-  /** The generated spec is the only contract admitted from Explorer output and executable by new scheduling. */
+  /** 已解析契约：**事实来源**。Executor、Verification、Merge 与界面都读它。 */
+  resolvedContract: ResolvedPlanContract;
+  /** 模型产出的原始 spec；由它解析出 `resolvedContract`。程序化创建（测试夹具）可以只给契约。 */
   generatedSpec?: GeneratedPlanSpec;
-  resolvedContract?: ResolvedPlanContract;
 };
 
 /** 执行中发现范围变化时，ChangeProposal 的人工决策状态。 */
@@ -137,7 +105,8 @@ export type ChangeProposal = Readonly<{
   planId: string;
   reason: string;
   requestedChanges: string[];
-  contract: PlanContract;
+  /** 提案当时的那份已解析契约，原值保持不可变。 */
+  resolvedContract: ResolvedPlanContract;
   status: ChangeProposalStatus;
   createdAt: string;
   createdBy: string;
@@ -158,8 +127,8 @@ export type ApprovedChangeProposal = {
 export type PlanRevision = Readonly<{
   planId: string;
   revision: number;
-  contract: Readonly<PlanContract>;
-  resolvedContract?: Readonly<ResolvedPlanContract>;
+  /** 已解析契约：这条 Revision 的**事实来源**，确认时冻结。 */
+  resolvedContract: Readonly<ResolvedPlanContract>;
   artifactHash: string;
   /**
    * 本 Revision 的落盘副本位置（确认时写入受管工程的计划目录）。
@@ -191,9 +160,8 @@ export type PlanRevisionDraft = Readonly<{
   targetRevision: number;
   status: PlanRevisionDraftStatus;
   title: string;
-  contract: Readonly<PlanContract>;
+  resolvedContract: ResolvedPlanContract;
   generatedSpec?: GeneratedPlanSpec;
-  resolvedContract?: ResolvedPlanContract;
   sourceExplorerThreadId: string;
   explorerPlanId?: string;
   sourceTurnId: string | null;
@@ -213,7 +181,8 @@ export type CreateCandidatePlanInput = {
   sourceExplorerThreadId: string;
   explorerPlanId?: string | undefined;
   title: string;
-  contract?: PlanContract | undefined;
+  /** 程序化创建（测试夹具）可以直接给一份已解析契约；Explorer 走 `generatedSpec`。 */
+  resolvedContract?: ResolvedPlanContract | undefined;
   generatedSpec?: GeneratedPlanSpec | undefined;
   sourceTurnId?: string | null | undefined;
   providerThreadId?: string | null | undefined;
@@ -233,6 +202,6 @@ export type CreateChangeProposalInput = {
   runId: string;
   reason: string;
   requestedChanges: string[];
-  contract: PlanContract;
+  resolvedContract: ResolvedPlanContract;
   createdBy?: string;
 };

@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { ExplorerService, ExplorerThreadService, InMemoryPipelineStore, PlanService, ProjectService, StubModelGateway } from "./index.js";
+import { planContractFixture } from "./plan/plan-fixture.js";
 
 describe("ExplorerService", () => {
   it("creates a fresh business Explorer without inheriting old turns or plans", () => {
@@ -13,7 +14,8 @@ describe("ExplorerService", () => {
     const plans = new PlanService(store);
     const oldExplorer = explorers.create({ projectId: "project-1", title: "Old design" });
     store.saveTurn({ id: "old-turn", threadId: oldExplorer.id, role: "user", content: "old requirement", status: "COMPLETED", createdAt: store.now(), sequence: 1 });
-    const oldPlan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: oldExplorer.id, title: "Old plan" });
+    const oldPlan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: oldExplorer.id, title: "Old plan",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Old plan" }) });
     plans.confirm(oldPlan.id, "user-1");
     plans.enqueue(oldPlan.id);
 

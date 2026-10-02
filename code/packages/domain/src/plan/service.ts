@@ -12,19 +12,17 @@
  *      updatePlanStatus 的路径都遵守这一点，新增路径也要。
  *   2) `revision` 是**单调递增的版本号**，确认/修订时取 `plan.revision + 1` 而不是从
  *      revision 表里 max+1。Revision 一旦落库就 freezeRevision（不可变），历史版本永不改写。
- *   3) 本文件里的两个模块级辅助有各自的历史包袱，别当成随手可改的工具：
- *      - defaultPlanContract 是 V1 契约的兜底（老 Plan 没有可执行的已解析契约时用它），
- *        它的 acceptanceCriteria 文案会被前端原样展示；
- *      - executionContractFromResolved 把已解析契约"投影回" V1 形状，是两种形状并存的
- *        过渡层，删除它会立刻打断所有读 contract 的老路径；
- *      - verifiedProjectBaseline 在批 D 已搬去 **git/baseline.ts**（它会执行 git 子进程，原先
- *        是本文件里唯一的 IO）。本文件现在只 import 它，不再自己碰 Git。
+ *   3) **契约只有一份**：`resolvedContract`（确认时冻结）就是事实来源——Executor、Verification、
+ *      Merge 与界面都读它。曾经与它并存的 V1 扁平镜像（`contract` 字段、`executionContractFromResolved`
+ *      投影与 `defaultPlanContract` 兜底）已经整体删掉，见 docs 的 §6 B 类。
+ *      本文件里唯一的 IO 是 `verifiedProjectBaseline`（会执行 git 子进程），它在批 D 已搬去
+ *      **git/baseline.ts**，这里只 import。
  *   4) 查询侧（query / listThreadPlans / listProjectPlans）用的是 plan/query.ts 的投影与游标，
  *      投影字段的增删要同步两个 Store 实现，见该文件的维护提示。
  */
 import { createHash } from "node:crypto";
 import { parseGeneratedPlanSpec, resolvePlanContract } from "./plan-spec.js";
-import { missingVerificationCommands, validatePlanContract } from "./contract.js";
+import { missingVerificationCommands } from "./contract.js";
 import { writePlanDocument } from "./plan-archive.js";
 import { emptyPlanPreflight } from "./preflight.js";
 import type { PlanPreflightInspector } from "./preflight.js";
@@ -47,7 +45,6 @@ import type {
   ExplorerPlan,
   ExplorerThread,
   ExecutionThreadSummary,
-  PlanContract,
   PlanIndexRow,
   PlanLifecycleEntry,
   PlanQuery,
@@ -57,54 +54,8 @@ import type {
   PlanRevisionDraft,
   PlanRevision,
   PlanStatus,
-  PlanTask,
   RegisterThreadInput,
 } from "../index.js";
-
-function defaultPlanContract(title: string): PlanContract {
-  return {
-    goal: title,
-    acceptanceCriteria: ["Legacy record: no executable plan contract is available"],
-    include: ["."],
-    exclude: [],
-    baseBranch: "unverified",
-    baseCommit: "unverified",
-    tasks: [{ id: "legacy", title: "Historical plan", dependencies: [], status: "PENDING" }],
-    conflictKeys: [],
-    executorModelRole: "executor",
-    toolPolicy: "executor-scoped-write",
-    verificationCommandIds: ["project.test", "project.typecheck"],
-    maxRepairAttempts: 2,
-    mergeStrategy: "manual",
-    requireHumanMerge: true,
-    dependsOnPlanIds: [],
-    priority: 0,
-  };
-}
-
-/** Internal adapter for pre-existing executor ports; API and revisions expose resolvedContract instead. */
-function executionContractFromResolved(contract: ResolvedPlanContract): PlanContract {
-  return {
-    goal: contract.objective.goal,
-    acceptanceCriteria: contract.objective.acceptanceCriteria,
-    include: contract.scope.includePaths,
-    exclude: contract.scope.excludePaths,
-    baseBranch: contract.repository.baseBranch,
-    baseCommit: contract.repository.baseCommit,
-    tasks: contract.tasks,
-    conflictKeys: contract.conflicts,
-    executorModelRole: contract.execution.executorModelRole,
-    toolPolicy: contract.execution.toolPolicy,
-    verificationCommandIds: contract.verification.commandIds,
-    maxRepairAttempts: contract.execution.maxRepairAttempts,
-    mergeStrategy: contract.merge.strategy,
-    requireHumanMerge: true,
-    artifactMode: contract.artifact.mode,
-    ...(contract.artifact.path ? { artifactPath: contract.artifact.path } : {}),
-    dependsOnPlanIds: [],
-    priority: 0,
-  };
-}
 
 /**
  * 负责 ExplorerThread、CandidatePlan、Confirm、Enqueue 和 Revision 的业务边界。
@@ -135,8 +86,7 @@ export class PlanService {
     planId: string;
     revision: number;
     title: string;
-    contract: PlanContract;
-    resolvedContract?: ResolvedPlanContract | undefined;
+    resolvedContract: ResolvedPlanContract;
     artifactHash: string;
     confirmedBy: string;
     confirmedAt: string;
@@ -154,14 +104,14 @@ export class PlanService {
    * 只阻断 `blocking` 级问题（计划要处理的文件在基线里不存在）。工作区不干净属于**警告**：
    * 它由建 worktree 时的那道硬闸门负责，确认计划与工作区干净是两件事，绑在一起会让只想看方案的人也被卡住。
    */
-  private assertPreflightPasses(projectId: string, contract: { baseCommit: string; include: string[]; artifactPath?: string | undefined }): void {
+  private assertPreflightPasses(projectId: string, resolved: ResolvedPlanContract): void {
     const project = this.store.getProject(projectId);
     if (!project) return;
     const result = this.preflight({
       repoRoot: this.projects.snapshot(projectId).repoRoot,
-      baseCommit: contract.baseCommit,
-      includePaths: contract.include,
-      ...(contract.artifactPath ? { artifactPath: contract.artifactPath } : {}),
+      baseCommit: resolved.repository.baseCommit,
+      includePaths: resolved.scope.includePaths,
+      ...(resolved.artifact.path ? { artifactPath: resolved.artifact.path } : {}),
     });
     if (result.blocking.length > 0) throw new Error(`PLAN_PREFLIGHT_FAILED: ${result.blocking.map((issue) => issue.message).join(" ")}`);
   }
@@ -186,12 +136,17 @@ export class PlanService {
     const createdAt = this.store.now();
     const project = this.store.getProject(input.projectId);
     let generatedSpec: GeneratedPlanSpec | undefined;
-    let resolvedContract: ResolvedPlanContract | undefined;
     if (input.generatedSpec) {
       if (!project) throw new Error(`Project ${input.projectId} not found`);
       generatedSpec = parseGeneratedPlanSpec(input.generatedSpec);
-      resolvedContract = resolvePlanContract(generatedSpec, this.projects.snapshot(project.id), verifiedProjectBaseline(project));
     }
+    // 契约是 CandidatePlan 的**必填事实**：Explorer 走 `generatedSpec` 解析，程序化调用方
+    // （测试夹具）直接给一份已解析契约。两者都没有就没有方案——这条路上不再有"兜底合同"
+    // （V1 的 defaultPlanContract 已随镜像一起删掉）。
+    const resolvedContract = generatedSpec && project
+      ? resolvePlanContract(generatedSpec, this.projects.snapshot(project.id), verifiedProjectBaseline(project))
+      : input.resolvedContract;
+    if (!resolvedContract) throw new Error("A candidate plan requires a generatedSpec or a resolvedContract");
     const plan: CandidatePlan = {
       id: this.store.nextId("plan"),
       projectId: input.projectId,
@@ -212,9 +167,8 @@ export class PlanService {
       runId: null,
       lastEventAt: createdAt,
       attentionReason: null,
-      contract: resolvedContract ? executionContractFromResolved(resolvedContract) : input.contract ?? defaultPlanContract(input.title),
+      resolvedContract,
       ...(generatedSpec ? { generatedSpec } : {}),
-      ...(resolvedContract ? { resolvedContract } : {}),
     };
     this.store.savePlan(plan);
     this.store.saveCandidateVersion(plan);
@@ -229,16 +183,17 @@ export class PlanService {
     const project = this.store.getProject(plan.projectId);
     if (!project) throw new Error(`Project ${plan.projectId} not found`);
     const generatedSpec = artifact.generatedSpec ? parseGeneratedPlanSpec(artifact.generatedSpec) : undefined;
-    const resolvedContract = generatedSpec ? resolvePlanContract(generatedSpec, this.projects.snapshot(project.id), verifiedProjectBaseline(project)) : undefined;
+    // 没有新 spec 就用调用方给的契约；两者都没有则**沿用这一版已有的契约**——只改标题、
+    // 不改方案的修订是合法的，不该因为没带契约就把 Plan 变成没有契约。
+    const resolvedContract = generatedSpec
+      ? resolvePlanContract(generatedSpec, this.projects.snapshot(project.id), verifiedProjectBaseline(project))
+      : artifact.resolvedContract ?? plan.resolvedContract;
     const revision = Math.max(plan.revision, ...this.store.listCandidateVersions(plan.id).map((item) => item.revision)) + 1;
-    const planWithoutGeneratedSpec = { ...plan };
+    const planWithoutGeneratedSpec = { ...plan, resolvedContract };
     delete planWithoutGeneratedSpec.generatedSpec;
-    delete planWithoutGeneratedSpec.resolvedContract;
     const updated = this.store.updatePlan({
       ...planWithoutGeneratedSpec, title: artifact.title, revision,
-      contract: resolvedContract ? executionContractFromResolved(resolvedContract) : artifact.contract ?? plan.contract,
       ...(generatedSpec ? { generatedSpec } : {}),
-      ...(resolvedContract ? { resolvedContract } : {}),
       ...source, lastEventAt: this.store.now(),
     });
     this.store.saveCandidateVersion(updated);
@@ -294,7 +249,7 @@ export class PlanService {
       basedOnRevision: input.fromRevision, targetRevision: plan.revision + 1, status: "EDITING",
       // A revision draft is rebased on the current verified default branch.  Carrying a
       // historical contract's base commit here can otherwise create an unstartable Run.
-      title: plan.title, contract: { ...source.contract, baseBranch: baseline.baseBranch, baseCommit: baseline.baseCommit }, ...(source.resolvedContract ? { resolvedContract: source.resolvedContract } : {}),
+      title: plan.title, resolvedContract: { ...source.resolvedContract, repository: { ...source.resolvedContract.repository, baseBranch: baseline.baseBranch, baseCommit: baseline.baseCommit } },
       sourceExplorerThreadId: thread.id, ...(plan.explorerPlanId ? { explorerPlanId: plan.explorerPlanId } : {}), sourceTurnId: source.sourceTurnId ?? null, providerThreadId: source.providerThreadId ?? null, providerTurnId: source.providerTurnId ?? null, providerItemId: source.providerItemId ?? null,
       baseBranch: baseline.baseBranch, baseCommit: baseline.baseCommit, createdAt: now, updatedAt: now, confirmedAt: null,
     });
@@ -315,9 +270,8 @@ export class PlanService {
     if (!project) throw new Error(`Project ${draft.projectId} not found`);
     const baseline = verifiedProjectBaseline(project);
     const generatedSpec = artifact.generatedSpec ? parseGeneratedPlanSpec(artifact.generatedSpec) : undefined;
-    const resolvedContract = generatedSpec ? resolvePlanContract(generatedSpec, this.projects.snapshot(project.id), baseline) : undefined;
-    const contract = resolvedContract ? executionContractFromResolved(resolvedContract) : artifact.contract ?? draft.contract;
-    const updated: PlanRevisionDraft = Object.freeze({ ...draft, title: artifact.title, contract, ...(generatedSpec ? { generatedSpec } : {}), ...(resolvedContract ? { resolvedContract } : {}), sourceExplorerThreadId: draft.sourceExplorerThreadId, ...source, baseBranch: baseline.baseBranch, baseCommit: baseline.baseCommit, status: "READY_TO_CONFIRM", updatedAt: this.store.now() });
+    const resolvedContract = generatedSpec ? resolvePlanContract(generatedSpec, this.projects.snapshot(project.id), baseline) : artifact.resolvedContract ?? draft.resolvedContract;
+    const updated: PlanRevisionDraft = Object.freeze({ ...draft, title: artifact.title, resolvedContract, ...(generatedSpec ? { generatedSpec } : {}), sourceExplorerThreadId: draft.sourceExplorerThreadId, ...source, baseBranch: baseline.baseBranch, baseCommit: baseline.baseCommit, status: "READY_TO_CONFIRM", updatedAt: this.store.now() });
     const saved = this.store.updateRevisionDraft(updated);
     this.store.appendEvent({ type: "plan.revision.draft.ready", aggregateId: saved.planId, payload: { draftId: saved.draftId, targetRevision: saved.targetRevision, sourceTurnId: source.sourceTurnId } });
     return saved;
@@ -338,15 +292,14 @@ export class PlanService {
       throw new Error("BASE_CHANGED");
     }
     // 与 confirm 同一道闸门：修订版冻结前也要过预检——否则"改一版再确认"就是绕过它的后门。
-    this.assertPreflightPasses(draft.projectId, draft.contract);
-    validatePlanContract(draft.contract);
+    this.assertPreflightPasses(draft.projectId, draft.resolvedContract);
     const snapshot = this.projects.snapshot(project.id);
     const confirmedAt = this.store.now();
-    const artifactHash = `sha256:${createHash("sha256").update(JSON.stringify({ contract: draft.contract, projectConfigSnapshot: snapshot })).digest("hex")}`;
-    const planDocumentPath = this.archiveRevision({ projectId: plan.projectId, planId: plan.id, revision: draft.targetRevision, title: draft.title, contract: draft.contract, ...(draft.resolvedContract ? { resolvedContract: draft.resolvedContract } : {}), artifactHash, confirmedBy, confirmedAt });
-    const revision = freezeRevision({ planId: plan.id, revision: draft.targetRevision, contract: draft.contract, ...(draft.resolvedContract ? { resolvedContract: draft.resolvedContract } : {}), artifactHash, ...(planDocumentPath ? { planDocumentPath } : {}), confirmedBy, confirmedAt, sourceExplorerThreadId: draft.sourceExplorerThreadId, ...(draft.explorerPlanId ? { explorerPlanId: draft.explorerPlanId } : {}), sourceTurnId: draft.sourceTurnId, providerThreadId: draft.providerThreadId, providerTurnId: draft.providerTurnId, providerItemId: draft.providerItemId, projectConfigVersion: snapshot.configVersion, projectConfigHash: snapshot.configHash, projectConfigSnapshot: snapshot });
+    const artifactHash = `sha256:${createHash("sha256").update(JSON.stringify({ resolvedContract: draft.resolvedContract, projectConfigSnapshot: snapshot })).digest("hex")}`;
+    const planDocumentPath = this.archiveRevision({ projectId: plan.projectId, planId: plan.id, revision: draft.targetRevision, title: draft.title, resolvedContract: draft.resolvedContract, artifactHash, confirmedBy, confirmedAt });
+    const revision = freezeRevision({ planId: plan.id, revision: draft.targetRevision, resolvedContract: draft.resolvedContract, artifactHash, ...(planDocumentPath ? { planDocumentPath } : {}), confirmedBy, confirmedAt, sourceExplorerThreadId: draft.sourceExplorerThreadId, ...(draft.explorerPlanId ? { explorerPlanId: draft.explorerPlanId } : {}), sourceTurnId: draft.sourceTurnId, providerThreadId: draft.providerThreadId, providerTurnId: draft.providerTurnId, providerItemId: draft.providerItemId, projectConfigVersion: snapshot.configVersion, projectConfigHash: snapshot.configHash, projectConfigSnapshot: snapshot });
     this.store.saveRevision(revision);
-    const updatedPlan = updatePlanStatus(this.store, plan, { title: draft.title, revision: draft.targetRevision, status: "READY", contract: draft.contract, ...(draft.generatedSpec ? { generatedSpec: draft.generatedSpec } : {}), ...(draft.resolvedContract ? { resolvedContract: draft.resolvedContract } : {}), sourceExplorerThreadId: draft.sourceExplorerThreadId, sourceTurnId: draft.sourceTurnId, providerThreadId: draft.providerThreadId, providerTurnId: draft.providerTurnId, providerItemId: draft.providerItemId, confirmedBy, confirmedAt, queuedAt: null, dispatchedAt: null, runId: null, attentionReason: null, lastEventAt: confirmedAt });
+    const updatedPlan = updatePlanStatus(this.store, plan, { title: draft.title, revision: draft.targetRevision, status: "READY", resolvedContract: draft.resolvedContract, ...(draft.generatedSpec ? { generatedSpec: draft.generatedSpec } : {}), sourceExplorerThreadId: draft.sourceExplorerThreadId, sourceTurnId: draft.sourceTurnId, providerThreadId: draft.providerThreadId, providerTurnId: draft.providerTurnId, providerItemId: draft.providerItemId, confirmedBy, confirmedAt, queuedAt: null, dispatchedAt: null, runId: null, attentionReason: null, lastEventAt: confirmedAt });
     this.store.updateRevisionDraft(Object.freeze({ ...draft, status: "CONFIRMED", confirmedAt, updatedAt: confirmedAt }));
     const thread = this.store.getThread(draft.sourceExplorerThreadId);
     if (thread?.activeRevisionDraftId === draftId) this.store.updateThread({ ...thread, activeRevisionDraftId: null, lastActivityAt: confirmedAt });
@@ -372,10 +325,10 @@ export class PlanService {
   /**
    * 设置这个 Plan 的前置 Plan。**Factory-owned 字段，模型不能填写。**
    *
-   * 为什么只能由人设置：模型不知道 CandidatePlan 的 id（它只见过自然语言的先决条件），而
-   * `dependsOnPlanIds` 是调度用的**真实 id 引用** —— dispatch 拿它做 `WAITING_DEPENDENCY` 判定
-   * （要求前置 Plan 达到 MERGED）。当前契约里没有对应字段，所以这里是"依赖"从一个不可达状态
-   * 变成可达状态的唯一入口。
+   * 为什么只能由人设置：模型不知道 CandidatePlan 的 id（它只见过自然语言先决条件，那些写进
+   * `contract.dependencies`），而 `dependsOnPlanIds` 是调度用的**真实 id 引用** —— dispatch 拿它做
+   * `WAITING_DEPENDENCY` 判定（要求前置 Plan 达到 MERGED）。解析时它恒为 `[]`，所以这里是
+   * "依赖"从一个不可达状态变成可达状态的唯一入口。
    *
    * 只在 Confirm 之前可改：确认后依赖随 Revision 一起冻结，改它等于改执行语义。
    * 合法性（未知 id、自环、环）由 `validatePlanDependencies` 判定，与 Confirm 时同一套规则。
@@ -384,7 +337,7 @@ export class PlanService {
     const plan = this.get(planId);
     if (!["DRAFT", "DESIGNED", "PLANNED"].includes(plan.status)) throw new Error(`Plan ${planId} dependencies cannot change from ${plan.status}`);
     const normalized = [...new Set(dependsOnPlanIds.map((id) => id.trim()).filter(Boolean))];
-    const updated: CandidatePlan = { ...plan, contract: { ...plan.contract, dependsOnPlanIds: normalized } };
+    const updated: CandidatePlan = { ...plan, resolvedContract: { ...plan.resolvedContract, dependsOnPlanIds: normalized } };
     this.validatePlanDependencies(updated);
     const saved = this.store.updatePlan(updated);
     this.store.appendEvent({ type: "plan.dependencies.updated", aggregateId: planId, payload: { actorId, dependsOnPlanIds: normalized } });
@@ -416,7 +369,7 @@ export class PlanService {
     const generatedSpec: GeneratedPlanSpec = { ...plan.generatedSpec, verification: { mode: "PROJECT_DEFAULT", ...(normalized.length ? { suites: normalized } : {}) } };
     const resolvedContract = resolvePlanContract(generatedSpec, snapshot, baseline);
     if (resolvedContract.verification.mode === "NONE") throw new Error("Project has no default verification commands; verification suites cannot be selected");
-    plan = this.store.updatePlan({ ...plan, generatedSpec, resolvedContract, contract: executionContractFromResolved(resolvedContract) });
+    plan = this.store.updatePlan({ ...plan, generatedSpec, resolvedContract });
     this.store.appendEvent({ type: "plan.verification.suites.updated", aggregateId: planId, payload: { actorId, suites: normalized, commandIds: resolvedContract.verification.commandIds } });
     return plan;
   }
@@ -439,13 +392,15 @@ export class PlanService {
     if (plan.status !== "DRAFT" && plan.status !== "DESIGNED" && plan.status !== "PLANNED") {
       throw new Error(`Plan ${planId} cannot be confirmed from ${plan.status}`);
     }
-    if (plan.contract.schemaVersion === 1) throw new Error(`Legacy V1 Plan ${planId} is read-only and cannot be executed by the scheduler`);
-    if (plan.resolvedContract) {
-      const project = this.store.getProject(plan.projectId);
-      if (!project || project.id !== plan.resolvedContract.repository.projectId) throw new Error(`Plan ${planId} is bound to an invalid Project`);
-      if (project.configVersion !== plan.resolvedContract.repository.configVersion || project.configHash !== plan.resolvedContract.repository.configHash) throw new Error(`Plan ${planId} is stale because Project configuration changed; regenerate it`);
+    // 绑定校验：契约里的 Project / 配置版本必须与当前事实一致，否则确认下去的就是一份过期方案。
+    // **Project 不在库里时跳过**（与 assertPreflightPasses 同一条容忍）：生产路径上 savePlan 的
+    // 外键守卫保证 Project 存在，这条分支只服务"没注册 Project 的夹具"。
+    const boundProject = this.store.getProject(plan.projectId);
+    if (boundProject) {
+      if (boundProject.id !== plan.resolvedContract.repository.projectId) throw new Error(`Plan ${planId} is bound to an invalid Project`);
+      if (boundProject.configVersion !== plan.resolvedContract.repository.configVersion || boundProject.configHash !== plan.resolvedContract.repository.configHash) throw new Error(`Plan ${planId} is stale because Project configuration changed; regenerate it`);
     }
-    if (plan.generatedSpec && plan.resolvedContract) {
+    if (plan.generatedSpec) {
       const prerequisites = [...new Set([...plan.generatedSpec.dependencies, ...plan.resolvedContract.dependencies])];
       const currentTechnicalConstraints = plan.resolvedContract.design.technicalConstraints;
       const technicalConstraints = [...new Set([...currentTechnicalConstraints, ...prerequisites])];
@@ -458,19 +413,17 @@ export class PlanService {
       }
     }
     // 预检排在冻结之前：先把"计划假设的文件根本不存在"挡在门外，再写不可变的 Revision。
-    this.assertPreflightPasses(plan.projectId, plan.contract);
-    validatePlanContract(plan.contract);
+    this.assertPreflightPasses(plan.projectId, plan.resolvedContract);
     this.validatePlanDependencies(plan);
     const confirmedAt = this.store.now();
     const project = this.store.getProject(plan.projectId);
     const projectConfigSnapshot = project ? this.projects.snapshot(project.id) : undefined;
-    const artifactHash = `sha256:${createHash("sha256").update(JSON.stringify({ contract: plan.contract, projectConfigSnapshot })).digest("hex")}`;
-    const planDocumentPath = this.archiveRevision({ projectId: plan.projectId, planId: plan.id, revision: plan.revision, title: plan.title, contract: plan.contract, ...(plan.resolvedContract ? { resolvedContract: plan.resolvedContract } : {}), artifactHash, confirmedBy, confirmedAt });
+    const artifactHash = `sha256:${createHash("sha256").update(JSON.stringify({ resolvedContract: plan.resolvedContract, projectConfigSnapshot })).digest("hex")}`;
+    const planDocumentPath = this.archiveRevision({ projectId: plan.projectId, planId: plan.id, revision: plan.revision, title: plan.title, resolvedContract: plan.resolvedContract, artifactHash, confirmedBy, confirmedAt });
     const revision = freezeRevision({
       planId: plan.id,
       revision: plan.revision,
-      contract: plan.contract,
-      ...(plan.resolvedContract ? { resolvedContract: plan.resolvedContract } : {}),
+      resolvedContract: plan.resolvedContract,
       ...(planDocumentPath ? { planDocumentPath } : {}),
       artifactHash,
       confirmedBy,
@@ -486,7 +439,7 @@ export class PlanService {
   }
 
   private validatePlanDependencies(plan: CandidatePlan): void {
-    const dependencies = plan.contract.dependsOnPlanIds ?? [];
+    const dependencies = plan.resolvedContract.dependsOnPlanIds ?? [];
     const plans = new Map(this.store.listPlans().filter((item) => item.projectId === plan.projectId).map((item) => [item.id, item]));
     for (const dependencyId of dependencies) {
       if (dependencyId === plan.id) throw new Error(`Plan ${plan.id} cannot depend on itself`);
@@ -500,7 +453,7 @@ export class PlanService {
       if (visited.has(planId)) return;
       visiting.add(planId);
       const current = plans.get(planId);
-      for (const dependencyId of current?.contract.dependsOnPlanIds ?? []) {
+      for (const dependencyId of current?.resolvedContract.dependsOnPlanIds ?? []) {
         if (!plans.has(dependencyId)) {
           if (planId === plan.id) throw new Error(`Plan ${plan.id} depends on unknown plan ${dependencyId}`);
           continue;
@@ -623,8 +576,7 @@ export class PlanService {
   /** 将已确认 Plan 放入人工 Enqueued 阶段；只有显式派发才会唤醒 Scheduler。 */
   enqueue(planId: string): CandidatePlan {
     const plan = this.get(planId);
-    if (plan.contract.schemaVersion === 1) throw new Error(`Legacy V1 Plan ${planId} is read-only and cannot be enqueued`);
-    if (plan.contract.artifactMode === "CONVERSATION") throw new Error("CONVERSATION_ARTIFACT_NOT_EXECUTABLE");
+    if (plan.resolvedContract.artifact.mode === "CONVERSATION") throw new Error("CONVERSATION_ARTIFACT_NOT_EXECUTABLE");
     if (plan.status === "ENQUEUED" || plan.status === "DISPATCHED" || plan.status === "IN_PROGRESS" || plan.status === "VERIFYING" || plan.status === "MERGE_READY" || plan.status === "MERGED") {
       return plan;
     }
@@ -638,8 +590,7 @@ export class PlanService {
   /** 将人工入队的 Plan 交给调度器；派发时间保留用于 Dispatched 历史投影。 */
   dispatch(planId: string): CandidatePlan {
     const plan = this.get(planId);
-    if (plan.contract.schemaVersion === 1) throw new Error(`Legacy V1 Plan ${planId} is read-only and cannot be dispatched`);
-    if (plan.contract.artifactMode === "CONVERSATION") throw new Error("CONVERSATION_ARTIFACT_NOT_EXECUTABLE");
+    if (plan.resolvedContract.artifact.mode === "CONVERSATION") throw new Error("CONVERSATION_ARTIFACT_NOT_EXECUTABLE");
     if (plan.status === "DISPATCHED" || plan.status === "IN_PROGRESS" || plan.status === "VERIFYING" || plan.status === "MERGE_READY" || plan.status === "MERGED") return plan;
     if (plan.status !== "ENQUEUED") throw new Error(`Plan ${planId} must be enqueued before dispatch`);
     const dispatchedAt = this.store.now();
@@ -657,13 +608,12 @@ export class PlanService {
     if (plan.status !== "DISPATCHED" || plan.runId !== null) {
       throw new Error(`Plan ${planId} is not eligible for a configuration revision`);
     }
-    validatePlanContract(plan.contract);
     this.validatePlanDependencies(plan);
     const project = this.store.getProject(plan.projectId);
     if (!project) throw new Error(`Project ${plan.projectId} not found`);
     const projectConfigSnapshot = this.projects.snapshot(project.id);
     // 与 Scheduler / 调度协调器共用同一条判定规则，见 plan/contract.ts 的 missingVerificationCommands。
-    const missingCommands = missingVerificationCommands({ contract: plan.contract, resolvedContract: plan.resolvedContract, commands: projectConfigSnapshot.settings.commands });
+    const missingCommands = missingVerificationCommands({ resolvedContract: plan.resolvedContract, commands: projectConfigSnapshot.settings.commands });
     if (missingCommands.length) {
       throw new Error(`RUN_PREREQUISITES_UNSATISFIED: missing registered commands: ${missingCommands.join(", ")}`);
     }
@@ -671,12 +621,12 @@ export class PlanService {
     const confirmedAt = this.store.now();
     const revisionNumber = plan.revision + 1;
     // 这是**新的一版 Revision**（plan.revision + 1），所以同样落一份盘：每版一个文件，不覆盖旧版。
-    const artifactHash = `sha256:${createHash("sha256").update(JSON.stringify({ contract: plan.contract, projectConfigSnapshot })).digest("hex")}`;
-    const planDocumentPath = this.archiveRevision({ projectId: plan.projectId, planId: plan.id, revision: revisionNumber, title: plan.title, contract: plan.contract, ...(plan.resolvedContract ? { resolvedContract: plan.resolvedContract } : {}), artifactHash, confirmedBy, confirmedAt });
+    const artifactHash = `sha256:${createHash("sha256").update(JSON.stringify({ resolvedContract: plan.resolvedContract, projectConfigSnapshot })).digest("hex")}`;
+    const planDocumentPath = this.archiveRevision({ projectId: plan.projectId, planId: plan.id, revision: revisionNumber, title: plan.title, resolvedContract: plan.resolvedContract, artifactHash, confirmedBy, confirmedAt });
     const revision = freezeRevision({
       planId: plan.id,
       revision: revisionNumber,
-      contract: plan.contract,
+      resolvedContract: plan.resolvedContract,
       artifactHash,
       ...(planDocumentPath ? { planDocumentPath } : {}),
       confirmedBy,
@@ -745,7 +695,7 @@ export class PlanService {
         runId: plan.runId,
         lastEventAt: plan.lastEventAt,
         attentionReason: plan.attentionReason,
-        priority: plan.contract.priority ?? 0,
+        priority: 0,
       }))
       .sort((a, b) => (b.queuedAt ?? "").localeCompare(a.queuedAt ?? "") || b.lastEventAt.localeCompare(a.lastEventAt) || b.planId.localeCompare(a.planId));
   }
@@ -773,7 +723,7 @@ export class PlanService {
         runId: plan.runId,
         lastEventAt: plan.lastEventAt,
         attentionReason: plan.attentionReason,
-        priority: plan.contract.priority ?? 0,
+        priority: 0,
       }))
       .sort((a, b) => b.lastEventAt.localeCompare(a.lastEventAt));
   }

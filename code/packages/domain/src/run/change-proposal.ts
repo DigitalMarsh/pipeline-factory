@@ -47,7 +47,7 @@ export class ChangeProposalService {
       planId: plan.id,
       reason: input.reason,
       requestedChanges: [...input.requestedChanges],
-      contract: input.contract,
+      resolvedContract: input.resolvedContract,
       status: "OPEN",
       createdAt: this.store.now(),
       createdBy: input.createdBy ?? "executor",
@@ -82,8 +82,8 @@ export class ChangeProposalService {
     const revision = freezeRevision({
       planId: plan.id,
       revision: revisionNumber,
-      contract: proposal.contract,
-      artifactHash: `sha256:${createHash("sha256").update(JSON.stringify({ contract: proposal.contract, projectConfigSnapshot })).digest("hex")}`,
+      resolvedContract: proposal.resolvedContract,
+      artifactHash: `sha256:${createHash("sha256").update(JSON.stringify({ resolvedContract: proposal.resolvedContract, projectConfigSnapshot })).digest("hex")}`,
       confirmedBy: actorId,
       confirmedAt,
       sourceExplorerThreadId: plan.sourceExplorerThreadId,
@@ -92,7 +92,7 @@ export class ChangeProposalService {
     });
     this.store.saveRevision(revision);
     const approvedProposal = this.store.updateChangeProposal({ ...proposal, status: "APPROVED", decidedAt: confirmedAt, decidedBy: actorId, revision: revisionNumber });
-    const enqueuedPlan = updatePlanStatus(this.store, plan, { revision: revisionNumber, contract: proposal.contract, status: "ENQUEUED", confirmedBy: actorId, confirmedAt, queuedAt: confirmedAt, dispatchedAt: null, runId: null, attentionReason: null, lastEventAt: confirmedAt });
+    const enqueuedPlan = updatePlanStatus(this.store, plan, { revision: revisionNumber, resolvedContract: proposal.resolvedContract, status: "ENQUEUED", confirmedBy: actorId, confirmedAt, queuedAt: confirmedAt, dispatchedAt: null, runId: null, attentionReason: null, lastEventAt: confirmedAt });
     this.store.appendEvent({ type: "change.proposal.approved", aggregateId: proposal.id, payload: { actorId, revision: revisionNumber, planId: plan.id } });
     return { proposal: approvedProposal, plan: enqueuedPlan, revision, run: null };
   }

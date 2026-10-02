@@ -80,15 +80,19 @@ export { InMemoryPipelineStore } from "./store/in-memory-store.js";
 export { SqlitePipelineStore } from "./store/sqlite-store.js";
 
 // ─────────────────────────── plan/：Plan 类型、合同校验与状态机 ───────────────────────────
-export type { ApprovedChangeProposal, CandidatePlan, ChangeProposal, ChangeProposalStatus, CreateCandidatePlanInput, CreateChangeProposalInput, CreateRevisionDraftInput, PlanContract, PlanLifecycleEntry, PlanLifecycleStatus, PlanRevisionDraft, PlanRevisionDraftStatus, PlanRevision, PlanStatus, PlanTask } from "./plan/types.js";
+export type { ApprovedChangeProposal, CandidatePlan, ChangeProposal, ChangeProposalStatus, CreateCandidatePlanInput, CreateChangeProposalInput, CreateRevisionDraftInput, PlanLifecycleEntry, PlanLifecycleStatus, PlanRevisionDraft, PlanRevisionDraftStatus, PlanRevision, PlanStatus } from "./plan/types.js";
 export { updatePlanStatus } from "./plan/status-transition.js";
-export { validatePlanContract } from "./plan/contract.js";
 export { assessPlanCompletion } from "./plan/completion.js";
 export type { PlanArtifact, PlanCompletionAssessment } from "./plan/completion.js";
 export { assertSafeProjectRelativeGlob, parseGeneratedPlanSpec, resolvePlanContract, validateGeneratedPlanSpec } from "./plan/plan-spec.js";
 export type { GeneratedPlanSpec, GitBaseline, PlanArtifactMode, PlanTaskChange, PlanValidationIssue, PlanValidationIssueCode, ResolvedPlanContract } from "./plan/plan-spec.js";
 export type { PlanIndexRow, PlanQuery, PlanQueryProjection, PlanQueryResult, PlanQuerySort } from "./plan/query.js";
 export { PlanService } from "./plan/service.js";
+// 跨包共用的**测试夹具**（见 plan/plan-fixture.ts）：api 与 web 的用例也要造一份已解析契约，
+// 各包自己写一份必然与领域形状漂移。**生产路径不要用它**——真的契约只有一条来源：
+// Explorer 产出 generatedSpec → resolvePlanContract。
+export { planContractFixture } from "./plan/plan-fixture.js";
+export type { PlanFixtureOptions, PlanFixtureProject } from "./plan/plan-fixture.js";
 // Plan 落盘目录的唯一定义（缺省 docs/pipeline/plans）：组合根拿它同时喂给"写盘"与"工作区干净检查的
 // 白名单"——两处必须对同一个目录得出同一个结论，见 plan/plan-directory.ts 的模块注释。
 export { DEFAULT_PLAN_DIRECTORY, planDirectoryRepoPath, resolvePlanDirectory } from "./plan/plan-directory.js";

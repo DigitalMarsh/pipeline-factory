@@ -18,16 +18,14 @@
  */
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { PlanContract } from "./types.js";
 import type { PlanTaskChange, ResolvedPlanContract } from "./plan-spec.js";
 
-/** 落盘所需的事实；已解析契约优先（它更完整），缺失时回落到 V1 投影。 */
+/** 落盘所需的事实；契约只有 `resolvedContract` 一份，没有回退形状。 */
 export type PlanDocumentInput = {
   planId: string;
   revision: number;
   title: string;
-  contract: PlanContract;
-  resolvedContract?: ResolvedPlanContract | undefined;
+  resolvedContract: ResolvedPlanContract;
   artifactHash: string;
   confirmedBy: string;
   confirmedAt: string;
@@ -47,20 +45,19 @@ const CHANGE_ACTION_LABELS: Record<PlanTaskChange["action"], string> = { create:
  */
 export function renderPlanDocument(input: PlanDocumentInput): string {
   const resolved = input.resolvedContract;
-  const goal = resolved?.objective.goal ?? input.contract.goal;
-  const acceptance = resolved?.objective.acceptanceCriteria ?? input.contract.acceptanceCriteria;
-  const outOfScope = resolved?.objective.outOfScope ?? [];
-  const audience = resolved?.objective.audience ?? [];
-  const include = resolved?.scope.includePaths ?? input.contract.include;
-  const exclude = resolved?.scope.excludePaths ?? input.contract.exclude;
-  // 显式标注结构而不是取联合类型：V1 的 PlanTask 没有 `changes`（它只有 title/dependencies），
-  // 联合类型会让 `task.changes` 变成不存在的属性。历史 Revision 因此渲染成"只有标题"的步骤，符合事实。
-  const tasks: Array<{ title: string; dependencies: string[]; changes?: PlanTaskChange[] | undefined }> = resolved?.tasks ?? input.contract.tasks;
-  const verification = resolved?.verification.commandIds ?? input.contract.verificationCommandIds;
-  const design = resolved?.design;
-  const artifactPath = resolved?.artifact.path ?? input.contract.artifactPath;
-  const artifactMode = resolved?.artifact.mode ?? input.contract.artifactMode;
-  const repository = resolved?.repository;
+  const goal = resolved.objective.goal;
+  const acceptance = resolved.objective.acceptanceCriteria;
+  const outOfScope = resolved.objective.outOfScope ?? [];
+  const audience = resolved.objective.audience ?? [];
+  const include = resolved.scope.includePaths;
+  const exclude = resolved.scope.excludePaths;
+  const tasks = resolved.tasks;
+  const verification = resolved.verification.commandIds;
+  const design = resolved.design;
+  const artifactPath = resolved.artifact.path;
+  const artifactMode = resolved.artifact.mode;
+  const repository = resolved.repository;
+  const merge = resolved.merge;
 
   const lines: string[] = [];
   lines.push(`# ${input.title}`, "");
@@ -70,7 +67,7 @@ export function renderPlanDocument(input: PlanDocumentInput): string {
   lines.push(`| Revision | ${input.revision} |`);
   lines.push(`| 确认人 | ${input.confirmedBy} |`);
   lines.push(`| 确认时间 | ${input.confirmedAt} |`);
-  lines.push(`| 基线 | ${repository ? `${repository.baseBranch} @ ${repository.baseCommit}` : `${input.contract.baseBranch} @ ${input.contract.baseCommit}`} |`);
+  lines.push(`| 基线 | ${repository.baseBranch} @ ${repository.baseCommit} |`);
   lines.push(`| 契约哈希 | \`${input.artifactHash}\` |`);
   lines.push(`| 产物模式 | ${artifactMode ?? "（未声明）"} |`);
   lines.push(`| 产物路径 | ${artifactPath ? `\`${artifactPath}\`` : "（未声明）"} |`, "");
@@ -106,9 +103,7 @@ export function renderPlanDocument(input: PlanDocumentInput): string {
   }
 
   lines.push("## 验证", "", verification.length > 0 ? `项目验证命令：${verification.map((id) => `\`${id}\``).join("、")}` : "（无验证命令，或由项目默认值决定）", "");
-  if (input.contract.mergeStrategy) {
-    lines.push("## 合并", "", `策略：${input.contract.mergeStrategy}${input.contract.requireHumanMerge ? "（需要人工确认合并）" : ""}`, "");
-  }
+  lines.push("## 合并", "", `策略：${merge.strategy}${merge.requireHumanMerge ? "（需要人工确认合并）" : ""}`, "");
   return `${lines.join("\n").trimEnd()}\n`;
 }
 

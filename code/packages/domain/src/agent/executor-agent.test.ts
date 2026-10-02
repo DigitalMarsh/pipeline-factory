@@ -13,6 +13,7 @@ import { ExecutorAgent, inspectWorkspaceScope, parseExecutorReport } from "./exe
 import { resolveExecutorWorkingDirectory } from "../tools/executor-working-directory.js";
 import { InMemoryPipelineStore, LifecycleHookRunner, PlanService, Scheduler, ToolGateway, type AgentLoop, type ModelEvent, type ModelGateway, type ModelRequest } from "../index.js";
 import { DEFAULT_PROJECT_SETTINGS } from "../project/project.js";
+import { planContractFixture } from "../plan/plan-fixture.js";
 import { DurableToolRuntime } from "../tools/tool-runtime.js";
 
 const executionReport = (taskId: string) => `<pipeline-factory-execution-report>${JSON.stringify({
@@ -32,23 +33,15 @@ async function createQueuedRun(saveRun = true, include = ["src/**"], artifactPat
   temporaryWorkspaces.push(workspacePath);
   const store = new InMemoryPipelineStore();
   const plans = new PlanService(store);
-  const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "explorer-1", title: "Executor plan", contract: {
+  const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "explorer-1", title: "Executor plan", resolvedContract: planContractFixture({
     goal: "Implement the feature",
     acceptanceCriteria: ["The feature works"],
-    include,
-    exclude: [".env"],
-    ...(artifactPath ? { artifactPath } : {}),
-    baseBranch: "main",
-    baseCommit: "abc",
+    includePaths: include,
+    excludePaths: [".env"],
+    artifact: { path: artifactPath },
     tasks: [{ id: "task-1", title: "Implement the feature", dependencies: [], status: "READY" }],
-    conflictKeys: [],
-    executorModelRole: "executor",
-    toolPolicy: "executor-scoped-write",
-    verificationCommandIds: ["project.test"],
-    maxRepairAttempts: 1,
-    mergeStrategy: "manual",
-    requireHumanMerge: true,
-  } });
+    verification: { commandIds: ["project.test"] },
+  }) });
   plans.confirm(plan.id, "user-1");
   plans.enqueue(plan.id);
   plans.dispatch(plan.id);
@@ -157,6 +150,7 @@ describe("ExecutorAgent", () => {
         scope: { includePaths: ["src/**"], excludePaths: [".env"] },
         tasks: [{ id: "task-1", title: "Implement the feature", dependencies: [], status: "READY" as const, changes: [{ path: "src/implemented.ts", action: "modify" as const, detail: "Update the handler to pass the current project id." }] }],
         dependencies: ["Use the existing package manager and lockfile."],
+        dependsOnPlanIds: [],
         conflicts: [],
         execution: { executorModelRole: "executor", toolPolicy: "executor-scoped-write", maxRepairAttempts: 1 },
         verification: { mode: "PROJECT_DEFAULT" as const, commandIds: ["project.test"] },
@@ -169,7 +163,7 @@ describe("ExecutorAgent", () => {
       capabilities: () => ({ supportsStructuredUserInput: false, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
       async *stream(request: ModelRequest): AsyncIterable<ModelEvent> {
         receivedMessages = request.messages;
-        yield { type: "text.delta", text: executionReport(plan.contract.tasks[0]!.id) };
+        yield { type: "text.delta", text: executionReport(plan.resolvedContract.tasks[0]!.id) };
         yield { type: "turn.completed" };
       },
       async answerUserInput() { return undefined; },
@@ -223,7 +217,7 @@ describe("ExecutorAgent", () => {
       capabilities: () => ({ supportsStructuredUserInput: false, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
       async *stream(request: ModelRequest): AsyncIterable<ModelEvent> {
         requestCwd = request.cwd;
-        yield { type: "text.delta", text: executionReport(plan.contract.tasks[0]!.id) };
+        yield { type: "text.delta", text: executionReport(plan.resolvedContract.tasks[0]!.id) };
         yield { type: "turn.completed" };
       },
       async answerUserInput() { return undefined; },
@@ -256,7 +250,7 @@ describe("ExecutorAgent", () => {
       async *stream(request: ModelRequest): AsyncIterable<ModelEvent> {
         expect(request.role).toBe("executor");
         yield { type: "model.usage", usage: { inputTokens: 100, outputTokens: 40, reasoningTokens: 12, totalTokens: 140 }, scope: "turn" };
-        yield { type: "text.delta", text: executionReport(plan.contract.tasks[0]!.id) };
+        yield { type: "text.delta", text: executionReport(plan.resolvedContract.tasks[0]!.id) };
         yield { type: "turn.completed" };
       },
       async answerUserInput() { return undefined; },
@@ -345,7 +339,7 @@ describe("ExecutorAgent", () => {
       async *stream() {
         modelCalls += 1;
         if (modelCalls === 1) yield { type: "tool.call", call: { callId: "write-1", tool: "write_file", input: { path: "src/generated.ts", content: "export const generated = true;\n" } } };
-        else yield { type: "text.delta", text: executionReport(plan.contract.tasks[0]!.id) };
+        else yield { type: "text.delta", text: executionReport(plan.resolvedContract.tasks[0]!.id) };
         yield { type: "turn.completed" };
       },
       async answerUserInput() { return undefined; },

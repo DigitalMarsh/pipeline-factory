@@ -3,16 +3,15 @@
  *   （模型产出的 `generatedSpec`、Factory 解析后的 `resolvedContract`），
  *   本模块决定"界面该读哪一个"，避免每个组件各自决定一遍。
  *
- * 为什么需要它：`contract` 字段是**有损投影**（`dependsOnPlanIds` 被填成 []、`priority` 为 0，
- *   见 domain 的 `executionContractFromResolved`），却因为字段名简短而在界面里被优先读取——
- *   于是界面上显示的 scope / 任务 / 验证命令可能与真正执行的那份不一致。事实来源是
- *   `resolvedContract`（Confirm 时冻结）。
+ * 为什么需要它：界面上有多处要读 goal / scope / 任务 / 验证命令，取值顺序若各自决定一遍就会漂移。
+ *   事实来源是 `resolvedContract`（Confirm 时冻结），草稿期才回落到模型产出的 `generatedSpec`。
+ *   曾经还有第三层——V1 扁平合同 `plan.contract`，那是一份**有损投影**（`dependsOnPlanIds` 被填成 []、
+ *   `priority` 归 0），字段名短反而被优先读，界面显示的可能不是真正执行的那份。它已经删掉了。
  *
  * 维护提示：
- *   1) 取值顺序固定为 `resolvedContract → generatedSpec`。**不要读 `plan.contract`**：
- *      那是有损投影，正是本轮要消掉的分歧。V1 扁平合同已不再支持，所以没有第三种来源了。
+ *   1) 取值顺序固定为 `resolvedContract → generatedSpec`，没有第三种来源。
  *   2) 这里**只做读投影**，不构造对象、不补默认值——缺失就是缺失，界面该显示占位符而不是编一个。
- *   3) 新页面要读 Plan 的 goal / scope / tasks / 验证命令时用这里，不要直接摸 `plan.contract`。
+ *   3) 新页面要读 Plan 的 goal / scope / tasks / 验证命令时用这里，不要直接摸 `plan.resolvedContract`。
  */
 import type { Plan, PlanTask } from "../types";
 
@@ -52,7 +51,7 @@ export function planContractView(plan: Plan | null | undefined): PlanContractVie
       mergeStrategy: resolved.merge?.strategy ?? "—",
       artifactMode: resolved.artifact?.mode ?? null,
       artifactPath: resolved.artifact?.path ?? null,
-      dependsOnPlanIds: resolved.dependencies ?? [],
+      dependsOnPlanIds: resolved.dependsOnPlanIds ?? [],
       source: "resolved",
     };
   }
@@ -72,7 +71,8 @@ export function planContractView(plan: Plan | null | undefined): PlanContractVie
     mergeStrategy: generated.merge?.strategy ?? "—",
     artifactMode: generated.artifact?.mode ?? null,
     artifactPath: generated.artifact?.path ?? null,
-    dependsOnPlanIds: generated.dependencies ?? [],
+    // 模型写不出 Plan id（它只写得出 `dependencies` 那串自然语言先决条件），草稿期恒为空。
+    dependsOnPlanIds: [],
     source: "generated",
   };
 }

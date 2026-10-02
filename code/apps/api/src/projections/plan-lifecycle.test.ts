@@ -11,7 +11,7 @@
  *   新增投影时若确实需要按 Plan 读表，请在这里把该表登记为"允许随行数增长"，不要直接放宽整个断言。
  */
 import { describe, expect, it } from "vitest";
-import { ExplorerService, InMemoryPipelineStore, PlanService, ProjectService, type CandidatePlan, type PipelineStore } from "@pipeline-factory/domain";
+import { ExplorerService, InMemoryPipelineStore, PlanService, ProjectService, type CandidatePlan, type PipelineStore, planContractFixture } from "@pipeline-factory/domain";
 import { decoratePlanRows, planProjection } from "./plan-lifecycle.js";
 
 /** 记录三张"按 Plan 反复读就会爆"的表被读了几次。 */
@@ -32,7 +32,7 @@ function seedPlans(store: PipelineStore, count: number): Array<{ planId: string;
   const plans = new PlanService(store, projects);
   const rows: Array<{ planId: string; revision: number; projectId: string }> = [];
   for (let index = 0; index < count; index += 1) {
-    const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: explorer.id, title: `Plan ${index}` });
+    const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: explorer.id, title: `Plan ${index}`, resolvedContract: planContractFixture({ store, projectId: project.id, title: `Plan ${index}` }) });
     rows.push({ planId: plan.id, revision: plan.revision, projectId: project.id });
   }
   return rows;

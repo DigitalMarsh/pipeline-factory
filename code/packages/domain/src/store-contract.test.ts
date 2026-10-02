@@ -29,6 +29,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { planContractFixture } from "./plan/plan-fixture.js";
 import {
   ExplorerService,
   InMemoryPipelineStore,
@@ -348,7 +349,8 @@ describe("store contract: Plan 与查询投影", () => {
     // 投影与事实的双写是 query.ts 模块头警告的漂移点，所以把"保存 Plan 必产生可查投影"钉住。
     assertBothStores((store) => {
       const { project, explorer, explorerPlanId, plans } = seedProjectScope(store);
-      const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: explorer.id, explorerPlanId, title: "Contract plan" });
+      const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: explorer.id, explorerPlanId, title: "Contract plan",
+      resolvedContract: planContractFixture({ store, projectId: project.id, title: "Contract plan" }) });
 
       const rows = store.listPlanQueryProjection(project.id);
 
@@ -360,7 +362,8 @@ describe("store contract: Plan 与查询投影", () => {
   it("refreshes the query projection when the Plan is updated", () => {
     assertBothStores((store) => {
       const { project, explorer, explorerPlanId, plans } = seedProjectScope(store);
-      const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: explorer.id, explorerPlanId, title: "Before" });
+      const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: explorer.id, explorerPlanId, title: "Before",
+      resolvedContract: planContractFixture({ store, projectId: project.id, title: "Before" }) });
       store.updatePlan({ ...store.getPlan(plan.id)!, title: "After" });
 
       expect(store.listPlanQueryProjection(project.id)[0]?.title).toBe("After");
@@ -370,7 +373,8 @@ describe("store contract: Plan 与查询投影", () => {
   it("round-trips revised Plan versions through saveCandidateVersion", () => {
     assertBothStores((store) => {
       const { project, explorer, explorerPlanId, plans } = seedProjectScope(store);
-      const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: explorer.id, explorerPlanId, title: "Versioned" });
+      const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: explorer.id, explorerPlanId, title: "Versioned",
+      resolvedContract: planContractFixture({ store, projectId: project.id, title: "Versioned" }) });
       store.saveCandidateVersion({ ...store.getPlan(plan.id)!, revision: 2 });
       store.saveCandidateVersion({ ...store.getPlan(plan.id)!, revision: 3 });
 
@@ -381,8 +385,10 @@ describe("store contract: Plan 与查询投影", () => {
   it("keeps dispatch state per Plan and removes only the named one", () => {
     assertBothStores((store) => {
       const { project, explorer, explorerPlanId, plans } = seedProjectScope(store);
-      const first = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: explorer.id, explorerPlanId, title: "First" });
-      const second = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: explorer.id, explorerPlanId, title: "Second" });
+      const first = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: explorer.id, explorerPlanId, title: "First",
+      resolvedContract: planContractFixture({ store, projectId: project.id, title: "First" }) });
+      const second = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: explorer.id, explorerPlanId, title: "Second",
+      resolvedContract: planContractFixture({ store, projectId: project.id, title: "Second" }) });
       const state = { planId: first.id, projectId: project.id, status: "QUEUED", waitReason: null, queuedAt: store.now(), runId: null, attempt: 1, updatedAt: store.now(), lastError: null } as const;
       store.saveDispatchState(state);
       store.saveDispatchState({ ...state, planId: second.id });

@@ -5,7 +5,7 @@
  * 维护提示：新增活动分组时同时补两条断言——组里有它、以及**别的日期没有它**。
  */
 import { describe, expect, it } from "vitest";
-import { InMemoryPipelineStore, PlanService, ProjectService, updatePlanStatus } from "@pipeline-factory/domain";
+import { InMemoryPipelineStore, PlanService, ProjectService, updatePlanStatus, planContractFixture } from "@pipeline-factory/domain";
 import { dailyActivity, localDayBounds, localToday } from "./activity.js";
 
 function fixture() {
@@ -19,9 +19,9 @@ function fixture() {
 describe("daily activity projection", () => {
   it("groups today's execution, merge and block facts by the day they happened", () => {
     const { store, projects, project, plans } = fixture();
-    const executed = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "thread-activity", title: "Executed plan" });
-    const merged = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "thread-activity", title: "Merged plan" });
-    const blocked = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "thread-activity", title: "Blocked plan" });
+    const executed = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "thread-activity", title: "Executed plan", resolvedContract: planContractFixture({ store, projectId: project.id, title: "Executed plan" }) });
+    const merged = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "thread-activity", title: "Merged plan", resolvedContract: planContractFixture({ store, projectId: project.id, title: "Merged plan" }) });
+    const blocked = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "thread-activity", title: "Blocked plan", resolvedContract: planContractFixture({ store, projectId: project.id, title: "Blocked plan" }) });
 
     updatePlanStatus(store, store.getPlan(executed.id)!, { status: "MERGE_READY" });
     updatePlanStatus(store, store.getPlan(merged.id)!, { status: "MERGED" });
@@ -40,7 +40,7 @@ describe("daily activity projection", () => {
 
   it("keeps a Plan's first entry into a state and reports only runs started on an earlier day as cross-day", () => {
     const { store, projects, project, plans } = fixture();
-    const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "thread-activity", title: "Flapping plan" });
+    const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "thread-activity", title: "Flapping plan", resolvedContract: planContractFixture({ store, projectId: project.id, title: "Flapping plan" }) });
     updatePlanStatus(store, store.getPlan(plan.id)!, { status: "MERGE_READY" });
     // 同日再次进入同一状态（例如被退回后重新验证通过）：日报里仍然只出现一次。
     updatePlanStatus(store, store.getPlan(plan.id)!, { status: "BLOCKED" });
@@ -58,7 +58,7 @@ describe("daily activity projection", () => {
 
   it("returns empty groups for another day and rejects a date that is not a real calendar day", () => {
     const { store, projects, project, plans } = fixture();
-    const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "thread-activity", title: "Today only" });
+    const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "thread-activity", title: "Today only", resolvedContract: planContractFixture({ store, projectId: project.id, title: "Today only" }) });
     updatePlanStatus(store, store.getPlan(plan.id)!, { status: "MERGED" });
 
     expect(dailyActivity(store, projects, project.id, "2020-01-02").mergedToday).toEqual([]);

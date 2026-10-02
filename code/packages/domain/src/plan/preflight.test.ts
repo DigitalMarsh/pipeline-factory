@@ -11,6 +11,7 @@ import { createLocalPlanPreflightInspector } from "./preflight.js";
 import { InMemoryPipelineStore } from "../store/in-memory-store.js";
 import { ProjectService } from "../project/project.js";
 import type { CommandResult } from "../platform/commands.js";
+import { planContractFixture } from "./plan-fixture.js";
 
 /** 假 git：`objects` 里登记"在 commit 上存在的路径"，`status` 是工作区输出。 */
 function fakeGit(input: { objects?: string[]; status?: string; statusExitCode?: number; isRepo?: boolean; batchExitCode?: number } = {}) {
@@ -127,7 +128,8 @@ describe("确认闸门", () => {
     const projects = new ProjectService(store);
     projects.create({ id: "project-1", name: "Preflight Project", repoRoot: "/repo", defaultBranch: "main", worktreeRoot: "/tmp/worktrees" });
     const plans = new PlanService(store, projects, inspector);
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Preflight plan" });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Preflight plan",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Preflight plan" }) });
     return { plans, plan };
   }
 
@@ -151,7 +153,8 @@ describe("确认闸门", () => {
     const projects = new ProjectService(store);
     projects.create({ id: "project-1", name: "Plain Project", repoRoot: "/repo", defaultBranch: "main", worktreeRoot: "/tmp/worktrees" });
     const plans = new PlanService(store, projects);
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Plain plan" });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Plain plan",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Plain plan" }) });
 
     expect(plans.confirm(plan.id, "user-1").status).toBe("READY");
   });

@@ -61,7 +61,6 @@ const draft = (overrides: Partial<PlanRevisionDraft> = {}): PlanRevisionDraft =>
   targetRevision: 3,
   status: "EDITING",
   title: "Revised plan",
-  contract: undefined,
   sourceExplorerThreadId: "explorer-1",
   sourceTurnId: null,
   providerThreadId: "provider-thread-1",

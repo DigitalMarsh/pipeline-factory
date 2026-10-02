@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { InMemoryPipelineStore, PlanService, ProjectService } from "./index.js";
+import { planContractFixture } from "./plan/plan-fixture.js";
 
 function repository(): string {
   const root = mkdtempSync(join(tmpdir(), "pipeline-revision-"));
@@ -21,13 +22,14 @@ describe("PlanRevisionDraft", () => {
       const project = projects.create({ id: "project-1", name: "Revision", repoRoot: root, defaultBranch: "main", worktreeRoot: join(root, "worktrees") });
       const plans = new PlanService(store, projects);
       plans.registerThread({ id: "explorer-1", projectId: project.id, parentThreadId: null });
-      const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "explorer-1", title: "Versioned plan" });
+      const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "explorer-1", title: "Versioned plan",
+      resolvedContract: planContractFixture({ store, projectId: project.id, title: "Versioned plan" }) });
       plans.confirm(plan.id, "user");
 
       for (const revision of [1, 2, 3]) {
         const draft = plans.createRevisionDraft({ planId: plan.id, fromRevision: revision, explorerThreadId: "explorer-1", discardUnmergedRun: false, clientRequestId: `draft-${revision}` });
         expect(plans.createRevisionDraft({ planId: plan.id, fromRevision: revision, explorerThreadId: "explorer-1", discardUnmergedRun: false, clientRequestId: `retry-${revision}` }).draftId).toBe(draft.draftId);
-        plans.updateRevisionDraftFromExplorer(draft.draftId, { title: `Versioned plan V${revision + 1}`, contract: draft.contract }, { sourceTurnId: `turn-${revision}`, providerThreadId: "provider", providerTurnId: `provider-turn-${revision}`, providerItemId: `item-${revision}` });
+        plans.updateRevisionDraftFromExplorer(draft.draftId, { title: `Versioned plan V${revision + 1}`, resolvedContract: draft.resolvedContract }, { sourceTurnId: `turn-${revision}`, providerThreadId: "provider", providerTurnId: `provider-turn-${revision}`, providerItemId: `item-${revision}` });
         expect(plans.confirmRevisionDraft(draft.draftId, "user")).toMatchObject({ id: plan.id, revision: revision + 1, status: "READY" });
       }
       expect(plans.listRevisions(plan.id).map((item) => item.revision)).toEqual([1, 2, 3, 4]);

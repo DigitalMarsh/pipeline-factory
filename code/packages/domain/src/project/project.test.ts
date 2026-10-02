@@ -7,17 +7,31 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ExplorerThreadService, InMemoryPipelineStore, LifecycleHookRunner, PlanService, ProjectService, Scheduler, SqlitePipelineStore, validatePlanContract, type ModelGateway } from "../index.js";
+import { ExplorerThreadService, InMemoryPipelineStore, LifecycleHookRunner, PlanService, ProjectService, Scheduler, SqlitePipelineStore, validateGeneratedPlanSpec, type ModelGateway } from "../index.js";
+import { planContractFixture } from "../plan/plan-fixture.js";
 
 describe("ProjectService", () => {
-  it("rejects duplicate, unknown, and cyclic task dependencies before confirmation", () => {
-    const base = {
-      goal: "goal", acceptanceCriteria: ["works"], include: ["src"], exclude: [], baseBranch: "main", baseCommit: "HEAD",
-      conflictKeys: [], executorModelRole: "executor", toolPolicy: "executor-scoped-write", verificationCommandIds: ["project.test"], maxRepairAttempts: 1, mergeStrategy: "manual" as const, requireHumanMerge: true,
+  it("rejects duplicate and unknown task dependencies", () => {
+    // 这条原先打的是 V1 校验器 `validatePlanContract`，它随 V1 扁平合同一起删掉了。
+    // 当前形状的任务图由 `validateGeneratedPlanSpec` 把关（重复 id → DUPLICATE，未知依赖 → INVALID）。
+    // **任务依赖环不再被拦**：V2 里任务依赖只进执行者的提示词，不驱动调度（进度来自 journal），
+    // 环不影响任何执行路径。
+    const spec = {
+      schemaVersion: 2,
+      title: "Task graph",
+      artifact: { mode: "REPOSITORY_FILE" },
+      objective: { goal: "goal", audience: [], acceptanceCriteria: ["works"], outOfScope: [] },
+      design: { technicalConstraints: [], dataSecurity: [], failureHandling: [] },
+      scope: { includePaths: ["src"], excludePaths: [] },
+      tasks: [{ id: "task-1", title: "one", dependencies: [] }],
+      dependencies: [],
+      conflicts: [],
+      execution: {},
+      verification: { mode: "NONE" },
+      merge: { strategy: "manual", requireHumanMerge: true },
     };
-    expect(() => validatePlanContract({ ...base, tasks: [{ id: "task-1", title: "one", dependencies: [], status: "READY" }, { id: "task-1", title: "duplicate", dependencies: [], status: "READY" }] })).toThrow(/unique/i);
-    expect(() => validatePlanContract({ ...base, tasks: [{ id: "task-1", title: "one", dependencies: ["missing"], status: "READY" }] })).toThrow(/unknown/i);
-    expect(() => validatePlanContract({ ...base, tasks: [{ id: "task-1", title: "one", dependencies: ["task-2"], status: "READY" }, { id: "task-2", title: "two", dependencies: ["task-1"], status: "READY" }] })).toThrow(/cycle/i);
+    expect(validateGeneratedPlanSpec({ ...spec, tasks: [{ id: "task-1", title: "one", dependencies: [] }, { id: "task-1", title: "duplicate", dependencies: [] }] }).map((issue) => issue.code)).toContain("DUPLICATE");
+    expect(validateGeneratedPlanSpec({ ...spec, tasks: [{ id: "task-1", title: "one", dependencies: ["missing"] }] }).some((issue) => issue.message.includes("不存在的任务"))).toBe(true);
   });
   it("creates a project with a versioned configuration", () => {
     const store = new InMemoryPipelineStore();
@@ -179,7 +193,8 @@ describe("ProjectService", () => {
     projects.create({ id: "project-1", name: "Demo", repoRoot: "/repo/demo", defaultBranch: "main", worktreeRoot: "/tmp/demo-worktrees" });
     const plans = new PlanService(store, projects);
     plans.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Frozen plan" });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Frozen plan",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Frozen plan" }) });
 
     plans.confirm(plan.id, "local-user");
     const revision = plans.getRevision(plan.id, 1);
@@ -273,7 +288,8 @@ describe("ProjectService", () => {
     const firstPlans = new PlanService(firstStore, firstProjects);
     const thread = firstPlans.registerThread({ id: "sqlite-candidates", projectId: "project-sqlite", parentThreadId: null });
     const requirement = firstStore.listExplorerPlans(thread.id)[0]!;
-    const candidate = firstPlans.createCandidatePlan({ projectId: "project-sqlite", sourceExplorerThreadId: thread.id, explorerPlanId: requirement.id, title: "Saved candidate" });
+    const candidate = firstPlans.createCandidatePlan({ projectId: "project-sqlite", sourceExplorerThreadId: thread.id, explorerPlanId: requirement.id, title: "Saved candidate",
+      resolvedContract: planContractFixture({ store: firstStore, projectId: "project-sqlite", title: "Saved candidate" }) });
     firstPlans.selectCandidate(requirement.id, null);
     firstStore.updateExplorerPlan({ ...firstStore.getExplorerPlan(requirement.id)!, providerThreadId: "provider-requirement-1", repositoryContextKey: "repository-v2" });
     firstStore.close();
@@ -295,10 +311,11 @@ describe("ProjectService", () => {
   it("runs confirmed plans with the immutable project snapshot adapters", async () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);
-    projects.create({ id: "project-snapshot", name: "Snapshot", repoRoot: "/repo/snapshot", defaultBranch: "main", worktreeRoot: "/tmp/snapshot-worktrees", settings: { commands: [{ commandId: "project.test", argv: ["true"] }, { commandId: "project.typecheck", argv: ["true"] }] } });
+    projects.create({ id: "project-snapshot", name: "Snapshot", repoRoot: "/repo/snapshot", defaultBranch: "main", worktreeRoot: "/tmp/snapshot-worktrees", settings: { commands: [{ commandId: "project.test", category: "verification", enabled: true, argv: ["true"] }, { commandId: "project.typecheck", category: "verification", enabled: true, argv: ["true"] }] } });
     const plans = new PlanService(store, projects);
     plans.registerThread({ id: "thread-snapshot", projectId: "project-snapshot", parentThreadId: null });
-    const plan = plans.createCandidatePlan({ projectId: "project-snapshot", sourceExplorerThreadId: "thread-snapshot", title: "Snapshot execution" });
+    const plan = plans.createCandidatePlan({ projectId: "project-snapshot", sourceExplorerThreadId: "thread-snapshot", title: "Snapshot execution",
+      resolvedContract: planContractFixture({ store, projectId: "project-snapshot", title: "Snapshot execution" }) });
     plans.confirm(plan.id, "local-user");
     plans.enqueue(plan.id);
     plans.dispatch(plan.id);

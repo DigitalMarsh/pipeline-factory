@@ -12,13 +12,13 @@
  *   2) `plan` 字段走 `store.getPlan(approved.plan.id) ?? approved.plan` 的**回退**：approve
  *      返回的是内存态 Plan，store 里的那份才是带最新版本号的。取不到时退回内存态而不是报错
  *      ——这一步在 approve 的同一事务语义之外，失败降级比 500 更符合调用方预期。
- *   3) `contract` 在 schema 里是 `z.record(z.unknown())`，这里用
- *      `as unknown as PlanContract` 交给领域侧校验。**不要在这里补形状校验**：合法性的
- *      唯一出处是 `validatePlanContract`，两处规则必然漂移。
+ *   3) `resolvedContract` 在 schema 里是 `z.record(z.unknown())`，这里用
+ *      `as unknown as ResolvedPlanContract` 标出边界。**不要在这里补形状校验**：契约形状的
+ *      唯一出处是领域侧的 `ResolvedPlanContract`，两处规则必然漂移。
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import type { ChangeProposalService, PlanContract, PipelineStore } from "@pipeline-factory/domain";
+import type { ChangeProposalService, PipelineStore, ResolvedPlanContract } from "@pipeline-factory/domain";
 import { changeProposalBody } from "../schemas/change-proposals.js";
 import { actorBody } from "../schemas/common.js";
 
@@ -35,7 +35,7 @@ export function registerChangeProposalRoutes(app: FastifyInstance, deps: ChangeP
     const body = changeProposalBody.safeParse(request.body ?? {});
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid ChangeProposal" });
     try {
-      const proposal = changeProposals.create({ runId: params.data.runId, reason: body.data.reason, requestedChanges: body.data.requestedChanges, contract: body.data.contract as unknown as PlanContract, createdBy: body.data.createdBy });
+      const proposal = changeProposals.create({ runId: params.data.runId, reason: body.data.reason, requestedChanges: body.data.requestedChanges, resolvedContract: body.data.resolvedContract as unknown as ResolvedPlanContract, createdBy: body.data.createdBy });
       return reply.code(201).send({ proposal });
     } catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "ChangeProposal cannot be created" }); }
   });

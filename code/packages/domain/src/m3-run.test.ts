@@ -8,14 +8,16 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryPipelineStore, LifecycleHookRunner, LocalGitWorktreeAdapter, PlanService, ProjectService, Scheduler, type RunBranchNameGenerator } from "./index.js";
+import { planContractFixture } from "./plan/plan-fixture.js";
 
 describe("Scheduler and ExecutionThread", () => {
   it("fails before creating a worktree when frozen verification commands are not registered", async () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);
-    projects.create({ id: "project-preflight", name: "Preflight", repoRoot: "/repo/preflight", defaultBranch: "main", worktreeRoot: "/tmp/preflight", settings: { commands: [{ commandId: "project.test", argv: ["true"] }] } });
+    projects.create({ id: "project-preflight", name: "Preflight", repoRoot: "/repo/preflight", defaultBranch: "main", worktreeRoot: "/tmp/preflight", settings: { commands: [{ commandId: "project.test", category: "verification", enabled: true, argv: ["true"] }] } });
     const plans = new PlanService(store, projects);
-    const plan = plans.createCandidatePlan({ projectId: "project-preflight", sourceExplorerThreadId: "thread-preflight", title: "Preflight" });
+    const plan = plans.createCandidatePlan({ projectId: "project-preflight", sourceExplorerThreadId: "thread-preflight", title: "Preflight",
+      resolvedContract: planContractFixture({ store, projectId: "project-preflight", title: "Preflight" }) });
     plans.confirm(plan.id, "user-1");
     plans.enqueue(plan.id);
     plans.dispatch(plan.id);
@@ -32,7 +34,8 @@ describe("Scheduler and ExecutionThread", () => {
   it("creates a run, workspace and thread in order, then records the start hook", async () => {
     const store = new InMemoryPipelineStore();
     const planService = new PlanService(store);
-    const plan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Run a plan" });
+    const plan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Run a plan",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Run a plan" }) });
     planService.confirm(plan.id, "user-1");
     planService.enqueue(plan.id);
     planService.dispatch(plan.id);
@@ -59,7 +62,8 @@ describe("Scheduler and ExecutionThread", () => {
   it("uses the generated readable branch for the Run and Worktree", async () => {
     const store = new InMemoryPipelineStore();
     const planService = new PlanService(store);
-    const plan = planService.createCandidatePlan({ projectId: "project-branch-name", sourceExplorerThreadId: "thread-branch-name", title: "Vue introduction" });
+    const plan = planService.createCandidatePlan({ projectId: "project-branch-name", sourceExplorerThreadId: "thread-branch-name", title: "Vue introduction",
+      resolvedContract: planContractFixture({ store, projectId: "project-branch-name", title: "Vue introduction" }) });
     planService.confirm(plan.id, "user-1");
     planService.enqueue(plan.id);
     planService.dispatch(plan.id);
@@ -88,7 +92,8 @@ describe("Scheduler and ExecutionThread", () => {
   it("falls back to change when branch summary generation fails", async () => {
     const store = new InMemoryPipelineStore();
     const planService = new PlanService(store);
-    const plan = planService.createCandidatePlan({ projectId: "project-branch-fallback", sourceExplorerThreadId: "thread-branch-fallback", title: "中文需求" });
+    const plan = planService.createCandidatePlan({ projectId: "project-branch-fallback", sourceExplorerThreadId: "thread-branch-fallback", title: "中文需求",
+      resolvedContract: planContractFixture({ store, projectId: "project-branch-fallback", title: "中文需求" }) });
     planService.confirm(plan.id, "user-1");
     planService.enqueue(plan.id);
     planService.dispatch(plan.id);
@@ -107,7 +112,8 @@ describe("Scheduler and ExecutionThread", () => {
   it("persists every bounded lifecycle hook attempt", async () => {
     const store = new InMemoryPipelineStore();
     const planService = new PlanService(store);
-    const plan = planService.createCandidatePlan({ projectId: "project-hooks", sourceExplorerThreadId: "thread-hooks", title: "Hook audit" });
+    const plan = planService.createCandidatePlan({ projectId: "project-hooks", sourceExplorerThreadId: "thread-hooks", title: "Hook audit",
+      resolvedContract: planContractFixture({ store, projectId: "project-hooks", title: "Hook audit" }) });
     planService.confirm(plan.id, "user-1");
     planService.enqueue(plan.id);
     planService.dispatch(plan.id);
@@ -130,7 +136,8 @@ describe("Scheduler and ExecutionThread", () => {
   it("blocks a run after start failure and never opens an Executor turn", async () => {
     const store = new InMemoryPipelineStore();
     const planService = new PlanService(store);
-    const plan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Blocked run" });
+    const plan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Blocked run",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Blocked run" }) });
     planService.confirm(plan.id, "user-1");
     planService.enqueue(plan.id);
     planService.dispatch(plan.id);
@@ -148,7 +155,8 @@ describe("Scheduler and ExecutionThread", () => {
   it("removes the workspace before running cleanup and keeps cleanup failure as attention", async () => {
     const store = new InMemoryPipelineStore();
     const planService = new PlanService(store);
-    const plan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Cleanup run" });
+    const plan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Cleanup run",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Cleanup run" }) });
     planService.confirm(plan.id, "user-1");
     planService.enqueue(plan.id);
     planService.dispatch(plan.id);
@@ -168,7 +176,8 @@ describe("Scheduler and ExecutionThread", () => {
   it("releases a merged Run's worktree once and keeps the branch", async () => {
     const store = new InMemoryPipelineStore();
     const planService = new PlanService(store);
-    const plan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Merged plan" });
+    const plan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Merged plan",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Merged plan" }) });
     planService.confirm(plan.id, "user-1");
     planService.enqueue(plan.id);
     planService.dispatch(plan.id);
@@ -220,7 +229,8 @@ describe("Scheduler and ExecutionThread", () => {
   it("uses the persisted run status after verification changes it", async () => {
     const store = new InMemoryPipelineStore();
     const planService = new PlanService(store);
-    const plan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Fresh run state" });
+    const plan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Fresh run state",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Fresh run state" }) });
     planService.confirm(plan.id, "user-1");
     planService.enqueue(plan.id);
     planService.dispatch(plan.id);
@@ -240,7 +250,8 @@ describe("Scheduler and ExecutionThread", () => {
   it("synchronizes the Plan when a cancelled Run reaches finish twice", async () => {
     const store = new InMemoryPipelineStore();
     const planService = new PlanService(store);
-    const plan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Cancelled run race" });
+    const plan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Cancelled run race",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Cancelled run race" }) });
     planService.confirm(plan.id, "user-1");
     planService.enqueue(plan.id);
     planService.dispatch(plan.id);
@@ -262,7 +273,8 @@ describe("Scheduler and ExecutionThread", () => {
   it.each(["READY_FOR_VERIFY", "MERGE_READY"] as const)("does not count %s as an execution slot", async (status) => {
     const store = new InMemoryPipelineStore();
     const planService = new PlanService(store);
-    const firstPlan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "First plan" });
+    const firstPlan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "First plan",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "First plan" }) });
     planService.confirm(firstPlan.id, "user-1");
     planService.enqueue(firstPlan.id);
     planService.dispatch(firstPlan.id);
@@ -274,7 +286,8 @@ describe("Scheduler and ExecutionThread", () => {
 
     const firstRun = await scheduler.start(firstPlan.id);
     store.saveRun({ ...firstRun, status });
-    const secondPlan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Second plan" });
+    const secondPlan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Second plan",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Second plan" }) });
     planService.confirm(secondPlan.id, "user-1");
     planService.enqueue(secondPlan.id);
     planService.dispatch(secondPlan.id);

@@ -8,6 +8,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryPipelineStore, MergeService, PlanService, ProjectService, SqlitePipelineStore, VerificationService, type ExecutionThread, type Run } from "./index.js";
+import { planContractFixture } from "./plan/plan-fixture.js";
 
 function makeRun(planId: string): Run {
   return { id: "run-1", projectId: "project-1", planId, planRevision: 1, status: "IN_PROGRESS", branch: "factory/run-1", workspacePath: "/tmp/run-1", baseCommit: "abc", executionThreadId: "thread-run-1", createdAt: new Date().toISOString(), startedAt: new Date().toISOString() };
@@ -17,7 +18,8 @@ describe("Verifier and MergeService", () => {
   it("does not verify a blocked or cancelled run", async () => {
     const store = new InMemoryPipelineStore();
     const plans = new PlanService(store);
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Invalid verification" });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Invalid verification",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Invalid verification" }) });
     plans.confirm(plan.id, "user-1");
     const run = makeRun(plan.id);
     run.status = "BLOCKED";
@@ -28,7 +30,8 @@ describe("Verifier and MergeService", () => {
   it("requires verification evidence to belong to the same run before review", () => {
     const store = new InMemoryPipelineStore();
     const plans = new PlanService(store);
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Review binding" });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Review binding",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Review binding" }) });
     plans.confirm(plan.id, "user-1");
     const run = makeRun(plan.id);
     run.status = "MERGE_READY";
@@ -39,7 +42,8 @@ describe("Verifier and MergeService", () => {
   it("repairs a failed verification within the revision limit and creates merge evidence", async () => {
     const store = new InMemoryPipelineStore();
     const plans = new PlanService(store);
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Verify and merge" });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Verify and merge",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Verify and merge" }) });
     plans.confirm(plan.id, "user-1");
     const run = makeRun(plan.id);
     let attempts = 0;
@@ -59,7 +63,8 @@ describe("Verifier and MergeService", () => {
     const projects = new ProjectService(store);
     projects.create({ id: "project-1", name: "Project", repoRoot: "/repo/project", defaultBranch: "main", worktreeRoot: "/tmp/project-worktrees" });
     const plans = new PlanService(store, projects);
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Git evidence" });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Git evidence",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Git evidence" }) });
     plans.confirm(plan.id, "user-1");
     const run = makeRun(plan.id);
     run.status = "MERGE_READY";
@@ -79,7 +84,8 @@ describe("Verifier and MergeService", () => {
   it("persists verification evidence in the pipeline store", async () => {
     const store = new InMemoryPipelineStore();
     const plans = new PlanService(store);
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Persist verification" });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Persist verification",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Persist verification" }) });
     plans.confirm(plan.id, "user-1");
     const run = makeRun(plan.id);
     store.saveRun(run);
@@ -94,7 +100,8 @@ describe("Verifier and MergeService", () => {
     try {
       const firstStore = new SqlitePipelineStore(databasePath);
       const plans = new PlanService(firstStore);
-      const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "SQLite verification" });
+      const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "SQLite verification",
+      resolvedContract: planContractFixture({ store: firstStore, projectId: "project-1", title: "SQLite verification" }) });
       plans.confirm(plan.id, "user-1");
       const run = makeRun(plan.id);
       firstStore.saveRun(run);
@@ -115,7 +122,8 @@ describe("Verifier and MergeService", () => {
     try {
       const store = new SqlitePipelineStore(databasePath);
       const plans = new PlanService(store);
-      const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Legacy verification" });
+      const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Legacy verification",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Legacy verification" }) });
       plans.confirm(plan.id, "user-1");
       const run = makeRun(plan.id);
       run.status = "MERGE_READY";
@@ -137,7 +145,8 @@ describe("Verifier and MergeService", () => {
   it("blocks verification after the configured repair limit", async () => {
     const store = new InMemoryPipelineStore();
     const plans = new PlanService(store);
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Stay blocked" });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Stay blocked",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Stay blocked" }) });
     plans.confirm(plan.id, "user-1");
     const run = makeRun(plan.id);
     const verification = await new VerificationService().verify(run, plans.getRevision(plan.id, 1), async () => ({ exitCode: 1, stdout: "", stderr: "still failing" }), async () => false);
@@ -148,7 +157,8 @@ describe("Verifier and MergeService", () => {
   it("synchronizes the Plan projection when verification blocks a Run", async () => {
     const store = new InMemoryPipelineStore();
     const plans = new PlanService(store);
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Sync blocked plan" });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Sync blocked plan",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Sync blocked plan" }) });
     plans.confirm(plan.id, "user-1");
     const run = makeRun(plan.id);
     store.saveRun(run);
@@ -162,8 +172,9 @@ describe("Verifier and MergeService", () => {
   it("uses the frozen plan base branch as the merge target", async () => {
     const store = new InMemoryPipelineStore();
     const plans = new PlanService(store);
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Use project branch" });
-    store.updatePlan({ ...plan, contract: { ...plan.contract, baseBranch: "trunk" } });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Use project branch",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Use project branch" }) });
+    store.updatePlan({ ...plan, resolvedContract: { ...plan.resolvedContract, repository: { ...plan.resolvedContract.repository, baseBranch: "trunk" } } });
     plans.confirm(plan.id, "user-1");
     const run = makeRun(plan.id);
     run.status = "MERGE_READY";
@@ -175,7 +186,8 @@ describe("Verifier and MergeService", () => {
   it("restores a merge request from the pipeline store", () => {
     const store = new InMemoryPipelineStore();
     const plans = new PlanService(store);
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Persist merge request" });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Persist merge request",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Persist merge request" }) });
     plans.confirm(plan.id, "user-1");
     const run = makeRun(plan.id);
     run.status = "MERGE_READY";
@@ -191,8 +203,9 @@ describe("Verifier and MergeService", () => {
     const projects = new ProjectService(store);
     projects.create({ id: "project-1", name: "Project", repoRoot: "/repo/project", defaultBranch: "main", worktreeRoot: "/tmp/project-worktrees" });
     const plans = new PlanService(store, projects);
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Reconcile external merge" });
-    const configuredPlan = store.updatePlan({ ...plan, contract: { ...plan.contract, baseBranch: "main", baseCommit: "base" } });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Reconcile external merge",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Reconcile external merge" }) });
+    const configuredPlan = store.updatePlan({ ...plan, resolvedContract: { ...plan.resolvedContract, repository: { ...plan.resolvedContract.repository, baseBranch: "main", baseCommit: "base" } } });
     plans.confirm(configuredPlan.id, "user-1");
     const run = makeRun(plan.id);
     run.status = "MERGE_READY";
@@ -229,8 +242,9 @@ describe("Verifier and MergeService", () => {
       const projects = new ProjectService(firstStore);
       projects.create({ id: "project-1", name: "Project", repoRoot: "/repo/project", defaultBranch: "main", worktreeRoot: "/tmp/project-worktrees" });
       const plans = new PlanService(firstStore, projects);
-      const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Persist detected merge" });
-      const configuredPlan = firstStore.updatePlan({ ...plan, contract: { ...plan.contract, baseBranch: "main", baseCommit: "base" } });
+      const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Persist detected merge",
+      resolvedContract: planContractFixture({ store: firstStore, projectId: "project-1", title: "Persist detected merge" }) });
+      const configuredPlan = firstStore.updatePlan({ ...plan, resolvedContract: { ...plan.resolvedContract, repository: { ...plan.resolvedContract.repository, baseBranch: "main", baseCommit: "base" } } });
       plans.confirm(configuredPlan.id, "user-1");
       const run = makeRun(plan.id);
       run.status = "MERGE_READY";

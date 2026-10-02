@@ -26,7 +26,6 @@ function candidatePlan(overrides: Partial<Plan> = {}): Plan {
   return {
     id: "plan-1", planId: "plan-1", title: "Candidate", revision: 1, status: "DRAFT", projectId: "project-1",
     sourceExplorerThreadId: "explorer-1", queuedAt: null, dispatchedAt: null, runId: null, lastEventAt: "2026-10-01T00:00:00.000Z", attentionReason: null,
-    contract: { goal: "goal", acceptanceCriteria: ["ok"], include: ["docs/guide.md"], exclude: [], baseBranch: "main", baseCommit: "abc", tasks: [], conflictKeys: [], executorModelRole: "executor", toolPolicy: "executor-scoped-write", verificationCommandIds: ["project.test", "docs.validate"], maxRepairAttempts: 1, mergeStrategy: "manual", requireHumanMerge: true, dependsOnPlanIds: [] },
     generatedSpec: {
       schemaVersion: 2, title: "Candidate", artifact: { mode: "REPOSITORY_FILE", path: "docs/guide.md" },
       objective: { goal: "goal", context: ["现有详情页已经返回日期字段。"], audience: ["devs"], acceptanceCriteria: ["ok"], outOfScope: [] },
@@ -42,7 +41,7 @@ function candidatePlan(overrides: Partial<Plan> = {}): Plan {
       conflicts: [], repository: { projectId: "project-1", name: "P", repoRoot: "/repo", baseBranch: "main", baseCommit: "abc", configVersion: 1, configHash: "h" },
       scope: { includePaths: ["docs/guide.md"], excludePaths: [] },
       tasks: [{ id: "docs", title: "Update guide", dependencies: [], status: "READY", changes: [{ path: "docs/guide.md", action: "modify", detail: "更新使用说明示例。" }] }],
-      dependencies: [], execution: { executorModelRole: "executor", toolPolicy: "executor-scoped-write", maxRepairAttempts: 1 },
+      dependencies: [], dependsOnPlanIds: [], execution: { executorModelRole: "executor", toolPolicy: "executor-scoped-write", maxRepairAttempts: 1 },
       verification: { mode: "PROJECT_DEFAULT", commandIds: ["docs.validate"] }, merge: { strategy: "manual", requireHumanMerge: true },
     },
     ...overrides,
@@ -51,10 +50,9 @@ function candidatePlan(overrides: Partial<Plan> = {}): Plan {
 
 function conversationPlan(): Plan {
   const base = candidatePlan();
-  // 对话产物三处声明都要改：投影可能来自 contract / generatedSpec / resolvedContract 任一份。
+  // 对话产物两处声明都要改：投影可能来自 generatedSpec 或 resolvedContract。
   return {
     ...base,
-    contract: { ...base.contract!, artifactMode: "CONVERSATION" },
     generatedSpec: { ...base.generatedSpec!, artifact: { mode: "CONVERSATION" }, scope: { includePaths: [], excludePaths: [] }, verification: { mode: "NONE" } },
     resolvedContract: { ...base.resolvedContract!, artifact: { mode: "CONVERSATION" }, scope: { includePaths: [], excludePaths: [] }, verification: { mode: "NONE", commandIds: [] } },
   };

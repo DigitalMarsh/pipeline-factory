@@ -230,19 +230,18 @@ function rebuildExecutionMessages(): void {
   executionMessages.value = projectExecutionJournal(currentThread?.journal ?? [], currentThread?.state ?? run.value?.status ?? "ACTIVE", executionPlan.value ?? undefined);
 }
 
-function executionPlanSnapshot(runValue: Run, revision: { contract: Plan["contract"]; resolvedContract?: Plan["resolvedContract"] }): ExecutionPlanSnapshot {
+function executionPlanSnapshot(runValue: Run, revision: { resolvedContract?: Plan["resolvedContract"] }): ExecutionPlanSnapshot {
   const resolved = revision.resolvedContract;
-  const contract = revision.contract;
   return {
     planId: runValue.planId,
     revision: runValue.planRevision,
     occurredAt: runValue.createdAt,
-    goal: resolved?.objective.goal ?? contract?.goal ?? "Execution plan received.",
-    acceptanceCriteria: resolved?.objective.acceptanceCriteria ?? contract?.acceptanceCriteria ?? [],
-    includePaths: resolved?.scope.includePaths ?? contract?.include ?? [],
-    excludePaths: resolved?.scope.excludePaths ?? contract?.exclude ?? [],
-    tasks: resolved?.tasks ?? contract?.tasks ?? [],
-    verificationCommandIds: resolved?.verification.commandIds ?? contract?.verificationCommandIds ?? [],
+    goal: resolved?.objective.goal ?? "Execution plan received.",
+    acceptanceCriteria: resolved?.objective.acceptanceCriteria ?? [],
+    includePaths: resolved?.scope.includePaths ?? [],
+    excludePaths: resolved?.scope.excludePaths ?? [],
+    tasks: resolved?.tasks ?? [],
+    verificationCommandIds: resolved?.verification.commandIds ?? [],
   };
 }
 
@@ -318,13 +317,11 @@ async function openPlanDetail(): Promise<void> {
     ]);
     if (requestToken !== planDetailRequestToken) return;
     const resolvedContract = revisionResponse.revision.resolvedContract ?? detailResponse.revision?.resolvedContract ?? detailResponse.plan.resolvedContract;
-    const contract = revisionResponse.revision.contract ?? detailResponse.plan.contract;
     const revisions = historyResponse.items.map((item) => item.revision);
     planDetailRevisions.value = Array.from(new Set([...revisions, currentRun.planRevision])).sort((left, right) => left - right);
     planDetail.value = {
       ...detailResponse.plan,
       revision: revisionResponse.revision.revision,
-      ...(contract ? { contract } : {}),
       ...(resolvedContract ? { resolvedContract } : {}),
       dispatch: detailResponse.dispatch,
       mergeRequest: detailResponse.mergeRequest ?? mergeRequest.value,
@@ -347,7 +344,6 @@ async function selectPlanRevision(revisionNumber: number): Promise<void> {
     planDetail.value = {
       ...currentPlan,
       revision: response.revision.revision,
-      ...(response.revision.contract ? { contract: response.revision.contract } : {}),
       ...(response.revision.resolvedContract ? { resolvedContract: response.revision.resolvedContract } : {}),
     };
     planDetailError.value = null;

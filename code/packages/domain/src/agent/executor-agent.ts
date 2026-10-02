@@ -95,7 +95,7 @@ export class ExecutorAgent {
   async start(run: Run, revision: PlanRevision): Promise<AgentLoop> {
     this.assertRunnable(run, revision);
     const workspaceRoot = run.workspacePath!;
-    const commandWorkingDirectory = await resolveExecutorWorkingDirectory(workspaceRoot, revision.contract.include, revision.contract.artifactPath);
+    const commandWorkingDirectory = await resolveExecutorWorkingDirectory(workspaceRoot, revision.resolvedContract.scope.includePaths, revision.resolvedContract.artifact.path);
     const projectConfig = this.executorModelConfig(revision);
     const mode = projectConfig.loopMode ?? this.options.mode ?? "provider-controlled";
     const maxDurationMs = revision.projectConfigSnapshot?.settings.concurrency.executionTimeoutMs ?? this.options.maxDurationMs;
@@ -141,7 +141,7 @@ export class ExecutorAgent {
   async run(run: Run, revision: PlanRevision): Promise<AgentLoop> {
     this.assertRunnable(run, revision);
     const workspaceRoot = run.workspacePath!;
-    const commandWorkingDirectory = await resolveExecutorWorkingDirectory(workspaceRoot, revision.contract.include, revision.contract.artifactPath);
+    const commandWorkingDirectory = await resolveExecutorWorkingDirectory(workspaceRoot, revision.resolvedContract.scope.includePaths, revision.resolvedContract.artifact.path);
     const projectConfig = this.executorModelConfig(revision);
     const mode = projectConfig.loopMode ?? this.options.mode ?? "provider-controlled";
     const maxDurationMs = revision.projectConfigSnapshot?.settings.concurrency.executionTimeoutMs ?? this.options.maxDurationMs;
@@ -210,14 +210,14 @@ export class ExecutorAgent {
   private async progressContext(run: Run, revision: PlanRevision, content: string, openToolCalls: Set<string>): Promise<Pick<GateContext, "allTasksComplete" | "changedPaths" | "pathsWithinScope" | "reportReady" | "hasOpenToolCalls" | "hasPendingChangeProposal" | "reportError" | "scopeError">> {
     const parsedReport = parseExecutorReportDetailed(content);
     const report = parsedReport.report;
-    const taskIds = new Set(revision.contract.tasks.map((task) => task.id));
+    const taskIds = new Set(revision.resolvedContract.tasks.map((task) => task.id));
     const completed = report?.completedTaskIds ?? [];
     let scope: WorkspaceScopeInspection & { error?: string } = { changedPaths: [], outsidePaths: [], pathsWithinScope: false };
     if (report) {
       if (!this.options.workspaceScopeInspector) scope = { changedPaths: report.changedPaths, outsidePaths: [], pathsWithinScope: true };
       else {
         try {
-          scope = await this.options.workspaceScopeInspector({ workspacePath: run.workspacePath!, baseCommit: run.baseCommit, include: revision.contract.include, exclude: revision.contract.exclude });
+          scope = await this.options.workspaceScopeInspector({ workspacePath: run.workspacePath!, baseCommit: run.baseCommit, include: revision.resolvedContract.scope.includePaths, exclude: revision.resolvedContract.scope.excludePaths });
         } catch (error) {
           scope.error = error instanceof Error ? error.message : String(error);
         }
@@ -250,8 +250,8 @@ export class ExecutorAgent {
     return [
       "You are the Pipeline Factory Executor.",
       "The approved Plan contract is the source of truth. The Plan is stored by the Factory, not as a file in the worktree; use the embedded contract below and do not search the worktree for a plan document.",
-      `Work only inside the approved include scope: ${revision.contract.include.join(", ")}.`,
-      `Never modify excluded or protected paths: ${revision.contract.exclude.join(", ")}.`,
+      `Work only inside the approved include scope: ${revision.resolvedContract.scope.includePaths.join(", ")}.`,
+      `Never modify excluded or protected paths: ${revision.resolvedContract.scope.excludePaths.join(", ")}.`,
       `The Run worktree root is ${workspaceRoot}; Provider shell commands start in ${commandWorkingDirectory}. Do not assume the shell is at the worktree root.`,
       "Before package-manager or build commands, verify pwd and the expected project manifest in the selected directory. Never run an install command in an ancestor directory that does not contain the project's manifest; if the expected project directory or manifest is missing, stop and report the exact blocker.",
       "Treat include/exclude paths and execution-report changedPaths as relative to the worktree root. Resolve shell command paths from the command working directory without duplicating the worktree-relative prefix.",
@@ -331,7 +331,7 @@ export class ExecutorAgent {
         const latestOutput = modelStep === undefined && thread ? thread.journal.filter((entry) => entry.type === "MODEL_OUTPUT").map((entry) => String(entry.payload.text ?? "")).join("") : turnOutput;
         const report = parseExecutorReport(latestOutput);
         if (report) {
-          const validTaskIds = new Set(revision.contract.tasks.map((task) => task.id));
+          const validTaskIds = new Set(revision.resolvedContract.tasks.map((task) => task.id));
           const activeTaskId = report.activeTaskId && validTaskIds.has(report.activeTaskId) ? report.activeTaskId : undefined;
           const blockedTaskId = report.blockedTaskId && validTaskIds.has(report.blockedTaskId) ? report.blockedTaskId : undefined;
           if (activeTaskId) {
@@ -465,7 +465,7 @@ export class ExecutorAgent {
     else buffer.text += delta;
     const currentBuffer = this.taskProgressBuffers.get(run.id);
     if (!currentBuffer) return;
-    const taskIds = new Set(revision.contract.tasks.map((task) => task.id));
+    const taskIds = new Set(revision.resolvedContract.tasks.map((task) => task.id));
     const markerStart = "<pipeline-factory-task-progress>";
     const markerEnd = "</pipeline-factory-task-progress>";
     const markerPattern = /<pipeline-factory-task-progress>([\s\S]*?)<\/pipeline-factory-task-progress>/g;
@@ -540,19 +540,18 @@ export class ExecutorAgent {
 /**
  * 交给执行者的计划视图。
  *
- * V2 revision 走**精选视图**，而不是 `revision.contract`（V1 投影）：那个投影
- * （`plan/service.ts` 的 `executionContractFromResolved`）**丢掉了 `design` 整节**——
- * 技术约束、数据安全、失败处理，以及被 `resolvePlanContract` 并进 `technicalConstraints` 的
- * `dependencies`，**从未到达执行者**。代价是具体的：库里反复出现
+ * 是**精选视图**，不是整份 `resolvedContract`：`repository`（路径、哈希）与 `execution`
+ * （Factory 固定的角色与工具策略）对执行者没用，塞进提示词只是费 token。
+ *
+ * 为什么必须带上 `design`：技术约束、数据安全、失败处理，以及被 `resolvePlanContract` 并进
+ * `technicalConstraints` 的 `dependencies`，都只能从这里到达执行者。代价是具体的：库里反复出现
  * `package.json remains missing in expected project directory`，而那些 Plan 的 dependencies 里
  * 明明写着"需要在 code/ 目录使用仓库现有 package.json 和锁文件安装依赖"——执行者没见过这句话。
- *
- * 只取执行需要的部分：不把 `repository`（路径、哈希）与 `execution`（Factory 固定的角色与工具策略）
- * 塞进提示词，那既无用又费 token。历史 V1 revision 没有 `resolvedContract`，原样退回，行为不变。
+ * 曾经拦住这句话的正是那份 V1 投影（`plan/service.ts` 的 `executionContractFromResolved`，
+ * 它丢掉了 `design` 整节），那个投影已经删掉，只剩下这一条读法。
  */
 function executorPlanView(revision: PlanRevision): unknown {
   const resolved = revision.resolvedContract;
-  if (!resolved) return revision.contract;
   return {
     objective: resolved.objective,
     design: resolved.design,

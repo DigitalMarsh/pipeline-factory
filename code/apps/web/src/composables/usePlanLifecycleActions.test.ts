@@ -59,7 +59,6 @@ const draft = (overrides: Partial<PlanRevisionDraft> = {}): PlanRevisionDraft =>
   targetRevision: 2,
   status: "READY_TO_CONFIRM",
   title: "revision",
-  contract: undefined,
   sourceExplorerThreadId: "explorer-1",
   sourceTurnId: null,
   providerThreadId: null,
@@ -233,7 +232,7 @@ describe("enqueuePlan", () => {
 
   it("对话产物在前置守卫处被拒绝", async () => {
     const s = setup();
-    const conversation = plan("plan-1", { status: "READY", contract: { artifactMode: "CONVERSATION" } as never });
+    const conversation = plan("plan-1", { status: "READY", resolvedContract: { artifact: { mode: "CONVERSATION" } } as never });
 
     await s.enqueuePlan(conversation);
 

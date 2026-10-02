@@ -28,8 +28,7 @@ function planIdentity(plan: Plan): string {
 }
 
 export function isConversationArtifactPlan(plan: Plan | null | undefined): boolean {
-  return plan?.contract?.artifactMode === "CONVERSATION"
-    || plan?.resolvedContract?.artifact?.mode === "CONVERSATION"
+  return plan?.resolvedContract?.artifact?.mode === "CONVERSATION"
     || plan?.generatedSpec?.artifact?.mode === "CONVERSATION";
 }
 

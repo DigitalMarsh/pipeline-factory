@@ -84,6 +84,13 @@ export type ResolvedPlanContract = {
   tasks: Array<{ id: string; title: string; dependencies: string[]; status: "PENDING" | "READY" | "DONE"; changes?: PlanTaskChange[] | undefined }>;
   /** Human-readable execution prerequisites; these are not CandidatePlan IDs. */
   dependencies: string[];
+  /**
+   * 本 Plan 的**前置 CandidatePlan id**（调度用，要求前置达到 MERGED）。**Factory-owned 字段**：
+   * 模型不产它（它只写得出 `dependencies` 那串自然语言），解析时恒为 `[]`，只有
+   * `PlanService.setDependencies` 能写。不要把它与 `dependencies` 混起来——两者曾经共用 V1 镜像的
+   * 一个字段，结果是"把自然语言先决条件当成 Plan id"。
+   */
+  dependsOnPlanIds: string[];
   execution: { executorModelRole: string; toolPolicy: string; maxRepairAttempts: number };
   verification: { mode: "PROJECT_DEFAULT" | "NONE"; commandIds: string[] };
   merge: { strategy: "manual" | "fast-forward" | "squash"; requireHumanMerge: true };
@@ -93,7 +100,7 @@ export type GitBaseline = { baseBranch: string; baseCommit: string };
 
 /**
  * 执行角色与工具策略由 Factory 固定，**不是模型可填的字段**（见 GeneratedPlanSpec.execution 的说明）。
- * 取这两个具体值是历史兼容：下游 `PlanContract` 投影、审计视图与既有 Run 的 journal 都在读它们。
+ * 取这两个具体值是历史兼容：审计视图与既有 Run 的 journal 都在读它们。
  */
 export const EXECUTOR_ROLE = "executor";
 export const EXECUTOR_TOOL_POLICY = "executor-scoped-write";
@@ -326,5 +333,5 @@ export function resolvePlanContract(specValue: unknown, project: ProjectExecutio
   // 解析后的 commandIds 才是执行事实；请求过的 suites 留在 generatedSpec 里可审计。
   const commandIds = mode === "PROJECT_DEFAULT" ? selectVerificationCommands(defaults, enabledVerification, spec.verification.suites ?? []) : [];
   const technicalConstraints = [...new Set([...spec.design.technicalConstraints, ...spec.dependencies])];
-  return { schemaVersion: 2, artifact: spec.artifact, objective: spec.objective, design: { ...spec.design, technicalConstraints }, conflicts: spec.conflicts, repository: { projectId: project.projectId, name: project.name, repoRoot: project.repoRoot, baseBranch: baseline.baseBranch, baseCommit: baseline.baseCommit, configVersion: project.configVersion, configHash: project.configHash }, scope: spec.scope, tasks: spec.tasks.map((task) => ({ ...task, status: task.status ?? "READY" })), dependencies: spec.dependencies, execution: { executorModelRole: EXECUTOR_ROLE, toolPolicy: EXECUTOR_TOOL_POLICY, maxRepairAttempts: Number.isInteger(spec.execution.maxRepairAttempts) && spec.execution.maxRepairAttempts! >= 0 ? spec.execution.maxRepairAttempts! : project.settings.concurrency.maxRepairAttempts }, verification: { mode, commandIds }, merge: { strategy: spec.merge.strategy, requireHumanMerge: true } };
+  return { schemaVersion: 2, artifact: spec.artifact, objective: spec.objective, design: { ...spec.design, technicalConstraints }, conflicts: spec.conflicts, repository: { projectId: project.projectId, name: project.name, repoRoot: project.repoRoot, baseBranch: baseline.baseBranch, baseCommit: baseline.baseCommit, configVersion: project.configVersion, configHash: project.configHash }, scope: spec.scope, tasks: spec.tasks.map((task) => ({ ...task, status: task.status ?? "READY" })), dependencies: spec.dependencies, dependsOnPlanIds: [], execution: { executorModelRole: EXECUTOR_ROLE, toolPolicy: EXECUTOR_TOOL_POLICY, maxRepairAttempts: Number.isInteger(spec.execution.maxRepairAttempts) && spec.execution.maxRepairAttempts! >= 0 ? spec.execution.maxRepairAttempts! : project.settings.concurrency.maxRepairAttempts }, verification: { mode, commandIds }, merge: { strategy: spec.merge.strategy, requireHumanMerge: true } };
 }

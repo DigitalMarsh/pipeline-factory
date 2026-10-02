@@ -10,18 +10,18 @@
  *   回退顺序（existing → Revision 快照 → 空）是契约，不要为了让某个用例好写而调换。
  */
 import { describe, expect, it } from "vitest";
-import { InMemoryPipelineStore, PlanService, ProjectService, type ExecutionTelemetry, type PlanRevision } from "@pipeline-factory/domain";
+import { InMemoryPipelineStore, PlanService, ProjectService, type ExecutionTelemetry, type PlanRevision , planContractFixture } from "@pipeline-factory/domain";
 import { projectRunThreadTelemetry, resolveRunExecutorConfig } from "./run-telemetry.js";
 
 function seed(store: InMemoryPipelineStore, telemetry: ExecutionTelemetry | null) {
   const projects = new ProjectService(store);
   const project = projects.create({ id: "project-1", name: "Demo", repoRoot: "/repo/demo", defaultBranch: "main", worktreeRoot: "/tmp/demo-worktrees" });
   const plans = new PlanService(store, projects);
-  const candidate = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "explorer-1", title: "Run telemetry" });
+  const candidate = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "explorer-1", title: "Run telemetry", resolvedContract: planContractFixture({ store, projectId: project.id, title: "Run telemetry" }) });
   const snapshot = projects.snapshot(project.id);
   // 快照里的 executor 与"当前项目设置"**故意不同**：只有这样才测得出"快照优先"。
   const revision = {
-    planId: candidate.id, revision: 1, contract: candidate.contract, artifactHash: "sha256:test",
+    planId: candidate.id, revision: 1, resolvedContract: candidate.resolvedContract, artifactHash: "sha256:test",
     confirmedBy: "tester", confirmedAt: store.now(), sourceExplorerThreadId: "explorer-1",
     projectConfigVersion: snapshot.configVersion, projectConfigHash: snapshot.configHash,
     projectConfigSnapshot: { ...snapshot, settings: { ...snapshot.settings, models: { ...snapshot.settings.models, executor: { ...snapshot.settings.models.executor, model: "frozen-at-confirm", backend: "claude-agent-sdk" } } } },

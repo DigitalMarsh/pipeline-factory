@@ -23,16 +23,17 @@ import { GeneratedPlanSpecValidationError, parseGeneratedPlanSpec, validateGener
 import type { GeneratedPlanSpec, PlanValidationIssue } from "./plan-spec.js";
 import { REQUIRED_PLAN_AREAS } from "../platform/plan-requirements.js";
 import { isRecord } from "../platform/guards.js";
-import type { PlanContract, PlanExplorationStatus } from "../index.js";
+import type { ResolvedPlanContract } from "./plan-spec.js";
+import type { PlanExplorationStatus } from "../index.js";
 
 /**
  * 解析出来的方案产物。
  *
- * `generatedSpec` 是 Explorer 现在唯一的产出；`contract` 选项留给**程序化调用方**
- * （测试夹具直接给一份现成的合同），不是"读旧库"的路径——V1 的助手文本解析分支已经删掉，
- * 见本文件的维护提示 4。这一项会随 V1 镜像一起收掉（见 docs 的 §6 B 类）。
+ * Explorer 走 `generatedSpec`；`resolvedContract` 留给**程序化调用方**（测试夹具直接给一份
+ * 现成的已解析契约）。V1 扁平合同（`contract`）不再接受——它不是"另一种输入"，而是一份
+ * 有损镜像，已经连同类型与存储列一起删掉（见 docs 的 §6 B 类第二步）。
  */
-export type PlanArtifact = { title: string; contract?: PlanContract; generatedSpec?: GeneratedPlanSpec };
+export type PlanArtifact = { title: string; generatedSpec?: GeneratedPlanSpec; resolvedContract?: ResolvedPlanContract };
 export type PlanCompletionAssessment = {
   status: PlanExplorationStatus;
   missing: string[];

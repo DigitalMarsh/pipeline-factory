@@ -8,7 +8,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ExplorerService, InMemoryPipelineStore, LifecycleHookRunner, MergeService, PlanService, ProjectService, Scheduler, type AgentLoop, type DomainEvent, type ExecutionTelemetry, type ModelEvent, type ModelGateway, type ModelRequest, type PlanRevision, type VerificationCommandExecutor } from "@pipeline-factory/domain";
+import { ExplorerService, InMemoryPipelineStore, LifecycleHookRunner, MergeService, PlanService, ProjectService, Scheduler, type AgentLoop, type DomainEvent, type ExecutionTelemetry, type ModelEvent, type ModelGateway, type ModelRequest, type PlanRevision, type VerificationCommandExecutor , planContractFixture } from "@pipeline-factory/domain";
 import { createApp } from "./server.js";
 import { loadFactoryConfig } from "./config.js";
 import { DirectoryDialogError } from "./runtime/directory-dialog.js";
@@ -17,7 +17,7 @@ import { sanitizeExplorerRequirementStatusEvent } from "./projections/explorer.j
 const apps: Array<Awaited<ReturnType<typeof createApp>>> = [];
 
 function createTestProject(store: InMemoryPipelineStore, id = "project-1") {
-  return new ProjectService(store).create({ id, name: id, repoRoot: `/repo/${id}`, defaultBranch: "main", worktreeRoot: `/tmp/${id}-worktrees`, settings: { commands: [{ commandId: "project.test", argv: ["true"] }, { commandId: "project.typecheck", argv: ["true"] }] } });
+  return new ProjectService(store).create({ id, name: id, repoRoot: `/repo/${id}`, defaultBranch: "main", worktreeRoot: `/tmp/${id}-worktrees`, settings: { commands: [{ commandId: "project.test", category: "verification", enabled: true, argv: ["true"] }, { commandId: "project.typecheck", category: "verification", enabled: true, argv: ["true"] }] } });
 }
 
 const temporaryRepos: string[] = [];
@@ -32,7 +32,7 @@ function createGitBackedTestProject(store: InMemoryPipelineStore, id = "project-
   temporaryRepos.push(repoRoot);
   execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "ignore" });
   execFileSync("git", ["-c", "user.name=Pipeline Test", "-c", "user.email=pipeline-test@example.com", "commit", "--allow-empty", "-m", "init"], { cwd: repoRoot, stdio: "ignore" });
-  return new ProjectService(store).create({ id, name: id, repoRoot, defaultBranch: "main", worktreeRoot: join(repoRoot, "worktrees"), settings: { commands: [{ commandId: "project.test", argv: ["true"] }, { commandId: "project.typecheck", argv: ["true"] }] } });
+  return new ProjectService(store).create({ id, name: id, repoRoot, defaultBranch: "main", worktreeRoot: join(repoRoot, "worktrees"), settings: { commands: [{ commandId: "project.test", category: "verification", enabled: true, argv: ["true"] }, { commandId: "project.typecheck", category: "verification", enabled: true, argv: ["true"] }] } });
 }
 
 async function waitUntil(check: () => boolean): Promise<void> {
@@ -186,14 +186,14 @@ describe("Pipeline Factory v4 API", () => {
     const project = projects.create({ id: "project-deps-api", name: "Deps API", repoRoot: "/repo/deps-api", defaultBranch: "main", worktreeRoot: "/tmp/deps-api-worktrees" });
     const plans = new PlanService(store, projects);
     plans.registerThread({ id: "deps-thread", projectId: project.id, parentThreadId: null });
-    const upstream = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "deps-thread", title: "Upstream" });
-    const downstream = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "deps-thread", title: "Downstream" });
+    const upstream = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "deps-thread", title: "Upstream", resolvedContract: planContractFixture({ store, projectId: project.id, title: "Upstream" }) });
+    const downstream = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "deps-thread", title: "Downstream", resolvedContract: planContractFixture({ store, projectId: project.id, title: "Downstream" }) });
     const app = createApp({ store, seed: false });
     apps.push(app);
 
     const saved = await app.inject({ method: "PUT", url: `/api/v4/plans/${downstream.id}/dependencies`, payload: { dependsOnPlanIds: [upstream.id], actorId: "tester" } });
     expect(saved.statusCode).toBe(200);
-    expect(saved.json().plan.contract.dependsOnPlanIds).toEqual([upstream.id]);
+    expect(saved.json().plan.resolvedContract.dependsOnPlanIds).toEqual([upstream.id]);
 
     // 未知 Plan 由 domain 拒绝，HTTP 层映射成 409 而不是 500。
     const invalid = await app.inject({ method: "PUT", url: `/api/v4/plans/${downstream.id}/dependencies`, payload: { dependsOnPlanIds: ["plan-missing"], actorId: "tester" } });
@@ -257,7 +257,7 @@ describe("Pipeline Factory v4 API", () => {
     const project = projects.create({ id: "project-workbench", name: "Workbench", repoRoot: "/repo/workbench", defaultBranch: "main", worktreeRoot: "/tmp/workbench-worktrees" });
     const plans = new PlanService(store, projects);
     plans.registerThread({ id: "workbench-thread", projectId: project.id, parentThreadId: null });
-    const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "workbench-thread", title: "Workbench plan" });
+    const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "workbench-thread", title: "Workbench plan", resolvedContract: planContractFixture({ store, projectId: project.id, title: "Workbench plan" }) });
     plans.confirm(plan.id, "user-1");
     const app = createApp({ store, seed: false });
     apps.push(app);
@@ -337,7 +337,7 @@ describe("Pipeline Factory v4 API", () => {
     const plans = new PlanService(store, projects);
     plans.registerThread({ id: "delete-thread", projectId: project.id, parentThreadId: null });
     plans.registerThread({ id: "replacement-thread", projectId: project.id, parentThreadId: null });
-    plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "delete-thread", title: "Deleted plan" });
+    plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "delete-thread", title: "Deleted plan", resolvedContract: planContractFixture({ store, projectId: project.id, title: "Deleted plan" }) });
     const app = createApp({ store, seed: false });
     apps.push(app);
 
@@ -362,7 +362,7 @@ describe("Pipeline Factory v4 API", () => {
     const project = projects.create({ id: "project-delete-active", name: "Delete Active", repoRoot: "/repo/delete-active", defaultBranch: "main", worktreeRoot: "/tmp/delete-active-worktrees" });
     const plans = new PlanService(store, projects);
     plans.registerThread({ id: "active-delete-thread", projectId: project.id, parentThreadId: null });
-    const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "active-delete-thread", title: "Active plan" });
+    const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "active-delete-thread", title: "Active plan", resolvedContract: planContractFixture({ store, projectId: project.id, title: "Active plan" }) });
     store.saveRun({ id: "active-delete-run", projectId: project.id, planId: plan.id, planRevision: 1, status: "IN_PROGRESS", branch: "factory/active-delete-run", workspacePath: "/tmp/active-delete-worktree", baseCommit: "HEAD", executionThreadId: "active-delete-execution", createdAt: store.now(), startedAt: store.now() });
     const app = createApp({ store, seed: false });
     apps.push(app);
@@ -397,8 +397,8 @@ describe("Pipeline Factory v4 API", () => {
     const plans = new PlanService(store, projects);
     plans.registerThread({ id: "explorer-a", projectId: project.id, parentThreadId: null });
     plans.registerThread({ id: "explorer-b", projectId: project.id, parentThreadId: null });
-    const first = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "explorer-a", title: "Plan A" });
-    const second = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "explorer-b", title: "Plan B" });
+    const first = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "explorer-a", title: "Plan A", resolvedContract: planContractFixture({ store, projectId: project.id, title: "Plan A" }) });
+    const second = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "explorer-b", title: "Plan B", resolvedContract: planContractFixture({ store, projectId: project.id, title: "Plan B" }) });
     plans.confirm(first.id, "user-1");
     plans.enqueue(first.id);
     plans.confirm(second.id, "user-1");
@@ -510,10 +510,10 @@ describe("Pipeline Factory v4 API", () => {
     const projects = new ProjectService(store);
     const project = projects.create({ id: "project-telemetry", name: "Telemetry", repoRoot: "/repo/telemetry", defaultBranch: "main", worktreeRoot: "/tmp/telemetry-worktrees" });
     const explorer = new ExplorerService(store).create({ projectId: project.id, title: "Telemetry explorer" });
-    const candidate = new PlanService(store, projects).createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: explorer.id, title: "Telemetry plan" });
+    const candidate = new PlanService(store, projects).createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: explorer.id, title: "Telemetry plan", resolvedContract: planContractFixture({ store, projectId: project.id, title: "Telemetry plan" }) });
     const snapshot = projects.snapshot(project.id);
     store.saveRevision({
-      planId: candidate.id, revision: 1, contract: candidate.contract, artifactHash: "sha256:test",
+      planId: candidate.id, revision: 1, resolvedContract: candidate.resolvedContract, artifactHash: "sha256:test",
       confirmedBy: "tester", confirmedAt: store.now(), sourceExplorerThreadId: explorer.id,
       projectConfigVersion: snapshot.configVersion, projectConfigHash: snapshot.configHash,
       projectConfigSnapshot: { ...snapshot, settings: { ...snapshot.settings, models: { ...snapshot.settings.models, executor: { ...snapshot.settings.models.executor, model: "frozen-model", backend: "claude-agent-sdk" } } } },
@@ -588,7 +588,7 @@ describe("Pipeline Factory v4 API", () => {
     const planService = (await import("@pipeline-factory/domain")).PlanService;
     const plans = new planService(store);
     plans.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", sourceTurnId: "assistant-1", title: "API plan" });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", sourceTurnId: "assistant-1", title: "API plan", resolvedContract: planContractFixture({ store, projectId: "project-1", title: "API plan" }) });
 
     const rejected = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/enqueue` });
     expect(rejected.statusCode).toBe(409);
@@ -610,11 +610,11 @@ describe("Pipeline Factory v4 API", () => {
     plans.registerThread({ id: "confirmed-child", projectId: "project-1", parentThreadId: "confirmed-root" });
     plans.registerThread({ id: "other-project-thread", projectId: "project-2", parentThreadId: null });
 
-    const ready = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "confirmed-root", title: "Ready confirmed plan" });
-    const queued = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "confirmed-child", title: "Queued confirmed plan" });
-    const draft = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "confirmed-child", title: "Still a draft" });
-    const discarded = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "confirmed-child", title: "Discarded plan" });
-    const otherProject = plans.createCandidatePlan({ projectId: "project-2", sourceExplorerThreadId: "other-project-thread", title: "Other project plan" });
+    const ready = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "confirmed-root", title: "Ready confirmed plan", resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Ready confirmed plan" }) });
+    const queued = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "confirmed-child", title: "Queued confirmed plan", resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Queued confirmed plan" }) });
+    const draft = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "confirmed-child", title: "Still a draft", resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Still a draft" }) });
+    const discarded = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "confirmed-child", title: "Discarded plan", resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Discarded plan" }) });
+    const otherProject = plans.createCandidatePlan({ projectId: "project-2", sourceExplorerThreadId: "other-project-thread", title: "Other project plan", resolvedContract: planContractFixture({ store, projectId: "project-2", title: "Other project plan" }) });
     plans.confirm(ready.id, "user-1");
     plans.confirm(queued.id, "user-1");
     plans.enqueue(queued.id);
@@ -642,8 +642,8 @@ describe("Pipeline Factory v4 API", () => {
     createTestProject(store);
     const plans = new PlanService(store);
     plans.registerThread({ id: "confirmed-lifecycle-thread", projectId: "project-1", parentThreadId: null });
-    const active = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "confirmed-lifecycle-thread", title: "Active confirmed plan" });
-    const terminal = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "confirmed-lifecycle-thread", title: "Merged confirmed plan" });
+    const active = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "confirmed-lifecycle-thread", title: "Active confirmed plan", resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Active confirmed plan" }) });
+    const terminal = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "confirmed-lifecycle-thread", title: "Merged confirmed plan", resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Merged confirmed plan" }) });
     plans.confirm(active.id, "user-1");
     plans.confirm(terminal.id, "user-1");
     const activeQueued = plans.enqueue(active.id);
@@ -664,7 +664,7 @@ describe("Pipeline Factory v4 API", () => {
     createTestProject(store);
     const plans = new PlanService(store);
     plans.registerThread({ id: "invalid-lifecycle-thread", projectId: "project-1", parentThreadId: null });
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "invalid-lifecycle-thread", title: "Invalid lifecycle" });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "invalid-lifecycle-thread", title: "Invalid lifecycle", resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Invalid lifecycle" }) });
     store.updatePlan({
       ...plan,
       status: "MERGE_READY",
@@ -690,7 +690,7 @@ describe("Pipeline Factory v4 API", () => {
     apps.push(app);
     const plans = new PlanService(store);
     plans.registerThread({ id: "discard-thread", projectId: "project-1", parentThreadId: null });
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "discard-thread", title: "Discard through API" });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "discard-thread", title: "Discard through API", resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Discard through API" }) });
 
     const discarded = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/discard`, payload: { actorId: "user-1" } });
     expect(discarded.statusCode).toBe(200);
@@ -759,8 +759,8 @@ describe("Pipeline Factory v4 API", () => {
     const plan1 = initial.json().items[0];
     const otherThread = plans.registerThread({ id: "thread-other", projectId: "project-1", parentThreadId: null });
     const otherThreadPlan = store.listExplorerPlans(otherThread.id)[0]!;
-    plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-plans", explorerPlanId: plan1.id, title: "Task 1 candidate" });
-    plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-plans", explorerPlanId: plan2.id, title: "Task 2 candidate" });
+    plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-plans", explorerPlanId: plan1.id, title: "Task 1 candidate", resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Task 1 candidate" }) });
+    plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-plans", explorerPlanId: plan2.id, title: "Task 2 candidate", resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Task 2 candidate" }) });
     store.saveTurn({ id: "task-1-user", threadId: "thread-plans", role: "user", content: "Task 1 message", status: "COMPLETED", createdAt: "2026-09-19T10:00:00.000Z", sequence: 1, explorerPlanId: plan1.id });
     store.saveTurn({ id: "task-1-assistant", threadId: "thread-plans", role: "assistant", content: "Task 1 reply", status: "COMPLETED", createdAt: "2026-09-19T10:00:01.000Z", sequence: 2, explorerPlanId: plan1.id });
     store.saveTurn({ id: "task-2-user", threadId: "thread-plans", role: "user", content: "Task 2 message", status: "COMPLETED", createdAt: "2026-09-19T10:01:00.000Z", sequence: 3, explorerPlanId: plan2.id });
@@ -860,7 +860,7 @@ describe("Pipeline Factory v4 API", () => {
     createTestProject(store);
     const plans = new PlanService(store);
     plans.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Start from API" });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Start from API", resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Start from API" }) });
     plans.confirm(plan.id, "user-1");
     plans.enqueue(plan.id);
     const scheduler = new Scheduler({ store, workspace: { create: async () => ({ path: "/tmp/run", branch: "factory/run", baseCommit: "abc" }), remove: async () => undefined }, hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })) });
@@ -878,7 +878,7 @@ describe("Pipeline Factory v4 API", () => {
     const project = projects.create({ id: "project-configuration", name: "Configuration", repoRoot: "/repo/project-configuration", defaultBranch: "main", worktreeRoot: "/tmp/project-configuration-worktrees", settings: { commands: [] } });
     const plans = new PlanService(store, projects);
     plans.registerThread({ id: "configuration-thread", projectId: project.id, parentThreadId: null });
-    const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "configuration-thread", title: "Recover configuration" });
+    const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "configuration-thread", title: "Recover configuration", resolvedContract: planContractFixture({ store, projectId: project.id, title: "Recover configuration" }) });
     plans.confirm(plan.id, "user-1");
     plans.enqueue(plan.id);
     const scheduler = new Scheduler({ store, workspace: { create: async ({ runId }) => ({ path: `/tmp/${runId}`, branch: `factory/${runId}`, baseCommit: "abc" }), remove: async () => undefined }, hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })) });
@@ -890,7 +890,7 @@ describe("Pipeline Factory v4 API", () => {
     const unresolved = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/revise-configuration`, payload: { actorId: "reviewer" } });
     expect(unresolved.statusCode).toBe(409);
     expect(unresolved.json()).toMatchObject({ code: "PLAN_CONFIGURATION_REVISION_FAILED", error: "RUN_PREREQUISITES_UNSATISFIED: missing registered commands: project.test, project.typecheck" });
-    const configured = projects.update(project.id, { expectedConfigVersion: project.configVersion, settings: { ...project.settings, commands: [{ commandId: "project.test", argv: ["true"] }, { commandId: "project.typecheck", argv: ["true"] }] } });
+    const configured = projects.update(project.id, { expectedConfigVersion: project.configVersion, settings: { ...project.settings, commands: [{ commandId: "project.test", category: "verification", enabled: true, argv: ["true"] }, { commandId: "project.typecheck", category: "verification", enabled: true, argv: ["true"] }] } });
 
     const revised = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/revise-configuration`, payload: { actorId: "reviewer" } });
 
@@ -906,8 +906,8 @@ describe("Pipeline Factory v4 API", () => {
     createTestProject(store);
     const plans = new PlanService(store);
     plans.registerThread({ id: "coordinator-run-thread", projectId: "project-1", parentThreadId: null });
-    const first = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "coordinator-run-thread", title: "First direct run" });
-    const second = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "coordinator-run-thread", title: "Second direct run" });
+    const first = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "coordinator-run-thread", title: "First direct run", resolvedContract: planContractFixture({ store, projectId: "project-1", title: "First direct run" }) });
+    const second = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "coordinator-run-thread", title: "Second direct run", resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Second direct run" }) });
     plans.confirm(first.id, "user-1");
     plans.enqueue(first.id);
     plans.confirm(second.id, "user-1");
@@ -932,9 +932,9 @@ describe("Pipeline Factory v4 API", () => {
     const plans = new PlanService(store);
     const thread = plans.registerThread({ id: "multi-plan-thread", projectId: "project-1", parentThreadId: null });
     const [requirement] = store.listExplorerPlans(thread.id);
-    const first = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: thread.id, explorerPlanId: requirement!.id, title: "First independent Plan" });
-    const second = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: thread.id, explorerPlanId: requirement!.id, title: "Second independent Plan" });
-    plans.reviseCandidate(second.id, { title: "Second independent Plan V2", contract: { ...second.contract, goal: "Updated second Plan" } }, { sourceTurnId: "turn-v2", providerThreadId: null, providerTurnId: null, providerItemId: null });
+    const first = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: thread.id, explorerPlanId: requirement!.id, title: "First independent Plan", resolvedContract: planContractFixture({ store, projectId: "project-1", title: "First independent Plan" }) });
+    const second = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: thread.id, explorerPlanId: requirement!.id, title: "Second independent Plan", resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Second independent Plan" }) });
+    plans.reviseCandidate(second.id, { title: "Second independent Plan V2", resolvedContract: { ...second.resolvedContract, objective: { ...second.resolvedContract.objective, goal: "Updated second Plan" } } }, { sourceTurnId: "turn-v2", providerThreadId: null, providerTurnId: null, providerItemId: null });
     plans.confirm(first.id, "user-1");
     const app = createApp({ store, seed: false });
     apps.push(app);
@@ -964,7 +964,7 @@ describe("Pipeline Factory v4 API", () => {
     createTestProject(store);
     const plans = new PlanService(store);
     const thread = plans.registerThread({ id: "confirm-start-thread", projectId: "project-1", parentThreadId: null });
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: thread.id, title: "Confirm starts Run" });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: thread.id, title: "Confirm starts Run", resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Confirm starts Run" }) });
     const scheduler = new Scheduler({ store, workspace: { create: async ({ runId }) => ({ path: `/tmp/${runId}`, branch: `factory/${runId}`, baseCommit: "abc" }), remove: async () => undefined }, hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })) });
     const app = createApp({ store, scheduler, seed: false });
     apps.push(app);
@@ -983,7 +983,7 @@ describe("Pipeline Factory v4 API", () => {
     createTestProject(store);
     const plans = new PlanService(store);
     plans.registerThread({ id: "auto-thread", projectId: "project-1", parentThreadId: null });
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "auto-thread", title: "Automatic API dispatch" });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "auto-thread", title: "Automatic API dispatch", resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Automatic API dispatch" }) });
     plans.confirm(plan.id, "user-1");
     const scheduler = new Scheduler({ store, workspace: { create: async ({ runId }) => ({ path: `/tmp/${runId}`, branch: `factory/${runId}`, baseCommit: "abc" }), remove: async () => undefined }, hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })) });
     const app = createApp({ store, scheduler, seed: false });
@@ -1003,7 +1003,7 @@ describe("Pipeline Factory v4 API", () => {
     createTestProject(store, "project-change");
     const plans = new PlanService(store);
     plans.registerThread({ id: "thread-change", projectId: "project-change", parentThreadId: null });
-    const plan = plans.createCandidatePlan({ projectId: "project-change", sourceExplorerThreadId: "thread-change", title: "Change API plan" });
+    const plan = plans.createCandidatePlan({ projectId: "project-change", sourceExplorerThreadId: "thread-change", title: "Change API plan", resolvedContract: planContractFixture({ store, projectId: "project-change", title: "Change API plan" }) });
     plans.confirm(plan.id, "user-1");
     plans.enqueue(plan.id);
     const scheduler = new Scheduler({ store, workspace: { create: async () => ({ path: "/tmp/change-api", branch: "factory/change-api", baseCommit: "abc" }), remove: async () => undefined }, hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })) });
@@ -1011,8 +1011,8 @@ describe("Pipeline Factory v4 API", () => {
     apps.push(app);
     const started = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/run` });
     const run = started.json().run as { id: string };
-    const contract = { ...plan.contract, include: [...plan.contract.include, "docs/*"] };
-    const created = await app.inject({ method: "POST", url: `/api/v4/runs/${run.id}/change-proposals`, payload: { reason: "Documentation is in scope", requestedChanges: ["Include docs"], contract } });
+    const resolvedContract = { ...plan.resolvedContract, scope: { ...plan.resolvedContract.scope, includePaths: [...plan.resolvedContract.scope.includePaths, "docs/*"] } };
+    const created = await app.inject({ method: "POST", url: `/api/v4/runs/${run.id}/change-proposals`, payload: { reason: "Documentation is in scope", requestedChanges: ["Include docs"], resolvedContract } });
     const approved = await app.inject({ method: "POST", url: `/api/v4/change-proposals/${created.json().proposal.id}/approve`, payload: { actorId: "reviewer" } });
 
     expect(created.statusCode).toBe(201);
@@ -1027,7 +1027,7 @@ describe("Pipeline Factory v4 API", () => {
     createTestProject(store);
     const plans = new PlanService(store);
     plans.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Review from API" });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Review from API", resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Review from API" }) });
     plans.confirm(plan.id, "user-1");
     plans.enqueue(plan.id);
     const scheduler = new Scheduler({ store, workspace: { create: async () => ({ path: "/tmp/run", branch: "factory/run", baseCommit: "abc" }), remove: async () => undefined }, hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })) });
@@ -1060,8 +1060,8 @@ describe("Pipeline Factory v4 API", () => {
     createTestProject(store);
     const plans = new PlanService(store);
     plans.registerThread({ id: "thread-reconcile", projectId: "project-1", parentThreadId: null });
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-reconcile", title: "Reconcile from API" });
-    const configuredPlan = store.updatePlan({ ...plan, contract: { ...plan.contract, baseBranch: "main", baseCommit: "base" } });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-reconcile", title: "Reconcile from API", resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Reconcile from API" }) });
+    const configuredPlan = store.updatePlan({ ...plan, resolvedContract: { ...plan.resolvedContract, repository: { ...plan.resolvedContract.repository, baseBranch: "main", baseCommit: "base" } } });
     plans.confirm(configuredPlan.id, "user-1");
     const run = { id: "run-reconcile", projectId: "project-1", planId: plan.id, planRevision: 1, status: "MERGE_READY", branch: "factory/run-reconcile", workspacePath: "/workspace/run-reconcile", baseCommit: "base", executionThreadId: "thread-run-reconcile", createdAt: new Date().toISOString(), startedAt: new Date().toISOString() } as const;
     store.saveRun(run);
@@ -1097,7 +1097,7 @@ describe("Pipeline Factory v4 API", () => {
     createTestProject(store);
     const plans = new PlanService(store);
     plans.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Control from API" });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Control from API", resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Control from API" }) });
     plans.confirm(plan.id, "user-1");
     plans.enqueue(plan.id);
     const scheduler = new Scheduler({ store, workspace: { create: async () => ({ path: "/tmp/run", branch: "factory/run", baseCommit: "abc" }), remove: async () => undefined }, hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })) });
@@ -1121,7 +1121,7 @@ describe("Pipeline Factory v4 API", () => {
     createTestProject(store);
     const plans = new PlanService(store);
     plans.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Terminate stale run" });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Terminate stale run", resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Terminate stale run" }) });
     plans.confirm(plan.id, "user-1");
     plans.enqueue(plan.id);
     const scheduler = new Scheduler({ store, workspace: { create: async () => ({ path: "/tmp/run", branch: "factory/run", baseCommit: "abc" }), remove: async () => undefined }, hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })) });
@@ -1288,7 +1288,7 @@ describe("Pipeline Factory v4 API", () => {
     createTestProject(store);
     const plans = new PlanService(store);
     plans.registerThread({ id: "v4-only-thread", projectId: "project-1", parentThreadId: null });
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "v4-only-thread", title: "v4-only plan" });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "v4-only-thread", title: "v4-only plan", resolvedContract: planContractFixture({ store, projectId: "project-1", title: "v4-only plan" }) });
     const scheduler = new Scheduler({ store, workspace: { create: async () => ({ path: "/tmp/v4-only", branch: "factory/v4-only", baseCommit: "abc" }), remove: async () => undefined }, hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })) });
     const app = createApp({ store, scheduler, seed: false });
     apps.push(app);
