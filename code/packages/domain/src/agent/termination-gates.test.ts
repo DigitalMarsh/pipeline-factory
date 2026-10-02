@@ -24,21 +24,18 @@ describe("PlanCompletenessGate", () => {
   it("completes only when the explicit READY artifact is valid", () => {
     const decision = new PlanCompletenessGate().evaluate({
       content: `<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>${JSON.stringify({
+        schemaVersion: 2,
         title: "Plan",
-        goal: "Build the feature",
-        acceptanceCriteria: ["test passes"],
-        include: ["src"],
-        exclude: [".env"],
-        baseBranch: "main",
-        baseCommit: "HEAD",
-        tasks: [{ id: "task-1", title: "Implement", dependencies: [], status: "READY" }],
-        conflictKeys: [],
-        executorModelRole: "executor",
-        toolPolicy: "executor-scoped-write",
-        verificationCommandIds: ["project.test"],
-        maxRepairAttempts: 1,
-        mergeStrategy: "manual",
-        requireHumanMerge: true,
+        artifact: { mode: "REPOSITORY_FILE", path: "src/feature.ts" },
+        objective: { goal: "Build the feature", context: ["现有代码里还没有这个入口"], audience: ["开发者"], acceptanceCriteria: ["test passes"], outOfScope: [] },
+        design: { technicalConstraints: ["沿用现有路由"], dataSecurity: ["不引入新的凭据"], failureHandling: ["失败时保持原行为"], risks: ["回滚：还原这次改动即可"] },
+        scope: { includePaths: ["src/feature.ts"], excludePaths: [".env"] },
+        tasks: [{ id: "task-1", title: "Implement", dependencies: [], status: "READY", changes: [{ path: "src/feature.ts", action: "create", detail: "新增入口" }] }],
+        dependencies: [],
+        conflicts: [],
+        execution: { maxRepairAttempts: 1 },
+        verification: { mode: "NONE" },
+        merge: { strategy: "manual", requireHumanMerge: true },
       })}</pipeline-factory-plan>`,
     });
     expect(decision).toEqual({ action: "complete", reason: "PLAN_READY" });

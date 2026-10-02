@@ -602,6 +602,7 @@ export class SqlitePipelineStore implements PipelineStore {
     // 两条都吞异常：新库上它们本来就不存在。
     try { this.database.exec("DROP TABLE IF EXISTS revision_lifecycle_projection"); } catch { /* 新库没有这张表。 */ }
     try { this.database.exec("ALTER TABLE plan_revisions DROP COLUMN provenance"); } catch { /* 新库没有这一列。 */ }
+    this.pruneLegacyV1Plans();
     this.repairUnconfirmedProgressedPlans();
     this.repairOrphanedPlans();
     this.backfillExplorerPlans();
@@ -1589,6 +1590,30 @@ export class SqlitePipelineStore implements PipelineStore {
     for (const plan of this.listPlans()) {
       if (plan.status === "DRAFT") this.saveCandidateVersion(plan);
     }
+  }
+
+  /**
+   * 删除 V1 扁平合同时代的 CandidatePlan（`contract.schemaVersion === 1`）。
+   *
+   * 这是计划里唯一"代码已经读不了"的形态：确认 / 入队 / 派发三处闸门都拦着它，
+   * 界面上也没有对应的展示分支（见 docs/消息类型及事件状态机流程图.md 的 §6）。
+   * **带 Run 的跳过**——`runs.plan_id` 没有外键约束，硬删会让那些 Run 指向一个不存在的 Plan。
+   */
+  private pruneLegacyV1Plans(): void {
+    const rows = this.statement("SELECT id FROM candidate_plans WHERE json_extract(contract_json, '$.schemaVersion') = 1").all() as unknown as Array<{ id: string }>;
+    if (rows.length === 0) return;
+    const referenced = new Set(this.listRuns().map((run) => run.planId));
+    const removable = rows.map((row) => String(row.id)).filter((id) => !referenced.has(id));
+    const planIds = sqlIn("plan_id", removable);
+    const entityIds = sqlIn("id", removable);
+    if (!planIds || !entityIds) return;
+    this.statement(`DELETE FROM change_proposals WHERE ${planIds.clause}`).run(...planIds.values);
+    this.statement(`DELETE FROM plan_dispatch_states WHERE ${planIds.clause}`).run(...planIds.values);
+    this.statement(`DELETE FROM plan_revisions WHERE ${planIds.clause}`).run(...planIds.values);
+    this.statement(`DELETE FROM plan_revision_drafts WHERE ${planIds.clause}`).run(...planIds.values);
+    this.statement(`DELETE FROM candidate_plan_versions WHERE ${planIds.clause}`).run(...planIds.values);
+    this.statement(`DELETE FROM plan_query_projection WHERE ${planIds.clause}`).run(...planIds.values);
+    this.statement(`DELETE FROM candidate_plans WHERE ${entityIds.clause}`).run(...entityIds.values);
   }
 
   private mergeRequestFromRow(row: SqliteRow): MergeRequest {

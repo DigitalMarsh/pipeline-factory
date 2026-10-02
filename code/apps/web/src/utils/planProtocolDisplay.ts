@@ -49,15 +49,11 @@ function countAt(record: JsonRecord | undefined, key: string): number | undefine
 type PlanSummary = { title: string; goal: string; includeCount: number; excludeCount: number; taskCount: number; acceptanceCount: number; verificationCount: number };
 
 /**
- * 从 Plan 契约里取摘要，**同时认两种形状**：
- * - **当前形状**：`objective.goal` / `scope.includePaths` / `scope.excludePaths` /
- *   `objective.acceptanceCriteria` / `verification.commandIds`；
- * - **V1（历史消息）**：顶层 `goal` / `include` / `exclude` / `acceptanceCriteria` / `verificationCommandIds`。
+ * 从 Plan 契约里取摘要。**只认当前形状**：`objective.goal` / `scope.includePaths` /
+ * `scope.excludePaths` / `objective.acceptanceCriteria` / `verification.commandIds`。
  *
- * 两种都要认，缺一不可：换成当前形状之前落库的助手文本仍是 V1 形状，只认当前形状会让那些线程的卡片
- * 变成"校验失败"。反过来**只认 V1 就是这里修掉的缺陷**——每一份方案都被判为非法、显示
- * "结构化计划校验失败，请继续完善。"，而同一屏下方紧跟着 "PLAN CREATED" 卡片，页面自相矛盾，
- * 用户会以为模型没做对。判据必须跟着**当前**契约走，历史形状只作兼容。
+ * 曾经还要认 V1 的扁平形状（顶层 `goal` / `include` / …）。V1 已经不再支持——助手文本里
+ * 那种形状现在会走到"校验失败"，与领域侧 `assessPlanArtifact` 的判定一致。
  *
  * 认不出来返回 null（缺少 title 或 goal，或根本不是对象）。
  */
@@ -67,17 +63,17 @@ function summarizePlan(parsed: JsonRecord): PlanSummary | null {
   const verification = isRecord(parsed.verification) ? parsed.verification : undefined;
 
   const title = stringAt(parsed, "title");
-  const goal = stringAt(objective, "goal") ?? stringAt(parsed, "goal");
+  const goal = stringAt(objective, "goal");
   // 用 undefined 判空（而不是真值判断）：空字符串在旧实现里算合法，这里不改那条语义。
   if (title === undefined || goal === undefined) return null;
 
   return {
     title,
     goal,
-    includeCount: countAt(scope, "includePaths") ?? countAt(parsed, "include") ?? 0,
-    excludeCount: countAt(scope, "excludePaths") ?? countAt(parsed, "exclude") ?? 0,
-    acceptanceCount: countAt(objective, "acceptanceCriteria") ?? countAt(parsed, "acceptanceCriteria") ?? 0,
-    verificationCount: countAt(verification, "commandIds") ?? countAt(parsed, "verificationCommandIds") ?? 0,
+    includeCount: countAt(scope, "includePaths") ?? 0,
+    excludeCount: countAt(scope, "excludePaths") ?? 0,
+    acceptanceCount: countAt(objective, "acceptanceCriteria") ?? 0,
+    verificationCount: countAt(verification, "commandIds") ?? 0,
     taskCount: countAt(parsed, "tasks") ?? 0,
   };
 }

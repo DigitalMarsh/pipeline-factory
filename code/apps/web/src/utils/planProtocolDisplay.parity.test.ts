@@ -57,7 +57,6 @@ function protocol(spec: unknown): string {
 describe("Plan 协议解析：领域层与 web 两份实现一致", () => {
   it.each([
     { name: "当前形状的契约", content: protocol(artifact) },
-    { name: "V1 契约（历史消息）", content: protocol(artifactV1) },
   ])("$name：两边都判为 READY，且摘要字段相同", ({ content }) => {
     const domain = domainActivitySummary(content);
     const web = parsePlanProtocolDisplay(content);
@@ -88,6 +87,9 @@ describe("Plan 协议解析：领域层与 web 两份实现一致", () => {
   it.each([
     { name: "JSON 非法", content: "<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>{bad}</pipeline-factory-plan>" },
     { name: "缺目标字段", content: protocol({ title: "只有标题" }) },
+    // V1 扁平契约已经不再支持：两边都必须判非法。留在这张表里是为了钉住"两份实现结论一致"——
+    // 它是**唯一**一条覆盖"历史上曾经合法的形状"的夹具。
+    { name: "V1 扁平契约（已不再支持）", content: protocol(artifactV1) },
   ])("$name：两边都判为非法，提示语一致", ({ content }) => {
     const domain = domainActivitySummary(content);
     const web = parsePlanProtocolDisplay(content);

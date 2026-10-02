@@ -3,22 +3,11 @@
  * 设计说明：fixture 只构造本测试需要的持久化事实，边界行为优先于实现细节。
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  *
- * **两套 fixture 不是冗余**：`legacyArtifact`（V1 扁平形状）与 `artifact`（当前形状）各有一组用例。
- * 这个文件曾经只有 V1 夹具，于是解析器只认 V1 这件事一直没被测出来——线上表现是**每一份方案**
- * 都被判为非法并显示"结构化计划校验失败，请继续完善。"（详见 artifact 上方的说明）。
+ * **只认当前形状**：V1 扁平合同（顶层 `goal` / `include` / …）已经不再支持，
+ * 对应的一组用例连同 `legacyArtifact` 夹具一起删掉了——那正是解析器曾经只认 V1 的那条路。
  */
 import { describe, expect, it } from "vitest";
 import { parsePlanProtocolDisplay, readableAssistantText } from "./planProtocolDisplay";
-
-const legacyArtifact = {
-  title: "Personal information manager",
-  goal: "Build a local single-user personal information manager",
-  acceptanceCriteria: ["User can create records", "Data is encrypted at rest"],
-  include: ["apps/web", "apps/api"],
-  exclude: ["deploy/*"],
-  tasks: [{ id: "task-1", title: "Implement record management", dependencies: [], status: "READY" }],
-  verificationCommandIds: ["project.test"],
-};
 
 /**
  * **这是当前形状**（`schemaVersion: 2`），字段取自一次真实输出（需求5，`agent_loop_steps` 里拼回的
@@ -50,22 +39,6 @@ const artifact = {
 };
 
 describe("plan protocol display", () => {
-  it("turns a complete READY protocol into a readable summary", () => {
-    const result = parsePlanProtocolDisplay(`方案已整理完成。\n<pipeline-factory-plan-status>READY</pipeline-factory-plan-status>\n<pipeline-factory-plan>${JSON.stringify(legacyArtifact)}</pipeline-factory-plan>`);
-
-    expect(result).toEqual({
-      kind: "ready",
-      prose: "方案已整理完成。",
-      title: "Personal information manager",
-      goal: "Build a local single-user personal information manager",
-      includeCount: 2,
-      excludeCount: 1,
-      taskCount: 1,
-      acceptanceCount: 2,
-      verificationCount: 1,
-    });
-  });
-
   it("**当前形状同样渲染为可执行方案**（回归：解析器只认 V1 时，每一份方案都显示「校验失败」）", () => {
     const result = parsePlanProtocolDisplay(`已补充功能范围与排除项。\n<pipeline-factory-plan-status>READY</pipeline-factory-plan-status>\n<pipeline-factory-plan>${JSON.stringify(artifact)}</pipeline-factory-plan>`);
 
@@ -95,7 +68,7 @@ describe("plan protocol display", () => {
     expect("acceptanceCriteria" in artifact).toBe(false);
   });
 
-  it("两种形状都缺目标时才算非法（V1 的顶层 goal 与当前形状的 objective.goal 都不在）", () => {
+  it("缺目标时算非法（当前形状必须有 objective.goal）", () => {
     const noGoal = parsePlanProtocolDisplay('<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>{"title":"只有标题"}</pipeline-factory-plan>');
 
     expect(noGoal.kind).toBe("invalid");
@@ -123,13 +96,13 @@ describe("plan protocol display", () => {
 
 describe("助手消息的可读文本", () => {
   it("READY 时把方案标题接在正文后面", () => {
-    const content = '先说两句 <pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>{"title":"接入登录","goal":"g"}</pipeline-factory-plan>';
+    const content = '先说两句 <pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>{"title":"接入登录","objective":{"goal":"g"}}</pipeline-factory-plan>';
 
     expect(readableAssistantText(content)).toBe("先说两句 完整执行方案已生成：接入登录");
   });
 
   it("只有协议没有正文时只留提示句，不留多余空格", () => {
-    const content = '<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>{"title":"接入登录","goal":"g"}</pipeline-factory-plan>';
+    const content = '<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>{"title":"接入登录","objective":{"goal":"g"}}</pipeline-factory-plan>';
 
     expect(readableAssistantText(content)).toBe("完整执行方案已生成：接入登录");
   });

@@ -3,12 +3,63 @@
  * 设计说明：fixture 只构造本测试需要的持久化事实，边界行为优先于实现细节。
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  */
-import { describe, expect, it } from "vitest";
-import { ExplorerService, ExplorerThreadService, InMemoryPipelineStore, StubModelGateway, assessPlanCompletion, type ExplorerInputRequest, type ModelEvent, type ModelGateway, type ModelRequest } from "./index.js";
+import { afterAll, describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ExplorerService, ExplorerThreadService, InMemoryPipelineStore, ProjectService, StubModelGateway, assessPlanCompletion, type ExplorerInputRequest, type ModelEvent, type ModelGateway, type ModelRequest } from "./index.js";
+
+const temporaryRepos: string[] = [];
+afterAll(() => { for (const repo of temporaryRepos) rmSync(repo, { recursive: true, force: true }); });
+
+/**
+ * 建一个**真 Git 仓库**支撑的项目。
+ *
+ * 为什么需要：当前形状的方案在落库时要 `resolvePlanContract` 拿一条可验证的 Git 基线
+ * （`verifiedProjectBaseline` 会跑 `git rev-parse`），所以"能完整跑完一个回合并生成 Plan"
+ * 的用例必须有真仓库。V1 扁平合同时代不需要——那条路只把合同原样存下来。
+ */
+function createGitBackedProject(store: InMemoryPipelineStore, id: string): void {
+  const repoRoot = mkdtempSync(join(tmpdir(), `pipeline-${id}-`));
+  temporaryRepos.push(repoRoot);
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "ignore" });
+  execFileSync("git", ["-c", "user.name=Pipeline Test", "-c", "user.email=pipeline@test", "commit", "--allow-empty", "-m", "init"], { cwd: repoRoot, stdio: "ignore" });
+  new ProjectService(store).create({ id, name: "Project", repoRoot, defaultBranch: "main", worktreeRoot: join(repoRoot, "worktrees") });
+}
 
 async function waitUntil(check: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 100 && !check(); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 1));
   expect(check()).toBe(true);
+}
+
+/**
+ * 一份**当前形状**的完整方案。V1 扁平合同已经不再支持（见 completion.ts 的维护提示 4），
+ * 所以 fixture 只能长这样：`objective.context` / `design.risks` / 每个 task 的 `changes`
+ * 是 Explorer 门禁额外要求的"细节"字段，缺哪一项都会被判为 INCOMPLETE。
+ * `overrides` 用来构造"这一版有问题"的变体（例如重复 task id）。
+ */
+function planSpec(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    schemaVersion: 2,
+    title: "Plan",
+    artifact: { mode: "REPOSITORY_FILE", path: "src/feature.ts" },
+    objective: { goal: "Build the feature", context: ["现状：仓库里还没有这个入口"], audience: ["开发者"], acceptanceCriteria: ["test passes"], outOfScope: [] },
+    design: { technicalConstraints: ["沿用现有路由"], dataSecurity: ["不引入新凭据"], failureHandling: ["失败时保持原行为"], risks: ["回滚：还原这次改动"] },
+    scope: { includePaths: ["src/feature.ts"], excludePaths: [".env"] },
+    tasks: [{ id: "task-1", title: "Implement", dependencies: [], status: "READY", changes: [{ path: "src/feature.ts", action: "create", detail: "新增入口" }] }],
+    dependencies: [],
+    conflicts: [],
+    execution: { maxRepairAttempts: 1 },
+    verification: { mode: "NONE" },
+    merge: { strategy: "manual", requireHumanMerge: true },
+    ...overrides,
+  };
+}
+
+/** 一个 READY 的协议块，正文是上面的方案。 */
+function readyProtocol(overrides: Record<string, unknown> = {}): string {
+  return `<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>${JSON.stringify(planSpec(overrides))}</pipeline-factory-plan>`;
 }
 
 describe("ExplorerThread", () => {
@@ -118,12 +169,13 @@ describe("ExplorerThread", () => {
 
   it("routes simultaneous structured input answers to the matching requirement turn", async () => {
     const store = new InMemoryPipelineStore();
+    createGitBackedProject(store, "project-1");
     const explorer = new ExplorerService(store).create({ projectId: "project-1" });
     const plan1 = store.listExplorerPlans(explorer.id)[0]!;
     const plan2 = new ExplorerService(store).createPlan(explorer.id);
     const resumeByRequestId = new Map<string, () => void>();
     const answerCalls: string[] = [];
-    const readyResponse = `<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>${JSON.stringify({ title: "Input isolated plan", goal: "Complete a requirement after its own structured input", acceptanceCriteria: ["The selected requirement completes independently"], include: ["docs/input-plan.md"], exclude: [], baseBranch: "main", baseCommit: "HEAD", tasks: [{ id: "task-input", title: "Complete requirement", dependencies: [], status: "READY" }], conflictKeys: [], executorModelRole: "executor", toolPolicy: "executor-scoped-write", verificationCommandIds: [], maxRepairAttempts: 1, mergeStrategy: "manual", requireHumanMerge: true })}</pipeline-factory-plan>`;
+    const readyResponse = readyProtocol({ title: "Input isolated plan", objective: { goal: "Complete a requirement after its own structured input", context: ["现状：这个需求还没成型"], audience: ["开发者"], acceptanceCriteria: ["The selected requirement completes independently"], outOfScope: [] }, tasks: [{ id: "task-input", title: "Complete requirement", dependencies: [], status: "READY", changes: [{ path: "src/feature.ts", action: "create", detail: "新增入口" }] }] });
     const model: ModelGateway = {
       configFor: () => ({ model: "gpt-5.6-luna" }),
       async *stream(request) {
@@ -278,40 +330,32 @@ describe("ExplorerThread", () => {
   });
 
   it("uses the latest valid READY protocol block instead of an earlier invalid block", () => {
-    const artifact = JSON.stringify({ title: "Plan", goal: "Build the feature", acceptanceCriteria: ["test passes"], include: ["src"], exclude: [".env"], baseBranch: "main", baseCommit: "HEAD", tasks: [{ id: "task-1", title: "Implement", dependencies: [], status: "READY" }], conflictKeys: [], executorModelRole: "executor", toolPolicy: "executor-scoped-write", verificationCommandIds: ["project.test"], maxRepairAttempts: 1, mergeStrategy: "manual", requireHumanMerge: true });
-    const content = `<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>{bad json}</pipeline-factory-plan>\n后来补全了方案：\n<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>${artifact}</pipeline-factory-plan>`;
+    const content = `<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>{bad json}</pipeline-factory-plan>\n后来补全了方案：\n${readyProtocol()}`;
 
     expect(assessPlanCompletion(content)).toMatchObject({ status: "READY", artifact: { title: "Plan" } });
   });
 
   it("rejects duplicate task IDs before creating a CandidatePlan", () => {
-    const artifact = JSON.stringify({ title: "Plan", goal: "Build the feature", acceptanceCriteria: ["test passes"], include: ["src"], exclude: [".env"], baseBranch: "main", baseCommit: "HEAD", tasks: [{ id: "task-1", title: "One", dependencies: [], status: "READY" }, { id: "task-1", title: "Duplicate", dependencies: [], status: "READY" }], conflictKeys: [], executorModelRole: "executor", toolPolicy: "executor-scoped-write", verificationCommandIds: ["project.test"], maxRepairAttempts: 1, mergeStrategy: "manual", requireHumanMerge: true });
+    const artifact = JSON.stringify(planSpec({ tasks: [{ id: "task-1", title: "One", dependencies: [], status: "READY", changes: [{ path: "src/feature.ts", action: "create", detail: "新增入口" }] }, { id: "task-1", title: "Duplicate", dependencies: [], status: "READY", changes: [{ path: "src/feature.ts", action: "modify", detail: "改同一个文件" }] }] }));
 
     expect(assessPlanCompletion(`<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>${artifact}</pipeline-factory-plan>`)).toMatchObject({ status: "INCOMPLETE", artifact: null, missing: expect.arrayContaining(["实施任务、依赖与冲突"]) });
   });
 
   it("continues exploring after a turn completes until a complete plan artifact is available", async () => {
     const store = new InMemoryPipelineStore();
+    createGitBackedProject(store, "project-1");
     store.saveThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
     const requests: ModelRequest[] = [];
-    const completeArtifact = `<pipeline-factory-plan-status>READY</pipeline-factory-plan-status>
-<pipeline-factory-plan>${JSON.stringify({
-  title: "Personal information manager",
-  goal: "Build a local single-user personal information manager",
-  acceptanceCriteria: ["User can create and search records", "Data is encrypted at rest"],
-  include: ["apps/web", "apps/api"],
-  exclude: ["deploy/*"],
-  baseBranch: "main",
-  baseCommit: "HEAD",
-  tasks: [{ id: "task-1", title: "Implement record management", dependencies: [], status: "READY" }],
-  conflictKeys: ["project-1:apps"],
-  executorModelRole: "executor",
-  toolPolicy: "executor-scoped-write",
-  verificationCommandIds: ["project.test"],
-  maxRepairAttempts: 2,
-  mergeStrategy: "manual",
-  requireHumanMerge: true,
-})}</pipeline-factory-plan>`;
+    const completeArtifact = readyProtocol({
+      title: "Personal information manager",
+      artifact: { mode: "CONVERSATION" },
+      objective: { goal: "Build a local single-user personal information manager", context: ["现状：还没有可用的记录管理"], audience: ["单个本地用户"], acceptanceCriteria: ["User can create and search records", "Data is encrypted at rest"], outOfScope: ["多用户协作"] },
+      design: { technicalConstraints: ["本地单用户"], dataSecurity: ["Data is encrypted at rest"], failureHandling: ["写入失败时回滚本次改动"], risks: ["回滚：还原这次改动"] },
+      scope: { includePaths: [], excludePaths: [] },
+      tasks: [{ id: "task-1", title: "Implement record management", dependencies: [], status: "READY", changes: [{ path: "apps/api/records.ts", action: "create", detail: "新增记录接口" }] }],
+      conflicts: ["project-1:apps"],
+      execution: { maxRepairAttempts: 2 },
+    });
     const model: ModelGateway = {
       configFor: () => ({ model: "gpt-5.6-luna" }),
       async *stream(request) {

@@ -14,19 +14,24 @@
  *      取"最新的一个 READY"而不是"第一个"——模型重试时会重复输出，取第一个会让修复永远不生效。
  *   3) DUPLICATE 诊断（同一轮重复输出完全相同的未通过 READY 块）是 prompt 里"不要原样重复"那句话的
  *      执行端。去掉它，模型卡在同一个错误上的循环就没有终止信号。
- *   4) V1 分支（schemaVersion !== 2）只服务历史数据；新 Explorer 只产出 V2。V1 分支的字段清单
- *      必须与 plan/contract.ts 的 validatePlanContract 保持一致，否则会出现"assessPlanCompletion
- *      判 READY、Confirm 时被 validatePlanContract 抛错拒绝"的错配。
+ *   4) **只认当前形状**（`schemaVersion: 2` 的 generated spec）。V1 扁平合同已不再支持，
+ *      `plan/contract.ts` 的 V1 校验器随之删除——所谓"老库里的 Plan 还能确认"这条路已经关掉。
  *   5) missing 用的是**面向用户的领域名**（REQUIRED_PLAN_AREAS 的成员），不是字段路径；
  *      diagnostics 才带 path/area/code。UI 与 continuationPrompt 分别消费两者。
  */
 import { GeneratedPlanSpecValidationError, parseGeneratedPlanSpec, validateGeneratedPlanSpec } from "./plan-spec.js";
 import type { GeneratedPlanSpec, PlanValidationIssue } from "./plan-spec.js";
 import { REQUIRED_PLAN_AREAS } from "../platform/plan-requirements.js";
-import { isNonEmptyStringArray, isRecord, isStringArray } from "../platform/guards.js";
-import { validatePlanContract } from "./contract.js";
+import { isRecord } from "../platform/guards.js";
 import type { PlanContract, PlanExplorationStatus } from "../index.js";
 
+/**
+ * 解析出来的方案产物。
+ *
+ * `generatedSpec` 是 Explorer 现在唯一的产出；`contract` 选项留给**程序化调用方**
+ * （测试夹具直接给一份现成的合同），不是"读旧库"的路径——V1 的助手文本解析分支已经删掉，
+ * 见本文件的维护提示 4。这一项会随 V1 镜像一起收掉（见 docs 的 §6 B 类）。
+ */
 export type PlanArtifact = { title: string; contract?: PlanContract; generatedSpec?: GeneratedPlanSpec };
 export type PlanCompletionAssessment = {
   status: PlanExplorationStatus;
@@ -98,48 +103,24 @@ function assessPlanArtifact(artifactText: string): PlanCompletionAssessment {
   let parsed: unknown;
   try { parsed = JSON.parse(artifactText); } catch { return { status: "INCOMPLETE", missing: ["完整执行契约"], completed: [], diagnostics: [{ path: "$", code: "INVALID", area: "完整执行契约", message: "必须是严格 JSON，不能使用代码围栏或残缺 JSON。" }], artifact: null }; }
   if (!isRecord(parsed)) return { status: "INCOMPLETE", missing: ["完整执行契约"], completed: [], diagnostics: [{ path: "$", code: "INVALID", area: "完整执行契约", message: "必须是 JSON 对象。" }], artifact: null };
-  // The current shape is intentionally a generated spec: Factory adds project identity, Git
-  // baseline and default verification commands only after this boundary.
-  if (parsed.schemaVersion === 2) {
-    try {
-      const generatedSpec = parseGeneratedPlanSpec(parsed);
-      // **只对新产物强制这些"细节"字段**。校验器那边它们是可选的——库里已有的 spec 会被
-      // reviseConfiguration / setVerificationSuites 重新解析，必填会让老 Plan 直接不可用
-      // （plan-spec.ts 的"过时键故意不报 FORBIDDEN"是同一条理由）。门禁只跑新产物，所以在这里
-      // 提要求是安全的，而且诊断会像其他缺失项一样触发 Explorer 自动续跑补齐。
-      const detailIssues = missingExplorerDetail(generatedSpec);
-      if (detailIssues.length > 0) {
-        const missing = [...new Set(detailIssues.map((item) => item.area))];
-        return { status: "INCOMPLETE", missing, completed: REQUIRED_PLAN_AREAS.filter((area) => !missing.includes(area)), diagnostics: detailIssues, artifact: null };
-      }
-      return { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], diagnostics: [], artifact: { title: generatedSpec.title, generatedSpec } };
-    } catch (error) {
-      const diagnostics = error instanceof GeneratedPlanSpecValidationError ? error.issues : validateGeneratedPlanSpec(parsed);
-      const missing = [...new Set(diagnostics.map((item) => item.area))];
-      return { status: "INCOMPLETE", missing: missing.length ? missing : ["完整执行契约"], completed: REQUIRED_PLAN_AREAS.filter((area) => !missing.includes(area)), diagnostics, artifact: null };
+  // 只认当前形状（`schemaVersion: 2` 的 generated spec）。V1 扁平合同已经不再支持：
+  // 那种产物既解析不出可执行契约，也不会被确认——它以"校验失败"的诊断回到 Explorer，
+  // 让模型重新产出一份合规的方案。
+  try {
+    const generatedSpec = parseGeneratedPlanSpec(parsed);
+    // **只对新产物强制这些"细节"字段**。校验器那边它们是可选的——库里已有的 spec 会被
+    // reviseConfiguration / setVerificationSuites 重新解析，必填会让老 Plan 直接不可用
+    // （plan-spec.ts 的"过时键故意不报 FORBIDDEN"是同一条理由）。门禁只跑新产物，所以在这里
+    // 提要求是安全的，而且诊断会像其他缺失项一样触发 Explorer 自动续跑补齐。
+    const detailIssues = missingExplorerDetail(generatedSpec);
+    if (detailIssues.length > 0) {
+      const missing = [...new Set(detailIssues.map((item) => item.area))];
+      return { status: "INCOMPLETE", missing, completed: REQUIRED_PLAN_AREAS.filter((area) => !missing.includes(area)), diagnostics: detailIssues, artifact: null };
     }
+    return { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], diagnostics: [], artifact: { title: generatedSpec.title, generatedSpec } };
+  } catch (error) {
+    const diagnostics = error instanceof GeneratedPlanSpecValidationError ? error.issues : validateGeneratedPlanSpec(parsed);
+    const missing = [...new Set(diagnostics.map((item) => item.area))];
+    return { status: "INCOMPLETE", missing: missing.length ? missing : ["完整执行契约"], completed: REQUIRED_PLAN_AREAS.filter((area) => !missing.includes(area)), diagnostics, artifact: null };
   }
-  const missing: string[] = [];
-  const title = typeof parsed.title === "string" ? parsed.title.trim() : "";
-  if (!title) missing.push("方案标题");
-  const contract = parsed as Partial<PlanContract>;
-  if (typeof contract.goal !== "string" || !contract.goal.trim()) missing.push("目标与用户范围");
-  if (!isNonEmptyStringArray(contract.acceptanceCriteria)) missing.push("验收标准与验证命令");
-  if (!isStringArray(contract.include) || !isStringArray(contract.exclude)) missing.push("功能范围与排除项");
-  if (typeof contract.baseBranch !== "string" || !contract.baseBranch.trim() || typeof contract.baseCommit !== "string" || !contract.baseCommit.trim()) missing.push("基线 Branch 与 Commit");
-  if (!Array.isArray(contract.tasks) || contract.tasks.length === 0 || contract.tasks.some((task) => !isRecord(task) || typeof task.id !== "string" || !task.id.trim() || typeof task.title !== "string" || !task.title.trim() || !isStringArray(task.dependencies))) missing.push("实施任务、依赖与冲突");
-  if (contract.dependsOnPlanIds !== undefined && !isStringArray(contract.dependsOnPlanIds)) missing.push("实施任务、依赖与冲突");
-  if (!isStringArray(contract.conflictKeys)) missing.push("实施任务、依赖与冲突");
-  if (typeof contract.executorModelRole !== "string" || !contract.executorModelRole.trim() || typeof contract.toolPolicy !== "string" || !contract.toolPolicy.trim()) missing.push("Executor 模型与 ToolPolicy");
-  if (!isNonEmptyStringArray(contract.verificationCommandIds)) missing.push("验收标准与验证命令");
-  if (typeof contract.maxRepairAttempts !== "number" || contract.maxRepairAttempts < 0 || !Number.isInteger(contract.maxRepairAttempts)) missing.push("修复次数上限");
-  if (contract.mergeStrategy !== "manual" && contract.mergeStrategy !== "fast-forward" && contract.mergeStrategy !== "squash") missing.push("合并策略与人工确认");
-  if (contract.requireHumanMerge !== true) missing.push("合并策略与人工确认");
-  if (missing.length === 0) {
-    try { validatePlanContract(contract as PlanContract); } catch { missing.push("实施任务、依赖与冲突"); }
-  }
-  const uniqueMissing = [...new Set(missing)];
-  if (uniqueMissing.length > 0) return { status: "INCOMPLETE", missing: uniqueMissing, completed: REQUIRED_PLAN_AREAS.filter((area) => !uniqueMissing.includes(area)), diagnostics: uniqueMissing.map((area) => ({ path: "$", code: "REQUIRED" as const, area, message: "历史 V1 合同缺少必填字段。" })), artifact: null };
-  // Flat artifacts are history-only. New Explorer instructions only emit the generated spec.
-  return { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], diagnostics: [], artifact: { title, contract: { ...(contract as PlanContract), schemaVersion: 1 } } };
 }

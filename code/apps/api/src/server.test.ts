@@ -20,6 +20,21 @@ function createTestProject(store: InMemoryPipelineStore, id = "project-1") {
   return new ProjectService(store).create({ id, name: id, repoRoot: `/repo/${id}`, defaultBranch: "main", worktreeRoot: `/tmp/${id}-worktrees`, settings: { commands: [{ commandId: "project.test", argv: ["true"] }, { commandId: "project.typecheck", argv: ["true"] }] } });
 }
 
+const temporaryRepos: string[] = [];
+
+/**
+ * **真 Git 仓库**支撑的 Project。当前形状的方案在落库时要 `resolvePlanContract` 拿一条可验证的
+ * Git 基线（`verifiedProjectBaseline` 会跑 `git rev-parse`），所以"要求把一条 READY 协议落成
+ * CandidatePlan"的用例必须用这个。只断言协议解析、不落库的用例用 `createTestProject` 就够。
+ */
+function createGitBackedTestProject(store: InMemoryPipelineStore, id = "project-1") {
+  const repoRoot = mkdtempSync(join(tmpdir(), `pipeline-${id}-`));
+  temporaryRepos.push(repoRoot);
+  execFileSync("git", ["init", "-b", "main"], { cwd: repoRoot, stdio: "ignore" });
+  execFileSync("git", ["-c", "user.name=Pipeline Test", "-c", "user.email=pipeline-test@example.com", "commit", "--allow-empty", "-m", "init"], { cwd: repoRoot, stdio: "ignore" });
+  return new ProjectService(store).create({ id, name: id, repoRoot, defaultBranch: "main", worktreeRoot: join(repoRoot, "worktrees"), settings: { commands: [{ commandId: "project.test", argv: ["true"] }, { commandId: "project.typecheck", argv: ["true"] }] } });
+}
+
 async function waitUntil(check: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 200 && !check(); attempt += 1) await new Promise((resolve) => setTimeout(resolve, 2));
   expect(check()).toBe(true);
@@ -27,6 +42,7 @@ async function waitUntil(check: () => boolean): Promise<void> {
 
 afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
+  for (const repo of temporaryRepos.splice(0)) rmSync(repo, { recursive: true, force: true });
 });
 
 describe("Pipeline Factory v4 API", () => {
@@ -1126,7 +1142,7 @@ describe("Pipeline Factory v4 API", () => {
 
   it("supports asynchronous v4 turns and structured answers", async () => {
     const store = new InMemoryPipelineStore();
-    createTestProject(store);
+    createGitBackedTestProject(store);
     store.saveThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
     const explorerPlanId = store.listExplorerPlans("thread-1")[0]!.id;
     let streamCount = 0;
@@ -1146,7 +1162,7 @@ describe("Pipeline Factory v4 API", () => {
           resumeOrder.push("stream-resumed");
           yield { type: "text.delta", text: "已记录选择，继续完善。" };
         } else {
-          yield { type: "text.delta", text: `<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>${JSON.stringify({ title: "API generated plan", goal: "Complete the requested system design", acceptanceCriteria: ["The approved scope is implemented"], include: ["apps/api"], exclude: ["deploy/*"], baseBranch: "main", baseCommit: "HEAD", tasks: [{ id: "task-1", title: "Implement the approved scope", dependencies: [], status: "READY" }], conflictKeys: [], executorModelRole: "executor", toolPolicy: "executor-scoped-write", verificationCommandIds: ["project.test"], maxRepairAttempts: 2, mergeStrategy: "manual", requireHumanMerge: true })}</pipeline-factory-plan>` };
+          yield { type: "text.delta", text: `<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>${JSON.stringify({ schemaVersion: 2, title: "API generated plan", artifact: { mode: "REPOSITORY_FILE", path: "apps/api/server.ts" }, objective: { goal: "Complete the requested system design", context: ["现状：接口还没有这套能力"], audience: ["接口使用者"], acceptanceCriteria: ["The approved scope is implemented"], outOfScope: [] }, design: { technicalConstraints: ["沿用现有接口"], dataSecurity: ["不引入新凭据"], failureHandling: ["失败时保持原行为"], risks: ["回滚：还原这次改动"] }, scope: { includePaths: ["apps/api/server.ts"], excludePaths: ["deploy/*"] }, tasks: [{ id: "task-1", title: "Implement the approved scope", dependencies: [], status: "READY", changes: [{ path: "apps/api/server.ts", action: "modify", detail: "接上新的接口" }] }], dependencies: [], conflicts: [], execution: { maxRepairAttempts: 2 }, verification: { mode: "PROJECT_DEFAULT" }, merge: { strategy: "manual", requireHumanMerge: true } })}</pipeline-factory-plan>` };
         }
         yield { type: "turn.completed" };
       },

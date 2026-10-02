@@ -6,6 +6,33 @@
 import { describe, expect, it } from "vitest";
 import { projectExplorerActivity } from "./explorer-activity.js";
 
+/**
+ * 一份**当前形状**的方案。V1 扁平合同已经不再支持，所以"能解析出摘要"的夹具只能长这样：
+ * 摘要字段在 `objective.goal` / `scope.includePaths` / `verification.commandIds` 之下。
+ */
+function planSpec(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    schemaVersion: 2,
+    title: "Personal information manager",
+    artifact: { mode: "CONVERSATION" },
+    objective: { goal: "Build a local single-user personal information manager", audience: ["本地用户"], acceptanceCriteria: ["User can create records", "Data is encrypted at rest"], outOfScope: [] },
+    design: { technicalConstraints: [], dataSecurity: [], failureHandling: [] },
+    scope: { includePaths: [], excludePaths: ["deploy/*"] },
+    tasks: [{ id: "task-1", title: "Implement record management", dependencies: [] }],
+    dependencies: [],
+    conflicts: [],
+    execution: {},
+    verification: { mode: "PROJECT_DEFAULT" },
+    merge: { strategy: "manual", requireHumanMerge: true },
+    ...overrides,
+  };
+}
+
+/** READY 协议块，正文是上面的方案。 */
+function protocol(overrides: Record<string, unknown> = {}): string {
+  return `<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>${JSON.stringify(planSpec(overrides))}</pipeline-factory-plan>`;
+}
+
 describe("Explorer activity projection", () => {
   it("marks a text-bearing assistant activity completed when its turn is completed", () => {
     const items = projectExplorerActivity({
@@ -74,16 +101,8 @@ describe("Explorer activity projection", () => {
   });
 
   it("replaces the machine-readable plan protocol with a readable activity summary", () => {
-    const artifact = {
-      title: "Personal information manager",
-      goal: "Build a local single-user personal information manager",
-      acceptanceCriteria: ["User can create records", "Data is encrypted at rest"],
-      include: ["apps/web", "apps/api"],
-      exclude: ["deploy/*"],
-      tasks: [{ id: "task-1", title: "Implement record management", dependencies: [], status: "READY" }],
-      verificationCommandIds: ["project.test"],
-    };
-    const rawProtocol = `<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>${JSON.stringify(artifact)}</pipeline-factory-plan>`;
+    // 解析后的方案里 `verification.commandIds` 由 Factory 填；这里给一份带 id 的，好断言条数确实算进去了。
+    const rawProtocol = protocol({ verification: { mode: "PROJECT_DEFAULT", commandIds: ["project.test"] } });
     const items = projectExplorerActivity({
       turns: [{ id: "assistant-1", threadId: "explorer-1", role: "assistant", content: "", status: "COMPLETED", createdAt: "2026-08-29T10:00:00.000Z", sequence: 1 }],
       loops: [{ id: "loop-1", ownerType: "explorer-turn", ownerId: "assistant-1", role: "explorer", mode: "provider-controlled", state: "COMPLETED", stepCount: 1, maxSteps: 40, startedAt: "2026-08-29T10:00:00.000Z", completedAt: "2026-08-29T10:00:02.000Z", providerThreadId: null, providerTurnId: null, checkpointJson: null }],
@@ -140,8 +159,7 @@ describe("Explorer activity projection", () => {
   });
 
   it("keeps the final plan text provider item ID when one turn has multiple assistant message segments", () => {
-    const artifact = { title: "Provider-bound plan", goal: "Bind the exact generated message" };
-    const rawProtocol = `<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>${JSON.stringify(artifact)}</pipeline-factory-plan>`;
+    const rawProtocol = protocol({ title: "Provider-bound plan", objective: { goal: "Bind the exact generated message", audience: ["开发者"], acceptanceCriteria: ["绑定到正确的那条消息"], outOfScope: [] } });
     const items = projectExplorerActivity({
       turns: [{ id: "assistant-1", threadId: "explorer-1", role: "assistant", content: "", status: "COMPLETED", createdAt: "2026-08-29T10:00:00.000Z", sequence: 1 }],
       loops: [{ id: "loop-1", ownerType: "explorer-turn", ownerId: "assistant-1", role: "explorer", mode: "provider-controlled", state: "COMPLETED", stepCount: 3, maxSteps: 40, startedAt: "2026-08-29T10:00:00.000Z", completedAt: "2026-08-29T10:00:03.000Z", providerThreadId: null, providerTurnId: null, checkpointJson: null }],
@@ -160,7 +178,7 @@ describe("Explorer activity projection", () => {
 
   it("renders the latest parseable READY protocol instead of an earlier invalid block", () => {
     const earlier = "<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>{bad json}</pipeline-factory-plan>";
-    const later = "<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>" + JSON.stringify({ title: "Latest plan", goal: "Use the latest valid protocol" }) + "</pipeline-factory-plan>";
+    const later = protocol({ title: "Latest plan", objective: { goal: "Use the latest valid protocol", audience: ["开发者"], acceptanceCriteria: ["取最新那份"], outOfScope: [] } });
     const items = projectExplorerActivity({
       turns: [{ id: "assistant-1", threadId: "explorer-1", role: "assistant", content: "", status: "COMPLETED", createdAt: "2026-08-29T10:00:00.000Z", sequence: 1 }],
       loops: [{ id: "loop-1", ownerType: "explorer-turn", ownerId: "assistant-1", role: "explorer", mode: "provider-controlled", state: "COMPLETED", stepCount: 2, maxSteps: 40, startedAt: "2026-08-29T10:00:00.000Z", completedAt: "2026-08-29T10:00:02.000Z", providerThreadId: null, providerTurnId: null, checkpointJson: null }],

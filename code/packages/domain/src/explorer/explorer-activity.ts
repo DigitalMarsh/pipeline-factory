@@ -119,14 +119,11 @@ function parsePlanArtifact(artifactText: string): Record<string, unknown> | null
 }
 
 /**
- * 从 Plan 契约里取界面要的摘要，**同时认两种形状**：
- * - **当前形状**：`objective.goal` / `scope.includePaths` / `scope.excludePaths` /
- *   `objective.acceptanceCriteria` / `verification.commandIds`；
- * - **V1（历史消息）**：顶层 `goal` / `include` / `exclude` / `acceptanceCriteria` / `verificationCommandIds`。
+ * 从 Plan 契约里取界面要的摘要。**只认当前形状**：`objective.goal` / `scope.includePaths` /
+ * `scope.excludePaths` / `objective.acceptanceCriteria` / `verification.commandIds`。
  *
- * 只认 V1 就是这里修掉的缺陷：模型产出的是 V2（`schemaVersion: 2`），顶层没有 `goal`，
- * 于是**每一份合法方案**都被判为非法、活动摘要写成"结构化计划校验失败，请继续完善。"——
- * 而同一屏下方紧跟着 PLAN_CREATED 卡片，用户会以为模型没做对。
+ * 曾经还要认 V1 的扁平形状（顶层 `goal` / `include` / …）。V1 已经不再支持——两条路都删了，
+ * 剩下的判定与 `assessPlanArtifact` 一致：认不出来就报"校验失败"，让模型重出一份。
  *
  * **这份实现与 `apps/web/src/utils/planProtocolDisplay.ts` 是一对镜像**，不是重复代码：
  * web 不能运行时依赖领域层（会把整个领域打进浏览器包），所以它必须自己解析一遍**流式**消息
@@ -140,17 +137,17 @@ function summarizePlanArtifact(parsed: Record<string, unknown>): Record<string, 
   const verification = isRecord(parsed.verification) ? parsed.verification : undefined;
 
   const title = stringAt(parsed, "title");
-  const goal = stringAt(objective, "goal") ?? stringAt(parsed, "goal");
+  const goal = stringAt(objective, "goal");
   // 用 undefined 判空（而不是真值判断）：空字符串在旧实现里算合法，这里不改那条语义。
   if (title === undefined || goal === undefined) return null;
 
   return {
     title,
     goal,
-    includeCount: countArray(scope ?? {}, "includePaths") ?? countArray(parsed, "include") ?? 0,
-    excludeCount: countArray(scope ?? {}, "excludePaths") ?? countArray(parsed, "exclude") ?? 0,
-    acceptanceCount: countArray(objective ?? {}, "acceptanceCriteria") ?? countArray(parsed, "acceptanceCriteria") ?? 0,
-    verificationCount: countArray(verification ?? {}, "commandIds") ?? countArray(parsed, "verificationCommandIds") ?? 0,
+    includeCount: countArray(scope ?? {}, "includePaths") ?? 0,
+    excludeCount: countArray(scope ?? {}, "excludePaths") ?? 0,
+    acceptanceCount: countArray(objective ?? {}, "acceptanceCriteria") ?? 0,
+    verificationCount: countArray(verification ?? {}, "commandIds") ?? 0,
     taskCount: countArray(parsed, "tasks") ?? 0,
   };
 }

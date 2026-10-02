@@ -505,7 +505,7 @@ export class ExplorerThreadService {
     const assessment = assessPlanCompletion(current.content);
     const updatedPlan = this.store.updateExplorerPlan({ ...explorerPlan, exploration: { ...explorerPlan.exploration, status: assessment.status, missing: assessment.missing, completed: assessment.completed, diagnostics: assessment.diagnostics, lastAssessedTurnId: assistantId }, lastAssessedTurnId: assistantId, lastActivityAt: this.store.now() });
     const mirror = { status: assessment.status, missing: assessment.missing, completed: assessment.completed, diagnostics: assessment.diagnostics, candidatePlanId: explorerPlan.candidatePlanId, lastAssessedTurnId: assistantId };
-    this.updateThreadContextSummary(threadId, updatedPlan, assessment.artifact?.contract?.goal ?? assessment.artifact?.generatedSpec?.objective?.goal ?? null);
+    this.updateThreadContextSummary(threadId, updatedPlan, assessment.artifact?.generatedSpec?.objective.goal ?? null);
     const currentThread = this.store.getThread(threadId) ?? thread;
     this.store.updateThread({ ...currentThread, ...(currentThread.activeExplorerPlanId === explorerPlan.id ? { exploration: mirror } : {}), lastActivityAt: this.store.now() });
     this.publish(this.store.appendEvent({ type: assessment.status === "READY" ? "explorer.plan.ready" : "explorer.plan.incomplete", aggregateId: threadId, payload: { turnId: assistantId, explorerPlanId: explorerPlan.id, missing: assessment.missing, completed: assessment.completed, diagnostics: assessment.diagnostics } }));
@@ -519,7 +519,7 @@ export class ExplorerThreadService {
         if (planAfterDraft) this.store.updateExplorerPlan({ ...planAfterDraft, exploration: { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], diagnostics: [], candidatePlanId: revisedPlan, lastAssessedTurnId: assistantId }, candidatePlanId: revisedPlan, newPlanRequested: false, lastAssessedTurnId: assistantId, lastActivityAt: this.store.now() });
       } else {
         const existing = explorerPlan.candidatePlanId ? this.store.getPlan(explorerPlan.candidatePlanId) : undefined;
-        const plan = existing?.status === "DRAFT" ? this.plans.reviseCandidate(existing.id, assessment.artifact, source) : this.plans.createCandidatePlan({ projectId: thread.projectId, sourceExplorerThreadId: threadId, explorerPlanId: explorerPlan.id, title: assessment.artifact.title, ...(assessment.artifact.generatedSpec ? { generatedSpec: assessment.artifact.generatedSpec } : { contract: assessment.artifact.contract }), ...source });
+        const plan = existing?.status === "DRAFT" ? this.plans.reviseCandidate(existing.id, assessment.artifact, source) : this.plans.createCandidatePlan({ projectId: thread.projectId, sourceExplorerThreadId: threadId, explorerPlanId: explorerPlan.id, title: assessment.artifact.title, generatedSpec: assessment.artifact.generatedSpec, ...source });
         const planAfterCandidate = this.store.updateExplorerPlan({ ...this.store.getExplorerPlan(explorerPlan.id)!, exploration: { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], diagnostics: [], candidatePlanId: plan.id, lastAssessedTurnId: assistantId }, candidatePlanId: plan.id, newPlanRequested: false, lastAssessedTurnId: assistantId, lastActivityAt: this.store.now() });
         this.updateThreadContextSummary(threadId, planAfterCandidate, plan.contract.goal ?? null);
         const latestThread = this.store.getThread(threadId)!;
