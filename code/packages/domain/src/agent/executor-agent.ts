@@ -13,7 +13,7 @@ import { isProviderActivityKind, isProviderActivityOutcome } from "../model/prov
 import { updatePlanStatus } from "../plan/status-transition.js";
 // 用 import type 而不是"具名绑定带 type 前缀"：这样"本模块对 index.js 只剩类型依赖"是显式的，
 // check-cycles.mjs 也据此判定这条回流边已被切断。
-import type { ExecutionTelemetry, ModelGateway, ModelRoleConfig, PipelineStore, PlanRevisionV2, Run } from "../index.js";
+import type { ExecutionTelemetry, ModelGateway, ModelRoleConfig, PipelineStore, PlanRevision, Run } from "../index.js";
 import type { ToolRuntime } from "../tools/tool-runtime.js";
 
 const REPORT_START = "<pipeline-factory-execution-report>";
@@ -62,7 +62,7 @@ export type ExecutorAgentOptions = {
   maxRepeatedToolCalls?: number;
   maxNoProgressSteps?: number;
   mode?: AgentLoopMode;
-  toolRuntimeFactory?: (run: Run, revision: PlanRevisionV2) => ToolRuntime;
+  toolRuntimeFactory?: (run: Run, revision: PlanRevision) => ToolRuntime;
   workspaceScopeInspector?: WorkspaceScopeInspector;
 };
 
@@ -92,7 +92,7 @@ export class ExecutorAgent {
   }
 
   /** 异步启动 Executor Loop；RunDetail 可通过 AgentLoop/SSE 观察实时进度。 */
-  async start(run: Run, revision: PlanRevisionV2): Promise<AgentLoop> {
+  async start(run: Run, revision: PlanRevision): Promise<AgentLoop> {
     this.assertRunnable(run, revision);
     const workspaceRoot = run.workspacePath!;
     const commandWorkingDirectory = await resolveExecutorWorkingDirectory(workspaceRoot, revision.contract.include, revision.contract.artifactPath);
@@ -138,7 +138,7 @@ export class ExecutorAgent {
   }
 
   /** 同步运行 Executor Loop，完成后同步 Run 的终态映射。 */
-  async run(run: Run, revision: PlanRevisionV2): Promise<AgentLoop> {
+  async run(run: Run, revision: PlanRevision): Promise<AgentLoop> {
     this.assertRunnable(run, revision);
     const workspaceRoot = run.workspacePath!;
     const commandWorkingDirectory = await resolveExecutorWorkingDirectory(workspaceRoot, revision.contract.include, revision.contract.artifactPath);
@@ -185,7 +185,7 @@ export class ExecutorAgent {
   cancel(loopId: string, reason: string): Promise<AgentLoop> { return this.engine.cancel(loopId, reason); }
   get(loopId: string): AgentLoop { return this.engine.get(loopId); }
 
-  private assertRunnable(run: Run, revision: PlanRevisionV2): void {
+  private assertRunnable(run: Run, revision: PlanRevision): void {
     if (run.status !== "IN_PROGRESS") throw new Error(`Run ${run.id} must be IN_PROGRESS before Executor starts`);
     if (run.planId !== revision.planId || run.planRevision !== revision.revision) throw new Error("Executor Run and PlanRevision do not match");
     if (!run.workspacePath) throw new Error(`Run ${run.id} has no workspace`);
@@ -203,11 +203,11 @@ export class ExecutorAgent {
   }
 
   /** 在 Loop 创建前复制快照配置；后续 Project 配置变化不会影响本次 Run。 */
-  private executorModelConfig(revision: PlanRevisionV2): ModelRoleConfig {
+  private executorModelConfig(revision: PlanRevision): ModelRoleConfig {
     return { ...this.model.configFor("executor"), ...(revision.projectConfigSnapshot?.settings.models.executor ?? {}) };
   }
 
-  private async progressContext(run: Run, revision: PlanRevisionV2, content: string, openToolCalls: Set<string>): Promise<Pick<GateContext, "allTasksComplete" | "changedPaths" | "pathsWithinScope" | "reportReady" | "hasOpenToolCalls" | "hasPendingChangeProposal" | "reportError" | "scopeError">> {
+  private async progressContext(run: Run, revision: PlanRevision, content: string, openToolCalls: Set<string>): Promise<Pick<GateContext, "allTasksComplete" | "changedPaths" | "pathsWithinScope" | "reportReady" | "hasOpenToolCalls" | "hasPendingChangeProposal" | "reportError" | "scopeError">> {
     const parsedReport = parseExecutorReportDetailed(content);
     const report = parsedReport.report;
     const taskIds = new Set(revision.contract.tasks.map((task) => task.id));
@@ -237,7 +237,7 @@ export class ExecutorAgent {
   }
 
   /** 将冻结的 Plan 合同和 Project 配置注入模型，确保执行阶段不读取当前 Project。 */
-  private systemInstructions(revision: PlanRevisionV2, workspaceRoot: string, commandWorkingDirectory: string): string {
+  private systemInstructions(revision: PlanRevision, workspaceRoot: string, commandWorkingDirectory: string): string {
     const executionContract = {
       planId: revision.planId,
       revision: revision.revision,
@@ -262,7 +262,7 @@ export class ExecutorAgent {
   }
 
   /** 把 Loop 事件投影为用户可读的 ExecutionThread journal，同时维护未完成工具集合。 */
-  private handleEvent(run: Run, event: AgentLoopEvent, openToolCalls: Set<string>, revision: PlanRevisionV2): void {
+  private handleEvent(run: Run, event: AgentLoopEvent, openToolCalls: Set<string>, revision: PlanRevision): void {
     if (!this.store.getExecutionThread(run.executionThreadId)) return;
     const payload = event.payload;
     const eventStep = typeof payload.step === "number" ? payload.step : undefined;
@@ -459,7 +459,7 @@ export class ExecutorAgent {
     }
   }
 
-  private recordTaskProgressMarkers(run: Run, event: AgentLoopEvent, revision: PlanRevisionV2, modelStep: number, delta: string, association: Record<string, unknown>): void {
+  private recordTaskProgressMarkers(run: Run, event: AgentLoopEvent, revision: PlanRevision, modelStep: number, delta: string, association: Record<string, unknown>): void {
     const buffer = this.taskProgressBuffers.get(run.id);
     if (!buffer || buffer.modelStep !== modelStep) this.taskProgressBuffers.set(run.id, { modelStep, text: delta, scanOffset: 0 });
     else buffer.text += delta;
@@ -541,8 +541,8 @@ export class ExecutorAgent {
  * 交给执行者的计划视图。
  *
  * V2 revision 走**精选视图**，而不是 `revision.contract`（V1 投影）：那个投影
- * （`plan/service.ts` 的 `executionContractFromResolvedV2`）**丢掉了 `design` 整节**——
- * 技术约束、数据安全、失败处理，以及被 `resolvePlanContractV2` 并进 `technicalConstraints` 的
+ * （`plan/service.ts` 的 `executionContractFromResolved`）**丢掉了 `design` 整节**——
+ * 技术约束、数据安全、失败处理，以及被 `resolvePlanContract` 并进 `technicalConstraints` 的
  * `dependencies`，**从未到达执行者**。代价是具体的：库里反复出现
  * `package.json remains missing in expected project directory`，而那些 Plan 的 dependencies 里
  * 明明写着"需要在 code/ 目录使用仓库现有 package.json 和锁文件安装依赖"——执行者没见过这句话。
@@ -550,7 +550,7 @@ export class ExecutorAgent {
  * 只取执行需要的部分：不把 `repository`（路径、哈希）与 `execution`（Factory 固定的角色与工具策略）
  * 塞进提示词，那既无用又费 token。历史 V1 revision 没有 `resolvedContract`，原样退回，行为不变。
  */
-function executorPlanView(revision: PlanRevisionV2): unknown {
+function executorPlanView(revision: PlanRevision): unknown {
   const resolved = revision.resolvedContract;
   if (!resolved) return revision.contract;
   return {

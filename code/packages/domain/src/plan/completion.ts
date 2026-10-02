@@ -3,7 +3,7 @@
  *
  * 为什么从 index.ts 抽出来：termination-gates.ts 的 PlanCompletenessGate 是 Explorer Loop 的完成
  *   门禁，它过去 `import { assessPlanCompletion } from "./index.js"`，构成 index.ts 的最后两条回流边
- *   之一。本模块的运行时依赖（plan-v2.js、platform/plan-requirements.js、platform/guards.js、
+ *   之一。本模块的运行时依赖（plan-spec.js、platform/plan-requirements.js、platform/guards.js、
  *   plan/contract.js）全部已在 index.ts 之外，因此搬到这里不会把回流边换个名字继续存在。
  *
  * 维护提示：
@@ -20,14 +20,14 @@
  *   5) missing 用的是**面向用户的领域名**（REQUIRED_PLAN_AREAS 的成员），不是字段路径；
  *      diagnostics 才带 path/area/code。UI 与 continuationPrompt 分别消费两者。
  */
-import { GeneratedPlanSpecV2ValidationError, parseGeneratedPlanSpecV2, validateGeneratedPlanSpecV2 } from "./plan-v2.js";
-import type { GeneratedPlanSpecV2, PlanValidationIssue } from "./plan-v2.js";
+import { GeneratedPlanSpecValidationError, parseGeneratedPlanSpec, validateGeneratedPlanSpec } from "./plan-spec.js";
+import type { GeneratedPlanSpec, PlanValidationIssue } from "./plan-spec.js";
 import { REQUIRED_PLAN_AREAS } from "../platform/plan-requirements.js";
 import { isNonEmptyStringArray, isRecord, isStringArray } from "../platform/guards.js";
 import { validatePlanContract } from "./contract.js";
 import type { PlanContract, PlanExplorationStatus } from "../index.js";
 
-export type PlanArtifact = { title: string; contract?: PlanContract; generatedSpec?: GeneratedPlanSpecV2 };
+export type PlanArtifact = { title: string; contract?: PlanContract; generatedSpec?: GeneratedPlanSpec };
 export type PlanCompletionAssessment = {
   status: PlanExplorationStatus;
   missing: string[];
@@ -48,7 +48,7 @@ export type PlanCompletionAssessment = {
  * `design.technicalConstraints`（含 dependencies）**根本没有进到执行者的提示词**——
  * 库里反复出现的 `package.json remains missing` 就是这么来的。
  */
-function missingExplorerDetail(spec: GeneratedPlanSpecV2): PlanValidationIssue[] {
+function missingExplorerDetail(spec: GeneratedPlanSpec): PlanValidationIssue[] {
   const issues: PlanValidationIssue[] = [];
   if (!spec.objective.context?.length) issues.push({ path: "objective.context", code: "REQUIRED", area: "目标与用户范围", message: "必须写出现状与调查发现：在仓库里看到了什么、依据是什么。" });
   if (!spec.design.risks?.length) issues.push({ path: "design.risks", code: "REQUIRED", area: "技术方案与关键约束", message: "必须写出风险与回滚。" });
@@ -98,14 +98,14 @@ function assessPlanArtifact(artifactText: string): PlanCompletionAssessment {
   let parsed: unknown;
   try { parsed = JSON.parse(artifactText); } catch { return { status: "INCOMPLETE", missing: ["完整执行契约"], completed: [], diagnostics: [{ path: "$", code: "INVALID", area: "完整执行契约", message: "必须是严格 JSON，不能使用代码围栏或残缺 JSON。" }], artifact: null }; }
   if (!isRecord(parsed)) return { status: "INCOMPLETE", missing: ["完整执行契约"], completed: [], diagnostics: [{ path: "$", code: "INVALID", area: "完整执行契约", message: "必须是 JSON 对象。" }], artifact: null };
-  // V2 is intentionally a generated spec: Factory adds project identity, Git
+  // The current shape is intentionally a generated spec: Factory adds project identity, Git
   // baseline and default verification commands only after this boundary.
   if (parsed.schemaVersion === 2) {
     try {
-      const generatedSpec = parseGeneratedPlanSpecV2(parsed);
+      const generatedSpec = parseGeneratedPlanSpec(parsed);
       // **只对新产物强制这些"细节"字段**。校验器那边它们是可选的——库里已有的 spec 会被
       // reviseConfiguration / setVerificationSuites 重新解析，必填会让老 Plan 直接不可用
-      // （plan-v2.ts 的"过时键故意不报 FORBIDDEN"是同一条理由）。门禁只跑新产物，所以在这里
+      // （plan-spec.ts 的"过时键故意不报 FORBIDDEN"是同一条理由）。门禁只跑新产物，所以在这里
       // 提要求是安全的，而且诊断会像其他缺失项一样触发 Explorer 自动续跑补齐。
       const detailIssues = missingExplorerDetail(generatedSpec);
       if (detailIssues.length > 0) {
@@ -114,7 +114,7 @@ function assessPlanArtifact(artifactText: string): PlanCompletionAssessment {
       }
       return { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], diagnostics: [], artifact: { title: generatedSpec.title, generatedSpec } };
     } catch (error) {
-      const diagnostics = error instanceof GeneratedPlanSpecV2ValidationError ? error.issues : validateGeneratedPlanSpecV2(parsed);
+      const diagnostics = error instanceof GeneratedPlanSpecValidationError ? error.issues : validateGeneratedPlanSpec(parsed);
       const missing = [...new Set(diagnostics.map((item) => item.area))];
       return { status: "INCOMPLETE", missing: missing.length ? missing : ["完整执行契约"], completed: REQUIRED_PLAN_AREAS.filter((area) => !missing.includes(area)), diagnostics, artifact: null };
     }
@@ -140,6 +140,6 @@ function assessPlanArtifact(artifactText: string): PlanCompletionAssessment {
   }
   const uniqueMissing = [...new Set(missing)];
   if (uniqueMissing.length > 0) return { status: "INCOMPLETE", missing: uniqueMissing, completed: REQUIRED_PLAN_AREAS.filter((area) => !uniqueMissing.includes(area)), diagnostics: uniqueMissing.map((area) => ({ path: "$", code: "REQUIRED" as const, area, message: "历史 V1 合同缺少必填字段。" })), artifact: null };
-  // Flat artifacts are history-only. New Explorer instructions only emit V2.
+  // Flat artifacts are history-only. New Explorer instructions only emit the generated spec.
   return { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], diagnostics: [], artifact: { title, contract: { ...(contract as PlanContract), schemaVersion: 1 } } };
 }

@@ -33,7 +33,7 @@
  *      explorerPlanId 缺失表示需要按旧线程回填到 Plan 1（见字段注释），不要当成 null 处理。
  */
 import type { ExplorerTitleSource, ExplorerTitleStatus } from "./explorer-title.js";
-import type { PlanValidationIssue } from "../plan/plan-v2.js";
+import type { PlanValidationIssue } from "../plan/plan-spec.js";
 
 /** ExplorerThread 的工作状态；ARCHIVED 只禁止新写入，不删除历史。 */
 export type ExplorerThreadState = "ACTIVE" | "WAITING_FOR_INPUT" | "COMPRESSED" | "ARCHIVED";

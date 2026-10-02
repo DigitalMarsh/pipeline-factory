@@ -4,7 +4,7 @@
  * 为什么值得单独测一个纯函数：这条规则原先在 run/scheduler.ts、PlanService.reviseConfiguration 与
  *   PlanDispatchCoordinator.evaluateWait 三处各写了一遍，而且分成两套不一致的规则，症状是
  *   "同一个 Plan 该不该被拦取决于谁先问"——派发前放行、启动时抛 RUN_PREREQUISITES_UNSATISFIED。
- *   收敛成一处的意义只有在两侧语义都被钉住时才成立：既要保住 V2 的严格判定（未启用/非 verification
+ *   收敛成一处的意义只有在两侧语义都被钉住时才成立：既要保住当前形状的严格判定（未启用/非 verification
  *   的命令不算已注册），也要保住 V1 平面的回落行为。漏掉任一侧，这个"统一"就变成了悄悄放宽或收紧。
  *
  * 维护提示：用例按"传入 resolvedContract 与否"两组组织，对应函数里那条三元分支。
@@ -19,9 +19,9 @@ function command(commandId: string, overrides: Partial<RegisteredCommandDefiniti
 }
 
 describe("missingVerificationCommands", () => {
-  describe("带 resolvedContract（V2 权威）", () => {
-    it("以 V2 解析出的 commandIds 为准，而不是 V1 的镜像字段", () => {
-      // 这正是原缺陷的现场：V2 模式为 NONE（commandIds 为空、按设计应被 SKIPPED），
+  describe("带 resolvedContract（当前形状，权威）", () => {
+    it("以 resolvedContract 解析出的 commandIds 为准，而不是 V1 的镜像字段", () => {
+      // 这正是原缺陷的现场：当前形状下 mode 为 NONE（commandIds 为空、按设计应被 SKIPPED），
       // 却带着一份陈旧的 V1 镜像 id。以 V1 为准就会把可执行的 Plan 拦成 NEEDS_CONFIGURATION。
       const missing = missingVerificationCommands({
         contract: { verificationCommandIds: ["project.test", "project.typecheck"] },
@@ -77,7 +77,7 @@ describe("missingVerificationCommands", () => {
     });
 
     it("保持历史行为：V1 平面下任何已注册命令都算数，不看类别与启用状态", () => {
-      // 这是与 V2 分支**有意不同**的一侧：V1 合同没有 resolvedContract 可依据，
+      // 这是与 resolvedContract 分支**有意不同**的一侧：V1 合同没有 resolvedContract 可依据，
       // 收紧它会让旧库里的历史合同突然无法确认。改动这里等于改历史数据的可执行性。
       const missing = missingVerificationCommands({
         contract: { verificationCommandIds: ["project.cleanup"] },

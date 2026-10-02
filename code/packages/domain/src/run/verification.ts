@@ -22,14 +22,14 @@
 import { randomUUID } from "node:crypto";
 import { updatePlanStatus } from "../plan/status-transition.js";
 import type { PipelineStore } from "../store/pipeline-store.js";
-import type { CommandResult, PlanRevisionV2, RepairExecutor, Run, VerificationCommandExecutor, VerificationRun } from "../index.js";
+import type { CommandResult, PlanRevision, RepairExecutor, Run, VerificationCommandExecutor, VerificationRun } from "../index.js";
 
 /** 脱离模型会话执行确定性验证，并按 Revision 的 repair limit 控制修复重试。 */
 export class VerificationService {
   constructor(private readonly store?: PipelineStore) {}
 
   /** 执行验证命令，失败时最多按 Plan contract 重试 repair。 */
-  async verify(run: Run, revision: PlanRevisionV2, execute: VerificationCommandExecutor, repair?: RepairExecutor): Promise<VerificationRun> {
+  async verify(run: Run, revision: PlanRevision, execute: VerificationCommandExecutor, repair?: RepairExecutor): Promise<VerificationRun> {
     if (run.status !== "IN_PROGRESS" && run.status !== "READY_FOR_VERIFY") throw new Error(`Run ${run.id} cannot be verified from ${run.status}`);
     run.status = "VERIFYING";
     this.store?.saveRun(run);

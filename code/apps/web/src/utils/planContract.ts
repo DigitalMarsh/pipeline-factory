@@ -3,10 +3,10 @@
  *   （V1 扁平 `contract`、模型产出的 `generatedSpec`、Factory 解析后的 `resolvedContract`），
  *   本模块决定"界面该读哪一个"，避免每个组件各自决定一遍。
  *
- * 为什么需要它：V2 的 `contract` 是**有损投影**（`dependsOnPlanIds` 被填成 []、`priority` 为 0，
- *   见 domain 的 `executionContractFromResolvedV2`），却因为字段名简短而在界面里被优先读取——
+ * 为什么需要它：`contract` 是**有损投影**（`dependsOnPlanIds` 被填成 []、`priority` 为 0，
+ *   见 domain 的 `executionContractFromResolved`），却因为字段名简短而在界面里被优先读取——
  *   于是界面上显示的 scope / 任务 / 验证命令可能与真正执行的那份不一致。事实来源是
- *   `resolvedContract`（Confirm 时冻结），V2 Plan 必须优先读它。
+ *   `resolvedContract`（Confirm 时冻结），有新契约的 Plan 必须优先读它。
  *
  * 维护提示：
  *   1) 取值顺序固定为 `resolvedContract → generatedSpec → contract`。不要为了某个页面"少一次判空"
@@ -34,7 +34,7 @@ export type PlanContractView = {
   source: "resolved" | "generated" | "legacy";
 };
 
-/** 把三种表示收敛成界面唯一的读取面；V2 优先 `resolvedContract`。 */
+/** 把三种表示收敛成界面唯一的读取面；优先 `resolvedContract`。 */
 export function planContractView(plan: Plan | null | undefined): PlanContractView | null {
   if (!plan) return null;
   const resolved = plan.resolvedContract;

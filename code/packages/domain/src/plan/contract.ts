@@ -2,7 +2,7 @@
  * 模块职责：历史 V1 扁平 Plan 合同的运行时结构校验。
  *
  * 为什么从 index.ts 抽出来：plan/completion.ts 的 assessPlanArtifact 在 V1 分支上要调它。
- *   计划里"S4 只需要 plan-v2.js 与 REQUIRED_PLAN_AREAS"这一条与实测不符——V1 校验器一直在
+ *   计划里"S4 只需要 plan-spec.js 与 REQUIRED_PLAN_AREAS"这一条与实测不符——V1 校验器一直在
  *   index.ts 里。若不一起搬走，completion.ts 就会从 index.ts 取值导入它，与 index.ts 对
  *   completion.ts 的导入构成新的双模块值级环：回流边从 termination-gates 换成 completion，
  *   计数不变，等于白做。它只依赖 platform/guards.ts 与 PlanContract 类型，因此可以独立成模块。
@@ -10,7 +10,7 @@
  * 维护提示：
  *   1) V1 是**历史形态**：新 Explorer 只产出 V2（见 assessPlanArtifact 的 schemaVersion === 2 分支），
  *      本文件存在只是为了让旧库里的 V1 合同仍能被校验与确认。不要在这里加新字段。
- *   2) 本函数是"抛错"语义（Error），而 plan-v2.ts 的 validateGeneratedPlanSpecV2 是"返回问题列表"
+ *   2) 本函数是"抛错"语义（Error），而 plan-spec.ts 的 validateGeneratedPlanSpec 是"返回问题列表"
  *      语义。assessPlanArtifact 靠 try/catch 适配这个差异，改动任一侧的错误类型都会影响对方。
  *   3) 任务依赖环检测用的是 visiting/visited 双集合的 DFS。改成单集合 visited 会把"重复引用
  *      同一个前置任务"误判成环。
@@ -20,7 +20,7 @@
  */
 import { isNonEmptyStringArray, isStringArray } from "../platform/guards.js";
 import type { PlanContract } from "../index.js";
-import type { ResolvedPlanContractV2 } from "./plan-v2.js";
+import type { ResolvedPlanContract } from "./plan-spec.js";
 import type { RegisteredCommandDefinition } from "../platform/commands.js";
 
 /**
@@ -29,20 +29,20 @@ import type { RegisteredCommandDefinition } from "../platform/commands.js";
  * 为什么必须唯一：这条规则原先在三处各写了一遍，而且分成两套不一致的规则：
  *   - run/scheduler.ts 的 assertVerificationCommands 与 PlanService.reviseConfiguration
  *     只读 V1 的 `contract.verificationCommandIds`，并把 settings.commands 里**任何**命令都算作已注册；
- *   - PlanDispatchCoordinator.evaluateWait 在 revision 带 resolvedContract 时改读 V2 的
+ *   - PlanDispatchCoordinator.evaluateWait 在 revision 带 resolvedContract 时改读已解析契约的
  *     `resolvedContract.verification.commandIds`，且只把 `category === "verification"` 且
  *     `enabled !== false` 的命令算作已注册。
  * 分歧的后果是"同一个 Plan 该不该被拦"取决于**谁先问**：派发前的 evaluateWait 放行，
  * 但 Scheduler.start 里的同名校验抛 `RUN_PREREQUISITES_UNSATISFIED`，最终表现为
- * `WAITING / NEEDS_CONFIGURATION`。典型触发是 V2 的 `verification.mode: "NONE"`
+ * `WAITING / NEEDS_CONFIGURATION`。典型触发是当前形状的 `verification.mode: "NONE"`
  * （解析后 commandIds 为空、按设计应当被 SKIPPED 而非被拦）却仍带着一份陈旧的 V1 镜像 id。
  *
- * 统一到 coordinator 的那套：已解析的 V2 契约是权威来源；未启用或非 verification 类别的命令
+ * 统一到 coordinator 的那套：已解析契约是权威来源；未启用或非 verification 类别的命令
  * 不该被当成"已注册"。传 `resolvedContract` 时以它为准，否则回落到 V1 平面。
  */
 export function missingVerificationCommands(input: {
   contract: Pick<PlanContract, "verificationCommandIds">;
-  resolvedContract?: Pick<ResolvedPlanContractV2, "verification"> | undefined;
+  resolvedContract?: Pick<ResolvedPlanContract, "verification"> | undefined;
   commands: readonly RegisteredCommandDefinition[];
 }): string[] {
   const expected = input.resolvedContract ? input.resolvedContract.verification.commandIds : input.contract.verificationCommandIds;

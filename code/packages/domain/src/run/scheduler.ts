@@ -44,7 +44,7 @@ import type {
   HookRunResult,
   JournalEntryType,
   LifecycleHookRunner,
-  PlanRevisionV2,
+  PlanRevision,
   Project,
   Run,
   Workspace,
@@ -59,7 +59,7 @@ export type SchedulerOptions = {
   hookRunnerFactory?: (snapshot: ProjectExecutionSnapshot) => LifecycleHookRunner;
   branchNameGenerator?: RunBranchNameGenerator;
   executor?: {
-    start(run: Run, revision: PlanRevisionV2): Promise<AgentLoop>;
+    start(run: Run, revision: PlanRevision): Promise<AgentLoop>;
     pause?: AgentLoopRunner["pause"];
     resume?: AgentLoopRunner["resume"];
     cancel?: AgentLoopRunner["cancel"];
@@ -177,7 +177,7 @@ export class Scheduler {
     return run;
   }
 
-  private async runBranchLeaf(plan: CandidatePlan, revision: PlanRevisionV2, createdAt: string): Promise<string> {
+  private async runBranchLeaf(plan: CandidatePlan, revision: PlanRevision, createdAt: string): Promise<string> {
     let summary = normalizeRunBranchSlug(plan.title) ?? "change";
     if (this.options.branchNameGenerator) {
       try {
@@ -276,12 +276,12 @@ export class Scheduler {
     return { released: true, worktreeRemoved, cleanupNeedsAttention: Boolean(cleanupResult.needsAttention), ...(error ? { error } : {}) };
   }
 
-  private workspaceAdapterFor(revision: PlanRevisionV2 | undefined): WorkspaceAdapter {
+  private workspaceAdapterFor(revision: PlanRevision | undefined): WorkspaceAdapter {
     const snapshot = revision?.projectConfigSnapshot;
     return snapshot && this.options.workspaceFactory ? this.options.workspaceFactory(snapshot) : this.options.workspace;
   }
 
-  private hookRunnerFor(revision: PlanRevisionV2 | undefined): LifecycleHookRunner {
+  private hookRunnerFor(revision: PlanRevision | undefined): LifecycleHookRunner {
     const snapshot = revision?.projectConfigSnapshot;
     return snapshot && this.options.hookRunnerFactory ? this.options.hookRunnerFactory(snapshot) : this.options.hooks;
   }
@@ -382,7 +382,7 @@ export class Scheduler {
     if (thread) this.options.store.saveExecutionThread({ ...thread, state });
   }
 
-  private assertVerificationCommands(revision: PlanRevisionV2): void {
+  private assertVerificationCommands(revision: PlanRevision): void {
     const snapshot = revision.projectConfigSnapshot;
     if (!snapshot) return;
     // 判定规则统一在 plan/contract.ts 的 missingVerificationCommands —— 这里曾自己实现一套，

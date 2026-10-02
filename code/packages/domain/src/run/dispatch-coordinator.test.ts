@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import * as domain from "../index.js";
-import { InMemoryPipelineStore, LifecycleHookRunner, PlanService, ProjectService, Scheduler, SqlitePipelineStore, resolvePlanContractV2 } from "../index.js";
+import { InMemoryPipelineStore, LifecycleHookRunner, PlanService, ProjectService, Scheduler, SqlitePipelineStore, resolvePlanContract } from "../index.js";
 
 const coordinatorModule = domain as unknown as {
   PlanDispatchCoordinator: new (options: {
@@ -11,7 +11,7 @@ const coordinatorModule = domain as unknown as {
     plans: PlanService;
     scheduler: Scheduler;
     globalConcurrency?: number;
-    verify?: (run: domain.Run, revision: domain.PlanRevisionV2) => Promise<domain.VerificationRun>;
+    verify?: (run: domain.Run, revision: domain.PlanRevision) => Promise<domain.VerificationRun>;
   }) => {
     dispatch(planId: string): Promise<{ plan: domain.CandidatePlan; state: domain.PlanDispatchState }>;
     confirmAndDispatch(planId: string, revision: number, confirmedBy: string): Promise<{ plan: domain.CandidatePlan; run: domain.Run | null; state: domain.PlanDispatchState }>;
@@ -128,7 +128,7 @@ describe("PlanDispatchCoordinator", () => {
       dependencies: ["Node.js 22 or compatible version", "pnpm"],
       conflicts: [], execution: {}, verification: { mode: "NONE" as const }, merge: { strategy: "manual" as const, requireHumanMerge: true as const },
     };
-    const resolvedContract = resolvePlanContractV2(generatedSpec, projects.snapshot(project.id), { baseBranch: "main", baseCommit: "a".repeat(40) });
+    const resolvedContract = resolvePlanContract(generatedSpec, projects.snapshot(project.id), { baseBranch: "main", baseCommit: "a".repeat(40) });
     store.updatePlan({
       ...plan,
       contract: { ...plan.contract, artifactMode: "REPOSITORY_FILE", dependsOnPlanIds: [] },

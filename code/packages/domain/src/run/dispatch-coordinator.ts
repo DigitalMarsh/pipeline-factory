@@ -19,7 +19,7 @@ import { missingVerificationCommands } from "../plan/contract.js";
 import type {
   CandidatePlan,
   DomainEvent,
-  PlanRevisionV2,
+  PlanRevision,
   PlanService,
   PipelineStore,
   Run,
@@ -89,7 +89,7 @@ export type PlanDispatchCoordinatorOptions = {
    * Project 级上限来自冻结快照的 `settings.concurrency.maxParallelRuns`（快照缺失时不判定）。
    */
   globalConcurrency?: number;
-  verify?: (run: Run, revision: PlanRevisionV2) => Promise<VerificationRun>;
+  verify?: (run: Run, revision: PlanRevision) => Promise<VerificationRun>;
 };
 
 /**
@@ -368,7 +368,7 @@ export class PlanDispatchCoordinator {
     }
   }
 
-  private evaluateWait(plan: CandidatePlan, revision: PlanRevisionV2): WaitEvaluation | undefined {
+  private evaluateWait(plan: CandidatePlan, revision: PlanRevision): WaitEvaluation | undefined {
     const dependencies = revision.contract.dependsOnPlanIds ?? [];
     const incompleteDependency = dependencies
       .map((id) => this.options.store.getPlan(id))

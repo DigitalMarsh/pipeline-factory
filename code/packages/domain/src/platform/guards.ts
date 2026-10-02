@@ -7,10 +7,10 @@
  *   这三个守卫只吃 unknown、**零 import**，搬到这里后 completion.ts 对 index.ts 就不再有任何值依赖。
  *
  * 维护提示：
- *   1) 本文件**只放守卫，不放业务校验**。像 validatePlanContract / validateGeneratedPlanSpecV2
- *      这类会抛错、带业务规则的校验器归各域自己的模块（plan/contract.ts、plan-v2.ts），
+ *   1) 本文件**只放守卫，不放业务校验**。像 validatePlanContract / validateGeneratedPlanSpec
+ *      这类会抛错、带业务规则的校验器归各域自己的模块（plan/contract.ts、plan-spec.ts），
  *      放进来会把"零依赖叶子"这个性质破坏掉，解环就白做了。
- *   2) 仓库里另外还有 4 份同义的 isRecord（project.ts、plan-v2.ts、explorer-activity.ts、redaction.ts
+ *   2) 仓库里另外还有 4 份同义的 isRecord（project.ts、plan-spec.ts、explorer-activity.ts、redaction.ts
  *      各一份，web 侧另有一份）。本轮**不动它们**——收敛它们会同时改动 4 个模块的 diff，
  *      与解环这一步的可归因性冲突；P8.3 统一处理。
  */

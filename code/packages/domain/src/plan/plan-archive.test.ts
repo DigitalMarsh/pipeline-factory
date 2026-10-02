@@ -14,7 +14,7 @@ import { planDocumentFileName, renderPlanDocument, writePlanDocument } from "./p
 import { InMemoryPipelineStore } from "../store/in-memory-store.js";
 import { ProjectService } from "../project/project.js";
 import type { PlanContract } from "./types.js";
-import type { ResolvedPlanContractV2 } from "./plan-v2.js";
+import type { ResolvedPlanContract } from "./plan-spec.js";
 
 const contract: PlanContract = {
   schemaVersion: 1,
@@ -66,8 +66,8 @@ describe("Plan 文档渲染", () => {
     expect(markdown).toContain("（未声明）");
   });
 
-  it("V2 文档写出现状、每步文件变更和风险", () => {
-    const resolvedContract: ResolvedPlanContractV2 = {
+  it("当前形状的文档写出现状、每步文件变更和风险", () => {
+    const resolvedContract: ResolvedPlanContract = {
       schemaVersion: 2,
       artifact: { mode: "REPOSITORY_FILE", path: "src/views/GanttView.vue" },
       objective: { goal: "在项目详情页展示甘特图", context: ["现有详情页只有列表视图，日期数据已由 API 返回。"], audience: ["项目成员"], acceptanceCriteria: ["能按日期排布"], outOfScope: ["不改后端数据模型"] },

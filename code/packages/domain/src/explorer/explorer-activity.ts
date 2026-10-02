@@ -120,7 +120,7 @@ function parsePlanArtifact(artifactText: string): Record<string, unknown> | null
 
 /**
  * 从 Plan 契约里取界面要的摘要，**同时认两种形状**：
- * - **V2（当前）**：`objective.goal` / `scope.includePaths` / `scope.excludePaths` /
+ * - **当前形状**：`objective.goal` / `scope.includePaths` / `scope.excludePaths` /
  *   `objective.acceptanceCriteria` / `verification.commandIds`；
  * - **V1（历史消息）**：顶层 `goal` / `include` / `exclude` / `acceptanceCriteria` / `verificationCommandIds`。
  *

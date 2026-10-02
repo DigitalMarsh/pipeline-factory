@@ -19,15 +19,15 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PlanContract } from "./types.js";
-import type { PlanTaskChange, ResolvedPlanContractV2 } from "./plan-v2.js";
+import type { PlanTaskChange, ResolvedPlanContract } from "./plan-spec.js";
 
-/** 落盘所需的事实；V2 契约优先（它更完整），缺失时回落到 V1 投影。 */
+/** 落盘所需的事实；已解析契约优先（它更完整），缺失时回落到 V1 投影。 */
 export type PlanDocumentInput = {
   planId: string;
   revision: number;
   title: string;
   contract: PlanContract;
-  resolvedContract?: ResolvedPlanContractV2 | undefined;
+  resolvedContract?: ResolvedPlanContract | undefined;
   artifactHash: string;
   confirmedBy: string;
   confirmedAt: string;

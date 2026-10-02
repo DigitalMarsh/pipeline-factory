@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 import { InMemoryPipelineStore, PlanService, ProjectService } from "./index.js";
 
-describe("PlanRevisionV2", () => {
+describe("PlanRevision", () => {
   it("freezes the execution contract and records a stable artifact hash on confirmation", () => {
     const service = new PlanService(new InMemoryPipelineStore());
     const candidate = service.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Freeze this plan" });

@@ -14,12 +14,12 @@ describe("PlanDetailDrawer execution read-only mode", () => {
     expect(contentSource).toContain('v-else class="drawer-actions"');
   });
 
-  it("renders generated V2 details before a resolved execution contract exists", () => {
+  it("renders generated spec details before a resolved execution contract exists", () => {
     expect(contentSource).toContain("props.plan?.generatedSpec");
     expect(contentSource).toContain("generated?.objective.goal");
     expect(contentSource).toContain("generated.value?.scope.includePaths");
     expect(contentSource).toContain("generated.value?.tasks");
-    expect(contentSource).toContain("generated ? 'Generated V2'");
+    expect(contentSource).toContain("generated ? 'Generated spec'");
     // 执行角色与工具策略**不在模型契约里**（模型填了也没有消费方，会撒谎）：只从 resolved 读。
     expect(contentSource).toContain("resolved?.execution.toolPolicy");
     expect(contentSource).not.toContain("generated?.execution.toolPolicy");

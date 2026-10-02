@@ -1,5 +1,5 @@
 /**
- * Plan V2 deliberately separates untrusted model output from the contract that
+ * The plan spec deliberately separates untrusted model output from the contract that
  * Factory persists and executes. In particular the model never supplies a
  * command id, repository identity, branch, commit or Project configuration.
  */
@@ -32,7 +32,7 @@ export type PlanTaskChange = {
 
 export type PlanTaskShape = { id: string; title: string; dependencies: string[]; status?: "PENDING" | "READY" | "DONE"; changes?: PlanTaskChange[] | undefined };
 
-export type GeneratedPlanSpecV2 = {
+export type GeneratedPlanSpec = {
   schemaVersion: 2;
   title: string;
   artifact: { mode: PlanArtifactMode; path?: string | undefined };
@@ -57,7 +57,7 @@ export type GeneratedPlanSpecV2 = {
    * **只有 Factory 能决定的部分**。这里曾经还有 `executorModelRole` 与 `toolPolicy`，模型可以填、
    * 却没有任何消费方（执行侧读的是 Project 快照里的 executor 配置），于是它们在界面上显示成
    * "执行策略"而实际不生效。会撒谎的字段不如没有：这两个值现在由 Factory 固定填进
-   * `ResolvedPlanContractV2.execution`，模型不再有机会声明它们。
+   * `ResolvedPlanContract.execution`，模型不再有机会声明它们。
    */
   execution: { maxRepairAttempts?: number | undefined };
   verification: {
@@ -72,14 +72,14 @@ export type GeneratedPlanSpecV2 = {
   merge: { strategy: "manual" | "fast-forward" | "squash"; requireHumanMerge: true };
 };
 
-export type ResolvedPlanContractV2 = {
+export type ResolvedPlanContract = {
   schemaVersion: 2;
-  artifact: GeneratedPlanSpecV2["artifact"];
-  objective: GeneratedPlanSpecV2["objective"];
-  design: GeneratedPlanSpecV2["design"];
+  artifact: GeneratedPlanSpec["artifact"];
+  objective: GeneratedPlanSpec["objective"];
+  design: GeneratedPlanSpec["design"];
   conflicts: string[];
   repository: { projectId: string; name: string; repoRoot: string; baseBranch: string; baseCommit: string; configVersion: number; configHash: string };
-  scope: GeneratedPlanSpecV2["scope"];
+  scope: GeneratedPlanSpec["scope"];
   /** 冻结后的步骤清单；`status` 恒为计划态（见 PlanTaskShape 的说明）。 */
   tasks: Array<{ id: string; title: string; dependencies: string[]; status: "PENDING" | "READY" | "DONE"; changes?: PlanTaskChange[] | undefined }>;
   /** Human-readable execution prerequisites; these are not CandidatePlan IDs. */
@@ -92,16 +92,16 @@ export type ResolvedPlanContractV2 = {
 export type GitBaseline = { baseBranch: string; baseCommit: string };
 
 /**
- * 执行角色与工具策略由 Factory 固定，**不是模型可填的字段**（见 GeneratedPlanSpecV2.execution 的说明）。
+ * 执行角色与工具策略由 Factory 固定，**不是模型可填的字段**（见 GeneratedPlanSpec.execution 的说明）。
  * 取这两个具体值是历史兼容：下游 `PlanContract` 投影、审计视图与既有 Run 的 journal 都在读它们。
  */
 export const EXECUTOR_ROLE = "executor";
 export const EXECUTOR_TOOL_POLICY = "executor-scoped-write";
 
-export class GeneratedPlanSpecV2ValidationError extends Error {
+export class GeneratedPlanSpecValidationError extends Error {
   constructor(readonly issues: PlanValidationIssue[]) {
-    super(issues.map((item) => `${item.path}: ${item.message}`).join("; ") || "Generated Plan V2 is invalid");
-    this.name = "GeneratedPlanSpecV2ValidationError";
+    super(issues.map((item) => `${item.path}: ${item.message}`).join("; ") || "Generated plan spec is invalid");
+    this.name = "GeneratedPlanSpecValidationError";
   }
 }
 
@@ -188,7 +188,7 @@ function optionalTaskChanges(rawTask: Record<string, unknown>, path: string, iss
 }
 
 /** Returns every structural violation so continuation can repair the full artifact at once. */
-export function validateGeneratedPlanSpecV2(value: unknown): PlanValidationIssue[] {
+export function validateGeneratedPlanSpec(value: unknown): PlanValidationIssue[] {
   const issues: PlanValidationIssue[] = [];
   if (!isRecord(value)) return [{ path: "$", code: "INVALID", area: "完整执行契约", message: "必须是 JSON 对象。" }];
   const source = value;
@@ -263,9 +263,9 @@ export function validateGeneratedPlanSpecV2(value: unknown): PlanValidationIssue
   return issues;
 }
 
-export function parseGeneratedPlanSpecV2(value: unknown): GeneratedPlanSpecV2 {
-  const issues = validateGeneratedPlanSpecV2(value);
-  if (issues.length) throw new GeneratedPlanSpecV2ValidationError(issues);
+export function parseGeneratedPlanSpec(value: unknown): GeneratedPlanSpec {
+  const issues = validateGeneratedPlanSpec(value);
+  if (issues.length) throw new GeneratedPlanSpecValidationError(issues);
   const source = value as Record<string, unknown>;
   const artifact = source.artifact as Record<string, unknown>;
   const objective = source.objective as Record<string, unknown>;
@@ -287,7 +287,7 @@ export function parseGeneratedPlanSpecV2(value: unknown): GeneratedPlanSpecV2 {
     conflicts: normalize(source.conflicts),
     execution: { maxRepairAttempts: typeof execution.maxRepairAttempts === "number" ? execution.maxRepairAttempts : undefined },
     verification: { mode: verification.mode as "PROJECT_DEFAULT" | "NONE", ...(verification.suites === undefined ? {} : { suites: normalize(verification.suites) }) },
-    merge: { strategy: merge.strategy as GeneratedPlanSpecV2["merge"]["strategy"], requireHumanMerge: true },
+    merge: { strategy: merge.strategy as GeneratedPlanSpec["merge"]["strategy"], requireHumanMerge: true },
   };
 }
 
@@ -316,9 +316,9 @@ function selectVerificationCommands(defaults: string[], enabledVerification: Map
   return selected;
 }
 
-export function resolvePlanContractV2(specValue: unknown, project: ProjectExecutionSnapshot, baseline: GitBaseline): ResolvedPlanContractV2 {
-  const spec = parseGeneratedPlanSpecV2(specValue);
-  if (!baseline.baseBranch.trim() || !baseline.baseCommit.trim() || /^(HEAD|unknown|unverified)$/i.test(baseline.baseCommit.trim())) throw new Error("Factory must resolve a verified Git baseline before creating a V2 plan");
+export function resolvePlanContract(specValue: unknown, project: ProjectExecutionSnapshot, baseline: GitBaseline): ResolvedPlanContract {
+  const spec = parseGeneratedPlanSpec(specValue);
+  if (!baseline.baseBranch.trim() || !baseline.baseCommit.trim() || /^(HEAD|unknown|unverified)$/i.test(baseline.baseCommit.trim())) throw new Error("Factory must resolve a verified Git baseline before creating a plan");
   const defaults = project.settings.defaultVerificationCommandIds ?? [];
   const enabledVerification = new Map(project.settings.commands.filter((command) => command.category === "verification" && command.enabled !== false).map((command) => [command.commandId, command]));
   if (defaults.some((id) => !enabledVerification.has(id))) throw new Error("Project default verification commands are invalid");

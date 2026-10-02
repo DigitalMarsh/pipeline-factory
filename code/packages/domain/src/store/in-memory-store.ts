@@ -44,7 +44,7 @@ import type {
   MergeRequest,
   PersistedToolCall,
   PlanRevisionDraft,
-  PlanRevisionV2,
+  PlanRevision,
   ProjectExecutionMessage,
   ProjectExecutionThread,
   RegisterThreadInput,
@@ -63,7 +63,7 @@ export class InMemoryPipelineStore implements PipelineStore {
   private readonly plans = new Map<string, CandidatePlan>();
   private readonly candidateVersions = new Map<string, CandidatePlan>();
   private readonly dispatchStates = new Map<string, PlanDispatchState>();
-  private readonly revisions = new Map<string, PlanRevisionV2>();
+  private readonly revisions = new Map<string, PlanRevision>();
   private readonly revisionDrafts = new Map<string, PlanRevisionDraft>();
   private readonly revisionLifecycleProjections = new Map<string, RevisionLifecycleProjection>();
   private readonly changeProposals = new Map<string, ChangeProposal>();
@@ -278,15 +278,15 @@ export class InMemoryPipelineStore implements PipelineStore {
       .sort((a, b) => a.queuedAt.localeCompare(b.queuedAt) || a.planId.localeCompare(b.planId));
   }
 
-  saveRevision(revision: PlanRevisionV2): PlanRevisionV2 {
+  saveRevision(revision: PlanRevision): PlanRevision {
     this.revisions.set(`${revision.planId}:${revision.revision}`, revision);
     return revision;
   }
 
-  getRevision(planId: string, revision: number): PlanRevisionV2 | undefined {
+  getRevision(planId: string, revision: number): PlanRevision | undefined {
     return this.revisions.get(`${planId}:${revision}`);
   }
-  listRevisions(planId: string): PlanRevisionV2[] {
+  listRevisions(planId: string): PlanRevision[] {
     return [...this.revisions.values()].filter((item) => item.planId === planId).sort((a, b) => a.revision - b.revision);
   }
   saveRevisionDraft(draft: PlanRevisionDraft): PlanRevisionDraft {

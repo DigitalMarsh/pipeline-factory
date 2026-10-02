@@ -50,12 +50,12 @@ type PlanSummary = { title: string; goal: string; includeCount: number; excludeC
 
 /**
  * 从 Plan 契约里取摘要，**同时认两种形状**：
- * - **V2（当前）**：`objective.goal` / `scope.includePaths` / `scope.excludePaths` /
+ * - **当前形状**：`objective.goal` / `scope.includePaths` / `scope.excludePaths` /
  *   `objective.acceptanceCriteria` / `verification.commandIds`；
  * - **V1（历史消息）**：顶层 `goal` / `include` / `exclude` / `acceptanceCriteria` / `verificationCommandIds`。
  *
- * 两种都要认，缺一不可：Plan V2 落地之前落库的助手文本仍是 V1 形状，只认 V2 会让那些线程的卡片
- * 变成"校验失败"。反过来**只认 V1 就是这里修掉的缺陷**——每一份 V2 方案都被判为非法、显示
+ * 两种都要认，缺一不可：换成当前形状之前落库的助手文本仍是 V1 形状，只认当前形状会让那些线程的卡片
+ * 变成"校验失败"。反过来**只认 V1 就是这里修掉的缺陷**——每一份方案都被判为非法、显示
  * "结构化计划校验失败，请继续完善。"，而同一屏下方紧跟着 "PLAN CREATED" 卡片，页面自相矛盾，
  * 用户会以为模型没做对。判据必须跟着**当前**契约走，历史形状只作兼容。
  *

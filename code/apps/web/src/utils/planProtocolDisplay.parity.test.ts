@@ -6,7 +6,7 @@
  *   领域层——那会把整个领域打进浏览器包——所以这是一对**必要的镜像**，不是重复代码。
  *
  * 代价是两边会各自漂移，而这次漂移的后果是：领域层那份只认 V1 形状（顶层 `goal`），
- *   于是每一份 V2 方案都被判为非法、活动摘要写成"结构化计划校验失败，请继续完善。"——
+ *   于是每一份方案都被判为非法、活动摘要写成"结构化计划校验失败，请继续完善。"——
  *   web 那份当时也错，所以没有一方能暴露另一方。这个文件用同一批夹具同时喂给两边，
  *   任何一边改了判定都会在这里红。
  */
@@ -25,7 +25,7 @@ function domainActivitySummary(content: string): { summary: string; details: Rec
   return { summary: item?.summary ?? "", details: (item?.details as Record<string, unknown> | null) ?? null };
 }
 
-const artifactV2 = {
+const artifact = {
   schemaVersion: 2,
   title: "需求5：修复现有项目添加任务时所属项目不合法",
   artifact: { mode: "REPOSITORY_FILE", path: "doc/需求5-任务归属修复方案.md" },
@@ -56,7 +56,7 @@ function protocol(spec: unknown): string {
 
 describe("Plan 协议解析：领域层与 web 两份实现一致", () => {
   it.each([
-    { name: "V2 契约（当前形状）", content: protocol(artifactV2) },
+    { name: "当前形状的契约", content: protocol(artifact) },
     { name: "V1 契约（历史消息）", content: protocol(artifactV1) },
   ])("$name：两边都判为 READY，且摘要字段相同", ({ content }) => {
     const domain = domainActivitySummary(content);

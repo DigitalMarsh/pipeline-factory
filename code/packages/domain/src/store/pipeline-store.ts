@@ -54,7 +54,7 @@ import type {
   PlanDispatchState,
   PlanQueryProjection,
   PlanRevisionDraft,
-  PlanRevisionV2,
+  PlanRevision,
   Project,
   ProjectConfigRevision,
   ProjectExecutionMessage,
@@ -129,9 +129,9 @@ export type PipelineStore = {
   deleteDispatchState(planId: string): void;
   getDispatchState(planId: string): PlanDispatchState | undefined;
   listDispatchStates(projectId?: string): PlanDispatchState[];
-  saveRevision(revision: PlanRevisionV2): PlanRevisionV2;
-  getRevision(planId: string, revision: number): PlanRevisionV2 | undefined;
-  listRevisions(planId: string): PlanRevisionV2[];
+  saveRevision(revision: PlanRevision): PlanRevision;
+  getRevision(planId: string, revision: number): PlanRevision | undefined;
+  listRevisions(planId: string): PlanRevision[];
   saveRevisionDraft(draft: PlanRevisionDraft): PlanRevisionDraft;
   getRevisionDraft(draftId: string): PlanRevisionDraft | undefined;
   listRevisionDrafts(planId?: string): PlanRevisionDraft[];

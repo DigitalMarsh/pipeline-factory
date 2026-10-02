@@ -8,7 +8,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ExplorerService, InMemoryPipelineStore, LifecycleHookRunner, MergeService, PlanService, ProjectService, Scheduler, type AgentLoop, type DomainEvent, type ExecutionTelemetry, type ModelEvent, type ModelGateway, type ModelRequest, type PlanRevisionV2, type VerificationCommandExecutor } from "@pipeline-factory/domain";
+import { ExplorerService, InMemoryPipelineStore, LifecycleHookRunner, MergeService, PlanService, ProjectService, Scheduler, type AgentLoop, type DomainEvent, type ExecutionTelemetry, type ModelEvent, type ModelGateway, type ModelRequest, type PlanRevision, type VerificationCommandExecutor } from "@pipeline-factory/domain";
 import { createApp } from "./server.js";
 import { loadFactoryConfig } from "./config.js";
 import { DirectoryDialogError } from "./runtime/directory-dialog.js";
@@ -501,7 +501,7 @@ describe("Pipeline Factory v4 API", () => {
       confirmedBy: "tester", confirmedAt: store.now(), sourceExplorerThreadId: explorer.id, provenance: "CURRENT",
       projectConfigVersion: snapshot.configVersion, projectConfigHash: snapshot.configHash,
       projectConfigSnapshot: { ...snapshot, settings: { ...snapshot.settings, models: { ...snapshot.settings.models, executor: { ...snapshot.settings.models.executor, model: "frozen-model", backend: "claude-agent-sdk" } } } },
-    } as unknown as PlanRevisionV2);
+    } as unknown as PlanRevision);
     store.saveRun({ id: "run-fresh", projectId: project.id, planId: candidate.id, planRevision: 1, status: "IN_PROGRESS", branch: "factory/run-fresh", workspacePath: "/tmp/run-fresh", baseCommit: "abc", executionThreadId: "execution-fresh", createdAt: store.now(), startedAt: null });
     store.saveExecutionThread({ id: "execution-fresh", runId: "run-fresh", state: "ACTIVE", journal: [], telemetry: null });
     const app = createApp({ store, seed: false });

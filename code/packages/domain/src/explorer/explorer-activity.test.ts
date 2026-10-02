@@ -96,9 +96,9 @@ describe("Explorer activity projection", () => {
     expect(items[0]?.details).toMatchObject({ planProtocol: true, status: "READY", title: "Personal information manager", taskCount: 1, verificationCount: 1 });
   });
 
-  it("**当前的 V2 契约同样渲染为完整方案**（回归：曾经每一份 V2 方案都显示「校验失败」）", () => {
+  it("**当前契约同样渲染为完整方案**（回归：解析器只认 V1 时，每一份方案都显示「校验失败」）", () => {
     // 字段取自一次真实输出（需求5）。顶层没有 goal——这正是旧实现判它非法的原因。
-    const artifactV2 = {
+    const artifact = {
       schemaVersion: 2,
       title: "需求5：修复现有项目添加任务时所属项目不合法",
       artifact: { mode: "REPOSITORY_FILE", path: "doc/需求5-任务归属修复方案.md" },
@@ -117,7 +117,7 @@ describe("Explorer activity projection", () => {
       verification: { mode: "PROJECT_DEFAULT" },
       merge: { strategy: "manual", requireHumanMerge: true },
     };
-    const rawProtocol = `<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>${JSON.stringify(artifactV2)}</pipeline-factory-plan>`;
+    const rawProtocol = `<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>${JSON.stringify(artifact)}</pipeline-factory-plan>`;
     const items = projectExplorerActivity({
       turns: [{ id: "assistant-1", threadId: "explorer-1", role: "assistant", content: "", status: "COMPLETED", createdAt: "2026-08-29T10:00:00.000Z", sequence: 1 }],
       loops: [{ id: "loop-1", ownerType: "explorer-turn", ownerId: "assistant-1", role: "explorer", mode: "provider-controlled", state: "COMPLETED", stepCount: 1, maxSteps: 40, startedAt: "2026-08-29T10:00:00.000Z", completedAt: "2026-08-29T10:00:02.000Z", providerThreadId: null, providerTurnId: null, checkpointJson: null }],

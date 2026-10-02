@@ -10,7 +10,7 @@
  *   回退顺序（existing → Revision 快照 → 空）是契约，不要为了让某个用例好写而调换。
  */
 import { describe, expect, it } from "vitest";
-import { InMemoryPipelineStore, PlanService, ProjectService, type ExecutionTelemetry, type PlanRevisionV2 } from "@pipeline-factory/domain";
+import { InMemoryPipelineStore, PlanService, ProjectService, type ExecutionTelemetry, type PlanRevision } from "@pipeline-factory/domain";
 import { projectRunThreadTelemetry, resolveRunExecutorConfig } from "./run-telemetry.js";
 
 function seed(store: InMemoryPipelineStore, telemetry: ExecutionTelemetry | null) {
@@ -25,7 +25,7 @@ function seed(store: InMemoryPipelineStore, telemetry: ExecutionTelemetry | null
     confirmedBy: "tester", confirmedAt: store.now(), sourceExplorerThreadId: "explorer-1", provenance: "CURRENT",
     projectConfigVersion: snapshot.configVersion, projectConfigHash: snapshot.configHash,
     projectConfigSnapshot: { ...snapshot, settings: { ...snapshot.settings, models: { ...snapshot.settings.models, executor: { ...snapshot.settings.models.executor, model: "frozen-at-confirm", backend: "claude-agent-sdk" } } } },
-  } as unknown as PlanRevisionV2;
+  } as unknown as PlanRevision;
   store.saveRevision(revision);
   const thread = store.saveExecutionThread({ id: "execution-thread-1", runId: "run-1", state: "ACTIVE", journal: [], telemetry });
   // Run 必须指向**真实的** Plan id：用占位字符串的话投影找不到 Revision，于是"快照优先"那条断言

@@ -42,7 +42,7 @@ import type { AgentLoop, AgentLoopStep, AgentLoopStepInput } from "../agent/agen
 import type { ExplorerTitleSource, ExplorerTitleStatus } from "../explorer/explorer-title.js";
 import type { PlanDispatchState } from "../run/dispatch-coordinator.js";
 import type { Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings } from "../project/project.js";
-import type { GeneratedPlanSpecV2, ResolvedPlanContractV2, PlanValidationIssue } from "../plan/plan-v2.js";
+import type { GeneratedPlanSpec, ResolvedPlanContract, PlanValidationIssue } from "../plan/plan-spec.js";
 import type {
   CandidatePlan,
   ChangeProposal,
@@ -71,7 +71,7 @@ import type {
   PlanExplorationStatus,
   PlanRevisionDraft,
   PlanRevisionDraftStatus,
-  PlanRevisionV2,
+  PlanRevision,
   PlanStatus,
   ProjectExecutionMessage,
   ProjectExecutionThread,
@@ -905,18 +905,18 @@ export class SqlitePipelineStore implements PipelineStore {
     return rows.map((row) => this.dispatchStateFromRow(row));
   }
 
-  saveRevision(revision: PlanRevisionV2): PlanRevisionV2 {
+  saveRevision(revision: PlanRevision): PlanRevision {
     this.statement("INSERT OR IGNORE INTO plan_revisions (plan_id, revision, contract_json, artifact_hash, confirmed_by, confirmed_at, source_explorer_thread_id, explorer_plan_id, project_config_version, project_config_hash, project_config_snapshot_json, resolved_contract_json, source_turn_id, provider_thread_id, provider_turn_id, provider_item_id, provenance, plan_document_path) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(revision.planId, revision.revision, JSON.stringify(revision.contract), revision.artifactHash, revision.confirmedBy, revision.confirmedAt, revision.sourceExplorerThreadId, revision.explorerPlanId ?? null, revision.projectConfigVersion ?? null, revision.projectConfigHash ?? null, revision.projectConfigSnapshot ? JSON.stringify(revision.projectConfigSnapshot) : null, revision.resolvedContract ? JSON.stringify(revision.resolvedContract) : null, revision.sourceTurnId ?? null, revision.providerThreadId ?? null, revision.providerTurnId ?? null, revision.providerItemId ?? null, revision.provenance ?? "CURRENT", revision.planDocumentPath ?? null);
-    return this.getRevision(revision.planId, revision.revision) as PlanRevisionV2;
+    return this.getRevision(revision.planId, revision.revision) as PlanRevision;
   }
 
-  getRevision(planId: string, revision: number): PlanRevisionV2 | undefined {
+  getRevision(planId: string, revision: number): PlanRevision | undefined {
     const row = this.statement("SELECT * FROM plan_revisions WHERE plan_id = ? AND revision = ?").get(planId, revision) as SqliteRow | undefined;
     if (!row) return undefined;
-    return freezeRevision({ planId: String(row.plan_id), revision: Number(row.revision), contract: JSON.parse(String(row.contract_json)) as PlanContract, ...(row.resolved_contract_json ? { resolvedContract: JSON.parse(String(row.resolved_contract_json)) as ResolvedPlanContractV2 } : {}), artifactHash: String(row.artifact_hash), ...(row.plan_document_path === null || row.plan_document_path === undefined ? {} : { planDocumentPath: String(row.plan_document_path) }), confirmedBy: String(row.confirmed_by), confirmedAt: String(row.confirmed_at), sourceExplorerThreadId: String(row.source_explorer_thread_id), ...(row.explorer_plan_id === null || row.explorer_plan_id === undefined ? {} : { explorerPlanId: String(row.explorer_plan_id) }), sourceTurnId: row.source_turn_id === null || row.source_turn_id === undefined ? null : String(row.source_turn_id), providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id), providerTurnId: row.provider_turn_id === null || row.provider_turn_id === undefined ? null : String(row.provider_turn_id), providerItemId: row.provider_item_id === null || row.provider_item_id === undefined ? null : String(row.provider_item_id), provenance: row.provenance === "CURRENT" ? "CURRENT" : "LEGACY", ...(row.project_config_version === null || row.project_config_version === undefined ? {} : { projectConfigVersion: Number(row.project_config_version) }), ...(row.project_config_hash === null || row.project_config_hash === undefined ? {} : { projectConfigHash: String(row.project_config_hash) }), ...(row.project_config_snapshot_json === null || row.project_config_snapshot_json === undefined ? {} : { projectConfigSnapshot: JSON.parse(String(row.project_config_snapshot_json)) as ProjectExecutionSnapshot }) });
+    return freezeRevision({ planId: String(row.plan_id), revision: Number(row.revision), contract: JSON.parse(String(row.contract_json)) as PlanContract, ...(row.resolved_contract_json ? { resolvedContract: JSON.parse(String(row.resolved_contract_json)) as ResolvedPlanContract } : {}), artifactHash: String(row.artifact_hash), ...(row.plan_document_path === null || row.plan_document_path === undefined ? {} : { planDocumentPath: String(row.plan_document_path) }), confirmedBy: String(row.confirmed_by), confirmedAt: String(row.confirmed_at), sourceExplorerThreadId: String(row.source_explorer_thread_id), ...(row.explorer_plan_id === null || row.explorer_plan_id === undefined ? {} : { explorerPlanId: String(row.explorer_plan_id) }), sourceTurnId: row.source_turn_id === null || row.source_turn_id === undefined ? null : String(row.source_turn_id), providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id), providerTurnId: row.provider_turn_id === null || row.provider_turn_id === undefined ? null : String(row.provider_turn_id), providerItemId: row.provider_item_id === null || row.provider_item_id === undefined ? null : String(row.provider_item_id), provenance: row.provenance === "CURRENT" ? "CURRENT" : "LEGACY", ...(row.project_config_version === null || row.project_config_version === undefined ? {} : { projectConfigVersion: Number(row.project_config_version) }), ...(row.project_config_hash === null || row.project_config_hash === undefined ? {} : { projectConfigHash: String(row.project_config_hash) }), ...(row.project_config_snapshot_json === null || row.project_config_snapshot_json === undefined ? {} : { projectConfigSnapshot: JSON.parse(String(row.project_config_snapshot_json)) as ProjectExecutionSnapshot }) });
   }
 
-  listRevisions(planId: string): PlanRevisionV2[] {
+  listRevisions(planId: string): PlanRevision[] {
     const rows = this.statement("SELECT revision FROM plan_revisions WHERE plan_id = ? ORDER BY revision ASC").all(planId) as unknown as SqliteRow[];
     return rows.map((row) => this.getRevision(planId, Number(row.revision))!).filter(Boolean);
   }
@@ -1484,8 +1484,8 @@ export class SqlitePipelineStore implements PipelineStore {
     return Object.freeze({
       draftId: String(row.draft_id), planId: String(row.plan_id), projectId: String(row.project_id), basedOnRevision: Number(row.based_on_revision), targetRevision: Number(row.target_revision), status: String(row.status) as PlanRevisionDraftStatus,
       title: String(row.title), contract: JSON.parse(String(row.contract_json)) as PlanContract,
-      ...(row.generated_spec_json ? { generatedSpec: JSON.parse(String(row.generated_spec_json)) as GeneratedPlanSpecV2 } : {}),
-      ...(row.resolved_contract_json ? { resolvedContract: JSON.parse(String(row.resolved_contract_json)) as ResolvedPlanContractV2 } : {}),
+      ...(row.generated_spec_json ? { generatedSpec: JSON.parse(String(row.generated_spec_json)) as GeneratedPlanSpec } : {}),
+      ...(row.resolved_contract_json ? { resolvedContract: JSON.parse(String(row.resolved_contract_json)) as ResolvedPlanContract } : {}),
       sourceExplorerThreadId: String(row.source_explorer_thread_id), ...(row.explorer_plan_id === null || row.explorer_plan_id === undefined ? {} : { explorerPlanId: String(row.explorer_plan_id) }), sourceTurnId: row.source_turn_id === null ? null : String(row.source_turn_id), providerThreadId: row.provider_thread_id === null ? null : String(row.provider_thread_id), providerTurnId: row.provider_turn_id === null ? null : String(row.provider_turn_id), providerItemId: row.provider_item_id === null ? null : String(row.provider_item_id),
       baseBranch: String(row.base_branch), baseCommit: String(row.base_commit), createdAt: String(row.created_at), updatedAt: String(row.updated_at), confirmedAt: row.confirmed_at === null ? null : String(row.confirmed_at),
     });
@@ -1639,7 +1639,7 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   private planFromRow(row: SqliteRow): CandidatePlan {
-    return { id: String(row.id), projectId: String(row.project_id), sourceExplorerThreadId: String(row.source_explorer_thread_id), ...(row.explorer_plan_id ? { explorerPlanId: String(row.explorer_plan_id) } : {}), sourceTurnId: row.source_turn_id === null || row.source_turn_id === undefined ? null : String(row.source_turn_id), providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id), providerTurnId: row.provider_turn_id === null || row.provider_turn_id === undefined ? null : String(row.provider_turn_id), providerItemId: row.provider_item_id === null || row.provider_item_id === undefined ? null : String(row.provider_item_id), title: String(row.title), revision: Number(row.revision), status: String(row.status) as PlanStatus, createdAt: String(row.created_at), confirmedBy: row.confirmed_by === null ? null : String(row.confirmed_by), confirmedAt: row.confirmed_at === null ? null : String(row.confirmed_at), queuedAt: row.queued_at === null ? null : String(row.queued_at), dispatchedAt: row.dispatched_at === null || row.dispatched_at === undefined ? null : String(row.dispatched_at), runId: row.run_id === null ? null : String(row.run_id), lastEventAt: String(row.last_event_at), attentionReason: row.attention_reason === null ? null : String(row.attention_reason), contract: JSON.parse(String(row.contract_json ?? "{}")) as PlanContract, ...(row.generated_spec_json ? { generatedSpec: JSON.parse(String(row.generated_spec_json)) as GeneratedPlanSpecV2 } : {}), ...(row.resolved_contract_json ? { resolvedContract: JSON.parse(String(row.resolved_contract_json)) as ResolvedPlanContractV2 } : {}) };
+    return { id: String(row.id), projectId: String(row.project_id), sourceExplorerThreadId: String(row.source_explorer_thread_id), ...(row.explorer_plan_id ? { explorerPlanId: String(row.explorer_plan_id) } : {}), sourceTurnId: row.source_turn_id === null || row.source_turn_id === undefined ? null : String(row.source_turn_id), providerThreadId: row.provider_thread_id === null || row.provider_thread_id === undefined ? null : String(row.provider_thread_id), providerTurnId: row.provider_turn_id === null || row.provider_turn_id === undefined ? null : String(row.provider_turn_id), providerItemId: row.provider_item_id === null || row.provider_item_id === undefined ? null : String(row.provider_item_id), title: String(row.title), revision: Number(row.revision), status: String(row.status) as PlanStatus, createdAt: String(row.created_at), confirmedBy: row.confirmed_by === null ? null : String(row.confirmed_by), confirmedAt: row.confirmed_at === null ? null : String(row.confirmed_at), queuedAt: row.queued_at === null ? null : String(row.queued_at), dispatchedAt: row.dispatched_at === null || row.dispatched_at === undefined ? null : String(row.dispatched_at), runId: row.run_id === null ? null : String(row.run_id), lastEventAt: String(row.last_event_at), attentionReason: row.attention_reason === null ? null : String(row.attention_reason), contract: JSON.parse(String(row.contract_json ?? "{}")) as PlanContract, ...(row.generated_spec_json ? { generatedSpec: JSON.parse(String(row.generated_spec_json)) as GeneratedPlanSpec } : {}), ...(row.resolved_contract_json ? { resolvedContract: JSON.parse(String(row.resolved_contract_json)) as ResolvedPlanContract } : {}) };
   }
 
   private dispatchStateFromRow(row: SqliteRow): PlanDispatchState {

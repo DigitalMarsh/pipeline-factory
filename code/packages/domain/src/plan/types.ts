@@ -3,7 +3,7 @@
  *   变更提案、已确认 Revision 与可写 Draft，以及它们的创建输入。
  *
  * 为什么从 index.ts 抽出来（批 E）：Plan 是全系统的中心概念，这块类型此前占了
- *   index.ts 内联类型的最大一段。搬进 plan/ 之后它与 plan/service.ts、plan/plan-v2.ts、
+ *   index.ts 内联类型的最大一段。搬进 plan/ 之后它与 plan/service.ts、plan/plan-spec.ts、
  *   plan/status-transition.ts、plan/contract.ts、plan/completion.ts 同目录 ——
  *   "状态怎么流转、合同怎么校验、完成度怎么判定"都围着这几个类型展开。
  *
@@ -18,21 +18,21 @@
  *   2) **PlanLifecycleEntry.occurredAt 为 null 表示"时间未知"，不是"刚刚"**。
  *      不要用同组其它条目的时间或 lastEventAt 去补 —— 那是猜的，会让时间线说谎。
  *   3) **PlanContract（V1 扁平合同）已标 @deprecated，只用于展示历史记录**；
- *      V2（GeneratedPlanSpecV2 / ResolvedPlanContractV2）才是 Explorer 输出与调度的唯一入口。
+ *      ），才是 Explorer 输出与调度的唯一入口。
  *      新代码不要新增读取 PlanContract 字段的路径。
  *   4) **CandidatePlan.status 的每次变化都应走 plan/status-transition.ts 的 updatePlanStatus**，
  *      它同时维护 lastEventAt / attentionReason 并追加事件；直接赋值会让生命周期时间线缺条目。
- *   5) **PlanRevisionV2 是冻结快照**（Readonly + projectConfigSnapshot），确认之后不随
+ *   5) **PlanRevision 是冻结快照**（Readonly + projectConfigSnapshot），确认之后不随
  *      Project 配置变化。provenance 为 LEGACY 表示旧数据无法补齐快照，只允许浏览、
  *      不能作为新执行来源 —— 别为了"让老 Plan 也能跑"去掉这个判断。
  *   6) **PlanRevisionDraft 是唯一可写的工作副本，永远不能直接成为 Executor 的合同**：
- *      必须先 confirm 成 PlanRevisionV2。BASE_CHANGED 表示基线已漂移，需要重建而不是继续编辑。
+ *      必须先 confirm 成 PlanRevision。BASE_CHANGED 表示基线已漂移，需要重建而不是继续编辑。
  *   7) ChangeProposal.contract 保持原值不可变（Readonly）：提案是"请求改"，不是"已经改"；
  *      批准后产生的是新 Revision，而不是就地改这个字段。
  *   8) CreateChangeProposalInput 只承载"请求"，因此没有 status / decidedAt 等决策字段 ——
  *      决策状态由 ChangeProposal 自己在批准/驳回时写入，不要提前塞进输入类型。
  */
-import type { GeneratedPlanSpecV2, ResolvedPlanContractV2 } from "./plan-v2.js";
+import type { GeneratedPlanSpec, ResolvedPlanContract } from "./plan-spec.js";
 import type { ProjectExecutionSnapshot } from "../project/project.js";
 import type { Run } from "../run/types.js";
 
@@ -95,7 +95,7 @@ export type PlanContract = {
   /** Conversation plans are reviewable but never executable. Undefined keeps historical contracts compatible. */
   artifactMode?: "CONVERSATION" | "REPOSITORY_FILE";
   artifactPath?: string;
-  /** IDs of other CandidatePlans in this Project; descriptive prerequisites belong in the V2 plan constraints. */
+  /** IDs of other CandidatePlans in this Project; descriptive prerequisites belong in the plan spec constraints. */
   dependsOnPlanIds?: string[];
   priority?: number;
 };
@@ -122,9 +122,9 @@ export type CandidatePlan = {
   lastEventAt: string;
   attentionReason: string | null;
   contract: PlanContract;
-  /** V2 is the only contract admitted from Explorer output and executable by new scheduling. */
-  generatedSpec?: GeneratedPlanSpecV2;
-  resolvedContract?: ResolvedPlanContractV2;
+  /** The generated spec is the only contract admitted from Explorer output and executable by new scheduling. */
+  generatedSpec?: GeneratedPlanSpec;
+  resolvedContract?: ResolvedPlanContract;
 };
 
 /** 执行中发现范围变化时，ChangeProposal 的人工决策状态。 */
@@ -150,16 +150,16 @@ export type ChangeProposal = Readonly<{
 export type ApprovedChangeProposal = {
   proposal: ChangeProposal;
   plan: CandidatePlan;
-  revision: PlanRevisionV2;
+  revision: PlanRevision;
   run: Run | null;
 };
 
 /** Confirm 时冻结的 Plan 合同和 ProjectExecutionSnapshot，不随当前配置变化。 */
-export type PlanRevisionV2 = Readonly<{
+export type PlanRevision = Readonly<{
   planId: string;
   revision: number;
   contract: Readonly<PlanContract>;
-  resolvedContract?: Readonly<ResolvedPlanContractV2>;
+  resolvedContract?: Readonly<ResolvedPlanContract>;
   artifactHash: string;
   /**
    * 本 Revision 的落盘副本位置（确认时写入受管工程的计划目录）。
@@ -194,8 +194,8 @@ export type PlanRevisionDraft = Readonly<{
   status: PlanRevisionDraftStatus;
   title: string;
   contract: Readonly<PlanContract>;
-  generatedSpec?: GeneratedPlanSpecV2;
-  resolvedContract?: ResolvedPlanContractV2;
+  generatedSpec?: GeneratedPlanSpec;
+  resolvedContract?: ResolvedPlanContract;
   sourceExplorerThreadId: string;
   explorerPlanId?: string;
   sourceTurnId: string | null;
@@ -228,7 +228,7 @@ export type CreateCandidatePlanInput = {
   explorerPlanId?: string | undefined;
   title: string;
   contract?: PlanContract | undefined;
-  generatedSpec?: GeneratedPlanSpecV2 | undefined;
+  generatedSpec?: GeneratedPlanSpec | undefined;
   sourceTurnId?: string | null | undefined;
   providerThreadId?: string | null | undefined;
   providerTurnId?: string | null | undefined;

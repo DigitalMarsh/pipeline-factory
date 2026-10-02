@@ -1,5 +1,5 @@
 /**
- * 模块职责：领域记录的深度冻结。PlanRevisionV2 等记录一旦进入 Store 就不再允许原地修改，
+ * 模块职责：领域记录的深度冻结。PlanRevision 等记录一旦进入 Store 就不再允许原地修改，
  *   冻结把"不可变"从类型上的 Readonly<> 变成运行时保证。
  *
  * 为什么从 index.ts 抽出来：freezeRevision 被 SqlitePipelineStore 的行映射与 index.ts 里的
@@ -12,9 +12,9 @@
  *   1) 冻结是**浅递归**：会遍历所有可达对象，但对已冻结的对象直接跳过（Object.isFrozen 短路），
  *      所以对同一个记录重复调用是幂等的，不会因为环状引用而无限递归。
  *   2) 泛型签名 `freezeDeep<T>(value: T): T` 保留原类型，不要改成 unknown——调用方依赖返回值
- *      仍是 PlanRevisionV2 才能直接赋给被 Readonly<> 约束的字段。
+ *      仍是 PlanRevision 才能直接赋给被 Readonly<> 约束的字段。
  */
-import type { PlanRevisionV2 } from "../index.js";
+import type { PlanRevision } from "../index.js";
 
 /** 递归冻结对象图；已是冻结对象的子树直接跳过（因此幂等，且天然免疫环状引用）。 */
 export function freezeDeep<T>(value: T): T {
@@ -25,7 +25,7 @@ export function freezeDeep<T>(value: T): T {
   return value;
 }
 
-/** 冻结一个 PlanRevisionV2；Revision 一旦落库就不再允许修改。 */
-export function freezeRevision(revision: PlanRevisionV2): PlanRevisionV2 {
+/** 冻结一个 PlanRevision；Revision 一旦落库就不再允许修改。 */
+export function freezeRevision(revision: PlanRevision): PlanRevision {
   return freezeDeep(revision);
 }

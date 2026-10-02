@@ -10,7 +10,7 @@
  *      prompt 用 EXPLORER_PLAN_INSTRUCTIONS 描述它，assessPlanCompletion 按它校验完整性。
  *      web 侧 ExplorerView.vue 另有一份"API 重启期间保持可见"的 fallback 副本，改动必须同步
  *      （且在 P8.3 之前已实测存在字段分歧）。
- *   2) 改动 areas 里的 field 字符串时，必须同步 plan-v2.ts 的校验器与 EXPLORER_PLAN_INSTRUCTIONS
+ *   2) 改动 areas 里的 field 字符串时，必须同步 plan-spec.ts 的校验器与 EXPLORER_PLAN_INSTRUCTIONS
  *      中那段必填字段清单，否则 Explorer 会按旧字段名产出方案并被校验拒绝。
  */
 /** 形成可执行方案必须覆盖的业务和工程领域。 */

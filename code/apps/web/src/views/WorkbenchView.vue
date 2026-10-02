@@ -36,7 +36,7 @@ const taskBucket = ref<TaskBucketKey | "all">("all");
 const taskCounts = computed(() => countTaskBuckets(plans.value));
 const visiblePlans = computed(() => filterTasksByBucket(plans.value, taskBucket.value));
 const selectedPlan = computed<WorkbenchPlan | null>(() => plans.value.find((plan) => plan.planId === selectedPlanId.value) ?? plans.value[0] ?? null);
-/** 界面只读这一份契约视图：V2 的 contract 是有损投影，事实来源是 resolvedContract。 */
+/** 界面只读这一份契约视图：`contract` 是有损投影，事实来源是 resolvedContract。 */
 const selectedContract = computed(() => planContractView(selectedPlan.value));
 const selectedRun = computed(() => {
   const plan = selectedPlan.value;

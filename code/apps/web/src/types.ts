@@ -345,7 +345,7 @@ export type GeneratedPlanSpec = {
   tasks: Array<{ id: string; title: string; dependencies: string[]; status?: "PENDING" | "READY" | "DONE"; changes?: PlanTaskChange[] }>;
   dependencies: string[];
   conflicts: string[];
-  /** 只含 Factory 允许模型决定的项；执行角色与工具策略由 Factory 固定（见 domain 的 plan-v2.ts）。 */
+  /** 只含 Factory 允许模型决定的项；执行角色与工具策略由 Factory 固定（见 domain 的 plan-spec.ts）。 */
   execution: { maxRepairAttempts?: number };
   /** `suites` 是模型请求的验证 tag 词表（可选）；Factory 解析成 resolvedContract 里的 commandIds。 */
   verification: { mode: "PROJECT_DEFAULT" | "NONE"; suites?: string[] };

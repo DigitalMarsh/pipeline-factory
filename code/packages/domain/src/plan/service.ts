@@ -13,9 +13,9 @@
  *   2) `revision` 是**单调递增的版本号**，确认/修订时取 `plan.revision + 1` 而不是从
  *      revision 表里 max+1。Revision 一旦落库就 freezeRevision（不可变），历史版本永不改写。
  *   3) 本文件里的两个模块级辅助有各自的历史包袱，别当成随手可改的工具：
- *      - defaultPlanContract 是 V1 契约的兜底（老 Plan 没有可执行的 V2 契约时用它），
+ *      - defaultPlanContract 是 V1 契约的兜底（老 Plan 没有可执行的已解析契约时用它），
  *        它的 acceptanceCriteria 文案会被前端原样展示；
- *      - executionContractFromResolvedV2 把 V2 解析结果"投影回" V1 形状，是 V1/V2 并存的
+ *      - executionContractFromResolved 把已解析契约"投影回" V1 形状，是两种形状并存的
  *        过渡层，删除它会立刻打断所有读 contract 的老路径；
  *      - verifiedProjectBaseline 在批 D 已搬去 **git/baseline.ts**（它会执行 git 子进程，原先
  *        是本文件里唯一的 IO）。本文件现在只 import 它，不再自己碰 Git。
@@ -23,7 +23,7 @@
  *      投影字段的增删要同步两个 Store 实现，见该文件的维护提示。
  */
 import { createHash } from "node:crypto";
-import { parseGeneratedPlanSpecV2, resolvePlanContractV2 } from "./plan-v2.js";
+import { parseGeneratedPlanSpec, resolvePlanContract } from "./plan-spec.js";
 import { missingVerificationCommands, validatePlanContract } from "./contract.js";
 import { writePlanDocument } from "./plan-archive.js";
 import { emptyPlanPreflight } from "./preflight.js";
@@ -35,7 +35,7 @@ import { ProjectService } from "../project/project.js";
 import { selectCurrentExplorer } from "../explorer/thread-selection.js";
 import { decodePlanCursor, encodePlanCursor, planQueryProjectionFor } from "./query.js";
 import type { PipelineStore } from "../store/pipeline-store.js";
-import type { GeneratedPlanSpecV2, ResolvedPlanContractV2 } from "./plan-v2.js";
+import type { GeneratedPlanSpec, ResolvedPlanContract } from "./plan-spec.js";
 import type { PlanArtifact } from "./completion.js";
 import type { Project } from "../project/project.js";
 import type {
@@ -55,7 +55,7 @@ import type {
   PlanQueryResult,
   PlanQuerySort,
   PlanRevisionDraft,
-  PlanRevisionV2,
+  PlanRevision,
   PlanStatus,
   PlanTask,
   RegisterThreadInput,
@@ -65,7 +65,7 @@ import type {
 function defaultPlanContract(title: string): PlanContract {
   return {
     goal: title,
-    acceptanceCriteria: ["Legacy record: no executable V2 contract is available"],
+    acceptanceCriteria: ["Legacy record: no executable plan contract is available"],
     include: ["."],
     exclude: [],
     baseBranch: "unverified",
@@ -84,7 +84,7 @@ function defaultPlanContract(title: string): PlanContract {
 }
 
 /** Internal adapter for pre-existing executor ports; API and revisions expose resolvedContract instead. */
-function executionContractFromResolvedV2(contract: ResolvedPlanContractV2): PlanContract {
+function executionContractFromResolved(contract: ResolvedPlanContract): PlanContract {
   return {
     goal: contract.objective.goal,
     acceptanceCriteria: contract.objective.acceptanceCriteria,
@@ -137,7 +137,7 @@ export class PlanService {
     revision: number;
     title: string;
     contract: PlanContract;
-    resolvedContract?: ResolvedPlanContractV2 | undefined;
+    resolvedContract?: ResolvedPlanContract | undefined;
     artifactHash: string;
     confirmedBy: string;
     confirmedAt: string;
@@ -186,12 +186,12 @@ export class PlanService {
     }
     const createdAt = this.store.now();
     const project = this.store.getProject(input.projectId);
-    let generatedSpec: GeneratedPlanSpecV2 | undefined;
-    let resolvedContract: ResolvedPlanContractV2 | undefined;
+    let generatedSpec: GeneratedPlanSpec | undefined;
+    let resolvedContract: ResolvedPlanContract | undefined;
     if (input.generatedSpec) {
       if (!project) throw new Error(`Project ${input.projectId} not found`);
-      generatedSpec = parseGeneratedPlanSpecV2(input.generatedSpec);
-      resolvedContract = resolvePlanContractV2(generatedSpec, this.projects.snapshot(project.id), verifiedProjectBaseline(project));
+      generatedSpec = parseGeneratedPlanSpec(input.generatedSpec);
+      resolvedContract = resolvePlanContract(generatedSpec, this.projects.snapshot(project.id), verifiedProjectBaseline(project));
     }
     const plan: CandidatePlan = {
       id: this.store.nextId("plan"),
@@ -213,7 +213,7 @@ export class PlanService {
       runId: null,
       lastEventAt: createdAt,
       attentionReason: null,
-      contract: resolvedContract ? executionContractFromResolvedV2(resolvedContract) : input.contract ?? defaultPlanContract(input.title),
+      contract: resolvedContract ? executionContractFromResolved(resolvedContract) : input.contract ?? defaultPlanContract(input.title),
       ...(generatedSpec ? { generatedSpec } : {}),
       ...(resolvedContract ? { resolvedContract } : {}),
     };
@@ -229,15 +229,15 @@ export class PlanService {
     if (plan.status !== "DRAFT") throw new Error("Only an unconfirmed Plan can be edited");
     const project = this.store.getProject(plan.projectId);
     if (!project) throw new Error(`Project ${plan.projectId} not found`);
-    const generatedSpec = artifact.generatedSpec ? parseGeneratedPlanSpecV2(artifact.generatedSpec) : undefined;
-    const resolvedContract = generatedSpec ? resolvePlanContractV2(generatedSpec, this.projects.snapshot(project.id), verifiedProjectBaseline(project)) : undefined;
+    const generatedSpec = artifact.generatedSpec ? parseGeneratedPlanSpec(artifact.generatedSpec) : undefined;
+    const resolvedContract = generatedSpec ? resolvePlanContract(generatedSpec, this.projects.snapshot(project.id), verifiedProjectBaseline(project)) : undefined;
     const revision = Math.max(plan.revision, ...this.store.listCandidateVersions(plan.id).map((item) => item.revision)) + 1;
     const planWithoutGeneratedSpec = { ...plan };
     delete planWithoutGeneratedSpec.generatedSpec;
     delete planWithoutGeneratedSpec.resolvedContract;
     const updated = this.store.updatePlan({
       ...planWithoutGeneratedSpec, title: artifact.title, revision,
-      contract: resolvedContract ? executionContractFromResolvedV2(resolvedContract) : artifact.contract ?? plan.contract,
+      contract: resolvedContract ? executionContractFromResolved(resolvedContract) : artifact.contract ?? plan.contract,
       ...(generatedSpec ? { generatedSpec } : {}),
       ...(resolvedContract ? { resolvedContract } : {}),
       ...source, lastEventAt: this.store.now(),
@@ -316,9 +316,9 @@ export class PlanService {
     const project = this.store.getProject(draft.projectId);
     if (!project) throw new Error(`Project ${draft.projectId} not found`);
     const baseline = verifiedProjectBaseline(project);
-    const generatedSpec = artifact.generatedSpec ? parseGeneratedPlanSpecV2(artifact.generatedSpec) : undefined;
-    const resolvedContract = generatedSpec ? resolvePlanContractV2(generatedSpec, this.projects.snapshot(project.id), baseline) : undefined;
-    const contract = resolvedContract ? executionContractFromResolvedV2(resolvedContract) : artifact.contract ?? draft.contract;
+    const generatedSpec = artifact.generatedSpec ? parseGeneratedPlanSpec(artifact.generatedSpec) : undefined;
+    const resolvedContract = generatedSpec ? resolvePlanContract(generatedSpec, this.projects.snapshot(project.id), baseline) : undefined;
+    const contract = resolvedContract ? executionContractFromResolved(resolvedContract) : artifact.contract ?? draft.contract;
     const updated: PlanRevisionDraft = Object.freeze({ ...draft, title: artifact.title, contract, ...(generatedSpec ? { generatedSpec } : {}), ...(resolvedContract ? { resolvedContract } : {}), sourceExplorerThreadId: draft.sourceExplorerThreadId, ...source, baseBranch: baseline.baseBranch, baseCommit: baseline.baseCommit, status: "READY_TO_CONFIRM", updatedAt: this.store.now() });
     const saved = this.store.updateRevisionDraft(updated);
     this.store.saveRevisionLifecycleProjection({ planId: saved.planId, revision: saved.targetRevision, projectId: saved.projectId, title: saved.title, status: saved.status, sourceExplorerThreadId: saved.sourceExplorerThreadId, runId: null, lastEventAt: saved.updatedAt });
@@ -373,14 +373,14 @@ export class PlanService {
     return saved;
   }
 
-  listRevisions(planId: string): PlanRevisionV2[] { this.get(planId); return this.store.listRevisions(planId); }
+  listRevisions(planId: string): PlanRevision[] { this.get(planId); return this.store.listRevisions(planId); }
 
   /**
    * 设置这个 Plan 的前置 Plan。**Factory-owned 字段，模型不能填写。**
    *
    * 为什么只能由人设置：模型不知道 CandidatePlan 的 id（它只见过自然语言的先决条件），而
    * `dependsOnPlanIds` 是调度用的**真实 id 引用** —— dispatch 拿它做 `WAITING_DEPENDENCY` 判定
-   * （要求前置 Plan 达到 MERGED）。V2 契约里没有对应字段，所以这里是"依赖"从一个不可达状态
+   * （要求前置 Plan 达到 MERGED）。当前契约里没有对应字段，所以这里是"依赖"从一个不可达状态
    * 变成可达状态的唯一入口。
    *
    * 只在 Confirm 之前可改：确认后依赖随 Revision 一起冻结，改它等于改执行语义。
@@ -402,7 +402,7 @@ export class PlanService {
    *
    * 为什么需要它：suites 目前只能由 Explorer 产出，想调整就得让模型重新出一版方案。这里给一个人工
    * 入口——**仍然只让模型/人选 tag，命令 ID 由 Factory 解析**，与生成路径共用同一套规则
-   * （`resolvePlanContractV2` → `selectVerificationCommands`）。
+   * （`resolvePlanContract` → `selectVerificationCommands`）。
    *
    * 传空数组表示"不按 tag 选子集、回到项目默认全集"（不是"什么都不跑"）。
    * 会**重新解析** resolvedContract（用当前 Project 配置与原有 Git 基线），这样：
@@ -411,7 +411,7 @@ export class PlanService {
   setVerificationSuites(planId: string, suites: string[], actorId: string): CandidatePlan {
     let plan = this.get(planId);
     if (!["DRAFT", "DESIGNED", "PLANNED"].includes(plan.status)) throw new Error(`Plan ${planId} verification suites cannot change from ${plan.status}`);
-    if (!plan.generatedSpec || !plan.resolvedContract) throw new Error(`Plan ${planId} has no V2 contract to re-resolve; regenerate it from Explorer`);
+    if (!plan.generatedSpec || !plan.resolvedContract) throw new Error(`Plan ${planId} has no resolved contract to re-resolve; regenerate it from Explorer`);
     const normalized = [...new Set(suites.map((suite) => suite.trim()).filter(Boolean))];
     const project = this.store.getProject(plan.projectId);
     if (!project) throw new Error(`Project ${plan.projectId} not found`);
@@ -419,10 +419,10 @@ export class PlanService {
     const baseline = { baseBranch: plan.resolvedContract.repository.baseBranch, baseCommit: plan.resolvedContract.repository.baseCommit };
     // 声明了 suites 就等于要求"跑项目验证"，所以把 mode 明确成 PROJECT_DEFAULT；项目没有默认命令时
     // 解析结果会是 NONE，那种情况下这个请求没有意义，明确拒绝而不是当成功。
-    const generatedSpec: GeneratedPlanSpecV2 = { ...plan.generatedSpec, verification: { mode: "PROJECT_DEFAULT", ...(normalized.length ? { suites: normalized } : {}) } };
-    const resolvedContract = resolvePlanContractV2(generatedSpec, snapshot, baseline);
+    const generatedSpec: GeneratedPlanSpec = { ...plan.generatedSpec, verification: { mode: "PROJECT_DEFAULT", ...(normalized.length ? { suites: normalized } : {}) } };
+    const resolvedContract = resolvePlanContract(generatedSpec, snapshot, baseline);
     if (resolvedContract.verification.mode === "NONE") throw new Error("Project has no default verification commands; verification suites cannot be selected");
-    plan = this.store.updatePlan({ ...plan, generatedSpec, resolvedContract, contract: executionContractFromResolvedV2(resolvedContract) });
+    plan = this.store.updatePlan({ ...plan, generatedSpec, resolvedContract, contract: executionContractFromResolved(resolvedContract) });
     this.store.appendEvent({ type: "plan.verification.suites.updated", aggregateId: planId, payload: { actorId, suites: normalized, commandIds: resolvedContract.verification.commandIds } });
     return plan;
   }
@@ -445,7 +445,7 @@ export class PlanService {
     if (plan.status !== "DRAFT" && plan.status !== "DESIGNED" && plan.status !== "PLANNED") {
       throw new Error(`Plan ${planId} cannot be confirmed from ${plan.status}`);
     }
-    if (plan.contract.schemaVersion === 1) throw new Error(`Legacy V1 Plan ${planId} is read-only and cannot be executed by V2 scheduling`);
+    if (plan.contract.schemaVersion === 1) throw new Error(`Legacy V1 Plan ${planId} is read-only and cannot be executed by the scheduler`);
     if (plan.resolvedContract) {
       const project = this.store.getProject(plan.projectId);
       if (!project || project.id !== plan.resolvedContract.repository.projectId) throw new Error(`Plan ${planId} is bound to an invalid Project`);
@@ -616,7 +616,7 @@ export class PlanService {
   }
 
   /** 读取指定不可变 Revision；缺失快照的旧数据仍按 LEGACY 兼容读取。 */
-  getRevision(planId: string, revision: number): PlanRevisionV2 {
+  getRevision(planId: string, revision: number): PlanRevision {
     const value = this.store.getRevision(planId, revision);
     if (!value) throw new Error(`Plan revision ${planId}@${revision} not found`);
     return value;
