@@ -191,6 +191,28 @@ describe("ExecutorAgent", () => {
     expect(systemMessage?.content).toContain("Use the existing package manager and lockfile.");
   });
 
+  it("blocks instead of waiting when the model asks for structured input", async () => {
+    // Run 会话没有回答入口。executor 启动 Loop 时带 allowStructuredInput: false，
+    // 所以模型真要提问就是一次明确的能力不匹配，而不是挂进等不到答案的 WAITING_FOR_INPUT。
+    const { store, plan, run } = await createQueuedRun();
+    const model: ModelGateway = {
+      configFor: () => ({ model: "gpt-5.6-luna", loopMode: "provider-controlled" }),
+      capabilities: () => ({ supportsStructuredUserInput: true, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
+      async *stream(): AsyncIterable<ModelEvent> {
+        yield { type: "turn.input_required", request: { requestId: "request-1", threadId: "provider-thread", turnId: "provider-turn", itemId: "item-1", questions: [], isBlocking: true, autoResolutionMs: null } };
+        yield { type: "turn.completed" };
+      },
+      async answerUserInput() { throw new Error("不该被调用：Run 没有回答入口"); },
+      async cancel() { return undefined; },
+    };
+
+    const loop = await new ExecutorAgent(store, model).run(run, plan);
+
+    expect(loop.state).toBe("BLOCKED");
+    expect(loop.checkpointJson).toContain("STRUCTURED_INPUT_UNSUPPORTED");
+    expect(store.listAgentLoopSteps(loop.id).map((step) => step.stepType)).not.toContain("INPUT_REQUIRED");
+  });
+
   it("uses the declared artifact directory when include scope spans multiple paths", async () => {
     const include = ["code/personal-site/**", "docs/**"];
     const artifactPath = "code/personal-site/**";

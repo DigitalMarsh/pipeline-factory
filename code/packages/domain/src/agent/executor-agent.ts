@@ -113,6 +113,9 @@ export class ExecutorAgent {
       role: "executor",
       mode,
       maxSteps: this.options.maxSteps ?? 40,
+      // Run 会话没有回答入口：执行会话里没有回答结构化提问的 UI。让 Loop 在模型提问时
+      // 直接以 STRUCTURED_INPUT_UNSUPPORTED 阻塞，而不是挂进等不到答案的 WAITING_FOR_INPUT。
+      allowStructuredInput: false,
       ...(maxDurationMs === undefined ? {} : { maxDurationMs }),
       ...(this.options.maxRepeatedToolCalls === undefined ? {} : { maxRepeatedToolCalls: this.options.maxRepeatedToolCalls }),
       ...(this.options.maxNoProgressSteps === undefined ? {} : { maxNoProgressSteps: this.options.maxNoProgressSteps }),
@@ -152,6 +155,8 @@ export class ExecutorAgent {
       role: "executor",
       mode,
       maxSteps: this.options.maxSteps ?? 40,
+      // 同上：Run 会话没有回答入口。
+      allowStructuredInput: false,
       ...(maxDurationMs === undefined ? {} : { maxDurationMs }),
       ...(this.options.maxRepeatedToolCalls === undefined ? {} : { maxRepeatedToolCalls: this.options.maxRepeatedToolCalls }),
       ...(this.options.maxNoProgressSteps === undefined ? {} : { maxNoProgressSteps: this.options.maxNoProgressSteps }),
