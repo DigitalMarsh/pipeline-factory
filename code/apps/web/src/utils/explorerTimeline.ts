@@ -3,27 +3,26 @@
  *
  * 结构化输入本身就是对话事件：它在 createdAt 产生，答案在 answeredAt 完成。
  * 因此不能在模板里把待处理项固定放到顶部、已回答项统一追加到末尾。
+ *
+ * **方案不再单独成条目**：方案卡挂在产出它的那条助手消息里（见 `planTimeline.ts` 的绑定表）。
+ * 此前还有一条"绑不上就单独渲染一张 PLAN CREATED 卡"的分支，现代代码里绑不上是不可能的，
+ * 已删除——理由与实测见 docs/消息类型及事件状态机流程图.md。
  */
-import type { ExplorerActivityItem, ExplorerInputRequest, Plan } from "../types";
-import { planIdentity } from "./planTimeline";
+import type { ExplorerActivityItem, ExplorerInputRequest } from "../types";
 import type { ExplorerMessageType } from "./explorerPresentation";
 
 export type ExplorerTimelineItem =
   | { key: string; kind: "activity"; activity: ExplorerActivityItem; occurredAt: string }
-  | { key: string; kind: "input"; request: ExplorerInputRequest; occurredAt: string }
-  | { key: string; kind: "plan"; plan: Plan; occurredAt: string };
+  | { key: string; kind: "input"; request: ExplorerInputRequest; occurredAt: string };
 
 /**
  * 时间线条目 → 消息类型。视图拿它去查 `EXPLORER_DISPLAY_MODES`
  * （见 `explorerPresentation.ts`），于是"这一类要不要显示"只由那张表决定。
  *
- * 只做类型翻译，不认识任何场景：条目是活动就原样交出它的 `kind`，
- * 是输入卡 / 游离 Plan 就翻成表里的那两个非活动类型。
+ * 只做类型翻译，不认识任何场景：条目是活动就原样交出它的 `kind`，是输入卡就翻成 `input-request`。
  */
 export function explorerTimelineMessageType(item: ExplorerTimelineItem): ExplorerMessageType {
-  if (item.kind === "input") return "input-request";
-  if (item.kind === "plan") return "plan-created";
-  return item.activity.kind;
+  return item.kind === "input" ? "input-request" : item.activity.kind;
 }
 
 /** 消息与活动的 DOM 锚点：用**活动 id** 拼，同一回合里的多条助手活动因此各有各的锚点。 */
@@ -55,7 +54,7 @@ const inputLifecycleKinds = new Set<ExplorerActivityItem["kind"]>(["INPUT_REQUIR
  * 用 input request 取代同一事件的低信息量生命周期行，避免问题和回答在流中重复出现。
  * 同一时间点保持输入数组/活动数组的原始顺序，保证渲染不会抖动。
  */
-export function buildExplorerTimeline(activities: ExplorerActivityItem[], inputRequests: ExplorerInputRequest[], detachedPlans: Plan[] = []): ExplorerTimelineItem[] {
+export function buildExplorerTimeline(activities: ExplorerActivityItem[], inputRequests: ExplorerInputRequest[]): ExplorerTimelineItem[] {
   const items: Array<ExplorerTimelineItem & { index: number }> = [];
   const hasInputRequest = inputRequests.length > 0;
 
@@ -66,10 +65,6 @@ export function buildExplorerTimeline(activities: ExplorerActivityItem[], inputR
 
   inputRequests.forEach((request, index) => {
     items.push({ key: `input:${request.id}`, kind: "input", request, occurredAt: request.createdAt, index: activities.length + index });
-  });
-
-  detachedPlans.forEach((plan, index) => {
-    items.push({ key: `plan:${planIdentity(plan)}`, kind: "plan", plan, occurredAt: plan.createdAt ?? plan.lastEventAt ?? plan.queuedAt ?? "", index: activities.length + inputRequests.length + index });
   });
 
   return items

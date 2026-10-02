@@ -156,19 +156,18 @@ describe("八类过程活动各摆什么", () => {
 });
 
 /**
- * 表里的键就是消息清单。活动 kind 是 SCREAMING_SNAKE，另外三类（输入卡 / 游离 Plan / 内嵌方案卡）
+ * 表里的键就是消息清单。活动 kind 是 SCREAMING_SNAKE，另外两类（输入卡 / 内嵌方案卡）
  * 是 kebab-case——靠这条形状差异把两类分开，不用再手抄一份 kind 清单。
  */
 const activityTypes = (Object.keys(EXPLORER_DISPLAY_MODES) as ExplorerMessageType[]).filter((type): type is ExplorerActivityItem["kind"] => type === type.toUpperCase());
 
 describe("探索会话的消息清单", () => {
-  it("清单覆盖 12 类活动加投影产生的 3 类非活动消息", () => {
+  it("清单覆盖 12 类活动加投影产生的 2 类非活动消息", () => {
     // 数量钉住是有意的：新增一类消息就得回来改这里，顺带在表里做一次"怎么显示"的决定。
     // 类型层面 `Record<ExplorerMessageType, …>` 已经强制穷尽，这条锁的是"清单本身有多大"。
     expect(activityTypes).toHaveLength(12);
-    expect(Object.keys(EXPLORER_DISPLAY_MODES)).toHaveLength(15);
+    expect(Object.keys(EXPLORER_DISPLAY_MODES)).toHaveLength(14);
     expect(EXPLORER_DISPLAY_MODES["input-request"]).toBe("card");
-    expect(EXPLORER_DISPLAY_MODES["plan-created"]).toBe("card");
     expect(EXPLORER_DISPLAY_MODES["candidate-plan"]).toBe("card");
   });
 

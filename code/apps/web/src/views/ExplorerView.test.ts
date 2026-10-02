@@ -183,9 +183,10 @@ describe("Explorer requirement list and shared drawer", () => {
   });
 
   it("warns inline when the card is a conversation artifact", () => {
-    // 对话产物确认后进不了执行：卡片上（两张内联卡各一处）在按钮旁边就说清，而不是等人切到 Run 页签。
-    expect(explorerViewSource).toContain('<p v-if="isConversationArtifactPlan(item.plan)" class="candidate-notice">');
+    // 对话产物确认后进不了执行：卡片上（方案卡只有助手消息里那一处）在按钮旁边就说清，
+    // 而不是等人切到 Run 页签。原先还有一张独立的 PLAN CREATED 卡也带这条警告，那张卡已删除。
     expect(explorerViewSource).toContain('<p v-if="isConversationArtifactPlan(planForActivity(item.activity))" class="candidate-notice">');
+    expect(explorerViewSource).not.toContain("plan-created-event");
   });
 
   it("preserves confirm and enqueue order while opening the task tab", () => {
@@ -302,13 +303,18 @@ describe("Explorer inline message presentation", () => {
     expect(explorerStylesSource).toMatch(/\.scroll-to-latest \{[^}]*left: 50%;[^}]*right: auto;[^}]*transform: translateX\(-50%\);/);
   });
 
-  it("renders each bound plan only in its generating assistant message and inserts detached plans into the shared timeline", () => {
+  it("renders each bound plan only in its generating assistant message", () => {
     expect(explorerTimelineComposableSource).toContain("const planBindings = computed(() => buildPlanActivityBindings");
     expect(explorerTimelineComposableSource).toContain("const activeTaskPlans = computed<Plan[]>(() => deps.allPlans.value.filter((plan) => belongsToActivePlan(plan.explorerPlanId)))");
     expect(explorerTimelineComposableSource).toContain("buildPlanActivityBindings(activeTaskPlans.value, visibleActivity.value)");
-    expect(explorerTimelineComposableSource).toContain("buildExplorerTimeline(visibleActivity.value, visibleInputRequests.value, detachedPlans.value)");
+    expect(explorerTimelineComposableSource).toContain("buildExplorerTimeline(visibleActivity.value, visibleInputRequests.value)");
     expect(explorerTimelineComposableSource).not.toContain("syntheticPlanItems");
-    expect(explorerViewSource).toContain("v-else-if=\"item.kind === 'plan'\"");
+    // 方案卡只挂在产出它的那条助手消息里；此前还有一条"绑不上就单独渲染一张 PLAN CREATED 卡"
+    // 的时间线分支，现代代码里绑不上是不可能的，已删除（见 docs/消息类型及事件状态机流程图.md）。
+    expect(explorerTimelineComposableSource).not.toContain("detachedPlans");
+    expect(explorerViewSource).not.toContain("item.kind === 'plan'");
+    expect(explorerViewSource).not.toContain("plan-created-event");
+    expect(explorerViewSource).toContain('v-if="showCandidatePlanCard && planForActivity(item.activity)"');
     expect(explorerViewSource).not.toContain("syntheticPlanItems");
     expect(explorerViewSource).not.toContain("v-for=\"item in syntheticPlanItems\"");
   });

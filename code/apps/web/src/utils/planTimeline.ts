@@ -82,7 +82,15 @@ export function findPlanForActivity(activity: ExplorerActivityItem, plans: Plan[
   return planActivityBindings(plans, activities).get(activity.id) ?? null;
 }
 
-/** 优先返回聊天中真实计划卡片的 DOM anchor，而不是讨论起始消息。 */
+/**
+ * 优先返回聊天中真实计划卡片的 DOM anchor，而不是讨论起始消息。
+ *
+ * **绑定不上时返回 `plan-created-…`，但那个 id 现在没有渲染方**：曾经它对应一条独立的
+ * PLAN CREATED 卡片，而现代代码里"计划绑不到消息"是不可能的（标题与 sourceTurnId 出自同一次
+ * 协议解析），那条卡片已删除——见 docs/消息类型及事件状态机流程图.md。这里的两个前缀保留，
+ * 是因为它同时被 `planTimelineItems` 与 `taskTree` 使用，且两者目前都没有实际调用方；
+ * 真要收，得连它们一起收，不要只改这一处。
+ */
 export function getPlanTimelineTarget(plan: Plan, activities: ExplorerActivityItem[], allPlans: Plan[] = [plan], bindings = planActivityBindings(allPlans, activities)): string {
   const isBound = [...bindings.values()].some((candidate) => planIdentity(candidate) === planIdentity(plan));
   return isBound ? `plan-generated-${planIdentity(plan)}` : `plan-created-${planIdentity(plan)}`;
@@ -91,21 +99,14 @@ export function getPlanTimelineTarget(plan: Plan, activities: ExplorerActivityIt
 /**
  * 聊天流里"计划卡片"的 DOM 锚点。**必须用 Plan 身份而不是消息起始点**：右侧 Plans 面板点一条
  * 计划，要定位到聊天中真正承载该计划的那张卡片，而不是引出它的那段讨论文字。
- * 与 `getPlanTimelineTarget` 的关系：那个函数**按绑定结果自己选** generated / created 两套前缀；
- * 这里的两个是**调用方已判定**的版本，用于明确知道"这条计划在流里有没有卡片"的场景。
  */
 export function planAnchorId(plan: Plan | null): string {
   return plan ? `plan-generated-${planIdentity(plan)}` : "";
 }
 
-/** 左侧时间线导航项的 key，与 `planTimelineItems` 产出的 `key` 同规则。 */
+/** 时间线导航项的 key。 */
 export function planAnchorKey(plan: Plan | null): string {
   return plan ? `plan-${planIdentity(plan)}` : "";
-}
-
-/** 流里没有对应卡片、需要单独渲染一条计划条目的情况。 */
-export function detachedPlanAnchorId(plan: Plan): string {
-  return `plan-created-${planIdentity(plan)}`;
 }
 
 export function planTimelineItems(plans: Plan[], activities: ExplorerActivityItem[], bindings = planActivityBindings(plans, activities)): PlanTimelineItem[] {

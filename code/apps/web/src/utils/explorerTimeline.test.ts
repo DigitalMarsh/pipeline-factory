@@ -2,7 +2,7 @@
  * 测试职责：验证 Explorer 消息流把结构化输入按生成时间插入，而不是统一追加到末尾。
  */
 import { describe, expect, it } from "vitest";
-import type { ExplorerActivityItem, ExplorerInputRequest, Plan } from "../types";
+import type { ExplorerActivityItem, ExplorerInputRequest } from "../types";
 import { buildExplorerTimeline, explorerPlanAnchorId, explorerTimelineMessageType, explorerTimelineTarget, inputRequestTarget } from "./explorerTimeline";
 
 const activity = (id: string, kind: ExplorerActivityItem["kind"], occurredAt: string): ExplorerActivityItem => ({
@@ -75,31 +75,6 @@ describe("Explorer timeline projection", () => {
     expect(explorerTimelineTarget(first, 4)).toBe("message-assistant-activity-1");
     expect(explorerTimelineTarget(second, 5)).toBe("message-assistant-activity-2");
   });
-
-  it("inserts detached historical plans at their creation time instead of appending them", () => {
-    const plan = {
-      id: "plan-1",
-      title: "Historical plan",
-      revision: 1,
-      status: "DRAFT" as const,
-      projectId: "project-1",
-      sourceExplorerThreadId: "explorer-1",
-      sourceTurnId: null,
-      createdAt: "2026-09-01T10:02:00.000Z",
-      queuedAt: null,
-      runId: null,
-      lastEventAt: "2026-09-01T10:02:00.000Z",
-      attentionReason: null,
-    };
-    const items = buildExplorerTimeline(
-      [activity("first", "USER_MESSAGE", "2026-09-01T10:01:00.000Z"), activity("last", "ASSISTANT_MESSAGE", "2026-09-01T10:03:00.000Z")],
-      [],
-      [plan],
-    );
-
-    expect(items.map((item) => item.kind)).toEqual(["activity", "plan", "activity"]);
-    expect(items[1]).toMatchObject({ kind: "plan", plan: { id: "plan-1" } });
-  });
 });
 
 describe("时间线条目 → 消息类型", () => {
@@ -108,12 +83,10 @@ describe("时间线条目 → 消息类型", () => {
     expect(item && explorerTimelineMessageType(item)).toBe("TOOL_DENIED");
   });
 
-  it("输入卡与游离 Plan 翻成表里的两个非活动类型", () => {
+  it("输入卡翻成表里的非活动类型", () => {
     const input = buildExplorerTimeline([], [inputRequest("input-2", "2026-09-01T10:02:00.000Z")])[0];
-    const plan = buildExplorerTimeline([], [], [detachedPlan()])[0];
 
     expect(input && explorerTimelineMessageType(input)).toBe("input-request");
-    expect(plan && explorerTimelineMessageType(plan)).toBe("plan-created");
   });
 });
 
@@ -125,35 +98,5 @@ describe("Explorer 锚点 id", () => {
   it("需求区块锚点由 explorerPlanId 直接拼出", () => {
     expect(explorerPlanAnchorId("explorer-plan-9")).toBe("explorer-plan-explorer-plan-9");
     expect(explorerPlanAnchorId("")).toBe("explorer-plan-");
-  });
-});
-
-const detachedPlan = (overrides: Partial<Plan> = {}): Plan => ({
-  id: "plan-7",
-  title: "Detached plan",
-  revision: 1,
-  status: "DRAFT",
-  projectId: "project-1",
-  sourceExplorerThreadId: "explorer-1",
-  sourceTurnId: null,
-  createdAt: "2026-09-01T10:01:00.000Z",
-  queuedAt: null,
-  runId: null,
-  lastEventAt: "2026-09-01T10:01:00.000Z",
-  attentionReason: null,
-  ...overrides,
-});
-
-describe("游离 Plan 的时间线 key", () => {
-  it("与 planIdentity 同规则：planId 优先，其次 id", () => {
-    const items = buildExplorerTimeline([], [], [detachedPlan()]);
-
-    expect(items.map((item) => item.key)).toEqual(["plan:plan-7"]);
-  });
-
-  it("派发态用 planId 时 key 跟着 planId 走", () => {
-    const items = buildExplorerTimeline([], [], [detachedPlan({ planId: "dispatched-9" })]);
-
-    expect(items.map((item) => item.key)).toEqual(["plan:dispatched-9"]);
   });
 });

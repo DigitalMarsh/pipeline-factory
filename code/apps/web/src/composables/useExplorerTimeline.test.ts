@@ -135,8 +135,8 @@ describe("Activity 为空时的 Turn 兜底", () => {
   });
 });
 
-describe("Plan 绑定与游离 Plan", () => {
-  it("活动上挂到 Plan 时进绑定表，不再算游离", () => {
+describe("Plan 与活动的绑定", () => {
+  it("活动上挂到 Plan 时进绑定表", () => {
     // 绑定规则（utils/planTimeline 的 planActivities）：Plan 要有 sourceTurnId，
     // 且该 turn 里要有一条 title 相同、status 为 READY 的 planProtocol 活动。
     const s = setup();
@@ -152,11 +152,10 @@ describe("Plan 绑定与游离 Plan", () => {
     ];
 
     expect(s.planBindings.value.get("a1")?.id).toBe("plan-1");
-    expect(s.detachedPlans.value).toEqual([]);
     expect(s.timelineItems.value.map((item) => item.key)).toEqual(["activity:a1"]);
   });
 
-  it("消息标题对不上 Plan 标题时不绑定，Plan 仍是游离的", () => {
+  it("消息标题对不上 Plan 标题时不绑定", () => {
     const s = setup();
     s.activeExplorerPlan.value = explorerPlan("ep-1");
     const bound = plan("plan-1", { explorerPlanId: "ep-1", sourceTurnId: "turn-a1" });
@@ -170,34 +169,32 @@ describe("Plan 绑定与游离 Plan", () => {
     ];
 
     expect(s.planBindings.value.size).toBe(0);
-    expect(s.detachedPlans.value.map((item) => item.id)).toEqual(["plan-1"]);
   });
 
-  it("活动都属于别的需求时，本需求的 Plan 全部是游离 Plan", () => {
+  it("没有任何活动时，本需求的 Plan 不进绑定表", () => {
     const s = setup();
     s.activeExplorerPlan.value = explorerPlan("ep-1");
     s.allPlans.value = [plan("plan-1", { explorerPlanId: "ep-1" })];
-    // 没有任何活动 → 绑定表为空 → plan-1 是游离的
-    expect(s.detachedPlans.value.map((item) => item.id)).toEqual(["plan-1"]);
+
+    expect(s.planBindings.value.size).toBe(0);
   });
 
-  it("不属于激活需求的 Plan 既不进绑定表也不进游离列表", () => {
+  it("不属于激活需求的 Plan 不进绑定表", () => {
     const s = setup();
     s.activeExplorerPlan.value = explorerPlan("ep-1");
     s.allPlans.value = [plan("plan-1", { explorerPlanId: "ep-2" })];
 
-    expect(s.detachedPlans.value).toEqual([]);
     expect(s.planBindings.value.size).toBe(0);
   });
 });
 
 describe("时间线条目", () => {
-  it("游离 Plan 会作为一条时间线条目出现", () => {
+  it("方案不再作为时间线条目出现——方案卡挂在产出它的助手消息里", () => {
     const s = setup();
     s.activeExplorerPlan.value = explorerPlan("ep-1");
     s.allPlans.value = [plan("plan-1", { explorerPlanId: "ep-1", createdAt: "2026-09-01T10:01:00.000Z" })];
     s.activity.value = [activity("a1", { explorerPlanId: "ep-1", occurredAt: "2026-09-01T10:00:00.000Z" })];
 
-    expect(s.timelineItems.value.map((item) => item.key)).toEqual(["activity:a1", "plan:plan-1"]);
+    expect(s.timelineItems.value.map((item) => item.key)).toEqual(["activity:a1"]);
   });
 });

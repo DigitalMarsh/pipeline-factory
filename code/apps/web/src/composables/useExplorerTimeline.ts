@@ -5,7 +5,7 @@
  * 1. `visibleActivity` 里那条 `activity` 为空时用 `visibleTurns` 合成兜底活动的分支是**必要的**：
  *    SSE 断线重连期间 `activity` 会是空的，此时若不做兜底，时间线会整条消失。
  *    合成出来的 id 带 `fallback-` 前缀，与后端下发的真实 id 不会碰撞。
- * 2. `activeTaskPlans` 只是 `planBindings` 与 `detachedPlans` 的中间量，**没有对外暴露**；
+ * 2. `activeTaskPlans` 只是 `planBindings` 的中间量，**没有对外暴露**；
  *    要复用它请从 `allPlans` 重新过滤，不要把它变成公共 API。
  * 3. 本文件是 P7 第二级从 `ExplorerView.vue` 抽出的，**投影逻辑逐字未改**，只把原先的
  *    闭包捕获（`turns` / `activity` / `inputRequests` / `allPlans` / `activeExplorerPlan`）
@@ -15,7 +15,7 @@ import { computed, type Ref } from "vue";
 import type { ExplorerActivityItem, ExplorerInputRequest, ExplorerPlan, ExplorerTurn, Plan } from "../types";
 import { buildExplorerTimeline } from "../utils/explorerTimeline";
 import { belongsToExplorerPlan } from "../utils/explorerScope";
-import { planActivityBindings as buildPlanActivityBindings, planIdentity } from "../utils/planTimeline";
+import { planActivityBindings as buildPlanActivityBindings } from "../utils/planTimeline";
 import { readableAssistantText } from "../utils/planProtocolDisplay";
 import { turnContent } from "../utils/turnStatus";
 
@@ -41,8 +41,7 @@ export function useExplorerTimeline(deps: ExplorerTimelineDeps) {
 
   const activeTaskPlans = computed<Plan[]>(() => deps.allPlans.value.filter((plan) => belongsToActivePlan(plan.explorerPlanId)));
   const planBindings = computed(() => buildPlanActivityBindings(activeTaskPlans.value, visibleActivity.value));
-  const detachedPlans = computed(() => activeTaskPlans.value.filter((plan) => ![...planBindings.value.values()].some((bound) => planIdentity(bound) === planIdentity(plan))));
-  const timelineItems = computed(() => buildExplorerTimeline(visibleActivity.value, visibleInputRequests.value, detachedPlans.value));
+  const timelineItems = computed(() => buildExplorerTimeline(visibleActivity.value, visibleInputRequests.value));
 
-  return { visibleTurns, visibleActivity, visibleInputRequests, planBindings, detachedPlans, timelineItems };
+  return { visibleTurns, visibleActivity, visibleInputRequests, planBindings, timelineItems };
 }

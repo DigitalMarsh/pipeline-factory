@@ -494,7 +494,6 @@ a { color: inherit; text-decoration: none; }
 .inline-plan-card .candidate-summary { max-width: none; margin: 14px 0 15px; padding: 0; border: 0; background: transparent; color: #67758a; font-size: 11px; line-height: 1.6; }
 .inline-plan-card .candidate-stats { width: 100%; }
 .inline-plan-card .candidate-actions { flex-wrap: wrap; }
-.plan-created-event { margin: 16px 34px; }
 .input-stream-questions { display: grid; gap: 7px; margin-top: 12px; }
 .input-stream-question { display: flex; gap: 9px; align-items: flex-start; padding: 9px 10px; border: 1px solid #e4eaf2; border-radius: 8px; background: #fbfcfe; }
 .input-stream-question .question-index { width: 20px; height: 20px; flex-basis: 20px; font-size: 9px; }

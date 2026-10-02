@@ -148,12 +148,15 @@ export function activityIconKind(kind: ExplorerActivityItem["kind"]): "info" | "
  *
  * 前 12 项直接取自 `ExplorerActivityItem["kind"]`（即领域侧的 `ExplorerActivityKind`），
  * **不是手抄一份**：后端新增一种活动时，`type-parity.test.ts` 先报两侧类型不一致，这里随即编译不过，
- * 逼着人来表里补一次"这类消息怎么显示"的决定。后三项不是活动条目的 kind，由投影或模板在别处产生：
+ * 逼着人来表里补一次"这类消息怎么显示"的决定。后两项不是活动条目的 kind，由投影或模板在别处产生：
  * - `input-request`：`ExplorerTimelineItem` 的 `input` 分支（结构化输入卡片，提问与回答共用一张卡）
- * - `plan-created`：`plan` 分支（游离 Plan 的 PLAN CREATED 卡片）
  * - `candidate-plan`：助手消息**内嵌**的候选方案卡，不是独立时间线条目
+ *
+ * 曾经还有第三个非活动类型 `plan-created`（游离 Plan 的独立卡片）：它只在"方案没能绑到任何一条
+ * 助手消息"时出现，而现代代码里每个 Plan 的标题与 `sourceTurnId` 都来自同一次协议解析，
+ * 必然绑得上——全量数据实测 21/21 全部绑定。已删除，理由见 docs/消息类型及事件状态机流程图.md。
  */
-export type ExplorerMessageType = ExplorerActivityItem["kind"] | "input-request" | "plan-created" | "candidate-plan";
+export type ExplorerMessageType = ExplorerActivityItem["kind"] | "input-request" | "candidate-plan";
 
 /**
  * 呈现档位。**执行侧的 card / line / folded / hidden 是按"占多少地方"分的，探索侧按"是什么"分**——
@@ -195,7 +198,6 @@ export const EXPLORER_DISPLAY_MODES: Record<ExplorerMessageType, ExplorerDisplay
   GATE_CHECKED: "gate",
   TURN_STATUS: "turn-status",
   "input-request": "card",
-  "plan-created": "card",
   "candidate-plan": "card",
 };
 

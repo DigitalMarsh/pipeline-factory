@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { ExplorerActivityItem, Plan } from "../types";
-import { detachedPlanAnchorId, findPlanForActivity, getPlanTimelineTarget, planActivityBindings, planAnchorId, planAnchorKey, planForActivity, planIdentity, planIdentityOrNull, planTimelineItems } from "./planTimeline";
+import { findPlanForActivity, getPlanTimelineTarget, planActivityBindings, planAnchorId, planAnchorKey, planForActivity, planIdentity, planIdentityOrNull, planTimelineItems } from "./planTimeline";
 
 const activity = (turnId: string, title: string, occurredAt = "2026-08-29T10:00:00.000Z", providerItemId?: string): ExplorerActivityItem => ({
   id: `activity-${turnId}-${providerItemId ?? occurredAt}`,
@@ -97,11 +97,10 @@ describe("rail 条目的状态文案", () => {
 });
 
 describe("plan DOM 锚点", () => {
-  it("有卡片与无卡片分别用 generated / created 前缀", () => {
+  it("聊天气泡里的卡片用 generated 前缀", () => {
     const bound = plan("plan-1", "turn-2");
 
     expect(planAnchorId(bound)).toBe("plan-generated-plan-1");
-    expect(detachedPlanAnchorId(bound)).toBe("plan-created-plan-1");
   });
 
   it("身份缺 planId 时退到 id", () => {

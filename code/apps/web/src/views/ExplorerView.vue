@@ -37,7 +37,7 @@ import { backendLabel } from "../utils/modelCatalog";
 import { useModelBackends } from "../composables/useModelBackends";
 import { isCandidatePlan as isCandidatePlanFor } from "../utils/planControls";
 import { readableAssistantText } from "../utils/planProtocolDisplay";
-import { detachedPlanAnchorId, planAnchorId, planAnchorKey, planForActivity as planForActivityIn, planIdentity } from "../utils/planTimeline";
+import { planAnchorId, planAnchorKey, planForActivity as planForActivityIn, planIdentity } from "../utils/planTimeline";
 import { taskDisplayTitle } from "../utils/taskTree";
 import { isConfirmedPlanRevision, resolvePlanVersionHistory } from "../utils/planVersionHistory";
 import { projectPathForModule } from "../utils/projectRoutes";
@@ -246,7 +246,7 @@ function canCreateConfigurationRevision(plan: Plan): boolean {
  * 需求范围内的 Turn / Activity / 输入 / Plan 投影成消息时间线，交给 composable。
  * `activeTaskPlans` 是它内部的中间量，不再暴露给视图。
  */
-const { visibleTurns, visibleActivity, visibleInputRequests, planBindings, detachedPlans, timelineItems } = useExplorerTimeline({ turns, activity, inputRequests, allPlans, activeExplorerPlan });
+const { visibleTurns, visibleActivity, visibleInputRequests, planBindings, timelineItems } = useExplorerTimeline({ turns, activity, inputRequests, allPlans, activeExplorerPlan });
 
 /**
  * 时间线上真正渲染哪些条目、助手消息里内嵌的方案卡显不显示，都问同一张清单表
@@ -1324,7 +1324,7 @@ onBeforeUnmount(() => { mounted.value = false; invalidateProjectScope(); closeEv
         <div :id="activeExplorerPlan ? explorerPlanAnchorId(activeExplorerPlan.id) : undefined" :data-nav-key="activeExplorerPlan ? `explorer-plan-${activeExplorerPlan.id}` : undefined" class="explorer-plan-anchor" aria-hidden="true" />
         <div v-if="activeExplorerPlan" class="active-plan-banner"><span class="eyebrow">需求 {{ activeExplorerPlan.ordinal }}</span><strong>{{ taskDisplayTitle(activeExplorerPlan) }}</strong><small>{{ activeExplorerPlan.latestUserMessageSummary ?? '尚未开始探索' }}</small></div>
         <div class="timeline-day">{{ visibleTurns.length ? 'EXPLORER ACTIVITY' : 'NEW EXPLORATION' }}</div>
-        <div v-if="!visibleActivity.length && !visibleInputRequests.length && !candidate && !detachedPlans.length" class="timeline-empty"><Connection :size="24" /><strong>{{ activeExplorerPlan ? taskDisplayTitle(activeExplorerPlan) : '开始一次全新的需求探索' }}</strong><span>当前需求还没有消息；切换需求不会删除其他对话内容。</span></div>
+        <div v-if="!visibleActivity.length && !visibleInputRequests.length && !candidate" class="timeline-empty"><Connection :size="24" /><strong>{{ activeExplorerPlan ? taskDisplayTitle(activeExplorerPlan) : '开始一次全新的需求探索' }}</strong><span>当前需求还没有消息；切换需求不会删除其他对话内容。</span></div>
         <template v-for="(item, index) in renderedTimelineItems" :key="item.key">
           <article v-if="item.kind === 'input'" :id="inputRequestTarget(item.request)" :data-nav-key="`input:${item.request.id}`" :class="['input-request-card', 'timeline-input-request', { recovery: item.request.status === 'RECOVERY_REQUIRED', answered: item.request.status === 'ANSWERED', cancelled: item.request.status === 'CANCELLED' }]">
             <div class="input-request-card-icon"><Check v-if="item.request.status === 'ANSWERED'" :size="16" /><Warning v-else-if="item.request.status === 'RECOVERY_REQUIRED' || item.request.status === 'CANCELLED'" :size="16" /><InfoFilled v-else :size="16" /></div>
@@ -1346,7 +1346,6 @@ onBeforeUnmount(() => { mounted.value = false; invalidateProjectScope(); closeEv
             </div>
             <el-button v-if="pendingInput?.id === item.request.id && inputAnswerInFlight !== item.request.id" type="primary" plain @click="openInputRequest">回答</el-button>
           </article>
-          <article v-else-if="item.kind === 'plan'" :id="detachedPlanAnchorId(item.plan)" :data-nav-key="planAnchorKey(item.plan)" class="inline-plan-card plan-created-event"><div class="candidate-head"><div class="candidate-icon"><Promotion :size="19" /></div><div><div class="eyebrow">PLAN CREATED · REVISION {{ item.plan.revision }}</div><h2>{{ item.plan.title }}</h2></div><el-tag type="warning" effect="light">{{ statusLabel(item.plan.status) }}</el-tag></div><p class="candidate-summary">{{ item.plan.resolvedContract?.objective.goal ?? item.plan.contract?.goal ?? item.plan.goal ?? 'A complete, reviewable execution contract generated from this ExplorerThread.' }}</p><p v-if="isConversationArtifactPlan(item.plan)" class="candidate-notice"><Warning :size="13" />对话产物（CONVERSATION）：确认后仍不能入队或启动 Run。要执行请在探索对话里改成“仓库文件”产物并确认新版本。</p><div class="candidate-actions"><el-button v-if="isCandidatePlan(item.plan)" @click="openPlanDetail(item.plan)">View full plan <Right :size="15" /></el-button><el-button v-if="isCandidatePlan(item.plan) && item.plan.status === 'DRAFT'" type="primary" :loading="busy" @click="confirmPlan(item.plan)">Confirm plan <Check :size="15" /></el-button><el-button v-else-if="isCandidatePlan(item.plan) && item.plan.status === 'READY'" type="primary" :loading="busy" @click="enqueuePlan(item.plan)">Enqueue plan <ArrowDown :size="15" /></el-button><span v-else class="confirmed-note"><CircleCheck :size="15" /> {{ statusLabel(item.plan.status) }}</span></div></article>
           <article v-else-if="item.activity.kind === 'USER_MESSAGE'" :id="activityTarget(item.activity, index)" :data-nav-key="activityTarget(item.activity, index)" :class="['message-card', 'user-message', { 'user-message-expanded': isUserMessageExpanded(item.activity.id), 'failed-message': item.activity.status === 'FAILED' }]">
             <div class="message-avatar user-avatar" title="我">LS</div>
             <div class="user-message-body">
