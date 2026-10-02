@@ -95,7 +95,14 @@ export function explorerActivityLine(item: ExplorerActivityItem): ExplorerActivi
     // 推理流没有名字可言，title 只是 Provider 的类别名，摆出来会和标签重复。
     // MCP 调用也走这一路（它只可能来自 Provider 活动），名字取 Server 给的 title。
     const named = item.kind !== "REASONING_SUMMARY";
-    return { label, name: named ? item.title : null, reference: named ? detailsText(item, "itemId") : null, body: item.summary };
+    return {
+      label,
+      name: named ? item.title : null,
+      reference: named ? detailsText(item, "itemId") : null,
+      // Provider 没给摘要时，投影层交的是空串（它不再补"Provider activity started."那种句子）。
+      // 工具行靠名字 + 调用 id 已经说清了；推理行是纯文本行，空着就只剩一个点和时间，故退回标签顶上。
+      body: named ? item.summary : item.summary || label,
+    };
   }
   const tool = detailsText(item, "tool");
   const callId = detailsText(item, "callId");

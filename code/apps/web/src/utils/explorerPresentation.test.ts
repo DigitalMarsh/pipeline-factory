@@ -116,6 +116,13 @@ describe("八类过程活动各摆什么", () => {
     expect(line).toEqual({ label: "Reasoning", name: null, reference: null, body: "对照 executionStream.ts 的档位表" });
   });
 
+  it("Provider 没给摘要的推理行退回标签，不留一个只有点和时间的空行", () => {
+    // 投影层对"没摘要"交的是空串；推理行是纯文本行，空着就只剩一个点和时间。
+    const line = explorerActivityLine(activity("REASONING_SUMMARY", { title: "reasoning", summary: "", details: { itemId: "item-reason-1", itemType: "reasoning", providerControlled: true } }));
+
+    expect(line).toEqual({ label: "Reasoning", name: null, reference: null, body: "Reasoning" });
+  });
+
   it("上下文压缩：摆的是消息条数，不是一句过程说明", () => {
     const line = explorerActivityLine(activity("CONTEXT_COMPACTED", { summary: "The loop saved a checkpoint before continuing.", details: { messageCount: 12 } }));
 

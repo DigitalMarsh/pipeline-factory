@@ -39,6 +39,26 @@ describe("Explorer activity projection", () => {
     expect(items[2]).toMatchObject({ title: "Tool running", details: { tool: "read_file", callId: "call-1" } });
   });
 
+  it("does not invent a description when a Provider activity carries no summary", () => {
+    // 此前这里会补 "Provider activity started." / "completed."：它把「有没有摘要」这个可判定的事实，
+    // 变成了一句要靠字符串识别才能认出的文案，而它本身没有告诉读者任何事。现在交空串。
+    const items = projectExplorerActivity({
+      turns: [{ id: "assistant-1", threadId: "explorer-1", role: "assistant", content: "", status: "COMPLETED", createdAt: "2026-08-29T10:00:00.000Z", sequence: 1 }],
+      loops: [{ id: "loop-1", ownerType: "explorer-turn", ownerId: "assistant-1", role: "explorer", mode: "provider-controlled", state: "COMPLETED", stepCount: 2, maxSteps: 40, startedAt: "2026-08-29T10:00:00.000Z", completedAt: null, providerThreadId: null, providerTurnId: null, checkpointJson: null }],
+      steps: [
+        { loopId: "loop-1", sequence: 1, stepType: "PROVIDER_ACTIVITY", status: "COMPLETED", callId: null, providerThreadId: null, providerTurnId: null, payload: { phase: "completed", itemId: "item-1", itemType: "reasoning" }, occurredAt: "2026-08-29T10:00:01.000Z" },
+        { loopId: "loop-1", sequence: 2, stepType: "PROVIDER_ACTIVITY", status: "COMPLETED", callId: null, providerThreadId: null, providerTurnId: null, payload: { phase: "completed", itemId: "item-2", itemType: "commandExecution", title: "Command", summary: "pnpm test" }, occurredAt: "2026-08-29T10:00:02.000Z" },
+      ],
+    });
+
+    const reasoning = items.find((item) => item.kind === "REASONING_SUMMARY");
+    const command = items.find((item) => item.kind === "TOOL_COMPLETED");
+    expect(reasoning?.summary).toBe("");
+    // Provider 给了摘要就照摆，只是截到 240 字。
+    expect(command?.summary).toBe("pnpm test");
+    expect(JSON.stringify(items)).not.toContain("Provider activity");
+  });
+
   it("does not expose raw reasoning or sensitive answer text", () => {
     const items = projectExplorerActivity({
       turns: [{ id: "assistant-1", threadId: "explorer-1", role: "assistant", content: "", status: "WAITING_FOR_INPUT", createdAt: "2026-08-29T10:00:00.000Z", sequence: 1 }],

@@ -234,7 +234,11 @@ function activityFromStep(turn: ExplorerTurn, step: AgentLoopStep): Omit<Explore
     const itemType = typeof payload.itemType === "string" ? payload.itemType : "provider-item";
     const phase = payload.phase === "completed" ? "completed" : "started";
     const kind = itemType.toLowerCase().includes("mcp") ? "MCP_ACTIVITY" : itemType.toLowerCase().includes("reason") ? "REASONING_SUMMARY" : phase === "completed" ? "TOOL_COMPLETED" : "TOOL_STARTED";
-    return { ...base, kind, status: phase === "completed" ? "COMPLETED" : "RUNNING", title: typeof payload.title === "string" && payload.title.trim() ? payload.title : itemType, summary: typeof payload.summary === "string" && payload.summary.trim() ? payload.summary.slice(0, 240) : phase === "completed" ? "Provider activity completed." : "Provider activity started.", details: { itemId: payload.itemId ?? null, itemType, providerControlled: true } };
+    // Provider 没给摘要就**交空串**，不要补 "Provider activity started." 这类句子：那两句话把
+    // 「有没有摘要」这个可判定的事实，变成了一句要靠字符串识别才能认出的文案，而它本身什么都没说。
+    // 呈现层把空串当作"没有可说的"——工具行摆名字与调用 id，推理行退回标签（见 explorerPresentation.ts）。
+    const summary = typeof payload.summary === "string" && payload.summary.trim() ? payload.summary.slice(0, 240) : "";
+    return { ...base, kind, status: phase === "completed" ? "COMPLETED" : "RUNNING", title: typeof payload.title === "string" && payload.title.trim() ? payload.title : itemType, summary, details: { itemId: payload.itemId ?? null, itemType, providerControlled: true } };
   }
   if (step.stepType === "MODEL_STARTED") return { ...base, kind: "REASONING_SUMMARY", status: "RUNNING", title: "Analyzing", summary: `Plan Explorer started step ${String(payload.step ?? step.sequence)}.`, details: null };
   if (step.stepType === "INPUT_REQUIRED") return { ...base, kind: "INPUT_REQUIRED", status: "WAITING", title: "Input required", summary: `${Array.isArray(payload.questions) ? payload.questions.length : 0} structured question(s) are waiting.`, details: { requestId: payload.requestId ?? null, isBlocking: payload.isBlocking ?? true } };
