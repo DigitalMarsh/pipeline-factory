@@ -51,6 +51,19 @@ describe("PlanService.query", () => {
     expect(store.listPlanQueryProjection("project-1")).toHaveLength(2);
   });
 
+  it("每一行都带上归属需求", () => {
+    // 查询投影表（plan_query_projection）没有 explorer_plan_id 这一列，必须从库里那份 plan 取。
+    // 少了它，前端 belongsToExplorerPlan 会把"已派发"的方案判成不属于当前需求，
+    // 于是聊天流里连方案卡都不渲染（只有 DRAFT / READY 的方案还看得见卡）。
+    const { plans } = setup();
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "explorer-parent", explorerPlanId: "explorer-plan-1", title: "Scoped", contract: contract("Scoped", 1) });
+    plans.confirm(plan.id, "local-user");
+    plans.enqueue(plan.id);
+
+    const [row] = plans.query({ projectId: "project-1", includeLineage: true, limit: 20, sort: "queued_at" }).items;
+    expect(row?.explorerPlanId).toBe("explorer-plan-1");
+  });
+
   it("sorts by priority and returns an opaque cursor for the next page", () => {
     const { plans } = setup();
     enqueue(plans, "explorer-parent", "Low priority", 1);

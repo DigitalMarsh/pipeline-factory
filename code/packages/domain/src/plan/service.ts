@@ -546,6 +546,10 @@ export class PlanService {
           status: row.status,
           projectId: row.projectId,
           sourceExplorerThreadId: row.sourceExplorerThreadId,
+          // **归属需求必须从库里那份 plan 取**：查询投影表（`plan_query_projection`）没有这一列，
+          // 缺了它，前端 `belongsToExplorerPlan` 会把"已派发"的方案判成不属于当前需求，
+          // 于是聊天流里连方案卡都不渲染（届时只有 DRAFT / READY 的方案还看得见卡）。
+          ...(plan.explorerPlanId ? { explorerPlanId: plan.explorerPlanId } : {}),
           sourceTurnId: row.sourceTurnId,
           providerThreadId: plan.providerThreadId,
           providerTurnId: plan.providerTurnId,
