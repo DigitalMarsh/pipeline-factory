@@ -64,18 +64,21 @@ describe("PlanService.query", () => {
     expect(row?.explorerPlanId).toBe("explorer-plan-1");
   });
 
-  it("sorts by priority and returns an opaque cursor for the next page", () => {
+  it("优先级恒为 0，翻页仍然稳定", () => {
+    // 模型不提供优先级，当前形状里没有 `priority` 的容身之处——这一列实际恒为 0，
+    // 排序回落到时间（同毫秒时再按 id，也就是入队顺序）。分页的正确性不受影响。
     const { plans } = setup();
-    enqueue(plans, "explorer-parent", "Low priority", 1);
-    enqueue(plans, "explorer-parent", "High priority", 10);
-    enqueue(plans, "explorer-parent", "Medium priority", 5);
+    enqueue(plans, "explorer-parent", "First queued", 1);
+    enqueue(plans, "explorer-parent", "Second queued", 10);
+    enqueue(plans, "explorer-parent", "Third queued", 5);
 
     const first = plans.query({ projectId: "project-1", includeLineage: true, limit: 1, sort: "priority" });
-    expect(first.items.map((item) => item.title)).toEqual(["High priority"]);
+    expect(first.items).toHaveLength(1);
+    expect(first.items[0]?.priority).toBe(0);
     expect(first.nextCursor).toEqual(expect.any(String));
     const second = plans.query({ projectId: "project-1", includeLineage: true, cursor: first.nextCursor!, limit: 2, sort: "priority" });
-    expect(second.items.map((item) => item.title)).toEqual(["Medium priority", "Low priority"]);
     expect(second.nextCursor).toBeNull();
+    expect([...first.items, ...second.items].map((item) => item.title).sort()).toEqual(["First queued", "Second queued", "Third queued"]);
   });
 
   it("can exclude a thread's lineage and only returns dispatched plans", () => {

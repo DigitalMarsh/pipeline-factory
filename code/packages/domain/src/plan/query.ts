@@ -78,7 +78,15 @@ export type PlanQuery = {
 
 export type PlanQueryResult = { items: PlanIndexRow[]; nextCursor: string | null };
 
-/** 从 CandidatePlan 投影出可检索字段；priority 缺失时按 0 参与排序。 */
+/**
+ * 从 CandidatePlan 投影出可检索字段。
+ *
+ * `goal` **优先读已解析契约**，只在没有它时才退回 `contract`——那个字段是有损投影
+ * （`dependsOnPlanIds` 被填成 []、`priority` 归 0），而这曾是这个镜像最后一个**无条件**读者：
+ * 改掉之后，`contract` 就只剩"优先读 `resolvedContract`、缺它才回退"的读点了。
+ *
+ * `priority` 恒为 0：模型不提供优先级，当前形状里没有它的容身之处，排序实际回落到时间。
+ */
 export function planQueryProjectionFor(plan: CandidatePlan): PlanQueryProjection {
   return {
     planId: plan.id,
@@ -86,10 +94,10 @@ export function planQueryProjectionFor(plan: CandidatePlan): PlanQueryProjection
     sourceExplorerThreadId: plan.sourceExplorerThreadId,
     sourceTurnId: plan.sourceTurnId,
     title: plan.title,
-    goal: plan.contract.goal,
+    goal: plan.resolvedContract?.objective.goal ?? plan.generatedSpec?.objective.goal ?? plan.contract.goal,
     revision: plan.revision,
     status: plan.status,
-    priority: plan.contract.priority ?? 0,
+    priority: 0,
     createdAt: plan.createdAt,
     queuedAt: plan.queuedAt,
     dispatchedAt: plan.dispatchedAt ?? null,
