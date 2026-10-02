@@ -103,6 +103,6 @@ export function inputAnswerDisplayText(request: ExplorerInputRequest, question: 
   if (labels.length) return labels.join("、");
   if (request.status === "SUBMITTING" || inFlightRequestId === request.id) return "提交结果确认中";
   if (request.status === "RECOVERY_REQUIRED") return "等待恢复";
-  if (request.status === "ANSWERED" || request.status === "AUTO_RESOLVED") return "已提交";
+  if (request.status === "ANSWERED") return "已提交";
   return "尚未选择";
 }

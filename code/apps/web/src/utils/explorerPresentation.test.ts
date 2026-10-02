@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activityIconKind, activityStatusLabel, EXPLORER_DISPLAY_MODES, explorerActivityLine, explorerDisplayMode, explorerDisplayTitle, formatTurnTime, inputRequestTarget, inputStatusLabel } from "./explorerPresentation";
+import { activityIconKind, activityStatusLabel, EXPLORER_DISPLAY_MODES, explorerActivityLine, explorerDisplayMode, explorerDisplayTitle, formatTurnTime, inputStatusLabel } from "./explorerPresentation";
 import type { ExplorerMessageType } from "./explorerPresentation";
 import type { ExplorerActivityItem, ExplorerActivityKind, ExplorerInputRequest } from "../types";
 
@@ -34,18 +34,13 @@ describe("Explorer 展示映射", () => {
     expect(explorerDisplayTitle({ title: "" } as never)).toBe("探索线程");
     expect(explorerDisplayTitle({ title: "改名后的线程" } as never)).toBe("改名后的线程");
   });
-
-  it("输入卡片的锚点只用 id 拼", () => {
-    expect(inputRequestTarget({ id: "input-1" })).toBe("input-request-input-1");
-  });
 });
 
 describe("输入请求状态文案", () => {
-  it("六个状态各有文案，不回落成原字符串", () => {
+  it("五个状态各有文案，不回落成原字符串", () => {
     expect(inputStatusLabel(request("a", "OPEN"), null)).toBe("Waiting for answer");
     expect(inputStatusLabel(request("a", "SUBMITTING"), null)).toBe("Submitting");
     expect(inputStatusLabel(request("a", "ANSWERED"), null)).toBe("Answered");
-    expect(inputStatusLabel(request("a", "AUTO_RESOLVED"), null)).toBe("Auto-resolved");
     expect(inputStatusLabel(request("a", "CANCELLED"), null)).toBe("Cancelled");
     expect(inputStatusLabel(request("a", "RECOVERY_REQUIRED"), null)).toBe("Recovery required");
   });

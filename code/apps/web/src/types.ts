@@ -191,7 +191,7 @@ export type ExplorerTurn = {
   explorerPlanId?: string | undefined;
 };
 
-export type ProjectExecutionTurnStatus = "QUEUED" | "RUNNING" | "WAITING_FOR_INPUT" | "COMPLETED" | "FAILED" | "CANCELLED" | "RECOVERY_REQUIRED";
+export type ProjectExecutionTurnStatus = "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED" | "RECOVERY_REQUIRED";
 
 export type ProjectExecutionThread = {
   id: string;
@@ -279,7 +279,7 @@ export type ExplorerInputRequest = {
   questions: ModelInputQuestion[];
   isBlocking: boolean;
   autoResolutionMs: number | null;
-  status: "OPEN" | "SUBMITTING" | "ANSWERED" | "CANCELLED" | "AUTO_RESOLVED" | "RECOVERY_REQUIRED";
+  status: "OPEN" | "SUBMITTING" | "ANSWERED" | "CANCELLED" | "RECOVERY_REQUIRED";
   createdAt: string;
   answeredAt: string | null;
   answeredBy: string | null;

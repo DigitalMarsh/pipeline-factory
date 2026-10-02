@@ -655,59 +655,6 @@ a { color: inherit; text-decoration: none; }
 .context-panel-shell .context-empty p { color: #dcecff; }
 .context-panel-shell .context-empty small { color: #91adca; }
 
-/* All lifecycle menus share this single card contract. The lifecycle itself is a
-   compact two-row path so the card stays short without hiding any state. */
-.task-lifecycle-card { min-width: 0; margin-top: 11px; padding: 13px 14px 12px; overflow: hidden; border: 1px solid #293b58; border-radius: 9px; background: #16253d; box-shadow: 0 3px 12px rgba(8, 18, 35, .2); color: #c2d1e4; cursor: pointer; }
-.task-lifecycle-card:hover { border-color: #477dc8; background: #1b3559; box-shadow: 0 5px 16px rgba(8, 18, 35, .28); }
-.task-lifecycle-card-head { display: block; min-width: 0; }
-.task-lifecycle-card-heading { min-width: 0; }
-.task-lifecycle-card-title-row { display: flex; min-width: 0; min-height: calc(2 * 1.36em); align-items: center; gap: 8px; }
-.task-lifecycle-card-title { display: -webkit-box; height: calc(2 * 1.36em); min-width: 0; flex: 1 1 auto; overflow: hidden; color: #edf3ff; font-size: 13px; font-weight: 800; line-height: 1.36; text-overflow: ellipsis; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-.task-lifecycle-card-version { flex: 0 0 auto; align-self: center; margin: 0; color: #91a5c0; font-size: 11px; line-height: 1.2; white-space: nowrap; }
-.task-lifecycle-timeline { --task-lifecycle-row-gap: 12px; display: grid; min-width: 0; margin-top: 2px; gap: var(--task-lifecycle-row-gap); }
-.task-lifecycle-row { position: relative; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); min-width: 0; min-height: 68px; }
-.task-lifecycle-row-connector { position: absolute; top: 40px; z-index: 0; width: 25%; height: 1px; background: #405573; pointer-events: none; }
-.task-lifecycle-row-connector-arrow { position: absolute; top: 50%; left: 50%; width: 0; height: 0; border-top: 4px solid transparent; border-bottom: 4px solid transparent; border-left: 5px solid #637b9b; content: ""; transform: translate(-50%, -50%); }
-.task-lifecycle-row-reverse .task-lifecycle-row-connector-arrow { border-right: 5px solid #637b9b; border-left: 0; }
-.task-lifecycle-row-turn { position: absolute; top: 40px; left: var(--task-lifecycle-turn-position); z-index: 0; width: 1px; height: calc(100% + var(--task-lifecycle-row-gap)); background: #405573; pointer-events: none; transform: translateX(-50%); }
-.task-lifecycle-row-turn-arrow { position: absolute; top: calc(100% - (var(--task-lifecycle-row-gap) / 2) - 5px); left: 50%; width: 0; height: 0; border-top: 5px solid #637b9b; border-right: 4px solid transparent; border-left: 4px solid transparent; transform: translateX(-50%); }
-.task-lifecycle-row-reverse { direction: rtl; }
-.task-lifecycle-step { position: relative; z-index: 1; display: grid; grid-template-rows: 28px 20px 14px; row-gap: 3px; min-width: 0; text-align: center; direction: ltr; }
-.task-lifecycle-step-copy { display: flex; min-width: 0; height: 28px; align-items: flex-end; justify-content: center; gap: 0 4px; overflow: hidden; }
-.task-lifecycle-step-label { display: -webkit-box; max-width: 100%; overflow: hidden; color: #8196b1; font-size: 9px; line-height: 1.18; text-align: center; text-overflow: ellipsis; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-.task-lifecycle-step-dot { position: relative; display: grid; place-self: center; place-items: center; width: 16px; height: 16px; border: 1px solid #405573; border-radius: 50%; background: #16253d; color: #637b9b; }
-.task-lifecycle-step-complete .task-lifecycle-step-dot { border-color: #4a9a78; background: #1d4c40; color: #70d5a4; }
-.task-lifecycle-step-current .task-lifecycle-step-dot { width: 17px; height: 17px; border-color: #75baf2; background: #24548b; color: #fff; }
-.task-lifecycle-step-complete .task-lifecycle-step-label { color: #c2d1e4; }
-.task-lifecycle-step-current .task-lifecycle-step-label { color: #edf3ff; font-weight: 800; }
-.task-lifecycle-step-time { min-width: 0; overflow: hidden; color: #8196b1; font-size: 8px; font-variant-numeric: tabular-nums; line-height: 1.2; text-align: center; text-overflow: ellipsis; white-space: nowrap; }
-.task-lifecycle-step-current .task-lifecycle-step-time { color: #9ddcff; font-weight: 700; }
-.task-lifecycle-step-pending .task-lifecycle-step-time { color: #526b8e; }
-.task-lifecycle-exception { display: flex; min-width: 0; align-items: flex-start; gap: 8px; margin-top: 11px; padding: 8px 9px; border: 1px solid #8b5160; border-radius: 6px; background: #3e2936; }
-.task-lifecycle-exception-icon { display: grid; place-items: center; width: 23px; height: 23px; flex: 0 0 23px; border: 1px solid #9a5364; border-radius: 50%; background: #52333e; color: #f19aa0; }
-.task-lifecycle-exception-copy { min-width: 0; flex: 1 1 auto; }
-.task-lifecycle-exception-heading { display: flex; min-width: 0; align-items: baseline; gap: 6px; }
-.task-lifecycle-exception-heading strong { min-width: 0; overflow: hidden; color: #f19aa0; font-size: 10px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
-.task-lifecycle-exception-current { flex: 0 0 auto; color: #f3a8ad; font-size: 7px; font-weight: 800; letter-spacing: .06em; }
-.task-lifecycle-exception-copy p { display: -webkit-box; margin: 3px 0 0; overflow: hidden; color: #bd7f89; font-size: 9px; line-height: 1.35; text-overflow: ellipsis; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-.task-lifecycle-card-footer { display: grid; min-width: 0; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 7px; margin-top: 10px; padding-top: 10px; border-top: 1px solid #29364d; }
-.task-lifecycle-footer-actions { display: flex; min-width: 0; max-width: 100%; flex-wrap: wrap; align-items: center; justify-content: center; gap: 4px; }
-.task-lifecycle-footer-actions > * { min-width: 0; max-width: 100%; }
-.task-lifecycle-footer-actions .el-button { min-width: 0; max-width: 100%; margin: 0; line-height: 1.2; overflow-wrap: anywhere; white-space: normal; }
-.task-lifecycle-footer-actions .context-plan-link { max-width: 100%; overflow-wrap: anywhere; text-align: center; white-space: normal; }
-.task-lifecycle-details, .task-lifecycle-run { display: inline-flex; min-width: 0; align-items: center; gap: 3px; padding: 5px 0; border: 0; background: transparent; color: #8fc5f0; cursor: pointer; font: inherit; font-size: 9px; font-weight: 700; }
-.task-lifecycle-details { justify-self: start; }
-.task-lifecycle-run { justify-self: end; }
-.task-lifecycle-details:hover, .task-lifecycle-details:focus-visible, .task-lifecycle-run:hover, .task-lifecycle-run:focus-visible { color: #c2edff; outline: 0; }
-.task-lifecycle-run-disabled, .task-lifecycle-run-disabled:hover, .task-lifecycle-run-disabled:focus-visible { color: #526b8e; cursor: not-allowed; }
-
-@media (max-width: 320px) {
-  .task-lifecycle-card { padding-inline: 10px; }
-  .task-lifecycle-step-label { font-size: 8px; }
-  .task-lifecycle-step-time { font-size: 7px; }
-  .task-lifecycle-card-footer { gap: 5px; }
-}
-
 @media (max-width: 1280px) {
   .console-layout { grid-template-columns: 292px minmax(0, 1fr); }
 }

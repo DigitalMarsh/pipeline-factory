@@ -26,17 +26,7 @@ export function explorerTimelineMessageType(item: ExplorerTimelineItem): Explore
   return item.activity.kind;
 }
 
-/** 左侧消息导航的最小投影：只保留时间、类型与定位信息。 */
-export type ExplorerMessageTimelineItem = {
-  key: string;
-  activationKey: string;
-  label: "消息" | "提问" | "回答";
-  occurredAt: string;
-  target: string;
-};
-
-const inputLifecycleKinds = new Set<ExplorerActivityItem["kind"]>(["INPUT_REQUIRED", "INPUT_RESOLVED"]);
-
+/** 消息与活动的 DOM 锚点：用**活动 id** 拼，同一回合里的多条助手活动因此各有各的锚点。 */
 export function explorerTimelineTarget(item: ExplorerActivityItem, index: number): string {
   if (item.kind === "USER_MESSAGE" || item.kind === "ASSISTANT_MESSAGE") {
     return `message-${item.id}`;
@@ -44,7 +34,7 @@ export function explorerTimelineTarget(item: ExplorerActivityItem, index: number
   return `activity-${item.id}-${index}`;
 }
 
-/** 输入卡片的 DOM 锚点。单点定义在这里，`buildExplorerMessageTimeline` 与视图共用同一条规则。 */
+/** 输入卡片的 DOM 锚点。单点定义在这里，视图直接引它当 `id`。 */
 export function inputRequestTarget(request: Pick<ExplorerInputRequest, "id">): string {
   return `input-request-${request.id}`;
 }
@@ -58,6 +48,8 @@ function timestamp(value: string): number {
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? Number.MAX_SAFE_INTEGER : parsed;
 }
+
+const inputLifecycleKinds = new Set<ExplorerActivityItem["kind"]>(["INPUT_REQUIRED", "INPUT_RESOLVED"]);
 
 /**
  * 用 input request 取代同一事件的低信息量生命周期行，避免问题和回答在流中重复出现。
@@ -83,34 +75,4 @@ export function buildExplorerTimeline(activities: ExplorerActivityItem[], inputR
   return items
     .sort((left, right) => timestamp(left.occurredAt) - timestamp(right.occurredAt) || left.index - right.index)
     .map(({ index: _index, ...item }) => item);
-}
-
-/**
- * 将结构化输入的提出与回答拆为独立导航时点；两者仍指向同一张输入卡片。
- * 常规用户与助手消息保持去身份化，统一投影为“消息”。
- */
-export function buildExplorerMessageTimeline(activities: ExplorerActivityItem[], inputRequests: ExplorerInputRequest[]): ExplorerMessageTimelineItem[] {
-  const entries: Array<ExplorerMessageTimelineItem & { order: number }> = [];
-
-  buildExplorerTimeline(activities, inputRequests).forEach((item, index) => {
-    if (item.kind === "activity") {
-      if (item.activity.kind !== "USER_MESSAGE" && item.activity.kind !== "ASSISTANT_MESSAGE") return;
-      const target = explorerTimelineTarget(item.activity, 0);
-      entries.push({ key: `message:${item.activity.id}`, activationKey: target, label: "消息", occurredAt: item.activity.occurredAt, target, order: index * 2 });
-      return;
-    }
-
-    if (item.kind === "plan") return;
-
-    const target = inputRequestTarget(item.request);
-    const activationKey = `input:${item.request.id}`;
-    entries.push({ key: `${activationKey}:question`, activationKey, label: "提问", occurredAt: item.request.createdAt, target, order: index * 2 });
-    if (item.request.answeredAt && (item.request.status === "ANSWERED" || item.request.status === "AUTO_RESOLVED")) {
-      entries.push({ key: `${activationKey}:answer`, activationKey, label: "回答", occurredAt: item.request.answeredAt, target, order: index * 2 + 1 });
-    }
-  });
-
-  return entries
-    .sort((left, right) => timestamp(left.occurredAt) - timestamp(right.occurredAt) || left.order - right.order)
-    .map(({ order: _order, ...item }) => item);
 }

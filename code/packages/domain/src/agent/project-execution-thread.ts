@@ -129,7 +129,7 @@ export class ProjectExecutionThreadService {
       if (assistant) return { thread, user: existing, assistant };
     }
     const messages = this.store.listProjectExecutionMessages(thread.id);
-    const hasInFlight = messages.some((message) => message.role === "assistant" && (message.status === "QUEUED" || message.status === "RUNNING" || message.status === "WAITING_FOR_INPUT"));
+    const hasInFlight = messages.some((message) => message.role === "assistant" && (message.status === "QUEUED" || message.status === "RUNNING"));
     const createdAt = this.store.now();
     const turnId = this.store.nextId("project-execution-turn");
     const status: ProjectExecutionTurnStatus = hasInFlight ? "QUEUED" : "RUNNING";
@@ -177,7 +177,7 @@ export class ProjectExecutionThreadService {
       const thread = this.store.getProjectExecutionThread(project.id);
       if (!thread) continue;
       for (const message of this.store.listProjectExecutionMessages(thread.id)) {
-        if (message.role !== "assistant" || message.status !== "RUNNING" && message.status !== "WAITING_FOR_INPUT") continue;
+        if (message.role !== "assistant" || message.status !== "RUNNING") continue;
         const recovered = this.store.updateProjectExecutionMessage({ ...message, status: "RECOVERY_REQUIRED", error: "PROJECT_EXECUTION_RECOVERY_REQUIRED" });
         const loop = message.loopId ? this.store.getAgentLoop(message.loopId) : undefined;
         if (loop && !["COMPLETED", "FAILED", "CANCELLED", "BLOCKED", "NEEDS_RECONCILIATION"].includes(loop.state)) {
@@ -273,6 +273,9 @@ export class ProjectExecutionThreadService {
           role: "executor",
           mode: loopMode,
           maxSteps: this.options.maxSteps ?? 40,
+          // 这个线程没有回答入口（面板只有提交 / 取消）。模型真要结构化提问时让 Loop 直接阻塞，
+          // 不要挂进「等待输入」——那个状态在这条线上等不到答案，只能靠取消脱身。
+          allowStructuredInput: false,
           ...(this.options.maxDurationMs === undefined ? {} : { maxDurationMs: this.options.maxDurationMs }),
           ...(this.options.maxRepeatedToolCalls === undefined ? {} : { maxRepeatedToolCalls: this.options.maxRepeatedToolCalls }),
           ...(this.options.maxNoProgressSteps === undefined ? {} : { maxNoProgressSteps: this.options.maxNoProgressSteps }),
@@ -319,11 +322,6 @@ export class ProjectExecutionThreadService {
     if (event.type === "agent.model.text.delta" && typeof event.payload.text === "string") {
       const updated = this.store.updateProjectExecutionMessage({ ...message, content: message.content + event.payload.text });
       this.store.appendEvent({ type: "project.execution.turn.text.delta", aggregateId: thread.id, payload: { turnId: assistant.turnId, messageId: assistant.id, text: event.payload.text, content: updated.content } });
-      return;
-    }
-    if (event.type === "agent.input.required") {
-      this.store.updateProjectExecutionMessage({ ...message, status: "WAITING_FOR_INPUT" });
-      this.store.appendEvent({ type: "project.execution.turn.activity", aggregateId: thread.id, payload: { turnId: assistant.turnId, messageId: assistant.id, kind: "input_required", ...event.payload } });
       return;
     }
     if (event.type === "agent.provider.activity" || event.type.startsWith("agent.tool.")) {

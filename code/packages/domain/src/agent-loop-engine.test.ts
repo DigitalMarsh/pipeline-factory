@@ -334,6 +334,30 @@ describe("AgentLoopEngine", () => {
     expect(store.listAgentLoopSteps(loop.id).map((step) => step.stepType)).toEqual(expect.arrayContaining(["INPUT_REQUIRED", "INPUT_RESOLVED"]));
   });
 
+  it("blocks instead of waiting when the caller has no input channel", async () => {
+    // 项目执行线程面板没有回答入口（只有提交 / 取消）。挂进 WAITING_FOR_INPUT 就是一个
+    // 等不到答案的死状态，所以 allowStructuredInput: false 时 Loop 直接阻塞，
+    // 把"这里答不了"留在诊断里，让回合以 FAILED 收尾。
+    const store = new InMemoryPipelineStore();
+    const model: ModelGateway = {
+      configFor: () => ({ model: "executor" }),
+      capabilities: () => ({ supportsStructuredUserInput: true, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
+      async *stream() {
+        yield { type: "turn.input_required", request: { requestId: "request-1", threadId: "provider-thread", turnId: "provider-turn", itemId: "item-1", questions: [], isBlocking: true, autoResolutionMs: null } };
+        yield { type: "turn.completed" };
+      },
+      async answerUserInput() { throw new Error("不该被调用：这条线没有回答入口"); },
+      async cancel() { return undefined; },
+    };
+    const engine = new AgentLoopEngine(store, model);
+    const loop = await engine.start({ ...baseInput(), mode: "provider-controlled", ownerType: "project-execution-turn", ownerId: "message-1", maxSteps: 2, allowStructuredInput: false });
+    const blocked = await engine.wait(loop.id);
+
+    expect(blocked.state).toBe("BLOCKED");
+    expect(blocked.checkpointJson).toContain("STRUCTURED_INPUT_UNSUPPORTED");
+    expect(store.listAgentLoopSteps(loop.id).map((step) => step.stepType)).not.toContain("INPUT_REQUIRED");
+  });
+
   it("blocks instead of looping beyond the configured step limit", async () => {
     const store = new InMemoryPipelineStore();
     const model: ModelGateway = {

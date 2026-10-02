@@ -198,18 +198,16 @@ describe("草稿的载入与清理", () => {
     expect(s.inputProgress.value).toEqual({ requestId: "r-1", currentIndex: 0, values: { "q-r-1": ["A"] }, otherValues: {} });
   });
 
-  it("已终态（ANSWERED / AUTO_RESOLVED / CANCELLED）的请求会清掉自己的草稿，未终态的留着", () => {
+  it("已终态（ANSWERED / CANCELLED）的请求会清掉自己的草稿，未终态的留着", () => {
     const s = setup();
     const answered = request("r-answered", { status: "ANSWERED" });
-    const autoResolved = request("r-auto", { status: "AUTO_RESOLVED" });
     const cancelled = request("r-cancelled", { status: "CANCELLED" });
     const stillOpen = request("r-open");
-    for (const item of [answered, autoResolved, cancelled, stillOpen]) seedDraft(item);
+    for (const item of [answered, cancelled, stillOpen]) seedDraft(item);
 
-    s.setInputRequests([answered, autoResolved, cancelled, stillOpen]);
+    s.setInputRequests([answered, cancelled, stillOpen]);
 
     expect(hasDraft(answered)).toBe(false);
-    expect(hasDraft(autoResolved)).toBe(false);
     expect(hasDraft(cancelled)).toBe(false);
     // 清理只针对终态；仍然 OPEN 的那张草稿必须留着。
     expect(hasDraft(stillOpen)).toBe(true);

@@ -1326,15 +1326,15 @@ onBeforeUnmount(() => { mounted.value = false; invalidateProjectScope(); closeEv
         <div class="timeline-day">{{ visibleTurns.length ? 'EXPLORER ACTIVITY' : 'NEW EXPLORATION' }}</div>
         <div v-if="!visibleActivity.length && !visibleInputRequests.length && !candidate && !detachedPlans.length" class="timeline-empty"><Connection :size="24" /><strong>{{ activeExplorerPlan ? taskDisplayTitle(activeExplorerPlan) : '开始一次全新的需求探索' }}</strong><span>当前需求还没有消息；切换需求不会删除其他对话内容。</span></div>
         <template v-for="(item, index) in renderedTimelineItems" :key="item.key">
-          <article v-if="item.kind === 'input'" :id="inputRequestTarget(item.request)" :data-nav-key="`input:${item.request.id}`" :class="['input-request-card', 'timeline-input-request', { recovery: item.request.status === 'RECOVERY_REQUIRED', answered: item.request.status === 'ANSWERED' || item.request.status === 'AUTO_RESOLVED', cancelled: item.request.status === 'CANCELLED' }]">
-            <div class="input-request-card-icon"><Check v-if="item.request.status === 'ANSWERED' || item.request.status === 'AUTO_RESOLVED'" :size="16" /><Warning v-else-if="item.request.status === 'RECOVERY_REQUIRED' || item.request.status === 'CANCELLED'" :size="16" /><InfoFilled v-else :size="16" /></div>
+          <article v-if="item.kind === 'input'" :id="inputRequestTarget(item.request)" :data-nav-key="`input:${item.request.id}`" :class="['input-request-card', 'timeline-input-request', { recovery: item.request.status === 'RECOVERY_REQUIRED', answered: item.request.status === 'ANSWERED', cancelled: item.request.status === 'CANCELLED' }]">
+            <div class="input-request-card-icon"><Check v-if="item.request.status === 'ANSWERED'" :size="16" /><Warning v-else-if="item.request.status === 'RECOVERY_REQUIRED' || item.request.status === 'CANCELLED'" :size="16" /><InfoFilled v-else :size="16" /></div>
             <div class="input-request-card-body">
-              <div class="message-meta"><strong>Plan Explorer input</strong><span :class="['agent-chip', { 'input-resolved-chip': item.request.status === 'ANSWERED' || item.request.status === 'AUTO_RESOLVED' }]">{{ inputStatusLabel(item.request) }}</span></div>
+              <div class="message-meta"><strong>Plan Explorer input</strong><span :class="['agent-chip', { 'input-resolved-chip': item.request.status === 'ANSWERED' }]">{{ inputStatusLabel(item.request) }}</span></div>
               <div class="input-request-event-times"><span><strong>问题生成</strong><time>{{ formatTurnTime(item.request.createdAt) }}</time></span><span v-if="item.request.answeredAt"><strong>回答提交</strong><time>{{ formatTurnTime(item.request.answeredAt) }}</time></span></div>
               <p v-if="item.request.status === 'SUBMITTING' || inputAnswerInFlight === item.request.id">已提交的答案正在等待 Provider 确认。刷新后会保留非敏感答案草稿，请勿重复提交。</p>
               <p v-else-if="item.request.status === 'RECOVERY_REQUIRED'">App Server 在回答确认前中断。本次回答不会自动重试，请恢复 Provider 会话后从此线程继续。</p>
               <p v-else-if="item.request.status === 'CANCELLED'">本次结构化输入已取消，问题和当时的时间点仍保留在对话记录中。</p>
-              <p v-else-if="item.request.status === 'ANSWERED' || item.request.status === 'AUTO_RESOLVED'">本轮结构化问题与回答已按原始时间线保留。</p>
+              <p v-else-if="item.request.status === 'ANSWERED'">本轮结构化问题与回答已按原始时间线保留。</p>
               <p v-else>{{ item.request.questions.length }} 个结构化问题正在等待回答，回答后本轮才能继续。</p>
               <div class="input-request-section-label">问题与回答</div>
               <div class="input-stream-questions">

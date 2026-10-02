@@ -192,8 +192,14 @@ export type ModelInputRequest = {
 /** 提交给 Provider 的按问题 id 分组答案。 */
 export type ModelInputAnswers = Record<string, { answers: string[] }>;
 
-/** 本地持久化的结构化输入请求状态。 */
-export type ExplorerInputRequestStatus = "OPEN" | "SUBMITTING" | "ANSWERED" | "CANCELLED" | "AUTO_RESOLVED" | "RECOVERY_REQUIRED";
+/**
+ * 本地持久化的结构化输入请求状态。
+ *
+ * 曾经还有一个 `AUTO_RESOLVED`：类型、界面文案、样式类都写好了，但**全仓没有任何写入点**，
+ * 永远不可能出现。它在上一次清点里被删掉——要恢复自动应答，先有"谁在什么条件下自动作答"
+ * 这一事实，再回来加状态。
+ */
+export type ExplorerInputRequestStatus = "OPEN" | "SUBMITTING" | "ANSWERED" | "CANCELLED" | "RECOVERY_REQUIRED";
 
 /** Explorer 输入请求事实；保存可回放的脱敏摘要而非 secret 原文。 */
 export type ExplorerInputRequest = {

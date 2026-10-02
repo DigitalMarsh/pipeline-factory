@@ -78,7 +78,7 @@ export function useExplorerInputRequests(deps: ExplorerInputRequestDeps) {
     inputProgress.value = draftRequest && scope ? existingProgress ?? loadExplorerInputProgressDraft(scope, draftRequest) : null;
     if (scope) {
       for (const request of activeRequests) {
-        if (request.status === "ANSWERED" || request.status === "AUTO_RESOLVED" || request.status === "CANCELLED") {
+        if (request.status === "ANSWERED" || request.status === "CANCELLED") {
           clearExplorerInputProgressDraft(scope, request.id);
         }
       }

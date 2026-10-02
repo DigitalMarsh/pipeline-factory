@@ -3,7 +3,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { ExplorerActivityItem, ExplorerInputRequest, Plan } from "../types";
-import { buildExplorerMessageTimeline, buildExplorerTimeline, explorerPlanAnchorId, explorerTimelineMessageType, explorerTimelineTarget, inputRequestTarget } from "./explorerTimeline";
+import { buildExplorerTimeline, explorerPlanAnchorId, explorerTimelineMessageType, explorerTimelineTarget, inputRequestTarget } from "./explorerTimeline";
 
 const activity = (id: string, kind: ExplorerActivityItem["kind"], occurredAt: string): ExplorerActivityItem => ({
   id,
@@ -76,30 +76,6 @@ describe("Explorer timeline projection", () => {
     expect(explorerTimelineTarget(second, 5)).toBe("message-assistant-activity-2");
   });
 
-  it("projects messages and an answered structured input as chronological message, question, and answer entries", () => {
-    const items = buildExplorerMessageTimeline(
-      [
-        activity("turn-1", "USER_MESSAGE", "2026-09-01T10:00:00.000Z"),
-        activity("turn-3", "ASSISTANT_MESSAGE", "2026-09-01T10:03:00.000Z"),
-      ],
-      [inputRequest("input-2", "2026-09-01T10:02:00.000Z")],
-    );
-
-    expect(items.map((item) => [item.label, item.occurredAt])).toEqual([
-      ["消息", "2026-09-01T10:00:00.000Z"],
-      ["提问", "2026-09-01T10:02:00.000Z"],
-      ["消息", "2026-09-01T10:03:00.000Z"],
-      ["回答", "2026-09-01T10:04:00.000Z"],
-    ]);
-    expect(items.filter((item) => item.label === "提问" || item.label === "回答").map((item) => item.target)).toEqual(["input-request-input-2", "input-request-input-2"]);
-  });
-
-  it("keeps an unanswered structured input as a question only", () => {
-    const items = buildExplorerMessageTimeline([], [inputRequest("input-2", "2026-09-01T10:02:00.000Z", "OPEN")]);
-
-    expect(items.map((item) => item.label)).toEqual(["提问"]);
-  });
-
   it("inserts detached historical plans at their creation time instead of appending them", () => {
     const plan = {
       id: "plan-1",
@@ -142,10 +118,7 @@ describe("时间线条目 → 消息类型", () => {
 });
 
 describe("Explorer 锚点 id", () => {
-  it("导航项里的输入锚点与视图共用同一条规则", () => {
-    const entries = buildExplorerMessageTimeline([], [inputRequest("input-2", "2026-09-01T10:02:00.000Z")]);
-
-    expect(entries[0]?.target).toBe(inputRequestTarget({ id: "input-2" }));
+  it("输入卡片的锚点只用 id 拼，视图直接引它当 DOM id", () => {
     expect(inputRequestTarget({ id: "input-2" })).toBe("input-request-input-2");
   });
 

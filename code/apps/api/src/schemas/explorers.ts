@@ -25,4 +25,4 @@ export const v4TurnBody = z.object({ threadId: z.string().min(1), explorerPlanId
 export const v4AnswerBody = z.object({ clientRequestId: z.string().min(1).max(200), answers: z.record(z.object({ answers: z.array(z.string().max(20_000)).min(1) })), actorId: z.string().min(1).default("local-user") });
 export const v4ThreadQuery = z.object({ threadId: z.string().min(1).optional(), explorerPlanId: z.string().min(1), afterSequence: z.coerce.number().int().nonnegative().optional() });
 export const v4ThreadStatusQuery = z.object({ threadId: z.string().min(1), afterSequence: z.coerce.number().int().nonnegative().optional() });
-export const v4InputQuery = z.object({ threadId: z.string().min(1).optional(), explorerPlanId: z.string().min(1), status: z.enum(["OPEN", "SUBMITTING", "ANSWERED", "CANCELLED", "AUTO_RESOLVED", "RECOVERY_REQUIRED"]).optional() });
+export const v4InputQuery = z.object({ threadId: z.string().min(1).optional(), explorerPlanId: z.string().min(1), status: z.enum(["OPEN", "SUBMITTING", "ANSWERED", "CANCELLED", "RECOVERY_REQUIRED"]).optional() });

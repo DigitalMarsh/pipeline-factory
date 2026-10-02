@@ -423,7 +423,8 @@ describe("Explorer thread switching", () => {
   });
 
   it("keeps message navigation keys unique when a turn has multiple assistant activities", () => {
-    expect(explorerTimelineSource).toContain("key: `message:${item.activity.id}`");
+    // 锚点用**活动 id** 而不是 turnId：同一个回合里的多条助手活动因此各有各的锚点。
+    expect(explorerTimelineSource).toContain("return `message-${item.id}`;");
     expect(explorerViewSource).toContain(':id="activityTarget(item.activity, index)"');
     expect(explorerViewSource).toContain(':data-nav-key="activityTarget(item.activity, index)"');
   });

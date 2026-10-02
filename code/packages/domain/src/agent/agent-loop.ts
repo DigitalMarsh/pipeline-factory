@@ -98,6 +98,7 @@ const TERMINAL_DIAGNOSTIC_MESSAGES: Record<string, string> = {
   PROVIDER_COMMAND_TIMEOUT: "Provider 命令在规定时间内未完成",
   NO_PROGRESS: "连续多个 Provider Turn 没有产生有效进展",
   MODEL_CAPABILITY_UNAVAILABLE: "当前模型不支持此 Agent Loop 能力",
+  STRUCTURED_INPUT_UNSUPPORTED: "该会话没有回答结构化提问的入口",
   REPEATED_TOOL_CALL: "检测到重复工具调用，已安全停止",
   TOOL_RUNTIME_UNAVAILABLE: "工具运行时不可用",
   PROVIDER_TURN_NOT_ACTIVE: "服务重启后原 Provider Turn 已不可恢复",
@@ -164,6 +165,14 @@ export type AgentLoopInput = {
   maxDurationMs?: number;
   /** Delegated provider shell commands must finish within this duration. */
   providerCommandTimeoutMs?: number;
+  /**
+   * 这个**调用方**能不能处理结构化提问，默认 `true`（保持既有行为）。
+   *
+   * 传 `false` 时，Loop 遇到 `turn.input.required` 会直接以 `STRUCTURED_INPUT_UNSUPPORTED`
+   * 阻塞，而不是挂进 `WAITING_FOR_INPUT` 等一个永远不会来的答案。判据是"调用方有没有回答入口"，
+   * 与 `capabilities.supportsStructuredUserInput`（Provider 支不支持提问）是两件事，两者都要过。
+   */
+  allowStructuredInput?: boolean;
   maxRepeatedToolCalls?: number;
   maxNoProgressSteps?: number;
   modelRequest: Omit<ModelRequest, "role">;
@@ -179,10 +188,15 @@ export type AgentLoopResult = {
   reason: string;
 };
 
-/** 终止门禁的明确决策；blocked 与 complete 都会结束当前 Loop。 */
+/**
+ * 终止门禁的明确决策；blocked 与 complete 都会结束当前 Loop，continue 则带着
+ * continuationPrompt 再跑一轮。
+ *
+ * 曾经还有一个 `suspend`（"挂起，等外部条件"）：没有任何门禁返回它，Loop 也没有对应的分支。
+ * 暂停/恢复走的是 `ExecutionThread` 与 `LoopState` 那条路，不需要这个决策——上一次清点时删掉。
+ */
 export type GateDecision =
   | { action: "continue"; reason: string; continuationPrompt?: string; diagnostics?: unknown[] | undefined }
-  | { action: "suspend"; reason: string; diagnostics?: unknown[] | undefined }
   | { action: "complete"; reason: string; diagnostics?: unknown[] | undefined }
   | { action: "blocked"; reason: string; diagnostics?: unknown[] | undefined };
 
@@ -524,6 +538,9 @@ export class AgentLoopEngine implements AgentLoopRunner {
               messages.push({ role: "assistant", content: JSON.stringify({ toolCall: event.call }) }, { role: "tool", content: JSON.stringify(result), toolCallId: event.call.callId });
             }
             if (event.type === "turn.input_required") {
+              // 先看调用方有没有回答入口，再看 Provider 支不支持提问：只有探索线程答得了，
+              // 其余调用方挂进 WAITING_FOR_INPUT 就是一个等不到答案的死状态。
+              if (input.allowStructuredInput === false) { this.block(initial.id, "STRUCTURED_INPUT_UNSUPPORTED"); return; }
               if (capabilities && !capabilities.supportsStructuredUserInput) { this.block(initial.id, "MODEL_CAPABILITY_UNAVAILABLE"); return; }
               progress = true;
               loop = { ...loop, state: "WAITING_FOR_INPUT", providerThreadId: event.request.threadId, providerTurnId: event.request.turnId, checkpointJson: JSON.stringify({ stepCount: loop.stepCount, providerThreadId: event.request.threadId, providerTurnId: event.request.turnId }) };

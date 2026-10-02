@@ -24,11 +24,6 @@ export function explorerDisplayTitle(item: ExplorerThread | null): string {
   return item?.title || "探索线程";
 }
 
-/** 输入卡片的 DOM 锚点。`explorerTimeline.ts` 生成导航项时用的是同一条规则。 */
-export function inputRequestTarget(request: Pick<ExplorerInputRequest, "id">): string {
-  return `input-request-${request.id}`;
-}
-
 /**
  * 输入请求的状态文案。`inFlightRequestId` 由调用方传组件自己的 `inputAnswerInFlight` ——
  * 只有请求 id 与它相等时才覆盖为 "Submitting"，因为此时**服务端状态还没变**（仍是 OPEN），
@@ -40,7 +35,6 @@ export function inputStatusLabel(request: Pick<ExplorerInputRequest, "id" | "sta
     OPEN: "Waiting for answer",
     SUBMITTING: "Submitting",
     ANSWERED: "Answered",
-    AUTO_RESOLVED: "Auto-resolved",
     CANCELLED: "Cancelled",
     RECOVERY_REQUIRED: "Recovery required",
   } as Record<ExplorerInputRequest["status"], string>)[request.status];

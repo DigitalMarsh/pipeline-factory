@@ -31,8 +31,7 @@
  *   6) **MergeRequest.humanConfirmationRequired 是字面量 true**：自动合并这条路
  *      在类型上就不存在，不要把它放宽成 boolean。
  *   7) ExecutionThreadSummary 目前**没有真正的使用者**：全仓唯一引用是 plan/service.ts
- *      顶部的一条 import（导入了但从未使用）；前端 TaskLifecycleCard 用的是
- *      apps/web/src/types.ts 里自己的同名副本。它仍是 barrel 的公共契约，故保留；
+ *      顶部的一条 import（导入了但从未使用）。它仍是 barrel 的公共契约，故保留；
  *      若将来要清理，先确认 web 侧确实不再需要从 domain 取。
  */
 import type { ModelUsage, ModelUsageScope } from "../model/usage.js";
@@ -42,8 +41,14 @@ import type { CommandResult } from "../platform/commands.js";
 export type RunStatus = "QUEUED" | "STARTING" | "IN_PROGRESS" | "READY_FOR_VERIFY" | "VERIFYING" | "MERGE_READY" | "BLOCKED" | "NEEDS_PLAN_CHANGE" | "STALE" | "RECOVERING" | "CANCELLED";
 /** ExecutionThread 的展示状态，承载 Run 的实时模型输出和控制事实。 */
 export type ExecutionThreadState = "ACTIVE" | "PAUSED" | "BLOCKED" | "CANCELLED" | "COMPLETED";
-/** Run journal 中可回放的事件类别。 */
-export type JournalEntryType = "RUN_CREATED" | "HOOK_COMPLETED" | "HOOK_FAILED" | "HOOK_SKIPPED" | "MODEL_OUTPUT" | "PROVIDER_ACTIVITY" | "TOOL_CALL" | "TASK_PROGRESS" | "USER_GUIDANCE" | "REPAIR" | "VERIFICATION" | "COMMIT" | "RECOVERY";
+/**
+ * Run journal 中可回放的事件类别。
+ *
+ * 只列**真的有人写入**的类别（写入点见 agent/executor-agent.ts 的 `append` 调用）。
+ * 曾经的 `REPAIR` / `COMMIT` 两个成员没有任何写入点，真出现也只会掉进执行会话的
+ * `unclassified` 显示成"未识别"；它们在最近一次清点里被删掉。
+ */
+export type JournalEntryType = "RUN_CREATED" | "HOOK_COMPLETED" | "HOOK_FAILED" | "HOOK_SKIPPED" | "MODEL_OUTPUT" | "PROVIDER_ACTIVITY" | "TOOL_CALL" | "TASK_PROGRESS" | "USER_GUIDANCE" | "VERIFICATION" | "RECOVERY";
 
 /** 跨模型轮次、Plan 任务和 Provider 调用的稳定关联字段。 */
 export type ExecutionJournalCorrelation = {

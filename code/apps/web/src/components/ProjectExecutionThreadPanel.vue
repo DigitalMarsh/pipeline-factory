@@ -24,7 +24,7 @@ const timeline = ref<HTMLElement | null>(null);
 let source: EventSource | null = null;
 let requestGeneration = 0;
 
-const activeAssistant = computed(() => messages.value.find((message) => message.role === "assistant" && ["RUNNING", "QUEUED", "WAITING_FOR_INPUT"].includes(message.status)) ?? null);
+const activeAssistant = computed(() => messages.value.find((message) => message.role === "assistant" && ["RUNNING", "QUEUED"].includes(message.status)) ?? null);
 const queuedCount = computed(() => messages.value.filter((message) => message.role === "assistant" && message.status === "QUEUED").length);
 const canSend = computed(() => Boolean(props.project && props.project.status === "ACTIVE" && draft.value.trim() && !sending.value));
 const effectiveModel = computed(() => modelSelection.value || snapshot.value?.defaultModel || "");
@@ -198,7 +198,6 @@ function activityLabel(event: ProjectExecutionEvent): string {
   const summary = event.payload.summary;
   if (typeof title === "string" && title) return title;
   if (typeof summary === "string" && summary) return summary;
-  if (kind === "input_required") return "模型正在等待输入";
   if (typeof kind === "string" && kind.startsWith("agent.tool.")) return `工具${kind.slice("agent.tool.".length)}`;
   return "执行进度";
 }
@@ -250,7 +249,7 @@ onBeforeUnmount(() => { requestGeneration += 1; closeEvents(); });
         <div class="project-execution-message-meta">
           <strong>{{ message.role === 'user' ? '你' : '项目执行助手' }}</strong>
           <time>{{ timeLabel(message.createdAt) }}</time>
-          <span v-if="message.role === 'assistant'" :class="['project-execution-status', `status-${message.status.toLowerCase()}`]">{{ message.status === 'QUEUED' ? '排队中' : message.status === 'RUNNING' ? '执行中' : message.status === 'WAITING_FOR_INPUT' ? '等待输入' : message.status === 'COMPLETED' ? '已完成' : message.status === 'CANCELLED' ? '已取消' : message.status === 'RECOVERY_REQUIRED' ? '需要恢复' : '失败' }}</span>
+          <span v-if="message.role === 'assistant'" :class="['project-execution-status', `status-${message.status.toLowerCase()}`]">{{ message.status === 'QUEUED' ? '排队中' : message.status === 'RUNNING' ? '执行中' : message.status === 'COMPLETED' ? '已完成' : message.status === 'CANCELLED' ? '已取消' : message.status === 'RECOVERY_REQUIRED' ? '需要恢复' : '失败' }}</span>
         </div>
         <MarkdownMessage v-if="message.content" :source="message.content" :streaming="message.role === 'assistant' && message.status === 'RUNNING'" />
         <p v-else-if="message.role === 'assistant' && message.status === 'RUNNING'" class="project-execution-placeholder">正在执行…</p>

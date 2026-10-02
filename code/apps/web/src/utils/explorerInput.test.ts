@@ -121,7 +121,6 @@ describe("回答行文案", () => {
     expect(inputAnswerDisplayText(request({ status: "SUBMITTING" }), question(), null, null)).toBe("提交结果确认中");
     expect(inputAnswerDisplayText(request({ status: "RECOVERY_REQUIRED" }), question(), null, null)).toBe("等待恢复");
     expect(inputAnswerDisplayText(request({ status: "ANSWERED" }), question(), null, null)).toBe("已提交");
-    expect(inputAnswerDisplayText(request({ status: "AUTO_RESOLVED" }), question(), null, null)).toBe("已提交");
     expect(inputAnswerDisplayText(request({ status: "OPEN" }), question(), null, null)).toBe("尚未选择");
   });
 
