@@ -15,6 +15,8 @@
  *      改这里就要连着看那边，别让同一屏里两种标签长得不一样。
  */
 import type { ExplorerInputRequest } from "../types";
+import type { ProjectExecutionMessage } from "../types";
+import type { RequirementStatusTone } from "./explorerRequirementRows";
 
 export type StatusTagType = "primary" | "success" | "info" | "warning" | "danger";
 
@@ -36,6 +38,29 @@ export function inputStatusTagType(status: ExplorerInputRequest["status"]): Stat
     OPEN: "info",
     SUBMITTING: "primary",
     ANSWERED: "success",
+    CANCELLED: "info",
+    RECOVERY_REQUIRED: "danger",
+  } as const)[status];
+}
+
+/** 需求清单里那两个状态（`explorerRequirementRows` 的 `tone`）→ 标签类型。五种 tone 与五种类型一一对应。 */
+export function requirementStatusTagType(tone: RequirementStatusTone): StatusTagType {
+  return ({
+    progress: "primary",
+    attention: "warning",
+    success: "success",
+    danger: "danger",
+    neutral: "info",
+  } as const)[tone];
+}
+
+/** 项目执行线程面板（对话框 C）里助手消息的状态。与 `ProjectExecutionMessage.status` 同集合。 */
+export function projectExecutionStatusTagType(status: ProjectExecutionMessage["status"]): StatusTagType {
+  return ({
+    QUEUED: "info",
+    RUNNING: "warning",
+    COMPLETED: "success",
+    FAILED: "danger",
     CANCELLED: "info",
     RECOVERY_REQUIRED: "danger",
   } as const)[status];

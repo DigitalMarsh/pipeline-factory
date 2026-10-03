@@ -7,6 +7,7 @@ import type { Project, ProjectExecutionEvent, ProjectExecutionMessage, ProjectEx
 import MarkdownMessage from "./MarkdownMessage.vue";
 import { backendLabel, modelOptionsFor, reasoningOptionsWith } from "../utils/modelCatalog";
 import { useModelBackends } from "../composables/useModelBackends";
+import { projectExecutionStatusTagType } from "../utils/statusTag";
 
 const props = defineProps<{ projectId: string; project: Project | null }>();
 const snapshot = ref<ProjectExecutionThreadSnapshot | null>(null);
@@ -249,7 +250,7 @@ onBeforeUnmount(() => { requestGeneration += 1; closeEvents(); });
         <div class="project-execution-message-meta">
           <strong>{{ message.role === 'user' ? '你' : '项目执行助手' }}</strong>
           <time>{{ timeLabel(message.createdAt) }}</time>
-          <span v-if="message.role === 'assistant'" :class="['project-execution-status', `status-${message.status.toLowerCase()}`]">{{ message.status === 'QUEUED' ? '排队中' : message.status === 'RUNNING' ? '执行中' : message.status === 'COMPLETED' ? '已完成' : message.status === 'CANCELLED' ? '已取消' : message.status === 'RECOVERY_REQUIRED' ? '需要恢复' : '失败' }}</span>
+          <el-tag v-if="message.role === 'assistant'" class="project-execution-status" size="small" effect="light" :type="projectExecutionStatusTagType(message.status)">{{ message.status === 'QUEUED' ? '排队中' : message.status === 'RUNNING' ? '执行中' : message.status === 'COMPLETED' ? '已完成' : message.status === 'CANCELLED' ? '已取消' : message.status === 'RECOVERY_REQUIRED' ? '需要恢复' : '失败' }}</el-tag>
         </div>
         <MarkdownMessage v-if="message.content" :source="message.content" :streaming="message.role === 'assistant' && message.status === 'RUNNING'" />
         <p v-else-if="message.role === 'assistant' && message.status === 'RUNNING'" class="project-execution-placeholder">正在执行…</p>
@@ -296,8 +297,8 @@ onBeforeUnmount(() => { requestGeneration += 1; closeEvents(); });
 .project-execution-message.failed { border-color:#f0cccc; background:#fffafa; }
 .project-execution-message-meta { display:flex; align-items:center; gap:10px; margin-bottom:12px; color:#8492a7; font-size:11px; }
 .project-execution-message-meta strong { color:#52637e; font-size:12px; }
-.project-execution-status { margin-left:auto; padding:3px 8px; border-radius:999px; background:#f0f3f7; color:#72839a; font-size:10px; }
-.status-running { background:#eaf4ff; color:#387bb7; }.status-completed { background:#eaf8f1; color:#27845b; }.status-failed,.status-recovery_required { background:#fff0f0; color:#b94b53; }
+.project-execution-status { margin-left: auto; }
+
 .project-execution-placeholder { color:#93a1b5; font-size:13px; }
 .project-execution-message-error { display:flex; align-items:center; gap:7px; color:#b74c55; font-size:12px; white-space:pre-wrap; }
 .project-execution-turn-config { margin-top:12px; color:#9aa6b8; font-size:10px; }

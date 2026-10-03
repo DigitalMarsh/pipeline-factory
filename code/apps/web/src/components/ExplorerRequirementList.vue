@@ -5,6 +5,7 @@
 <script setup lang="ts">
 import { Document, EditPen, Plus } from "@element-plus/icons-vue";
 import type { ExplorerRequirementRow } from "../utils/explorerRequirementRows";
+import { requirementStatusTagType } from "../utils/statusTag";
 
 defineProps<{
   rows: ExplorerRequirementRow[];
@@ -61,10 +62,10 @@ const emit = defineEmits<{
           <div class="requirement-cell" role="cell">
             <button
               type="button"
-              :class="['requirement-status-button', `tone-${row.planStatus.tone}`]"
+              class="requirement-status-button"
               :aria-label="`${row.title}，Plan 状态：${row.planStatus.label}，打开探索对话`"
               @click="emit('explore', row.explorerPlan.id)"
-            >{{ row.planStatus.label }}</button>
+            ><el-tag size="small" effect="light" :type="requirementStatusTagType(row.planStatus.tone)">{{ row.planStatus.label }}</el-tag></button>
           </div>
           <div class="requirement-cell" role="cell">
             <button
@@ -80,10 +81,10 @@ const emit = defineEmits<{
             <button
               v-if="row.taskStatus.label !== '—'"
               type="button"
-              :class="['requirement-status-button', `tone-${row.taskStatus.tone}`]"
+              class="requirement-status-button"
               :aria-label="`${row.title}，任务状态：${row.taskStatus.label}，打开 Run`"
               @click="emit('openTask', row.explorerPlan.id)"
-            >{{ row.taskStatus.label }}</button>
+            ><el-tag size="small" effect="light" :type="requirementStatusTagType(row.taskStatus.tone)">{{ row.taskStatus.label }}</el-tag></button>
             <span v-else class="requirement-unavailable">—</span>
           </div>
         </article>

@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { executionTaskStatusType } from "./executionTasks.js";
-import { inputStatusTagType, statusTagType } from "./statusTag.js";
+import { inputStatusTagType, projectExecutionStatusTagType, requirementStatusTagType, statusTagType } from "./statusTag.js";
 
 describe("statusTagType", () => {
   it("完成是 success、失败是 danger、进行中是 warning，其余中性", () => {
@@ -34,5 +34,26 @@ describe("inputStatusTagType", () => {
     expect(inputStatusTagType("SUBMITTING")).toBe("primary");
     expect(inputStatusTagType("OPEN")).toBe("info");
     expect(inputStatusTagType("CANCELLED")).toBe("info");
+  });
+});
+
+describe("requirementStatusTagType", () => {
+  it("需求清单的五个 tone 与五种标签类型一一对应", () => {
+    expect(requirementStatusTagType("progress")).toBe("primary");
+    expect(requirementStatusTagType("attention")).toBe("warning");
+    expect(requirementStatusTagType("success")).toBe("success");
+    expect(requirementStatusTagType("danger")).toBe("danger");
+    expect(requirementStatusTagType("neutral")).toBe("info");
+  });
+});
+
+describe("projectExecutionStatusTagType", () => {
+  it("面板的六个状态：完成 success、执行中 warning、失败与需要恢复 danger、排队与取消中性", () => {
+    expect(projectExecutionStatusTagType("COMPLETED")).toBe("success");
+    expect(projectExecutionStatusTagType("RUNNING")).toBe("warning");
+    expect(projectExecutionStatusTagType("FAILED")).toBe("danger");
+    expect(projectExecutionStatusTagType("RECOVERY_REQUIRED")).toBe("danger");
+    expect(projectExecutionStatusTagType("QUEUED")).toBe("info");
+    expect(projectExecutionStatusTagType("CANCELLED")).toBe("info");
   });
 });
