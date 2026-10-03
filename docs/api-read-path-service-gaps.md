@@ -2,13 +2,13 @@
 
 本文记录 `code/apps/api/src/routes/*.ts` 里 Store 直连读的逐类判定，以及"要收敛还得补哪些 Service 方法"。它是 P6（Store 直连收敛到 Service）留下的交付物——**要动手时按这里的表逐条做，一条一个提交**。
 
-## 度量口径（可复现，先读这一段）
+## 度量方法（可复现，先读这一段）
 
 度量命令**必须排除整行注释**：
 
 ```bash
 cd code
-# 命令 A：Store 直连调用的出现次数（P6 的棘轮就是这个数）
+# 命令 A：Store 直连调用的出现次数（P6 那道**只许往下走的门槛**就是这个数）
 grep -h -v '^[[:space:]]*\(\*\|//\|/\*\)' apps/api/src/routes/*.ts | grep -o 'store\.[a-zA-Z]*(' | wc -l
 ```
 
@@ -145,6 +145,6 @@ ExplorerService.findInProject(projectId, explorerId): ExplorerThread | null
 
 ## 一条不要做的事
 
-**不要为了把 `store.*` 清零而现造 Service 方法。** 那会把重构变成功能开发，而且每一次现造都是在扩大 domain 的公共面。真实的收敛顺序是：**先补 A 类的非抛错读 → 再补 B 类的归属校验 → C 类默认保留**。每补一个，同一个提交里改掉对应的 route 调用点并跑 `pnpm --filter @pipeline-factory/api test`；棘轮数字记在提交信息里。
+**不要为了把 `store.*` 清零而现造 Service 方法。** 那会把重构变成功能开发，而且每一次现造都是在扩大 domain 的公共面。真实的收敛顺序是：**先补 A 类的非抛错读 → 再补 B 类的归属校验 → C 类默认保留**。每补一个，同一个提交里改掉对应的 route 调用点并跑 `pnpm --filter @pipeline-factory/api test`；这个计数记在提交信息里。
 
 另有一条**不属于 P6、但读代码时会问到的**重复：`routes/*.ts` 里那些 `if (!store.getProject(id)) return 404 PROJECT_NOT_FOUND` 与组合根 `server.ts` 的 `preHandler` **守卫完全重合**（同一个 `/^\/api\/v[34]\/projects\/([^/]+)/` 前缀，同一个 `code`，同一条 error 文案），因此那些 404 分支在当前路由表下**不可达**。删掉它们是行为中性的，但那是**减法收尾**（方案 P9 的"可选"一类），不在 P6 的章程内——本文只做记录。
