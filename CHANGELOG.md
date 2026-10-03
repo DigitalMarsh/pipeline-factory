@@ -29,12 +29,12 @@
 ### 随后一并处理
 
 - **`agent_loop_steps` 同一处碎片也收掉了**：模式一样（段内照旧实时派发 `agent.model.text.delta`，
-  只在段结束时落一条步骤），封段边界与读取方 `explorer-activity` 合并气泡的边界逐字相同。
+  只在段结束时落一条步骤），封段边界与读取方 `explorer-activity` 合并卡片的边界逐字相同。
   改这里的前提是 `routes/explorers.ts` 里那句"没有等价性测试不要改这里"——
   已补上等价性用例（同一段正文按 3 条 / 1 条两种形态投影，结果逐字段相同）与引擎级用例。
 - **历史碎片合并成段**（经确认的一次性历史改写）：启动时把库里已有的连续碎片按同一规则并成段。
   实测本机：`agent_loop_steps` 60,161 → 2,963 行、`execution_journal` 4,547 → 739 行、`domain_events` 133,464 → 90,031 行，
-  而同一个 Run 的执行会话投影逐条完全一致（94 条消息、类型直方图、正文长度分布全部与压实前相同）。
+  而同一个 Run 的执行会话投影逐条完全一致（94 条消息、类型直方图、正文长度分布全部与合并前相同）。
 - **`domain_events` 里带序号的两簇也合并成段了**：`agent.step.model_text_delta` 40,245 → 221 行、
   `run.executor.event` 的 MODEL_OUTPUT（带 `payload.sequence` 的）3,529 → 120 行。
   这里踩到一个坑值得记下来：**事件流是交错的**——每 40ms 一次刷新会同时写步骤镜像与那条遗留重复
@@ -177,11 +177,11 @@
 - **同一件事说了两遍**：「任务 开始 · 新增项目级任务创建接口…」与它上方步骤头说的是同一件事。
 
 用户还要求"把大模型的消息类型列个清单，我来决定每种怎么呈现"。清单按真实数据做，
-结论落成**一张档位表**（见下）。
+结论落成**一张呈现方式表**（见下）。
 
 ### Changed
 
-**1. 消息类型清单 → 一张档位表**（`apps/web/src/utils/executionStream.ts`）
+**1. 消息类型清单 → 一张呈现方式表**（`apps/web/src/utils/executionStream.ts`）
 
 新增 `ExecutionMessageType`（17 类）与 `EXECUTION_DISPLAY_MODES`：每类映射到
 `card` / `line` / `folded` / `hidden` 四档。**视图只问 `executionDisplayMode(item)`**，
@@ -190,7 +190,7 @@
 
 实际落到界面上：推理与门禁 → 折叠（`N 条过程记录`）；Provider 回显、会话重建、
 上下文压缩、循环启动 → 不显示；命令 / 文件变更 / 工具 / 步骤 → 一行；正文与结论 → 卡片。
-**异常类（阻塞、取消、恢复、你的插话）无论档位怎么调都是卡片。**
+**异常类（阻塞、取消、恢复、你的插话）无论呈现方式怎么调都是卡片。**
 
 **2. 说人话：动作卡片说清"做的是什么"**
 
@@ -219,10 +219,10 @@
 ### 验证
 
 - `pnpm verify` 全绿：domain **358** / api **111** / web **496**，无新增值级环。
-- 新增/更新用例：`executionStream.test.ts`（档位表抽查、"异常永远是卡片"、"认不出来的活动标成未识别"、
+- 新增/更新用例：`executionStream.test.ts`（呈现方式表抽查、"异常永远是卡片"、"认不出来的活动标成未识别"、
   `summary` 决定标题、老事件退回类别标签、长命令截断、失败原因翻译、**跨事件切断的标记两种形态**、
   空正文不产生卡片、普通正文不被误伤）；`executor-agent.test.ts`（**journal 确实记下 summary**）；
-  `RunDetailView.test.ts`（视图只问档位表，`isActivityNoise` 已移除）。
+  `RunDetailView.test.ts`（视图只问呈现方式表，`isActivityNoise` 已移除）。
 - 浏览器实测同一个 Run：卡片从 16 张降到 10 张，`Provider reported success` 与
   `Provider activity started` 均已消失，正文里不再有标记残留，折叠区显示「9 条过程记录」。
 - ⚠️ **`summary` 只对新事件生效**：这次实测里命令卡还没显示命令原文（那些事件写在改动之前）。
@@ -374,7 +374,7 @@ project4 没登记任何验证命令，所以这条**现在触发不到**——�
 **没有丢数据**：它们仍可回溯，只是默认不占视线。步骤头的计数也随之分成两段
 （`10 条` + `6 条活动`），一眼能看出"这一步真正发生了什么"有多少。
 
-**3. 连续的空执行步骤折成一行**
+**3. 连续的空执行步骤并成一行**
 
 `collapsePendingTaskGroups` 把**连续的**空步骤合成一行「N 个执行步骤尚未开始」并列出标题。
 只在连续时合并：中间夹着有内容的步骤时分开显示，"跳过第 2 步先做第 3 步"这种事实才看得出来。
@@ -429,7 +429,7 @@ Claude：`tool_use`/`tool_result`/`providerSession` + `started`/`succeeded`/`fai
 - 中立词表：`activityKind`（command / file-change / tool / mcp / reasoning / message / session / other）
   与 `outcome`（running / succeeded / failed / unknown / **not-applicable**）。
 - **`not-applicable` 与 `unknown` 分开是这次的关键**：前者是"这类活动没有成败概念"（推理流、用户消息、
-  会话重建，UI 不再给它们挂状态 chip），后者是"应该有成败但 Provider 没给"。两者此前混成同一个
+  会话重建，UI 不再给它们挂状态标签），后者是"应该有成败但 Provider 没给"。两者此前混成同一个
   "状态未知"，是 210/343 条噪音的来源。
 - 两个 Provider 的映射表**集中在一处、并排写**，"同一逻辑活动 → 同一类别 + 同一成败"因此可读可测；
   `ModelEvent.provider.activity` 的两个新字段**必填**，编译器会指到所有需要更新的夹具。
@@ -593,7 +593,7 @@ Claude：`tool_use`/`tool_result`/`providerSession` + `started`/`succeeded`/`fai
 
 - **步骤头变成折叠开关**（`<header>` → `<button>`，带 `aria-expanded` / `aria-controls`）：
   整条可点，右侧有箭头，收起的是**这一组的消息**——步骤头始终留着，它就是"这里还有一个 task"的那一行。
-  头部同时补强了可读性：`PLAN TASK` 变成小胶囊标签、标题加大、状态变成带色 chip
+  头部同时补强了可读性：`PLAN TASK` 变成小圆角标签、标题加大、状态变成带色标签
   （完成绿 / 进行中蓝 / 阻塞红）、右侧显示条数（`19 条`），阻塞原因照旧在最下面一行。
 - **去掉左侧竖线**，改成**组与组之间一条 2px 横线**：省下横向空间，任务边界反而更醒目。
   "从状态卡选中某一步"的高亮也从"竖线变蓝"改成整条头部高亮。
@@ -603,7 +603,7 @@ Claude：`tool_use`/`tool_result`/`providerSession` + `started`/`succeeded`/`fai
 ### 验证
 
 - `pnpm verify` 全绿：domain 309 / api 111 / web **456**。新增断言：步骤头是带 `aria-expanded`
-  的按钮、`toggleTaskGroup` 接线、条目容器存在、聚焦时先展开，以及**样式表里不再出现
+  的按钮、`toggleTaskGroup` 有没有接上、条目容器存在、聚焦时先展开，以及**样式表里不再出现
   `.execution-conversation-group-task { … border-left … }`**、且组间是 `border-top: 2px solid`
   （竖线不许悄悄回来）。
 - 浏览器实测（真实 Run `run-14f0417a-5cb`）：
@@ -678,7 +678,7 @@ Claude：`tool_use`/`tool_result`/`providerSession` + `started`/`succeeded`/`fai
   移到 hover（`title`）与"详情"折叠里。规则抽成 `utils/executionMessageDetails.ts` 并单测——
   它同时是安全边界的外沿：**只排版已有字段，不新增暴露面**（`executionStream.ts` 定过：不出工具参数、
   成功结果与思维链）。
-- `状态未知` 不再整卡染黄（截图里三张黄卡很扎眼），改成中性卡片 + 状态 chip。
+- `状态未知` 不再整卡染黄（截图里三张黄卡很扎眼），改成中性卡片 + 状态标签。
 
 **探索线程：同一套读法（靠右 + 右侧身份标识）**
 
@@ -1180,11 +1180,11 @@ dev 模式下 API 跑的是 `src/main.ts`（tsx），但 `@pipeline-factory/doma
   全局 executor=codex（支持两种 Loop 模式）、某 Project 覆盖为 claude（只支持 provider-controlled）时，
   按角色默认判定会放过 factory-controlled 配置，失败被推迟到第一次模型调用。
 - `ProjectSettings.models.<role>.backend` 与 `ModelBackendCatalog` 新增；有目录时校验后端 id 与
-  该后端的推理档位。**`backend: null` 表示"清除覆盖、跟随全局"**——不区分它的话，控制台第一次保存
+  该后端的推理强度。**`backend: null` 表示"清除覆盖、跟随全局"**——不区分它的话，控制台第一次保存
   就会把当前全局后端固化进 Project。
 - `ExecutionTelemetry.backend` 新增（可选，旧行为 null）：这次 Run 由哪个 agent 执行，取自
   `agent.loop.started` 的端点指纹。与 `model` 是两件事——同一个模型名可能来自不同后端。
-- `ProjectExecutionThreadSnapshot.backend` 新增（只读展示）与其模型/档位目录改为**按该项目 executor
+- `ProjectExecutionThreadSnapshot.backend` 新增（只读展示）与其模型/推理强度目录改为**按该项目 executor
   后端**提供（`modelCatalogForProject`）；`updatePreferences` 的校验与给出的选项**同源**，
   消掉"下拉里有、选了却被拒"的死路。
 
@@ -1198,7 +1198,7 @@ dev 模式下 API 跑的是 `src/main.ts`（tsx），但 `@pipeline-factory/doma
   现场发现的回归：懒构造单独用会把"缺 `codexAppServer` 块"从启动期失败推迟成第一次 `/health` 500。
 - `apps/api/src/runtime/model-catalog.ts` 新增：`GET /api/v4/model-backends` 的投影与
   `ModelBackendCatalog` 的数据源。模型清单只驱动控制台下拉（Factory 不知道 provider 支持什么），
-  推理档位是**接线事实**（Claude 侧只透传 5 档）。`/health` 增加 `modelBackends`，`modelBackend`
+  推理强度**由后端决定、不是建议**（Claude 侧只透传 5 个取值）。`/health` 增加 `modelBackends`，`modelBackend`
   保留为 explorer 生效后端的兼容键。
 
 控制台（`apps/web`）：
@@ -1217,7 +1217,7 @@ dev 模式下 API 跑的是 `src/main.ts`（tsx），但 `@pipeline-factory/doma
   启动期失败与"未被引用的后端不拖垮启动"）。
 - 新增 `apps/api/src/server.test.ts` 的 HTTP 集成用例：双后端配置下 `/health` 返回
   `modelBackends: { explorer: codex-app-server, executor: deepseek }`、`/api/v4/model-backends`
-  给出注册表后端的模型与档位。
+  给出注册表后端的模型与推理强度。
 - 真机启动验证：用 `/tmp/pf-routing/config.json`（explorer=codex、executor=deepseek）启动，
   `/api/v4/model-backends` 输出符合预期；把 `codexAppServer` 块去掉后**启动即失败**（与改动前一致）。
 - **未做真机模型调用**：本机 Codex 刷新令牌已过期、DeepSeek 端点也没有可用凭据，因此
@@ -1421,7 +1421,7 @@ D3 原计划把 ExplorerView.vue 的 script 块按三簇拆成 `usePlanDetailDra
 ### D3-3 `useExplorerComposer`：安全网不足，不做
 
 这一簇（`draft` / `requirementDrafts` / `pendingSendPlanIds` / `failedExplorerSends`）确实内聚，
-但它的主体是 `sendTurn`——**全应用最热的路径**（乐观回合、SSE 重试、失败重发、按需求暂存草稿）。
+但它的主体是 `sendTurn`——**全应用最热的路径**（回合的抢先显示、SSE 重试、失败重发、按需求暂存草稿）。
 抽它等于把这条路径整体搬家，而当前**没有任何行为测试兜底**：
 
 - `ExplorerView.vue` 只有一个测试文件，且 `mount(` 出现 **0 次**——它全部是读源码文本做断言
@@ -1494,7 +1494,7 @@ ExplorerView 的发送路径挂到组件测试上），再动结构——那是�
 - `pnpm --dir code verify` 通过：domain 276/276、API 72/72、Web 424/424，无新增值级循环依赖。
 - 契约套件新增 5 条用例，在两个实现上各跑一遍：cutoff 在过去时一条不删；白名单外的类型永不删；保底条数**按聚合**生效（3 条保 2 条只删最旧一条，2 条的聚合一条不删）；`run.executor.event` 无论载荷是什么都不删（本条当时断言的是"只有 `MODEL_OUTPUT` 被删"，规则收紧后已改为反向断言）；回收后追加的事件序号仍大于历史。
 - 最后一条**当场抓到上文的序号回退缺陷**——SQLite 实现当时还没写高水位，用例失败。这不是"补一条测试让它通过"，是守卫先红后绿。
-- 启动期接线新增 1 条用例（`store-startup-repair.test.ts`）：不配置回收时一条不删、配置后只删白名单内那条、且删完追加的事件序号仍大于历史。用独立连接直接写库造"2020 年的事件"，因为 `appendEvent` 给不出过去的时间戳。
+- 启动期这套逻辑新增 1 条用例（`store-startup-repair.test.ts`）：不配置回收时一条不删、配置后只删白名单内那条、且删完追加的事件序号仍大于历史。用独立连接直接写库造"2020 年的事件"，因为 `appendEvent` 给不出过去的时间戳。
 - `store-startup-repair.test.ts` 的 `corrupt()` 改名 `runRawSql()`：它在本文件里多数时候确实在制造损坏，但回收那组用例只是用它塞一条旧事件，用 `corrupt` 会让那句读起来像在"制造损坏"。
 
 ## 2026-09-28 — Explorer 活动取数去重，并把"产出依赖逐条增量"这个事实钉住（B1 的结论）
@@ -1505,8 +1505,8 @@ ExplorerView 的发送路径挂到组件测试上），再动结构——那是�
 `content` 已经是增量的逐字拼接、投影真正还需要的是 `providerItemId`/`occurredAt`/排序序号。
 **这个前提是错的。** `projectExplorerActivity` 的产出确实依赖逐条 `MODEL_TEXT_DELTA`，两处：
 
-- **气泡数量**取决于增量步与非增量步的先后。相邻增量合并进同一条 `ASSISTANT_MESSAGE`，但中间只要夹了任何其它步骤（工具、门禁、Provider 活动）就会另起一条。一个回合有几个助手气泡，拿拼好的 `content` 分不出来。
-- **合并后那条气泡的 `occurredAt` 与排序序号取的是第一条增量**（它参与最终按 `occurredAt` 的排序，换成最后一条会改变该气泡与其它活动的相对顺序），而挂在气泡上的 `providerItemId` 取的是最后一条非空增量。两个值 `content` 里都没有。
+- **卡片数量**取决于增量步与非增量步的先后。相邻增量合并进同一条 `ASSISTANT_MESSAGE`，但中间只要夹了任何其它步骤（工具、门禁、Provider 活动）就会另起一条。一个回合有几张助手卡片，拿拼好的 `content` 分不出来。
+- **合并后那张卡片的 `occurredAt` 与排序序号取的是第一条增量**（它参与最终按 `occurredAt` 的排序，换成最后一条会改变该卡片与其它活动的相对顺序），而挂在那张卡片上的 `providerItemId` 取的是最后一条非空增量。两个值 `content` 里都没有。
 
 所以"只取最后一条增量"与"改读 `content`"都会改变可见产出，不是等价优化。真要收敛，得让**写侧**按"文本段"落一条事实（见 `agent/agent-loop.ts` 的 `flushTextDelta`），而不是在读侧猜。本次不硬做。
 
@@ -1516,7 +1516,7 @@ ExplorerView 的发送路径挂到组件测试上），再动结构——那是�
 
 ### Added
 
-- `explorer-activity.test.ts` 新增两条用例，把上面两个事实钉住：增量之间夹了非增量步骤会另起一条气泡（且用例把 `turn.content` 设成两段增量的完整拼接，正是为了说明"有 content 也分不出来"）；合并后气泡的时间取第一条增量、`providerItemId` 取最后一条非空增量。**这两条不是描述理想行为，而是守卫**——谁想按原计划那样优化，先让它们变绿。
+- `explorer-activity.test.ts` 新增两条用例，把上面两个事实钉住：增量之间夹了非增量步骤会另起一张卡片（且用例把 `turn.content` 设成两段增量的完整拼接，正是为了说明"有 content 也分不出来"）；合并后卡片的时间取第一条增量、`providerItemId` 取最后一条非空增量。**这两条不是描述理想行为，而是守卫**——谁想按原计划那样优化，先让它们变绿。
 
 ### Changed files
 
@@ -1776,7 +1776,7 @@ ExplorerView 的发送路径挂到组件测试上），再动结构——那是�
 - `pnpm --dir code test`：88 个测试文件、526 个测试通过（当前工作区）。
 - `pnpm --dir code typecheck`：domain、web、API 均通过。
 - `pnpm --dir code build`：domain、web、API 均通过；仅有既有的 chunk size warning。
-- API smoke check：health、Project、Explorer、ExplorerPlan、workspace 和 Plan endpoints 均返回成功；跨项目访问按预期拒绝。
+- API 冒烟检查：health、Project、Explorer、ExplorerPlan、workspace 和 Plan 这些接口均返回成功；跨项目访问按预期拒绝。
 - `git diff --check`：通过。
 - 浏览器已完成 Explorer Tree 基础交互和 API 健康检查；完整的 Explorer、Plan Center、Workbench、Run、Settings 桌面/平板/窄屏矩阵仍待完成。
 

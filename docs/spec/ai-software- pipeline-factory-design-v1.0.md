@@ -197,7 +197,7 @@ Reviewer 在 Review Queue 中检查：
 审查通过只表示证据包可合并，不等于目标分支已经合并。合并人在线下或受控 Git 流程中完成合并后，调用 `confirm_merged(plan_id, target_branch, target_commit)`：
 
 1. Factory 验证目标分支、目标 Commit 和 MergeRequest 中的提交信息完整。
-2. Factory 通过只读 Git 检查确认目标 Commit 包含 Run 的提交；若检查不可用，必须保留为待确认，不得乐观推进状态。
+2. Factory 通过只读 Git 检查确认目标 Commit 包含 Run 的提交；若检查不可用，必须保留为待确认，不得在未确认的情况下推进状态。
 3. Factory 原子写入 merge confirmation 事件和目标 Commit，将 Plan 从 MERGE_READY 变为 MERGED。
 4. 若目标分支发生冲突、提交不匹配或合并后验证信息缺失，保持 MERGE_READY，创建 Needs Attention，不自动重跑或自动删除 Workspace。
 
