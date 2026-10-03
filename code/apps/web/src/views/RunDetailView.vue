@@ -13,7 +13,7 @@ import ProviderUsageFooter from "../components/ProviderUsageFooter.vue";
 import { api } from "../api";
 import MarkdownMessage from "../components/MarkdownMessage.vue";
 import type { AgentLoopStep, ExecutionTask, ExecutionThread, MergeRequest, Plan, PlanTask, Run, RunJournalEvent, VerificationRun } from "../types";
-import { statusTagType } from "../utils/statusTag";
+import { statusTagType, streamStatusTagType } from "../utils/statusTag";
 import { executionDisplayMode, projectExecutionJournal, type ExecutionJournalEntry, type ExecutionPlanSnapshot, type ExecutionStreamItem } from "../utils/executionStream";
 import { executionMessageDetails, executionMessageDiagnosticsTitle } from "../utils/executionMessageDetails";
 import { executionModelSourceNote as executionModelSourceNoteFor, formatProviderContextUsage, resolveExecutionModelIdentity } from "../utils/executionTelemetry";
@@ -69,7 +69,8 @@ let planDetailRequestToken = 0;
 // ExecutionThread journal 是持久化事实，conversation projection 只负责把事实转换为可读消息。
 // sequence 同时作为 SSE 游标，重连时从最后一条已接受的事件继续回放。
 const loopStatusLabel = computed(() => formatAgentLoopState(executorLoop.value?.state, "No loop"));
-const executionStatusLabel = computed(() => runStreamConnected.value ? "Live" : ["IN_PROGRESS", "STARTING"].includes(run.value?.status ?? "") ? "Reconnecting" : "Saved");
+const streamState = computed<"live" | "reconnecting" | "saved">(() => runStreamConnected.value ? "live" : ["IN_PROGRESS", "STARTING"].includes(run.value?.status ?? "") ? "reconnecting" : "saved");
+const executionStatusLabel = computed(() => ({ live: "Live", reconnecting: "Reconnecting", saved: "Saved" })[streamState.value]);
 const executionBlockReason = computed(() => {
   for (const entry of [...(thread.value?.journal ?? [])].reverse()) {
     const reason = entry.payload.reason ?? entry.payload.error;
@@ -594,7 +595,7 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
       </div>
       <div v-if="run.status === 'BLOCKED' && executionBlockReason" class="run-blocked-notice" role="alert"><Warning :size="16" /><div><strong>Why execution stopped</strong><span>{{ executionBlockReason }}</span></div></div>
       <section class="execution-conversation-panel">
-        <div class="journal-heading"><div><div class="eyebrow">EXECUTION CONVERSATION</div><h2>What the Executor is doing</h2></div><div class="execution-stream-status" role="status"><i :class="{ connected: runStreamConnected }" /> {{ executionStatusLabel }}</div></div>
+        <div class="journal-heading"><div><div class="eyebrow">EXECUTION CONVERSATION</div><h2>What the Executor is doing</h2></div><el-tag size="small" effect="light" :type="streamStatusTagType(streamState)" role="status">{{ executionStatusLabel }}</el-tag></div>
         <ol class="execution-phase-strip" aria-label="执行阶段">
           <li v-for="(phase, index) in executionPhaseSteps" :key="phase.key" :class="['execution-phase', { current: phase.current, done: phase.done }]">
             <span class="execution-phase-mark">{{ phase.done ? "✓" : index + 1 }}</span>

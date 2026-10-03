@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createApp, defineComponent, h, nextTick, ref } from "vue";
-import { ElButton, ElDropdown, ElDropdownItem, ElDropdownMenu, ElTree } from "element-plus";
+import { ElButton, ElDropdown, ElDropdownItem, ElDropdownMenu, ElTag, ElTree } from "element-plus";
 import { describe, expect, it } from "vitest";
 import ThreadRail from "./ThreadRail.vue";
 import type { ExplorerPlan, ExplorerThread, Project } from "../types";
@@ -87,6 +87,8 @@ function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplor
   app.component("el-dropdown", ElDropdown);
   app.component("el-dropdown-item", ElDropdownItem);
   app.component("el-dropdown-menu", ElDropdownMenu);
+  // 状态标签现在就是 `el-tag`——不注册的话它会被当成未知元素渲染，断言不到标签本身。
+  app.component("el-tag", ElTag);
   app.mount(host);
   return {
     app,
@@ -157,7 +159,7 @@ describe("ThreadRail left workspace navigation", () => {
     const titleRow = contextCard?.querySelector<HTMLElement>(".project-context-title-row");
     const metaRow = contextCard?.querySelector<HTMLElement>(".project-context-meta-row");
     expect(titleRow?.querySelector(".project-context-name")?.textContent).toContain("Project 1");
-    expect(contextCard?.querySelector(".project-context-status")?.textContent).toContain("Active");
+    expect(contextCard?.querySelector(".el-tag")?.textContent).toContain("Active");
     expect(metaRow?.querySelector(".project-context-count")?.textContent).toContain("2 explorations");
     expect(metaRow?.querySelectorAll("*")).toHaveLength(1);
     expect(contextCard?.querySelector(".project-context-path")).toBeNull();
@@ -184,7 +186,8 @@ describe("ThreadRail left workspace navigation", () => {
     expect(styles).not.toContain(".project-context-path");
     expect(styles).toContain(".project-context-summary { display: flex; min-width: 0; align-items: center; margin-top: 0;");
     expect(styles).toContain(".project-context-card { display: flex; min-width: 0; align-items: center; gap: 8px;");
-    expect(styles).toContain(".project-context-status { display: inline-flex; align-self: center; align-items: center;");
+    // 状态标签改用 `el-tag`（尺寸由组件决定），这条手写规则随之外迁——与 `project-context-path` 同样是"不该再有"的断言。
+    expect(styles).not.toContain(".project-context-status");
     expect(styles).toContain(".left-panel-header { flex: 0 0 auto; min-width: 0; padding: 0 5px 8px;");
     expect(styles).toContain(".left-panel-scroll { min-height: 0; flex: 1 1 auto; overflow-y: auto; padding: 8px 1px 2px;");
   });

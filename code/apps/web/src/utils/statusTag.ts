@@ -15,7 +15,7 @@
  *      改这里就要连着看那边，别让同一屏里两种标签长得不一样。
  */
 import type { ExplorerInputRequest } from "../types";
-import type { ProjectExecutionMessage } from "../types";
+import type { ExplorerThread, Project, ProjectExecutionMessage } from "../types";
 import type { RequirementStatusTone } from "./explorerRequirementRows";
 
 export type StatusTagType = "primary" | "success" | "info" | "warning" | "danger";
@@ -64,4 +64,19 @@ export function projectExecutionStatusTagType(status: ProjectExecutionMessage["s
     CANCELLED: "info",
     RECOVERY_REQUIRED: "danger",
   } as const)[status];
+}
+
+/** 项目状态（左侧栏的项目头与项目切换列表）。 */
+export function projectStatusTagType(status: Project["status"]): StatusTagType {
+  return ({ ACTIVE: "success", ARCHIVED: "info" } as const)[status];
+}
+
+/** 探索线程状态（左侧栏的线程列表）。只有 ARCHIVED 与"还在用"两种观感，与原先的样式一致。 */
+export function explorerThreadStatusTagType(state: ExplorerThread["state"]): StatusTagType {
+  return ({ ACTIVE: "success", WAITING_FOR_INPUT: "success", COMPRESSED: "success", ARCHIVED: "info" } as const)[state];
+}
+
+/** Run 会话的实时流状态（`RunDetailView` 右上角那个指示灯）。 */
+export function streamStatusTagType(state: "live" | "reconnecting" | "saved"): StatusTagType {
+  return ({ live: "success", reconnecting: "warning", saved: "info" } as const)[state];
 }

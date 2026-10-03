@@ -6,7 +6,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { executionTaskStatusType } from "./executionTasks.js";
-import { inputStatusTagType, projectExecutionStatusTagType, requirementStatusTagType, statusTagType } from "./statusTag.js";
+import { explorerThreadStatusTagType, inputStatusTagType, projectExecutionStatusTagType, projectStatusTagType, requirementStatusTagType, statusTagType, streamStatusTagType } from "./statusTag.js";
 
 describe("statusTagType", () => {
   it("完成是 success、失败是 danger、进行中是 warning，其余中性", () => {
@@ -55,5 +55,23 @@ describe("projectExecutionStatusTagType", () => {
     expect(projectExecutionStatusTagType("RECOVERY_REQUIRED")).toBe("danger");
     expect(projectExecutionStatusTagType("QUEUED")).toBe("info");
     expect(projectExecutionStatusTagType("CANCELLED")).toBe("info");
+  });
+});
+
+describe("项目与线程的状态看起来要一致", () => {
+  it("ACTIVE 是 success、ARCHIVED 是 info", () => {
+    expect(projectStatusTagType("ACTIVE")).toBe("success");
+    expect(projectStatusTagType("ARCHIVED")).toBe("info");
+    expect(explorerThreadStatusTagType("ARCHIVED")).toBe("info");
+    expect(explorerThreadStatusTagType("ACTIVE")).toBe("success");
+    expect(explorerThreadStatusTagType("COMPRESSED")).toBe("success");
+  });
+});
+
+describe("streamStatusTagType", () => {
+  it("连着是 success、重连中是 warning、历史是 info", () => {
+    expect(streamStatusTagType("live")).toBe("success");
+    expect(streamStatusTagType("reconnecting")).toBe("warning");
+    expect(streamStatusTagType("saved")).toBe("info");
   });
 });

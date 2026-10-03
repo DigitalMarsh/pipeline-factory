@@ -7,6 +7,7 @@ import { ArrowDown, ArrowRight, Connection, Delete, EditPen, FolderOpened, MoreF
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import type { ExplorerThread, Project } from "../types";
 import { explorerListRows } from "../utils/explorerGroups";
+import { explorerThreadStatusTagType, projectStatusTagType } from "../utils/statusTag";
 
 type LeftPanel = "projects" | "explorers";
 type ThreadActionCommand = "toggle-pause" | "rename" | "policy" | "refresh" | "delete";
@@ -159,9 +160,7 @@ function emitThreadAction(command: string | number): void {
                 <span class="project-context-count">{{ props.explorers.length }} explorations</span>
               </span>
             </span>
-            <span v-if="props.project" :class="['project-context-status', { archived: props.project.status === 'ARCHIVED' }]">
-              <i /> {{ projectStatusLabel(props.project.status) }}
-            </span>
+            <el-tag v-if="props.project" size="small" effect="light" :type="projectStatusTagType(props.project.status)">{{ projectStatusLabel(props.project.status) }}</el-tag>
             <ArrowDown :class="['project-context-arrow', { open: projectSwitcherOpen }]" :size="16" aria-hidden="true" />
           </button>
           <div v-if="projectSwitcherOpen" id="inline-project-switcher" class="inline-project-switcher" data-inline-project-switcher role="listbox" aria-label="选择项目">
@@ -178,7 +177,7 @@ function emitThreadAction(command: string | number): void {
             >
               <span class="left-list-icon"><FolderOpened :size="15" /></span>
               <span class="inline-project-option-copy"><strong>{{ availableProject.name }}</strong><small>{{ availableProject.repoRoot }}</small></span>
-              <span :class="['left-list-status', { archived: availableProject.status === 'ARCHIVED' }]">{{ projectStatusLabel(availableProject.status) }}</span>
+              <el-tag size="small" effect="light" :type="projectStatusTagType(availableProject.status)">{{ projectStatusLabel(availableProject.status) }}</el-tag>
             </button>
           </div>
         </div>
@@ -206,7 +205,7 @@ function emitThreadAction(command: string | number): void {
           >
             <span class="left-list-icon"><FolderOpened :size="16" /></span>
             <span class="left-list-copy"><strong>{{ availableProject.name }}<span v-if="availableProject.shortName && availableProject.shortName !== availableProject.name" class="left-list-short-name">{{ availableProject.shortName }}</span></strong><small>{{ availableProject.repoRoot }}</small></span>
-            <span :class="['left-list-status', { archived: availableProject.status === 'ARCHIVED' }]">{{ projectStatusLabel(availableProject.status) }}</span>
+            <el-tag size="small" effect="light" :type="projectStatusTagType(availableProject.status)">{{ projectStatusLabel(availableProject.status) }}</el-tag>
           </button>
           <div class="project-list-actions" aria-label="Project actions">
             <button type="button" class="project-list-action" data-project-action="open-explorer" @click.stop="emit('open-project', availableProject.id)">
@@ -303,7 +302,7 @@ function emitThreadAction(command: string | number): void {
               @click="emit('select-explorer', row.explorer.id)"
             >
               <span class="left-list-copy"><strong>{{ row.explorer.title }}</strong></span>
-              <span :class="['left-list-status', { archived: row.explorer.state === 'ARCHIVED' }]">{{ explorerStatusLabel(row.explorer.state) }}</span>
+              <el-tag size="small" effect="light" :type="explorerThreadStatusTagType(row.explorer.state)">{{ explorerStatusLabel(row.explorer.state) }}</el-tag>
             </button>
             <div v-if="row.explorer.id === props.thread?.id" class="explorer-thread-row-actions" @click.stop>
               <el-dropdown placement="bottom-end" popper-class="thread-action-popper" :disabled="Boolean(props.explorerActionId)" @command="emitThreadAction">
