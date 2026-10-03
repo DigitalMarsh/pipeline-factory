@@ -1,5 +1,71 @@
 # Changelog
 
+## 2026-10-03 — 删掉 V1 扁平合同镜像（Plan 契约只剩一份）
+
+### 为什么做
+
+`ResolvedPlanContract` 之外还并存着一份 V1 扁平合同（`CandidatePlan.contract`）。它不是"另一种契约"，
+而是已解析契约的**有损投影**：`dependsOnPlanIds` 恒填 `[]`、`priority` 恒为 0。字段名却更短，
+于是界面与调度里到处是"优先读 `resolvedContract`、缺它才回退到 `contract`"的读点——
+两份形状迟早对不上，而 `planQueryProjectionFor` 曾是这份镜像最后一个**无条件**读者。
+
+库里的数据支持直接删：本机 3 个库、35 份候选计划，`schemaVersion = 1` 的 **0 份**，
+没有 `generatedSpec` 的也是 **0 份**——也就是说这份镜像在库里**完全可推导**，删列不丢事实。
+（清点见 `docs/消息类型及事件状态机流程图.md` 的 §6。）
+
+### Changed
+
+**1. 契约只剩 `resolvedContract`（domain）**
+
+- 删 `PlanContract` / `PlanTask` 类型、`executionContractFromResolved`（投影函数）、
+  `defaultPlanContract`（兜底合同）、`validatePlanContract`（V1 结构校验），以及三处
+  `contract.schemaVersion === 1` 只读闸门——没有可表达的 V1 形状，闸门成了空转。
+- `CandidatePlan` / `PlanRevision` / `PlanRevisionDraft` / `ChangeProposal` 的 `contract` 改成
+  必填的 `resolvedContract`；`PlanArtifact` 的 `contract` 入口换成 `resolvedContract`。
+- `createCandidatePlan` 现在**必须**拿到 `generatedSpec` 或 `resolvedContract`，两者都没有直接拒绝；
+  落盘、审计哈希、预检全部改读 `resolvedContract`。
+
+**2. 计划依赖与自然语言先决条件分开（这是删镜像暴露出的真问题）**
+
+`dependsOnPlanIds` 与 `dependencies` 原先共用镜像的同一个字段，而 `resolvePlanContract` 往
+`dependencies` 里填的是模型写的**自然语言先决条件**（"需要 Node.js 22"）。镜像一删，两条读点
+（`validatePlanDependencies`、`dispatch-coordinator.evaluateWait`）就会把先决条件当成 Plan id，
+去等一个不存在的 Plan——表现为 `BLOCKED / depends on unknown plan 需要 Node.js 22`。
+
+处置：`ResolvedPlanContract` 新增 Factory-owned 的 `dependsOnPlanIds`（解析时恒为 `[]`，
+只有 `PlanService.setDependencies` 能写），`dependencies` 保持原义。
+
+**3. 存储与 API**
+
+- 四张表的 `contract_json` 列删掉，老库启动时 `DROP COLUMN`；`pruneLegacyV1Plans` 随之删除
+  （它靠 `json_extract(contract_json, ...)` 找行，列一没就没有识别依据）。
+- 读契约失败**抛错**而不是回落到一个（看着像契约、其实什么都没有的）空形状：
+  空任务清单会让执行者开工、空命令集会让验证静默判 `SKIPPED`。
+- 老库回填 `resolvedContract.dependsOnPlanIds`：字段是新加的必填项，老行里没有这个键，
+  读点虽然都写了 `?? []`，但让数据对得上比要求每个新读点都记得兜底可靠。
+- `change_proposals` 补上 `resolved_contract_json` 列。提案的契约此前存在 `contract_json` 里，
+  改列时漏了建表——**内存实现不经过 SQL 列，所有用例照样绿**，只有真开一个 SQLite 库才暴露。
+  已补一条 SQLite 往返用例。
+- API：workbench 投影与 change-proposal 请求体暴露 `resolvedContract`；`Plan.contract` 响应字段消失。
+  `PlanIndexRow.priority` 保留但恒为 0（响应形状与 `sort=priority` 还引用它），dispatch 的优先级排序删掉。
+
+**4. Web：从三层回落到两层**
+
+`PlanDetailContent` / `RunDetailView` / `planContract.ts` / `explorerRequirementRows` 里所有
+`plan.contract` 的读取与回落都删掉，只剩 `resolvedContract → generatedSpec`。
+
+**5. 测试夹具**
+
+不再有兜底合同之后，造一个 Plan 必须显式给契约。新增跨包夹具 `plan/plan-fixture.ts`
+（domain 导出、api 与 web 共用），每个包各写一份必然与领域形状漂移。
+
+### 验证
+
+- `pnpm verify`：986 个用例全绿（domain 366 / api 111 / web 509），typecheck 全过，无新增值级环。
+- 真库升级：重启服务后本机运行库 21 份 Plan / 21 个 Revision / 6 份草稿全部读得出契约，
+  四列成功丢弃，`dependsOnPlanIds` 回填完成；`/workbench`、`/plans/:id`、Plan Center 查询
+  返回的都是 `resolvedContract`，没有 `contract` 字段。
+
 ## 2026-10-01（其十五）— Plan 结构对齐 Claude Code：现状、风险、文件变更真正传给 Executor
 
 ### 为什么做
