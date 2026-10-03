@@ -88,6 +88,23 @@ export function assessPlanCompletion(content: string): PlanCompletionAssessment 
     : { status: "INCOMPLETE", missing: [...REQUIRED_PLAN_AREAS], completed: [], diagnostics: [], artifact: null };
 }
 
+/**
+ * 去掉模型输出里的计划协议块，只留给人看的正文。
+ *
+ * 与 `planProtocolCandidates` 同族（都围着 `<pipeline-factory-plan*>` 这对标记），所以放在本文件。
+ * **两处调用方**：探索活动的展示投影（`explorer-activity.ts`）与 store 的历史清理——后者拿它验证
+ * `explorer.turn.text.delta` 那批事件是否已被 `explorer_turns.content` 覆盖。它们必须共用同一条规则，
+ * 否则"验证通过"的那一批里会混进实际有损的行，而那是删除的唯一判据。
+ */
+export function stripPlanProtocol(content: string): string {
+  return content
+    .replace(/<pipeline-factory-plan-status>[\s\S]*?<\/pipeline-factory-plan-status>/gi, "")
+    .replace(/<pipeline-factory-plan>[\s\S]*?<\/pipeline-factory-plan>/gi, "")
+    .replace(/<pipeline-factory-plan-status>[\s\S]*$/gi, "")
+    .replace(/<pipeline-factory-plan>[\s\S]*$/gi, "")
+    .trim();
+}
+
 function planProtocolCandidates(content: string): Array<{ status: string; artifactText: string }> {
   const statusMatches = [...content.matchAll(/<pipeline-factory-plan-status>\s*([^<]+?)\s*<\/pipeline-factory-plan-status>/gi)];
   const planMatches = [...content.matchAll(/<pipeline-factory-plan>\s*([\s\S]*?)\s*<\/pipeline-factory-plan>/gi)];

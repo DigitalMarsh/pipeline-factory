@@ -31,6 +31,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { containsAnyString, defaultExplorerPlan, defaultPlanExploration, defaultThreadContextSummary, isVerificationRun, parsePlanValidationIssues, parseStringArray, parseThreadContextSummary, summarizeExplorerMessage, threadTitleMetadata } from "./records.js";
 import { planQueryProjectionFor, type PlanQueryProjection } from "../plan/query.js";
+import { stripPlanProtocol } from "../plan/completion.js";
 import { updatePlanStatus } from "../plan/status-transition.js";
 import { freezeRevision } from "../platform/freeze.js";
 import { isRecord } from "../platform/guards.js";
@@ -1641,24 +1642,76 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   /**
-   * 把历史里"逐次刷新"留下的正文碎片合并成"一个文本段一条"。
+   * 删除两簇"另有副本"的正文事件。**与压实不同**：它们不能合并——合并会把正文挪到别的活动事件之后，
+   * 打乱事件流的时序——只能**确认副本存在后删除**。
    *
-   * 写侧从这一版起按段落库（见 agent-loop.ts 的 textSegments / executor-agent.ts 的 modelOutputBuffers），
-   * 但这之前的库里存的是 40ms 一片的碎片：实测本机 `agent_loop_steps` 60,161 行里 57,445 行是
-   * `MODEL_TEXT_DELTA`、文本长度**中位数 2 个字符**，`execution_journal` 的 `MODEL_OUTPUT` 同形。
-   * 它们不影响显示（读取方本来就会合并），但每次读都要把这几万行捞出来解析。
+   * 判据**逐个聚合验证，不抽样**（这是 event-retention.ts 用 9,408 条真实垃圾换来的教训）：
+   *   - `agent.model.text.delta`（步骤镜像的逐字重复）：该 loop 的重复正文总量 ≤ 步骤行正文总量。
+   *   - `explorer.turn.text.delta`：剥掉计划协议块之后**逐字等于** `explorer_turns.content`。
+   * 不满足的行一律保留。实测本机 33 个回合里有 3 个不满足：两个**被取消**的回合
+   * （content 被替换成"本轮已取消"，模型的原始输出只在这批事件里）与一个 content 被后续覆盖的回合。
    *
-   * 合并规则**与读取方逐字相同**，所以读数不变：
-   *   - 步骤：同 loop 内**连续**的 `MODEL_TEXT_DELTA`——中间夹任何别的步骤就断开（explorer-activity
-   *     合并 ASSISTANT_MESSAGE 的边界就是它）。
-   *   - journal：同 run 内连续的 `MODEL_OUTPUT`，且 `modelStep` 与 `providerItemId` 都不变
+   * **自验证**：每次启动重新判一遍。所以"当时验不过"的行不会被误删，将来副本补齐了也还会被清掉。
+   * 删完这两簇之后剩下的是几十行到几百行，稳态下这一步几乎不花时间。
+   */
+  private deleteDuplicatedTextEvents(): void {
+    // 簇一：同一 loop 的重复正文不得超过该 loop 步骤行里的正文。求和与顺序无关，可以直接用 SQL。
+    const duplicated = this.statement(`
+      SELECT d.aggregate_id AS loop_id,
+             SUM(LENGTH(json_extract(d.payload_json, '$.text'))) AS duplicate_bytes,
+             COALESCE((SELECT SUM(LENGTH(json_extract(s.payload_json, '$.text')))
+                       FROM agent_loop_steps s
+                       WHERE s.loop_id = d.aggregate_id AND s.step_type = 'MODEL_TEXT_DELTA'), 0) AS step_bytes
+      FROM domain_events d
+      WHERE d.type = 'agent.model.text.delta'
+      GROUP BY d.aggregate_id
+    `).all() as unknown as SqliteRow[];
+    for (const row of duplicated) {
+      const duplicateBytes = Number(row.duplicate_bytes ?? 0);
+      if (duplicateBytes === 0 || duplicateBytes > Number(row.step_bytes ?? 0)) continue;
+      this.statement("DELETE FROM domain_events WHERE type = 'agent.model.text.delta' AND aggregate_id = ?").run(String(row.loop_id));
+    }
+
+    // 簇二：按 (线程, 回合) 分组，逐条按发生顺序拼回原文再比对——GROUP_CONCAT 的拼接顺序在 SQLite 里
+    // 是未定义的，而这里的一致性判断是删除的唯一依据，不能建立在"实践中好像是插入顺序"上。
+    const turnEvents = this.statement("SELECT aggregate_id, json_extract(payload_json, '$.turnId') AS turn_id, json_extract(payload_json, '$.text') AS text FROM domain_events WHERE type = 'explorer.turn.text.delta' ORDER BY aggregate_id, turn_id, sequence").all() as unknown as SqliteRow[];
+    const byTurn = new Map<string, { threadId: string; turnId: unknown; text: string }>();
+    for (const row of turnEvents) {
+      const key = `${String(row.aggregate_id)}\u0000${String(row.turn_id)}`;
+      const current = byTurn.get(key) ?? { threadId: String(row.aggregate_id), turnId: row.turn_id, text: "" };
+      current.text += String(row.text ?? "");
+      byTurn.set(key, current);
+    }
+    for (const group of byTurn.values()) {
+      if (group.turnId === null || group.turnId === undefined) continue;
+      const turn = this.statement("SELECT content FROM explorer_turns WHERE id = ?").get(String(group.turnId)) as SqliteRow | undefined;
+      if (!turn) continue;
+      if (stripPlanProtocol(group.text) !== String(turn.content ?? "")) continue;
+      this.statement("DELETE FROM domain_events WHERE type = 'explorer.turn.text.delta' AND aggregate_id = ? AND json_extract(payload_json, '$.turnId') = ?").run(group.threadId, String(group.turnId));
+    }
+  }
+
+  /**
+   * 启动期收缩历史的正文碎片：能合并的按段合并，能证明「另有副本」的直接删除。
+   *
+   * 这些碎片是写侧的旧节奏留下的：正文刷新曾是 160 字符阈值**或 40ms 定时器**，低速率输出下
+   * 定时器主导——实测本机 `agent_loop_steps` 60,161 行里 57,445 行是 `MODEL_TEXT_DELTA`、
+   * 文本长度**中位数 2 个字符**，`execution_journal`、`domain_events` 里同形。
+   *
+   * **合并**（规则与读取方逐字相同，所以读数不变）：
+   *   - `agent_loop_steps`：同 loop 内**连续**的 `MODEL_TEXT_DELTA`——中间夹任何别的步骤就断开
+   *     （explorer-activity 合并 ASSISTANT_MESSAGE 的边界就是它）。
+   *   - `execution_journal`：同 run 内连续、且 `modelStep` 与 `providerItemId` 都不变的 `MODEL_OUTPUT`
    *     （web 的 projectExecutionJournal 用的就是这套 key）。
-   * 每个段保留**首行**的 sequence 与 occurred_at，正文拼接、`providerItemId` 取段内最后一个非空、
-   * `taskId` / `providerThreadId` / `providerTurnId` 取段内第一个非空——这正是读取方自己会算出来的值。
-   * 丢掉的是每个碎片各自的毫秒级时间戳，而读取方从不用它。
+   *   - `domain_events`：带内层序号的两簇（步骤镜像、journal 镜像），见 `compactTextEventSegments`。
+   *   每段保留**首行**的 sequence 与 occurred_at，正文拼接、`providerItemId` 取段内最后一个非空、
+   *   `taskId` / `providerThreadId` / `providerTurnId` 取段内第一个非空——这正是读取方会算出来的值。
+   *   丢掉的是每个碎片各自的毫秒级时间戳，而读取方从不用它。
    *
-   * **这是不可逆的历史改写**（经确认后加入）。幂等：合并过之后相邻行不再同类，再跑一次找不到可合并的段。
-   * 不动 `domain_events`：那两簇碎片受回收策略管辖，改写审计行是另一类风险。
+   * **删除**：`agent.model.text.delta` 与 `explorer.turn.text.delta` 两簇不能合并（合并会把正文挪到
+   * 别的活动事件之后，打乱事件流时序），只能逐个聚合验过副本存在后删除，见 `deleteDuplicatedTextEvents`。
+   *
+   * **不可逆**（经确认后加入）。幂等：合并过的段不再有相邻同类行，验过副本的簇也已删除，再跑是空操作。
    */
   private compactTextStreams(): void {
     this.database.exec("BEGIN");
@@ -1673,6 +1726,7 @@ export class SqlitePipelineStore implements PipelineStore {
       this.compactStepsTextSegments();
       this.compactJournalTextSegments();
       this.compactTextEventSegments();
+      this.deleteDuplicatedTextEvents();
       this.database.exec("COMMIT");
     } catch (error) {
       this.database.exec("ROLLBACK");

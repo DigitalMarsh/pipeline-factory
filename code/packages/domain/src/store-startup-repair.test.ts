@@ -131,8 +131,13 @@ describe("SqlitePipelineStore 构造期回填", () => {
       seeded.appendEvent({ type: "agent.step.model_text_delta", aggregateId: "loop-1", payload: { text, providerItemId: "item-1", sequence: index + 1 } });
       seeded.appendEvent({ type: "agent.model.text.delta", aggregateId: "loop-1", payload: { text } });
     }
-    // 没有内层序号的那两簇不合并：它们是"另有副本"的中间态，该按回收策略删除，不是合并。
-    for (const text of ["第一", "句"]) seeded.appendEvent({ type: "explorer.turn.text.delta", aggregateId: "assistant-1", payload: { turnId: "assistant-1", explorerPlanId: "plan-1", loopId: "loop-1", text } });
+    // 两簇"另有副本"的事件：副本验得过就删，验不过就留。
+    seeded.saveThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
+    seeded.saveTurn({ id: "turn-ok", threadId: "thread-1", role: "assistant", content: "第一句", status: "COMPLETED", createdAt: seeded.now(), sequence: 1 });
+    // 被取消的回合：content 被替换成提示语，模型原始输出只在这批事件里 —— 副本不成立，必须留。
+    seeded.saveTurn({ id: "turn-cancelled", threadId: "thread-1", role: "assistant", content: "本轮已取消", status: "CANCELLED", createdAt: seeded.now(), sequence: 2 });
+    for (const text of ["第一", "句"]) seeded.appendEvent({ type: "explorer.turn.text.delta", aggregateId: "thread-1", payload: { turnId: "turn-ok", explorerPlanId: "plan-1", loopId: "loop-1", text } });
+    for (const text of ["模型说了一半"]) seeded.appendEvent({ type: "explorer.turn.text.delta", aggregateId: "thread-1", payload: { turnId: "turn-cancelled", explorerPlanId: "plan-1", loopId: "loop-1", text } });
     // journal 镜像：内层序号连续 → 并段；不连续 → 不并。
     for (const [index, text] of ["He", "llo"].entries()) seeded.appendEvent({ type: "run.executor.event", aggregateId: "run-1", payload: { executionThreadId: "thread-1", type: "MODEL_OUTPUT", sequence: index + 1, occurredAt: seeded.now(), text, modelStep: 1, providerItemId: "item-1" } });
     seeded.appendEvent({ type: "run.executor.event", aggregateId: "run-1", payload: { executionThreadId: "thread-1", type: "MODEL_OUTPUT", sequence: 9, occurredAt: seeded.now(), text: "!", modelStep: 1, providerItemId: "item-1" } });
@@ -151,10 +156,12 @@ describe("SqlitePipelineStore 构造期回填", () => {
     expect(journal.map((entry) => entry.payload.text)).toEqual(["Hello world"]);
     expect(journal.map((entry) => entry.sequence)).toEqual([1]);
 
-    // 事件里那两簇带内层序号的碎片按内层序号并段，正文一字不丢；没有内层序号的原样保留。
+    // 事件里带内层序号的两簇按内层序号并段，正文一字不丢。
     expect((reopened.listEvents({ types: ["agent.step.model_text_delta"] })).map((event) => event.payload.text)).toEqual(["你好呀"]);
-    expect((reopened.listEvents({ types: ["explorer.turn.text.delta"] })).map((event) => event.payload.text)).toEqual(["第一", "句"]);
     expect((reopened.listEvents({ types: ["run.executor.event"] })).map((event) => event.payload.text)).toEqual(["Hello", "!"]);
+    // "另有副本"的两簇：步骤表覆盖得住的那簇删掉；探索回合里副本对得上的删、对不上的（取消的回合）留着。
+    expect(reopened.listEvents({ types: ["agent.model.text.delta"] })).toEqual([]);
+    expect((reopened.listEvents({ types: ["explorer.turn.text.delta"] })).map((event) => [event.payload.turnId, event.payload.text])).toEqual([["turn-cancelled", "模型说了一半"]]);
 
     // 幂等：再开一次没有任何可合并的相邻行。
     reopened.close();

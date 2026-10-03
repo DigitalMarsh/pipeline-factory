@@ -6,6 +6,7 @@
 import type { AgentLoop, AgentLoopStep } from "../agent/agent-loop.js";
 import type { ExplorerTurn } from "../index.js";
 import { isRecord } from "../platform/guards.js";
+import { stripPlanProtocol } from "../plan/completion.js";
 
 /** Explorer 时间线中的消息、工具、Plan 和状态事件类型。 */
 export type ExplorerActivityKind =
@@ -64,15 +65,6 @@ function countArray(record: Record<string, unknown>, key: string): number | unde
 function stringAt(record: Record<string, unknown> | undefined, key: string): string | undefined {
   const value = record?.[key];
   return typeof value === "string" ? value : undefined;
-}
-
-function stripPlanProtocol(content: string): string {
-  return content
-    .replace(/<pipeline-factory-plan-status>[\s\S]*?<\/pipeline-factory-plan-status>/gi, "")
-    .replace(/<pipeline-factory-plan>[\s\S]*?<\/pipeline-factory-plan>/gi, "")
-    .replace(/<pipeline-factory-plan-status>[\s\S]*$/gi, "")
-    .replace(/<pipeline-factory-plan>[\s\S]*$/gi, "")
-    .trim();
 }
 
 function formatPlanActivity(content: string, providerItemId: string | null = null): PlanActivityDisplay {
