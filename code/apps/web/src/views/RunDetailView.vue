@@ -13,11 +13,12 @@ import ProviderUsageFooter from "../components/ProviderUsageFooter.vue";
 import { api } from "../api";
 import MarkdownMessage from "../components/MarkdownMessage.vue";
 import type { AgentLoopStep, ExecutionTask, ExecutionThread, MergeRequest, Plan, PlanTask, Run, RunJournalEvent, VerificationRun } from "../types";
+import { statusTagType } from "../utils/statusTag";
 import { executionDisplayMode, projectExecutionJournal, type ExecutionJournalEntry, type ExecutionPlanSnapshot, type ExecutionStreamItem } from "../utils/executionStream";
 import { executionMessageDetails, executionMessageDiagnosticsTitle } from "../utils/executionMessageDetails";
 import { executionModelSourceNote as executionModelSourceNoteFor, formatProviderContextUsage, resolveExecutionModelIdentity } from "../utils/executionTelemetry";
 import { useModelBackends } from "../composables/useModelBackends";
-import { executionTaskStatusLabel, executionTaskSummary, projectExecutionTasks } from "../utils/executionTasks";
+import { executionTaskStatusLabel, executionTaskStatusType, executionTaskSummary, projectExecutionTasks } from "../utils/executionTasks";
 import { canTerminateRun } from "../utils/runControls";
 import { describeRunLoadError } from "../utils/runLoadError";
 import { createProjectRequestScope } from "../utils/projectRoutes";
@@ -608,7 +609,7 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
             <button v-if="group.task" type="button" class="execution-task-stream-heading" :aria-expanded="!isTaskGroupCollapsed(group.id)" :aria-controls="`execution-task-stream-${group.id}`" @click="toggleTaskGroup(group.id)">
               <span class="execution-task-stream-step">PLAN TASK</span>
               <strong>{{ group.task.title }}</strong>
-              <span :class="['execution-task-stream-status', `tone-${group.task.status.toLowerCase()}`]">{{ executionTaskStatusLabel(group.task.status) }}</span>
+              <el-tag size="small" effect="light" :type="executionTaskStatusType(group.task.status)">{{ executionTaskStatusLabel(group.task.status) }}</el-tag>
               <span class="execution-task-stream-count">{{ visibleItems(group).length }} 条</span>
               <span v-if="foldedItems(group).length" class="execution-task-stream-quiet">{{ foldedItems(group).length }} 条过程记录</span>
               <ArrowUp v-if="!isTaskGroupCollapsed(group.id)" :size="14" /><ArrowDown v-else :size="14" />
@@ -627,7 +628,7 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
             <article v-for="item in visibleItems(group)" :key="item.id" :data-sequence="item.sequence" :data-task-id="item.taskId" :data-model-step="item.modelStep" :title="executionMessageDiagnosticsTitle(item)" :class="['execution-message', `execution-message-${item.kind}`, { failed: item.status === 'FAILED', waiting: item.status === 'WAITING', running: item.status === 'RUNNING', unknown: item.status === 'UNKNOWN', mine: item.role === 'user' }]">
               <div class="execution-message-avatar">{{ item.role === 'user' ? 'LS' : item.kind === 'plan' ? 'PL' : item.kind === 'model' ? 'EX' : item.kind === 'tool' ? 'TL' : '·' }}</div>
               <div class="execution-message-body">
-                <div class="execution-message-meta"><strong>{{ item.title }}</strong><span v-if="item.status !== 'INFO'" class="agent-status">{{ executionMessageStatusLabel(item.status) }}</span><span class="execution-message-time">{{ new Date(item.occurredAt).toLocaleTimeString('zh-CN') }}</span><button v-if="executionMessageDetails(item).length" type="button" class="execution-message-toggle" :aria-expanded="isExecutionItemExpanded(item.id)" @click="toggleExecutionItem(item.id)">{{ isExecutionItemExpanded(item.id) ? '收起详情' : '详情' }}</button></div>
+                <div class="execution-message-meta"><strong>{{ item.title }}</strong><el-tag v-if="item.status !== 'INFO'" size="small" effect="light" :type="statusTagType(item.status)">{{ executionMessageStatusLabel(item.status) }}</el-tag><span class="execution-message-time">{{ new Date(item.occurredAt).toLocaleTimeString('zh-CN') }}</span><button v-if="executionMessageDetails(item).length" type="button" class="execution-message-toggle" :aria-expanded="isExecutionItemExpanded(item.id)" @click="toggleExecutionItem(item.id)">{{ isExecutionItemExpanded(item.id) ? '收起详情' : '详情' }}</button></div>
                 <div v-if="isExecutionItemExpanded(item.id)" class="execution-message-details"><span v-for="detail in executionMessageDetails(item)" :key="detail">{{ detail }}</span></div>
                 <template v-if="item.kind === 'plan' && item.plan">
                   <div class="execution-plan-message">
