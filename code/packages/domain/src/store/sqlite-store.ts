@@ -1681,37 +1681,37 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   /**
-   * 事件表里的正文碎片。四簇合计 126,067 行 / 17.6 MB，占 `domain_events` 的 94% 行、90% 字节，
-   * 而**一个读的人都没有**：
-   *   - `agent.step.model_text_delta`：`agent_loop_steps` 那一行的事件镜像；
-   *   - `agent.model.text.delta`：上一簇的逐字重复，写侧早已停写（见 event-retention.ts 的说明）；
-   *   - `explorer.turn.text.delta`：最终正文在 `explorer_turns.content`；
-   *   - `run.executor.event` 的 MODEL_OUTPUT：`execution_journal` 的镜像。
+   * 事件表里**带内层序号**的正文碎片。
    *
-   * 段 = 同 type + 同 aggregate + **事件序号相邻**（这一段时间里没有为该聚合写入别的事件）；
-   * 载荷里带内层 `sequence` 的（步骤镜像、journal 镜像）另外要求内层序号也相邻——这样合并出来的
-   * 段与 `agent_loop_steps` / `execution_journal` 压实后的段一一对应，镜像关系仍然成立。
+   * 这一版只处理两类：`agent.step.model_text_delta`（`agent_loop_steps` 那一行的事件镜像）
+   * 与 `run.executor.event` 里带 `payload.sequence` 的 MODEL_OUTPUT（`execution_journal` 的镜像）。
+   *
+   * 段的判据是**载荷里的内层序号**相邻，不是事件序号相邻——实测本机：同 type + 同 aggregate
+   * 且事件序号相邻的行是 **0**。事件流本身是交错的：每 40ms 一次刷新会同时写步骤镜像与那条遗留重复
+   * （`agent.model.text.delta`），两者把对方的序号隔开。内层序号才是"它对应哪一行步骤 / journal"，
+   * 所以合并出来的段与两张表压实后的段一一对应。
+   *
+   * **没有内层序号的两簇（`agent.model.text.delta`、`explorer.turn.text.delta`）不在这里处理**：
+   * 前者是步骤镜像的历史重复、后者是探索回合正文的历史重复，都属于"另有副本"的中间态，
+   * 该按回收策略删除而不是合并——但删之前要逐个聚合验证副本确实存在，那是另一件事。
    */
   private compactTextEventSegments(): void {
     const rows = this.statement(`
       WITH text_events AS (
         SELECT id, sequence, aggregate_id, type, payload_json,
-               LAG(sequence) OVER (PARTITION BY aggregate_id, type ORDER BY sequence) AS prev_sequence,
                LAG(json_extract(payload_json, '$.sequence')) OVER (PARTITION BY aggregate_id, type ORDER BY sequence) AS prev_inner,
                LAG(json_extract(payload_json, '$.modelStep')) OVER (PARTITION BY aggregate_id, type ORDER BY sequence) AS prev_step,
                LAG(json_extract(payload_json, '$.providerItemId')) OVER (PARTITION BY aggregate_id, type ORDER BY sequence) AS prev_item
         FROM domain_events
-        WHERE (type IN ('agent.step.model_text_delta', 'agent.model.text.delta', 'explorer.turn.text.delta')
-               OR (type = 'run.executor.event' AND json_extract(payload_json, '$.type') = 'MODEL_OUTPUT'))
+        WHERE type = 'agent.step.model_text_delta'
+           OR (type = 'run.executor.event' AND json_extract(payload_json, '$.type') = 'MODEL_OUTPUT' AND json_extract(payload_json, '$.sequence') IS NOT NULL)
       ), grouped AS (
         SELECT id, sequence, aggregate_id, type, payload_json,
-               SUM(CASE WHEN prev_sequence = sequence - 1
-                         AND (json_extract(payload_json, '$.sequence') IS NULL
-                              OR prev_inner = json_extract(payload_json, '$.sequence') - 1)
+               SUM(CASE WHEN prev_inner = json_extract(payload_json, '$.sequence') - 1
                          AND (json_extract(payload_json, '$.providerItemId') IS prev_item)
                          AND (json_extract(payload_json, '$.modelStep') IS prev_step)
                    THEN 0 ELSE 1 END)
-                 OVER (PARTITION BY aggregate_id, type, json_extract(payload_json, '$.type') ORDER BY sequence) AS segment
+                 OVER (PARTITION BY aggregate_id, type ORDER BY sequence) AS segment
         FROM text_events
       )
       SELECT aggregate_id, type, segment, id, sequence, payload_json

@@ -124,10 +124,18 @@ describe("SqlitePipelineStore 构造期回填", () => {
     seeded.saveRun({ id: "run-1", projectId: "project-1", planId: "plan-1", planRevision: 1, status: "IN_PROGRESS", branch: "factory/run-1", workspacePath: "/tmp/run-1", baseCommit: "abc", executionThreadId: "thread-1", createdAt: seeded.now(), startedAt: null });
     seeded.saveExecutionThread({ id: "thread-1", runId: "run-1", state: "ACTIVE", journal: [] });
     for (const text of ["He", "llo", " world"]) seeded.appendExecutionJournal({ executionThreadId: "thread-1", runId: "run-1", type: "MODEL_OUTPUT", payload: { text, modelStep: 1, providerItemId: "item-1" } });
-    // 事件表里的四簇正文碎片同样要压实：步骤镜像、它的历史重复、探索回合正文、journal 镜像。
-    for (const [index, text] of ["你", "好", "呀"].entries()) seeded.appendEvent({ type: "agent.step.model_text_delta", aggregateId: "loop-1", payload: { text, providerItemId: "item-1", sequence: index + 1 } });
+    // 事件里那两簇带内层序号的碎片按**内层序号**并段，正文一字不丢。
+    // 刻意在中间插一条别的事件：真实的事件流就是交错的（每 40ms 一次刷新同时写两种事件），
+    // 所以判据只能是内层序号，不能是事件序号相邻——那一条在真实库上匹配数是 0。
+    for (const [index, text] of ["你", "好", "呀"].entries()) {
+      seeded.appendEvent({ type: "agent.step.model_text_delta", aggregateId: "loop-1", payload: { text, providerItemId: "item-1", sequence: index + 1 } });
+      seeded.appendEvent({ type: "agent.model.text.delta", aggregateId: "loop-1", payload: { text } });
+    }
+    // 没有内层序号的那两簇不合并：它们是"另有副本"的中间态，该按回收策略删除，不是合并。
     for (const text of ["第一", "句"]) seeded.appendEvent({ type: "explorer.turn.text.delta", aggregateId: "assistant-1", payload: { turnId: "assistant-1", explorerPlanId: "plan-1", loopId: "loop-1", text } });
+    // journal 镜像：内层序号连续 → 并段；不连续 → 不并。
     for (const [index, text] of ["He", "llo"].entries()) seeded.appendEvent({ type: "run.executor.event", aggregateId: "run-1", payload: { executionThreadId: "thread-1", type: "MODEL_OUTPUT", sequence: index + 1, occurredAt: seeded.now(), text, modelStep: 1, providerItemId: "item-1" } });
+    seeded.appendEvent({ type: "run.executor.event", aggregateId: "run-1", payload: { executionThreadId: "thread-1", type: "MODEL_OUTPUT", sequence: 9, occurredAt: seeded.now(), text: "!", modelStep: 1, providerItemId: "item-1" } });
     seeded.close();
 
     const reopened = new SqlitePipelineStore(databasePath);
@@ -143,10 +151,10 @@ describe("SqlitePipelineStore 构造期回填", () => {
     expect(journal.map((entry) => entry.payload.text)).toEqual(["Hello world"]);
     expect(journal.map((entry) => entry.sequence)).toEqual([1]);
 
-    // 事件里那四簇碎片同样并成段，正文一字不丢。
+    // 事件里那两簇带内层序号的碎片按内层序号并段，正文一字不丢；没有内层序号的原样保留。
     expect((reopened.listEvents({ types: ["agent.step.model_text_delta"] })).map((event) => event.payload.text)).toEqual(["你好呀"]);
-    expect((reopened.listEvents({ types: ["explorer.turn.text.delta"] })).map((event) => event.payload.text)).toEqual(["第一句"]);
-    expect((reopened.listEvents({ types: ["run.executor.event"] })).map((event) => event.payload.text)).toEqual(["Hello"]);
+    expect((reopened.listEvents({ types: ["explorer.turn.text.delta"] })).map((event) => event.payload.text)).toEqual(["第一", "句"]);
+    expect((reopened.listEvents({ types: ["run.executor.event"] })).map((event) => event.payload.text)).toEqual(["Hello", "!"]);
 
     // 幂等：再开一次没有任何可合并的相邻行。
     reopened.close();
