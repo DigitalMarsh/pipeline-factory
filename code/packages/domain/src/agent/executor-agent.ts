@@ -77,6 +77,8 @@ export class ExecutorAgent {
   private readonly modelContexts = new Map<string, { modelStep?: number; loopId?: string; providerThreadId?: string; providerTurnId?: string }>();
   private readonly providerCallsByStep = new Map<string, Map<number, Map<string, string>>>();
   private readonly taskProgressBuffers = new Map<string, { modelStep: number; text: string; scanOffset: number }>();
+  /** 未落库的模型正文，键是 ExecutionThread id；分段规则见 bufferModelOutput。 */
+  private readonly modelOutputBuffers = new Map<string, { text: string; key: string; payload: Record<string, unknown> }>();
   private readonly activeTaskByRun = new Map<string, string>();
   private readonly currentTaskByRun = new Map<string, string>();
 
@@ -365,7 +367,8 @@ export class ExecutorAgent {
       const text = typeof payload.text === "string" ? payload.text : "";
       if (text && modelStep !== undefined) this.recordTaskProgressMarkers(run, event, revision, modelStep, text, association);
       const outputTaskId = this.currentTaskByRun.get(run.id);
-      this.append(run.executionThreadId, "MODEL_OUTPUT", { text, ...association, ...(outputTaskId ? { taskId: outputTaskId } : {}), ...(typeof payload.providerItemId === "string" ? { providerItemId: payload.providerItemId } : {}) });
+      const providerItemId = typeof payload.providerItemId === "string" ? payload.providerItemId : undefined;
+      this.bufferModelOutput(run.executionThreadId, text, `${modelStep ?? "-"}:${providerItemId ?? "-"}`, { ...association, ...(outputTaskId ? { taskId: outputTaskId } : {}), ...(providerItemId ? { providerItemId } : {}) });
     }
     if (event.type === "agent.provider.activity") {
       const itemType = typeof payload.itemType === "string" ? payload.itemType : "provider activity";
@@ -510,6 +513,8 @@ export class ExecutorAgent {
   }
 
   private setRunStatus(run: Run, status: "READY_FOR_VERIFY" | "BLOCKED" | "CANCELLED", reason?: string): void {
+    // 收尾：正文若正好卡在最后一段（之后没有任何别的条目），它还没有落库的理由就消失了。
+    this.flushModelOutput(run.executionThreadId);
     run.status = status;
     const current = this.store.getRun(run.id);
     if (current) this.store.saveRun({ ...current, status });
@@ -523,10 +528,50 @@ export class ExecutorAgent {
   }
 
   private append(threadId: string, type: import("../index.js").JournalEntryType, payload: Record<string, unknown>): void {
+    // 正文是**连续段**：任何别的事实出现，都意味着这一段说完了。先把它落库，条目顺序才和
+    // 逐条追加时逐字一致（见 bufferModelOutput）。
+    if (type !== "MODEL_OUTPUT") this.flushModelOutput(threadId);
+    this.writeJournal(threadId, type, payload);
+  }
+
+  /** 逐条追加的唯一写入口。调用方一律走 `append`，它负责先冲掉未落库的正文。 */
+  private writeJournal(threadId: string, type: import("../index.js").JournalEntryType, payload: Record<string, unknown>): void {
     const thread = this.store.getExecutionThread(threadId);
     if (!thread) return;
     const entry = this.store.appendExecutionJournal({ executionThreadId: thread.id, runId: thread.runId, type, payload });
     this.store.appendEvent({ type: "run.executor.event", aggregateId: thread.runId, payload: { executionThreadId: thread.id, type, sequence: entry.sequence, occurredAt: entry.occurredAt, ...entry.payload } });
+  }
+
+  /**
+   * 把模型正文攒成**一个连续段一条**，而不是逐次刷新一条。
+   *
+   * 为什么必须攒：正文的刷新节奏由 agent-loop 的 160 字符阈值 **或 40ms 定时器**决定，低速率输出下
+   * 定时器主导——实测本机库 3,933 条 `MODEL_OUTPUT` 的文本长度**中位数是 2 个字符**，66% 不超过 3 个。
+   * 逐条落库有两个代价：journal 与它镜像的 `run.executor.event` 都被碎片灌满（本机 4,547 / 15,458 条），
+   * 以及每个碎片都触发一次前端重投影。
+   *
+   * `key`（模型轮次 + provider 条目 id）与前端投影的分段依据**逐字相同**（见 web 的
+   * `projectExecutionJournal`）：同样的边界切出来的段，顺序与分组与逐条追加时完全一致，
+   * 只是条目数少了一两个数量级。
+   */
+  private bufferModelOutput(threadId: string, text: string, key: string, payload: Record<string, unknown>): void {
+    if (!text) return;
+    const buffered = this.modelOutputBuffers.get(threadId);
+    if (buffered && buffered.key === key) {
+      buffered.text += text;
+      if (!buffered.payload.taskId && payload.taskId) buffered.payload.taskId = payload.taskId;
+      return;
+    }
+    this.flushModelOutput(threadId);
+    this.modelOutputBuffers.set(threadId, { text, key, payload });
+  }
+
+  /** 把攒着的正文写成一条 MODEL_OUTPUT。没有攒到东西就什么都不写。 */
+  private flushModelOutput(threadId: string): void {
+    const buffered = this.modelOutputBuffers.get(threadId);
+    if (!buffered) return;
+    this.modelOutputBuffers.delete(threadId);
+    this.writeJournal(threadId, "MODEL_OUTPUT", { text: buffered.text, ...buffered.payload });
   }
 
   private updateTelemetry(threadId: string, update: Partial<ExecutionTelemetry>): void {

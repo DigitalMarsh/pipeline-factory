@@ -271,6 +271,30 @@ describe("ExecutorAgent", () => {
     expect(Array.isArray(completedTaskIds) && completedTaskIds.includes("task-1")).toBe(true);
   });
 
+  it("把一次模型回合的正文落成一条 MODEL_OUTPUT，而不是逐次刷新一条", async () => {
+    // 正文的刷新节奏由 agent-loop 的 160 字符阈值**或 40ms 定时器**决定，低速率输出下定时器主导：
+    // 实测本机库 3,933 条 MODEL_OUTPUT 的文本长度**中位数是 2 个字符**。逐条落库会把 journal
+    // 和它镜像的 run.executor.event 都灌满碎片（本机 4,547 / 15,458 条），每个碎片还要触发一次前端重投影。
+    const { store, plan, run } = await createQueuedRun();
+    const report = executionReport(plan.resolvedContract.tasks[0]!.id);
+    const model: ModelGateway = {
+      configFor: () => ({ model: "gpt-5.6-luna", loopMode: "provider-controlled" }),
+      capabilities: () => ({ supportsStructuredUserInput: false, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
+      async *stream(): AsyncIterable<ModelEvent> {
+        for (const chunk of [report.slice(0, 12), report.slice(12, 40), report.slice(40)]) yield { type: "text.delta", text: chunk };
+        yield { type: "turn.completed" };
+      },
+      async answerUserInput() { return undefined; },
+      async cancel() { return undefined; },
+    };
+
+    await new ExecutorAgent(store, model).run(run, plan);
+
+    const outputs = store.getExecutionThread(run.executionThreadId)!.journal.filter((entry) => entry.type === "MODEL_OUTPUT");
+    expect(outputs).toHaveLength(1);
+    expect(outputs[0]!.payload.text).toBe(report);
+  });
+
   it("does not treat a model completion message as task completion", async () => {
     const { store, plan, run } = await createQueuedRun();
     const model: ModelGateway = {
