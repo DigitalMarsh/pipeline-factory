@@ -107,6 +107,47 @@ describe("SqlitePipelineStore 构造期回填", () => {
     expect(JSON.parse(String(runRawSqlQuery(databasePath, "SELECT resolved_contract_json AS value FROM plan_revisions WHERE plan_id = ?", planId).value))).toHaveProperty("dependsOnPlanIds", []);
   });
 
+  it("把历史里逐次刷新的正文碎片压实成段，且读数不变", () => {
+    // compactTextStreams 的场景：写侧曾经按 160 字符阈值或 40ms 定时器逐次落库，实测碎片中位 2 个字符。
+    // 压实规则与读取方逐字相同（连续的同类正文 = 一段），所以**正文总量守恒、非文本步骤一条不动**。
+    const directory = mkdtempSync(join(tmpdir(), "pipeline-compact-"));
+    temporaryDirectories.push(directory);
+    const databasePath = join(directory, "factory.sqlite");
+    const seeded = new SqlitePipelineStore(databasePath);
+    const loop = seeded.saveAgentLoop({ id: "loop-1", ownerType: "run", ownerId: "run-1", role: "executor", mode: "provider-controlled", state: "RUNNING", stepCount: 0, maxSteps: 40, startedAt: seeded.now(), completedAt: null, providerThreadId: null, providerTurnId: null, checkpointJson: null });
+    seeded.appendAgentLoopStep({ loopId: loop.id, stepType: "MODEL_TEXT_DELTA", status: "COMPLETED", payload: { text: "好", providerItemId: "item-1" } });
+    seeded.appendAgentLoopStep({ loopId: loop.id, stepType: "MODEL_TEXT_DELTA", status: "COMPLETED", payload: { text: "的" } });
+    seeded.appendAgentLoopStep({ loopId: loop.id, stepType: "MODEL_TEXT_DELTA", status: "COMPLETED", payload: { text: "，我" } });
+    seeded.appendAgentLoopStep({ loopId: loop.id, stepType: "PROVIDER_ACTIVITY", status: "COMPLETED", payload: { itemId: "activity-1" } });
+    seeded.appendAgentLoopStep({ loopId: loop.id, stepType: "MODEL_TEXT_DELTA", status: "COMPLETED", payload: { text: "看" } });
+    seeded.appendAgentLoopStep({ loopId: loop.id, stepType: "MODEL_TEXT_DELTA", status: "COMPLETED", payload: { text: "一下" } });
+    seeded.saveRun({ id: "run-1", projectId: "project-1", planId: "plan-1", planRevision: 1, status: "IN_PROGRESS", branch: "factory/run-1", workspacePath: "/tmp/run-1", baseCommit: "abc", executionThreadId: "thread-1", createdAt: seeded.now(), startedAt: null });
+    seeded.saveExecutionThread({ id: "thread-1", runId: "run-1", state: "ACTIVE", journal: [] });
+    for (const text of ["He", "llo", " world"]) seeded.appendExecutionJournal({ executionThreadId: "thread-1", runId: "run-1", type: "MODEL_OUTPUT", payload: { text, modelStep: 1, providerItemId: "item-1" } });
+    seeded.close();
+
+    const reopened = new SqlitePipelineStore(databasePath);
+    openStores.push(reopened);
+
+    const steps = reopened.listAgentLoopSteps("loop-1");
+    // 两段连续正文各并成一条，段首的 sequence 保留；中间那条 PROVIDER_ACTIVITY 一条不动。
+    expect(steps.filter((step) => step.stepType === "MODEL_TEXT_DELTA").map((step) => [step.sequence, step.payload.text])).toEqual([[1, "好的，我"], [5, "看一下"]]);
+    expect(steps.map((step) => step.stepType)).toEqual(["MODEL_TEXT_DELTA", "PROVIDER_ACTIVITY", "MODEL_TEXT_DELTA"]);
+    expect(steps[0]!.payload.providerItemId).toBe("item-1");
+    // journal 同理；正文总量守恒。
+    const journal = reopened.getExecutionThread("thread-1")!.journal;
+    expect(journal.map((entry) => entry.payload.text)).toEqual(["Hello world"]);
+    expect(journal.map((entry) => entry.sequence)).toEqual([1]);
+
+    // 幂等：再开一次没有任何可合并的相邻行。
+    reopened.close();
+    openStores.splice(openStores.indexOf(reopened), 1);
+    const again = new SqlitePipelineStore(databasePath);
+    openStores.push(again);
+    expect(again.listAgentLoopSteps("loop-1").map((step) => step.sequence)).toEqual(steps.map((step) => step.sequence));
+    expect(again.getExecutionThread("thread-1")!.journal.map((entry) => entry.sequence)).toEqual([1]);
+  });
+
   it("把只存在整体快照里的历史 journal 搬进执行日志表", () => {
     // backfillJournalRowsFromSnapshot 的场景：`execution_threads.journal_json` 是这份 journal 的
     // 第二份副本，读路径早已改读 execution_journal 表，所以那条列被丢掉了。

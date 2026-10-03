@@ -116,6 +116,37 @@ function resolvedContractFromRow(row: SqliteRow, owner: string): ResolvedPlanCon
   return JSON.parse(String(value)) as ResolvedPlanContract;
 }
 
+/** 把已按 (聚合, 段号) 排好序的行切成段；只有一个元素的段不返回——它们没什么可合并的。 */
+function groupTextSegments(rows: readonly SqliteRow[], keyOf: (row: SqliteRow) => string): SqliteRow[][] {
+  const groups: SqliteRow[][] = [];
+  let current: SqliteRow[] = [];
+  let currentKey: string | null = null;
+  for (const row of rows) {
+    const key = keyOf(row);
+    if (key !== currentKey) {
+      if (current.length > 1) groups.push(current);
+      current = [];
+      currentKey = key;
+    }
+    current.push(row);
+  }
+  if (current.length > 1) groups.push(current);
+  return groups;
+}
+
+/** 段内第一个非空字符串（读取方对 taskId / providerThreadId 的取法就是「第一个非空」）。 */
+function firstNonEmptyString(values: readonly unknown[]): string | undefined {
+  for (const value of values) if (typeof value === "string" && value) return value;
+  return undefined;
+}
+
+/** 段内最后一个非空字符串（providerItemId 按读取方的取法是「最后一个非空」）。 */
+function lastNonEmptyString(values: readonly unknown[]): string | undefined {
+  let found: string | undefined;
+  for (const value of values) if (typeof value === "string" && value) found = value;
+  return found;
+}
+
 /** 语句缓存条目上限。取值理由见 SqlitePipelineStore#statement 的注释。 */
 const STATEMENT_CACHE_LIMIT = 512;
 
@@ -629,6 +660,7 @@ export class SqlitePipelineStore implements PipelineStore {
     this.backfillJournalRowsFromSnapshot();
     try { this.database.exec("ALTER TABLE execution_threads DROP COLUMN journal_json"); } catch { /* 新库没有这一列。 */ }
     this.backfillPlanDependencyIds();
+    this.compactTextStreams();
     this.repairUnconfirmedProgressedPlans();
     this.repairOrphanedPlans();
     this.backfillExplorerPlans();
@@ -1605,6 +1637,98 @@ export class SqlitePipelineStore implements PipelineStore {
       const plan = this.planFromRow(row);
       const reason = "Plan source is missing: its source ExplorerThread no longer exists.";
       updatePlanStatus(this, plan, { status: "BLOCKED", attentionReason: reason, lastEventAt: this.now() }, reason);
+    }
+  }
+
+  /**
+   * 把历史里"逐次刷新"留下的正文碎片合并成"一个文本段一条"。
+   *
+   * 写侧从这一版起按段落库（见 agent-loop.ts 的 textSegments / executor-agent.ts 的 modelOutputBuffers），
+   * 但这之前的库里存的是 40ms 一片的碎片：实测本机 `agent_loop_steps` 60,161 行里 57,445 行是
+   * `MODEL_TEXT_DELTA`、文本长度**中位数 2 个字符**，`execution_journal` 的 `MODEL_OUTPUT` 同形。
+   * 它们不影响显示（读取方本来就会合并），但每次读都要把这几万行捞出来解析。
+   *
+   * 合并规则**与读取方逐字相同**，所以读数不变：
+   *   - 步骤：同 loop 内**连续**的 `MODEL_TEXT_DELTA`——中间夹任何别的步骤就断开（explorer-activity
+   *     合并 ASSISTANT_MESSAGE 的边界就是它）。
+   *   - journal：同 run 内连续的 `MODEL_OUTPUT`，且 `modelStep` 与 `providerItemId` 都不变
+   *     （web 的 projectExecutionJournal 用的就是这套 key）。
+   * 每个段保留**首行**的 sequence 与 occurred_at，正文拼接、`providerItemId` 取段内最后一个非空、
+   * `taskId` / `providerThreadId` / `providerTurnId` 取段内第一个非空——这正是读取方自己会算出来的值。
+   * 丢掉的是每个碎片各自的毫秒级时间戳，而读取方从不用它。
+   *
+   * **这是不可逆的历史改写**（经确认后加入）。幂等：合并过之后相邻行不再同类，再跑一次找不到可合并的段。
+   * 不动 `domain_events`：那两簇碎片受回收策略管辖，改写审计行是另一类风险。
+   */
+  private compactTextStreams(): void {
+    this.database.exec("BEGIN");
+    try {
+      this.compactStepsTextSegments();
+      this.compactJournalTextSegments();
+      this.database.exec("COMMIT");
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  /** 步骤表：同 loop 内连续的 MODEL_TEXT_DELTA 合成一条（seq 相邻 = 中间没有别的步骤）。 */
+  private compactStepsTextSegments(): void {
+    const rows = this.statement(`
+      WITH text_steps AS (
+        SELECT loop_id, sequence, payload_json,
+               LAG(sequence) OVER (PARTITION BY loop_id ORDER BY sequence) AS prev_sequence
+        FROM agent_loop_steps WHERE step_type = 'MODEL_TEXT_DELTA'
+      ), grouped AS (
+        SELECT loop_id, sequence, payload_json,
+               SUM(CASE WHEN prev_sequence = sequence - 1 THEN 0 ELSE 1 END)
+                 OVER (PARTITION BY loop_id ORDER BY sequence) AS segment
+        FROM text_steps
+      )
+      SELECT loop_id, segment, sequence, payload_json FROM grouped ORDER BY loop_id, segment, sequence
+    `).all() as unknown as SqliteRow[];
+    for (const group of groupTextSegments(rows, (row) => `${String(row.loop_id)}\u0000${String(row.segment)}`)) {
+      const first = group[0]!;
+      const payloads = group.map((row) => JSON.parse(String(row.payload_json)) as Record<string, unknown>);
+      const itemId = lastNonEmptyString(payloads.map((payload) => payload.providerItemId));
+      const merged = { ...payloads[0], text: payloads.map((payload) => String(payload.text ?? "")).join(""), ...(itemId ? { providerItemId: itemId } : {}) };
+      this.statement("UPDATE agent_loop_steps SET payload_json = ? WHERE loop_id = ? AND sequence = ?").run(JSON.stringify(merged), String(first.loop_id), Number(first.sequence));
+      for (const row of group.slice(1)) this.statement("DELETE FROM agent_loop_steps WHERE loop_id = ? AND sequence = ?").run(String(row.loop_id), Number(row.sequence));
+    }
+  }
+
+  /** journal：同 run 内连续、且 modelStep 与 providerItemId 都不变的 MODEL_OUTPUT 合成一条。 */
+  private compactJournalTextSegments(): void {
+    const rows = this.statement(`
+      WITH text_rows AS (
+        SELECT run_id, sequence, payload_json,
+               LAG(sequence) OVER (PARTITION BY run_id ORDER BY sequence) AS prev_sequence,
+               LAG(json_extract(payload_json, '$.modelStep')) OVER (PARTITION BY run_id ORDER BY sequence) AS prev_step,
+               LAG(json_extract(payload_json, '$.providerItemId')) OVER (PARTITION BY run_id ORDER BY sequence) AS prev_item
+        FROM execution_journal WHERE type = 'MODEL_OUTPUT'
+      ), grouped AS (
+        SELECT run_id, sequence, payload_json,
+               SUM(CASE WHEN prev_sequence = sequence - 1
+                         AND json_extract(payload_json, '$.modelStep') IS prev_step
+                         AND json_extract(payload_json, '$.providerItemId') IS prev_item
+                   THEN 0 ELSE 1 END)
+                 OVER (PARTITION BY run_id ORDER BY sequence) AS segment
+        FROM text_rows
+      )
+      SELECT run_id, segment, sequence, payload_json FROM grouped ORDER BY run_id, segment, sequence
+    `).all() as unknown as SqliteRow[];
+    for (const group of groupTextSegments(rows, (row) => `${String(row.run_id)}\u0000${String(row.segment)}`)) {
+      const first = group[0]!;
+      const payloads = group.map((row) => JSON.parse(String(row.payload_json)) as Record<string, unknown>);
+      const merged: Record<string, unknown> = { ...payloads[0], text: payloads.map((payload) => String(payload.text ?? "")).join("") };
+      const taskId = firstNonEmptyString(payloads.map((payload) => payload.taskId));
+      if (taskId) merged.taskId = taskId;
+      const threadId = firstNonEmptyString(payloads.map((payload) => payload.providerThreadId));
+      if (threadId) merged.providerThreadId = threadId;
+      const turnId = firstNonEmptyString(payloads.map((payload) => payload.providerTurnId));
+      if (turnId) merged.providerTurnId = turnId;
+      this.statement("UPDATE execution_journal SET payload_json = ? WHERE run_id = ? AND sequence = ?").run(JSON.stringify(merged), String(first.run_id), Number(first.sequence));
+      for (const row of group.slice(1)) this.statement("DELETE FROM execution_journal WHERE run_id = ? AND sequence = ?").run(String(row.run_id), Number(row.sequence));
     }
   }
 
