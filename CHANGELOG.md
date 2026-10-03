@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026-10-03 — journal：条目不再按 40ms 一片，也不再每次重写整体快照
+
+### 为什么做
+
+执行会话页看起来像"一行两个字"。查下去发现根因不在渲染：`agent-loop` 的正文刷新是
+**160 字符阈值或 40ms 定时器**，低速率输出下定时器主导——实测本机库 3,933 条 `MODEL_OUTPUT`
+的文本长度**中位数是 2 个字符**，66% 不超过 3 个（单个 Run 最多 1,536 条正文条目）。
+它们还逐条镜像成 `run.executor.event` 领域事件，于是同一份碎片在库里存了两遍（15,458 条）。
+
+顺带查清了两件事：前端的 `projectExecutionJournal` **已经在**按"模型轮次 + provider 条目 id"
+把连续正文合并成一条消息（1,647 条 journal → 94 条消息、17 条正文、平均 52 字），
+所以页面上并不缺合并逻辑；缺的是**写侧的粒度**。而 `execution_threads.journal_json`
+（journal 的整体快照）既贵又错：写侧每次 `saveExecutionThread` 都要序列化整份（实测最大 579 KB），
+它却只在那一处更新、`appendExecutionJournal` 不碰它——实测 18 个线程里 **13 个的快照与执行日志表
+已经对不上**。
+
+### Changed
+
+- **正文按"连续段"落一条**（`executor-agent.ts`）：攒进内存，遇到下一条非正文条目或 Run 终止时写一条。
+  分段依据与前端投影**逐字相同**，所以条目顺序、分组、页面呈现都不变，只是条目数少一两个数量级。
+- **`execution_threads.journal_json` 整体快照删除**：启动时先把"只有快照、表里没有行"的历史线程
+  搬进 `execution_journal`，再 `DROP COLUMN`。`backfillLegacyVerificationRuns` 一并从快照改读表
+  （拿一份已经过期的副本当修复依据，会漏掉最近的条目）。
+- **`appendExecutionJournal` 的归属校验**从 `getExecutionThread`（读整条日志并解析）改成一次主键查询。
+  它逐条追加调用，此前整体是 O(n²)。
+
+### 已知未做
+
+`agent_loop_steps` 里同一处碎片更严重：**60,161 行里 57,445 行是 `MODEL_TEXT_DELTA`，文本长度中位数同样是 2**
+（同一个 40ms 刷新的产物）。它不参与执行会话的呈现，所以这轮没动。
+
 ## 2026-10-03 — 删掉 V1 扁平合同镜像（Plan 契约只剩一份）
 
 ### 为什么做
