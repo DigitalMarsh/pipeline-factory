@@ -377,7 +377,6 @@ export class SqlitePipelineStore implements PipelineStore {
         id TEXT PRIMARY KEY,
         run_id TEXT NOT NULL,
         state TEXT NOT NULL,
-        journal_json TEXT NOT NULL,
         telemetry_json TEXT
       );
       CREATE TABLE IF NOT EXISTS execution_journal (
@@ -622,6 +621,13 @@ export class SqlitePipelineStore implements PipelineStore {
     for (const table of ["candidate_plans", "plan_revisions", "plan_revision_drafts", "change_proposals"]) {
       try { this.database.exec(`ALTER TABLE ${table} DROP COLUMN contract_json`); } catch { /* 新库没有这一列。 */ }
     }
+    // `execution_threads.journal_json` 是 journal 的**整体快照**，与 `execution_journal` 表是同一份
+    // 事实的两份副本。它两个毛病都占全了：写侧每次 saveExecutionThread 都要把整份 journal 序列化
+    // 一遍（实测最大 579 KB），而它只在 saveExecutionThread 时更新、appendExecutionJournal 不碰它，
+    // 于是实测本机 18 个线程里 **13 个的快照与表已经对不上**——读路径早就改读表了（也只有表是对的）。
+    // 先把"只有快照、表里没有"的历史线程搬进表，再丢列。
+    this.backfillJournalRowsFromSnapshot();
+    try { this.database.exec("ALTER TABLE execution_threads DROP COLUMN journal_json"); } catch { /* 新库没有这一列。 */ }
     this.backfillPlanDependencyIds();
     this.repairUnconfirmedProgressedPlans();
     this.repairOrphanedPlans();
@@ -988,7 +994,7 @@ export class SqlitePipelineStore implements PipelineStore {
 
   saveExecutionThread(thread: ExecutionThread): ExecutionThread {
     const safe = { ...thread, journal: thread.journal.map((entry) => ({ ...entry, payload: redactAuditPayload(entry.payload) as ExecutionJournalPayload })) };
-    this.statement("INSERT INTO execution_threads (id, run_id, state, journal_json, telemetry_json) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET state=excluded.state, journal_json=excluded.journal_json, telemetry_json=excluded.telemetry_json").run(safe.id, safe.runId, safe.state, JSON.stringify(safe.journal), safe.telemetry ? JSON.stringify(safe.telemetry) : null);
+    this.statement("INSERT INTO execution_threads (id, run_id, state, telemetry_json) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET state=excluded.state, telemetry_json=excluded.telemetry_json").run(safe.id, safe.runId, safe.state, safe.telemetry ? JSON.stringify(safe.telemetry) : null);
     for (const entry of safe.journal) {
       this.statement("INSERT OR IGNORE INTO execution_journal (execution_thread_id, run_id, sequence, type, occurred_at, payload_json) VALUES (?, ?, ?, ?, ?, ?)").run(safe.id, safe.runId, entry.sequence, entry.type, entry.occurredAt, JSON.stringify(entry.payload));
     }
@@ -996,8 +1002,10 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   appendExecutionJournal(input: { executionThreadId: string; runId: string; type: JournalEntryType; payload: Record<string, unknown>; occurredAt?: string }): ExecutionJournalEntry {
-    const thread = this.getExecutionThread(input.executionThreadId);
-    if (!thread || thread.runId !== input.runId) throw new Error(`ExecutionThread ${input.executionThreadId} does not belong to Run ${input.runId}`);
+    // 归属校验只查一次主键。**不要改成 getExecutionThread**：那条路会把这 1,600+ 行的 journal
+    // 全读出来解析一遍，而它是逐条追加调用的（每追加一条就读一次全部 → O(n²)）。
+    const owner = this.statement("SELECT run_id FROM execution_threads WHERE id = ?").get(input.executionThreadId) as SqliteRow | undefined;
+    if (!owner || String(owner.run_id) !== input.runId) throw new Error(`ExecutionThread ${input.executionThreadId} does not belong to Run ${input.runId}`);
     const sequence = Number((this.statement("SELECT COALESCE(MAX(sequence), 0) + 1 AS next_sequence FROM execution_journal WHERE run_id = ?").get(input.runId) as SqliteRow).next_sequence);
     const entry: ExecutionJournalEntry = { sequence, type: input.type, occurredAt: input.occurredAt ?? this.now(), payload: redactAuditPayload(input.payload) as ExecutionJournalPayload };
     this.statement("INSERT INTO execution_journal (execution_thread_id, run_id, sequence, type, occurred_at, payload_json) VALUES (?, ?, ?, ?, ?, ?)").run(input.executionThreadId, input.runId, entry.sequence, entry.type, entry.occurredAt, JSON.stringify(entry.payload));
@@ -1052,16 +1060,14 @@ export class SqlitePipelineStore implements PipelineStore {
 
   private backfillLegacyVerificationRuns(): void {
     const insert = this.statement("INSERT OR IGNORE INTO verification_runs (id, run_id, status, repair_attempts, command_results_json, completed_at) VALUES (?, ?, ?, ?, ?, ?)");
-    const rows = this.statement("SELECT journal_json FROM execution_threads").all() as unknown as SqliteRow[];
+    // 读**执行日志表**而不是那个整体快照：快照只在 saveExecutionThread 时更新，而 journal 是逐条
+    // 追加的，两者实测已经对不上（本机 18 个线程里 13 个不一致）——拿它当修复依据会漏掉最近的条目。
+    const rows = this.statement("SELECT payload_json FROM execution_journal WHERE type = 'VERIFICATION'").all() as unknown as SqliteRow[];
     for (const row of rows) {
-      let journal: unknown;
-      try { journal = JSON.parse(String(row.journal_json)); } catch { continue; }
-      if (!Array.isArray(journal)) continue;
-      for (const entry of journal) {
-        if (!isRecord(entry) || entry.type !== "VERIFICATION" || !isVerificationRun(entry.payload)) continue;
-        const verification = entry.payload;
-        insert.run(verification.id, verification.runId, verification.status, verification.repairAttempts, JSON.stringify(verification.commandResults), verification.completedAt);
-      }
+      let payload: unknown;
+      try { payload = JSON.parse(String(row.payload_json)); } catch { continue; }
+      if (!isVerificationRun(payload)) continue;
+      insert.run(payload.id, payload.runId, payload.status, payload.repairAttempts, JSON.stringify(payload.commandResults), payload.completedAt);
     }
   }
 
@@ -1162,9 +1168,7 @@ export class SqlitePipelineStore implements PipelineStore {
     const row = this.statement("SELECT * FROM execution_threads WHERE id = ?").get(threadId) as SqliteRow | undefined;
     if (!row) return undefined;
     const journalRows = this.statement("SELECT sequence, type, occurred_at, payload_json FROM execution_journal WHERE execution_thread_id = ? ORDER BY sequence ASC").all(threadId) as unknown as SqliteRow[];
-    const journal = journalRows.length > 0
-      ? journalRows.map((entry) => ({ sequence: Number(entry.sequence), type: String(entry.type) as JournalEntryType, occurredAt: String(entry.occurred_at), payload: JSON.parse(String(entry.payload_json)) as ExecutionJournalPayload }))
-      : JSON.parse(String(row.journal_json)) as ExecutionJournalEntry[];
+    const journal = journalRows.map((entry) => ({ sequence: Number(entry.sequence), type: String(entry.type) as JournalEntryType, occurredAt: String(entry.occurred_at), payload: JSON.parse(String(entry.payload_json)) as ExecutionJournalPayload }));
     const telemetry = typeof row.telemetry_json === "string" && row.telemetry_json.length > 0 ? JSON.parse(row.telemetry_json) as ExecutionTelemetry : null;
     return { id: String(row.id), runId: String(row.run_id), state: String(row.state) as ExecutionThreadState, journal, telemetry };
   }
@@ -1618,6 +1622,29 @@ export class SqlitePipelineStore implements PipelineStore {
     for (const table of ["candidate_plans", "plan_revisions", "plan_revision_drafts", "change_proposals"]) {
       this.database.exec(`UPDATE ${table} SET resolved_contract_json = json_set(resolved_contract_json, '$.dependsOnPlanIds', json('[]'))
         WHERE resolved_contract_json IS NOT NULL AND json_extract(resolved_contract_json, '$.dependsOnPlanIds') IS NULL`);
+    }
+  }
+
+  /**
+   * 把"只存在整体快照里"的历史 journal 行搬进 `execution_journal`，然后那条快照列才能丢。
+   *
+   * 只处理表里一行都没有的线程——表里有行的，快照一定是旧的（见调用点的说明），拿它去补只会把
+   * 已经正确的事实换成过期的。新库上这条 SELECT 会因为列不存在而抛错，那就是"没有可搬的"。
+   */
+  private backfillJournalRowsFromSnapshot(): void {
+    let threads: SqliteRow[];
+    try {
+      threads = this.statement("SELECT t.id, t.run_id, t.journal_json FROM execution_threads t WHERE EXISTS (SELECT 1 FROM runs r WHERE r.id = t.run_id) AND NOT EXISTS (SELECT 1 FROM execution_journal j WHERE j.execution_thread_id = t.id)").all() as unknown as SqliteRow[];
+    } catch { return; /* 列已经不存在（本迁移跑过了）。 */ }
+    const insert = this.statement("INSERT OR IGNORE INTO execution_journal (execution_thread_id, run_id, sequence, type, occurred_at, payload_json) VALUES (?, ?, ?, ?, ?, ?)");
+    for (const thread of threads) {
+      let journal: unknown;
+      try { journal = JSON.parse(String(thread.journal_json)); } catch { continue; }
+      if (!Array.isArray(journal)) continue;
+      for (const entry of journal) {
+        if (!isRecord(entry) || typeof entry.sequence !== "number" || typeof entry.type !== "string" || typeof entry.occurredAt !== "string") continue;
+        insert.run(String(thread.id), String(thread.run_id), entry.sequence, entry.type, entry.occurredAt, JSON.stringify(isRecord(entry.payload) ? entry.payload : {}));
+      }
     }
   }
 

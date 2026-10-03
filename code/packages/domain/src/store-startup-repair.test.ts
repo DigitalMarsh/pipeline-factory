@@ -66,6 +66,16 @@ function runRawSql(databasePath: string, sql: string, ...parameters: Array<strin
   }
 }
 
+/** 读一张表的列名（同样是绕开 store）：给"这一列到底还在不在"这类断言用。 */
+function runRawSqlColumnNames(databasePath: string, table: string): string[] {
+  const database = new DatabaseSync(databasePath);
+  try {
+    return (database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((column) => column.name);
+  } finally {
+    database.close();
+  }
+}
+
 /** 用一条独立连接读一行（同样是绕开 store），只给"回填前/后库里到底写了什么"这类断言用。 */
 function runRawSqlQuery(databasePath: string, sql: string, ...parameters: Array<string | number>): Record<string, unknown> {
   const database = new DatabaseSync(databasePath);
@@ -95,6 +105,37 @@ describe("SqlitePipelineStore 构造期回填", () => {
     expect(reopened.getRevision(planId, 1)?.resolvedContract.dependsOnPlanIds).toEqual([]);
     // 只补缺键的行：已经有人设过依赖的（非空）不能被这次回填抹平。
     expect(JSON.parse(String(runRawSqlQuery(databasePath, "SELECT resolved_contract_json AS value FROM plan_revisions WHERE plan_id = ?", planId).value))).toHaveProperty("dependsOnPlanIds", []);
+  });
+
+  it("把只存在整体快照里的历史 journal 搬进执行日志表", () => {
+    // backfillJournalRowsFromSnapshot 的场景：`execution_threads.journal_json` 是这份 journal 的
+    // 第二份副本，读路径早已改读 execution_journal 表，所以那条列被丢掉了。
+    // 老库里"只有快照、表里没有行"的线程必须先搬进表，否则丢列就等于删数据。
+    const directory = mkdtempSync(join(tmpdir(), "pipeline-journal-backfill-"));
+    temporaryDirectories.push(directory);
+    const databasePath = join(directory, "factory.sqlite");
+    const seeded = new SqlitePipelineStore(databasePath);
+    seeded.saveRun({ id: "run-legacy", projectId: "project-1", planId: "plan-1", planRevision: 1, status: "IN_PROGRESS", branch: "factory/run-legacy", workspacePath: "/tmp/run-legacy", baseCommit: "abc", executionThreadId: "thread-legacy", createdAt: seeded.now(), startedAt: null });
+    seeded.saveExecutionThread({
+      id: "thread-legacy", runId: "run-legacy", state: "ACTIVE",
+      journal: [
+        { sequence: 1, type: "RUN_CREATED", occurredAt: "2026-09-01T10:00:00.000Z", payload: { planId: "plan-1" } },
+        { sequence: 2, type: "MODEL_OUTPUT", occurredAt: "2026-09-01T10:00:01.000Z", payload: { text: "hello" } },
+      ],
+    });
+    seeded.close();
+
+    // 把列加回去并只留快照，回到"老库"的形态。
+    runRawSql(databasePath, "ALTER TABLE execution_threads ADD COLUMN journal_json TEXT");
+    runRawSql(databasePath, "UPDATE execution_threads SET journal_json = ? WHERE id = ?", JSON.stringify([{ sequence: 1, type: "RUN_CREATED", occurredAt: "2026-09-01T10:00:00.000Z", payload: { planId: "plan-1" } }, { sequence: 2, type: "MODEL_OUTPUT", occurredAt: "2026-09-01T10:00:01.000Z", payload: { text: "hello" } }]), "thread-legacy");
+    runRawSql(databasePath, "DELETE FROM execution_journal WHERE execution_thread_id = ?", "thread-legacy");
+
+    const reopened = new SqlitePipelineStore(databasePath);
+    openStores.push(reopened);
+
+    expect(reopened.getExecutionThread("thread-legacy")?.journal.map((entry) => entry.sequence)).toEqual([1, 2]);
+    // 搬完之后那条快照列就没了：留着一个与表会分叉的副本，是"两份事实"的经典来源。
+    expect(runRawSqlColumnNames(databasePath, "execution_threads")).not.toContain("journal_json");
   });
 });
 
