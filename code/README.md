@@ -247,7 +247,7 @@ Pipeline Flow 负责 Plan、Run、Verify 和 Merge 的业务事实；Agent Loop 
 - `factory-controlled`：ModelGateway 必须声明 `supportsToolCalls=true`，工具请求交给 DurableToolRuntime/ToolGateway 执行；能力不足时返回 `MODEL_CAPABILITY_UNAVAILABLE`，不静默降级。
 - Explorer 固定为 Provider-controlled + Plan Mode + read-only；Executor 的模式从配置读取，但默认也是 Codex App Server Provider-controlled。两种循环禁止嵌套。
 
-每个 Loop 都持久化 `agent_loops`、连续的 `agent_loop_steps`、checkpoint 和 Domain Event。达到最大步骤/时长、重复工具调用或无进展阈值时停止；暂停、取消会阻止新步骤并中断当前 Provider Turn。未知副作用、服务重启时没有活动 Provider Turn 的 Loop 进入 `RECOVERING` 或 `NEEDS_RECONCILIATION`，不自动重放。
+每个 Loop 都持久化 `agent_loops`、连续的 `agent_loop_steps`、checkpoint 和 Domain Event。**落库的正文按「文本段」一条**：40ms 的刷新定时器只驱动在线可见性（`agent.model.text.delta` 仍逐次派发，Explorer 的回合正文与项目执行线程靠它累积），而步骤表与 Run journal 在段结束时才写一条——段的边界与各自的读取方逐字相同（`explorer-activity` 合并助手气泡、`projectExecutionJournal` 合并执行会话），所以页面上一条都不变。启动时还会把老库里已有的碎片按同一规则并段，并删掉能逐个聚合证明「另有副本」的正文事件（3 个副本不成立的回合会保留，那是唯一记录）；判据、实测数字与 `VACUUM` 的顺序见 `docs/消息类型及事件状态机流程图.md` 的 §7。达到最大步骤/时长、重复工具调用或无进展阈值时停止；暂停、取消会阻止新步骤并中断当前 Provider Turn。未知副作用、服务重启时没有活动 Provider Turn 的 Loop 进入 `RECOVERING` 或 `NEEDS_RECONCILIATION`，不自动重放。
 
 Executor 只有输出结构化执行报告并通过 `TaskProgressGate` 后才会进入 `READY_FOR_VERIFY`。验证命令由 Verifier 脱离模型会话执行，失败可按 PlanRevision 的上限回到同一 ExecutionThread 修复，超过上限进入 `BLOCKED`。范围、依赖或验收不足时创建 ChangeProposal；批准后生成新的不可变 Revision 和新的 Run，旧 Run 保持原始事实。
 
