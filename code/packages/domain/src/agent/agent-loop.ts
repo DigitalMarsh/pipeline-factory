@@ -703,8 +703,11 @@ export class AgentLoopEngine implements AgentLoopRunner {
     const event: AgentLoopEvent = { loopId: loop.id, type, sequence: this.currentStepSequence(loop.id), payload };
     this.callbacks.get(loop.id)?.(event);
     this.listeners.get(loop.id)?.forEach((listener) => listener(event));
-    // durable:false 用于"同一份事实已经以步骤形式落库"的事件，避免同一次模型增量在事件表里存两份。
-    // **进程内派发必须保留**——Explorer 的实时文本链路（thread-service 的 callback）靠它。
+    // durable:false 用于"同一份事实最终会以步骤形式落库"的事件：逐次刷新的文本增量不必在事件表里
+    // 再存一份——步骤是一个**文本段**一条、在段结束时才写（见 textSegments 的说明），所以这里
+    // 省掉的是"事件表里的第二份碎片"，不是"已经有人存过了"。
+    // **进程内派发必须保留**：Explorer 的实时正文（thread-service）与 project-execution-thread
+    // 都靠它逐次累积，砍掉它等于干掉在线流式输出。
     // 只跳过 appendEvent，调用方读到的事件内容与顺序完全不变。
     if (options.durable === false) return;
     this.store.appendEvent({ type: type as import("../index.js").DomainEvent["type"], aggregateId: loop.id, payload });

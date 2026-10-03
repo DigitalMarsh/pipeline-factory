@@ -18,9 +18,11 @@
  *      usageScope 记录用量是整轮还是单步；缺了它消费方无法判断累计口径，
  *      只能把累计值当单轮值展示。
  *   3) **journal 是只追加的回放事实，不决定控制状态**：ExecutionJournalEntry.payload
- *      与 DomainEvent.payload 同理，只放结构化事实。ExecutionJournalCorrelation 是
- *      跨模型轮次、Plan 任务与 Provider 调用之间**唯一**的稳定关联字段集合；
- *      新增关联维度时加到这里，不要在 payload 里另起一个同义字段名。
+ *      与 DomainEvent.payload 同理，只放结构化事实。**写入侧确实只追加**，但启动期的收缩迁移
+ *      （`sqlite-store` 的 `compactTextStreams`）会把历史里逐次刷新留下的正文碎片并成段——
+ *      读到的内容不变，条目边界会变，所以别拿"行数"或"某条 entry 还在不在"当业务依据。
+ *      ExecutionJournalCorrelation 是跨模型轮次、Plan 任务与 Provider 调用之间**唯一**的稳定关联
+ *      字段集合；新增关联维度时加到这里，不要在 payload 里另起一个同义字段名。
  *   4) **VerificationRun.commandResults 保存 CommandResult 原文**（含 exitCode / stdout /
  *      stderr），它是**证据**而不是结论；status 与 reason 才是结论。
  *      只存结论会让失败无法复盘 —— 这是排查验证失败时唯一的输入。
