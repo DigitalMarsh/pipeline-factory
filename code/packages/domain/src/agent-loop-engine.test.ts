@@ -55,6 +55,37 @@ describe("AgentLoopEngine", () => {
     expect(requests.map((request) => request.continuationPrompt)).toEqual([undefined, "continue-1", "continue-2", "continue-3"]);
   });
 
+  it("把一个文本段落成一条 MODEL_TEXT_DELTA 步骤", async () => {
+    // 刷新节奏是 160 字符阈值**或 40ms 定时器**，低速率输出下定时器主导：实测本机库 60,161 条步骤里
+    // 57,445 条是 MODEL_TEXT_DELTA、文本长度中位数 2 个字符。段内每次刷新仍然实时派发
+    // agent.model.text.delta（在线正文靠它），但只有段结束才落一条步骤。
+    const store = new InMemoryPipelineStore();
+    const model: ModelGateway = {
+      configFor: () => ({ model: "explorer" }),
+      capabilities: () => ({ supportsStructuredUserInput: true, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
+      async *stream() {
+        yield { type: "text.delta", text: "Hel", providerItemId: "item-1" };
+        yield { type: "text.delta", text: "lo", providerItemId: "item-1" };
+        // 中间插入别的步骤 —— 段到此为止（与读取方合并气泡的边界同一个）。
+        yield { type: "provider.activity", phase: "completed", itemId: "item-2", itemType: "reasoning", activityKind: "reasoning", outcome: "not-applicable", title: "Reasoning", summary: "working" };
+        yield { type: "text.delta", text: " done", providerItemId: "item-3" };
+        yield { type: "turn.completed" };
+      },
+      async answerUserInput() { return undefined; },
+      async cancel() { return undefined; },
+    };
+
+    const loop = await new AgentLoopEngine(store, model).run({ ...baseInput(), mode: "provider-controlled" });
+
+    const textSteps = store.listAgentLoopSteps(loop.id).filter((step) => step.stepType === "MODEL_TEXT_DELTA");
+    expect(textSteps.map((step) => step.payload.text)).toEqual(["Hello", " done"]);
+    // 段内**最后**一个非空 providerItemId 跟着段一起走（读取方拿它决定气泡归属）。
+    expect(textSteps.map((step) => step.payload.providerItemId)).toEqual(["item-1", "item-3"]);
+    // 段首那条增量的时间：气泡的时间用它，不能记成封段那一刻。
+    expect(textSteps[0]!.occurredAt <= textSteps[1]!.occurredAt).toBe(true);
+    expect(store.listAgentLoopSteps(loop.id).some((step) => step.stepType === "MODEL_TEXT_DELTA" && step.payload.text === "Hel")).toBe(false);
+  });
+
   it("records the provider endpoint fingerprint on the loop start event", async () => {
     const store = new InMemoryPipelineStore();
     const fingerprint = { backend: "claude-agent-sdk", endpoint: "127.0.0.1:15721", source: "config" as const, cliVersion: "2.1.283", credentialSource: "none", providerModel: "claude-opus-5" };

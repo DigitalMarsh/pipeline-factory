@@ -5,6 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { projectExplorerActivity } from "./explorer-activity.js";
+import type { AgentLoop, AgentLoopStep, ExplorerTurn } from "../index.js";
 
 /**
  * 一份**当前形状**的方案。V1 扁平合同已经不再支持，所以"能解析出摘要"的夹具只能长这样：
@@ -64,6 +65,40 @@ describe("Explorer activity projection", () => {
     expect(items.map((item) => item.kind)).toEqual(["USER_MESSAGE", "ASSISTANT_MESSAGE", "TOOL_STARTED", "TOOL_COMPLETED", "GATE_CHECKED"]);
     expect(items[1]?.summary).toBe("Hello");
     expect(items[2]).toMatchObject({ title: "Tool running", details: { tool: "read_file", callId: "call-1" } });
+  });
+
+  it("正文的落库粒度变化不改变活动投影的可见产出（写侧按「文本段」合并的等价性）", () => {
+    // 这条是 agent-loop 把 MODEL_TEXT_DELTA 从"逐次刷新一条"改成"一个文本段一条"的等价性见证：
+    // 同一段正文，旧形态是 3 条步骤、新形态是 1 条，投影出来的对话必须逐字段相同。
+    // 该改动的依据就在这里——读取方合并 ASSISTANT_MESSAGE 的边界是"中间夹了别的步骤"，
+    // 与写侧封段的边界是同一个，所以切成几条都不改变气泡。
+    const turn: ExplorerTurn = { id: "assistant-1", threadId: "explorer-1", role: "assistant", content: "Hello!", status: "COMPLETED", createdAt: "2026-08-29T10:00:00.000Z", sequence: 1 };
+    const loop: AgentLoop = { id: "loop-1", ownerType: "explorer-turn", ownerId: "assistant-1", role: "explorer", mode: "provider-controlled", state: "COMPLETED", stepCount: 4, maxSteps: 40, startedAt: "2026-08-29T10:00:00.500Z", completedAt: "2026-08-29T10:00:02.000Z", providerThreadId: null, providerTurnId: null, checkpointJson: null };
+    const textStep = (sequence: number, text: string, occurredAt: string, providerItemId: string | null): AgentLoopStep => ({ loopId: "loop-1", sequence, stepType: "MODEL_TEXT_DELTA", status: "COMPLETED", callId: null, providerThreadId: null, providerTurnId: null, payload: { text, ...(providerItemId ? { providerItemId } : {}) }, occurredAt });
+    const toolStep = (sequence: number, occurredAt: string): AgentLoopStep => ({ loopId: "loop-1", sequence, stepType: "TOOL_REQUESTED", status: "RUNNING", callId: "call-1", providerThreadId: null, providerTurnId: null, payload: { tool: "read_file", delegatedToProvider: true }, occurredAt });
+
+    const fragmented = [
+      textStep(1, "Hel", "2026-08-29T10:00:01.000Z", "item-1"),
+      textStep(2, "lo", "2026-08-29T10:00:01.040Z", "item-1"),
+      textStep(3, "!", "2026-08-29T10:00:01.080Z", null),
+      toolStep(4, "2026-08-29T10:00:01.200Z"),
+      textStep(5, "OK", "2026-08-29T10:00:01.400Z", "item-2"),
+    ];
+    // 合并后的形态：段首时间与段内最后一个非空 providerItemId 一起带走。
+    const coalesced = [
+      textStep(1, "Hello!", "2026-08-29T10:00:01.000Z", "item-1"),
+      toolStep(2, "2026-08-29T10:00:01.200Z"),
+      textStep(3, "OK", "2026-08-29T10:00:01.400Z", "item-2"),
+    ];
+
+    const visible = (steps: typeof fragmented) => projectExplorerActivity({ turns: [turn], loops: [loop], steps }).map(({ id: _id, ...item }) => item);
+    expect(visible(coalesced)).toEqual(visible(fragmented));
+    // 合并后仍然：一条正文一个气泡、时间取段首那条增量、内容取整段的拼接。
+    expect(visible(coalesced).map((item) => [item.kind, item.summary, item.occurredAt])).toEqual([
+      ["ASSISTANT_MESSAGE", "Hello!", "2026-08-29T10:00:01.000Z"],
+      ["TOOL_STARTED", "read_file", "2026-08-29T10:00:01.200Z"],
+      ["ASSISTANT_MESSAGE", "OK", "2026-08-29T10:00:01.400Z"],
+    ]);
   });
 
   it("does not invent a description when a Provider activity carries no summary", () => {

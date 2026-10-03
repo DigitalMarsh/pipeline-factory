@@ -268,6 +268,18 @@ export class AgentLoopEngine implements AgentLoopRunner {
   private readonly providerCommandTimers = new Map<string, Map<string, ReturnType<typeof setTimeout>>>();
   private readonly callbacks = new Map<string, (event: AgentLoopEvent) => void>();
   private readonly stepSequences = new Map<string, number>();
+  /**
+   * 未落库的"文本段"。段内每次刷新都实时派发 `agent.model.text.delta`（在线正文靠它累积，
+   * 见 thread-service / project-execution-thread），但只在**段结束时**写一条 MODEL_TEXT_DELTA 步骤。
+   *
+   * 为什么按段落而不是逐次刷新落：刷新节奏是 160 字符阈值**或 40ms 定时器**，低速率输出下定时器主导。
+   * 实测本机库 `agent_loop_steps` 60,161 行里 57,445 行是 MODEL_TEXT_DELTA、文本长度**中位数 2 个字符**，
+   * 这些行还被镜像成 4 万条 `agent.step.model_text_delta` 领域事件。
+   *
+   * 段的边界与**读取方**（explorer-activity 的 ASSISTANT_MESSAGE 合并）**逐字相同**：任何别的步骤
+   * 出现就意味着这一段说完了。所以气泡数量、顺序、时间与 providerItemId 都不变。
+   */
+  private readonly textSegments = new Map<string, { text: string; providerItemId: string | null; occurredAt: string }>();
   private readonly options: Required<AgentLoopEngineOptions>;
 
   constructor(private readonly store: PipelineStore, private readonly model: ModelGateway, private readonly defaultToolRuntime?: ToolRuntime, options: AgentLoopEngineOptions = {}) {
@@ -433,10 +445,13 @@ export class AgentLoopEngine implements AgentLoopRunner {
       if (!deltaBuffer) return;
       const text = deltaBuffer;
       deltaBuffer = "";
-      // appendStep 已经把这段文本落进 agent_loop_steps，并同时发出 agent.step.model_text_delta 事件。
-      // 下面这次派发只为把**带 providerThreadId/providerTurnId** 的增量送给进程内消费者
-      // （thread-service 靠它累积 turn 正文），不再往事件表里存第二份同样的 text。
-      this.appendStep(current, "MODEL_TEXT_DELTA", "COMPLETED", { text, ...(deltaItemId ? { providerItemId: deltaItemId } : {}) });
+      // 攒进"当前文本段"（落库由封段负责），同时**每次刷新都**把带 providerThreadId/providerTurnId
+      // 的增量派发给进程内消费者：thread-service 靠它累积 turn 正文、project-execution-thread 靠它
+      // 推 project.execution.turn.text.delta。这条派发的节奏与落库粒度是两件事，不要合并。
+      const segment = this.textSegments.get(current.id) ?? { text: "", providerItemId: null, occurredAt: this.store.now() };
+      segment.text += text;
+      if (deltaItemId) segment.providerItemId = deltaItemId;
+      this.textSegments.set(current.id, segment);
       this.emit(current, "agent.model.text.delta", { text, ...(deltaThreadId ? { providerThreadId: deltaThreadId } : {}), ...(deltaTurnId ? { providerTurnId: deltaTurnId } : {}), ...(deltaItemId ? { providerItemId: deltaItemId } : {}) }, { durable: false });
     };
     // 低速率输出时字符阈值可能迟迟达不到；定时刷新保证文本仍能即时可见，而不是等步骤结束才出现。
@@ -604,8 +619,9 @@ export class AgentLoopEngine implements AgentLoopRunner {
         this.emit(loop, "agent.context.compacted", { messageCount: messages.length });
       }
     } finally {
-      // 任何退出路径都不能留下未清理的定时器。
+      // 任何退出路径都不能留下未清理的定时器，也不能留下没落库的正文段。
       clearDeltaTimer();
+      this.sealTextSegment(initial.id);
     }
   }
 
@@ -647,10 +663,28 @@ export class AgentLoopEngine implements AgentLoopRunner {
 
   private resolveWaiter(loop: AgentLoop): void { this.resolveWaiters.get(loop.id)?.(loop); this.resolveWaiters.delete(loop.id); }
 
-  private appendStep(loop: AgentLoop, stepType: AgentStepType, status: AgentLoopStepStatus, payload: Record<string, unknown>): void {
-    const step = this.store.appendAgentLoopStep({ loopId: loop.id, stepType, status, callId: typeof payload.callId === "string" ? payload.callId : null, providerThreadId: loop.providerThreadId, providerTurnId: loop.providerTurnId, payload });
+  private appendStep(loop: AgentLoop, stepType: AgentStepType, status: AgentLoopStepStatus, payload: Record<string, unknown>, occurredAt?: string): void {
+    // 任何别的步骤出现，都意味着当前这一段正文说完了：先封段，步骤顺序才和逐次刷新时逐字一致。
+    if (stepType !== "MODEL_TEXT_DELTA") this.sealTextSegment(loop.id);
+    const step = this.store.appendAgentLoopStep({ loopId: loop.id, stepType, status, callId: typeof payload.callId === "string" ? payload.callId : null, providerThreadId: loop.providerThreadId, providerTurnId: loop.providerTurnId, payload, ...(occurredAt ? { occurredAt } : {}) });
     this.stepSequences.set(loop.id, step.sequence);
     this.emit(loop, `agent.step.${stepType.toLowerCase()}`, { ...payload, sequence: step.sequence });
+  }
+
+  /**
+   * 把攒着的文本段落成一条 MODEL_TEXT_DELTA 步骤。
+   *
+   * 段首增量的 `occurredAt` 与段内**最后**一个非空 providerItemId 一起带走：读取方拿这两个值
+   * 决定气泡的时间与归属（见 explorer-activity 的 ASSISTANT_MESSAGE），丢了它们就等于改了可见产出。
+   */
+  private sealTextSegment(loopId: string): void {
+    const segment = this.textSegments.get(loopId);
+    if (!segment) return;
+    this.textSegments.delete(loopId);
+    if (!segment.text) return;
+    const loop = this.store.getAgentLoop(loopId);
+    if (!loop) return;
+    this.appendStep(loop, "MODEL_TEXT_DELTA", "COMPLETED", { text: segment.text, ...(segment.providerItemId ? { providerItemId: segment.providerItemId } : {}) }, segment.occurredAt);
   }
 
   /**
