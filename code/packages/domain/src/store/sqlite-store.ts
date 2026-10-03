@@ -1663,12 +1663,75 @@ export class SqlitePipelineStore implements PipelineStore {
   private compactTextStreams(): void {
     this.database.exec("BEGIN");
     try {
+      // **先记高水位，再删行**（与 pruneEvents 同一条规矩，理由见那里的注释）：压实会删掉某些聚合的
+      // 尾部事件，删完 MAX(sequence) 会退回去，而事件序号正是客户端重连时的游标。
+      this.statement(`
+        INSERT INTO event_sequence_watermark (id, last_sequence)
+        VALUES (1, COALESCE((SELECT MAX(sequence) FROM domain_events), 0))
+        ON CONFLICT(id) DO UPDATE SET last_sequence = MAX(event_sequence_watermark.last_sequence, excluded.last_sequence)
+      `).run();
       this.compactStepsTextSegments();
       this.compactJournalTextSegments();
+      this.compactTextEventSegments();
       this.database.exec("COMMIT");
     } catch (error) {
       this.database.exec("ROLLBACK");
       throw error;
+    }
+  }
+
+  /**
+   * 事件表里的正文碎片。四簇合计 126,067 行 / 17.6 MB，占 `domain_events` 的 94% 行、90% 字节，
+   * 而**一个读的人都没有**：
+   *   - `agent.step.model_text_delta`：`agent_loop_steps` 那一行的事件镜像；
+   *   - `agent.model.text.delta`：上一簇的逐字重复，写侧早已停写（见 event-retention.ts 的说明）；
+   *   - `explorer.turn.text.delta`：最终正文在 `explorer_turns.content`；
+   *   - `run.executor.event` 的 MODEL_OUTPUT：`execution_journal` 的镜像。
+   *
+   * 段 = 同 type + 同 aggregate + **事件序号相邻**（这一段时间里没有为该聚合写入别的事件）；
+   * 载荷里带内层 `sequence` 的（步骤镜像、journal 镜像）另外要求内层序号也相邻——这样合并出来的
+   * 段与 `agent_loop_steps` / `execution_journal` 压实后的段一一对应，镜像关系仍然成立。
+   */
+  private compactTextEventSegments(): void {
+    const rows = this.statement(`
+      WITH text_events AS (
+        SELECT id, sequence, aggregate_id, type, payload_json,
+               LAG(sequence) OVER (PARTITION BY aggregate_id, type ORDER BY sequence) AS prev_sequence,
+               LAG(json_extract(payload_json, '$.sequence')) OVER (PARTITION BY aggregate_id, type ORDER BY sequence) AS prev_inner,
+               LAG(json_extract(payload_json, '$.modelStep')) OVER (PARTITION BY aggregate_id, type ORDER BY sequence) AS prev_step,
+               LAG(json_extract(payload_json, '$.providerItemId')) OVER (PARTITION BY aggregate_id, type ORDER BY sequence) AS prev_item
+        FROM domain_events
+        WHERE (type IN ('agent.step.model_text_delta', 'agent.model.text.delta', 'explorer.turn.text.delta')
+               OR (type = 'run.executor.event' AND json_extract(payload_json, '$.type') = 'MODEL_OUTPUT'))
+      ), grouped AS (
+        SELECT id, sequence, aggregate_id, type, payload_json,
+               SUM(CASE WHEN prev_sequence = sequence - 1
+                         AND (json_extract(payload_json, '$.sequence') IS NULL
+                              OR prev_inner = json_extract(payload_json, '$.sequence') - 1)
+                         AND (json_extract(payload_json, '$.providerItemId') IS prev_item)
+                         AND (json_extract(payload_json, '$.modelStep') IS prev_step)
+                   THEN 0 ELSE 1 END)
+                 OVER (PARTITION BY aggregate_id, type, json_extract(payload_json, '$.type') ORDER BY sequence) AS segment
+        FROM text_events
+      )
+      SELECT aggregate_id, type, segment, id, sequence, payload_json
+      FROM grouped
+      ORDER BY aggregate_id, type, segment, sequence
+    `).all() as unknown as SqliteRow[];
+    for (const group of groupTextSegments(rows, (row) => `${String(row.aggregate_id)}\u0000${String(row.type)}\u0000${String(row.segment)}`)) {
+      const first = group[0]!;
+      const payloads = group.map((row) => JSON.parse(String(row.payload_json)) as Record<string, unknown>);
+      const merged: Record<string, unknown> = { ...payloads[0], text: payloads.map((payload) => String(payload.text ?? "")).join("") };
+      const itemId = lastNonEmptyString(payloads.map((payload) => payload.providerItemId));
+      if (itemId) merged.providerItemId = itemId;
+      const taskId = firstNonEmptyString(payloads.map((payload) => payload.taskId));
+      if (taskId) merged.taskId = taskId;
+      const threadId = firstNonEmptyString(payloads.map((payload) => payload.providerThreadId));
+      if (threadId) merged.providerThreadId = threadId;
+      const turnId = firstNonEmptyString(payloads.map((payload) => payload.providerTurnId));
+      if (turnId) merged.providerTurnId = turnId;
+      this.statement("UPDATE domain_events SET payload_json = ? WHERE id = ?").run(JSON.stringify(merged), String(first.id));
+      for (const row of group.slice(1)) this.statement("DELETE FROM domain_events WHERE id = ?").run(String(row.id));
     }
   }
 

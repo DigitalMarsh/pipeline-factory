@@ -124,6 +124,10 @@ describe("SqlitePipelineStore 构造期回填", () => {
     seeded.saveRun({ id: "run-1", projectId: "project-1", planId: "plan-1", planRevision: 1, status: "IN_PROGRESS", branch: "factory/run-1", workspacePath: "/tmp/run-1", baseCommit: "abc", executionThreadId: "thread-1", createdAt: seeded.now(), startedAt: null });
     seeded.saveExecutionThread({ id: "thread-1", runId: "run-1", state: "ACTIVE", journal: [] });
     for (const text of ["He", "llo", " world"]) seeded.appendExecutionJournal({ executionThreadId: "thread-1", runId: "run-1", type: "MODEL_OUTPUT", payload: { text, modelStep: 1, providerItemId: "item-1" } });
+    // 事件表里的四簇正文碎片同样要压实：步骤镜像、它的历史重复、探索回合正文、journal 镜像。
+    for (const [index, text] of ["你", "好", "呀"].entries()) seeded.appendEvent({ type: "agent.step.model_text_delta", aggregateId: "loop-1", payload: { text, providerItemId: "item-1", sequence: index + 1 } });
+    for (const text of ["第一", "句"]) seeded.appendEvent({ type: "explorer.turn.text.delta", aggregateId: "assistant-1", payload: { turnId: "assistant-1", explorerPlanId: "plan-1", loopId: "loop-1", text } });
+    for (const [index, text] of ["He", "llo"].entries()) seeded.appendEvent({ type: "run.executor.event", aggregateId: "run-1", payload: { executionThreadId: "thread-1", type: "MODEL_OUTPUT", sequence: index + 1, occurredAt: seeded.now(), text, modelStep: 1, providerItemId: "item-1" } });
     seeded.close();
 
     const reopened = new SqlitePipelineStore(databasePath);
@@ -138,6 +142,11 @@ describe("SqlitePipelineStore 构造期回填", () => {
     const journal = reopened.getExecutionThread("thread-1")!.journal;
     expect(journal.map((entry) => entry.payload.text)).toEqual(["Hello world"]);
     expect(journal.map((entry) => entry.sequence)).toEqual([1]);
+
+    // 事件里那四簇碎片同样并成段，正文一字不丢。
+    expect((reopened.listEvents({ types: ["agent.step.model_text_delta"] })).map((event) => event.payload.text)).toEqual(["你好呀"]);
+    expect((reopened.listEvents({ types: ["explorer.turn.text.delta"] })).map((event) => event.payload.text)).toEqual(["第一句"]);
+    expect((reopened.listEvents({ types: ["run.executor.event"] })).map((event) => event.payload.text)).toEqual(["Hello"]);
 
     // 幂等：再开一次没有任何可合并的相邻行。
     reopened.close();
