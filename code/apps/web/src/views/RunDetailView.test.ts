@@ -164,12 +164,12 @@ describe("Run detail execution conversation", () => {
     expect(runDetailStyles).toContain(".execution-conversation-group-guidance");
   });
 
-  it("执行过程有阶段感，且呈现方式由一张档位表统一决定", () => {
+  it("执行过程有阶段感，且呈现方式由一张表统一决定", () => {
     // 四阶段条：回答"现在在干什么、下一步是什么"——此前页面最缺的就是这一句。
     expect(runDetailSource).toContain('class="execution-phase-strip"');
     expect(runDetailSource).toContain("executionPhaseSteps");
     expect(runDetailStyles).toContain(".execution-phase.current");
-    // **呈现方式不再散在视图里**：视图只问档位表，档位表是那个"消息清单"的唯一落点。
+    // **呈现方式不再散在视图里**：视图只问呈现方式表，那张表是那个"消息清单"的唯一落点。
     expect(runDetailSource).toContain("function visibleItems(group: ExecutionConversationGroup)");
     expect(runDetailSource).toContain("function foldedItems(group: ExecutionConversationGroup)");
     expect(runDetailSource).toContain("executionDisplayMode(item)");

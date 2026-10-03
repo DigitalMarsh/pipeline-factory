@@ -111,9 +111,9 @@ describe("八类过程活动各摆什么", () => {
   });
 
   it("Provider 推理流不摆标题——那只是类别名，摆出来和标签重复", () => {
-    const line = explorerActivityLine(activity("REASONING_SUMMARY", { title: "Reasoning", summary: "对照 executionStream.ts 的档位表", details: { itemId: "item-reason-1", itemType: "reasoning", providerControlled: true } }));
+    const line = explorerActivityLine(activity("REASONING_SUMMARY", { title: "Reasoning", summary: "对照 executionStream.ts 的呈现方式表", details: { itemId: "item-reason-1", itemType: "reasoning", providerControlled: true } }));
 
-    expect(line).toEqual({ label: "Reasoning", name: null, reference: null, body: "对照 executionStream.ts 的档位表" });
+    expect(line).toEqual({ label: "Reasoning", name: null, reference: null, body: "对照 executionStream.ts 的呈现方式表" });
   });
 
   it("Provider 没给摘要的推理行退回标签，不留一个只有点和时间的空行", () => {

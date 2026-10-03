@@ -1,6 +1,6 @@
 /**
  * 模块职责：平台级路由 —— 与具体 Project 无关的运行状态与目录查询。共 6 条：
- *   `/health`（启动探针）、`/api/v4/model-backends`（可用 agent/模型/档位目录）、
+ *   `/health`（启动探针）、`/api/v4/model-backends`（可用 agent/模型/推理强度目录）、
  *   `/api/v4/mcp/tools`、`/api/v4/plugins/tools`、`/api/v4/explorer-plan-requirements`、
  *   `/api/v4/dialogs/select-directory`（弹系统"选择文件夹"对话框）。
  *
@@ -60,7 +60,7 @@ export function registerPlatformRoutes(app: FastifyInstance, deps: PlatformRoute
 
   /**
    * 可用后端目录。控制台的"给这个角色选哪个 agent / 哪个模型 / 哪档推理强度"三件事都取自这里：
-   * 模型与档位是**建议值与接线事实**（见 runtime/model-catalog.ts 的维护提示），不是白名单校验。
+   * 模型与推理强度是**建议值与配置事实**（见 runtime/model-catalog.ts 的维护提示），不是白名单校验。
    */
   app.get("/api/v4/model-backends", async () => backends ?? { backends: [], roles: { explorer: "stub", executor: "stub" }, defaultBackend: "stub" });
 

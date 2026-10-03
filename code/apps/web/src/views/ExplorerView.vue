@@ -251,7 +251,7 @@ const { visibleTurns, visibleActivity, visibleInputRequests, planBindings, timel
 /**
  * 时间线上真正渲染哪些条目、助手消息里内嵌的方案卡显不显示，都问同一张清单表
  * （`EXPLORER_DISPLAY_MODES`，见 utils/explorerPresentation.ts）。视图不再自己判断
- * "这一类要不要出现"——档位是产品决定，集中在一张表里，改那里即可。
+ * "这一类要不要出现"——呈现方式是产品决定，集中在一张表里，改那里即可。
  */
 const renderedTimelineItems = computed(() => timelineItems.value.filter((item) => explorerDisplayMode(explorerTimelineMessageType(item)) !== "hidden"));
 const showCandidatePlanCard = explorerDisplayMode("candidate-plan") !== "hidden";

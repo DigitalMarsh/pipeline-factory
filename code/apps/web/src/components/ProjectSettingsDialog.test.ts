@@ -10,7 +10,7 @@ vi.mock("../api", () => ({
     project: vi.fn(),
     updateProject: vi.fn(),
     validateRepository: vi.fn(),
-    // 后端目录：两个后端、各自一组模型与档位。控制台的 agent/模型/推理强度三个下拉全部由它驱动。
+    // 后端目录：两个后端、各自一组模型与推理强度。控制台的 agent/模型/推理强度三个下拉全部由它驱动。
     modelBackends: vi.fn(async () => ({
       backends: [
         { id: "codex-app-server", kind: "codex-app-server", source: "implicit", models: ["gpt-6-sol", "gpt-5.6-luna"], reasoningEfforts: ["low", "high"], endpoint: "codex app-server --stdio", endpointSource: "provider-settings" },
@@ -150,7 +150,7 @@ describe("ProjectSettingsDialog", () => {
     // 未固定后端时默认项写的是"跟随全局（<生效后端>）"，而不是一个空字符串标签。
     expect(selects[0]!.options[0]!.textContent).toContain("跟随全局");
     expect([...selects[0]!.options].some((option) => option.value === "deepseek")).toBe(true);
-    // 模型与档位跟着所选 agent 走：codex 的档位里没有 xhigh，deepseek（Claude 侧）的有。
+    // 模型与推理强度跟着所选 agent 走：codex 的推理强度里没有 xhigh，deepseek（Claude 侧）的有。
     expect([...selects[1]!.options].some((option) => option.value === "gpt-6-sol")).toBe(true);
     expect([...selects[2]!.options].some((option) => option.value === "high")).toBe(true);
     expect([...selects[2]!.options].some((option) => option.value === "xhigh")).toBe(false);

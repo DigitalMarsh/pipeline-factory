@@ -136,8 +136,8 @@ function collapsePendingTaskGroups(groups: ExecutionConversationGroup[]): Execut
 }
 
 /**
- * 按**呈现档位**分流（档位表在 utils/executionStream.ts 的 `EXECUTION_DISPLAY_MODES`）。
- * 视图不自己判断"这条该不该显示"：档位是产品决定，集中在一张表里，改那里即可。
+ * 按**呈现方式**渲染（表在 utils/executionStream.ts 的 `EXECUTION_DISPLAY_MODES`）。
+ * 视图不自己判断"这条该不该显示"：呈现方式是产品决定，集中在一张表里，改那里即可。
  * `hidden` 的条目连计数都不进——它们不是内容，只是 Provider 的机制回显。
  */
 function visibleItems(group: ExecutionConversationGroup): ExecutionStreamItem[] {
@@ -651,7 +651,7 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
                 </template>
               </div>
             </article>
-            <!-- 档位为 `folded` 的过程记录（推理、门禁、机制提示）：默认不占视线，需要时仍可回溯。 -->
+            <!-- 呈现方式为 `folded` 的过程记录（推理、门禁、机制提示）：默认不占视线，需要时仍可回溯。 -->
             <details v-if="foldedItems(group).length" class="execution-folded-log">
               <summary>{{ foldedItems(group).length }} 条过程记录</summary>
               <ul class="execution-folded-list">

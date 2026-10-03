@@ -453,7 +453,7 @@ describe("ClaudeAgentSdkGateway", () => {
     expect(captures[0]?.options.model).toBe("claude-opus-5");
     expect(captures[0]?.options.maxTurns).toBe(7);
     expect(captures[0]?.options.includePartialMessages).toBe(true);
-    // "ultra" 不是 SDK 认识的档位：不传，而不是映射成别的档位。
+    // "ultra" 不是 SDK 认识的取值：不传，而不是映射成别的取值。
     expect(captures[0]?.options.effort).toBeUndefined();
   });
 });

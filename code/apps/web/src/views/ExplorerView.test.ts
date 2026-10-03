@@ -320,7 +320,7 @@ describe("Explorer inline message presentation", () => {
   });
 
   it("时间线的显隐与内嵌方案卡都问同一张清单表", () => {
-    // 档位表（`EXPLORER_DISPLAY_MODES`）必须是**唯一**的判据：模板里再自己写一遍
+    // 呈现方式表（`EXPLORER_DISPLAY_MODES`）必须是**唯一**的判据：模板里再自己写一遍
     // "哪些 kind 要显示"，就等于把表绕过去了——改表不再生效，而且没人会发现。
     expect(explorerViewSource).toContain('v-for="(item, index) in renderedTimelineItems"');
     expect(explorerViewSource).toContain("explorerDisplayMode(explorerTimelineMessageType(item))");

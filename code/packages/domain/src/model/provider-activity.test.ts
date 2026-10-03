@@ -42,7 +42,7 @@ describe("provider 活动的中立词表", () => {
   });
 
   it("没有成败概念的类别返回 not-applicable，而不是 unknown", () => {
-    // 推理流 / 用户消息 / 会话重建：给它们挂状态 chip 是噪音（全库 210/343 条属于这一类）。
+    // 推理流 / 用户消息 / 会话重建：给它们挂状态标签是噪音（全库 210/343 条属于这一类）。
     expect(classifyCodexActivity({ itemType: "reasoning", phase: "completed" })).toEqual({ activityKind: "reasoning", outcome: "not-applicable" });
     expect(classifyCodexActivity({ itemType: "userMessage", phase: "completed" })).toEqual({ activityKind: "message", outcome: "not-applicable" });
     expect(classifyCodexActivity({ itemType: "providerSession", phase: "completed" })).toEqual({ activityKind: "session", outcome: "not-applicable" });

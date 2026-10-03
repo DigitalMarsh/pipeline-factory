@@ -65,7 +65,7 @@ describe("Provider 活动在页面上的成败呈现", () => {
     expect(items[0]?.outcome).toBe("succeeded");
   });
 
-  it("推理流不挂状态 chip（not-applicable → INFO），也不再被标成未记录", () => {
+  it("推理流不挂状态标签（not-applicable → INFO），也不再被标成未记录", () => {
     const items = projectExecutionJournal(journal([
       { sequence: 1, type: "PROVIDER_ACTIVITY", payload: { phase: "completed", itemId: "rs-1", providerItemId: "rs-1", itemType: "reasoning", activityKind: "reasoning", outcome: "not-applicable" } },
     ]));

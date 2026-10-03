@@ -98,7 +98,7 @@ export type ExecutionMessageType =
   | "recovery";
 
 /**
- * 呈现档位：
+ * 呈现方式：
  * - `card`：完整卡片（可读正文 + 详情）
  * - `line`：一行（紧凑活动行，不展开正文）
  * - `folded`：折进所属执行步骤的「N 条活动」，点开才看
@@ -107,7 +107,7 @@ export type ExecutionMessageType =
 export type ExecutionDisplayMode = "card" | "line" | "folded" | "hidden";
 
 /**
- * **消息类型 → 呈现档位。这张表就是"清单"本身。**
+ * **消息类型 → 呈现方式。这张表就是"清单"本身。**
  * 依据是每条消息对"搞清楚 Executor 在干什么"的贡献：
  * 正文与结论是 `card`；动作（命令 / 文件 / 工具 / 步骤）是 `line`；
  * 过程性噪音（推理、门禁）`folded`；Provider 的回显与会话机制 `hidden`。
@@ -673,7 +673,7 @@ export function legacyActivityKind(itemType: string): ProviderActivityKind {
  * 老 journal 事件的成败兜底。**与领域实现同一张词表**，包括那条关键修正：
  * Codex 的 `completed` 就是成功——曾经成功白名单只有 success|succeeded，于是成功的调用
  * 全被显示成"状态未知"。另外 `reasoning` / `message` / `session` 没有成败概念，返回 not-applicable，
- * UI 不再给它们挂状态 chip。
+ * UI 不再给它们挂状态标签。
  */
 export function legacyActivityOutcome(input: { kind: ProviderActivityKind; phase: "started" | "completed"; status?: string | undefined; reason?: string | undefined }): ProviderActivityOutcome {
   if (input.kind === "reasoning" || input.kind === "message" || input.kind === "session") return "not-applicable";
@@ -691,7 +691,7 @@ function readActivityOutcome(value: unknown, fallback: { kind: ProviderActivityK
   return isActivityOutcome(value) ? value : legacyActivityOutcome(fallback);
 }
 
-/** 中立成败 → 条目的展示状态。`not-applicable` 落到 INFO，模板据此**不渲染状态 chip**。 */
+/** 中立成败 → 条目的展示状态。`not-applicable` 落到 INFO，模板据此**不渲染状态标签**。 */
 function outcomeToItemStatus(outcome: ProviderActivityOutcome): ExecutionStreamItem["status"] {
   if (outcome === "not-applicable") return "INFO";
   if (outcome === "running") return "RUNNING";
@@ -801,7 +801,7 @@ function projectExecutionActivity(entry: ExecutionJournalEntry, taskId?: string,
   if (entry.type === "RECOVERY") return activity(entry, "需要恢复", stringValue(payload.reason) ?? stringValue(payload.error) ?? "阻塞原因未记录", "FAILED", { ...association, messageType: "recovery" });
   if (entry.type === "TASK_PROGRESS") {
     const state = stringValue(payload.state);
-    // 阻塞与取消是**异常**：无论呈现档位怎么调，它们都要显眼。
+    // 阻塞与取消是**异常**：无论呈现方式怎么调，它们都要显眼。
     if (state === "BLOCKED") return activity(entry, "Run blocked", stringValue(payload.reason) ?? "Blocking reason not recorded", "FAILED", { ...association, messageType: "recovery" });
     if (state === "CANCELLED") return activity(entry, "Run cancelled", stringValue(payload.reason) ?? "Cancelled", "FAILED", { ...association, messageType: "recovery" });
     if (payload.action === "task-status") return null;

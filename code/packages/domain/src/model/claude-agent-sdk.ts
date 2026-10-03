@@ -484,7 +484,7 @@ function permissionModeFor(role: ModelRole, mode: ModelMode): PermissionMode {
   return "acceptEdits";
 }
 
-/** reasoningEffort 只透传 SDK 认识的档位，不认识就不传（不映射成别的档位）。 */
+/** reasoningEffort 只透传 SDK 认识的取值，不认识就不传（不映射成别的取值）。 */
 function asEffort(value: string | undefined): "low" | "medium" | "high" | "xhigh" | "max" | undefined {
   return value === "low" || value === "medium" || value === "high" || value === "xhigh" || value === "max" ? value : undefined;
 }

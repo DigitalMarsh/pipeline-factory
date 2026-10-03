@@ -124,8 +124,8 @@ describe("projectExecutionJournal", () => {
   });
 });
 
-describe("消息清单的呈现档位", () => {
-  it("**档位表是唯一落点**：卡片 / 一行 / 折叠 / 不显示，一眼看全", () => {
+describe("消息清单的呈现方式", () => {
+  it("**呈现方式表是唯一落点**：卡片 / 一行 / 折叠 / 不显示，一眼看全", () => {
     expect(EXECUTION_DISPLAY_MODES["model-prose"]).toBe("card");
     expect(EXECUTION_DISPLAY_MODES["model-report"]).toBe("card");
     expect(EXECUTION_DISPLAY_MODES.plan).toBe("card");
@@ -139,7 +139,7 @@ describe("消息清单的呈现档位", () => {
     expect(EXECUTION_DISPLAY_MODES.session).toBe("hidden");
   });
 
-  it("**异常类消息永远是卡片**：档位怎么调，阻塞与恢复都不能被藏起来", () => {
+  it("**异常类消息永远是卡片**：呈现方式怎么调，阻塞与恢复都不能被藏起来", () => {
     expect(EXECUTION_DISPLAY_MODES.recovery).toBe("card");
     expect(EXECUTION_DISPLAY_MODES.guidance).toBe("card");
 

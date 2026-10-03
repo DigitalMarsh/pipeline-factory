@@ -8,7 +8,7 @@
  * 维护提示：
  *   1) **未知的已配置模型永远保持可选**：`modelOptionsFor` 会把调用方传入的当前值并进选项，
  *      否则用户手写的模型名（本地别名、代理映射名）会在打开设置页时被下拉框悄悄改掉。
- *   2) 推理档位是**接线事实**而不是建议：Claude Agent SDK 只透传 5 档，配 minimal/ultra
+ *   2) 推理强度**由后端决定、不是建议**：Claude Agent SDK 只透传 5 个取值，配 minimal/ultra
  *      等于没配。空数组表示"该后端不消费这个字段"，此时退回完整词表而不是清空下拉。
  *   3) 目录拉不到时（API 重启中）返回空目录，页面应退回"只显示当前值"的行为，不要编造清单。
  */
@@ -64,13 +64,13 @@ export function modelOptionsFor(catalog: ModelBackendsResponse | null, backendId
   return [...new Set([...fromCatalog, ...configured.filter((value): value is string => Boolean(value))])];
 }
 
-/** 选择某个后端时该显示的推理档位；空值那一项由调用方自己加（它的文案随页面而变）。 */
+/** 选择某个后端时该显示的推理强度；空值那一项由调用方自己加（它的文案随页面而变）。 */
 export function reasoningOptionsFor(catalog: ModelBackendsResponse | null, backendId: string | null | undefined): Array<{ value: string; label: string }> {
   const levels = findBackend(catalog, backendId)?.reasoningEfforts ?? [];
   return (levels.length > 0 ? levels : FULL_REASONING_EFFORTS).map((value) => ({ value, label: value }));
 }
 
-/** 当前值不在该后端的档位表里时，把它也列出来 —— 否则用户看不到自己配了什么。 */
+/** 当前值不在该后端的推理强度表里时，把它也列出来 —— 否则用户看不到自己配了什么。 */
 export function reasoningOptionsWith(catalog: ModelBackendsResponse | null, backendId: string | null | undefined, current: string): Array<{ value: string; label: string }> {
   const options = reasoningOptionsFor(catalog, backendId);
   if (!current || options.some((option) => option.value === current)) return options;

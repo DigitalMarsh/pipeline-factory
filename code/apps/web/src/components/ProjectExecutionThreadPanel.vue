@@ -30,7 +30,7 @@ const canSend = computed(() => Boolean(props.project && props.project.status ===
 const effectiveModel = computed(() => modelSelection.value || snapshot.value?.defaultModel || "");
 const effectiveReasoningEffort = computed(() => reasoningSelection.value || snapshot.value?.defaultReasoningEffort || "default");
 /**
- * 这些模型与档位来自**该项目的 executor 后端**，不是一份全局清单：换个 agent 之后能选的东西就变了。
+ * 这些模型与推理强度来自**该项目的 executor 后端**，不是一份全局清单：换个 agent 之后能选的东西就变了。
  * 已保存的覆盖值始终并入选项，否则用户看不到自己配了什么、也没法清掉它。
  */
 const { catalog: modelCatalog, load: loadModelBackends } = useModelBackends();

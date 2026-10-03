@@ -159,7 +159,7 @@ export function activityIconKind(kind: ExplorerActivityItem["kind"]): "info" | "
 export type ExplorerMessageType = ExplorerActivityItem["kind"] | "input-request" | "candidate-plan";
 
 /**
- * 呈现档位。**执行侧的 card / line / folded / hidden 是按"占多少地方"分的，探索侧按"是什么"分**——
+ * 呈现方式。**执行侧的 card / line / folded / hidden 是按"占多少地方"分的，探索侧按"是什么"分**——
  * 因为探索时间线是平铺的，没有"步骤"这一层可以折叠，密度分档区分不出"模型在思考"和"工具被拒绝"
  * 这两件事，而它们本来就该长得不一样：
  * - `card`：完整卡片（正文 / 方案 / 结构化输入）
@@ -173,7 +173,7 @@ export type ExplorerMessageType = ExplorerActivityItem["kind"] | "input-request"
 export type ExplorerDisplayMode = "card" | "tool" | "reasoning" | "divider" | "gate" | "turn-status" | "hidden";
 
 /**
- * **消息类型 → 呈现档位。这张表就是"清单"本身。**
+ * **消息类型 → 呈现方式。这张表就是"清单"本身。**
  *
  * 判据是每条消息对"看懂这次探索"的贡献：人说的话、模型正文、方案与结构化输入是 `card`；
  * 八类过程活动按**语义**各归各的行——四类带调用身份的归 `tool`（靠标签与语调区分开始 / 完成 / 被拒 / MCP），

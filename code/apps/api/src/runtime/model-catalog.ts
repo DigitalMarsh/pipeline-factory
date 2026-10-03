@@ -1,6 +1,6 @@
 /**
  * 模块职责：把配置里的后端解析成控制台与 domain 都能消费的**目录** ——
- *   每个后端支持哪些模型名、哪些推理档位，以及当前角色默认用哪个后端。
+ *   每个后端支持哪些模型名、哪些推理强度，以及当前角色默认用哪个后端。
  *
  * 为什么单独一个文件，而不是塞进 config.ts：config.ts 描述的是"用户写了什么"，
  *   这里描述的是"这一类 provider 事实是什么"（例如 Claude Agent SDK 只认 5 档 effort）。
@@ -11,7 +11,7 @@
  *   1) **内置模型清单只驱动下拉框，不参与任何后端校验。** Factory 不可能知道某个网关
  *      （尤其是 cc-switch 这类代理）把哪些模型名映射到哪里，所以这些名字是"建议值"，
  *      用户永远可以填清单外的名字 —— 与 Project 设置里"未知模型名保持可选"的既有立场一致。
- *   2) `REASONING_EFFORTS_BY_KIND` 是**接线事实**，不是建议：Claude 侧 `asEffort`
+ *   2) `REASONING_EFFORTS_BY_KIND` 是**由后端配置决定的事实**，不是建议：Claude 侧 `asEffort`
  *      （model/claude-agent-sdk.ts）只透传 low/medium/high/xhigh/max，配了 minimal/ultra
  *      等于没配且**没有任何提示**。这里如实列出，让 Project 设置保存时就能拒绝。
  *      改这里之前先改那一侧的映射，否则会把"能存但无效"变成"存都存不进去"。
@@ -28,7 +28,7 @@ const BUILT_IN_MODELS_BY_KIND: Record<string, string[]> = {
   stub: [],
 };
 
-/** 各类后端真正接受的推理档位；空数组 = 该后端不消费 reasoningEffort，不做校验。 */
+/** 各类后端真正接受的推理强度；空数组 = 该后端不消费 reasoningEffort，不做校验。 */
 const REASONING_EFFORTS_BY_KIND: Record<string, string[]> = {
   "codex-app-server": ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"],
   "claude-agent-sdk": ["low", "medium", "high", "xhigh", "max"],
@@ -96,7 +96,7 @@ export function describeModelBackends(config: FactoryConfig): { backends: ModelB
   };
 }
 
-/** 给 ProjectService 用的校验端口：domain 只问"有没有这个 id、这个 id 接受哪些档位"。 */
+/** 给 ProjectService 用的校验端口：domain 只问"有没有这个 id、这个 id 接受哪些推理强度"。 */
 export function createModelCatalog(config: FactoryConfig): ModelBackendCatalog & { modelsFor(id: string): string[] } {
   const descriptors = describeModelBackends(config).backends;
   const byId = new Map(descriptors.map((descriptor) => [descriptor.id, descriptor]));

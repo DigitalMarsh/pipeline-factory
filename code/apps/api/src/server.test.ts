@@ -71,7 +71,7 @@ describe("Pipeline Factory v4 API", () => {
       const catalog = await app.inject({ method: "GET", url: "/api/v4/model-backends" });
       expect(catalog.statusCode).toBe(200);
       expect(catalog.json()).toMatchObject({ roles: { explorer: "codex-app-server", executor: "deepseek" }, defaultBackend: "codex-app-server" });
-      // 注册表后端用它自己的模型清单；档位按 kind 给（Claude 侧没有 minimal/ultra）。
+      // 注册表后端用它自己的模型清单；推理强度按 kind 给（Claude 侧没有 minimal/ultra）。
       expect(catalog.json().backends.find((backend: { id: string }) => backend.id === "deepseek")).toMatchObject({
         kind: "claude-agent-sdk",
         source: "registry",

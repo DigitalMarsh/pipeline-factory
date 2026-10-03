@@ -24,7 +24,7 @@ export type ModelBackendCatalog = {
   /** 该 id 是否是已配置的模型后端。 */
   has(id: string): boolean;
   /**
-   * 该后端**真正接受**的推理档位。空数组表示"这个后端不消费 reasoningEffort"，
+   * 该后端**真正接受**的推理强度。空数组表示"这个后端不消费 reasoningEffort"，
    * 此时不校验——把"没有词表"当成"什么都不接受"会让所有 openai/stub 后端无法配这个字段。
    */
   effortLevelsFor(id: string): string[];
@@ -234,7 +234,7 @@ function mergeRoleModels<T extends ModelRoleConfig>(base: T, override: ModelRole
   return merged as T;
 }
 
-/** 校验并归一化一个角色的推理档位与后端引用；取值以外的判断都交给调用方。 */
+/** 校验并归一化一个角色的推理强度与后端引用；取值以外的判断都交给调用方。 */
 function validateRoleBackend(model: ModelRoleConfig, role: "explorer" | "executor", catalog: ModelBackendCatalog): void {
   if (!model.backend) return;
   if (!catalog.has(model.backend)) throw new Error(`models.${role}.backend "${model.backend}" is not a configured model backend`);

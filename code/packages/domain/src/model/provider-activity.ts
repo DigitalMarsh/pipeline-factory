@@ -10,7 +10,7 @@
  * 维护提示：
  *   1) **`not-applicable` 与 `unknown` 是两件事，不要合并**：前者是"这类活动没有成败概念"
  *      （推理流、用户消息、会话重建），后者是"应该有成败但 Provider 没给"。UI 对前者的正确处理是
- *      **不渲染状态 chip**；合并回一个值，噪音就回来了（全库 210/343 条属于前者）。
+ *      **不渲染状态标签**；合并回一个值，噪音就回来了（全库 210/343 条属于前者）。
  *   2) **成败词表两个 Provider 共用**，因为 Codex 的 `completed` 与 Claude 的 `succeeded` 指的是
  *      同一件事。加新 Provider 时先看它的词能不能落进这张表，落不进再考虑新增分支——不要为它
  *      另起一套判定。
@@ -50,7 +50,7 @@ export function isProviderActivityOutcome(value: unknown): value is ProviderActi
   return typeof value === "string" && (ACTIVITY_OUTCOMES as readonly string[]).includes(value);
 }
 
-/** 该类别是否根本没有成败概念（UI 据此决定不渲染状态 chip）。 */
+/** 该类别是否根本没有成败概念（UI 据此决定不渲染状态标签）。 */
 export function isOutcomeFreeKind(kind: ProviderActivityKind): boolean {
   return OUTCOME_FREE_KINDS.includes(kind);
 }

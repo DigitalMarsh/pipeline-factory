@@ -43,10 +43,10 @@ export type ProjectExecutionThreadServiceOptions = {
   providerCommandTimeoutMs?: number;
   toolRuntimeForProject?: (project: Project) => ToolRuntime | undefined;
   /**
-   * 这个项目的执行会话可选的模型与推理档位；由组合根按该项目的 **executor 后端**提供。
+   * 这个项目的执行会话可选的模型与推理强度；由组合根按该项目的 **executor 后端**提供。
    * 缺省时退回内置清单（`PROJECT_EXECUTION_MODELS` / `PROJECT_EXECUTION_REASONING_EFFORTS`）。
    *
-   * 为什么必须由外部提供：模型名与档位是 provider 事实，跨后端不通用（Claude 侧只认 5 档
+   * 为什么必须由外部提供：模型名与推理强度是 provider 事实，跨后端不通用（Claude 侧只认 5 档
    * effort）。缺省清单的意义只是"没有目录信息时仍然能用"，不是权威取值。
    * **给的清单要与 `updatePreferences` 的校验同源**（这里给的正是校验用的那一份），
    * 否则会出现"下拉里有、选了却被拒"的死路。
@@ -101,7 +101,7 @@ export class ProjectExecutionThreadService {
     const snapshot = this.get(projectId);
     const allowedModels = new Set(snapshot.modelOptions);
     if (preferences.model !== null && !allowedModels.has(preferences.model)) throw new Error("PROJECT_EXECUTION_MODEL_INVALID");
-    // 档位校验与上面给出的选项同源：能选的一定能存，存过的一定还能再存。
+    // 推理强度校验与上面给出的选项同源：能选的一定能存，存过的一定还能再存。
     const allowedEfforts = new Set(snapshot.reasoningEffortOptions.map((option) => option.value).filter((value): value is string => value !== null));
     if (preferences.reasoningEffort !== null && !allowedEfforts.has(preferences.reasoningEffort)) throw new Error("PROJECT_EXECUTION_REASONING_EFFORT_INVALID");
     const updated = this.store.updateProjectExecutionThread({

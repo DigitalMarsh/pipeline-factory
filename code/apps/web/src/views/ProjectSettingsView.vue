@@ -39,7 +39,7 @@ const form = reactive({
 });
 const { catalog: modelCatalog, load: loadModelBackends } = useModelBackends();
 const modelBackendOptions = computed(() => backendOptions(modelCatalog.value));
-/** 空值表示"跟随全局"；此时下拉里的模型与档位该按全局那个后端来列，而不是留空。 */
+/** 空值表示"跟随全局"；此时下拉里的模型与推理强度该按全局那个后端来列，而不是留空。 */
 const effectiveExplorerBackend = computed(() => form.explorerBackend || modelCatalog.value?.roles.explorer || "");
 const effectiveExecutorBackend = computed(() => form.executorBackend || modelCatalog.value?.roles.executor || "");
 const explorerModelOptions = computed(() => modelOptionsFor(modelCatalog.value, effectiveExplorerBackend.value, form.explorerModel));

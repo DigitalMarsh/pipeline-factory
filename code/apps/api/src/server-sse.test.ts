@@ -4,7 +4,7 @@
  *
  * 设计说明：**不能用 `app.inject`** —— SSE 处理器 hijack 之后永不 end，inject 的 Promise
  *   永不 resolve（已实测挂起）。所以这里真听端口、用 node:http 读前几帧后断开。
- *   分工：帧格式与心跳/轮询节拍的单元级锁定在 http/sse.test.ts；本文件只验证"路由接线仍然通"
+ *   分工：帧格式与心跳/轮询节拍的单元级锁定在 http/sse.test.ts；本文件只验证"路由仍然接得通"
  *   与真实 HTTP 下的响应头，两种形态各覆盖一条 —— 轮询式（runs/events）与订阅式
  *   （explorer-thread/events）。**这两种形态的差别正是 openSseChannel 的 poll 选项与
  *   onClose 订阅清理，所以必须各测一条。**

@@ -1,13 +1,13 @@
 /**
  * 模块职责：ToolCallLedger —— 进程内记录每次工具调用的确定性结果，并在恢复时把状态不明的
  *   调用从 UNCERTAIN 收敛为 NEEDS_RECONCILIATION（即"必须先去核对，不许重放"）。
- *   **注意：这是一份尚未接线进主链路的实现，见维护提示 4。**
+ *   **注意：这是一份**尚未接进主链路**的实现，见维护提示 4。**
  *
  * 为什么从 index.ts 抽出来（批 D）：它表达的是"结果不确定时绝不重放"这条安全约束，
  *   却一直夹在 Merge 类型与 Codex 适配器之间。搬进 tools/ 之后它与同目录的
  *   tool-runtime.ts 相邻 —— 后者才是这条约束**当前实际**的执行点（读 store 里的
  *   PersistedToolCall，遇到 NEEDS_RECONCILIATION / UNKNOWN 直接拒绝重放），两者可以并排
- *   对照，接线的落差一目了然。
+ *   对照，**设计与落地之间的落差**一目了然。
  *
  * 维护提示：
  *   1) **recover() 只降级、不重放**：UNCERTAIN → NEEDS_RECONCILIATION，并且硬写

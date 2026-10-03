@@ -170,7 +170,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
         },
       }));
     },
-    // 项目级执行会话的模型与档位跟随该项目 executor 的后端：跨后端不通用，不能拿一份全局清单糊弄。
+    // 项目级执行会话的模型与推理强度跟随该项目 executor 的后端：跨后端不通用，不能拿一份全局清单糊弄。
     modelCatalogForProject: (project) => {
       if (!modelCatalog) return undefined;
       const backendId = executorBackendId(project, options.config!);
