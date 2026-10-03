@@ -1,5 +1,5 @@
 /**
- * 测试职责：验证 SqlitePipelineStore 在**构造期**对历史数据做的事——两条修复，以及事件回收。
+ * 测试职责：验证 SqlitePipelineStore 在**构造期**对历史数据做的事——一条回填、两条修复，以及事件回收。
  *
  * 为什么单独一个文件：这些都是"打开库的那一刻就改变了历史数据"，它们的输入只能靠**绕过领域 API
  *   直接改库**来构造（走 API 的路径根本产生不出这些行——这正是它们只在历史数据上生效的原因）。
@@ -11,6 +11,8 @@
  *   2) 修 A 不要顺带断言 B。两条修复处理的是互斥的状态集合（见各自用例的注释）。
  *   3) 改库用独立的 DatabaseSync 连接：不借道 store 是为了绕开它的写入路径与校验，
  *      借道就构造不出"老库里的坏数据"这个前提。
+ *   3b) **回填与修复不是一回事**：回填（`backfillPlanDependencyIds`）补的是"新增的必填字段在
+ *      老行里没有"，改完的数据仍然是好的；修复改的是状态本身。回填的用例在下面单独一组。
  *   4) 事件回收（第三组用例）与那两条修复的区别：修复是**纠正**，回收是**删除**，且默认关闭。
  *      它不要求幂等（删过的行第二次本来就不在），但要求**只动白名单内的类型**——
  *      那条断言比"删掉了该删的"更重要。
@@ -63,6 +65,38 @@ function runRawSql(databasePath: string, sql: string, ...parameters: Array<strin
     database.close();
   }
 }
+
+/** 用一条独立连接读一行（同样是绕开 store），只给"回填前/后库里到底写了什么"这类断言用。 */
+function runRawSqlQuery(databasePath: string, sql: string, ...parameters: Array<string | number>): Record<string, unknown> {
+  const database = new DatabaseSync(databasePath);
+  try {
+    return database.prepare(sql).get(...parameters) as Record<string, unknown>;
+  } finally {
+    database.close();
+  }
+}
+
+describe("SqlitePipelineStore 构造期回填", () => {
+  it("给本轮之前落库的契约补上 dependsOnPlanIds", () => {
+    // backfillPlanDependencyIds 的场景：字段是随"删掉 V1 镜像"一起加进 ResolvedPlanContract 的，
+    // 老库里那 21 份契约都没有这个键。读点虽然都写了 `?? []`，但类型说它必填——
+    // 让数据对得上，比要求未来每个读点都记得兜底可靠。
+    const { store, databasePath, planId } = seedConfirmedPlan();
+    runRawSql(databasePath, "UPDATE candidate_plans SET resolved_contract_json = json_remove(resolved_contract_json, '$.dependsOnPlanIds') WHERE id = ?", planId);
+    runRawSql(databasePath, "UPDATE plan_revisions SET resolved_contract_json = json_remove(resolved_contract_json, '$.dependsOnPlanIds') WHERE plan_id = ?", planId);
+    expect(JSON.parse(String(runRawSqlQuery(databasePath, "SELECT resolved_contract_json AS value FROM candidate_plans WHERE id = ?", planId).value))).not.toHaveProperty("dependsOnPlanIds");
+    store.close();
+    openStores.splice(openStores.indexOf(store), 1);
+
+    const reopened = new SqlitePipelineStore(databasePath);
+    openStores.push(reopened);
+
+    expect(reopened.getPlan(planId)?.resolvedContract.dependsOnPlanIds).toEqual([]);
+    expect(reopened.getRevision(planId, 1)?.resolvedContract.dependsOnPlanIds).toEqual([]);
+    // 只补缺键的行：已经有人设过依赖的（非空）不能被这次回填抹平。
+    expect(JSON.parse(String(runRawSqlQuery(databasePath, "SELECT resolved_contract_json AS value FROM plan_revisions WHERE plan_id = ?", planId).value))).toHaveProperty("dependsOnPlanIds", []);
+  });
+});
 
 describe("SqlitePipelineStore 构造期修复", () => {
   it("blocks a plan that reached a later state without any confirmation record", () => {

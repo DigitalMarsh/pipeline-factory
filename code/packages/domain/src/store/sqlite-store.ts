@@ -352,6 +352,7 @@ export class SqlitePipelineStore implements PipelineStore {
         plan_id TEXT NOT NULL,
         reason TEXT NOT NULL,
         requested_changes_json TEXT NOT NULL,
+        resolved_contract_json TEXT,
         status TEXT NOT NULL,
         created_at TEXT NOT NULL,
         created_by TEXT NOT NULL,
@@ -594,6 +595,10 @@ export class SqlitePipelineStore implements PipelineStore {
     this.database.exec("UPDATE domain_events SET sequence = rowid WHERE sequence IS NULL");
     try { this.database.exec("CREATE UNIQUE INDEX IF NOT EXISTS domain_events_sequence_uq ON domain_events(sequence)"); } catch { /* Existing databases already have the index. */ }
     try { this.database.exec("ALTER TABLE change_proposals ADD COLUMN revision INTEGER"); } catch { /* Existing databases already have the column. */ }
+    // ChangeProposal 的契约此前存在 `contract_json`（V1 镜像）里。镜像是那份**有损投影**，
+    // 而提案要的是"提案人交上来的那份契约"——形状不同，没有迁移路径，只能另开一列。
+    // 老库里这一列是空的（本机 0 行提案），真读到时会由 `resolvedContractFromRow` 点名报错。
+    try { this.database.exec("ALTER TABLE change_proposals ADD COLUMN resolved_contract_json TEXT"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN project_config_version INTEGER"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN project_config_hash TEXT"); } catch { /* Existing databases already have the column. */ }
     try { this.database.exec("ALTER TABLE plan_revisions ADD COLUMN project_config_snapshot_json TEXT"); } catch { /* Existing databases already have the column. */ }
@@ -617,6 +622,7 @@ export class SqlitePipelineStore implements PipelineStore {
     for (const table of ["candidate_plans", "plan_revisions", "plan_revision_drafts", "change_proposals"]) {
       try { this.database.exec(`ALTER TABLE ${table} DROP COLUMN contract_json`); } catch { /* 新库没有这一列。 */ }
     }
+    this.backfillPlanDependencyIds();
     this.repairUnconfirmedProgressedPlans();
     this.repairOrphanedPlans();
     this.backfillExplorerPlans();
@@ -946,7 +952,7 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   saveChangeProposal(proposal: ChangeProposal): ChangeProposal {
-    this.statement("INSERT OR IGNORE INTO change_proposals (id, run_id, plan_id, reason, requested_changes_json, status, created_at, created_by, decided_at, decided_by, revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(proposal.id, proposal.runId, proposal.planId, proposal.reason, JSON.stringify(proposal.requestedChanges), proposal.status, proposal.createdAt, proposal.createdBy, proposal.decidedAt, proposal.decidedBy, proposal.revision);
+    this.statement("INSERT OR IGNORE INTO change_proposals (id, run_id, plan_id, reason, requested_changes_json, resolved_contract_json, status, created_at, created_by, decided_at, decided_by, revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(proposal.id, proposal.runId, proposal.planId, proposal.reason, JSON.stringify(proposal.requestedChanges), JSON.stringify(proposal.resolvedContract), proposal.status, proposal.createdAt, proposal.createdBy, proposal.decidedAt, proposal.decidedBy, proposal.revision);
     return this.getChangeProposal(proposal.id) as ChangeProposal;
   }
 
@@ -1595,6 +1601,23 @@ export class SqlitePipelineStore implements PipelineStore {
       const plan = this.planFromRow(row);
       const reason = "Plan source is missing: its source ExplorerThread no longer exists.";
       updatePlanStatus(this, plan, { status: "BLOCKED", attentionReason: reason, lastEventAt: this.now() }, reason);
+    }
+  }
+
+  /**
+   * 老库回填：`resolvedContract.dependsOnPlanIds` 是新增的必填字段（见 plan-spec.ts 的说明），
+   * 本轮之前落库的契约里没有这个键。
+   *
+   * 读点都写了 `?? []`，所以不补也能跑；但类型说它必填，而"21 行数据里少一个字段"这种
+   * 类型与数据的漂移迟早会在某个没写兜底的新读点上炸掉（`?.map()` 之类）。
+   * 让库里的数据也对得上，比要求每个读点都记得兜底可靠。
+   *
+   * 只补缺这个键的行：已有值的不动——**包括非空的依赖**，那是人设置的调度事实。
+   */
+  private backfillPlanDependencyIds(): void {
+    for (const table of ["candidate_plans", "plan_revisions", "plan_revision_drafts", "change_proposals"]) {
+      this.database.exec(`UPDATE ${table} SET resolved_contract_json = json_set(resolved_contract_json, '$.dependsOnPlanIds', json('[]'))
+        WHERE resolved_contract_json IS NOT NULL AND json_extract(resolved_contract_json, '$.dependsOnPlanIds') IS NULL`);
     }
   }
 

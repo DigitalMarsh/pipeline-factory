@@ -4,7 +4,10 @@
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  */
 import { describe, expect, it } from "vitest";
-import { ChangeProposalService, InMemoryPipelineStore, LifecycleHookRunner, PlanService, Scheduler } from "./index.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ChangeProposalService, InMemoryPipelineStore, LifecycleHookRunner, PlanService, Scheduler, SqlitePipelineStore } from "./index.js";
 import { planContractFixture } from "./plan/plan-fixture.js";
 
 describe("ChangeProposalService", () => {
@@ -63,5 +66,36 @@ describe("ChangeProposalService", () => {
     expect(second).toEqual(first);
     expect(store.listAgentLoops()).toHaveLength(0);
     expect(store.listRuns()).toHaveLength(1);
+  });
+});
+
+/**
+ * 内存实现只是"形状对"，落库才是提案真正被消费的路径。这一组存在的原因很具体：
+ * 提案的契约此前存的是 V1 镜像列 `contract_json`，改成 `resolved_contract_json` 时**漏了建表**，
+ * 而内存实现不经过 SQL 列，所有用例照样绿——只有真开一个 SQLite 库才暴露得出来。
+ */
+describe("ChangeProposalService（SQLite）", () => {
+  it("提案的契约经落库往返后一字不差", () => {
+    const directory = mkdtempSync(join(tmpdir(), "pipeline-change-proposal-"));
+    try {
+      const store = new SqlitePipelineStore(join(directory, "factory.sqlite"));
+      try {
+        const plans = new PlanService(store);
+        const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Persisted proposal", resolvedContract: planContractFixture({ title: "Persisted proposal" }) });
+        plans.confirm(plan.id, "user-1");
+        plans.enqueue(plan.id);
+        plans.dispatch(plan.id);
+        const run = store.saveRun({ id: "run-1", projectId: "project-1", planId: plan.id, planRevision: 1, status: "NEEDS_PLAN_CHANGE", branch: "factory/run-1", workspacePath: "/tmp/run-1", baseCommit: "abc", executionThreadId: "thread-run-1", createdAt: store.now(), startedAt: store.now() });
+        const proposals = new ChangeProposalService(store);
+
+        const created = proposals.create({ runId: run.id, reason: "Scope grew", requestedChanges: ["Include docs"], resolvedContract: { ...plan.resolvedContract, dependsOnPlanIds: [] } });
+
+        expect(store.getChangeProposal(created.id)?.resolvedContract).toEqual(created.resolvedContract);
+      } finally {
+        store.close();
+      }
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
   });
 });
