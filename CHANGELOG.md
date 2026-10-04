@@ -1,5 +1,50 @@
 # Changelog
 
+## 2026-10-04 — 两条对话线共用一份消息词表；一次调用只占一行
+
+### 为什么做
+
+清点探索线程（对话框 A）与执行线程（对话框 B）的类型表时发现三层不一致：
+
+1. **名字**：同一个概念两边不同名——"你发的消息"在 A 叫 `USER_MESSAGE`、在 B 叫 `guidance`；
+   同一次工具调用，A 按生命周期拆成 `TOOL_STARTED` / `TOOL_COMPLETED` / `TOOL_DENIED` 三条，B 合成一个 `tool`。
+2. **大小写**：A 的类型值全大写（它直接来自领域枚举），B 的 17 个值是手写的小写串。
+3. **语言**：同一组状态，A 写 `Running` / `Read only` / `Failed`，B 写 `进行中` / `已完成` / `失败`。
+
+再加上三处具体的呈现缺陷，依据都是本机运行库的实测：
+
+- **一次调用在 A 占两行**：`TOOL_REQUESTED → TOOL_COMPLETED` 是同一件事的两端，B 按 `callId` 合并成一条，
+  A 没有。顺带发现 `TOOL_FAILED` / `TOOL_NEEDS_RECONCILIATION` 两个步骤类型在 A **连一行都没有**
+  （投影里没有分支，静默掉了）——"工具失败了"在探索时间线上看不见。
+- **Provider 回声冒充工具行**：A 只按 `itemType` 里有没有 `mcp` / `reason` 三个子串判类，
+  于是 `userMessage`（Provider 把你那句话回显一次）与 `plan`（整篇规划文档）都落进了
+  "Tool started / Tool completed"——实测 112 个与 29 个。
+- **门禁刷屏**：90 条 `GATE_CHECKED` 里 `complete` 51、`continue` 39、**`blocked` 0**，每轮都写一行"一切正常"。
+
+### Changed
+
+- **共用词表**（新增 `apps/web/src/utils/conversationTypes.ts`）：13 类共用项在两条线上同名、同中文文案，
+  两张呈现表都必须为每一项给出一行——`type-parity.test.ts` 编译期拦、`conversationTypes.test.ts` 运行时拦。
+  命名一律大写下划线；执行侧只此一份的 5 类（`PLAN` / `MODEL_REPORT` / `TASK_LIFECYCLE` /
+  `RUN_ACTIVITY` / `RECOVERY`）与探索侧独有的 4 类逐条登记了理由。
+- **一次调用只产出一条条目**（`explorer-activity.ts`）：按身份键（Loop 步骤的 `callId` / Provider 活动的
+  `itemId`）合成一条，后到的事件覆盖状态与正文——与执行侧 `projectExecutionJournal` 同一条规则。
+  名字留住开始那一条的、原因覆盖成结束那一条的；回合结束后仍没有结束事件的标成 `状态未知`，
+  不再一直显示"进行中"。推理与 Provider 回声同样按身份合并。
+- **Provider 活动改按中立类别归类**（复用 `model/provider-activity.ts`）：`command` / `file-change` /
+  `tool` / `mcp` 各成一类，`message` / `session` 落 `hidden`，`plan` 回声不再产出，
+  真正认不出来的仍以「未识别」一行保留（标签直接摆原生 `itemType`）。
+- **门禁只在 `blocked` 时成行**；`TOOL_FAILED` / `TOOL_NEEDS_RECONCILIATION` 补上分支。
+- **用户消息改成纯文本**：三个界面统一成 Codex 那种「`› + 原文`」，去掉头像、卡片与展开按钮，
+  仍然靠右。`messageSummary.ts` 随之删除。
+- **状态文案与行首标签中文化**，与执行侧、项目执行线程、需求清单同一套词。
+- **修一个会静默丢消息的判据**：`RunDetailView` 的 `visibleItems` 此前写死"属于 `card` 或 `line`"，
+  新增的 `text` 会让那类消息**从会话里消失**——改成"除折叠与不渲染之外"。
+
+实测同一条需求的渲染行数 **432 → 229**，本机 27 个需求合计 **1,274 → 653**：少掉的不是信息，
+是同一次事实的第二行、每一轮的"一切正常"，以及内容在别处已经有的回声。
+`docs/消息类型及事件状态机流程图.md` 按改后的代码逐节核过（含新增的 §4.4「两条线共用的词表」）。
+
 ## 2026-10-03 — journal：条目不再按 40ms 一片，也不再每次重写整体快照
 
 ### 为什么做
