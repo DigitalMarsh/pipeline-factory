@@ -29,7 +29,7 @@ describe("projectExecutionJournal", () => {
     expect(items[0]).toMatchObject({ kind: "plan", title: "Plan received", sequence: 0, plan });
     expect(items.slice(1).map((item) => item.sequence)).toEqual([1, 2, 3]);
     expect(items[1]).toMatchObject({ kind: "activity", title: "Run created" });
-    expect(items[3]).toMatchObject({ kind: "guidance", content: "保持范围不变" });
+    expect(items[3]).toMatchObject({ kind: "user", content: "保持范围不变" });
   });
 
   it("merges model deltas and keeps user guidance and execution activity readable", () => {
@@ -47,7 +47,7 @@ describe("projectExecutionJournal", () => {
     expect(items[1]).toMatchObject({ kind: "model", role: "assistant", content: "正在读取计划", status: "COMPLETED" });
     expect(items[2]).toMatchObject({ kind: "activity", status: "COMPLETED", title: "模型轮次 · #1" });
     expect(items[3]).toMatchObject({ kind: "tool", status: "UNKNOWN", title: "工具调用", callId: "call-1" });
-    expect(items[4]).toMatchObject({ kind: "guidance", role: "user", content: "只修改批准范围内的文件" });
+    expect(items[4]).toMatchObject({ kind: "user", role: "user", content: "只修改批准范围内的文件" });
     expect(items[5]).toMatchObject({ kind: "activity", status: "FAILED", title: "Run blocked", detail: "MAX_DURATION_EXCEEDED" });
   });
 
@@ -103,7 +103,7 @@ describe("projectExecutionJournal", () => {
     ]);
 
     // 没有 summary 时卡片只能写「命令 · 已完成 · Provider reported success」——等于没说。
-    expect(items[0]).toMatchObject({ title: "命令 · npm install --ignore-scripts", detail: "执行成功", messageType: "command" });
+    expect(items[0]).toMatchObject({ title: "命令 · npm install --ignore-scripts", detail: "执行成功", messageType: "COMMAND" });
   });
 
   it("老事件没有 summary 时退回类别标签，不编造内容", () => {
@@ -111,7 +111,7 @@ describe("projectExecutionJournal", () => {
       { sequence: 1, type: "PROVIDER_ACTIVITY", occurredAt: "2026-08-30T07:00:00.000Z", payload: { phase: "completed", itemId: "exec-1", providerItemId: "exec-1", itemType: "commandExecution", providerStatus: "completed" } },
     ]);
 
-    expect(items[0]).toMatchObject({ title: "命令", detail: "执行成功", messageType: "command" });
+    expect(items[0]).toMatchObject({ title: "命令", detail: "执行成功", messageType: "COMMAND" });
   });
 
   it("标题里的命令截断到可读长度，不把整行长命令铺出来", () => {
@@ -126,27 +126,28 @@ describe("projectExecutionJournal", () => {
 
 describe("消息清单的呈现方式", () => {
   it("**呈现方式表是唯一落点**：卡片 / 一行 / 折叠 / 不显示，一眼看全", () => {
-    expect(EXECUTION_DISPLAY_MODES["model-prose"]).toBe("card");
-    expect(EXECUTION_DISPLAY_MODES["model-report"]).toBe("card");
-    expect(EXECUTION_DISPLAY_MODES.plan).toBe("card");
-    expect(EXECUTION_DISPLAY_MODES.command).toBe("line");
-    expect(EXECUTION_DISPLAY_MODES["file-change"]).toBe("line");
-    expect(EXECUTION_DISPLAY_MODES.tool).toBe("line");
-    expect(EXECUTION_DISPLAY_MODES["task-lifecycle"]).toBe("line");
-    expect(EXECUTION_DISPLAY_MODES.reasoning).toBe("folded");
-    expect(EXECUTION_DISPLAY_MODES.gate).toBe("folded");
-    expect(EXECUTION_DISPLAY_MODES["provider-message"]).toBe("hidden");
-    expect(EXECUTION_DISPLAY_MODES.session).toBe("hidden");
+    expect(EXECUTION_DISPLAY_MODES.ASSISTANT_MESSAGE).toBe("card");
+    expect(EXECUTION_DISPLAY_MODES.MODEL_REPORT).toBe("card");
+    expect(EXECUTION_DISPLAY_MODES.PLAN).toBe("card");
+    expect(EXECUTION_DISPLAY_MODES.COMMAND).toBe("line");
+    expect(EXECUTION_DISPLAY_MODES.FILE_CHANGE).toBe("line");
+    expect(EXECUTION_DISPLAY_MODES.TOOL_CALL).toBe("line");
+    expect(EXECUTION_DISPLAY_MODES.MCP_CALL).toBe("line");
+    expect(EXECUTION_DISPLAY_MODES.TASK_LIFECYCLE).toBe("line");
+    expect(EXECUTION_DISPLAY_MODES.REASONING).toBe("folded");
+    expect(EXECUTION_DISPLAY_MODES.GATE).toBe("folded");
+    expect(EXECUTION_DISPLAY_MODES.PROVIDER_MESSAGE).toBe("hidden");
+    expect(EXECUTION_DISPLAY_MODES.SESSION).toBe("hidden");
   });
 
   it("**异常类消息永远是卡片**：呈现方式怎么调，阻塞与恢复都不能被藏起来", () => {
-    expect(EXECUTION_DISPLAY_MODES.recovery).toBe("card");
-    expect(EXECUTION_DISPLAY_MODES.guidance).toBe("card");
+    expect(EXECUTION_DISPLAY_MODES.RECOVERY).toBe("card");
+    expect(EXECUTION_DISPLAY_MODES.USER_MESSAGE).toBe("text");
 
     const items = projectExecutionJournal([
       { sequence: 1, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:00.000Z", payload: { state: "BLOCKED", reason: "MAX_DURATION_EXCEEDED" } },
     ]);
-    expect(items[0]).toMatchObject({ messageType: "recovery", status: "FAILED" });
+    expect(items[0]).toMatchObject({ messageType: "RECOVERY", status: "FAILED" });
     expect(executionDisplayMode(items[0]!)).toBe("card");
   });
 
@@ -208,7 +209,7 @@ describe("消息清单的呈现方式", () => {
       { sequence: 1, type: "PROVIDER_ACTIVITY", occurredAt: "2026-08-30T07:00:00.000Z", payload: { phase: "completed", itemId: "x-1", providerItemId: "x-1", itemType: "somethingBrandNew", activityKind: "other", outcome: "unknown" } },
     ]);
 
-    expect(items[0]).toMatchObject({ messageType: "unclassified" });
+    expect(items[0]).toMatchObject({ messageType: "UNCLASSIFIED" });
     expect(executionDisplayMode(items[0]!)).toBe("folded");
   });
 });

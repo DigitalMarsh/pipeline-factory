@@ -19,10 +19,10 @@ export type ExplorerTimelineItem =
  * 时间线条目 → 消息类型。视图拿它去查 `EXPLORER_DISPLAY_MODES`
  * （见 `explorerPresentation.ts`），于是"这一类要不要显示"只由那张表决定。
  *
- * 只做类型翻译，不认识任何场景：条目是活动就原样交出它的 `kind`，是输入卡就翻成 `input-request`。
+ * 只做类型翻译，不认识任何场景：条目是活动就原样交出它的 `kind`，是输入卡就翻成 `INPUT_REQUEST`。
  */
 export function explorerTimelineMessageType(item: ExplorerTimelineItem): ExplorerMessageType {
-  return item.kind === "input" ? "input-request" : item.activity.kind;
+  return item.kind === "input" ? "INPUT_REQUEST" : item.activity.kind;
 }
 
 /** 消息与活动的 DOM 锚点：用**活动 id** 拼，同一回合里的多条助手活动因此各有各的锚点。 */

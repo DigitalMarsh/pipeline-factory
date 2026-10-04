@@ -79,14 +79,14 @@ describe("Explorer timeline projection", () => {
 
 describe("时间线条目 → 消息类型", () => {
   it("活动条目原样交出它的 kind，交给展示表去决定怎么显示", () => {
-    const item = buildExplorerTimeline([activity("turn-1", "TOOL_DENIED", "2026-09-01T10:00:00.000Z")], [])[0];
-    expect(item && explorerTimelineMessageType(item)).toBe("TOOL_DENIED");
+    const item = buildExplorerTimeline([activity("turn-1", "TOOL_CALL", "2026-09-01T10:00:00.000Z")], [])[0];
+    expect(item && explorerTimelineMessageType(item)).toBe("TOOL_CALL");
   });
 
   it("输入卡翻成表里的非活动类型", () => {
     const input = buildExplorerTimeline([], [inputRequest("input-2", "2026-09-01T10:02:00.000Z")])[0];
 
-    expect(input && explorerTimelineMessageType(input)).toBe("input-request");
+    expect(input && explorerTimelineMessageType(input)).toBe("INPUT_REQUEST");
   });
 });
 

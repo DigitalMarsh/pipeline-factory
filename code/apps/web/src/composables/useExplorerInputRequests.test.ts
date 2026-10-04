@@ -486,7 +486,7 @@ describe("resetInputState 与三个 label wrapper", () => {
     s.inputProgress.value = null;
     s.inputAnswerInFlight.value = "r-1";
     // 在途标记优先于状态文案：没有答案可显示时才按状态给过程提示。
-    expect(s.inputStatusLabel(open)).toBe("Submitting");
+    expect(s.inputStatusLabel(open)).toBe("提交中");
     expect(s.inputAnswerText(open, open.questions[0]!)).toBe("提交结果确认中");
   });
 });

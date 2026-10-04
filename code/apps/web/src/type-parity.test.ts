@@ -36,6 +36,9 @@ import type {
   ProjectExecutionTurnStatus as DomainProjectExecutionTurnStatus,
   VerificationRun as DomainVerificationRun,
 } from "@pipeline-factory/domain";
+import type { SharedMessageType } from "./utils/conversationTypes";
+import type { ExecutionSharedMessageType } from "./utils/executionStream";
+import type { ExplorerSharedMessageType } from "./utils/explorerPresentation";
 import type {
   AgentLoopDiagnostics,
   AgentLoopState,
@@ -67,6 +70,15 @@ type Equal<Left, Right> = (<T>() => T extends Left ? 1 : 2) extends <T>() => T e
   : false;
 type Expect<T extends true> = T;
 
+/**
+ * 两条对话线共用的消息词表也是 parity 的一部分：`Extract<…, SharedMessageType>` 等于全表，
+ * 就说明这一侧把每一项都列出来了（少一项这里就不是 `SharedMessageType` 了）。
+ */
+type SharedVocabularyParity = [
+  Expect<Equal<ExplorerSharedMessageType, SharedMessageType>>,
+  Expect<Equal<ExecutionSharedMessageType, SharedMessageType>>,
+];
+
 type SharedTypeParity = [
   Expect<Equal<DomainPlanStatus, PlanStatus>>,
   Expect<Equal<DomainPlanLifecycleStatus, PlanLifecycleStatus>>,
@@ -94,6 +106,8 @@ type SharedTypeParity = [
 ];
 
 // Keep the alias referenced so future compiler configurations cannot elide the checks as unused.
+const sharedVocabularyChecks: SharedVocabularyParity | null = null;
+void sharedVocabularyChecks;
 const parityChecks: SharedTypeParity | null = null;
 void parityChecks;
 

@@ -281,21 +281,19 @@ describe("Explorer rail layout", () => {
 });
 
 describe("Explorer inline message presentation", () => {
-  it("keeps the left thread rail clear of requirement rows while retaining accessible chat summaries", () => {
+  it("用户消息是「› + 纯文本」的一行，靠右，不再是可以折叠的卡片", () => {
     expect(threadRailSource).not.toContain("<el-tree");
     expect(threadRailSource).not.toContain("explorer-thread-tree");
     expect(threadRailSource).not.toContain('command="new-requirement"');
-    expect(explorerViewSource).toContain('class="user-message-summary"');
-    expect(explorerViewSource).toContain(':aria-expanded="isUserMessageExpanded(item.activity.id)"');
-    expect(explorerViewSource).toContain('@click="toggleUserMessage(item.activity.id)"');
-    expect(explorerViewSource).toContain('class="user-message-content"');
-    // 右侧要有身份标识：左边 assistant 有头像，右边只有卡片就是"一边有标识、一边没有"。
-    expect(explorerViewSource).toContain('<div class="message-avatar user-avatar" title="我">LS</div>');
-    expect(explorerViewSource).toContain('class="user-message-body"');
-    expect(explorerStylesSource).toContain(".user-message-summary:focus-visible");
-    // 我的消息靠右（与执行线程的 `.execution-message.mine` 同一套读法）：`margin-left: auto` 掉了
+    expect(explorerViewSource).toContain("activityMode(item.activity) === 'text'");
+    expect(explorerViewSource).toContain('class="timeline-user-mark"');
+    // 卡片那一套（头像 + 首行摘要 + 展开按钮）已经删掉：用户输入是一行原文，不是一份要点提要。
+    expect(explorerViewSource).not.toContain("user-message-summary");
+    expect(explorerViewSource).not.toContain("isUserMessageExpanded");
+    expect(explorerStylesSource).not.toContain(".user-message-summary");
+    // 我的消息靠右（与执行线程的 `.execution-message.mine` 同一套读法）：那个 `auto` 左外边距掉了
     // 就会悄悄退回左对齐——那不是"没样式"，是读起来像两个人在同一侧说话。
-    expect(explorerStylesSource).toMatch(/\.user-message \{[^}]*margin-left: auto;/);
+    expect(explorerStylesSource).toMatch(/\.timeline-user-text \{[^}]*margin: 0 0 18px auto;/);
   });
 
   it("centers the latest-message prompt within the chat timeline", () => {
@@ -324,7 +322,7 @@ describe("Explorer inline message presentation", () => {
     // "哪些 kind 要显示"，就等于把表绕过去了——改表不再生效，而且没人会发现。
     expect(explorerViewSource).toContain('v-for="(item, index) in renderedTimelineItems"');
     expect(explorerViewSource).toContain("explorerDisplayMode(explorerTimelineMessageType(item))");
-    expect(explorerViewSource).toContain('explorerDisplayMode("candidate-plan")');
+    expect(explorerViewSource).toContain('explorerDisplayMode("CANDIDATE_PLAN")');
     expect(explorerViewSource).not.toContain('v-for="(item, index) in timelineItems"');
     // 被输入卡取代的那两类生命周期行只写在表里（和投影层），视图不该认得它们的名字。
     expect(explorerViewSource).not.toContain("INPUT_REQUIRED");

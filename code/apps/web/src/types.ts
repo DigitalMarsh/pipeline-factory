@@ -163,7 +163,8 @@ export type ExplorerPlan = {
   runtimeStatus?: "QUEUED" | "RUNNING" | "WAITING_FOR_INPUT" | "PAUSED" | "COMPLETED" | "FAILED" | "CANCELLED";
 };
 
-export type ExplorerActivityKind = "USER_MESSAGE" | "ASSISTANT_MESSAGE" | "REASONING_SUMMARY" | "INPUT_REQUIRED" | "INPUT_RESOLVED" | "TOOL_STARTED" | "TOOL_COMPLETED" | "TOOL_DENIED" | "MCP_ACTIVITY" | "CONTEXT_COMPACTED" | "GATE_CHECKED" | "TURN_STATUS";
+/** 与领域侧 `ExplorerActivityKind` 同集合；两边的名字也是执行线程那套词表（见 utils/conversationTypes.ts）。 */
+export type ExplorerActivityKind = "USER_MESSAGE" | "ASSISTANT_MESSAGE" | "REASONING" | "INPUT_REQUIRED" | "INPUT_RESOLVED" | "COMMAND" | "FILE_CHANGE" | "TOOL_CALL" | "MCP_CALL" | "UNCLASSIFIED" | "CONTEXT" | "GATE" | "TURN_STATUS" | "PROVIDER_MESSAGE" | "SESSION";
 
 export type ExplorerActivityItem = {
   id: string;
@@ -171,7 +172,7 @@ export type ExplorerActivityItem = {
   turnId: string;
   sequence: number;
   kind: ExplorerActivityKind;
-  status: "RUNNING" | "COMPLETED" | "FAILED" | "WAITING";
+  status: "RUNNING" | "COMPLETED" | "FAILED" | "WAITING" | "UNKNOWN";
   title: string;
   summary: string;
   details: Record<string, unknown> | null;

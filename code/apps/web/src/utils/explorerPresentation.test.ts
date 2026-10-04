@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { activityIconKind, activityStatusLabel, EXPLORER_DISPLAY_MODES, explorerActivityLine, explorerDisplayMode, explorerDisplayTitle, formatTurnTime, inputStatusLabel } from "./explorerPresentation";
+import { activityIconKind, activityStatusLabel, assistantActivityLabel, EXPLORER_DISPLAY_MODES, explorerActivityLine, explorerDisplayMode, explorerDisplayTitle, formatTurnTime, inputStatusLabel } from "./explorerPresentation";
 import type { ExplorerMessageType } from "./explorerPresentation";
+import { SHARED_MESSAGE_TYPES } from "./conversationTypes";
 import type { ExplorerActivityItem, ExplorerActivityKind, ExplorerInputRequest } from "../types";
 
 function request(id: string, status: ExplorerInputRequest["status"]): Pick<ExplorerInputRequest, "id" | "status"> {
@@ -38,106 +39,120 @@ describe("Explorer 展示映射", () => {
 
 describe("输入请求状态文案", () => {
   it("五个状态各有文案，不回落成原字符串", () => {
-    expect(inputStatusLabel(request("a", "OPEN"), null)).toBe("Waiting for answer");
-    expect(inputStatusLabel(request("a", "SUBMITTING"), null)).toBe("Submitting");
-    expect(inputStatusLabel(request("a", "ANSWERED"), null)).toBe("Answered");
-    expect(inputStatusLabel(request("a", "CANCELLED"), null)).toBe("Cancelled");
-    expect(inputStatusLabel(request("a", "RECOVERY_REQUIRED"), null)).toBe("Recovery required");
+    expect(inputStatusLabel(request("a", "OPEN"), null)).toBe("等待回答");
+    expect(inputStatusLabel(request("a", "SUBMITTING"), null)).toBe("提交中");
+    expect(inputStatusLabel(request("a", "ANSWERED"), null)).toBe("已回答");
+    expect(inputStatusLabel(request("a", "CANCELLED"), null)).toBe("已取消");
+    expect(inputStatusLabel(request("a", "RECOVERY_REQUIRED"), null)).toBe("需要恢复");
   });
 
   it("本地在途标记优先于服务端状态，且只对同一个请求生效", () => {
-    // 提交后服务端仍是 OPEN，界面必须靠本地标记抢先显示 Submitting。
-    expect(inputStatusLabel(request("in-flight", "OPEN"), "in-flight")).toBe("Submitting");
-    expect(inputStatusLabel(request("other", "OPEN"), "in-flight")).toBe("Waiting for answer");
+    // 提交后服务端仍是 OPEN，界面必须靠本地标记抢先显示"提交中"。
+    expect(inputStatusLabel(request("in-flight", "OPEN"), "in-flight")).toBe("提交中");
+    expect(inputStatusLabel(request("other", "OPEN"), "in-flight")).toBe("等待回答");
   });
 });
 
 describe("活动条目文案", () => {
-  it("状态映射四档", () => {
-    expect(activityStatusLabel({ status: "WAITING" })).toBe("Waiting");
-    expect(activityStatusLabel({ status: "FAILED" })).toBe("Failed");
-    expect(activityStatusLabel({ status: "RUNNING" })).toBe("Running");
-    expect(activityStatusLabel({ status: "COMPLETED" })).toBe("Completed");
+  it("五档状态都有中文文案，与执行线程同一套词", () => {
+    expect(activityStatusLabel({ status: "WAITING" })).toBe("等待中");
+    expect(activityStatusLabel({ status: "FAILED" })).toBe("失败");
+    expect(activityStatusLabel({ status: "RUNNING" })).toBe("进行中");
+    expect(activityStatusLabel({ status: "COMPLETED" })).toBe("已完成");
+    expect(activityStatusLabel({ status: "UNKNOWN" })).toBe("状态未知");
   });
 
-  it("图标语义：拒绝与门禁是警告，完成与输入解决是成功，其余是信息", () => {
-    expect(activityIconKind("TOOL_DENIED")).toBe("warning");
-    expect(activityIconKind("GATE_CHECKED")).toBe("warning");
-    expect(activityIconKind("TOOL_COMPLETED")).toBe("success");
-    expect(activityIconKind("INPUT_RESOLVED")).toBe("success");
-    expect(activityIconKind("REASONING_SUMMARY")).toBe("info");
-    expect(activityIconKind("USER_MESSAGE")).toBe("info");
+  it("助手消息卡片把回合状态归成三档", () => {
+    expect(assistantActivityLabel({ status: "RUNNING" })).toBe("进行中");
+    expect(assistantActivityLabel({ status: "FAILED" })).toBe("失败");
+    expect(assistantActivityLabel({ status: "COMPLETED" })).toBe("已完成");
+    expect(assistantActivityLabel({ status: "WAITING" })).toBe("已完成");
+  });
+
+  it("图标只由状态决定：完成是成功，失败与状态未知是警告，其余是信息", () => {
+    expect(activityIconKind("COMPLETED")).toBe("success");
+    expect(activityIconKind("FAILED")).toBe("warning");
+    // "没记录到它是怎么结束的"值得看一眼，但它不是失败——图标给警告，文案仍是"状态未知"。
+    expect(activityIconKind("UNKNOWN")).toBe("warning");
+    expect(activityIconKind("RUNNING")).toBe("info");
+    expect(activityIconKind("WAITING")).toBe("info");
   });
 });
 
-describe("八类过程活动各摆什么", () => {
+describe("各类过程活动各摆什么", () => {
   it("工具开始：名字单独一格，正文不再重复工具名", () => {
-    const line = explorerActivityLine(activity("TOOL_STARTED", { status: "RUNNING", summary: "read_file", details: { tool: "read_file", callId: "call-1" } }));
+    const line = explorerActivityLine(activity("TOOL_CALL", { status: "RUNNING", title: "read_file", summary: "", details: { tool: "read_file", callId: "call-1" } }));
 
-    expect(line).toEqual({ label: "Tool started", name: "read_file", reference: "call-1", body: "" });
+    expect(line).toEqual({ label: "工具调用", name: "read_file", reference: "call-1", body: "" });
   });
 
-  it("工具开始：连工具名都没记下来时，正文兜住 Provider 给的说明", () => {
-    const line = explorerActivityLine(activity("TOOL_STARTED", { summary: "Provider tool" }));
+  it("没有工具名时把摘要顶上当名字，正文不重复同一句", () => {
+    const line = explorerActivityLine(activity("COMMAND", { title: "", summary: "pnpm --filter @pipeline-factory/web test" }));
 
-    expect(line).toEqual({ label: "Tool started", name: null, reference: null, body: "Provider tool" });
+    expect(line).toEqual({ label: "命令", name: "pnpm --filter @pipeline-factory/web test", reference: null, body: "" });
   });
 
-  it("工具完成：只摆 reason，不摆「工具返回了结果」这句废话", () => {
-    const bare = explorerActivityLine(activity("TOOL_COMPLETED", { summary: "The tool returned a result.", details: { callId: "call-2", reason: null } }));
-    const explained = explorerActivityLine(activity("TOOL_COMPLETED", { summary: "The tool returned a result.", details: { callId: "call-2", reason: "命令退出码 1" } }));
+  it("结束那条：原因进正文，它是这一行唯一要说的事", () => {
+    const bare = explorerActivityLine(activity("TOOL_CALL", { title: "read_file", summary: "", details: { callId: "call-2" } }));
+    const explained = explorerActivityLine(activity("TOOL_CALL", { status: "FAILED", title: "shell", details: { callId: "call-3", reason: "策略不允许写仓库目录以外的文件。" } }));
 
-    expect(bare).toEqual({ label: "Tool completed", name: null, reference: "call-2", body: "" });
-    expect(explained.body).toBe("命令退出码 1");
+    expect(bare).toEqual({ label: "工具调用", name: "read_file", reference: "call-2", body: "" });
+    expect(explained).toEqual({ label: "工具调用", name: "shell", reference: "call-3", body: "策略不允许写仓库目录以外的文件。" });
   });
 
-  it("工具被拒：原因进正文，它是这一行唯一要说的事", () => {
-    const line = explorerActivityLine(activity("TOOL_DENIED", { status: "FAILED", summary: "The tool request was denied by policy.", details: { tool: "shell", callId: "call-3" } }));
+  it("没有开始记录的调用：名字与原因各就各位，原因不会被读成名字", () => {
+    const line = explorerActivityLine(activity("TOOL_CALL", { status: "UNKNOWN", title: "", summary: "", details: { callId: "call-4", reason: "未记录调用的结束状态。" } }));
 
-    expect(line).toEqual({ label: "Tool denied", name: "shell", reference: "call-3", body: "The tool request was denied by policy." });
+    expect(line).toEqual({ label: "工具调用", name: null, reference: "call-4", body: "未记录调用的结束状态。" });
   });
 
-  it("MCP：身份是 Server 给的 title，itemId 只进尾巴", () => {
-    const line = explorerActivityLine(activity("MCP_ACTIVITY", { title: "mcpToolCall", summary: "MCP 工具已返回。", details: { itemId: "item-9", itemType: "mcpToolCall", providerControlled: true } }));
+  it("MCP：身份是 Server 给的工具名，itemId 只进尾巴", () => {
+    const line = explorerActivityLine(activity("MCP_CALL", { title: "github/create_issue", summary: "已创建 issue #42", details: { itemId: "item-9", itemType: "mcpToolCall", providerControlled: true } }));
 
-    expect(line).toEqual({ label: "MCP activity", name: "mcpToolCall", reference: "item-9", body: "MCP 工具已返回。" });
+    expect(line).toEqual({ label: "MCP 调用", name: "github/create_issue", reference: "item-9", body: "已创建 issue #42" });
   });
 
   it("Provider 活动：名字在 title、真正跑了什么在 summary，一句都不丢", () => {
     // 同一个 kind 的两条来源。Provider 这一路没有 details.tool，丢掉 summary 这行就只剩个标签。
-    const line = explorerActivityLine(activity("TOOL_COMPLETED", { title: "Command", summary: "pnpm --filter @pipeline-factory/web test", details: { itemId: "item-cmd-1", itemType: "commandExecution", providerControlled: true } }));
+    const line = explorerActivityLine(activity("COMMAND", { title: "Command", summary: "pnpm --filter @pipeline-factory/web test", details: { itemId: "item-cmd-1", itemType: "commandExecution", providerControlled: true } }));
 
-    expect(line).toEqual({ label: "Tool completed", name: "Command", reference: "item-cmd-1", body: "pnpm --filter @pipeline-factory/web test" });
+    expect(line).toEqual({ label: "命令", name: "Command", reference: "item-cmd-1", body: "pnpm --filter @pipeline-factory/web test" });
   });
 
   it("Provider 推理流不摆标题——那只是类别名，摆出来和标签重复", () => {
-    const line = explorerActivityLine(activity("REASONING_SUMMARY", { title: "Reasoning", summary: "对照 executionStream.ts 的呈现方式表", details: { itemId: "item-reason-1", itemType: "reasoning", providerControlled: true } }));
+    const line = explorerActivityLine(activity("REASONING", { title: "Reasoning", summary: "对照 executionStream.ts 的呈现方式表", details: { itemId: "item-reason-1", itemType: "reasoning", providerControlled: true } }));
 
-    expect(line).toEqual({ label: "Reasoning", name: null, reference: null, body: "对照 executionStream.ts 的呈现方式表" });
+    expect(line).toEqual({ label: "推理", name: null, reference: null, body: "对照 executionStream.ts 的呈现方式表" });
   });
 
   it("Provider 没给摘要的推理行退回标签，不留一个只有点和时间的空行", () => {
     // 投影层对"没摘要"交的是空串；推理行是纯文本行，空着就只剩一个点和时间。
-    const line = explorerActivityLine(activity("REASONING_SUMMARY", { title: "reasoning", summary: "", details: { itemId: "item-reason-1", itemType: "reasoning", providerControlled: true } }));
+    const line = explorerActivityLine(activity("REASONING", { title: "reasoning", summary: "", details: { itemId: "item-reason-1", itemType: "reasoning", providerControlled: true } }));
 
-    expect(line).toEqual({ label: "Reasoning", name: null, reference: null, body: "Reasoning" });
+    expect(line).toEqual({ label: "推理", name: null, reference: null, body: "推理" });
   });
 
   it("上下文压缩：摆的是消息条数，不是一句过程说明", () => {
-    const line = explorerActivityLine(activity("CONTEXT_COMPACTED", { summary: "The loop saved a checkpoint before continuing.", details: { messageCount: 12 } }));
+    const line = explorerActivityLine(activity("CONTEXT", { summary: "The loop saved a checkpoint before continuing.", details: { messageCount: 12 } }));
 
-    expect(line).toEqual({ label: "Context checkpoint", name: null, reference: "12 messages", body: "" });
+    expect(line).toEqual({ label: "上下文压缩", name: null, reference: "12 条消息", body: "" });
   });
 
-  it("门禁：放行还是拦截是结论本身，占 name 那一格", () => {
-    const line = explorerActivityLine(activity("GATE_CHECKED", { summary: "no progress", details: { action: "blocked" } }));
+  it("门禁：拦截是结论本身，占 name 那一格", () => {
+    const line = explorerActivityLine(activity("GATE", { status: "FAILED", summary: "连续两步没有进展", details: { action: "blocked" } }));
 
-    expect(line).toEqual({ label: "Gate checked", name: "blocked", reference: null, body: "no progress" });
+    expect(line).toEqual({ label: "执行门禁", name: "blocked", reference: null, body: "连续两步没有进展" });
+  });
+
+  it("未识别：标签直接摆 Provider 的原生 itemType，不编一个像样的类别名", () => {
+    const line = explorerActivityLine(activity("UNCLASSIFIED", { title: "somethingNew", summary: "说不上是什么", details: { itemId: "item-x", itemType: "somethingNew", providerControlled: true } }));
+
+    expect(line).toEqual({ label: "somethingNew", name: null, reference: "item-x", body: "说不上是什么" });
   });
 
   it("推理与轮次状态：只有正文，没有名字也没有尾巴", () => {
-    expect(explorerActivityLine(activity("REASONING_SUMMARY", { summary: "Plan Explorer started step 3." }))).toEqual({ label: "Reasoning", name: null, reference: null, body: "Plan Explorer started step 3." });
-    expect(explorerActivityLine(activity("TURN_STATUS", { status: "WAITING", summary: "Waiting for input" }))).toEqual({ label: "Turn status", name: null, reference: null, body: "Waiting for input" });
+    expect(explorerActivityLine(activity("REASONING", { summary: "Plan Explorer started step 3." }))).toEqual({ label: "推理", name: null, reference: null, body: "Plan Explorer started step 3." });
+    expect(explorerActivityLine(activity("TURN_STATUS", { status: "WAITING", summary: "Waiting for input" }))).toEqual({ label: "回合状态", name: null, reference: null, body: "Waiting for input" });
   });
 
   it("认不出来的活动回落成原字符串，不留白", () => {
@@ -148,53 +163,69 @@ describe("八类过程活动各摆什么", () => {
   });
 
   it("details 里是空串或非字符串时，不留一格空的", () => {
-    const line = explorerActivityLine(activity("TOOL_STARTED", { details: { tool: "   ", callId: 42 } }));
+    const line = explorerActivityLine(activity("TOOL_CALL", { title: "", summary: "", details: { tool: "   ", callId: 42 } }));
 
     expect(line.name).toBeNull();
     expect(line.reference).toBeNull();
   });
+
+  it("主标识过长时截断，不把整条命令行铺进一行", () => {
+    const long = `/bin/zsh -lc "${"a".repeat(200)}"`;
+    const line = explorerActivityLine(activity("COMMAND", { title: "", summary: long }));
+
+    expect(line.name).toHaveLength(80);
+    expect(line.name?.endsWith("…")).toBe(true);
+  });
 });
 
-/**
- * 表里的键就是消息清单。活动 kind 是 SCREAMING_SNAKE，另外两类（输入卡 / 内嵌方案卡）
- * 是 kebab-case——靠这条形状差异把两类分开，不用再手抄一份 kind 清单。
- */
-const activityTypes = (Object.keys(EXPLORER_DISPLAY_MODES) as ExplorerMessageType[]).filter((type): type is ExplorerActivityItem["kind"] => type === type.toUpperCase());
+/** 清单里的键：15 类是活动条目的 kind，另两类（输入卡 / 内嵌方案卡）由投影或模板在别处产生。 */
+const messageTypes = Object.keys(EXPLORER_DISPLAY_MODES) as ExplorerMessageType[];
+const producedWithoutActivity = new Set<ExplorerMessageType>(["INPUT_REQUEST", "CANDIDATE_PLAN"]);
+const activityTypes = messageTypes.filter((type): type is ExplorerActivityItem["kind"] => !producedWithoutActivity.has(type));
 
 describe("探索会话的消息清单", () => {
-  it("清单覆盖 12 类活动加投影产生的 2 类非活动消息", () => {
+  it("清单覆盖 15 类活动加投影产生的 2 类非活动消息", () => {
     // 数量钉住是有意的：新增一类消息就得回来改这里，顺带在表里做一次"怎么显示"的决定。
     // 类型层面 `Record<ExplorerMessageType, …>` 已经强制穷尽，这条锁的是"清单本身有多大"。
-    expect(activityTypes).toHaveLength(12);
-    expect(Object.keys(EXPLORER_DISPLAY_MODES)).toHaveLength(14);
-    expect(EXPLORER_DISPLAY_MODES["input-request"]).toBe("card");
-    expect(EXPLORER_DISPLAY_MODES["candidate-plan"]).toBe("card");
+    expect(activityTypes).toHaveLength(15);
+    expect(messageTypes).toHaveLength(17);
+    expect(EXPLORER_DISPLAY_MODES.INPUT_REQUEST).toBe("card");
+    expect(EXPLORER_DISPLAY_MODES.CANDIDATE_PLAN).toBe("card");
   });
 
-  it("只有被人说的话、模型正文、方案与输入做成卡片", () => {
-    expect(new Set(activityTypes.filter((type) => explorerDisplayMode(type) === "card"))).toEqual(new Set(["USER_MESSAGE", "ASSISTANT_MESSAGE"]));
+  it("共用词表里的每一项，探索线程都有一行呈现方式", () => {
+    // 这就是"两条对话线一致"的落地处：漏一项，`conversationTypes.ts` 的共用词表就名不副实。
+    for (const shared of SHARED_MESSAGE_TYPES) expect(EXPLORER_DISPLAY_MODES[shared]).toBeDefined();
   });
 
-  it("被结构化输入卡取代的两类生命周期行不单独渲染", () => {
-    // 投影层在存在输入卡时就已经不产出它们；漏到视图说明没有卡可点，那两行只会是死路。
-    expect(activityTypes.filter((type) => explorerDisplayMode(type) === "hidden")).toEqual(["INPUT_REQUIRED", "INPUT_RESOLVED"]);
+  it("只有模型正文、方案与结构化输入做成卡片；你自己说的话是纯文本一行", () => {
+    expect(new Set(activityTypes.filter((type) => explorerDisplayMode(type) === "card"))).toEqual(new Set(["ASSISTANT_MESSAGE"]));
+    expect(explorerDisplayMode("USER_MESSAGE")).toBe("text");
+    expect(explorerDisplayMode("INPUT_REQUEST")).toBe("card");
+    expect(explorerDisplayMode("CANDIDATE_PLAN")).toBe("card");
   });
 
-  it("八类过程活动各归各的行，不再挤在同一档", () => {
-    // 四类带调用身份的归工具行（靠标签和语调区分开始/完成/被拒/MCP）；其余四类各有各的形状。
-    expect(new Set(activityTypes.filter((type) => explorerDisplayMode(type) === "tool"))).toEqual(new Set(["TOOL_STARTED", "TOOL_COMPLETED", "TOOL_DENIED", "MCP_ACTIVITY"]));
-    expect(explorerDisplayMode("REASONING_SUMMARY")).toBe("reasoning");
-    expect(explorerDisplayMode("CONTEXT_COMPACTED")).toBe("divider");
-    expect(explorerDisplayMode("GATE_CHECKED")).toBe("gate");
+  it("内容在别处已经有的几类不单独渲染", () => {
+    // 输入卡取代了那两条生命周期行；Provider 的回声与执行侧同名，同样标 hidden。
+    expect(new Set(activityTypes.filter((type) => explorerDisplayMode(type) === "hidden"))).toEqual(new Set(["INPUT_REQUIRED", "INPUT_RESOLVED", "PROVIDER_MESSAGE", "SESSION"]));
+  });
+
+  it("四类调用同归调用行，其余四类各有各的形状", () => {
+    // 一次调用只有一条（开始与结束在投影层已合并），所以这里比的是"哪四类算调用"。
+    expect(new Set(activityTypes.filter((type) => explorerDisplayMode(type) === "tool"))).toEqual(new Set(["COMMAND", "FILE_CHANGE", "TOOL_CALL", "MCP_CALL"]));
+    expect(explorerDisplayMode("REASONING")).toBe("reasoning");
+    expect(explorerDisplayMode("CONTEXT")).toBe("divider");
+    expect(explorerDisplayMode("GATE")).toBe("gate");
     expect(explorerDisplayMode("TURN_STATUS")).toBe("turn-status");
+    expect(explorerDisplayMode("UNCLASSIFIED")).toBe("turn-status");
   });
 
   it("每一类过程活动都有自己的标签，不回落成原字符串", () => {
     // 把某类活动从 hidden 改成有行型、却忘了在 ACTIVITY_LABELS 里补标签时，页面会直接显示
-    // TOOL_STARTED 这种原始枚举值——这条断言在那次改动上拦住它。
+    // TOOL_CALL 这种原始枚举值——这条断言在那次改动上拦住它。
     for (const type of activityTypes) {
       const mode = explorerDisplayMode(type);
-      if (mode === "card" || mode === "hidden") continue;
+      if (mode === "card" || mode === "text" || mode === "hidden") continue;
       expect(explorerActivityLine(activity(type)).label).not.toBe(type);
     }
   });

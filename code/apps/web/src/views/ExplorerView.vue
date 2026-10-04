@@ -43,12 +43,11 @@ import { taskDisplayTitle } from "../utils/taskTree";
 import { isConfirmedPlanRevision, resolvePlanVersionHistory } from "../utils/planVersionHistory";
 import { projectPathForModule } from "../utils/projectRoutes";
 import { explorerTimelineTarget as activityTarget, explorerPlanAnchorId, explorerTimelineMessageType, inputRequestTarget } from "../utils/explorerTimeline";
-import { activityIconKind, activityStatusLabel, explorerActivityLine, explorerDisplayMode, explorerDisplayTitle, formatTurnTime } from "../utils/explorerPresentation";
+import { activityIconKind, activityStatusLabel, assistantActivityLabel, explorerActivityLine, explorerDisplayMode, explorerDisplayTitle, formatTurnTime } from "../utils/explorerPresentation";
 import type { ExplorerActivityLine, ExplorerDisplayMode } from "../utils/explorerPresentation";
 import { planStatusLabel as statusLabel } from "../utils/planStatus";
 
 import { formatAgentLoopCompletion, formatAgentLoopGate, formatAgentLoopState, formatAgentLoopTerminal } from "../utils/agentLoopPresentation";
-import { summarizeUserMessage as userMessageSummary } from "../utils/messageSummary";
 import { canCreateConfigurationRevision as canCreateConfigurationRevisionFor } from "../utils/runPrerequisites";
 
 import { useExplorerInputRequests, type ExplorerInputDialogHandle } from "../composables/useExplorerInputRequests";
@@ -171,7 +170,6 @@ const selectedRequirementRow = computed(() => requirementRows.value.find((row) =
 const sharedDrawerTitle = computed(() => selectedRequirementRow.value?.title ?? (activeExplorerPlan.value ? taskDisplayTitle(activeExplorerPlan.value) : "需求详情"));
 const taskPanelPlan = computed(() => selectedRequirementRow.value?.plan ?? null);
 const explorationProgress = computed(() => activeExplorerPlan.value?.exploration ?? thread.value?.exploration ?? { status: "INCOMPLETE" as const, missing: [], completed: [], diagnostics: [], candidatePlanId: null, lastAssessedTurnId: null });
-const expandedUserMessageIds = ref<Set<string>>(new Set());
 const activePlanBusy = computed(() => visibleTurns.value.some((turn) => turn.status === "RUNNING" || turn.status === "WAITING_FOR_INPUT" || turn.status === "PAUSED" || turn.status === "QUEUED"));
 const activePlanWaitingForInput = computed(() => visibleTurns.value.some((turn) => turn.status === "WAITING_FOR_INPUT"));
 const sendingCurrentPlan = computed(() => Boolean(activeExplorerPlan.value && pendingSendPlanIds.value.has(activeExplorerPlan.value.id)));
@@ -255,7 +253,7 @@ const { visibleTurns, visibleActivity, visibleInputRequests, planBindings, timel
  * "这一类要不要出现"——呈现方式是产品决定，集中在一张表里，改那里即可。
  */
 const renderedTimelineItems = computed(() => timelineItems.value.filter((item) => explorerDisplayMode(explorerTimelineMessageType(item)) !== "hidden"));
-const showCandidatePlanCard = explorerDisplayMode("candidate-plan") !== "hidden";
+const showCandidatePlanCard = explorerDisplayMode("CANDIDATE_PLAN") !== "hidden";
 
 /**
  * 过程活动的行型与内容字段，同样出自那张表与 `explorerActivityLine`（utils/explorerPresentation.ts）。
@@ -424,17 +422,6 @@ async function refreshThread() {
   if (!error.value) ElMessage.success("ExplorerThread 已刷新");
 }
 
-function isUserMessageExpanded(activityId: string): boolean {
-  return expandedUserMessageIds.value.has(activityId);
-}
-
-function toggleUserMessage(activityId: string): void {
-  const next = new Set(expandedUserMessageIds.value);
-  if (next.has(activityId)) next.delete(activityId);
-  else next.add(activityId);
-  expandedUserMessageIds.value = next;
-}
-
 /** 只负责把绑定表喂给 utils 里的纯查找。 */
 function planForActivity(item: ExplorerActivityItem): Plan | null {
   return planForActivityIn(item, planBindings.value);
@@ -463,7 +450,6 @@ function resetThreadState() {
   explorerPaused.value = false;
   activeTimelineKey.value = "";
   activePlanKey.value = "";
-  expandedUserMessageIds.value = new Set();
   busy.value = false;
   pendingSendPlanIds.value = new Set();
 }
@@ -1347,40 +1333,20 @@ onBeforeUnmount(() => { mounted.value = false; invalidateProjectScope(); closeEv
             </div>
             <el-button v-if="pendingInput?.id === item.request.id && inputAnswerInFlight !== item.request.id" type="primary" plain @click="openInputRequest">回答</el-button>
           </article>
-          <article v-else-if="item.activity.kind === 'USER_MESSAGE'" :id="activityTarget(item.activity, index)" :data-nav-key="activityTarget(item.activity, index)" :class="['message-card', 'user-message', { 'user-message-expanded': isUserMessageExpanded(item.activity.id), 'failed-message': item.activity.status === 'FAILED' }]">
-            <div class="message-avatar user-avatar" title="我">LS</div>
-            <div class="user-message-body">
-            <button
-              :id="`user-message-summary-${item.activity.id}`"
-              class="user-message-summary"
-              :class="{ expanded: isUserMessageExpanded(item.activity.id) }"
-              type="button"
-              :aria-expanded="isUserMessageExpanded(item.activity.id)"
-              :aria-controls="`user-message-content-${item.activity.id}`"
-              @click="toggleUserMessage(item.activity.id)"
-            >
-              <span class="user-message-summary-copy">
-                <strong>{{ userMessageSummary(item.activity.summary).title }}</strong>
-                <span v-if="userMessageSummary(item.activity.summary).preview" class="user-message-summary-preview">{{ userMessageSummary(item.activity.summary).preview }}</span>
-              </span>
-              <span class="user-message-summary-footer">
-                <time>{{ formatTurnTime(item.activity.occurredAt) }}</time>
-                <span class="user-message-summary-action">{{ isUserMessageExpanded(item.activity.id) ? '收起' : '展开' }}<ArrowUp v-if="isUserMessageExpanded(item.activity.id)" :size="14" /><ArrowDown v-else :size="14" /></span>
-              </span>
-            </button>
-            <div v-if="isUserMessageExpanded(item.activity.id)" :id="`user-message-content-${item.activity.id}`" class="user-message-content">
-              <div class="message-meta"><strong>{{ item.activity.title }}</strong><span>{{ formatTurnTime(item.activity.occurredAt) }}</span></div>
+          <article v-else-if="activityMode(item.activity) === 'text'" :id="activityTarget(item.activity, index)" :data-nav-key="activityTarget(item.activity, index)" :class="['timeline-user-text', { 'failed-message': item.activity.status === 'FAILED' }]">
+            <span class="timeline-user-mark" aria-hidden="true">›</span>
+            <div class="timeline-user-body">
               <MarkdownMessage :source="item.activity.summary" />
-            </div>
+              <time>{{ formatTurnTime(item.activity.occurredAt) }}</time>
             </div>
           </article>
           <article v-else-if="item.activity.kind === 'ASSISTANT_MESSAGE'" :id="activityTarget(item.activity, index)" :data-nav-key="activityTarget(item.activity, index)" :class="['message-card', 'assistant-message', item.activity.status === 'FAILED' ? 'failed-message' : '', item.activity.status === 'RUNNING' ? 'processing-message' : '']">
             <div class="message-avatar agent-avatar"><span :class="['brand-dot', { 'brand-dot-processing': item.activity.status === 'RUNNING' }]" /></div>
-            <div class="message-body"><div class="message-meta"><strong>{{ item.activity.title }}</strong><el-tag size="small" effect="light" :type="statusTagType(item.activity.status)">{{ item.activity.status === 'RUNNING' ? 'Running' : item.activity.status === 'FAILED' ? 'Failed' : 'Read only' }}</el-tag><span>{{ formatTurnTime(item.activity.occurredAt) }}</span></div><MarkdownMessage :source="readableAssistantText(item.activity.summary)" :streaming="item.activity.status === 'RUNNING'" /><div v-if="showCandidatePlanCard && planForActivity(item.activity)" :id="planAnchorId(planForActivity(item.activity))" :data-nav-key="planAnchorKey(planForActivity(item.activity))" class="inline-plan-card"><div class="candidate-head"><div class="candidate-icon"><Promotion :size="19" /></div><div><div class="eyebrow">CANDIDATE PLAN · REVISION {{ planForActivity(item.activity)?.revision }}</div><h2>{{ planForActivity(item.activity)?.title }}</h2></div><el-tag type="warning" effect="light">{{ statusLabel(planForActivity(item.activity)?.status ?? 'DRAFT') }}</el-tag></div><p class="candidate-summary">{{ planForActivity(item.activity)?.resolvedContract?.objective.goal ?? planForActivity(item.activity)?.goal ?? 'A complete, reviewable execution contract generated from this ExplorerThread.' }}</p><div class="candidate-stats"><div><span>执行步骤</span><strong>{{ planForActivity(item.activity)?.resolvedContract?.tasks.length ?? planForActivity(item.activity)?.tasks?.length ?? 0 }}</strong></div><div><span>Scope entries</span><strong>{{ planForActivity(item.activity)?.resolvedContract?.scope.includePaths.length ?? planForActivity(item.activity)?.include?.length ?? 0 }}</strong></div><div><span>Verification</span><strong>{{ planForActivity(item.activity)?.resolvedContract?.verification.commandIds.length ?? planForActivity(item.activity)?.verificationCommands?.length ?? 0 }} checks</strong></div><div><span>Merge</span><strong class="risk-low">Human review</strong></div></div><p v-if="isConversationArtifactPlan(planForActivity(item.activity))" class="candidate-notice"><Warning :size="13" />对话产物（CONVERSATION）：确认后仍不能入队或启动 Run。要执行请在探索对话里改成“仓库文件”产物并确认新版本。</p><div class="candidate-actions"><el-button v-if="isCandidatePlan(planForActivity(item.activity))" @click="openPlanDetail(planForActivity(item.activity)!)">View full plan <Right :size="15" /></el-button><el-button v-if="isCandidatePlan(planForActivity(item.activity)) && planForActivity(item.activity)?.status === 'DRAFT'" type="primary" :loading="busy" @click="confirmPlan(planForActivity(item.activity) ?? null)">Confirm plan <Check :size="15" /></el-button><el-button v-else-if="isCandidatePlan(planForActivity(item.activity)) && planForActivity(item.activity)?.status === 'READY'" type="primary" :loading="busy" @click="enqueuePlan(planForActivity(item.activity) ?? null)">Enqueue plan <ArrowDown :size="15" /></el-button><span v-else class="confirmed-note"><CircleCheck :size="15" /> {{ statusLabel(planForActivity(item.activity)?.status ?? 'DRAFT') }}</span></div></div></div>
+            <div class="message-body"><div class="message-meta"><strong>{{ item.activity.title }}</strong><el-tag size="small" effect="light" :type="statusTagType(item.activity.status)">{{ assistantActivityLabel(item.activity) }}</el-tag><span>{{ formatTurnTime(item.activity.occurredAt) }}</span></div><MarkdownMessage :source="readableAssistantText(item.activity.summary)" :streaming="item.activity.status === 'RUNNING'" /><div v-if="showCandidatePlanCard && planForActivity(item.activity)" :id="planAnchorId(planForActivity(item.activity))" :data-nav-key="planAnchorKey(planForActivity(item.activity))" class="inline-plan-card"><div class="candidate-head"><div class="candidate-icon"><Promotion :size="19" /></div><div><div class="eyebrow">CANDIDATE PLAN · REVISION {{ planForActivity(item.activity)?.revision }}</div><h2>{{ planForActivity(item.activity)?.title }}</h2></div><el-tag type="warning" effect="light">{{ statusLabel(planForActivity(item.activity)?.status ?? 'DRAFT') }}</el-tag></div><p class="candidate-summary">{{ planForActivity(item.activity)?.resolvedContract?.objective.goal ?? planForActivity(item.activity)?.goal ?? 'A complete, reviewable execution contract generated from this ExplorerThread.' }}</p><div class="candidate-stats"><div><span>执行步骤</span><strong>{{ planForActivity(item.activity)?.resolvedContract?.tasks.length ?? planForActivity(item.activity)?.tasks?.length ?? 0 }}</strong></div><div><span>Scope entries</span><strong>{{ planForActivity(item.activity)?.resolvedContract?.scope.includePaths.length ?? planForActivity(item.activity)?.include?.length ?? 0 }}</strong></div><div><span>Verification</span><strong>{{ planForActivity(item.activity)?.resolvedContract?.verification.commandIds.length ?? planForActivity(item.activity)?.verificationCommands?.length ?? 0 }} checks</strong></div><div><span>Merge</span><strong class="risk-low">Human review</strong></div></div><p v-if="isConversationArtifactPlan(planForActivity(item.activity))" class="candidate-notice"><Warning :size="13" />对话产物（CONVERSATION）：确认后仍不能入队或启动 Run。要执行请在探索对话里改成“仓库文件”产物并确认新版本。</p><div class="candidate-actions"><el-button v-if="isCandidatePlan(planForActivity(item.activity))" @click="openPlanDetail(planForActivity(item.activity)!)">View full plan <Right :size="15" /></el-button><el-button v-if="isCandidatePlan(planForActivity(item.activity)) && planForActivity(item.activity)?.status === 'DRAFT'" type="primary" :loading="busy" @click="confirmPlan(planForActivity(item.activity) ?? null)">Confirm plan <Check :size="15" /></el-button><el-button v-else-if="isCandidatePlan(planForActivity(item.activity)) && planForActivity(item.activity)?.status === 'READY'" type="primary" :loading="busy" @click="enqueuePlan(planForActivity(item.activity) ?? null)">Enqueue plan <ArrowDown :size="15" /></el-button><span v-else class="confirmed-note"><CircleCheck :size="15" /> {{ statusLabel(planForActivity(item.activity)?.status ?? 'DRAFT') }}</span></div></div></div>
           </article>
           <article v-else-if="activityMode(item.activity) === 'reasoning'" :id="activityTarget(item.activity, index)" :data-nav-key="activityTarget(item.activity, index)" class="timeline-note" :class="{ running: item.activity.status === 'RUNNING' }"><span class="timeline-note-dot" /><p>{{ activityLine(item.activity).body }}</p><time>{{ formatTurnTime(item.activity.occurredAt) }}</time></article>
           <article v-else-if="activityMode(item.activity) === 'divider'" :id="activityTarget(item.activity, index)" :data-nav-key="activityTarget(item.activity, index)" class="timeline-divider"><span class="timeline-divider-rule" /><span class="timeline-divider-label">{{ activityLine(item.activity).label }}<em v-if="activityLine(item.activity).reference"> · {{ activityLine(item.activity).reference }}</em></span><time>{{ formatTurnTime(item.activity.occurredAt) }}</time><span class="timeline-divider-rule" /></article>
-          <article v-else :id="activityTarget(item.activity, index)" :data-nav-key="activityTarget(item.activity, index)" :class="['loop-activity-card', `activity-${activityMode(item.activity)}`, { waiting: item.activity.status === 'WAITING', failed: item.activity.status === 'FAILED', running: item.activity.status === 'RUNNING' }]"><div class="loop-activity-icon"><InfoFilled v-if="activityIconKind(item.activity.kind) === 'info'" :size="14" /><Check v-else-if="activityIconKind(item.activity.kind) === 'success'" :size="14" /><Warning v-else :size="14" /></div><div class="loop-activity-copy"><div class="loop-activity-meta"><strong>{{ activityLine(item.activity).label }}</strong><code v-if="activityLine(item.activity).name">{{ activityLine(item.activity).name }}</code><span>{{ formatTurnTime(item.activity.occurredAt) }}</span><el-tag size="small" effect="light" :type="statusTagType(item.activity.status)">{{ activityStatusLabel(item.activity) }}</el-tag></div><p v-if="activityLine(item.activity).body">{{ activityLine(item.activity).body }}</p><code v-if="activityLine(item.activity).reference" class="activity-reference">{{ activityLine(item.activity).reference }}</code></div></article>
+          <article v-else :id="activityTarget(item.activity, index)" :data-nav-key="activityTarget(item.activity, index)" :class="['loop-activity-card', `activity-${activityMode(item.activity)}`, { waiting: item.activity.status === 'WAITING', failed: item.activity.status === 'FAILED', running: item.activity.status === 'RUNNING' }]"><div class="loop-activity-icon"><InfoFilled v-if="activityIconKind(item.activity.status) === 'info'" :size="14" /><Check v-else-if="activityIconKind(item.activity.status) === 'success'" :size="14" /><Warning v-else :size="14" /></div><div class="loop-activity-copy"><div class="loop-activity-meta"><strong>{{ activityLine(item.activity).label }}</strong><code v-if="activityLine(item.activity).name">{{ activityLine(item.activity).name }}</code><span>{{ formatTurnTime(item.activity.occurredAt) }}</span><el-tag size="small" effect="light" :type="statusTagType(item.activity.status)">{{ activityStatusLabel(item.activity) }}</el-tag></div><p v-if="activityLine(item.activity).body">{{ activityLine(item.activity).body }}</p><code v-if="activityLine(item.activity).reference" class="activity-reference">{{ activityLine(item.activity).reference }}</code></div></article>
         </template>
       </div>
       <button v-if="showScrollToLatest" class="scroll-to-latest" type="button" aria-label="Scroll to latest message" title="Scroll to latest message" @click="jumpToLatest"><img class="scroll-to-latest-image" :src="scrollToLatestIcon" alt="" /></button>

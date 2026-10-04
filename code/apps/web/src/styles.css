@@ -57,7 +57,7 @@ a { color: inherit; text-decoration: none; }
 /* Explorer 对话头部、消息时间线和固定底部 composer。 */
 .conversation-column { position: relative; min-width: 0; background: #fff; border-right: 1px solid var(--line); }.conversation-header { display: flex; justify-content: space-between; padding: 27px 35px 22px; border-bottom: 1px solid var(--line); }.conversation-header h1, .page-title-row h1 { margin: 5px 0 4px; color: #1c2a3d; font-size: 22px; letter-spacing: -.04em; }.conversation-header p, .page-title-row p { margin: 0; color: var(--muted); font-size: 12px; }.mode-dot { display: inline-block; width: 6px; height: 6px; margin-right: 5px; vertical-align: 1px; border-radius: 50%; background: var(--blue); }.demo-notice { display: flex; align-items: center; gap: 8px; margin: 18px 35px 0; padding: 10px 12px; border: 1px solid #f4dfb5; border-radius: 6px; background: #fffaf0; color: #9b711f; font-size: 11px; line-height: 1.5; }.demo-notice .el-button { margin-left: auto; padding: 0; color: #ae7915; }
 /* Explorer 消息卡片及用户/assistant 的差异化视觉。 */
-.timeline { padding: 20px 35px 105px; min-height: 530px; }.timeline-day { margin: 0 0 17px 34px; color: #a6b0bf; font-size: 9px; font-weight: 800; letter-spacing: .11em; }.message-card { display: flex; width: 100%; gap: 11px; margin-bottom: 18px; align-items: flex-start; }.message-avatar { display: grid; place-items: center; width: 25px; height: 25px; flex: 0 0 25px; border-radius: 50%; font-size: 9px; font-weight: 800; }.message-body { min-width: 0; max-width: min(82%, 620px); }.user-message { flex-direction: row-reverse; }.user-message .message-body { display: flex; flex-direction: column; align-items: flex-end; }.user-message .message-meta { justify-content: flex-end; }.user-message p { padding: 9px 12px; border: 1px solid #dbe7ff; border-radius: 9px 2px 9px 9px; background: #f3f7ff; }.assistant-message p { padding: 9px 12px; border: 1px solid #edf0f4; border-radius: 2px 9px 9px 9px; background: #fafbfc; }.failed-message p { border-color: #f0c9ce; background: #fff5f6; color: #a54a56; }.user-avatar { background: #e9edf5; color: #6d7890; }.agent-avatar { background: #eaf1ff; }.message-meta { display: flex; align-items: center; gap: 8px; margin: 2px 0 7px; font-size: 11px; }.message-meta span:not(.el-tag) { color: #a0aabb; font-size: 10px; font-weight: 400; }.message-card p { max-width: 570px; margin: 0; color: #4d5b70; font-size: 12px; line-height: 1.65; }.assistant-message { padding-bottom: 16px; border-bottom: 1px solid #f0f2f5; }.insight-row { display: flex; gap: 15px; margin-top: 11px; color: #6b7990; font-size: 10px; }.insight-row span { display: flex; gap: 4px; align-items: center; }.insight-row svg { color: #33ad7c; }
+.timeline { padding: 20px 35px 105px; min-height: 530px; }.timeline-day { margin: 0 0 17px 34px; color: #a6b0bf; font-size: 9px; font-weight: 800; letter-spacing: .11em; }.message-card { display: flex; width: 100%; gap: 11px; margin-bottom: 18px; align-items: flex-start; }.message-avatar { display: grid; place-items: center; width: 25px; height: 25px; flex: 0 0 25px; border-radius: 50%; font-size: 9px; font-weight: 800; }.message-body { min-width: 0; max-width: min(82%, 620px); }.assistant-message p { padding: 9px 12px; border: 1px solid #edf0f4; border-radius: 2px 9px 9px 9px; background: #fafbfc; }.failed-message p { border-color: #f0c9ce; background: #fff5f6; color: #a54a56; }.agent-avatar { background: #eaf1ff; }.message-meta { display: flex; align-items: center; gap: 8px; margin: 2px 0 7px; font-size: 11px; }.message-meta span:not(.el-tag) { color: #a0aabb; font-size: 10px; font-weight: 400; }.message-card p { max-width: 570px; margin: 0; color: #4d5b70; font-size: 12px; line-height: 1.65; }.assistant-message { padding-bottom: 16px; border-bottom: 1px solid #f0f2f5; }.insight-row { display: flex; gap: 15px; margin-top: 11px; color: #6b7990; font-size: 10px; }.insight-row span { display: flex; gap: 4px; align-items: center; }.insight-row svg { color: #33ad7c; }
 /* Candidate Plan、消息中的执行契约预览和 composer。 */
 .candidate-card { margin-left: 34px; padding: 17px; border: 1px solid #dbe5f8; border-radius: 8px; background: #fbfdff; box-shadow: 0 4px 15px rgba(42, 78, 139, .05); }.candidate-head { display: flex; align-items: center; gap: 10px; }.candidate-icon { display: grid; place-items: center; width: 34px; height: 34px; color: var(--blue); border-radius: 7px; background: #eaf1ff; }.candidate-head h2 { margin: 3px 0 0; font-size: 13px; letter-spacing: -.01em; }.candidate-head .el-tag { margin-left: auto; }.candidate-summary { margin: 14px 0 15px; color: #67758a; font-size: 11px; line-height: 1.6; }.candidate-stats { display: grid; grid-template-columns: repeat(4, 1fr); padding: 12px 0; border-top: 1px solid #edf1f7; border-bottom: 1px solid #edf1f7; }.candidate-stats div { padding-left: 12px; border-left: 1px solid #edf1f7; }.candidate-stats div:first-child { padding-left: 0; border-left: 0; }.candidate-stats span { display: block; margin-bottom: 5px; color: #9aa6b7; font-size: 9px; }.candidate-stats strong { color: #405066; font-size: 12px; }.candidate-stats .risk-low { color: var(--green); }.candidate-actions { display: flex; align-items: center; gap: 8px; padding-top: 14px; }.candidate-actions .el-button { font-size: 11px; }.candidate-actions .el-button:first-child { color: #50627c; }.confirmed-note { display: flex; align-items: center; gap: 6px; color: var(--green); font-size: 11px; }
 /* 对话产物（CONVERSATION）的内联提醒：卡片上就说明"确认了也不能执行"，不能只靠按钮文案。 */
@@ -135,42 +135,18 @@ a { color: inherit; text-decoration: none; }
 @media (max-width: 980px) { .context-panel { display: none; } }
 
 .message-body { min-width: 0; max-width: 570px; }
-.user-message { flex-direction: row-reverse; justify-content: flex-start; }
-.user-message .message-body { display: flex; flex-direction: column; align-items: flex-end; }
-.user-message .message-meta { justify-content: flex-end; }
-.user-message p { display: inline-block; padding: 9px 12px; border: 1px solid #dbe7ff; border-radius: 12px 2px 12px 12px; background: #f3f7ff; text-align: left; }
 .assistant-message p { padding: 9px 12px; border: 1px solid #edf0f4; border-radius: 2px 12px 12px 12px; background: #fff; }
 .failed-message p { border-color: #f2d3d7; background: #fff7f7; color: #a34853; }
 
-/* Codex Desktop 风格的用户消息：默认只保留标题与摘要，正文按需展开。
-   **靠右**，与执行线程的 `.execution-message.mine` 同一套读法；右上角收一点圆角作"这是我说的"记号。
-   右边那个 `LS` 头像与左侧 assistant 的头像对称——不然只有一边有身份标识。 */
-.user-message { display: flex; flex-direction: row-reverse; align-items: flex-start; gap: 11px; max-width: 800px; margin-left: auto; margin-bottom: 18px; }
-.user-message-body { min-width: 0; flex: 1 1 auto; max-width: 760px; }
-.user-message-summary { display: flex; min-width: 0; align-items: flex-start; gap: 14px; width: 100%; padding: 14px 16px 12px; border: 1px solid #e0e7f2; border-radius: 14px 3px 14px 14px; outline: 0; background: #f7f9fd; color: #35445a; cursor: pointer; font: inherit; text-align: left; transition: border-color .16s ease, background .16s ease, box-shadow .16s ease; }
-.user-message-summary:hover, .user-message-summary:focus-visible { border-color: #b9cdf4; background: #f4f8ff; box-shadow: 0 4px 12px rgba(55, 91, 151, .08); }
-.user-message-summary:focus-visible { outline: 2px solid #7ca3f4; outline-offset: 2px; }
-.user-message-summary.expanded { border-color: #cbd9f2; background: #fbfdff; box-shadow: 0 2px 8px rgba(55, 91, 151, .05); }
-.user-message-summary-copy { display: block; min-width: 0; flex: 1 1 auto; }
-.user-message-summary-copy > strong { display: block; overflow: hidden; color: #2c3a50; font-size: 13px; font-weight: 700; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
-.user-message-summary-preview { display: -webkit-box; max-width: 100%; margin-top: 7px; overflow: hidden; color: #8995a6; font-size: 12px; line-height: 1.6; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
-.user-message-summary-footer { display: flex; flex: 0 0 auto; align-items: center; gap: 9px; padding-top: 1px; color: #9aa6b7; font-size: 10px; white-space: nowrap; }
-.user-message-summary-action { display: inline-flex; align-items: center; gap: 3px; color: #7892c5; font-size: 10px; font-weight: 700; }
-.user-message-summary-action svg { color: #86a0d2; }
-.user-message-content { margin-top: 10px; padding: 12px 14px 14px; border: 1px solid #e4e9f1; border-radius: 10px; background: #fff; }
-.user-message-content .message-meta { margin: 0 0 8px; }
-.user-message-content .message-meta strong { color: #53647c; }
-.user-message-content .markdown-body { max-width: none; }
-.user-message-expanded .user-message-content .markdown-body { padding: 0; border: 0; background: transparent; }
-.failed-message .user-message-summary { border-color: #f2d3d7; background: #fff7f7; }
-.failed-message .user-message-summary-copy > strong, .failed-message .user-message-summary-action { color: #a34853; }
-
-@media (max-width: 720px) {
-  .user-message-summary { gap: 10px; padding: 12px 13px 11px; }
-  .user-message-summary-copy > strong { font-size: 12px; }
-  .user-message-summary-preview { font-size: 11px; }
-  .user-message-summary-footer { gap: 6px; font-size: 9px; }
-}
+/* 用户消息：Codex 那种「› + 纯文本」——不套卡片、不折叠、不带头像，正文原样摆出来。
+   **靠右**，与执行线程的 `.execution-message.mine` 是同一套读法（谁说的先被看见，说了什么随后）；
+   那条 `›` 是"这句是我说的"的记号，也是与助手正文唯一的形态差别。 */
+.timeline-user-text { display: flex; justify-content: flex-end; align-items: flex-start; gap: 7px; max-width: 800px; margin: 0 0 18px auto; }
+.timeline-user-mark { flex: 0 0 auto; color: #9aa6b7; font-size: 13px; line-height: 1.75; user-select: none; }
+.timeline-user-body { display: flex; min-width: 0; flex-direction: column; align-items: flex-end; }
+.timeline-user-body .markdown-body { max-width: 620px; color: #35445a; font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; text-align: left; }
+.timeline-user-body time { margin-top: 4px; color: #a6b0bf; font-size: 10px; }
+.timeline-user-text.failed-message .markdown-body { color: #a34853; }
 
 .composer-input input { min-width: 0; flex: 1; border: 0; outline: 0; color: #526178; background: transparent; font-size: 11px; }
 .composer-input input::placeholder { color: #a5afbd; }
@@ -202,17 +178,20 @@ a { color: inherit; text-decoration: none; }
 .execution-message { display: flex; gap: 11px; padding: 13px 0; border-bottom: 1px solid #f0f3f7; }
 .execution-message:last-child { border-bottom: 0; }
 .execution-message-avatar { display: grid; place-items: center; width: 28px; height: 28px; flex: 0 0 28px; border-radius: 50%; background: #eef3fb; color: #5479bf; font-size: 9px; font-weight: 800; }
-.execution-message-guidance .execution-message-avatar { background: #e8f0ff; color: #4774cf; }
 .execution-message-activity .execution-message-avatar, .execution-message-tool .execution-message-avatar { background: #f2f5f9; color: #8997a8; }
 .execution-message-body { min-width: 0; flex: 1; }
 .execution-message-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: #a0aaba; font-size: 9px; }
 .execution-message-meta strong { color: #52657f; font-size: 10px; }
 .execution-message-body > p { margin: 6px 0 0; color: #5f7087; font-size: 11px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
 .execution-message-model .execution-message-body > p { color: #405571; }
-.execution-message-guidance .execution-message-body > p { color: #4d6d9e; }
+.execution-message-user .execution-message-body > p { color: #4d6d9e; }
 /* 我的消息靠右、执行者的靠左：和模型对话的常规读法。宽度收窄才看得出"这是我说的一句话"——
    原来 flex-basis 92% 几乎占满整行，右对齐等于没做。 */
 .execution-message.mine { flex-direction: row-reverse; }
+/* 你自己说的话：Codex 那种「› + 纯文本」——没有头像，正文原样摆出来，仍然靠右。 */
+.execution-user-text { display: flex; justify-content: flex-end; align-items: flex-start; gap: 7px; margin-top: 6px; }
+.execution-user-mark { flex: 0 0 auto; color: #a6b0bf; font-size: 12px; line-height: 1.7; user-select: none; }
+.execution-user-text .markdown-body { max-width: 560px; color: #3f5a86; font-size: 11px; line-height: 1.65; overflow-wrap: anywhere; }
 .execution-message.mine .execution-message-body { display: flex; flex: 0 1 min(620px, 78%); flex-direction: column; align-items: flex-end; }
 .execution-message.mine .execution-message-meta { justify-content: flex-end; }
 /* 诊断细节默认不露面（见 utils/executionMessageDetails.ts）：常驻只留标题、状态与时间。 */
@@ -234,7 +213,7 @@ a { color: inherit; text-decoration: none; }
 .execution-conversation-group { margin-bottom: 14px; }
 /* 步骤分组：**不用左侧竖线**（它把整组内容再往右推 53px，而且说的和"这是一组"是同一件事），
    改成组与组之间一条横线分段——省下横向空间，任务边界反而更醒目。 */
-.execution-conversation-group-task, .execution-conversation-group-guidance, .execution-conversation-group-unattributed { margin-top: 22px; border-top: 2px solid #d7e0ec; }
+.execution-conversation-group-task, .execution-conversation-group-user, .execution-conversation-group-unattributed { margin-top: 22px; border-top: 2px solid #d7e0ec; }
 .execution-conversation-group:first-child { margin-top: 0; border-top: 0; }
 .execution-task-stream-items { padding-top: 2px; }
 /* 步骤头是**可点的折叠开关**，所以它要长得像个控件：整条可点、有 hover/focus、带状态与条数。 */
@@ -790,7 +769,6 @@ a { color: inherit; text-decoration: none; }
 
 /* 消息正文 Markdown 排版：气泡沿用原有 p 的视觉，块级元素在气泡内自适应并允许横向滚动。 */
 .message-card .markdown-body { max-width: 570px; color: #4d5b70; font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
-.user-message .markdown-body { display: inline-block; padding: 9px 12px; border: 1px solid #dbe7ff; border-radius: 12px 2px 12px 12px; background: #f3f7ff; text-align: left; }
 .assistant-message .markdown-body { padding: 9px 12px; border: 1px solid #edf0f4; border-radius: 2px 12px 12px 12px; background: #fff; }
 .failed-message .markdown-body { border-color: #f2d3d7; background: #fff7f7; color: #a34853; }
 .processing-message .markdown-body { border-color: #cdddfb; background: linear-gradient(110deg, #fff 25%, #f4f8ff 45%, #fff 65%); background-size: 220% 100%; animation: explorer-message-sheen 2.8s ease-in-out infinite; }
@@ -815,9 +793,7 @@ a { color: inherit; text-decoration: none; }
 .markdown-body del { color: #93a0b1; }
 .execution-message-body > .markdown-body { margin-top: 6px; color: #5f7087; font-size: 11px; line-height: 1.65; overflow-wrap: anywhere; }
 .execution-message-model .execution-message-body > .markdown-body { color: #405571; }
-.execution-message-guidance .execution-message-body > .markdown-body { color: #4d6d9e; }
-.execution-message-model .execution-message-body > .markdown-body, .execution-message-guidance .execution-message-body > .markdown-body { display: inline-block; max-width: min(680px, 100%); padding: 9px 12px; border: 1px solid #edf0f4; border-radius: 2px 12px 12px 12px; background: #fff; }
-.execution-message-guidance .execution-message-body > .markdown-body { border-color: #dbe7ff; border-radius: 12px 2px 12px 12px; background: #f3f7ff; text-align: left; }
+.execution-message-model .execution-message-body > .markdown-body { display: inline-block; max-width: min(680px, 100%); padding: 9px 12px; border: 1px solid #edf0f4; border-radius: 2px 12px 12px 12px; background: #fff; }
 
 /* Explorer requirements consolidate exploration, Plan and Run state by thread. */
 .requirement-workspace-column { height: 100%; min-height: 0; overflow: hidden; background: #f7f9fc; }

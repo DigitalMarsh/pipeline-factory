@@ -34,6 +34,20 @@ function protocol(overrides: Record<string, unknown> = {}): string {
   return `<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>${JSON.stringify(planSpec(overrides))}</pipeline-factory-plan>`;
 }
 
+/** 一次 Explore 回合的 Loop 与 Turn；这几个用例只关心步骤，其余字段给固定值。 */
+function explorerLoop(): AgentLoop {
+  return { id: "loop-1", ownerType: "explorer-turn", ownerId: "assistant-1", role: "explorer", mode: "provider-controlled", state: "COMPLETED", stepCount: 0, maxSteps: 40, startedAt: "2026-08-29T10:00:00.000Z", completedAt: "2026-08-29T10:00:05.000Z", providerThreadId: null, providerTurnId: null, checkpointJson: null };
+}
+function assistantTurn(status: ExplorerTurn["status"] = "COMPLETED"): ExplorerTurn {
+  return { id: "assistant-1", threadId: "explorer-1", role: "assistant", content: "", status, createdAt: "2026-08-29T10:00:00.000Z", sequence: 1 };
+}
+function step(sequence: number, stepType: AgentLoopStep["stepType"], status: AgentLoopStep["status"], payload: Record<string, unknown>, callId: string | null, occurredAt: string): AgentLoopStep {
+  return { loopId: "loop-1", sequence, stepType, status, callId, providerThreadId: null, providerTurnId: null, payload, occurredAt };
+}
+function providerStep(sequence: number, payload: Record<string, unknown>, occurredAt: string): AgentLoopStep {
+  return step(sequence, "PROVIDER_ACTIVITY", "COMPLETED", payload, null, occurredAt);
+}
+
 describe("Explorer activity projection", () => {
   it("marks a text-bearing assistant activity completed when its turn is completed", () => {
     const items = projectExplorerActivity({
@@ -62,9 +76,11 @@ describe("Explorer activity projection", () => {
       ],
     });
 
-    expect(items.map((item) => item.kind)).toEqual(["USER_MESSAGE", "ASSISTANT_MESSAGE", "TOOL_STARTED", "TOOL_COMPLETED", "GATE_CHECKED"]);
+    // 一次工具调用只占一条：TOOL_REQUESTED 与 TOOL_COMPLETED 是同一件事的两端。
+    // 门禁判定是 `complete`（一切正常）——不占位，见下面单独的那条用例。
+    expect(items.map((item) => item.kind)).toEqual(["USER_MESSAGE", "ASSISTANT_MESSAGE", "TOOL_CALL"]);
     expect(items[1]?.summary).toBe("Hello");
-    expect(items[2]).toMatchObject({ title: "Tool running", details: { tool: "read_file", callId: "call-1" } });
+    expect(items[2]).toMatchObject({ title: "read_file", status: "COMPLETED", details: { tool: "read_file", callId: "call-1", reason: "ok" } });
   });
 
   it("正文的落库粒度变化不改变活动投影的可见产出（写侧按「文本段」合并的等价性）", () => {
@@ -94,10 +110,10 @@ describe("Explorer activity projection", () => {
     const visible = (steps: typeof fragmented) => projectExplorerActivity({ turns: [turn], loops: [loop], steps }).map(({ id: _id, ...item }) => item);
     expect(visible(coalesced)).toEqual(visible(fragmented));
     // 合并后仍然：一条正文一个气泡、时间取段首那条增量、内容取整段的拼接。
-    expect(visible(coalesced).map((item) => [item.kind, item.summary, item.occurredAt])).toEqual([
-      ["ASSISTANT_MESSAGE", "Hello!", "2026-08-29T10:00:01.000Z"],
-      ["TOOL_STARTED", "read_file", "2026-08-29T10:00:01.200Z"],
-      ["ASSISTANT_MESSAGE", "OK", "2026-08-29T10:00:01.400Z"],
+    expect(visible(coalesced).map((item) => [item.kind, item.title, item.occurredAt])).toEqual([
+      ["ASSISTANT_MESSAGE", "Plan Explorer", "2026-08-29T10:00:01.000Z"],
+      ["TOOL_CALL", "read_file", "2026-08-29T10:00:01.200Z"],
+      ["ASSISTANT_MESSAGE", "Plan Explorer", "2026-08-29T10:00:01.400Z"],
     ]);
   });
 
@@ -113,8 +129,8 @@ describe("Explorer activity projection", () => {
       ],
     });
 
-    const reasoning = items.find((item) => item.kind === "REASONING_SUMMARY");
-    const command = items.find((item) => item.kind === "TOOL_COMPLETED");
+    const reasoning = items.find((item) => item.kind === "REASONING");
+    const command = items.find((item) => item.kind === "COMMAND");
     expect(reasoning?.summary).toBe("");
     // Provider 给了摘要就照摆，只是截到 240 字。
     expect(command?.summary).toBe("pnpm test");
@@ -262,5 +278,70 @@ describe("Explorer activity projection", () => {
     // 会改变这个气泡与其它活动的相对顺序。providerItemId 相反，取最后一条非空的。
     expect(items[0]?.occurredAt).toBe("2026-08-29T10:00:01.000Z");
     expect(items[0]?.details).toMatchObject({ providerItemId: "item-last" });
+  });
+
+  /**
+   * 下面四条钉住本轮的**呈现判据**，依据是本机运行库的实测（见 docs/消息类型及事件状态机流程图.md §1）：
+   * Provider 活动 1,737 行去重后是 873 个真实活动、门禁 90 条里 blocked 0 条、
+   * 112 个 userMessage 与 29 个 plan 回声曾被渲染成工具行。
+   */
+  it("把一次调用的开始与结束合成一条，被拒与失败也落在这一条上", () => {
+    const merged = projectExplorerActivity({
+      turns: [assistantTurn()],
+      loops: [explorerLoop()],
+      steps: [
+        step(1, "TOOL_REQUESTED", "RUNNING", { tool: "shell" }, "call-9", "2026-08-29T10:00:01.000Z"),
+        step(2, "TOOL_DENIED", "DENIED", { reason: "策略不允许写仓库目录以外的文件。" }, "call-9", "2026-08-29T10:00:02.000Z"),
+      ],
+    });
+    expect(merged.map((item) => item.kind)).toEqual(["TOOL_CALL"]);
+    // 名字留住开始那一条的，原因覆盖成结束那一条的——两边各只说了一半。
+    expect(merged[0]).toMatchObject({ title: "shell", status: "FAILED", details: { reason: "策略不允许写仓库目录以外的文件。" } });
+
+    // TOOL_FAILED / TOOL_NEEDS_RECONCILIATION 此前**连一行都没有**（没有分支，静默掉了）。
+    const failed = projectExplorerActivity({
+      turns: [assistantTurn()],
+      loops: [explorerLoop()],
+      steps: [
+        step(1, "TOOL_REQUESTED", "RUNNING", { tool: "pnpm" }, "call-8", "2026-08-29T10:00:01.000Z"),
+        step(2, "TOOL_FAILED", "FAILED", { reason: "命令退出码 1" }, "call-8", "2026-08-29T10:00:02.000Z"),
+      ],
+    });
+    expect(failed[0]).toMatchObject({ kind: "TOOL_CALL", title: "pnpm", status: "FAILED", details: { reason: "命令退出码 1" } });
+  });
+
+  it("回合结束后仍没有结束事件的调用标成状态未知，而不是一直进行中", () => {
+    const items = projectExplorerActivity({
+      turns: [assistantTurn("COMPLETED")],
+      loops: [explorerLoop()],
+      steps: [step(1, "TOOL_REQUESTED", "RUNNING", { tool: "pnpm" }, "call-7", "2026-08-29T10:00:01.000Z")],
+    });
+    expect(items[0]).toMatchObject({ kind: "TOOL_CALL", status: "UNKNOWN", details: { reason: "未记录调用的结束状态。" } });
+  });
+
+  it("只在拦下这一步时给门禁成行", () => {
+    const steps = (action: string) => [step(1, "GATE_CHECKED", "COMPLETED", { action, reason: action === "blocked" ? "连续两步没有进展" : "MODEL_CONTINUES" }, null, "2026-08-29T10:00:01.000Z")];
+    expect(projectExplorerActivity({ turns: [assistantTurn()], loops: [explorerLoop()], steps: steps("continue") })).toEqual([]);
+    expect(projectExplorerActivity({ turns: [assistantTurn()], loops: [explorerLoop()], steps: steps("complete") })).toEqual([]);
+    expect(projectExplorerActivity({ turns: [assistantTurn()], loops: [explorerLoop()], steps: steps("blocked") })[0]).toMatchObject({ kind: "GATE", status: "FAILED", summary: "连续两步没有进展" });
+  });
+
+  it("不把 Provider 的回声渲染成工具行，认不出来的仍然照实显示", () => {
+    const items = projectExplorerActivity({
+      turns: [assistantTurn()],
+      loops: [explorerLoop()],
+      steps: [
+        providerStep(1, { phase: "completed", itemId: "item-user", itemType: "userMessage" }, "2026-08-29T10:00:01.000Z"),
+        providerStep(2, { phase: "completed", itemId: "item-plan", itemType: "plan", summary: "# 整篇规划文档" }, "2026-08-29T10:00:02.000Z"),
+        providerStep(3, { phase: "completed", itemId: "item-x", itemType: "somethingNew", summary: "说不上是什么" }, "2026-08-29T10:00:03.000Z"),
+        providerStep(4, { phase: "completed", itemId: "item-cmd", itemType: "commandExecution", summary: "pnpm test" }, "2026-08-29T10:00:04.000Z"),
+      ],
+    });
+    // 你那句话的回声归 PROVIDER_MESSAGE（呈现层把它标成 hidden，不占位），整篇规划的回声直接不产出
+    // ——它们在时间线上已经有对应的东西（用户消息本身、那条助手正文）。
+    expect(items.map((item) => item.kind)).toEqual(["PROVIDER_MESSAGE", "UNCLASSIFIED", "COMMAND"]);
+    // 认不出来就说认不出来：标签摆 Provider 的原生 itemType，不编一个像样的类别名。
+    expect(items[1]).toMatchObject({ details: { itemType: "somethingNew" }, summary: "说不上是什么" });
+    expect(items[2]).toMatchObject({ title: "", summary: "pnpm test", status: "COMPLETED" });
   });
 });

@@ -248,12 +248,14 @@ onBeforeUnmount(() => { requestGeneration += 1; closeEvents(); });
       </div>
       <article v-for="message in messages" :key="message.id" :class="['project-execution-message', `${message.role}-message`, { failed: message.status === 'FAILED' || message.status === 'RECOVERY_REQUIRED' }]" :data-execution-message="message.id">
         <div class="project-execution-message-meta">
-          <strong>{{ message.role === 'user' ? '你' : '项目执行助手' }}</strong>
+          <strong v-if="message.role === 'assistant'">项目执行助手</strong>
           <time>{{ timeLabel(message.createdAt) }}</time>
           <el-tag v-if="message.role === 'assistant'" class="project-execution-status" size="small" effect="light" :type="projectExecutionStatusTagType(message.status)">{{ message.status === 'QUEUED' ? '排队中' : message.status === 'RUNNING' ? '执行中' : message.status === 'COMPLETED' ? '已完成' : message.status === 'CANCELLED' ? '已取消' : message.status === 'RECOVERY_REQUIRED' ? '需要恢复' : '失败' }}</el-tag>
         </div>
-        <MarkdownMessage v-if="message.content" :source="message.content" :streaming="message.role === 'assistant' && message.status === 'RUNNING'" />
-        <p v-else-if="message.role === 'assistant' && message.status === 'RUNNING'" class="project-execution-placeholder">正在执行…</p>
+        <!-- 你自己说的话：Codex 那种「› + 纯文本」，不套卡片（见 docs/消息类型及事件状态机流程图.md §3.1）。 -->
+        <div v-if="message.role === 'user'" class="project-execution-user-text"><span class="project-execution-user-mark" aria-hidden="true">›</span><MarkdownMessage v-if="message.content" :source="message.content" /></div>
+        <MarkdownMessage v-else-if="message.content" :source="message.content" :streaming="message.status === 'RUNNING'" />
+        <p v-else-if="message.status === 'RUNNING'" class="project-execution-placeholder">正在执行…</p>
         <p v-if="message.error" class="project-execution-message-error"><Warning :size="14" /> {{ message.error }}</p>
         <div v-if="message.role === 'assistant' && message.model" class="project-execution-turn-config">{{ message.model }}<span v-if="message.reasoningEffort"> · {{ message.reasoningEffort }}</span></div>
         <div v-if="message.role === 'assistant' && activitiesFor(message).length" class="project-execution-activities" aria-label="执行进度">
@@ -293,7 +295,11 @@ onBeforeUnmount(() => { requestGeneration += 1; closeEvents(); });
 .project-execution-empty strong { color:#33425a; font-size:17px; }
 .project-execution-empty span { max-width:470px; font-size:13px; line-height:1.6; }
 .project-execution-message { max-width:860px; margin:0 auto 22px; padding:18px 20px; border:1px solid #e5eaf1; border-radius:12px; background:#fff; box-shadow:0 2px 10px #1f31400a; overflow-wrap:anywhere; }
-.project-execution-message.user-message { background:#f6f8fb; }
+.project-execution-message.user-message { max-width:none; margin:0 0 18px auto; padding:0; border:0; background:transparent; box-shadow:none; }
+.project-execution-message.user-message .project-execution-message-meta { justify-content:flex-end; margin-bottom:6px; }
+.project-execution-user-text { display:flex; justify-content:flex-end; align-items:flex-start; gap:7px; }
+.project-execution-user-mark { flex:0 0 auto; color:#a6b0bf; font-size:13px; line-height:1.7; user-select:none; }
+.project-execution-user-text :deep(.markdown-body) { max-width:620px; color:#35445a; font-size:12px; line-height:1.65; overflow-wrap:anywhere; text-align:left; }
 .project-execution-message.failed { border-color:#f0cccc; background:#fffafa; }
 .project-execution-message-meta { display:flex; align-items:center; gap:10px; margin-bottom:12px; color:#8492a7; font-size:11px; }
 .project-execution-message-meta strong { color:#52637e; font-size:12px; }

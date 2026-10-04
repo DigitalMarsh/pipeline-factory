@@ -29,7 +29,7 @@ const route = useRoute();
 const router = useRouter();
 const props = withDefaults(defineProps<{ embedded?: boolean; projectId?: string; runId?: string }>(), { embedded: false });
 const emit = defineEmits<{ (event: "close"): void; (event: "open-plan", plan: Plan): void }>();
-type ExecutionConversationGroup = { id: string; kind: "plan" | "task" | "guidance" | "unattributed" | "pending"; task?: ExecutionTask; tasks?: ExecutionTask[]; items: ExecutionStreamItem[] };
+type ExecutionConversationGroup = { id: string; kind: "plan" | "task" | "user" | "unattributed" | "pending"; task?: ExecutionTask; tasks?: ExecutionTask[]; items: ExecutionStreamItem[] };
 const embedded = computed(() => props.embedded);
 const projectId = computed(() => props.projectId ?? String(route.params.projectId ?? ""));
 const runId = computed(() => props.runId ?? String(route.params.runId ?? ""));
@@ -105,11 +105,11 @@ const executionConversationGroups = computed<ExecutionConversationGroup[]>(() =>
   }
   // 你在执行线程里发的消息。它不属于任何执行步骤，但也不该和 Run 级活动混在一组——
   // 它此前就挂在「未关联执行步骤」标题下，等于把用户自己说的话标成了"没有归属的执行步骤"。
-  const guidance = executionMessages.value.filter((item) => item.kind === "guidance" && !item.taskId);
-  if (guidance.length) groups.push({ id: "guidance", kind: "guidance", items: guidance });
+  const userMessages = executionMessages.value.filter((item) => item.kind === "user" && !item.taskId);
+  if (userMessages.length) groups.push({ id: "user", kind: "user", items: userMessages });
   // 剩下的才是真正的归因缺口：本该落进某个执行步骤、却没有归属的模型 / 工具条目。
   // 现代 Run 不产生这类条目，它们集中在 2026-09-25 之前的数据里。
-  const unattributed = executionMessages.value.filter((item) => item.kind !== "plan" && item.kind !== "guidance" && !isRunActivity(item) && (!item.taskId || !taskIds.has(item.taskId)));
+  const unattributed = executionMessages.value.filter((item) => item.kind !== "plan" && item.kind !== "user" && !isRunActivity(item) && (!item.taskId || !taskIds.has(item.taskId)));
   if (unattributed.length) groups.push({ id: "unattributed", kind: "unattributed", items: unattributed });
   return collapsePendingTaskGroups(groups);
 });
@@ -143,9 +143,11 @@ function collapsePendingTaskGroups(groups: ExecutionConversationGroup[]): Execut
  * `hidden` 的条目连计数都不进——它们不是内容，只是 Provider 的机制回显。
  */
 function visibleItems(group: ExecutionConversationGroup): ExecutionStreamItem[] {
+  // 判据是"除折叠与不渲染之外"，不是"属于某几种呈现方式"——写成白名单时，
+  // 新增一种呈现方式（比如你自己说的话那条 `text`）会让那一类消息**从会话里静默消失**。
   return group.items.filter((item) => {
     const mode = executionDisplayMode(item);
-    return mode === "card" || mode === "line";
+    return mode !== "folded" && mode !== "hidden";
   });
 }
 function foldedItems(group: ExecutionConversationGroup): ExecutionStreamItem[] {
@@ -627,7 +629,7 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
             <div v-if="group.kind !== 'pending' && !isTaskGroupCollapsed(group.id)" :id="`execution-task-stream-${group.id}`" class="execution-task-stream-items">
             <p v-if="group.task && !visibleItems(group).length && !foldedItems(group).length" class="execution-task-stream-empty">{{ taskGroupEmptyNote(group.task) }}</p>
             <article v-for="item in visibleItems(group)" :key="item.id" :data-sequence="item.sequence" :data-task-id="item.taskId" :data-model-step="item.modelStep" :title="executionMessageDiagnosticsTitle(item)" :class="['execution-message', `execution-message-${item.kind}`, { failed: item.status === 'FAILED', waiting: item.status === 'WAITING', running: item.status === 'RUNNING', unknown: item.status === 'UNKNOWN', mine: item.role === 'user' }]">
-              <div class="execution-message-avatar">{{ item.role === 'user' ? 'LS' : item.kind === 'plan' ? 'PL' : item.kind === 'model' ? 'EX' : item.kind === 'tool' ? 'TL' : '·' }}</div>
+              <div v-if="item.kind !== 'user'" class="execution-message-avatar">{{ item.kind === 'plan' ? 'PL' : item.kind === 'model' ? 'EX' : item.kind === 'tool' ? 'TL' : '·' }}</div>
               <div class="execution-message-body">
                 <div class="execution-message-meta"><strong>{{ item.title }}</strong><el-tag v-if="item.status !== 'INFO'" size="small" effect="light" :type="statusTagType(item.status)">{{ executionMessageStatusLabel(item.status) }}</el-tag><span class="execution-message-time">{{ new Date(item.occurredAt).toLocaleTimeString('zh-CN') }}</span><button v-if="executionMessageDetails(item).length" type="button" class="execution-message-toggle" :aria-expanded="isExecutionItemExpanded(item.id)" @click="toggleExecutionItem(item.id)">{{ isExecutionItemExpanded(item.id) ? '收起详情' : '详情' }}</button></div>
                 <div v-if="isExecutionItemExpanded(item.id)" class="execution-message-details"><span v-for="detail in executionMessageDetails(item)" :key="detail">{{ detail }}</span></div>
@@ -643,8 +645,13 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
                     <div class="execution-plan-message-actions"><el-button text size="small" @click="openPlanDetail">View full plan</el-button></div>
                   </div>
                 </template>
-                <template v-else-if="item.kind === 'model' || item.kind === 'guidance'">
+                <template v-else-if="item.kind === 'model'">
                   <MarkdownMessage :source="item.content" :streaming="item.status === 'RUNNING'" />
+                  <small v-if="item.detail || item.unrecordedFields?.length" class="execution-message-note">{{ item.detail || item.unrecordedFields?.join(' · ') }}</small>
+                </template>
+                <!-- 你自己说的话：Codex 那种「› + 纯文本」，不套卡片、不带头像（见 docs/消息类型及事件状态机流程图.md §2.1）。 -->
+                <template v-else-if="item.kind === 'user'">
+                  <div class="execution-user-text"><span class="execution-user-mark" aria-hidden="true">›</span><MarkdownMessage :source="item.content" /></div>
                   <small v-if="item.detail || item.unrecordedFields?.length" class="execution-message-note">{{ item.detail || item.unrecordedFields?.join(' · ') }}</small>
                 </template>
                 <template v-else>

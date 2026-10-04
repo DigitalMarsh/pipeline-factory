@@ -13,9 +13,19 @@ const runDetailStyles = readFileSync(fileURLToPath(new URL("../styles.css", impo
 describe("Run detail execution conversation", () => {
   it("renders executor model and guidance text through the shared Markdown component", () => {
     expect(runDetailSource).toContain('import MarkdownMessage from "../components/MarkdownMessage.vue"');
-    expect(runDetailSource).toContain('<template v-else-if="item.kind === \'model\' || item.kind === \'guidance\'">');
+    expect(runDetailSource).toContain('<template v-else-if="item.kind === \'model\'">');
+    // 你自己说的话不走卡片、也不带头像：Codex 那种「› + 纯文本」，仍然靠右。
+    expect(runDetailSource).toContain('class="execution-user-mark"');
+    expect(runDetailSource).toContain('<div v-if="item.kind !== \'user\'" class="execution-message-avatar">');
     expect(runDetailSource).toContain('<MarkdownMessage :source="item.content" :streaming="item.status === \'RUNNING\'" />');
     expect(runDetailSource).not.toContain("{{ item.content }}<span v-if=\"item.status === 'RUNNING'\"");
+  });
+
+  it("呈现方式的判据不是白名单：新增一种就不会有消息从会话里消失", () => {
+    // `text`（你自己说的话）就是这么漏过一次的——`visibleItems` 当时写死"属于 card 或 line"，
+    // 于是那类消息在页面上直接不见了，而类型、模板、样式都对着。
+    expect(runDetailSource).toContain('return mode !== "folded" && mode !== "hidden";');
+    expect(runDetailSource).not.toContain('return mode === "card" || mode === "line";');
   });
 
   it("keeps execution activity details as plain text", () => {
@@ -160,8 +170,8 @@ describe("Run detail execution conversation", () => {
     expect(runDetailStyles).not.toContain(".execution-unassigned-heading");
     // 你在执行线程里发的消息独立成组：此前它挂在「未关联执行步骤」下面，
     // 等于把用户自己说的话标成了"没有归属的执行步骤"。
-    expect(runDetailSource).toContain('groups.push({ id: "guidance", kind: "guidance", items: guidance })');
-    expect(runDetailStyles).toContain(".execution-conversation-group-guidance");
+    expect(runDetailSource).toContain('groups.push({ id: "user", kind: "user", items: userMessages })');
+    expect(runDetailStyles).toContain(".execution-conversation-group-user");
   });
 
   it("执行过程有阶段感，且呈现方式由一张表统一决定", () => {

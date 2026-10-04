@@ -1280,7 +1280,7 @@ describe("Pipeline Factory v4 API", () => {
     const response = await app.inject({ method: "GET", url: `/api/v4/projects/project-1/explorers/explorer-1/activity?explorerPlanId=${explorerPlanId}` });
 
     expect(response.statusCode).toBe(200);
-    expect(response.json().items.map((item: { kind: string }) => item.kind)).toEqual(["USER_MESSAGE", "ASSISTANT_MESSAGE", "TOOL_STARTED"]);
+    expect(response.json().items.map((item: { kind: string }) => item.kind)).toEqual(["USER_MESSAGE", "ASSISTANT_MESSAGE", "TOOL_CALL"]);
   });
 
   it("exposes the Plan and Run lifecycle only through the v4 API", async () => {
