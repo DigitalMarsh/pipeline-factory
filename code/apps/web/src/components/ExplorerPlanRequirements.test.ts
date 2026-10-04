@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createApp, defineComponent, h, nextTick, ref } from "vue";
+import { ElTag } from "element-plus";
 import { describe, expect, it } from "vitest";
 import ExplorerPlanRequirements from "./ExplorerPlanRequirements.vue";
 
@@ -26,6 +27,8 @@ function mountRequirements(initialDiagnostics: Issue[] = [], initiallyExpanded =
       return () => h(ExplorerPlanRequirements, { requirements, completed, diagnostics: diagnostics.value, initiallyExpanded });
     },
   }));
+  // 摘要那三个状态现在是 `el-tag`——不注册的话它会被当成未知元素渲染，且控制台会有 Vue 警告。
+  app.component("el-tag", ElTag);
   app.mount(host);
   return { app, host, diagnostics };
 }
@@ -47,6 +50,7 @@ describe("ExplorerPlanRequirements", () => {
     expect(button.getAttribute("aria-expanded")).toBe("false");
     expect(button.getAttribute("aria-controls")).toBe("plan-requirements-details");
     expect(button.textContent).toContain("3/3 项已满足");
+    expect(button.querySelector(".el-tag")?.textContent).toContain("3/3 项已满足");
     expect(details(mounted.host).getAttribute("style")).toContain("display: none");
 
     mounted.app.unmount();
@@ -106,6 +110,33 @@ describe("ExplorerPlanRequirements", () => {
 
     mounted.app.unmount();
     mounted.host.remove();
+  });
+
+  it("行首标记由图标组件渲染，不再是 ✓ / ! / · 这些文字字形", () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const app = createApp(defineComponent({
+      setup() {
+        return () => h(ExplorerPlanRequirements, {
+          requirements,
+          completed: [requirements[0]!.label],                                                                                      // 一条已完成
+          diagnostics: [{ path: "scope.includePaths", code: "REQUIRED", area: "功能范围与排除项", message: "必须指定至少一个范围路径" }],   // 一条有问题
+          initiallyExpanded: true,                                                                                                  // 第三条待补齐
+        });
+      },
+    }));
+    app.component("el-tag", ElTag);
+    app.mount(host);
+
+    const markers = [...host.querySelectorAll<HTMLElement>(".plan-requirement-status")];
+    expect(markers).toHaveLength(3);
+    // 完成与问题各一个图标，待补齐是一个圆点；三种状态下都没有文字（字形当图标用是这一处曾经的毛病）。
+    expect(markers.map((marker) => marker.textContent?.trim())).toEqual(["", "", ""]);
+    expect(markers.filter((marker) => marker.querySelector("svg"))).toHaveLength(2);
+    expect(markers.filter((marker) => marker.querySelector(".plan-requirement-dot"))).toHaveLength(1);
+
+    app.unmount();
+    host.remove();
   });
 
   it("keeps the details grid responsive on narrow layouts", () => {

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { CircleCheck, Warning } from "@element-plus/icons-vue";
 
 type Requirement = { key: string; label: string; requiredFields: string[]; optionalFields: string[]; factoryOwnedFields?: string[] };
 type Issue = { path: string; code: string; area: string; message: string };
@@ -67,9 +68,9 @@ watch(() => props.diagnostics.length, (count, previousCount) => {
           </span>
         </span>
         <span class="plan-requirements-summary-meta">
-          <span class="plan-requirements-summary-status">{{ completionSummary }}</span>
-          <span v-if="pendingCount" class="plan-requirements-summary-pending">待补齐 {{ pendingCount }}</span>
-          <span v-if="issueCount" class="plan-requirements-summary-invalid">问题 {{ issueCount }}</span>
+          <el-tag size="small" effect="light" type="success">{{ completionSummary }}</el-tag>
+          <el-tag v-if="pendingCount" size="small" effect="light" type="warning">待补齐 {{ pendingCount }}</el-tag>
+          <el-tag v-if="issueCount" size="small" effect="light" type="danger">问题 {{ issueCount }}</el-tag>
           <span class="plan-requirements-toggle-label">{{ expanded ? '收起详情' : '展开详情' }}</span>
           <span class="plan-requirements-toggle-icon" aria-hidden="true">{{ expanded ? '−' : '+' }}</span>
         </span>
@@ -78,7 +79,7 @@ watch(() => props.diagnostics.length, (count, previousCount) => {
     <div v-show="expanded" :id="detailsId" class="plan-requirements-details" role="region" aria-labelledby="plan-requirements-title">
       <div class="plan-requirements-grid" role="list">
         <article v-for="requirement in requirements" :key="requirement.key" :class="['plan-requirement-row', stateFor(requirement)]" role="listitem">
-          <span class="plan-requirement-status" :aria-label="stateFor(requirement)">{{ stateFor(requirement) === 'complete' ? '✓' : stateFor(requirement) === 'invalid' ? '!' : '·' }}</span>
+          <span class="plan-requirement-status" :aria-label="stateFor(requirement)"><CircleCheck v-if="stateFor(requirement) === 'complete'" :size="11" /><Warning v-else-if="stateFor(requirement) === 'invalid'" :size="11" /><span v-else class="plan-requirement-dot" /></span>
           <div>
             <strong>{{ requirement.label }}</strong>
             <small>必填：{{ requirement.requiredFields.join('、') }}</small>
