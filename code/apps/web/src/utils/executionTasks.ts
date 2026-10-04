@@ -115,7 +115,7 @@ export function executionTaskSummary(tasks: ExecutionTask[]): { completed: numbe
 }
 
 export function executionTaskStatusLabel(status: ExecutionTaskStatus): string {
-  return ({ PENDING: "Pending", IN_PROGRESS: "In progress", DONE: "Completed", BLOCKED: "Blocked", UNKNOWN: "Not recorded" } as Record<ExecutionTaskStatus, string>)[status];
+  return ({ PENDING: "待处理", IN_PROGRESS: "进行中", DONE: "已完成", BLOCKED: "已阻塞", UNKNOWN: "状态未知" } as Record<ExecutionTaskStatus, string>)[status];
 }
 
 export function executionTaskStatusType(status: ExecutionTaskStatus): "success" | "warning" | "danger" | "info" {
@@ -125,9 +125,9 @@ export function executionTaskStatusType(status: ExecutionTaskStatus): "success" 
 /** 验证失败属于运行级证据，不会被投影成某个任务的伪造失败状态。 */
 export function verificationSummary(verification: VerificationRun | null): string | null {
   if (!verification) return null;
-  if (verification.status === "PASSED") return "Verification passed";
-  if (verification.status === "SKIPPED") return "Verification skipped";
-  return verification.status === "BLOCKED" ? "Verification blocked" : "Verification needs repair";
+  if (verification.status === "PASSED") return "验证通过";
+  if (verification.status === "SKIPPED") return "验证已跳过";
+  return verification.status === "BLOCKED" ? "验证被阻塞" : "验证需要修复";
 }
 
 function parseReport(content: string): Report | null {

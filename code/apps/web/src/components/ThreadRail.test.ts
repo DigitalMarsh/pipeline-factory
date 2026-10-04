@@ -155,11 +155,11 @@ describe("ThreadRail left workspace navigation", () => {
     expect(contextCard?.textContent).toContain("Project 1");
     expect(contextCard?.textContent).not.toContain("CURRENT PROJECT");
     expect(contextCard?.textContent).toContain("2 explorations");
-    expect(contextCard?.textContent).toContain("Active");
+    expect(contextCard?.textContent).toContain("启用中");
     const titleRow = contextCard?.querySelector<HTMLElement>(".project-context-title-row");
     const metaRow = contextCard?.querySelector<HTMLElement>(".project-context-meta-row");
     expect(titleRow?.querySelector(".project-context-name")?.textContent).toContain("Project 1");
-    expect(contextCard?.querySelector(".el-tag")?.textContent).toContain("Active");
+    expect(contextCard?.querySelector(".el-tag")?.textContent).toContain("启用中");
     expect(metaRow?.querySelector(".project-context-count")?.textContent).toContain("2 explorations");
     expect(metaRow?.querySelectorAll("*")).toHaveLength(1);
     expect(contextCard?.querySelector(".project-context-path")).toBeNull();

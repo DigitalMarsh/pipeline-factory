@@ -68,7 +68,7 @@ let telemetryTimer: ReturnType<typeof setInterval> | null = null;
 let planDetailRequestToken = 0;
 // ExecutionThread journal 是持久化事实，conversation projection 只负责把事实转换为可读消息。
 // sequence 同时作为 SSE 游标，重连时从最后一条已接受的事件继续回放。
-const loopStatusLabel = computed(() => formatAgentLoopState(executorLoop.value?.state, "No loop"));
+const loopStatusLabel = computed(() => formatAgentLoopState(executorLoop.value?.state, "无活动 Loop"));
 const streamState = computed<"live" | "reconnecting" | "saved">(() => runStreamConnected.value ? "live" : ["IN_PROGRESS", "STARTING"].includes(run.value?.status ?? "") ? "reconnecting" : "saved");
 const executionStatusLabel = computed(() => ({ live: "Live", reconnecting: "Reconnecting", saved: "Saved" })[streamState.value]);
 const executionBlockReason = computed(() => {

@@ -9,6 +9,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { api } from "../api";
 import { useDirectoryPicker } from "../composables/useDirectoryPicker";
 import type { Project } from "../types";
+import { projectStatusLabel } from "../utils/entityStatus";
 
 const props = defineProps<{ modelValue: boolean; projects: Project[]; currentProjectId?: string }>();
 const emit = defineEmits<{
@@ -134,9 +135,6 @@ async function createProject() {
   }
 }
 
-function statusLabel(status: Project["status"]) {
-  return status === "ACTIVE" ? "Active" : "Archived";
-}
 </script>
 
 <template>
@@ -173,7 +171,7 @@ function statusLabel(status: Project["status"]) {
         <article v-for="project in managedProjects" :key="project.id" class="project-management-card" :class="{ archived: project.status === 'ARCHIVED', current: project.id === currentProjectId }">
           <div class="project-management-card-main">
             <div class="project-management-icon"><FolderOpened :size="19" /></div>
-            <div class="project-management-copy"><div class="project-management-title"><strong>{{ project.name }}</strong><el-tag :type="project.status === 'ACTIVE' ? 'success' : 'info'" effect="light" size="small">{{ statusLabel(project.status) }}</el-tag><span v-if="project.id === currentProjectId" class="current-project-badge"><CircleCheck :size="12" /> Current</span></div><code>{{ project.repoRoot }}</code><small>{{ project.defaultBranch || "Default branch not set" }} · {{ project.currentExplorerThreadId ? "Explorer selected" : "No Explorer selected" }}</small></div>
+            <div class="project-management-copy"><div class="project-management-title"><strong>{{ project.name }}</strong><el-tag :type="project.status === 'ACTIVE' ? 'success' : 'info'" effect="light" size="small">{{ projectStatusLabel(project.status) }}</el-tag><span v-if="project.id === currentProjectId" class="current-project-badge"><CircleCheck :size="12" /> Current</span></div><code>{{ project.repoRoot }}</code><small>{{ project.defaultBranch || "Default branch not set" }} · {{ project.currentExplorerThreadId ? "Explorer selected" : "No Explorer selected" }}</small></div>
           </div>
           <div class="project-management-card-actions"><el-button text size="small" @click="selectProject(project)">Open Explorer <ArrowRight :size="13" /></el-button><el-button text size="small" @click="openSettings(project)"><Setting :size="13" /> Settings</el-button><el-button text size="small" :loading="actionProjectId === project.id" @click="toggleArchive(project)">{{ project.status === "ACTIVE" ? "Archive" : "Activate" }}</el-button></div>
         </article>

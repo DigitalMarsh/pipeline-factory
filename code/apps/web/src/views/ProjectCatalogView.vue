@@ -10,6 +10,7 @@ import { useRouter } from "vue-router";
 import { api } from "../api";
 import ProjectCreateDialog from "../components/ProjectCreateDialog.vue";
 import type { Project, ProjectCatalogItem } from "../types";
+import { projectStatusLabel } from "../utils/entityStatus";
 
 const router = useRouter();
 const projects = ref<ProjectCatalogItem[]>([]);
@@ -62,9 +63,8 @@ function openSettings(project: Project) {
   void router.push(`/projects/${project.id}/settings`);
 }
 
-function statusLabel(status: Project["status"]) { return status === "ACTIVE" ? "Active" : "Archived"; }
 function activityLabel(value: string | null) {
-  if (!value) return "No activity";
+  if (!value) return "暂无活动";
   return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
 }
 onMounted(() => { void load(); });
@@ -84,13 +84,13 @@ onMounted(() => { void load(); });
     <div v-if="error" class="catalog-alert"><Warning :size="15" /> {{ error }}</div>
     <div v-loading="loading" class="project-card-grid">
       <article v-for="project in projects" :key="project.id" class="project-card" :class="{ archived: project.status === 'ARCHIVED' }">
-        <div class="project-card-top"><div class="project-card-icon"><FolderOpened :size="20" /></div><el-tag :type="project.status === 'ACTIVE' ? 'success' : 'info'" effect="light">{{ statusLabel(project.status) }}</el-tag></div>
+        <div class="project-card-top"><div class="project-card-icon"><FolderOpened :size="20" /></div><el-tag :type="project.status === 'ACTIVE' ? 'success' : 'info'" effect="light">{{ projectStatusLabel(project.status) }}</el-tag></div>
         <button class="project-card-title" type="button" @click="openProject(project)"><strong>{{ project.name }}<small v-if="project.shortName && project.shortName !== project.name">{{ project.shortName }}</small></strong><ArrowRight :size="16" /></button>
         <code class="project-id">{{ project.id }}</code>
         <div class="project-path"><FolderOpened :size="14" /><span>{{ project.repoRoot }}</span></div>
         <div class="project-current"><ChatDotRound :size="13" /><span>Current Explorer</span><code :title="project.summary.currentExplorerThread ?? undefined">{{ project.summary.currentExplorerTitle ?? project.summary.currentExplorerThread ?? "Not selected" }}</code></div>
-        <div class="project-facts"><span><Connection :size="13" />{{ project.defaultBranch }}</span><span><VideoPlay :size="13" />{{ project.summary.activeRunCount }} running</span></div>
-        <div class="project-facts project-facts-secondary"><span><Warning :size="13" />{{ project.summary.needsAttentionCount }} attention</span><span><Clock :size="13" />{{ activityLabel(project.summary.lastActivityAt) }}</span></div>
+        <div class="project-facts"><span><Connection :size="13" />{{ project.defaultBranch }}</span><span><VideoPlay :size="13" />{{ project.summary.activeRunCount }} 个在跑</span></div>
+        <div class="project-facts project-facts-secondary"><span><Warning :size="13" />{{ project.summary.needsAttentionCount }} 项待处理</span><span><Clock :size="13" />{{ activityLabel(project.summary.lastActivityAt) }}</span></div>
         <div class="project-card-footer"><el-button text size="small" @click="openProject(project)">Open Explorer</el-button><el-button text size="small" @click="openSettings(project)"><Setting :size="13" /> Settings</el-button><el-button text size="small" @click="toggleArchive(project)">{{ project.status === 'ACTIVE' ? 'Archive' : 'Activate' }}</el-button></div>
       </article>
       <button class="project-add-card" type="button" @click="openCreate"><span><Plus :size="20" /></span><strong>添加 Git Project</strong><small>配置仓库目录、Worktree 和运行策略</small></button>

@@ -2,6 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { CircleCheck, InfoFilled, Refresh, VideoPause, VideoPlay } from "@element-plus/icons-vue";
 import type { AgentLoop, ExplorerThread } from "../types";
+import { formatAgentLoopState } from "../utils/agentLoopPresentation";
 import ExplorerPlanRequirements from "./ExplorerPlanRequirements.vue";
 
 type Requirement = { key: string; label: string; requiredFields: string[]; optionalFields: string[]; factoryOwnedFields?: string[] };
@@ -54,9 +55,10 @@ const requirementSummary = computed(() => {
   return `${completedCount.value}/${props.requirements.length} 项已满足`;
 });
 const requirementMeta = computed(() => invalidCount.value ? `问题 ${props.diagnostics.length}` : pendingCount.value ? `待补齐 ${pendingCount.value}` : "全部完成");
-const loopSummary = computed(() => props.agentLoop?.state === "PAUSED" ? "Paused" : props.agentLoopLabel);
+// `PAUSED` 此前被硬编码成英文 `Paused` 覆盖掉传进来的标签——同一个状态两处两个词。现在一律走共用的状态文案。
+const loopSummary = computed(() => props.agentLoop ? formatAgentLoopState(props.agentLoop.state) : props.agentLoopLabel);
 const loopMeta = computed(() => props.agentLoop ? `Turns ${props.agentLoop.stepCount}/${props.agentLoop.maxSteps}` : "等待启动");
-const progressSummary = computed(() => props.progress.status === "READY" ? "Plan ready" : props.progress.lastAssessedTurnId ? "Exploring" : "未评估");
+const progressSummary = computed(() => props.progress.status === "READY" ? "方案已就绪" : props.progress.lastAssessedTurnId ? "探索中" : "未评估");
 const progressMeta = computed(() => props.progress.status === "READY" ? "完整方案已生成" : props.progress.missing.length ? `待确认 ${props.progress.missing.length} 项` : "等待首轮评估");
 const loopTone = computed(() => {
   if (!props.agentLoop) return "neutral";

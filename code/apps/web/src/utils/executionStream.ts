@@ -611,6 +611,25 @@ const ACTIVITY_KIND_LABELS: Record<ProviderActivityKind, string> = {
   other: "活动",
 };
 
+/**
+ * 验证结果的文案。`SKIPPED` 是"没跑"、`BLOCKED` 是"没跑成"，都不是失败——别合并成一个词。
+ */
+const VERIFICATION_STATUS_LABELS: Record<string, string> = {
+  PASSED: "验证通过",
+  FAILED: "验证未通过",
+  BLOCKED: "验证被阻塞",
+  SKIPPED: "验证已跳过",
+};
+
+/** 门禁判定的动作词。**只有 `blocked` 有信息量**，其余是"可以继续跑"。 */
+function gateActionLabel(action: unknown): string {
+  const value = typeof action === "string" ? action : "";
+  if (value === "blocked") return "判定拦截";
+  if (value === "complete") return "判定完成";
+  if (value === "continue") return "判定继续";
+  return value || "未记录";
+}
+
 function isActivityKind(value: unknown): value is ProviderActivityKind {
   return typeof value === "string" && (ACTIVITY_KINDS as readonly string[]).includes(value);
 }
@@ -779,32 +798,32 @@ function projectExecutionActivity(entry: ExecutionJournalEntry, taskId?: string,
     ...(loopId ? { loopId } : {}),
   };
   if (entry.type === "USER_GUIDANCE") return { id: `execution-guidance-${entry.sequence}`, kind: "user", role: "user", title: "你补充了要求", content: stringValue(payload.content) ?? "", detail: "", status: "COMPLETED", occurredAt: entry.occurredAt, sequence: entry.sequence, messageType: "USER_MESSAGE", ...association };
-  if (entry.type === "RUN_CREATED") return activity(entry, "Run created", `Plan ${stringValue(payload.planId) ?? "未记录"} · Revision ${stringValue(payload.revision) ?? "—"}`, "INFO", association);
-  if (entry.type === "HOOK_SKIPPED") return activity(entry, "Hook skipped", stringValue(payload.hook) ?? "Hook name not recorded", "INFO", association);
-  if (entry.type === "HOOK_COMPLETED") return activity(entry, "Hook completed", stringValue(payload.hook) ?? "Lifecycle hook", "COMPLETED", association);
-  if (entry.type === "HOOK_FAILED") return activity(entry, "Hook failed", stringValue(payload.stderr) ?? stringValue(payload.hook) ?? "Hook failure reason not recorded", "FAILED", association);
+  if (entry.type === "RUN_CREATED") return activity(entry, "Run 已创建", `Plan ${stringValue(payload.planId) ?? "未记录"} · Revision ${stringValue(payload.revision) ?? "—"}`, "INFO", association);
+  if (entry.type === "HOOK_SKIPPED") return activity(entry, "已跳过生命周期钩子", stringValue(payload.hook) ?? "钩子名未记录", "INFO", association);
+  if (entry.type === "HOOK_COMPLETED") return activity(entry, "生命周期钩子已完成", stringValue(payload.hook) ?? "生命周期钩子", "COMPLETED", association);
+  if (entry.type === "HOOK_FAILED") return activity(entry, "生命周期钩子失败", stringValue(payload.stderr) ?? stringValue(payload.hook) ?? "钩子失败原因未记录", "FAILED", association);
   if (entry.type === "VERIFICATION") {
-    const status = stringValue(payload.status) ?? "未记录";
+    const status = stringValue(payload.status);
     const reason = stringValue(payload.reason);
-    return activity(entry, "Verification", reason ?? status, status === "PASSED" ? "COMPLETED" : status === "SKIPPED" ? "INFO" : "FAILED", association);
+    return activity(entry, "验证", reason ?? VERIFICATION_STATUS_LABELS[status ?? ""] ?? "未记录", status === "PASSED" ? "COMPLETED" : status === "SKIPPED" ? "INFO" : "FAILED", association);
   }
   if (entry.type === "RECOVERY") return activity(entry, "需要恢复", stringValue(payload.reason) ?? stringValue(payload.error) ?? "阻塞原因未记录", "FAILED", { ...association, messageType: "RECOVERY" });
   if (entry.type === "TASK_PROGRESS") {
     const state = stringValue(payload.state);
     // 阻塞与取消是**异常**：无论呈现方式怎么调，它们都要显眼。
-    if (state === "BLOCKED") return activity(entry, "Run blocked", stringValue(payload.reason) ?? "Blocking reason not recorded", "FAILED", { ...association, messageType: "RECOVERY" });
-    if (state === "CANCELLED") return activity(entry, "Run cancelled", stringValue(payload.reason) ?? "Cancelled", "FAILED", { ...association, messageType: "RECOVERY" });
+    if (state === "BLOCKED") return activity(entry, "Run 已阻塞", stringValue(payload.reason) ?? "阻塞原因未记录", "FAILED", { ...association, messageType: "RECOVERY" });
+    if (state === "CANCELLED") return activity(entry, "Run 已取消", stringValue(payload.reason) ?? "已取消", "FAILED", { ...association, messageType: "RECOVERY" });
     if (payload.action === "task-status") return null;
     const event = stringValue(payload.event) ?? "";
     if (event === "continue") return null;
-    if (event === "agent.context.compacted") return activity(entry, "Context compacted", "Model context was refreshed", "INFO", { ...association, messageType: "CONTEXT" });
-    if (event === "agent.gate.checked") return activity(entry, "Execution gate", `${stringValue(payload.action) ?? "unknown"}${stringValue(payload.reason) ? ` · ${stringValue(payload.reason)}` : ""}`, payload.action === "blocked" ? "FAILED" : "INFO", { ...association, messageType: "GATE" });
-    if (event === "agent.loop.created" || payload.action === "executor_loop_created") return activity(entry, "Executor started", stringValue(payload.loopId) ?? "", "RUNNING", { ...association, messageType: "TURN_STATUS" });
-    if (payload.action === "legacy_plan_revision") return activity(entry, "Legacy Plan revision", stringValue(payload.reason) ?? "Using legacy runtime settings", "INFO", { ...association, messageType: "CONTEXT" });
-    if (payload.action === "paused") return activity(entry, "Execution paused", "Waiting for resume", "WAITING", { ...association, messageType: "GATE" });
-    if (payload.action === "resumed") return activity(entry, "Execution resumed", "", "RUNNING", { ...association, messageType: "GATE" });
+    if (event === "agent.context.compacted") return activity(entry, "上下文已压缩", "模型上下文已刷新", "INFO", { ...association, messageType: "CONTEXT" });
+    if (event === "agent.gate.checked") return activity(entry, "执行门禁", `${gateActionLabel(payload.action)}${stringValue(payload.reason) ? ` · ${stringValue(payload.reason)}` : ""}`, payload.action === "blocked" ? "FAILED" : "INFO", { ...association, messageType: "GATE" });
+    if (event === "agent.loop.created" || payload.action === "executor_loop_created") return activity(entry, "Executor 已启动", stringValue(payload.loopId) ?? "", "RUNNING", { ...association, messageType: "TURN_STATUS" });
+    if (payload.action === "legacy_plan_revision") return activity(entry, "旧版 Plan 修订", stringValue(payload.reason) ?? "使用旧版运行时配置", "INFO", { ...association, messageType: "CONTEXT" });
+    if (payload.action === "paused") return activity(entry, "执行已暂停", "等待恢复", "WAITING", { ...association, messageType: "GATE" });
+    if (payload.action === "resumed") return activity(entry, "执行已恢复", "", "RUNNING", { ...association, messageType: "GATE" });
     if (["agent.model.completed", "agent.step.started"].includes(event)) return null;
-    return activity(entry, "Execution activity", event || stringValue(payload.reason) || stringValue(payload.action) || "Activity details not recorded", "INFO", { ...association, messageType: "UNCLASSIFIED" });
+    return activity(entry, "执行活动", event || stringValue(payload.reason) || stringValue(payload.action) || "活动详情未记录", "INFO", { ...association, messageType: "UNCLASSIFIED" });
   }
   if (["MODEL_OUTPUT", "PROVIDER_ACTIVITY", "TOOL_CALL"].includes(entry.type)) return null;
   return activity(entry, entry.type.replaceAll("_", " "), "未记录可展示的执行摘要。", "UNKNOWN", { ...association, messageType: "UNCLASSIFIED", unrecordedFields: ["执行摘要未记录"] });
@@ -832,8 +851,19 @@ function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
+/**
+ * 完成报告末尾那行"完成了几个任务、改了几个文件"。**它是被解析的**：
+ * `sameReportProgress` 靠匹配这行的两个数字判断"这次报告与上次是不是同一个进度"，
+ * 从而把重复报告合并成一条。改这里的措辞就要同步改那里的正则，否则合并会静默失效。
+ */
+function reportProgressSummary(completedTasks: number, changedPaths: number): string {
+  return `已完成 ${completedTasks} 个任务 · 改动 ${changedPaths} 个文件`;
+}
+
+const REPORT_PROGRESS_PATTERN = /已完成 (\d+) 个任务 · 改动 (\d+) 个文件$/;
+
 function sameReportProgress(previous: string, next: string): boolean {
-  const progress = (value: string) => value.match(/Completed (\d+) task\(s\) · (\d+) changed path\(s\)$/)?.slice(1).join(":") ?? null;
+  const progress = (value: string) => value.match(REPORT_PROGRESS_PATTERN)?.slice(1).join(":") ?? null;
   return progress(previous) !== null && progress(previous) === progress(next);
 }
 
@@ -852,15 +882,15 @@ function humanizeModelOutput(content: string): { title: string; body: string; re
   if (start < 0) return { title: "执行说明", body: content, report: false };
   const jsonStart = start + startMarker.length;
   const end = content.indexOf(endMarker, jsonStart);
-  if (end < 0) return { title: "执行报告", body: content.slice(0, start).trim() || "Execution report is still streaming.", report: true };
+  if (end < 0) return { title: "执行报告", body: content.slice(0, start).trim() || "执行报告仍在生成中。", report: true };
   try {
     const report = JSON.parse(content.slice(jsonStart, end).trim()) as { completedTaskIds?: unknown; changedPaths?: unknown; report?: unknown };
     const completed = Array.isArray(report.completedTaskIds) ? report.completedTaskIds.filter((id): id is string => typeof id === "string") : [];
     const changedPaths = Array.isArray(report.changedPaths) ? report.changedPaths.filter((path): path is string => typeof path === "string") : [];
-    const summary = typeof report.report === "string" ? report.report : "Execution report recorded.";
-    return { title: "执行报告", body: `${summary}\n\nCompleted ${completed.length} task(s) · ${changedPaths.length} changed path(s)`, report: true };
+    const summary = typeof report.report === "string" ? report.report : "执行报告已记录。";
+    return { title: "执行报告", body: `${summary}\n\n${reportProgressSummary(completed.length, changedPaths.length)}`, report: true };
   } catch {
-    return { title: "执行报告", body: content.slice(0, start).trim() || "Execution report could not be parsed.", report: true };
+    return { title: "执行报告", body: content.slice(0, start).trim() || "执行报告无法解析。", report: true };
   }
 }
 

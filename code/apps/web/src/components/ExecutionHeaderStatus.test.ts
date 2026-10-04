@@ -222,7 +222,7 @@ describe("ExecutionHeaderStatus", () => {
     review.click();
     await nextTick();
 
-    expect(mounted.host.textContent).toContain("Ready for review");
+    expect(mounted.host.textContent).toContain("待人工审阅");
     expect(mounted.host.textContent).toContain("执行和验证已完成");
     expect(mounted.host.textContent).toContain("factory/add-doc");
 

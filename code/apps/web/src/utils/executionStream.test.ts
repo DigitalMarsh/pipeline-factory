@@ -28,7 +28,7 @@ describe("projectExecutionJournal", () => {
 
     expect(items[0]).toMatchObject({ kind: "plan", title: "Plan received", sequence: 0, plan });
     expect(items.slice(1).map((item) => item.sequence)).toEqual([1, 2, 3]);
-    expect(items[1]).toMatchObject({ kind: "activity", title: "Run created" });
+    expect(items[1]).toMatchObject({ kind: "activity", title: "Run 已创建" });
     expect(items[3]).toMatchObject({ kind: "user", content: "保持范围不变" });
   });
 
@@ -48,7 +48,7 @@ describe("projectExecutionJournal", () => {
     expect(items[2]).toMatchObject({ kind: "activity", status: "COMPLETED", title: "模型轮次 · #1" });
     expect(items[3]).toMatchObject({ kind: "tool", status: "UNKNOWN", title: "工具调用", callId: "call-1" });
     expect(items[4]).toMatchObject({ kind: "user", role: "user", content: "只修改批准范围内的文件" });
-    expect(items[5]).toMatchObject({ kind: "activity", status: "FAILED", title: "Run blocked", detail: "MAX_DURATION_EXCEEDED" });
+    expect(items[5]).toMatchObject({ kind: "activity", status: "FAILED", title: "Run 已阻塞", detail: "MAX_DURATION_EXCEEDED" });
   });
 
   it("marks a trailing model message as running while the execution thread is active", () => {
@@ -65,7 +65,7 @@ describe("projectExecutionJournal", () => {
       { sequence: 2, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:01.000Z", payload: { action: "task-status", completedTaskIds: ["task-1", "task-2"] } },
     ], "BLOCKED");
 
-    expect(items[0]).toMatchObject({ kind: "model", title: "执行报告", content: "已完成内容与格式复核\n\nCompleted 2 task(s) · 1 changed path(s)" });
+    expect(items[0]).toMatchObject({ kind: "model", title: "执行报告", content: "已完成内容与格式复核\n\n已完成 2 个任务 · 改动 1 个文件" });
     expect(items.some((item) => item.detail.includes("<pipeline-factory-execution-report>"))).toBe(false);
   });
 
@@ -79,7 +79,7 @@ describe("projectExecutionJournal", () => {
 
     expect(items).toEqual([
       expect.objectContaining({ title: "模型轮次 · #1", status: "COMPLETED", modelStep: 1 }),
-      expect.objectContaining({ title: "Context compacted", status: "INFO" }),
+      expect.objectContaining({ title: "上下文已压缩", status: "INFO" }),
     ]);
   });
 
@@ -94,7 +94,7 @@ describe("projectExecutionJournal", () => {
   it("does not leak an incomplete report protocol into the conversation", () => {
     const items = projectExecutionJournal([{ sequence: 1, type: "MODEL_OUTPUT", occurredAt: "2026-08-30T07:00:00.000Z", payload: { text: "<pipeline-factory-execution-report>{\"completedTaskIds\":[\"task-1\"]" } }], "ACTIVE");
 
-    expect(items[0]).toMatchObject({ title: "执行报告", content: "Execution report is still streaming." });
+    expect(items[0]).toMatchObject({ title: "执行报告", content: "执行报告仍在生成中。" });
   });
 
   it("动作类消息说清「做的是什么」：标题用 Provider 给的 summary", () => {

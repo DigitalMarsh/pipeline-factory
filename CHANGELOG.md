@@ -1,5 +1,49 @@
 # Changelog
 
+## 2026-10-05 — 另外两套状态机中文化，顺手收掉三份重复的状态文案
+
+### 为什么做
+
+上一条把 Plan 生命周期的状态词收成了一份，但界面上还剩两套英文状态机——它们与 Plan 状态
+**同时出现在 Run 头部那一排卡片里**，只改一半就是"半张脸中文"：
+
+- **Agent Loop**（`AGENT LOOP` 卡与探索侧头部）：`Running` / `Blocked` / `Completed` …
+- **Run 审阅阶段**（`REVIEW` 卡）：`Not started` / `Verification pending` / `Ready for review` /
+  `Awaiting merge` / `Merged` / `Needs attention`
+- **Run 级活动标题**（`RUN ACTIVITY` / `RUN CONTEXT`）：`Run created` / `Hook completed` /
+  `Context compacted` / `Execution gate` / `Verification` …
+
+顺带发现另外三处同类问题：`ExplorerHeaderStatus` 把 `PAUSED` 硬编码成英文 `Paused` 覆盖掉传进来的
+标签（同一个状态两处两个词）；`StatusVisual` 之外，Project 的 `Active` / `Archived` 在三个文件里
+各写了一遍；`ExecutionHeaderStatus` 把 `PASSED` / `OPEN` 这样的**枚举值**直接渲染给用户看。
+
+### Changed
+
+- **Agent Loop 中文化**（`utils/agentLoopPresentation.ts`）：已创建 / 运行中 / 等待输入 / 已暂停 /
+  需要恢复 / 已阻塞 / 已完成 / 失败 / 已取消 / 需要对账；门禁判定改成"方案已就绪 / 方案未完成 · … /
+  已阻塞 · …"；收尾文案改成"已完成 N 个 Provider 回合"。
+- **REVIEW 卡中文化**（`components/ExecutionHeaderStatus.vue`）：尚未开始 / 等待验证 / 进行中 /
+  待人工审阅 / 等待合并 / 已合并 / 需要处理。标签与语气色同处算出（此前模板拿中文串当"配色键"去比，
+  改一个词就会静默丢掉配色）。同卡内的裸枚举（`verification.status`、`mergeRequest.status`）、
+  `PLAN PROGRESS` / `RUN CONTROL` 两个卡片的值与计数、以及任务行的
+  `Waiting for N prerequisite(s)` / `Not reached yet` 一并中文化。
+- **Run 级活动标题中文化**（`utils/executionStream.ts`）：Run 已创建 / 已跳过生命周期钩子 /
+  生命周期钩子已完成 / 生命周期钩子失败 / 验证 / Run 已阻塞 / Run 已取消 / 上下文已压缩 / 执行门禁 /
+  Executor 已启动 / 旧版 Plan 修订 / 执行已暂停 / 执行已恢复 / 执行活动。
+- **执行报告末尾那行也中文化**（`已完成 N 个任务 · 改动 N 个文件`）。它是**被解析的**——
+  `sameReportProgress` 靠匹配这行的两个数字把重复报告合并成一条，所以正则与措辞一起改，
+  并在代码里写明这条耦合。
+- **左侧栏实体状态收成一份**（新增 `utils/entityStatus.ts`）：Project 与其他两处共用同一句文案；
+  ExplorerThread 拆分四档（此前 `WAITING_FOR_INPUT` 与 `COMPRESSED` 都显示 `Completed`，是一句错话）。
+- `utils/executionTasks.ts` 的任务状态与验证结果中文化；`ExplorerHeaderStatus` 的
+  `Plan ready` / `Exploring`、`RunDetailView` 的 `No loop` 兜底、项目卡片的
+  `0 running` / `0 attention` / `No activity` 一并中文化。
+
+### 实测
+
+Run 详情页与项目列表页扫描一遍，已无英文状态词残留（只剩全大写的小节标题与计数单位，如 `1/40 steps`）。
+`pnpm verify` 通过：375 + 111 + 524 个用例。
+
 ## 2026-10-05 — Plan 生命周期状态：文案收成一份，并把枚举值从界面上撤下来
 
 ### 为什么做

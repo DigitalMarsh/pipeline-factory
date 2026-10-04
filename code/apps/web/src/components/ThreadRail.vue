@@ -8,6 +8,7 @@ import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import type { ExplorerThread, Project } from "../types";
 import { explorerListRows } from "../utils/explorerGroups";
 import { explorerThreadStatusTagType, projectStatusTagType } from "../utils/statusTag";
+import { explorerThreadStateLabel, projectStatusLabel } from "../utils/entityStatus";
 
 type LeftPanel = "projects" | "explorers";
 type ThreadActionCommand = "toggle-pause" | "rename" | "policy" | "refresh" | "delete";
@@ -89,13 +90,6 @@ onBeforeUnmount(() => {
   document.removeEventListener("keydown", closeProjectSwitcherOnKeydown);
 });
 
-function projectStatusLabel(status: Project["status"]): string {
-  return status === "ACTIVE" ? "Active" : "Archived";
-}
-
-function explorerStatusLabel(state: ExplorerThread["state"]): string {
-  return state === "ACTIVE" ? "Active" : state === "ARCHIVED" ? "Archived" : "Completed";
-}
 
 const visibleExplorers = computed(() => props.showArchived ? props.explorers : props.explorers.filter((explorer) => explorer.state !== "ARCHIVED"));
 
@@ -302,7 +296,7 @@ function emitThreadAction(command: string | number): void {
               @click="emit('select-explorer', row.explorer.id)"
             >
               <span class="left-list-copy"><strong>{{ row.explorer.title }}</strong></span>
-              <el-tag size="small" effect="light" :type="explorerThreadStatusTagType(row.explorer.state)">{{ explorerStatusLabel(row.explorer.state) }}</el-tag>
+              <el-tag size="small" effect="light" :type="explorerThreadStatusTagType(row.explorer.state)">{{ explorerThreadStateLabel(row.explorer.state) }}</el-tag>
             </button>
             <div v-if="row.explorer.id === props.thread?.id" class="explorer-thread-row-actions" @click.stop>
               <el-dropdown placement="bottom-end" popper-class="thread-action-popper" :disabled="Boolean(props.explorerActionId)" @command="emitThreadAction">

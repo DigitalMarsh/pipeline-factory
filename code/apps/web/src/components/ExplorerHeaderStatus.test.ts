@@ -89,8 +89,8 @@ describe("ExplorerHeaderStatus", () => {
 
     expect(mounted.host.querySelectorAll(".explorer-header-status-card")).toHaveLength(3);
     expect(mounted.host.textContent).toContain("3/3 项已满足");
-    expect(mounted.host.textContent).toContain("Running");
-    expect(mounted.host.textContent).toContain("Plan ready");
+    expect(mounted.host.textContent).toContain("运行中");
+    expect(mounted.host.textContent).toContain("方案已就绪");
     expect(trigger.getAttribute("aria-expanded")).toBe("false");
     expect(mounted.host.querySelector(".explorer-header-status-details")).toBeNull();
 
