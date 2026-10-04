@@ -114,7 +114,7 @@ export function usePlanLifecycleActions(deps: PlanLifecycleActionsDeps) {
       await deps.refreshPlanProjection();
       deps.drawerTab.value = "task";
       deps.drawerOpen.value = true;
-      ElMessage.success("Plan 已进入 Enqueued 阶段");
+      ElMessage.success("Plan 已入队");
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : "";
       if (message === "CONVERSATION_ARTIFACT_NOT_EXECUTABLE") {
@@ -140,7 +140,7 @@ export function usePlanLifecycleActions(deps: PlanLifecycleActionsDeps) {
       const runId = result.run?.id ?? deps.selectedRequirementPlan.value?.runId ?? deps.selectedRequirementPlan.value?.dispatch?.runId;
       if (result.run) deps.projectRuns.value = [result.run, ...deps.projectRuns.value.filter((run) => run.id !== result.run!.id)];
       if (runId) await deps.openRunView(runId, deps.thread.value?.id, deps.activeExplorerPlan.value?.id);
-      ElMessage.success(result.dispatch?.waitReason ? `Plan 已派发，正在等待：${result.dispatch.waitReason}` : "Plan 已进入 Dispatched 阶段");
+      ElMessage.success(result.dispatch?.waitReason ? `Plan 已派发，正在等待：${result.dispatch.waitReason}` : "Plan 已派发");
     } catch (caught) {
       deps.error.value = caught instanceof Error ? `Start run 失败：${caught.message}` : "Start run 失败";
       ElMessage.error(deps.error.value);

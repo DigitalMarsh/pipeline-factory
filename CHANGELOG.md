@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026-10-05 — Plan 生命周期状态：文案收成一份，并把枚举值从界面上撤下来
+
+### 为什么做
+
+同一个 Plan 状态在界面上能有三四个词，因为它们来自**三份互不相干的表**：
+
+| 状态 | 抽屉标题 | 候选方案卡 | 工作台 | 生命周期条 |
+|---|---|---|---|---|
+| `DRAFT` | `DRAFT`（**直接渲染枚举值**） | `Candidate` | `Draft` | `Candidate` |
+| `READY` | `READY` | `Confirmed` | `Ready` | `Confirmed` |
+| `MERGE_READY` | `MERGE_READY` | `Ready for review` | `Needs review` | `Ready for review` |
+| `MERGED` | `MERGED` | `Merged` | `Merged` | **`Completed`** |
+
+`PlanDetailContent.vue` 那句 `<el-tag>{{ plan.status }}</el-tag>` 是把**枚举值本身**端给用户看；
+`utils/statusVisual.ts` 另有一张自己的文案表，与 `utils/planStatus.ts` 早已漂成两套词。
+
+### Changed
+
+- **Plan 状态文案中文化**（`utils/planStatus.ts`）：草稿 / 已丢弃 / 已设计 / 已规划 / 已确认 / 已入队 /
+  已派发 / 排队中 / 启动中 / 执行中 / 验证中 / 待合并 / 已合并 / 已阻塞 / 需要改计划。
+  补上此前缺的 `DESIGNED` / `PLANNED` 两项（它们此前回落成原字符串）。
+- **`utils/statusVisual.ts` 不再自带 Plan 状态的文案**：它只留 PlanStatus **之外**的派发 / 等待 /
+  运行态（`WAITING_*`、`NEEDS_CONFIGURATION`、`DISPATCHING` 等，一并中文化），Plan 状态一律从
+  `planStatusLabel` 取——同一个状态一个词。`statusVisual.test.ts` 断言源文件里不许再出现同名条目。
+- **抽屉标题不再渲染枚举值**：`{{ plan.status }}` → `planStatusLabel(plan.status)`；它的语气色也改成
+  `statusVisualFor(...).tone`，去掉那份自己写的三元判断。
+- `planLifecycle.ts` 的 `NEEDS_CONFIGURATION`、以及两处把状态名写进句子的提示文案一并中文化。
+
+### 还没动的（另一套状态机，不在本轮范围）
+
+Run 详情头的 REVIEW 卡（`Not started` / `Verification pending` / `Ready for review` / `Awaiting merge` …）、
+Agent Loop 状态（`Running` / `Blocked` / `Completed` …）、Run 级活动标题
+（`Run created` / `Hook completed` / `Verification`）。
+
 ## 2026-10-04 — 两条对话线共用一份消息词表；一次调用只占一行
 
 ### 为什么做

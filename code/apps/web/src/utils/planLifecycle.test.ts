@@ -56,9 +56,9 @@ describe("plan lifecycle presentation", () => {
 
   it("uses the shared Plan status wording for lifecycle labels", () => {
     // P8.3：这条先锁住可见差异，再收敛 planLifecycle 的两张标签表。
-    expect(lifecycleLabel("MERGED")).toBe("Merged");
-    expect(lifecycleLabel("BLOCKED")).toBe("Blocked");
-    expect(lifecycleLabel("NEEDS_CONFIGURATION")).toBe("Needs configuration");
+    expect(lifecycleLabel("MERGED")).toBe("已合并");
+    expect(lifecycleLabel("BLOCKED")).toBe("已阻塞");
+    expect(lifecycleLabel("NEEDS_CONFIGURATION")).toBe("需要配置");
   });
 
   it("formats current-year times compactly and includes another year", () => {

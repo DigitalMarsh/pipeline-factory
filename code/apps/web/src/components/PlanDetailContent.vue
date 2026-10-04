@@ -5,6 +5,8 @@ import { Close, DocumentChecked, Lock, Right, Warning } from "@element-plus/icon
 import type { Plan, PlanTask } from "../types";
 import { canDiscardPlan } from "../utils/planControls";
 import { isConversationArtifactPlan } from "../utils/explorerRequirementRows";
+import { planStatusLabel } from "../utils/planStatus";
+import { statusVisualFor } from "../utils/statusVisual";
 
 const props = defineProps<{ plan: Plan | null; error?: string | null | undefined; revisions?: number[] | undefined; revisionDraftStatus?: "EDITING" | "READY_TO_CONFIRM" | "CONFIRMED" | "DISCARDED" | "BASE_CHANGED" | null | undefined; readOnly?: boolean | undefined; dependencyOptions?: Array<{ id: string; title: string }> | undefined; canEditDependencies?: boolean | undefined; dependenciesSaving?: boolean | undefined; verificationSuiteOptions?: string[] | undefined; canEditVerificationSuites?: boolean | undefined; verificationSuitesSaving?: boolean | undefined }>();
 const emit = defineEmits<{ close: []; confirm: []; discard: []; "keep-editing": [plan: Plan]; "select-revision": [revision: number]; "update-dependencies": [planIds: string[]]; "update-verification-suites": [suites: string[]] }>();
@@ -76,8 +78,14 @@ function runPath(plan: Plan): string {
   if (plan.explorerPlanId) query.set("explorerPlanId", plan.explorerPlanId);
   return `/projects/${encodeURIComponent(plan.projectId)}/explorer?${query.toString()}`;
 }
-// 操作按钮由服务端状态的只读投影驱动：Candidate 只允许确认或丢弃。
-const statusTagType = computed(() => props.plan?.status === "DRAFT" || props.plan?.status === "MERGE_READY" ? "warning" : props.plan?.status === "DISCARDED" ? "danger" : "success");
+/**
+ * 操作按钮由服务端状态的只读投影驱动：草稿只允许确认或丢弃。
+ * 标签的文案与语气色都从共用表取（`planStatusLabel` / `statusVisualFor`）——
+ * 这里此前自己写了一份三元的语气色，并且**直接把 `plan.status` 这个枚举值渲染给用户看**，
+ * 于是抽屉里显示的是 `DRAFT`、候选卡上显示的是另一套英文词。
+ */
+const planStatusText = computed(() => planStatusLabel(props.plan?.status ?? ""));
+const statusTagType = computed(() => statusVisualFor(props.plan?.status ?? "").tone);
 const mergeRequest = computed(() => props.plan?.mergeRequest ?? null);
 </script>
 
@@ -85,7 +93,7 @@ const mergeRequest = computed(() => props.plan?.mergeRequest ?? null);
   <div class="plan-detail-content">
     <div class="drawer-shell" v-if="plan">
       <div class="drawer-header"><div><div class="eyebrow">FULL EXECUTION CONTRACT</div><h2>View full plan</h2></div><el-button text circle aria-label="Close" @click="emit('close')"><Close /></el-button></div>
-      <div class="drawer-plan-title"><div class="plan-file-icon"><DocumentChecked :size="22" /></div><div><h3>{{ plan.title }}</h3><p>{{ planId }} · Revision {{ plan.revision }}</p></div><el-tag :type="statusTagType" effect="light">{{ plan.status }}</el-tag></div>
+      <div class="drawer-plan-title"><div class="plan-file-icon"><DocumentChecked :size="22" /></div><div><h3>{{ plan.title }}</h3><p>{{ planId }} · Revision {{ plan.revision }}</p></div><el-tag :type="statusTagType" effect="light">{{ planStatusText }}</el-tag></div>
       <div v-if="props.error" class="settings-error" role="status">{{ props.error }}，当前显示已加载的计划内容。</div>
       <section v-if="revisions?.length" class="contract-section"><div class="section-heading"><span>00</span><strong>Plan version history · previous versions are read only</strong></div><div class="candidate-actions"><el-button v-for="revision in revisions" :key="revision" size="small" :type="revision === plan.revision ? 'primary' : undefined" plain @click="emit('select-revision', revision)">View V{{ revision }}</el-button></div></section>
       <section class="contract-section"><div class="section-heading"><span>01</span><strong>Goal & acceptance</strong></div><p class="contract-goal">{{ resolved?.objective.goal ?? generated?.objective.goal ?? plan.goal }}</p><ul class="check-list"><li v-for="item in (resolved?.objective.acceptanceCriteria ?? generated?.objective.acceptanceCriteria ?? plan.acceptanceCriteria ?? [])" :key="item"><span>✓</span>{{ item }}</li></ul></section>
@@ -118,7 +126,7 @@ const mergeRequest = computed(() => props.plan?.mergeRequest ?? null);
           <div class="dependency-actions"><el-button size="small" type="primary" :loading="verificationSuitesSaving" :disabled="!suiteDirty || verificationSuitesSaving" @click="saveVerificationSuites">保存验证子集</el-button></div>
         </template>
       </section>
-      <section v-if="mergeRequest?.status === 'OPEN' && mergeRequest.detectedTargetCommit" class="contract-section merge-detected-section"><div class="section-heading"><span>03E</span><strong>Merge detection</strong><el-tag size="small" type="warning" effect="light">待人工确认</el-tag></div><p class="merge-detected-copy">已检测到目标分支包含此 Run 的 source commit。Plan 会在人工确认前保持 MERGE_READY。</p><div class="policy-grid"><div><label>SOURCE COMMIT</label><code>{{ mergeRequest.sourceCommit }}</code></div><div><label>TARGET</label><code>{{ mergeRequest.targetBranch }} · {{ mergeRequest.detectedTargetCommit }}</code></div></div><RouterLink v-if="plan.runId" class="merge-detected-link" :to="runPath(plan)">Open run to confirm</RouterLink></section>
+      <section v-if="mergeRequest?.status === 'OPEN' && mergeRequest.detectedTargetCommit" class="contract-section merge-detected-section"><div class="section-heading"><span>03E</span><strong>Merge detection</strong><el-tag size="small" type="warning" effect="light">待人工确认</el-tag></div><p class="merge-detected-copy">已检测到目标分支包含此 Run 的 source commit。Plan 会在人工确认前保持「待合并」。</p><div class="policy-grid"><div><label>SOURCE COMMIT</label><code>{{ mergeRequest.sourceCommit }}</code></div><div><label>TARGET</label><code>{{ mergeRequest.targetBranch }} · {{ mergeRequest.detectedTargetCommit }}</code></div></div><RouterLink v-if="plan.runId" class="merge-detected-link" :to="runPath(plan)">Open run to confirm</RouterLink></section>
       <section class="contract-section"><div class="section-heading"><span>04</span><strong>Execution policy</strong></div><div class="policy-grid"><div><label>FROZEN PROJECT</label><strong>{{ resolved?.repository.repoRoot ?? 'Not frozen' }} · config v{{ resolved?.repository.configVersion ?? '—' }}</strong></div><div><label>BASE</label><strong>{{ resolved?.repository.baseBranch ?? '—' }} · {{ resolved?.repository.baseCommit ?? '—' }}</strong></div><div><label>VERIFICATION</label><em v-if="generated?.verification.suites?.length" class="policy-note">按 tag 选子集：{{ generated.verification.suites.join(" · ") }}</em><strong>{{ resolved?.verification.mode === 'NONE' || generated?.verification.mode === 'NONE' ? '未配置自动验证（将记录为 SKIPPED）' : (resolved?.verification.commandIds ?? plan.verificationCommands ?? []).join(' · ') || (generated?.verification ? '项目默认验证命令' : '—') }}</strong></div><div><label>EXECUTOR</label><strong>{{ resolved?.execution.executorModelRole ?? '—' }} · Factory 固定</strong></div><div><label>TOOL POLICY</label><strong>{{ resolved?.execution.toolPolicy ?? '—' }} · Factory 固定</strong></div><div><label>REPAIR LIMIT</label><strong>{{ resolved?.execution.maxRepairAttempts ?? generated?.execution.maxRepairAttempts ?? '—' }} attempts</strong></div><div><label>MERGE</label><strong>{{ resolved?.merge.strategy ?? generated?.merge.strategy ?? '—' }} · {{ (resolved?.merge.requireHumanMerge ?? generated?.merge.requireHumanMerge) ? 'human review required' : '—' }}</strong></div></div></section>
       <section class="contract-section source-section"><div class="section-heading"><span>05</span><strong>Source evidence</strong></div><div class="source-row"><span>ExplorerThread</span><code>{{ plan.sourceExplorerThreadId }}</code></div><div class="source-row"><span>Contract</span><code>{{ resolved ? 'Resolved contract' : generated ? 'Generated spec' : '—' }}</code></div></section>
       <div v-if="!readOnly && canConfirm && conversationArtifact" class="drawer-confirm-warning" role="status"><Warning :size="14" /><span><strong>此 Plan 是对话产物（CONVERSATION）。</strong>确认后仍不能入队或启动 Run，执行线程也不会产生仓库改动。要执行请在探索对话里改成“仓库文件”产物（REPOSITORY_FILE），确认新版本。</span></div>

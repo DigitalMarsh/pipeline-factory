@@ -2,20 +2,22 @@ import { describe, expect, it } from "vitest";
 import { planStatusLabel } from "./planStatus";
 
 describe("Plan 状态文案", () => {
-  it("覆盖视图会用到的全部 13 个状态", () => {
-    expect(planStatusLabel("DRAFT")).toBe("Candidate");
-    expect(planStatusLabel("DISCARDED")).toBe("Discarded");
-    expect(planStatusLabel("READY")).toBe("Confirmed");
-    expect(planStatusLabel("ENQUEUED")).toBe("Enqueued");
-    expect(planStatusLabel("DISPATCHED")).toBe("Dispatched");
-    expect(planStatusLabel("QUEUED")).toBe("Queued");
-    expect(planStatusLabel("STARTING")).toBe("Starting");
-    expect(planStatusLabel("IN_PROGRESS")).toBe("Running");
-    expect(planStatusLabel("VERIFYING")).toBe("Verifying");
-    expect(planStatusLabel("MERGE_READY")).toBe("Ready for review");
-    expect(planStatusLabel("MERGED")).toBe("Merged");
-    expect(planStatusLabel("NEEDS_PLAN_CHANGE")).toBe("Plan change required");
-    expect(planStatusLabel("BLOCKED")).toBe("Blocked");
+  it("PlanStatus 的 14 个取值各有中文文案，不回落成原字符串", () => {
+    expect(planStatusLabel("DRAFT")).toBe("草稿");
+    expect(planStatusLabel("DISCARDED")).toBe("已丢弃");
+    expect(planStatusLabel("DESIGNED")).toBe("已设计");
+    expect(planStatusLabel("PLANNED")).toBe("已规划");
+    expect(planStatusLabel("READY")).toBe("已确认");
+    expect(planStatusLabel("ENQUEUED")).toBe("已入队");
+    expect(planStatusLabel("DISPATCHED")).toBe("已派发");
+    expect(planStatusLabel("QUEUED")).toBe("排队中");
+    expect(planStatusLabel("STARTING")).toBe("启动中");
+    expect(planStatusLabel("IN_PROGRESS")).toBe("执行中");
+    expect(planStatusLabel("VERIFYING")).toBe("验证中");
+    expect(planStatusLabel("MERGE_READY")).toBe("待合并");
+    expect(planStatusLabel("MERGED")).toBe("已合并");
+    expect(planStatusLabel("BLOCKED")).toBe("已阻塞");
+    expect(planStatusLabel("NEEDS_PLAN_CHANGE")).toBe("需要改计划");
   });
 
   it("未知状态回落成原字符串，不回落成空串", () => {

@@ -16,7 +16,7 @@ export const PLAN_LIFECYCLE_EXCEPTIONS: Array<{ status: PlanLifecycleStatus; lab
   { status: "BLOCKED", label: planStatusLabel("BLOCKED") },
   { status: "NEEDS_PLAN_CHANGE", label: planStatusLabel("NEEDS_PLAN_CHANGE") },
   // This is a dispatch wait reason, not a PlanStatus, so it intentionally remains local.
-  { status: "NEEDS_CONFIGURATION", label: "Needs configuration" },
+  { status: "NEEDS_CONFIGURATION", label: "需要配置" },
 ];
 
 const PLAN_LIFECYCLE_PROGRESS_STATUSES: PlanLifecycleStatus[] = [
