@@ -132,8 +132,8 @@ describe("消息清单的呈现方式", () => {
   });
 
   it("**呈现方式表是唯一落点**：卡片 / 一行 / 折叠 / 不显示，一眼看全", () => {
-    expect(EXECUTION_DISPLAY_MODES.ASSISTANT_MESSAGE).toBe("card");
-    expect(EXECUTION_DISPLAY_MODES.MODEL_REPORT).toBe("card");
+    expect(EXECUTION_DISPLAY_MODES.ASSISTANT_MESSAGE).toBe("prose");
+    expect(EXECUTION_DISPLAY_MODES.MODEL_REPORT).toBe("prose");
     expect(EXECUTION_DISPLAY_MODES.PLAN).toBe("card");
     expect(EXECUTION_DISPLAY_MODES.COMMAND).toBe("line");
     expect(EXECUTION_DISPLAY_MODES.FILE_CHANGE).toBe("line");

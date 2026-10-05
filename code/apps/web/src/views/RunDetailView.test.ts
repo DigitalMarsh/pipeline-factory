@@ -21,7 +21,8 @@ describe("Run detail execution conversation", () => {
     expect(runDetailSource).toContain('<template v-else-if="item.kind === \'model\'"><ExecutionModelRow :item="item" /></template>');
     expect(runDetailSource).toContain('<template v-else-if="item.kind === \'user\'"><ExecutionUserRow :item="item" /></template>');
     // 你自己说的话不走卡片、也不带头像：Codex 那种「› + 纯文本」，仍然靠右。
-    expect(runDetailSource).toContain('<div v-if="item.kind !== \'user\'" class="execution-message-avatar">');
+    // （助手正文 `prose` 同样不带头像——与探索侧同档同形，见 docs 的共用档位表。）
+    expect(runDetailSource).toContain('<div v-if="item.kind !== \'user\' && executionDisplayMode(item) !== \'prose\'" class="execution-message-avatar">');
     expect(executionModelRowSource).toContain('<MarkdownMessage :source="item.content" :streaming="item.status === \'RUNNING\'" />');
     expect(executionUserRowSource).toContain('<MarkdownMessage :source="item.content" />');
     expect(executionUserRowSource).toContain('class="execution-user-mark"');

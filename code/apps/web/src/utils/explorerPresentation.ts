@@ -187,21 +187,21 @@ export type ExplorerSharedMessageType = Extract<ExplorerMessageType, SharedMessa
  * - `card`：完整卡片（方案 / 结构化输入）
  * - `text`：纯文本一行（你自己说的话——靠右、带 `›` 记号，不套卡片）
  * - `prose`：铺开的正文（模型的回复——左侧、带一行 meta，内嵌的方案卡照旧挂在这里面）
- * - `tool`：调用行——命令 / 文件 / 工具 / MCP，交代"谁在跑、跑完没、是哪一次调用"
+ * - `line`：调用行——命令 / 文件 / 工具 / MCP，交代"谁在跑、跑完没、是哪一次调用"（**与执行侧同名**）
  * - `reasoning`：推理行——背景音，最轻的一档，不该有卡片的重量
  * - `divider`：分隔行——上下文压缩是会话在这里换了上下文，是边界不是事件
  * - `gate`：判定行——门禁给出的是**结论**（拦截），不是过程
  * - `turn-status`：状态行——回合占位与未识别的活动，虚线框，比调用行更淡
  * - `hidden`：不渲染
  */
-export type ExplorerDisplayMode = "card" | "text" | "prose" | "tool" | "reasoning" | "divider" | "gate" | "turn-status" | "hidden";
+export type ExplorerDisplayMode = "card" | "text" | "prose" | "line" | "reasoning" | "divider" | "gate" | "turn-status" | "hidden";
 
 /**
  * **消息类型 → 呈现方式。这张表就是"清单"本身。**
  *
  * 判据是每条消息对"看懂这次探索"的贡献：**人说的话与模型的回复都是铺开的正文**（`text` / `prose`——
  * 它们本来就是一段话，外面的白底边框不承载任何信息），方案与结构化输入是 `card`；
- * 四类调用按**语义**同归 `tool`（标签与图标区分命令 / 文件 / 工具 / MCP 与被拒 / 失败），
+ * 四类调用按**语义**同归 `line`（标签与状态标签区分命令 / 文件 / 工具 / MCP 与被拒 / 失败），
  * 门禁是判定，回合状态是占位，推理是背景音，上下文压缩是分隔。
  *
  * `PROVIDER_MESSAGE` / `SESSION` 标成 `hidden`：它们是"Provider 把你那句话回显一次"与
@@ -216,10 +216,10 @@ export const EXPLORER_DISPLAY_MODES: Record<ExplorerMessageType, ExplorerDisplay
   USER_MESSAGE: "text",
   ASSISTANT_MESSAGE: "prose",
   REASONING: "reasoning",
-  COMMAND: "tool",
-  FILE_CHANGE: "tool",
-  TOOL_CALL: "tool",
-  MCP_CALL: "tool",
+  COMMAND: "line",
+  FILE_CHANGE: "line",
+  TOOL_CALL: "line",
+  MCP_CALL: "line",
   UNCLASSIFIED: "turn-status",
   CONTEXT: "divider",
   GATE: "gate",
@@ -232,11 +232,11 @@ export const EXPLORER_DISPLAY_MODES: Record<ExplorerMessageType, ExplorerDisplay
 
 /**
  * **这三种行型共用一个行组件**（`ExplorerActivityRow`）：它们的 DOM 逐字相同——线程侧标记点 +
- * 标签 + 名字 + 时间 + 状态标签 + 正文 + 引用——差别**全在 CSS 类上**（`activity-tool` 给名字加等宽底色、
+ * 标签 + 名字 + 时间 + 状态标签 + 正文 + 引用——差别**全在 CSS 类上**（`activity-line` 给名字加等宽底色、
  * `activity-gate` 加一道竖线、`activity-turn-status` 换成虚线框）。按行型写三份同构模板，
  * 与按消息类型写四份同构模板是同一个错误。
  */
-export const EXPLORER_ROW_MODES = ["tool", "gate", "turn-status"] as const;
+export const EXPLORER_ROW_MODES = ["line", "gate", "turn-status"] as const;
 export type ExplorerRowMode = (typeof EXPLORER_ROW_MODES)[number];
 
 /** 剩下的取值各由自己的模板分支负责：`card`/`text`/`prose` 是块级内容，`reasoning`/`divider` 各有行型，`hidden` 不渲染。 */

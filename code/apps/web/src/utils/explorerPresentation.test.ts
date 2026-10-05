@@ -212,7 +212,8 @@ describe("探索会话的消息清单", () => {
 
   it("四类调用同归调用行，其余四类各有各的形状", () => {
     // 一次调用只有一条（开始与结束在投影层已合并），所以这里比的是"哪四类算调用"。
-    expect(new Set(activityTypes.filter((type) => explorerDisplayMode(type) === "tool"))).toEqual(new Set(["COMMAND", "FILE_CHANGE", "TOOL_CALL", "MCP_CALL"]));
+    // 档位名与执行侧**同名**（`line`）：同一个概念在两条对话线上只有一个名字。
+    expect(new Set(activityTypes.filter((type) => explorerDisplayMode(type) === "line"))).toEqual(new Set(["COMMAND", "FILE_CHANGE", "TOOL_CALL", "MCP_CALL"]));
     expect(explorerDisplayMode("REASONING")).toBe("reasoning");
     expect(explorerDisplayMode("CONTEXT")).toBe("divider");
     expect(explorerDisplayMode("GATE")).toBe("gate");

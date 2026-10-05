@@ -1,5 +1,47 @@
 # Changelog
 
+## 2026-10-06 — 两条对话线：同一个"模型说的正文"、同一个"紧凑动作行"
+
+### 为什么做
+
+用户在页面上看到两处不一致，问是不是设计如此：
+
+1. 执行线程的 `ASSISTANT_MESSAGE` 是 `card`（带头像、白底气泡），探索线程的是 `prose`（铺开的正文）；
+2. 四类调用（`TOOL_CALL` / `MCP_CALL` / `COMMAND` / `FILE_CHANGE`）在探索侧叫 `tool`，在执行侧叫 `line`。
+
+两处都**不是取舍，是漏改**：探索侧引入 `prose` 之后执行侧没跟着改（同一个"模型说的正文"两条线
+长得不一样，而执行线程本质也是模型输出）；`tool` 与 `line` 是同一个"紧凑动作行"的两个名字。
+用户的原话是"执行线程本质上也是大模型的输出，显示方式应该和探索线程差不多，只是执行线程多一个数据类型而已"。
+
+### Changed
+
+- `EXPLORER_DISPLAY_MODES`：`COMMAND` / `FILE_CHANGE` / `TOOL_CALL` / `MCP_CALL` 由 `tool` 改为 **`line`**；
+  `EXPLORER_ROW_MODES` 与 `ExplorerDisplayMode` 联合类型同步（`tool` 这个取值从词表里消失），
+  `ExplorerActivityRow.vue` 的 `mode` prop 由 `"tool" | …` 改为 `"line" | …`，
+  `styles.css` 的 `.activity-tool` 改名 `.activity-line`。
+- `EXECUTION_DISPLAY_MODES`：`ASSISTANT_MESSAGE` 与 `MODEL_REPORT` 由 `card` 改为 **`prose`**，
+  `ExecutionDisplayMode` 联合类型加上 `prose`。
+- `RunDetailView.vue`：头像条件改成 `item.kind !== 'user' && executionDisplayMode(item) !== 'prose'`——
+  助手正文不再带头像；`styles.css` 里 `.execution-message-model .markdown-body` 的白底气泡
+  （`max-width` / `padding` / `border` / `border-radius` / `background`）撤掉，改成与探索侧同形的铺开正文。
+
+现在 §0 的两张表有 **5 个共用档位**（`card` / `text` / `prose` / `line` / `hidden`）**同名同义**，
+各自独有四项（A：`reasoning` / `divider` / `gate` / `turn-status`；B：`folded`），两边**同一个概念只有一个名字**。
+
+### 测试
+
+`explorerPresentation.test.ts`、`executionStream.test.ts`、`RunDetailView.test.ts` 的断言随之更新
+（后者新增一条：助手 `prose` 那一行不渲染头像）。`pnpm --filter @pipeline-factory/web test`：
+72 个文件 / 532 条全绿，vue-tsc 干净。
+
+浏览器实测 `run-419e7060-fef`：4 条助手行 `avatar: false`、`markdown-body` 计算样式
+`border: 0px / background: rgba(0, 0, 0, 0)`（无气泡），其余 18 个头像照旧在 plan / activity 行上。
+
+### 文档
+
+`docs/消息类型及事件状态机流程图.md`：§0 的取值行与"共用档位表"重写（含为什么此前不一致的说明）、
+§1.1 与 §2.1 两张清单表的呈现方式列、§2.2 示例注解、§5 补一行。
+
 ## 2026-10-05 — 切 Agent 时模型跟着换；项目执行线程里改 Agent 不生效的问题
 
 ### 为什么做
@@ -49,6 +91,7 @@
 `docs/消息类型及事件状态机流程图.md` §2.3 C 补上"这条线用哪个模型、从哪来、为什么切 Agent 必须带上模型"，
 §5 补一行。
 
+## 2026-10-05 — 被中断的 Run 现在真的会被恢复；顺带修需求清单漏判的四个 Run 状态
 
 ### 为什么做
 

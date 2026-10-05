@@ -19,7 +19,7 @@ const props = defineProps<{
   activity: ExplorerActivityItem;
   index: number;
   /** 行型：只决定套哪个 CSS 类，不决定结构。 */
-  mode: "tool" | "gate" | "turn-status";
+  mode: "line" | "gate" | "turn-status";
 }>();
 
 const line = computed(() => explorerActivityLine(props.activity));

@@ -87,11 +87,12 @@ export type ExecutionSharedMessageType = Extract<ExecutionMessageType, SharedMes
  * 呈现方式：
  * - `card`：完整卡片（可读正文 + 详情）
  * - `text`：纯文本一行（用户自己说的话——不套卡片，见 `docs/消息类型及事件状态机流程图.md`）
+ * - `prose`：铺开的正文（模型的回复——与探索侧同档同形：不套气泡、不带头像）
  * - `line`：一行（紧凑活动行，不展开正文）
  * - `folded`：折进所属执行步骤的「N 条活动」，点开才看
  * - `hidden`：不渲染
  */
-export type ExecutionDisplayMode = "card" | "text" | "line" | "folded" | "hidden";
+export type ExecutionDisplayMode = "card" | "text" | "prose" | "line" | "folded" | "hidden";
 
 /**
  * **消息类型 → 呈现方式。这张表就是"清单"本身。**
@@ -101,8 +102,12 @@ export type ExecutionDisplayMode = "card" | "text" | "line" | "folded" | "hidden
  */
 export const EXECUTION_DISPLAY_MODES: Record<ExecutionMessageType, ExecutionDisplayMode> = {
   PLAN: "card",
-  ASSISTANT_MESSAGE: "card",
-  MODEL_REPORT: "card",
+  // 与探索侧同档同形：模型的回复**直接铺开**，不套气泡、不带头像（见
+  // `docs/消息类型及事件状态机流程图.md` §0 的共用档位表）。此前这里是 `card`，
+  // 于是同一件事在两条对话线上长得不一样——那是漏改，不是设计。
+  ASSISTANT_MESSAGE: "prose",
+  // 完成报告与正文**渲染的是同一个组件**（只差标题），所以档位也相同——写成 `card` 会与模板对不上。
+  MODEL_REPORT: "prose",
   USER_MESSAGE: "text",
   COMMAND: "line",
   FILE_CHANGE: "line",
