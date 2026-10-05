@@ -190,8 +190,9 @@ export type ExplorerSharedMessageType = Extract<ExplorerMessageType, SharedMessa
  * 呈现方式。**执行侧的 card / text / line / folded / hidden 是按"占多少地方"分的，探索侧按"是什么"分**——
  * 因为探索时间线是平铺的，没有"步骤"这一层可以折叠，密度分档区分不出"模型在思考"和"工具被拒绝"
  * 这两件事，而它们本来就该长得不一样：
- * - `card`：完整卡片（正文 / 方案 / 结构化输入）
- * - `text`：纯文本一行（你自己说的话——不套卡片，也不折叠）
+ * - `card`：完整卡片（方案 / 结构化输入）
+ * - `text`：纯文本一行（你自己说的话——靠右、带 `›` 记号，不套卡片）
+ * - `prose`：铺开的正文（模型的回复——左侧、带一行 meta，内嵌的方案卡照旧挂在这里面）
  * - `tool`：调用行——命令 / 文件 / 工具 / MCP，交代"谁在跑、跑完没、是哪一次调用"
  * - `reasoning`：推理行——背景音，最轻的一档，不该有卡片的重量
  * - `divider`：分隔行——上下文压缩是会话在这里换了上下文，是边界不是事件
@@ -199,12 +200,13 @@ export type ExplorerSharedMessageType = Extract<ExplorerMessageType, SharedMessa
  * - `turn-status`：状态行——回合占位与未识别的活动，虚线框，比调用行更淡
  * - `hidden`：不渲染
  */
-export type ExplorerDisplayMode = "card" | "text" | "tool" | "reasoning" | "divider" | "gate" | "turn-status" | "hidden";
+export type ExplorerDisplayMode = "card" | "text" | "prose" | "tool" | "reasoning" | "divider" | "gate" | "turn-status" | "hidden";
 
 /**
  * **消息类型 → 呈现方式。这张表就是"清单"本身。**
  *
- * 判据是每条消息对"看懂这次探索"的贡献：人说的话、模型正文、方案与结构化输入是 `card`；
+ * 判据是每条消息对"看懂这次探索"的贡献：**人说的话与模型的回复都是铺开的正文**（`text` / `prose`——
+ * 它们本来就是一段话，外面的白底边框不承载任何信息），方案与结构化输入是 `card`；
  * 四类调用按**语义**同归 `tool`（标签与图标区分命令 / 文件 / 工具 / MCP 与被拒 / 失败），
  * 门禁是判定，回合状态是占位，推理是背景音，上下文压缩是分隔。
  *
@@ -218,7 +220,7 @@ export type ExplorerDisplayMode = "card" | "text" | "tool" | "reasoning" | "divi
  */
 export const EXPLORER_DISPLAY_MODES: Record<ExplorerMessageType, ExplorerDisplayMode> = {
   USER_MESSAGE: "text",
-  ASSISTANT_MESSAGE: "card",
+  ASSISTANT_MESSAGE: "prose",
   REASONING: "reasoning",
   INPUT_REQUIRED: "hidden",
   INPUT_RESOLVED: "hidden",

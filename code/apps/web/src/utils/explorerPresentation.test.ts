@@ -198,9 +198,11 @@ describe("探索会话的消息清单", () => {
     for (const shared of SHARED_MESSAGE_TYPES) expect(EXPLORER_DISPLAY_MODES[shared]).toBeDefined();
   });
 
-  it("只有模型正文、方案与结构化输入做成卡片；你自己说的话是纯文本一行", () => {
-    expect(new Set(activityTypes.filter((type) => explorerDisplayMode(type) === "card"))).toEqual(new Set(["ASSISTANT_MESSAGE"]));
+  it("只有方案与结构化输入做成卡片；人说的话与模型的回复都是铺开的正文", () => {
+    // 白底边框不承载任何信息：用户消息靠右带 `›`，助手回复靠左带一行 meta（状态 + 时间 + 内嵌方案卡）。
+    expect(activityTypes.filter((type) => explorerDisplayMode(type) === "card")).toEqual([]);
     expect(explorerDisplayMode("USER_MESSAGE")).toBe("text");
+    expect(explorerDisplayMode("ASSISTANT_MESSAGE")).toBe("prose");
     expect(explorerDisplayMode("INPUT_REQUEST")).toBe("card");
     expect(explorerDisplayMode("CANDIDATE_PLAN")).toBe("card");
   });
@@ -225,7 +227,7 @@ describe("探索会话的消息清单", () => {
     // TOOL_CALL 这种原始枚举值——这条断言在那次改动上拦住它。
     for (const type of activityTypes) {
       const mode = explorerDisplayMode(type);
-      if (mode === "card" || mode === "text" || mode === "hidden") continue;
+      if (mode === "card" || mode === "text" || mode === "prose" || mode === "hidden") continue;
       expect(explorerActivityLine(activity(type)).label).not.toBe(type);
     }
   });
