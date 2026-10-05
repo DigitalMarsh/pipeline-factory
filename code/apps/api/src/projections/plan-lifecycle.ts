@@ -15,10 +15,11 @@
  *      扩展这里，否则该事件会在 Plan 时间线中丢失"。
  *   两条都属于"漏改不报错、只是事件静默消失"的类型，所以注释必须留在代码边上而不是挪到文件头。
  *
- * 另有两处看着像冗余、实则是行为契约的分支，不要顺手删：
- *   - `normalizedLifecycleStatus` 把历史值 `QUEUED` 归一成 `ENQUEUED`（老数据里两种写法并存）。
+ * 另有一处看着像冗余、实则是行为契约的分支，不要顺手删：
  *   - `buildPlanLifecycle` 末尾的"未确认却已推进 → 整条时间线塌缩成 DRAFT + BLOCKED"兜底：
  *     它消费 `plan.attentionReason`，是 UI 上"卡住原因"的来源。
+ *   （曾经还有一条 `QUEUED → ENQUEUED` 的历史值归一化。`QUEUED` 已从 `PlanStatus` 删掉——
+ *   全仓无写入点、8 个库零行，所谓"老数据里两种写法并存"在本机从未成立。）
  *
  * 依赖方向：本文件不依赖同目录其他投影。`workbench.ts` 单向依赖本文件的 `planProjection`。
  */
@@ -31,7 +32,6 @@ const PLAN_LIFECYCLE_PROGRESS_STATUSES = new Set<PlanLifecycleStatus>(["READY", 
 const UNCONFIRMED_LIFECYCLE_REASON = "Plan lifecycle is invalid: it reached a later state without a confirmation record.";
 
 function normalizedLifecycleStatus(value: unknown): PlanLifecycleStatus | null {
-  if (value === "QUEUED") return "ENQUEUED";
   if (typeof value !== "string") return null;
   if (PLAN_LIFECYCLE_NORMALIZED.has(value as PlanLifecycleStatus)) return value as PlanLifecycleStatus;
   if (["BLOCKED", "NEEDS_PLAN_CHANGE", "NEEDS_CONFIGURATION"].includes(value)) return value as PlanLifecycleStatus;

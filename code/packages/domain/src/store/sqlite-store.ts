@@ -1591,7 +1591,7 @@ export class SqlitePipelineStore implements PipelineStore {
    * 这类记录不能继续被当作可执行 Plan，保留历史时间但转入 BLOCKED，等待重新确认。
    */
   private repairUnconfirmedProgressedPlans(): void {
-    const rows = this.statement("SELECT * FROM candidate_plans WHERE confirmed_at IS NULL AND status IN (?, ?, ?, ?, ?, ?, ?, ?)").all("READY", "QUEUED", "ENQUEUED", "DISPATCHED", "IN_PROGRESS", "VERIFYING", "MERGE_READY", "MERGED") as unknown as SqliteRow[];
+    const rows = this.statement("SELECT * FROM candidate_plans WHERE confirmed_at IS NULL AND status IN (?, ?, ?, ?, ?, ?, ?)").all("READY", "ENQUEUED", "DISPATCHED", "IN_PROGRESS", "VERIFYING", "MERGE_READY", "MERGED") as unknown as SqliteRow[];
     const hasConfirmationEvent = this.statement("SELECT 1 AS present FROM domain_events WHERE aggregate_id = ? AND type IN (?, ?, ?) LIMIT 1");
     for (const row of rows) {
       const planId = String(row.id);
@@ -1631,9 +1631,9 @@ export class SqlitePipelineStore implements PipelineStore {
   private repairOrphanedPlans(): void {
     const rows = this.statement(`
       SELECT * FROM candidate_plans
-      WHERE status IN (?, ?, ?, ?, ?, ?, ?, ?)
+      WHERE status IN (?, ?, ?, ?, ?, ?, ?)
         AND source_explorer_thread_id NOT IN (SELECT id FROM explorer_threads)
-    `).all("READY", "QUEUED", "ENQUEUED", "DISPATCHED", "IN_PROGRESS", "VERIFYING", "MERGE_READY", "MERGED") as unknown as SqliteRow[];
+    `).all("READY", "ENQUEUED", "DISPATCHED", "IN_PROGRESS", "VERIFYING", "MERGE_READY", "MERGED") as unknown as SqliteRow[];
     for (const row of rows) {
       const plan = this.planFromRow(row);
       const reason = "Plan source is missing: its source ExplorerThread no longer exists.";

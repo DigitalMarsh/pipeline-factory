@@ -335,7 +335,7 @@ export class PlanService {
    */
   setDependencies(planId: string, dependsOnPlanIds: string[], actorId: string): CandidatePlan {
     const plan = this.get(planId);
-    if (!["DRAFT", "DESIGNED", "PLANNED"].includes(plan.status)) throw new Error(`Plan ${planId} dependencies cannot change from ${plan.status}`);
+    if (plan.status !== "DRAFT") throw new Error(`Plan ${planId} dependencies cannot change from ${plan.status}`);
     const normalized = [...new Set(dependsOnPlanIds.map((id) => id.trim()).filter(Boolean))];
     const updated: CandidatePlan = { ...plan, resolvedContract: { ...plan.resolvedContract, dependsOnPlanIds: normalized } };
     this.validatePlanDependencies(updated);
@@ -357,7 +357,7 @@ export class PlanService {
    */
   setVerificationSuites(planId: string, suites: string[], actorId: string): CandidatePlan {
     let plan = this.get(planId);
-    if (!["DRAFT", "DESIGNED", "PLANNED"].includes(plan.status)) throw new Error(`Plan ${planId} verification suites cannot change from ${plan.status}`);
+    if (plan.status !== "DRAFT") throw new Error(`Plan ${planId} verification suites cannot change from ${plan.status}`);
     if (!plan.generatedSpec || !plan.resolvedContract) throw new Error(`Plan ${planId} has no resolved contract to re-resolve; regenerate it from Explorer`);
     const normalized = [...new Set(suites.map((suite) => suite.trim()).filter(Boolean))];
     const project = this.store.getProject(plan.projectId);
@@ -389,7 +389,7 @@ export class PlanService {
     let plan = this.get(planId);
     if (expectedRevision !== undefined && plan.revision !== expectedRevision) throw new Error("REVISION_NOT_LATEST");
     if (plan.status === "READY" || plan.status === "ENQUEUED" || plan.status === "DISPATCHED") return plan;
-    if (plan.status !== "DRAFT" && plan.status !== "DESIGNED" && plan.status !== "PLANNED") {
+    if (plan.status !== "DRAFT") {
       throw new Error(`Plan ${planId} cannot be confirmed from ${plan.status}`);
     }
     // 绑定校验：契约里的 Project / 配置版本必须与当前事实一致，否则确认下去的就是一份过期方案。

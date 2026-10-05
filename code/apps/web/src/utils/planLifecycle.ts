@@ -33,11 +33,17 @@ const PLAN_LIFECYCLE_PROGRESS_STATUSES: PlanLifecycleStatus[] = [
 ];
 const UNCONFIRMED_LIFECYCLE_REASON = "方案生命周期不合法：它在没有确认记录的情况下进入了更后面的状态。";
 
+/**
+ * 把 Plan 状态归一成生命周期条能显示的那几个。
+ *
+ * **这里只剩 `NEEDS_CONFIGURATION` 一条分支**（它是派发等待原因，不是 PlanStatus）。
+ * 曾经还有三块补丁——`QUEUED → ENQUEUED`、`STARTING/RUNNING → IN_PROGRESS`、
+ * `NEEDS_REVIEW → MERGE_READY`。它们的存在本身就是"转换表缺边"的证据：喂进来的值根本不该是 Plan 状态。
+ * 现在三个幽灵状态已从 `PlanStatus` 删掉（全仓无写入点，8 个库零行），
+ * 剩下的由 `plan/status-transition.ts` 的转换表负责——补丁与表一收一放，两处同时消失。
+ */
 export function normalizedLifecycleStatus(status: string, plan?: Plan): PlanLifecycleStatus {
   if (plan?.dispatch?.waitReason === "NEEDS_CONFIGURATION") return "NEEDS_CONFIGURATION";
-  if (status === "QUEUED") return "ENQUEUED";
-  if (status === "STARTING" || status === "RUNNING") return "IN_PROGRESS";
-  if (status === "NEEDS_REVIEW") return "MERGE_READY";
   return status as PlanLifecycleStatus;
 }
 

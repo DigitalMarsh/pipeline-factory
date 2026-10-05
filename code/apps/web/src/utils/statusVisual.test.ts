@@ -16,8 +16,8 @@ describe("statusVisualFor", () => {
     // 此前这里另有一份 `DRAFT: "Draft"` / `READY: "Ready"` / `MERGE_READY: "Needs review"`，
     // 而 `planStatusLabel` 给的是 Candidate / Confirmed / Ready for review——同一个 Plan
     // 在抽屉里一个词、在工作台上另一个词。现在 Plan 状态一律从那边取。
-    // 含 `STARTING`：它不在 web 的 `PlanStatus` 联合里，但 Plan 行确实会带着它出现（见 `planStatus.test.ts`）。
-    const statuses: string[] = ["DRAFT", "READY", "ENQUEUED", "DISPATCHED", "QUEUED", "STARTING", "IN_PROGRESS", "VERIFYING", "MERGE_READY", "MERGED", "BLOCKED", "NEEDS_PLAN_CHANGE", "DISCARDED"];
+    // 这份清单就是 `PlanStatus` 的全部取值——"哪里有 Plan 状态文案"与"Plan 能到达哪些状态"是同一个集合。
+    const statuses: string[] = ["DRAFT", "READY", "ENQUEUED", "DISPATCHED", "IN_PROGRESS", "VERIFYING", "MERGE_READY", "MERGED", "BLOCKED", "NEEDS_PLAN_CHANGE", "DISCARDED"];
     for (const status of statuses) expect(statusVisualFor(status).label).toBe(planStatusLabel(status));
 
     const source = readFileSync(fileURLToPath(new URL("./statusVisual.ts", import.meta.url)), "utf8");

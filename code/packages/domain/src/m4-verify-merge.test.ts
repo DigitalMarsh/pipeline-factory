@@ -10,6 +10,20 @@ import { join } from "node:path";
 import { InMemoryPipelineStore, MergeService, PlanService, ProjectService, SqlitePipelineStore, VerificationService, type ExecutionThread, type Run } from "./index.js";
 import { planContractFixture } from "./plan/plan-fixture.js";
 
+/**
+ * 布置前置条件：把 Plan 直接摆成"已验证、等人合并"。
+ *
+ * **故意走 `store.updatePlan` 而不是 `updatePlanStatus`**：后者现在有转换守卫（非法转换抛错），
+ * 而这里要的只是"先把状态摆好"，不是"验证一次转换"——真跑一遍
+ * `enqueue → dispatch → IN_PROGRESS → VERIFYING` 与本用例要考的东西无关。
+ * 同文件下面那条"同步 Plan 投影"的用例本来就是这个写法。
+ */
+function arrangeMergeReadyPlan(store: InMemoryPipelineStore, planId: string, runId: string): void {
+  const plan = store.getPlan(planId);
+  if (!plan) throw new Error(`Plan ${planId} not found`);
+  store.updatePlan({ ...plan, status: "MERGE_READY", runId, attentionReason: null });
+}
+
 function makeRun(planId: string): Run {
   return { id: "run-1", projectId: "project-1", planId, planRevision: 1, status: "IN_PROGRESS", branch: "factory/run-1", workspacePath: "/tmp/run-1", baseCommit: "abc", executionThreadId: "thread-run-1", createdAt: new Date().toISOString(), startedAt: new Date().toISOString() };
 }
@@ -51,6 +65,7 @@ describe("Verifier and MergeService", () => {
     expect(verification.status).toBe("PASSED");
     expect(verification.repairAttempts).toBe(1);
     expect(run.status).toBe("MERGE_READY");
+    arrangeMergeReadyPlan(store, plan.id, run.id);
     const merge = new MergeService(store);
     const request = merge.createRequest(run, verification, "def456");
     expect(() => merge.confirmMerged(request.id, "wrong-commit")).toThrow(/target commit/i);
@@ -76,6 +91,7 @@ describe("Verifier and MergeService", () => {
       branchContains: () => true,
     } });
 
+    arrangeMergeReadyPlan(store, plan.id, run.id);
     expect(() => merge.createRequest(run, verification, "missing")).toThrow(/source commit/i);
     const request = merge.createRequest(run, verification, "source");
     expect(() => merge.confirmMerged(request.id, "target")).not.toThrow();
@@ -192,6 +208,7 @@ describe("Verifier and MergeService", () => {
     const run = makeRun(plan.id);
     run.status = "MERGE_READY";
     const verification = { id: "verification-1", runId: run.id, status: "PASSED" as const, repairAttempts: 0, commandResults: [], completedAt: new Date().toISOString() };
+    arrangeMergeReadyPlan(store, plan.id, run.id);
     const request = new MergeService(store).createRequest(run, verification, "def456");
     const reopenedService = new MergeService(store);
     expect(reopenedService.findByRun(run.id)).toEqual(request);

@@ -37,16 +37,20 @@ import type { GeneratedPlanSpec, ResolvedPlanContract } from "./plan-spec.js";
 import type { ProjectExecutionSnapshot } from "../project/project.js";
 import type { Run } from "../run/types.js";
 
-/** Plan 从草稿到执行、验证和合并的持久化状态；DISCARDED 为不可逆终态。 */
+/**
+ * Plan 从草稿到执行、验证和合并的持久化状态。
+ *
+ * **这里只有"有人写"的状态**：`DESIGNED` / `PLANNED` / `QUEUED` 曾经在联合类型里，
+ * 但全仓没有任何写入点——前者只出现在几处守卫的 `includes([...])` 白名单里（把"未确认"写宽了），
+ * 后者那两处 `status: "QUEUED"` 写的是 `PlanDispatchState`（另一个类型）。8 个库全查过，
+ * 三个值一行数据都没有。删掉之后，"状态空间 = 有人写的状态"，转换表才谈得上完整。
+ */
 export type PlanStatus =
   | "DRAFT"
   | "DISCARDED"
-  | "DESIGNED"
-  | "PLANNED"
   | "READY"
   | "ENQUEUED"
   | "DISPATCHED"
-  | "QUEUED"
   | "IN_PROGRESS"
   | "VERIFYING"
   | "MERGE_READY"

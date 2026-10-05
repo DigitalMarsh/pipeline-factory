@@ -46,8 +46,12 @@ describe("plan lifecycle presentation", () => {
   });
 
   it("quarantines downstream states that have no confirmation evidence", () => {
-    expect(normalizedLifecycleStatus("QUEUED")).toBe("ENQUEUED");
-    expect(normalizedLifecycleStatus("STARTING")).toBe("IN_PROGRESS");
+    // 曾经这里还断言三块归一化补丁：`QUEUED → ENQUEUED`、`STARTING → IN_PROGRESS`、
+    // `NEEDS_REVIEW → MERGE_READY`。它们是"转换表缺边"的证据（喂进来的值根本不该是 Plan 状态），
+    // 已随幽灵状态一起删掉；现在归一化只处理 `NEEDS_CONFIGURATION`（派发等待原因，不是 PlanStatus），
+    // 其余原样透传——不认识的枚举值由文案表回落成原字符串，不去猜一个像样的答案。
+    expect(normalizedLifecycleStatus("QUEUED")).toBe("QUEUED");
+    expect(normalizedLifecycleStatus("STARTING")).toBe("STARTING");
     expect(normalizedLifecycleStatus("VERIFYING")).toBe("VERIFYING");
     const entries = lifecycleEntriesFor(plan({ status: "MERGE_READY", confirmedAt: null, queuedAt: "2026-09-19T01:02:00.000Z", dispatchedAt: "2026-09-19T01:03:00.000Z", createdAt: "" }));
     expect(entries.map((entry) => entry.status)).toEqual(["DRAFT", "BLOCKED"]);

@@ -31,7 +31,7 @@ const plan = (id: string, status: Plan["status"]): Plan => ({
   status,
   projectId: "project-1",
   sourceExplorerThreadId: "explorer-1",
-  queuedAt: status === "QUEUED" || status === "ENQUEUED" ? "2026-08-29T10:01:00.000Z" : null,
+  queuedAt: status === "ENQUEUED" ? "2026-08-29T10:01:00.000Z" : null,
   runId: null,
   lastEventAt: "2026-08-29T10:00:00.000Z",
   attentionReason: null,

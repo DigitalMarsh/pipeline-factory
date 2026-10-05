@@ -206,7 +206,7 @@ export class PlanDispatchCoordinator {
     this.saveState(state);
     try {
       let current = this.options.plans.get(planId);
-      if (["DRAFT", "DESIGNED", "PLANNED"].includes(current.status)) current = this.options.plans.confirm(planId, state.confirmedBy ?? confirmedBy, revision);
+      if (current.status === "DRAFT") current = this.options.plans.confirm(planId, state.confirmedBy ?? confirmedBy, revision);
       state = { ...state, phase: "FROZEN", updatedAt: this.options.store.now(), lastError: null };
       this.saveState(state);
 

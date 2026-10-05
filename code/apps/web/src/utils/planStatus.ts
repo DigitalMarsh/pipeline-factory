@@ -14,18 +14,17 @@
  *   2) 入参故意收 `string` 而不是 `PlanStatus`：这些文案的调用点拿到的常常是普通字符串
  *      （journal 载荷、查询投影），收窄成联合类型会逼着调用点去断言。
  *   3) 未知状态**回落为原字符串**，不要回落为空串——后端新增状态时要能在页面上一眼看出来。
+ *   4) **表里只放 `PlanStatus` 的取值**：`DESIGNED` / `PLANNED` / `QUEUED` 三个幽灵状态已从类型里删掉
+ *      （全仓无写入点，8 个库零行），`STARTING` 是 `RunStatus` 不是 Plan 状态，也一并删掉——
+ *      留在这里只会让人以为它们是 Plan 能到达的状态。
  */
 export function planStatusLabel(status: string): string {
   return ({
     DRAFT: "草稿",
     DISCARDED: "已丢弃",
-    DESIGNED: "已设计",
-    PLANNED: "已规划",
     READY: "已确认",
     ENQUEUED: "已入队",
     DISPATCHED: "已派发",
-    QUEUED: "排队中",
-    STARTING: "启动中",
     IN_PROGRESS: "执行中",
     VERIFYING: "验证中",
     MERGE_READY: "待合并",

@@ -75,13 +75,13 @@ describe("plan timeline bindings", () => {
 
   it("sorts Plans rail items by stable generation time while retaining status", () => {
     const first = plan("plan-1", "turn-1", "2026-08-29T10:01:00.000Z");
-    const second = { ...plan("plan-2", "turn-2", "2026-08-29T10:02:00.000Z"), status: "QUEUED" as const };
+    const second = { ...plan("plan-2", "turn-2", "2026-08-29T10:02:00.000Z"), status: "ENQUEUED" as const };
 
     expect(planTimelineItems([second, first], []).map((item) => item.plan.id)).toEqual(["plan-1", "plan-2"]);
     const time = (value: string) => new Date(value).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
     expect(planTimelineItems([second, first], [activity("turn-1", first.title)]).map((item) => item.detail)).toEqual([
       `${time(first.createdAt!)} · 草稿 · Rev 1`,
-      `${time(second.createdAt!)} · 排队中 · Rev 1`,
+      `${time(second.createdAt!)} · 已入队 · Rev 1`,
     ]);
   });
 });

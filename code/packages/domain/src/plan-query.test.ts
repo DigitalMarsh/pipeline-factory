@@ -79,7 +79,7 @@ describe("PlanService.query", () => {
     const { store, plans } = setup();
     enqueue(store, plans, "explorer-parent", "Healthy plan");
     const now = store.now();
-    store.savePlanQueryProjection({ planId: "plan-orphan", projectId: "project-1", sourceExplorerThreadId: "explorer-parent", sourceTurnId: null, title: "Orphan", goal: "orphan goal", revision: 1, status: "QUEUED", priority: 0, createdAt: now, queuedAt: now, lastEventAt: now, runId: null, attentionReason: null });
+    store.savePlanQueryProjection({ planId: "plan-orphan", projectId: "project-1", sourceExplorerThreadId: "explorer-parent", sourceTurnId: null, title: "Orphan", goal: "orphan goal", revision: 1, status: "ENQUEUED", priority: 0, createdAt: now, queuedAt: now, lastEventAt: now, runId: null, attentionReason: null });
 
     const result = plans.query({ projectId: "project-1", includeLineage: true, limit: 20, sort: "queued_at" });
 

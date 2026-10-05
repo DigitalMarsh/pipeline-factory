@@ -19,7 +19,7 @@ export type ExplorerRequirementRow = {
 };
 
 const CONFIRMED_PLAN_STATUSES = new Set([
-  "READY", "ENQUEUED", "DISPATCHED", "QUEUED", "IN_PROGRESS", "VERIFYING",
+  "READY", "ENQUEUED", "DISPATCHED", "IN_PROGRESS", "VERIFYING",
   "MERGE_READY", "MERGED", "BLOCKED", "NEEDS_PLAN_CHANGE",
 ]);
 
@@ -89,7 +89,7 @@ function taskStatusFor(plan: Plan | null, run: Run | null): RequirementStatus {
     || dispatch?.status === "NEEDS_REVIEW" || dispatch?.status === "BLOCKED"
     || dispatch?.waitReason === "NEEDS_CONFIGURATION") return { label: "待处理", tone: "attention" };
   if (plan.status === "READY") return { label: "待入队", tone: "neutral" };
-  if (["ENQUEUED", "DISPATCHED", "QUEUED"].includes(plan.status)
+  if (["ENQUEUED", "DISPATCHED"].includes(plan.status)
     || ["QUEUED", "WAITING", "DISPATCHING"].includes(dispatch?.status ?? "")) {
     return { label: "已入队/已派发", tone: "progress" };
   }

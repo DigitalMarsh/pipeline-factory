@@ -1,5 +1,46 @@
 # Changelog
 
+## 2026-10-05 — Plan 状态有了集中的转换表；三个没人写的状态顺手清掉
+
+### 为什么做
+
+`PlanStatus` 有 14 个取值，但"哪些转换合法"这件事**没有任何地方管**：22 个 `updatePlanStatus` 调用点
+各自传一个 `Partial<CandidatePlan>`，函数只做"状态变了就追加一条 `plan.status.changed`"——
+从 `BLOCKED` 直接跳回 `READY` 也只是安静地落库。
+
+而"哪些转换存在"有**四份互不知道的副本**：四处散落的 `includes([...])` 白名单；
+`planLifecycle.ts` 的 `normalizedLifecycleStatus`（`QUEUED→ENQUEUED`、`STARTING/RUNNING→IN_PROGRESS`、
+`NEEDS_REVIEW→MERGE_READY` 三块补丁）；`recovery-coordinator.ts` 的 `RECONCILIABLE_PLAN_STATUSES`
++ `planStatusForRun`；前端 `explorerRequirementRows.ts` 的 `CONFIRMED_PLAN_STATUSES`。
+
+**顺带查出三个幽灵状态**：`DESIGNED` / `PLANNED` / `QUEUED` 在 `PlanStatus` 里，但全仓没有任何写入点——
+前两个只出现在几处守卫的白名单里，后者那两处 `status: "QUEUED"` 写的是 `PlanDispatchState`（另一个类型）。
+**8 个库全查过，三个值一行数据都没有**（所谓"老数据里两种写法并存"在本机从未成立）。
+
+### Changed
+
+- **删掉三个幽灵状态**（`PlanStatus` 14 → 11），连同四处白名单引用、`sqlite-store` 启动修复那两条 SQL
+  里的 `"QUEUED"`、以及 `planStatusLabel` 里的三条文案。`STARTING` 也从 `planStatusLabel` 删了——
+  它是 `RunStatus`，不是 Plan 状态。
+- **新增转换表**（`plan/status-transition.ts` 的 `canTransitionPlanStatus`），由 `updatePlanStatus`
+  在**写入之前**强制：非法转换抛错，且抛错时状态没有被改动过（先判后写——写完再检查就晚了）。
+  表的形状不是一条链：主路径 + `VERIFYING/MERGE_READY → IN_PROGRESS` 等恢复边 +
+  **三个"从任意非终态进入"的入口**（`BLOCKED` / `READY` / `NEEDS_PLAN_CHANGE`）+
+  `DRAFT → DISCARDED`。`MERGED` 不是终态（启动修复会把它拉回 `BLOCKED`），**真正不可逆的只有 `DISCARDED`**。
+- **删掉三块归一化补丁**（web 的 `normalizedLifecycleStatus`、api 投影的同名函数）——它们的存在本身
+  就是"表缺边"的证据：喂进来的值根本不该是 Plan 状态。补丁与表一收一放，两处同时消失。
+- 新增 `plan/status-transition.test.ts`（6 条）：主路径逐步走通、三个入口从任意非终态可进、
+  `DISCARDED` 只能从 `DRAFT` 进且出不去、跨级边不合法、**非法转换抛错且 store 里的状态没被动过**。
+
+### 顺带修正的测试夹具
+
+`m4-verify-merge.test.ts` 与 `api/projections/activity.test.ts` 里有几处"把 Plan 直接摆成终态"的夹具
+（`DRAFT → MERGE_READY`、`DRAFT → MERGED`、`READY → MERGED`）。它们在真实流程里到不了——
+`MERGE_READY → MERGED` 是进 `MERGED` 的唯一一条边——所以夹具改成走合法路径（新增一个小 helper），
+并把"已合并的 Plan 不算今天执行完成"那条断言按新事实改写并注明理由。
+
+`pnpm verify` 通过：381 + 111 + 526 个用例；本机库启动修复正常，两个对话框页面实测无异常。
+
 ## 2026-10-05 — 两个对话框的模板按"形态"拆成行组件，兜底不再静默
 
 ### 为什么做

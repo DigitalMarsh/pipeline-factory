@@ -17,6 +17,69 @@
  *      （如 queuedAt: null、runId: null），否则旧值会被保留下来。
  */
 import type { CandidatePlan, PipelineStore } from "../index.js";
+import type { PlanStatus } from "./types.js";
+
+/**
+ * **Plan 状态的合法转换——这是唯一一份"哪些转换存在"的定义。**
+ *
+ * 建这张表之前，"哪些转换合法"这件事有四份互不知道的副本：散落在 `plan/service.ts` 与
+ * `run/dispatch-coordinator.ts` 的四处 `includes([...])` 白名单；`planLifecycle.ts` 的
+ * `normalizedLifecycleStatus`（三块归一化补丁，其实是"表缺边"打的）；`recovery-coordinator.ts` 的
+ * `RECONCILIABLE_PLAN_STATUSES` + `planStatusForRun`；以及前端 `explorerRequirementRows.ts` 的
+ * `CONFIRMED_PLAN_STATUSES`。而写入点本身（22 处 `updatePlanStatus`）**没有任何合法性检查**——
+ * 从 `BLOCKED` 直接跳回 `READY` 也是合法的，只要有人这么写。
+ *
+ * 表里的每一条边都能指到代码里的写入点：
+ *
+ * | 边 | 写入点 |
+ * |---|---|
+ * | `DRAFT → READY` | `plan/service.ts` 的 `confirm` |
+ * | `DRAFT → DISCARDED` | `plan/service.ts` 的 `discard`（守卫：只允许从 DRAFT 丢弃） |
+ * | `READY → ENQUEUED` | `plan/service.ts` 的 `enqueue` |
+ * | `ENQUEUED → DISPATCHED` | `plan/service.ts` 的 `dispatch` |
+ * | `DISPATCHED → IN_PROGRESS` | `run/scheduler.ts`（Run 启动） |
+ * | `IN_PROGRESS → VERIFYING` | `run/verification.ts` |
+ * | `VERIFYING → MERGE_READY / BLOCKED` | `run/verification.ts` 的 `record` |
+ * | `MERGE_READY → MERGED` | `run/merge.ts` |
+ * | `VERIFYING / MERGE_READY → IN_PROGRESS` | `run/recovery-coordinator.ts` 的对账 |
+ * | `BLOCKED → ENQUEUED / IN_PROGRESS / VERIFYING / MERGE_READY` | `run/change-proposal.ts`、对账 |
+ * | `NEEDS_PLAN_CHANGE → ENQUEUED` | `run/change-proposal.ts`（改完计划重新入队） |
+ */
+
+/** 主路径与恢复边：`DRAFT → READY → ENQUEUED → DISPATCHED → IN_PROGRESS → VERIFYING → MERGE_READY → MERGED`。 */
+const PLAN_STATUS_MAIN_TRANSITIONS: Record<PlanStatus, readonly PlanStatus[]> = {
+  DRAFT: ["READY"],
+  READY: ["ENQUEUED"],
+  ENQUEUED: ["DISPATCHED"],
+  DISPATCHED: ["IN_PROGRESS"],
+  IN_PROGRESS: ["VERIFYING"],
+  VERIFYING: ["MERGE_READY", "IN_PROGRESS"],
+  MERGE_READY: ["MERGED", "IN_PROGRESS"],
+  BLOCKED: ["ENQUEUED", "IN_PROGRESS", "VERIFYING", "MERGE_READY"],
+  NEEDS_PLAN_CHANGE: ["ENQUEUED"],
+  MERGED: [],
+  DISCARDED: [],
+};
+
+/**
+ * 从**任意非终态**都能进入的三个状态：它们不是主路径上的一步，而是"外部把这件事推翻了"——
+ * 写它们的地方（调度阻塞、启动修复、确认修订草稿）本来就不知道、也不该知道当前状态。
+ * - `BLOCKED`：调度阻塞、执行器阻塞、恢复对账、启动修复；
+ * - `READY`：确认修订草稿——改一版再确认，回到"已确认"重来；
+ * - `NEEDS_PLAN_CHANGE`：变更提案要求改计划。
+ *
+ * `MERGED` 也在其中（启动修复会把"没有确认记录却到了后面"的行拉回 `BLOCKED`），
+ * 所以**真正不可逆的终态只有 `DISCARDED`**。
+ */
+const PLAN_STATUS_RESET_TARGETS: readonly PlanStatus[] = ["BLOCKED", "READY", "NEEDS_PLAN_CHANGE"];
+
+/** 这一步转换合法吗。（`from === to` 不算转换，调用方自己跳过。） */
+export function canTransitionPlanStatus(from: PlanStatus, to: PlanStatus): boolean {
+  if (from === "DISCARDED") return false;
+  if (to === "DISCARDED") return from === "DRAFT";
+  if (PLAN_STATUS_RESET_TARGETS.includes(to)) return true;
+  return PLAN_STATUS_MAIN_TRANSITIONS[from].includes(to);
+}
 
 /** 统一记录 Plan 状态变更；领域语义事件仍由各业务服务分别保留。 */
 export function updatePlanStatus(
@@ -25,6 +88,12 @@ export function updatePlanStatus(
   updates: Partial<CandidatePlan>,
   reason?: string | null,
 ): CandidatePlan {
+  const nextStatus = updates.status ?? plan.status;
+  // **先判后写**：非法转换当场抛错。写完再检查就晚了——`store.updatePlan` 已经落库，
+  // 抛错只会留下一个停在不合法状态上的 Plan，比不抛更糟。
+  if (nextStatus !== plan.status && !canTransitionPlanStatus(plan.status, nextStatus)) {
+    throw new Error(`Illegal plan status transition: ${plan.status} → ${nextStatus} (plan ${plan.id})`);
+  }
   const updated = store.updatePlan({ ...plan, ...updates });
   if (updated.status !== plan.status) {
     store.appendEvent({
