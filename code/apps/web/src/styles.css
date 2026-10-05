@@ -137,7 +137,7 @@ a { color: inherit; text-decoration: none; }
 
 
 /* 模型的回复：与用户消息同一档重量——正文直接铺开，不套气泡。
-   上一行 meta（品牌点 + 名字 + 状态 + 时间）留着，因为它是探索侧少数**会变**的类型：
+   上一行 meta（线程侧标记点 + 名字 + 状态 + 时间）留着，因为它是探索侧少数**会变**的类型：
    「还在跑 / 失败」得有地方说，内嵌的候选方案卡也挂在这块里。 */
 .timeline-assistant-prose { margin: 0 0 20px; }
 .timeline-assistant-body { min-width: 0; }
