@@ -1,6 +1,54 @@
 # Changelog
 
-## 2026-10-05 — 被中断的 Run 现在真的会被恢复；需求清单补上四个 Run 状态
+## 2026-10-05 — 切 Agent 时模型跟着换；项目执行线程里改 Agent 不生效的问题
+
+### 为什么做
+
+现象（用户报的）：在项目设置里把**执行侧 Agent** 从 Codex 改成 Claude 之后——
+
+1. 重新打开设置，那一格显示的还是修改前的配置；
+2. 去执行线程看，显示的也还是旧 agent 的信息；
+3. 切 Agent 后，模型下拉里列的还是**上一个 agent 的模型**。
+
+根因是同一个：**切 Agent 时不换模型**。
+
+`modelCatalog.modelOptionsFor` 会把"当前模型值"并进候选（那是为了**打开设置页时**不弄丢手写模型名，
+是一条有意的维护立场），但它同时带来一个后果：切到 Claude 后，下拉里列的是 Claude 的模型**加上**
+上一个后端的 slug，而**选中项仍然是那个旧 slug**。用户不改模型直接保存，存下去的就是：
+
+```json
+{ "backend": "claude-agent-sdk", "model": "gpt-5.6-luna" }
+```
+
+这一组永远不会被自动修正——域里的 `migrateForeignFamilyModels` **刻意跳过显式写了 backend 的项目**
+（它认为"那是用户有意为这个项目选的后端，slug 该由 Provider 侧报错暴露"）。于是：
+
+- 设置页重开：Agent 是 Claude、模型那格还是 `gpt-5.6-luna` → 读起来就是"配置没改"；
+- 执行线程：`snapshot.backend` 与 `defaultModel` 都读 Project 当前设置，显示的也还是旧模型；
+- 真正跑起来时，执行侧第一个回合会在 Provider 侧失败，而错误离配置很远。
+
+### Changed
+
+- 新增 `modelCatalog.backendSwitchAdjustment`：**切换 Agent 之后，模型（必要时还有推理强度）该跟着怎么变**。
+  设置的 Agent 下拉加了 `@change` 处理器（`ProjectSettingsDialog.vue` 与 `/settings` 的
+  `ProjectSettingsView.vue` **两处都有同一份表单**，一起改）。判据：
+  - 当前模型属于**另一个已知 kind** 的后端 → 换成新后端的候选模型；
+  - 目录里查不到的名字（手写别名、cc-switch 这类代理的映射名）→ **不动**——那正是要被保护的东西；
+  - 同 kind 内部换后端（两个 Claude 网关之间）→ 不动；
+  - 新后端**不接受**的推理强度 → 清回"默认"（否则保存会被域直接拒绝：
+    `validateRoleBackend` 抛 `reasoningEffort "ultra" is not supported by backend …`）。
+- 新增 `modelCatalog.test.ts`（5 条），其中一条专门钉住 `modelOptionsFor` 的合并行为——
+  它是上面那条调整的**前提**，删了会让"打开设置页不动手写名"这条保护消失。
+
+实测（浏览器）：把执行侧 Agent 切成 `claude-agent-sdk` 后，执行侧模型的下拉变成
+`claude-opus-5 / claude-sonnet-5 / claude-haiku-4-5` 且**选中 `claude-opus-5`**（此前会停在 `gpt-5.6-luna`），
+推理强度也换成 Claude 的 5 档（`minimal` / `ultra` 消失）。
+
+### 文档
+
+`docs/消息类型及事件状态机流程图.md` §2.3 C 补上"这条线用哪个模型、从哪来、为什么切 Agent 必须带上模型"，
+§5 补一行。
+
 
 ### 为什么做
 
