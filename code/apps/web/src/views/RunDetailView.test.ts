@@ -9,16 +9,30 @@ import { describe, expect, it } from "vitest";
 
 const runDetailSource = readFileSync(fileURLToPath(new URL("./RunDetailView.vue", import.meta.url)), "utf8");
 const runDetailStyles = readFileSync(fileURLToPath(new URL("../styles.css", import.meta.url)), "utf8");
+// 执行会话的行组件：**按形态分文件**，所以"这一行长什么样"要去各自的组件里看。
+const executionPlanCardSource = readFileSync(fileURLToPath(new URL("../components/ExecutionPlanCard.vue", import.meta.url)), "utf8");
+const executionModelRowSource = readFileSync(fileURLToPath(new URL("../components/ExecutionModelRow.vue", import.meta.url)), "utf8");
+const executionUserRowSource = readFileSync(fileURLToPath(new URL("../components/ExecutionUserRow.vue", import.meta.url)), "utf8");
+const executionActivityRowSource = readFileSync(fileURLToPath(new URL("../components/ExecutionActivityRow.vue", import.meta.url)), "utf8");
 
 describe("Run detail execution conversation", () => {
-  it("renders executor model and guidance text through the shared Markdown component", () => {
-    expect(runDetailSource).toContain('import MarkdownMessage from "../components/MarkdownMessage.vue"');
-    expect(runDetailSource).toContain('<template v-else-if="item.kind === \'model\'">');
+  it("正文与用户消息各走自己的行组件，都经同一个 Markdown 组件渲染", () => {
+    // 视图这一层只按**形态**选组件；"长什么样"在各自的组件里。
+    expect(runDetailSource).toContain('<template v-else-if="item.kind === \'model\'"><ExecutionModelRow :item="item" /></template>');
+    expect(runDetailSource).toContain('<template v-else-if="item.kind === \'user\'"><ExecutionUserRow :item="item" /></template>');
     // 你自己说的话不走卡片、也不带头像：Codex 那种「› + 纯文本」，仍然靠右。
-    expect(runDetailSource).toContain('class="execution-user-mark"');
     expect(runDetailSource).toContain('<div v-if="item.kind !== \'user\'" class="execution-message-avatar">');
-    expect(runDetailSource).toContain('<MarkdownMessage :source="item.content" :streaming="item.status === \'RUNNING\'" />');
+    expect(executionModelRowSource).toContain('<MarkdownMessage :source="item.content" :streaming="item.status === \'RUNNING\'" />');
+    expect(executionUserRowSource).toContain('<MarkdownMessage :source="item.content" />');
+    expect(executionUserRowSource).toContain('class="execution-user-mark"');
     expect(runDetailSource).not.toContain("{{ item.content }}<span v-if=\"item.status === 'RUNNING'\"");
+  });
+
+  it("形态分支是显式的，兜底会当场显示出来", () => {
+    // 五个形态各有自己的分支；某种形态掉到兜底说明模板没跟上——显示出来，不静默降级。
+    expect(runDetailSource).toContain("item.kind === 'activity' || item.kind === 'tool'");
+    expect(runDetailSource).toContain("execution-unknown-row");
+    expect(runDetailStyles).toContain(".execution-unknown-row");
   });
 
   it("呈现方式的判据不是白名单：新增一种就不会有消息从会话里消失", () => {
@@ -28,8 +42,9 @@ describe("Run detail execution conversation", () => {
     expect(runDetailSource).not.toContain('return mode === "card" || mode === "line";');
   });
 
-  it("keeps execution activity details as plain text", () => {
-    expect(runDetailSource).toContain('class="execution-activity-detail"');
+  it("动作行的正文保持纯文本，不渲染成 markdown", () => {
+    expect(executionActivityRowSource).toContain('class="execution-activity-detail"');
+    expect(executionActivityRowSource).not.toContain("MarkdownMessage");
   });
 
   it("supports embedding the complete Run surface and opening Plan in the shared drawer", () => {
@@ -129,9 +144,10 @@ describe("Run detail execution conversation", () => {
     expect(runDetailSource).toContain('type ExecutionPlanSnapshot');
     expect(runDetailSource).toContain('executionPlan.value = executionPlanSnapshot(response.run, revisionResponse.revision)');
     expect(runDetailSource).toContain('projectExecutionJournal(currentThread?.journal ?? [], currentThread?.state ?? run.value?.status ?? "ACTIVE", executionPlan.value ?? undefined)');
-    expect(runDetailSource).toContain('class="execution-plan-message"');
-    expect(runDetailSource).toContain('class="execution-plan-toggle"');
-    expect(runDetailSource).toContain('查看完整方案');
+    expect(runDetailSource).toContain('<ExecutionPlanCard :item-id="item.id" :plan="item.plan" @view="openPlanDetail" />');
+    expect(executionPlanCardSource).toContain('class="execution-plan-message"');
+    expect(executionPlanCardSource).toContain('class="execution-plan-toggle"');
+    expect(executionPlanCardSource).toContain('查看方案');
   });
 
   it("uses a persistent Explorer-style composer for execution messages", () => {

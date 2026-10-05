@@ -14,6 +14,10 @@ import { api } from "../api";
 import MarkdownMessage from "../components/MarkdownMessage.vue";
 import type { AgentLoopStep, ExecutionTask, ExecutionThread, MergeRequest, Plan, PlanTask, Run, RunJournalEvent, VerificationRun } from "../types";
 import { statusTagType, streamStatusTagType } from "../utils/statusTag";
+import ExecutionActivityRow from "../components/ExecutionActivityRow.vue";
+import ExecutionModelRow from "../components/ExecutionModelRow.vue";
+import ExecutionPlanCard from "../components/ExecutionPlanCard.vue";
+import ExecutionUserRow from "../components/ExecutionUserRow.vue";
 import { executionDisplayMode, projectExecutionJournal, type ExecutionJournalEntry, type ExecutionPlanSnapshot, type ExecutionStreamItem } from "../utils/executionStream";
 import { executionMessageDetails, executionMessageDiagnosticsTitle } from "../utils/executionMessageDetails";
 import { executionModelSourceNote as executionModelSourceNoteFor, formatProviderContextUsage, resolveExecutionModelIdentity } from "../utils/executionTelemetry";
@@ -59,7 +63,6 @@ const planDetail = ref<Plan | null>(null);
 const planDetailRevisions = ref<number[]>([]);
 const planDetailError = ref<string | null>(null);
 const executionPlan = ref<ExecutionPlanSnapshot | null>(null);
-const planMessageExpanded = ref(false);
 const selectedTaskId = ref<string | null>(null);
 const telemetryNow = ref(Date.now());
 let runEventSource: EventSource | null = null;
@@ -410,7 +413,6 @@ async function load() {
   executionMessages.value = [];
   planTasks.value = [];
   selectedTaskId.value = null;
-  planMessageExpanded.value = false;
   try {
     try {
       const report = await api.reconcileProjectMerges(requestProjectId);
@@ -633,31 +635,11 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
               <div class="execution-message-body">
                 <div class="execution-message-meta"><strong>{{ item.title }}</strong><el-tag v-if="item.status !== 'INFO'" size="small" effect="light" :type="statusTagType(item.status)">{{ executionMessageStatusLabel(item.status) }}</el-tag><span class="execution-message-time">{{ new Date(item.occurredAt).toLocaleTimeString('zh-CN') }}</span><button v-if="executionMessageDetails(item).length" type="button" class="execution-message-toggle" :aria-expanded="isExecutionItemExpanded(item.id)" @click="toggleExecutionItem(item.id)">{{ isExecutionItemExpanded(item.id) ? '收起详情' : '详情' }}</button></div>
                 <div v-if="isExecutionItemExpanded(item.id)" class="execution-message-details"><span v-for="detail in executionMessageDetails(item)" :key="detail">{{ detail }}</span></div>
-                <template v-if="item.kind === 'plan' && item.plan">
-                  <div class="execution-plan-message">
-                    <div class="execution-plan-message-summary"><MarkdownMessage :source="item.plan.goal" /></div>
-                    <button :id="`execution-plan-toggle-${item.id}`" class="execution-plan-toggle" type="button" :aria-expanded="planMessageExpanded" :aria-controls="`execution-plan-details-${item.id}`" @click="planMessageExpanded = !planMessageExpanded">{{ planMessageExpanded ? '收起 Plan 摘要' : '展开 Plan 摘要' }}</button>
-                    <div v-if="planMessageExpanded" :id="`execution-plan-details-${item.id}`" class="execution-plan-message-details">
-                      <div class="execution-plan-message-stats"><span><strong>{{ item.plan.tasks.length }}</strong> tasks</span><span><strong>{{ item.plan.acceptanceCriteria.length }}</strong> 验收标准</span><span><strong>{{ item.plan.verificationCommandIds.length }}</strong> 验证命令</span></div>
-                      <div v-if="item.plan.tasks.length" class="execution-plan-message-section"><span class="execution-plan-message-label">任务</span><ul><li v-for="task in item.plan.tasks" :key="task.id ?? task.title">{{ task.title }}</li></ul></div>
-                      <div class="execution-plan-message-scope"><div><span class="execution-plan-message-label">包含</span><code v-for="path in item.plan.includePaths" :key="`include-${path}`">{{ path }}</code><small v-if="!item.plan.includePaths.length">无包含路径</small></div><div><span class="execution-plan-message-label">排除</span><code v-for="path in item.plan.excludePaths" :key="`exclude-${path}`">{{ path }}</code><small v-if="!item.plan.excludePaths.length">无排除路径</small></div></div>
-                    </div>
-                    <div class="execution-plan-message-actions"><el-button text size="small" @click="openPlanDetail">查看完整方案</el-button></div>
-                  </div>
-                </template>
-                <template v-else-if="item.kind === 'model'">
-                  <MarkdownMessage :source="item.content" :streaming="item.status === 'RUNNING'" />
-                  <small v-if="item.detail || item.unrecordedFields?.length" class="execution-message-note">{{ item.detail || item.unrecordedFields?.join(' · ') }}</small>
-                </template>
-                <!-- 你自己说的话：Codex 那种「› + 纯文本」，不套卡片、不带头像（见 docs/消息类型及事件状态机流程图.md §2.1）。 -->
-                <template v-else-if="item.kind === 'user'">
-                  <div class="execution-user-text"><span class="execution-user-mark" aria-hidden="true">›</span><MarkdownMessage :source="item.content" /></div>
-                  <small v-if="item.detail || item.unrecordedFields?.length" class="execution-message-note">{{ item.detail || item.unrecordedFields?.join(' · ') }}</small>
-                </template>
-                <template v-else>
-                  <p class="execution-activity-detail">{{ item.detail }}</p>
-                  <small v-if="item.unrecordedFields?.length" class="execution-message-note">{{ item.unrecordedFields.join(' · ') }}</small>
-                </template>
+                <template v-if="item.kind === 'plan' && item.plan"><ExecutionPlanCard :item-id="item.id" :plan="item.plan" @view="openPlanDetail" /></template>
+                <template v-else-if="item.kind === 'model'"><ExecutionModelRow :item="item" /></template>
+                <template v-else-if="item.kind === 'user'"><ExecutionUserRow :item="item" /></template>
+                <template v-else-if="item.kind === 'activity' || item.kind === 'tool'"><ExecutionActivityRow :item="item" /></template>
+                <article v-else class="execution-unknown-row">未识别的消息形态：{{ item.kind }}（{{ item.messageType }}）</article>
               </div>
             </article>
             <!-- 呈现方式为 `folded` 的过程记录（推理、门禁、机制提示）：默认不占视线，需要时仍可回溯。 -->

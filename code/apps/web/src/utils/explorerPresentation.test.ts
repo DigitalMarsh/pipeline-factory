@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activityStatusLabel, assistantActivityLabel, EXPLORER_DISPLAY_MODES, explorerActivityLine, explorerDisplayMode, explorerDisplayTitle, formatTurnTime, inputStatusLabel } from "./explorerPresentation";
+import { activityStatusLabel, assistantActivityLabel, EXPLORER_DISPLAY_MODES, EXPLORER_INLINE_MODES, EXPLORER_ROW_MODES, explorerActivityLine, explorerDisplayMode, explorerDisplayTitle, formatTurnTime, inputStatusLabel } from "./explorerPresentation";
 import type { ExplorerMessageType } from "./explorerPresentation";
 import { SHARED_MESSAGE_TYPES } from "./conversationTypes";
 import type { ExplorerActivityItem, ExplorerActivityKind, ExplorerInputRequest } from "../types";
@@ -183,6 +183,12 @@ describe("探索会话的消息清单", () => {
     expect(messageTypes).toHaveLength(15);
     expect(EXPLORER_DISPLAY_MODES.INPUT_REQUEST).toBe("card");
     expect(EXPLORER_DISPLAY_MODES.CANDIDATE_PLAN).toBe("card");
+  });
+
+  it("每一种呈现方式都有人渲染它：行型组件 或 内联分支，二选一", () => {
+    // 新增一种 `ExplorerDisplayMode` 却没归到任何一边时，`explorerPresentation.ts` 里的编译期护栏会先红；
+    // 这条是它的运行时孪生兄弟——两张清单合起来必须正好是全部取值。
+    expect(new Set(Object.values(EXPLORER_DISPLAY_MODES))).toEqual(new Set([...EXPLORER_ROW_MODES, ...EXPLORER_INLINE_MODES]));
   });
 
   it("共用词表里的每一项，探索线程都有一行呈现方式", () => {

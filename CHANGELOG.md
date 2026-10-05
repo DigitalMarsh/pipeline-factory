@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-10-05 — 两个对话框的模板按"形态"拆成行组件，兜底不再静默
+
+### 为什么做
+
+两个对话框的时间线都是**一条长 `v-if / v-else-if` 链 + 一个 `v-else` 兜底**。这套写法的真实风险不是
+"模板长"，而是**新形态会静默掉进兜底**：探索侧的 class 是 `` `activity-${mode}` `` **拼**出来的，
+新增一种行型时 `styles.css` 里没有对应规则，那一行就变成一张**没有样式的裸卡**——不报错、不显眼。
+
+### Changed
+
+- **按形态拆行组件，不按消息类型拆**：探索侧 15 个类型映射到 8 种取值，其中 `tool` 一条承担
+  命令 / 文件变更 / 工具调用 / MCP 调用四类；执行侧 18 个类型映射到 5 种形态，`activity`/`tool`
+  承担其余 13 类。**按消息类型拆会得到四份逐字相同的同构组件**——渲染只跟形态走。
+  - 探索侧：`ExplorerReasoningRow` / `ExplorerDividerRow` / `ExplorerActivityRow`（tool+gate+turn-status）+
+    `ExplorerCandidatePlanCard`（从助手消息分支里抽出来）。
+  - 执行侧：`ExecutionPlanCard`（自带展开态）/ `ExecutionModelRow` / `ExecutionUserRow` / `ExecutionActivityRow`。
+- **两道护栏**：编译期用 `EXPLORER_ROW_MODES` + `EXPLORER_INLINE_MODES`（合起来必须正好是
+  `ExplorerDisplayMode` 的全部取值）与 `EXECUTION_ROW_KINDS`（必须正好是 `ExecutionStreamItem["kind"]`），
+  新增取值却没归到任何一边就**编译不过**；运行时各留一条 `.timeline-unknown-row` /
+  `.execution-unknown-row` 兜底，漏网的取值**当场显示成一行红字**。
+- 执行会话里的方案卡统计文案中文化（`tasks` / `acceptance criteria` / `verification commands` →
+  个任务 / 条验收标准 / 条验证命令），与上一轮的"界面在说话就中文"一致。
+
+`pnpm verify` 通过：375 + 111 + 526 个用例；浏览器实测探索侧 13 行 0 兜底、执行侧 22 行 0 兜底。
+
 ## 2026-10-05 — 线程侧的每一行都带同一个记号；Factory 的三类点名；收掉 INPUT_*
 
 ### 为什么做

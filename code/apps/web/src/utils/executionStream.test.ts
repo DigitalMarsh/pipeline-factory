@@ -4,7 +4,7 @@
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  */
 import { describe, expect, it } from "vitest";
-import { EXECUTION_DISPLAY_MODES, executionDisplayMode, projectExecutionJournal, type ExecutionPlanSnapshot } from "./executionStream";
+import { EXECUTION_DISPLAY_MODES, EXECUTION_ROW_KINDS, executionDisplayMode, projectExecutionJournal, type ExecutionPlanSnapshot } from "./executionStream";
 
 describe("projectExecutionJournal", () => {
   const plan: ExecutionPlanSnapshot = {
@@ -125,6 +125,12 @@ describe("projectExecutionJournal", () => {
 });
 
 describe("消息清单的呈现方式", () => {
+  it("条目的形态只有五种，模板按形态选行组件", () => {
+    // 18 个消息类型映射到这 5 种形态；`tool` 一条就承担命令 / 文件变更 / 工具调用 / MCP 调用四类。
+    // 新增一种形态却没登记到 `EXECUTION_ROW_KINDS` 时，那边有编译期护栏会先红。
+    expect(EXECUTION_ROW_KINDS).toEqual(["plan", "model", "user", "activity", "tool"]);
+  });
+
   it("**呈现方式表是唯一落点**：卡片 / 一行 / 折叠 / 不显示，一眼看全", () => {
     expect(EXECUTION_DISPLAY_MODES.ASSISTANT_MESSAGE).toBe("card");
     expect(EXECUTION_DISPLAY_MODES.MODEL_REPORT).toBe("card");

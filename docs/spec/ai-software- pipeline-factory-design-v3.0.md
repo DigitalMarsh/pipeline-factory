@@ -198,9 +198,9 @@ Plan Mode 必须由状态机、ToolPolicy 和结构化 CandidatePlan 同时约�
 
 确认和下发是两个独立操作：
 
-1. 用户点击 `View full plan` 打开 Plan Detail Drawer。
+1. 用户点击 `查看方案` 打开 Plan Detail Drawer。
 2. 用户查看 Goal、Scope、Task、依赖、冲突、验证、Executor 和来源 turn。
-3. 用户调用 `confirm_plan`，Factory 固定 Artifact hash、base Commit、确认人和确认时间，创建不可变 PlanRevision，Plan 进入 READY。
+3. 用户调用 `确认方案`，Factory 固定 Artifact hash、base Commit、确认人和确认时间，创建不可变 PlanRevision，Plan 进入 READY。
 4. 用户再次复核 READY 计划后调用 `enqueue_plan`，Plan 原子进入 QUEUED。
 5. READY Plan 不会自动执行，只有 QUEUED Plan 才能被 Scheduler 选中。
 6. 重复确认、重复下发必须由幂等键和状态前置条件保护。
@@ -445,11 +445,11 @@ Plan 查询从 `plan_query_projection` 读取，不调用模型、不读取执�
 - 当前 CandidatePlan 摘要；
 - 当前线程谱系的已下发 Plan；
 - 状态、Revision、Run ID、最近事件时间；
-- `View full plan` 打开的详情抽屉。
+- `查看方案` 打开的详情抽屉。
 
 ### 7.2 Plan Detail Drawer
 
-`View full plan` 打开右侧抽屉，不离开 ExplorerThread：
+`查看方案` 打开右侧抽屉，不离开 ExplorerThread：
 
 - Plan 标题、ID、Revision、状态；
 - Goal 和验收标准；
@@ -460,9 +460,9 @@ Plan 查询从 `plan_query_projection` 读取，不调用模型、不读取执�
 - Verification 命令；
 - Executor 模型角色、ToolPolicy 和修复上限；
 - ExplorerThread 来源、turn 区间和 Artifact hash；
-- 底部固定操作：Keep editing、Confirm plan、Enqueue plan。
+- 底部固定操作：继续编辑、确认方案、入队方案。
 
-Confirm plan 与 Enqueue plan 必须使用不同按钮和不同状态说明。
+确认方案与入队方案必须使用不同按钮和不同状态说明。
 
 ### 7.3 Plan Center
 
@@ -574,7 +574,7 @@ type PlanQuery = {
 - `create_explorer_thread`
 - `send_explorer_turn`
 - `validate_candidate_plan`
-- `confirm_plan`
+- `确认方案`
 - `enqueue_plan`
 - `list_thread_plans`
 - `get_plan_detail`
@@ -808,7 +808,7 @@ INCOMPLETE
 READY
   ├─ 校验完整 pipeline-factory-plan 协议块
   ├─ 生成 DRAFT CandidatePlan
-  └─ 允许用户 View full plan → Confirm plan → Enqueue plan
+  └─ 允许用户查看方案 → 确认方案 → 入队方案
 ```
 
 完整性门禁至少检查目标与受众、范围、技术约束、数据与安全、异常处理、验收与验证、任务与依赖、冲突、Executor ToolPolicy、修复上限以及合并策略。模型必须使用原生 `item/tool/requestUserInput` 承载需要用户决定的问题，并把当前可同时确认的问题合并到一个请求中；普通文本中的“请选择”不参与门禁，也不会触发弹窗。Explorer 启动时同时取得 `GET /api/v4/explorer-plan-requirements` 的要求清单并显示在主内容区，提示词与页面清单共享相同的字段语义。
@@ -929,7 +929,7 @@ Executor 使用 `TaskProgressGate`，要求任务及依赖已完成、无未解�
 - ExplorerThread 是项目主工作区，不是 Dashboard 卡片。
 - 对话时间线内显示 CandidatePlan、确认、下发、执行、验证和合并事件。
 - Plan Detail Drawer 保留对话上下文，并显示完整执行契约。
-- Confirm plan 与 Enqueue plan 是独立操作。
+- 确认方案与入队方案是独立操作。
 - Plan Center 支持状态、关键词、项目、时间、来源线程、分页和排序。
 - 页面在桌面、平板和窄屏下不溢出。
 - 关键状态同时使用文字、图标和颜色表达。

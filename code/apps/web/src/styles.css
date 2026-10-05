@@ -200,6 +200,8 @@ a { color: inherit; text-decoration: none; }
    原来 flex-basis 92% 几乎占满整行，右对齐等于没做。 */
 .execution-message.mine { flex-direction: row-reverse; }
 /* 你自己说的话：Codex 那种「› + 纯文本」——没有头像，正文原样摆出来，仍然靠右。 */
+/* 形态兜底：某种 ExecutionStreamItem.kind 掉到这里，说明模板没跟上——当场显示，不静默降级。 */
+.execution-unknown-row { margin: 6px 0 0; padding: 8px 11px; border: 1px dashed #e2c9cd; border-radius: 7px; background: #fff8f8; color: #a8545f; font-size: 10px; }
 .execution-user-text { display: flex; justify-content: flex-end; align-items: flex-start; gap: 7px; margin-top: 6px; }
 .execution-user-mark { flex: 0 0 auto; color: #a6b0bf; font-size: 12px; line-height: 1.7; user-select: none; }
 .execution-user-text .markdown-body { max-width: 560px; color: #3f5a86; font-size: 11px; line-height: 1.65; overflow-wrap: anywhere; }
@@ -461,6 +463,9 @@ a { color: inherit; text-decoration: none; }
 .candidate-create-label { display: block; margin: 20px 0 12px; color: #76859a; font-size: 10px; }.candidate-create-label input { display: block; width: 100%; height: 36px; margin-top: 7px; padding: 0 10px; border: 1px solid #dfe5ed; border-radius: 5px; outline: 0; color: #526178; font-size: 11px; }.candidate-create-label input:focus { border-color: #7fa4f4; box-shadow: 0 0 0 2px #edf3ff; }.memory-detail { color: #8794a7 !important; font: 10px ui-monospace, monospace; }
 .loop-activity-card { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 16px 34px; padding: 10px 12px; border: 1px solid #e7ebf2; border-radius: 8px; background: #fbfcfe; scroll-margin-top: 18px; }.loop-activity-card.waiting { border-color: #ead9af; background: #fffaf0; }.loop-activity-card.failed { border-color: #f0c8cd; background: #fff7f7; }.loop-activity-copy { min-width: 0; }.loop-activity-meta { display: flex; align-items: center; gap: 7px; color: #9aa6b5; font-size: 9px; }.loop-activity-meta strong { color: #64738a; font-size: 10px; }.loop-activity-copy p { margin: 4px 0 0; color: #7c899b; font-size: 10px; line-height: 1.55; }.loop-activity-copy code { color: #627aa8; font: 9px ui-monospace, monospace; }
 /* 八类过程活动各走各的行：推理是最轻的背景音、上下文压缩是一条分隔线、工具 / 门禁 / 轮次状态共用卡片骨架但各有语调。 */
+/* 行型兜底：某种 ExplorerDisplayMode 掉到这里，说明"映射归了类、模板没跟上"。
+   显示出来而不是静默渲染成裸卡——静默降级正是这一轮要堵掉的那种失效。 */
+.timeline-unknown-row { margin: 0 0 16px 34px; padding: 8px 11px; border: 1px dashed #e2c9cd; border-radius: 7px; background: #fff8f8; color: #a8545f; font-size: 10px; }
 .timeline-note { display: flex; align-items: center; gap: 8px; margin: 0 0 13px 34px; color: #9aa6b5; font-size: 10px; scroll-margin-top: 18px; }.timeline-note p { min-width: 0; flex: 1; margin: 0; overflow: hidden; color: #8d99a9; line-height: 1.5; text-overflow: ellipsis; white-space: nowrap; }.timeline-note time { flex: none; color: #b3bcc9; font: 9px ui-monospace, monospace; }
 .timeline-divider { display: flex; align-items: center; gap: 10px; margin: 20px 0 20px 34px; scroll-margin-top: 18px; }.timeline-divider-rule { height: 1px; flex: 1; background: #e7ebf2; }.timeline-divider-label { display: inline-flex; flex: none; align-items: center; gap: 7px; color: #98a4b4; font-size: 10px; font-weight: 700; }.timeline-divider-label em { color: #aeb8c6; font-style: normal; font-weight: 700; letter-spacing: 0; text-transform: none; }.timeline-divider time { flex: none; color: #b3bcc9; font: 9px ui-monospace, monospace; }
 .activity-tool .loop-activity-meta code { padding: 1px 6px; border-radius: 4px; background: #eef3fd; color: #47618f; font-weight: 700; }.loop-activity-copy code.activity-reference { display: block; margin-top: 5px; color: #aab4c2; font: 9px ui-monospace, monospace; }.loop-activity-card > .thread-mark { margin-top: 5px; }.loop-activity-card.running > .thread-mark { animation: explorer-status-pulse 1.2s ease-in-out infinite; }

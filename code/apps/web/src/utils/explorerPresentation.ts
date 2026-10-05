@@ -230,6 +230,25 @@ export const EXPLORER_DISPLAY_MODES: Record<ExplorerMessageType, ExplorerDisplay
   CANDIDATE_PLAN: "card",
 };
 
+/**
+ * **这三种行型共用一个行组件**（`ExplorerActivityRow`）：它们的 DOM 逐字相同——线程侧标记点 +
+ * 标签 + 名字 + 时间 + 状态标签 + 正文 + 引用——差别**全在 CSS 类上**（`activity-tool` 给名字加等宽底色、
+ * `activity-gate` 加一道竖线、`activity-turn-status` 换成虚线框）。按行型写三份同构模板，
+ * 与按消息类型写四份同构模板是同一个错误。
+ */
+export const EXPLORER_ROW_MODES = ["tool", "gate", "turn-status"] as const;
+export type ExplorerRowMode = (typeof EXPLORER_ROW_MODES)[number];
+
+/** 剩下的取值各由自己的模板分支负责：`card`/`text`/`prose` 是块级内容，`reasoning`/`divider` 各有行型，`hidden` 不渲染。 */
+export const EXPLORER_INLINE_MODES = ["card", "text", "prose", "reasoning", "divider", "hidden"] as const;
+
+/**
+ * 编译期护栏：上面两张清单合起来必须**正好**是 `ExplorerDisplayMode` 的全部取值。
+ * 新增一种呈现方式却没归到任何一边时，下面这行编译不过——这正是"新增行型会静默渲染成裸卡"的堵口。
+ */
+const _modeCoverage: Record<Exclude<ExplorerDisplayMode, ExplorerRowMode | (typeof EXPLORER_INLINE_MODES)[number]>, true> = {};
+void _modeCoverage;
+
 /** 这类消息该怎么呈现。视图只问它，不再自己判断"该不该显示、显示成什么样"。 */
 export function explorerDisplayMode(type: ExplorerMessageType): ExplorerDisplayMode {
   return EXPLORER_DISPLAY_MODES[type];

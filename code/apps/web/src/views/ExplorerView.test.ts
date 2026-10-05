@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 
 const explorerViewSource = readFileSync(fileURLToPath(new URL("./ExplorerView.vue", import.meta.url)), "utf8");
 const explorerStylesSource = readFileSync(fileURLToPath(new URL("../styles.css", import.meta.url)), "utf8");
+// 方案卡与行组件：**按形态分文件**，"这一行长什么样"要去各自的组件里看。
+const explorerCandidatePlanCardSource = readFileSync(fileURLToPath(new URL("../components/ExplorerCandidatePlanCard.vue", import.meta.url)), "utf8");
 const explorerTimelineSource = readFileSync(fileURLToPath(new URL("../utils/explorerTimeline.ts", import.meta.url)), "utf8");
 // P7 第二级把这条投影链从视图搬进了 composable。下面的断言跟着代码走，
 // **没有放宽**：正向断言改读新归属文件，负向断言（`syntheticPlanItems`）
@@ -185,7 +187,7 @@ describe("Explorer requirement list and shared drawer", () => {
   it("warns inline when the card is a conversation artifact", () => {
     // 对话产物确认后进不了执行：卡片上（方案卡只有助手消息里那一处）在按钮旁边就说清，
     // 而不是等人切到 Run 页签。原先还有一张独立的 PLAN CREATED 卡也带这条警告，那张卡已删除。
-    expect(explorerViewSource).toContain('<p v-if="isConversationArtifactPlan(planForActivity(item.activity))" class="candidate-notice">');
+    expect(explorerCandidatePlanCardSource).toContain('v-if="conversationArtifact" class="candidate-notice"');
     expect(explorerViewSource).not.toContain("plan-created-event");
   });
 
@@ -329,12 +331,17 @@ describe("Explorer inline message presentation", () => {
     expect(explorerViewSource).not.toContain("INPUT_RESOLVED");
   });
 
-  it("八类过程活动在模板里各走各的行", () => {
-    // 此前八类共用同一条 loop-activity-card 骨架，于是"正在思考""工具被拒""上下文压缩"长得一模一样。
+  it("过程活动各走各的行组件，兜底会当场显示出来", () => {
+    // 视图这一层只做一件事：按行型选分支。**摆哪些字段**在 `explorerActivityLine()`，
+    // **长什么样**在各自的组件里（`components/Explorer*Row.vue`）——视图不再自己翻 kind 决定显示什么。
     expect(explorerViewSource).toContain("activityMode(item.activity) === 'reasoning'");
     expect(explorerViewSource).toContain("activityMode(item.activity) === 'divider'");
-    expect(explorerViewSource).toContain("`activity-${activityMode(item.activity)}`");
-    // 行型与字段都出自 utils，视图不再自己翻 kind 决定显示什么。
+    expect(explorerViewSource).toContain("<ExplorerReasoningRow");
+    expect(explorerViewSource).toContain("<ExplorerDividerRow");
+    expect(explorerViewSource).toContain("<ExplorerActivityRow");
+    // 兜底：行型掉到这里说明映射与模板没跟上，**当场显示**，不要静默渲染成一张裸卡。
+    expect(explorerViewSource).toContain("timeline-unknown-row");
+    expect(explorerStylesSource).toContain(".timeline-unknown-row");
     expect(explorerViewSource).not.toContain("activityKindLabel");
     expect(explorerStylesSource).toContain(".timeline-note");
     expect(explorerStylesSource).toContain(".timeline-divider-label");

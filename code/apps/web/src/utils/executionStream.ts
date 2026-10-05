@@ -128,6 +128,25 @@ export const EXECUTION_DISPLAY_MODES: Record<ExecutionMessageType, ExecutionDisp
  * 此前这里比的是**标题字符串**（`["Task progress", "Execution activity", "任务完成"].includes(title)`），
  * 改一个文案就会静默失效。
  */
+/**
+ * 执行会话里条目的**形态**——模板按它选行组件。五种的 DOM 各不相同：
+ * - `plan`：冻结方案卡（可展开）
+ * - `model`：`ASSISTANT_MESSAGE` 与 `MODEL_REPORT` 共用（都是 markdown 正文，只差标题）
+ * - `user`：你自己说的话（`›` + 纯文本）
+ * - `activity` / `tool`：其余全部——正文只有一句 `detail`
+ *
+ * **按形态分文件，不按消息类型分**：18 个消息类型映射到这 5 种形态，
+ * 其中 `tool` 一条就承担命令 / 文件变更 / 工具调用 / MCP 调用四类。
+ */
+export const EXECUTION_ROW_KINDS = ["plan", "model", "user", "activity", "tool"] as const;
+
+/**
+ * 编译期护栏：这张清单必须正好是 `ExecutionStreamItem["kind"]` 的全部取值。
+ * 新增一种形态却没登记时，下面这行编译不过——模板里那个"未识别的消息形态"兜底也就不会被跑到。
+ */
+const _kindCoverage: Record<Exclude<ExecutionStreamItem["kind"], (typeof EXECUTION_ROW_KINDS)[number]>, true> = {};
+void _kindCoverage;
+
 function isMechanismOnly(item: ExecutionStreamItem): boolean {
   return item.messageType === "TURN_STATUS" || item.messageType === "TASK_LIFECYCLE" || item.messageType === "GATE" || item.messageType === "CONTEXT" || item.messageType === "UNCLASSIFIED";
 }

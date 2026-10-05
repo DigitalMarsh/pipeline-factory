@@ -25,6 +25,10 @@ import { inputStatusTagType, statusTagType } from "../utils/statusTag";
 import { formatContextUsage } from "../utils/explorerStatus";
 import ExplorerInputDialog from "../components/ExplorerInputDialog.vue";
 import MarkdownMessage from "../components/MarkdownMessage.vue";
+import ExplorerActivityRow from "../components/ExplorerActivityRow.vue";
+import ExplorerCandidatePlanCard from "../components/ExplorerCandidatePlanCard.vue";
+import ExplorerDividerRow from "../components/ExplorerDividerRow.vue";
+import ExplorerReasoningRow from "../components/ExplorerReasoningRow.vue";
 import ProjectExecutionThreadPanel from "../components/ProjectExecutionThreadPanel.vue";
 import ProjectSettingsDialog from "../components/ProjectSettingsDialog.vue";
 import ProjectCreateDialog from "../components/ProjectCreateDialog.vue";
@@ -43,8 +47,8 @@ import { taskDisplayTitle } from "../utils/taskTree";
 import { isConfirmedPlanRevision, resolvePlanVersionHistory } from "../utils/planVersionHistory";
 import { projectPathForModule } from "../utils/projectRoutes";
 import { explorerTimelineTarget as activityTarget, explorerPlanAnchorId, explorerTimelineMessageType, inputRequestTarget } from "../utils/explorerTimeline";
-import { activityStatusLabel, assistantActivityLabel, explorerActivityLine, explorerDisplayMode, explorerDisplayTitle, formatTurnTime } from "../utils/explorerPresentation";
-import type { ExplorerActivityLine, ExplorerDisplayMode } from "../utils/explorerPresentation";
+import { assistantActivityLabel, explorerDisplayMode, explorerDisplayTitle, formatTurnTime, EXPLORER_ROW_MODES, type ExplorerRowMode } from "../utils/explorerPresentation";
+import type { ExplorerDisplayMode } from "../utils/explorerPresentation";
 import { planStatusLabel as statusLabel } from "../utils/planStatus";
 
 import { formatAgentLoopCompletion, formatAgentLoopGate, formatAgentLoopState, formatAgentLoopTerminal } from "../utils/agentLoopPresentation";
@@ -256,16 +260,18 @@ const renderedTimelineItems = computed(() => timelineItems.value.filter((item) =
 const showCandidatePlanCard = explorerDisplayMode("CANDIDATE_PLAN") !== "hidden";
 
 /**
- * 过程活动的行型与内容字段，同样出自那张表与 `explorerActivityLine`（utils/explorerPresentation.ts）。
- * 视图只负责摆位置：八类活动各走各的行，模板里不再有一串 `kind === '…'` 的串联判断。
- * 字段按活动 id 先算一次，模板里读的是缓存而不是反复构造。
+ * 行型只在这里算一次，模板拿它选分支。
+ * **"这一类摆哪些字段"不在这里**——`explorerActivityLine()`（utils/explorerPresentation.ts）把它算成
+ * `{label, name, reference, body}`，由各自的**行组件**负责摆位置（见 components/Explorer*Row.vue）。
  */
-const activityLines = computed(() => new Map(visibleActivity.value.map((activity) => [activity.id, explorerActivityLine(activity)])));
-function activityLine(activity: ExplorerActivityItem): ExplorerActivityLine {
-  return activityLines.value.get(activity.id) ?? explorerActivityLine(activity);
-}
 function activityMode(activity: ExplorerActivityItem): ExplorerDisplayMode {
   return explorerDisplayMode(activity.kind);
+}
+
+/** 这一条属于"共用行组件的那三种行型"时交出它的行型，否则交出 null（由别的分支负责）。 */
+function rowMode(activity: ExplorerActivityItem): ExplorerRowMode | null {
+  const mode = activityMode(activity);
+  return (EXPLORER_ROW_MODES as readonly string[]).includes(mode) ? (mode as ExplorerRowMode) : null;
 }
 
 /**
@@ -1340,11 +1346,12 @@ onBeforeUnmount(() => { mounted.value = false; invalidateProjectScope(); closeEv
             </div>
           </article>
           <article v-else-if="activityMode(item.activity) === 'prose'" :id="activityTarget(item.activity, index)" :data-nav-key="activityTarget(item.activity, index)" :class="['timeline-assistant-prose', { 'failed-message': item.activity.status === 'FAILED' }]">
-            <div class="timeline-assistant-body"><div class="timeline-assistant-meta"><span class="thread-mark" :class="{ 'thread-mark-live': item.activity.status === 'RUNNING' }" /><strong>{{ item.activity.title }}</strong><el-tag size="small" effect="light" :type="statusTagType(item.activity.status)">{{ assistantActivityLabel(item.activity) }}</el-tag><span>{{ formatTurnTime(item.activity.occurredAt) }}</span></div><MarkdownMessage :source="readableAssistantText(item.activity.summary)" :streaming="item.activity.status === 'RUNNING'" /><div v-if="showCandidatePlanCard && planForActivity(item.activity)" :id="planAnchorId(planForActivity(item.activity))" :data-nav-key="planAnchorKey(planForActivity(item.activity))" class="inline-plan-card"><div class="candidate-head"><div class="candidate-icon"><Promotion :size="19" /></div><div><div class="eyebrow">候选方案 · 第 {{ planForActivity(item.activity)?.revision }} 版</div><h2>{{ planForActivity(item.activity)?.title }}</h2></div><el-tag type="warning" effect="light">{{ statusLabel(planForActivity(item.activity)?.status ?? 'DRAFT') }}</el-tag></div><p class="candidate-summary">{{ planForActivity(item.activity)?.resolvedContract?.objective.goal ?? planForActivity(item.activity)?.goal ?? '从这条探索线程生成的一份完整、可审阅的执行契约。' }}</p><div class="candidate-stats"><div><span>执行步骤</span><strong>{{ planForActivity(item.activity)?.resolvedContract?.tasks.length ?? planForActivity(item.activity)?.tasks?.length ?? 0 }}</strong></div><div><span>范围条目</span><strong>{{ planForActivity(item.activity)?.resolvedContract?.scope.includePaths.length ?? planForActivity(item.activity)?.include?.length ?? 0 }}</strong></div><div><span>验证</span><strong>{{ planForActivity(item.activity)?.resolvedContract?.verification.commandIds.length ?? planForActivity(item.activity)?.verificationCommands?.length ?? 0 }} 项检查</strong></div><div><span>合并</span><strong class="risk-low">人工审阅</strong></div></div><p v-if="isConversationArtifactPlan(planForActivity(item.activity))" class="candidate-notice"><Warning :size="13" />对话产物（CONVERSATION）：确认后仍不能入队或启动 Run。要执行请在探索对话里改成“仓库文件”产物并确认新版本。</p><div class="candidate-actions"><el-button v-if="isCandidatePlan(planForActivity(item.activity))" @click="openPlanDetail(planForActivity(item.activity)!)">查看完整方案 <Right :size="15" /></el-button><el-button v-if="isCandidatePlan(planForActivity(item.activity)) && planForActivity(item.activity)?.status === 'DRAFT'" type="primary" :loading="busy" @click="confirmPlan(planForActivity(item.activity) ?? null)">确认方案 <Check :size="15" /></el-button><el-button v-else-if="isCandidatePlan(planForActivity(item.activity)) && planForActivity(item.activity)?.status === 'READY'" type="primary" :loading="busy" @click="enqueuePlan(planForActivity(item.activity) ?? null)">入队方案 <ArrowDown :size="15" /></el-button><span v-else class="confirmed-note"><CircleCheck :size="15" /> {{ statusLabel(planForActivity(item.activity)?.status ?? 'DRAFT') }}</span></div></div></div>
+            <div class="timeline-assistant-body"><div class="timeline-assistant-meta"><span class="thread-mark" :class="{ 'thread-mark-live': item.activity.status === 'RUNNING' }" /><strong>{{ item.activity.title }}</strong><el-tag size="small" effect="light" :type="statusTagType(item.activity.status)">{{ assistantActivityLabel(item.activity) }}</el-tag><span>{{ formatTurnTime(item.activity.occurredAt) }}</span></div><MarkdownMessage :source="readableAssistantText(item.activity.summary)" :streaming="item.activity.status === 'RUNNING'" /><ExplorerCandidatePlanCard v-if="showCandidatePlanCard && planForActivity(item.activity)" :plan="planForActivity(item.activity)!" :is-candidate="isCandidatePlan(planForActivity(item.activity))" :busy="busy" @view="openPlanDetail" @confirm="confirmPlan" @enqueue="enqueuePlan" /></div>
           </article>
-          <article v-else-if="activityMode(item.activity) === 'reasoning'" :id="activityTarget(item.activity, index)" :data-nav-key="activityTarget(item.activity, index)" class="timeline-note" :class="{ running: item.activity.status === 'RUNNING' }"><span class="thread-mark" :class="{ 'thread-mark-live': item.activity.status === 'RUNNING' }" /><p>{{ activityLine(item.activity).body }}</p><time>{{ formatTurnTime(item.activity.occurredAt) }}</time></article>
-          <article v-else-if="activityMode(item.activity) === 'divider'" :id="activityTarget(item.activity, index)" :data-nav-key="activityTarget(item.activity, index)" class="timeline-divider"><span class="timeline-divider-rule" /><span class="timeline-divider-label"><span class="thread-mark" />{{ activityLine(item.activity).label }}<em v-if="activityLine(item.activity).reference"> · {{ activityLine(item.activity).reference }}</em></span><time>{{ formatTurnTime(item.activity.occurredAt) }}</time><span class="timeline-divider-rule" /></article>
-          <article v-else :id="activityTarget(item.activity, index)" :data-nav-key="activityTarget(item.activity, index)" :class="['loop-activity-card', `activity-${activityMode(item.activity)}`, { waiting: item.activity.status === 'WAITING', failed: item.activity.status === 'FAILED', running: item.activity.status === 'RUNNING' }]"><span class="thread-mark" /><div class="loop-activity-copy"><div class="loop-activity-meta"><strong>{{ activityLine(item.activity).label }}</strong><code v-if="activityLine(item.activity).name">{{ activityLine(item.activity).name }}</code><span>{{ formatTurnTime(item.activity.occurredAt) }}</span><el-tag size="small" effect="light" :type="statusTagType(item.activity.status)">{{ activityStatusLabel(item.activity) }}</el-tag></div><p v-if="activityLine(item.activity).body">{{ activityLine(item.activity).body }}</p><code v-if="activityLine(item.activity).reference" class="activity-reference">{{ activityLine(item.activity).reference }}</code></div></article>
+          <template v-else-if="activityMode(item.activity) === 'reasoning'"><ExplorerReasoningRow :activity="item.activity" :index="index" /></template>
+          <template v-else-if="activityMode(item.activity) === 'divider'"><ExplorerDividerRow :activity="item.activity" :index="index" /></template>
+          <template v-else-if="rowMode(item.activity)"><ExplorerActivityRow :activity="item.activity" :index="index" :mode="rowMode(item.activity)!" /></template>
+          <article v-else class="timeline-unknown-row">未识别的行型：{{ activityMode(item.activity) }}（{{ item.activity.kind }}）</article>
         </template>
       </div>
       <button v-if="showScrollToLatest" class="scroll-to-latest" type="button" aria-label="跳到最新消息" title="跳到最新消息" @click="jumpToLatest"><img class="scroll-to-latest-image" :src="scrollToLatestIcon" alt="" /></button>
