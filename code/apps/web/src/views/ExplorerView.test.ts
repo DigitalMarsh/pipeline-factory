@@ -590,9 +590,9 @@ describe("Explorer provider loop layout", () => {
 
 describe("Explorer header status layout", () => {
   it("renders three compact status cards with independent floating detail surfaces", () => {
-    expect(explorerHeaderStatusSource).toContain("REQUIREMENTS");
-    expect(explorerHeaderStatusSource).toContain("PROVIDER LOOP");
-    expect(explorerHeaderStatusSource).toContain("EXPLORATION");
+    expect(explorerHeaderStatusSource).toContain("必填项");
+    expect(explorerHeaderStatusSource).toContain("Provider 循环");
+    expect(explorerHeaderStatusSource).toContain("探索进度");
     expect((explorerHeaderStatusSource.match(/trigger="click"/g) ?? [])).toHaveLength(3);
     expect(explorerHeaderStatusSource).toContain('data-status-card="requirements"');
     expect(explorerHeaderStatusSource).toContain('data-status-card="provider-loop"');

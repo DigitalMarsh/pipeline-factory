@@ -37,15 +37,15 @@ const sourceNoteText = computed(() => props.sourceNote);
 <template>
   <div class="provider-usage-footer" aria-label="模型与上下文信息">
     <span v-if="props.backend" class="provider-usage-fact">
-      <small>AGENT</small>
+      <small>Agent</small>
       <strong :title="props.backend">{{ props.backend }}</strong>
     </span>
     <span class="provider-usage-fact">
-      <small>MODEL</small>
+      <small>模型</small>
       <strong :title="props.model">{{ props.model }}</strong>
     </span>
     <span class="provider-usage-fact">
-      <small>CONTEXT</small>
+      <small>上下文</small>
       <strong :title="props.context">{{ props.context }}</strong>
       <em v-if="contextNoteText">{{ contextNoteText }}</em>
     </span>

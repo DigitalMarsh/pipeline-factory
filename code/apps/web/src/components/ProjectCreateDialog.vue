@@ -93,7 +93,7 @@ watch(() => props.modelValue, (open) => {
       <div class="project-create-heading">
         <div class="project-create-heading-icon"><FolderOpened :size="20" /></div>
         <div>
-          <div class="eyebrow">PIPELINE FACTORY · PROJECT SETUP</div>
+          <div class="eyebrow">PIPELINE FACTORY · 新建项目</div>
           <h2>New Project</h2>
         </div>
       </div>

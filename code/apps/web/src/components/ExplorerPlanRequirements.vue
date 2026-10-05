@@ -61,7 +61,7 @@ watch(() => props.diagnostics.length, (count, previousCount) => {
         @keydown.space.prevent="toggleExpanded"
       >
         <span class="plan-requirements-summary-copy">
-          <span class="eyebrow">PLAN REQUIREMENTS</span>
+          <span class="eyebrow">方案必填项</span>
           <span class="plan-requirements-title-row">
             <strong id="plan-requirements-title" class="plan-requirements-title">启动前已声明的完整契约</strong>
             <small class="plan-requirements-note">模型必填项一次说明</small>

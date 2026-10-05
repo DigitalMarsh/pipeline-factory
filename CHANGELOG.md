@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-10-05 — 小节标题不再是装饰性英文；顺手修一处 Markdown 表格
+
+### 为什么做
+
+状态词都中文化之后，它们**落点的那一行**还是 ASCII 大写：`RUN CONTEXT` / `PLAN PROGRESS` /
+`AGENT LOOP` / `RUN CONTROL` / `REVIEW` / `EXECUTION STEPS` / `VERIFICATION RUN` / `REQUIREMENTS` /
+`PROVIDER LOOP` / `EXPLORATION` / `LIFECYCLE HOOKS` / `ACTIVITY CENTER` / `THREAD ACTION` / `TASKS` …
+契约区与遥测区的字段标签（`AUDIENCE` / `INCLUDE` / `EXCLUDE` / `OUT OF SCOPE` / `FROZEN PROJECT` /
+`REPAIR LIMIT` / `BASE BRANCH` / `EXECUTION BRANCH` / `SOURCE COMMIT` / `TARGET` / `MODEL` /
+`REASONING` / `TOKENS USED` / `EXECUTION TIME` / `WORKSPACE` / `THREAD` …）也一样。
+大写只是排版，不该变成"这一行还没翻译"的记号——它们标的那一格值已经是中文了。
+
+### Changed
+
+- 上述小节标题与字段标签全部中文化（运行上下文 / 方案进度 / Agent 循环 / 运行控制 / 审阅与合并 /
+  执行步骤 / 验证运行 / 必填项 / Provider 循环 / 探索进度 / 生命周期钩子 / 活动中心 / 线程操作 /
+  任务 / 受众 / 包含 / 排除 / 范围外 / 冻结项目 / 修复上限 / 基线分支 / 执行分支 / 源提交 / 目标 /
+  模型 / 推理 / 已用 token / 执行时长 / 工作区 / 线程 …）。品牌与专有名词保留：
+  `PIPELINE FACTORY` / `Agent` / `Executor` / `Provider` / `Explorer` / `Plan` / `Run` / `MCP`。
+- 带版本号的三处改成「第 n 版」：`CANDIDATE PLAN · REVISION 3` → 「候选方案 · 第 3 版」、
+  `EXECUTION · REVISION n`、`PLAN INSPECTOR · REVISION n`；`MERGE REQUEST · id` → 「合并请求 · id」。
+- 同一排卡片里的计数单位一并中文化：`Turns 1/40` → `回合 1/40`、`1/40 steps` → `1/40 步`、
+  `Provider Turns 1 / 40 · Activities 2` → `Provider 回合 1 / 40 · 活动 2`。
+
+### Fixed
+
+- `docs/消息类型及事件状态机流程图.md` §2.1 的表格分隔行比表头多一列（上一轮加「侧」列时留下的），
+  整张表因此渲染不出来。已改回 7 列，并加了一次全文件表格列数复核。
+
+### 还没动（不是状态词，也没有"同一件事两个词"的问题）
+
+表单字段名与说明句（`Worktree root` / `Max attempts` / `Save Project configuration` /
+`Controls append facts to the ExecutionThread…`）与动作按钮
+（`View full plan` / `Confirm plan` / `Pause loop` / `Cancel` / `Retry`）。
+
 ## 2026-10-05 — 另外两套状态机中文化，顺手收掉三份重复的状态文案
 
 ### 为什么做

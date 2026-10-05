@@ -67,7 +67,7 @@ onUnmounted(() => {
 
     <el-drawer v-model="helpOpen" direction="rtl" size="min(430px, 92vw)" :with-header="false">
       <div class="global-drawer-shell">
-        <div class="drawer-header"><div><div class="eyebrow">PIPELINE FACTORY · HELP</div><h2>How this workspace works</h2></div><el-button text circle aria-label="Close help" @click="helpOpen = false">×</el-button></div>
+        <div class="drawer-header"><div><div class="eyebrow">PIPELINE FACTORY · 帮助</div><h2>How this workspace works</h2></div><el-button text circle aria-label="Close help" @click="helpOpen = false">×</el-button></div>
         <div class="help-card"><strong>Explore first</strong><p>Use the ExplorerThread to inspect the repository and shape a CandidatePlan. Explorer remains read only until you confirm and enqueue the plan.</p></div>
         <div class="help-card"><strong>Follow execution</strong><p>Each dispatched plan gets its own Run and ExecutionThread. Pause, guide, verify and review the run from its detail page.</p></div>
         <div class="help-card"><strong>Need assistance?</strong><p>Use the project settings page to review lifecycle hooks and use 计划中心 to find every dispatched plan.</p></div>
@@ -76,7 +76,7 @@ onUnmounted(() => {
 
     <el-drawer v-model="notificationsOpen" direction="rtl" size="min(430px, 92vw)" :with-header="false">
       <div class="global-drawer-shell">
-        <div class="drawer-header"><div><div class="eyebrow">ACTIVITY CENTER</div><h2>Notifications</h2></div><el-button text circle aria-label="Close notifications" @click="notificationsOpen = false">×</el-button></div>
+        <div class="drawer-header"><div><div class="eyebrow">活动中心</div><h2>Notifications</h2></div><el-button text circle aria-label="Close notifications" @click="notificationsOpen = false">×</el-button></div>
         <div class="notification-item"><span class="notification-dot" :class="`notification-dot-${apiHealth.tone}`" /><div><strong>{{ apiHealth.label }}</strong><p>{{ apiHealth.tooltip }}</p><small>Live</small></div></div>
         <div class="notification-item"><span class="notification-dot" /><div><strong>Explorer policy active</strong><p>Write, shell, test and commit tools are disabled in Plan Mode.</p><small>Now</small></div></div>
         <div class="notification-empty">No additional notifications.</div>

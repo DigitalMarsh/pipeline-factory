@@ -71,7 +71,7 @@ function submit() {
       <div class="explorer-rename-heading">
         <div class="explorer-rename-heading-icon"><EditPen :size="19" /></div>
         <div>
-          <div class="eyebrow">THREAD ACTION</div>
+          <div class="eyebrow">线程操作</div>
           <h2>Rename thread</h2>
         </div>
       </div>

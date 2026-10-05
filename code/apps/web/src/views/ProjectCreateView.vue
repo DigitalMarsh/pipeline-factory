@@ -38,7 +38,7 @@ async function createProject() {
     <div class="create-breadcrumb"><button type="button" @click="router.push('/projects')"><ArrowLeft :size="14" /> Projects</button><span>/</span><strong>New Project</strong></div>
     <div class="create-layout">
       <main class="create-card">
-        <div class="create-heading"><div class="create-icon"><FolderOpened :size="21" /></div><div><div class="eyebrow">PROJECT SETUP · 01</div><h1>New Project</h1><p>将一个本地 Git 仓库注册为独立的 Pipeline Factory 工作空间。</p></div></div>
+        <div class="create-heading"><div class="create-icon"><FolderOpened :size="21" /></div><div><div class="eyebrow">新建项目 · 01</div><h1>New Project</h1><p>将一个本地 Git 仓库注册为独立的 Pipeline Factory 工作空间。</p></div></div>
         <div v-if="error" class="create-alert"><Warning :size="15" />{{ error }}</div>
         <el-form label-position="top" @submit.prevent="createProject">
           <div class="create-form-grid"><el-form-item label="Project name" required><el-input v-model="form.name" placeholder="例如：Pipeline Factory" /></el-form-item><el-form-item label="Project short name"><el-input v-model="form.shortName" placeholder="例如：PF" /></el-form-item></div>
@@ -48,7 +48,7 @@ async function createProject() {
         </el-form>
       </main>
       <aside class="create-guide">
-        <div class="eyebrow">WHAT HAPPENS NEXT</div>
+        <div class="eyebrow">接下来会发生什么</div>
         <h2>One Project, one boundary.</h2>
         <div class="guide-item"><span><Connection :size="15" /></span><div><strong>Repository validated</strong><p>API 会 canonicalize Git 根目录并检查默认分支。</p></div></div>
         <div class="guide-item"><span><Aim :size="15" /></span><div><strong>Explorer starts read-only</strong><p>ExplorerThread 只读；写入必须来自已确认 Plan。</p></div></div>

@@ -148,7 +148,7 @@ async function createProject() {
     <template #header>
       <div class="project-management-heading">
         <div>
-          <div class="eyebrow">PIPELINE FACTORY · PROJECTS</div>
+          <div class="eyebrow">PIPELINE FACTORY · 项目</div>
           <h2>{{ createMode ? "New Project" : "Manage Projects" }}</h2>
           <p>{{ createMode ? "把一个本机 Git 仓库添加到当前 Factory。" : "在当前 Explorer 中维护项目，关闭弹框即可回到原来的对话位置。" }}</p>
         </div>
@@ -166,7 +166,7 @@ async function createProject() {
     </form>
 
     <div v-else class="project-management-content">
-      <div class="project-management-toolbar"><div><strong>PROJECTS</strong><span>{{ managedProjects.length }} 个项目</span></div><el-button type="primary" size="small" @click="openCreate"><Plus :size="14" /> New Project</el-button></div>
+      <div class="project-management-toolbar"><div><strong>项目</strong><span>{{ managedProjects.length }} 个项目</span></div><el-button type="primary" size="small" @click="openCreate"><Plus :size="14" /> New Project</el-button></div>
       <div v-loading="loading" class="project-management-list">
         <article v-for="project in managedProjects" :key="project.id" class="project-management-card" :class="{ archived: project.status === 'ARCHIVED', current: project.id === currentProjectId }">
           <div class="project-management-card-main">

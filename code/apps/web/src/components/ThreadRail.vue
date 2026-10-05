@@ -176,7 +176,7 @@ function emitThreadAction(command: string | number): void {
           </div>
         </div>
         <template v-else>
-          <div class="eyebrow">PROJECTS</div>
+          <div class="eyebrow">项目</div>
           <strong>{{ props.projects.length }} projects</strong>
           <small>{{ props.project?.name ?? props.thread?.projectId ?? "Local workspace" }}</small>
         </template>

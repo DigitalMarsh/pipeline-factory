@@ -597,7 +597,7 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
       </div>
       <div v-if="run.status === 'BLOCKED' && executionBlockReason" class="run-blocked-notice" role="alert"><Warning :size="16" /><div><strong>Why execution stopped</strong><span>{{ executionBlockReason }}</span></div></div>
       <section class="execution-conversation-panel">
-        <div class="journal-heading"><div><div class="eyebrow">EXECUTION CONVERSATION</div><h2>What the Executor is doing</h2></div><el-tag size="small" effect="light" :type="streamStatusTagType(streamState)" role="status">{{ executionStatusLabel }}</el-tag></div>
+        <div class="journal-heading"><div><div class="eyebrow">执行会话</div><h2>What the Executor is doing</h2></div><el-tag size="small" effect="light" :type="streamStatusTagType(streamState)" role="status">{{ executionStatusLabel }}</el-tag></div>
         <ol class="execution-phase-strip" aria-label="执行阶段">
           <li v-for="(phase, index) in executionPhaseSteps" :key="phase.key" :class="['execution-phase', { current: phase.current, done: phase.done }]">
             <span class="execution-phase-mark">{{ phase.done ? "✓" : index + 1 }}</span>
@@ -610,7 +610,7 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
           <div v-if="!executionMessages.length" class="empty-state"><Document :size="28" /><h3>Waiting for executor activity</h3><p>The execution conversation will appear here when the Run starts.</p></div>
           <section v-for="group in executionConversationGroups" :key="group.id" :class="['execution-conversation-group', `execution-conversation-group-${group.kind}`, { selected: selectedTaskId === group.task?.id, collapsed: isTaskGroupCollapsed(group.id) }]" :data-task-id="group.task?.id">
             <button v-if="group.task" type="button" class="execution-task-stream-heading" :aria-expanded="!isTaskGroupCollapsed(group.id)" :aria-controls="`execution-task-stream-${group.id}`" @click="toggleTaskGroup(group.id)">
-              <span class="execution-task-stream-step">PLAN TASK</span>
+              <span class="execution-task-stream-step">计划任务</span>
               <strong>{{ group.task.title }}</strong>
               <el-tag size="small" effect="light" :type="executionTaskStatusType(group.task.status)">{{ executionTaskStatusLabel(group.task.status) }}</el-tag>
               <span class="execution-task-stream-count">{{ visibleItems(group).length }} 条</span>
@@ -619,10 +619,10 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
               <small v-if="group.task.blockedReason">{{ group.task.blockedReason }}</small>
             </button>
             <button v-else-if="group.kind === 'unattributed'" type="button" class="execution-task-stream-heading execution-unattributed-heading" :aria-expanded="!isTaskGroupCollapsed(group.id)" :aria-controls="`execution-task-stream-${group.id}`" @click="toggleTaskGroup(group.id)">
-              <span class="execution-task-stream-step">UNATTRIBUTED</span><strong>未归属事件</strong><span class="execution-task-stream-count">{{ visibleItems(group).length }} 条</span><ArrowUp v-if="!isTaskGroupCollapsed(group.id)" :size="14" /><ArrowDown v-else :size="14" /><small>这些事件没有记录所属的执行步骤，只出现在早期 Run 的数据里。</small>
+              <span class="execution-task-stream-step">未归属</span><strong>未归属事件</strong><span class="execution-task-stream-count">{{ visibleItems(group).length }} 条</span><ArrowUp v-if="!isTaskGroupCollapsed(group.id)" :size="14" /><ArrowDown v-else :size="14" /><small>这些事件没有记录所属的执行步骤，只出现在早期 Run 的数据里。</small>
             </button>
             <div v-else-if="group.kind === 'pending'" class="execution-pending-steps">
-              <span class="execution-task-stream-step">PENDING</span>
+              <span class="execution-task-stream-step">待处理</span>
               <strong>{{ (group.tasks ?? []).length }} 个执行步骤尚未开始</strong>
               <small>{{ (group.tasks ?? []).map((task) => task.title).join(" · ") }}</small>
             </div>
@@ -639,8 +639,8 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
                     <button :id="`execution-plan-toggle-${item.id}`" class="execution-plan-toggle" type="button" :aria-expanded="planMessageExpanded" :aria-controls="`execution-plan-details-${item.id}`" @click="planMessageExpanded = !planMessageExpanded">{{ planMessageExpanded ? '收起 Plan 摘要' : '展开 Plan 摘要' }}</button>
                     <div v-if="planMessageExpanded" :id="`execution-plan-details-${item.id}`" class="execution-plan-message-details">
                       <div class="execution-plan-message-stats"><span><strong>{{ item.plan.tasks.length }}</strong> tasks</span><span><strong>{{ item.plan.acceptanceCriteria.length }}</strong> acceptance criteria</span><span><strong>{{ item.plan.verificationCommandIds.length }}</strong> verification commands</span></div>
-                      <div v-if="item.plan.tasks.length" class="execution-plan-message-section"><span class="execution-plan-message-label">TASKS</span><ul><li v-for="task in item.plan.tasks" :key="task.id ?? task.title">{{ task.title }}</li></ul></div>
-                      <div class="execution-plan-message-scope"><div><span class="execution-plan-message-label">INCLUDE</span><code v-for="path in item.plan.includePaths" :key="`include-${path}`">{{ path }}</code><small v-if="!item.plan.includePaths.length">No include paths</small></div><div><span class="execution-plan-message-label">EXCLUDE</span><code v-for="path in item.plan.excludePaths" :key="`exclude-${path}`">{{ path }}</code><small v-if="!item.plan.excludePaths.length">No exclude paths</small></div></div>
+                      <div v-if="item.plan.tasks.length" class="execution-plan-message-section"><span class="execution-plan-message-label">任务</span><ul><li v-for="task in item.plan.tasks" :key="task.id ?? task.title">{{ task.title }}</li></ul></div>
+                      <div class="execution-plan-message-scope"><div><span class="execution-plan-message-label">包含</span><code v-for="path in item.plan.includePaths" :key="`include-${path}`">{{ path }}</code><small v-if="!item.plan.includePaths.length">No include paths</small></div><div><span class="execution-plan-message-label">排除</span><code v-for="path in item.plan.excludePaths" :key="`exclude-${path}`">{{ path }}</code><small v-if="!item.plan.excludePaths.length">No exclude paths</small></div></div>
                     </div>
                     <div class="execution-plan-message-actions"><el-button text size="small" @click="openPlanDetail">View full plan</el-button></div>
                   </div>

@@ -27,18 +27,18 @@ describe("ProviderUsageFooter", () => {
   it("keeps agent and model as separate facts", () => {
     const host = mount({ backend: "codex-app-server" });
 
-    expect(host.textContent).toContain("AGENT");
+    expect(host.textContent).toContain("Agent");
     expect(host.textContent).toContain("codex-app-server");
-    expect(host.textContent).toContain("MODEL");
+    expect(host.textContent).toContain("模型");
     expect(host.textContent).toContain("gpt-5.6-luna");
-    expect(host.textContent).toContain("CONTEXT");
+    expect(host.textContent).toContain("上下文");
     expect(host.textContent).toContain("191,197 tokens");
   });
 
   it("drops the agent cell instead of leaving an empty one", () => {
     const host = mount({});
 
-    expect(host.textContent).not.toContain("AGENT");
+    expect(host.textContent).not.toContain("Agent");
     expect(host.querySelectorAll(".provider-usage-fact")).toHaveLength(2);
   });
 

@@ -131,7 +131,7 @@ describe("ExplorerHeaderStatus", () => {
     statusTrigger(mounted.host, "requirements").click();
     await nextTick();
 
-    expect(mounted.host.textContent).toContain("PLAN REQUIREMENTS");
+    expect(mounted.host.textContent).toContain("方案必填项");
     expect(mounted.host.textContent).toContain("必填：title");
     expect(mounted.host.textContent).not.toContain("Provider Turns");
     expect(mounted.host.textContent).not.toContain("完整设计方案已生成");
@@ -147,7 +147,7 @@ describe("ExplorerHeaderStatus", () => {
     trigger.click();
     await nextTick();
     expect(trigger.getAttribute("aria-expanded")).toBe("true");
-    expect(mounted.host.textContent).toContain("Provider Turns 1 / 40");
+    expect(mounted.host.textContent).toContain("Provider 回合 1 / 40");
     expect(mounted.host.textContent).not.toContain("必填：title");
     expect(mounted.host.textContent).not.toContain("完整设计方案已生成");
 

@@ -57,7 +57,7 @@ const requirementSummary = computed(() => {
 const requirementMeta = computed(() => invalidCount.value ? `问题 ${props.diagnostics.length}` : pendingCount.value ? `待补齐 ${pendingCount.value}` : "全部完成");
 // `PAUSED` 此前被硬编码成英文 `Paused` 覆盖掉传进来的标签——同一个状态两处两个词。现在一律走共用的状态文案。
 const loopSummary = computed(() => props.agentLoop ? formatAgentLoopState(props.agentLoop.state) : props.agentLoopLabel);
-const loopMeta = computed(() => props.agentLoop ? `Turns ${props.agentLoop.stepCount}/${props.agentLoop.maxSteps}` : "等待启动");
+const loopMeta = computed(() => props.agentLoop ? `回合 ${props.agentLoop.stepCount}/${props.agentLoop.maxSteps}` : "等待启动");
 const progressSummary = computed(() => props.progress.status === "READY" ? "方案已就绪" : props.progress.lastAssessedTurnId ? "探索中" : "未评估");
 const progressMeta = computed(() => props.progress.status === "READY" ? "完整方案已生成" : props.progress.missing.length ? `待确认 ${props.progress.missing.length} 项` : "等待首轮评估");
 const loopTone = computed(() => {
@@ -107,7 +107,7 @@ watch(() => props.threadId, () => {
             @keydown.space.prevent="toggleCard('requirements')"
           >
             <span :class="['explorer-header-status-card', { invalid: diagnostics.length, pending: pendingCount }]">
-              <span class="header-status-card-label">REQUIREMENTS</span>
+              <span class="header-status-card-label">必填项</span>
               <strong class="header-status-card-value">{{ requirementSummary }}</strong>
               <small class="header-status-card-meta">{{ requirementMeta }}</small>
             </span>
@@ -117,7 +117,7 @@ watch(() => props.threadId, () => {
         <section id="explorer-header-requirements-details" class="explorer-header-status-details" aria-label="需求契约详情">
           <div class="explorer-header-status-details-heading">
             <div>
-              <span class="eyebrow">PLAN REQUIREMENTS</span>
+              <span class="eyebrow">方案必填项</span>
               <strong>启动前已声明的完整契约</strong>
             </div>
             <InfoFilled :size="15" aria-hidden="true" />
@@ -157,7 +157,7 @@ watch(() => props.threadId, () => {
             @keydown.space.prevent="toggleCard('provider-loop')"
           >
             <span :class="['explorer-header-status-card', `tone-${loopTone}`]">
-              <span class="header-status-card-label">PROVIDER LOOP</span>
+              <span class="header-status-card-label">Provider 循环</span>
               <strong class="header-status-card-value">{{ loopSummary }}</strong>
               <small class="header-status-card-meta">{{ loopMeta }}</small>
             </span>
@@ -167,7 +167,7 @@ watch(() => props.threadId, () => {
         <section id="explorer-header-provider-loop-details" class="explorer-header-status-details" aria-label="Provider Loop 状态详情">
           <div class="explorer-header-status-details-heading">
             <div>
-              <span class="eyebrow">PROVIDER LOOP</span>
+              <span class="eyebrow">Provider 循环</span>
               <strong>Provider Loop 运行状态</strong>
             </div>
             <InfoFilled :size="15" aria-hidden="true" />
@@ -175,10 +175,10 @@ watch(() => props.threadId, () => {
 
           <div v-if="agentLoop" class="agent-loop-strip" role="status">
             <div class="agent-loop-summary">
-              <span class="eyebrow">EXPLORER PROVIDER TURN LOOP</span>
+              <span class="eyebrow">Explorer 的 Provider 回合循环</span>
               <strong>{{ agentLoopLabel }}</strong>
             </div>
-            <span class="agent-loop-budget">Provider Turns {{ agentLoop.stepCount }} / {{ agentLoop.maxSteps }} · Activities {{ agentLoop.diagnostics?.providerActivityCount ?? 0 }}</span>
+            <span class="agent-loop-budget">Provider 回合 {{ agentLoop.stepCount }} / {{ agentLoop.maxSteps }} · 活动 {{ agentLoop.diagnostics?.providerActivityCount ?? 0 }}</span>
             <div v-if="agentLoopGateLabel || agentLoopTerminalLabel || agentLoopCompletionLabel" class="agent-loop-status">
               <span v-if="agentLoopGateLabel" class="agent-loop-diagnostic">{{ agentLoopGateLabel }}</span>
               <span v-if="agentLoopTerminalLabel" class="agent-loop-terminal">{{ agentLoopTerminalLabel }}</span>
@@ -217,7 +217,7 @@ watch(() => props.threadId, () => {
             @keydown.space.prevent="toggleCard('exploration')"
           >
             <span :class="['explorer-header-status-card', { ready: progress.status === 'READY' }]">
-              <span class="header-status-card-label">EXPLORATION</span>
+              <span class="header-status-card-label">探索进度</span>
               <strong class="header-status-card-value">{{ progressSummary }}</strong>
               <small class="header-status-card-meta">{{ progressMeta }}</small>
             </span>
@@ -227,7 +227,7 @@ watch(() => props.threadId, () => {
         <section id="explorer-header-exploration-details" class="explorer-header-status-details" aria-label="探索进度详情">
           <div class="explorer-header-status-details-heading">
             <div>
-              <span class="eyebrow">EXPLORATION</span>
+              <span class="eyebrow">探索进度</span>
               <strong>Explorer 探索进度</strong>
             </div>
             <InfoFilled :size="15" aria-hidden="true" />

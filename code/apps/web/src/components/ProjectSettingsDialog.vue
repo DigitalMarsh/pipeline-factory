@@ -151,7 +151,7 @@ onBeforeUnmount(() => requestScope.invalidate());
 
 <template>
   <el-dialog :model-value="props.modelValue" class="project-settings-dialog" width="min(980px, calc(100vw - 24px))" :close-on-click-modal="false" destroy-on-close @update:model-value="emit('update:modelValue', $event)">
-    <template #header><div class="settings-dialog-heading"><div><div class="eyebrow">PROJECT SETTINGS</div><h1>{{ project?.name || 'Project settings' }}</h1><p>{{ project?.repoRoot || '管理仓库、执行和模型配置' }}</p></div><div class="settings-heading-actions"><el-tag :type="project?.status === 'ACTIVE' ? 'success' : 'info'">{{ project?.status === 'ACTIVE' ? 'Active' : 'Archived' }}</el-tag><span>{{ statusText }}</span></div></div></template>
+    <template #header><div class="settings-dialog-heading"><div><div class="eyebrow">项目设置</div><h1>{{ project?.name || 'Project settings' }}</h1><p>{{ project?.repoRoot || '管理仓库、执行和模型配置' }}</p></div><div class="settings-heading-actions"><el-tag :type="project?.status === 'ACTIVE' ? 'success' : 'info'">{{ project?.status === 'ACTIVE' ? 'Active' : 'Archived' }}</el-tag><span>{{ statusText }}</span></div></div></template>
     <div class="settings-dialog-body" v-loading="loading">
       <div v-if="error" class="settings-error"><Warning :size="15" /> {{ error }}</div>
       <div v-if="project" class="settings-shell">

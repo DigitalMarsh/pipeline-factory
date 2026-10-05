@@ -227,7 +227,7 @@ onBeforeUnmount(() => { requestGeneration += 1; closeEvents(); });
   <section class="project-execution-panel" aria-label="项目执行线程" data-project-execution-panel>
     <header class="project-execution-header">
       <div>
-        <p class="project-execution-eyebrow">PROJECT EXECUTION THREAD</p>
+        <p class="project-execution-eyebrow">项目执行线程</p>
         <h1>项目执行线程</h1>
         <p class="project-execution-subtitle">在 {{ project?.repoRoot ?? '项目仓库目录' }} 中直接处理请求，并延续本线程上下文。</p>
       </div>

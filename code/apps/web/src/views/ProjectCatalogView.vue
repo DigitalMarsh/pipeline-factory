@@ -74,7 +74,7 @@ onMounted(() => { void load(); });
   <div class="project-catalog-page">
     <div class="catalog-heading">
       <div>
-        <div class="eyebrow">PIPELINE FACTORY · PROJECTS</div>
+        <div class="eyebrow">PIPELINE FACTORY · 项目</div>
         <h1>Projects</h1>
         <p>每个 Project 对应一个 Git 仓库，并独立保存 Explorer、Plan、Run 和执行配置。</p>
       </div>

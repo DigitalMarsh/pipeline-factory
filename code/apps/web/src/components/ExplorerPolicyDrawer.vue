@@ -21,7 +21,7 @@ const emit = defineEmits<{ "update:modelValue": [value: boolean] }>();
     <div class="policy-drawer-shell">
       <div class="drawer-header">
         <div>
-          <div class="eyebrow">PLAN MODE · TOOL POLICY</div>
+          <div class="eyebrow">Plan 模式 · 工具策略</div>
           <h2>Explorer policy</h2>
         </div>
         <el-button text circle aria-label="Close policy" @click="emit('update:modelValue', false)">
