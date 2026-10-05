@@ -107,7 +107,7 @@ describe("Run detail execution conversation", () => {
   it("keeps the title and Plan in the first column of the two-row header grid", () => {
     expect(runDetailSource).toContain('class="detail-heading-title"');
     expect(runDetailSource).toContain('class="detail-heading-plan"');
-    expect(runDetailSource).toContain("<h1>Execution run</h1>");
+    expect(runDetailSource).toContain("<h1>执行运行</h1>");
     expect(runDetailSource).toContain('class="execution-plan-link"');
     expect(runDetailSource).not.toContain('class="detail-heading-copy"');
   });
@@ -131,7 +131,7 @@ describe("Run detail execution conversation", () => {
     expect(runDetailSource).toContain('projectExecutionJournal(currentThread?.journal ?? [], currentThread?.state ?? run.value?.status ?? "ACTIVE", executionPlan.value ?? undefined)');
     expect(runDetailSource).toContain('class="execution-plan-message"');
     expect(runDetailSource).toContain('class="execution-plan-toggle"');
-    expect(runDetailSource).toContain('View full plan');
+    expect(runDetailSource).toContain('查看完整方案');
   });
 
   it("uses a persistent Explorer-style composer for execution messages", () => {
@@ -141,11 +141,11 @@ describe("Run detail execution conversation", () => {
     expect(runDetailSource).toContain('class="execution-conversation-stage"');
     expect(runDetailSource).toContain('class="composer execution-composer"');
     expect(runDetailSource).toContain('placeholder="与执行线程沟通，或提出修改…"');
-    expect(runDetailSource).toContain('<span class="composer-mode">Run Mode</span>');
+    expect(runDetailSource).toContain('<span class="composer-mode">Run 模式</span>');
     expect(runDetailSource).toContain('@keydown="handleExecutionComposerKeydown"');
     expect(runDetailSource).toContain('function handleExecutionComposerKeydown(event: KeyboardEvent): void');
     expect(runDetailSource).toContain('class="composer-send"');
-    expect(runDetailSource).toContain('aria-label="Send message"');
+    expect(runDetailSource).toContain('aria-label="发送消息"');
     expect(runDetailSource).toContain('context-note="仅结束时由 provider 上报"');
     expect(runDetailSource).not.toContain("guidanceComposerOpen");
     expect(runDetailSource).not.toContain('class="execution-guidance-shell"');

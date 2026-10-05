@@ -17,7 +17,7 @@ const form = reactive({ name: "", shortName: "", repoRoot: "", defaultBranch: ""
 async function createProject() {
   error.value = null;
   if (!form.name.trim() || !form.repoRoot.trim()) {
-    error.value = "请填写 Project name 和 Git repository root";
+    error.value = "请填写 项目名称 和 Git 仓库根目录";
     return;
   }
   saving.value = true;
@@ -35,25 +35,25 @@ async function createProject() {
 
 <template>
   <div class="project-create-page">
-    <div class="create-breadcrumb"><button type="button" @click="router.push('/projects')"><ArrowLeft :size="14" /> Projects</button><span>/</span><strong>New Project</strong></div>
+    <div class="create-breadcrumb"><button type="button" @click="router.push('/projects')"><ArrowLeft :size="14" /> 项目</button><span>/</span><strong>新建项目</strong></div>
     <div class="create-layout">
       <main class="create-card">
-        <div class="create-heading"><div class="create-icon"><FolderOpened :size="21" /></div><div><div class="eyebrow">新建项目 · 01</div><h1>New Project</h1><p>将一个本地 Git 仓库注册为独立的 Pipeline Factory 工作空间。</p></div></div>
+        <div class="create-heading"><div class="create-icon"><FolderOpened :size="21" /></div><div><div class="eyebrow">新建项目 · 01</div><h1>新建项目</h1><p>将一个本地 Git 仓库注册为独立的 Pipeline Factory 工作空间。</p></div></div>
         <div v-if="error" class="create-alert"><Warning :size="15" />{{ error }}</div>
         <el-form label-position="top" @submit.prevent="createProject">
-          <div class="create-form-grid"><el-form-item label="Project name" required><el-input v-model="form.name" placeholder="例如：Pipeline Factory" /></el-form-item><el-form-item label="Project short name"><el-input v-model="form.shortName" placeholder="例如：PF" /></el-form-item></div>
-          <el-form-item label="Git repository root" required><el-input v-model="form.repoRoot" placeholder="/Users/you/Project/repository" /><small class="create-help">必须是本机可访问的绝对路径，并且是 Git repository root，不接受子目录。</small></el-form-item>
-          <div class="create-form-grid"><el-form-item label="Default branch"><el-input v-model="form.defaultBranch" placeholder="自动检测" /></el-form-item><el-form-item label="Worktree root"><el-input v-model="form.worktreeRoot" placeholder="自动生成安全目录" /></el-form-item></div>
-          <div class="create-actions"><el-button @click="router.push('/projects')">Cancel</el-button><el-button type="primary" :loading="saving" @click="createProject"><Check :size="14" /> Validate & Create</el-button></div>
+          <div class="create-form-grid"><el-form-item label="项目名称" required><el-input v-model="form.name" placeholder="例如：Pipeline Factory" /></el-form-item><el-form-item label="项目简称"><el-input v-model="form.shortName" placeholder="例如：PF" /></el-form-item></div>
+          <el-form-item label="Git 仓库根目录" required><el-input v-model="form.repoRoot" placeholder="/Users/you/Project/repository" /><small class="create-help">必须是本机可访问的绝对路径，并且是 Git 仓库根目录，不接受子目录。</small></el-form-item>
+          <div class="create-form-grid"><el-form-item label="默认分支"><el-input v-model="form.defaultBranch" placeholder="自动检测" /></el-form-item><el-form-item label="Worktree 根目录"><el-input v-model="form.worktreeRoot" placeholder="自动生成安全目录" /></el-form-item></div>
+          <div class="create-actions"><el-button @click="router.push('/projects')">取消</el-button><el-button type="primary" :loading="saving" @click="createProject"><Check :size="14" /> 校验并创建</el-button></div>
         </el-form>
       </main>
       <aside class="create-guide">
         <div class="eyebrow">接下来会发生什么</div>
-        <h2>One Project, one boundary.</h2>
-        <div class="guide-item"><span><Connection :size="15" /></span><div><strong>Repository validated</strong><p>API 会 canonicalize Git 根目录并检查默认分支。</p></div></div>
-        <div class="guide-item"><span><Aim :size="15" /></span><div><strong>Explorer starts read-only</strong><p>ExplorerThread 只读；写入必须来自已确认 Plan。</p></div></div>
-        <div class="guide-item"><span><Lock :size="15" /></span><div><strong>Execution stays isolated</strong><p>每个 Run 使用独立 Worktree，沿用冻结的 Project 配置快照。</p></div></div>
-        <div class="guide-note"><strong>Recommended defaults</strong><p>先使用自动检测的 branch 和 Worktree root，创建后可在 Settings 调整并查看配置历史。</p></div>
+        <h2>一个项目一条边界。</h2>
+        <div class="guide-item"><span><Connection :size="15" /></span><div><strong>仓库已校验</strong><p>API 会 canonicalize Git 根目录并检查默认分支。</p></div></div>
+        <div class="guide-item"><span><Aim :size="15" /></span><div><strong>探索阶段只读</strong><p>ExplorerThread 只读；写入必须来自已确认 Plan。</p></div></div>
+        <div class="guide-item"><span><Lock :size="15" /></span><div><strong>执行始终隔离</strong><p>每个 Run 使用独立 Worktree，沿用冻结的 Project 配置快照。</p></div></div>
+        <div class="guide-note"><strong>推荐默认值</strong><p>先使用自动检测的 branch 和 Worktree 根目录，创建后可在 Settings 调整并查看配置历史。</p></div>
       </aside>
     </div>
   </div>

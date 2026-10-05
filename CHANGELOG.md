@@ -1,5 +1,43 @@
 # Changelog
 
+## 2026-10-05 — 表单字段名、按钮与提示消息中文化
+
+### 为什么做
+
+状态词与小节标题都中文化之后，界面上剩的英文只剩"界面在说话"的那一半：表单字段名与说明、
+动作按钮、提示消息、空态与占位符。它们和刚改完的那些**长在同一屏里**，留着就是半张脸中文。
+
+### Changed
+
+- **表单字段名与说明**：`Worktree root` / `Max attempts` / `Default timeout (ms)` /
+  `Environment allowlist` / `Git repository root` / `Save Project configuration` /
+  `Registered commands run through ToolGateway with fixed argv, timeout and HookContext.` … →
+  项目设置、新建项目、生命周期钩子三个表单全中文。
+- **动作按钮**：`View full plan` / `Confirm plan` / `Enqueue plan` / `Discard plan` /
+  `Pause loop` / `Resume loop` / `Cancel loop` / `View verification` / `Start run` /
+  `Terminate run` / `Create review` / `Confirm merged` / `Retry` / `Back` / `Done` / `Cancel` /
+  `Archive` / `Activate` / `Settings` / `Validate & Create` …
+- **提示与确认消息**（`usePlanLifecycleActions.ts`）：`Plan discarded` /
+  `Revision 3 discarded` / `Confirm revision failed` / `Discard plan` 确认框的三段文案 …
+- **提示与错误**：`API service is reachable. Click to refresh.` / `Request failed: 500` /
+  `Plan lifecycle is invalid: …`
+- **空态与占位符**：`No include paths` / `No dependencies` / `Not selected` / `Not created` /
+  `The execution conversation will appear here when the Run starts.` / `Actual target commit after manual merge` …
+- **会话头部的实时流状态**：`Live` / `Reconnecting` / `Saved` → 实时 / 重连中 / 已保存；
+  方案卡标题 `Plan received` → 已收到方案。
+- 项目设置的分页标签（`General` / `Execution` / `Commands` / `Hooks` / `Models & Tools`）→
+  常规 / 执行 / 命令 / 钩子 / 模型与工具。
+
+### 仍然保留英文的只剩两类
+
+产品名与专有名词（`PIPELINE FACTORY` / `Agent` / `Executor` / `Provider` / `Explorer` / `Plan` /
+`Run` / `MCP` / `Worktree` / `Git`），以及命令、标签、路径这类**本来就是英文的值**
+（`pnpm test` / `unit, types, docs` / `/Users/you/Project/repository`）。
+判据是"这是界面在说话，还是数据本身长这样"——前者中文，后者原样。
+
+`pnpm verify` 通过：375 + 111 + 524 个用例；Run 详情页、探索视图、项目列表页扫过一遍，
+已无"界面在说话"的英文残留。
+
 ## 2026-10-05 — 小节标题不再是装饰性英文；顺手修一处 Markdown 表格
 
 ### 为什么做

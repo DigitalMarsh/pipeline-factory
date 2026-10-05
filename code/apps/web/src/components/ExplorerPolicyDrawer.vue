@@ -22,9 +22,9 @@ const emit = defineEmits<{ "update:modelValue": [value: boolean] }>();
       <div class="drawer-header">
         <div>
           <div class="eyebrow">Plan 模式 · 工具策略</div>
-          <h2>Explorer policy</h2>
+          <h2>探索策略</h2>
         </div>
-        <el-button text circle aria-label="Close policy" @click="emit('update:modelValue', false)">
+        <el-button text circle aria-label="关闭策略" @click="emit('update:modelValue', false)">
           <Close />
         </el-button>
       </div>
@@ -32,8 +32,8 @@ const emit = defineEmits<{ "update:modelValue": [value: boolean] }>();
       <div class="policy-hero">
         <div class="policy-hero-icon"><DocumentChecked :size="22" /></div>
         <div>
-          <strong>Read-only exploration</strong>
-          <p>ExplorerThread can understand the repository before any change is authorized.</p>
+          <strong>只读探索</strong>
+          <p>在授权任何改动之前，先让探索线程把仓库读懂。</p>
         </div>
       </div>
 
@@ -47,13 +47,13 @@ const emit = defineEmits<{ "update:modelValue": [value: boolean] }>();
       <div class="policy-boundary">
         <Lock :size="16" />
         <div>
-          <strong>Authorization boundary</strong>
-          <p>Only Confirm plan and Enqueue plan can move work from exploration into execution. The ExplorerThread cannot perform that transition by itself.</p>
+          <strong>授权边界</strong>
+          <p>只有「确认方案」与「入队方案」能把工作从探索推进到执行；探索线程自己做不到这一步。</p>
         </div>
       </div>
 
       <div class="policy-drawer-actions">
-        <el-button type="primary" @click="emit('update:modelValue', false)">Got it <Right /></el-button>
+        <el-button type="primary" @click="emit('update:modelValue', false)">知道了 <Right /></el-button>
       </div>
     </div>
   </el-drawer>

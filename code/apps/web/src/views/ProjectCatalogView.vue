@@ -75,10 +75,10 @@ onMounted(() => { void load(); });
     <div class="catalog-heading">
       <div>
         <div class="eyebrow">PIPELINE FACTORY · 项目</div>
-        <h1>Projects</h1>
+        <h1>项目</h1>
         <p>每个 Project 对应一个 Git 仓库，并独立保存 Explorer、Plan、Run 和执行配置。</p>
       </div>
-      <div class="catalog-actions"><el-button plain @click="load"><Refresh :size="15" /> Refresh</el-button><el-button type="primary" @click="openCreate"><Plus :size="15" /> New Project</el-button></div>
+      <div class="catalog-actions"><el-button plain @click="load"><Refresh :size="15" /> Refresh</el-button><el-button type="primary" @click="openCreate"><Plus :size="15" /> 新建项目</el-button></div>
     </div>
 
     <div v-if="error" class="catalog-alert"><Warning :size="15" /> {{ error }}</div>
@@ -88,10 +88,10 @@ onMounted(() => { void load(); });
         <button class="project-card-title" type="button" @click="openProject(project)"><strong>{{ project.name }}<small v-if="project.shortName && project.shortName !== project.name">{{ project.shortName }}</small></strong><ArrowRight :size="16" /></button>
         <code class="project-id">{{ project.id }}</code>
         <div class="project-path"><FolderOpened :size="14" /><span>{{ project.repoRoot }}</span></div>
-        <div class="project-current"><ChatDotRound :size="13" /><span>Current Explorer</span><code :title="project.summary.currentExplorerThread ?? undefined">{{ project.summary.currentExplorerTitle ?? project.summary.currentExplorerThread ?? "Not selected" }}</code></div>
+        <div class="project-current"><ChatDotRound :size="13" /><span>当前探索线程</span><code :title="project.summary.currentExplorerThread ?? undefined">{{ project.summary.currentExplorerTitle ?? project.summary.currentExplorerThread ?? "未选择" }}</code></div>
         <div class="project-facts"><span><Connection :size="13" />{{ project.defaultBranch }}</span><span><VideoPlay :size="13" />{{ project.summary.activeRunCount }} 个在跑</span></div>
         <div class="project-facts project-facts-secondary"><span><Warning :size="13" />{{ project.summary.needsAttentionCount }} 项待处理</span><span><Clock :size="13" />{{ activityLabel(project.summary.lastActivityAt) }}</span></div>
-        <div class="project-card-footer"><el-button text size="small" @click="openProject(project)">Open Explorer</el-button><el-button text size="small" @click="openSettings(project)"><Setting :size="13" /> Settings</el-button><el-button text size="small" @click="toggleArchive(project)">{{ project.status === 'ACTIVE' ? 'Archive' : 'Activate' }}</el-button></div>
+        <div class="project-card-footer"><el-button text size="small" @click="openProject(project)">打开探索</el-button><el-button text size="small" @click="openSettings(project)"><Setting :size="13" /> 设置</el-button><el-button text size="small" @click="toggleArchive(project)">{{ project.status === 'ACTIVE' ? '归档' : '启用' }}</el-button></div>
       </article>
       <button class="project-add-card" type="button" @click="openCreate"><span><Plus :size="20" /></span><strong>添加 Git Project</strong><small>配置仓库目录、Worktree 和运行策略</small></button>
       <div v-if="!loading && !projects.length" class="catalog-empty"><FolderOpened :size="30" /><strong>还没有 Project</strong><span>导入一个本地 Git 仓库开始使用。</span></div>

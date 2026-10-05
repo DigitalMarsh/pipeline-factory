@@ -50,7 +50,7 @@ describe("ExplorerRenameDialog", () => {
     await nextTick();
     await nextTick();
 
-    const input = mounted.host.querySelector<HTMLInputElement>('input[aria-label="Thread name"]');
+    const input = mounted.host.querySelector<HTMLInputElement>('input[aria-label="线程名称"]');
     expect(input?.value).toBe("  Current thread  ");
     expect(document.activeElement).toBe(input);
     expect(input?.maxLength).toBe(200);
@@ -60,7 +60,7 @@ describe("ExplorerRenameDialog", () => {
 
   it("rejects blank names and trims submitted names", async () => {
     const mounted = mountDialog();
-    const input = mounted.host.querySelector<HTMLInputElement>('input[aria-label="Thread name"]');
+    const input = mounted.host.querySelector<HTMLInputElement>('input[aria-label="线程名称"]');
     if (!input) throw new Error("rename input was not rendered");
 
     input.value = "   ";
@@ -70,12 +70,12 @@ describe("ExplorerRenameDialog", () => {
     await nextTick();
 
     expect(mounted.submitted).toEqual([]);
-    expect(mounted.host.querySelector('[role="alert"]')?.textContent).toContain("Thread name is required");
+    expect(mounted.host.querySelector('[role="alert"]')?.textContent).toContain("线程名称不能为空");
 
     input.value = "  Renamed thread  ";
     input.dispatchEvent(new Event("input", { bubbles: true }));
     await nextTick();
-    buttonByText(mounted.host, "Save name")?.click();
+    buttonByText(mounted.host, "保存名称")?.click();
     await nextTick();
 
     expect(mounted.submitted).toEqual(["Renamed thread"]);
@@ -90,7 +90,7 @@ describe("ExplorerRenameDialog", () => {
     saving.app.unmount();
 
     const mounted = mountDialog();
-    buttonByText(mounted.host, "Cancel")?.click();
+    buttonByText(mounted.host, "取消")?.click();
     await nextTick();
     expect(mounted.updates).toEqual([false]);
 

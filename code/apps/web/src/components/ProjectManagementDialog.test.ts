@@ -100,10 +100,10 @@ describe("ProjectManagementDialog", () => {
     const mounted = mountDialog();
     await nextTick();
 
-    expect(mounted.host.textContent).toContain("Manage Projects");
-    expect(mounted.host.querySelector(".current-project-badge")?.textContent).toContain("Current");
+    expect(mounted.host.textContent).toContain("管理项目");
+    expect(mounted.host.querySelector(".current-project-badge")?.textContent).toContain("当前");
 
-    const done = [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Done"));
+    const done = [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("完成"));
     done?.click();
     await nextTick();
     expect(mounted.updates).toEqual([false]);
@@ -117,7 +117,7 @@ describe("ProjectManagementDialog", () => {
     await nextTick();
 
     const secondCard = mounted.host.querySelectorAll(".project-management-card")[1];
-    [...(secondCard?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((button) => button.textContent?.includes("Open Explorer"))?.click();
+    [...(secondCard?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((button) => button.textContent?.includes("打开探索"))?.click();
     await nextTick();
 
     expect(mounted.selected).toEqual(["project-2"]);
@@ -132,7 +132,7 @@ describe("ProjectManagementDialog", () => {
     await nextTick();
 
     const secondCard = mounted.host.querySelectorAll(".project-management-card")[1];
-    [...(secondCard?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((button) => button.textContent?.includes("Settings"))?.click();
+    [...(secondCard?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((button) => button.textContent?.includes("设置"))?.click();
     await nextTick();
 
     expect(mounted.settings).toEqual(["project-2"]);
@@ -146,7 +146,7 @@ describe("ProjectManagementDialog", () => {
     const mounted = mountDialog();
     await nextTick();
 
-    [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("New Project"))?.click();
+    [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("新建项目"))?.click();
     await nextTick();
     const name = mounted.host.querySelector<HTMLInputElement>('input[placeholder="例如：Pipeline Factory"]');
     const repoRoot = mounted.host.querySelector<HTMLInputElement>('input[placeholder="/Users/you/Project/repository"]');
@@ -156,7 +156,7 @@ describe("ProjectManagementDialog", () => {
       repoRoot.value = "/tmp/project-3";
       repoRoot.dispatchEvent(new Event("input", { bubbles: true }));
     }
-    [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Validate & Create"))?.click();
+    [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("校验并创建"))?.click();
     await nextTick();
     await nextTick();
 
@@ -173,7 +173,7 @@ describe("ProjectManagementDialog", () => {
     const mounted = mountDialog();
     await nextTick();
 
-    [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("New Project"))?.click();
+    [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("新建项目"))?.click();
     await nextTick();
     mounted.host.querySelector<HTMLButtonElement>("button[data-pick-directory]")?.click();
     await nextTick();

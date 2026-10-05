@@ -116,7 +116,7 @@ function emitThreadAction(command: string | number): void {
 
 <template>
   <aside class="thread-rail">
-    <nav class="left-entry-rail" role="tablist" aria-label="Explorer workspace sections">
+    <nav class="left-entry-rail" role="tablist" aria-label="探索视图的分区">
       <button
         v-for="entry in panelEntries"
         :key="entry.key"
@@ -140,7 +140,7 @@ function emitThreadAction(command: string | number): void {
           <button
             class="project-context-card"
             type="button"
-            :aria-label="`切换项目：${props.project?.name ?? props.thread?.projectId ?? 'Local workspace'}`"
+            :aria-label="`切换项目：${props.project?.name ?? props.thread?.projectId ?? '本地工作区'}`"
             aria-haspopup="listbox"
             :aria-expanded="projectSwitcherOpen"
             aria-controls="inline-project-switcher"
@@ -148,10 +148,10 @@ function emitThreadAction(command: string | number): void {
           >
             <span class="project-context-copy">
               <span class="project-context-title-row">
-                <strong class="project-context-name">{{ props.project?.name ?? props.thread?.projectId ?? "Local workspace" }}</strong>
+                <strong class="project-context-name">{{ props.project?.name ?? props.thread?.projectId ?? "本地工作区" }}</strong>
               </span>
               <span class="project-context-summary project-context-meta-row">
-                <span class="project-context-count">{{ props.explorers.length }} explorations</span>
+                <span class="project-context-count">{{ props.explorers.length }} 条探索线程</span>
               </span>
             </span>
             <el-tag v-if="props.project" size="small" effect="light" :type="projectStatusTagType(props.project.status)">{{ projectStatusLabel(props.project.status) }}</el-tag>
@@ -177,8 +177,8 @@ function emitThreadAction(command: string | number): void {
         </div>
         <template v-else>
           <div class="eyebrow">项目</div>
-          <strong>{{ props.projects.length }} projects</strong>
-          <small>{{ props.project?.name ?? props.thread?.projectId ?? "Local workspace" }}</small>
+          <strong>{{ props.projects.length }} 个项目</strong>
+          <small>{{ props.project?.name ?? props.thread?.projectId ?? "本地工作区" }}</small>
         </template>
       </header>
 
@@ -201,12 +201,12 @@ function emitThreadAction(command: string | number): void {
             <span class="left-list-copy"><strong>{{ availableProject.name }}<span v-if="availableProject.shortName && availableProject.shortName !== availableProject.name" class="left-list-short-name">{{ availableProject.shortName }}</span></strong><small>{{ availableProject.repoRoot }}</small></span>
             <el-tag size="small" effect="light" :type="projectStatusTagType(availableProject.status)">{{ projectStatusLabel(availableProject.status) }}</el-tag>
           </button>
-          <div class="project-list-actions" aria-label="Project actions">
+          <div class="project-list-actions" aria-label="项目操作">
             <button type="button" class="project-list-action" data-project-action="open-explorer" @click.stop="emit('open-project', availableProject.id)">
-              Open Explorer <ArrowRight :size="12" />
+              打开探索 <ArrowRight :size="12" />
             </button>
             <button type="button" class="project-list-action" data-project-action="settings" @click.stop="emit('open-project-settings', availableProject.id)">
-              <Setting :size="12" /> Settings
+              <Setting :size="12" /> 设置
             </button>
             <button
               type="button"
@@ -216,13 +216,13 @@ function emitThreadAction(command: string | number): void {
               :aria-busy="props.projectActionId === availableProject.id ? 'true' : undefined"
               @click.stop="emit('archive-project', availableProject.id)"
             >
-              {{ availableProject.status === "ACTIVE" ? "Archive" : "Activate" }}
+              {{ availableProject.status === "ACTIVE" ? "归档" : "启用" }}
             </button>
           </div>
         </article>
         <button class="left-panel-create-project" type="button" data-project-action="create" @click="emit('create-project')">
           <span class="left-panel-create-icon"><Plus :size="16" /></span>
-          <span><strong>New Project</strong><small>添加 Git 仓库</small></span>
+          <span><strong>新建项目</strong><small>添加 Git 仓库</small></span>
         </button>
       </div>
 

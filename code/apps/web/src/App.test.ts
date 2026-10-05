@@ -24,7 +24,7 @@ describe("global project selector", () => {
     expect(appSource).toContain("api.health()");
     expect(appSource).toContain("setInterval");
     expect(appSource).toContain("clearInterval");
-    expect(appSource).toContain("Refresh API health");
+    expect(appSource).toContain("刷新 API 健康状态");
     expect(appSource).not.toContain("<i /> Healthy</span>");
     expect(appSource).not.toContain("Factory is healthy");
   });

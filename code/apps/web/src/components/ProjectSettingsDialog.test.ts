@@ -96,14 +96,14 @@ describe("ProjectSettingsDialog", () => {
     await nextTick();
     await nextTick();
 
-    expect(mounted.host.textContent).toContain("Project identity");
+    expect(mounted.host.textContent).toContain("项目标识");
     expect(mounted.host.querySelector<HTMLInputElement>('input[disabled]')?.value).toBe("project-1");
     const shortName = mounted.host.querySelector<HTMLInputElement>('input[placeholder="例如：PF"]');
     if (shortName) {
       shortName.value = "P1X";
       shortName.dispatchEvent(new Event("input", { bubbles: true }));
     }
-    const save = [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Save Project configuration"));
+    const save = [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("保存项目配置"));
     save?.click();
     await nextTick();
     await nextTick();
@@ -122,11 +122,11 @@ describe("ProjectSettingsDialog", () => {
     await nextTick();
     await nextTick();
 
-    const execution = [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Execution"));
+    const execution = [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("执行"));
     execution?.click();
     await nextTick();
 
-    expect(mounted.host.textContent).toContain("Execution policy");
+    expect(mounted.host.textContent).toContain("执行策略");
     expect(mounted.host.textContent).not.toContain("Max parallel runs");
     expect(mounted.host.textContent).not.toContain("Project settings page");
 
@@ -141,7 +141,7 @@ describe("ProjectSettingsDialog", () => {
     await nextTick();
     await nextTick();
 
-    const modelsTab = [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Models & Tools"));
+    const modelsTab = [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("模型与工具"));
     modelsTab?.click();
     await nextTick();
     // 顺序：Explorer agent / model / reasoning，然后 Executor 三项。agent 是本次新增的那一列。
@@ -165,7 +165,7 @@ describe("ProjectSettingsDialog", () => {
     await nextTick();
     const executorModelOptions = [...mounted.host.querySelectorAll<HTMLSelectElement>(".settings-form-grid select")[4]!.options].map((option) => option.value);
     expect(executorModelOptions).toContain("deepseek-chat");
-    const save = [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Save Project configuration"));
+    const save = [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("保存项目配置"));
     save?.click();
     await nextTick();
     await nextTick();

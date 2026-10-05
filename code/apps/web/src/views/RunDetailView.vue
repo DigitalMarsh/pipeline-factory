@@ -70,7 +70,7 @@ let planDetailRequestToken = 0;
 // sequence 同时作为 SSE 游标，重连时从最后一条已接受的事件继续回放。
 const loopStatusLabel = computed(() => formatAgentLoopState(executorLoop.value?.state, "无活动 Loop"));
 const streamState = computed<"live" | "reconnecting" | "saved">(() => runStreamConnected.value ? "live" : ["IN_PROGRESS", "STARTING"].includes(run.value?.status ?? "") ? "reconnecting" : "saved");
-const executionStatusLabel = computed(() => ({ live: "Live", reconnecting: "Reconnecting", saved: "Saved" })[streamState.value]);
+const executionStatusLabel = computed(() => ({ live: "实时", reconnecting: "重连中", saved: "已保存" })[streamState.value]);
 const executionBlockReason = computed(() => {
   for (const entry of [...(thread.value?.journal ?? [])].reverse()) {
     const reason = entry.payload.reason ?? entry.payload.error;
@@ -481,7 +481,7 @@ async function togglePause() {
 async function terminateRun() {
   if (!run.value || actionBusy.value || !canTerminateRun(run.value.status)) return;
   try {
-    await ElMessageBox.confirm("Terminate this run? The confirmed Plan will remain in history.", "Terminate run", { confirmButtonText: "Terminate", cancelButtonText: "Keep running", type: "warning" });
+    await ElMessageBox.confirm("Terminate this run? The confirmed Plan will remain in history.", "终止 Run", { confirmButtonText: "Terminate", cancelButtonText: "Keep running", type: "warning" });
   } catch { return; }
   actionBusy.value = true;
   try {
@@ -558,15 +558,15 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
 
 <template>
   <div :class="['detail-page', 'run-detail-page', { 'detail-page-embedded': embedded }]" v-loading="loading">
-    <div v-if="!embedded" class="detail-top"><el-button text @click="closeView"><ArrowLeft :size="15" /> Back</el-button></div>
+    <div v-if="!embedded" class="detail-top"><el-button text @click="closeView"><ArrowLeft :size="15" /> 返回</el-button></div>
     <div v-if="error" class="demo-notice"><Warning :size="14" /> {{ error }}</div>
     <template v-if="run">
       <div class="detail-heading">
         <div class="detail-heading-title">
-          <h1>Execution run</h1>
+          <h1>执行运行</h1>
         </div>
         <div class="detail-heading-plan">
-          <p class="execution-plan-link-row"><span>Plan</span><button type="button" class="execution-plan-link" :aria-label="`查看 Plan ${run.planId} Revision ${run.planRevision} 详情`" @click="openPlanDetail"><code>{{ run.planId }}</code><span>· Revision {{ run.planRevision }}</span></button></p>
+          <p class="execution-plan-link-row"><span>方案</span><button type="button" class="execution-plan-link" :aria-label="`查看方案 ${run.planId} 第 ${run.planRevision} 版详情`" @click="openPlanDetail"><code>{{ run.planId }}</code><span>· 第 {{ run.planRevision }} 版</span></button></p>
         </div>
         <ExecutionHeaderStatus
           :run="run"
@@ -595,9 +595,9 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
           @update:target-commit="updateTargetCommit"
         />
       </div>
-      <div v-if="run.status === 'BLOCKED' && executionBlockReason" class="run-blocked-notice" role="alert"><Warning :size="16" /><div><strong>Why execution stopped</strong><span>{{ executionBlockReason }}</span></div></div>
+      <div v-if="run.status === 'BLOCKED' && executionBlockReason" class="run-blocked-notice" role="alert"><Warning :size="16" /><div><strong>为什么停下</strong><span>{{ executionBlockReason }}</span></div></div>
       <section class="execution-conversation-panel">
-        <div class="journal-heading"><div><div class="eyebrow">执行会话</div><h2>What the Executor is doing</h2></div><el-tag size="small" effect="light" :type="streamStatusTagType(streamState)" role="status">{{ executionStatusLabel }}</el-tag></div>
+        <div class="journal-heading"><div><div class="eyebrow">执行会话</div><h2>Executor 在做什么</h2></div><el-tag size="small" effect="light" :type="streamStatusTagType(streamState)" role="status">{{ executionStatusLabel }}</el-tag></div>
         <ol class="execution-phase-strip" aria-label="执行阶段">
           <li v-for="(phase, index) in executionPhaseSteps" :key="phase.key" :class="['execution-phase', { current: phase.current, done: phase.done }]">
             <span class="execution-phase-mark">{{ phase.done ? "✓" : index + 1 }}</span>
@@ -607,7 +607,7 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
         </ol>
         <div class="execution-conversation-stage">
           <div ref="executionTimeline" class="execution-conversation" @scroll="updateExecutionScrollState">
-          <div v-if="!executionMessages.length" class="empty-state"><Document :size="28" /><h3>Waiting for executor activity</h3><p>The execution conversation will appear here when the Run starts.</p></div>
+          <div v-if="!executionMessages.length" class="empty-state"><Document :size="28" /><h3>等待 Executor 的活动</h3><p>Run 启动后，执行会话会出现在这里。</p></div>
           <section v-for="group in executionConversationGroups" :key="group.id" :class="['execution-conversation-group', `execution-conversation-group-${group.kind}`, { selected: selectedTaskId === group.task?.id, collapsed: isTaskGroupCollapsed(group.id) }]" :data-task-id="group.task?.id">
             <button v-if="group.task" type="button" class="execution-task-stream-heading" :aria-expanded="!isTaskGroupCollapsed(group.id)" :aria-controls="`execution-task-stream-${group.id}`" @click="toggleTaskGroup(group.id)">
               <span class="execution-task-stream-step">计划任务</span>
@@ -638,11 +638,11 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
                     <div class="execution-plan-message-summary"><MarkdownMessage :source="item.plan.goal" /></div>
                     <button :id="`execution-plan-toggle-${item.id}`" class="execution-plan-toggle" type="button" :aria-expanded="planMessageExpanded" :aria-controls="`execution-plan-details-${item.id}`" @click="planMessageExpanded = !planMessageExpanded">{{ planMessageExpanded ? '收起 Plan 摘要' : '展开 Plan 摘要' }}</button>
                     <div v-if="planMessageExpanded" :id="`execution-plan-details-${item.id}`" class="execution-plan-message-details">
-                      <div class="execution-plan-message-stats"><span><strong>{{ item.plan.tasks.length }}</strong> tasks</span><span><strong>{{ item.plan.acceptanceCriteria.length }}</strong> acceptance criteria</span><span><strong>{{ item.plan.verificationCommandIds.length }}</strong> verification commands</span></div>
+                      <div class="execution-plan-message-stats"><span><strong>{{ item.plan.tasks.length }}</strong> tasks</span><span><strong>{{ item.plan.acceptanceCriteria.length }}</strong> 验收标准</span><span><strong>{{ item.plan.verificationCommandIds.length }}</strong> 验证命令</span></div>
                       <div v-if="item.plan.tasks.length" class="execution-plan-message-section"><span class="execution-plan-message-label">任务</span><ul><li v-for="task in item.plan.tasks" :key="task.id ?? task.title">{{ task.title }}</li></ul></div>
-                      <div class="execution-plan-message-scope"><div><span class="execution-plan-message-label">包含</span><code v-for="path in item.plan.includePaths" :key="`include-${path}`">{{ path }}</code><small v-if="!item.plan.includePaths.length">No include paths</small></div><div><span class="execution-plan-message-label">排除</span><code v-for="path in item.plan.excludePaths" :key="`exclude-${path}`">{{ path }}</code><small v-if="!item.plan.excludePaths.length">No exclude paths</small></div></div>
+                      <div class="execution-plan-message-scope"><div><span class="execution-plan-message-label">包含</span><code v-for="path in item.plan.includePaths" :key="`include-${path}`">{{ path }}</code><small v-if="!item.plan.includePaths.length">无包含路径</small></div><div><span class="execution-plan-message-label">排除</span><code v-for="path in item.plan.excludePaths" :key="`exclude-${path}`">{{ path }}</code><small v-if="!item.plan.excludePaths.length">无排除路径</small></div></div>
                     </div>
-                    <div class="execution-plan-message-actions"><el-button text size="small" @click="openPlanDetail">View full plan</el-button></div>
+                    <div class="execution-plan-message-actions"><el-button text size="small" @click="openPlanDetail">查看完整方案</el-button></div>
                   </div>
                 </template>
                 <template v-else-if="item.kind === 'model'">
@@ -670,17 +670,17 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
             </div>
           </section>
           </div>
-          <el-button v-if="showScrollToLatest" class="execution-scroll-latest" size="small" @click="scrollExecutionToLatest">Jump to latest</el-button>
+          <el-button v-if="showScrollToLatest" class="execution-scroll-latest" size="small" @click="scrollExecutionToLatest">跳到最新</el-button>
         </div>
         <div class="composer execution-composer">
           <div class="composer-input">
-            <textarea v-model="executionDraft" aria-label="Execution thread message" placeholder="与执行线程沟通，或提出修改…" :disabled="actionBusy || !canSendExecutionMessage" @keydown="handleExecutionComposerKeydown" />
-            <span class="composer-mode">Run Mode</span>
+            <textarea v-model="executionDraft" aria-label="执行会话消息" placeholder="与执行线程沟通，或提出修改…" :disabled="actionBusy || !canSendExecutionMessage" @keydown="handleExecutionComposerKeydown" />
+            <span class="composer-mode">Run 模式</span>
           </div>
           <div class="composer-footer">
             <ProviderUsageFooter :model="executionModelIdentity.model" :backend="executionModelIdentity.backend" :context="executionContextUsage" context-note="仅结束时由 provider 上报" :source-note="executionModelSourceNote" />
-            <span v-if="sendingExecutionMessage" class="composer-status" role="status" aria-live="polite">Message sent · waiting for Executor…</span>
-            <el-button class="composer-send" type="primary" circle :loading="sendingExecutionMessage" :disabled="!executionDraft.trim() || !canSendExecutionMessage || actionBusy" aria-label="Send message" :title="actionBusy ? '正在发送消息' : 'Send message'" @click="sendExecutionMessage"><ArrowUp :size="18" /></el-button>
+            <span v-if="sendingExecutionMessage" class="composer-status" role="status" aria-live="polite">消息已发送 · 等待 Executor…</span>
+            <el-button class="composer-send" type="primary" circle :loading="sendingExecutionMessage" :disabled="!executionDraft.trim() || !canSendExecutionMessage || actionBusy" aria-label="发送消息" :title="actionBusy ? '正在发送消息' : '发送消息'" @click="sendExecutionMessage"><ArrowUp :size="18" /></el-button>
           </div>
         </div>
       </section>

@@ -149,7 +149,7 @@ async function createProject() {
       <div class="project-management-heading">
         <div>
           <div class="eyebrow">PIPELINE FACTORY · 项目</div>
-          <h2>{{ createMode ? "New Project" : "Manage Projects" }}</h2>
+          <h2>{{ createMode ? "新建项目" : "管理项目" }}</h2>
           <p>{{ createMode ? "把一个本机 Git 仓库添加到当前 Factory。" : "在当前 Explorer 中维护项目，关闭弹框即可回到原来的对话位置。" }}</p>
         </div>
         <el-button v-if="!createMode" plain size="small" :loading="loading" @click="refreshProjects"><Refresh :size="14" /> Refresh</el-button>
@@ -160,28 +160,28 @@ async function createProject() {
 
     <form v-if="createMode" class="project-create-form" @submit.prevent="createProject">
       <div class="project-dialog-intro">新 Project 必须指向 Git 仓库根目录。创建前 API 会校验真实路径和默认分支。</div>
-      <div class="project-create-grid"><label>Project name <input v-model="form.name" autofocus placeholder="例如：Pipeline Factory" /></label><label>Project short name <input v-model="form.shortName" placeholder="例如：PF" /></label></div>
-      <label>Git repository root <span class="repo-root-row"><input v-model="form.repoRoot" placeholder="/Users/you/Project/repository" /><el-button :loading="picking" data-pick-directory="true" @click="chooseRepositoryRoot">选择文件夹…</el-button></span><small>选择或直接输入本机可访问的绝对路径，不能是仓库子目录。</small></label>
-      <div class="project-create-grid"><label>Default branch <input v-model="form.defaultBranch" placeholder="自动检测" /></label><label>Worktree root <input v-model="form.worktreeRoot" placeholder="自动生成" /></label></div>
+      <div class="project-create-grid"><label>项目名称 <input v-model="form.name" autofocus placeholder="例如：Pipeline Factory" /></label><label>项目简称 <input v-model="form.shortName" placeholder="例如：PF" /></label></div>
+      <label>Git 仓库根目录 <span class="repo-root-row"><input v-model="form.repoRoot" placeholder="/Users/you/Project/repository" /><el-button :loading="picking" data-pick-directory="true" @click="chooseRepositoryRoot">选择文件夹…</el-button></span><small>选择或直接输入本机可访问的绝对路径，不能是仓库子目录。</small></label>
+      <div class="project-create-grid"><label>默认分支 <input v-model="form.defaultBranch" placeholder="自动检测" /></label><label>Worktree 根目录 <input v-model="form.worktreeRoot" placeholder="自动生成" /></label></div>
     </form>
 
     <div v-else class="project-management-content">
-      <div class="project-management-toolbar"><div><strong>项目</strong><span>{{ managedProjects.length }} 个项目</span></div><el-button type="primary" size="small" @click="openCreate"><Plus :size="14" /> New Project</el-button></div>
+      <div class="project-management-toolbar"><div><strong>项目</strong><span>{{ managedProjects.length }} 个项目</span></div><el-button type="primary" size="small" @click="openCreate"><Plus :size="14" /> 新建项目</el-button></div>
       <div v-loading="loading" class="project-management-list">
         <article v-for="project in managedProjects" :key="project.id" class="project-management-card" :class="{ archived: project.status === 'ARCHIVED', current: project.id === currentProjectId }">
           <div class="project-management-card-main">
             <div class="project-management-icon"><FolderOpened :size="19" /></div>
-            <div class="project-management-copy"><div class="project-management-title"><strong>{{ project.name }}</strong><el-tag :type="project.status === 'ACTIVE' ? 'success' : 'info'" effect="light" size="small">{{ projectStatusLabel(project.status) }}</el-tag><span v-if="project.id === currentProjectId" class="current-project-badge"><CircleCheck :size="12" /> Current</span></div><code>{{ project.repoRoot }}</code><small>{{ project.defaultBranch || "Default branch not set" }} · {{ project.currentExplorerThreadId ? "Explorer selected" : "No Explorer selected" }}</small></div>
+            <div class="project-management-copy"><div class="project-management-title"><strong>{{ project.name }}</strong><el-tag :type="project.status === 'ACTIVE' ? 'success' : 'info'" effect="light" size="small">{{ projectStatusLabel(project.status) }}</el-tag><span v-if="project.id === currentProjectId" class="current-project-badge"><CircleCheck :size="12" /> 当前</span></div><code>{{ project.repoRoot }}</code><small>{{ project.defaultBranch || "默认分支 not set" }} · {{ project.currentExplorerThreadId ? "Explorer selected" : "No Explorer selected" }}</small></div>
           </div>
-          <div class="project-management-card-actions"><el-button text size="small" @click="selectProject(project)">Open Explorer <ArrowRight :size="13" /></el-button><el-button text size="small" @click="openSettings(project)"><Setting :size="13" /> Settings</el-button><el-button text size="small" :loading="actionProjectId === project.id" @click="toggleArchive(project)">{{ project.status === "ACTIVE" ? "Archive" : "Activate" }}</el-button></div>
+          <div class="project-management-card-actions"><el-button text size="small" @click="selectProject(project)">打开探索 <ArrowRight :size="13" /></el-button><el-button text size="small" @click="openSettings(project)"><Setting :size="13" /> 设置</el-button><el-button text size="small" :loading="actionProjectId === project.id" @click="toggleArchive(project)">{{ project.status === "ACTIVE" ? "归档" : "启用" }}</el-button></div>
         </article>
-        <div v-if="!loading && !managedProjects.length" class="project-management-empty"><FolderOpened :size="27" /><strong>还没有 Project</strong><span>添加一个本地 Git 仓库开始使用。</span><el-button plain size="small" @click="openCreate"><Plus :size="14" /> New Project</el-button></div>
+        <div v-if="!loading && !managedProjects.length" class="project-management-empty"><FolderOpened :size="27" /><strong>还没有 Project</strong><span>添加一个本地 Git 仓库开始使用。</span><el-button plain size="small" @click="openCreate"><Plus :size="14" /> 新建项目</el-button></div>
       </div>
     </div>
 
     <template #footer>
-      <template v-if="createMode"><el-button @click="cancelCreate">Cancel</el-button><el-button type="primary" :loading="saving" @click="createProject"><Check :size="14" /> Validate & Create</el-button></template>
-      <el-button v-else @click="close">Done</el-button>
+      <template v-if="createMode"><el-button @click="cancelCreate">取消</el-button><el-button type="primary" :loading="saving" @click="createProject"><Check :size="14" /> 校验并创建</el-button></template>
+      <el-button v-else @click="close">完成</el-button>
     </template>
   </el-dialog>
 </template>

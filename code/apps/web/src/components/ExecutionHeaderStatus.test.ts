@@ -127,7 +127,7 @@ describe("ExecutionHeaderStatus", () => {
     const mounted = mountStatus();
 
     expect(mounted.host.querySelectorAll(".execution-header-status-card")).toHaveLength(6);
-    expect(mounted.host.textContent).toContain("Revision 2");
+    expect(mounted.host.textContent).toContain("第 2 版");
     expect(mounted.host.textContent).toContain("当前状态无需操作");
     expect(trigger(mounted.host, "review").getAttribute("aria-expanded")).toBe("false");
     expect(mounted.host.querySelector("#execution-header-review-details")).toBeNull();
@@ -205,7 +205,7 @@ describe("ExecutionHeaderStatus", () => {
     controls.click();
     await nextTick();
     expect(mounted.host.textContent).toContain("当前状态无需操作");
-    expect(mounted.host.textContent).not.toContain("Terminate run");
+    expect(mounted.host.textContent).not.toContain("终止 Run");
 
     trigger(mounted.host, "progress").click();
     await nextTick();

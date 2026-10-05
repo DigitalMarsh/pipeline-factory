@@ -150,7 +150,7 @@ watch(() => props.threadId, () => {
             class="explorer-header-status-trigger"
             data-status-card="provider-loop"
             type="button"
-            aria-label="查看 Provider Loop 状态"
+            aria-label="查看 Provider 循环状态"
             aria-controls="explorer-header-provider-loop-details"
             :aria-expanded="providerLoopOpen"
             @keydown.enter.prevent="toggleCard('provider-loop')"
@@ -164,7 +164,7 @@ watch(() => props.threadId, () => {
           </button>
         </template>
 
-        <section id="explorer-header-provider-loop-details" class="explorer-header-status-details" aria-label="Provider Loop 状态详情">
+        <section id="explorer-header-provider-loop-details" class="explorer-header-status-details" aria-label="Provider 循环状态详情">
           <div class="explorer-header-status-details-heading">
             <div>
               <span class="eyebrow">Provider 循环</span>
@@ -187,7 +187,7 @@ watch(() => props.threadId, () => {
             <el-button v-if="agentLoop.state === 'RUNNING' || agentLoop.state === 'PAUSED'" class="agent-loop-action" size="small" plain @click="emit('toggle-pause')">
               <VideoPlay v-if="paused" :size="14" />
               <VideoPause v-else :size="14" />
-              {{ paused ? 'Resume loop' : 'Pause loop' }}
+              {{ paused ? '恢复 Loop' : '暂停 Loop' }}
             </el-button>
           </div>
           <div v-else class="explorer-header-status-empty" role="status">

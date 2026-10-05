@@ -164,7 +164,7 @@ describe("confirmPlan", () => {
     await s.confirmPlan();
 
     expect(api.confirmRevisionDraft).not.toHaveBeenCalled();
-    expect(ElMessage.info).toHaveBeenCalledWith("Default branch changed. Rebase the revision draft before confirmation.");
+    expect(ElMessage.info).toHaveBeenCalledWith("默认分支已变，确认前需要先给这份修订草稿 rebase。");
   });
 
   it("候选为空（已确认 Plan 上挂着草稿）时，抽屉传入的那一版仍然确认草稿", async () => {

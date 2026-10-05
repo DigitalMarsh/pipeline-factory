@@ -142,7 +142,7 @@ defineExpose({ onSubmitted, onFailed });
     @update:model-value="emit('update:modelValue', $event)"
   >
     <div v-if="request" class="input-dialog-content">
-      <div class="input-dialog-intro"><span class="input-dialog-status"><span class="mode-dot" /> STRUCTURED INPUT</span><p>这是来自 Plan Mode 的结构化问题。请按序号逐题作答，答案会在最后统一提交。</p></div>
+      <div class="input-dialog-intro"><span class="input-dialog-status"><span class="mode-dot" /> 结构化输入</span><p>这是来自 Plan 模式 的结构化问题。请按序号逐题作答，答案会在最后统一提交。</p></div>
       <nav class="input-question-nav" aria-label="结构化问题导航">
         <button v-for="(question, index) in request.questions" :key="question.id" type="button" :class="['input-question-step', { active: currentIndex === index, complete: inputQuestionComplete(question, answers[question.id] ?? [], otherAnswers[question.id] ?? '') }]" :aria-current="currentIndex === index ? 'step' : undefined" :aria-label="`第 ${index + 1} 题：${question.header}`" :disabled="submitting" @click="selectQuestion(index)"><span>{{ index + 1 }}</span><small>{{ question.header }}</small></button>
       </nav>

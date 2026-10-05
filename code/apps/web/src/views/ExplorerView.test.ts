@@ -649,7 +649,7 @@ describe("Explorer composer availability", () => {
   });
 
   it("explains why the send button is unavailable while the selected requirement is running", () => {
-    expect(explorerViewSource).toContain(`:title="pendingInput ? '请先回答上方结构化问题' : activePlanBusy ? '当前需求回合执行中，完成后可继续' : 'Send message'"`);
+    expect(explorerViewSource).toContain(`:title="pendingInput ? '请先回答上方结构化问题' : activePlanBusy ? '当前需求回合执行中，完成后可继续' : '发送消息'"`);
     expect(explorerViewSource).toContain(`if (!content || activePlanBusy.value || sendingCurrentPlan.value || busy.value || !thread.value || thread.value.state === "ARCHIVED"`);
   });
 

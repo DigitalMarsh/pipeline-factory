@@ -94,7 +94,7 @@ watch(() => props.modelValue, (open) => {
         <div class="project-create-heading-icon"><FolderOpened :size="20" /></div>
         <div>
           <div class="eyebrow">PIPELINE FACTORY · 新建项目</div>
-          <h2>New Project</h2>
+          <h2>新建项目</h2>
         </div>
       </div>
     </template>
@@ -102,14 +102,14 @@ watch(() => props.modelValue, (open) => {
     <div v-if="error" class="project-create-alert"><Warning :size="15" /> {{ error }}</div>
     <form class="project-create-form" @submit.prevent="createProject">
       <div class="project-create-intro">新 Project 必须指向 Git 仓库根目录。创建前 API 会校验真实路径和默认分支。</div>
-      <div class="project-create-grid"><label>Project name <input v-model="form.name" autofocus placeholder="例如：Pipeline Factory" /></label><label>Project short name <input v-model="form.shortName" placeholder="例如：PF" /><small>用于列表和执行上下文；留空则使用 Project name。</small></label></div>
-      <label>Git repository root <span class="repo-root-row"><input v-model="form.repoRoot" placeholder="/Users/you/Project/repository" /><el-button :loading="picking" data-pick-directory="true" @click="chooseRepositoryRoot">选择文件夹…</el-button></span><small>选择或直接输入本机可访问的绝对路径，不能是仓库子目录。</small></label>
-      <div class="project-create-grid"><label>Default branch <input v-model="form.defaultBranch" placeholder="自动检测" /></label><label>Worktree root <input v-model="form.worktreeRoot" placeholder="自动生成" /></label></div>
+      <div class="project-create-grid"><label>项目名称 <input v-model="form.name" autofocus placeholder="例如：Pipeline Factory" /></label><label>项目简称 <input v-model="form.shortName" placeholder="例如：PF" /><small>用于列表和执行上下文；留空则使用 项目名称。</small></label></div>
+      <label>Git 仓库根目录 <span class="repo-root-row"><input v-model="form.repoRoot" placeholder="/Users/you/Project/repository" /><el-button :loading="picking" data-pick-directory="true" @click="chooseRepositoryRoot">选择文件夹…</el-button></span><small>选择或直接输入本机可访问的绝对路径，不能是仓库子目录。</small></label>
+      <div class="project-create-grid"><label>默认分支 <input v-model="form.defaultBranch" placeholder="自动检测" /></label><label>Worktree 根目录 <input v-model="form.worktreeRoot" placeholder="自动生成" /></label></div>
     </form>
 
     <template #footer>
-      <el-button @click="close">Cancel</el-button>
-      <el-button type="primary" data-create-action="submit" :loading="saving" :aria-busy="saving ? 'true' : undefined" @click="createProject"><Check :size="14" /> Validate & Create</el-button>
+      <el-button @click="close">取消</el-button>
+      <el-button type="primary" data-create-action="submit" :loading="saving" :aria-busy="saving ? 'true' : undefined" @click="createProject"><Check :size="14" /> 校验并创建</el-button>
     </template>
   </el-dialog>
 </template>

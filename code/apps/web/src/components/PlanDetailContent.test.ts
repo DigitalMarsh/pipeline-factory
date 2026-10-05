@@ -106,7 +106,7 @@ describe("PlanDetailContent scheduling editors", () => {
 
   it("shows the requested tags read-only once the candidate is no longer editable", () => {
     const { host } = mount({ canEditVerificationSuites: false, verificationSuiteOptions: ["docs", "unit"] });
-    expect(host.textContent).toContain("Verification subset");
+    expect(host.textContent).toContain("验证子集");
     expect(host.textContent).toContain("docs");
     // 只读态没有复选框、也没有保存按钮。
     expect(host.querySelectorAll(".dependency-option")).toHaveLength(0);
@@ -138,7 +138,7 @@ describe("PlanDetailContent plan design details", () => {
   });
 });
 describe("PlanDetailContent conversation artifact warning", () => {
-  const confirmButton = (host: HTMLElement) => [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Confirm V"));
+  const confirmButton = (host: HTMLElement) => [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("确认 V"));
 
   it("warns before confirming a conversation artifact, and still allows confirming it", () => {
     const { host } = mount({ plan: conversationPlan() });

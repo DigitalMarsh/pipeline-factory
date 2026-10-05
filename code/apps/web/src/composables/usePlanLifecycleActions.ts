@@ -57,7 +57,7 @@ export function usePlanLifecycleActions(deps: PlanLifecycleActionsDeps) {
     const activeDraft = deps.revisionDraft.value;
     if (activeDraft && activeDraft.planId === id) {
       if (activeDraft.status !== "READY_TO_CONFIRM") {
-        ElMessage.info(activeDraft.status === "BASE_CHANGED" ? "Default branch changed. Rebase the revision draft before confirmation." : "Continue exploring until this revision draft is ready to confirm.");
+        ElMessage.info(activeDraft.status === "BASE_CHANGED" ? "默认分支已变，确认前需要先给这份修订草稿 rebase。" : "继续探索，等这份修订草稿可以确认。");
         return;
       }
       deps.busy.value = true;
@@ -67,9 +67,9 @@ export function usePlanLifecycleActions(deps: PlanLifecycleActionsDeps) {
         deps.drawerOpen.value = true;
         await deps.refreshPlanProjection();
         deps.detailPlan.value = response.plan;
-        ElMessage.success(`Revision ${activeDraft.targetRevision} confirmed · ${response.confirmation?.stage ?? "FROZEN"}`);
+        ElMessage.success(`修订 V${activeDraft.targetRevision} 已确认 · ${response.confirmation?.stage ?? "FROZEN"}`);
       } catch (caught) {
-        deps.error.value = caught instanceof Error ? `Confirm revision failed: ${caught.message}` : "Confirm revision failed";
+        deps.error.value = caught instanceof Error ? `确认修订失败：${caught.message}` : "确认修订失败";
       } finally {
         deps.busy.value = false;
       }
@@ -92,7 +92,7 @@ export function usePlanLifecycleActions(deps: PlanLifecycleActionsDeps) {
       const issueText = response.dispatch?.lastError ? ` · ${response.dispatch.lastError}` : "";
       ElMessage.success(`Plan 已确认 · ${response.confirmation.stage}${runText}${issueText}`);
     } catch (caught) {
-      deps.error.value = caught instanceof Error ? `Confirm plan 失败：${caught.message}` : "Confirm plan 失败";
+      deps.error.value = caught instanceof Error ? `确认方案失败：${caught.message}` : "确认方案失败";
     } finally {
       deps.busy.value = false;
     }
@@ -120,7 +120,7 @@ export function usePlanLifecycleActions(deps: PlanLifecycleActionsDeps) {
       if (message === "CONVERSATION_ARTIFACT_NOT_EXECUTABLE") {
         ElMessage.error("此 Plan 是对话产物，不能入队执行。请在探索对话中修订为仓库文件产物并确认新版本。");
       } else {
-        deps.error.value = message ? `Enqueue plan 失败：${message}` : "Enqueue plan 失败";
+        deps.error.value = message ? `入队方案失败：${message}` : "入队方案失败";
       }
     } finally {
       deps.busy.value = false;
@@ -142,7 +142,7 @@ export function usePlanLifecycleActions(deps: PlanLifecycleActionsDeps) {
       if (runId) await deps.openRunView(runId, deps.thread.value?.id, deps.activeExplorerPlan.value?.id);
       ElMessage.success(result.dispatch?.waitReason ? `Plan 已派发，正在等待：${result.dispatch.waitReason}` : "Plan 已派发");
     } catch (caught) {
-      deps.error.value = caught instanceof Error ? `Start run 失败：${caught.message}` : "Start run 失败";
+      deps.error.value = caught instanceof Error ? `启动 Run 失败：${caught.message}` : "启动 Run 失败";
       ElMessage.error(deps.error.value);
     } finally {
       deps.busy.value = false;
@@ -158,9 +158,9 @@ export function usePlanLifecycleActions(deps: PlanLifecycleActionsDeps) {
       await api.revisePlanConfiguration(id);
       await deps.refreshPlanProjection();
       deps.contextPanel.value = "confirmed";
-      ElMessage.success("已基于当前配置创建新 Revision，请重新 Enqueue 并 Start run");
+      ElMessage.success("已基于当前配置创建新 Revision，请重新入队并启动 Run");
     } catch (caught) {
-      deps.error.value = caught instanceof Error ? `Create updated revision 失败：${caught.message}` : "Create updated revision 失败";
+      deps.error.value = caught instanceof Error ? `创建新修订失败：${caught.message}` : "创建新修订失败";
       ElMessage.error(deps.error.value);
     } finally {
       deps.busy.value = false;
@@ -179,23 +179,23 @@ export function usePlanLifecycleActions(deps: PlanLifecycleActionsDeps) {
     const activeDraft = deps.revisionDraft.value;
     if (activeDraft && activeDraft.planId === id) {
       try {
-        await ElMessageBox.confirm(`Discard revision V${activeDraft.targetRevision}? The confirmed V${activeDraft.basedOnRevision} remains unchanged.`, "Discard revision draft", { confirmButtonText: "Discard revision", cancelButtonText: "Keep editing", type: "warning" });
+        await ElMessageBox.confirm(`丢弃修订 V${activeDraft.targetRevision}？已确认的 V${activeDraft.basedOnRevision} 保持不变。`, "丢弃修订草稿", { confirmButtonText: "丢弃修订", cancelButtonText: "继续编辑", type: "warning" });
       } catch { return; }
       deps.busy.value = true;
       try {
         await api.discardRevisionDraft(id, activeDraft.draftId);
         deps.drawerOpen.value = false;
         await deps.refreshPlanProjection();
-        ElMessage.success(`Revision ${activeDraft.targetRevision} discarded`);
+        ElMessage.success(`修订 V${activeDraft.targetRevision} 已丢弃`);
       } catch (caught) {
-        deps.error.value = caught instanceof Error ? `Discard revision failed: ${caught.message}` : "Discard revision failed";
+        deps.error.value = caught instanceof Error ? `丢弃修订失败：${caught.message}` : "丢弃修订失败";
       } finally {
         deps.busy.value = false;
       }
       return;
     }
     try {
-      await ElMessageBox.confirm(`Discard “${plan.title}”? This Plan will be kept as Discarded and cannot be confirmed, enqueued, or started.`, "Discard plan", { confirmButtonText: "Discard plan", cancelButtonText: "Keep editing", type: "warning" });
+      await ElMessageBox.confirm(`丢弃「${plan.title}」？这个方案会保留为已丢弃，且不能再确认、入队或启动。`, "丢弃方案", { confirmButtonText: "丢弃方案", cancelButtonText: "继续编辑", type: "warning" });
     } catch {
       return;
     }
@@ -206,9 +206,9 @@ export function usePlanLifecycleActions(deps: PlanLifecycleActionsDeps) {
       if ((deps.candidate.value?.id ?? deps.candidate.value?.planId) === id) deps.candidate.value = null;
       deps.drawerOpen.value = false;
       await deps.refreshPlanProjection();
-      ElMessage.success("Plan discarded");
+      ElMessage.success("方案已丢弃");
     } catch (caught) {
-      deps.error.value = caught instanceof Error ? `Discard plan 失败：${caught.message}` : "Discard plan 失败";
+      deps.error.value = caught instanceof Error ? `丢弃方案失败：${caught.message}` : "丢弃方案失败";
       ElMessage.error(deps.error.value);
     } finally {
       deps.busy.value = false;

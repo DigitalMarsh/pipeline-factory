@@ -125,14 +125,14 @@ watch(() => props.run.id, () => {
 </script>
 
 <template>
-  <div class="execution-header-status" aria-label="Execution run details">
+  <div class="execution-header-status" aria-label="执行运行详情">
     <div class="execution-header-status-cards">
       <el-popover v-model:visible="contextOpen" placement="bottom-start" :width="560" trigger="click" popper-class="execution-header-status-popper" :teleported="true">
         <template #reference>
-          <button class="execution-header-status-trigger" data-status-card="context" type="button" aria-label="查看 Run context 详情" aria-controls="execution-header-context-details" :aria-expanded="isOpen('context')" @keydown.enter.prevent="toggleCard('context')" @keydown.space.prevent="toggleCard('context')">
+          <button class="execution-header-status-trigger" data-status-card="context" type="button" aria-label="查看运行上下文详情" aria-controls="execution-header-context-details" :aria-expanded="isOpen('context')" @keydown.enter.prevent="toggleCard('context')" @keydown.space.prevent="toggleCard('context')">
             <span :class="['execution-header-status-card', { blocked: runActivityFailed }]">
               <span class="header-status-card-label">运行上下文</span>
-              <strong class="header-status-card-value">Revision {{ run.planRevision }}</strong>
+              <strong class="header-status-card-value">第 {{ run.planRevision }} 版</strong>
               <small class="header-status-card-meta">{{ runActivityFailed ? "有 Run 级活动失败" : run.branch }}</small>
             </span>
           </button>
@@ -140,7 +140,7 @@ watch(() => props.run.id, () => {
         <section id="execution-header-context-details" class="execution-header-status-details" aria-label="Run context 详情">
           <div class="execution-header-status-details-heading"><div><span class="eyebrow">运行上下文</span><strong>执行线程上下文</strong></div><InfoFilled :size="15" aria-hidden="true" /></div>
           <div class="execution-context-grid">
-            <div><span>工作区</span><code>{{ run.workspacePath ?? "Not created" }}</code></div>
+            <div><span>工作区</span><code>{{ run.workspacePath ?? "未创建" }}</code></div>
             <div><span>基线提交</span><code>{{ run.baseCommit }}</code></div>
             <div><span>线程</span><code>{{ run.executionThreadId }}</code></div>
             <div><span>开始时间</span><strong>{{ formatStartedAt(run.startedAt) }}</strong></div>
@@ -156,7 +156,7 @@ watch(() => props.run.id, () => {
               </li>
             </ol>
           </div>
-          <div class="execution-header-detail-footer"><span>Plan {{ run.planId }} · Revision {{ run.planRevision }}</span><el-button size="small" @click="openPlan">View plan</el-button></div>
+          <div class="execution-header-detail-footer"><span>Plan {{ run.planId }} · 第 {{ run.planRevision }} 版</span><el-button size="small" @click="openPlan">查看方案</el-button></div>
         </section>
       </el-popover>
 
@@ -181,12 +181,12 @@ watch(() => props.run.id, () => {
 
       <el-popover v-model:visible="progressOpen" placement="bottom" :width="560" trigger="click" popper-class="execution-header-status-popper" :teleported="true">
         <template #reference>
-          <button class="execution-header-status-trigger" data-status-card="progress" type="button" aria-label="查看 Plan progress 详情" aria-controls="execution-header-progress-details" :aria-expanded="isOpen('progress')" @keydown.enter.prevent="toggleCard('progress')" @keydown.space.prevent="toggleCard('progress')">
+          <button class="execution-header-status-trigger" data-status-card="progress" type="button" aria-label="查看 方案进度 详情" aria-controls="execution-header-progress-details" :aria-expanded="isOpen('progress')" @keydown.enter.prevent="toggleCard('progress')" @keydown.space.prevent="toggleCard('progress')">
             <span :class="['execution-header-status-card', { ready: taskCounts.total > 0 && taskCounts.completed === taskCounts.total, blocked: taskCounts.blocked > 0 }]"><span class="header-status-card-label">方案进度</span><strong class="header-status-card-value">已完成 {{ taskCounts.completed }}/{{ taskCounts.total }}</strong><small class="header-status-card-meta">{{ taskCounts.blocked ? `已阻塞 ${taskCounts.blocked}` : taskCounts.active ? `进行中 ${taskCounts.active}` : taskCounts.unknown ? `状态未知 ${taskCounts.unknown}` : "任务执行步骤" }}</small></span>
           </button>
         </template>
-        <section id="execution-header-progress-details" class="execution-header-status-details" aria-label="Plan progress 详情">
-          <div class="execution-header-status-details-heading"><div><span class="eyebrow">执行步骤</span><strong>Plan progress</strong></div><span>已完成 {{ taskCounts.completed }}/{{ taskCounts.total }} 个任务</span></div>
+        <section id="execution-header-progress-details" class="execution-header-status-details" aria-label="方案进度 详情">
+          <div class="execution-header-status-details-heading"><div><span class="eyebrow">执行步骤</span><strong>方案进度</strong></div><span>已完成 {{ taskCounts.completed }}/{{ taskCounts.total }} 个任务</span></div>
           <div class="execution-progress-track" aria-hidden="true"><span :style="{ width: `${taskCounts.total ? Math.round((taskCounts.completed / taskCounts.total) * 100) : 0}%` }" /></div>
           <div v-if="tasks.length" class="execution-task-list">
             <button v-for="(task, index) in tasks" :key="task.id" type="button" :class="['execution-task', `execution-task-${task.status.toLowerCase()}`, { selected: selectedTaskId === task.id }]" :aria-label="`${task.title}, ${executionTaskStatusLabel(task.status)}`" @click="focusTask(task)">
@@ -208,37 +208,37 @@ watch(() => props.run.id, () => {
         </template>
         <section id="execution-header-loop-details" class="execution-header-status-details" aria-label="Executor Agent Loop 详情">
           <div class="execution-header-status-details-heading"><div><span class="eyebrow">Executor Agent 循环</span><strong>{{ executorLoop ? loopStatusLabel : "无活动 Loop" }}</strong></div><InfoFilled :size="15" aria-hidden="true" /></div>
-          <div v-if="executorLoop" class="agent-loop-strip" role="status"><div class="agent-loop-summary"><span class="eyebrow">Executor Agent 循环</span><strong>{{ executorLoop.mode }}</strong></div><span class="agent-loop-budget">{{ executorLoop.stepCount }} / {{ executorLoop.maxSteps }} 个循环步骤</span><div v-if="executorSteps.length" class="loop-step-list"><span v-for="step in executorSteps.slice(-4)" :key="`${step.loopId}-${step.sequence}`" class="loop-step"><strong>#{{ step.sequence }}</strong> {{ step.stepType }}</span></div><div class="loop-detail-actions"><el-button v-if="executorLoop.state === 'RUNNING'" size="small" :loading="actionBusy" @click="emit('loop-action', 'pause')"><VideoPause :size="14" /> Pause loop</el-button><el-button v-if="executorLoop.state === 'PAUSED'" size="small" :loading="actionBusy" @click="emit('loop-action', 'resume')"><VideoPlay :size="14" /> Resume loop</el-button><el-button v-if="['RUNNING', 'PAUSED', 'RECOVERING', 'WAITING_FOR_INPUT'].includes(executorLoop.state)" size="small" type="danger" plain :loading="actionBusy" @click="emit('loop-action', 'cancel')">Cancel loop</el-button></div></div>
+          <div v-if="executorLoop" class="agent-loop-strip" role="status"><div class="agent-loop-summary"><span class="eyebrow">Executor Agent 循环</span><strong>{{ executorLoop.mode }}</strong></div><span class="agent-loop-budget">{{ executorLoop.stepCount }} / {{ executorLoop.maxSteps }} 个循环步骤</span><div v-if="executorSteps.length" class="loop-step-list"><span v-for="step in executorSteps.slice(-4)" :key="`${step.loopId}-${step.sequence}`" class="loop-step"><strong>#{{ step.sequence }}</strong> {{ step.stepType }}</span></div><div class="loop-detail-actions"><el-button v-if="executorLoop.state === 'RUNNING'" size="small" :loading="actionBusy" @click="emit('loop-action', 'pause')"><VideoPause :size="14" /> 暂停 Loop</el-button><el-button v-if="executorLoop.state === 'PAUSED'" size="small" :loading="actionBusy" @click="emit('loop-action', 'resume')"><VideoPlay :size="14" /> 恢复 Loop</el-button><el-button v-if="['RUNNING', 'PAUSED', 'RECOVERING', 'WAITING_FOR_INPUT'].includes(executorLoop.state)" size="small" type="danger" plain :loading="actionBusy" @click="emit('loop-action', 'cancel')">取消 Loop</el-button></div></div>
           <div v-else class="explorer-header-status-empty" role="status"><strong>暂无 Executor Agent Loop</strong><span>当前 Run 没有正在运行或等待恢复的 Agent Loop。</span></div>
         </section>
       </el-popover>
 
       <el-popover v-model:visible="controlsOpen" placement="bottom" :width="560" trigger="click" popper-class="execution-header-status-popper" :teleported="true">
         <template #reference>
-          <button class="execution-header-status-trigger" data-status-card="controls" type="button" aria-label="查看 Run Control 详情" aria-controls="execution-header-controls-details" :aria-expanded="isOpen('controls')" @keydown.enter.prevent="toggleCard('controls')" @keydown.space.prevent="toggleCard('controls')">
+          <button class="execution-header-status-trigger" data-status-card="controls" type="button" aria-label="查看 运行控制详情" aria-controls="execution-header-controls-details" :aria-expanded="isOpen('controls')" @keydown.enter.prevent="toggleCard('controls')" @keydown.space.prevent="toggleCard('controls')">
             <span :class="['execution-header-status-card', { ready: hasControls }]" ><span class="header-status-card-label">运行控制</span><strong class="header-status-card-value">{{ hasControls ? "有可用操作" : "无可用操作" }}</strong><small class="header-status-card-meta">{{ hasControls ? "可执行操作" : "当前状态无需操作" }}</small></span>
           </button>
         </template>
-        <section id="execution-header-controls-details" class="execution-header-status-details" aria-label="Run Control 详情">
-          <div class="execution-header-status-details-heading"><div><span class="eyebrow">运行控制</span><strong>Execution controls</strong></div><InfoFilled :size="15" aria-hidden="true" /></div>
-          <p class="execution-header-status-description">Controls append facts to the ExecutionThread; they do not change the confirmed PlanRevision.</p>
-          <div v-if="hasControls" class="action-buttons execution-header-action-buttons"><el-button v-if="canTerminateRun(run.status)" type="danger" plain :loading="actionBusy" @click="emit('run-action', 'terminate')">Terminate run</el-button><el-button v-if="canPauseRun(run.status, threadState)" :loading="actionBusy" @click="emit('run-action', threadState === 'PAUSED' ? 'resume' : 'pause')"><VideoPlay v-if="threadState === 'PAUSED'" :size="14" /><VideoPause v-else :size="14" /> {{ threadState === 'PAUSED' ? 'Resume' : 'Pause' }}</el-button><el-button v-if="run.status === 'IN_PROGRESS' || run.status === 'READY_FOR_VERIFY'" type="primary" :loading="actionBusy" @click="emit('run-action', 'verify')"><Check :size="14" /> Run verification</el-button></div>
+        <section id="execution-header-controls-details" class="execution-header-status-details" aria-label="运行控制详情">
+          <div class="execution-header-status-details-heading"><div><span class="eyebrow">运行控制</span><strong>执行控制</strong></div><InfoFilled :size="15" aria-hidden="true" /></div>
+          <p class="execution-header-status-description">控制命令只是往 ExecutionThread 追加事实；它们不会改动已确认的 PlanRevision。</p>
+          <div v-if="hasControls" class="action-buttons execution-header-action-buttons"><el-button v-if="canTerminateRun(run.status)" type="danger" plain :loading="actionBusy" @click="emit('run-action', 'terminate')">终止 Run</el-button><el-button v-if="canPauseRun(run.status, threadState)" :loading="actionBusy" @click="emit('run-action', threadState === 'PAUSED' ? 'resume' : 'pause')"><VideoPlay v-if="threadState === 'PAUSED'" :size="14" /><VideoPause v-else :size="14" /> {{ threadState === 'PAUSED' ? '恢复' : '暂停' }}</el-button><el-button v-if="run.status === 'IN_PROGRESS' || run.status === 'READY_FOR_VERIFY'" type="primary" :loading="actionBusy" @click="emit('run-action', 'verify')"><Check :size="14" /> 运行验证</el-button></div>
           <div v-else class="execution-no-action" role="status"><strong>当前状态无需操作</strong><span>Run 当前状态不提供可执行的控制命令。</span></div>
         </section>
       </el-popover>
 
       <el-popover v-model:visible="reviewOpen" placement="bottom-end" :width="600" trigger="click" popper-class="execution-header-status-popper" :teleported="true">
         <template #reference>
-          <button class="execution-header-status-trigger" data-status-card="review" type="button" aria-label="查看 Verification 和 Human merge confirmation 详情" aria-controls="execution-header-review-details" :aria-expanded="isOpen('review')" @keydown.enter.prevent="toggleCard('review')" @keydown.space.prevent="toggleCard('review')">
+          <button class="execution-header-status-trigger" data-status-card="review" type="button" aria-label="查看 验证与人工合并确认详情" aria-controls="execution-header-review-details" :aria-expanded="isOpen('review')" @keydown.enter.prevent="toggleCard('review')" @keydown.space.prevent="toggleCard('review')">
             <span :class="['execution-header-status-card', { ready: review.tone === 'ready', blocked: review.tone === 'blocked' }]" ><span class="header-status-card-label">审阅</span><strong class="header-status-card-value">{{ reviewStatus }}</strong><small class="header-status-card-meta">{{ mergeRequest ? mergeRequestStatusText : verificationStatusSummary ?? "等待验证" }}</small></span>
           </button>
         </template>
-        <section id="execution-header-review-details" class="execution-header-status-details" aria-label="Verification 和 Human merge confirmation 详情">
-          <div class="execution-header-status-details-heading"><div><span class="eyebrow">审阅与合并</span><strong>Verification and Human merge confirmation</strong></div><InfoFilled :size="15" aria-hidden="true" /></div>
+        <section id="execution-header-review-details" class="execution-header-status-details" aria-label="验证与人工合并确认详情">
+          <div class="execution-header-status-details-heading"><div><span class="eyebrow">审阅与合并</span><strong>验证与人工合并确认</strong></div><InfoFilled :size="15" aria-hidden="true" /></div>
           <p class="execution-header-status-description">{{ reviewStatusDescription }}</p>
           <div class="review-context-grid"><div><span>执行分支</span><code>{{ run.branch }}</code></div><div><span>基线提交</span><code>{{ run.baseCommit }}</code></div></div>
-          <div v-if="verification || run.status === 'MERGE_READY'" class="review-detail-block"><div class="evidence-heading"><div><span class="eyebrow">验证运行</span><strong>Deterministic checks</strong></div><el-tag :type="verification?.status === 'PASSED' ? 'success' : 'danger'" effect="light">{{ verificationStatusText }}</el-tag></div><div v-if="verification" class="verification-summary"><span>{{ verification.commandResults.length }} 条命令</span><span>修复尝试 {{ verification.repairAttempts }} 次</span><span>{{ new Date(verification.completedAt).toLocaleString('zh-CN') }}</span></div><div v-if="verification?.commandResults.length" class="command-results"><div v-for="command in verification.commandResults" :key="command.commandId" class="command-result"><code>{{ command.commandId }}</code><span :class="command.result.exitCode === 0 ? 'result-pass' : 'result-fail'">exit {{ command.result.exitCode }}</span></div></div><div v-if="run.status === 'MERGE_READY' && !mergeRequest" class="review-form"><el-input :model-value="sourceCommit" size="small" aria-label="Reviewed source commit" placeholder="Reviewed source commit" @update:model-value="emit('update:source-commit', $event)" /><el-button type="primary" size="small" :loading="actionBusy" @click="emit('create-review')">Create review</el-button></div></div>
-          <div v-if="mergeRequest" class="review-detail-block merge-card"><div class="evidence-heading"><div><span class="eyebrow">合并请求 · {{ mergeRequest.id }}</span><strong>Human merge confirmation</strong></div><el-tag :type="mergeRequest.status === 'MERGED' ? 'success' : 'warning'" effect="light">{{ mergeRequestStatusText }}</el-tag></div><div class="verification-summary"><span>Source <code>{{ mergeRequest.sourceCommit }}</code></span><span>Target <code>{{ mergeRequest.targetBranch }}</code></span><span v-if="mergeRequest.detectedTargetCommit">Detected <code>{{ mergeRequest.detectedTargetCommit }}</code></span></div><p v-if="mergeRequest.status === 'OPEN' && mergeRequest.detectedTargetCommit" class="merge-detected-banner"><strong>Merge detected</strong> · 已检测到目标分支包含 source commit；请确认后将 Plan 更新为「已合并」。</p><div v-if="mergeRequest.status === 'OPEN'" class="review-form"><el-input :model-value="targetCommit" size="small" aria-label="Target commit" placeholder="Actual target commit after manual merge" @update:model-value="emit('update:target-commit', $event)" /><el-button type="primary" size="small" :loading="actionBusy" @click="emit('confirm-merged')">Confirm merged</el-button></div></div>
+          <div v-if="verification || run.status === 'MERGE_READY'" class="review-detail-block"><div class="evidence-heading"><div><span class="eyebrow">验证运行</span><strong>确定性检查</strong></div><el-tag :type="verification?.status === 'PASSED' ? 'success' : 'danger'" effect="light">{{ verificationStatusText }}</el-tag></div><div v-if="verification" class="verification-summary"><span>{{ verification.commandResults.length }} 条命令</span><span>修复尝试 {{ verification.repairAttempts }} 次</span><span>{{ new Date(verification.completedAt).toLocaleString('zh-CN') }}</span></div><div v-if="verification?.commandResults.length" class="command-results"><div v-for="command in verification.commandResults" :key="command.commandId" class="command-result"><code>{{ command.commandId }}</code><span :class="command.result.exitCode === 0 ? 'result-pass' : 'result-fail'">exit {{ command.result.exitCode }}</span></div></div><div v-if="run.status === 'MERGE_READY' && !mergeRequest" class="review-form"><el-input :model-value="sourceCommit" size="small" aria-label="已审阅的源提交" placeholder="已审阅的源提交" @update:model-value="emit('update:source-commit', $event)" /><el-button type="primary" size="small" :loading="actionBusy" @click="emit('create-review')">创建审阅</el-button></div></div>
+          <div v-if="mergeRequest" class="review-detail-block merge-card"><div class="evidence-heading"><div><span class="eyebrow">合并请求 · {{ mergeRequest.id }}</span><strong>人工合并确认</strong></div><el-tag :type="mergeRequest.status === 'MERGED' ? 'success' : 'warning'" effect="light">{{ mergeRequestStatusText }}</el-tag></div><div class="verification-summary"><span>源 <code>{{ mergeRequest.sourceCommit }}</code></span><span>目标 <code>{{ mergeRequest.targetBranch }}</code></span><span v-if="mergeRequest.detectedTargetCommit">已检测到 <code>{{ mergeRequest.detectedTargetCommit }}</code></span></div><p v-if="mergeRequest.status === 'OPEN' && mergeRequest.detectedTargetCommit" class="merge-detected-banner"><strong>检测到合并</strong> · 已检测到目标分支包含 source commit；请确认后将 Plan 更新为「已合并」。</p><div v-if="mergeRequest.status === 'OPEN'" class="review-form"><el-input :model-value="targetCommit" size="small" aria-label="目标提交" placeholder="人工合并后的实际目标提交" @update:model-value="emit('update:target-commit', $event)" /><el-button type="primary" size="small" :loading="actionBusy" @click="emit('confirm-merged')">确认已合并</el-button></div></div>
           <div v-if="!verification && !mergeRequest && run.status !== 'MERGE_READY'" class="explorer-header-status-empty" role="status"><strong>暂无 Review 证据</strong><span>验证完成或创建 Merge request 后，相关详情会显示在这里。</span></div>
         </section>
       </el-popover>

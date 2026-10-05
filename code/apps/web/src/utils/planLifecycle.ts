@@ -31,7 +31,7 @@ const PLAN_LIFECYCLE_PROGRESS_STATUSES: PlanLifecycleStatus[] = [
   "NEEDS_PLAN_CHANGE",
   "NEEDS_CONFIGURATION",
 ];
-const UNCONFIRMED_LIFECYCLE_REASON = "Plan lifecycle is invalid: it reached a later state without a confirmation record.";
+const UNCONFIRMED_LIFECYCLE_REASON = "方案生命周期不合法：它在没有确认记录的情况下进入了更后面的状态。";
 
 export function normalizedLifecycleStatus(status: string, plan?: Plan): PlanLifecycleStatus {
   if (plan?.dispatch?.waitReason === "NEEDS_CONFIGURATION") return "NEEDS_CONFIGURATION";

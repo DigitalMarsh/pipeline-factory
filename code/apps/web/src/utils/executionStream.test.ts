@@ -26,7 +26,7 @@ describe("projectExecutionJournal", () => {
       { sequence: 3, type: "USER_GUIDANCE", occurredAt: "2026-08-30T07:00:02.000Z", payload: { content: "保持范围不变" } },
     ], "COMPLETED", plan);
 
-    expect(items[0]).toMatchObject({ kind: "plan", title: "Plan received", sequence: 0, plan });
+    expect(items[0]).toMatchObject({ kind: "plan", title: "已收到方案", sequence: 0, plan });
     expect(items.slice(1).map((item) => item.sequence)).toEqual([1, 2, 3]);
     expect(items[1]).toMatchObject({ kind: "activity", title: "Run 已创建" });
     expect(items[3]).toMatchObject({ kind: "user", content: "保持范围不变" });

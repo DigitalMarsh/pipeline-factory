@@ -49,11 +49,11 @@ describe("ProjectCreateDialog", () => {
   it("shows the existing Project creation fields inside a modal", () => {
     const mounted = mountDialog();
 
-    expect(mounted.host.textContent).toContain("New Project");
+    expect(mounted.host.textContent).toContain("新建项目");
     expect(mounted.host.querySelector('input[placeholder="例如：Pipeline Factory"]')).not.toBeNull();
     expect(mounted.host.querySelector('input[placeholder="例如：PF"]')).not.toBeNull();
     expect(mounted.host.querySelector('input[placeholder="/Users/you/Project/repository"]')).not.toBeNull();
-    expect(mounted.host.textContent).toContain("Validate & Create");
+    expect(mounted.host.textContent).toContain("校验并创建");
 
     mounted.app.unmount();
     mounted.host.remove();

@@ -503,7 +503,7 @@ function planMessage(plan: ExecutionPlanSnapshot): ExecutionStreamItem {
     id: `execution-plan-${plan.planId}-${plan.revision}`,
     kind: "plan",
     role: "assistant",
-    title: "Plan received",
+    title: "已收到方案",
     content: plan.goal,
     messageType: "PLAN",
     detail: "",

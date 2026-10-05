@@ -47,7 +47,7 @@ function close() {
 function submit() {
   const trimmedTitle = draftTitle.value.trim();
   if (!trimmedTitle) {
-    localError.value = "Thread name is required";
+    localError.value = "线程名称不能为空";
     return;
   }
   localError.value = null;
@@ -72,24 +72,24 @@ function submit() {
         <div class="explorer-rename-heading-icon"><EditPen :size="19" /></div>
         <div>
           <div class="eyebrow">线程操作</div>
-          <h2>Rename thread</h2>
+          <h2>重命名线程</h2>
         </div>
       </div>
     </template>
 
     <form class="explorer-rename-form" @submit.prevent="submit">
       <label class="explorer-rename-field">
-        <span>Thread name</span>
-        <input ref="titleInput" v-model="draftTitle" autofocus maxlength="200" :disabled="saving" aria-label="Thread name" />
+        <span>线程名称</span>
+        <input ref="titleInput" v-model="draftTitle" autofocus maxlength="200" :disabled="saving" aria-label="线程名称" />
       </label>
-      <p class="explorer-rename-hint">The new name will appear in the Explorer header and thread list.</p>
+      <p class="explorer-rename-hint">新名字会出现在探索视图的标题与线程列表里。</p>
       <div v-if="errorMessage" class="explorer-rename-error" role="alert"><Warning :size="14" /> {{ errorMessage }}</div>
     </form>
 
     <template #footer>
       <div class="explorer-rename-footer">
-        <el-button :disabled="saving" @click="close"><CircleClose :size="14" /> Cancel</el-button>
-        <el-button type="primary" data-rename-action="submit" :loading="saving" :disabled="saving || !draftTitle.trim()" @click="submit"><Check :size="14" /> Save name</el-button>
+        <el-button :disabled="saving" @click="close"><CircleClose :size="14" /> 取消</el-button>
+        <el-button type="primary" data-rename-action="submit" :loading="saving" :disabled="saving || !draftTitle.trim()" @click="submit"><Check :size="14" /> 保存名称</el-button>
       </div>
     </template>
   </el-dialog>

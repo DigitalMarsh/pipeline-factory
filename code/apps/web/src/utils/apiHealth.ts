@@ -8,9 +8,9 @@ export type ApiHealthVisual = {
 };
 
 const API_HEALTH_VISUALS: Record<ApiHealthState, ApiHealthVisual> = {
-  checking: { label: "Checking API…", tooltip: "Checking API service availability.", tone: "checking" },
-  healthy: { label: "API Healthy", tooltip: "API service is reachable. Click to refresh.", tone: "healthy" },
-  unavailable: { label: "API Unavailable", tooltip: "API service is unavailable. Click to retry.", tone: "unavailable" },
+  checking: { label: "Checking API…", tooltip: "正在检查 API 可用性。", tone: "checking" },
+  healthy: { label: "API Healthy", tooltip: "API 可用，点击刷新。", tone: "healthy" },
+  unavailable: { label: "API Unavailable", tooltip: "API 不可用，点击重试。", tone: "unavailable" },
 };
 
 export function classifyApiHealth(response: { status?: string } | null): ApiHealthState {

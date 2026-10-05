@@ -162,7 +162,7 @@ async function startPlanRun() {
     const result = await api.startPlanRun(plan.planId);
     await load();
     ElMessage.success(result.dispatch?.waitReason ? `Plan 已派发，正在等待：${result.dispatch.waitReason}` : "Plan 已进入 Dispatched 阶段");
-  } catch (caught) { ElMessage.error(caught instanceof Error ? caught.message : "Start run 失败"); }
+  } catch (caught) { ElMessage.error(caught instanceof Error ? caught.message : "启动 Run 失败"); }
   finally { actionBusy.value = false; }
 }
 
@@ -202,12 +202,12 @@ onBeforeUnmount(() => { requestScope.invalidate(); closeEvents(); });
         <p>自动调度、执行状态与证据集中在一个 Project workspace。</p>
       </div>
       <div class="workbench-header-actions">
-        <span class="workbench-sync"><i /> Live replay · {{ snapshot?.cursor ?? 0 }}</span>
+        <span class="workbench-sync"><i /> 实时回放 · {{ snapshot?.cursor ?? 0 }}</span>
         <el-button plain @click="load"><Refresh :size="14" /> Refresh</el-button>
       </div>
     </header>
 
-    <div v-if="error" class="workbench-alert danger"><Warning :size="15" /><span>{{ error }}</span><el-button text @click="load">Retry</el-button></div>
+    <div v-if="error" class="workbench-alert danger"><Warning :size="15" /><span>{{ error }}</span><el-button text @click="load">重试</el-button></div>
 
     <section class="workbench-today" aria-label="今日活动">
       <header class="today-heading"><span class="eyebrow">今日</span><strong>{{ activity?.date ?? "—" }}</strong><small v-if="activity">{{ activity.timeZone }}</small><small v-if="activity && activity.retentionDays === 0">保留窗口：不回收</small><small v-else-if="activity">保留窗口：{{ activity.retentionDays }} 天</small></header>
@@ -229,10 +229,10 @@ onBeforeUnmount(() => { requestScope.invalidate(); closeEvents(); });
       <p v-if="activity && !activityHasFacts" class="today-note">今天还没有执行完成、合并或阻塞的记录。事件保留窗口之外的历史不在统计范围内。</p>
     </section>
 
-    <nav class="workbench-mobile-tabs" aria-label="Workbench panels">
-      <button type="button" :class="{ active: mobilePanel === 'history' }" @click="mobilePanel = 'history'">History</button>
-      <button type="button" :class="{ active: mobilePanel === 'inspector' }" @click="mobilePanel = 'inspector'">Inspector</button>
-      <button type="button" :class="{ active: mobilePanel === 'context' }" @click="mobilePanel = 'context'">Context</button>
+    <nav class="workbench-mobile-tabs" aria-label="工作台分区">
+      <button type="button" :class="{ active: mobilePanel === 'history' }" @click="mobilePanel = 'history'">历史</button>
+      <button type="button" :class="{ active: mobilePanel === 'inspector' }" @click="mobilePanel = 'inspector'">检查器</button>
+      <button type="button" :class="{ active: mobilePanel === 'context' }" @click="mobilePanel = 'context'">上下文</button>
     </nav>
 
     <div class="workbench-layout" v-loading="loading">
@@ -246,7 +246,7 @@ onBeforeUnmount(() => { requestScope.invalidate(); closeEvents(); });
           <button v-for="plan in visiblePlans" :key="plan.planId" type="button" class="history-item" :class="{ selected: selectedPlan?.planId === plan.planId }" @click="selectPlan(plan)">
             <span class="history-icon"><Document :size="14" /></span><span class="history-copy"><strong>{{ plan.title }}</strong><small>{{ plan.planId }}</small><small>{{ relativeTime(plan.lastEventAt) }}</small></span><span class="history-status" :class="'tone-' + planStatus(plan).tone" :title="planStatus(plan).label" />
           </button>
-          <div v-if="!loading && visiblePlans.length === 0" class="workbench-empty compact"><Collection :size="24" /><strong>{{ plans.length ? "这一档暂时没有任务" : "还没有已确认的任务" }}</strong><span>{{ plans.length ? "换一个分区看看，或点 全部 显示所有任务。" : "确认后的 Plan 会作为任务出现在这里。" }}</span><RouterLink :to="'/projects/' + projectId + '/explorer'">Open Explorer <ArrowRight :size="13" /></RouterLink></div>
+          <div v-if="!loading && visiblePlans.length === 0" class="workbench-empty compact"><Collection :size="24" /><strong>{{ plans.length ? "这一档暂时没有任务" : "还没有已确认的任务" }}</strong><span>{{ plans.length ? "换一个分区看看，或点 全部 显示所有任务。" : "确认后的 Plan 会作为任务出现在这里。" }}</span><RouterLink :to="'/projects/' + projectId + '/explorer'">打开探索 <ArrowRight :size="13" /></RouterLink></div>
         </div>
       </aside>
 
@@ -254,27 +254,27 @@ onBeforeUnmount(() => { requestScope.invalidate(); closeEvents(); });
         <div v-if="selectedPlan" class="inspector-content">
           <div class="inspector-topline"><span class="eyebrow">方案检查器 · 第 {{ selectedPlan.revision }} 版</span><el-tag :type="statusTagType" effect="light">{{ currentStatus.label }}</el-tag></div>
           <div class="inspector-title"><span class="inspector-plan-icon"><Document :size="20" /></span><div><h2>{{ selectedPlan.title }}</h2><code>{{ selectedPlan.planId }}</code></div></div>
-          <div class="inspector-summary"><span><Clock :size="14" /> Last event {{ relativeTime(selectedPlan.lastEventAt) }}</span><span><Cpu :size="14" /> Attempt {{ selectedDispatch?.attempt ?? 0 }}</span><span><FolderOpened :size="14" /> {{ selectedProject?.name ?? selectedPlan.projectId }}</span></div>
-          <section class="inspector-section"><div class="inspector-section-heading"><span>01</span><strong>Goal & acceptance</strong></div><p class="inspector-goal">{{ selectedContract?.goal }}</p><ul class="inspector-check-list"><li v-for="criterion in selectedContract?.acceptanceCriteria ?? []" :key="criterion"><Check :size="13" />{{ criterion }}</li></ul></section>
-          <section class="inspector-section"><div class="inspector-section-heading"><span>02</span><strong>Approved plan steps</strong><small>{{ selectedContract?.tasks.length ?? 0 }} steps</small></div><div class="inspector-task-list"><div v-for="(task, index) in selectedContract?.tasks ?? []" :key="task.id" class="inspector-task"><span>{{ index + 1 }}</span><div><strong>{{ task.title }}</strong><small><template v-if="task.dependencies.length">depends on {{ task.dependencies.join(", ") }}</template><template v-else>no step dependencies</template></small></div></div></div><p v-if="selectedContract?.tasks.length ?? 0" class="inspector-note">计划态的步骤清单：每一步的实际进度（执行中 / 已完成 / 受阻）来自 Run 的执行日志，用下方 <strong>Open Run</strong> 查看。</p></section>
-          <section class="inspector-section"><div class="inspector-section-heading"><span>03</span><strong>Scope & verification</strong></div><div class="inspector-scope-grid"><div><label>包含</label><code v-for="item in selectedContract?.include ?? []" :key="item">{{ item }}</code></div><div><label>排除</label><code v-for="item in selectedContract?.exclude ?? []" :key="item">{{ item }}</code><span v-if="selectedContract?.exclude.length ?? 0 === 0" class="scope-empty">None</span></div><div><label>验证</label><code v-for="item in selectedContract?.verificationCommandIds ?? []" :key="item">{{ item }}</code></div><div><label>基线分支</label><code>{{ selectedContract?.baseBranch ?? "—" }}</code></div><div><label>基线提交</label><code>{{ selectedContract?.baseCommit ?? "—" }}</code></div><div><label>修复上限</label><code>{{ selectedContract?.maxRepairAttempts ?? "—" }}</code></div></div></section>
+          <div class="inspector-summary"><span><Clock :size="14" /> 最近事件 {{ relativeTime(selectedPlan.lastEventAt) }}</span><span><Cpu :size="14" /> 第 {{ (selectedDispatch?.attempt ?? 0) }} 次尝试</span><span><FolderOpened :size="14" /> {{ selectedProject?.name ?? selectedPlan.projectId }}</span></div>
+          <section class="inspector-section"><div class="inspector-section-heading"><span>01</span><strong>目标与验收</strong></div><p class="inspector-goal">{{ selectedContract?.goal }}</p><ul class="inspector-check-list"><li v-for="criterion in selectedContract?.acceptanceCriteria ?? []" :key="criterion"><Check :size="13" />{{ criterion }}</li></ul></section>
+          <section class="inspector-section"><div class="inspector-section-heading"><span>02</span><strong>已批准的方案步骤</strong><small>{{ selectedContract?.tasks.length ?? 0 }} 步</small></div><div class="inspector-task-list"><div v-for="(task, index) in selectedContract?.tasks ?? []" :key="task.id" class="inspector-task"><span>{{ index + 1 }}</span><div><strong>{{ task.title }}</strong><small><template v-if="task.dependencies.length">依赖 {{ task.dependencies.join("、") }}</template><template v-else>无步骤依赖</template></small></div></div></div><p v-if="selectedContract?.tasks.length ?? 0" class="inspector-note">计划态的步骤清单：每一步的实际进度（执行中 / 已完成 / 受阻）来自 Run 的执行日志，用下方 <strong>打开 Run</strong> 查看。</p></section>
+          <section class="inspector-section"><div class="inspector-section-heading"><span>03</span><strong>范围与验证</strong></div><div class="inspector-scope-grid"><div><label>包含</label><code v-for="item in selectedContract?.include ?? []" :key="item">{{ item }}</code></div><div><label>排除</label><code v-for="item in selectedContract?.exclude ?? []" :key="item">{{ item }}</code><span v-if="selectedContract?.exclude.length ?? 0 === 0" class="scope-empty">无</span></div><div><label>验证</label><code v-for="item in selectedContract?.verificationCommandIds ?? []" :key="item">{{ item }}</code></div><div><label>基线分支</label><code>{{ selectedContract?.baseBranch ?? "—" }}</code></div><div><label>基线提交</label><code>{{ selectedContract?.baseCommit ?? "—" }}</code></div><div><label>修复上限</label><code>{{ selectedContract?.maxRepairAttempts ?? "—" }}</code></div></div></section>
           <div v-if="selectedDispatch?.lastError" class="workbench-alert warning"><Warning :size="14" /><span>{{ selectedDispatch.lastError }}</span></div>
           <div class="inspector-actions">
-            <el-button v-if="selectedPlan.status === 'READY'" type="primary" :loading="actionBusy" @click="enqueuePlan">Enqueue plan <ArrowRight :size="14" /></el-button>
-            <el-button v-else-if="selectedPlan.status === 'ENQUEUED'" type="primary" :loading="actionBusy" @click="startPlanRun">Start run <ArrowRight :size="14" /></el-button>
-            <el-button v-if="selectedRun" plain @click="openRun">Open Run <ArrowRight :size="14" /></el-button>
+            <el-button v-if="selectedPlan.status === 'READY'" type="primary" :loading="actionBusy" @click="enqueuePlan">入队方案 <ArrowRight :size="14" /></el-button>
+            <el-button v-else-if="selectedPlan.status === 'ENQUEUED'" type="primary" :loading="actionBusy" @click="startPlanRun">启动 Run <ArrowRight :size="14" /></el-button>
+            <el-button v-if="selectedRun" plain @click="openRun">打开 Run <ArrowRight :size="14" /></el-button>
             <span v-if="selectedPlan.status === 'DISPATCHED' && !selectedRun" class="action-note"><Clock :size="14" /> {{ currentStatus.label }}</span>
           </div>
         </div>
-        <div v-else class="workbench-empty inspector-empty"><Document :size="35" /><strong>Select a Plan</strong><span>选择左侧历史项查看完整 Plan Inspector。</span></div>
+        <div v-else class="workbench-empty inspector-empty"><Document :size="35" /><strong>选择一个方案</strong><span>选择左侧历史项查看完整 Plan Inspector。</span></div>
       </main>
 
       <aside class="workbench-context" :class="{ 'mobile-panel-hidden': mobilePanel !== 'context' }">
-        <div class="workbench-panel-heading"><div><span class="eyebrow">上下文</span><h2>Evidence</h2></div><CircleCheck :size="17" class="context-ok" /></div>
-        <section class="context-block"><div class="context-block-title"><Lock :size="14" /> Policy</div><div v-if="selectedPlan" class="context-facts"><div><span>Executor role</span><code>{{ selectedPlan.resolvedContract?.execution.executorModelRole ?? "executor" }} · fixed</code></div><div><span>Tool policy</span><code>{{ selectedPlan.resolvedContract?.execution.toolPolicy ?? "executor-scoped-write" }} · fixed</code></div><div><span>Merge</span><code>{{ selectedContract?.mergeStrategy ?? "—" }} · human</code></div></div><div v-else class="context-muted">Select a Plan to inspect policy.</div></section>
-        <section class="context-block"><div class="context-block-title"><Collection :size="14" /> Memory</div><div class="memory-card"><strong>{{ selectedProject?.name ?? "Workspace" }}</strong><span>{{ activeRunCount }} active Run{{ activeRunCount === 1 ? "" : "s" }}</span><span>{{ selectedProject?.summary.needsAttentionCount ?? 0 }} attention item{{ (selectedProject?.summary.needsAttentionCount ?? 0) === 1 ? "" : "s" }}</span></div></section>
-        <section class="context-block evidence-block"><div class="context-block-title"><CircleCheck :size="14" /> Recent evidence <small>{{ evidence.length }}</small></div><div v-if="evidence.length" class="evidence-list"><div v-for="event in evidence" :key="event.id" class="evidence-item"><span class="evidence-dot" :class="{ success: event.type.includes('completed') || event.type.includes('confirmed') }" /><div><strong>{{ eventLabel(event.type) }}</strong><small>{{ relativeTime(event.occurredAt) }}</small></div></div></div><div v-else class="context-muted">No replayable evidence for this selection.</div></section>
-        <div class="context-footer"><span class="live-dot" /> Event cursor {{ snapshot?.cursor ?? 0 }}<RouterLink :to="'/projects/' + projectId + '/settings?tab=commands'">Review policy <ArrowRight :size="13" /></RouterLink></div>
+        <div class="workbench-panel-heading"><div><span class="eyebrow">上下文</span><h2>证据</h2></div><CircleCheck :size="17" class="context-ok" /></div>
+        <section class="context-block"><div class="context-block-title"><Lock :size="14" /> 策略</div><div v-if="selectedPlan" class="context-facts"><div><span>执行侧角色</span><code>{{ selectedPlan.resolvedContract?.execution.executorModelRole ?? "executor" }} · fixed</code></div><div><span>工具策略</span><code>{{ selectedPlan.resolvedContract?.execution.toolPolicy ?? "executor-scoped-write" }} · fixed</code></div><div><span>合并</span><code>{{ selectedContract?.mergeStrategy ?? "—" }} · human</code></div></div><div v-else class="context-muted">选择一个方案以查看策略。</div></section>
+        <section class="context-block"><div class="context-block-title"><Collection :size="14" /> 记忆</div><div class="memory-card"><strong>{{ selectedProject?.name ?? "工作区" }}</strong><span>{{ activeRunCount }} 个在跑</span><span>{{ selectedProject?.summary.needsAttentionCount ?? 0 }} 项待处理{{ (selectedProject?.summary.needsAttentionCount ?? 0) === 1 ? "" : "s" }}</span></div></section>
+        <section class="context-block evidence-block"><div class="context-block-title"><CircleCheck :size="14" /> 最近的证据 <small>{{ evidence.length }}</small></div><div v-if="evidence.length" class="evidence-list"><div v-for="event in evidence" :key="event.id" class="evidence-item"><span class="evidence-dot" :class="{ success: event.type.includes('completed') || event.type.includes('confirmed') }" /><div><strong>{{ eventLabel(event.type) }}</strong><small>{{ relativeTime(event.occurredAt) }}</small></div></div></div><div v-else class="context-muted">这个选择没有可回放的证据。</div></section>
+        <div class="context-footer"><span class="live-dot" /> 事件游标 {{ snapshot?.cursor ?? 0 }}<RouterLink :to="'/projects/' + projectId + '/settings?tab=commands'">审阅策略 <ArrowRight :size="13" /></RouterLink></div>
       </aside>
     </div>
   </div>

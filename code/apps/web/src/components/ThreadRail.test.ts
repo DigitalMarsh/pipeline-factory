@@ -154,13 +154,13 @@ describe("ThreadRail left workspace navigation", () => {
     expect(contextCard).not.toBeNull();
     expect(contextCard?.textContent).toContain("Project 1");
     expect(contextCard?.textContent).not.toContain("CURRENT PROJECT");
-    expect(contextCard?.textContent).toContain("2 explorations");
+    expect(contextCard?.textContent).toContain("2 条探索线程");
     expect(contextCard?.textContent).toContain("启用中");
     const titleRow = contextCard?.querySelector<HTMLElement>(".project-context-title-row");
     const metaRow = contextCard?.querySelector<HTMLElement>(".project-context-meta-row");
     expect(titleRow?.querySelector(".project-context-name")?.textContent).toContain("Project 1");
     expect(contextCard?.querySelector(".el-tag")?.textContent).toContain("启用中");
-    expect(metaRow?.querySelector(".project-context-count")?.textContent).toContain("2 explorations");
+    expect(metaRow?.querySelector(".project-context-count")?.textContent).toContain("2 条探索线程");
     expect(metaRow?.querySelectorAll("*")).toHaveLength(1);
     expect(contextCard?.querySelector(".project-context-path")).toBeNull();
     expect(contextCard?.getAttribute("aria-expanded")).toBe("false");
@@ -241,10 +241,10 @@ describe("ThreadRail left workspace navigation", () => {
     expect(mounted.host.querySelector(".project-list")).not.toBeNull();
     expect(mounted.host.querySelector(".explorer-list")).toBeNull();
     expect(mounted.host.textContent).toContain("Project 1");
-    expect(mounted.host.textContent).toContain("Open Explorer");
-    expect(mounted.host.textContent).toContain("Settings");
-    expect(mounted.host.textContent).toContain("Archive");
-    expect(mounted.host.textContent).toContain("New Project");
+    expect(mounted.host.textContent).toContain("打开探索");
+    expect(mounted.host.textContent).toContain("设置");
+    expect(mounted.host.textContent).toContain("归档");
+    expect(mounted.host.textContent).toContain("新建项目");
     expect(mounted.host.querySelector(".left-panel-manage")).toBeNull();
 
     mounted.app.unmount();

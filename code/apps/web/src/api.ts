@@ -17,7 +17,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const headers = { ...(init?.headers ?? {}) } as Record<string, string>;
   if (init?.body && !Object.keys(headers).some((key) => key.toLowerCase() === "content-type")) headers["content-type"] = "application/json";
   const response = await fetch(url, { ...init, headers });
-  if (!response.ok) throw new ApiRequestError((await response.json().catch(() => null))?.error ?? `Request failed: ${response.status}`, response.status);
+  if (!response.ok) throw new ApiRequestError((await response.json().catch(() => null))?.error ?? `请求失败：${response.status}`, response.status);
   return response.json() as Promise<T>;
 }
 
