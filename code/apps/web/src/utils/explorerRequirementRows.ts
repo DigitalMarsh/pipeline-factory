@@ -76,10 +76,15 @@ function planStatusFor(requirement: ExplorerPlan, plan: Plan | null): Requiremen
 function taskStatusFor(plan: Plan | null, run: Run | null): RequirementStatus {
   if (!plan || plan.status === "DRAFT" || plan.status === "DISCARDED") return { label: "—", tone: "neutral" };
   if (run) {
+    // **`RunStatus` 有 11 个取值，这里必须逐个接住**：漏掉的那些会掉进最后那条兜底，
+    // 在需求清单里显示成"未知状态：RECOVERING"这种半截枚举值。`RECOVERING` 尤其不能漏——
+    // 启动恢复把被中断的 Run 交回给人决定时，它就是当时的唯一现场证据。
     if (["STARTING", "QUEUED", "RUNNING", "IN_PROGRESS", "VERIFYING"].includes(run.status)) return { label: "运行中", tone: "progress" };
+    if (run.status === "READY_FOR_VERIFY") return { label: "待验证", tone: "progress" };
     if (["COMPLETED", "MERGED"].includes(run.status)) return { label: "运行完", tone: "success" };
+    if (run.status === "RECOVERING") return { label: "需要恢复", tone: "attention" };
     if (run.status === "MERGE_READY") return { label: "待处理", tone: "attention" };
-    if (["FAILED", "CANCELLED", "BLOCKED"].includes(run.status)) return { label: "待处理", tone: "attention" };
+    if (["FAILED", "CANCELLED", "BLOCKED", "NEEDS_PLAN_CHANGE", "STALE"].includes(run.status)) return { label: "待处理", tone: "attention" };
     return { label: `未知状态：${run.status}`, tone: "neutral" };
   }
   if (isConversationArtifactPlan(plan)) return { label: "待处理", tone: "attention" };

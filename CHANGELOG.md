@@ -1,6 +1,56 @@
 # Changelog
 
-## 2026-10-05 — Plan 状态有了集中的转换表；三个没人写的状态顺手清掉
+## 2026-10-05 — 被中断的 Run 现在真的会被恢复；需求清单补上四个 Run 状态
+
+### 为什么做
+
+现象：新派发的方案一直停在「等待 free slot in this Project (2/2 in use)」，而需求清单上两条
+几天前的需求始终显示「运行中」。
+
+查下去是同一个根因——**启动恢复的判据反了**。`RecoveryCoordinator.recover()` 在组合根启动时跑一次，
+它对一条 Run Loop 的处理条件此前是：
+
+```ts
+} else if (loop.state === "RUNNING" && (!loop.providerThreadId || !loop.providerTurnId)) {
+  this.transition(loop, "RECOVERING", "PROVIDER_TURN_NOT_ACTIVE");
+```
+
+也就是说"**没记下会话标识**"才恢复。而记下标识恰恰是它**已经向 Provider 发起过回合**的证据，
+不是"不用管"——于是每一个跑过一步就被中断的 Run 都落进 `else` 原样留着：
+
+- 实测本机 **3 个 RUNNING 的 Run Loop，3/3 都记着 `providerThreadId` 与 `providerTurnId`**，一个都没被恢复；
+- 它们连着 Run 一起停在 `IN_PROGRESS`，而 `IN_PROGRESS` 是**占并发槽位**的状态
+  （`EXECUTION_SLOT_RUN_STATUSES` 只有 `STARTING` / `IN_PROGRESS` / `VERIFYING`，`RECOVERING` 不在其中）；
+- 于是该项目的两个槽位被三天前的僵尸长期占满，后续派发永远排队，界面上那两条需求一直是「运行中」。
+
+### Changed
+
+- **启动那一刻仍停在 `RUNNING` 的 Run Loop 一律转 `RECOVERING`**（判据只留"还在不在跑"，
+  去掉"有没有记下标识"）：进程刚起来，没有任何 Provider 回合是活的。`RECOVERING` 不占槽位，
+  槽位立刻还回去，由人决定终止还是重来（Run Control 的「终止 Run」在 `RECOVERING` 上可用）。
+  本机实测：重启后两个僵尸 Run `IN_PROGRESS → RECOVERING`，该项目占用的槽位 **2 → 0**。
+- **需求清单的「任务状态」补上四个漏判的 Run 状态**：`READY_FOR_VERIFY`（待验证）、
+  `NEEDS_PLAN_CHANGE` / `STALE`（待处理）、**`RECOVERING`（需要恢复）**。
+  此前它们全掉进兜底，显示成"未知状态：RECOVERING"这种半截枚举值——而恢复流程把 Run
+  交回给人时，那正是需求清单上唯一的现场证据。现在 `RunStatus` 的 11 个取值逐个接住（新增用例逐个钉住）。
+
+### 测试
+
+- 新增回归用例：**记着 provider 标识的 Run Loop 同样要恢复**（正是这次修的缺口），
+  并断言 `RECOVERING` 不占槽位。
+- 两条 API 用例的夹具改成"Loop 摆在 `createApp` 之后"——应用创建时会先跑一次启动恢复，
+  那一刻仍停在 `RUNNING` 的 Loop 必然是僵尸，会被收成 `RECOVERING`。用例考的是读接口，不是恢复。
+
+### 文档
+
+`docs/消息类型及事件状态机流程图.md`：
+
+- §2 的正文**不再把 `ExecutionThread.journal` 叫作 journal**，一律写「执行日志」——
+  journal 是日记 / 日记账，而这东西是一台机器写的、只追加、按 `sequence` 排序的执行事实，
+  日志（log）才是它的本义。（代码符号名不变；那是另一次纯重命名。）
+- §2.3 C 补上启动恢复的判据与这次的修复（含实测数字），§5 补三行。
+
+
 
 ### 为什么做
 

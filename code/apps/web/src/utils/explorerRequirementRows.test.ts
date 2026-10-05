@@ -124,15 +124,44 @@ describe("projectExplorerRequirementRows", () => {
     const candidate = plan("unused", "DRAFT", { id: "candidate-id", planId: "candidate-id", explorerPlanId: undefined });
     const unknownPlan = plan("unknown", "READY" as Plan["status"]);
     (unknownPlan as { status: string }).status = "SOMETHING_NEW";
+    const unknownRun = run("plan-unknown-run", "SOMETHING_NEW" as Run["status"]);
     const rows = projectExplorerRequirementRows([
       requirement("candidate", 1, { candidatePlanId: "candidate-id" }),
       requirement("unknown", 2),
       requirement("unknown-run", 3),
-    ], [candidate, unknownPlan, plan("unknown-run", "READY", { runId: "run-unknown-run" })], [run("plan-unknown-run", "PAUSED")]);
+    ], [candidate, unknownPlan, plan("unknown-run", "READY", { runId: "run-unknown-run" })], [unknownRun]);
 
     expect(rows[0]?.plan?.id).toBe("candidate-id");
     expect(rows[0]?.planStatus.label).toBe("待确认");
     expect(rows[1]?.planStatus.label).toBe("未知状态：SOMETHING_NEW");
-    expect(rows[2]?.taskStatus.label).toBe("未知状态：PAUSED");
+    // 只有**真的认不出来**才落这条兜底（`RunStatus` 是封闭联合，11 个取值下面那条用例逐个钉住）。
+    expect(rows[2]?.taskStatus.label).toBe("未知状态：SOMETHING_NEW");
+  });
+
+  it("**RunStatus 的每个取值都接住了**，不漏成「未知状态：RECOVERING」", () => {
+    // 曾经漏了四个：`READY_FOR_VERIFY` / `NEEDS_PLAN_CHANGE` / `STALE` / **`RECOVERING`**。
+    // 最后一个尤其要紧——启动恢复把被中断的 Run 交回给人决定时，它就是需求清单上唯一的现场证据，
+    // 而它此前显示成"未知状态：RECOVERING"这种半截枚举值。
+    const cases: Array<[Run["status"], string]> = [
+      ["QUEUED", "运行中"],
+      ["STARTING", "运行中"],
+      ["IN_PROGRESS", "运行中"],
+      ["VERIFYING", "运行中"],
+      ["READY_FOR_VERIFY", "待验证"],
+      ["MERGE_READY", "待处理"],
+      ["BLOCKED", "待处理"],
+      ["NEEDS_PLAN_CHANGE", "待处理"],
+      ["STALE", "待处理"],
+      ["RECOVERING", "需要恢复"],
+      ["CANCELLED", "待处理"],
+    ];
+    for (const [status, expected] of cases) {
+      const rows = projectExplorerRequirementRows(
+        [requirement("r", 1)],
+        [plan("r", "IN_PROGRESS", { runId: `run-r` })],
+        [run("r", status)],
+      );
+      expect(rows[0]?.taskStatus.label, `Run 状态 ${status}`).toBe(expected);
+    }
   });
 });

@@ -83,7 +83,33 @@ describe("RecoveryCoordinator", () => {
     new RecoveryCoordinator(store).recover();
 
     expect(store.getRun(run.id)).toMatchObject({ status: "RECOVERING" });
-    expect(store.getPlan(plan.id)).toMatchObject({ attentionReason: "Execution recovery required: PROVIDER_TURN_NOT_ACTIVE" });
+    expect(store.getPlan(plan.id)).toMatchObject({ attentionReason: "Execution recovery required: PROCESS_RESTARTED" });
+  });
+
+  it("记着 provider 标识的 Run Loop 同样要恢复——那是「跑过」的证据，不是「不用管」", () => {
+    // 回归：这里此前要求 `(!providerThreadId || !providerTurnId)`，把跑过的 Loop 判成"不用管"，
+    // 于是它连 Run 一起永远停在 IN_PROGRESS——而 IN_PROGRESS 占并发槽位，后续派发全部排队。
+    // 实测本机 3 个 RUNNING 的 Run Loop **3/3 都记着标识**，一个都没被恢复。
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    projects.create({ id: "project-1", name: "Demo", repoRoot: "/repo/demo", defaultBranch: "main", worktreeRoot: "/tmp/demo-worktrees" });
+    const plans = new PlanService(store, projects);
+    plans.registerThread({ id: "explorer-1", projectId: "project-1", parentThreadId: null });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "explorer-1", title: "Restarted run",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Restarted run" }) });
+    plans.confirm(plan.id, "user-1");
+    plans.enqueue(plan.id);
+    const run: Run = { id: "run-restarted", projectId: "project-1", planId: plan.id, planRevision: 1, status: "IN_PROGRESS", branch: "factory/run-restarted", workspacePath: "/tmp/demo-worktrees/run-restarted", baseCommit: "abc", executionThreadId: "execution-restarted", createdAt: store.now(), startedAt: store.now() };
+    store.saveRun(run);
+    store.updatePlan({ ...plan, status: "IN_PROGRESS", runId: run.id });
+    loop(store, "restarted", "RUNNING", "provider-thread-1", "provider-turn-1", run.id);
+
+    new RecoveryCoordinator(store).recover();
+
+    expect(store.getAgentLoop("restarted")).toMatchObject({ state: "RECOVERING" });
+    expect(store.getRun(run.id)).toMatchObject({ status: "RECOVERING" });
+    // `RECOVERING` 不占并发槽位（`EXECUTION_SLOT_RUN_STATUSES` 只有 STARTING / IN_PROGRESS / VERIFYING），
+    // 所以这一步同时把槽位还回去——这正是"下发的线程卡在等待 free slot"的解法。
   });
 
   it("reconciles a terminal run into a stale in-progress plan projection", () => {

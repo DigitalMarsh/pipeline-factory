@@ -35,8 +35,16 @@ export class RecoveryCoordinator {
       if (uncertainLoopIds.has(loop.id)) {
         const updated = this.transition(loop, "NEEDS_RECONCILIATION", "UNKNOWN_TOOL_RESULT");
         affected.set(updated.id, updated);
-      } else if (loop.state === "RUNNING" && (!loop.providerThreadId || !loop.providerTurnId)) {
-        const updated = this.transition(loop, "RECOVERING", "PROVIDER_TURN_NOT_ACTIVE");
+      } else if (loop.state === "RUNNING") {
+        // **进程刚起来，没有任何 Provider 回合是活的**——一个仍停在 RUNNING 的 Run Loop 必然是上一次
+        // 进程留下的，无论它有没有记下 `providerThreadId` / `providerTurnId`。
+        //
+        // 这里此前要求 `(!providerThreadId || !providerTurnId)`（"没记下会话标识"），把一个**跑过**的
+        // Loop 判成了"不用管"：记下标识恰恰是它已经向 Provider 发起过回合的证据。于是每一个被中断的
+        // Run 都落进 else 分支原样留着——实测本机 3 个 RUNNING 的 Run Loop **3/3 都记着标识**，
+        // 一个都没被恢复；而 `IN_PROGRESS` 是占并发槽位的状态（`EXECUTION_SLOT_RUN_STATUSES`），
+        // 后续派发于是永远排在"等待 free slot"上。`RECOVERING` 不占槽位，把它交回给人决定。
+        const updated = this.transition(loop, "RECOVERING", "PROCESS_RESTARTED");
         affected.set(updated.id, updated);
       } else {
         affected.set(loop.id, loop);

@@ -441,6 +441,11 @@ describe("Pipeline Factory v4 API", () => {
 
   it("exposes persisted Agent Loop state, steps, and event history", async () => {
     const store = new InMemoryPipelineStore();
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+    // Loop 摆在 **`createApp` 之后**：创建应用时会先跑一次启动恢复，而那一刻仍停在 RUNNING 的
+    // Run Loop 必然是上一次进程留下的僵尸，会被收成 RECOVERING（并追加一条 LOOP_SUSPENDED）。
+    // 本用例考的是"读接口能不能把状态、步骤、事件原样暴露出来"，所以让 Loop 在进程起来之后再开跑。
     const loop: AgentLoop = { id: "loop-1", ownerType: "run", ownerId: "run-1", role: "executor", mode: "provider-controlled", state: "RUNNING", stepCount: 1, maxSteps: 40, startedAt: store.now(), completedAt: null, providerThreadId: "provider-thread-1", providerTurnId: "provider-turn-1", checkpointJson: null };
     store.saveAgentLoop(loop);
     store.appendAgentLoopStep({ loopId: loop.id, stepType: "MODEL_STARTED", status: "RUNNING", payload: { step: 1 } });
@@ -448,8 +453,6 @@ describe("Pipeline Factory v4 API", () => {
     store.appendAgentLoopStep({ loopId: loop.id, stepType: "PROVIDER_ACTIVITY", status: "COMPLETED", payload: { providerItemId: "provider-item-1", itemId: "activity-1" } });
     store.appendAgentLoopStep({ loopId: loop.id, stepType: "GATE_CHECKED", status: "COMPLETED", payload: { action: "continue", reason: "PLAN_INCOMPLETE:完整方案缺少验收标准与验证命令" } });
     store.appendEvent({ type: "agent.loop.started", aggregateId: loop.id, payload: { role: loop.role } });
-    const app = createApp({ store, seed: false });
-    apps.push(app);
 
     const state = await app.inject({ method: "GET", url: "/api/v4/agent-loops/loop-1" });
     const steps = await app.inject({ method: "GET", url: "/api/v4/agent-loops/loop-1/steps" });
@@ -563,10 +566,11 @@ describe("Pipeline Factory v4 API", () => {
 
   it("makes Agent Loop pause, resume, and cancel controls observable", async () => {
     const store = new InMemoryPipelineStore();
-    const loop: AgentLoop = { id: "loop-controls", ownerType: "run", ownerId: "run-1", role: "executor", mode: "provider-controlled", state: "RUNNING", stepCount: 0, maxSteps: 4, startedAt: store.now(), completedAt: null, providerThreadId: "provider-thread", providerTurnId: "provider-turn", checkpointJson: null };
-    store.saveAgentLoop(loop);
     const app = createApp({ store, seed: false });
     apps.push(app);
+    // 同前一条用例：Loop 摆在 `createApp` 之后，否则启动恢复会先把这个 RUNNING 的僵尸收成 RECOVERING。
+    const loop: AgentLoop = { id: "loop-controls", ownerType: "run", ownerId: "run-1", role: "executor", mode: "provider-controlled", state: "RUNNING", stepCount: 0, maxSteps: 4, startedAt: store.now(), completedAt: null, providerThreadId: "provider-thread", providerTurnId: "provider-turn", checkpointJson: null };
+    store.saveAgentLoop(loop);
 
     const paused = await app.inject({ method: "POST", url: `/api/v4/agent-loops/${loop.id}/pause`, payload: { reason: "inspect" } });
     const resumed = await app.inject({ method: "POST", url: `/api/v4/agent-loops/${loop.id}/resume` });
