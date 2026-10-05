@@ -386,9 +386,6 @@ a { color: inherit; text-decoration: none; }
 .explorer-tree-task-row:hover .explorer-tree-rename, .explorer-tree-task-row:focus-within .explorer-tree-rename { opacity: 1; }
 .explorer-tree-rename:hover, .explorer-tree-rename:focus-visible { background: #1b3559; color: #dcecff; outline: 0; }
 .explorer-plan-anchor { height: 1px; scroll-margin-top: 20px; }
-.active-plan-banner { display: grid; gap: 4px; margin: 0 16px 18px; padding: 11px 13px; border: 1px solid #dce7f8; border-radius: 7px; background: #f7faff; }
-.active-plan-banner strong { overflow: hidden; color: #3d5273; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
-.active-plan-banner small { overflow: hidden; color: #8a9ab0; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .context-plan-card-clickable, .context-plan-row-clickable { cursor: pointer; }
 .context-plan-card-clickable:hover, .context-plan-row-clickable:hover { border-color: #9ebbf3; box-shadow: 0 5px 16px rgba(68, 111, 183, .12); }
 .timeline { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding-bottom: 24px; }

@@ -1309,7 +1309,6 @@ onBeforeUnmount(() => { mounted.value = false; invalidateProjectScope(); closeEv
       <div class="timeline-shell">
       <div ref="timeline" class="timeline" v-loading="loading" @scroll="updateTimelineScrollState">
         <div :id="activeExplorerPlan ? explorerPlanAnchorId(activeExplorerPlan.id) : undefined" :data-nav-key="activeExplorerPlan ? `explorer-plan-${activeExplorerPlan.id}` : undefined" class="explorer-plan-anchor" aria-hidden="true" />
-        <div v-if="activeExplorerPlan" class="active-plan-banner"><span class="eyebrow">需求 {{ activeExplorerPlan.ordinal }}</span><strong>{{ taskDisplayTitle(activeExplorerPlan) }}</strong><small>{{ activeExplorerPlan.latestUserMessageSummary ?? '尚未开始探索' }}</small></div>
         <div class="timeline-day">{{ visibleTurns.length ? '探索活动' : '新建探索' }}</div>
         <div v-if="!visibleActivity.length && !visibleInputRequests.length && !candidate" class="timeline-empty"><Connection :size="24" /><strong>{{ activeExplorerPlan ? taskDisplayTitle(activeExplorerPlan) : '开始一次全新的需求探索' }}</strong><span>当前需求还没有消息；切换需求不会删除其他对话内容。</span></div>
         <template v-for="(item, index) in renderedTimelineItems" :key="item.key">
