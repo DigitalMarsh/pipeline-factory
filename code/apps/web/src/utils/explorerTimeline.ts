@@ -48,18 +48,17 @@ function timestamp(value: string): number {
   return Number.isNaN(parsed) ? Number.MAX_SAFE_INTEGER : parsed;
 }
 
-const inputLifecycleKinds = new Set<ExplorerActivityItem["kind"]>(["INPUT_REQUIRED", "INPUT_RESOLVED"]);
-
 /**
- * 用 input request 取代同一事件的低信息量生命周期行，避免问题和回答在流中重复出现。
  * 同一时间点保持输入数组/活动数组的原始顺序，保证渲染不会抖动。
+ *
+ * 结构化输入的生命周期行（`INPUT_REQUIRED` / `INPUT_RESOLVED`）**不在这里过滤**——
+ * 它们压根不会出现在 `activities` 里：投影层已经知道那张输入卡必然存在（写步骤与写请求行是同一次调用），
+ * 所以不产出这两条（见 `explorer-activity.ts` 的模块注释 3）。
  */
 export function buildExplorerTimeline(activities: ExplorerActivityItem[], inputRequests: ExplorerInputRequest[]): ExplorerTimelineItem[] {
   const items: Array<ExplorerTimelineItem & { index: number }> = [];
-  const hasInputRequest = inputRequests.length > 0;
 
   activities.forEach((activity, index) => {
-    if (hasInputRequest && inputLifecycleKinds.has(activity.kind)) return;
     items.push({ key: `activity:${activity.id}`, kind: "activity", activity, occurredAt: activity.occurredAt, index });
   });
 

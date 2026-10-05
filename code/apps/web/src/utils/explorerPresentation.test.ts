@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activityIconKind, activityStatusLabel, assistantActivityLabel, EXPLORER_DISPLAY_MODES, explorerActivityLine, explorerDisplayMode, explorerDisplayTitle, formatTurnTime, inputStatusLabel } from "./explorerPresentation";
+import { activityStatusLabel, assistantActivityLabel, EXPLORER_DISPLAY_MODES, explorerActivityLine, explorerDisplayMode, explorerDisplayTitle, formatTurnTime, inputStatusLabel } from "./explorerPresentation";
 import type { ExplorerMessageType } from "./explorerPresentation";
 import { SHARED_MESSAGE_TYPES } from "./conversationTypes";
 import type { ExplorerActivityItem, ExplorerActivityKind, ExplorerInputRequest } from "../types";
@@ -69,14 +69,6 @@ describe("活动条目文案", () => {
     expect(assistantActivityLabel({ status: "WAITING" })).toBe("已完成");
   });
 
-  it("图标只由状态决定：完成是成功，失败与状态未知是警告，其余是信息", () => {
-    expect(activityIconKind("COMPLETED")).toBe("success");
-    expect(activityIconKind("FAILED")).toBe("warning");
-    // "没记录到它是怎么结束的"值得看一眼，但它不是失败——图标给警告，文案仍是"状态未知"。
-    expect(activityIconKind("UNKNOWN")).toBe("warning");
-    expect(activityIconKind("RUNNING")).toBe("info");
-    expect(activityIconKind("WAITING")).toBe("info");
-  });
 });
 
 describe("各类过程活动各摆什么", () => {
@@ -135,13 +127,13 @@ describe("各类过程活动各摆什么", () => {
   it("上下文压缩：摆的是消息条数，不是一句过程说明", () => {
     const line = explorerActivityLine(activity("CONTEXT", { summary: "The loop saved a checkpoint before continuing.", details: { messageCount: 12 } }));
 
-    expect(line).toEqual({ label: "上下文压缩", name: null, reference: "12 条消息", body: "" });
+    expect(line).toEqual({ label: "Factory · 上下文压缩", name: null, reference: "12 条消息", body: "" });
   });
 
   it("门禁：拦截是结论本身，占 name 那一格", () => {
     const line = explorerActivityLine(activity("GATE", { status: "FAILED", summary: "连续两步没有进展", details: { action: "blocked" } }));
 
-    expect(line).toEqual({ label: "执行门禁", name: "blocked", reference: null, body: "连续两步没有进展" });
+    expect(line).toEqual({ label: "Factory · 执行门禁", name: "blocked", reference: null, body: "连续两步没有进展" });
   });
 
   it("未识别：标签直接摆 Provider 的原生 itemType，不编一个像样的类别名", () => {
@@ -152,7 +144,7 @@ describe("各类过程活动各摆什么", () => {
 
   it("推理与轮次状态：只有正文，没有名字也没有尾巴", () => {
     expect(explorerActivityLine(activity("REASONING", { summary: "Plan Explorer started step 3." }))).toEqual({ label: "推理", name: null, reference: null, body: "Plan Explorer started step 3." });
-    expect(explorerActivityLine(activity("TURN_STATUS", { status: "WAITING", summary: "Waiting for input" }))).toEqual({ label: "回合状态", name: null, reference: null, body: "Waiting for input" });
+    expect(explorerActivityLine(activity("TURN_STATUS", { status: "WAITING", summary: "Waiting for input" }))).toEqual({ label: "Factory · 模型轮次", name: null, reference: null, body: "Waiting for input" });
   });
 
   it("认不出来的活动回落成原字符串，不留白", () => {
@@ -184,11 +176,11 @@ const producedWithoutActivity = new Set<ExplorerMessageType>(["INPUT_REQUEST", "
 const activityTypes = messageTypes.filter((type): type is ExplorerActivityItem["kind"] => !producedWithoutActivity.has(type));
 
 describe("探索会话的消息清单", () => {
-  it("清单覆盖 15 类活动加投影产生的 2 类非活动消息", () => {
+  it("清单覆盖 13 类活动加投影产生的 2 类非活动消息", () => {
     // 数量钉住是有意的：新增一类消息就得回来改这里，顺带在表里做一次"怎么显示"的决定。
     // 类型层面 `Record<ExplorerMessageType, …>` 已经强制穷尽，这条锁的是"清单本身有多大"。
-    expect(activityTypes).toHaveLength(15);
-    expect(messageTypes).toHaveLength(17);
+    expect(activityTypes).toHaveLength(13);
+    expect(messageTypes).toHaveLength(15);
     expect(EXPLORER_DISPLAY_MODES.INPUT_REQUEST).toBe("card");
     expect(EXPLORER_DISPLAY_MODES.CANDIDATE_PLAN).toBe("card");
   });
@@ -209,7 +201,7 @@ describe("探索会话的消息清单", () => {
 
   it("内容在别处已经有的几类不单独渲染", () => {
     // 输入卡取代了那两条生命周期行；Provider 的回声与执行侧同名，同样标 hidden。
-    expect(new Set(activityTypes.filter((type) => explorerDisplayMode(type) === "hidden"))).toEqual(new Set(["INPUT_REQUIRED", "INPUT_RESOLVED", "PROVIDER_MESSAGE", "SESSION"]));
+    expect(new Set(activityTypes.filter((type) => explorerDisplayMode(type) === "hidden"))).toEqual(new Set(["PROVIDER_MESSAGE", "SESSION"]));
   });
 
   it("四类调用同归调用行，其余四类各有各的形状", () => {

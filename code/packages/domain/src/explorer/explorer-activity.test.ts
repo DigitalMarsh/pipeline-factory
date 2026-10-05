@@ -137,7 +137,9 @@ describe("Explorer activity projection", () => {
     expect(JSON.stringify(items)).not.toContain("Provider activity");
   });
 
-  it("does not expose raw reasoning or sensitive answer text", () => {
+  it("结构化输入的步骤不产出活动条目，也不泄漏答案原文", () => {
+    // 这两个步骤由 Loop 写下，但投影层不把它们变成条目：写步骤的同一次调用里就落了一条
+    // `input_requests` 行，而那张卡上提问、回答、状态俱全——这两行只剩"有 N 个问题在等"。
     const items = projectExplorerActivity({
       turns: [{ id: "assistant-1", threadId: "explorer-1", role: "assistant", content: "", status: "WAITING_FOR_INPUT", createdAt: "2026-08-29T10:00:00.000Z", sequence: 1 }],
       loops: [{ id: "loop-1", ownerType: "explorer-turn", ownerId: "assistant-1", role: "explorer", mode: "provider-controlled", state: "WAITING_FOR_INPUT", stepCount: 1, maxSteps: 40, startedAt: "2026-08-29T10:00:00.000Z", completedAt: null, providerThreadId: null, providerTurnId: null, checkpointJson: null }],
@@ -147,7 +149,7 @@ describe("Explorer activity projection", () => {
       ],
     });
 
-    expect(items.map((item) => item.kind)).toEqual(["INPUT_REQUIRED", "INPUT_RESOLVED"]);
+    expect(items.map((item) => item.kind)).toEqual([]);
     expect(JSON.stringify(items)).not.toContain("do-not-display");
   });
 

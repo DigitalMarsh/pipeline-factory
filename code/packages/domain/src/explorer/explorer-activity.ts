@@ -10,7 +10,12 @@
  *      不是两条消息：投影按身份键（Loop 步骤的 `callId` / Provider 活动的 `itemId`）把它们合成一条，
  *      后到的事件覆盖状态与正文——与执行侧 `projectExecutionJournal` 的合并规则是同一条。
  *      此前探索侧是两行，同一个工具会在时间线上占两行。
- *   3) **Provider 活动按中立类别归类**（`model/provider-activity.ts` 的 `codexActivityKind` /
+ *   3) **结构化输入不在这里成行**：`INPUT_REQUIRED` / `INPUT_RESOLVED` 两个步骤由 Loop 写下，
+      但投影层**不把它们变成活动条目**——`agent-loop` 写下 `INPUT_REQUIRED` 的同一次调用里就 emit 了
+      `agent.input.required`，`thread-service` 收到后立刻落一条 `input_requests` 行；也就是说
+      只要这条步骤存在，同一需求里必然有那张结构化输入卡，而卡上提问、回答、状态俱全。
+      两行各自只有一句"有 N 个问题在等" / "你的选择已提交"，属于被整张卡取代的东西。
+（`model/provider-activity.ts` 的 `codexActivityKind` /
  *      `claudeActivityKind` / `activityOutcome`），不要退回 `itemType.includes(...)` 那种现猜：
  *      `userMessage`（Provider 把你那句话回显一次）与 `plan`（整篇规划文档）都曾被猜成工具行。
  *   4) **回合结束后仍没有结束事件的调用标成 `UNKNOWN`**，不要一直显示"进行中"。
@@ -35,8 +40,6 @@ export type ExplorerActivityKind =
   | "USER_MESSAGE"
   | "ASSISTANT_MESSAGE"
   | "REASONING"
-  | "INPUT_REQUIRED"
-  | "INPUT_RESOLVED"
   | "COMMAND"
   | "FILE_CHANGE"
   | "TOOL_CALL"
@@ -391,8 +394,6 @@ function activityFromStep(turn: ExplorerTurn, step: AgentLoopStep): Omit<Explore
   // 轮次开始只是一条"这一轮跑起来了"的标记，正文留空——呈现层会退回行首标签（"推理"），
   // 比摆一句 `Plan Explorer started step 3.` 更少噪音，也不必为它想一句中文。
   if (step.stepType === "MODEL_STARTED") return { ...base, kind: "REASONING", status: "RUNNING", title: "", summary: "", details: { step: payload.step ?? step.sequence } };
-  if (step.stepType === "INPUT_REQUIRED") return { ...base, kind: "INPUT_REQUIRED", status: "WAITING", title: "Input required", summary: `${Array.isArray(payload.questions) ? payload.questions.length : 0} structured question(s) are waiting.`, details: { requestId: payload.requestId ?? null, isBlocking: payload.isBlocking ?? true } };
-  if (step.stepType === "INPUT_RESOLVED") return { ...base, kind: "INPUT_RESOLVED", status: "COMPLETED", title: "Input resolved", summary: "Your selection was submitted; the same turn is continuing.", details: { requestId: payload.requestId ?? null, answerCount: payload.answerCount ?? 0 } };
   if (step.stepType === "TOOL_REQUESTED") return toolStep(base, "RUNNING", nonEmptyString(payload.tool), step.callId, null);
   // 一次调用的四种结束：正常完成、被策略拒绝、执行失败、需要人工对账。
   // 后两种此前**连一行都没有**（这里没有分支，静默掉了）——"工具失败了"在时间线上看不见。

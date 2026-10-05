@@ -164,7 +164,7 @@ export type ExplorerPlan = {
 };
 
 /** 与领域侧 `ExplorerActivityKind` 同集合；两边的名字也是执行线程那套词表（见 utils/conversationTypes.ts）。 */
-export type ExplorerActivityKind = "USER_MESSAGE" | "ASSISTANT_MESSAGE" | "REASONING" | "INPUT_REQUIRED" | "INPUT_RESOLVED" | "COMMAND" | "FILE_CHANGE" | "TOOL_CALL" | "MCP_CALL" | "UNCLASSIFIED" | "CONTEXT" | "GATE" | "TURN_STATUS" | "PROVIDER_MESSAGE" | "SESSION";
+export type ExplorerActivityKind = "USER_MESSAGE" | "ASSISTANT_MESSAGE" | "REASONING" | "COMMAND" | "FILE_CHANGE" | "TOOL_CALL" | "MCP_CALL" | "UNCLASSIFIED" | "CONTEXT" | "GATE" | "TURN_STATUS" | "PROVIDER_MESSAGE" | "SESSION";
 
 export type ExplorerActivityItem = {
   id: string;

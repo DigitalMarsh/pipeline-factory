@@ -49,17 +49,18 @@ describe("Explorer timeline projection", () => {
     expect(items.map((item) => item.key)).toEqual(["activity:turn-1", "input:input-2", "activity:turn-3"]);
   });
 
-  it("does not duplicate provider input lifecycle events when an input request exists", () => {
+  it("把活动与输入卡按时间合成一条，不额外过滤什么", () => {
+    // 结构化输入的生命周期行不再需要在这里过滤：投影层已经不产出它们
+    // （写步骤与写 input_requests 行是同一次调用，见 explorer-activity.ts 的模块注释 3）。
     const items = buildExplorerTimeline(
       [
         activity("turn-1", "ASSISTANT_MESSAGE", "2026-09-01T10:00:00.000Z"),
-        activity("input-required", "INPUT_REQUIRED", "2026-09-01T10:02:00.000Z"),
-        activity("input-resolved", "INPUT_RESOLVED", "2026-09-01T10:04:00.000Z"),
+        activity("turn-3", "COMMAND", "2026-09-01T10:06:00.000Z"),
       ],
       [inputRequest("input-2", "2026-09-01T10:02:00.000Z")],
     );
 
-    expect(items.map((item) => item.key)).toEqual(["activity:turn-1", "input:input-2"]);
+    expect(items.map((item) => item.key)).toEqual(["activity:turn-1", "input:input-2", "activity:turn-3"]);
   });
 
   it("keeps a message target stable when lifecycle activity precedes the assistant message", () => {

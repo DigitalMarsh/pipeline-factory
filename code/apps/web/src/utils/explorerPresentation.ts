@@ -83,16 +83,17 @@ export type ExplorerActivityLine = {
 /** 过程活动的行首标签。`USER_MESSAGE` / `ASSISTANT_MESSAGE` 刻意不在表里——它们走消息行/卡片，不显示标签。 */
 const ACTIVITY_LABELS: Partial<Record<ExplorerActivityItem["kind"], string>> = {
   REASONING: "推理",
-  INPUT_REQUIRED: "需要输入",
-  INPUT_RESOLVED: "输入已提交",
   COMMAND: "命令",
   FILE_CHANGE: "文件变更",
   TOOL_CALL: "工具调用",
   MCP_CALL: "MCP 调用",
   UNCLASSIFIED: "未识别",
-  CONTEXT: "上下文压缩",
-  GATE: "执行门禁",
-  TURN_STATUS: "回合状态",
+  // 这三类不是模型说的话，是 **Factory 自己记的**（终止门禁、上下文压缩、模型轮次标记与调度占位）。
+  // 行首那个点说的是"线程侧"，这三个词说的是"线程侧里的哪一边"——名字只在有歧义的地方出现，
+  // 模型那一侧（正文 / 推理 / 调用）不点名，因为它就是这条线程本身。
+  CONTEXT: "Factory · 上下文压缩",
+  GATE: "Factory · 执行门禁",
+  TURN_STATUS: "Factory · 模型轮次",
   PROVIDER_MESSAGE: "消息回显",
   SESSION: "会话重建",
 };
@@ -156,13 +157,6 @@ function detailsText(item: ExplorerActivityItem, key: string): string | null {
   return typeof value === "string" && value.trim() ? value : null;
 }
 
-/** 行首图标只由状态决定：进行中是信息、完成是成功、失败与状态未知都值得看一眼。 */
-export function activityIconKind(status: ExplorerActivityItem["status"]): "info" | "success" | "warning" {
-  if (status === "FAILED" || status === "UNKNOWN") return "warning";
-  if (status === "COMPLETED") return "success";
-  return "info";
-}
-
 /**
  * 探索会话里的消息类型。**这张联合类型就是"消息清单"**——每一种在聊天框里怎么呈现，
  * 由下面 `EXPLORER_DISPLAY_MODES` 一张表决定；要调整呈现方式，改表即可，不用翻模板。
@@ -214,16 +208,14 @@ export type ExplorerDisplayMode = "card" | "text" | "prose" | "tool" | "reasonin
  * "Provider 会话重建"——内容在时间线上已经有了（用户消息本身、回合状态），
  * 但**名字留在共用词表里**，两边才不会各起一个（见 `conversationTypes.ts`）。
  *
- * `INPUT_REQUIRED` / `INPUT_RESOLVED` 标成 `hidden` 同理由：正常情况下投影层
- * （`utils/explorerTimeline.ts` 的 `buildExplorerTimeline`）在存在输入卡时就已经不产出这两行——
+ * 注意 `INPUT_REQUIRED` / `INPUT_RESOLVED` **不在这张表里**：那两条生命周期行已经不产出条目
+ * （见 `packages/domain/src/explorer/explorer-activity.ts` 的模块注释 3），
  * "问了什么、答了什么"由结构化输入卡自己承载。
  */
 export const EXPLORER_DISPLAY_MODES: Record<ExplorerMessageType, ExplorerDisplayMode> = {
   USER_MESSAGE: "text",
   ASSISTANT_MESSAGE: "prose",
   REASONING: "reasoning",
-  INPUT_REQUIRED: "hidden",
-  INPUT_RESOLVED: "hidden",
   COMMAND: "tool",
   FILE_CHANGE: "tool",
   TOOL_CALL: "tool",
