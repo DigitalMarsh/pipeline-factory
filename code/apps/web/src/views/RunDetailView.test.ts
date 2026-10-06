@@ -74,6 +74,11 @@ describe("Run detail execution conversation", () => {
     expect(executionReasoningRowSource).toContain("<details");
     // 跑着的时候默认展开——那时候它正在说事；跑完收起来，把视线还给正文。
     expect(executionReasoningRowSource).toContain(":open=\"streaming\"");
+    // **没有正文时不摆这个折叠**：本机库里 13/13 条老推理行都是空的（那时还不记摘要），
+    // 一个点开只有空白的展开区比没有更糟。也不补"未记录摘要"这类句子——上面那行 meta
+    // 已经写着「推理」，正文留空就是"这一轮没有可说的"。
+    expect(executionReasoningRowSource).toContain('<details v-if="hasBody"');
+    expect(executionReasoningRowSource).toContain("props.item.content.trim()");
   });
 
   it("动作行的正文保持纯文本，不渲染成 markdown", () => {
