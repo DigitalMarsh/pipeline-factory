@@ -6,9 +6,10 @@
  *   主要来源。收进"详情"之后，**哪些字段值得收、hover 里写什么**就成了会被反复调整的展示规则，
  *   值得有单测钉住，而不是散在模板里。
  *
- * 维护提示：这里只做**已有字段的排版**，不新增暴露面。`utils/executionStream.ts` 的项目定下过
- *   边界：不得输出工具参数、成功结果或模型私有思维链——真要看那些，改的是投影与它的评审结论，
- *   不是这里的字符串拼接。
+ * 维护提示：这里只做**已有字段的排版**，不新增暴露面。工具参数 / 返回 / 命令输出现在是**可以展示的**
+ *   了（走"展开结果"，见 `components/ExecutionActivityRow.vue`），但它们的脱敏与截断由
+ *   `utils/sensitiveValue.ts` 一处负责——**不要在这里拼那些字符串**。
+ *   模型的私有思维链（`thinking` 原文）仍然不展示：展示的是 Provider 自己给的推理摘要。
  */
 export type ExecutionMessageDetailSource = {
   modelStep?: number | undefined;

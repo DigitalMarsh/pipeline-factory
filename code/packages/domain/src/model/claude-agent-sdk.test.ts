@@ -457,3 +457,108 @@ describe("ClaudeAgentSdkGateway", () => {
     expect(captures[0]?.options.effort).toBeUndefined();
   });
 });
+
+/**
+ * 这一组钉的是**数据层曾经丢掉的东西**：推理整块没读、工具载荷没进事件、
+ * 标签放在 title 位；以及二十几个 `system` 子类型里那几类值得往上传的运行事实。
+ */
+describe("Claude 侧的数据层：读什么、为什么读", () => {
+  async function run(script: (sessionId: string) => AsyncIterable<SDKMessage>): Promise<ModelEvent[]> {
+    const captures: Capture[] = [];
+    const gateway = new ClaudeAgentSdkGateway({
+      roles,
+      sessionExists: async () => true,
+      queryFactory: createFactory(captures, async function* ({ sessionId }) { yield* script(sessionId); }),
+    });
+    return await collect(gateway.stream(explorerRequest()));
+  }
+
+  it("**读 `thinking` 块** —— 此前整块被丢掉，Claude 侧的推理在界面上从来不存在", async () => {
+    const events = await run(async function* (sessionId) {
+      yield initMessage(sessionId);
+      yield message({ type: "assistant", session_id: sessionId, uuid: "uuid-think", message: { role: "assistant", content: [{ type: "thinking", thinking: "先看订单与退款的耦合点。", signature: "sig" }] } });
+      yield resultMessage(sessionId);
+    });
+
+    expect(events).toContainEqual(expect.objectContaining({ type: "provider.activity", activityKind: "reasoning", outcome: "not-applicable", itemType: "thinking", summary: "先看订单与退款的耦合点。" }));
+  });
+
+  it("安全脱敏过的思考留下一条**看得见的事实**，而不是静默消失", async () => {
+    const events = await run(async function* (sessionId) {
+      yield initMessage(sessionId);
+      yield message({ type: "assistant", session_id: sessionId, uuid: "uuid-redacted", message: { role: "assistant", content: [{ type: "redacted_thinking", data: "opaque" }] } });
+      yield resultMessage(sessionId);
+    });
+
+    expect(events).toContainEqual(expect.objectContaining({ activityKind: "reasoning", itemId: "uuid-redacted:redacted:0" }));
+  });
+
+  it("一条空思考不留行（没有内容就没有可说的）", async () => {
+    const events = await run(async function* (sessionId) {
+      yield initMessage(sessionId);
+      yield message({ type: "assistant", session_id: sessionId, uuid: "uuid-empty", message: { role: "assistant", content: [{ type: "thinking", thinking: "   " }] } });
+      yield resultMessage(sessionId);
+    });
+
+    expect(events.some((event) => event.type === "provider.activity" && event.activityKind === "reasoning")).toBe(false);
+  });
+
+  it("工具调用的**参数与返回**各有各的字段，不再揉成一行摘要", async () => {
+    const events = await run(async function* (sessionId) {
+      yield initMessage(sessionId);
+      yield assistantToolUse(sessionId, "tool-1", "Bash", { command: "pnpm test" });
+      yield toolResult(sessionId, "tool-1", "3 passed");
+      yield resultMessage(sessionId);
+    });
+
+    const started = events.find((event) => event.type === "provider.activity" && event.phase === "started");
+    const completed = events.find((event) => event.type === "provider.activity" && event.phase === "completed");
+    expect(started).toMatchObject({ type: "provider.activity", arguments: { command: "pnpm test" } });
+    expect(completed).toMatchObject({ type: "provider.activity", status: "succeeded" });
+    // `summary` 仍是一行的可读摘要（紧凑的动作行要它），`result` 是完整返回（展开后的详情要它）。
+    expect(completed && "result" in completed ? completed.result : undefined).toEqual([{ type: "text", text: "3 passed" }]);
+  });
+
+  it("压缩边界带上 token 数 —— 与 OpenClaw 那条分隔线写的是同一件事", async () => {
+    const events = await run(async function* (sessionId) {
+      yield initMessage(sessionId);
+      yield message({ type: "system", subtype: "compact_boundary", session_id: sessionId, uuid: "uuid-compact", compact_metadata: { trigger: "auto", pre_tokens: 120_000, post_tokens: 8_000, duration_ms: 900 } });
+      yield resultMessage(sessionId);
+    });
+
+    expect(events).toContainEqual(expect.objectContaining({ type: "provider.activity", activityKind: "compaction", itemType: "compact_boundary", summary: "Provider 自动压缩了上下文：120000 → 8000 tokens。", durationMs: 900 }));
+  });
+
+  it("重试 / 权限被拒 / 配额 / 子任务 / 钩子 / 警告各归自己的类别", async () => {
+    const events = await run(async function* (sessionId) {
+      yield initMessage(sessionId);
+      yield message({ type: "system", subtype: "api_retry", session_id: sessionId, uuid: "uuid-retry", attempt: 2, max_retries: 5, retry_delay_ms: 4_000, error_status: 529, error: "overloaded" });
+      yield message({ type: "system", subtype: "permission_denied", session_id: sessionId, uuid: "uuid-perm", tool_name: "Bash", tool_use_id: "tool-2", message: "策略拒绝写入仓库之外的路径。" });
+      yield message({ type: "rate_limit_event", session_id: sessionId, uuid: "uuid-rate", rate_limit_info: { status: "rejected", rateLimitType: "five_hour" } });
+      yield message({ type: "system", subtype: "task_started", session_id: sessionId, uuid: "uuid-task", task_id: "task-1", tool_use_id: "tool-3", description: "扫描依赖", subagent_type: "Explore" });
+      yield message({ type: "system", subtype: "task_notification", session_id: sessionId, uuid: "uuid-task-done", task_id: "task-1", tool_use_id: "tool-3", status: "completed", output_file: "/tmp/out", summary: "扫完了" });
+      yield message({ type: "system", subtype: "hook_response", session_id: sessionId, uuid: "uuid-hook", hook_id: "hook-1", hook_name: "lint", hook_event: "PostToolUse", output: "ok", stdout: "ok", stderr: "", exit_code: 0, outcome: "success" });
+      yield message({ type: "system", subtype: "informational", session_id: sessionId, uuid: "uuid-info", level: "warning", content: "配置里有一个不认识的键。" });
+      yield resultMessage(sessionId);
+    });
+
+    const kinds = events.flatMap((event) => event.type === "provider.activity" ? [event.activityKind] : []);
+    expect(kinds).toEqual(["retry", "permission", "rate-limit", "task", "task", "hook", "warning"]);
+    // 被拒是一次**明确的失败**，不是"状态未知"。
+    expect(events).toContainEqual(expect.objectContaining({ activityKind: "permission", status: "denied" }));
+    expect(events).toContainEqual(expect.objectContaining({ activityKind: "permission", outcome: "failed" }));
+    // 常态噪音不上传：`level: "info"` 的那一类一律不发。
+    expect(events.some((event) => event.type === "provider.activity" && event.itemType === "informational" && event.summary === "info")).toBe(false);
+  });
+
+  it("每轮都来的 `allowed` 配额与 `info` 提示不上传（「常态收进诊断区」说的是记录，不是每次都浮现）", async () => {
+    const events = await run(async function* (sessionId) {
+      yield initMessage(sessionId);
+      yield message({ type: "rate_limit_event", session_id: sessionId, uuid: "uuid-rate-ok", rate_limit_info: { status: "allowed" } });
+      yield message({ type: "system", subtype: "informational", session_id: sessionId, uuid: "uuid-info-ok", level: "info", content: "你好" });
+      yield resultMessage(sessionId);
+    });
+
+    expect(events.some((event) => event.type === "provider.activity" && (event.activityKind === "rate-limit" || event.activityKind === "warning"))).toBe(false);
+  });
+});

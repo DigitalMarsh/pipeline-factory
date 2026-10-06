@@ -37,7 +37,7 @@
 import { getSessionInfo, query, type CanUseTool, type Options, type PermissionMode, type PermissionResult, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { EXPLORER_PLAN_INSTRUCTIONS } from "../platform/plan-requirements.js";
 import { replayConversation, resolveModelMode } from "./provider-session.js";
-import { classifyClaudeActivity } from "./provider-activity.js";
+import { classifyClaudeActivity, type ProviderActivityKind } from "./provider-activity.js";
 import { normalizeModelUsage } from "./usage.js";
 import type { ModelInputAnswers, ModelInputQuestion, ModelInputRequest } from "../explorer/types.js";
 import type { ModelCapabilities, ModelEvent, ModelGateway, ModelMessage, ModelRequest, ModelMode, ModelRole, ModelRoleConfig, ProviderEndpoint } from "./types.js";
@@ -380,20 +380,34 @@ type MapContext = {
   endpoint: () => ProviderEndpoint;
 };
 
-/** 把 SDK 的一条消息映射成 0..n 个 ModelEvent；未知消息安全忽略而不伪造模型输出。 */
+/**
+ * 把 SDK 的一条消息映射成 0..n 个 ModelEvent；未知消息安全忽略而不伪造模型输出。
+ *
+ * **读哪些、为什么不读其余**（SDK 的 `SDKMessage` 有 39 个成员，这里只认其中的一部分）：
+ *   - `assistant` 里的 `text` 块**不读**：正文由 `stream_event` 的 `text_delta` 累积，
+ *     同一个字节流读两遍会在时间线上出现两遍。
+ *   - `assistant` 里的 `thinking` 块**读**（见下）。
+ *   - `stream_event` 的 `thinking_delta` 不单独读：与正文同理，accumulate 在整块上更省事，
+ *     而且 Codex 那边推理也只有"整条 item"一种形态，两边行为因此一致。
+ *   - `type: "system"` 下面二十几个 `subtype` 大多落进 ④「Provider 说的」，见 `systemRuntimeFact()`。
+ */
 function* mapMessage(message: SDKMessage, context: MapContext): Generator<ModelEvent> {
   if (message.type === "system") {
-    if (message.subtype !== "init") return;
-    const sessionId = message.session_id;
-    context.sessionIds.set(context.conversationId, sessionId);
-    // init 是唯一能拿到"端点的另一半"的地方：CLI 自报版本、凭据来源与实际模型名。
-    // 只在这里读、不做任何推断 —— 字段缺失就留 null。
-    context.reported.cliVersion = typeof message.claude_code_version === "string" ? message.claude_code_version : null;
-    context.reported.credentialSource = typeof message.apiKeySource === "string" ? message.apiKeySource : null;
-    context.reported.providerModel = typeof message.model === "string" ? message.model : null;
-    // 只有新建会话（或 resume 落到了另一个会话）才重新声明线程：否则 loop 会在每轮都覆写一次
-    // providerThreadId，看不出会话是真的换了还是照旧。
-    if (context.resumedSessionId !== sessionId) yield { type: "thread.started", threadId: sessionId, endpoint: context.endpoint() };
+    if (message.subtype === "init") {
+      const sessionId = message.session_id;
+      context.sessionIds.set(context.conversationId, sessionId);
+      // init 是唯一能拿到"端点的另一半"的地方：CLI 自报版本、凭据来源与实际模型名。
+      // 只在这里读、不做任何推断 —— 字段缺失就留 null。
+      context.reported.cliVersion = typeof message.claude_code_version === "string" ? message.claude_code_version : null;
+      context.reported.credentialSource = typeof message.apiKeySource === "string" ? message.apiKeySource : null;
+      context.reported.providerModel = typeof message.model === "string" ? message.model : null;
+      // 只有新建会话（或 resume 落到了另一个会话）才重新声明线程：否则 loop 会在每轮都覆写一次
+      // providerThreadId，看不出会话是真的换了还是照旧。
+      if (context.resumedSessionId !== sessionId) yield { type: "thread.started", threadId: sessionId, endpoint: context.endpoint() };
+      return;
+    }
+    const runtime = systemRuntimeFact(message);
+    if (runtime) yield runtime;
     return;
   }
   if (message.type === "stream_event") {
@@ -410,10 +424,29 @@ function* mapMessage(message: SDKMessage, context: MapContext): Generator<ModelE
       yield { type: "turn.failed", error: `Claude Agent SDK assistant error: ${message.error}` };
       return;
     }
+    let blockIndex = 0;
     for (const block of message.message.content) {
-      if (block.type !== "tool_use") continue;
-      context.toolCalls.set(block.id, block.name);
-      yield { type: "provider.activity", phase: "started", itemId: block.id, itemType: "tool_use", ...classifyClaudeActivity({ itemType: "tool_use", phase: "started", status: "started", toolName: block.name }), title: block.name, summary: summarizeToolInput(block.name, block.input as JsonObject), toolName: block.name, status: "started", providerItemId: block.id, providerThreadId: message.session_id };
+      const index = blockIndex++;
+      if (block.type === "tool_use") {
+        context.toolCalls.set(block.id, block.name);
+        // `input` 是这次调用的**结构化参数**（文件路径、命令原文、查询串…）。此前它只被揉成一行
+        // 摘要塞进 title，界面上"这次调用到底传了什么"没有原料。原样落库，展示时脱敏+截断。
+        yield { type: "provider.activity", phase: "started", itemId: block.id, itemType: "tool_use", ...classifyClaudeActivity({ itemType: "tool_use", phase: "started", status: "started", toolName: block.name }), title: block.name, summary: summarizeToolInput(block.name, block.input as JsonObject), arguments: block.input, toolName: block.name, status: "started", providerItemId: block.id, providerThreadId: message.session_id };
+        continue;
+      }
+      // **推理（②）**：`thinking` 块此前整块被丢掉——全仓 `grep thinking` 在 domain/web 的 src 里
+      // 0 命中，所以 Claude 侧的推理在界面上从来不存在（Codex 侧有）。它没有 id，用"哪条消息的第几块"
+      // 造一个稳定身份键；标题留空让呈现层退回"推理"标签，正文就是思考原文。
+      if (block.type === "thinking") {
+        const text = typeof block.thinking === "string" ? block.thinking.trim() : "";
+        if (!text) continue;
+        yield reasoningActivity(`${message.uuid}:thinking:${index}`, text, message.session_id);
+        continue;
+      }
+      // 安全脱敏过的思考：内容不可读，但"这里有一段看不见的推理"是可说的事实。
+      if (block.type === "redacted_thinking") {
+        yield reasoningActivity(`${message.uuid}:redacted:${index}`, "这段思考被 Provider 安全脱敏，内容不可读。", message.session_id);
+      }
     }
     return;
   }
@@ -425,8 +458,32 @@ function* mapMessage(message: SDKMessage, context: MapContext): Generator<ModelE
       context.toolCalls.delete(block.toolUseId);
       const status = block.isError ? "failed" : "succeeded";
       const error = block.isError ? (block.summary ?? "Tool call failed") : undefined;
-      yield { type: "provider.activity", phase: "completed", itemId: block.toolUseId, itemType: "tool_result", ...classifyClaudeActivity({ itemType: "tool_result", phase: "completed", status, ...(toolName === undefined ? {} : { toolName }), ...(error === undefined ? {} : { error }) }), title: toolName ?? block.toolUseId, summary: block.summary, status, ...(toolName === undefined ? {} : { toolName }), ...(error === undefined ? {} : { error }), providerItemId: block.toolUseId, providerThreadId: message.session_id };
+      // `summary` 是**一行的可读摘要**（两个 Provider 同义），`result` 是**完整返回**。
+      // 两者都留：前者给紧凑的动作行，后者给展开后的详情。此前只有前者，于是"结果"没有原料。
+      yield { type: "provider.activity", phase: "completed", itemId: block.toolUseId, itemType: "tool_result", ...classifyClaudeActivity({ itemType: "tool_result", phase: "completed", status, ...(toolName === undefined ? {} : { toolName }), ...(error === undefined ? {} : { error }) }), title: toolName ?? block.toolUseId, summary: block.summary, result: block.result, status, ...(toolName === undefined ? {} : { toolName }), ...(error === undefined ? {} : { error }), providerItemId: block.toolUseId, providerThreadId: message.session_id };
     }
+    return;
+  }
+  // 限流与鉴权是顶层 type（不在 `system` 下面），同一个处置。
+  if (message.type === "rate_limit_event") {
+    const info = message.rate_limit_info;
+    // `allowed` 是常态，每轮都来——记下来只是噪音。"常态收进诊断区"指的是**记录**，
+    // 不是**每次都浮现**：这里只送值得看一眼的两档。
+    if (info.status === "allowed") return;
+    const rejected = info.status === "rejected";
+    yield runtimeActivity({
+      id: `rate-limit:${message.uuid}`,
+      itemType: "rate_limit",
+      kind: "rate-limit",
+      title: rejected ? "配额已用尽" : "配额接近上限",
+      summary: [info.rateLimitType ? `窗口 ${info.rateLimitType}` : null, info.utilization === undefined ? null : `已用 ${Math.round(info.utilization * 100)}%`, info.resetsAt === undefined ? null : `重置于 ${new Date(info.resetsAt * 1000).toLocaleString("zh-CN")}`].filter(Boolean).join(" · ") || "Provider 上报了配额状态。",
+      status: "warning",
+    }, message.session_id);
+    return;
+  }
+  if (message.type === "auth_status") {
+    if (!message.error) return;
+    yield runtimeActivity({ id: `auth:${message.uuid}`, itemType: "auth_status", kind: "warning", title: "鉴权异常", summary: message.error, status: "failed" }, message.session_id);
     return;
   }
   if (message.type !== "result") return;
@@ -446,6 +503,127 @@ function* mapMessage(message: SDKMessage, context: MapContext): Generator<ModelE
   }
   yield { type: "turn.completed" };
 }
+
+/** 一段推理。它是 ②「模型说的」，但**不是对你说的话**——呈现层据此给它更淡的一档。 */
+function reasoningActivity(itemId: string, text: string, sessionId: string): ModelEvent {
+  return { type: "provider.activity", phase: "completed", itemId, itemType: "thinking", ...classifyClaudeActivity({ itemType: "thinking", phase: "completed" }), title: null, summary: text, providerItemId: itemId, providerThreadId: sessionId };
+}
+
+/** 一条 ④「Provider 说的」运行事实（不是模型做的，也不是你说的）。形态与 item 那条一致。 */
+function runtimeActivity(input: { id: string; itemType: string; kind: ProviderActivityKind; title: string; summary: string; status?: string; error?: string; durationMs?: number }, sessionId: string | undefined): ModelEvent {
+  const classification = classifyClaudeActivity({ itemType: input.itemType, phase: "completed", ...(input.status === undefined ? {} : { status: input.status }), ...(input.error === undefined ? {} : { error: input.error }) });
+  return {
+    type: "provider.activity", phase: "completed", itemId: input.id, itemType: input.itemType, ...classification,
+    title: input.title, summary: input.summary,
+    ...(input.durationMs === undefined ? {} : { durationMs: input.durationMs }),
+    ...(input.status ? { status: input.status } : {}),
+    ...(input.error ? { error: input.error } : {}),
+    ...(sessionId ? { providerThreadId: sessionId } : {}),
+    providerItemId: input.id,
+  };
+}
+
+/**
+ * `type: "system"` 下面那二十几个 `subtype` 里，哪些值得往上传。
+ *
+ * 判据是"用户会不会因为看到它而改变动作"：压缩（这次对话的成本基线变了）、重试（不是我卡住，
+ * 是它在等）、权限被拒（我得去改策略）、后台子任务（还有东西在跑）、钩子（工厂配的那段脚本
+ * 跑了/挂了）、命令级告警（配置写错了）。**其余一律不传**——`status` / `files_persisted` /
+ * `memory_recall` / `elicitation_complete` / `commands_changed` / `worker_shutting_down` 这些
+ * 每次都要来，传上去只是噪音。
+ */
+function systemRuntimeFact(message: SDKMessage & { type: "system"; session_id?: string }): ModelEvent | null {
+  const sessionId = typeof message.session_id === "string" ? message.session_id : undefined;
+  const subtype = (message as { subtype?: string }).subtype;
+  switch (subtype) {
+    case "compact_boundary": {
+      const meta = (message as unknown as { compact_metadata?: { trigger?: string; pre_tokens?: number; post_tokens?: number; duration_ms?: number } }).compact_metadata;
+      const before = meta?.pre_tokens;
+      const after = meta?.post_tokens;
+      const size = before === undefined ? null : after === undefined ? `压缩前 ${before} tokens` : `${before} → ${after} tokens`;
+      return runtimeActivity({
+        id: `compaction:${(message as unknown as { uuid?: string }).uuid ?? String(before ?? "")}`,
+        itemType: "compact_boundary",
+        kind: "compaction",
+        title: "上下文已压缩",
+        // `pre_tokens → post_tokens` 是 OpenClaw 那条压缩分隔线上写的同一件事：
+        // "上下文在这里变小了"。拿不到 token 数就只说压缩发生了，不编一个数字。
+        summary: `Provider ${meta?.trigger === "manual" ? "手动" : "自动"}压缩了上下文${size ? `：${size}` : ""}。`,
+        ...(typeof meta?.duration_ms === "number" ? { durationMs: meta.duration_ms } : {}),
+      }, sessionId);
+    }
+    case "api_retry": {
+      const m = message as unknown as { attempt?: number; max_retries?: number; retry_delay_ms?: number; error?: string; error_status?: number | null };
+      return runtimeActivity({
+        id: `retry:${sessionId ?? ""}:${m.attempt ?? 0}:${m.error_status ?? ""}`,
+        itemType: "api_retry",
+        kind: "retry",
+        title: "正在自动重试",
+        summary: [`第 ${m.attempt ?? "?"}/${m.max_retries ?? "?"} 次`, typeof m.retry_delay_ms === "number" ? `${Math.round(m.retry_delay_ms / 1000)} 秒后重试` : null, m.error ? `原因 ${m.error}` : null].filter(Boolean).join(" · ") || "Provider 正在自动重试。",
+        status: "warning",
+      }, sessionId);
+    }
+    case "permission_denied": {
+      const m = message as unknown as { tool_name?: string; message?: string; decision_reason?: string };
+      return runtimeActivity({
+        id: `permission:${(message as unknown as { uuid?: string }).uuid ?? m.tool_name ?? "denied"}`,
+        itemType: "permission_denied",
+        kind: "permission",
+        title: `权限被拒 · ${m.tool_name ?? "工具"}`,
+        summary: m.message ?? m.decision_reason ?? "这一次工具调用被权限策略拒绝。",
+        status: "denied",
+      }, sessionId);
+    }
+    case "task_started":
+    case "task_progress":
+    case "task_updated":
+    case "task_notification": {
+      const m = message as unknown as { task_id?: string; tool_use_id?: string; description?: string; summary?: string; status?: string; subagent_type?: string; patch?: { status?: string; description?: string; error?: string }; usage?: { duration_ms?: number } };
+      const id = m.tool_use_id ?? m.task_id ?? "task";
+      const status = m.status ?? m.patch?.status;
+      const label = m.description ?? m.patch?.description ?? m.summary ?? "后台子任务";
+      return runtimeActivity({
+        id: `task:${id}`,
+        itemType: `task_${subtype.slice(5)}`,
+        kind: "task",
+        title: `子任务 · ${label}`,
+        summary: [m.subagent_type ? `类型 ${m.subagent_type}` : null, status ? `状态 ${status}` : null, m.patch?.error ?? null].filter(Boolean).join(" · ") || "后台子任务有更新。",
+        ...(status ? { status } : {}),
+        ...(typeof m.usage?.duration_ms === "number" ? { durationMs: m.usage.duration_ms } : {}),
+      }, sessionId);
+    }
+    case "background_tasks_changed": {
+      const m = message as unknown as { tasks?: Array<{ task_id: string; description: string }> };
+      const count = m.tasks?.length ?? 0;
+      return runtimeActivity({ id: `background-tasks:${sessionId ?? ""}`, itemType: "background_tasks_changed", kind: "task", title: "后台任务已变化", summary: count > 0 ? `${count} 个后台任务在跑：${m.tasks?.map((t) => t.description).join(" · ")}` : "当前没有后台任务。" }, sessionId);
+    }
+    case "hook_started":
+    case "hook_progress":
+    case "hook_response": {
+      const m = message as unknown as { hook_id?: string; hook_name?: string; hook_event?: string; output?: string; exit_code?: number; outcome?: string };
+      const name = m.hook_name ?? m.hook_event ?? "hook";
+      const failed = m.outcome === "error" || (m.exit_code !== undefined && m.exit_code !== 0);
+      return runtimeActivity({
+        id: `hook:${m.hook_id ?? name}`,
+        itemType: `hook_${subtype.slice(5)}`,
+        kind: "hook",
+        title: `钩子 · ${name}`,
+        summary: m.output?.trim() || (subtype === "hook_started" ? "钩子开始执行。" : "钩子执行结束。"),
+        status: subtype === "hook_started" ? "started" : failed ? "failed" : "succeeded",
+        ...(failed ? { error: m.output?.trim() || `钩子以退出码 ${m.exit_code} 结束。` } : {}),
+      }, sessionId);
+    }
+    case "informational": {
+      const m = message as unknown as { content?: string; level?: string };
+      // `info` / `notice` / `suggestion` 每轮都有，只有 `warning` 值得往上传。
+      if (m.level !== "warning") return null;
+      return runtimeActivity({ id: `informational:${(message as unknown as { uuid?: string }).uuid ?? ""}`, itemType: "informational", kind: "warning", title: "Provider 警告", summary: m.content || "Provider 报告了一条警告。", status: "warning" }, sessionId);
+    }
+    default:
+      return null;
+  }
+}
+
 
 /** 本适配器内部的事件队列；把回调式事件（canUseTool）与生成器式事件合到一条流上。 */
 class ModelEventQueue implements AsyncIterable<ModelEvent> {
@@ -541,13 +719,20 @@ function toProviderAnswers(answers: ModelInputAnswers, questions: ProviderQuesti
   return mapped;
 }
 
-function readToolResults(content: unknown): Array<{ toolUseId: string; summary: string | null; isError: boolean }> {
+/**
+ * 读出这一条 `tool_result`。
+ * - `summary` 是**一行的可读摘要**（截断到 200 字），给紧凑的动作行用；
+ * - `result` 是**完整返回**，给展开后的详情用。
+ * 两者都留：此前只有前者，于是"这次调用结果是什么"在界面上没有原料。
+ * 落库保留原样，**脱敏与截断发生在展示边界**（`apps/web/src/utils/sensitiveValue.ts`）。
+ */
+function readToolResults(content: unknown): Array<{ toolUseId: string; summary: string | null; result: unknown; isError: boolean }> {
   if (!Array.isArray(content)) return [];
   return content.flatMap((block) => {
     if (!block || typeof block !== "object") return [];
     const value = block as JsonObject;
     if (value.type !== "tool_result" || typeof value.tool_use_id !== "string") return [];
-    return [{ toolUseId: value.tool_use_id, summary: summarizeToolResult(value.content), isError: value.is_error === true }];
+    return [{ toolUseId: value.tool_use_id, summary: summarizeToolResult(value.content), result: value.content, isError: value.is_error === true }];
   });
 }
 

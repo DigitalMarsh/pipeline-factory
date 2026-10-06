@@ -142,7 +142,7 @@ export { PROJECT_EXECUTION_MODELS, PROJECT_EXECUTION_REASONING_EFFORTS, ProjectE
 export type { ProjectExecutionThreadServiceOptions, ProjectExecutionThreadSnapshot } from "./agent/project-execution-thread.js";
 
 // ─────────────────────────── model/：ModelGateway 端口与三个实现 ───────────────────────────
-export type { ModelCapabilities, ModelEvent, ModelGateway, ModelMessage, ModelRequest, ModelRole, ModelRoleConfig, ModelToolDefinition, ProviderEndpoint } from "./model/types.js";
+export type { ModelCapabilities, ModelEvent, ModelGateway, ModelMessage, ModelMessagePhase, ModelRequest, ModelRole, ModelRoleConfig, ModelToolDefinition, ProviderEndpoint } from "./model/types.js";
 export { mergeModelUsage, normalizeModelUsage } from "./model/usage.js";
 export type { ModelUsage, ModelUsageScope } from "./model/usage.js";
 // 中立的活动词表：`provider.activity` 的消费方（Agent Loop、执行会话投影）一律读 activityKind / outcome，

@@ -14,11 +14,9 @@ import { api } from "../api";
 import MarkdownMessage from "../components/MarkdownMessage.vue";
 import type { AgentLoopStep, ExecutionTask, ExecutionThread, MergeRequest, Plan, PlanTask, Run, RunJournalEvent, VerificationRun } from "../types";
 import { statusTagType, streamStatusTagType } from "../utils/statusTag";
-import ExecutionActivityRow from "../components/ExecutionActivityRow.vue";
-import ExecutionModelRow from "../components/ExecutionModelRow.vue";
-import ExecutionPlanCard from "../components/ExecutionPlanCard.vue";
-import ExecutionUserRow from "../components/ExecutionUserRow.vue";
-import { executionDisplayMode, projectExecutionJournal, type ExecutionJournalEntry, type ExecutionPlanSnapshot, type ExecutionStreamItem } from "../utils/executionStream";
+import ExecutionMessageRow from "../components/ExecutionMessageRow.vue";
+import { executionMessageWeight, foldsIntoProcess, isRuntimeFactItem, projectExecutionJournal, type ExecutionJournalEntry, type ExecutionPlanSnapshot, type ExecutionStreamItem } from "../utils/executionStream";
+import { durationBetween, formatDuration } from "../utils/duration";
 import { executionMessageDetails, executionMessageDiagnosticsTitle } from "../utils/executionMessageDetails";
 import { executionModelSourceNote as executionModelSourceNoteFor, formatProviderContextUsage, resolveExecutionModelIdentity } from "../utils/executionTelemetry";
 import { useModelBackends } from "../composables/useModelBackends";
@@ -97,6 +95,12 @@ function isRunActivity(item: ExecutionStreamItem): boolean {
 }
 
 const runActivityItems = computed<ExecutionStreamItem[]>(() => executionMessages.value.filter(isRunActivity));
+/**
+ * ④「Provider 说的」运行事实：压缩边界、重试、配额、钩子、后台子任务、权限被拒、告警。
+ * 它们**不进会话正文**（权重表里一律 `hidden`），由顶部「运行上下文」卡承载——
+ * 常态收在展开区里，需要你动手的那几条浮到卡片上（见 `ExecutionHeaderStatus` 的 `runtimeAlert`）。
+ */
+const runtimeFactItems = computed<ExecutionStreamItem[]>(() => executionMessages.value.filter(isRuntimeFactItem));
 
 const executionConversationGroups = computed<ExecutionConversationGroup[]>(() => {
   const groups: ExecutionConversationGroup[] = [];
@@ -141,20 +145,63 @@ function collapsePendingTaskGroups(groups: ExecutionConversationGroup[]): Execut
 }
 
 /**
- * 按**呈现方式**渲染（表在 utils/executionStream.ts 的 `EXECUTION_DISPLAY_MODES`）。
- * 视图不自己判断"这条该不该显示"：呈现方式是产品决定，集中在一张表里，改那里即可。
- * `hidden` 的条目连计数都不进——它们不是内容，只是 Provider 的机制回显。
+ * **这一步现在还在跑吗。** 它在跑的时候一切照常显示——照 OpenClaw：
+ * *live response text and the working indicator stay outside the log*。跑完之后过程才折起来，
+ * 把视线还给这一步的结论。
+ *
+ * 判据取任务自己的状态（`IN_PROGRESS`），不是"有没有最近的消息"——后者会把刚起步的一步
+ * 当成跑完，把它唯一那两条线索折掉。
+ */
+function stepRunning(group: ExecutionConversationGroup): boolean {
+  if (group.task) return group.task.status === "IN_PROGRESS";
+  // 没有任务归属的组（未归属事件）：Run 还活着就当"进行中"，宁可多显示一行也不藏。
+  return thread.value?.state === "ACTIVE";
+}
+
+/**
+ * **折进上方过程记录的那一批**。判据全在 `foldsIntoProcess` 里——视图只负责回答"这一步跑完没有"。
+ */
+function foldedItems(group: ExecutionConversationGroup): ExecutionStreamItem[] {
+  const stepRunningHere = stepRunning(group);
+  return group.items.filter((item) => foldsIntoProcess(item, { stepRunning: stepRunningHere }));
+}
+
+/**
+ * 按**权重**渲染（表在 utils/executionStream.ts 的 `EXECUTION_MESSAGE_WEIGHTS`）。
+ * 视图不自己判断"这条该不该显示"：权重是产品决定，集中在一张表里，改那里即可。
+ * `hidden` 的条目连计数都不进——它们不是内容，只是 Provider 的机制回显与运行事实。
  */
 function visibleItems(group: ExecutionConversationGroup): ExecutionStreamItem[] {
-  // 判据是"除折叠与不渲染之外"，不是"属于某几种呈现方式"——写成白名单时，
-  // 新增一种呈现方式（比如你自己说的话那条 `text`）会让那一类消息**从会话里静默消失**。
-  return group.items.filter((item) => {
-    const mode = executionDisplayMode(item);
-    return mode !== "folded" && mode !== "hidden";
-  });
+  // 判据是"除折叠与不渲染之外"，不是"属于某几种权重"——写成白名单时，
+  // 新增一种权重（比如你自己说的话那条 `answer`）会让那一类消息**从会话里静默消失**。
+  const folded = new Set(foldedItems(group).map((item) => item.id));
+  return group.items.filter((item) => executionMessageWeight(item) !== "hidden" && !folded.has(item.id));
 }
-function foldedItems(group: ExecutionConversationGroup): ExecutionStreamItem[] {
-  return group.items.filter((item) => executionDisplayMode(item) === "folded");
+
+/**
+ * 这一步的用时。**来自任务自己的生命周期事实**（见 `ExecutionTask.startedAt`），
+ * 不是从消息时间戳估的——拿不到就返回 null，由模板让那一格**不出现**，
+ * 而不是编一个数（OpenClaw 的原话：拿不到时长就写 `Worked`，不估）。
+ */
+function stepDuration(group: ExecutionConversationGroup): string | null {
+  const task = group.task;
+  if (!task?.startedAt || !task.completedAt) return null;
+  const ms = durationBetween(task.startedAt, task.completedAt);
+  return ms === null ? null : formatDuration(ms);
+}
+
+/** 折起来的那批里，有几条是**认不出来的活动**——这件事本身要说得出口，不能悄悄折掉。 */
+function unclassifiedCount(group: ExecutionConversationGroup): number {
+  return foldedItems(group).filter((item) => item.messageType === "UNCLASSIFIED").length;
+}
+
+/**
+ * 这一步里**没被折进去的失败**有多少。它要写在折叠标题上——
+ * OpenClaw 的原话是 `Worked for 2 minutes, 3 seconds · 2 failed`：
+ * 失败**永远可见**，即使这一组是收起的。折起来等于把这轮唯一要你处理的事藏了。
+ */
+function failedCount(group: ExecutionConversationGroup): number {
+  return visibleItems(group).filter((item) => item.status === "FAILED").length;
 }
 
 /**
@@ -287,10 +334,6 @@ function focusExecutionTask(task: ExecutionTask): void {
       ?? Array.from(executionTimeline.value?.querySelectorAll<HTMLElement>("[data-task-id]") ?? []).find((element) => element.dataset.taskId === task.id);
     target?.scrollIntoView({ behavior: "smooth", block: "center" });
   });
-}
-
-function executionMessageStatusLabel(status: ExecutionStreamItem["status"]): string {
-  return ({ RUNNING: "进行中", COMPLETED: "已完成", WAITING: "等待中", FAILED: "失败 / 阻塞", INFO: "信息", UNKNOWN: "状态未知" } as const)[status];
 }
 
 function taskGroupEmptyNote(task: ExecutionTask): string {
@@ -578,6 +621,7 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
           :tasks="executionTasks"
           :task-counts="executionTaskCounts"
           :run-activity="runActivityItems"
+            :runtime-facts="runtimeFactItems"
           :selected-task-id="selectedTaskId"
           :executor-loop="executorLoop"
           :executor-steps="executorSteps"
@@ -629,26 +673,22 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
               <small>{{ (group.tasks ?? []).map((task) => task.title).join(" · ") }}</small>
             </div>
             <div v-if="group.kind !== 'pending' && !isTaskGroupCollapsed(group.id)" :id="`execution-task-stream-${group.id}`" class="execution-task-stream-items">
-            <p v-if="group.task && !visibleItems(group).length && !foldedItems(group).length" class="execution-task-stream-empty">{{ taskGroupEmptyNote(group.task) }}</p>
-            <article v-for="item in visibleItems(group)" :key="item.id" :data-sequence="item.sequence" :data-task-id="item.taskId" :data-model-step="item.modelStep" :title="executionMessageDiagnosticsTitle(item)" :class="['execution-message', `execution-message-${item.kind}`, { failed: item.status === 'FAILED', waiting: item.status === 'WAITING', running: item.status === 'RUNNING', unknown: item.status === 'UNKNOWN', mine: item.role === 'user' }]">
-              <div v-if="item.kind !== 'user' && executionDisplayMode(item) !== 'prose'" class="execution-message-avatar">{{ item.kind === 'plan' ? 'PL' : item.kind === 'model' ? 'EX' : item.kind === 'tool' ? 'TL' : '·' }}</div>
-              <div class="execution-message-body">
-                <div class="execution-message-meta"><strong>{{ item.title }}</strong><el-tag v-if="item.status !== 'INFO'" size="small" effect="light" :type="statusTagType(item.status)">{{ executionMessageStatusLabel(item.status) }}</el-tag><span class="execution-message-time">{{ new Date(item.occurredAt).toLocaleTimeString('zh-CN') }}</span><button v-if="executionMessageDetails(item).length" type="button" class="execution-message-toggle" :aria-expanded="isExecutionItemExpanded(item.id)" @click="toggleExecutionItem(item.id)">{{ isExecutionItemExpanded(item.id) ? '收起详情' : '详情' }}</button></div>
-                <div v-if="isExecutionItemExpanded(item.id)" class="execution-message-details"><span v-for="detail in executionMessageDetails(item)" :key="detail">{{ detail }}</span></div>
-                <template v-if="item.kind === 'plan' && item.plan"><ExecutionPlanCard :item-id="item.id" :plan="item.plan" @view="openPlanDetail" /></template>
-                <template v-else-if="item.kind === 'model'"><ExecutionModelRow :item="item" /></template>
-                <template v-else-if="item.kind === 'user'"><ExecutionUserRow :item="item" /></template>
-                <template v-else-if="item.kind === 'activity' || item.kind === 'tool'"><ExecutionActivityRow :item="item" /></template>
-                <article v-else class="execution-unknown-row">未识别的消息形态：{{ item.kind }}（{{ item.messageType }}）</article>
-              </div>
-            </article>
-            <!-- 呈现方式为 `folded` 的过程记录（推理、门禁、机制提示）：默认不占视线，需要时仍可回溯。 -->
+            <!-- **过程记录折在上面**（照 OpenClaw 的 `Worked for …`）：先交代这一步花了多久、折了多少条，
+                 再让结论自己说话。展开后是**真实的行**，不是一张只写了标题的清单。
+                 失败项与"未识别"不折进来——那是这一步里唯一需要你动手的东西。 -->
             <details v-if="foldedItems(group).length" class="execution-folded-log">
-              <summary>{{ foldedItems(group).length }} 条过程记录</summary>
-              <ul class="execution-folded-list">
-                <li v-for="item in foldedItems(group)" :key="item.id" :data-sequence="item.sequence"><span class="execution-noise-time">{{ new Date(item.occurredAt).toLocaleTimeString("zh-CN") }}</span><span class="execution-noise-title">{{ item.title }}</span><small v-if="item.detail">{{ item.detail }}</small></li>
-              </ul>
+              <summary>
+                <span>{{ foldedItems(group).length }} 条过程记录</span>
+                <small v-if="stepDuration(group)">用时 {{ stepDuration(group) }}</small>
+                <small v-if="failedCount(group)">{{ failedCount(group) }} 个失败留在外面</small>
+                <small v-if="unclassifiedCount(group)">{{ unclassifiedCount(group) }} 条未识别</small>
+              </summary>
+              <div class="execution-folded-list">
+                <ExecutionMessageRow v-for="item in foldedItems(group)" :key="item.id" :item="item" :expanded="isExecutionItemExpanded(item.id)" @toggle-details="toggleExecutionItem" @view-plan="openPlanDetail" />
+              </div>
             </details>
+            <p v-if="group.task && !visibleItems(group).length && !foldedItems(group).length" class="execution-task-stream-empty">{{ taskGroupEmptyNote(group.task) }}</p>
+            <ExecutionMessageRow v-for="item in visibleItems(group)" :key="item.id" :item="item" :expanded="isExecutionItemExpanded(item.id)" @toggle-details="toggleExecutionItem" @view-plan="openPlanDetail" />
             </div>
           </section>
           </div>

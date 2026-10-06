@@ -9,11 +9,13 @@
  * 「摆哪些字段」不在这里：`explorerActivityLine()` 把活动条目算成 `{label, name, reference, body}`，
  * 本组件只负责摆位置。
  */
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import type { ExplorerActivityItem } from "../types";
-import { activityStatusLabel, explorerActivityLine, formatTurnTime } from "../utils/explorerPresentation";
+import { activityStatusLabel, explorerActivityLine, explorerActivityResult, formatTurnTime } from "../utils/explorerPresentation";
 import { explorerTimelineTarget as activityTarget } from "../utils/explorerTimeline";
 import { statusTagType } from "../utils/statusTag";
+import { hasActivityPayload } from "../utils/sensitiveValue";
+import ActivityResultDetails from "./ActivityResultDetails.vue";
 
 const props = defineProps<{
   activity: ExplorerActivityItem;
@@ -23,6 +25,9 @@ const props = defineProps<{
 }>();
 
 const line = computed(() => explorerActivityLine(props.activity));
+const payload = computed(() => explorerActivityResult(props.activity));
+const canExpand = computed(() => hasActivityPayload(payload.value));
+const expanded = ref(false);
 </script>
 
 <template>
@@ -41,6 +46,11 @@ const line = computed(() => explorerActivityLine(props.activity));
       </div>
       <p v-if="line.body">{{ line.body }}</p>
       <code v-if="line.reference" class="activity-reference">{{ line.reference }}</code>
+      <!-- 「显示结果」是两条对话线共用的效果：默认只占一行，需要时展开看这一调用到底做了什么。 -->
+      <div v-if="canExpand" class="activity-result-shell">
+        <button type="button" class="activity-result-toggle" :aria-expanded="expanded" @click="expanded = !expanded">{{ expanded ? '收起结果' : '显示结果' }}</button>
+        <ActivityResultDetails v-if="expanded" v-bind="payload" />
+      </div>
     </div>
   </article>
 </template>

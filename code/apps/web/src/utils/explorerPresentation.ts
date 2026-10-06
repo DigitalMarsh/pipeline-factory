@@ -16,8 +16,8 @@
  *      （`RunDetailView` 的 `executionMessageStatusLabel`）用同一套中文——同一种状态在两个对话框里
  *      必须是同一个词，否则用户要自己翻译一遍才知道它们是一回事。
  */
-import type { ExplorerActivityItem, ExplorerInputRequest, ExplorerThread } from "../types";
-import type { SharedMessageType } from "./conversationTypes";
+import type { ExplorerActivityItem, ExplorerActivityKind, ExplorerInputRequest, ExplorerThread } from "../types";
+import { SHARED_MESSAGE_CLASSES, type MessageClass, type SharedMessageType } from "./conversationTypes";
 
 /** 消息时间：只到分钟，中文环境。传入的一定是 ISO 时间串（调用点来自领域数据）。 */
 export function formatTurnTime(value: string): string {
@@ -87,6 +87,9 @@ const ACTIVITY_LABELS: Partial<Record<ExplorerActivityItem["kind"], string>> = {
   FILE_CHANGE: "文件变更",
   TOOL_CALL: "工具调用",
   MCP_CALL: "MCP 调用",
+  SUBAGENT: "子代理",
+  WEB_SEARCH: "联网搜索",
+  IMAGE_GENERATION: "生成图片",
   UNCLASSIFIED: "未识别",
   // 这三类不是模型说的话，是 **Factory 自己记的**（终止门禁、上下文压缩、模型轮次标记与调度占位）。
   // 行首那个点说的是"线程侧"，这三个词说的是"线程侧里的哪一边"——名字只在有歧义的地方出现，
@@ -96,10 +99,18 @@ const ACTIVITY_LABELS: Partial<Record<ExplorerActivityItem["kind"], string>> = {
   TURN_STATUS: "Factory · 模型轮次",
   PROVIDER_MESSAGE: "消息回显",
   SESSION: "会话重建",
+  // ④ 那几类的标签。它们不进时间线，用在自己的诊断区里。
+  PROVIDER_COMPACTION: "上下文已压缩",
+  PERMISSION_DENIED: "权限被拒",
+  RATE_LIMIT: "配额",
+  PROVIDER_RETRY: "自动重试",
+  BACKGROUND_TASK: "后台子任务",
+  HOOK: "钩子",
+  PROVIDER_WARNING: "Provider 警告",
 };
 
-/** 工具类的四种：名字、身份、正文的摆法完全相同，只有标签不同。 */
-const TOOL_LINE_KINDS: ReadonlySet<ExplorerActivityItem["kind"]> = new Set(["COMMAND", "FILE_CHANGE", "TOOL_CALL", "MCP_CALL"]);
+/** 工具类的七种：名字、身份、正文的摆法完全相同，只有标签不同。 */
+const TOOL_LINE_KINDS: ReadonlySet<ExplorerActivityItem["kind"]> = new Set(["COMMAND", "FILE_CHANGE", "TOOL_CALL", "MCP_CALL", "SUBAGENT", "WEB_SEARCH", "IMAGE_GENERATION"]);
 
 /** 主标识放不下整条命令，截断到可读长度。 */
 function truncateLine(value: string): string | null {
@@ -201,33 +212,61 @@ export type ExplorerDisplayMode = "card" | "text" | "prose" | "line" | "reasonin
  *
  * 判据是每条消息对"看懂这次探索"的贡献：**人说的话与模型的回复都是铺开的正文**（`text` / `prose`——
  * 它们本来就是一段话，外面的白底边框不承载任何信息），方案与结构化输入是 `card`；
- * 四类调用按**语义**同归 `line`（标签与状态标签区分命令 / 文件 / 工具 / MCP 与被拒 / 失败），
+ * 七类调用按**语义**同归 `line`（标签与状态标签区分命令 / 文件 / 工具 / MCP / 子代理 / 搜索 / 生图），
  * 门禁是判定，回合状态是占位，推理是背景音，上下文压缩是分隔。
  *
- * `PROVIDER_MESSAGE` / `SESSION` 标成 `hidden`：它们是"Provider 把你那句话回显一次"与
- * "Provider 会话重建"——内容在时间线上已经有了（用户消息本身、回合状态），
- * 但**名字留在共用词表里**，两边才不会各起一个（见 `conversationTypes.ts`）。
+ * **④「Provider 说的」一律 `hidden`**：那是"机器在说话"，不是模型或你的发言。它们的归宿是
+ * 头部状态卡的「Provider 运行事实」一节（`explorerRuntimeFacts()`），与"不进会话正文"是同一条判据。
+ * 唯一的例外是 `UNCLASSIFIED`——"Provider 给了我不认识的东西"这件事**必须当场可见**，
+ * 否则新活动类型会静默消失（它是 ④ 里唯一露面的那个）。
  *
  * 注意 `INPUT_REQUIRED` / `INPUT_RESOLVED` **不在这张表里**：那两条生命周期行已经不产出条目
  * （见 `packages/domain/src/explorer/explorer-activity.ts` 的模块注释 3），
  * "问了什么、答了什么"由结构化输入卡自己承载。
  */
 export const EXPLORER_DISPLAY_MODES: Record<ExplorerMessageType, ExplorerDisplayMode> = {
+  // ① 你说的
   USER_MESSAGE: "text",
+  // ② 模型说的
   ASSISTANT_MESSAGE: "prose",
   REASONING: "reasoning",
+  // ③ 模型做的
   COMMAND: "line",
   FILE_CHANGE: "line",
   TOOL_CALL: "line",
   MCP_CALL: "line",
+  SUBAGENT: "line",
+  WEB_SEARCH: "line",
+  IMAGE_GENERATION: "line",
+  // ④ Provider 说的：不进正文（`UNCLASSIFIED` 例外，见上）
+  PROVIDER_COMPACTION: "hidden",
+  PERMISSION_DENIED: "hidden",
+  RATE_LIMIT: "hidden",
+  PROVIDER_RETRY: "hidden",
+  BACKGROUND_TASK: "hidden",
+  HOOK: "hidden",
+  PROVIDER_WARNING: "hidden",
   UNCLASSIFIED: "turn-status",
+  PROVIDER_MESSAGE: "hidden",
+  SESSION: "hidden",
+  // ⑤ Factory 说的
   CONTEXT: "divider",
   GATE: "gate",
   TURN_STATUS: "turn-status",
-  PROVIDER_MESSAGE: "hidden",
-  SESSION: "hidden",
+  // 投影与模板在别处产生的两类
   INPUT_REQUEST: "card",
   CANDIDATE_PLAN: "card",
+};
+
+/**
+ * 探索侧的大类表：共用项直接取 `SHARED_MESSAGE_CLASSES`（**分类的唯一定义处**），
+ * 这里只补探索侧独有的两项。两项都是"模型做的"——候选方案是模型产出的产物，
+ * 输入卡是模型发起、需要你回话的动作。
+ */
+export const EXPLORER_MESSAGE_CLASSES: Record<ExplorerMessageType, MessageClass> = {
+  ...SHARED_MESSAGE_CLASSES,
+  INPUT_REQUEST: "action",
+  CANDIDATE_PLAN: "action",
 };
 
 /**
@@ -252,4 +291,57 @@ void _modeCoverage;
 /** 这类消息该怎么呈现。视图只问它，不再自己判断"该不该显示、显示成什么样"。 */
 export function explorerDisplayMode(type: ExplorerMessageType): ExplorerDisplayMode {
   return EXPLORER_DISPLAY_MODES[type];
+}
+
+/** 这类消息属于哪一大类。见 `conversationTypes.ts` 的 `MessageClass`。 */
+export function explorerMessageClass(type: ExplorerMessageType): MessageClass {
+  return EXPLORER_MESSAGE_CLASSES[type];
+}
+
+/**
+ * 这条调用的**结构化载荷**（参数、返回、输出、退出码、耗时）。
+ *
+ * 载荷由领域的 `structuredProviderPayload` 写进 `details`（见
+ * `packages/domain/src/platform/provider-payload.ts`），这里只把它取出来给展开区用。
+ * 取不到的键**不写**：`undefined` 是"Provider 没给"，空串是"Provider 说这里什么都没有"。
+ */
+export function explorerActivityResult(activity: ExplorerActivityItem): { arguments?: unknown; result?: unknown; output?: string | undefined; exitCode?: number | undefined; durationMs?: number | undefined } {
+  const details = activity.details ?? {};
+  return {
+    ...(details.arguments === undefined ? {} : { arguments: details.arguments }),
+    ...(details.result === undefined ? {} : { result: details.result }),
+    ...(typeof details.output === "string" ? { output: details.output } : {}),
+    ...(typeof details.exitCode === "number" ? { exitCode: details.exitCode } : {}),
+    ...(typeof details.durationMs === "number" ? { durationMs: details.durationMs } : {}),
+  };
+}
+
+/**
+ * ④「Provider 说的」里**没在时间线上露过面**的那些条目 —— 头部状态卡的「Provider 运行事实」一节读它。
+ *
+ * 判据是三条一起看：大类是 `provider`，呈现方式为 `hidden`，**且不是 `PROVIDER_MESSAGE`**。
+ * 前两条自动排除 `UNCLASSIFIED`（它虽然是 ④，但已经作为一行「未识别」出现在时间线上，收进诊断区
+ * 就成了同一个事实的第二份）；第三条排除"Provider 把你那句话回显一次"——那是纯回声，诊断价值为零。
+ * 三条判据都来自既有的表，所以**新增一类 ④ 不需要回来改这里**。
+ */
+export function explorerRuntimeFacts(activities: readonly ExplorerActivityItem[]): ExplorerActivityItem[] {
+  return activities.filter((activity) => EXPLORER_MESSAGE_CLASSES[activity.kind] === "provider" && EXPLORER_DISPLAY_MODES[activity.kind] === "hidden" && activity.kind !== "PROVIDER_MESSAGE");
+}
+
+/**
+ * 一条运行事实在列表里的标题。
+ *
+ * 为什么要有回退：Provider 常常只报"发生了一件事"而不给话——Codex 的 `contextCompaction`
+ * item 没有任何文本。空标题在列表里就是一行空白，等于没说；退回中立类别的标签至少说清了是什么事。
+ */
+export function runtimeFactTitle(activity: ExplorerActivityItem): string {
+  return activity.title.trim() || ACTIVITY_LABELS[activity.kind] || activity.kind;
+}
+
+/** 诊断区里那几类**需要立刻浮出来**的（额度、重试、权限被拒、告警）；其余 ④ 只在展开时看。 */
+const RUNTIME_ALERT_KINDS: ReadonlySet<ExplorerActivityKind> = new Set(["RATE_LIMIT", "PROVIDER_RETRY", "PERMISSION_DENIED", "PROVIDER_WARNING"]);
+
+/** 这条运行事实要不要浮到用户眼前。与 `packages/domain/src/model/provider-activity.ts` 的 `isRuntimeAlertKind` 同义。 */
+export function isRuntimeAlert(activity: ExplorerActivityItem): boolean {
+  return RUNTIME_ALERT_KINDS.has(activity.kind) || activity.status === "FAILED";
 }

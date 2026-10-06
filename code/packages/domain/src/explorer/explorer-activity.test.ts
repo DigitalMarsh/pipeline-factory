@@ -339,11 +339,13 @@ describe("Explorer activity projection", () => {
         providerStep(4, { phase: "completed", itemId: "item-cmd", itemType: "commandExecution", summary: "pnpm test" }, "2026-08-29T10:00:04.000Z"),
       ],
     });
-    // 你那句话的回声归 PROVIDER_MESSAGE（呈现层把它标成 hidden，不占位），整篇规划的回声直接不产出
-    // ——它们在时间线上已经有对应的东西（用户消息本身、那条助手正文）。
-    expect(items.map((item) => item.kind)).toEqual(["PROVIDER_MESSAGE", "UNCLASSIFIED", "COMMAND"]);
+    // 你那句话的回声、以及整篇规划文档的回声，都归 PROVIDER_MESSAGE——呈现层把它们标成 `hidden`，
+    // 因为它们在时间线上已经有对应的东西（用户消息本身、那条助手正文）。**判定不再是特判**：
+    // `codexActivityKind("plan")` 直接给 `message`，于是"规划文档是回声"这条事实写在中立词表里，
+    // 而不是散在这一处的地方规则里。
+    expect(items.map((item) => item.kind)).toEqual(["PROVIDER_MESSAGE", "PROVIDER_MESSAGE", "UNCLASSIFIED", "COMMAND"]);
     // 认不出来就说认不出来：标签摆 Provider 的原生 itemType，不编一个像样的类别名。
-    expect(items[1]).toMatchObject({ details: { itemType: "somethingNew" }, summary: "说不上是什么" });
-    expect(items[2]).toMatchObject({ title: "", summary: "pnpm test", status: "COMPLETED" });
+    expect(items[2]).toMatchObject({ details: { itemType: "somethingNew" }, summary: "说不上是什么" });
+    expect(items[3]).toMatchObject({ title: "", summary: "pnpm test", status: "COMPLETED" });
   });
 });

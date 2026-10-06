@@ -150,7 +150,7 @@ export function projectAgentLoopDiagnostics(loop: AgentLoop, steps: AgentLoopSte
   return { providerActivityCount: providerItems.size, lastGate, terminal: { code, message: diagnosticMessage(code) } };
 }
 
-import type { ModelEvent, ModelGateway, ModelMessage, ModelRequest, ModelRole, ToolCall } from "../index.js";
+import type { ModelEvent, ModelGateway, ModelMessage, ModelMessagePhase, ModelRequest, ModelRole, ToolCall } from "../index.js";
 import type { PipelineStore } from "../index.js";
 import type { ToolRuntime } from "../tools/tool-runtime.js";
 
@@ -247,6 +247,23 @@ const TEXT_DELTA_FLUSH_CHARS = 160;
 const TEXT_DELTA_FLUSH_INTERVAL_MS = 40;
 
 /**
+ * Provider 的**结构化载荷**（工具参数、返回、命令输出、退出码、耗时）在步骤与事件里的共同形状。
+ *
+ * 取不到的键一律**不写**：`undefined` 是"Provider 没给"，空串是"Provider 说这里什么都没有"，
+ * 两者在界面上该长得不一样。这里是纯转发——脱敏与截断发生在展示边界
+ * （`apps/web/src/utils/sensitiveValue.ts`），因为同一份数据还要给排障与审计读。
+ */
+function activityPayloadOf(event: Extract<ModelEvent, { type: "provider.activity" }>): Record<string, unknown> {
+  return {
+    ...(event.arguments === undefined ? {} : { arguments: event.arguments }),
+    ...(event.result === undefined ? {} : { result: event.result }),
+    ...(event.output === undefined ? {} : { output: event.output }),
+    ...(event.exitCode === undefined ? {} : { exitCode: event.exitCode }),
+    ...(event.durationMs === undefined ? {} : { durationMs: event.durationMs }),
+  };
+}
+
+/**
  * 驱动一次可恢复的模型循环，并把步骤、事件和控制状态持久化到 PipelineStore。
  * Provider-controlled 模式只消费 Provider 事件；factory-controlled 模式才会调用 ToolRuntime，
  * 这样两种工具循环不会嵌套，也不会重复执行 Provider 已经处理的工具。
@@ -278,8 +295,11 @@ export class AgentLoopEngine implements AgentLoopRunner {
    *
    * 段的边界与**读取方**（explorer-activity 的 ASSISTANT_MESSAGE 合并）**逐字相同**：任何别的步骤
    * 出现就意味着这一段说完了。所以气泡数量、顺序、时间与 providerItemId 都不变。
+   *
+   * `phase` 也按段记：同一个 loop 里可能先有过程叙述（`commentary`）再有最终回答（`final_answer`），
+   * 而它们是**两种重量**——前者在任务完成后折进过程记录，后者常驻。两种 phase 各自成段。
    */
-  private readonly textSegments = new Map<string, { text: string; providerItemId: string | null; occurredAt: string }>();
+  private readonly textSegments = new Map<string, { text: string; providerItemId: string | null; phase: ModelMessagePhase | null; occurredAt: string }>();
   private readonly options: Required<AgentLoopEngineOptions>;
 
   constructor(private readonly store: PipelineStore, private readonly model: ModelGateway, private readonly defaultToolRuntime?: ToolRuntime, options: AgentLoopEngineOptions = {}) {
@@ -438,6 +458,13 @@ export class AgentLoopEngine implements AgentLoopRunner {
     let deltaItemId: string | null = null;
     let deltaThreadId: string | null = null;
     let deltaTurnId: string | null = null;
+    /**
+     * 输出项 → 这一段正文是哪一类（`commentary` / `final_answer`）。
+     *
+     * Codex 只把 `phase` 放在 `agentMessage` 这个 item 上，而增量事件里没有它，所以它是
+     * **跟着 item 走、不跟着增量走**的一条事实。生命周期与本次 loop 相同（局部变量，随循环结束释放）。
+     */
+    const messagePhases = new Map<string, ModelMessagePhase>();
     let deltaTimer: ReturnType<typeof setTimeout> | null = null;
     const clearDeltaTimer = (): void => { if (deltaTimer !== null) { clearTimeout(deltaTimer); deltaTimer = null; } };
     const flushTextDelta = (current: AgentLoop): void => {
@@ -448,11 +475,15 @@ export class AgentLoopEngine implements AgentLoopRunner {
       // 攒进"当前文本段"（落库由封段负责），同时**每次刷新都**把带 providerThreadId/providerTurnId
       // 的增量派发给进程内消费者：thread-service 靠它累积 turn 正文、project-execution-thread 靠它
       // 推 project.execution.turn.text.delta。这条派发的节奏与落库粒度是两件事，不要合并。
-      const segment = this.textSegments.get(current.id) ?? { text: "", providerItemId: null, occurredAt: this.store.now() };
+      const segment = this.textSegments.get(current.id) ?? { text: "", providerItemId: null, phase: null, occurredAt: this.store.now() };
       segment.text += text;
       if (deltaItemId) segment.providerItemId = deltaItemId;
+      // 段属于哪一类正文：Codex 在 item 上给 `phase`（见 ModelEvent 的 `text.phase`），
+      // Claude 不给 → 保持 null，界面按"未知"处理而不是猜一个。
+      const phase = (deltaItemId ? messagePhases.get(deltaItemId) : undefined) ?? segment.phase;
+      segment.phase = phase ?? null;
       this.textSegments.set(current.id, segment);
-      this.emit(current, "agent.model.text.delta", { text, ...(deltaThreadId ? { providerThreadId: deltaThreadId } : {}), ...(deltaTurnId ? { providerTurnId: deltaTurnId } : {}), ...(deltaItemId ? { providerItemId: deltaItemId } : {}) }, { durable: false });
+      this.emit(current, "agent.model.text.delta", { text, ...(phase ? { phase } : {}), ...(deltaThreadId ? { providerThreadId: deltaThreadId } : {}), ...(deltaTurnId ? { providerTurnId: deltaTurnId } : {}), ...(deltaItemId ? { providerItemId: deltaItemId } : {}) }, { durable: false });
     };
     // 低速率输出时字符阈值可能迟迟达不到；定时刷新保证文本仍能即时可见，而不是等步骤结束才出现。
     const scheduleDeltaFlush = (): void => {
@@ -489,6 +520,14 @@ export class AgentLoopEngine implements AgentLoopRunner {
             if (event.type !== "text.delta") flushTextDelta(loop);
             if (isTerminal(loop.state)) return;
             if (event.type === "thread.started") { loop = { ...loop, providerThreadId: event.threadId }; this.store.updateAgentLoop(loop); this.emit(loop, "agent.provider.thread.started", { threadId: event.threadId, ...(event.endpoint ? { provider: event.endpoint } : {}) }); }
+            if (event.type === "text.phase") {
+              // 这一段正文是哪一类。**phase 变了就先封段**：过程叙述与最终回答是两种重量
+              // （前者在任务完成后折进过程记录，后者常驻），合成一条会让整段都变成其中一种。
+              const open = this.textSegments.get(loop.id);
+              if (open && open.phase && open.phase !== event.phase) this.sealTextSegment(loop.id);
+              messagePhases.set(event.providerItemId, event.phase);
+              continue;
+            }
             if (event.type === "text.delta") {
               stepText += event.text;
               fullText += event.text;
@@ -523,8 +562,8 @@ export class AgentLoopEngine implements AgentLoopRunner {
               const commandContext = event.activityKind === "command"
                 ? { cwd: input.modelRequest.cwd ?? process.cwd(), timeoutMs: input.providerCommandTimeoutMs ?? null }
                 : {};
-              this.appendStep(loop, "PROVIDER_ACTIVITY", event.phase === "completed" ? "COMPLETED" : "RUNNING", { phase: event.phase, itemId: event.itemId, itemType: event.itemType, activityKind: event.activityKind, outcome: event.outcome, title: event.title, summary: event.summary, ...commandContext, providerItemId: event.providerItemId ?? event.itemId, providerControlled: true });
-              this.emit(loop, "agent.provider.activity", { phase: event.phase, itemId: event.itemId, itemType: event.itemType, activityKind: event.activityKind, outcome: event.outcome, title: event.title, summary: event.summary, ...commandContext, ...(event.toolName ? { toolName: event.toolName } : {}), ...(event.serverName ? { serverName: event.serverName } : {}), ...(event.status ? { status: event.status } : {}), ...(event.error ? { error: event.error } : {}), ...(event.providerThreadId ? { providerThreadId: event.providerThreadId } : {}), ...(event.providerTurnId ? { providerTurnId: event.providerTurnId } : {}), ...(event.providerItemId ? { providerItemId: event.providerItemId } : {}) });
+              this.appendStep(loop, "PROVIDER_ACTIVITY", event.phase === "completed" ? "COMPLETED" : "RUNNING", { phase: event.phase, itemId: event.itemId, itemType: event.itemType, activityKind: event.activityKind, outcome: event.outcome, title: event.title, summary: event.summary, ...activityPayloadOf(event), ...commandContext, providerItemId: event.providerItemId ?? event.itemId, providerControlled: true });
+              this.emit(loop, "agent.provider.activity", { phase: event.phase, itemId: event.itemId, itemType: event.itemType, activityKind: event.activityKind, outcome: event.outcome, title: event.title, summary: event.summary, ...activityPayloadOf(event), ...commandContext, ...(event.toolName ? { toolName: event.toolName } : {}), ...(event.serverName ? { serverName: event.serverName } : {}), ...(event.status ? { status: event.status } : {}), ...(event.error ? { error: event.error } : {}), ...(event.providerThreadId ? { providerThreadId: event.providerThreadId } : {}), ...(event.providerTurnId ? { providerTurnId: event.providerTurnId } : {}), ...(event.providerItemId ? { providerItemId: event.providerItemId } : {}) });
             }
             if (event.type === "model.usage") {
               loop = { ...loop, ...(event.providerThreadId ? { providerThreadId: event.providerThreadId } : {}), ...(event.providerTurnId ? { providerTurnId: event.providerTurnId } : {}) };
@@ -684,7 +723,7 @@ export class AgentLoopEngine implements AgentLoopRunner {
     if (!segment.text) return;
     const loop = this.store.getAgentLoop(loopId);
     if (!loop) return;
-    this.appendStep(loop, "MODEL_TEXT_DELTA", "COMPLETED", { text: segment.text, ...(segment.providerItemId ? { providerItemId: segment.providerItemId } : {}) }, segment.occurredAt);
+    this.appendStep(loop, "MODEL_TEXT_DELTA", "COMPLETED", { text: segment.text, ...(segment.providerItemId ? { providerItemId: segment.providerItemId } : {}), ...(segment.phase ? { phase: segment.phase } : {}) }, segment.occurredAt);
   }
 
   /**

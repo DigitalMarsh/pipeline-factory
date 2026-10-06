@@ -10,6 +10,7 @@ import { resolveExecutorWorkingDirectory } from "../tools/executor-working-direc
 import { TaskProgressGate } from "./termination-gates.js";
 import { mergeModelUsage, normalizeModelUsage } from "../model/usage.js";
 import { isProviderActivityKind, isProviderActivityOutcome } from "../model/provider-activity.js";
+import { structuredProviderPayload } from "../platform/provider-payload.js";
 import { updatePlanStatus } from "../plan/status-transition.js";
 // 用 import type 而不是"具名绑定带 type 前缀"：这样"本模块对 index.js 只剩类型依赖"是显式的，
 // check-cycles.mjs 也据此判定这条回流边已被切断。
@@ -368,7 +369,10 @@ export class ExecutorAgent {
       if (text && modelStep !== undefined) this.recordTaskProgressMarkers(run, event, revision, modelStep, text, association);
       const outputTaskId = this.currentTaskByRun.get(run.id);
       const providerItemId = typeof payload.providerItemId === "string" ? payload.providerItemId : undefined;
-      this.bufferModelOutput(run.executionThreadId, text, `${modelStep ?? "-"}:${providerItemId ?? "-"}`, { ...association, ...(outputTaskId ? { taskId: outputTaskId } : {}), ...(providerItemId ? { providerItemId } : {}) });
+      // `phase`（过程叙述 / 最终回答）**也算分段依据**：两种重量不能进同一个缓冲段，
+      // 否则界面上要么整段被折进过程记录，要么整段常驻——两条都不对。
+      const phase = payload.phase === "commentary" || payload.phase === "final_answer" ? payload.phase : undefined;
+      this.bufferModelOutput(run.executionThreadId, text, `${modelStep ?? "-"}:${providerItemId ?? "-"}:${phase ?? "-"}`, { ...association, ...(phase ? { phase } : {}), ...(outputTaskId ? { taskId: outputTaskId } : {}), ...(providerItemId ? { providerItemId } : {}) });
     }
     if (event.type === "agent.provider.activity") {
       const itemType = typeof payload.itemType === "string" ? payload.itemType : "provider activity";
@@ -397,6 +401,9 @@ export class ExecutorAgent {
         ...(serverName ? { serverName } : {}),
         ...(providerStatus ? { providerStatus } : {}),
         ...(reason ? { reason } : {}),
+        // **这一动作到底做了什么**：工具参数、返回、命令输出、退出码、耗时。
+        // 没有它们，"展开看结果"在界面上没有原料。上限与取值规则见 platform/provider-payload.ts。
+        ...structuredProviderPayload(payload),
         ...(providerItemId ? { providerItemId } : {}),
         ...(toolLike && providerItemId ? { callId: providerItemId } : {}),
         ...association,

@@ -4,7 +4,7 @@
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  */
 import { describe, expect, it } from "vitest";
-import { EXECUTION_DISPLAY_MODES, EXECUTION_ROW_KINDS, executionDisplayMode, projectExecutionJournal, type ExecutionPlanSnapshot } from "./executionStream";
+import { EXECUTION_MESSAGE_WEIGHTS, EXECUTION_ROW_KINDS, executionMessageWeight, executionRowKind, foldsIntoProcess, projectExecutionJournal, type ExecutionPlanSnapshot } from "./executionStream";
 
 describe("projectExecutionJournal", () => {
   const plan: ExecutionPlanSnapshot = {
@@ -124,37 +124,79 @@ describe("projectExecutionJournal", () => {
   });
 });
 
-describe("消息清单的呈现方式", () => {
-  it("条目的形态只有五种，模板按形态选行组件", () => {
-    // 18 个消息类型映射到这 5 种形态；`tool` 一条就承担命令 / 文件变更 / 工具调用 / MCP 调用四类。
-    // 新增一种形态却没登记到 `EXECUTION_ROW_KINDS` 时，那边有编译期护栏会先红。
-    expect(EXECUTION_ROW_KINDS).toEqual(["plan", "model", "user", "activity", "tool"]);
+describe("消息清单的权重", () => {
+  it("条目的形态只有七种，模板按形态选行组件", () => {
+    // 28 个消息类型映射到这 7 种形态；`tool` 一条就承担命令 / 文件变更 / 工具调用 / MCP /
+    // 子代理 / 联网搜索 / 生成图片七类。新增一种形态却没登记到 `EXECUTION_ROW_KINDS` 时，
+    // 那边有编译期护栏会先红。
+    expect(EXECUTION_ROW_KINDS).toEqual(["plan", "model", "user", "divider", "reasoning", "activity", "tool"]);
+    // 形态由消息类型算出来，且只有一处定义——投影不再自己挑 `kind`。
+    expect(executionRowKind("CONTEXT")).toBe("divider");
+    expect(executionRowKind("REASONING")).toBe("reasoning");
+    expect(executionRowKind("COMMAND")).toBe("tool");
+    expect(executionRowKind("MCP_CALL")).toBe("tool");
+    expect(executionRowKind("SUBAGENT")).toBe("tool");
+    expect(executionRowKind("RUN_ACTIVITY")).toBe("activity");
   });
 
-  it("**呈现方式表是唯一落点**：卡片 / 一行 / 折叠 / 不显示，一眼看全", () => {
-    expect(EXECUTION_DISPLAY_MODES.ASSISTANT_MESSAGE).toBe("prose");
-    expect(EXECUTION_DISPLAY_MODES.MODEL_REPORT).toBe("prose");
-    expect(EXECUTION_DISPLAY_MODES.PLAN).toBe("card");
-    expect(EXECUTION_DISPLAY_MODES.COMMAND).toBe("line");
-    expect(EXECUTION_DISPLAY_MODES.FILE_CHANGE).toBe("line");
-    expect(EXECUTION_DISPLAY_MODES.TOOL_CALL).toBe("line");
-    expect(EXECUTION_DISPLAY_MODES.MCP_CALL).toBe("line");
-    expect(EXECUTION_DISPLAY_MODES.TASK_LIFECYCLE).toBe("line");
-    expect(EXECUTION_DISPLAY_MODES.REASONING).toBe("folded");
-    expect(EXECUTION_DISPLAY_MODES.GATE).toBe("folded");
-    expect(EXECUTION_DISPLAY_MODES.PROVIDER_MESSAGE).toBe("hidden");
-    expect(EXECUTION_DISPLAY_MODES.SESSION).toBe("hidden");
+  it("**权重表是唯一落点**：常驻 / 过程 / 不显示，一眼看全", () => {
+    expect(EXECUTION_MESSAGE_WEIGHTS.ASSISTANT_MESSAGE).toBe("answer");
+    expect(EXECUTION_MESSAGE_WEIGHTS.MODEL_REPORT).toBe("answer");
+    expect(EXECUTION_MESSAGE_WEIGHTS.PLAN).toBe("answer");
+    expect(EXECUTION_MESSAGE_WEIGHTS.USER_MESSAGE).toBe("answer");
+    expect(EXECUTION_MESSAGE_WEIGHTS.COMMAND).toBe("process");
+    expect(EXECUTION_MESSAGE_WEIGHTS.FILE_CHANGE).toBe("process");
+    expect(EXECUTION_MESSAGE_WEIGHTS.TOOL_CALL).toBe("process");
+    expect(EXECUTION_MESSAGE_WEIGHTS.MCP_CALL).toBe("process");
+    expect(EXECUTION_MESSAGE_WEIGHTS.SUBAGENT).toBe("process");
+    expect(EXECUTION_MESSAGE_WEIGHTS.REASONING).toBe("process");
+    expect(EXECUTION_MESSAGE_WEIGHTS.GATE).toBe("process");
+    expect(EXECUTION_MESSAGE_WEIGHTS.CONTEXT).toBe("process");
+    expect(EXECUTION_MESSAGE_WEIGHTS.PROVIDER_MESSAGE).toBe("hidden");
+    expect(EXECUTION_MESSAGE_WEIGHTS.SESSION).toBe("hidden");
+    // ④ 一律不进会话正文——归宿是 Run 头的「Provider 运行事实」。
+    expect(EXECUTION_MESSAGE_WEIGHTS.PROVIDER_COMPACTION).toBe("hidden");
+    expect(EXECUTION_MESSAGE_WEIGHTS.PERMISSION_DENIED).toBe("hidden");
+    expect(EXECUTION_MESSAGE_WEIGHTS.RATE_LIMIT).toBe("hidden");
+    expect(EXECUTION_MESSAGE_WEIGHTS.PROVIDER_RETRY).toBe("hidden");
+    expect(EXECUTION_MESSAGE_WEIGHTS.BACKGROUND_TASK).toBe("hidden");
+    expect(EXECUTION_MESSAGE_WEIGHTS.HOOK).toBe("hidden");
+    expect(EXECUTION_MESSAGE_WEIGHTS.PROVIDER_WARNING).toBe("hidden");
   });
 
-  it("**异常类消息永远是卡片**：呈现方式怎么调，阻塞与恢复都不能被藏起来", () => {
-    expect(EXECUTION_DISPLAY_MODES.RECOVERY).toBe("card");
-    expect(EXECUTION_DISPLAY_MODES.USER_MESSAGE).toBe("text");
+  it("**异常类消息永远是常驻**：权重怎么调，阻塞与恢复都不能被藏起来", () => {
+    expect(EXECUTION_MESSAGE_WEIGHTS.RECOVERY).toBe("answer");
 
     const items = projectExecutionJournal([
       { sequence: 1, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:00.000Z", payload: { state: "BLOCKED", reason: "MAX_DURATION_EXCEEDED" } },
     ]);
     expect(items[0]).toMatchObject({ messageType: "RECOVERY", status: "FAILED" });
-    expect(executionDisplayMode(items[0]!)).toBe("card");
+    expect(executionMessageWeight(items[0]!)).toBe("answer");
+  });
+
+  it("`phase` 决定一段正文是「过程」还是「结论」，**拿不到就当结论**（不折判不准的正文）", () => {
+    const base = { id: "x", kind: "model", role: "assistant", title: "执行说明", content: "", detail: "", status: "COMPLETED", occurredAt: "2026-08-30T07:00:00.000Z", sequence: 1, messageType: "ASSISTANT_MESSAGE" } as const;
+
+    expect(executionMessageWeight({ ...base, phase: "commentary" })).toBe("process");
+    expect(executionMessageWeight({ ...base, phase: "final_answer" })).toBe("answer");
+    // Provider 不保证给 phase（Codex schema 原话：treat None as "phase unknown"）——
+    // 把判不准的正文折起来，等于把可能重要的内容藏了。
+    expect(executionMessageWeight({ ...base })).toBe("answer");
+    // 报告协议本身就是终答，不受 phase 影响。
+    expect(executionMessageWeight({ ...base, messageType: "MODEL_REPORT", phase: "commentary" })).toBe("answer");
+  });
+
+  it("折起来的三条判据：过程、已跑完、不是失败", () => {
+    const item = { id: "x", kind: "tool", role: "system", title: "命令 · pnpm test", content: "", detail: "", status: "COMPLETED", occurredAt: "2026-08-30T07:00:00.000Z", sequence: 1, messageType: "COMMAND" } as const;
+
+    expect(foldsIntoProcess(item, { stepRunning: false })).toBe(true);
+    // 还在跑：照 OpenClaw，live 内容留在日志外面。
+    expect(foldsIntoProcess(item, { stepRunning: true })).toBe(false);
+    // 失败**永远可见**——`Worked for … · 2 个失败` 这一行的意思是"失败的条目还在外面"。
+    expect(foldsIntoProcess({ ...item, status: "FAILED" }, { stepRunning: false })).toBe(false);
+    // 结论与隐藏项从不折。
+    expect(foldsIntoProcess({ ...item, messageType: "ASSISTANT_MESSAGE" }, { stepRunning: false })).toBe(false);
+    expect(foldsIntoProcess({ ...item, messageType: "PROVIDER_MESSAGE" }, { stepRunning: false })).toBe(false);
   });
 
   it("**跨事件被切断的任务标记不会漏进正文**（回归：正文第一行曾是 `-progress>{...}`）", () => {
@@ -216,6 +258,7 @@ describe("消息清单的呈现方式", () => {
     ]);
 
     expect(items[0]).toMatchObject({ messageType: "UNCLASSIFIED" });
-    expect(executionDisplayMode(items[0]!)).toBe("folded");
+    // 它是"过程"而不是"结论"——但**认不出来这件事本身可见**（折叠头会写"N 条未识别"）。
+    expect(executionMessageWeight(items[0]!)).toBe("process");
   });
 });

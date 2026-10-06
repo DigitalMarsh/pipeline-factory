@@ -1,10 +1,14 @@
 /**
  * 模块职责：把 ExecutionThread journal 投影成按 Plan 任务组织的执行会话。
  *
- * 维护提示：这里只展示持久化事实和 Provider 明确提供的安全摘要；不得输出工具参数、成功结果或模型私有思维链。
+ * 维护提示：**边界是"脱敏 + 截断"，不是"不许显示"**。工具参数、命令输出与工具返回都可以展示，
+ *   但一律先过 `utils/sensitiveValue.ts`（脱敏 + 2000 字截断）**在展示边界**——落库与投影都保留原样，
+ *   因为同一份数据还要给排障与审计读。曾经这里写的是"不得输出工具参数、成功结果或模型私有思维链"，
+ *   结果是 OpenClaw / Hermes 那种"展开看结果"做不出来。**模型的私有思维链（`thinking` 的原文）
+ *   仍然不展示**——展示的是 Provider 自己给的推理摘要。
  */
-import type { ExecutionJournalPayload, PlanTask } from "../types";
-import type { SharedMessageType } from "./conversationTypes";
+import type { ExecutionJournalPayload, ModelMessagePhase, PlanTask } from "../types";
+import { SHARED_MESSAGE_CLASSES, type MessageClass, type SharedMessageType } from "./conversationTypes";
 
 export type ExecutionJournalEntry = {
   sequence: number;
@@ -27,7 +31,7 @@ export type ExecutionPlanSnapshot = {
 
 export type ExecutionStreamItem = {
   id: string;
-  kind: "plan" | "model" | "user" | "activity" | "tool";
+  kind: "plan" | "model" | "user" | "divider" | "reasoning" | "activity" | "tool";
   role: "assistant" | "user" | "system";
   title: string;
   content: string;
@@ -49,7 +53,22 @@ export type ExecutionStreamItem = {
   /** Provider 活动的中立类别与成败（见下方 ACTIVITY_KIND_LABELS 的说明）；非 Provider 活动条目为空。 */
   activityKind?: ProviderActivityKind | undefined;
   outcome?: ProviderActivityOutcome | undefined;
-  /** 这条消息属于哪一类（见 EXECUTION_DISPLAY_MODES）。呈现方式只由它决定。 */
+  /**
+   * 这一段正文是**过程叙述**还是**最终回答**（Codex 的 `agentMessage.phase`）。
+   * 只有 Codex 给，Claude 不给 → 留空，`executionMessageWeight` 按"结论"处理，不把判不准的正文折起来。
+   */
+  phase?: ModelMessagePhase | undefined;
+  /**
+   * 这一动作的**结构化载荷**：工具参数、返回、命令输出、退出码、耗时。
+   * 展示前一律过 `utils/sensitiveValue.ts`（脱敏 + 截断）——**落库与传输都保留原样**，
+   * 因为同一份数据还要给排障与审计读。
+   */
+  arguments?: unknown;
+  result?: unknown;
+  output?: string | undefined;
+  exitCode?: number | undefined;
+  durationMs?: number | undefined;
+  /** 这条消息属于哪一类（见 EXECUTION_MESSAGE_WEIGHTS）。权重只由它决定。 */
   messageType: ExecutionMessageType;  plan?: ExecutionPlanSnapshot;
 };
 
@@ -83,67 +102,110 @@ export type ExecutionMessageType =
  */
 export type ExecutionSharedMessageType = Extract<ExecutionMessageType, SharedMessageType>;
 
-/**
- * 呈现方式：
- * - `card`：完整卡片（可读正文 + 详情）
- * - `text`：纯文本一行（用户自己说的话——不套卡片，见 `docs/消息类型及事件状态机流程图.md`）
- * - `prose`：铺开的正文（模型的回复——与探索侧同档同形：不套气泡、不带头像）
- * - `line`：一行（紧凑活动行，不展开正文）
- * - `folded`：折进所属执行步骤的「N 条活动」，点开才看
- * - `hidden`：不渲染
- */
-export type ExecutionDisplayMode = "card" | "text" | "prose" | "line" | "folded" | "hidden";
 
 /**
- * **消息类型 → 呈现方式。这张表就是"清单"本身。**
- * 依据是每条消息对"搞清楚 Executor 在干什么"的贡献：
- * 正文与结论是 `card`；你自己说的话是 `text`；动作（命令 / 文件 / 工具 / 步骤）是 `line`；
- * 过程性噪音（推理、门禁）`folded`；Provider 的回显与会话机制 `hidden`。
+ * **权重：这一类消息在会话里占多少地方。** 它与"形态"（`kind`）是两个轴：
+ * `kind` 说"这一行长什么样"（模板按它选组件），权重说"它凭什么留在视线里"。
+ *
+ * 三个取值照 OpenClaw 那条线切：
+ * - `answer`：**你说的、模型对你说的、以及需要你决策的**。常驻，不折。
+ * - `process`：**模型对外做的过程**（动作、推理、判定、轮次、机制记录）。
+ *   所属执行步骤**跑完之后**折进它上方那一行；跑的过程中照常逐条显示——
+ *   照 OpenClaw：*live response text and the working indicator stay outside the log*。
+ * - `hidden`：不渲染，也不进任何计数。Provider 的回显与会话机制、以及全部 ④「Provider 说的」。
+ *
+ * 判据是"它对看懂这次执行有没有独立贡献"。同一次事实的第二行、每一轮的机制记录、
+ * 以及内容在别处已经有的回声，都不该各占一行。
  */
-export const EXECUTION_DISPLAY_MODES: Record<ExecutionMessageType, ExecutionDisplayMode> = {
-  PLAN: "card",
-  // 与探索侧同档同形：模型的回复**直接铺开**，不套气泡、不带头像（见
-  // `docs/消息类型及事件状态机流程图.md` §0 的共用档位表）。此前这里是 `card`，
-  // 于是同一件事在两条对话线上长得不一样——那是漏改，不是设计。
-  ASSISTANT_MESSAGE: "prose",
-  // 完成报告与正文**渲染的是同一个组件**（只差标题），所以档位也相同——写成 `card` 会与模板对不上。
-  MODEL_REPORT: "prose",
-  USER_MESSAGE: "text",
-  COMMAND: "line",
-  FILE_CHANGE: "line",
-  TOOL_CALL: "line",
-  MCP_CALL: "line",
-  TASK_LIFECYCLE: "line",
-  REASONING: "folded",
-  GATE: "folded",
-  // 机制信息（回合状态、上下文压缩、认不出来的活动）：默认收起而不是彻底隐藏——
-  // 它们平时无用，但排查"这一轮到底有没有开始"时是唯一线索。
-  TURN_STATUS: "folded",
-  CONTEXT: "folded",
-  UNCLASSIFIED: "folded",
+export type ExecutionMessageWeight = "answer" | "process" | "hidden";
+
+/** ④「Provider 说的」运行事实的权重一律是 `hidden`：归宿是 Run 头诊断区，不是会话正文。 */
+export const EXECUTION_MESSAGE_WEIGHTS: Record<ExecutionMessageType, ExecutionMessageWeight> = {
+  PLAN: "answer",
+  ASSISTANT_MESSAGE: "answer",
+  MODEL_REPORT: "answer",
+  USER_MESSAGE: "answer",
+  RUN_ACTIVITY: "answer",
+  RECOVERY: "answer",
+  COMMAND: "process",
+  FILE_CHANGE: "process",
+  TOOL_CALL: "process",
+  MCP_CALL: "process",
+  SUBAGENT: "process",
+  WEB_SEARCH: "process",
+  IMAGE_GENERATION: "process",
+  TASK_LIFECYCLE: "process",
+  REASONING: "process",
+  GATE: "process",
+  TURN_STATUS: "process",
+  CONTEXT: "process",
+  UNCLASSIFIED: "process",
   PROVIDER_MESSAGE: "hidden",
   SESSION: "hidden",
-  RUN_ACTIVITY: "card",
-  RECOVERY: "card",
+  PROVIDER_COMPACTION: "hidden",
+  PERMISSION_DENIED: "hidden",
+  RATE_LIMIT: "hidden",
+  PROVIDER_RETRY: "hidden",
+  BACKGROUND_TASK: "hidden",
+  HOOK: "hidden",
+  PROVIDER_WARNING: "hidden",
 };
 
 /**
- * 这条消息是否只是"机制记录"——它不构成内容，因此不改变"报告是否重复"的判断
- * （见 flushModel 里合并重复完成报告的那段）。
- * 此前这里比的是**标题字符串**（`["Task progress", "Execution activity", "任务完成"].includes(title)`），
- * 改一个文案就会静默失效。
+ * 执行侧的大类表：共用项直接取 `SHARED_MESSAGE_CLASSES`（**分类的唯一定义处**），
+ * 这里只补执行侧独有的五项。冻结方案、Plan 任务、Run 级事件、恢复都是 Factory 自己的账；
+ * 执行报告是模型说的（协议解析后的一种正文形态）。
  */
+export const EXECUTION_MESSAGE_CLASSES: Record<ExecutionMessageType, MessageClass> = {
+  ...SHARED_MESSAGE_CLASSES,
+  PLAN: "factory",
+  MODEL_REPORT: "model",
+  TASK_LIFECYCLE: "factory",
+  RUN_ACTIVITY: "factory",
+  RECOVERY: "factory",
+};
+
 /**
- * 执行会话里条目的**形态**——模板按它选行组件。五种的 DOM 各不相同：
+ * 这条条目是不是 ④「Provider 说的」运行事实 —— Run 头那节读它。
+ *
+ * 判据来自两张表：大类是 `provider`，且权重是 `hidden`（即它**没在会话里露过面**）。
+ * `PROVIDER_MESSAGE` 排除在外：那是"Provider 把你那句话回显一次"，诊断价值为零。
+ */
+export function isRuntimeFactItem(item: ExecutionStreamItem): boolean {
+  return EXECUTION_MESSAGE_CLASSES[item.messageType] === "provider" && EXECUTION_MESSAGE_WEIGHTS[item.messageType] === "hidden" && item.messageType !== "PROVIDER_MESSAGE";
+}
+
+/**
+ * **这一条到底是"结论"还是"过程"。**
+ *
+ * 表给的是按消息类型的默认值，这里只对它做**一处细化**：`ASSISTANT_MESSAGE` 按 Codex 给的
+ * `phase` 分档——`commentary`（中途的叙述）是过程，`final_answer`（这一轮真正的回答）是结论。
+ * 这正是 OpenClaw「Worked for …」那条折叠线的判据。
+ *
+ * **拿不到 `phase` 一律按结论处理**：Provider 不保证给（Codex schema 原话是 callers must treat
+ * `None` as "phase unknown"），把判不准的正文折起来，等于把可能重要的内容藏了。
+ */
+export function executionMessageWeight(item: ExecutionStreamItem): ExecutionMessageWeight {
+  const weight = EXECUTION_MESSAGE_WEIGHTS[item.messageType];
+  if (weight === "hidden") return "hidden";
+  if (item.messageType === "ASSISTANT_MESSAGE" && item.phase === "commentary") return "process";
+  return weight;
+}
+
+/**
+ * 执行会话里条目的**形态**——模板按它选行组件。六种的 DOM 各不相同：
  * - `plan`：冻结方案卡（可展开）
  * - `model`：`ASSISTANT_MESSAGE` 与 `MODEL_REPORT` 共用（都是 markdown 正文，只差标题）
  * - `user`：你自己说的话（`›` + 纯文本）
- * - `activity` / `tool`：其余全部——正文只有一句 `detail`
+ * - `divider`：会话边界（上下文在这里换了），与探索侧同形——它是**边界不是事件**，
+ *   所以不折进过程记录：折进去，"这一轮的上下文从这儿重新开始"就看不见了
+ * - `reasoning`：可折叠的推理卡，与探索侧同形——推理是背景音，不该占正文的地方
+ * - `activity` / `tool`：其余全部——正文只有一句 `detail`，其中 `tool` 还能展开看结果
  *
- * **按形态分文件，不按消息类型分**：18 个消息类型映射到这 5 种形态，
- * 其中 `tool` 一条就承担命令 / 文件变更 / 工具调用 / MCP 调用四类。
+ * **按形态分文件，不按消息类型分**：28 个消息类型映射到这 7 种形态，
+ * 其中 `tool` 一条就承担命令 / 文件变更 / 工具调用 / MCP / 子代理 / 搜索 / 生图七类。
  */
-export const EXECUTION_ROW_KINDS = ["plan", "model", "user", "activity", "tool"] as const;
+export const EXECUTION_ROW_KINDS = ["plan", "model", "user", "divider", "reasoning", "activity", "tool"] as const;
 
 /**
  * 编译期护栏：这张清单必须正好是 `ExecutionStreamItem["kind"]` 的全部取值。
@@ -152,13 +214,78 @@ export const EXECUTION_ROW_KINDS = ["plan", "model", "user", "activity", "tool"]
 const _kindCoverage: Record<Exclude<ExecutionStreamItem["kind"], (typeof EXECUTION_ROW_KINDS)[number]>, true> = {};
 void _kindCoverage;
 
+/** 形态由消息类型决定，**只有一处**（`ProjectProviderActivity` 也会覆盖它，见那里的说明）。 */
+const KIND_BY_MESSAGE_TYPE: Record<ExecutionMessageType, ExecutionStreamItem["kind"]> = {
+  PLAN: "plan",
+  ASSISTANT_MESSAGE: "model",
+  MODEL_REPORT: "model",
+  USER_MESSAGE: "user",
+  CONTEXT: "divider",
+  COMMAND: "tool",
+  FILE_CHANGE: "tool",
+  TOOL_CALL: "tool",
+  MCP_CALL: "tool",
+  SUBAGENT: "tool",
+  WEB_SEARCH: "tool",
+  IMAGE_GENERATION: "tool",
+  TASK_LIFECYCLE: "activity",
+  REASONING: "reasoning",
+  GATE: "activity",
+  TURN_STATUS: "activity",
+  UNCLASSIFIED: "activity",
+  PROVIDER_MESSAGE: "activity",
+  SESSION: "activity",
+  PROVIDER_COMPACTION: "activity",
+  PERMISSION_DENIED: "activity",
+  RATE_LIMIT: "activity",
+  PROVIDER_RETRY: "activity",
+  BACKGROUND_TASK: "activity",
+  HOOK: "activity",
+  PROVIDER_WARNING: "activity",
+  RUN_ACTIVITY: "activity",
+  RECOVERY: "activity",
+};
+
+/** 这类消息的默认形态。投影用它，模板的兜底不变。 */
+export function executionRowKind(messageType: ExecutionMessageType): ExecutionStreamItem["kind"] {
+  return KIND_BY_MESSAGE_TYPE[messageType];
+}
+
+/**
+ * 执行会话里条目状态的中文文案。**这套状态机只有这一张表**——行组件与视图都从这儿取，
+ * 两处各写一份就会出现"失败 / 阻塞"与"失败"指同一个状态。
+ * （颜色另有一处：`utils/statusTag.ts` 的 `statusTagType`；文案常要当纯文本用，颜色只给 `el-tag`。）
+ */
+export function executionMessageStatusLabel(status: ExecutionStreamItem["status"]): string {
+  return ({ RUNNING: "进行中", COMPLETED: "已完成", WAITING: "等待中", FAILED: "失败 / 阻塞", INFO: "信息", UNKNOWN: "状态未知" } as const)[status];
+}
+
+/**
+ * 这条消息是否只是"机制记录"——它不构成内容，因此不改变"报告是否重复"的判断
+ * （见 flushModel 里合并重复完成报告的那段）。
+ * 此前这里比的是**标题字符串**（`["Task progress", "Execution activity", "任务完成"].includes(title)`），
+ * 改一个文案就会静默失效。
+ */
 function isMechanismOnly(item: ExecutionStreamItem): boolean {
   return item.messageType === "TURN_STATUS" || item.messageType === "TASK_LIFECYCLE" || item.messageType === "GATE" || item.messageType === "CONTEXT" || item.messageType === "UNCLASSIFIED";
 }
 
-/** 这条消息该怎么呈现。视图与分组都只问它，不再各自判断。 */
-export function executionDisplayMode(item: ExecutionStreamItem): ExecutionDisplayMode {
-  return EXECUTION_DISPLAY_MODES[item.messageType];
+/**
+ * **这一条要不要折进上方的过程记录。**
+ *
+ * 三条判据，缺一不可：
+ *   1) 权重是 `process`（结论、隐藏项不折）；
+ *   2) 它**不在**当前正在跑的那一步里——OpenClaw 的原话是 live 内容留在日志外面；
+ *   3) 它**不是失败**——`Worked for 2 分 3 秒 · 2 个失败` 这一行的意思是"失败数在标题上，
+ *      失败的条目本身也还在外面"。把失败折起来，等于把这轮唯一要你处理的事藏了。
+ *
+ * 第 2 条由调用方（`RunDetailView` 的分组）传进来：视图知道"这一步跑完没有"，
+ * 投影层不知道，也不该知道。
+ */
+export function foldsIntoProcess(item: ExecutionStreamItem, options: { stepRunning: boolean }): boolean {
+  if (executionMessageWeight(item) !== "process") return false;
+  if (options.stepRunning) return false;
+  return item.status !== "FAILED";
 }
 
 
@@ -173,6 +300,8 @@ type PendingModelText = {
   providerThreadId?: string;
   providerTurnId?: string;
   providerItemId?: string;
+  /** 过程叙述还是最终回答。**也是分段依据**——两种重量不能粘成一条（见 executionMessageWeight）。 */
+  phase?: ModelMessagePhase;
 };
 
 /** 将 ExecutionThread journal 映射成按 Plan 任务归组的模型、Provider 和用户消息。 */
@@ -230,6 +359,7 @@ export function projectExecutionJournal(journal: ExecutionJournalEntry[], thread
         status: "COMPLETED",
         occurredAt: pendingModel.occurredAt,
         sequence: pendingModel.lastSequence,
+        ...(pendingModel.phase ? { phase: pendingModel.phase } : {}),
         ...(pendingModel.taskId ? { taskId: pendingModel.taskId } : {}),
         ...(pendingModel.modelStep === undefined ? {} : { modelStep: pendingModel.modelStep }),
         ...(pendingModel.loopId ? { loopId: pendingModel.loopId } : {}),
@@ -253,9 +383,13 @@ export function projectExecutionJournal(journal: ExecutionJournalEntry[], thread
       const providerItemId = stringValue(payload.providerItemId);
       const providerThreadId = stringValue(payload.providerThreadId);
       const providerTurnId = stringValue(payload.providerTurnId);
+      // `phase` 变了就换一条：过程叙述与最终回答是两种重量（前者折进过程记录，后者常驻），
+      // 粘成一条会让整段都变成其中一种。与写侧 `bufferModelOutput` 的分段键逐字一致。
+      const phase = payload.phase === "commentary" || payload.phase === "final_answer" ? payload.phase : undefined;
       const sameModelStream = pendingModel
         && pendingModel.modelStep === step
-        && pendingModel.providerItemId === providerItemId;
+        && pendingModel.providerItemId === providerItemId
+        && pendingModel.phase === phase;
       if (!sameModelStream) flushModel();
       if (!pendingModel) {
         pendingModel = {
@@ -269,6 +403,7 @@ export function projectExecutionJournal(journal: ExecutionJournalEntry[], thread
           ...(providerThreadId ? { providerThreadId } : {}),
           ...(providerTurnId ? { providerTurnId } : {}),
           ...(providerItemId ? { providerItemId } : {}),
+          ...(phase ? { phase } : {}),
         };
       } else {
         pendingModel.text += text;
@@ -613,10 +748,37 @@ function projectToolCall(entry: ExecutionJournalEntry, taskId: string | undefine
  * 两边必须一致：`executionStream.parity.test.ts` 用同一批样例断言镜像与领域实现给出相同结论，
  * 改这里就要同步改那边，测试会拦住漂移。
  */
-export type ProviderActivityKind = "command" | "file-change" | "tool" | "mcp" | "reasoning" | "message" | "session" | "other";
+export type ProviderActivityKind =
+  // ② 内容流
+  | "reasoning"
+  | "message"
+  // ③ 动作
+  | "command"
+  | "file-change"
+  | "tool"
+  | "mcp"
+  | "search"
+  | "media"
+  | "subagent"
+  // ④ 运行事实（不进会话正文）
+  | "session"
+  | "compaction"
+  | "hook"
+  | "task"
+  | "rate-limit"
+  | "retry"
+  | "permission"
+  | "warning"
+  | "review"
+  | "other";
 export type ProviderActivityOutcome = "running" | "succeeded" | "failed" | "unknown" | "not-applicable";
 
-const ACTIVITY_KINDS: readonly ProviderActivityKind[] = ["command", "file-change", "tool", "mcp", "reasoning", "message", "session", "other"];
+const ACTIVITY_KINDS: readonly ProviderActivityKind[] = [
+  "reasoning", "message",
+  "command", "file-change", "tool", "mcp", "search", "media", "subagent",
+  "session", "compaction", "hook", "task", "rate-limit", "retry", "permission", "warning", "review",
+  "other",
+];
 const ACTIVITY_OUTCOMES: readonly ProviderActivityOutcome[] = ["running", "succeeded", "failed", "unknown", "not-applicable"];
 
 /**
@@ -625,13 +787,25 @@ const ACTIVITY_OUTCOMES: readonly ProviderActivityOutcome[] = ["running", "succe
  * 这种标签等于没说。
  */
 const ACTIVITY_KIND_LABELS: Record<ProviderActivityKind, string> = {
+  reasoning: "推理",
+  message: "消息",
   command: "命令",
   "file-change": "文件变更",
   tool: "工具调用",
   mcp: "MCP 调用",
-  reasoning: "推理",
-  message: "消息",
+  search: "联网搜索",
+  media: "生成图片",
+  subagent: "子代理",
+  // ④ 那几类只出现在 Run 头的诊断区，用它们自己的话说。
   session: "会话",
+  compaction: "上下文已压缩",
+  hook: "钩子",
+  task: "后台子任务",
+  "rate-limit": "配额",
+  retry: "自动重试",
+  permission: "权限被拒",
+  warning: "Provider 警告",
+  review: "评审模式",
   other: "活动",
 };
 
@@ -669,11 +843,53 @@ const ACTIVITY_MESSAGE_TYPES: Record<ProviderActivityKind, ExecutionMessageType>
   // MCP 调用有自己的名字（不再并进 `tool`）：探索线程那边同样单列一类，
   // 两条会话里"这是 MCP 服务端的调用"都看得见。
   mcp: "MCP_CALL",
+  search: "WEB_SEARCH",
+  media: "IMAGE_GENERATION",
+  subagent: "SUBAGENT",
   reasoning: "REASONING",
   message: "PROVIDER_MESSAGE",
+  // ④：一律 `hidden`（见 EXECUTION_MESSAGE_WEIGHTS），归宿是 Run 头的「Provider 运行事实」。
   session: "SESSION",
+  compaction: "PROVIDER_COMPACTION",
+  hook: "HOOK",
+  task: "BACKGROUND_TASK",
+  "rate-limit": "RATE_LIMIT",
+  retry: "PROVIDER_RETRY",
+  permission: "PERMISSION_DENIED",
+  warning: "PROVIDER_WARNING",
+  // Codex 的评审模式没有独立的展示位：它与"Provider 说了句话"是同一件事，归到未识别那一档。
+  review: "UNCLASSIFIED",
   other: "UNCLASSIFIED",
 };
+
+/**
+ * ④「Provider 说的」的中立类别。与领域侧 `isRuntimeKind()` 同义——**两边各自成表是因为
+ * web 不能运行时依赖领域层**（见本段开头的说明），不是可以随便分叉的两份。parity 测试会拦。
+ */
+export const RUNTIME_ACTIVITY_KINDS: ReadonlySet<ProviderActivityKind> = new Set(["session", "compaction", "hook", "task", "rate-limit", "retry", "permission", "warning", "review"]);
+
+/** 该类别是不是 ④。语义见 `RUNTIME_ACTIVITY_KINDS`。 */
+export function isRuntimeActivityKind(kind: ProviderActivityKind): boolean {
+  return RUNTIME_ACTIVITY_KINDS.has(kind);
+}
+
+/**
+ * ④ 里**需要浮到用户眼前**的那几类（配额、重试、权限被拒、告警、评审）。
+ * 与 `packages/domain/src/model/provider-activity.ts` 的 `isRuntimeAlertKind` 同义。
+ */
+const RUNTIME_ALERT_KINDS: ReadonlySet<ProviderActivityKind> = new Set(["rate-limit", "retry", "permission", "warning", "review"]);
+
+/**
+ * 这条运行事实要不要**浮出来**（而不是安静地待在诊断区里）。
+ *
+ * 两条判据：类别本身就是要你动手的，或者它**失败了**（钩子挂了、后台子任务失败了）。
+ * 只按类别判，会把"钩子执行失败"藏进展开区；只按失败判，会把"配额用尽"这种
+ * 明明成功返回、却要你立刻知道的事漏掉。
+ */
+export function isRuntimeAlertItem(item: ExecutionStreamItem): boolean {
+  if (!item.activityKind || !isRuntimeActivityKind(item.activityKind)) return false;
+  return RUNTIME_ALERT_KINDS.has(item.activityKind) || item.status === "FAILED";
+}
 
 function isActivityOutcome(value: unknown): value is ProviderActivityOutcome {
   return typeof value === "string" && (ACTIVITY_OUTCOMES as readonly string[]).includes(value);
@@ -682,19 +898,30 @@ function isActivityOutcome(value: unknown): value is ProviderActivityOutcome {
 /**
  * 老 journal 事件的类别兜底（本次改动之前写入的条目没有 activityKind）。
  * **只按 Codex 的词表判**：带 Claude 字段的事件都在本次改动之后写入，不会走到这里。
- * 表与顺序必须与 `codexActivityKind` 逐字一致——`tool` 排在 `mcp` 之后，否则 `mcpToolCall`
- * 会被"tool"抢走；parity 测试会拦下任何分叉。
+ * 表与顺序必须与 `codexActivityKind` 逐字一致——`tool` 排在 `mcp` / `subagent` / `search` 之后，
+ * 否则 `mcpToolCall` 会被"tool"抢走；parity 测试会拦下任何分叉。
  */
 export function legacyActivityKind(itemType: string): ProviderActivityKind {
   const value = itemType.trim().toLowerCase();
   const table: Array<[ProviderActivityKind, readonly string[]]> = [
     ["mcp", ["mcp"]],
+    ["subagent", ["collab", "subagent"]],
+    ["search", ["websearch", "web_search"]],
+    ["media", ["imagegeneration", "image_generation"]],
     ["command", ["command", "exec"]],
     ["file-change", ["file", "patch"]],
     ["reasoning", ["reason"]],
-    ["message", ["message"]],
+    ["message", ["message", "plan"]],
+    ["hook", ["hook"]],
+    ["compaction", ["compact"]],
+    ["task", ["task"]],
+    ["rate-limit", ["ratelimit", "rate_limit"]],
+    ["retry", ["retry"]],
+    ["permission", ["permission", "approval"]],
+    ["warning", ["warning", "deprecation", "notice"]],
+    ["review", ["review"]],
     ["session", ["session"]],
-    ["tool", ["tool"]],
+    ["tool", ["tool", "imageview"]],
   ];
   for (const [kind, needles] of table) {
     if (needles.some((needle) => value.includes(needle))) return kind;
@@ -703,18 +930,24 @@ export function legacyActivityKind(itemType: string): ProviderActivityKind {
 }
 
 /**
- * 老 journal 事件的成败兜底。**与领域实现同一张词表**，包括那条关键修正：
+ * 老 journal 事件的成败兜底。**与领域实现同一张词表**，包括两条关键修正：
  * Codex 的 `completed` 就是成功——曾经成功白名单只有 success|succeeded，于是成功的调用
- * 全被显示成"状态未知"。另外 `reasoning` / `message` / `session` 没有成败概念，返回 not-applicable，
- * UI 不再给它们挂状态标签。
+ * 全被显示成"状态未知"；以及 `declined` 就是失败——那是 Codex 明确拒绝掉一条命令的说法，
+ * 落到"按阶段回落"会被显示成状态未知，而"被拒"与"没记录到"是两句完全不同的话。
+ *
+ * 没有成败概念的类别返回 not-applicable（UI 不再给它们挂状态标签）——**表与领域的
+ * `OUTCOME_FREE_KINDS` 逐字一致**，parity 测试会拦下漂移。
  */
 export function legacyActivityOutcome(input: { kind: ProviderActivityKind; phase: "started" | "completed"; status?: string | undefined; reason?: string | undefined }): ProviderActivityOutcome {
-  if (input.kind === "reasoning" || input.kind === "message" || input.kind === "session") return "not-applicable";
+  if (OUTCOME_FREE_ACTIVITY_KINDS.has(input.kind)) return "not-applicable";
   const status = input.status?.trim().toLowerCase();
-  if (input.reason || status === "failed" || status === "error" || status === "denied" || status === "cancelled" || status === "canceled") return "failed";
+  if (input.reason || status === "failed" || status === "error" || status === "denied" || status === "declined" || status === "cancelled" || status === "canceled") return "failed";
   if (status === "success" || status === "succeeded" || status === "completed" || status === "complete") return "succeeded";
   return input.phase === "started" ? "running" : "unknown";
 }
+
+/** 没有成败概念的类别；与领域侧 `OUTCOME_FREE_KINDS` 逐字一致。 */
+const OUTCOME_FREE_ACTIVITY_KINDS: ReadonlySet<ProviderActivityKind> = new Set(["reasoning", "message", "session", "compaction", "rate-limit", "retry", "warning", "review"]);
 
 function readActivityKind(value: unknown, itemType: string | undefined): ProviderActivityKind {
   return isActivityKind(value) ? value : legacyActivityKind(itemType ?? "");
@@ -762,6 +995,25 @@ function localizeProviderReason(reason: string): string {
   return reason;
 }
 
+/**
+ * 从 journal 载荷里搬出**结构化字段**（工具参数、返回、命令输出、退出码、耗时）。
+ * **取不到的键不写**——`undefined` 是"Provider 没给"，空串是"Provider 说这里什么都没有"，
+ * 两者在界面上该长得不一样（前者不摆那一格）。
+ *
+ * 这里**不做脱敏也不做截断**：那是展示边界的事（`utils/sensitiveValue.ts`）。
+ * 在投影里抹掉，"展开看结果"就永远看不到东西，而排障恰恰要的是全量。
+ */
+function structuredFields(payload: ExecutionJournalPayload): Partial<ExecutionStreamItem> {
+  const fields: Partial<ExecutionStreamItem> = {};
+  if (payload.phase === "commentary" || payload.phase === "final_answer") fields.phase = payload.phase;
+  if (payload.arguments !== undefined) fields.arguments = payload.arguments;
+  if (payload.result !== undefined) fields.result = payload.result;
+  if (typeof payload.output === "string") fields.output = payload.output;
+  if (typeof payload.exitCode === "number") fields.exitCode = payload.exitCode;
+  if (typeof payload.durationMs === "number") fields.durationMs = payload.durationMs;
+  return fields;
+}
+
 function projectProviderActivity(entry: ExecutionJournalEntry, taskId: string | undefined, modelStep: number | undefined, loopId: string | undefined): ExecutionStreamItem {
   const payload = entry.payload;
   const itemType = stringValue(payload.itemType);
@@ -776,13 +1028,16 @@ function projectProviderActivity(entry: ExecutionJournalEntry, taskId: string | 
   // 正是"343 条状态未知、0 条成功"的成因。
   const activityKind = readActivityKind(payload.activityKind, itemType);
   const outcome = readActivityOutcome(payload.outcome, { kind: activityKind, phase, status: providerStatus, reason });
-  const toolLike = activityKind === "tool" || activityKind === "mcp";
+  // `tool` / `mcp` 之外的 ③ 类（子代理、联网搜索、生成图片）同样是"一次调用"：它们和工具一样
+  // 有身份键、会被按身份合并，所以一起进 `callId` 的账。
+  const toolLike = activityKind === "tool" || activityKind === "mcp" || activityKind === "subagent" || activityKind === "search" || activityKind === "media";
+  const messageType = ACTIVITY_MESSAGE_TYPES[activityKind];
   const status = outcomeToItemStatus(outcome);
   const category = ACTIVITY_KIND_LABELS[activityKind];
-  // **说清"这一条到底是什么"**：工具名优先，否则用 Provider 给的 summary（命令原文 / 被改的文件路径）。
-  // 没有它，卡片只能显示「命令 · 已完成 · Provider reported success」——说了等于没说，
-  // 用户看不出它在干什么。summary 从 2026-10-01 起才记进 journal，老事件仍然只有类别标签。
-  const name = toolName ? `${serverName ? `${serverName}/` : ""}${toolName}` : serverName ?? truncateSummary(stringValue(payload.summary));
+  // 推理是**背景音**，不是"一次调用的名字"：它的正文归 `content`（可折叠的推理卡读它），
+  // 标题只留标签。此前它整段被塞进 title 并被截断，展开也看不到全文。
+  const isReasoning = activityKind === "reasoning";
+  const name = isReasoning ? undefined : toolName ? `${serverName ? `${serverName}/` : ""}${toolName}` : serverName ?? truncateSummary(stringValue(payload.summary));
   const detail = reason ? localizeProviderReason(reason) : activityOutcomeDetail(outcome);
   const missing: string[] = [];
   if (!providerItemId) missing.push("Provider 调用标识未记录");
@@ -791,17 +1046,20 @@ function projectProviderActivity(entry: ExecutionJournalEntry, taskId: string | 
   if (outcome === "unknown") missing.push("调用结束状态未记录");
   return {
     id: providerItemId ? `execution-provider-${providerItemId}` : `execution-provider-missing-${entry.sequence}`,
-    kind: toolLike ? "tool" : "activity",
     role: "system",
     title: name ? `${category} · ${name}` : category,
-    content: "",
+    content: isReasoning ? stringValue(payload.summary) ?? "" : "",
     detail,
-    messageType: ACTIVITY_MESSAGE_TYPES[activityKind],
+    messageType,
+    kind: executionRowKind(messageType),
     status,
     occurredAt: entry.occurredAt,
     sequence: entry.sequence,
     activityKind,
     outcome,
+    // **这一动作到底做了什么**：参数、返回、命令输出、退出码、耗时。展示前过脱敏与截断
+    // （`utils/sensitiveValue.ts`）；这里只做"有没有值"的搬运。
+    ...structuredFields(payload),
     ...(taskId ? { taskId } : {}),
     ...(modelStep === undefined ? {} : { modelStep }),
     ...(loopId ? { loopId } : {}),
@@ -855,7 +1113,10 @@ function projectExecutionActivity(entry: ExecutionJournalEntry, taskId?: string,
 
 function activity(entry: ExecutionJournalEntry, title: string, detail: string, status: ExecutionStreamItem["status"], metadata: Partial<ExecutionStreamItem> = {}): ExecutionStreamItem {
   // 默认按 Run 级活动处理（创建、钩子、验证）；其余类别由调用点通过 metadata 覆盖。
-  return { id: `execution-activity-${entry.sequence}`, kind: "activity", role: "system", title, content: "", detail, status, occurredAt: entry.occurredAt, sequence: entry.sequence, messageType: "RUN_ACTIVITY", ...metadata };
+  // **形态跟着消息类型走**：`CONTEXT` 是分隔线、其余是活动行——形态只有一个来源（`KIND_BY_MESSAGE_TYPE`），
+  // 调用点不必、也不该自己重复一遍。
+  const messageType = metadata.messageType ?? "RUN_ACTIVITY";
+  return { id: `execution-activity-${entry.sequence}`, role: "system", title, content: "", detail, status, occurredAt: entry.occurredAt, sequence: entry.sequence, ...metadata, kind: metadata.kind ?? executionRowKind(messageType), messageType };
 }
 
 function taskTitle(plan: ExecutionPlanSnapshot | undefined, taskId: string): string {

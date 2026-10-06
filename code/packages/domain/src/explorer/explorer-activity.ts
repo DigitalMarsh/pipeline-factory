@@ -24,6 +24,7 @@
 import type { AgentLoop, AgentLoopStep } from "../agent/agent-loop.js";
 import type { ExplorerTurn } from "../index.js";
 import { isRecord } from "../platform/guards.js";
+import { structuredProviderPayload } from "../platform/provider-payload.js";
 import { stripPlanProtocol } from "../plan/completion.js";
 import {
   activityOutcome,
@@ -35,21 +36,43 @@ import {
   type ProviderActivityOutcome,
 } from "../model/provider-activity.js";
 
-/** Explorer 时间线中的消息、工具、Plan 和状态事件类型。与执行侧共用其中大部分（见模块头 1）。 */
+/**
+ * Explorer 时间线中的消息、工具、Plan 和状态事件类型。与执行侧共用其中大部分（见模块头 1）。
+ *
+ * 顺序按**五类**排（见 `docs/Provider消息格式与消息大类调研.md`）：
+ * ① 你说的 → ② 模型说的 → ③ 模型做的 → ④ Provider 说的 → ⑤ Factory 说的。
+ * ④ 那一组**不进会话正文**（呈现表里是 `hidden`），它们的归宿是头部状态卡的
+ * 「Provider 运行事实」一节——`explorerRuntimeFacts()` 挑的就是这几个。
+ */
 export type ExplorerActivityKind =
+  // ①
   | "USER_MESSAGE"
+  // ②
   | "ASSISTANT_MESSAGE"
   | "REASONING"
+  // ③
   | "COMMAND"
   | "FILE_CHANGE"
   | "TOOL_CALL"
   | "MCP_CALL"
+  | "SUBAGENT"
+  | "WEB_SEARCH"
+  | "IMAGE_GENERATION"
+  // ④
+  | "PROVIDER_COMPACTION"
+  | "PERMISSION_DENIED"
+  | "RATE_LIMIT"
+  | "PROVIDER_RETRY"
+  | "BACKGROUND_TASK"
+  | "HOOK"
+  | "PROVIDER_WARNING"
   | "UNCLASSIFIED"
+  | "PROVIDER_MESSAGE"
+  | "SESSION"
+  // ⑤
   | "CONTEXT"
   | "GATE"
-  | "TURN_STATUS"
-  | "PROVIDER_MESSAGE"
-  | "SESSION";
+  | "TURN_STATUS";
 
 /** 前端可直接渲染的 Explorer 活动项，保留来源事实以支持定位。 */
 export type ExplorerActivityItem = {
@@ -94,30 +117,54 @@ const PLAN_OPEN_TAG = /<pipeline-factory-plan>/i;
 /**
  * 中立类别 → 探索侧的条目类型。**一张表说清"Provider 报的这件事在时间线上是哪一类"**，
  * 不再逐个 `itemType.includes(...)` 现猜（那正是 userMessage / plan 被渲染成工具行的成因）。
+ *
+ * 它必须是**穷尽**的 `Record<ProviderActivityKind, …>`：中立词表加一类而这里没跟上，
+ * 编译先红——这正是"新增一类 Provider 活动会静默显示成未识别"的堵口。
  */
 const KIND_BY_ACTIVITY: Record<ProviderActivityKind, ExplorerActivityKind> = {
+  // ② 内容流
+  reasoning: "REASONING",
+  message: "PROVIDER_MESSAGE",
+  // ③ 动作
   command: "COMMAND",
   "file-change": "FILE_CHANGE",
   tool: "TOOL_CALL",
   mcp: "MCP_CALL",
-  reasoning: "REASONING",
-  message: "PROVIDER_MESSAGE",
+  subagent: "SUBAGENT",
+  search: "WEB_SEARCH",
+  media: "IMAGE_GENERATION",
+  // ④ 运行事实（不进会话正文）
+  compaction: "PROVIDER_COMPACTION",
+  permission: "PERMISSION_DENIED",
+  "rate-limit": "RATE_LIMIT",
+  retry: "PROVIDER_RETRY",
+  task: "BACKGROUND_TASK",
+  hook: "HOOK",
+  warning: "PROVIDER_WARNING",
   session: "SESSION",
+  review: "PROVIDER_MESSAGE",
   other: "UNCLASSIFIED",
 };
 
+/**
+ * ④「Provider 说的」运行事实在探索侧的条目类型。头部状态卡按这一组挑数据，
+ * **不各自列白名单**——中立词表里 `isRuntimeKind()` 是那条判据的唯一定义处。
+ */
+export const EXPLORER_RUNTIME_KINDS: ReadonlySet<ExplorerActivityKind> = new Set([
+  "PROVIDER_COMPACTION", "PERMISSION_DENIED", "RATE_LIMIT", "PROVIDER_RETRY",
+  "BACKGROUND_TASK", "HOOK", "PROVIDER_WARNING", "SESSION",
+]);
+
 /** 工具类条目：它们按身份键合成一条，且正文/名字的摆法相同。 */
-const TOOL_KINDS: ReadonlySet<ExplorerActivityKind> = new Set(["COMMAND", "FILE_CHANGE", "TOOL_CALL", "MCP_CALL"]);
+const TOOL_KINDS: ReadonlySet<ExplorerActivityKind> = new Set(["COMMAND", "FILE_CHANGE", "TOOL_CALL", "MCP_CALL", "SUBAGENT", "WEB_SEARCH", "IMAGE_GENERATION"]);
 
 /**
- * 需要按身份键合并的类别 = 任何**有身份**的条目：工具类四类，加上推理、
- * Provider 回声与未识别项。判据是身份本身，不是类别清单——`itemId` / `callId` 就是
- * "这是同一个活动"的定义，条目的类别只决定它长什么样（见模块头 2）。
+ * 需要按身份键合并的类别 = 任何**有身份**的条目：工具类，加上推理、Provider 回声与未识别项，
+ * 以及 ④ 里那些**有开始也有结束**的运行事实（钩子、子任务）。
+ * 判据是身份本身，不是类别清单——`itemId` / `callId` 就是"这是同一个活动"的定义，
+ * 条目的类别只决定它长什么样（见模块头 2）。
  */
-const MERGED_KINDS: ReadonlySet<ExplorerActivityKind> = new Set([...TOOL_KINDS, "REASONING", "PROVIDER_MESSAGE", "SESSION", "UNCLASSIFIED"]);
-
-/** Provider 的规划协议回声：它的正文就是那条助手消息，不再单独成行（见 activityFromStep）。 */
-const PLAN_ECHO_ITEM_TYPES: ReadonlySet<string> = new Set(["plan"]);
+const MERGED_KINDS: ReadonlySet<ExplorerActivityKind> = new Set([...TOOL_KINDS, "REASONING", "PROVIDER_MESSAGE", "SESSION", "UNCLASSIFIED", "HOOK", "BACKGROUND_TASK"]);
 
 function countArray(record: Record<string, unknown>, key: string): number | undefined {
   const value = record[key];
@@ -127,6 +174,16 @@ function countArray(record: Record<string, unknown>, key: string): number | unde
 function stringAt(record: Record<string, unknown> | undefined, key: string): string | undefined {
   const value = record?.[key];
   return typeof value === "string" ? value : undefined;
+}
+
+/**
+ * 这一动作的**结构化载荷**：工具参数、工具返回、命令输出、退出码、耗时。
+ * 它们此前一个都没进业务层，于是"这条命令到底跑了什么、结果是什么"在界面上没有原料。
+ * 上限与取值规则在 `platform/provider-payload.ts`——执行侧读同一份数据，
+ * 两处各写一份规则，同一个动作就会在两个对话框里显示得不一样。
+ */
+function structuredDetails(payload: Record<string, unknown>): Record<string, unknown> {
+  return structuredProviderPayload(payload);
 }
 
 /** 非空字符串才算有值：空串在呈现层表示"没有可说的"，不能当名字。 */
@@ -376,9 +433,6 @@ function activityFromStep(turn: ExplorerTurn, step: AgentLoopStep): Omit<Explore
     const phase = payload.phase === "completed" ? "completed" : "started";
     const toolName = nonEmptyString(payload.toolName);
     const activityKind = readActivityKind(payload.activityKind, itemType, toolName);
-    // 规划协议的回声：它整篇内容就是那条助手消息（实测 27/27 个产生该项的 loop 都有助手正文），
-    // 再摆一行是重复。它不是"认不出来的活动"，所以不走 UNCLASSIFIED。
-    if (activityKind === "other" && PLAN_ECHO_ITEM_TYPES.has(itemType.trim().toLowerCase())) return null;
     const status = providerStatusFor(payload, activityKind, phase);
     const reason = nonEmptyString(payload.error);
     // 名字只有一个来源：Provider 给的 title，其次工具名（带 Server 前缀），其次空串——
@@ -389,7 +443,7 @@ function activityFromStep(turn: ExplorerTurn, step: AgentLoopStep): Omit<Explore
     // 「有没有摘要」这个可判定的事实，变成了一句要靠字符串识别才能认出的文案，而它本身什么都没说。
     const summary = nonEmptyString(payload.summary)?.slice(0, 240) ?? "";
     const itemId = nonEmptyString(payload.itemId) ?? nonEmptyString(payload.providerItemId);
-    return { ...base, kind: KIND_BY_ACTIVITY[activityKind], status, title, summary, details: { itemId: itemId ?? null, itemType, providerControlled: true, ...(toolName ? { toolName } : {}), ...(serverName ? { serverName } : {}), ...(reason ? { reason } : {}) } };
+    return { ...base, kind: KIND_BY_ACTIVITY[activityKind], status, title, summary, details: { itemId: itemId ?? null, itemType, providerControlled: true, ...structuredDetails(payload), ...(toolName ? { toolName } : {}), ...(serverName ? { serverName } : {}), ...(reason ? { reason } : {}) } };
   }
   // 轮次开始只是一条"这一轮跑起来了"的标记，正文留空——呈现层会退回行首标签（"推理"），
   // 比摆一句 `Plan Explorer started step 3.` 更少噪音，也不必为它想一句中文。

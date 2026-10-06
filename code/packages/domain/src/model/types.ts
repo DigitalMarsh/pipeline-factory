@@ -101,17 +101,36 @@ export type ModelRequest = {
   tools?: ModelToolDefinition[] | undefined;
   signal?: AbortSignal | undefined;
 };
+/** 一条正文是"过程叙述"还是"最终回答"。**两个 Provider 只有 Codex 给**（`MessagePhase`）。 */
+export type ModelMessagePhase = "commentary" | "final_answer";
+
 /** ModelGateway 输出的统一流事件，供 Agent Loop 和消息流共同消费。 */
 export type ModelEvent =
   | { type: "thread.started"; threadId: string; endpoint?: ProviderEndpoint | undefined }
-  | { type: "text.delta"; text: string; providerThreadId?: string | undefined; providerTurnId?: string | undefined; providerItemId?: string | undefined }
+  | { type: "text.delta"; text: string; phase?: ModelMessagePhase | undefined; providerThreadId?: string | undefined; providerTurnId?: string | undefined; providerItemId?: string | undefined }
+  /**
+   * **这一段正文属于哪一类**。Codex 的 `agentMessage` item 带 `phase`，而它的
+   * `item/agentMessage/delta` 载荷里**没有**这个字段（见 `AgentMessageDeltaNotification`），
+   * 所以它只能从 `item/started` / `item/completed` 单独送一趟。
+   *
+   * 为什么要它：`commentary`（中途的叙述）与 `final_answer`（这一轮真正的回答）在界面上的
+   * 重量完全不同——前者是"过程"，任务完成后折进折叠组；后者常驻。这正是 OpenClaw
+   * 「Worked for …」那条折叠线的判据。**Provider 不保证给**（schema 原话：callers must treat
+   * `None` as "phase unknown"），拿不到就不给，界面按"未知"处理而不是猜一个。
+   */
+  | { type: "text.phase"; providerItemId: string; phase: ModelMessagePhase }
   /**
    * `provider.activity` 的 `itemType` / `status` 是 **Provider 的原生词表**（Codex 与 Claude 完全不同），
    * 消费方不得直接拿它们判断语义。`activityKind` / `outcome` 是翻译后的中立词表，**必填**：
    * 每个 gateway 都必须能回答"这是什么活动、成没成"，回答不了就显式给 `unknown` / `other`。
    * 字段可选会让某个 Provider 悄悄漏填，而漏填的后果是 UI 退回到"状态未知"——那正是本次要修的缺陷。
+   *
+   * `arguments` / `result` / `output` / `exitCode` / `durationMs` 是**这一动作的结构化载荷**：
+   * 它们此前一个都没进业务层，于是"这条命令到底跑了什么、结果是什么"在界面上没有原料。
+   * 展示前一律过 `apps/web/src/utils/sensitiveValue.ts` 的脱敏与截断——**落库保留原样，
+   * 脱敏发生在展示边界**（这样审计与排障仍有全量数据）。
    */
-  | { type: "provider.activity"; phase: "started" | "completed"; itemId: string; itemType: string; activityKind: ProviderActivityKind; outcome: ProviderActivityOutcome; title: string | null; summary: string | null; toolName?: string | undefined; serverName?: string | undefined; status?: string | undefined; error?: string | undefined; providerThreadId?: string | undefined; providerTurnId?: string | undefined; providerItemId?: string | undefined }
+  | { type: "provider.activity"; phase: "started" | "completed"; itemId: string; itemType: string; activityKind: ProviderActivityKind; outcome: ProviderActivityOutcome; title: string | null; summary: string | null; toolName?: string | undefined; serverName?: string | undefined; arguments?: unknown; result?: unknown; output?: string | undefined; exitCode?: number | undefined; durationMs?: number | undefined; status?: string | undefined; error?: string | undefined; providerThreadId?: string | undefined; providerTurnId?: string | undefined; providerItemId?: string | undefined }
   | { type: "model.usage"; usage: ModelUsage; scope: ModelUsageScope; providerThreadId?: string | undefined; providerTurnId?: string | undefined }
   | { type: "tool.call"; call: ToolCall }
   | { type: "turn.input_required"; request: ModelInputRequest }

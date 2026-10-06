@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { CircleCheck, InfoFilled, Refresh, VideoPause, VideoPlay } from "@element-plus/icons-vue";
-import type { AgentLoop, ExplorerThread } from "../types";
+import type { AgentLoop, ExplorerActivityItem, ExplorerThread } from "../types";
 import { formatAgentLoopState } from "../utils/agentLoopPresentation";
+import { isRuntimeAlert, runtimeFactTitle } from "../utils/explorerPresentation";
 import ExplorerPlanRequirements from "./ExplorerPlanRequirements.vue";
 
 type Requirement = { key: string; label: string; requiredFields: string[]; optionalFields: string[]; factoryOwnedFields?: string[] };
@@ -20,6 +21,11 @@ const props = defineProps<{
   agentLoopCompletionLabel: string | null;
   threadId: string;
   paused: boolean;
+  /**
+   * ④「Provider 说的」运行事实：压缩边界、自动重试、配额、钩子、后台任务、权限被拒、告警。
+   * **它们不进探索时间线**（`EXPLORER_DISPLAY_MODES` 里一律 `hidden`），归宿是这张卡里的一节。
+   */
+  runtimeFacts: ExplorerActivityItem[];
 }>();
 
 const emit = defineEmits<{ (event: "toggle-pause"): void }>();
@@ -60,6 +66,11 @@ const loopSummary = computed(() => props.agentLoop ? formatAgentLoopState(props.
 const loopMeta = computed(() => props.agentLoop ? `回合 ${props.agentLoop.stepCount}/${props.agentLoop.maxSteps}` : "等待启动");
 const progressSummary = computed(() => props.progress.status === "READY" ? "方案已就绪" : props.progress.lastAssessedTurnId ? "探索中" : "未评估");
 const progressMeta = computed(() => props.progress.status === "READY" ? "完整方案已生成" : props.progress.missing.length ? `待确认 ${props.progress.missing.length} 项` : "等待首轮评估");
+/**
+ * ④ 里**需要立刻浮出来**的那一条（配额、重试、权限被拒、告警，或任何失败）。
+ * 常态收在下面那一节里，这几类要在卡片上看得见——"常态不打扰、异常必须显眼"。
+ */
+const runtimeAlert = computed(() => props.runtimeFacts.find(isRuntimeAlert) ?? null);
 const loopTone = computed(() => {
   if (!props.agentLoop) return "neutral";
   if (["FAILED", "BLOCKED", "RECOVERING", "NEEDS_RECONCILIATION", "CANCELLED"].includes(props.agentLoop.state)) return "danger";
@@ -159,7 +170,7 @@ watch(() => props.threadId, () => {
             <span :class="['explorer-header-status-card', `tone-${loopTone}`]">
               <span class="header-status-card-label">Provider 循环</span>
               <strong class="header-status-card-value">{{ loopSummary }}</strong>
-              <small class="header-status-card-meta">{{ loopMeta }}</small>
+              <small class="header-status-card-meta">{{ runtimeAlert ? runtimeAlert.summary || runtimeFactTitle(runtimeAlert) : loopMeta }}</small>
             </span>
           </button>
         </template>
@@ -193,6 +204,18 @@ watch(() => props.threadId, () => {
           <div v-else class="explorer-header-status-empty" role="status">
             <strong>暂无活动 Provider Loop</strong>
             <span>当前没有正在运行或等待恢复的 Provider Loop。</span>
+          </div>
+
+          <div v-if="runtimeFacts.length" class="run-activity-block">
+            <div class="evidence-heading"><div><span class="eyebrow">Provider 运行事实</span><strong>Provider 运行事实</strong></div><span class="run-activity-count">{{ runtimeFacts.length }} 条</span></div>
+            <p class="execution-header-status-description">Provider 自己报的运行时状态：上下文压缩、自动重试、配额、钩子、后台任务、权限被拒。它们不是模型做的动作，所以不进时间线；需要你动手的那几条会同时浮到上面那张卡上。</p>
+            <ol class="run-activity-list">
+              <li v-for="item in runtimeFacts" :key="item.id" :class="['run-activity-item', `tone-${item.status.toLowerCase()}`]">
+                <span class="run-activity-time">{{ new Date(item.occurredAt).toLocaleTimeString("zh-CN") }}</span>
+                <strong>{{ runtimeFactTitle(item) }}</strong>
+                <small v-if="item.summary">{{ item.summary }}</small>
+              </li>
+            </ol>
           </div>
         </section>
       </el-popover>

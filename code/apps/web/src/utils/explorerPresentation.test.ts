@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activityStatusLabel, assistantActivityLabel, EXPLORER_DISPLAY_MODES, EXPLORER_INLINE_MODES, EXPLORER_ROW_MODES, explorerActivityLine, explorerDisplayMode, explorerDisplayTitle, formatTurnTime, inputStatusLabel } from "./explorerPresentation";
+import { activityStatusLabel, assistantActivityLabel, EXPLORER_DISPLAY_MODES, EXPLORER_INLINE_MODES, EXPLORER_ROW_MODES, explorerActivityLine, explorerDisplayMode, explorerDisplayTitle, explorerRuntimeFacts, formatTurnTime, inputStatusLabel, isRuntimeAlert, runtimeFactTitle } from "./explorerPresentation";
 import type { ExplorerMessageType } from "./explorerPresentation";
 import { SHARED_MESSAGE_TYPES } from "./conversationTypes";
 import type { ExplorerActivityItem, ExplorerActivityKind, ExplorerInputRequest } from "../types";
@@ -170,17 +170,19 @@ describe("各类过程活动各摆什么", () => {
   });
 });
 
-/** 清单里的键：15 类是活动条目的 kind，另两类（输入卡 / 内嵌方案卡）由投影或模板在别处产生。 */
+/** 清单里的键：23 类是活动条目的 kind，另两类（输入卡 / 内嵌方案卡）由投影或模板在别处产生。 */
 const messageTypes = Object.keys(EXPLORER_DISPLAY_MODES) as ExplorerMessageType[];
 const producedWithoutActivity = new Set<ExplorerMessageType>(["INPUT_REQUEST", "CANDIDATE_PLAN"]);
 const activityTypes = messageTypes.filter((type): type is ExplorerActivityItem["kind"] => !producedWithoutActivity.has(type));
 
 describe("探索会话的消息清单", () => {
-  it("清单覆盖 13 类活动加投影产生的 2 类非活动消息", () => {
+  it("清单覆盖 23 类活动加投影产生的 2 类非活动消息", () => {
     // 数量钉住是有意的：新增一类消息就得回来改这里，顺带在表里做一次"怎么显示"的决定。
     // 类型层面 `Record<ExplorerMessageType, …>` 已经强制穷尽，这条锁的是"清单本身有多大"。
-    expect(activityTypes).toHaveLength(13);
-    expect(messageTypes).toHaveLength(15);
+    // 从 13 涨到 23 是这一轮的事：③ 补了子代理 / 联网搜索 / 生成图片，④ 补了七类运行事实
+    // （压缩边界、权限被拒、配额、重试、后台子任务、钩子、告警）。
+    expect(activityTypes).toHaveLength(23);
+    expect(messageTypes).toHaveLength(25);
     expect(EXPLORER_DISPLAY_MODES.INPUT_REQUEST).toBe("card");
     expect(EXPLORER_DISPLAY_MODES.CANDIDATE_PLAN).toBe("card");
   });
@@ -205,15 +207,39 @@ describe("探索会话的消息清单", () => {
     expect(explorerDisplayMode("CANDIDATE_PLAN")).toBe("card");
   });
 
-  it("内容在别处已经有的几类不单独渲染", () => {
-    // 输入卡取代了那两条生命周期行；Provider 的回声与执行侧同名，同样标 hidden。
-    expect(new Set(activityTypes.filter((type) => explorerDisplayMode(type) === "hidden"))).toEqual(new Set(["PROVIDER_MESSAGE", "SESSION"]));
+  it("**④「Provider 说的」在探索时间线上一条都不露面**", () => {
+    // 它们的归宿是头部状态卡的「Provider 运行事实」一节（`explorerRuntimeFacts()`）。
+    // `UNCLASSIFIED` 是 ④ 里唯一露面的那个——"Provider 给了我不认识的东西"必须当场可见，
+    // 否则新活动类型会静默消失，那正是这一轮在修的那类毛病。
+    expect(new Set(activityTypes.filter((type) => explorerDisplayMode(type) === "hidden"))).toEqual(
+      new Set(["PROVIDER_MESSAGE", "SESSION", "PROVIDER_COMPACTION", "PERMISSION_DENIED", "RATE_LIMIT", "PROVIDER_RETRY", "BACKGROUND_TASK", "HOOK", "PROVIDER_WARNING"]),
+    );
+    expect(explorerDisplayMode("UNCLASSIFIED")).toBe("turn-status");
   });
 
-  it("四类调用同归调用行，其余四类各有各的形状", () => {
-    // 一次调用只有一条（开始与结束在投影层已合并），所以这里比的是"哪四类算调用"。
+  it("`explorerRuntimeFacts` 挑的正是 ④ 里没露面的那些，且判据来自表本身", () => {
+    const facts = explorerRuntimeFacts([
+      activity("RATE_LIMIT"), activity("PERMISSION_DENIED"), activity("HOOK"),
+      // 这三条**不该**进诊断区：前两条已经作为时间线露过面（一个未识别、一个是 ③ 的动作），
+      // 第三条是"Provider 把你那句话回显一次"，纯回声没有诊断价值。
+      activity("UNCLASSIFIED"), activity("COMMAND"), activity("PROVIDER_MESSAGE"),
+    ]);
+
+    expect(facts.map((item) => item.kind)).toEqual(["RATE_LIMIT", "PERMISSION_DENIED", "HOOK"]);
+    // Provider 常常只报"发生了一件事"而不给话（Codex 的 contextCompaction 就没有文本）——
+    // 空标题在列表里是一行空白，退回中立类别的标签至少说清了是什么事。
+    expect(runtimeFactTitle(activity("PROVIDER_COMPACTION", { title: "" }))).toBe("上下文已压缩");
+    expect(runtimeFactTitle(activity("RATE_LIMIT", { title: "配额接近上限" }))).toBe("配额接近上限");
+    // 需要立刻浮出来的只有那几类（额度 / 重试 / 权限 / 告警），其余展开才看；失败同样要浮。
+    expect(facts.filter(isRuntimeAlert).map((item) => item.kind)).toEqual(["RATE_LIMIT", "PERMISSION_DENIED"]);
+    expect(isRuntimeAlert(activity("HOOK", { status: "FAILED" }))).toBe(true);
+  });
+
+  it("七类调用同归调用行，其余各类各有各的形状", () => {
+    // 一次调用只有一条（开始与结束在投影层已合并），所以这里比的是"哪几类算调用"。
     // 档位名与执行侧**同名**（`line`）：同一个概念在两条对话线上只有一个名字。
-    expect(new Set(activityTypes.filter((type) => explorerDisplayMode(type) === "line"))).toEqual(new Set(["COMMAND", "FILE_CHANGE", "TOOL_CALL", "MCP_CALL"]));
+    // ③ 从四类涨到七类：子代理、联网搜索、生成图片此前全被并进 `tool`。
+    expect(new Set(activityTypes.filter((type) => explorerDisplayMode(type) === "line"))).toEqual(new Set(["COMMAND", "FILE_CHANGE", "TOOL_CALL", "MCP_CALL", "SUBAGENT", "WEB_SEARCH", "IMAGE_GENERATION"]));
     expect(explorerDisplayMode("REASONING")).toBe("reasoning");
     expect(explorerDisplayMode("CONTEXT")).toBe("divider");
     expect(explorerDisplayMode("GATE")).toBe("gate");

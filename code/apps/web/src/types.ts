@@ -163,8 +163,48 @@ export type ExplorerPlan = {
   runtimeStatus?: "QUEUED" | "RUNNING" | "WAITING_FOR_INPUT" | "PAUSED" | "COMPLETED" | "FAILED" | "CANCELLED";
 };
 
-/** 与领域侧 `ExplorerActivityKind` 同集合；两边的名字也是执行线程那套词表（见 utils/conversationTypes.ts）。 */
-export type ExplorerActivityKind = "USER_MESSAGE" | "ASSISTANT_MESSAGE" | "REASONING" | "COMMAND" | "FILE_CHANGE" | "TOOL_CALL" | "MCP_CALL" | "UNCLASSIFIED" | "CONTEXT" | "GATE" | "TURN_STATUS" | "PROVIDER_MESSAGE" | "SESSION";
+/**
+ * 与领域侧 `ModelMessagePhase` 同集合：这一段正文是"过程叙述"还是"最终回答"。
+ * **只有 Codex 给**（`agentMessage.phase`）；拿不到时按"未知"处理，不猜。
+ */
+export type ModelMessagePhase = "commentary" | "final_answer";
+
+/**
+ * 与领域侧 `ExplorerActivityKind` 同集合；两边的名字也是执行线程那套词表（见 utils/conversationTypes.ts）。
+ *
+ * 顺序按**五类**排，与领域侧逐字一致（见 `docs/Provider消息格式与消息大类调研.md`）：
+ * ① 你说的 → ② 模型说的 → ③ 模型做的 → ④ Provider 说的 → ⑤ Factory 说的。
+ * ④ 那一组不进会话正文，归宿是头部状态卡的「Provider 运行事实」。
+ */
+export type ExplorerActivityKind =
+  // ①
+  | "USER_MESSAGE"
+  // ②
+  | "ASSISTANT_MESSAGE"
+  | "REASONING"
+  // ③
+  | "COMMAND"
+  | "FILE_CHANGE"
+  | "TOOL_CALL"
+  | "MCP_CALL"
+  | "SUBAGENT"
+  | "WEB_SEARCH"
+  | "IMAGE_GENERATION"
+  // ④
+  | "PROVIDER_COMPACTION"
+  | "PERMISSION_DENIED"
+  | "RATE_LIMIT"
+  | "PROVIDER_RETRY"
+  | "BACKGROUND_TASK"
+  | "HOOK"
+  | "PROVIDER_WARNING"
+  | "UNCLASSIFIED"
+  | "PROVIDER_MESSAGE"
+  | "SESSION"
+  // ⑤
+  | "CONTEXT"
+  | "GATE"
+  | "TURN_STATUS";
 
 export type ExplorerActivityItem = {
   id: string;
@@ -359,6 +399,15 @@ export type ExecutionTask = PlanTask & {
   status: ExecutionTaskStatus;
   evidenceSequence: number | null;
   blockedReason: string | null;
+  /**
+   * 这一步**自己报的**开始与完成时刻（`task-lifecycle` 的 `IN_PROGRESS` 与 `DONE` 两条）。
+   *
+   * 为什么不用消息时间戳推：OpenClaw 在这一点上是明确的——拿不到时长就写 `Worked` 而不是
+   * 从消息时间戳估一个数。我们的消息时间戳包含模型思考、排队、以及属于别步的时间，
+   * 用它算出来的"用时"是编的；而任务自己的生命周期事实是**它说的**。
+   */
+  startedAt: string | null;
+  completedAt: string | null;
 };
 
 export type Plan = {

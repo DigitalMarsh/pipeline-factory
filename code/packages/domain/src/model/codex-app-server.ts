@@ -6,13 +6,13 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EXPLORER_PLAN_INSTRUCTIONS } from "../platform/plan-requirements.js";
 import { replayConversation, resolveModelMode } from "./provider-session.js";
-import { classifyCodexActivity } from "./provider-activity.js";
+import { activityOutcome, classifyCodexActivity, type ProviderActivityKind } from "./provider-activity.js";
 import { normalizeModelUsage } from "./usage.js";
 // 用 import type 而不是"具名绑定带 type 前缀"：这样"本模块对模型契约只剩类型依赖"是显式的，
 // check-cycles.mjs 也据此判定这条边已被切断。P2 期间它指向 ../index.js；批 E 建 model/types.ts
 // 后改指 ./types.js（边仍是 type-only，判定不变）—— 至此 model/ 下四个 ModelGateway 实现
 // 都直接从同一处契约取类型，不再有实现经由 barrel 绕一圈。
-import type { ModelCapabilities, ModelEvent, ModelGateway, ModelMessage, ModelRequest, ModelRole, ModelRoleConfig, ProviderEndpoint } from "./types.js";
+import type { ModelCapabilities, ModelEvent, ModelGateway, ModelMessage, ModelMessagePhase, ModelRequest, ModelRole, ModelRoleConfig, ProviderEndpoint } from "./types.js";
 
 type JsonObject = Record<string, unknown>;
 /** JSON-RPC 请求和通知使用的 Provider request id。 */
@@ -530,13 +530,20 @@ function mapCodexEvent(event: CodexAppServerEvent, source: { providerThreadId?: 
     const itemId = getString(item, "id");
     const itemType = getString(item, "type");
     if (!itemId || !itemType) return null;
-    if (itemType === "agentMessage" || itemType === "message") return null;
+    // 正文类 item **不产出"活动行"**——它的文字走 `item/agentMessage/delta`。但 `phase`
+    // （`commentary` / `final_answer`）**只在这条 item 上**，delta 的载荷里没有它
+    // （见 `AgentMessageDeltaNotification` 的 schema），所以单独送一趟。
+    // 此前这里对 agentMessage 直接 `return null`，把"这一段是过程叙述还是最终回答"整个丢掉了。
+    if (itemType === "agentMessage" || itemType === "message") {
+      const phase = messagePhaseOf(item);
+      return phase ? { type: "text.phase", providerItemId: itemId, phase } : null;
+    }
     const title = getString(item, "name") ?? getString(item, "title") ?? null;
     const summary = getString(item, "command") ?? getString(item, "text") ?? null;
     const server = getObject(item, "server");
     const serverName = getString(item, "serverName") ?? getString(server, "name");
     const toolName = getString(item, "toolName") ?? (itemType.toLowerCase().includes("tool") ? getString(item, "name") : undefined);
-    const exitCode = typeof item.exitCode === "number" && Number.isFinite(item.exitCode) ? item.exitCode : undefined;
+    const exitCode = numberField(item, "exitCode");
     const status = getString(item, "status") ?? (exitCode === undefined ? undefined : exitCode === 0 ? "succeeded" : "failed");
     const error = getString(item, "error") ?? getString(getObject(item, "error"), "message")
       ?? (exitCode !== undefined && exitCode !== 0 ? `Provider command exited with code ${exitCode}` : undefined);
@@ -546,7 +553,7 @@ function mapCodexEvent(event: CodexAppServerEvent, source: { providerThreadId?: 
     // 中立词表在**这里**翻译，而不是留给消费方：`itemType` / `status` 是 Codex 的原生词，
     // 只有本文件知道它们的含义（见 model/provider-activity.ts 的模块注释）。
     const classification = classifyCodexActivity({ itemType, phase, ...(status === undefined ? {} : { status }), ...(error === undefined ? {} : { error }) });
-    return { type: "provider.activity", phase, itemId, itemType, ...classification, title, summary, ...(toolName ? { toolName } : {}), ...(serverName ? { serverName } : {}), ...(status ? { status } : {}), ...(error ? { error } : {}), ...(providerThreadId ? { providerThreadId } : {}), ...(providerTurnId ? { providerTurnId } : {}), providerItemId: itemId };
+    return { type: "provider.activity", phase, itemId, itemType, ...classification, title, summary, ...structuredItemPayload(itemType, item), ...(toolName ? { toolName } : {}), ...(serverName ? { serverName } : {}), ...(status ? { status } : {}), ...(error ? { error } : {}), ...(providerThreadId ? { providerThreadId } : {}), ...(providerTurnId ? { providerTurnId } : {}), providerItemId: itemId };
   }
   if (event.method === "item/tool/requestUserInput") {
     const request = event.params;
@@ -572,6 +579,44 @@ function mapCodexEvent(event: CodexAppServerEvent, source: { providerThreadId?: 
     });
     return { type: "turn.input_required", request: { requestId: event.id ?? "", threadId, turnId, itemId, questions, isBlocking: request.isBlocking === true, autoResolutionMs: typeof request.autoResolutionMs === "number" ? request.autoResolutionMs : null } };
   }
+  // ── ④「Provider 说的」运行事实 ────────────────────────────────────────────
+  // 这些不是模型做的，也不是你说的，而是会话设施在报告自己的状态。它们走**同一套**
+  // `provider.activity` 通道（消费方只需要一个地方回答"这是什么、成没成"，多一条事件类型就多
+  // 一处要同步的地方），靠 `activityKind` 落进 ④ 组——消费方用 `isRuntimeKind()` 把它们挡在
+  // 会话正文之外，收进 Run 头诊断区。
+  if (event.method === "thread/compacted") {
+    return runtimeFact({ id: `compaction:${getString(event.params, "turnId") ?? getString(event.params, "threadId") ?? "unknown"}`, itemType: "threadCompacted", activityKind: "compaction", title: "上下文已压缩", summary: "Provider 在这一轮压缩了上下文。" }, source);
+  }
+  if (event.method === "hook/started" || event.method === "hook/completed") {
+    const run = getObject(event.params, "run");
+    const name = getString(run, "eventName") ?? "hook";
+    const started = event.method === "hook/started";
+    const durationMs = numberField(run, "durationMs");
+    const status = started ? "started" : getString(run, "status") ?? "completed";
+    const statusMessage = getString(run, "statusMessage");
+    return runtimeFact({
+      id: getString(run, "id") ?? `hook:${name}:${getString(event.params, "turnId") ?? source.providerTurnId ?? ""}`,
+      itemType: started ? "hook_started" : "hook_completed",
+      activityKind: "hook",
+      title: `钩子 · ${name}`,
+      summary: started ? "钩子开始执行。" : "钩子执行结束。",
+      status,
+      ...(durationMs === undefined ? {} : { durationMs }),
+      ...(statusMessage ? { error: statusMessage } : {}),
+    }, source);
+  }
+  if (event.method === "account/rateLimits/updated") {
+    return runtimeFact({ id: `rate-limits:${source.providerThreadId ?? "account"}`, itemType: "accountRateLimits", activityKind: "rate-limit", title: "配额已更新", summary: "Provider 上报了新的账号配额。" }, source);
+  }
+  if (event.method === "warning" || event.method === "guardianWarning" || event.method === "configWarning" || event.method === "windows/worldWritableWarning") {
+    const message = getString(event.params, "message") ?? getString(event.params, "summary") ?? "Provider 报告了一条警告。";
+    return runtimeFact({ id: `warning:${event.method}:${source.providerThreadId ?? ""}:${message.slice(0, 40)}`, itemType: event.method, activityKind: "warning", title: "Provider 警告", summary: message, status: "warning" }, source);
+  }
+  if (event.method === "deprecationNotice") {
+    const summary = getString(event.params, "summary") ?? "Provider 报告了一条弃用提示。";
+    const details = getString(event.params, "details");
+    return runtimeFact({ id: `deprecation:${summary.slice(0, 40)}`, itemType: "deprecationNotice", activityKind: "warning", title: "弃用提示", summary: [summary, details].filter(Boolean).join(" "), status: "warning" }, source);
+  }
   if (event.method !== "turn/completed") return null;
   const turn = getObject(event.params, "turn");
   const usage = extractCodexUsage(turn) ?? extractCodexUsage(event.params);
@@ -584,6 +629,71 @@ function mapCodexEvent(event: CodexAppServerEvent, source: { providerThreadId?: 
     return usageEvent ? [usageEvent, failed] : failed;
   }
   return usageEvent ? [usageEvent, { type: "turn.completed" }] : { type: "turn.completed" };
+}
+
+/** 这一条正文是"过程叙述"还是"最终回答"。Provider 不保证给，不给就是"不知道"。 */
+function messagePhaseOf(item: JsonObject): ModelMessagePhase | null {
+  const phase = getString(item, "phase");
+  return phase === "commentary" || phase === "final_answer" ? phase : null;
+}
+
+/**
+ * 一条**没有 item 载体**的运行事实（通知形态，如 `thread/compacted` / `hook/*` / 账号配额）。
+ * 构造出来的形态与 item 那条一模一样，消费方不必分两路读。
+ */
+function runtimeFact(
+  input: { id: string; itemType: string; activityKind: ProviderActivityKind; title: string; summary: string; status?: string; error?: string; durationMs?: number },
+  source: { providerThreadId?: string; providerTurnId?: string },
+): ModelEvent {
+  return {
+    type: "provider.activity",
+    phase: "completed",
+    itemId: input.id,
+    itemType: input.itemType,
+    activityKind: input.activityKind,
+    outcome: activityOutcome({ kind: input.activityKind, phase: "completed", ...(input.status === undefined ? {} : { status: input.status }), ...(input.error === undefined ? {} : { error: input.error }) }),
+    title: input.title,
+    summary: input.summary,
+    ...(input.durationMs === undefined ? {} : { durationMs: input.durationMs }),
+    ...(input.status ? { status: input.status } : {}),
+    ...(input.error ? { error: input.error } : {}),
+    ...(source.providerThreadId ? { providerThreadId: source.providerThreadId } : {}),
+    ...(source.providerTurnId ? { providerTurnId: source.providerTurnId } : {}),
+    providerItemId: input.id,
+  };
+}
+
+/**
+ * 这一动作的**结构化载荷**——"它到底跑了什么、结果是什么"，此前一个都没进业务层。
+ *
+ * 取不到的键**不写**：`undefined` 是"Provider 没给"，空数组是"Provider 说这里什么都没有"，
+ * 两者在界面上该长得不一样（前者不摆那一格，后者摆一个"无输出"）。
+ * 输出类字段落库保留原样，**脱敏与截断发生在展示边界**（`apps/web/src/utils/sensitiveValue.ts`），
+ * 这样排障与审计仍然拿得到全量数据。
+ */
+function structuredItemPayload(itemType: string, item: JsonObject): { arguments?: unknown; result?: unknown; output?: string; exitCode?: number; durationMs?: number } {
+  const payload: { arguments?: unknown; result?: unknown; output?: string; exitCode?: number; durationMs?: number } = {};
+  const durationMs = numberField(item, "durationMs");
+  if (durationMs !== undefined) payload.durationMs = durationMs;
+  if (itemType === "commandExecution") {
+    const output = getString(item, "aggregatedOutput");
+    if (output !== undefined) payload.output = output;
+    const exitCode = numberField(item, "exitCode");
+    if (exitCode !== undefined) payload.exitCode = exitCode;
+  }
+  if (itemType === "mcpToolCall" || itemType === "dynamicToolCall" || itemType === "collabAgentToolCall") {
+    if (item.arguments !== undefined) payload.arguments = item.arguments;
+    if (item.result !== undefined) payload.result = item.result;
+  }
+  if (itemType === "fileChange" && item.changes !== undefined) payload.result = item.changes;
+  if (itemType === "webSearch" && item.results !== undefined) payload.result = item.results;
+  return payload;
+}
+
+function numberField(value: unknown, key: string): number | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = (value as JsonObject)[key];
+  return typeof candidate === "number" && Number.isFinite(candidate) ? candidate : undefined;
 }
 
 function latestUserMessage(messages: ModelMessage[]): string {

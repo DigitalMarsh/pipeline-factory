@@ -345,3 +345,84 @@ describe("CodexAppServerGateway", () => {
     await gateway.close();
   });
 });
+
+/**
+ * 这一组钉的是**数据层曾经丢掉的东西**：`agentMessage.phase`（过程叙述 vs 最终回答）、
+ * 工具的结构化载荷，以及那些"没有 item 载体"的运行事实通知。
+ */
+describe("Codex 侧的数据层：读什么、为什么读", () => {
+  async function run(events: Array<{ id?: string | number; method: string; params: Record<string, unknown> }>) {
+    const calls: Array<{ method: string; params: unknown }> = [];
+    const gateway = new CodexAppServerGateway({
+      roles: { explorer: { model: "explorer-model" }, executor: { model: "executor-model" } },
+      sessionFactory: createSessionFactory(events, calls),
+    });
+    const streamed = [];
+    for await (const event of gateway.stream({ role: "explorer", conversationId: "explorer-phase", messages: [{ role: "user", content: "inspect" }] })) streamed.push(event);
+    return streamed;
+  }
+
+  it("**`agentMessage` 的 `phase` 单独送一趟** —— 它在 item 上，不在 delta 的载荷里", async () => {
+    const events = await run([
+      { method: "item/started", params: { threadId: "codex-thread-1", turnId: "turn-1", item: { id: "item-msg-1", type: "agentMessage", phase: "commentary", text: "先看一圈" } } },
+      { method: "item/completed", params: { threadId: "codex-thread-1", turnId: "turn-1", item: { id: "item-msg-2", type: "agentMessage", phase: "final_answer", text: "结论" } } },
+      // Provider 不保证给 phase（schema 原话：treat None as "phase unknown"）——不给就不发，别猜。
+      { method: "item/completed", params: { threadId: "codex-thread-1", turnId: "turn-1", item: { id: "item-msg-3", type: "agentMessage", text: "无 phase" } } },
+      { method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } },
+    ]);
+
+    // 正文本身走 `item/agentMessage/delta`，这里**不重复产出活动行**——只送"这一段是哪一类"。
+    const phases = events.filter((event) => event.type === "text.phase");
+    expect(phases).toEqual([
+      { type: "text.phase", providerItemId: "item-msg-1", phase: "commentary" },
+      { type: "text.phase", providerItemId: "item-msg-2", phase: "final_answer" },
+    ]);
+    expect(events.some((event) => event.type === "provider.activity")).toBe(false);
+  });
+
+  it("命令的**输出、退出码与耗时**跟着事件走，不再只剩一句摘要", async () => {
+    const events = await run([
+      { method: "item/completed", params: { threadId: "codex-thread-1", turnId: "turn-1", item: { id: "exec-1", type: "commandExecution", command: "pnpm test", status: "failed", exitCode: 1, aggregatedOutput: "1 failed", durationMs: 2_500 } } },
+      { method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } },
+    ]);
+
+    expect(events).toContainEqual(expect.objectContaining({
+      type: "provider.activity", activityKind: "command", outcome: "failed",
+      output: "1 failed", exitCode: 1, durationMs: 2_500, summary: "pnpm test",
+    }));
+  });
+
+  it("MCP 与动态工具的**参数和返回**原样带上来", async () => {
+    const events = await run([
+      { method: "item/completed", params: { threadId: "codex-thread-1", turnId: "turn-1", item: { id: "mcp-1", type: "mcpToolCall", server: "github", tool: "create_issue", arguments: { title: "x" }, result: { number: 42 }, status: "completed" } } },
+      { method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } },
+    ]);
+
+    expect(events).toContainEqual(expect.objectContaining({ activityKind: "mcp", arguments: { title: "x" }, result: { number: 42 } }));
+  });
+
+  it("**Codex 声明拒绝的命令是 failed** —— `declined` 曾漏在失败词表外，被显示成「状态未知」", async () => {
+    const events = await run([
+      { method: "item/completed", params: { threadId: "codex-thread-1", turnId: "turn-1", item: { id: "exec-2", type: "commandExecution", command: "rm -rf /", status: "declined" } } },
+      { method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } },
+    ]);
+
+    expect(events).toContainEqual(expect.objectContaining({ activityKind: "command", outcome: "failed", status: "declined" }));
+  });
+
+  it("**没有 item 载体的运行事实**（压缩 / 钩子 / 配额 / 告警）也走同一条通道", async () => {
+    const events = await run([
+      { method: "thread/compacted", params: { threadId: "codex-thread-1", turnId: "turn-1" } },
+      { method: "hook/started", params: { threadId: "codex-thread-1", turnId: "turn-1", run: { id: "hook-run-1", eventName: "PostToolUse", status: "running" } } },
+      { method: "hook/completed", params: { threadId: "codex-thread-1", turnId: "turn-1", run: { id: "hook-run-1", eventName: "PostToolUse", status: "failed", statusMessage: "lint 失败", durationMs: 400 } } },
+      { method: "account/rateLimits/updated", params: { threadId: "codex-thread-1" } },
+      { method: "warning", params: { threadId: "codex-thread-1", message: "配置里有一个不认识的键。" } },
+      { method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } },
+    ]);
+
+    const runtime = events.flatMap((event) => event.type === "provider.activity" ? [event.activityKind] : []);
+    expect(runtime).toEqual(["compaction", "hook", "hook", "rate-limit", "warning"]);
+    expect(events).toContainEqual(expect.objectContaining({ activityKind: "hook", outcome: "failed", error: "lint 失败", durationMs: 400 }));
+    expect(events).toContainEqual(expect.objectContaining({ activityKind: "warning", summary: "配置里有一个不认识的键。" }));
+  });
+});

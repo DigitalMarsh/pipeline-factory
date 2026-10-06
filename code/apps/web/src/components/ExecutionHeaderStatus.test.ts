@@ -26,6 +26,8 @@ const task: ExecutionTask = {
   dependencies: [],
   evidenceSequence: 1,
   blockedReason: null,
+  startedAt: "2026-09-19T00:02:00.000Z",
+  completedAt: "2026-09-19T00:03:00.000Z",
 };
 
 const loop: AgentLoop = {
@@ -66,7 +68,7 @@ const ElTagStub = defineComponent({
   },
 });
 
-function mountStatus(status = run.status, runActivity: ExecutionStreamItem[] = []) {
+function mountStatus(status = run.status, runActivity: ExecutionStreamItem[] = [], runtimeFacts: ExecutionStreamItem[] = []) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const emitted: Array<{ event: string; payload?: unknown }> = [];
@@ -80,6 +82,7 @@ function mountStatus(status = run.status, runActivity: ExecutionStreamItem[] = [
         tasks: [task],
         taskCounts: { completed: 1, total: 1, blocked: 0, active: 0 },
         runActivity,
+        runtimeFacts,
         selectedTaskId: null,
         executorLoop: loop,
         executorSteps: [],

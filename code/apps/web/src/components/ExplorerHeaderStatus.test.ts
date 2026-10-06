@@ -68,6 +68,7 @@ function mountStatus(initialDiagnostics: ExplorerThread["exploration"]["diagnost
         agentLoopCompletionLabel: null,
         threadId: threadId.value,
         paused: false,
+        runtimeFacts: [],
         onTogglePause: () => { pauseCount += 1; },
       });
     },

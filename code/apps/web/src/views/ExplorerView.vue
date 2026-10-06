@@ -47,7 +47,7 @@ import { taskDisplayTitle } from "../utils/taskTree";
 import { isConfirmedPlanRevision, resolvePlanVersionHistory } from "../utils/planVersionHistory";
 import { projectPathForModule } from "../utils/projectRoutes";
 import { explorerTimelineTarget as activityTarget, explorerPlanAnchorId, explorerTimelineMessageType, inputRequestTarget } from "../utils/explorerTimeline";
-import { assistantActivityLabel, explorerDisplayMode, explorerDisplayTitle, formatTurnTime, EXPLORER_ROW_MODES, type ExplorerRowMode } from "../utils/explorerPresentation";
+import { assistantActivityLabel, explorerDisplayMode, explorerDisplayTitle, explorerRuntimeFacts, formatTurnTime, EXPLORER_ROW_MODES, type ExplorerRowMode } from "../utils/explorerPresentation";
 import type { ExplorerDisplayMode } from "../utils/explorerPresentation";
 import { planStatusLabel as statusLabel } from "../utils/planStatus";
 
@@ -250,6 +250,13 @@ function canCreateConfigurationRevision(plan: Plan): boolean {
  * `activeTaskPlans` 是它内部的中间量，不再暴露给视图。
  */
 const { visibleTurns, visibleActivity, visibleInputRequests, planBindings, timelineItems } = useExplorerTimeline({ turns, activity, inputRequests, allPlans, activeExplorerPlan });
+
+/**
+ * ④「Provider 说的」运行事实：压缩边界、自动重试、配额、钩子、后台任务、权限被拒、告警。
+ * 它们**不进时间线**（`EXPLORER_DISPLAY_MODES` 里一律 `hidden`），由头部状态卡承载。
+ * 判据来自两张表本身（大类 + 呈现方式），所以新增一类 ④ 不需要回来改这里。
+ */
+const runtimeFacts = computed(() => explorerRuntimeFacts(visibleActivity.value));
 
 /**
  * 时间线上真正渲染哪些条目、助手消息里内嵌的方案卡显不显示，都问同一张清单表
@@ -1305,6 +1312,7 @@ onBeforeUnmount(() => { mounted.value = false; invalidateProjectScope(); closeEv
             :agent-loop-completion-label="agentLoopCompletionLabel"
             :thread-id="thread?.id ?? ''"
             :paused="explorerPaused"
+            :runtime-facts="runtimeFacts"
             @toggle-pause="toggleExplorerPause"
           />
         </div>

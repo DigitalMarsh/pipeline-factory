@@ -2,7 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { Check, CircleCheck, InfoFilled, VideoPause, VideoPlay, Warning } from "@element-plus/icons-vue";
 import type { AgentLoop, AgentLoopStep, ExecutionTask, ExecutionTelemetry, MergeRequest, Run, VerificationRun } from "../types";
-import type { ExecutionStreamItem } from "../utils/executionStream";
+import { isRuntimeAlertItem, type ExecutionStreamItem } from "../utils/executionStream";
 import { formatExecutionDuration, formatTokenSummary, telemetryModel, telemetryReasoning, usageDetailRows } from "../utils/executionTelemetry";
 import { executionTaskStatusLabel, executionTaskStatusType, verificationSummary } from "../utils/executionTasks";
 import { canPauseRun, canTerminateRun, hasRunControlActions } from "../utils/runControls";
@@ -22,6 +22,12 @@ const props = defineProps<{
    *  它们原先混在执行会话末尾的一个「未关联执行步骤」分组里，读起来像报错，且时序颠倒
    *  （Run created 永远最早发生、却永远排在最后）。改由 RUN CONTEXT 卡片承载。 */
   runActivity: ExecutionStreamItem[];
+  /**
+   * ④「Provider 说的」运行事实（压缩边界、重试、配额、钩子、后台子任务、权限被拒、告警）。
+   * **它们不进会话正文**——判据与投影同源（`EXECUTION_MESSAGE_WEIGHTS` 里一律 `hidden`），
+   * 归宿是下面那一节。常态收在这里，异常时才浮到卡片上（见 `runtimeAlert`）。
+   */
+  runtimeFacts: ExecutionStreamItem[];
   selectedTaskId: string | null;
   executorLoop: AgentLoop | null;
   executorSteps: AgentLoopStep[];
@@ -80,6 +86,15 @@ const controlsOpen = computed({ get: () => isOpen("controls"), set: (visible: bo
 const reviewOpen = computed({ get: () => isOpen("review"), set: (visible: boolean) => setCardVisibility("review", visible) });
 /** 有 Run 级活动失败（如 HOOK_FAILED）时卡片要变色——否则失败只藏在弹层里，不点开就看不见。 */
 const runActivityFailed = computed(() => props.runActivity.some((item) => item.status === "FAILED"));
+/**
+ * ④ 里**需要立刻浮出来**的那一条。
+ *
+ * 判据两条：类别本身就是要你动手的（配额、重试、权限被拒、告警），或者它**失败了**
+ * （钩子挂了、后台子任务失败了）。其余运行事实（压缩、子任务进度）是常态，只在展开时看——
+ * "常态收进诊断区、异常必须显眼"是这一类的落点。
+ */
+const runtimeAlert = computed(() => props.runtimeFacts.find((item) => isRuntimeAlertItem(item)) ?? null);
+const contextAlert = computed(() => runtimeAlert.value?.title ?? (runActivityFailed.value ? "有 Run 级活动失败" : null));
 const loopTone = computed(() => {
   if (!props.executorLoop) return "neutral";
   if (["FAILED", "BLOCKED", "RECOVERING", "NEEDS_RECONCILIATION", "CANCELLED"].includes(props.executorLoop.state)) return "danger";
@@ -130,10 +145,10 @@ watch(() => props.run.id, () => {
       <el-popover v-model:visible="contextOpen" placement="bottom-start" :width="560" trigger="click" popper-class="execution-header-status-popper" :teleported="true">
         <template #reference>
           <button class="execution-header-status-trigger" data-status-card="context" type="button" aria-label="查看运行上下文详情" aria-controls="execution-header-context-details" :aria-expanded="isOpen('context')" @keydown.enter.prevent="toggleCard('context')" @keydown.space.prevent="toggleCard('context')">
-            <span :class="['execution-header-status-card', { blocked: runActivityFailed }]">
+            <span :class="['execution-header-status-card', { blocked: Boolean(contextAlert) }]">
               <span class="header-status-card-label">运行上下文</span>
               <strong class="header-status-card-value">第 {{ run.planRevision }} 版</strong>
-              <small class="header-status-card-meta">{{ runActivityFailed ? "有 Run 级活动失败" : run.branch }}</small>
+              <small class="header-status-card-meta">{{ contextAlert ?? run.branch }}</small>
             </span>
           </button>
         </template>
@@ -150,6 +165,17 @@ watch(() => props.run.id, () => {
             <p class="execution-header-status-description">Run 的创建、生命周期钩子与验证等事件，属于整个 Run，不归属于任何单个执行步骤。</p>
             <ol class="run-activity-list">
               <li v-for="item in runActivity" :key="item.id" :class="['run-activity-item', `tone-${item.status.toLowerCase()}`]">
+                <span class="run-activity-time">{{ new Date(item.occurredAt).toLocaleTimeString("zh-CN") }}</span>
+                <strong>{{ item.title }}</strong>
+                <small v-if="item.detail">{{ item.detail }}</small>
+              </li>
+            </ol>
+          </div>
+          <div v-if="runtimeFacts.length" class="run-activity-block">
+            <div class="evidence-heading"><div><span class="eyebrow">Provider 运行事实</span><strong>Provider 运行事实</strong></div><span class="run-activity-count">{{ runtimeFacts.length }} 条</span></div>
+            <p class="execution-header-status-description">Provider 自己报的运行时状态：上下文压缩、自动重试、配额、钩子、后台任务、权限被拒。它们不是模型做的动作，所以不进会话正文；需要你动手的那几条会同时浮到上面那张卡上。</p>
+            <ol class="run-activity-list">
+              <li v-for="item in runtimeFacts" :key="item.id" :class="['run-activity-item', `tone-${item.status.toLowerCase()}`]">
                 <span class="run-activity-time">{{ new Date(item.occurredAt).toLocaleTimeString("zh-CN") }}</span>
                 <strong>{{ item.title }}</strong>
                 <small v-if="item.detail">{{ item.detail }}</small>

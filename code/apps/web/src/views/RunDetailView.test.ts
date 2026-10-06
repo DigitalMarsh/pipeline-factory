@@ -14,33 +14,66 @@ const executionPlanCardSource = readFileSync(fileURLToPath(new URL("../component
 const executionModelRowSource = readFileSync(fileURLToPath(new URL("../components/ExecutionModelRow.vue", import.meta.url)), "utf8");
 const executionUserRowSource = readFileSync(fileURLToPath(new URL("../components/ExecutionUserRow.vue", import.meta.url)), "utf8");
 const executionActivityRowSource = readFileSync(fileURLToPath(new URL("../components/ExecutionActivityRow.vue", import.meta.url)), "utf8");
+// 一条消息的 DOM（头像 + meta + 正文）现在住在行组件里：同一条消息要在**两处**渲染（可见的那批、
+// 以及折在上方「N 条过程记录」里那批），两处各写一份模板就是"折叠前后长得不一样"的成因。
+const executionMessageRowSource = readFileSync(fileURLToPath(new URL("../components/ExecutionMessageRow.vue", import.meta.url)), "utf8");
+const executionDividerRowSource = readFileSync(fileURLToPath(new URL("../components/ExecutionDividerRow.vue", import.meta.url)), "utf8");
+const executionReasoningRowSource = readFileSync(fileURLToPath(new URL("../components/ExecutionReasoningRow.vue", import.meta.url)), "utf8");
 
 describe("Run detail execution conversation", () => {
   it("正文与用户消息各走自己的行组件，都经同一个 Markdown 组件渲染", () => {
-    // 视图这一层只按**形态**选组件；"长什么样"在各自的组件里。
-    expect(runDetailSource).toContain('<template v-else-if="item.kind === \'model\'"><ExecutionModelRow :item="item" /></template>');
-    expect(runDetailSource).toContain('<template v-else-if="item.kind === \'user\'"><ExecutionUserRow :item="item" /></template>');
+    // **形态**在行组件里选（视图这一层只按分组摆行）；"长什么样"在各自的组件里。
+    expect(executionMessageRowSource).toContain("item.kind === 'model'");
+    expect(executionMessageRowSource).toContain("item.kind === 'user'");
     // 你自己说的话不走卡片、也不带头像：Codex 那种「› + 纯文本」，仍然靠右。
-    // （助手正文 `prose` 同样不带头像——与探索侧同档同形，见 docs 的共用档位表。）
-    expect(runDetailSource).toContain('<div v-if="item.kind !== \'user\' && executionDisplayMode(item) !== \'prose\'" class="execution-message-avatar">');
+    // （助手正文同样不带头像——与探索侧同档同形，见 docs 的共用档位表。）
+    expect(executionMessageRowSource).toContain('props.item.kind !== "user" && props.item.kind !== "model"');
     expect(executionModelRowSource).toContain('<MarkdownMessage :source="item.content" :streaming="item.status === \'RUNNING\'" />');
     expect(executionUserRowSource).toContain('<MarkdownMessage :source="item.content" />');
     expect(executionUserRowSource).toContain('class="execution-user-mark"');
-    expect(runDetailSource).not.toContain("{{ item.content }}<span v-if=\"item.status === 'RUNNING'\"");
+    expect(executionMessageRowSource).not.toContain("{{ item.content }}<span v-if=\"item.status === 'RUNNING'\"");
   });
 
   it("形态分支是显式的，兜底会当场显示出来", () => {
-    // 五个形态各有自己的分支；某种形态掉到兜底说明模板没跟上——显示出来，不静默降级。
-    expect(runDetailSource).toContain("item.kind === 'activity' || item.kind === 'tool'");
-    expect(runDetailSource).toContain("execution-unknown-row");
+    // 七种形态各有自己的分支；某种形态掉到兜底说明模板没跟上——显示出来，不静默降级。
+    expect(executionMessageRowSource).toContain("item.kind === 'activity' || item.kind === 'tool'");
+    expect(executionMessageRowSource).toContain("execution-unknown-row");
     expect(runDetailStyles).toContain(".execution-unknown-row");
   });
 
-  it("呈现方式的判据不是白名单：新增一种就不会有消息从会话里消失", () => {
+  it("**权重**的判据不是白名单：新增一种就不会有消息从会话里消失", () => {
     // `text`（你自己说的话）就是这么漏过一次的——`visibleItems` 当时写死"属于 card 或 line"，
     // 于是那类消息在页面上直接不见了，而类型、模板、样式都对着。
-    expect(runDetailSource).toContain('return mode !== "folded" && mode !== "hidden";');
-    expect(runDetailSource).not.toContain('return mode === "card" || mode === "line";');
+    expect(runDetailSource).toContain('executionMessageWeight(item) !== "hidden"');
+    expect(runDetailSource).not.toContain('mode === "card" || mode === "line"');
+  });
+
+  it("**过程记录折在结论上方**，展开后是真实的行（照 OpenClaw 的 `Worked for …`）", () => {
+    // 位置：折叠区排在可见条目**之前**——先交代这一步花了多久、折了多少条，再让结论说话。
+    const foldedIndex = runDetailSource.indexOf("execution-folded-log");
+    const visibleIndex = runDetailSource.indexOf("v-for=\"item in visibleItems(group)\"");
+    expect(foldedIndex).toBeGreaterThan(-1);
+    expect(visibleIndex).toBeGreaterThan(foldedIndex);
+    // 内容：展开后是行组件，不是一张只写了标题的清单。
+    expect(runDetailSource).toContain('<ExecutionMessageRow v-for="item in foldedItems(group)"');
+    expect(runDetailSource).not.toContain("execution-noise-title");
+    // 标题上要有时长与失败数——失败**永远可见**，即使这一组是收起的。
+    expect(runDetailSource).toContain("stepDuration(group)");
+    expect(runDetailSource).toContain("failedCount(group)");
+    // 进行中的一步**不折**：live 内容留在日志外面。
+    expect(runDetailSource).toContain("foldsIntoProcess(item, { stepRunning:");
+  });
+
+  it("上下文压缩在执行侧也是**分隔线**，与探索侧同形", () => {
+    // 它是会话边界不是事件——画成又一条活动行，读的人不会意识到分界在哪。
+    expect(executionDividerRowSource).toContain("timeline-divider");
+    expect(executionDividerRowSource).toContain("Factory · 上下文压缩");
+  });
+
+  it("推理是**可折叠的推理卡**，与探索侧同形", () => {
+    expect(executionReasoningRowSource).toContain("<details");
+    // 跑着的时候默认展开——那时候它正在说事；跑完收起来，把视线还给正文。
+    expect(executionReasoningRowSource).toContain(":open=\"streaming\"");
   });
 
   it("动作行的正文保持纯文本，不渲染成 markdown", () => {
@@ -90,12 +123,12 @@ describe("Run detail execution conversation", () => {
 
   it("puts my messages on the right and collapses provider diagnostics", () => {
     // 左右分栏：我的消息（role=user）靠右，执行者的靠左。
-    expect(runDetailSource).toContain("mine: item.role === 'user'");
+    expect(executionMessageRowSource).toContain("mine: item.role === 'user'");
     // 诊断字段默认收起（Turn #/Call/Provider item/Provider session），hover 与"详情"里才看得到。
-    expect(runDetailSource).toContain(':title="executionMessageDiagnosticsTitle(item)"');
-    expect(runDetailSource).toContain('v-if="executionMessageDetails(item).length"');
-    expect(runDetailSource).toContain('class="execution-message-toggle"');
-    expect(runDetailSource).toContain('v-if="isExecutionItemExpanded(item.id)"');
+    expect(executionMessageRowSource).toContain(':title="executionMessageDiagnosticsTitle(item)"');
+    expect(executionMessageRowSource).toContain('v-if="details.length"');
+    expect(executionMessageRowSource).toContain('class="execution-message-toggle"');
+    expect(executionMessageRowSource).toContain('v-if="expanded"');
     // 常驻元信息里不再直接铺这些字段。
     expect(runDetailSource).not.toContain("Turn #{{ item.modelStep }}");
     expect(runDetailSource).not.toContain("Provider item {{ item.providerItemId }}");
@@ -145,7 +178,7 @@ describe("Run detail execution conversation", () => {
     expect(runDetailSource).toContain('type ExecutionPlanSnapshot');
     expect(runDetailSource).toContain('executionPlan.value = executionPlanSnapshot(response.run, revisionResponse.revision)');
     expect(runDetailSource).toContain('projectExecutionJournal(currentThread?.journal ?? [], currentThread?.state ?? run.value?.status ?? "ACTIVE", executionPlan.value ?? undefined)');
-    expect(runDetailSource).toContain('<ExecutionPlanCard :item-id="item.id" :plan="item.plan" @view="openPlanDetail" />');
+    expect(executionMessageRowSource).toContain('<ExecutionPlanCard :item-id="item.id" :plan="item.plan" @view="viewPlan" />');
     expect(executionPlanCardSource).toContain('class="execution-plan-message"');
     expect(executionPlanCardSource).toContain('class="execution-plan-toggle"');
     expect(executionPlanCardSource).toContain('查看方案');
@@ -196,10 +229,10 @@ describe("Run detail execution conversation", () => {
     expect(runDetailSource).toContain('class="execution-phase-strip"');
     expect(runDetailSource).toContain("executionPhaseSteps");
     expect(runDetailStyles).toContain(".execution-phase.current");
-    // **呈现方式不再散在视图里**：视图只问呈现方式表，那张表是那个"消息清单"的唯一落点。
+    // **权重不再散在视图里**：视图只问权重表，那张表是那个"消息清单"的唯一落点。
     expect(runDetailSource).toContain("function visibleItems(group: ExecutionConversationGroup)");
     expect(runDetailSource).toContain("function foldedItems(group: ExecutionConversationGroup)");
-    expect(runDetailSource).toContain("executionDisplayMode(item)");
+    expect(runDetailSource).toContain("executionMessageWeight(item)");
     expect(runDetailSource).not.toContain("isActivityNoise");
     expect(runDetailStyles).toContain(".execution-folded-log");
     expect(runDetailStyles).not.toContain(".execution-activity-noise");

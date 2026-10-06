@@ -25,7 +25,7 @@ type Report = TaskProgressPayload;
 export function projectExecutionTasks(tasks: PlanTask[], journal: ExecutionJournalEntry[], runStatus: string): ExecutionTask[] {
   const projected: ExecutionTask[] = tasks
     .filter((task): task is PlanTask & { id: string } => typeof task.id === "string" && task.id.trim().length > 0)
-    .map((task) => ({ ...task, id: task.id, status: "PENDING" as ExecutionTaskStatus, evidenceSequence: null, blockedReason: null }));
+    .map((task) => ({ ...task, id: task.id, status: "PENDING" as ExecutionTaskStatus, evidenceSequence: null, blockedReason: null, startedAt: null, completedAt: null }));
   const byId = new Map(projected.map((task) => [task.id, task]));
   let hasTaskProgressFact = false;
 
@@ -75,6 +75,10 @@ export function projectExecutionTasks(tasks: PlanTask[], journal: ExecutionJourn
         task.status = state;
         task.evidenceSequence = entry.sequence;
         task.blockedReason = state === "BLOCKED" ? typeof entry.payload.reason === "string" ? entry.payload.reason : null : null;
+        // 开始 / 完成时刻**只认任务自己报的那两条**（见 `ExecutionTask.startedAt` 的说明）。
+        // 第一次见到 IN_PROGRESS 就定下来，不随后续重复事件改写；DONE 同理。
+        if (state === "IN_PROGRESS" && !task.startedAt) task.startedAt = entry.occurredAt;
+        if (state === "DONE" && !task.completedAt) task.completedAt = entry.occurredAt;
       }
     }
   }
