@@ -1,5 +1,74 @@
 # Changelog
 
+## 2026-10-06 — 补上 Provider 数据层的三处硬缺口，消息按五类重排，呈现对齐 OpenClaw
+
+调研（`docs/Provider消息格式与消息大类调研.md`）查出两件事，这一轮把它们做完：数据层丢了
+Provider 明明给了的东西；消息大类只分"用户 / 模型 / 运行时"三堆，不够用。
+
+### 为什么做
+
+三条可复核的证据：
+
+- **全仓 `grep thinking` 在 domain/web 的 src 里 0 命中**。Claude 适配器只认 `assistant` 的
+  `tool_use` 块，`thinking` 块整块被丢——换个 Agent，推理就整片消失（Codex 侧有，本机 868 条）。
+- **`codexActivityKind` 的 needle 表里没有 `plan` 与 `contextCompaction`**，实测 58 条 + 3 条落进
+  `other`：整篇规划文档与"上下文压缩发生在此处"在界面上是「未识别」。
+- **`activityOutcome` 的失败词表缺 `declined`**，而它是 Codex `CommandExecutionStatus` 的四个取值
+  之一——"Provider 说这条命令被拒了"因此显示成「状态未知」。
+
+再加一条结构性的：Codex 有 18 种 `ThreadItem`、Claude 有 39 种 `SDKMessage`，而中立词表只有
+8 个类别、其中 ④「Provider 说的」只占 3 个位置（2 个还是 `hidden`）。配额、重试、子任务、
+钩子这些**每次都被丢弃**。
+
+### 数据层
+
+- **读 Claude 的 `thinking` 块**（`redacted_thinking` 留一条"内容不可读"的事实，不是静默丢掉）。
+- **读 Codex 的 `agentMessage.phase`**：它只在 item 上、不在 `item/agentMessage/delta` 的载荷里，
+  所以新增一条 `ModelEvent.text.phase` 单独送。它决定一段正文是"过程叙述"还是"最终回答"。
+- **工具的载荷进 journal**：`arguments` / `result` / `aggregatedOutput` / `exitCode` / `durationMs`
+  走新增的 `platform/provider-payload.ts`（上限与取值规则只此一处，两处消费方共用）。
+- **`declined` 补进失败词表**；`plan` → `message`（回声）、`contextCompaction` → `compaction`；
+  中立词表按 ②③④ 分组扩到 19 个类别，`isRuntimeKind` / `isRuntimeAlertKind` 是 ④ 的唯一判据。
+  探索侧为此写的 `PLAN_ECHO_ITEM_TYPES` 特判随之删掉。
+
+### 五类
+
+`conversationTypes.ts` 新增 `MessageClass` 与 `SHARED_MESSAGE_CLASSES`（分类的**唯一定义处**），
+两张呈现表从它派生：① 你说的 / ② 模型说的 / ③ 模型做的 / ④ Provider 说的 / ⑤ Factory 说的。
+共用词表从 13 类涨到 23 类，合计 **53 种消息类型**（探索 25 + 执行 28）。
+
+**④ 一律不进会话正文**，落点是头部状态卡新增的「Provider 运行事实」一节（常态不打扰），
+异常时（配额 / 重试 / 权限被拒 / 告警，以及任何失败）把那张卡染成告警色并写出原因。
+
+### 呈现（对齐 OpenClaw）
+
+- **执行侧的过程记录折到结论上方**（`Worked for …` 同形），标题带用时与失败数；
+  展开后是**真实的行**，不再是只写标题的清单。
+- **进行中的一步不折**、**失败永远留在外面**——判据收在 `foldsIntoProcess()` 一处。
+- **用时来自任务自己的生命周期事实**（`task-lifecycle` 的 `IN_PROGRESS` 与 `DONE`），
+  不从消息时间戳估（OpenClaw 在这一点上很明确：没有时长就写 `Worked`）；拿不到就不显示那一格。
+- 执行侧 `CONTEXT` 改成**分隔线**、推理改成**可折叠推理卡**；探索侧推理行同步改成同形的卡。
+- 动作行可**展开看结果**（参数 / 返回 / 输出 / 退出码 / 耗时）。两处维护提示从"不得输出工具参数、
+  成功结果"改成"**脱敏 + 截断后可见**"；脱敏与截断收敛到 `utils/sensitiveValue.ts` 一处
+  （与 `platform/redaction.ts` 是一对镜像，有 parity 测试）。**模型的私有思维链仍然不展示。**
+- 呈现表拆成两个轴：`kind`（形，7 种）+ `EXECUTION_MESSAGE_WEIGHTS`（重，`answer`/`process`/`hidden`）。
+- 新增 `ExecutionMessageRow.vue`：同一条消息要在可见区与折叠区两处渲染，两处各写一份模板
+  就是"折叠前后长得不一样"的成因。
+
+### 实测
+
+- 探索侧一条真线程：251 条活动里 227 条渲染，24 条隐藏（21 条回声 + **3 条 `PROVIDER_COMPACTION`**，
+  后者此前显示成「未识别」）。
+- 执行侧一个 41 条条目的 Run：折起 22 条过程记录，留 7 条可见（终答 + **5 条真失败的命令**，
+  退出码 1 / 127）——失败确实没被折叠吃掉。
+
+### 文档
+
+`docs/消息类型及事件状态机流程图.md`：§0 新增「五类」「形与重两个轴」「④ 落在哪」三节，
+三张清单表各加一列**分类**（并改用编号引用，①–⑤ 从此专指大类），§2.2 示例改成折叠组在上，
+§4.4 共用词表补到 23 类，§5 补 13 行。
+`docs/Provider消息格式与消息大类调研.md` 的 §5 标注实施情况。
+
 ## 2026-10-06 — 调研：两个 Provider 的消息格式、消息大类的重新划分、呈现参考
 
 纯调研，**无代码改动**。产出 `docs/Provider消息格式与消息大类调研.md`。四条结论：
