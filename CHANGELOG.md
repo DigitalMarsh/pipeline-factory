@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-10-06 — 调研：两个 Provider 的消息格式、消息大类的重新划分、呈现参考
+
+纯调研，**无代码改动**。产出 `docs/Provider消息格式与消息大类调研.md`。四条结论：
+
+- **格式**：Codex App Server 是 75 条 JSON-RPC 通知 + 18 种 ThreadItem；Claude Agent SDK 是
+  39 种 `SDKMessage`（外加一套 content block）。适配器各读 5 条，两边只有"正文增量 / 工具调用 /
+  用量 / 回合结束"对得上。协议取自本机 `codex app-server generate-json-schema`（0.149.0）
+  与 SDK 自带的 `sdk.d.ts`（0.3.283）。
+- **实锤的丢失**：全仓 `grep thinking` **0 命中** —— Claude 的 `thinking` 块与 thinking delta
+  从未被读，所以 **Claude 侧的推理在界面上不存在**（Codex 侧有，本机 868 条）。
+  另：`plan` / `contextCompaction` 落进 `other`（实测 58 条 + 3 条）、
+  Codex 的 `declined` 不在失败词表里（被拒的命令显示成"状态未知"）、
+  `agentMessage.phase`（`commentary` / `final_answer`）没读。
+  本机 19 条执行线程 **backend 全是 codex-app-server，零条 Claude**。
+- **消息大类**：三分法（用户 / 模型 / 运行时）不够用——它把"模型说的"与"模型做的"合成一类
+  （这两类在 OpenClaw 与 Hermes 里是两种排版），也把"Provider 的运行事实"与"Factory 自己的
+  生命周期"合成一类（归属层不同）。改按 **① 你说的 / ② 模型说的 / ③ 模型做的 /
+  ④ Provider 说的 / ⑤ Factory 说的** 五类，两个清单 33 个类型逐条归类。
+  ④ 现在只有 3 个位置（2 个 hidden），而 Provider 有 18/39 种消息——这是最实的一块缺口。
+- **接入网关**：**已经有了**且形状正确——`RoutingModelGateway`（路由，凭据唯一读取点）→
+  各 Provider 适配器 → `provider-activity.ts`（中立词表）→ `AgentLoop` → SSE → 两张呈现表。
+  缺的不是架构，是**中立词表的分辨率**。
+- **呈现参考**：OpenClaw 与 Hermes 的共识七条（正文之外一律折、推理不进正文、压缩是分隔线、
+  失败不被折叠吃掉、动作可展开看结果、声明这一轮到底做了什么、持久化对话只有少数角色）。
+  我们的**排版档位已经基本一致**，差的是"折起来的能展开看""Provider 运行事实有地方放"
+  "动作种类能分辨"。
+
 ## 2026-10-06 — 两条对话线：同一个"模型说的正文"、同一个"紧凑动作行"
 
 ### 为什么做
