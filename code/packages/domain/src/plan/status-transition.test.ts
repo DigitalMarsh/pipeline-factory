@@ -12,7 +12,19 @@ import { canTransitionPlanStatus, updatePlanStatus } from "./status-transition.j
 import { planContractFixture } from "./plan-fixture.js";
 import type { PlanStatus } from "./types.js";
 
-const ALL_STATUSES: PlanStatus[] = ["DRAFT", "DISCARDED", "READY", "ENQUEUED", "DISPATCHED", "IN_PROGRESS", "VERIFYING", "MERGE_READY", "MERGED", "BLOCKED", "NEEDS_PLAN_CHANGE"];
+const ALL_STATUSES: PlanStatus[] = [
+  "DRAFT",
+  "DISCARDED",
+  "READY",
+  "ENQUEUED",
+  "DISPATCHED",
+  "IN_PROGRESS",
+  "VERIFYING",
+  "MERGE_READY",
+  "MERGED",
+  "BLOCKED",
+  "NEEDS_PLAN_CHANGE",
+];
 
 /** 主路径，逐步可走。 */
 const MAIN_PATH: PlanStatus[] = ["READY", "ENQUEUED", "DISPATCHED", "IN_PROGRESS", "VERIFYING", "MERGE_READY", "MERGED"];
@@ -23,7 +35,12 @@ const RESET_TARGETS: PlanStatus[] = ["BLOCKED", "READY", "NEEDS_PLAN_CHANGE"];
 function fixture() {
   const store = new InMemoryPipelineStore();
   const plans = new PlanService(store);
-  const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Transition table", resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Transition table" }) });
+  const plan = plans.createCandidatePlan({
+    projectId: "project-1",
+    sourceExplorerThreadId: "thread-1",
+    title: "Transition table",
+    resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Transition table" }),
+  });
   return { store, plans, planId: plan.id, current: () => store.getPlan(plan.id)! };
 }
 

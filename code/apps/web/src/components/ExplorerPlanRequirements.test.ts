@@ -22,11 +22,13 @@ function mountRequirements(initialDiagnostics: Issue[] = [], initiallyExpanded =
   const host = document.createElement("div");
   document.body.appendChild(host);
   const diagnostics = ref(initialDiagnostics);
-  const app = createApp(defineComponent({
-    setup() {
-      return () => h(ExplorerPlanRequirements, { requirements, completed, diagnostics: diagnostics.value, initiallyExpanded });
-    },
-  }));
+  const app = createApp(
+    defineComponent({
+      setup() {
+        return () => h(ExplorerPlanRequirements, { requirements, completed, diagnostics: diagnostics.value, initiallyExpanded });
+      },
+    }),
+  );
   // 摘要那三个状态现在是 `el-tag`——不注册的话它会被当成未知元素渲染，且控制台会有 Vue 警告。
   app.component("el-tag", ElTag);
   app.mount(host);
@@ -91,7 +93,9 @@ describe("ExplorerPlanRequirements", () => {
     const mounted = mountRequirements();
     const button = toggle(mounted.host);
 
-    mounted.diagnostics.value = [{ path: "scope.includePaths", code: "REQUIRED", area: "功能范围与排除项", message: "必须指定至少一个范围路径" }];
+    mounted.diagnostics.value = [
+      { path: "scope.includePaths", code: "REQUIRED", area: "功能范围与排除项", message: "必须指定至少一个范围路径" },
+    ];
     await nextTick();
     expect(button.getAttribute("aria-expanded")).toBe("true");
     expect(mounted.host.textContent).toContain("问题 1");
@@ -115,16 +119,21 @@ describe("ExplorerPlanRequirements", () => {
   it("行首标记由图标组件渲染，不再是 ✓ / ! / · 这些文字字形", () => {
     const host = document.createElement("div");
     document.body.appendChild(host);
-    const app = createApp(defineComponent({
-      setup() {
-        return () => h(ExplorerPlanRequirements, {
-          requirements,
-          completed: [requirements[0]!.label],                                                                                      // 一条已完成
-          diagnostics: [{ path: "scope.includePaths", code: "REQUIRED", area: "功能范围与排除项", message: "必须指定至少一个范围路径" }],   // 一条有问题
-          initiallyExpanded: true,                                                                                                  // 第三条待补齐
-        });
-      },
-    }));
+    const app = createApp(
+      defineComponent({
+        setup() {
+          return () =>
+            h(ExplorerPlanRequirements, {
+              requirements,
+              completed: [requirements[0]!.label], // 一条已完成
+              diagnostics: [
+                { path: "scope.includePaths", code: "REQUIRED", area: "功能范围与排除项", message: "必须指定至少一个范围路径" },
+              ], // 一条有问题
+              initiallyExpanded: true, // 第三条待补齐
+            });
+        },
+      }),
+    );
     app.component("el-tag", ElTag);
     app.mount(host);
 
@@ -141,6 +150,19 @@ describe("ExplorerPlanRequirements", () => {
 
   it("keeps the details grid responsive on narrow layouts", () => {
     const styles = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../styles.css"), "utf8");
-    expect(styles).toMatch(/@media \(max-width: 720px\)[\s\S]*?\.plan-requirements-grid \{ grid-template-columns: 1fr; \}/);
+    // **换行与缩进不是这条断言的判据**：Prettier 会把一条规则从"一行写完"重排成"一行一声明"，规则本身
+    // 一个字都没变。先把连续空白压成单个空格、再去掉括号分号花括号两侧的空格，比的才是声明序列。
+    const flat = (text: string) =>
+      text
+        .replace(/\s+/g, " ")
+        // 断行会在**下一个 token 前面**留下一个空格（`foo(\n  bar,` -> `foo( bar,`）。只吃掉这些
+        // "断行带进来的"空格：开括号/花括号之后，闭括号/花括号/方括号/分号/逗号/引号之前。
+        // **不要**动别处——尤其别去掉 `(` 前面的空格：正则断言不会被折叠，`@media (max-width:` 那样
+        // 一改就再也匹配不上。
+        .replace(/([({])\s+/g, "$1")
+        .replace(/\s+([)}\]);,"'])/g, "$1")
+        .replace(/,([)}\]])/g, "$1")
+        .trim();
+    expect(flat(styles)).toMatch(/@media \(max-width: 720px\).*?\.plan-requirements-grid \{grid-template-columns: 1fr;\}/);
   });
 });

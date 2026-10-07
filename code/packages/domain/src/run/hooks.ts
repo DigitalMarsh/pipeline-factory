@@ -86,7 +86,10 @@ const DEFAULT_HOOK_TIMEOUT_MS = 120_000;
 export class LifecycleHookRunner {
   private readonly cleanupCwd: string;
 
-  constructor(private readonly executor: CommandExecutor, options: { cleanupCwd?: string } = {}) {
+  constructor(
+    private readonly executor: CommandExecutor,
+    options: { cleanupCwd?: string } = {},
+  ) {
     this.cleanupCwd = options.cleanupCwd ?? process.cwd();
   }
 
@@ -115,7 +118,18 @@ export class LifecycleHookRunner {
         blocked: false,
         needsAttention: false,
         result: null,
-        attempts: [{ attempt: 1, commandId: definition?.commandId ?? null, cwd, timeoutMs, status: "skipped", result: null, startedAt: new Date().toISOString(), completedAt: new Date().toISOString() }],
+        attempts: [
+          {
+            attempt: 1,
+            commandId: definition?.commandId ?? null,
+            cwd,
+            timeoutMs,
+            status: "skipped",
+            result: null,
+            startedAt: new Date().toISOString(),
+            completedAt: new Date().toISOString(),
+          },
+        ],
       };
     }
     const attempts: HookRunResult["attempts"] = [];

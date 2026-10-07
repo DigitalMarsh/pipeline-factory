@@ -11,7 +11,11 @@ const { apiMocks } = vi.hoisted(() => ({
     submitProjectExecutionTurn: vi.fn(),
     cancelProjectExecutionTurn: vi.fn(),
     projectExecutionEventsUrl: vi.fn(() => "/events"),
-    modelBackends: vi.fn(async () => ({ backends: [], roles: { explorer: "codex-app-server", executor: "codex-app-server" }, defaultBackend: "codex-app-server" })),
+    modelBackends: vi.fn(async () => ({
+      backends: [],
+      roles: { explorer: "codex-app-server", executor: "codex-app-server" },
+      defaultBackend: "codex-app-server",
+    })),
   },
 }));
 vi.mock("../api", () => ({ api: apiMocks }));
@@ -24,26 +28,47 @@ class FakeEventSource extends EventTarget {
 
 const mounted: Array<{ app: ReturnType<typeof createApp>; host: HTMLElement }> = [];
 afterEach(() => {
-  mounted.splice(0).forEach(({ app, host }) => { app.unmount(); host.remove(); });
+  mounted.splice(0).forEach(({ app, host }) => {
+    app.unmount();
+    host.remove();
+  });
   vi.clearAllMocks();
 });
 
 function makeSnapshot(projectId: string, messages: ProjectExecutionMessage[] = []): ProjectExecutionThreadSnapshot {
   return {
-    thread: { id: `execution-${projectId}`, projectId, providerThreadId: null, modelOverride: null, reasoningEffortOverride: null, createdAt: "2026-09-26T00:00:00.000Z", updatedAt: "2026-09-26T00:00:00.000Z" },
+    thread: {
+      id: `execution-${projectId}`,
+      projectId,
+      providerThreadId: null,
+      modelOverride: null,
+      reasoningEffortOverride: null,
+      createdAt: "2026-09-26T00:00:00.000Z",
+      updatedAt: "2026-09-26T00:00:00.000Z",
+    },
     messages,
     events: [],
     lastEventSequence: 0,
     defaultModel: "gpt-5.6-luna",
     defaultReasoningEffort: "low",
     modelOptions: ["gpt-5.6-luna", "gpt-5.6-sol"],
-    reasoningEffortOptions: [{ value: null, label: "跟随项目默认" }, { value: "low", label: "low" }, { value: "high", label: "high" }],
+    reasoningEffortOptions: [
+      { value: null, label: "跟随项目默认" },
+      { value: "low", label: "low" },
+      { value: "high", label: "high" },
+    ],
     backend: "codex-app-server",
   } as ProjectExecutionThreadSnapshot;
 }
 
 function makeProject(id: string): Project {
-  return { id, name: id, repoRoot: `/repo/${id}`, status: "ACTIVE", settings: { models: { executor: { model: "gpt-5.6-luna", reasoningEffort: "low" } } } } as Project;
+  return {
+    id,
+    name: id,
+    repoRoot: `/repo/${id}`,
+    status: "ACTIVE",
+    settings: { models: { executor: { model: "gpt-5.6-luna", reasoningEffort: "low" } } },
+  } as Project;
 }
 
 async function waitUntil(check: () => boolean): Promise<void> {
@@ -56,13 +81,17 @@ function mountPanel(props: { projectId: string; project: Project | null }) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const app = createApp({ render: () => h(ProjectExecutionThreadPanel, props) });
-  app.component("el-button", defineComponent({
-    props: { disabled: Boolean, loading: Boolean, type: String, circle: Boolean, size: String, text: Boolean },
-    emits: ["click"],
-    setup(componentProps, { attrs, emit, slots }) {
-      return () => h("button", { ...attrs, disabled: componentProps.disabled, onClick: (event: Event) => emit("click", event) }, slots.default?.());
-    },
-  }));
+  app.component(
+    "el-button",
+    defineComponent({
+      props: { disabled: Boolean, loading: Boolean, type: String, circle: Boolean, size: String, text: Boolean },
+      emits: ["click"],
+      setup(componentProps, { attrs, emit, slots }) {
+        return () =>
+          h("button", { ...attrs, disabled: componentProps.disabled, onClick: (event: Event) => emit("click", event) }, slots.default?.());
+      },
+    }),
+  );
   app.mount(host);
   mounted.push({ app, host });
   return { host, app };
@@ -70,10 +99,45 @@ function mountPanel(props: { projectId: string; project: Project | null }) {
 
 describe("ProjectExecutionThreadPanel", () => {
   it("loads per-project history, saves model and reasoning choices, and sends a direct request", async () => {
-    const user: ProjectExecutionMessage = { id: "user-1", threadId: "execution-project-1", turnId: "turn-1", clientTurnId: "client-1", role: "user", content: "direct request", status: "COMPLETED", error: null, createdAt: "2026-09-26T00:00:00.000Z", sequence: 1, loopId: null, model: null, reasoningEffort: null };
-    const assistant: ProjectExecutionMessage = { ...user, id: "assistant-1", clientTurnId: null, role: "assistant", content: "done", status: "COMPLETED", sequence: 2, model: "gpt-5.6-sol", reasoningEffort: "high" };
-    apiMocks.projectExecutionThread.mockImplementation(async (projectId: string) => ({ ...makeSnapshot(projectId), messages: projectId === "project-1" ? [user, assistant] : [] }));
-    apiMocks.updateProjectExecutionPreferences.mockImplementation(async (_projectId: string, preferences: { model: string | null; reasoningEffort: string | null }) => ({ thread: { ...makeSnapshot("project-1").thread, modelOverride: preferences.model, reasoningEffortOverride: preferences.reasoningEffort } }));
+    const user: ProjectExecutionMessage = {
+      id: "user-1",
+      threadId: "execution-project-1",
+      turnId: "turn-1",
+      clientTurnId: "client-1",
+      role: "user",
+      content: "direct request",
+      status: "COMPLETED",
+      error: null,
+      createdAt: "2026-09-26T00:00:00.000Z",
+      sequence: 1,
+      loopId: null,
+      model: null,
+      reasoningEffort: null,
+    };
+    const assistant: ProjectExecutionMessage = {
+      ...user,
+      id: "assistant-1",
+      clientTurnId: null,
+      role: "assistant",
+      content: "done",
+      status: "COMPLETED",
+      sequence: 2,
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+    };
+    apiMocks.projectExecutionThread.mockImplementation(async (projectId: string) => ({
+      ...makeSnapshot(projectId),
+      messages: projectId === "project-1" ? [user, assistant] : [],
+    }));
+    apiMocks.updateProjectExecutionPreferences.mockImplementation(
+      async (_projectId: string, preferences: { model: string | null; reasoningEffort: string | null }) => ({
+        thread: {
+          ...makeSnapshot("project-1").thread,
+          modelOverride: preferences.model,
+          reasoningEffortOverride: preferences.reasoningEffort,
+        },
+      }),
+    );
     apiMocks.submitProjectExecutionTurn.mockResolvedValue({ thread: makeSnapshot("project-1").thread, user, assistant });
     const props = reactive({ projectId: "project-1", project: makeProject("project-1") as Project | null });
     const mountedPanel = mountPanel(props);
@@ -85,11 +149,17 @@ describe("ProjectExecutionThreadPanel", () => {
     selects[0]!.value = "gpt-5.6-sol";
     selects[0]!.dispatchEvent(new Event("change", { bubbles: true }));
     await waitUntil(() => apiMocks.updateProjectExecutionPreferences.mock.calls.length === 1);
-    expect(apiMocks.updateProjectExecutionPreferences).toHaveBeenLastCalledWith("project-1", { model: "gpt-5.6-sol", reasoningEffort: null });
+    expect(apiMocks.updateProjectExecutionPreferences).toHaveBeenLastCalledWith("project-1", {
+      model: "gpt-5.6-sol",
+      reasoningEffort: null,
+    });
     selects[1]!.value = "high";
     selects[1]!.dispatchEvent(new Event("change", { bubbles: true }));
     await waitUntil(() => apiMocks.updateProjectExecutionPreferences.mock.calls.length === 2);
-    expect(apiMocks.updateProjectExecutionPreferences).toHaveBeenLastCalledWith("project-1", { model: "gpt-5.6-sol", reasoningEffort: "high" });
+    expect(apiMocks.updateProjectExecutionPreferences).toHaveBeenLastCalledWith("project-1", {
+      model: "gpt-5.6-sol",
+      reasoningEffort: "high",
+    });
 
     const composer = mountedPanel.host.querySelector<HTMLTextAreaElement>("textarea[aria-label='项目执行请求']")!;
     composer.value = "please update the project";
@@ -97,11 +167,37 @@ describe("ProjectExecutionThreadPanel", () => {
     await nextTick();
     mountedPanel.host.querySelector<HTMLButtonElement>("button.project-execution-send")?.click();
     await waitUntil(() => apiMocks.submitProjectExecutionTurn.mock.calls.length === 1);
-    expect(apiMocks.submitProjectExecutionTurn).toHaveBeenCalledWith("project-1", "please update the project", expect.stringContaining("project-execution-"));
+    expect(apiMocks.submitProjectExecutionTurn).toHaveBeenCalledWith(
+      "project-1",
+      "please update the project",
+      expect.stringContaining("project-execution-"),
+    );
   });
 
   it("clears the previous project's messages immediately when the selected Project changes", async () => {
-    apiMocks.projectExecutionThread.mockImplementation(async (projectId: string) => ({ ...makeSnapshot(projectId), messages: projectId === "project-1" ? [{ id: "private-old-message", threadId: "execution-project-1", turnId: "turn-old", clientTurnId: "old", role: "user", content: "only project one", status: "COMPLETED", error: null, createdAt: "2026-09-26T00:00:00.000Z", sequence: 1, loopId: null, model: null, reasoningEffort: null }] : [] }));
+    apiMocks.projectExecutionThread.mockImplementation(async (projectId: string) => ({
+      ...makeSnapshot(projectId),
+      messages:
+        projectId === "project-1"
+          ? [
+              {
+                id: "private-old-message",
+                threadId: "execution-project-1",
+                turnId: "turn-old",
+                clientTurnId: "old",
+                role: "user",
+                content: "only project one",
+                status: "COMPLETED",
+                error: null,
+                createdAt: "2026-09-26T00:00:00.000Z",
+                sequence: 1,
+                loopId: null,
+                model: null,
+                reasoningEffort: null,
+              },
+            ]
+          : [],
+    }));
     const props = reactive({ projectId: "project-1", project: makeProject("project-1") as Project | null });
     const mountedPanel = mountPanel(props);
     await waitUntil(() => mountedPanel.host.textContent?.includes("only project one") === true);
@@ -133,7 +229,10 @@ function projectWithExecutor(id: string, executor: { model: string; backend?: st
 describe("ProjectExecutionThreadPanel 的 Agent 芯片", () => {
   it("**页面开着时把执行侧 Agent 换掉，芯片与它的 title 都要跟着换**", async () => {
     apiMocks.projectExecutionThread.mockImplementation(async (projectId: string) => ({ ...makeSnapshot(projectId) }));
-    const props = reactive({ projectId: "project-1", project: projectWithExecutor("project-1", { model: "gpt-5.6-luna" }) as Project | null });
+    const props = reactive({
+      projectId: "project-1",
+      project: projectWithExecutor("project-1", { model: "gpt-5.6-luna" }) as Project | null,
+    });
     const mountedPanel = mountPanel(props);
     await waitUntil(() => agentLabel(mountedPanel.host).length > 0);
 

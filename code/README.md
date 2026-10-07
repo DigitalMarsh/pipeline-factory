@@ -73,8 +73,16 @@ Git 根目录的 `.runtime/`（API 为 `.runtime/api.pid` / `.runtime/api.log`�
     "root": "/absolute/path/to/your/project",
     "planDirectory": "docs/pipeline/plans",
     "commands": [
-      { "commandId": "project.start", "argv": ["/absolute/path/to/node", "scripts/start.mjs"], "environment": { "PATH": "/absolute/path/to/bin:/usr/bin:/bin" } },
-      { "commandId": "project.cleanup", "argv": ["/absolute/path/to/node", "scripts/cleanup.mjs"], "environment": { "PATH": "/absolute/path/to/bin:/usr/bin:/bin" } }
+      {
+        "commandId": "project.start",
+        "argv": ["/absolute/path/to/node", "scripts/start.mjs"],
+        "environment": { "PATH": "/absolute/path/to/bin:/usr/bin:/bin" }
+      },
+      {
+        "commandId": "project.cleanup",
+        "argv": ["/absolute/path/to/node", "scripts/cleanup.mjs"],
+        "environment": { "PATH": "/absolute/path/to/bin:/usr/bin:/bin" }
+      }
     ]
   }
 }
@@ -121,13 +129,23 @@ API 的运行参数全部来自 `config/pipeline-factory.config.json`，也可�
 最小切换（端点与凭据交给 CLI 自己解析）：
 
 ```json
-{ "model": { "backend": "claude-agent-sdk", "roles": { "explorer": { "model": "claude-opus-5", "mode": "plan" }, "executor": { "model": "claude-opus-5", "mode": "default" } } } }
+{
+  "model": {
+    "backend": "claude-agent-sdk",
+    "roles": { "explorer": { "model": "claude-opus-5", "mode": "plan" }, "executor": { "model": "claude-opus-5", "mode": "default" } }
+  }
+}
 ```
 
 需要把端点写死在配置里时（例如 cc-switch 的本地代理、或 DeepSeek 的 Anthropic 兼容端点 `https://api.deepseek.com/anthropic`）：
 
 ```json
-{ "model": { "backend": "claude-agent-sdk", "claudeAgent": { "baseUrl": "http://127.0.0.1:15721", "authToken": "…", "settingsPath": "./claude-settings.json", "maxTurns": 40 } } }
+{
+  "model": {
+    "backend": "claude-agent-sdk",
+    "claudeAgent": { "baseUrl": "http://127.0.0.1:15721", "authToken": "…", "settingsPath": "./claude-settings.json", "maxTurns": 40 }
+  }
+}
 ```
 
 - **不写 `claudeAgent` 是常规用法**：与 Codex 后端一样，Factory 不读环境变量、不存密钥，端点与凭据由 CLI 读自己的设置（`~/.claude/settings.json`；cc-switch 正是把 `ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN` 和模型映射写在这里）。`baseUrl`/`authToken` 是唯一显式覆盖点，集中在组合根读一次。
@@ -154,7 +172,7 @@ Codex 与 Claude 可以**同时**跑在同一个进程里，并按角色各用�
     },
     "roles": {
       "explorer": { "backend": "codex-app-server", "model": "gpt-5.6-sol", "mode": "plan", "reasoningEffort": "high" },
-      "executor": { "backend": "deepseek",         "model": "deepseek-chat", "mode": "default", "reasoningEffort": "medium" }
+      "executor": { "backend": "deepseek", "model": "deepseek-chat", "mode": "default", "reasoningEffort": "medium" }
     }
   }
 }

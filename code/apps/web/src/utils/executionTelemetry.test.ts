@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { executionModelSourceNote, formatExecutionDuration, formatProviderContextUsage, formatTokenSummary, liveDurationMs, resolveExecutionModelIdentity, telemetryReasoning, usageDetailRows } from "./executionTelemetry";
+import {
+  executionModelSourceNote,
+  formatExecutionDuration,
+  formatProviderContextUsage,
+  formatTokenSummary,
+  liveDurationMs,
+  resolveExecutionModelIdentity,
+  telemetryReasoning,
+  usageDetailRows,
+} from "./executionTelemetry";
 
 describe("execution telemetry formatting", () => {
   it("formats exact token totals and keeps missing usage explicit", () => {
@@ -19,8 +28,28 @@ describe("execution telemetry formatting", () => {
   });
 
   it("formats completed and live wall-clock duration", () => {
-    expect(formatExecutionDuration({ model: "m", reasoningEffort: null, startedAt: "2026-01-01T00:00:00.000Z", completedAt: "2026-01-01T00:01:02.000Z", durationMs: 62_000, usage: null, usageSource: "not-recorded", usageScope: null })).toBe("1m 02s");
-    const telemetry = { model: "m", reasoningEffort: null, startedAt: "2026-01-01T00:00:00.000Z", completedAt: null, durationMs: null, usage: null, usageSource: "not-recorded" as const, usageScope: null };
+    expect(
+      formatExecutionDuration({
+        model: "m",
+        reasoningEffort: null,
+        startedAt: "2026-01-01T00:00:00.000Z",
+        completedAt: "2026-01-01T00:01:02.000Z",
+        durationMs: 62_000,
+        usage: null,
+        usageSource: "not-recorded",
+        usageScope: null,
+      }),
+    ).toBe("1m 02s");
+    const telemetry = {
+      model: "m",
+      reasoningEffort: null,
+      startedAt: "2026-01-01T00:00:00.000Z",
+      completedAt: null,
+      durationMs: null,
+      usage: null,
+      usageSource: "not-recorded" as const,
+      usageScope: null,
+    };
     expect(liveDurationMs(telemetry, Date.parse("2026-01-01T00:00:07.500Z"))).toBe(7500);
     expect(formatExecutionDuration(telemetry, Date.parse("2026-01-01T00:00:07.500Z"))).toBe("7s");
   });
@@ -30,7 +59,20 @@ describe("execution telemetry formatting", () => {
   });
 
   it("answers which model is in use from the recorded turn, and says so", () => {
-    const identity = resolveExecutionModelIdentity({ model: "gpt-5.6-luna", reasoningEffort: null, backend: "codex-app-server", startedAt: null, completedAt: null, durationMs: null, usage: null, usageSource: "provider", usageScope: null }, { model: "configured-model", backend: "claude-agent-sdk" });
+    const identity = resolveExecutionModelIdentity(
+      {
+        model: "gpt-5.6-luna",
+        reasoningEffort: null,
+        backend: "codex-app-server",
+        startedAt: null,
+        completedAt: null,
+        durationMs: null,
+        usage: null,
+        usageSource: "provider",
+        usageScope: null,
+      },
+      { model: "configured-model", backend: "claude-agent-sdk" },
+    );
 
     // 本次记录整份优先：model 与 backend 是同一次写入的一对，不跟配置混搭。
     expect(identity).toEqual({ model: "gpt-5.6-luna", backend: "codex-app-server", source: "recorded" });
@@ -47,15 +89,34 @@ describe("execution telemetry formatting", () => {
   it("keeps saying 未记录 when neither the record nor the config exists", () => {
     expect(resolveExecutionModelIdentity(null, null)).toEqual({ model: "未记录", backend: "未记录", source: "unknown" });
     // 只有一半也不编造另一半。
-    expect(resolveExecutionModelIdentity(null, { model: "m", backend: null })).toEqual({ model: "m", backend: "未记录", source: "configured" });
+    expect(resolveExecutionModelIdentity(null, { model: "m", backend: null })).toEqual({
+      model: "m",
+      backend: "未记录",
+      source: "configured",
+    });
   });
 
   it("says where the value came from, and calls out a config that moved on", () => {
-    const recorded = resolveExecutionModelIdentity({ model: "gpt-5.6-luna", reasoningEffort: null, backend: "codex-app-server", startedAt: null, completedAt: null, durationMs: null, usage: null, usageSource: "provider", usageScope: null }, null);
+    const recorded = resolveExecutionModelIdentity(
+      {
+        model: "gpt-5.6-luna",
+        reasoningEffort: null,
+        backend: "codex-app-server",
+        startedAt: null,
+        completedAt: null,
+        durationMs: null,
+        usage: null,
+        usageSource: "provider",
+        usageScope: null,
+      },
+      null,
+    );
 
     expect(executionModelSourceNote(recorded, { model: "gpt-5.6-luna" })).toBe("本次执行记录");
     // 用户把项目模型换成 claude 之后最想问的那句：为什么这里还是旧的。
-    expect(executionModelSourceNote(recorded, { model: "claude-opus-5" })).toBe("本次执行记录 · 项目当前配置 claude-opus-5（改在下一个 Plan Revision 生效）");
+    expect(executionModelSourceNote(recorded, { model: "claude-opus-5" })).toBe(
+      "本次执行记录 · 项目当前配置 claude-opus-5（改在下一个 Plan Revision 生效）",
+    );
   });
 
   it("does not invent a config note when there is nothing to compare", () => {

@@ -20,10 +20,23 @@ import { planContractFixture } from "./plan-fixture.js";
 const resolvedContract: ResolvedPlanContract = {
   schemaVersion: 2,
   artifact: { mode: "REPOSITORY_FILE", path: "src/views/GanttView.vue" },
-  objective: { goal: "在项目详情页展示甘特图", audience: ["项目成员"], acceptanceCriteria: ["能按日期排布"], outOfScope: ["不改后端数据模型"] },
+  objective: {
+    goal: "在项目详情页展示甘特图",
+    audience: ["项目成员"],
+    acceptanceCriteria: ["能按日期排布"],
+    outOfScope: ["不改后端数据模型"],
+  },
   design: { technicalConstraints: ["复用现有 Vue 组件边界"], dataSecurity: ["不新增敏感数据"], failureHandling: ["数据缺失时显示空状态"] },
   conflicts: [],
-  repository: { projectId: "project-1", name: "Project", repoRoot: "/repo", baseBranch: "main", baseCommit: "abc123", configVersion: 1, configHash: "sha256:config" },
+  repository: {
+    projectId: "project-1",
+    name: "Project",
+    repoRoot: "/repo",
+    baseBranch: "main",
+    baseCommit: "abc123",
+    configVersion: 1,
+    configHash: "sha256:config",
+  },
   scope: { includePaths: ["src/views/**"], excludePaths: [] },
   tasks: [{ id: "task-1", title: "实现时间轴", dependencies: [], status: "READY" }],
   dependencies: [],
@@ -58,7 +71,17 @@ describe("Plan 文档渲染", () => {
   });
 
   it("空字段写'（未声明）'而不是留白，避免被当成渲染坏了", () => {
-    const markdown = renderPlanDocument({ ...document, resolvedContract: { ...resolvedContract, objective: { ...resolvedContract.objective, acceptanceCriteria: [] }, scope: { includePaths: [], excludePaths: [] }, tasks: [], design: { ...resolvedContract.design, technicalConstraints: [], dataSecurity: [], failureHandling: [] }, verification: { mode: "NONE", commandIds: [] } } });
+    const markdown = renderPlanDocument({
+      ...document,
+      resolvedContract: {
+        ...resolvedContract,
+        objective: { ...resolvedContract.objective, acceptanceCriteria: [] },
+        scope: { includePaths: [], excludePaths: [] },
+        tasks: [],
+        design: { ...resolvedContract.design, technicalConstraints: [], dataSecurity: [], failureHandling: [] },
+        verification: { mode: "NONE", commandIds: [] },
+      },
+    });
 
     expect(markdown).toContain("（未声明）");
   });
@@ -70,7 +93,15 @@ describe("Plan 文档渲染", () => {
         ...resolvedContract,
         objective: { ...resolvedContract.objective, context: ["现有详情页只有列表视图，日期数据已由 API 返回。"] },
         design: { ...resolvedContract.design, risks: ["旧浏览器样式兼容风险；失败时保留原列表视图。"] },
-        tasks: [{ id: "task-1", title: "实现时间轴", dependencies: [], status: "READY", changes: [{ path: "src/views/GanttView.vue", action: "create", detail: "新增甘特图视图并复用详情页布局。" }] }],
+        tasks: [
+          {
+            id: "task-1",
+            title: "实现时间轴",
+            dependencies: [],
+            status: "READY",
+            changes: [{ path: "src/views/GanttView.vue", action: "create", detail: "新增甘特图视图并复用详情页布局。" }],
+          },
+        ],
       },
     });
 
@@ -90,8 +121,12 @@ describe("Plan 文档渲染", () => {
 
 describe("Plan 落盘", () => {
   let directory: string;
-  beforeEach(() => { directory = join(mkdtempSync(join(tmpdir(), "plan-archive-")), "docs", "pipeline", "plans"); });
-  afterEach(() => { rmSync(directory, { recursive: true, force: true }); });
+  beforeEach(() => {
+    directory = join(mkdtempSync(join(tmpdir(), "plan-archive-")), "docs", "pipeline", "plans");
+  });
+  afterEach(() => {
+    rmSync(directory, { recursive: true, force: true });
+  });
 
   it("目录不存在时自动创建（含多级）", () => {
     expect(existsSync(directory)).toBe(false);
@@ -119,17 +154,31 @@ describe("Plan 落盘", () => {
 
 describe("确认时的落盘（PlanService）", () => {
   let root: string;
-  beforeEach(() => { root = mkdtempSync(join(tmpdir(), "plan-confirm-")); });
-  afterEach(() => { rmSync(root, { recursive: true, force: true }); });
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "plan-confirm-"));
+  });
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
 
   function setup(withArchive: boolean) {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);
-    projects.create({ id: "project-1", name: "Archive Project", repoRoot: root, defaultBranch: "main", worktreeRoot: join(root, "worktrees") });
+    projects.create({
+      id: "project-1",
+      name: "Archive Project",
+      repoRoot: root,
+      defaultBranch: "main",
+      worktreeRoot: join(root, "worktrees"),
+    });
     const directory = join(root, "docs", "pipeline", "plans");
     const plans = withArchive ? new PlanService(store, projects, undefined, () => directory) : new PlanService(store, projects);
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "落盘方案",
-      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "落盘方案" }) });
+    const plan = plans.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "thread-1",
+      title: "落盘方案",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "落盘方案" }),
+    });
     return { plans, plan, directory };
   }
 

@@ -117,7 +117,12 @@ export function encodePlanCursor(cursor: PlanCursor): string {
 export function decodePlanCursor(value: string): PlanCursor {
   try {
     const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as Partial<PlanCursor>;
-    if (typeof parsed.planId !== "string" || !parsed.planId || !["queued_at", "last_event_at", "priority", "status"].includes(parsed.sort ?? "")) throw new Error("invalid");
+    if (
+      typeof parsed.planId !== "string" ||
+      !parsed.planId ||
+      !["queued_at", "last_event_at", "priority", "status"].includes(parsed.sort ?? "")
+    )
+      throw new Error("invalid");
     return { planId: parsed.planId, sort: parsed.sort as PlanQuerySort };
   } catch {
     throw new Error("Invalid Plan query cursor");

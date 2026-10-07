@@ -28,16 +28,32 @@ describe("CodexAppServerClient", () => {
       if (request.method === "thread/start") response({ thread: { id: "thread-1" } });
       if (request.method === "turn/start") {
         response({ turn: { id: "turn-1", status: "inProgress" } });
-        stdout.write(`${JSON.stringify({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { threadId: "thread-1", turnId: "turn-1", delta: "hello" } })}\n`);
-        stdout.write(`${JSON.stringify({ jsonrpc: "2.0", method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } } })}\n`);
+        stdout.write(
+          `${JSON.stringify({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { threadId: "thread-1", turnId: "turn-1", delta: "hello" } })}\n`,
+        );
+        stdout.write(
+          `${JSON.stringify({ jsonrpc: "2.0", method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } } })}\n`,
+        );
       }
     });
     const spawnProcess: CodexSpawnProcess = () => child as unknown as ReturnType<CodexSpawnProcess>;
-    const client = new CodexAppServerClient({ command: "codex", args: ["app-server", "--stdio"], cwd: "/tmp", startupTimeoutMs: 5000, requestTimeoutMs: 5000, clientName: "test", clientVersion: "1.0.0", spawnProcess });
+    const client = new CodexAppServerClient({
+      command: "codex",
+      args: ["app-server", "--stdio"],
+      cwd: "/tmp",
+      startupTimeoutMs: 5000,
+      requestTimeoutMs: 5000,
+      clientName: "test",
+      clientVersion: "1.0.0",
+      spawnProcess,
+    });
 
-    await expect(client.startThread({ model: "gpt-5", cwd: "/tmp/project", sandbox: "read-only", approvalPolicy: "never" })).resolves.toBe("thread-1");
+    await expect(client.startThread({ model: "gpt-5", cwd: "/tmp/project", sandbox: "read-only", approvalPolicy: "never" })).resolves.toBe(
+      "thread-1",
+    );
     const events = [];
-    for await (const event of client.streamTurn({ threadId: "thread-1", input: [{ type: "text", text: "inspect" }], model: "gpt-5" })) events.push(event);
+    for await (const event of client.streamTurn({ threadId: "thread-1", input: [{ type: "text", text: "inspect" }], model: "gpt-5" }))
+      events.push(event);
 
     expect(requests).toEqual(["initialize", "thread/start", "turn/start"]);
     expect(events).toEqual([
@@ -64,17 +80,31 @@ describe("CodexAppServerClient", () => {
         const turnId = `provider-turn-${++turnNumber}`;
         respond({ turn: { id: turnId, status: "inProgress" } });
         setImmediate(() => {
-          stdout.write(`${JSON.stringify({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { threadId, turnId, delta: threadId } })}\n`);
-          stdout.write(`${JSON.stringify({ jsonrpc: "2.0", method: "turn/completed", params: { threadId, turn: { id: turnId, status: "completed" } } })}\n`);
+          stdout.write(
+            `${JSON.stringify({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { threadId, turnId, delta: threadId } })}\n`,
+          );
+          stdout.write(
+            `${JSON.stringify({ jsonrpc: "2.0", method: "turn/completed", params: { threadId, turn: { id: turnId, status: "completed" } } })}\n`,
+          );
         });
       }
     });
-    const client = new CodexAppServerClient({ command: "codex", args: ["app-server"], cwd: "/tmp", startupTimeoutMs: 5000, requestTimeoutMs: 5000, clientName: "test", clientVersion: "1.0.0", spawnProcess: () => child as unknown as ReturnType<CodexSpawnProcess> });
+    const client = new CodexAppServerClient({
+      command: "codex",
+      args: ["app-server"],
+      cwd: "/tmp",
+      startupTimeoutMs: 5000,
+      requestTimeoutMs: 5000,
+      clientName: "test",
+      clientVersion: "1.0.0",
+      spawnProcess: () => child as unknown as ReturnType<CodexSpawnProcess>,
+    });
     const firstThread = await client.startThread({ model: "gpt-5", cwd: "/tmp/project", sandbox: "read-only", approvalPolicy: "never" });
     const secondThread = await client.startThread({ model: "gpt-5", cwd: "/tmp/project", sandbox: "read-only", approvalPolicy: "never" });
     const collect = async (threadId: string) => {
       const events = [];
-      for await (const event of client.streamTurn({ threadId, input: [{ type: "text", text: threadId }], model: "gpt-5" })) events.push(event);
+      for await (const event of client.streamTurn({ threadId, input: [{ type: "text", text: threadId }], model: "gpt-5" }))
+        events.push(event);
       return events;
     };
 
@@ -101,13 +131,25 @@ describe("CodexAppServerClient", () => {
       const message = JSON.parse(chunk.toString()) as Record<string, unknown>;
       writes.push(message);
       if (message.method === "initialize") stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: message.id, result: {} })}\n`);
-      if (message.method === "thread/start") stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { thread: { id: "thread-1" } } })}\n`);
+      if (message.method === "thread/start")
+        stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { thread: { id: "thread-1" } } })}\n`);
       if (message.method === "turn/start") {
         stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { turn: { id: "turn-1" } } })}\n`);
-        stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: "server-request-id", method: "item/tool/requestUserInput", params: { threadId: "thread-1", turnId: "turn-1", itemId: "item-1", questions: [], isBlocking: true } })}\n`);
+        stdout.write(
+          `${JSON.stringify({ jsonrpc: "2.0", id: "server-request-id", method: "item/tool/requestUserInput", params: { threadId: "thread-1", turnId: "turn-1", itemId: "item-1", questions: [], isBlocking: true } })}\n`,
+        );
       }
     });
-    const client = new CodexAppServerClient({ command: "codex", args: ["app-server"], cwd: "/tmp", startupTimeoutMs: 5000, requestTimeoutMs: 5000, clientName: "test", clientVersion: "1.0.0", spawnProcess: () => child as unknown as ReturnType<CodexSpawnProcess> });
+    const client = new CodexAppServerClient({
+      command: "codex",
+      args: ["app-server"],
+      cwd: "/tmp",
+      startupTimeoutMs: 5000,
+      requestTimeoutMs: 5000,
+      clientName: "test",
+      clientVersion: "1.0.0",
+      spawnProcess: () => child as unknown as ReturnType<CodexSpawnProcess>,
+    });
     await client.startThread({ model: "gpt-5", cwd: "/tmp/project", sandbox: "read-only", approvalPolicy: "never" });
     const stream = client.streamTurn({ threadId: "thread-1", input: [{ type: "text", text: "inspect" }], model: "gpt-5" });
     const event = await stream[Symbol.asyncIterator]().next();

@@ -62,7 +62,10 @@ function allNamedBindingsTyped(clause) {
   if (!brace) return false;
   const beforeBrace = clause.slice(0, brace.index).trim();
   if (beforeBrace && !beforeBrace.startsWith("{")) return false;
-  const names = brace[1].split(",").map((name) => name.trim()).filter(Boolean);
+  const names = brace[1]
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean);
   if (!names.length) return false;
   return names.every((name) => /^type\s/.test(name));
 }
@@ -254,7 +257,10 @@ for (const cycle of introduced) {
 }
 
 for (const { cycle, shrunkFrom } of shrinkages) {
-  const dropped = shrunkFrom.split(" | ").filter((member) => !new Set(cycle).has(member)).map(shortName);
+  const dropped = shrunkFrom
+    .split(" | ")
+    .filter((member) => !new Set(cycle).has(member))
+    .map(shortName);
   console.log(`\n环在收缩：${shrunkFrom.split(" | ").length} 个模块 → ${cycle.length} 个模块，已脱离 ${dropped.join(", ")}`);
 }
 if (shrinkages.length) console.log("这是解环的预期进度，不是回归。更新基线：node scripts/check-cycles.mjs --write-baseline");

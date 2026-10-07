@@ -29,7 +29,9 @@ import type { ModelCapabilities, ModelEvent, ModelGateway, ModelRequest, ModelRo
 export class StubModelGateway implements ModelGateway {
   constructor(private readonly configs: Record<ModelRole, ModelRoleConfig>) {}
 
-  configFor(role: ModelRole): ModelRoleConfig { return this.configs[role]; }
+  configFor(role: ModelRole): ModelRoleConfig {
+    return this.configs[role];
+  }
 
   capabilities(_role: ModelRole): ModelCapabilities {
     return { supportsStructuredUserInput: false, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] };
@@ -44,9 +46,15 @@ export class StubModelGateway implements ModelGateway {
     yield { type: "turn.completed" };
   }
 
-  async answerUserInput(): Promise<void> { return undefined; }
-  async cancel(): Promise<void> { return undefined; }
+  async answerUserInput(): Promise<void> {
+    return undefined;
+  }
+  async cancel(): Promise<void> {
+    return undefined;
+  }
 
   /** 替身没有端点可担保：如实报"没有 Provider"，而不是编一个看起来像真的端点。 */
-  describeEndpoint(): ProviderEndpoint { return { backend: "stub", endpoint: null, source: "config", cliVersion: null, credentialSource: null, providerModel: null }; }
+  describeEndpoint(): ProviderEndpoint {
+    return { backend: "stub", endpoint: null, source: "config", cliVersion: null, credentialSource: null, providerModel: null };
+  }
 }

@@ -116,7 +116,13 @@ export class PlanService {
     this.store.appendEvent({
       type: "explorer.thread.created",
       aggregateId: thread.id,
-      payload: { projectId: thread.projectId, parentThreadId: thread.parentThreadId, explorerPlanId: thread.activeExplorerPlanId, turnId: null, loopId: null },
+      payload: {
+        projectId: thread.projectId,
+        parentThreadId: thread.parentThreadId,
+        explorerPlanId: thread.activeExplorerPlanId,
+        turnId: null,
+        loopId: null,
+      },
     });
     return thread;
   }
@@ -136,9 +142,10 @@ export class PlanService {
     // 契约是 CandidatePlan 的**必填事实**：Explorer 走 `generatedSpec` 解析，程序化调用方
     // （测试夹具）直接给一份已解析契约。两者都没有就没有方案——这条路上不再有"兜底合同"
     // （V1 的 defaultPlanContract 已随镜像一起删掉）。
-    const resolvedContract = generatedSpec && project
-      ? resolvePlanContract(generatedSpec, this.projects.snapshot(project.id), verifiedProjectBaseline(project))
-      : input.resolvedContract;
+    const resolvedContract =
+      generatedSpec && project
+        ? resolvePlanContract(generatedSpec, this.projects.snapshot(project.id), verifiedProjectBaseline(project))
+        : input.resolvedContract;
     if (!resolvedContract) throw new Error("A candidate plan requires a generatedSpec or a resolvedContract");
     const plan: CandidatePlan = {
       id: this.store.nextId("plan"),
@@ -165,12 +172,28 @@ export class PlanService {
     };
     this.store.savePlan(plan);
     this.store.saveCandidateVersion(plan);
-    this.store.appendEvent({ type: "plan.candidate.created", aggregateId: plan.id, payload: { title: plan.title, revision: plan.revision, explorerPlanId: plan.explorerPlanId ?? null, sourceTurnId: plan.sourceTurnId, providerThreadId: plan.providerThreadId, providerTurnId: plan.providerTurnId, providerItemId: plan.providerItemId } });
+    this.store.appendEvent({
+      type: "plan.candidate.created",
+      aggregateId: plan.id,
+      payload: {
+        title: plan.title,
+        revision: plan.revision,
+        explorerPlanId: plan.explorerPlanId ?? null,
+        sourceTurnId: plan.sourceTurnId,
+        providerThreadId: plan.providerThreadId,
+        providerTurnId: plan.providerTurnId,
+        providerItemId: plan.providerItemId,
+      },
+    });
     return plan;
   }
 
   /** 每次重新生成 READY 产物都保存不可变的候选版本，确认只能使用最新版。 */
-  reviseCandidate(planId: string, artifact: PlanArtifact, source: { sourceTurnId: string; providerThreadId: string | null; providerTurnId: string | null; providerItemId: string | null }): CandidatePlan {
+  reviseCandidate(
+    planId: string,
+    artifact: PlanArtifact,
+    source: { sourceTurnId: string; providerThreadId: string | null; providerTurnId: string | null; providerItemId: string | null },
+  ): CandidatePlan {
     const plan = this.get(planId);
     if (plan.status !== "DRAFT") throw new Error("Only an unconfirmed Plan can be edited");
     const project = this.store.getProject(plan.projectId);
@@ -180,17 +203,24 @@ export class PlanService {
     // 不改方案的修订是合法的，不该因为没带契约就把 Plan 变成没有契约。
     const resolvedContract = generatedSpec
       ? resolvePlanContract(generatedSpec, this.projects.snapshot(project.id), verifiedProjectBaseline(project))
-      : artifact.resolvedContract ?? plan.resolvedContract;
+      : (artifact.resolvedContract ?? plan.resolvedContract);
     const revision = Math.max(plan.revision, ...this.store.listCandidateVersions(plan.id).map((item) => item.revision)) + 1;
     const planWithoutGeneratedSpec = { ...plan, resolvedContract };
     delete planWithoutGeneratedSpec.generatedSpec;
     const updated = this.store.updatePlan({
-      ...planWithoutGeneratedSpec, title: artifact.title, revision,
+      ...planWithoutGeneratedSpec,
+      title: artifact.title,
+      revision,
       ...(generatedSpec ? { generatedSpec } : {}),
-      ...source, lastEventAt: this.store.now(),
+      ...source,
+      lastEventAt: this.store.now(),
     });
     this.store.saveCandidateVersion(updated);
-    this.store.appendEvent({ type: "plan.candidate.revised", aggregateId: plan.id, payload: { revision, sourceTurnId: source.sourceTurnId } });
+    this.store.appendEvent({
+      type: "plan.candidate.revised",
+      aggregateId: plan.id,
+      payload: { revision, sourceTurnId: source.sourceTurnId },
+    });
     return updated;
   }
 
@@ -207,10 +237,26 @@ export class PlanService {
     if (!requirement) throw new Error("Requirement not found");
     if (planId) {
       const plan = this.get(planId);
-      if (plan.projectId !== requirement.projectId || plan.explorerPlanId !== requirement.id || plan.sourceExplorerThreadId !== requirement.explorerThreadId || plan.status !== "DRAFT") throw new Error("Plan is not an editable candidate for this requirement");
+      if (
+        plan.projectId !== requirement.projectId ||
+        plan.explorerPlanId !== requirement.id ||
+        plan.sourceExplorerThreadId !== requirement.explorerThreadId ||
+        plan.status !== "DRAFT"
+      )
+        throw new Error("Plan is not an editable candidate for this requirement");
     }
-    const updated = this.store.updateExplorerPlan({ ...requirement, candidatePlanId: planId, newPlanRequested: planId === null, exploration: { ...requirement.exploration, candidatePlanId: planId }, lastActivityAt: this.store.now() });
-    this.store.appendEvent({ type: "explorer.plan.selected", aggregateId: requirement.explorerThreadId, payload: { explorerPlanId, planId } });
+    const updated = this.store.updateExplorerPlan({
+      ...requirement,
+      candidatePlanId: planId,
+      newPlanRequested: planId === null,
+      exploration: { ...requirement.exploration, candidatePlanId: planId },
+      lastActivityAt: this.store.now(),
+    });
+    this.store.appendEvent({
+      type: "explorer.plan.selected",
+      aggregateId: requirement.explorerThreadId,
+      payload: { explorerPlanId, planId },
+    });
     return updated;
   }
 
@@ -224,13 +270,24 @@ export class PlanService {
     const plan = this.get(input.planId);
     const thread = this.store.getThread(input.explorerThreadId);
     if (!thread || thread.projectId !== plan.projectId) throw new Error("EXPLORER_THREAD_PROJECT_MISMATCH");
-    if (input.fromRevision > plan.revision || input.fromRevision < 1 || !this.store.getRevision(plan.id, input.fromRevision)) throw new Error("REVISION_NOT_FOUND");
-    const active = this.store.listRevisionDrafts(plan.id).find((draft) => draft.status === "EDITING" || draft.status === "READY_TO_CONFIRM" || draft.status === "BASE_CHANGED");
+    if (input.fromRevision > plan.revision || input.fromRevision < 1 || !this.store.getRevision(plan.id, input.fromRevision))
+      throw new Error("REVISION_NOT_FOUND");
+    const active = this.store
+      .listRevisionDrafts(plan.id)
+      .find((draft) => draft.status === "EDITING" || draft.status === "READY_TO_CONFIRM" || draft.status === "BASE_CHANGED");
     if (active) {
       this.store.saveIdempotency("revision-draft", input.clientRequestId, active as unknown as Record<string, unknown>);
       return active;
     }
-    const unmergedRuns = this.store.listRuns().filter((run) => run.planId === plan.id && run.planRevision === input.fromRevision && !this.store.findMergeRequestByRun(run.id)?.mergedAt && (run.workspacePath !== null || !["CANCELLED", "STALE"].includes(run.status)));
+    const unmergedRuns = this.store
+      .listRuns()
+      .filter(
+        (run) =>
+          run.planId === plan.id &&
+          run.planRevision === input.fromRevision &&
+          !this.store.findMergeRequestByRun(run.id)?.mergedAt &&
+          (run.workspacePath !== null || !["CANCELLED", "STALE"].includes(run.status)),
+      );
     if (unmergedRuns.length && !input.discardUnmergedRun) throw new Error("UNMERGED_RUN_CONFIRMATION_REQUIRED");
     const source = this.store.getRevision(plan.id, input.fromRevision)!;
     const project = this.store.getProject(plan.projectId);
@@ -238,35 +295,85 @@ export class PlanService {
     const baseline = verifiedProjectBaseline(project);
     const now = this.store.now();
     const draft: PlanRevisionDraft = Object.freeze({
-      draftId: this.store.nextId("revision-draft"), planId: plan.id, projectId: plan.projectId,
-      basedOnRevision: input.fromRevision, targetRevision: plan.revision + 1, status: "EDITING",
+      draftId: this.store.nextId("revision-draft"),
+      planId: plan.id,
+      projectId: plan.projectId,
+      basedOnRevision: input.fromRevision,
+      targetRevision: plan.revision + 1,
+      status: "EDITING",
       // A revision draft is rebased on the current verified default branch.  Carrying a
       // historical contract's base commit here can otherwise create an unstartable Run.
-      title: plan.title, resolvedContract: { ...source.resolvedContract, repository: { ...source.resolvedContract.repository, baseBranch: baseline.baseBranch, baseCommit: baseline.baseCommit } },
-      sourceExplorerThreadId: thread.id, ...(plan.explorerPlanId ? { explorerPlanId: plan.explorerPlanId } : {}), sourceTurnId: source.sourceTurnId ?? null, providerThreadId: source.providerThreadId ?? null, providerTurnId: source.providerTurnId ?? null, providerItemId: source.providerItemId ?? null,
-      baseBranch: baseline.baseBranch, baseCommit: baseline.baseCommit, createdAt: now, updatedAt: now, confirmedAt: null,
+      title: plan.title,
+      resolvedContract: {
+        ...source.resolvedContract,
+        repository: { ...source.resolvedContract.repository, baseBranch: baseline.baseBranch, baseCommit: baseline.baseCommit },
+      },
+      sourceExplorerThreadId: thread.id,
+      ...(plan.explorerPlanId ? { explorerPlanId: plan.explorerPlanId } : {}),
+      sourceTurnId: source.sourceTurnId ?? null,
+      providerThreadId: source.providerThreadId ?? null,
+      providerTurnId: source.providerTurnId ?? null,
+      providerItemId: source.providerItemId ?? null,
+      baseBranch: baseline.baseBranch,
+      baseCommit: baseline.baseCommit,
+      createdAt: now,
+      updatedAt: now,
+      confirmedAt: null,
     });
     const saved = this.store.saveRevisionDraft(draft);
-    if (thread.state === "ARCHIVED") this.store.updateThread({ ...thread, state: "ACTIVE", activeRevisionDraftId: saved.draftId, lastActivityAt: now });
+    if (thread.state === "ARCHIVED")
+      this.store.updateThread({ ...thread, state: "ACTIVE", activeRevisionDraftId: saved.draftId, lastActivityAt: now });
     else this.store.updateThread({ ...thread, activeRevisionDraftId: saved.draftId, lastActivityAt: now });
-    this.store.appendEvent({ type: "plan.revision.draft.created", aggregateId: plan.id, payload: { draftId: saved.draftId, fromRevision: input.fromRevision, targetRevision: saved.targetRevision, explorerThreadId: thread.id, discardUnmergedRun: input.discardUnmergedRun } });
+    this.store.appendEvent({
+      type: "plan.revision.draft.created",
+      aggregateId: plan.id,
+      payload: {
+        draftId: saved.draftId,
+        fromRevision: input.fromRevision,
+        targetRevision: saved.targetRevision,
+        explorerThreadId: thread.id,
+        discardUnmergedRun: input.discardUnmergedRun,
+      },
+    });
     this.store.saveIdempotency("revision-draft", input.clientRequestId, saved as unknown as Record<string, unknown>);
     return saved;
   }
 
   /** READY 只更新同一个 Draft；不会为同一业务计划创建新的 planId。 */
-  updateRevisionDraftFromExplorer(draftId: string, artifact: PlanArtifact, source: { sourceTurnId: string; providerThreadId: string | null; providerTurnId: string | null; providerItemId: string | null }): PlanRevisionDraft {
+  updateRevisionDraftFromExplorer(
+    draftId: string,
+    artifact: PlanArtifact,
+    source: { sourceTurnId: string; providerThreadId: string | null; providerTurnId: string | null; providerItemId: string | null },
+  ): PlanRevisionDraft {
     const draft = this.store.getRevisionDraft(draftId);
     if (!draft) throw new Error(`RevisionDraft ${draftId} not found`);
-    if (draft.status !== "EDITING" && draft.status !== "READY_TO_CONFIRM" && draft.status !== "BASE_CHANGED") throw new Error(`RevisionDraft ${draftId} is not editable`);
+    if (draft.status !== "EDITING" && draft.status !== "READY_TO_CONFIRM" && draft.status !== "BASE_CHANGED")
+      throw new Error(`RevisionDraft ${draftId} is not editable`);
     const project = this.store.getProject(draft.projectId);
     if (!project) throw new Error(`Project ${draft.projectId} not found`);
     const baseline = verifiedProjectBaseline(project);
     const generatedSpec = artifact.generatedSpec ? parseGeneratedPlanSpec(artifact.generatedSpec) : undefined;
-    const resolvedContract = generatedSpec ? resolvePlanContract(generatedSpec, this.projects.snapshot(project.id), baseline) : artifact.resolvedContract ?? draft.resolvedContract;
-    const updated: PlanRevisionDraft = Object.freeze({ ...draft, title: artifact.title, resolvedContract, ...(generatedSpec ? { generatedSpec } : {}), sourceExplorerThreadId: draft.sourceExplorerThreadId, ...source, baseBranch: baseline.baseBranch, baseCommit: baseline.baseCommit, status: "READY_TO_CONFIRM", updatedAt: this.store.now() });
+    const resolvedContract = generatedSpec
+      ? resolvePlanContract(generatedSpec, this.projects.snapshot(project.id), baseline)
+      : (artifact.resolvedContract ?? draft.resolvedContract);
+    const updated: PlanRevisionDraft = Object.freeze({
+      ...draft,
+      title: artifact.title,
+      resolvedContract,
+      ...(generatedSpec ? { generatedSpec } : {}),
+      sourceExplorerThreadId: draft.sourceExplorerThreadId,
+      ...source,
+      baseBranch: baseline.baseBranch,
+      baseCommit: baseline.baseCommit,
+      status: "READY_TO_CONFIRM",
+      updatedAt: this.store.now(),
+    });
     const saved = this.store.updateRevisionDraft(updated);
-    this.store.appendEvent({ type: "plan.revision.draft.ready", aggregateId: saved.planId, payload: { draftId: saved.draftId, targetRevision: saved.targetRevision, sourceTurnId: source.sourceTurnId } });
+    this.store.appendEvent({
+      type: "plan.revision.draft.ready",
+      aggregateId: saved.planId,
+      payload: { draftId: saved.draftId, targetRevision: saved.targetRevision, sourceTurnId: source.sourceTurnId },
+    });
     return saved;
   }
 
@@ -288,15 +395,66 @@ export class PlanService {
     this.assertPreflightPasses(draft.projectId, draft.resolvedContract);
     const snapshot = this.projects.snapshot(project.id);
     const confirmedAt = this.store.now();
-    const artifactHash = `sha256:${createHash("sha256").update(JSON.stringify({ resolvedContract: draft.resolvedContract, projectConfigSnapshot: snapshot })).digest("hex")}`;
-    const planDocumentPath = this.archiveRevision({ projectId: plan.projectId, planId: plan.id, revision: draft.targetRevision, title: draft.title, resolvedContract: draft.resolvedContract, artifactHash, confirmedBy, confirmedAt });
-    const revision = freezeRevision({ planId: plan.id, revision: draft.targetRevision, resolvedContract: draft.resolvedContract, artifactHash, ...(planDocumentPath ? { planDocumentPath } : {}), confirmedBy, confirmedAt, sourceExplorerThreadId: draft.sourceExplorerThreadId, ...(draft.explorerPlanId ? { explorerPlanId: draft.explorerPlanId } : {}), sourceTurnId: draft.sourceTurnId, providerThreadId: draft.providerThreadId, providerTurnId: draft.providerTurnId, providerItemId: draft.providerItemId, projectConfigVersion: snapshot.configVersion, projectConfigHash: snapshot.configHash, projectConfigSnapshot: snapshot });
+    const artifactHash = `sha256:${createHash("sha256")
+      .update(JSON.stringify({ resolvedContract: draft.resolvedContract, projectConfigSnapshot: snapshot }))
+      .digest("hex")}`;
+    const planDocumentPath = this.archiveRevision({
+      projectId: plan.projectId,
+      planId: plan.id,
+      revision: draft.targetRevision,
+      title: draft.title,
+      resolvedContract: draft.resolvedContract,
+      artifactHash,
+      confirmedBy,
+      confirmedAt,
+    });
+    const revision = freezeRevision({
+      planId: plan.id,
+      revision: draft.targetRevision,
+      resolvedContract: draft.resolvedContract,
+      artifactHash,
+      ...(planDocumentPath ? { planDocumentPath } : {}),
+      confirmedBy,
+      confirmedAt,
+      sourceExplorerThreadId: draft.sourceExplorerThreadId,
+      ...(draft.explorerPlanId ? { explorerPlanId: draft.explorerPlanId } : {}),
+      sourceTurnId: draft.sourceTurnId,
+      providerThreadId: draft.providerThreadId,
+      providerTurnId: draft.providerTurnId,
+      providerItemId: draft.providerItemId,
+      projectConfigVersion: snapshot.configVersion,
+      projectConfigHash: snapshot.configHash,
+      projectConfigSnapshot: snapshot,
+    });
     this.store.saveRevision(revision);
-    const updatedPlan = updatePlanStatus(this.store, plan, { title: draft.title, revision: draft.targetRevision, status: "READY", resolvedContract: draft.resolvedContract, ...(draft.generatedSpec ? { generatedSpec: draft.generatedSpec } : {}), sourceExplorerThreadId: draft.sourceExplorerThreadId, sourceTurnId: draft.sourceTurnId, providerThreadId: draft.providerThreadId, providerTurnId: draft.providerTurnId, providerItemId: draft.providerItemId, confirmedBy, confirmedAt, queuedAt: null, dispatchedAt: null, runId: null, attentionReason: null, lastEventAt: confirmedAt });
+    const updatedPlan = updatePlanStatus(this.store, plan, {
+      title: draft.title,
+      revision: draft.targetRevision,
+      status: "READY",
+      resolvedContract: draft.resolvedContract,
+      ...(draft.generatedSpec ? { generatedSpec: draft.generatedSpec } : {}),
+      sourceExplorerThreadId: draft.sourceExplorerThreadId,
+      sourceTurnId: draft.sourceTurnId,
+      providerThreadId: draft.providerThreadId,
+      providerTurnId: draft.providerTurnId,
+      providerItemId: draft.providerItemId,
+      confirmedBy,
+      confirmedAt,
+      queuedAt: null,
+      dispatchedAt: null,
+      runId: null,
+      attentionReason: null,
+      lastEventAt: confirmedAt,
+    });
     this.store.updateRevisionDraft(Object.freeze({ ...draft, status: "CONFIRMED", confirmedAt, updatedAt: confirmedAt }));
     const thread = this.store.getThread(draft.sourceExplorerThreadId);
-    if (thread?.activeRevisionDraftId === draftId) this.store.updateThread({ ...thread, activeRevisionDraftId: null, lastActivityAt: confirmedAt });
-    this.store.appendEvent({ type: "plan.revision.confirmed", aggregateId: plan.id, payload: { draftId, revision: draft.targetRevision, confirmedBy } });
+    if (thread?.activeRevisionDraftId === draftId)
+      this.store.updateThread({ ...thread, activeRevisionDraftId: null, lastActivityAt: confirmedAt });
+    this.store.appendEvent({
+      type: "plan.revision.confirmed",
+      aggregateId: plan.id,
+      payload: { draftId, revision: draft.targetRevision, confirmedBy },
+    });
     return updatedPlan;
   }
 
@@ -308,12 +466,16 @@ export class PlanService {
     const now = this.store.now();
     const saved = this.store.updateRevisionDraft(Object.freeze({ ...draft, status: "DISCARDED", updatedAt: now }));
     const thread = this.store.getThread(saved.sourceExplorerThreadId);
-    if (thread?.activeRevisionDraftId === saved.draftId) this.store.updateThread({ ...thread, activeRevisionDraftId: null, lastActivityAt: now });
+    if (thread?.activeRevisionDraftId === saved.draftId)
+      this.store.updateThread({ ...thread, activeRevisionDraftId: null, lastActivityAt: now });
     this.store.appendEvent({ type: "plan.revision.draft.discarded", aggregateId: saved.planId, payload: { draftId, actorId } });
     return saved;
   }
 
-  listRevisions(planId: string): PlanRevision[] { this.get(planId); return this.store.listRevisions(planId); }
+  listRevisions(planId: string): PlanRevision[] {
+    this.get(planId);
+    return this.store.listRevisions(planId);
+  }
 
   /**
    * 设置这个 Plan 的前置 Plan。**Factory-owned 字段，模型不能填写。**
@@ -351,7 +513,8 @@ export class PlanService {
   setVerificationSuites(planId: string, suites: string[], actorId: string): CandidatePlan {
     let plan = this.get(planId);
     if (plan.status !== "DRAFT") throw new Error(`Plan ${planId} verification suites cannot change from ${plan.status}`);
-    if (!plan.generatedSpec || !plan.resolvedContract) throw new Error(`Plan ${planId} has no resolved contract to re-resolve; regenerate it from Explorer`);
+    if (!plan.generatedSpec || !plan.resolvedContract)
+      throw new Error(`Plan ${planId} has no resolved contract to re-resolve; regenerate it from Explorer`);
     const normalized = [...new Set(suites.map((suite) => suite.trim()).filter(Boolean))];
     const project = this.store.getProject(plan.projectId);
     if (!project) throw new Error(`Project ${plan.projectId} not found`);
@@ -359,11 +522,19 @@ export class PlanService {
     const baseline = { baseBranch: plan.resolvedContract.repository.baseBranch, baseCommit: plan.resolvedContract.repository.baseCommit };
     // 声明了 suites 就等于要求"跑项目验证"，所以把 mode 明确成 PROJECT_DEFAULT；项目没有默认命令时
     // 解析结果会是 NONE，那种情况下这个请求没有意义，明确拒绝而不是当成功。
-    const generatedSpec: GeneratedPlanSpec = { ...plan.generatedSpec, verification: { mode: "PROJECT_DEFAULT", ...(normalized.length ? { suites: normalized } : {}) } };
+    const generatedSpec: GeneratedPlanSpec = {
+      ...plan.generatedSpec,
+      verification: { mode: "PROJECT_DEFAULT", ...(normalized.length ? { suites: normalized } : {}) },
+    };
     const resolvedContract = resolvePlanContract(generatedSpec, snapshot, baseline);
-    if (resolvedContract.verification.mode === "NONE") throw new Error("Project has no default verification commands; verification suites cannot be selected");
+    if (resolvedContract.verification.mode === "NONE")
+      throw new Error("Project has no default verification commands; verification suites cannot be selected");
     plan = this.store.updatePlan({ ...plan, generatedSpec, resolvedContract });
-    this.store.appendEvent({ type: "plan.verification.suites.updated", aggregateId: planId, payload: { actorId, suites: normalized, commandIds: resolvedContract.verification.commandIds } });
+    this.store.appendEvent({
+      type: "plan.verification.suites.updated",
+      aggregateId: planId,
+      payload: { actorId, suites: normalized, commandIds: resolvedContract.verification.commandIds },
+    });
     return plan;
   }
 
@@ -391,13 +562,19 @@ export class PlanService {
     const boundProject = this.store.getProject(plan.projectId);
     if (boundProject) {
       if (boundProject.id !== plan.resolvedContract.repository.projectId) throw new Error(`Plan ${planId} is bound to an invalid Project`);
-      if (boundProject.configVersion !== plan.resolvedContract.repository.configVersion || boundProject.configHash !== plan.resolvedContract.repository.configHash) throw new Error(`Plan ${planId} is stale because Project configuration changed; regenerate it`);
+      if (
+        boundProject.configVersion !== plan.resolvedContract.repository.configVersion ||
+        boundProject.configHash !== plan.resolvedContract.repository.configHash
+      )
+        throw new Error(`Plan ${planId} is stale because Project configuration changed; regenerate it`);
     }
     if (plan.generatedSpec) {
       const prerequisites = [...new Set([...plan.generatedSpec.dependencies, ...plan.resolvedContract.dependencies])];
       const currentTechnicalConstraints = plan.resolvedContract.design.technicalConstraints;
       const technicalConstraints = [...new Set([...currentTechnicalConstraints, ...prerequisites])];
-      const constraintsChanged = technicalConstraints.length !== currentTechnicalConstraints.length || technicalConstraints.some((constraint, index) => constraint !== currentTechnicalConstraints[index]);
+      const constraintsChanged =
+        technicalConstraints.length !== currentTechnicalConstraints.length ||
+        technicalConstraints.some((constraint, index) => constraint !== currentTechnicalConstraints[index]);
       if (constraintsChanged) {
         plan = this.store.updatePlan({
           ...plan,
@@ -411,8 +588,19 @@ export class PlanService {
     const confirmedAt = this.store.now();
     const project = this.store.getProject(plan.projectId);
     const projectConfigSnapshot = project ? this.projects.snapshot(project.id) : undefined;
-    const artifactHash = `sha256:${createHash("sha256").update(JSON.stringify({ resolvedContract: plan.resolvedContract, projectConfigSnapshot })).digest("hex")}`;
-    const planDocumentPath = this.archiveRevision({ projectId: plan.projectId, planId: plan.id, revision: plan.revision, title: plan.title, resolvedContract: plan.resolvedContract, artifactHash, confirmedBy, confirmedAt });
+    const artifactHash = `sha256:${createHash("sha256")
+      .update(JSON.stringify({ resolvedContract: plan.resolvedContract, projectConfigSnapshot }))
+      .digest("hex")}`;
+    const planDocumentPath = this.archiveRevision({
+      projectId: plan.projectId,
+      planId: plan.id,
+      revision: plan.revision,
+      title: plan.title,
+      resolvedContract: plan.resolvedContract,
+      artifactHash,
+      confirmedBy,
+      confirmedAt,
+    });
     const revision = freezeRevision({
       planId: plan.id,
       revision: plan.revision,
@@ -423,7 +611,13 @@ export class PlanService {
       confirmedAt,
       sourceExplorerThreadId: plan.sourceExplorerThreadId,
       ...(plan.explorerPlanId ? { explorerPlanId: plan.explorerPlanId } : {}),
-      ...(projectConfigSnapshot ? { projectConfigVersion: projectConfigSnapshot.configVersion, projectConfigHash: projectConfigSnapshot.configHash, projectConfigSnapshot } : {}),
+      ...(projectConfigSnapshot
+        ? {
+            projectConfigVersion: projectConfigSnapshot.configVersion,
+            projectConfigHash: projectConfigSnapshot.configHash,
+            projectConfigSnapshot,
+          }
+        : {}),
     });
     this.store.saveRevision(revision);
     const updated = updatePlanStatus(this.store, plan, { status: "READY", confirmedBy, confirmedAt, lastEventAt: confirmedAt });
@@ -433,7 +627,12 @@ export class PlanService {
 
   private validatePlanDependencies(plan: CandidatePlan): void {
     const dependencies = plan.resolvedContract.dependsOnPlanIds ?? [];
-    const plans = new Map(this.store.listPlans().filter((item) => item.projectId === plan.projectId).map((item) => [item.id, item]));
+    const plans = new Map(
+      this.store
+        .listPlans()
+        .filter((item) => item.projectId === plan.projectId)
+        .map((item) => [item.id, item]),
+    );
     for (const dependencyId of dependencies) {
       if (dependencyId === plan.id) throw new Error(`Plan ${plan.id} cannot depend on itself`);
       if (!plans.has(dependencyId)) throw new Error(`Plan ${plan.id} depends on unknown plan ${dependencyId}`);
@@ -461,11 +660,13 @@ export class PlanService {
 
   /** 执行 Plan Center 查询：只读已 Enqueued 的计划，并以 projection 提供稳定排序和游标。 */
   query(query: PlanQuery): PlanQueryResult {
-    if (!Number.isInteger(query.limit) || query.limit < 1 || query.limit > 100) throw new Error("Plan query limit must be between 1 and 100");
+    if (!Number.isInteger(query.limit) || query.limit < 1 || query.limit > 100)
+      throw new Error("Plan query limit must be between 1 and 100");
     const sourceIds = query.explorerThreadId ? this.explorerLineage(query.explorerThreadId, query.includeLineage !== false) : null;
     const keyword = query.q?.trim().toLowerCase();
     const statuses = query.status && query.status.length > 0 ? new Set(query.status) : null;
-    const rows = this.store.listPlanQueryProjection(query.projectId)
+    const rows = this.store
+      .listPlanQueryProjection(query.projectId)
       .filter((row) => row.queuedAt !== null)
       .filter((row) => !sourceIds || sourceIds.has(row.sourceExplorerThreadId))
       .filter((row) => !statuses || statuses.has(row.status))
@@ -479,29 +680,31 @@ export class PlanService {
         // 正常流程不会产生这种行——savePlan 的外键驱动守卫 + deleteExplorerCascade 的级联删除
         // 已经覆盖了写入与清理两侧，所以这条分支只在数据已损坏时生效，不应指望测试覆盖它。
         if (!plan) return [];
-        return [{
-          planId: row.planId,
-          title: row.title,
-          revision: row.revision,
-          status: row.status,
-          projectId: row.projectId,
-          sourceExplorerThreadId: row.sourceExplorerThreadId,
-          // **归属需求必须从库里那份 plan 取**：查询投影表（`plan_query_projection`）没有这一列，
-          // 缺了它，前端 `belongsToExplorerPlan` 会把"已派发"的方案判成不属于当前需求，
-          // 于是聊天流里连方案卡都不渲染（届时只有 DRAFT / READY 的方案还看得见卡）。
-          ...(plan.explorerPlanId ? { explorerPlanId: plan.explorerPlanId } : {}),
-          sourceTurnId: row.sourceTurnId,
-          providerThreadId: plan.providerThreadId,
-          providerTurnId: plan.providerTurnId,
-          providerItemId: plan.providerItemId,
-          createdAt: row.createdAt,
-          queuedAt: row.queuedAt as string,
-          dispatchedAt: row.dispatchedAt ?? null,
-          runId: row.runId,
-          lastEventAt: row.lastEventAt,
-          attentionReason: row.attentionReason,
-          priority: row.priority,
-        } satisfies PlanIndexRow];
+        return [
+          {
+            planId: row.planId,
+            title: row.title,
+            revision: row.revision,
+            status: row.status,
+            projectId: row.projectId,
+            sourceExplorerThreadId: row.sourceExplorerThreadId,
+            // **归属需求必须从库里那份 plan 取**：查询投影表（`plan_query_projection`）没有这一列，
+            // 缺了它，前端 `belongsToExplorerPlan` 会把"已派发"的方案判成不属于当前需求，
+            // 于是聊天流里连方案卡都不渲染（届时只有 DRAFT / READY 的方案还看得见卡）。
+            ...(plan.explorerPlanId ? { explorerPlanId: plan.explorerPlanId } : {}),
+            sourceTurnId: row.sourceTurnId,
+            providerThreadId: plan.providerThreadId,
+            providerTurnId: plan.providerTurnId,
+            providerItemId: plan.providerItemId,
+            createdAt: row.createdAt,
+            queuedAt: row.queuedAt as string,
+            dispatchedAt: row.dispatchedAt ?? null,
+            runId: row.runId,
+            lastEventAt: row.lastEventAt,
+            attentionReason: row.attentionReason,
+            priority: row.priority,
+          } satisfies PlanIndexRow,
+        ];
       })
       .sort((a, b) => this.comparePlanRows(a, b, query.sort));
 
@@ -515,7 +718,10 @@ export class PlanService {
     }
     const items = rows.slice(start, start + query.limit);
     const last = items.at(-1);
-    return { items, nextCursor: last && start + items.length < rows.length ? encodePlanCursor({ sort: query.sort, planId: last.planId }) : null };
+    return {
+      items,
+      nextCursor: last && start + items.length < rows.length ? encodePlanCursor({ sort: query.sort, planId: last.planId }) : null,
+    };
   }
 
   private explorerLineage(threadId: string, includeLineage: boolean): Set<string> {
@@ -570,7 +776,14 @@ export class PlanService {
   enqueue(planId: string): CandidatePlan {
     const plan = this.get(planId);
     if (plan.resolvedContract.artifact.mode === "CONVERSATION") throw new Error("CONVERSATION_ARTIFACT_NOT_EXECUTABLE");
-    if (plan.status === "ENQUEUED" || plan.status === "DISPATCHED" || plan.status === "IN_PROGRESS" || plan.status === "VERIFYING" || plan.status === "MERGE_READY" || plan.status === "MERGED") {
+    if (
+      plan.status === "ENQUEUED" ||
+      plan.status === "DISPATCHED" ||
+      plan.status === "IN_PROGRESS" ||
+      plan.status === "VERIFYING" ||
+      plan.status === "MERGE_READY" ||
+      plan.status === "MERGED"
+    ) {
       return plan;
     }
     if (plan.status !== "READY") throw new Error(`Plan ${planId} must be confirmed before enqueue`);
@@ -584,7 +797,14 @@ export class PlanService {
   dispatch(planId: string): CandidatePlan {
     const plan = this.get(planId);
     if (plan.resolvedContract.artifact.mode === "CONVERSATION") throw new Error("CONVERSATION_ARTIFACT_NOT_EXECUTABLE");
-    if (plan.status === "DISPATCHED" || plan.status === "IN_PROGRESS" || plan.status === "VERIFYING" || plan.status === "MERGE_READY" || plan.status === "MERGED") return plan;
+    if (
+      plan.status === "DISPATCHED" ||
+      plan.status === "IN_PROGRESS" ||
+      plan.status === "VERIFYING" ||
+      plan.status === "MERGE_READY" ||
+      plan.status === "MERGED"
+    )
+      return plan;
     if (plan.status !== "ENQUEUED") throw new Error(`Plan ${planId} must be enqueued before dispatch`);
     const dispatchedAt = this.store.now();
     const updated = updatePlanStatus(this.store, plan, { status: "DISPATCHED", dispatchedAt, lastEventAt: dispatchedAt });
@@ -606,7 +826,10 @@ export class PlanService {
     if (!project) throw new Error(`Project ${plan.projectId} not found`);
     const projectConfigSnapshot = this.projects.snapshot(project.id);
     // 与 Scheduler / 调度协调器共用同一条判定规则，见 plan/contract.ts 的 missingVerificationCommands。
-    const missingCommands = missingVerificationCommands({ resolvedContract: plan.resolvedContract, commands: projectConfigSnapshot.settings.commands });
+    const missingCommands = missingVerificationCommands({
+      resolvedContract: plan.resolvedContract,
+      commands: projectConfigSnapshot.settings.commands,
+    });
     if (missingCommands.length) {
       throw new Error(`RUN_PREREQUISITES_UNSATISFIED: missing registered commands: ${missingCommands.join(", ")}`);
     }
@@ -614,8 +837,19 @@ export class PlanService {
     const confirmedAt = this.store.now();
     const revisionNumber = plan.revision + 1;
     // 这是**新的一版 Revision**（plan.revision + 1），所以同样落一份盘：每版一个文件，不覆盖旧版。
-    const artifactHash = `sha256:${createHash("sha256").update(JSON.stringify({ resolvedContract: plan.resolvedContract, projectConfigSnapshot })).digest("hex")}`;
-    const planDocumentPath = this.archiveRevision({ projectId: plan.projectId, planId: plan.id, revision: revisionNumber, title: plan.title, resolvedContract: plan.resolvedContract, artifactHash, confirmedBy, confirmedAt });
+    const artifactHash = `sha256:${createHash("sha256")
+      .update(JSON.stringify({ resolvedContract: plan.resolvedContract, projectConfigSnapshot }))
+      .digest("hex")}`;
+    const planDocumentPath = this.archiveRevision({
+      projectId: plan.projectId,
+      planId: plan.id,
+      revision: revisionNumber,
+      title: plan.title,
+      resolvedContract: plan.resolvedContract,
+      artifactHash,
+      confirmedBy,
+      confirmedAt,
+    });
     const revision = freezeRevision({
       planId: plan.id,
       revision: revisionNumber,
@@ -642,7 +876,17 @@ export class PlanService {
       attentionReason: null,
       lastEventAt: confirmedAt,
     });
-    this.store.appendEvent({ type: "plan.configuration.revised", aggregateId: planId, payload: { confirmedBy, fromRevision: plan.revision, revision: revisionNumber, projectConfigVersion: projectConfigSnapshot.configVersion, projectConfigHash: projectConfigSnapshot.configHash } });
+    this.store.appendEvent({
+      type: "plan.configuration.revised",
+      aggregateId: planId,
+      payload: {
+        confirmedBy,
+        fromRevision: plan.revision,
+        revision: revisionNumber,
+        projectConfigVersion: projectConfigSnapshot.configVersion,
+        projectConfigHash: projectConfigSnapshot.configHash,
+      },
+    });
     return updated;
   }
 
@@ -690,7 +934,12 @@ export class PlanService {
         attentionReason: plan.attentionReason,
         priority: 0,
       }))
-      .sort((a, b) => (b.queuedAt ?? "").localeCompare(a.queuedAt ?? "") || b.lastEventAt.localeCompare(a.lastEventAt) || b.planId.localeCompare(a.planId));
+      .sort(
+        (a, b) =>
+          (b.queuedAt ?? "").localeCompare(a.queuedAt ?? "") ||
+          b.lastEventAt.localeCompare(a.lastEventAt) ||
+          b.planId.localeCompare(a.planId),
+      );
   }
 
   /** 按 Project 隔离返回 Plan，避免多个仓库之间出现跨项目数据串联。 */
@@ -723,21 +972,24 @@ export class PlanService {
 
   /** 当前探索线程中跨所有需求分区的完整 Plan 集合。 */
   listExplorerThreadPlans(threadId: string): CandidatePlan[] {
-    return this.store.listPlans()
+    return this.store
+      .listPlans()
       .filter((plan) => plan.sourceExplorerThreadId === threadId)
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
   }
 
   /** 项目 Plan 中心只列尚未确认的 Candidate。 */
   listProjectPlanCandidates(projectId: string): CandidatePlan[] {
-    return this.store.listPlans()
+    return this.store
+      .listPlans()
       .filter((plan) => plan.projectId === projectId && plan.status === "DRAFT" && plan.confirmedAt === null)
       .sort((a, b) => b.lastEventAt.localeCompare(a.lastEventAt) || a.id.localeCompare(b.id));
   }
 
   /** 项目任务中心只列已确认 Plan；合并状态仍由人工确认接口推进。 */
   listProjectTasks(projectId: string): CandidatePlan[] {
-    return this.store.listPlans()
+    return this.store
+      .listPlans()
       .filter((plan) => plan.projectId === projectId && !["DRAFT", "DISCARDED"].includes(plan.status))
       .sort((a, b) => b.lastEventAt.localeCompare(a.lastEventAt) || a.id.localeCompare(b.id));
   }

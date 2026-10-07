@@ -25,7 +25,16 @@
  */
 import { computed, ref, type Ref } from "vue";
 import { api } from "../api";
-import type { AgentLoop, ExplorerActivityItem, ExplorerInputRequest, ExplorerPlan, ExplorerThread, ExplorerTurn, Plan, PlanRevisionDraft } from "../types";
+import type {
+  AgentLoop,
+  ExplorerActivityItem,
+  ExplorerInputRequest,
+  ExplorerPlan,
+  ExplorerThread,
+  ExplorerTurn,
+  Plan,
+  PlanRevisionDraft,
+} from "../types";
 import { normalizePlanProjection, planFromRevisionDraft as revisionDraftToPlan } from "../utils/planProjection";
 import { optional } from "../utils/optional";
 import { planIdentity } from "../utils/planTimeline";
@@ -78,7 +87,8 @@ export function usePlanProjection(deps: PlanProjectionDeps) {
 
   const allPlans = computed<Plan[]>(() => {
     const unique = new Map<string, Plan>();
-    for (const plan of [candidate.value, ...confirmedPlans.value, ...enqueued.value, ...dispatched.value]) if (plan) unique.set(planIdentity(plan), plan);
+    for (const plan of [candidate.value, ...confirmedPlans.value, ...enqueued.value, ...dispatched.value])
+      if (plan) unique.set(planIdentity(plan), plan);
     return [...unique.values()];
   });
 
@@ -96,7 +106,11 @@ export function usePlanProjection(deps: PlanProjectionDeps) {
     return revisionDraftToPlan(item, activeExplorerPlanId.value);
   }
 
-  function applyPlanProjection(projection: ReturnType<typeof normalizePlanProjection>, confirmed: Plan[], activeRevisionDraft: PlanRevisionDraft | null = null): void {
+  function applyPlanProjection(
+    projection: ReturnType<typeof normalizePlanProjection>,
+    confirmed: Plan[],
+    activeRevisionDraft: PlanRevisionDraft | null = null,
+  ): void {
     deps.thread.value = projection.thread;
     revisionDraft.value = activeRevisionDraft;
     candidate.value = activeRevisionDraft ? planFromRevisionDraft(activeRevisionDraft) : projection.candidate;
@@ -105,7 +119,12 @@ export function usePlanProjection(deps: PlanProjectionDeps) {
     dispatched.value = projection.dispatched.filter((plan) => plan.dispatchedAt !== null && plan.dispatchedAt !== undefined);
   }
 
-  async function loadActivePlanWorkspace(explorerId: string, explorerPlanId: string | null, requestProjectId: string, requestToken: number): Promise<boolean> {
+  async function loadActivePlanWorkspace(
+    explorerId: string,
+    explorerPlanId: string | null,
+    requestProjectId: string,
+    requestToken: number,
+  ): Promise<boolean> {
     if (!explorerPlanId) return true;
     const workspace = await api.explorerPlanWorkspace(requestProjectId, explorerId, explorerPlanId);
     if (!deps.isCurrentProjectScope(requestProjectId, requestToken) || deps.thread.value?.id !== explorerId) return false;
@@ -135,11 +154,22 @@ export function usePlanProjection(deps: PlanProjectionDeps) {
         optional(() => api.explorerConfirmedPlans(requestProjectId, explorerId)),
         api.explorerThreadPlans(requestProjectId, explorerId),
       ]);
-      if (!deps.isCurrentProjectScope(requestProjectId, requestToken) || !isCurrentPlanProjection(requestVersion) || deps.thread.value?.id !== explorerId) return;
+      if (
+        !deps.isCurrentProjectScope(requestProjectId, requestToken) ||
+        !isCurrentPlanProjection(requestVersion) ||
+        deps.thread.value?.id !== explorerId
+      )
+        return;
       explorerPlans.value = planGroupsResponse.items;
       threadPlans.value = threadPlansResponse.items;
       const routePlanId = deps.routeExplorerPlanId();
-      activeExplorerPlanId.value = explorerPlans.value.some((plan) => plan.id === activeExplorerPlanId.value) ? activeExplorerPlanId.value : explorerPlans.value.some((plan) => plan.id === routePlanId) ? routePlanId : explorerPlans.value.some((plan) => plan.id === explorerResponse.explorer.activeExplorerPlanId) ? explorerResponse.explorer.activeExplorerPlanId ?? null : explorerPlans.value[0]?.id ?? null;
+      activeExplorerPlanId.value = explorerPlans.value.some((plan) => plan.id === activeExplorerPlanId.value)
+        ? activeExplorerPlanId.value
+        : explorerPlans.value.some((plan) => plan.id === routePlanId)
+          ? routePlanId
+          : explorerPlans.value.some((plan) => plan.id === explorerResponse.explorer.activeExplorerPlanId)
+            ? (explorerResponse.explorer.activeExplorerPlanId ?? null)
+            : (explorerPlans.value[0]?.id ?? null);
       const projection = normalizePlanProjection(explorerResponse.explorer, null, plansResponse.items);
       applyPlanProjection(projection, confirmedResponse?.items ?? [], null);
       await loadActivePlanWorkspace(explorerId, activeExplorerPlanId.value, requestProjectId, requestToken);
@@ -157,7 +187,12 @@ export function usePlanProjection(deps: PlanProjectionDeps) {
     const requestToken = deps.projectScopeToken();
     try {
       const response = await api.explorerActivity(requestProjectId, requestThreadId, explorerPlanId);
-      if (!deps.isCurrentProjectScope(requestProjectId, requestToken) || deps.thread.value?.id !== requestThreadId || activeExplorerPlan.value?.id !== explorerPlanId) return;
+      if (
+        !deps.isCurrentProjectScope(requestProjectId, requestToken) ||
+        deps.thread.value?.id !== requestThreadId ||
+        activeExplorerPlan.value?.id !== explorerPlanId
+      )
+        return;
       deps.activity.value = response.items;
       explorerEventSequence.value = Math.max(explorerEventSequence.value ?? 0, response.lastEventSequence ?? 0);
     } catch {

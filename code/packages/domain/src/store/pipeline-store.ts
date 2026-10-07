@@ -147,7 +147,13 @@ export type PipelineStore = {
   listRuns(): Run[];
   saveExecutionThread(thread: ExecutionThread): ExecutionThread;
   getExecutionThread(threadId: string): ExecutionThread | undefined;
-  appendExecutionJournal(input: { executionThreadId: string; runId: string; type: JournalEntryType; payload: Record<string, unknown>; occurredAt?: string }): ExecutionJournalEntry;
+  appendExecutionJournal(input: {
+    executionThreadId: string;
+    runId: string;
+    type: JournalEntryType;
+    payload: Record<string, unknown>;
+    occurredAt?: string;
+  }): ExecutionJournalEntry;
   saveHookExecution(execution: HookExecution): HookExecution;
   listHookExecutions(runId?: string): HookExecution[];
   savePlanQueryProjection(projection: PlanQueryProjection): PlanQueryProjection;

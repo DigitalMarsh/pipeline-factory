@@ -70,7 +70,11 @@ export function openSseChannel(request: FastifyRequest, reply: FastifyReply, opt
   });
 
   const timers: Array<ReturnType<typeof setInterval>> = [];
-  timers.push(setInterval(() => { raw.write(`: heartbeat ${Date.now()}\n\n`); }, options.heartbeatMs ?? SSE_HEARTBEAT_MS));
+  timers.push(
+    setInterval(() => {
+      raw.write(`: heartbeat ${Date.now()}\n\n`);
+    }, options.heartbeatMs ?? SSE_HEARTBEAT_MS),
+  );
   if (options.poll) {
     const poll = options.poll;
     timers.push(setInterval(poll, options.pollIntervalMs ?? SSE_POLL_MS));
@@ -81,9 +85,17 @@ export function openSseChannel(request: FastifyRequest, reply: FastifyReply, opt
   });
 
   return {
-    send: (id, event, data) => { raw.write(frame(id, event, data)); },
-    ready: (id, data) => { raw.write(frame(id, "stream.ready", data)); },
-    comment: (text) => { raw.write(`: ${text}\n\n`); },
-    onClose: (handler) => { handlers.push(handler); },
+    send: (id, event, data) => {
+      raw.write(frame(id, event, data));
+    },
+    ready: (id, data) => {
+      raw.write(frame(id, "stream.ready", data));
+    },
+    comment: (text) => {
+      raw.write(`: ${text}\n\n`);
+    },
+    onClose: (handler) => {
+      handlers.push(handler);
+    },
   };
 }

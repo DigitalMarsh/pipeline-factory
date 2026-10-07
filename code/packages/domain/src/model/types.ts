@@ -107,7 +107,14 @@ export type ModelMessagePhase = "commentary" | "final_answer";
 /** ModelGateway 输出的统一流事件，供 Agent Loop 和消息流共同消费。 */
 export type ModelEvent =
   | { type: "thread.started"; threadId: string; endpoint?: ProviderEndpoint | undefined }
-  | { type: "text.delta"; text: string; phase?: ModelMessagePhase | undefined; providerThreadId?: string | undefined; providerTurnId?: string | undefined; providerItemId?: string | undefined }
+  | {
+      type: "text.delta";
+      text: string;
+      phase?: ModelMessagePhase | undefined;
+      providerThreadId?: string | undefined;
+      providerTurnId?: string | undefined;
+      providerItemId?: string | undefined;
+    }
   /**
    * **这一段正文属于哪一类**。Codex 的 `agentMessage` item 带 `phase`，而它的
    * `item/agentMessage/delta` 载荷里**没有**这个字段（见 `AgentMessageDeltaNotification`），
@@ -130,8 +137,35 @@ export type ModelEvent =
    * 展示前一律过 `apps/web/src/utils/sensitiveValue.ts` 的脱敏与截断——**落库保留原样，
    * 脱敏发生在展示边界**（这样审计与排障仍有全量数据）。
    */
-  | { type: "provider.activity"; phase: "started" | "completed"; itemId: string; itemType: string; activityKind: ProviderActivityKind; outcome: ProviderActivityOutcome; title: string | null; summary: string | null; toolName?: string | undefined; serverName?: string | undefined; arguments?: unknown; result?: unknown; output?: string | undefined; exitCode?: number | undefined; durationMs?: number | undefined; status?: string | undefined; error?: string | undefined; providerThreadId?: string | undefined; providerTurnId?: string | undefined; providerItemId?: string | undefined }
-  | { type: "model.usage"; usage: ModelUsage; scope: ModelUsageScope; providerThreadId?: string | undefined; providerTurnId?: string | undefined }
+  | {
+      type: "provider.activity";
+      phase: "started" | "completed";
+      itemId: string;
+      itemType: string;
+      activityKind: ProviderActivityKind;
+      outcome: ProviderActivityOutcome;
+      title: string | null;
+      summary: string | null;
+      toolName?: string | undefined;
+      serverName?: string | undefined;
+      arguments?: unknown;
+      result?: unknown;
+      output?: string | undefined;
+      exitCode?: number | undefined;
+      durationMs?: number | undefined;
+      status?: string | undefined;
+      error?: string | undefined;
+      providerThreadId?: string | undefined;
+      providerTurnId?: string | undefined;
+      providerItemId?: string | undefined;
+    }
+  | {
+      type: "model.usage";
+      usage: ModelUsage;
+      scope: ModelUsageScope;
+      providerThreadId?: string | undefined;
+      providerTurnId?: string | undefined;
+    }
   | { type: "tool.call"; call: ToolCall }
   | { type: "turn.input_required"; request: ModelInputRequest }
   | { type: "turn.completed" }

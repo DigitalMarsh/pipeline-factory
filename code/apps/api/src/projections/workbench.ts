@@ -29,7 +29,8 @@ export function workbenchSnapshot(store: PipelineStore, projects: ProjectService
   const projectRows = [{ ...project, summary: projects.summary(project.id) }];
   // 索引按请求建一次并传给每个 plan：否则 planProjection 会对每个 Plan 各读一遍全表 Run/MergeRequest。
   const lifecycleIndex = buildPlanLifecycleIndex(store);
-  const plans = store.listPlans()
+  const plans = store
+    .listPlans()
     .filter((plan) => plan.projectId === projectId)
     .filter((plan) => plan.status !== "DRAFT" && plan.status !== "DISCARDED")
     .map((plan) => ({
@@ -53,15 +54,19 @@ export function workbenchSnapshot(store: PipelineStore, projects: ProjectService
       dispatch: store.getDispatchState(plan.id) ?? null,
       ...planProjection(store, plan, lifecycleIndex),
     }));
-  const runs = store.listRuns().filter((run) => run.projectId === projectId).map((run) => ({
-    ...run,
-    planTitle: store.getPlan(run.planId)?.title ?? run.planId,
-    dispatch: store.getDispatchState(run.planId) ?? null,
-  }));
+  const runs = store
+    .listRuns()
+    .filter((run) => run.projectId === projectId)
+    .map((run) => ({
+      ...run,
+      planTitle: store.getPlan(run.planId)?.title ?? run.planId,
+      dispatch: store.getDispatchState(run.planId) ?? null,
+    }));
   // 只回放事件尾部：UI 的 Evidence 面板仅展示最近若干条，全量历史会把响应放大到数十 MB。
   // 更早的事件仍可通过 SSE 的 Last-Event-ID 或各资源详情接口按需获取。
   const belongsToProject = createProjectEventScope(store, projectId);
-  const events = store.listEvents({ afterSequence: 0, limit: WORKBENCH_EVENT_TAIL_LIMIT })
+  const events = store
+    .listEvents({ afterSequence: 0, limit: WORKBENCH_EVENT_TAIL_LIMIT })
     .filter((event) => belongsToProject(event))
     .slice(-WORKBENCH_EVENT_LIMIT);
   return {
@@ -110,7 +115,8 @@ export function createProjectEventScope(store: PipelineStore, projectId: string)
     const loop = loopOwners.get(aggregateId);
     if (!loop) return null;
     // 三类 owner 都已经在上面的索引里映射到 Project：run / explorer-turn / project-execution-turn。
-    if (loop.ownerType === "run" || loop.ownerType === "explorer-turn" || loop.ownerType === "project-execution-turn") return aggregateProject.get(loop.ownerId) ?? null;
+    if (loop.ownerType === "run" || loop.ownerType === "explorer-turn" || loop.ownerType === "project-execution-turn")
+      return aggregateProject.get(loop.ownerId) ?? null;
     return null;
   };
 

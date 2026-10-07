@@ -25,9 +25,11 @@ const canExpand = computed(() => hasActivityPayload(props.item));
 
 <template>
   <p class="execution-activity-detail">{{ item.detail }}</p>
-  <small v-if="item.unrecordedFields?.length" class="execution-message-note">{{ item.unrecordedFields.join(' · ') }}</small>
+  <small v-if="item.unrecordedFields?.length" class="execution-message-note">{{ item.unrecordedFields.join(" · ") }}</small>
   <div v-if="canExpand" class="activity-result-shell">
-    <button type="button" class="activity-result-toggle" :aria-expanded="open" @click="open = !open">{{ open ? '收起结果' : '显示结果' }}</button>
+    <button type="button" class="activity-result-toggle" :aria-expanded="open" @click="open = !open">
+      {{ open ? "收起结果" : "显示结果" }}
+    </button>
     <ActivityResultDetails
       v-if="open"
       :arguments="item.arguments"

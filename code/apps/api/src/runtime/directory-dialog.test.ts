@@ -10,7 +10,13 @@
  *   （取消 / 选到）用例；不要在这里启动子进程。
  */
 import { describe, expect, it } from "vitest";
-import { chooseDirectory, directoryDialogCandidates, DirectoryDialogError, interpretDialogOutcome, type DialogProcessResult } from "./directory-dialog.js";
+import {
+  chooseDirectory,
+  directoryDialogCandidates,
+  DirectoryDialogError,
+  interpretDialogOutcome,
+  type DialogProcessResult,
+} from "./directory-dialog.js";
 
 const candidates = (platform: NodeJS.Platform) => directoryDialogCandidates(platform);
 const first = (platform: NodeJS.Platform) => candidates(platform)[0]!;
@@ -33,7 +39,10 @@ describe("directoryDialogCandidates", () => {
 
 describe("interpretDialogOutcome", () => {
   it("reads a chosen path from stdout and trims the newline", () => {
-    expect(outcome("darwin", { exitCode: 0, stdout: "/Users/bill/repo\n", stderr: "" })).toEqual({ kind: "path", path: "/Users/bill/repo" });
+    expect(outcome("darwin", { exitCode: 0, stdout: "/Users/bill/repo\n", stderr: "" })).toEqual({
+      kind: "path",
+      path: "/Users/bill/repo",
+    });
     expect(outcome("win32", { exitCode: 0, stdout: "C:\\repo\r\n", stderr: "" })).toEqual({ kind: "path", path: "C:\\repo" });
   });
 
@@ -65,6 +74,9 @@ describe("interpretDialogOutcome", () => {
 
   it("does not mistake a stderr-only success for a failure", () => {
     // 有的实现会把警告写到 stderr 但正常返回路径：只要退出码为 0 且有输出，就算选到了。
-    expect(outcome("darwin", { exitCode: 0, stdout: "/Users/bill/repo\n", stderr: "warning: something" })).toEqual({ kind: "path", path: "/Users/bill/repo" });
+    expect(outcome("darwin", { exitCode: 0, stdout: "/Users/bill/repo\n", stderr: "warning: something" })).toEqual({
+      kind: "path",
+      path: "/Users/bill/repo",
+    });
   });
 });

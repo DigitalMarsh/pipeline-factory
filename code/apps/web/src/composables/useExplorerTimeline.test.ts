@@ -51,7 +51,7 @@ const activity = (id: string, overrides: Partial<ExplorerActivityItem> = {}): Ex
   ...overrides,
 });
 
-const explorerPlan = (id: string): ExplorerPlan => ({ id, title: id, ordinal: 1 } as ExplorerPlan);
+const explorerPlan = (id: string): ExplorerPlan => ({ id, title: id, ordinal: 1 }) as ExplorerPlan;
 
 const inputRequest = (id: string, explorerPlanId?: string): ExplorerInputRequest =>
   ({

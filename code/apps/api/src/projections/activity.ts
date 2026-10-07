@@ -62,23 +62,45 @@ export function localToday(now = new Date()): string {
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
 }
 
-export function dailyActivity(store: PipelineStore, projects: ProjectService, projectId: string, date = localToday(), retentionDays = 0): DailyActivity {
+export function dailyActivity(
+  store: PipelineStore,
+  projects: ProjectService,
+  projectId: string,
+  date = localToday(),
+  retentionDays = 0,
+): DailyActivity {
   projects.get(projectId);
   const bounds = localDayBounds(date);
   if (!bounds) throw new Error(`Activity date must be a real local calendar day in YYYY-MM-DD form, received "${date}"`);
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const empty: DailyActivity = { projectId, date, timeZone, retentionDays, executedToday: [], mergedToday: [], failedToday: [], runningAcrossDays: [] };
-  if (!store.listPlans().some((plan) => plan.projectId === projectId) && !store.listRuns().some((run) => run.projectId === projectId)) return empty;
+  const empty: DailyActivity = {
+    projectId,
+    date,
+    timeZone,
+    retentionDays,
+    executedToday: [],
+    mergedToday: [],
+    failedToday: [],
+    runningAcrossDays: [],
+  };
+  if (!store.listPlans().some((plan) => plan.projectId === projectId) && !store.listRuns().some((run) => run.projectId === projectId))
+    return empty;
 
   const titleFor = (planId: string): string => store.getPlan(planId)?.title ?? planId;
-  const planIds = new Set(store.listPlans().filter((plan) => plan.projectId === projectId).map((plan) => plan.id));
+  const planIds = new Set(
+    store
+      .listPlans()
+      .filter((plan) => plan.projectId === projectId)
+      .map((plan) => plan.id),
+  );
   const inDay = (event: DomainEvent): boolean => {
     const at = Date.parse(event.occurredAt);
     return Number.isFinite(at) && at >= bounds.start && at < bounds.end;
   };
   // 一天内的状态变更事件只会落在事件流的尾部，所以从尾部取一窗就够；上限 2000 是"单日状态
   // 变更条数"的务实上界（超过它的项目该先看看是不是有循环派发），而不是分页没做完。
-  const statusEvents = store.listEvents({ types: ["plan.status.changed"], limit: 2_000, limitFrom: "tail" })
+  const statusEvents = store
+    .listEvents({ types: ["plan.status.changed"], limit: 2_000, limitFrom: "tail" })
     .filter((event) => planIds.has(event.aggregateId) && inDay(event));
 
   // 一个 Plan 在一天内可能反复进出同一个状态；日报要的是"当天首次进入"，所以按 planId 取第一条。
@@ -110,7 +132,8 @@ export function dailyActivity(store: PipelineStore, projects: ProjectService, pr
     at: event.occurredAt,
     reason: typeof event.payload.reason === "string" ? event.payload.reason : null,
   }));
-  empty.runningAcrossDays = store.listRuns()
+  empty.runningAcrossDays = store
+    .listRuns()
     .filter((run) => run.projectId === projectId && EXECUTION_SLOT_RUN_STATUSES.has(run.status))
     .filter((run) => {
       const startedAt = Date.parse(run.startedAt ?? run.createdAt);

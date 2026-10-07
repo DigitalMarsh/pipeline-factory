@@ -18,7 +18,7 @@ export const revisionDraftParams = z.object({ planId: z.string().min(1), draftId
 
 export const threadPlanQuery = z.object({
   explorerThreadId: z.string().min(1).optional(),
-  includeLineage: z.preprocess((value) => value === "false" ? false : value === "true" ? true : value, z.boolean().default(true)),
+  includeLineage: z.preprocess((value) => (value === "false" ? false : value === "true" ? true : value), z.boolean().default(true)),
   status: z.string().optional(),
   q: z.string().optional(),
   from: z.string().datetime({ offset: true }).optional(),
@@ -28,4 +28,9 @@ export const threadPlanQuery = z.object({
   sort: z.enum(["queued_at", "last_event_at", "priority", "status"]).default("queued_at"),
 });
 
-export const revisionDraftBody = z.object({ fromRevision: z.number().int().positive(), explorerThreadId: z.string().min(1), discardUnmergedRun: z.boolean(), clientRequestId: z.string().min(1).max(200) });
+export const revisionDraftBody = z.object({
+  fromRevision: z.number().int().positive(),
+  explorerThreadId: z.string().min(1),
+  discardUnmergedRun: z.boolean(),
+  clientRequestId: z.string().min(1).max(200),
+});

@@ -25,7 +25,14 @@ export function sanitizeExplorerRequirementStatusEvent(
   const status = event.payload.status;
   const occurredAt = event.payload.occurredAt;
   const allowedStatuses = new Set(["QUEUED", "RUNNING", "WAITING_FOR_INPUT", "PAUSED", "COMPLETED", "FAILED", "CANCELLED"]);
-  if (typeof explorerPlanId !== "string" || (typeof turnId !== "string" && turnId !== null) || typeof status !== "string" || !allowedStatuses.has(status) || typeof occurredAt !== "string") return null;
+  if (
+    typeof explorerPlanId !== "string" ||
+    (typeof turnId !== "string" && turnId !== null) ||
+    typeof status !== "string" ||
+    !allowedStatuses.has(status) ||
+    typeof occurredAt !== "string"
+  )
+    return null;
   const plan = store.getExplorerPlan(explorerPlanId);
   if (!plan || plan.explorerThreadId !== thread.id || plan.projectId !== thread.projectId) return null;
   return { sequence: event.sequence, payload: { explorerPlanId, turnId, status, occurredAt } };
@@ -33,5 +40,7 @@ export function sanitizeExplorerRequirementStatusEvent(
 
 /** 在指定 Project 内解析 Thread；不允许用相同 Thread ID 跨 Project 访问数据。 */
 export function findProjectThread(store: PipelineStore, projectId: string, threadId?: string) {
-  return store.listThreads().find((thread) => thread.projectId === projectId && (threadId ? thread.id === threadId : thread.parentThreadId === null));
+  return store
+    .listThreads()
+    .find((thread) => thread.projectId === projectId && (threadId ? thread.id === threadId : thread.parentThreadId === null));
 }

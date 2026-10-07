@@ -31,24 +31,30 @@ describe("explorer day grouping", () => {
   it("orders day groups newest first and keeps unknown timestamps last", () => {
     const now = new Date(2026, 9, 1, 12, 0);
     // 输入是"最近活动倒序"，组名却是创建日：不排组就会出现 9-26、9-25、9-27 这种看着像坏了的顺序。
-    const groups = groupExplorersByDay([
-      thread("sep26", new Date(2026, 8, 26, 9, 0).toISOString()),
-      thread("sep25", new Date(2026, 8, 25, 9, 0).toISOString()),
-      thread("sep27", new Date(2026, 8, 27, 9, 0).toISOString()),
-      thread("broken", "nope"),
-    ], now);
+    const groups = groupExplorersByDay(
+      [
+        thread("sep26", new Date(2026, 8, 26, 9, 0).toISOString()),
+        thread("sep25", new Date(2026, 8, 25, 9, 0).toISOString()),
+        thread("sep27", new Date(2026, 8, 27, 9, 0).toISOString()),
+        thread("broken", "nope"),
+      ],
+      now,
+    );
     expect(groups.map((group) => group.day)).toEqual(["2026-09-27", "2026-09-26", "2026-09-25", "unknown"]);
   });
 
   it("groups by creation day, keeping the incoming order and flagging unknown timestamps", () => {
     const now = new Date(2026, 9, 1, 12, 0);
-    const groups = groupExplorersByDay([
-      thread("today-a", new Date(2026, 9, 1, 9, 5).toISOString()),
-      thread("today-b", new Date(2026, 9, 1, 8, 0).toISOString()),
-      thread("yesterday", new Date(2026, 8, 30, 21, 0).toISOString()),
-      thread("broken", "not-a-date"),
-      thread("missing", ""),
-    ], now);
+    const groups = groupExplorersByDay(
+      [
+        thread("today-a", new Date(2026, 9, 1, 9, 5).toISOString()),
+        thread("today-b", new Date(2026, 9, 1, 8, 0).toISOString()),
+        thread("yesterday", new Date(2026, 8, 30, 21, 0).toISOString()),
+        thread("broken", "not-a-date"),
+        thread("missing", ""),
+      ],
+      now,
+    );
 
     expect(groups.map((group) => group.label)).toEqual(["今天", "昨天", "创建时间未知"]);
     expect(groups[0]?.explorers.map((explorer) => explorer.id)).toEqual(["today-a", "today-b"]);
@@ -62,10 +68,10 @@ describe("explorer day grouping", () => {
   });
 
   it("flattens groups into day headers followed by their rows", () => {
-    const rows = explorerListRows([
-      thread("today", new Date(2026, 9, 1, 9, 0).toISOString()),
-      thread("older", new Date(2026, 8, 28, 9, 0).toISOString()),
-    ], new Date(2026, 9, 1, 12, 0));
+    const rows = explorerListRows(
+      [thread("today", new Date(2026, 9, 1, 9, 0).toISOString()), thread("older", new Date(2026, 8, 28, 9, 0).toISOString())],
+      new Date(2026, 9, 1, 12, 0),
+    );
 
     expect(rows.map((row) => [row.kind, row.label ?? row.explorer?.id])).toEqual([
       ["day", "今天"],

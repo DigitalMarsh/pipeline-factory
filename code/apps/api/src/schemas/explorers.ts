@@ -14,15 +14,45 @@
 import { z } from "zod";
 
 export const projectExplorerParams = z.object({ projectId: z.string().min(1), explorerId: z.string().min(1) });
-export const projectExplorerPlanParams = z.object({ projectId: z.string().min(1), explorerId: z.string().min(1), explorerPlanId: z.string().min(1) });
+export const projectExplorerPlanParams = z.object({
+  projectId: z.string().min(1),
+  explorerId: z.string().min(1),
+  explorerPlanId: z.string().min(1),
+});
 
-export const explorerCreateBody = z.object({ title: z.string().trim().min(1).max(200).optional(), originThreadId: z.string().min(1).optional() });
+export const explorerCreateBody = z.object({
+  title: z.string().trim().min(1).max(200).optional(),
+  originThreadId: z.string().min(1).optional(),
+});
 export const explorerRenameBody = z.object({ title: z.string().trim().min(1).max(200) });
-export const explorerActivityQuery = z.object({ explorerPlanId: z.string().min(1), afterSequence: z.coerce.number().int().nonnegative().optional() });
+export const explorerActivityQuery = z.object({
+  explorerPlanId: z.string().min(1),
+  afterSequence: z.coerce.number().int().nonnegative().optional(),
+});
 export const explorerCandidateQuery = z.object({ explorerPlanId: z.string().min(1).optional() });
 
-export const v4TurnBody = z.object({ threadId: z.string().min(1), explorerPlanId: z.string().min(1), content: z.string().trim().min(1).max(20_000), clientTurnId: z.string().min(1).max(200) });
-export const v4AnswerBody = z.object({ clientRequestId: z.string().min(1).max(200), answers: z.record(z.object({ answers: z.array(z.string().max(20_000)).min(1) })), actorId: z.string().min(1).default("local-user") });
-export const v4ThreadQuery = z.object({ threadId: z.string().min(1).optional(), explorerPlanId: z.string().min(1), afterSequence: z.coerce.number().int().nonnegative().optional() });
-export const v4ThreadStatusQuery = z.object({ threadId: z.string().min(1), afterSequence: z.coerce.number().int().nonnegative().optional() });
-export const v4InputQuery = z.object({ threadId: z.string().min(1).optional(), explorerPlanId: z.string().min(1), status: z.enum(["OPEN", "SUBMITTING", "ANSWERED", "CANCELLED", "RECOVERY_REQUIRED"]).optional() });
+export const v4TurnBody = z.object({
+  threadId: z.string().min(1),
+  explorerPlanId: z.string().min(1),
+  content: z.string().trim().min(1).max(20_000),
+  clientTurnId: z.string().min(1).max(200),
+});
+export const v4AnswerBody = z.object({
+  clientRequestId: z.string().min(1).max(200),
+  answers: z.record(z.object({ answers: z.array(z.string().max(20_000)).min(1) })),
+  actorId: z.string().min(1).default("local-user"),
+});
+export const v4ThreadQuery = z.object({
+  threadId: z.string().min(1).optional(),
+  explorerPlanId: z.string().min(1),
+  afterSequence: z.coerce.number().int().nonnegative().optional(),
+});
+export const v4ThreadStatusQuery = z.object({
+  threadId: z.string().min(1),
+  afterSequence: z.coerce.number().int().nonnegative().optional(),
+});
+export const v4InputQuery = z.object({
+  threadId: z.string().min(1).optional(),
+  explorerPlanId: z.string().min(1),
+  status: z.enum(["OPEN", "SUBMITTING", "ANSWERED", "CANCELLED", "RECOVERY_REQUIRED"]).optional(),
+});

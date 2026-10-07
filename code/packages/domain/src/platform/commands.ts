@@ -93,7 +93,8 @@ export class RegisteredCommandExecutor {
   execute(command: CommandInvocation): Promise<CommandResult> {
     const definition = this.commands.get(command.commandId);
     if (!definition) return Promise.resolve({ exitCode: 127, stdout: "", stderr: `Command ${command.commandId} is not registered` });
-    if (definition.enabled === false) return Promise.resolve({ exitCode: 126, stdout: "", stderr: `Command ${command.commandId} is disabled` });
+    if (definition.enabled === false)
+      return Promise.resolve({ exitCode: 126, stdout: "", stderr: `Command ${command.commandId} is disabled` });
     const env: Record<string, string> = { ...(definition.environment ?? {}) };
     // PATH is process resolution infrastructure, not project data; preserve it
     // when a Project command leaves the optional environment block empty.
@@ -110,7 +111,9 @@ export class RegisteredCommandExecutor {
     return this.runProcess([...definition.argv], command.cwd, definition.timeoutMs ?? command.timeoutMs, env);
   }
 
-  invoke(command: CommandInvocation): Promise<CommandResult> { return this.execute(command); }
+  invoke(command: CommandInvocation): Promise<CommandResult> {
+    return this.execute(command);
+  }
 }
 
 function defaultProcessRunner(argv: string[], cwd: string, timeoutMs: number, env: Record<string, string>): Promise<CommandResult> {
@@ -119,15 +122,37 @@ function defaultProcessRunner(argv: string[], cwd: string, timeoutMs: number, en
     let stdout = "";
     let stderr = "";
     let settled = false;
-    const settle = (result: CommandResult) => { if (!settled) { settled = true; clearTimeout(timer); resolveResult(result); } };
-    child.stdout?.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-    child.stderr?.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+    const settle = (result: CommandResult) => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        resolveResult(result);
+      }
+    };
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
     child.on("error", (error) => settle({ exitCode: 1, stdout, stderr: `${stderr}${error.message}` }));
     child.on("close", (code) => settle({ exitCode: code, stdout, stderr }));
     const timer = setTimeout(() => {
       if (child.pid) {
-        try { process.kill(-child.pid, "SIGTERM"); } catch { child.kill("SIGTERM"); }
-        setTimeout(() => { if (!settled) { try { process.kill(-child.pid!, "SIGKILL"); } catch { child.kill("SIGKILL"); } } }, 1000);
+        try {
+          process.kill(-child.pid, "SIGTERM");
+        } catch {
+          child.kill("SIGTERM");
+        }
+        setTimeout(() => {
+          if (!settled) {
+            try {
+              process.kill(-child.pid!, "SIGKILL");
+            } catch {
+              child.kill("SIGKILL");
+            }
+          }
+        }, 1000);
       }
       settle({ exitCode: 124, stdout, stderr: `${stderr}Command timed out` });
     }, timeoutMs);

@@ -55,21 +55,35 @@ export class BuiltinToolExecutor {
     const workspacePath = await realpath(requestedWorkspace).catch(() => requestedWorkspace);
     if (!this.isInside(workspacePath)) throw new Error("Tool workspace is outside the configured workspace boundary");
     switch (call.tool) {
-      case "read_file": return this.readFile(call.input);
-      case "list_files": return this.listFiles(call.input);
-      case "git_status": return this.git(["status", "--short", "--branch"], workspacePath);
-      case "git_diff": return this.gitDiff(call.input, workspacePath);
-      case "git_log": return this.gitLog(call.input, workspacePath);
-      case "search_text": return this.searchText(call.input);
-      case "write_file": return this.writeFile(call.input);
-      case "apply_patch": return this.applyPatch(call.input, workspacePath);
-      case "run_registered_command": return this.runRegistered(call.input, context);
-      case "run_verification": return this.runRegistered(call.input, context);
-      case "git_commit": return this.gitCommit(call.input, workspacePath);
-      case "run_command": throw new Error("Arbitrary shell commands are not available through the ToolGateway");
+      case "read_file":
+        return this.readFile(call.input);
+      case "list_files":
+        return this.listFiles(call.input);
+      case "git_status":
+        return this.git(["status", "--short", "--branch"], workspacePath);
+      case "git_diff":
+        return this.gitDiff(call.input, workspacePath);
+      case "git_log":
+        return this.gitLog(call.input, workspacePath);
+      case "search_text":
+        return this.searchText(call.input);
+      case "write_file":
+        return this.writeFile(call.input);
+      case "apply_patch":
+        return this.applyPatch(call.input, workspacePath);
+      case "run_registered_command":
+        return this.runRegistered(call.input, context);
+      case "run_verification":
+        return this.runRegistered(call.input, context);
+      case "git_commit":
+        return this.gitCommit(call.input, workspacePath);
+      case "run_command":
+        throw new Error("Arbitrary shell commands are not available through the ToolGateway");
       default:
-        if (call.tool.startsWith("mcp:") && this.options.mcpToolExecutor) return this.options.mcpToolExecutor(call.tool, call.input, context);
-        if (call.tool.startsWith("plugin:") && this.options.pluginToolExecutor) return this.options.pluginToolExecutor(call.tool, call.input, context);
+        if (call.tool.startsWith("mcp:") && this.options.mcpToolExecutor)
+          return this.options.mcpToolExecutor(call.tool, call.input, context);
+        if (call.tool.startsWith("plugin:") && this.options.pluginToolExecutor)
+          return this.options.pluginToolExecutor(call.tool, call.input, context);
         if (call.tool === "computer_use" && this.options.computerUseExecutor) return this.options.computerUseExecutor(call.input, context);
         throw new Error("Unsupported tool " + call.tool);
     }
@@ -122,7 +136,9 @@ export class BuiltinToolExecutor {
     return this.git(["log", "-" + limit, "--oneline", "--decorate"], cwd);
   }
 
-  private async searchText(input: Record<string, unknown>): Promise<{ matches: Array<{ path: string; line: number; text: string }>; truncated: boolean }> {
+  private async searchText(
+    input: Record<string, unknown>,
+  ): Promise<{ matches: Array<{ path: string; line: number; text: string }>; truncated: boolean }> {
     const query = requiredString(input, "query");
     if (!query) throw new Error("Search query must not be empty");
     const root = await this.safePath(optionalString(input, "path") ?? ".", false);
@@ -188,7 +204,12 @@ export class BuiltinToolExecutor {
       baseCommit: context.baseCommit ?? optionalString(input, "baseCommit") ?? "unknown-base",
       exitReason: context.exitReason ?? optionalString(input, "exitReason") ?? "tool",
     };
-    return this.options.registeredCommandExecutor({ commandId, cwd: context.workspacePath, timeoutMs: timeout(input), context: hookContext });
+    return this.options.registeredCommandExecutor({
+      commandId,
+      cwd: context.workspacePath,
+      timeoutMs: timeout(input),
+      context: hookContext,
+    });
   }
 
   private async gitCommit(input: Record<string, unknown>, cwd: string): Promise<unknown> {
@@ -211,9 +232,12 @@ export class BuiltinToolExecutor {
   private async safePath(inputPath: string, allowMissing: boolean): Promise<{ absolute: string; relative: string }> {
     const absolute = resolve(this.workspaceRoot, inputPath);
     if (!this.isInside(absolute)) throw new Error("Path is outside the configured workspace boundary");
-    const existing = await realpath(absolute).catch(async () => allowMissing ? this.realPathOfExistingParent(dirname(absolute)) : Promise.reject(new Error("Path " + inputPath + " does not exist")));
+    const existing = await realpath(absolute).catch(async () =>
+      allowMissing ? this.realPathOfExistingParent(dirname(absolute)) : Promise.reject(new Error("Path " + inputPath + " does not exist")),
+    );
     if (!this.isInside(existing)) throw new Error("Path resolves outside the configured workspace boundary");
-    if (isProtectedName(relative(this.workspaceRoot, absolute))) throw new Error("Protected secrets and repository internals are not accessible");
+    if (isProtectedName(relative(this.workspaceRoot, absolute)))
+      throw new Error("Protected secrets and repository internals are not accessible");
     return { absolute, relative: this.toRelative(absolute) };
   }
 
@@ -255,12 +279,13 @@ function requiredString(input: Record<string, unknown>, key: string): string {
 }
 
 function optionalString(input: Record<string, unknown>, key: string): string | undefined {
-  return typeof input[key] === "string" ? input[key] as string : undefined;
+  return typeof input[key] === "string" ? (input[key] as string) : undefined;
 }
 
 function requiredStringArray(input: Record<string, unknown>, key: string): string[] {
   const value = input[key];
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) throw new Error("Tool input " + key + " must be an array of strings");
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string"))
+    throw new Error("Tool input " + key + " must be an array of strings");
   return value as string[];
 }
 
@@ -272,7 +297,13 @@ function timeout(input: Record<string, unknown>): number {
   return boundedInteger(input.timeoutMs, DEFAULT_TIMEOUT_MS, 1, 600_000);
 }
 
-function defaultProcessRunner(argv: string[], cwd: string, timeoutMs: number, env: Record<string, string> = {}, stdin?: string): Promise<CommandResult> {
+function defaultProcessRunner(
+  argv: string[],
+  cwd: string,
+  timeoutMs: number,
+  env: Record<string, string> = {},
+  stdin?: string,
+): Promise<CommandResult> {
   return new Promise((resolveResult, reject) => {
     const child = spawn(argv[0]!, argv.slice(1), { cwd, env: { ...process.env, ...env } });
     let stdout = "";
@@ -284,8 +315,12 @@ function defaultProcessRunner(argv: string[], cwd: string, timeoutMs: number, en
       clearTimeout(timer);
       resolveResult(result);
     };
-    child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString(); });
-    child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
+    child.stdout.on("data", (chunk: Buffer) => {
+      stdout += chunk.toString();
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
     child.once("error", (error) => {
       if (!settled) reject(error);
     });

@@ -1,22 +1,25 @@
 <script setup lang="ts">
 import { computed } from "vue";
 
-const props = withDefaults(defineProps<{
-  model: string;
-  context: string;
-  contextNote?: string;
-  /** 这一轮由哪个 agent 执行；缺省或"未记录"时该格显示占位而不是留空。 */
-  backend?: string;
-  /**
-   * 整行末尾的来源说明（如"本次执行记录"/"按本 Run 冻结的配置"）。**只在真的有两种来源时传**：
-   * 执行页在"这一轮还没跑完、没有记录"时会改用配置值，不说清来源就等于把配置当事实展示。
-   */
-  sourceNote?: string;
-}>(), {
-  contextNote: "",
-  backend: "",
-  sourceNote: "",
-});
+const props = withDefaults(
+  defineProps<{
+    model: string;
+    context: string;
+    contextNote?: string;
+    /** 这一轮由哪个 agent 执行；缺省或"未记录"时该格显示占位而不是留空。 */
+    backend?: string;
+    /**
+     * 整行末尾的来源说明（如"本次执行记录"/"按本 Run 冻结的配置"）。**只在真的有两种来源时传**：
+     * 执行页在"这一轮还没跑完、没有记录"时会改用配置值，不说清来源就等于把配置当事实展示。
+     */
+    sourceNote?: string;
+  }>(),
+  {
+    contextNote: "",
+    backend: "",
+    sourceNote: "",
+  },
+);
 
 /**
  * 用量栏只呈现三件 provider 无关的事实：这一轮是哪个 agent、哪个模型、上下文占了多少。

@@ -19,8 +19,15 @@ const telemetry: ExecutionTelemetry = {
 
 describe("execution telemetry domain", () => {
   it("normalizes Responses and App Server token field variants", () => {
-    expect(normalizeModelUsage({ input_tokens: 10, output_tokens: 5, total_tokens: 15, output_tokens_details: { reasoning_tokens: 2 } })).toEqual({ inputTokens: 10, outputTokens: 5, reasoningTokens: 2, totalTokens: 15 });
-    expect(normalizeModelUsage({ inputTokens: 10, outputTokens: 5, reasoningOutputTokens: 2, totalTokens: 15 })).toEqual({ inputTokens: 10, outputTokens: 5, reasoningTokens: 2, totalTokens: 15 });
+    expect(
+      normalizeModelUsage({ input_tokens: 10, output_tokens: 5, total_tokens: 15, output_tokens_details: { reasoning_tokens: 2 } }),
+    ).toEqual({ inputTokens: 10, outputTokens: 5, reasoningTokens: 2, totalTokens: 15 });
+    expect(normalizeModelUsage({ inputTokens: 10, outputTokens: 5, reasoningOutputTokens: 2, totalTokens: 15 })).toEqual({
+      inputTokens: 10,
+      outputTokens: 5,
+      reasoningTokens: 2,
+      totalTokens: 15,
+    });
     expect(normalizeModelUsage({ text: "no usage" })).toBeNull();
   });
 
@@ -52,8 +59,12 @@ describe("execution telemetry domain", () => {
     const databasePath = join(directory, "factory.sqlite");
     try {
       const legacy = new DatabaseSync(databasePath);
-      legacy.exec("CREATE TABLE execution_threads (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, state TEXT NOT NULL, journal_json TEXT NOT NULL)");
-      legacy.prepare("INSERT INTO execution_threads (id, run_id, state, journal_json) VALUES (?, ?, ?, ?)").run("legacy-thread", "legacy-run", "COMPLETED", "[]");
+      legacy.exec(
+        "CREATE TABLE execution_threads (id TEXT PRIMARY KEY, run_id TEXT NOT NULL, state TEXT NOT NULL, journal_json TEXT NOT NULL)",
+      );
+      legacy
+        .prepare("INSERT INTO execution_threads (id, run_id, state, journal_json) VALUES (?, ?, ?, ?)")
+        .run("legacy-thread", "legacy-run", "COMPLETED", "[]");
       legacy.close();
       const store = new SqlitePipelineStore(databasePath);
       expect(store.getExecutionThread("legacy-thread")?.telemetry).toBeNull();

@@ -53,12 +53,15 @@ export function saveExplorerInputProgressDraft(
     if (typeof progress.otherValues[questionId] === "string") otherValues[questionId] = progress.otherValues[questionId]!;
   }
   try {
-    storage.setItem(explorerInputProgressDraftKey(scope, request.id), JSON.stringify({
-      requestId: request.id,
-      currentIndex: Number.isInteger(progress.currentIndex) ? progress.currentIndex : 0,
-      values,
-      otherValues,
-    }));
+    storage.setItem(
+      explorerInputProgressDraftKey(scope, request.id),
+      JSON.stringify({
+        requestId: request.id,
+        currentIndex: Number.isInteger(progress.currentIndex) ? progress.currentIndex : 0,
+        values,
+        otherValues,
+      }),
+    );
   } catch {
     // Storage can be disabled or full; the in-memory draft still works for this page.
   }
@@ -79,8 +82,9 @@ export function loadExplorerInputProgressDraft(
     const value = parsed as Record<string, unknown>;
     if (value.requestId !== request.id) return null;
     const allowedIds = publicQuestionIds(request);
-    const savedValues = value.values && typeof value.values === "object" ? value.values as Record<string, unknown> : {};
-    const savedOtherValues = value.otherValues && typeof value.otherValues === "object" ? value.otherValues as Record<string, unknown> : {};
+    const savedValues = value.values && typeof value.values === "object" ? (value.values as Record<string, unknown>) : {};
+    const savedOtherValues =
+      value.otherValues && typeof value.otherValues === "object" ? (value.otherValues as Record<string, unknown>) : {};
     const values: Record<string, string[]> = {};
     const otherValues: Record<string, string> = {};
     for (const questionId of allowedIds) {
@@ -88,7 +92,8 @@ export function loadExplorerInputProgressDraft(
       if (typeof savedOtherValues[questionId] === "string") otherValues[questionId] = savedOtherValues[questionId] as string;
     }
     const maxIndex = Math.max(0, request.questions.length - 1);
-    const requestedIndex = typeof value.currentIndex === "number" && Number.isFinite(value.currentIndex) ? Math.trunc(value.currentIndex) : 0;
+    const requestedIndex =
+      typeof value.currentIndex === "number" && Number.isFinite(value.currentIndex) ? Math.trunc(value.currentIndex) : 0;
     return { requestId: request.id, currentIndex: Math.max(0, Math.min(maxIndex, requestedIndex)), values, otherValues };
   } catch {
     return null;

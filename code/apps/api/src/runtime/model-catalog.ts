@@ -62,7 +62,9 @@ function describeEndpoint(backend: ResolvedModelBackend): Pick<ModelBackendDescr
   }
   if (backend.kind === "codex-app-server") {
     const codex = backend.codexAppServer;
-    return codex ? { endpoint: [codex.command, ...codex.args].join(" "), endpointSource: "provider-settings" } : { endpoint: null, endpointSource: "config" };
+    return codex
+      ? { endpoint: [codex.command, ...codex.args].join(" "), endpointSource: "provider-settings" }
+      : { endpoint: null, endpointSource: "config" };
   }
   if (backend.kind === "openai-responses") {
     const baseUrl = backend.openai?.baseUrl;
@@ -77,14 +79,18 @@ function describeEndpoint(backend: ResolvedModelBackend): Pick<ModelBackendDescr
 }
 
 /** 逐个后端列出可用于控制台的目录项，按 id 稳定排序以便对比两次输出的差异。 */
-export function describeModelBackends(config: FactoryConfig): { backends: ModelBackendDescriptor[]; roles: Record<"explorer" | "executor", string>; defaultBackend: string } {
+export function describeModelBackends(config: FactoryConfig): {
+  backends: ModelBackendDescriptor[];
+  roles: Record<"explorer" | "executor", string>;
+  defaultBackend: string;
+} {
   const resolved = resolveModelBackends(config.model);
   const backends = [...resolved.values()]
     .map((backend) => ({
       id: backend.id,
       kind: backend.kind,
       source: backend.source,
-      models: backend.models.length > 0 ? backend.models : BUILT_IN_MODELS_BY_KIND[backend.kind] ?? [],
+      models: backend.models.length > 0 ? backend.models : (BUILT_IN_MODELS_BY_KIND[backend.kind] ?? []),
       reasoningEfforts: REASONING_EFFORTS_BY_KIND[backend.kind] ?? [],
       ...describeEndpoint(backend),
     }))

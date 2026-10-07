@@ -62,7 +62,10 @@ export function registerPlatformRoutes(app: FastifyInstance, deps: PlatformRoute
    * 可用后端目录。控制台的"给这个角色选哪个 agent / 哪个模型 / 哪档推理强度"三件事都取自这里：
    * 模型与推理强度是**建议值与配置事实**（见 runtime/model-catalog.ts 的维护提示），不是白名单校验。
    */
-  app.get("/api/v4/model-backends", async () => backends ?? { backends: [], roles: { explorer: "stub", executor: "stub" }, defaultBackend: "stub" });
+  app.get(
+    "/api/v4/model-backends",
+    async () => backends ?? { backends: [], roles: { explorer: "stub", executor: "stub" }, defaultBackend: "stub" },
+  );
 
   app.get("/api/v4/mcp/tools", async (request, reply) => {
     if (!mcpRegistry) return { tools: [] };
@@ -92,7 +95,10 @@ export function registerPlatformRoutes(app: FastifyInstance, deps: PlatformRoute
    *   501 / 504 / 502（平台不支持 / 等超时 / 命令失败）。前端据此决定"回填"还是"说人话"。
    */
   app.post("/api/v4/dialogs/select-directory", async (request, reply) => {
-    if (!isLoopbackAddress(request.ip)) return reply.code(403).send({ code: "DIALOG_LOCAL_ONLY", error: "目录选择框只能在运行 API 的那台机器上弹出，请改用手动输入绝对路径。" });
+    if (!isLoopbackAddress(request.ip))
+      return reply
+        .code(403)
+        .send({ code: "DIALOG_LOCAL_ONLY", error: "目录选择框只能在运行 API 的那台机器上弹出，请改用手动输入绝对路径。" });
     try {
       const result = await pickDirectory();
       return "cancelled" in result ? { cancelled: true, path: null } : { cancelled: false, path: result.path };

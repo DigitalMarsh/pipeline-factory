@@ -8,7 +8,9 @@ import { fileURLToPath, URL } from "node:url";
 import { defineConfig } from "vite";
 import vue from "@vitejs/plugin-vue";
 
-const factoryConfig = JSON.parse(readFileSync(fileURLToPath(new URL("../../config/pipeline-factory.config.json", import.meta.url)), "utf8")) as {
+const factoryConfig = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../../config/pipeline-factory.config.json", import.meta.url)), "utf8"),
+) as {
   server?: { host?: string; port?: number };
   web?: { host?: string; port?: number };
 };

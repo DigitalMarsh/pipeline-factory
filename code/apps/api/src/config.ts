@@ -32,17 +32,21 @@ const mcpServerSchema = z.object({
   allowedTools: z.array(z.string().min(1)).default([]),
 });
 
-const pluginsSchema = z.object({
-  directories: z.array(z.string().min(1)).default([]),
-  supportedApiMajor: z.number().int().positive().default(1),
-  allowedTools: z.array(z.string().min(1)).default([]),
-}).default({});
+const pluginsSchema = z
+  .object({
+    directories: z.array(z.string().min(1)).default([]),
+    supportedApiMajor: z.number().int().positive().default(1),
+    allowedTools: z.array(z.string().min(1)).default([]),
+  })
+  .default({});
 
-const computerUseSchema = z.object({
-  enabled: z.boolean().default(false),
-  requireApproval: z.boolean().default(true),
-  timeoutMs: z.number().int().positive().default(120_000),
-}).default({});
+const computerUseSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    requireApproval: z.boolean().default(true),
+    timeoutMs: z.number().int().positive().default(120_000),
+  })
+  .default({});
 
 /** 可用的模型后端种类；`model.backends` 的注册项与旧的 `model.backend` 共用这一份取值。 */
 const modelKindSchema = z.enum(["codex-app-server", "claude-agent-sdk", "openai-responses", "stub"]);
@@ -109,89 +113,107 @@ const roleSchema = z.object({
 });
 
 const configSchema = z.object({
-  server: z.object({
-    host: z.string().min(1).default("127.0.0.1"),
-    port: z.number().int().min(1).max(65_535).default(4310),
-    /**
-     * 是否由本进程托管 Web 构建产物。默认关闭，这样测试与 `pnpm dev:api` 的行为
-     * 与引入单进程托管之前完全一致；生产方式由 config 显式打开。
-     */
-    serveWeb: z.boolean().default(false),
-    /** Web 构建产物目录，相对配置文件所在目录解析。 */
-    webDistPath: z.string().min(1).default("../apps/web/dist"),
-  }).default({}),
-  web: z.object({
-    host: z.string().min(1).default("127.0.0.1"),
-    port: z.number().int().min(1).max(65_535).default(5173),
-  }).default({}),
-  storage: z.object({
-    databasePath: z.string().min(1).default("./var/pipeline-factory.sqlite"),
-    worktreeRoot: z.string().min(1).default("./var/worktrees"),
-    /**
-     * 高频事件的保留天数。**0（缺省）表示不回收**——回收是不可逆地删除事件行，
-     * 不该在升级后第一次启动时悄悄开始。设成正数即在每次启动时清理一次。
-     * 可回收的类型白名单与判定规则见 packages/domain/src/store/event-retention.ts。
-     */
-    eventRetentionDays: z.number().int().min(0).default(0),
-    /** 每个聚合至少保留多少条可回收事件（避免正在进行的回合被删空）。仅在 eventRetentionDays > 0 时有意义。 */
-    eventRetentionMinPerAggregate: z.number().int().min(0).default(200),
-  }).default({}),
-  project: z.object({
-    root: z.string().min(1).default(".."),
-    /**
-     * Plan 落盘目录，**相对受管工程根目录**（缺省 `docs/pipeline/plans`），也接受绝对路径。
-     * 这是**唯一不按配置目录解析**的路径字段：它描述的是"每个受管工程自己的 docs 目录"，
-     * 而不是 Factory 自己的目录树——解析放在 runtime/plan-directory.ts，因为那里才知道
-     * 当前工程的 repoRoot（每个 Project 可以有不同的根）。见 domain 的 plan/plan-directory.ts。
-     */
-    planDirectory: z.string().min(1).default(DEFAULT_PLAN_DIRECTORY),
-    commands: z.array(commandSchema).default([]),
-  }).default({}),
-  mcp: z.object({
-    servers: z.array(mcpServerSchema).default([]),
-  }).default({}),
+  server: z
+    .object({
+      host: z.string().min(1).default("127.0.0.1"),
+      port: z.number().int().min(1).max(65_535).default(4310),
+      /**
+       * 是否由本进程托管 Web 构建产物。默认关闭，这样测试与 `pnpm dev:api` 的行为
+       * 与引入单进程托管之前完全一致；生产方式由 config 显式打开。
+       */
+      serveWeb: z.boolean().default(false),
+      /** Web 构建产物目录，相对配置文件所在目录解析。 */
+      webDistPath: z.string().min(1).default("../apps/web/dist"),
+    })
+    .default({}),
+  web: z
+    .object({
+      host: z.string().min(1).default("127.0.0.1"),
+      port: z.number().int().min(1).max(65_535).default(5173),
+    })
+    .default({}),
+  storage: z
+    .object({
+      databasePath: z.string().min(1).default("./var/pipeline-factory.sqlite"),
+      worktreeRoot: z.string().min(1).default("./var/worktrees"),
+      /**
+       * 高频事件的保留天数。**0（缺省）表示不回收**——回收是不可逆地删除事件行，
+       * 不该在升级后第一次启动时悄悄开始。设成正数即在每次启动时清理一次。
+       * 可回收的类型白名单与判定规则见 packages/domain/src/store/event-retention.ts。
+       */
+      eventRetentionDays: z.number().int().min(0).default(0),
+      /** 每个聚合至少保留多少条可回收事件（避免正在进行的回合被删空）。仅在 eventRetentionDays > 0 时有意义。 */
+      eventRetentionMinPerAggregate: z.number().int().min(0).default(200),
+    })
+    .default({}),
+  project: z
+    .object({
+      root: z.string().min(1).default(".."),
+      /**
+       * Plan 落盘目录，**相对受管工程根目录**（缺省 `docs/pipeline/plans`），也接受绝对路径。
+       * 这是**唯一不按配置目录解析**的路径字段：它描述的是"每个受管工程自己的 docs 目录"，
+       * 而不是 Factory 自己的目录树——解析放在 runtime/plan-directory.ts，因为那里才知道
+       * 当前工程的 repoRoot（每个 Project 可以有不同的根）。见 domain 的 plan/plan-directory.ts。
+       */
+      planDirectory: z.string().min(1).default(DEFAULT_PLAN_DIRECTORY),
+      commands: z.array(commandSchema).default([]),
+    })
+    .default({}),
+  mcp: z
+    .object({
+      servers: z.array(mcpServerSchema).default([]),
+    })
+    .default({}),
   plugins: pluginsSchema,
   computerUse: computerUseSchema,
-  model: z.object({
-    /** 未在角色（或 Project）上指定 backend 时使用的默认后端。 */
-    backend: modelKindSchema.default("codex-app-server"),
-    /**
-     * 具名后端注册表。**整块缺省是合法且常见的用法**：四个 kind 名本身就能当 id 用
-     * （`codex-app-server` / `claude-agent-sdk` / `openai-responses` / `stub`），端点由下面
-     * 三块兼容配置提供。只有需要"同类两个不同端点"（例如探索走官方 Claude、执行走
-     * DeepSeek 兼容端点）时才在这里注册第二个同 kind 的后端。
-     *
-     * 同名注册项会**覆盖**隐式后端（例如把 `codex-app-server` 重新指到另一个 cwd）。
-     */
-    backends: z.record(z.string().min(1), backendEntrySchema).default({}),
-    codexAppServer: codexAppServerSchema.optional(),
-    /**
-     * Claude Agent SDK 后端的可选覆盖。**整块缺省是完全合法的用法**：不传 env、不读密钥，
-     * 端点与凭据都由 CLI 自己解析（~/.claude/settings.json，cc-switch 就作用在这一层）。
-     * 只有需要把端点写死在配置里时才填 baseUrl/authToken。
-     */
-    claudeAgent: claudeAgentSchema.optional(),
-    openai: openAiSchema.optional(),
-    roles: z.object({
-      explorer: roleSchema.default({ model: "gpt-5.6-luna", temperature: 0.1 }),
-      executor: roleSchema.default({ model: "gpt-5.6-luna", temperature: 0 }),
-    }).default({}),
-    loop: z.object({
-      maxSteps: z.number().int().positive().default(40),
-      maxDurationMs: z.number().int().positive().default(1_800_000),
-      maxRepeatedToolCalls: z.number().int().nonnegative().default(2),
-      maxNoProgressSteps: z.number().int().positive().default(3),
-      requireFactoryToolGatewayForExecutor: z.boolean().default(false),
-    }).default({}),
-  }).default({}),
-  runtime: z.object({
-    globalConcurrency: z.number().int().positive().default(4),
-    projectConcurrency: z.number().int().positive().default(2),
-    defaultTimeoutMs: z.number().int().positive().default(120_000),
-    executionTimeoutMs: z.number().int().positive().default(1_800_000),
-    /** @deprecated Retained for reading legacy config; Agent Loop uses model.loop.maxSteps. */
-    maxAutoContinuationTurns: z.number().int().min(0).max(20).default(4),
-  }).default({}),
+  model: z
+    .object({
+      /** 未在角色（或 Project）上指定 backend 时使用的默认后端。 */
+      backend: modelKindSchema.default("codex-app-server"),
+      /**
+       * 具名后端注册表。**整块缺省是合法且常见的用法**：四个 kind 名本身就能当 id 用
+       * （`codex-app-server` / `claude-agent-sdk` / `openai-responses` / `stub`），端点由下面
+       * 三块兼容配置提供。只有需要"同类两个不同端点"（例如探索走官方 Claude、执行走
+       * DeepSeek 兼容端点）时才在这里注册第二个同 kind 的后端。
+       *
+       * 同名注册项会**覆盖**隐式后端（例如把 `codex-app-server` 重新指到另一个 cwd）。
+       */
+      backends: z.record(z.string().min(1), backendEntrySchema).default({}),
+      codexAppServer: codexAppServerSchema.optional(),
+      /**
+       * Claude Agent SDK 后端的可选覆盖。**整块缺省是完全合法的用法**：不传 env、不读密钥，
+       * 端点与凭据都由 CLI 自己解析（~/.claude/settings.json，cc-switch 就作用在这一层）。
+       * 只有需要把端点写死在配置里时才填 baseUrl/authToken。
+       */
+      claudeAgent: claudeAgentSchema.optional(),
+      openai: openAiSchema.optional(),
+      roles: z
+        .object({
+          explorer: roleSchema.default({ model: "gpt-5.6-luna", temperature: 0.1 }),
+          executor: roleSchema.default({ model: "gpt-5.6-luna", temperature: 0 }),
+        })
+        .default({}),
+      loop: z
+        .object({
+          maxSteps: z.number().int().positive().default(40),
+          maxDurationMs: z.number().int().positive().default(1_800_000),
+          maxRepeatedToolCalls: z.number().int().nonnegative().default(2),
+          maxNoProgressSteps: z.number().int().positive().default(3),
+          requireFactoryToolGatewayForExecutor: z.boolean().default(false),
+        })
+        .default({}),
+    })
+    .default({}),
+  runtime: z
+    .object({
+      globalConcurrency: z.number().int().positive().default(4),
+      projectConcurrency: z.number().int().positive().default(2),
+      defaultTimeoutMs: z.number().int().positive().default(120_000),
+      executionTimeoutMs: z.number().int().positive().default(1_800_000),
+      /** @deprecated Retained for reading legacy config; Agent Loop uses model.loop.maxSteps. */
+      maxAutoContinuationTurns: z.number().int().min(0).max(20).default(4),
+    })
+    .default({}),
 });
 
 /** 经过 Zod 校验且已完成相对路径解析的服务级配置。 */
@@ -220,7 +242,10 @@ export function loadFactoryConfig(configPath = resolveConfigPath(undefined)): Fa
   try {
     raw = JSON.parse(readFileSync(absoluteConfigPath, "utf8")) as unknown;
   } catch (error) {
-    throw new Error(`Unable to read Factory configuration ${absoluteConfigPath}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    throw new Error(
+      `Unable to read Factory configuration ${absoluteConfigPath}: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
   }
   const parsed = configSchema.safeParse(raw);
   if (!parsed.success) throw new Error(`Invalid Factory configuration ${absoluteConfigPath}: ${parsed.error.message}`);
@@ -242,7 +267,10 @@ export function loadFactoryConfig(configPath = resolveConfigPath(undefined)): Fa
       root: resolveFromConfig(baseDirectory, parsed.data.project.root),
     },
     mcp: {
-      servers: parsed.data.mcp.servers.map((server) => ({ ...server, ...(server.cwd ? { cwd: resolveFromConfig(baseDirectory, server.cwd) } : {}) })),
+      servers: parsed.data.mcp.servers.map((server) => ({
+        ...server,
+        ...(server.cwd ? { cwd: resolveFromConfig(baseDirectory, server.cwd) } : {}),
+      })),
     },
     plugins: {
       ...parsed.data.plugins,
@@ -250,15 +278,23 @@ export function loadFactoryConfig(configPath = resolveConfigPath(undefined)): Fa
     },
     model: {
       ...parsed.data.model,
-      backends: Object.fromEntries(Object.entries(parsed.data.model.backends).map(([id, backend]) => [id, resolveBackendPaths(baseDirectory, backend)])),
-      codexAppServer: parsed.data.model.codexAppServer ? {
-        ...parsed.data.model.codexAppServer,
-        cwd: resolveFromConfig(baseDirectory, parsed.data.model.codexAppServer.cwd),
-      } : undefined,
-      claudeAgent: parsed.data.model.claudeAgent ? {
-        ...parsed.data.model.claudeAgent,
-        ...(parsed.data.model.claudeAgent.settingsPath ? { settingsPath: resolveFromConfig(baseDirectory, parsed.data.model.claudeAgent.settingsPath) } : {}),
-      } : undefined,
+      backends: Object.fromEntries(
+        Object.entries(parsed.data.model.backends).map(([id, backend]) => [id, resolveBackendPaths(baseDirectory, backend)]),
+      ),
+      codexAppServer: parsed.data.model.codexAppServer
+        ? {
+            ...parsed.data.model.codexAppServer,
+            cwd: resolveFromConfig(baseDirectory, parsed.data.model.codexAppServer.cwd),
+          }
+        : undefined,
+      claudeAgent: parsed.data.model.claudeAgent
+        ? {
+            ...parsed.data.model.claudeAgent,
+            ...(parsed.data.model.claudeAgent.settingsPath
+              ? { settingsPath: resolveFromConfig(baseDirectory, parsed.data.model.claudeAgent.settingsPath) }
+              : {}),
+          }
+        : undefined,
     },
   };
 }
@@ -318,7 +354,10 @@ export function resolveModelBackends(model: FactoryConfig["model"]): Map<string,
   }
   for (const role of ["explorer", "executor"] as const) {
     const id = model.roles[role].backend ?? model.backend;
-    if (!backends.has(id)) throw new Error(`Invalid Factory configuration: model.roles.${role}.backend "${id}" is not defined. Known backends: ${[...backends.keys()].join(", ")}.`);
+    if (!backends.has(id))
+      throw new Error(
+        `Invalid Factory configuration: model.roles.${role}.backend "${id}" is not defined. Known backends: ${[...backends.keys()].join(", ")}.`,
+      );
   }
   return backends;
 }

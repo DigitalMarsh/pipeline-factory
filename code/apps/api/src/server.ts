@@ -104,10 +104,15 @@ const SLOW_REQUEST_MS = 1000;
  */
 export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
   const ownsStore = !options.store;
-  const store = options.store ?? new SqlitePipelineStore(options.databasePath ?? options.config?.storage.databasePath ?? "pipeline-factory.sqlite", {
-    // 配置缺省是 0（不回收）；这里原样传下去，由存储层判断要不要在启动时清一次。
-    retention: { retentionDays: options.config?.storage.eventRetentionDays ?? 0, minPerAggregate: options.config?.storage.eventRetentionMinPerAggregate ?? 200 },
-  });
+  const store =
+    options.store ??
+    new SqlitePipelineStore(options.databasePath ?? options.config?.storage.databasePath ?? "pipeline-factory.sqlite", {
+      // 配置缺省是 0（不回收）；这里原样传下去，由存储层判断要不要在启动时清一次。
+      retention: {
+        retentionDays: options.config?.storage.eventRetentionDays ?? 0,
+        minPerAggregate: options.config?.storage.eventRetentionMinPerAggregate ?? 200,
+      },
+    });
   new RecoveryCoordinator(store).recover();
   const modelCatalog = options.config ? createModelCatalog(options.config) : undefined;
   const projects = new ProjectService(store, modelCatalog);
@@ -116,18 +121,33 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
   // 没有配置时：预检用空实现、落盘跳过。本文件被大量测试以最小参数构造，不该因缺配置拒绝启动。
   const factoryConfig = options.config;
   const plans = factoryConfig
-    ? new PlanService(store, projects, createLocalPlanPreflightInspector({ configuredPlanDirectory: factoryConfig.project.planDirectory }), (repoRoot: string) => planStorageFor(factoryConfig, repoRoot).directory)
+    ? new PlanService(
+        store,
+        projects,
+        createLocalPlanPreflightInspector({ configuredPlanDirectory: factoryConfig.project.planDirectory }),
+        (repoRoot: string) => planStorageFor(factoryConfig, repoRoot).directory,
+      )
     : new PlanService(store, projects);
   const explorers = new ExplorerService(store);
   const changeProposals = new ChangeProposalService(store);
   const verifier = new VerificationService(store);
   const merger = options.mergeService ?? new MergeService(store, { git: localGitMergeInspector });
-  const verificationExecutor = options.verificationExecutor ?? (options.config ? createDefaultVerificationExecutor(store, options.config) : undefined);
+  const verificationExecutor =
+    options.verificationExecutor ?? (options.config ? createDefaultVerificationExecutor(store, options.config) : undefined);
   const ownsModel = !options.model;
-  const model = options.model ?? (options.config ? createModelGateway(options.config) : new StubModelGateway({ explorer: { model: "stub-explorer", temperature: 0.1 }, executor: { model: "stub-executor", temperature: 0 } }));
+  const model =
+    options.model ??
+    (options.config
+      ? createModelGateway(options.config)
+      : new StubModelGateway({
+          explorer: { model: "stub-explorer", temperature: 0.1 },
+          executor: { model: "stub-executor", temperature: 0 },
+        }));
   const repositoryContextCache = new RepositoryContextCache();
   const mcpRegistry = options.mcpRegistry ?? (options.config ? new McpToolRegistry(options.config.mcp.servers) : undefined);
-  const pluginRegistry = options.pluginRegistry ?? (options.config ? new PluginRegistry({ supportedApiMajor: options.config.plugins.supportedApiMajor }) : undefined);
+  const pluginRegistry =
+    options.pluginRegistry ??
+    (options.config ? new PluginRegistry({ supportedApiMajor: options.config.plugins.supportedApiMajor }) : undefined);
   const explorer = new ExplorerThreadService(store, model, {
     maxAutoContinuationTurns: options.config?.runtime.maxAutoContinuationTurns,
     maxSteps: options.config?.model.loop.maxSteps,
@@ -136,56 +156,89 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     maxNoProgressSteps: options.config?.model.loop.maxNoProgressSteps,
     cwdForProject: (projectId) => store.getProject(projectId)?.repoRoot,
     modelConfigForProject: (projectId) => store.getProject(projectId)?.settings.models.explorer,
-    repositoryContextForProject: (projectId) => { const project = store.getProject(projectId); return project ? repositoryContextCache.get(project) : undefined; },
+    repositoryContextForProject: (projectId) => {
+      const project = store.getProject(projectId);
+      return project ? repositoryContextCache.get(project) : undefined;
+    },
     titleGenerator: new ModelExplorerTitleGenerator(model),
   });
   void explorer.backfillTitles();
   void explorer.recoverQueuedTurns();
   const projectExecution = new ProjectExecutionThreadService(store, model, {
-    ...(options.config ? {
-    maxSteps: options.config.model.loop.maxSteps,
-    maxDurationMs: options.config.model.loop.maxDurationMs,
-    maxRepeatedToolCalls: options.config.model.loop.maxRepeatedToolCalls,
-    maxNoProgressSteps: options.config.model.loop.maxNoProgressSteps,
-    providerCommandTimeoutMs: options.config.runtime.defaultTimeoutMs,
-    toolRuntimeForProject: (project) => {
-      const commands = new RegisteredCommandExecutor(project.settings.commands);
-      const commandIds = new Set(project.settings.commands.map((command) => command.commandId));
-      return new DurableToolRuntime(store, new ToolGateway({
-        role: "executor",
-        workspaceRoot: project.repoRoot,
-        registeredCommandIds: commandIds,
-        mcpAllowedTools: new Set(project.settings.toolPolicy.allowedMcpTools),
-        pluginAllowedTools: new Set(project.settings.toolPolicy.allowedPluginTools),
-        computerUseAllowed: project.settings.toolPolicy.computerUseEnabled && Boolean(options.computerUse),
-        builtin: {
-          registeredCommandExecutor: (invocation) => commands.execute({
-            ...invocation,
-            context: { ...invocation.context, projectId: project.id, runId: invocation.context.runId || "project-execution", workspacePath: project.repoRoot, exitReason: "project_execution_thread" },
-          }),
-          ...(mcpRegistry ? { mcpToolExecutor: (name: string, input: Record<string, unknown>) => mcpRegistry.call(name, input) } : {}),
-          ...(pluginRegistry ? { pluginToolExecutor: (name: string, input: Record<string, unknown>) => pluginRegistry.bridge.call(name, input) } : {}),
-          ...(options.computerUse ? { computerUseExecutor: (input: Record<string, unknown>) => options.computerUse!.call({ action: input.action as import("@pipeline-factory/domain").ComputerUseAction, ...(typeof input.requestId === "string" ? { requestId: input.requestId } : {}), ...(typeof input.timeoutMs === "number" ? { timeoutMs: input.timeoutMs } : {}) }) } : {}),
-        },
-      }));
-    },
-    // 项目级执行会话的模型与推理强度跟随该项目 executor 的后端：跨后端不通用，不能拿一份全局清单糊弄。
-    modelCatalogForProject: (project) => {
-      if (!modelCatalog) return undefined;
-      const backendId = executorBackendId(project, options.config!);
-      return { models: modelCatalog.modelsFor(backendId), reasoningEfforts: modelCatalog.effortLevelsFor(backendId) };
-    } } : {}),
+    ...(options.config
+      ? {
+          maxSteps: options.config.model.loop.maxSteps,
+          maxDurationMs: options.config.model.loop.maxDurationMs,
+          maxRepeatedToolCalls: options.config.model.loop.maxRepeatedToolCalls,
+          maxNoProgressSteps: options.config.model.loop.maxNoProgressSteps,
+          providerCommandTimeoutMs: options.config.runtime.defaultTimeoutMs,
+          toolRuntimeForProject: (project) => {
+            const commands = new RegisteredCommandExecutor(project.settings.commands);
+            const commandIds = new Set(project.settings.commands.map((command) => command.commandId));
+            return new DurableToolRuntime(
+              store,
+              new ToolGateway({
+                role: "executor",
+                workspaceRoot: project.repoRoot,
+                registeredCommandIds: commandIds,
+                mcpAllowedTools: new Set(project.settings.toolPolicy.allowedMcpTools),
+                pluginAllowedTools: new Set(project.settings.toolPolicy.allowedPluginTools),
+                computerUseAllowed: project.settings.toolPolicy.computerUseEnabled && Boolean(options.computerUse),
+                builtin: {
+                  registeredCommandExecutor: (invocation) =>
+                    commands.execute({
+                      ...invocation,
+                      context: {
+                        ...invocation.context,
+                        projectId: project.id,
+                        runId: invocation.context.runId || "project-execution",
+                        workspacePath: project.repoRoot,
+                        exitReason: "project_execution_thread",
+                      },
+                    }),
+                  ...(mcpRegistry
+                    ? { mcpToolExecutor: (name: string, input: Record<string, unknown>) => mcpRegistry.call(name, input) }
+                    : {}),
+                  ...(pluginRegistry
+                    ? { pluginToolExecutor: (name: string, input: Record<string, unknown>) => pluginRegistry.bridge.call(name, input) }
+                    : {}),
+                  ...(options.computerUse
+                    ? {
+                        computerUseExecutor: (input: Record<string, unknown>) =>
+                          options.computerUse!.call({
+                            action: input.action as import("@pipeline-factory/domain").ComputerUseAction,
+                            ...(typeof input.requestId === "string" ? { requestId: input.requestId } : {}),
+                            ...(typeof input.timeoutMs === "number" ? { timeoutMs: input.timeoutMs } : {}),
+                          }),
+                      }
+                    : {}),
+                },
+              }),
+            );
+          },
+          // 项目级执行会话的模型与推理强度跟随该项目 executor 的后端：跨后端不通用，不能拿一份全局清单糊弄。
+          modelCatalogForProject: (project) => {
+            if (!modelCatalog) return undefined;
+            const backendId = executorBackendId(project, options.config!);
+            return { models: modelCatalog.modelsFor(backendId), reasoningEfforts: modelCatalog.effortLevelsFor(backendId) };
+          },
+        }
+      : {}),
   });
   projectExecution.recoverQueuedTurns();
-  const scheduler = options.scheduler ?? (options.config ? createDefaultScheduler(store, options.config, model, mcpRegistry, pluginRegistry, options.computerUse) : undefined);
-  const dispatchCoordinator = scheduler ? new PlanDispatchCoordinator({
-    store,
-    plans,
-    scheduler,
-    // 全局容量上限：配置里写多少就是多少（不写则 config 的缺省值 4 生效）。
-    ...(options.config ? { globalConcurrency: options.config.runtime.globalConcurrency } : {}),
-    ...(verificationExecutor ? { verify: (run, revision) => verifier.verify(run, revision, verificationExecutor) } : {}),
-  }) : undefined;
+  const scheduler =
+    options.scheduler ??
+    (options.config ? createDefaultScheduler(store, options.config, model, mcpRegistry, pluginRegistry, options.computerUse) : undefined);
+  const dispatchCoordinator = scheduler
+    ? new PlanDispatchCoordinator({
+        store,
+        plans,
+        scheduler,
+        // 全局容量上限：配置里写多少就是多少（不写则 config 的缺省值 4 生效）。
+        ...(options.config ? { globalConcurrency: options.config.runtime.globalConcurrency } : {}),
+        ...(verificationExecutor ? { verify: (run, revision) => verifier.verify(run, revision, verificationExecutor) } : {}),
+      })
+    : undefined;
   if (dispatchCoordinator) void dispatchCoordinator.wake();
   const schedulerLoopController = scheduler?.agentLoopController();
   const loopController: Pick<AgentLoopRunner, "pause" | "resume" | "cancel"> = options.agentLoopController ?? {
@@ -223,14 +276,15 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     const projectName = basename(projectRoot);
     const defaultBranch = detectDefaultBranch(projectRoot);
     const backends = resolveModelBackends(options.config.model);
-    const kindForRole = (role: ModelRole): ModelBackendKind => backends.get(roleBackendId(options.config!.model, role))?.kind ?? options.config!.model.backend;
+    const kindForRole = (role: ModelRole): ModelBackendKind =>
+      backends.get(roleBackendId(options.config!.model, role))?.kind ?? options.config!.model.backend;
     projects.bootstrapLegacy({
       id: "project-demo",
-        name: projectName,
-        repoRoot: projectRoot,
-        defaultBranch,
-        worktreeRoot: options.config.storage.worktreeRoot,
-        settings: {
+      name: projectName,
+      repoRoot: projectRoot,
+      defaultBranch,
+      worktreeRoot: options.config.storage.worktreeRoot,
+      settings: {
         commands: options.config.project.commands.map((command) => ({ ...command, argv: command.argv as [string, ...string[]] })),
         concurrency: {
           defaultTimeoutMs: options.config.runtime.defaultTimeoutMs,
@@ -240,7 +294,10 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
         },
         // 只播种模型与策略，**不播种 backend**：把全局默认抄进 Project 会让这个 Project 从此
         // 脱离"跟随全局配置"，连下面的家族迁移都跳过它。缺省即跟随，正是我们要的语义。
-        models: { explorer: withoutBackend(options.config.model.roles.explorer), executor: withoutBackend(options.config.model.roles.executor) },
+        models: {
+          explorer: withoutBackend(options.config.model.roles.explorer),
+          executor: withoutBackend(options.config.model.roles.executor),
+        },
         toolPolicy: {
           allowedMcpTools: options.config.mcp.servers.flatMap((server) => server.allowedTools.map((tool) => `mcp:${server.name}:${tool}`)),
           allowedPluginTools: options.config.plugins.allowedTools,
@@ -278,7 +335,12 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (!project) {
       return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${projectId} not found` });
     }
-    if (project.status === "ARCHIVED" && request.method !== "GET" && !path.endsWith("/activate") && !path.endsWith("/validate-repository")) {
+    if (
+      project.status === "ARCHIVED" &&
+      request.method !== "GET" &&
+      !path.endsWith("/activate") &&
+      !path.endsWith("/validate-repository")
+    ) {
       return reply.code(409).send({ code: "PROJECT_ARCHIVED", error: `Project ${projectId} is archived` });
     }
   });
@@ -315,11 +377,22 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
   // 那才是正确的层。
   registerApiRoutes(app, {
     config: options.config,
-    store, projects, plans, explorers,
+    store,
+    projects,
+    plans,
+    explorers,
     explorerThread: explorer,
-    merger, changeProposals, verifier, scheduler, dispatchCoordinator,
-    verificationExecutor, loopController, projectExecution,
-    model, mcpRegistry, pluginRegistry,
+    merger,
+    changeProposals,
+    verifier,
+    scheduler,
+    dispatchCoordinator,
+    verificationExecutor,
+    loopController,
+    projectExecution,
+    model,
+    mcpRegistry,
+    pluginRegistry,
     ...(options.chooseDirectory ? { chooseDirectory: options.chooseDirectory } : {}),
   });
 

@@ -23,7 +23,18 @@ export class RepositoryContextCache {
     const trackedChangedPaths = git(root, ["diff", "--name-only", "--no-renames", "-z", "HEAD", "--"]).split("\0").filter(Boolean).sort();
     const untracked = git(root, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean).sort();
     const changedFingerprints = [...new Set([...trackedChangedPaths, ...untracked])].map((path) => fingerprintPath(root, path));
-    const key = sha256(JSON.stringify({ projectId: project.id, configVersion: project.configVersion, configHash: project.configHash, defaultBranch: project.defaultBranch, branch, head, status, changedFingerprints }));
+    const key = sha256(
+      JSON.stringify({
+        projectId: project.id,
+        configVersion: project.configVersion,
+        configHash: project.configHash,
+        defaultBranch: project.defaultBranch,
+        branch,
+        head,
+        status,
+        changedFingerprints,
+      }),
+    );
     const cacheEntryKey = `${project.id}:${key}`;
     const cached = this.entries.get(cacheEntryKey);
     if (cached?.key === key) return cached;
@@ -37,13 +48,22 @@ export class RepositoryContextCache {
       const extension = name.includes(".") ? name.slice(name.lastIndexOf(".")).toLowerCase() : "[no extension]";
       extensions.set(extension, (extensions.get(extension) ?? 0) + 1);
     }
-    const largest = (values: Map<string, number>, count: number) => [...values.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, count).map(([name, total]) => `${name} (${total})`).join(", ") || "none";
+    const largest = (values: Map<string, number>, count: number) =>
+      [...values.entries()]
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .slice(0, count)
+        .map(([name, total]) => `${name} (${total})`)
+        .join(", ") || "none";
     // 验证 tag 词表：Plan 的 verification.suites 只能用这里列出的词。**只给 tag，不给命令 ID**——
     // 模型声明"要哪一类验证"，命令 ID 由 Factory 解析（见 plan/plan-spec.ts 的 selectVerificationCommands）。
     // `settings` 用可选链读：只读投影与测试替身可能不带它，缺了就是"没登记 tag"，不是错误。
-    const declaredTags = [...new Set((project.settings?.commands ?? [])
-      .filter((command) => command.category === "verification" && command.enabled !== false)
-      .flatMap((command) => command.tags ?? []))].sort();
+    const declaredTags = [
+      ...new Set(
+        (project.settings?.commands ?? [])
+          .filter((command) => command.category === "verification" && command.enabled !== false)
+          .flatMap((command) => command.tags ?? []),
+      ),
+    ].sort();
     // 默认产物模式：探索提示词按这一行决定"要不要问用户"。**必须在这份上下文里**，因为它是
     // 唯一按 Project 注入模型的通道（与上面的 Verification tags 同一条路），而且提示词里
     // 已经写明"见仓库上下文里 Plan artifact mode 那一行"。老配置行没有这一格，缺省即
@@ -71,12 +91,17 @@ export class RepositoryContextCache {
     return entry;
   }
 
-  getBuildCount(projectId: string): number { return this.buildCounts.get(projectId) ?? 0; }
+  getBuildCount(projectId: string): number {
+    return this.buildCounts.get(projectId) ?? 0;
+  }
 }
 
 function git(cwd: string, args: string[]): string {
-  try { return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }); }
-  catch { return ""; }
+  try {
+    return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  } catch {
+    return "";
+  }
 }
 
 function sha256(value: string | Buffer): string {
@@ -88,5 +113,7 @@ function fingerprintPath(root: string, path: string): string {
     const target = `${root}/${path}`;
     const stat = lstatSync(target);
     return stat.isSymbolicLink() ? `${path}:symlink:${readlinkSync(target)}` : `${path}:${sha256(readFileSync(target))}`;
-  } catch { return `${path}:missing-or-unreadable`; }
+  } catch {
+    return `${path}:missing-or-unreadable`;
+  }
 }

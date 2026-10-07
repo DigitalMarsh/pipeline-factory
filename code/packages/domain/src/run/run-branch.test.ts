@@ -19,8 +19,12 @@ function model(output: string): { gateway: ModelGateway; requests: ModelRequest[
       yield { type: "text.delta", text: output };
       yield { type: "turn.completed" };
     },
-    async answerUserInput() { return undefined; },
-    async cancel() { return undefined; },
+    async answerUserInput() {
+      return undefined;
+    },
+    async cancel() {
+      return undefined;
+    },
   };
   return { gateway, requests };
 }
@@ -35,7 +39,7 @@ describe("Run branch naming", () => {
   });
 
   it("normalizes model output into a bounded lowercase slug", () => {
-    expect(normalizeRunBranchSlug("```text\n\"Vue Intro: Router\"\n```")).toBe("vue-intro-router");
+    expect(normalizeRunBranchSlug('```text\n"Vue Intro: Router"\n```')).toBe("vue-intro-router");
     expect(normalizeRunBranchSlug("Vue Intro Router State Persistence Extra Word")).toBe("vue-intro-router-state");
     expect(normalizeRunBranchSlug("中文需求")).toBeNull();
   });
@@ -44,7 +48,9 @@ describe("Run branch naming", () => {
     const { gateway, requests } = model("Vue Intro");
     const generator = new ModelRunBranchNameGenerator(gateway);
 
-    await expect(generator.generate({ createdAt: "2026-09-06T00:00:00.000Z", planTitle: "Vue 使用手册", goal: "Build a Vue introduction guide" })).resolves.toBe("vue-intro");
+    await expect(
+      generator.generate({ createdAt: "2026-09-06T00:00:00.000Z", planTitle: "Vue 使用手册", goal: "Build a Vue introduction guide" }),
+    ).resolves.toBe("vue-intro");
     expect(requests[0]).toMatchObject({ role: "explorer", purpose: "title" });
     expect(requests[0]?.messages[0]?.content).toContain("Build a Vue introduction guide");
   });
@@ -52,6 +58,8 @@ describe("Run branch naming", () => {
   it("allocates readable numeric suffixes for persisted branch collisions", () => {
     expect(allocateRunBranchLeaf("20260906-vue-intro", [])).toBe("20260906-vue-intro");
     expect(allocateRunBranchLeaf("20260906-vue-intro", ["factory/20260906-vue-intro"])).toBe("20260906-vue-intro-2");
-    expect(allocateRunBranchLeaf("20260906-vue-intro", ["factory/20260906-vue-intro", "factory/20260906-vue-intro-2"])).toBe("20260906-vue-intro-3");
+    expect(allocateRunBranchLeaf("20260906-vue-intro", ["factory/20260906-vue-intro", "factory/20260906-vue-intro-2"])).toBe(
+      "20260906-vue-intro-3",
+    );
   });
 });

@@ -42,11 +42,21 @@ function seedConfirmedPlan() {
   openStores.push(store);
 
   const projects = new ProjectService(store);
-  const project = projects.create({ id: "project-repair", name: "Repair Project", repoRoot: "/repo/repair", defaultBranch: "main", worktreeRoot: "/tmp/repair-worktrees" });
+  const project = projects.create({
+    id: "project-repair",
+    name: "Repair Project",
+    repoRoot: "/repo/repair",
+    defaultBranch: "main",
+    worktreeRoot: "/tmp/repair-worktrees",
+  });
   const explorer = new ExplorerService(store).create({ projectId: project.id, title: "Repair Explorer" });
   const plans = new PlanService(store, projects);
-  const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: explorer.id, title: "Repair plan",
-      resolvedContract: planContractFixture({ store, projectId: project.id, title: "Repair plan" }) });
+  const plan = plans.createCandidatePlan({
+    projectId: project.id,
+    sourceExplorerThreadId: explorer.id,
+    title: "Repair plan",
+    resolvedContract: planContractFixture({ store, projectId: project.id, title: "Repair plan" }),
+  });
   plans.confirm(plan.id, "local-user");
   return { store, databasePath, project, explorer, planId: plan.id };
 }
@@ -92,9 +102,21 @@ describe("SqlitePipelineStore 构造期回填", () => {
     // 老库里那 21 份契约都没有这个键。读点虽然都写了 `?? []`，但类型说它必填——
     // 让数据对得上，比要求未来每个读点都记得兜底可靠。
     const { store, databasePath, planId } = seedConfirmedPlan();
-    runRawSql(databasePath, "UPDATE candidate_plans SET resolved_contract_json = json_remove(resolved_contract_json, '$.dependsOnPlanIds') WHERE id = ?", planId);
-    runRawSql(databasePath, "UPDATE plan_revisions SET resolved_contract_json = json_remove(resolved_contract_json, '$.dependsOnPlanIds') WHERE plan_id = ?", planId);
-    expect(JSON.parse(String(runRawSqlQuery(databasePath, "SELECT resolved_contract_json AS value FROM candidate_plans WHERE id = ?", planId).value))).not.toHaveProperty("dependsOnPlanIds");
+    runRawSql(
+      databasePath,
+      "UPDATE candidate_plans SET resolved_contract_json = json_remove(resolved_contract_json, '$.dependsOnPlanIds') WHERE id = ?",
+      planId,
+    );
+    runRawSql(
+      databasePath,
+      "UPDATE plan_revisions SET resolved_contract_json = json_remove(resolved_contract_json, '$.dependsOnPlanIds') WHERE plan_id = ?",
+      planId,
+    );
+    expect(
+      JSON.parse(
+        String(runRawSqlQuery(databasePath, "SELECT resolved_contract_json AS value FROM candidate_plans WHERE id = ?", planId).value),
+      ),
+    ).not.toHaveProperty("dependsOnPlanIds");
     store.close();
     openStores.splice(openStores.indexOf(store), 1);
 
@@ -104,7 +126,11 @@ describe("SqlitePipelineStore 构造期回填", () => {
     expect(reopened.getPlan(planId)?.resolvedContract.dependsOnPlanIds).toEqual([]);
     expect(reopened.getRevision(planId, 1)?.resolvedContract.dependsOnPlanIds).toEqual([]);
     // 只补缺键的行：已经有人设过依赖的（非空）不能被这次回填抹平。
-    expect(JSON.parse(String(runRawSqlQuery(databasePath, "SELECT resolved_contract_json AS value FROM plan_revisions WHERE plan_id = ?", planId).value))).toHaveProperty("dependsOnPlanIds", []);
+    expect(
+      JSON.parse(
+        String(runRawSqlQuery(databasePath, "SELECT resolved_contract_json AS value FROM plan_revisions WHERE plan_id = ?", planId).value),
+      ),
+    ).toHaveProperty("dependsOnPlanIds", []);
   });
 
   it("把历史里逐次刷新的正文碎片压实成段，且读数不变", () => {
@@ -114,33 +140,125 @@ describe("SqlitePipelineStore 构造期回填", () => {
     temporaryDirectories.push(directory);
     const databasePath = join(directory, "factory.sqlite");
     const seeded = new SqlitePipelineStore(databasePath);
-    const loop = seeded.saveAgentLoop({ id: "loop-1", ownerType: "run", ownerId: "run-1", role: "executor", mode: "provider-controlled", state: "RUNNING", stepCount: 0, maxSteps: 40, startedAt: seeded.now(), completedAt: null, providerThreadId: null, providerTurnId: null, checkpointJson: null });
-    seeded.appendAgentLoopStep({ loopId: loop.id, stepType: "MODEL_TEXT_DELTA", status: "COMPLETED", payload: { text: "好", providerItemId: "item-1" } });
+    const loop = seeded.saveAgentLoop({
+      id: "loop-1",
+      ownerType: "run",
+      ownerId: "run-1",
+      role: "executor",
+      mode: "provider-controlled",
+      state: "RUNNING",
+      stepCount: 0,
+      maxSteps: 40,
+      startedAt: seeded.now(),
+      completedAt: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      checkpointJson: null,
+    });
+    seeded.appendAgentLoopStep({
+      loopId: loop.id,
+      stepType: "MODEL_TEXT_DELTA",
+      status: "COMPLETED",
+      payload: { text: "好", providerItemId: "item-1" },
+    });
     seeded.appendAgentLoopStep({ loopId: loop.id, stepType: "MODEL_TEXT_DELTA", status: "COMPLETED", payload: { text: "的" } });
     seeded.appendAgentLoopStep({ loopId: loop.id, stepType: "MODEL_TEXT_DELTA", status: "COMPLETED", payload: { text: "，我" } });
     seeded.appendAgentLoopStep({ loopId: loop.id, stepType: "PROVIDER_ACTIVITY", status: "COMPLETED", payload: { itemId: "activity-1" } });
     seeded.appendAgentLoopStep({ loopId: loop.id, stepType: "MODEL_TEXT_DELTA", status: "COMPLETED", payload: { text: "看" } });
     seeded.appendAgentLoopStep({ loopId: loop.id, stepType: "MODEL_TEXT_DELTA", status: "COMPLETED", payload: { text: "一下" } });
-    seeded.saveRun({ id: "run-1", projectId: "project-1", planId: "plan-1", planRevision: 1, status: "IN_PROGRESS", branch: "factory/run-1", workspacePath: "/tmp/run-1", baseCommit: "abc", executionThreadId: "thread-1", createdAt: seeded.now(), startedAt: null });
+    seeded.saveRun({
+      id: "run-1",
+      projectId: "project-1",
+      planId: "plan-1",
+      planRevision: 1,
+      status: "IN_PROGRESS",
+      branch: "factory/run-1",
+      workspacePath: "/tmp/run-1",
+      baseCommit: "abc",
+      executionThreadId: "thread-1",
+      createdAt: seeded.now(),
+      startedAt: null,
+    });
     seeded.saveExecutionThread({ id: "thread-1", runId: "run-1", state: "ACTIVE", journal: [] });
-    for (const text of ["He", "llo", " world"]) seeded.appendExecutionJournal({ executionThreadId: "thread-1", runId: "run-1", type: "MODEL_OUTPUT", payload: { text, modelStep: 1, providerItemId: "item-1" } });
+    for (const text of ["He", "llo", " world"])
+      seeded.appendExecutionJournal({
+        executionThreadId: "thread-1",
+        runId: "run-1",
+        type: "MODEL_OUTPUT",
+        payload: { text, modelStep: 1, providerItemId: "item-1" },
+      });
     // 事件里那两簇带内层序号的碎片按**内层序号**并段，正文一字不丢。
     // 刻意在中间插一条别的事件：真实的事件流就是交错的（每 40ms 一次刷新同时写两种事件），
     // 所以判据只能是内层序号，不能是事件序号相邻——那一条在真实库上匹配数是 0。
     for (const [index, text] of ["你", "好", "呀"].entries()) {
-      seeded.appendEvent({ type: "agent.step.model_text_delta", aggregateId: "loop-1", payload: { text, providerItemId: "item-1", sequence: index + 1 } });
+      seeded.appendEvent({
+        type: "agent.step.model_text_delta",
+        aggregateId: "loop-1",
+        payload: { text, providerItemId: "item-1", sequence: index + 1 },
+      });
       seeded.appendEvent({ type: "agent.model.text.delta", aggregateId: "loop-1", payload: { text } });
     }
     // 两簇"另有副本"的事件：副本验得过就删，验不过就留。
     seeded.saveThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
-    seeded.saveTurn({ id: "turn-ok", threadId: "thread-1", role: "assistant", content: "第一句", status: "COMPLETED", createdAt: seeded.now(), sequence: 1 });
+    seeded.saveTurn({
+      id: "turn-ok",
+      threadId: "thread-1",
+      role: "assistant",
+      content: "第一句",
+      status: "COMPLETED",
+      createdAt: seeded.now(),
+      sequence: 1,
+    });
     // 被取消的回合：content 被替换成提示语，模型原始输出只在这批事件里 —— 副本不成立，必须留。
-    seeded.saveTurn({ id: "turn-cancelled", threadId: "thread-1", role: "assistant", content: "本轮已取消", status: "CANCELLED", createdAt: seeded.now(), sequence: 2 });
-    for (const text of ["第一", "句"]) seeded.appendEvent({ type: "explorer.turn.text.delta", aggregateId: "thread-1", payload: { turnId: "turn-ok", explorerPlanId: "plan-1", loopId: "loop-1", text } });
-    for (const text of ["模型说了一半"]) seeded.appendEvent({ type: "explorer.turn.text.delta", aggregateId: "thread-1", payload: { turnId: "turn-cancelled", explorerPlanId: "plan-1", loopId: "loop-1", text } });
+    seeded.saveTurn({
+      id: "turn-cancelled",
+      threadId: "thread-1",
+      role: "assistant",
+      content: "本轮已取消",
+      status: "CANCELLED",
+      createdAt: seeded.now(),
+      sequence: 2,
+    });
+    for (const text of ["第一", "句"])
+      seeded.appendEvent({
+        type: "explorer.turn.text.delta",
+        aggregateId: "thread-1",
+        payload: { turnId: "turn-ok", explorerPlanId: "plan-1", loopId: "loop-1", text },
+      });
+    for (const text of ["模型说了一半"])
+      seeded.appendEvent({
+        type: "explorer.turn.text.delta",
+        aggregateId: "thread-1",
+        payload: { turnId: "turn-cancelled", explorerPlanId: "plan-1", loopId: "loop-1", text },
+      });
     // journal 镜像：内层序号连续 → 并段；不连续 → 不并。
-    for (const [index, text] of ["He", "llo"].entries()) seeded.appendEvent({ type: "run.executor.event", aggregateId: "run-1", payload: { executionThreadId: "thread-1", type: "MODEL_OUTPUT", sequence: index + 1, occurredAt: seeded.now(), text, modelStep: 1, providerItemId: "item-1" } });
-    seeded.appendEvent({ type: "run.executor.event", aggregateId: "run-1", payload: { executionThreadId: "thread-1", type: "MODEL_OUTPUT", sequence: 9, occurredAt: seeded.now(), text: "!", modelStep: 1, providerItemId: "item-1" } });
+    for (const [index, text] of ["He", "llo"].entries())
+      seeded.appendEvent({
+        type: "run.executor.event",
+        aggregateId: "run-1",
+        payload: {
+          executionThreadId: "thread-1",
+          type: "MODEL_OUTPUT",
+          sequence: index + 1,
+          occurredAt: seeded.now(),
+          text,
+          modelStep: 1,
+          providerItemId: "item-1",
+        },
+      });
+    seeded.appendEvent({
+      type: "run.executor.event",
+      aggregateId: "run-1",
+      payload: {
+        executionThreadId: "thread-1",
+        type: "MODEL_OUTPUT",
+        sequence: 9,
+        occurredAt: seeded.now(),
+        text: "!",
+        modelStep: 1,
+        providerItemId: "item-1",
+      },
+    });
     seeded.close();
 
     const reopened = new SqlitePipelineStore(databasePath);
@@ -148,7 +266,10 @@ describe("SqlitePipelineStore 构造期回填", () => {
 
     const steps = reopened.listAgentLoopSteps("loop-1");
     // 两段连续正文各并成一条，段首的 sequence 保留；中间那条 PROVIDER_ACTIVITY 一条不动。
-    expect(steps.filter((step) => step.stepType === "MODEL_TEXT_DELTA").map((step) => [step.sequence, step.payload.text])).toEqual([[1, "好的，我"], [5, "看一下"]]);
+    expect(steps.filter((step) => step.stepType === "MODEL_TEXT_DELTA").map((step) => [step.sequence, step.payload.text])).toEqual([
+      [1, "好的，我"],
+      [5, "看一下"],
+    ]);
     expect(steps.map((step) => step.stepType)).toEqual(["MODEL_TEXT_DELTA", "PROVIDER_ACTIVITY", "MODEL_TEXT_DELTA"]);
     expect(steps[0]!.payload.providerItemId).toBe("item-1");
     // journal 同理；正文总量守恒。
@@ -157,11 +278,13 @@ describe("SqlitePipelineStore 构造期回填", () => {
     expect(journal.map((entry) => entry.sequence)).toEqual([1]);
 
     // 事件里带内层序号的两簇按内层序号并段，正文一字不丢。
-    expect((reopened.listEvents({ types: ["agent.step.model_text_delta"] })).map((event) => event.payload.text)).toEqual(["你好呀"]);
-    expect((reopened.listEvents({ types: ["run.executor.event"] })).map((event) => event.payload.text)).toEqual(["Hello", "!"]);
+    expect(reopened.listEvents({ types: ["agent.step.model_text_delta"] }).map((event) => event.payload.text)).toEqual(["你好呀"]);
+    expect(reopened.listEvents({ types: ["run.executor.event"] }).map((event) => event.payload.text)).toEqual(["Hello", "!"]);
     // "另有副本"的两簇：步骤表覆盖得住的那簇删掉；探索回合里副本对得上的删、对不上的（取消的回合）留着。
     expect(reopened.listEvents({ types: ["agent.model.text.delta"] })).toEqual([]);
-    expect((reopened.listEvents({ types: ["explorer.turn.text.delta"] })).map((event) => [event.payload.turnId, event.payload.text])).toEqual([["turn-cancelled", "模型说了一半"]]);
+    expect(reopened.listEvents({ types: ["explorer.turn.text.delta"] }).map((event) => [event.payload.turnId, event.payload.text])).toEqual(
+      [["turn-cancelled", "模型说了一半"]],
+    );
 
     // 幂等：再开一次没有任何可合并的相邻行。
     reopened.close();
@@ -180,9 +303,23 @@ describe("SqlitePipelineStore 构造期回填", () => {
     temporaryDirectories.push(directory);
     const databasePath = join(directory, "factory.sqlite");
     const seeded = new SqlitePipelineStore(databasePath);
-    seeded.saveRun({ id: "run-legacy", projectId: "project-1", planId: "plan-1", planRevision: 1, status: "IN_PROGRESS", branch: "factory/run-legacy", workspacePath: "/tmp/run-legacy", baseCommit: "abc", executionThreadId: "thread-legacy", createdAt: seeded.now(), startedAt: null });
+    seeded.saveRun({
+      id: "run-legacy",
+      projectId: "project-1",
+      planId: "plan-1",
+      planRevision: 1,
+      status: "IN_PROGRESS",
+      branch: "factory/run-legacy",
+      workspacePath: "/tmp/run-legacy",
+      baseCommit: "abc",
+      executionThreadId: "thread-legacy",
+      createdAt: seeded.now(),
+      startedAt: null,
+    });
     seeded.saveExecutionThread({
-      id: "thread-legacy", runId: "run-legacy", state: "ACTIVE",
+      id: "thread-legacy",
+      runId: "run-legacy",
+      state: "ACTIVE",
       journal: [
         { sequence: 1, type: "RUN_CREATED", occurredAt: "2026-09-01T10:00:00.000Z", payload: { planId: "plan-1" } },
         { sequence: 2, type: "MODEL_OUTPUT", occurredAt: "2026-09-01T10:00:01.000Z", payload: { text: "hello" } },
@@ -192,7 +329,15 @@ describe("SqlitePipelineStore 构造期回填", () => {
 
     // 把列加回去并只留快照，回到"老库"的形态。
     runRawSql(databasePath, "ALTER TABLE execution_threads ADD COLUMN journal_json TEXT");
-    runRawSql(databasePath, "UPDATE execution_threads SET journal_json = ? WHERE id = ?", JSON.stringify([{ sequence: 1, type: "RUN_CREATED", occurredAt: "2026-09-01T10:00:00.000Z", payload: { planId: "plan-1" } }, { sequence: 2, type: "MODEL_OUTPUT", occurredAt: "2026-09-01T10:00:01.000Z", payload: { text: "hello" } }]), "thread-legacy");
+    runRawSql(
+      databasePath,
+      "UPDATE execution_threads SET journal_json = ? WHERE id = ?",
+      JSON.stringify([
+        { sequence: 1, type: "RUN_CREATED", occurredAt: "2026-09-01T10:00:00.000Z", payload: { planId: "plan-1" } },
+        { sequence: 2, type: "MODEL_OUTPUT", occurredAt: "2026-09-01T10:00:01.000Z", payload: { text: "hello" } },
+      ]),
+      "thread-legacy",
+    );
     runRawSql(databasePath, "DELETE FROM execution_journal WHERE execution_thread_id = ?", "thread-legacy");
 
     const reopened = new SqlitePipelineStore(databasePath);
@@ -211,7 +356,11 @@ describe("SqlitePipelineStore 构造期修复", () => {
     const { store, databasePath, planId } = seedConfirmedPlan();
     // 把确认的**事实与事件**一起抹掉，只留下"已推进"的状态。
     runRawSql(databasePath, "UPDATE candidate_plans SET confirmed_at = NULL, confirmed_by = NULL, status = 'QUEUED' WHERE id = ?", planId);
-    runRawSql(databasePath, "DELETE FROM domain_events WHERE aggregate_id = ? AND type IN ('plan.confirmed', 'plan.revision.confirmed', 'plan.configuration.revised')", planId);
+    runRawSql(
+      databasePath,
+      "DELETE FROM domain_events WHERE aggregate_id = ? AND type IN ('plan.confirmed', 'plan.revision.confirmed', 'plan.configuration.revised')",
+      planId,
+    );
     store.close();
     openStores.splice(openStores.indexOf(store), 1);
 
@@ -269,8 +418,26 @@ describe("构造期的事件回收", () => {
     // 先让 store 把 schema 建出来，再直接往事件表塞"过去的事件"——appendEvent 的 occurredAt
     // 由存储层生成，调用方造不出两周前的行，所以这一步必须绕过 store。
     new SqlitePipelineStore(databasePath).close();
-    runRawSql(databasePath, "INSERT INTO domain_events (id, sequence, type, aggregate_id, occurred_at, payload_json) VALUES (?, ?, ?, ?, ?, ?)", "aged-delta", 1, "explorer.turn.text.delta", "thread-aged", "2020-01-01T00:00:00.000Z", "{}");
-    runRawSql(databasePath, "INSERT INTO domain_events (id, sequence, type, aggregate_id, occurred_at, payload_json) VALUES (?, ?, ?, ?, ?, ?)", "aged-plan", 2, "plan.confirmed", "plan-aged", "2020-01-01T00:00:00.000Z", "{}");
+    runRawSql(
+      databasePath,
+      "INSERT INTO domain_events (id, sequence, type, aggregate_id, occurred_at, payload_json) VALUES (?, ?, ?, ?, ?, ?)",
+      "aged-delta",
+      1,
+      "explorer.turn.text.delta",
+      "thread-aged",
+      "2020-01-01T00:00:00.000Z",
+      "{}",
+    );
+    runRawSql(
+      databasePath,
+      "INSERT INTO domain_events (id, sequence, type, aggregate_id, occurred_at, payload_json) VALUES (?, ?, ?, ?, ?, ?)",
+      "aged-plan",
+      2,
+      "plan.confirmed",
+      "plan-aged",
+      "2020-01-01T00:00:00.000Z",
+      "{}",
+    );
 
     // 不配置回收（缺省）：一条都不动。这是这条用例的一半价值——回收默认是关的。
     const plain = new SqlitePipelineStore(databasePath);

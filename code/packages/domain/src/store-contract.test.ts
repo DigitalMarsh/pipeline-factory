@@ -45,34 +45,97 @@ import {
 
 /** 端口里**必选**的方法：两个实现都必须提供。 */
 const REQUIRED_PORT_METHOD_NAMES = [
-  "now", "nextId",
-  "saveThread", "getThread", "listThreads", "updateThread",
-  "saveExplorerPlan", "getExplorerPlan", "listExplorerPlans", "updateExplorerPlan",
-  "saveProject", "getProject", "listProjects", "updateProject",
-  "saveProjectExecutionThread", "getProjectExecutionThread", "updateProjectExecutionThread",
-  "saveProjectExecutionMessage", "getProjectExecutionMessageByClientTurnId", "listProjectExecutionMessages", "updateProjectExecutionMessage",
-  "saveProjectConfigRevision", "listProjectConfigRevisions",
-  "saveTurn", "updateTurn", "listTurns",
-  "saveInputRequest", "getInputRequest", "listInputRequests", "updateInputRequest",
-  "savePlan", "getPlan", "listPlans", "updatePlan",
-  "saveCandidateVersion", "listCandidateVersions",
-  "saveDispatchState", "deleteDispatchState", "getDispatchState", "listDispatchStates",
-  "saveRevision", "getRevision", "listRevisions",
-  "saveRevisionDraft", "getRevisionDraft", "listRevisionDrafts", "updateRevisionDraft",
-  "saveChangeProposal", "getChangeProposal", "listChangeProposals", "updateChangeProposal",
-  "saveRun", "getRun", "listRuns",
-  "saveExecutionThread", "getExecutionThread", "appendExecutionJournal",
-  "saveHookExecution", "listHookExecutions",
-  "savePlanQueryProjection", "listPlanQueryProjection",
-  "saveVerificationRun", "getVerificationRun", "listVerificationRuns",
-  "saveMergeRequest", "getMergeRequest", "findMergeRequestByRun", "listMergeRequests", "updateMergeRequest",
-  "saveRunGuidance", "updateRunGuidance", "listRunGuidance",
-  "saveAgentLoop", "getAgentLoop", "listAgentLoops", "updateAgentLoop",
-  "appendAgentLoopStep", "listAgentLoopSteps", "getLastAgentLoopStepSequence", "recoverAgentLoops",
-  "saveToolCall", "getToolCall", "listToolCalls", "updateToolCall",
-  "appendEvent", "listEvents", "getLastEventSequence", "pruneEvents",
+  "now",
+  "nextId",
+  "saveThread",
+  "getThread",
+  "listThreads",
+  "updateThread",
+  "saveExplorerPlan",
+  "getExplorerPlan",
+  "listExplorerPlans",
+  "updateExplorerPlan",
+  "saveProject",
+  "getProject",
+  "listProjects",
+  "updateProject",
+  "saveProjectExecutionThread",
+  "getProjectExecutionThread",
+  "updateProjectExecutionThread",
+  "saveProjectExecutionMessage",
+  "getProjectExecutionMessageByClientTurnId",
+  "listProjectExecutionMessages",
+  "updateProjectExecutionMessage",
+  "saveProjectConfigRevision",
+  "listProjectConfigRevisions",
+  "saveTurn",
+  "updateTurn",
+  "listTurns",
+  "saveInputRequest",
+  "getInputRequest",
+  "listInputRequests",
+  "updateInputRequest",
+  "savePlan",
+  "getPlan",
+  "listPlans",
+  "updatePlan",
+  "saveCandidateVersion",
+  "listCandidateVersions",
+  "saveDispatchState",
+  "deleteDispatchState",
+  "getDispatchState",
+  "listDispatchStates",
+  "saveRevision",
+  "getRevision",
+  "listRevisions",
+  "saveRevisionDraft",
+  "getRevisionDraft",
+  "listRevisionDrafts",
+  "updateRevisionDraft",
+  "saveChangeProposal",
+  "getChangeProposal",
+  "listChangeProposals",
+  "updateChangeProposal",
+  "saveRun",
+  "getRun",
+  "listRuns",
+  "saveExecutionThread",
+  "getExecutionThread",
+  "appendExecutionJournal",
+  "saveHookExecution",
+  "listHookExecutions",
+  "savePlanQueryProjection",
+  "listPlanQueryProjection",
+  "saveVerificationRun",
+  "getVerificationRun",
+  "listVerificationRuns",
+  "saveMergeRequest",
+  "getMergeRequest",
+  "findMergeRequestByRun",
+  "listMergeRequests",
+  "updateMergeRequest",
+  "saveRunGuidance",
+  "updateRunGuidance",
+  "listRunGuidance",
+  "saveAgentLoop",
+  "getAgentLoop",
+  "listAgentLoops",
+  "updateAgentLoop",
+  "appendAgentLoopStep",
+  "listAgentLoopSteps",
+  "getLastAgentLoopStepSequence",
+  "recoverAgentLoops",
+  "saveToolCall",
+  "getToolCall",
+  "listToolCalls",
+  "updateToolCall",
+  "appendEvent",
+  "listEvents",
+  "getLastEventSequence",
+  "pruneEvents",
   "deleteExplorerCascade",
-  "getIdempotency", "saveIdempotency",
+  "getIdempotency",
+  "saveIdempotency",
 ] as const satisfies readonly (keyof PipelineStore)[];
 
 /** 端口里**可选**的方法：按端口注释，两侧不必都提供（当前 subscribeEvents 两侧都有、runInTransaction 只有 SQLite）。 */
@@ -83,7 +146,10 @@ void OPTIONAL_PORT_METHOD_NAMES;
 
 /** 漏写一个端口方法就在这里编译不过：清单必须与 keyof PipelineStore 完全一致。 */
 type AssertNever<Value extends never> = Value;
-type UnlistedPortMembers = Exclude<keyof PipelineStore, (typeof REQUIRED_PORT_METHOD_NAMES)[number] | (typeof OPTIONAL_PORT_METHOD_NAMES)[number]>;
+type UnlistedPortMembers = Exclude<
+  keyof PipelineStore,
+  (typeof REQUIRED_PORT_METHOD_NAMES)[number] | (typeof OPTIONAL_PORT_METHOD_NAMES)[number]
+>;
 const portMethodListIsComplete: AssertNever<UnlistedPortMembers> extends never ? true : never = true;
 void portMethodListIsComplete;
 
@@ -118,7 +184,13 @@ function assertBothStores(assertion: (store: PipelineStore, kind: "memory" | "sq
 /** Project + ExplorerThread + 一个已绑定的 Project，满足 savePlan 的投影前提。 */
 function seedProjectScope(store: PipelineStore) {
   const projects = new ProjectService(store);
-  const project = projects.create({ id: "contract-project", name: "Contract Project", repoRoot: "/repo/contract", defaultBranch: "main", worktreeRoot: "/tmp/contract-worktrees" });
+  const project = projects.create({
+    id: "contract-project",
+    name: "Contract Project",
+    repoRoot: "/repo/contract",
+    defaultBranch: "main",
+    worktreeRoot: "/tmp/contract-worktrees",
+  });
   const explorers = new ExplorerService(store);
   const explorer = explorers.create({ projectId: project.id, title: "Contract Explorer" });
   const explorerPlanId = store.listExplorerPlans(explorer.id)[0]!.id;
@@ -130,7 +202,9 @@ function seedProjectScope(store: PipelineStore) {
 describe("store contract: 公共方法表面", () => {
   it("exposes every required port method on both implementations", () => {
     assertBothStores((store, kind) => {
-      const missing = REQUIRED_PORT_METHOD_NAMES.filter((name) => typeof (store as unknown as Record<string, unknown>)[name] !== "function");
+      const missing = REQUIRED_PORT_METHOD_NAMES.filter(
+        (name) => typeof (store as unknown as Record<string, unknown>)[name] !== "function",
+      );
       expect(missing, `${kind} store is missing port methods`).toEqual([]);
     });
   });
@@ -247,7 +321,8 @@ describe("store contract: 事件回收", () => {
 
   it("keeps the newest minPerAggregate prunable events per aggregate", () => {
     assertBothStores((store) => {
-      for (const text of ["一", "二", "三"]) store.appendEvent({ type: "explorer.turn.text.delta", aggregateId: "thread-a", payload: { text } });
+      for (const text of ["一", "二", "三"])
+        store.appendEvent({ type: "explorer.turn.text.delta", aggregateId: "thread-a", payload: { text } });
       for (const text of ["甲", "乙"]) store.appendEvent({ type: "explorer.turn.text.delta", aggregateId: "thread-b", payload: { text } });
 
       // thread-a 有 3 条、保底 2 → 只删最旧的一条；thread-b 只有 2 条 → 一条都不删。
@@ -290,7 +365,21 @@ describe("store contract: 事件回收", () => {
 
 describe("store contract: Agent Loop 步骤", () => {
   function seedLoop(store: PipelineStore): string {
-    store.saveAgentLoop({ id: "loop-contract", ownerType: "explorer-turn", ownerId: "turn-1", role: "explorer", mode: "provider-controlled", state: "RUNNING", stepCount: 0, maxSteps: 8, startedAt: store.now(), completedAt: null, providerThreadId: null, providerTurnId: null, checkpointJson: null });
+    store.saveAgentLoop({
+      id: "loop-contract",
+      ownerType: "explorer-turn",
+      ownerId: "turn-1",
+      role: "explorer",
+      mode: "provider-controlled",
+      state: "RUNNING",
+      stepCount: 0,
+      maxSteps: 8,
+      startedAt: store.now(),
+      completedAt: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      checkpointJson: null,
+    });
     return "loop-contract";
   }
 
@@ -309,8 +398,18 @@ describe("store contract: Agent Loop 步骤", () => {
   it("round-trips the step payload and preserves append order", () => {
     assertBothStores((store) => {
       const loopId = seedLoop(store);
-      store.appendAgentLoopStep({ loopId, stepType: "MODEL_TEXT_DELTA", status: "COMPLETED", payload: { text: "先分析", providerItemId: "item-1" } });
-      store.appendAgentLoopStep({ loopId, stepType: "GATE_CHECKED", status: "COMPLETED", payload: { action: "blocked", reason: "incomplete" } });
+      store.appendAgentLoopStep({
+        loopId,
+        stepType: "MODEL_TEXT_DELTA",
+        status: "COMPLETED",
+        payload: { text: "先分析", providerItemId: "item-1" },
+      });
+      store.appendAgentLoopStep({
+        loopId,
+        stepType: "GATE_CHECKED",
+        status: "COMPLETED",
+        payload: { action: "blocked", reason: "incomplete" },
+      });
 
       const steps = store.listAgentLoopSteps(loopId);
 
@@ -328,7 +427,9 @@ describe("store contract: Agent Loop 步骤", () => {
       store.appendAgentLoopStep({ loopId, stepType: "PROVIDER_ACTIVITY", status: "COMPLETED", payload: { activityId: "act-1" } });
       store.appendAgentLoopStep({ loopId, stepType: "MODEL_TEXT_DELTA", status: "COMPLETED", payload: { text: "b" } });
 
-      expect(store.listAgentLoopSteps(loopId, { stepTypes: ["PROVIDER_ACTIVITY"] }).map((step) => step.stepType)).toEqual(["PROVIDER_ACTIVITY"]);
+      expect(store.listAgentLoopSteps(loopId, { stepTypes: ["PROVIDER_ACTIVITY"] }).map((step) => step.stepType)).toEqual([
+        "PROVIDER_ACTIVITY",
+      ]);
       expect(store.listAgentLoopSteps(loopId, { stepTypes: [] })).toEqual([]);
     });
   });
@@ -336,7 +437,21 @@ describe("store contract: Agent Loop 步骤", () => {
   it("keeps steps of different loops apart", () => {
     assertBothStores((store) => {
       const first = seedLoop(store);
-      store.saveAgentLoop({ id: "loop-other", ownerType: "explorer-turn", ownerId: "turn-2", role: "explorer", mode: "provider-controlled", state: "RUNNING", stepCount: 0, maxSteps: 8, startedAt: store.now(), completedAt: null, providerThreadId: null, providerTurnId: null, checkpointJson: null });
+      store.saveAgentLoop({
+        id: "loop-other",
+        ownerType: "explorer-turn",
+        ownerId: "turn-2",
+        role: "explorer",
+        mode: "provider-controlled",
+        state: "RUNNING",
+        stepCount: 0,
+        maxSteps: 8,
+        startedAt: store.now(),
+        completedAt: null,
+        providerThreadId: null,
+        providerTurnId: null,
+        checkpointJson: null,
+      });
       store.appendAgentLoopStep({ loopId: first, stepType: "MODEL_STARTED", status: "RUNNING", payload: {} });
       store.appendAgentLoopStep({ loopId: "loop-other", stepType: "MODEL_STARTED", status: "RUNNING", payload: {} });
 
@@ -353,8 +468,13 @@ describe("store contract: Plan 与查询投影", () => {
     // 投影与事实的双写是 query.ts 模块头警告的漂移点，所以把"保存 Plan 必产生可查投影"钉住。
     assertBothStores((store) => {
       const { project, explorer, explorerPlanId, plans } = seedProjectScope(store);
-      const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: explorer.id, explorerPlanId, title: "Contract plan",
-      resolvedContract: planContractFixture({ store, projectId: project.id, title: "Contract plan" }) });
+      const plan = plans.createCandidatePlan({
+        projectId: project.id,
+        sourceExplorerThreadId: explorer.id,
+        explorerPlanId,
+        title: "Contract plan",
+        resolvedContract: planContractFixture({ store, projectId: project.id, title: "Contract plan" }),
+      });
 
       const rows = store.listPlanQueryProjection(project.id);
 
@@ -366,8 +486,13 @@ describe("store contract: Plan 与查询投影", () => {
   it("refreshes the query projection when the Plan is updated", () => {
     assertBothStores((store) => {
       const { project, explorer, explorerPlanId, plans } = seedProjectScope(store);
-      const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: explorer.id, explorerPlanId, title: "Before",
-      resolvedContract: planContractFixture({ store, projectId: project.id, title: "Before" }) });
+      const plan = plans.createCandidatePlan({
+        projectId: project.id,
+        sourceExplorerThreadId: explorer.id,
+        explorerPlanId,
+        title: "Before",
+        resolvedContract: planContractFixture({ store, projectId: project.id, title: "Before" }),
+      });
       store.updatePlan({ ...store.getPlan(plan.id)!, title: "After" });
 
       expect(store.listPlanQueryProjection(project.id)[0]?.title).toBe("After");
@@ -377,23 +502,53 @@ describe("store contract: Plan 与查询投影", () => {
   it("round-trips revised Plan versions through saveCandidateVersion", () => {
     assertBothStores((store) => {
       const { project, explorer, explorerPlanId, plans } = seedProjectScope(store);
-      const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: explorer.id, explorerPlanId, title: "Versioned",
-      resolvedContract: planContractFixture({ store, projectId: project.id, title: "Versioned" }) });
+      const plan = plans.createCandidatePlan({
+        projectId: project.id,
+        sourceExplorerThreadId: explorer.id,
+        explorerPlanId,
+        title: "Versioned",
+        resolvedContract: planContractFixture({ store, projectId: project.id, title: "Versioned" }),
+      });
       store.saveCandidateVersion({ ...store.getPlan(plan.id)!, revision: 2 });
       store.saveCandidateVersion({ ...store.getPlan(plan.id)!, revision: 3 });
 
-      expect(store.listCandidateVersions(plan.id).map((version) => version.revision).sort()).toEqual([1, 2, 3]);
+      expect(
+        store
+          .listCandidateVersions(plan.id)
+          .map((version) => version.revision)
+          .sort(),
+      ).toEqual([1, 2, 3]);
     });
   });
 
   it("keeps dispatch state per Plan and removes only the named one", () => {
     assertBothStores((store) => {
       const { project, explorer, explorerPlanId, plans } = seedProjectScope(store);
-      const first = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: explorer.id, explorerPlanId, title: "First",
-      resolvedContract: planContractFixture({ store, projectId: project.id, title: "First" }) });
-      const second = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: explorer.id, explorerPlanId, title: "Second",
-      resolvedContract: planContractFixture({ store, projectId: project.id, title: "Second" }) });
-      const state = { planId: first.id, projectId: project.id, status: "QUEUED", waitReason: null, queuedAt: store.now(), runId: null, attempt: 1, updatedAt: store.now(), lastError: null } as const;
+      const first = plans.createCandidatePlan({
+        projectId: project.id,
+        sourceExplorerThreadId: explorer.id,
+        explorerPlanId,
+        title: "First",
+        resolvedContract: planContractFixture({ store, projectId: project.id, title: "First" }),
+      });
+      const second = plans.createCandidatePlan({
+        projectId: project.id,
+        sourceExplorerThreadId: explorer.id,
+        explorerPlanId,
+        title: "Second",
+        resolvedContract: planContractFixture({ store, projectId: project.id, title: "Second" }),
+      });
+      const state = {
+        planId: first.id,
+        projectId: project.id,
+        status: "QUEUED",
+        waitReason: null,
+        queuedAt: store.now(),
+        runId: null,
+        attempt: 1,
+        updatedAt: store.now(),
+        lastError: null,
+      } as const;
       store.saveDispatchState(state);
       store.saveDispatchState({ ...state, planId: second.id });
 
@@ -411,7 +566,17 @@ describe("store contract: Plan 与查询投影", () => {
 describe("store contract: Run 与合并状态", () => {
   it("finds a MergeRequest by its Run and keeps the update visible", () => {
     assertBothStores((store) => {
-      store.saveMergeRequest({ id: "merge-1", runId: "run-1", planId: "plan-1", sourceCommit: "abc", targetBranch: "main", status: "OPEN", humanConfirmationRequired: true, createdAt: store.now(), mergedAt: null });
+      store.saveMergeRequest({
+        id: "merge-1",
+        runId: "run-1",
+        planId: "plan-1",
+        sourceCommit: "abc",
+        targetBranch: "main",
+        status: "OPEN",
+        humanConfirmationRequired: true,
+        createdAt: store.now(),
+        mergedAt: null,
+      });
       expect(store.findMergeRequestByRun("run-1")?.id).toBe("merge-1");
       expect(store.findMergeRequestByRun("run-missing")).toBeUndefined();
 
@@ -427,7 +592,17 @@ describe("store contract: Run 与合并状态", () => {
    */
   it("skips a superseded MergeRequest when looking one up by Run", () => {
     assertBothStores((store) => {
-      store.saveMergeRequest({ id: "merge-1", runId: "run-1", planId: "plan-1", sourceCommit: "abc", targetBranch: "main", status: "SUPERSEDED", humanConfirmationRequired: true, createdAt: store.now(), mergedAt: null });
+      store.saveMergeRequest({
+        id: "merge-1",
+        runId: "run-1",
+        planId: "plan-1",
+        sourceCommit: "abc",
+        targetBranch: "main",
+        status: "SUPERSEDED",
+        humanConfirmationRequired: true,
+        createdAt: store.now(),
+        mergedAt: null,
+      });
 
       expect(store.findMergeRequestByRun("run-1")).toBeUndefined();
       // 按 id 仍读得到——它是审计事实，只是不再是"当前那个"。
@@ -438,9 +613,36 @@ describe("store contract: Run 与合并状态", () => {
   it("round-trips Run guidance with its delivery mode and consumption", () => {
     assertBothStores((store) => {
       const createdAt = store.now();
-      store.saveRunGuidance({ id: "guidance-1", runId: "run-1", content: "顺便把空指针也修了", mode: "QUEUE", status: "PENDING", authorId: "local-user", createdAt, consumedAt: null });
-      store.saveRunGuidance({ id: "guidance-2", runId: "run-1", content: "先看 X", mode: "STEER", status: "PENDING", authorId: "local-user", createdAt, consumedAt: null });
-      store.saveRunGuidance({ id: "guidance-3", runId: "run-2", content: "别的 Run", mode: "STEER", status: "PENDING", authorId: "local-user", createdAt, consumedAt: null });
+      store.saveRunGuidance({
+        id: "guidance-1",
+        runId: "run-1",
+        content: "顺便把空指针也修了",
+        mode: "QUEUE",
+        status: "PENDING",
+        authorId: "local-user",
+        createdAt,
+        consumedAt: null,
+      });
+      store.saveRunGuidance({
+        id: "guidance-2",
+        runId: "run-1",
+        content: "先看 X",
+        mode: "STEER",
+        status: "PENDING",
+        authorId: "local-user",
+        createdAt,
+        consumedAt: null,
+      });
+      store.saveRunGuidance({
+        id: "guidance-3",
+        runId: "run-2",
+        content: "别的 Run",
+        mode: "STEER",
+        status: "PENDING",
+        authorId: "local-user",
+        createdAt,
+        consumedAt: null,
+      });
 
       expect(store.listRunGuidance("run-1").map((item) => item.id)).toEqual(["guidance-1", "guidance-2"]);
       // 两个过滤器各自生效，也都能组合。
@@ -461,10 +663,27 @@ describe("store contract: Run 与合并状态", () => {
     // 这个差异是有意的（内存是宽松的测试替身），但正因如此，夹具必须建出真实的前置事实——
     // 否则这组断言在内存上过、在 SQLite 上抛 FOREIGN KEY，等于把替身的宽松当成契约。
     assertBothStores((store) => {
-      store.saveRun({ id: "run-1", projectId: "project-1", planId: "plan-1", planRevision: 1, status: "IN_PROGRESS", branch: "factory/run-1", workspacePath: "/tmp/run-1", baseCommit: "HEAD", executionThreadId: "thread-1", createdAt: store.now(), startedAt: store.now() });
+      store.saveRun({
+        id: "run-1",
+        projectId: "project-1",
+        planId: "plan-1",
+        planRevision: 1,
+        status: "IN_PROGRESS",
+        branch: "factory/run-1",
+        workspacePath: "/tmp/run-1",
+        baseCommit: "HEAD",
+        executionThreadId: "thread-1",
+        createdAt: store.now(),
+        startedAt: store.now(),
+      });
       store.saveExecutionThread({ id: "thread-1", runId: "run-1", state: "ACTIVE", journal: [] });
       const first = store.appendExecutionJournal({ executionThreadId: "thread-1", runId: "run-1", type: "RUN_CREATED", payload: {} });
-      const second = store.appendExecutionJournal({ executionThreadId: "thread-1", runId: "run-1", type: "MODEL_OUTPUT", payload: { text: "hi" } });
+      const second = store.appendExecutionJournal({
+        executionThreadId: "thread-1",
+        runId: "run-1",
+        type: "MODEL_OUTPUT",
+        payload: { text: "hi" },
+      });
 
       expect(second.sequence).toBe(first.sequence + 1);
       expect(second.payload).toMatchObject({ text: "hi" });
@@ -473,11 +692,28 @@ describe("store contract: Run 与合并状态", () => {
 
   it("round-trips persisted tool calls", () => {
     assertBothStores((store) => {
-      store.saveToolCall({ callId: "call-1", loopId: "loop-1", role: "explorer", tool: "read_file", status: "PENDING", inputHash: "sha256:abc", result: null, startedAt: store.now(), completedAt: null });
+      store.saveToolCall({
+        callId: "call-1",
+        loopId: "loop-1",
+        role: "explorer",
+        tool: "read_file",
+        status: "PENDING",
+        inputHash: "sha256:abc",
+        result: null,
+        startedAt: store.now(),
+        completedAt: null,
+      });
 
       expect(store.getToolCall("call-1")?.status).toBe("PENDING");
 
-      const outcome: ToolCallResult = { callId: "call-1", allowed: true, status: "SUCCEEDED", reason: null, result: { content: "file body" }, audited: true };
+      const outcome: ToolCallResult = {
+        callId: "call-1",
+        allowed: true,
+        status: "SUCCEEDED",
+        reason: null,
+        result: { content: "file body" },
+        audited: true,
+      };
       store.updateToolCall({ ...store.getToolCall("call-1")!, status: "SUCCEEDED", result: outcome, completedAt: store.now() });
 
       expect(store.getToolCall("call-1")?.status).toBe("SUCCEEDED");
@@ -491,8 +727,23 @@ describe("store contract: Run 与合并状态", () => {
     // 于是生产上 NO_PROJECT_VERIFICATION_COMMANDS 永远读不出来，而内存测试全绿。
     // 这条断言就是那次漂移的守卫——两侧都必须把 reason 存下来并原样读回。
     assertBothStores((store) => {
-      store.saveVerificationRun({ id: "verify-1", runId: "run-1", status: "SKIPPED", repairAttempts: 0, commandResults: [], reason: "NO_PROJECT_VERIFICATION_COMMANDS", completedAt: store.now() });
-      store.saveVerificationRun({ id: "verify-2", runId: "run-2", status: "PASSED", repairAttempts: 0, commandResults: [], completedAt: store.now() });
+      store.saveVerificationRun({
+        id: "verify-1",
+        runId: "run-1",
+        status: "SKIPPED",
+        repairAttempts: 0,
+        commandResults: [],
+        reason: "NO_PROJECT_VERIFICATION_COMMANDS",
+        completedAt: store.now(),
+      });
+      store.saveVerificationRun({
+        id: "verify-2",
+        runId: "run-2",
+        status: "PASSED",
+        repairAttempts: 0,
+        commandResults: [],
+        completedAt: store.now(),
+      });
 
       expect(store.getVerificationRun("run-1")?.reason).toBe("NO_PROJECT_VERIFICATION_COMMANDS");
       expect(store.listVerificationRuns("run-1")).toHaveLength(1);
@@ -530,10 +781,12 @@ describe("store contract: 幂等与事务", () => {
     });
     expect(store.getIdempotency("turn", "committed")).toEqual({ ok: true });
 
-    expect(() => store.runInTransaction?.(() => {
-      store.saveIdempotency("turn", "rolled-back", { ok: true });
-      throw new Error("transaction body failed");
-    })).toThrow(/transaction body failed/);
+    expect(() =>
+      store.runInTransaction?.(() => {
+        store.saveIdempotency("turn", "rolled-back", { ok: true });
+        throw new Error("transaction body failed");
+      }),
+    ).toThrow(/transaction body failed/);
 
     expect(store.getIdempotency("turn", "rolled-back")).toBeUndefined();
   });

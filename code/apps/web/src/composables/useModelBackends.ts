@@ -27,12 +27,17 @@ export function useModelBackends() {
     // 而"目录取不到"应当是降级（下拉只显示当前值），不是让整个面板崩掉。
     pending = Promise.resolve()
       .then(() => api.modelBackends())
-      .then((response) => { catalog.value = response; loadError.value = null; })
+      .then((response) => {
+        catalog.value = response;
+        loadError.value = null;
+      })
       .catch((caught: unknown) => {
         loadError.value = caught instanceof Error ? caught.message : "模型后端目录加载失败";
         if (force) catalog.value = null;
       })
-      .finally(() => { pending = null; });
+      .finally(() => {
+        pending = null;
+      });
     return pending;
   }
 

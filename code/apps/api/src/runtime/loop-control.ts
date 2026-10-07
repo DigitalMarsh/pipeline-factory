@@ -23,9 +23,23 @@ export function persistLoopControl(store: PipelineStore, loop: AgentLoop, state:
   if (terminal.has(loop.state)) throw new Error(`AgentLoop ${loop.id} is already ${loop.state}`);
   if (state === "RUNNING" && loop.state !== "PAUSED") throw new Error(`AgentLoop ${loop.id} cannot be resumed from ${loop.state}`);
   if (state === "PAUSED" && loop.state !== "RUNNING") throw new Error(`AgentLoop ${loop.id} cannot be paused from ${loop.state}`);
-  const updated = { ...loop, state, ...(state === "CANCELLED" ? { completedAt: store.now() } : {}), checkpointJson: JSON.stringify({ reason, stepCount: loop.stepCount }) };
+  const updated = {
+    ...loop,
+    state,
+    ...(state === "CANCELLED" ? { completedAt: store.now() } : {}),
+    checkpointJson: JSON.stringify({ reason, stepCount: loop.stepCount }),
+  };
   store.updateAgentLoop(updated);
-  store.appendAgentLoopStep({ loopId: loop.id, stepType: state === "CANCELLED" ? "LOOP_COMPLETED" : state === "PAUSED" ? "LOOP_SUSPENDED" : "LOOP_RESUMED", status: state === "CANCELLED" ? "CANCELLED" : "RUNNING", payload: { reason } });
-  store.appendEvent({ type: state === "CANCELLED" ? "agent.loop.cancelled" : state === "PAUSED" ? "agent.loop.paused" : "agent.loop.resumed", aggregateId: loop.id, payload: { reason } });
+  store.appendAgentLoopStep({
+    loopId: loop.id,
+    stepType: state === "CANCELLED" ? "LOOP_COMPLETED" : state === "PAUSED" ? "LOOP_SUSPENDED" : "LOOP_RESUMED",
+    status: state === "CANCELLED" ? "CANCELLED" : "RUNNING",
+    payload: { reason },
+  });
+  store.appendEvent({
+    type: state === "CANCELLED" ? "agent.loop.cancelled" : state === "PAUSED" ? "agent.loop.paused" : "agent.loop.resumed",
+    aggregateId: loop.id,
+    payload: { reason },
+  });
   return updated;
 }

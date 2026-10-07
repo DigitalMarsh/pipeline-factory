@@ -12,6 +12,24 @@
  */
 import type { FactoryConfig } from "../config.js";
 
-export function readCommandDefinitions(config: FactoryConfig): Array<{ commandId: string; category: "verification"; enabled: true; argv: readonly [string, ...string[]]; environment?: Readonly<Record<string, string>> | undefined }> {
-  return config.project.commands.flatMap((command) => command.argv.length > 0 ? [{ commandId: command.commandId, category: "verification" as const, enabled: true as const, argv: [command.argv[0]!, ...command.argv.slice(1)] as readonly [string, ...string[]], environment: command.environment }] : []);
+export function readCommandDefinitions(config: FactoryConfig): Array<{
+  commandId: string;
+  category: "verification";
+  enabled: true;
+  argv: readonly [string, ...string[]];
+  environment?: Readonly<Record<string, string>> | undefined;
+}> {
+  return config.project.commands.flatMap((command) =>
+    command.argv.length > 0
+      ? [
+          {
+            commandId: command.commandId,
+            category: "verification" as const,
+            enabled: true as const,
+            argv: [command.argv[0]!, ...command.argv.slice(1)] as readonly [string, ...string[]],
+            environment: command.environment,
+          },
+        ]
+      : [],
+  );
 }

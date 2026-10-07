@@ -39,7 +39,8 @@ export function taskBucketFor(plan: Plan): TaskBucketKey {
   const dispatchStatus = plan.dispatch?.status ?? "";
   if (plan.status === "MERGED") return "completed";
   if (["IN_PROGRESS", "VERIFYING"].includes(plan.status) || ["RUNNING", "VERIFYING"].includes(dispatchStatus)) return "running";
-  if (["MERGE_READY", "BLOCKED", "NEEDS_PLAN_CHANGE"].includes(plan.status) || ["NEEDS_REVIEW", "BLOCKED"].includes(dispatchStatus)) return "attention";
+  if (["MERGE_READY", "BLOCKED", "NEEDS_PLAN_CHANGE"].includes(plan.status) || ["NEEDS_REVIEW", "BLOCKED"].includes(dispatchStatus))
+    return "attention";
   return "pending";
 }
 

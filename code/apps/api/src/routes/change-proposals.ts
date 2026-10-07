@@ -35,9 +35,17 @@ export function registerChangeProposalRoutes(app: FastifyInstance, deps: ChangeP
     const body = changeProposalBody.safeParse(request.body ?? {});
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid ChangeProposal" });
     try {
-      const proposal = changeProposals.create({ runId: params.data.runId, reason: body.data.reason, requestedChanges: body.data.requestedChanges, resolvedContract: body.data.resolvedContract as unknown as ResolvedPlanContract, createdBy: body.data.createdBy });
+      const proposal = changeProposals.create({
+        runId: params.data.runId,
+        reason: body.data.reason,
+        requestedChanges: body.data.requestedChanges,
+        resolvedContract: body.data.resolvedContract as unknown as ResolvedPlanContract,
+        createdBy: body.data.createdBy,
+      });
       return reply.code(201).send({ proposal });
-    } catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "ChangeProposal cannot be created" }); }
+    } catch (error) {
+      return reply.code(409).send({ error: error instanceof Error ? error.message : "ChangeProposal cannot be created" });
+    }
   });
 
   app.get("/api/v4/runs/:runId/change-proposals", async (request, reply) => {
@@ -56,6 +64,8 @@ export function registerChangeProposalRoutes(app: FastifyInstance, deps: ChangeP
     try {
       const approved = await changeProposals.approve(params.data.proposalId, body.data.actorId);
       return { ...approved, plan: store.getPlan(approved.plan.id) ?? approved.plan, run: null };
-    } catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "ChangeProposal cannot be approved" }); }
+    } catch (error) {
+      return reply.code(409).send({ error: error instanceof Error ? error.message : "ChangeProposal cannot be approved" });
+    }
   });
 }

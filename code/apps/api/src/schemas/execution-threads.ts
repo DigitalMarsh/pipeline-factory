@@ -10,6 +10,12 @@
  */
 import { z } from "zod";
 
-export const projectExecutionTurnBody = z.object({ content: z.string().trim().min(1).max(20_000), clientTurnId: z.string().trim().min(1).max(160) });
-export const projectExecutionPreferencesBody = z.object({ model: z.string().trim().min(1).max(200).nullable(), reasoningEffort: z.enum(["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]).nullable() });
+export const projectExecutionTurnBody = z.object({
+  content: z.string().trim().min(1).max(20_000),
+  clientTurnId: z.string().trim().min(1).max(160),
+});
+export const projectExecutionPreferencesBody = z.object({
+  model: z.string().trim().min(1).max(200).nullable(),
+  reasoningEffort: z.enum(["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]).nullable(),
+});
 export const projectExecutionEventsQuery = z.object({ afterSequence: z.coerce.number().int().nonnegative().optional() });

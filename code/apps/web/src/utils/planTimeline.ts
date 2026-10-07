@@ -78,7 +78,11 @@ export function planForActivity(item: Pick<ExplorerActivityItem, "id">, bindings
 }
 
 /** 从统一绑定结果读取当前消息承载的 Plan，避免同一 turn 的多个文本片段重复渲染。 */
-export function findPlanForActivity(activity: ExplorerActivityItem, plans: Plan[], activities: ExplorerActivityItem[] = [activity]): Plan | null {
+export function findPlanForActivity(
+  activity: ExplorerActivityItem,
+  plans: Plan[],
+  activities: ExplorerActivityItem[] = [activity],
+): Plan | null {
   return planActivityBindings(plans, activities).get(activity.id) ?? null;
 }
 
@@ -91,7 +95,12 @@ export function findPlanForActivity(activity: ExplorerActivityItem, plans: Plan[
  * 是因为它同时被 `planTimelineItems` 与 `taskTree` 使用，且两者目前都没有实际调用方；
  * 真要收，得连它们一起收，不要只改这一处。
  */
-export function getPlanTimelineTarget(plan: Plan, activities: ExplorerActivityItem[], allPlans: Plan[] = [plan], bindings = planActivityBindings(allPlans, activities)): string {
+export function getPlanTimelineTarget(
+  plan: Plan,
+  activities: ExplorerActivityItem[],
+  allPlans: Plan[] = [plan],
+  bindings = planActivityBindings(allPlans, activities),
+): string {
   const isBound = [...bindings.values()].some((candidate) => planIdentity(candidate) === planIdentity(plan));
   return isBound ? `plan-generated-${planIdentity(plan)}` : `plan-created-${planIdentity(plan)}`;
 }
@@ -109,7 +118,11 @@ export function planAnchorKey(plan: Plan | null): string {
   return plan ? `plan-${planIdentity(plan)}` : "";
 }
 
-export function planTimelineItems(plans: Plan[], activities: ExplorerActivityItem[], bindings = planActivityBindings(plans, activities)): PlanTimelineItem[] {
+export function planTimelineItems(
+  plans: Plan[],
+  activities: ExplorerActivityItem[],
+  bindings = planActivityBindings(plans, activities),
+): PlanTimelineItem[] {
   const unique = new Map<string, Plan>();
   for (const plan of plans) unique.set(planIdentity(plan), plan);
   return [...unique.values()]

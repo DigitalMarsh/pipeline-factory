@@ -24,24 +24,64 @@ export const REQUIRED_PLAN_AREAS = [
   "合并策略与人工确认",
 ] as const;
 
-export type ExplorerPlanRequirement = { key: string; label: string; requiredFields: string[]; optionalFields: string[]; factoryOwnedFields?: string[] | undefined };
+export type ExplorerPlanRequirement = {
+  key: string;
+  label: string;
+  requiredFields: string[];
+  optionalFields: string[];
+  factoryOwnedFields?: string[] | undefined;
+};
 export const EXPLORER_PLAN_REQUIREMENTS = {
   requirementsVersion: 1,
   schemaVersion: 2,
   areas: [
-    { key: "objective", label: "目标与用户范围", requiredFields: ["title", "objective.goal", "objective.audience", "objective.context"], optionalFields: [] },
-    { key: "scope", label: "功能范围与排除项", requiredFields: ["objective.outOfScope", "scope.includePaths", "scope.excludePaths"], optionalFields: [] },
+    {
+      key: "objective",
+      label: "目标与用户范围",
+      requiredFields: ["title", "objective.goal", "objective.audience", "objective.context"],
+      optionalFields: [],
+    },
+    {
+      key: "scope",
+      label: "功能范围与排除项",
+      requiredFields: ["objective.outOfScope", "scope.includePaths", "scope.excludePaths"],
+      optionalFields: [],
+    },
     { key: "design", label: "技术方案与关键约束", requiredFields: ["design.technicalConstraints", "design.risks"], optionalFields: [] },
     { key: "safety", label: "数据、安全与异常处理", requiredFields: ["design.dataSecurity", "design.failureHandling"], optionalFields: [] },
-    { key: "verification", label: "验收标准与验证命令", requiredFields: ["objective.acceptanceCriteria", "verification.mode"], optionalFields: ["verification.suites"] },
-    { key: "delivery", label: "实施任务、依赖与冲突", requiredFields: ["tasks", "tasks[].changes", "dependencies", "conflicts", "execution"], optionalFields: ["execution.maxRepairAttempts"] },
+    {
+      key: "verification",
+      label: "验收标准与验证命令",
+      requiredFields: ["objective.acceptanceCriteria", "verification.mode"],
+      optionalFields: ["verification.suites"],
+    },
+    {
+      key: "delivery",
+      label: "实施任务、依赖与冲突",
+      requiredFields: ["tasks", "tasks[].changes", "dependencies", "conflicts", "execution"],
+      optionalFields: ["execution.maxRepairAttempts"],
+    },
     { key: "merge", label: "合并策略与人工确认", requiredFields: ["merge.strategy", "merge.requireHumanMerge"], optionalFields: [] },
   ] satisfies ExplorerPlanRequirement[],
   artifactModes: [
     { mode: "CONVERSATION", label: "对话产物", includePaths: "EMPTY", verificationMode: "NONE", executable: false },
-    { mode: "REPOSITORY_FILE", label: "仓库文件", includePaths: "NON_EMPTY", verificationMode: "PROJECT_DEFAULT_OR_NONE", executable: true },
+    {
+      mode: "REPOSITORY_FILE",
+      label: "仓库文件",
+      includePaths: "NON_EMPTY",
+      verificationMode: "PROJECT_DEFAULT_OR_NONE",
+      executable: true,
+    },
   ] as const,
-  factoryOwnedFields: ["repository", "baseBranch", "baseCommit", "configVersion", "configHash", "verification.commandIds", "verificationCommandIds"],
+  factoryOwnedFields: [
+    "repository",
+    "baseBranch",
+    "baseCommit",
+    "configVersion",
+    "configHash",
+    "verification.commandIds",
+    "verificationCommandIds",
+  ],
 } as const;
 
 /** 注入 Explorer 的职责和 machine-readable Plan 协议；变更需同步协议解析器。 */

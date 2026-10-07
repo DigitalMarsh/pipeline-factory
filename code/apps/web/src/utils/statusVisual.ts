@@ -52,7 +52,13 @@ export function statusVisualFor(status: string): StatusVisual {
   // 认不出来的状态 `planStatusLabel` 原样返回——那说明两张表都不认识它，按老规矩人性化一下。
   const label = planStatusLabel(status);
   if (label === status) {
-    return { label: status.replaceAll("_", " ").toLowerCase().replace(/^./, (character) => character.toUpperCase()), tone: "neutral" };
+    return {
+      label: status
+        .replaceAll("_", " ")
+        .toLowerCase()
+        .replace(/^./, (character) => character.toUpperCase()),
+      tone: "neutral",
+    };
   }
   return { label, tone: PLAN_STATUS_TONES[status] ?? "neutral" };
 }

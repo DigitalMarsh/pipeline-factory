@@ -38,11 +38,23 @@ import type {
 
 /** 新建 ExplorerPlan 时的默认探索状态：没有任何区域完成，也没有候选方案。 */
 export function defaultPlanExploration(): PlanExploration {
-  return { status: "INCOMPLETE", missing: [...REQUIRED_PLAN_AREAS], completed: [], diagnostics: [], candidatePlanId: null, lastAssessedTurnId: null };
+  return {
+    status: "INCOMPLETE",
+    missing: [...REQUIRED_PLAN_AREAS],
+    completed: [],
+    diagnostics: [],
+    candidatePlanId: null,
+    lastAssessedTurnId: null,
+  };
 }
 
 /** 新建 ExplorerPlan 的默认记录；标题是占位值，由标题生成器异步补齐。 */
-export function defaultExplorerPlan(thread: Pick<ExplorerThread, "id" | "projectId" | "createdAt">, id: string, ordinal: number, now: string): ExplorerPlan {
+export function defaultExplorerPlan(
+  thread: Pick<ExplorerThread, "id" | "projectId" | "createdAt">,
+  id: string,
+  ordinal: number,
+  now: string,
+): ExplorerPlan {
   return {
     id,
     explorerThreadId: thread.id,
@@ -70,19 +82,26 @@ export function defaultThreadContextSummary(now: string): ExplorerThreadContextS
 /** 校验从库里读回的 VerificationRun 行；形状不符返回 false 而不是抛错。 */
 export function isVerificationRun(value: unknown): value is VerificationRun {
   if (!isRecord(value)) return false;
-  return typeof value.id === "string"
-    && typeof value.runId === "string"
-    && (value.status === "PASSED" || value.status === "SKIPPED" || value.status === "FAILED" || value.status === "BLOCKED")
-    && typeof value.repairAttempts === "number"
-    && Number.isInteger(value.repairAttempts)
-    && Array.isArray(value.commandResults)
-    && typeof value.completedAt === "string";
+  return (
+    typeof value.id === "string" &&
+    typeof value.runId === "string" &&
+    (value.status === "PASSED" || value.status === "SKIPPED" || value.status === "FAILED" || value.status === "BLOCKED") &&
+    typeof value.repairAttempts === "number" &&
+    Number.isInteger(value.repairAttempts) &&
+    Array.isArray(value.commandResults) &&
+    typeof value.completedAt === "string"
+  );
 }
 
 /** 把存成 JSON 字符串的 string[] 还原；解析失败或形状不符都回落 fallback。 */
 export function parseStringArray(value: unknown, fallback: string[]): string[] {
   if (typeof value !== "string") return [...fallback];
-  try { const parsed: unknown = JSON.parse(value); return isStringArray(parsed) ? parsed : [...fallback]; } catch { return [...fallback]; }
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isStringArray(parsed) ? parsed : [...fallback];
+  } catch {
+    return [...fallback];
+  }
 }
 
 /** 把存成 JSON 字符串的上下文摘要还原；version 不是 1 就整体回落默认值。 */
@@ -90,8 +109,14 @@ export function parseThreadContextSummary(value: unknown, fallbackTime: string):
   if (typeof value !== "string") return defaultThreadContextSummary(fallbackTime);
   try {
     const parsed = JSON.parse(value) as Partial<ExplorerThreadContextSummary>;
-    if (parsed.version !== 1 || !Array.isArray(parsed.completedPlans) || !Array.isArray(parsed.openPlanIds)) return defaultThreadContextSummary(fallbackTime);
-    return { version: 1, updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : fallbackTime, completedPlans: parsed.completedPlans as ExplorerThreadContextSummary["completedPlans"], openPlanIds: parsed.openPlanIds.filter((id): id is string => typeof id === "string") };
+    if (parsed.version !== 1 || !Array.isArray(parsed.completedPlans) || !Array.isArray(parsed.openPlanIds))
+      return defaultThreadContextSummary(fallbackTime);
+    return {
+      version: 1,
+      updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : fallbackTime,
+      completedPlans: parsed.completedPlans as ExplorerThreadContextSummary["completedPlans"],
+      openPlanIds: parsed.openPlanIds.filter((id): id is string => typeof id === "string"),
+    };
   } catch {
     return defaultThreadContextSummary(fallbackTime);
   }
@@ -102,21 +127,31 @@ export function parsePlanValidationIssues(value: unknown): PlanValidationIssue[]
   try {
     const parsed = JSON.parse(String(value ?? "[]"));
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((item): item is PlanValidationIssue => isRecord(item)
-      && typeof item.path === "string"
-      && typeof item.code === "string"
-      && typeof item.area === "string"
-      && typeof item.message === "string")
+    return parsed
+      .filter(
+        (item): item is PlanValidationIssue =>
+          isRecord(item) &&
+          typeof item.path === "string" &&
+          typeof item.code === "string" &&
+          typeof item.area === "string" &&
+          typeof item.message === "string",
+      )
       .map((item) => ({ path: item.path, code: item.code as PlanValidationIssue["code"], area: item.area, message: item.message }));
-  } catch { return []; }
+  } catch {
+    return [];
+  }
 }
 
 const LEGACY_AUTO_TITLES = new Set(["New Explorer", "Previous exploration", "ExplorerThread"]);
 
 /** 判定标题来源：空标题与历史自动标题都归为 AUTO/PLACEHOLDER，其余视为用户手填。 */
-export function threadTitleMetadata(title: string | undefined, createdAt: string): { title: string; titleSource: ExplorerTitleSource; titleStatus: ExplorerTitleStatus } {
+export function threadTitleMetadata(
+  title: string | undefined,
+  createdAt: string,
+): { title: string; titleSource: ExplorerTitleSource; titleStatus: ExplorerTitleStatus } {
   const normalized = title?.trim();
-  if (!normalized || LEGACY_AUTO_TITLES.has(normalized)) return { title: placeholderExplorerTitle(createdAt), titleSource: "AUTO", titleStatus: "PLACEHOLDER" };
+  if (!normalized || LEGACY_AUTO_TITLES.has(normalized))
+    return { title: placeholderExplorerTitle(createdAt), titleSource: "AUTO", titleStatus: "PLACEHOLDER" };
   return { title: normalized, titleSource: "MANUAL", titleStatus: "GENERATED" };
 }
 

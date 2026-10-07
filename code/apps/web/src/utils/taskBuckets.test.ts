@@ -7,7 +7,13 @@ import { TASK_BUCKETS, countTaskBuckets, filterTasksByBucket, taskBucketFor } fr
 import type { Plan } from "../types";
 
 function plan(id: string, status: string, dispatchStatus?: string): Plan {
-  return { id, planId: id, title: id, status, dispatch: dispatchStatus ? { status: dispatchStatus } as Plan["dispatch"] : null } as unknown as Plan;
+  return {
+    id,
+    planId: id,
+    title: id,
+    status,
+    dispatch: dispatchStatus ? ({ status: dispatchStatus } as Plan["dispatch"]) : null,
+  } as unknown as Plan;
 }
 
 describe("task buckets", () => {

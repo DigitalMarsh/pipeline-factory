@@ -12,6 +12,10 @@ describe("optional async loading", () => {
   });
 
   it("turns a missing optional resource into null", async () => {
-    await expect(optional(async () => { throw new Error("not found"); })).resolves.toBeNull();
+    await expect(
+      optional(async () => {
+        throw new Error("not found");
+      }),
+    ).resolves.toBeNull();
   });
 });

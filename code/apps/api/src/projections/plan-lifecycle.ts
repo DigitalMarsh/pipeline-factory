@@ -23,12 +23,40 @@
  *
  * 依赖方向：本文件不依赖同目录其他投影。`workbench.ts` 单向依赖本文件的 `planProjection`。
  */
-import type { CandidatePlan, ChangeProposal, MergeRequest, PipelineStore, PlanLifecycleEntry, PlanLifecycleStatus, Run } from "@pipeline-factory/domain";
+import type {
+  CandidatePlan,
+  ChangeProposal,
+  MergeRequest,
+  PipelineStore,
+  PlanLifecycleEntry,
+  PlanLifecycleStatus,
+  Run,
+} from "@pipeline-factory/domain";
 
-const PLAN_LIFECYCLE_ORDER: Array<PlanLifecycleStatus> = ["DRAFT", "READY", "ENQUEUED", "DISPATCHED", "IN_PROGRESS", "VERIFYING", "MERGE_READY", "MERGED"];
+const PLAN_LIFECYCLE_ORDER: Array<PlanLifecycleStatus> = [
+  "DRAFT",
+  "READY",
+  "ENQUEUED",
+  "DISPATCHED",
+  "IN_PROGRESS",
+  "VERIFYING",
+  "MERGE_READY",
+  "MERGED",
+];
 
 const PLAN_LIFECYCLE_NORMALIZED = new Set<PlanLifecycleStatus>(PLAN_LIFECYCLE_ORDER);
-const PLAN_LIFECYCLE_PROGRESS_STATUSES = new Set<PlanLifecycleStatus>(["READY", "ENQUEUED", "DISPATCHED", "IN_PROGRESS", "VERIFYING", "MERGE_READY", "MERGED", "BLOCKED", "NEEDS_PLAN_CHANGE", "NEEDS_CONFIGURATION"]);
+const PLAN_LIFECYCLE_PROGRESS_STATUSES = new Set<PlanLifecycleStatus>([
+  "READY",
+  "ENQUEUED",
+  "DISPATCHED",
+  "IN_PROGRESS",
+  "VERIFYING",
+  "MERGE_READY",
+  "MERGED",
+  "BLOCKED",
+  "NEEDS_PLAN_CHANGE",
+  "NEEDS_CONFIGURATION",
+]);
 const UNCONFIRMED_LIFECYCLE_REASON = "Plan lifecycle is invalid: it reached a later state without a confirmation record.";
 
 function normalizedLifecycleStatus(value: unknown): PlanLifecycleStatus | null {
@@ -44,9 +72,17 @@ function normalizedLifecycleStatus(value: unknown): PlanLifecycleStatus | null {
  * 维护提示：在下面的循环里新增分支时，必须把对应事件类型加进来，否则该事件读不到。
  */
 const PLAN_LIFECYCLE_EVENT_TYPES = [
-  "plan.candidate.created", "plan.status.changed", "plan.confirmed", "plan.revision.confirmed",
-  "plan.configuration.revised", "plan.enqueued", "plan.dispatched", "verification.completed",
-  "change.proposal.created", "merge.confirmed", "plan.dispatch.state.changed",
+  "plan.candidate.created",
+  "plan.status.changed",
+  "plan.confirmed",
+  "plan.revision.confirmed",
+  "plan.configuration.revised",
+  "plan.enqueued",
+  "plan.dispatched",
+  "verification.completed",
+  "change.proposal.created",
+  "merge.confirmed",
+  "plan.dispatch.state.changed",
 ] as const;
 
 /**
@@ -114,15 +150,28 @@ function buildPlanLifecycle(store: PipelineStore, plan: CandidatePlan, revision:
   const dispatch = store.getDispatchState(plan.id);
   const currentStatus = dispatch?.waitReason === "NEEDS_CONFIGURATION" ? "NEEDS_CONFIGURATION" : normalizedLifecycleStatus(plan.status);
   const entries = new Map<PlanLifecycleStatus, PlanLifecycleEntry>();
-  const eventPlanId = (payload: Record<string, unknown>) => typeof payload.planId === "string" ? payload.planId : null;
-  const eventRevision = (payload: Record<string, unknown>) => typeof payload.revision === "number" ? payload.revision : null;
-  const relevant = store.listEvents({ afterSequence: 0, aggregateIds: planEventAggregateIds(plan, index), types: PLAN_LIFECYCLE_EVENT_TYPES })
+  const eventPlanId = (payload: Record<string, unknown>) => (typeof payload.planId === "string" ? payload.planId : null);
+  const eventRevision = (payload: Record<string, unknown>) => (typeof payload.revision === "number" ? payload.revision : null);
+  const relevant = store
+    .listEvents({ afterSequence: 0, aggregateIds: planEventAggregateIds(plan, index), types: PLAN_LIFECYCLE_EVENT_TYPES })
     .filter((event) => event.aggregateId === plan.id || event.aggregateId === run?.id || eventPlanId(event.payload) === plan.id);
-  const add = (status: PlanLifecycleStatus, occurredAt: string | null, options: { reason?: string | null; runId?: string | null; eventRevision?: number | null } = {}) => {
+  const add = (
+    status: PlanLifecycleStatus,
+    occurredAt: string | null,
+    options: { reason?: string | null; runId?: string | null; eventRevision?: number | null } = {},
+  ) => {
     if (options.eventRevision !== null && options.eventRevision !== undefined && options.eventRevision !== revision) return;
     const existing = entries.get(status);
     if (existing && existing.occurredAt && occurredAt && existing.occurredAt <= occurredAt) return;
-    entries.set(status, { status, occurredAt, revision, current: status === currentStatus, ...(options.reason !== undefined ? { reason: options.reason } : {}), ...(options.runId !== undefined ? { runId: options.runId } : {}), ...(run ? { executionThreadId: run.executionThreadId } : {}) });
+    entries.set(status, {
+      status,
+      occurredAt,
+      revision,
+      current: status === currentStatus,
+      ...(options.reason !== undefined ? { reason: options.reason } : {}),
+      ...(options.runId !== undefined ? { runId: options.runId } : {}),
+      ...(run ? { executionThreadId: run.executionThreadId } : {}),
+    });
   };
 
   add("DRAFT", plan.createdAt);
@@ -138,27 +187,56 @@ function buildPlanLifecycle(store: PipelineStore, plan: CandidatePlan, revision:
     if (event.type === "plan.candidate.created") add("DRAFT", event.occurredAt, { eventRevision: matchingEventRevision });
     if (event.type === "plan.status.changed") {
       const status = normalizedLifecycleStatus(payload.toStatus);
-      if (status) add(status, event.occurredAt, { reason: typeof payload.reason === "string" ? payload.reason : null, runId: typeof payload.runId === "string" ? payload.runId : null, eventRevision: eventRev });
+      if (status)
+        add(status, event.occurredAt, {
+          reason: typeof payload.reason === "string" ? payload.reason : null,
+          runId: typeof payload.runId === "string" ? payload.runId : null,
+          eventRevision: eventRev,
+        });
     }
-    if (event.type === "plan.confirmed" || event.type === "plan.revision.confirmed" || event.type === "plan.configuration.revised") add("READY", event.occurredAt, { eventRevision: matchingEventRevision });
-    if (event.type === "plan.enqueued") add("ENQUEUED", typeof payload.queuedAt === "string" ? payload.queuedAt : event.occurredAt, { eventRevision: matchingEventRevision });
-    if (event.type === "plan.dispatched") add("DISPATCHED", typeof payload.dispatchedAt === "string" ? payload.dispatchedAt : event.occurredAt, { eventRevision: matchingEventRevision });
+    if (event.type === "plan.confirmed" || event.type === "plan.revision.confirmed" || event.type === "plan.configuration.revised")
+      add("READY", event.occurredAt, { eventRevision: matchingEventRevision });
+    if (event.type === "plan.enqueued")
+      add("ENQUEUED", typeof payload.queuedAt === "string" ? payload.queuedAt : event.occurredAt, { eventRevision: matchingEventRevision });
+    if (event.type === "plan.dispatched")
+      add("DISPATCHED", typeof payload.dispatchedAt === "string" ? payload.dispatchedAt : event.occurredAt, {
+        eventRevision: matchingEventRevision,
+      });
     if (event.type === "verification.completed") {
       const verificationStatus = payload.status;
-      add(verificationStatus === "PASSED" || verificationStatus === "SKIPPED" ? "MERGE_READY" : "BLOCKED", typeof payload.completedAt === "string" ? payload.completedAt : event.occurredAt, { reason: verificationStatus === "PASSED" || verificationStatus === "SKIPPED" ? null : "Verification failed", runId: run?.id ?? null, eventRevision: matchingEventRevision });
+      add(
+        verificationStatus === "PASSED" || verificationStatus === "SKIPPED" ? "MERGE_READY" : "BLOCKED",
+        typeof payload.completedAt === "string" ? payload.completedAt : event.occurredAt,
+        {
+          reason: verificationStatus === "PASSED" || verificationStatus === "SKIPPED" ? null : "Verification failed",
+          runId: run?.id ?? null,
+          eventRevision: matchingEventRevision,
+        },
+      );
     }
-    if (event.type === "change.proposal.created") add("NEEDS_PLAN_CHANGE", event.occurredAt, { reason: typeof payload.reason === "string" ? payload.reason : null, runId: typeof payload.runId === "string" ? payload.runId : null, eventRevision: matchingEventRevision });
+    if (event.type === "change.proposal.created")
+      add("NEEDS_PLAN_CHANGE", event.occurredAt, {
+        reason: typeof payload.reason === "string" ? payload.reason : null,
+        runId: typeof payload.runId === "string" ? payload.runId : null,
+        eventRevision: matchingEventRevision,
+      });
     if (event.type === "merge.confirmed") add("MERGED", event.occurredAt, { runId: run?.id ?? null, eventRevision: matchingEventRevision });
-    if (event.type === "plan.dispatch.state.changed" && payload.waitReason === "NEEDS_CONFIGURATION") add("NEEDS_CONFIGURATION", typeof payload.updatedAt === "string" ? payload.updatedAt : event.occurredAt, { reason: typeof payload.lastError === "string" ? payload.lastError : "Needs configuration", runId: typeof payload.runId === "string" ? payload.runId : null, eventRevision: eventRev });
+    if (event.type === "plan.dispatch.state.changed" && payload.waitReason === "NEEDS_CONFIGURATION")
+      add("NEEDS_CONFIGURATION", typeof payload.updatedAt === "string" ? payload.updatedAt : event.occurredAt, {
+        reason: typeof payload.lastError === "string" ? payload.lastError : "Needs configuration",
+        runId: typeof payload.runId === "string" ? payload.runId : null,
+        eventRevision: eventRev,
+      });
   }
 
-  if (dispatch?.waitReason === "NEEDS_CONFIGURATION") add("NEEDS_CONFIGURATION", dispatch.updatedAt ?? null, { reason: dispatch.lastError ?? "Needs configuration", runId: dispatch.runId });
+  if (dispatch?.waitReason === "NEEDS_CONFIGURATION")
+    add("NEEDS_CONFIGURATION", dispatch.updatedAt ?? null, { reason: dispatch.lastError ?? "Needs configuration", runId: dispatch.runId });
   let lifecycleCurrentStatus = currentStatus;
   const hasConfirmation = entries.has("READY");
-  const progressedWithoutConfirmation = !hasConfirmation && (
-    [...entries.keys()].some((status) => status !== "DRAFT")
-    || (currentStatus !== null && PLAN_LIFECYCLE_PROGRESS_STATUSES.has(currentStatus))
-  );
+  const progressedWithoutConfirmation =
+    !hasConfirmation &&
+    ([...entries.keys()].some((status) => status !== "DRAFT") ||
+      (currentStatus !== null && PLAN_LIFECYCLE_PROGRESS_STATUSES.has(currentStatus)));
   if (progressedWithoutConfirmation) {
     const draft = entries.get("DRAFT") ?? { status: "DRAFT" as const, occurredAt: plan.createdAt, revision, current: false };
     const existingBlocked = entries.get("BLOCKED");
@@ -179,7 +257,11 @@ function buildPlanLifecycle(store: PipelineStore, plan: CandidatePlan, revision:
       const bOrder = PLAN_LIFECYCLE_ORDER.indexOf(b.status);
       return (aOrder < 0 ? PLAN_LIFECYCLE_ORDER.length : aOrder) - (bOrder < 0 ? PLAN_LIFECYCLE_ORDER.length : bOrder);
     })
-    .map((entry) => ({ ...entry, current: entry.status === lifecycleCurrentStatus, ...(entry.runId === undefined && run ? { runId: run.id } : {}) }));
+    .map((entry) => ({
+      ...entry,
+      current: entry.status === lifecycleCurrentStatus,
+      ...(entry.runId === undefined && run ? { runId: run.id } : {}),
+    }));
 }
 
 function planExecutionThread(store: PipelineStore, plan: CandidatePlan) {
@@ -194,11 +276,19 @@ function planExecutionThread(store: PipelineStore, plan: CandidatePlan) {
  * **列表路径必须显式传**同一个 index，否则就退化成每个 Plan 建一次索引。
  */
 export function planProjection(store: PipelineStore, plan: CandidatePlan, index: PlanLifecycleIndex = buildPlanLifecycleIndex(store)) {
-  return { confirmedAt: plan.confirmedAt ?? null, lifecycle: buildPlanLifecycle(store, plan, plan.revision, index), executionThread: planExecutionThread(store, plan) };
+  return {
+    confirmedAt: plan.confirmedAt ?? null,
+    lifecycle: buildPlanLifecycle(store, plan, plan.revision, index),
+    executionThread: planExecutionThread(store, plan),
+  };
 }
 
 /** 将 PlanRevision 的快照版本与当前 Project 对比，供 Plan Center 显示 CURRENT/CHANGED/LEGACY。 */
-export function decoratePlanRows(store: PipelineStore, rows: Array<{ planId: string; revision: number; projectId: string }>, index: PlanLifecycleIndex = buildPlanLifecycleIndex(store)) {
+export function decoratePlanRows(
+  store: PipelineStore,
+  rows: Array<{ planId: string; revision: number; projectId: string }>,
+  index: PlanLifecycleIndex = buildPlanLifecycleIndex(store),
+) {
   return rows.map((row) => {
     const revision = store.getRevision(row.planId, row.revision);
     const plan = store.getPlan(row.planId);
@@ -209,9 +299,13 @@ export function decoratePlanRows(store: PipelineStore, rows: Array<{ planId: str
       ...(plan ? planProjection(store, plan, index) : { confirmedAt: null, lifecycle: [], executionThread: null }),
       projectConfigVersion: revision?.projectConfigVersion ?? null,
       projectConfigHash: revision?.projectConfigHash ?? null,
-      projectConfigStatus: !snapshot ? "LEGACY" : project && snapshot.configVersion === project.configVersion && snapshot.configHash === project.configHash ? "CURRENT" : "CHANGED",
+      projectConfigStatus: !snapshot
+        ? "LEGACY"
+        : project && snapshot.configVersion === project.configVersion && snapshot.configHash === project.configHash
+          ? "CURRENT"
+          : "CHANGED",
       dispatch: store.getDispatchState(row.planId) ?? null,
-      mergeRequest: plan?.runId ? store.findMergeRequestByRun(plan.runId) ?? null : null,
+      mergeRequest: plan?.runId ? (store.findMergeRequestByRun(plan.runId) ?? null) : null,
       ...(plan?.generatedSpec ? { generatedSpec: plan.generatedSpec } : {}),
       ...(plan?.resolvedContract ? { resolvedContract: plan.resolvedContract } : {}),
     };

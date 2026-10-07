@@ -13,11 +13,7 @@ describe("Explorer policy panel", () => {
   });
 
   it("describes the read-only boundary", () => {
-    expect(explorerPolicySections.map((section) => section.title)).toEqual([
-      "Explorer access",
-      "Disabled tools",
-      "Execution boundary",
-    ]);
+    expect(explorerPolicySections.map((section) => section.title)).toEqual(["Explorer access", "Disabled tools", "Execution boundary"]);
     expect(explorerPolicySections[1]?.items).toContain("Write files");
     expect(explorerPolicySections[1]?.items).toContain("Run shell commands");
   });

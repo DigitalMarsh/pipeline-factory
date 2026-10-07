@@ -43,7 +43,17 @@ export type ExplorerSseDeps = {
   load: () => Promise<boolean>;
 };
 
-const AGENT_LOOP_IMMEDIATE_REFRESH_EVENTS = new Set(["agent.step.gate_checked", "agent.loop.completed", "agent.loop.failed", "agent.loop.cancelled", "agent.loop.recovery_required", "agent.loop.paused", "agent.loop.resumed", "agent.input.required", "agent.input.resolved"]);
+const AGENT_LOOP_IMMEDIATE_REFRESH_EVENTS = new Set([
+  "agent.step.gate_checked",
+  "agent.loop.completed",
+  "agent.loop.failed",
+  "agent.loop.cancelled",
+  "agent.loop.recovery_required",
+  "agent.loop.paused",
+  "agent.loop.resumed",
+  "agent.input.required",
+  "agent.input.resolved",
+]);
 
 export function useExplorerSse(deps: ExplorerSseDeps) {
   let eventSource: EventSource | null = null;
@@ -60,12 +70,22 @@ export function useExplorerSse(deps: ExplorerSseDeps) {
     const requestThreadId = deps.thread.value.id;
     const requestToken = deps.projectScopeToken();
     const response = await api.getExplorerTurns(requestProjectId, requestThreadId, explorerPlanId);
-    if (!deps.isCurrentProjectScope(requestProjectId, requestToken) || deps.thread.value?.id !== requestThreadId || deps.activeExplorerPlan.value?.id !== explorerPlanId) return;
+    if (
+      !deps.isCurrentProjectScope(requestProjectId, requestToken) ||
+      deps.thread.value?.id !== requestThreadId ||
+      deps.activeExplorerPlan.value?.id !== explorerPlanId
+    )
+      return;
     deps.turns.value = response.items;
     await deps.refreshActivity();
     await deps.refreshPlanProjection();
     const inputResponse = await api.inputRequests(requestProjectId, requestThreadId, explorerPlanId);
-    if (!deps.isCurrentProjectScope(requestProjectId, requestToken) || deps.thread.value?.id !== requestThreadId || deps.activeExplorerPlan.value?.id !== explorerPlanId) return;
+    if (
+      !deps.isCurrentProjectScope(requestProjectId, requestToken) ||
+      deps.thread.value?.id !== requestThreadId ||
+      deps.activeExplorerPlan.value?.id !== explorerPlanId
+    )
+      return;
     deps.adoptInputRequest(null, inputResponse.items);
     await nextTick();
     if (deps.timeline.value) scrollTimelineToLatest(deps.timeline.value);
@@ -78,12 +98,17 @@ export function useExplorerSse(deps: ExplorerSseDeps) {
     const connectionThreadId = deps.thread.value.id;
     const connectionPlanId = deps.activeExplorerPlan.value.id;
     const connectionToken = deps.projectScopeToken();
-    const isConnectionCurrent = () => deps.isCurrentProjectScope(connectionProjectId, connectionToken) && deps.thread.value?.id === connectionThreadId && deps.activeExplorerPlan.value?.id === connectionPlanId;
+    const isConnectionCurrent = () =>
+      deps.isCurrentProjectScope(connectionProjectId, connectionToken) &&
+      deps.thread.value?.id === connectionThreadId &&
+      deps.activeExplorerPlan.value?.id === connectionPlanId;
     eventSource?.close();
     loopEventSource?.close();
     const replayGate = createSseReplayGate();
     if (deps.explorerEventSequence.value !== null) replayGate.markReady();
-    eventSource = new EventSource(api.explorerEventsUrl(connectionProjectId, connectionThreadId, connectionPlanId, deps.explorerEventSequence.value ?? undefined));
+    eventSource = new EventSource(
+      api.explorerEventsUrl(connectionProjectId, connectionThreadId, connectionPlanId, deps.explorerEventSequence.value ?? undefined),
+    );
     eventSource.addEventListener("stream.ready", () => {
       if (!isConnectionCurrent()) return;
       replayGate.accept("stream.ready");
@@ -93,7 +118,10 @@ export function useExplorerSse(deps: ExplorerSseDeps) {
       if (!isConnectionCurrent() || !replayGate.accept("turn.text.delta")) return;
       const payload = JSON.parse((raw as MessageEvent).data) as { turnId: string; text: string };
       const current = deps.turns.value.find((turn) => turn.id === payload.turnId);
-      if (current) deps.turns.value = deps.turns.value.map((turn) => turn.id === payload.turnId ? { ...turn, content: turn.content + payload.text, status: "RUNNING" } : turn);
+      if (current)
+        deps.turns.value = deps.turns.value.map((turn) =>
+          turn.id === payload.turnId ? { ...turn, content: turn.content + payload.text, status: "RUNNING" } : turn,
+        );
       deps.scheduleProjectionRefresh();
     });
     eventSource.addEventListener("turn.input_required", async (raw) => {
@@ -106,14 +134,42 @@ export function useExplorerSse(deps: ExplorerSseDeps) {
     });
     eventSource.addEventListener("title.updated", (raw) => {
       if (!isConnectionCurrent() || !replayGate.accept("title.updated")) return;
-      const payload = JSON.parse((raw as MessageEvent).data) as { explorerId: string; title: string; titleStatus: ExplorerThread["titleStatus"] };
+      const payload = JSON.parse((raw as MessageEvent).data) as {
+        explorerId: string;
+        title: string;
+        titleStatus: ExplorerThread["titleStatus"];
+      };
       if (payload.explorerId !== connectionThreadId || !deps.thread.value) return;
       deps.thread.value = { ...deps.thread.value, title: payload.title, titleStatus: payload.titleStatus };
-      deps.explorers.value = deps.explorers.value.map((item) => item.id === payload.explorerId ? { ...item, title: payload.title, titleStatus: payload.titleStatus } : item);
+      deps.explorers.value = deps.explorers.value.map((item) =>
+        item.id === payload.explorerId ? { ...item, title: payload.title, titleStatus: payload.titleStatus } : item,
+      );
     });
-    for (const eventName of ["turn.accepted", "turn.started", "turn.completed", "turn.failed", "turn.cancelled", "turn.input.resolved", "plan.ready"]) eventSource.addEventListener(eventName, () => { if (!isConnectionCurrent() || !replayGate.accept(eventName)) return; void refreshTurnsAfterEvent(); });
-    for (const eventName of ["plan.created", "plan.renamed"]) eventSource.addEventListener(eventName, () => { if (!isConnectionCurrent() || !replayGate.accept(eventName)) return; void deps.refreshPlanProjection(); });
-    eventSource.addEventListener("thread.state.changed", () => { if (!isConnectionCurrent() || !replayGate.accept("thread.state.changed")) return; closeEvents(); void deps.load().then((loaded) => { if (loaded) connectEvents(); }); });
+    for (const eventName of [
+      "turn.accepted",
+      "turn.started",
+      "turn.completed",
+      "turn.failed",
+      "turn.cancelled",
+      "turn.input.resolved",
+      "plan.ready",
+    ])
+      eventSource.addEventListener(eventName, () => {
+        if (!isConnectionCurrent() || !replayGate.accept(eventName)) return;
+        void refreshTurnsAfterEvent();
+      });
+    for (const eventName of ["plan.created", "plan.renamed"])
+      eventSource.addEventListener(eventName, () => {
+        if (!isConnectionCurrent() || !replayGate.accept(eventName)) return;
+        void deps.refreshPlanProjection();
+      });
+    eventSource.addEventListener("thread.state.changed", () => {
+      if (!isConnectionCurrent() || !replayGate.accept("thread.state.changed")) return;
+      closeEvents();
+      void deps.load().then((loaded) => {
+        if (loaded) connectEvents();
+      });
+    });
     connectLoopEvents();
   }
 
@@ -121,17 +177,37 @@ export function useExplorerSse(deps: ExplorerSseDeps) {
     if (!deps.thread.value || typeof EventSource === "undefined") return;
     const connectionProjectId = deps.projectId.value;
     const connectionThreadId = deps.thread.value.id;
-    if (requirementStatusEventSource && requirementStatusScope?.projectId === connectionProjectId && requirementStatusScope.threadId === connectionThreadId) return;
+    if (
+      requirementStatusEventSource &&
+      requirementStatusScope?.projectId === connectionProjectId &&
+      requirementStatusScope.threadId === connectionThreadId
+    )
+      return;
     closeRequirementStatusEvents();
     const connectionToken = deps.projectScopeToken();
-    const source = new EventSource(api.explorerRequirementStatusEventsUrl(connectionProjectId, connectionThreadId, deps.explorerEventSequence.value ?? undefined));
+    const source = new EventSource(
+      api.explorerRequirementStatusEventsUrl(connectionProjectId, connectionThreadId, deps.explorerEventSequence.value ?? undefined),
+    );
     requirementStatusEventSource = source;
     requirementStatusScope = { projectId: connectionProjectId, threadId: connectionThreadId };
     source.addEventListener("requirement.status", (raw) => {
-      if (requirementStatusEventSource !== source || !deps.isCurrentProjectScope(connectionProjectId, connectionToken) || deps.thread.value?.id !== connectionThreadId) return;
-      const payload = JSON.parse((raw as MessageEvent).data) as { explorerPlanId: string; turnId: string | null; status: NonNullable<ExplorerPlan["runtimeStatus"]>; occurredAt: string };
-      if (!deps.explorerPlans.value.some((plan) => plan.id === payload.explorerPlanId && plan.explorerThreadId === connectionThreadId)) return;
-      deps.explorerPlans.value = deps.explorerPlans.value.map((plan) => plan.id === payload.explorerPlanId ? { ...plan, runtimeStatus: payload.status, lastActivityAt: payload.occurredAt } : plan);
+      if (
+        requirementStatusEventSource !== source ||
+        !deps.isCurrentProjectScope(connectionProjectId, connectionToken) ||
+        deps.thread.value?.id !== connectionThreadId
+      )
+        return;
+      const payload = JSON.parse((raw as MessageEvent).data) as {
+        explorerPlanId: string;
+        turnId: string | null;
+        status: NonNullable<ExplorerPlan["runtimeStatus"]>;
+        occurredAt: string;
+      };
+      if (!deps.explorerPlans.value.some((plan) => plan.id === payload.explorerPlanId && plan.explorerThreadId === connectionThreadId))
+        return;
+      deps.explorerPlans.value = deps.explorerPlans.value.map((plan) =>
+        plan.id === payload.explorerPlanId ? { ...plan, runtimeStatus: payload.status, lastActivityAt: payload.occurredAt } : plan,
+      );
     });
   }
 
@@ -144,24 +220,68 @@ export function useExplorerSse(deps: ExplorerSseDeps) {
     loopEventSource?.close();
     const replayGate = createSseReplayGate();
     loopEventSource = new EventSource(api.agentLoopEventsUrl(loopId));
-    loopEventSource.addEventListener("stream.ready", () => { replayGate.accept("stream.ready"); });
-    for (const eventName of ["agent.loop.started", "agent.step.started", "agent.step.model_text_delta", "agent.step.tool_requested", "agent.step.tool_completed", "agent.step.tool_denied", "agent.step.tool_failed", "agent.step.tool_needs_reconciliation", "agent.step.input_required", "agent.step.input_resolved", "agent.step.context_compacted", "agent.step.gate_checked", "agent.provider.activity", "agent.input.required", "agent.input.resolved", "agent.loop.paused", "agent.loop.resumed", "agent.loop.completed", "agent.loop.failed", "agent.loop.cancelled", "agent.loop.recovery_required"]) {
+    loopEventSource.addEventListener("stream.ready", () => {
+      replayGate.accept("stream.ready");
+    });
+    for (const eventName of [
+      "agent.loop.started",
+      "agent.step.started",
+      "agent.step.model_text_delta",
+      "agent.step.tool_requested",
+      "agent.step.tool_completed",
+      "agent.step.tool_denied",
+      "agent.step.tool_failed",
+      "agent.step.tool_needs_reconciliation",
+      "agent.step.input_required",
+      "agent.step.input_resolved",
+      "agent.step.context_compacted",
+      "agent.step.gate_checked",
+      "agent.provider.activity",
+      "agent.input.required",
+      "agent.input.resolved",
+      "agent.loop.paused",
+      "agent.loop.resumed",
+      "agent.loop.completed",
+      "agent.loop.failed",
+      "agent.loop.cancelled",
+      "agent.loop.recovery_required",
+    ]) {
       // 状态与门禁事件立即刷新；步骤级事件（文本增量、工具活动）合并到固定间隔，避免每个事件都拉取 Loop。
       const immediate = AGENT_LOOP_IMMEDIATE_REFRESH_EVENTS.has(eventName);
       loopEventSource.addEventListener(eventName, () => {
-        if (!deps.isCurrentProjectScope(connectionProjectId, connectionToken) || deps.thread.value?.id !== connectionThreadId || !replayGate.accept(eventName)) return;
+        if (
+          !deps.isCurrentProjectScope(connectionProjectId, connectionToken) ||
+          deps.thread.value?.id !== connectionThreadId ||
+          !replayGate.accept(eventName)
+        )
+          return;
         const refresh = () => {
-          void api.agentLoop(loopId).then(async (response) => {
-            if (!deps.isCurrentProjectScope(connectionProjectId, connectionToken) || deps.thread.value?.id !== connectionThreadId || deps.agentLoop.value?.id !== loopId) return;
-            deps.agentLoop.value = response.loop;
-            deps.explorerPaused.value = response.loop.state === "PAUSED";
-            await deps.refreshActivity();
-            if (immediate) await deps.refreshPlanProjection();
-          }).catch(() => undefined);
+          void api
+            .agentLoop(loopId)
+            .then(async (response) => {
+              if (
+                !deps.isCurrentProjectScope(connectionProjectId, connectionToken) ||
+                deps.thread.value?.id !== connectionThreadId ||
+                deps.agentLoop.value?.id !== loopId
+              )
+                return;
+              deps.agentLoop.value = response.loop;
+              deps.explorerPaused.value = response.loop.state === "PAUSED";
+              await deps.refreshActivity();
+              if (immediate) await deps.refreshPlanProjection();
+            })
+            .catch(() => undefined);
         };
-        if (immediate) { cancelLoopRefresh(); refresh(); return; }
+        if (immediate) {
+          cancelLoopRefresh();
+          refresh();
+          return;
+        }
         if (loopRefreshTimer !== null) return;
-        loopRefreshTimer = setTimeout(() => { loopRefreshTimer = null; refresh(); }, PROJECTION_REFRESH_INTERVAL_MS);
+        loopRefreshTimer = setTimeout(() => {
+          loopRefreshTimer = null;
+          refresh();
+        }, PROJECTION_REFRESH_INTERVAL_MS);
       });
     }
   }
@@ -176,8 +296,26 @@ export function useExplorerSse(deps: ExplorerSseDeps) {
     loopRefreshTimer = null;
   }
 
-  function closeRequirementStatusEvents() { requirementStatusEventSource?.close(); requirementStatusEventSource = null; requirementStatusScope = null; }
-  function closeEvents() { eventSource?.close(); loopEventSource?.close(); eventSource = null; loopEventSource = null; deps.cancelProjectionRefresh(); cancelLoopRefresh(); }
+  function closeRequirementStatusEvents() {
+    requirementStatusEventSource?.close();
+    requirementStatusEventSource = null;
+    requirementStatusScope = null;
+  }
+  function closeEvents() {
+    eventSource?.close();
+    loopEventSource?.close();
+    eventSource = null;
+    loopEventSource = null;
+    deps.cancelProjectionRefresh();
+    cancelLoopRefresh();
+  }
 
-  return { connectEvents, connectRequirementStatusEvents, connectLoopEvents, connectLoopEventsIfConnected, closeEvents, closeRequirementStatusEvents };
+  return {
+    connectEvents,
+    connectRequirementStatusEvents,
+    connectLoopEvents,
+    connectLoopEventsIfConnected,
+    closeEvents,
+    closeRequirementStatusEvents,
+  };
 }

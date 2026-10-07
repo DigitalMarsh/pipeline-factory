@@ -8,4 +8,7 @@
 import { z } from "zod";
 
 export const agentLoopParams = z.object({ loopId: z.string().min(1) });
-export const loopEventsQuery = z.object({ format: z.enum(["json", "sse"]).optional(), afterSequence: z.coerce.number().int().nonnegative().optional() });
+export const loopEventsQuery = z.object({
+  format: z.enum(["json", "sse"]).optional(),
+  afterSequence: z.coerce.number().int().nonnegative().optional(),
+});

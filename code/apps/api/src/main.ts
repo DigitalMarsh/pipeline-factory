@@ -20,13 +20,16 @@ try {
 
 const app = createApp({ config });
 
-app.listen({ port: config.server.port, host: config.server.host }).then(() => {
-  console.log(`Pipeline Factory API v4 listening on http://${config.server.host}:${config.server.port}`);
-}).catch((error: unknown) => {
-  app.log.error(error);
-  console.error(`Pipeline Factory API failed to start: ${error instanceof Error ? error.stack ?? error.message : String(error)}`);
-  process.exitCode = 1;
-});
+app
+  .listen({ port: config.server.port, host: config.server.host })
+  .then(() => {
+    console.log(`Pipeline Factory API v4 listening on http://${config.server.host}:${config.server.port}`);
+  })
+  .catch((error: unknown) => {
+    app.log.error(error);
+    console.error(`Pipeline Factory API failed to start: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
+    process.exitCode = 1;
+  });
 
 function readConfigPath(args: string[]): string | undefined {
   const index = args.indexOf("--config");

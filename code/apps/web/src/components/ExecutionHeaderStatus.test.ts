@@ -50,9 +50,17 @@ const ElPopoverStub = defineComponent({
   props: { visible: Boolean },
   emits: ["update:visible"],
   setup(props, { emit, slots }) {
-    return () => h("div", { class: "popover-stub", onClick: (event: MouseEvent) => {
-      if ((event.target as HTMLElement).closest(".execution-header-status-trigger")) emit("update:visible", !props.visible);
-    } }, [slots.reference?.(), props.visible ? slots.default?.() : null]);
+    return () =>
+      h(
+        "div",
+        {
+          class: "popover-stub",
+          onClick: (event: MouseEvent) => {
+            if ((event.target as HTMLElement).closest(".execution-header-status-trigger")) emit("update:visible", !props.visible);
+          },
+        },
+        [slots.reference?.(), props.visible ? slots.default?.() : null],
+      );
   },
 });
 
@@ -72,35 +80,51 @@ function mountStatus(status = run.status, runActivity: ExecutionStreamItem[] = [
   const host = document.createElement("div");
   document.body.appendChild(host);
   const emitted: Array<{ event: string; payload?: unknown }> = [];
-  const app = createApp(defineComponent({
-    setup() {
-      return () => h(ExecutionHeaderStatus, {
-        run: { ...run, status },
-        threadState: "ACTIVE",
-        telemetry: null,
-        telemetryNow: Date.now(),
-        tasks: [task],
-        taskCounts: { completed: 1, total: 1, blocked: 0, active: 0 },
-        runActivity,
-        runtimeFacts,
-        selectedTaskId: null,
-        executorLoop: loop,
-        executorSteps: [],
-        loopStatusLabel: "Completed",
-        verification: null,
-        mergeRequest: null,
-        actionBusy: false,
-        sourceCommit: "abc123",
-        targetCommit: "def456",
-        onFocusTask: (value: unknown) => emitted.push({ event: "focus-task", payload: value }),
-        onOpenPlan: () => emitted.push({ event: "open-plan" }),
-      });
-    },
-  }));
+  const app = createApp(
+    defineComponent({
+      setup() {
+        return () =>
+          h(ExecutionHeaderStatus, {
+            run: { ...run, status },
+            threadState: "ACTIVE",
+            telemetry: null,
+            telemetryNow: Date.now(),
+            tasks: [task],
+            taskCounts: { completed: 1, total: 1, blocked: 0, active: 0 },
+            runActivity,
+            runtimeFacts,
+            selectedTaskId: null,
+            executorLoop: loop,
+            executorSteps: [],
+            loopStatusLabel: "Completed",
+            verification: null,
+            mergeRequest: null,
+            actionBusy: false,
+            sourceCommit: "abc123",
+            targetCommit: "def456",
+            onFocusTask: (value: unknown) => emitted.push({ event: "focus-task", payload: value }),
+            onOpenPlan: () => emitted.push({ event: "open-plan" }),
+          });
+      },
+    }),
+  );
   app.component("el-popover", ElPopoverStub);
   app.component("el-button", ElButtonStub);
   app.component("el-tag", ElTagStub);
-  app.component("el-input", defineComponent({ props: { modelValue: String, size: String }, emits: ["update:modelValue"], setup(props, { emit }) { return () => h("input", { value: props.modelValue, onInput: (event: Event) => emit("update:modelValue", (event.target as HTMLInputElement).value) }); } }));
+  app.component(
+    "el-input",
+    defineComponent({
+      props: { modelValue: String, size: String },
+      emits: ["update:modelValue"],
+      setup(props, { emit }) {
+        return () =>
+          h("input", {
+            value: props.modelValue,
+            onInput: (event: Event) => emit("update:modelValue", (event.target as HTMLInputElement).value),
+          });
+      },
+    }),
+  );
   app.mount(host);
   return { app, host, emitted };
 }

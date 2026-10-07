@@ -37,7 +37,9 @@ const meta = computed(() =>
   [
     props.exitCode === undefined ? null : `退出码 ${props.exitCode}`,
     props.durationMs === undefined ? null : `耗时 ${formatDuration(props.durationMs)}`,
-  ].filter((line): line is string => Boolean(line)).join(" · "),
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join(" · "),
 );
 </script>
 

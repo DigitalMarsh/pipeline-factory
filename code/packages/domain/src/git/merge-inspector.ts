@@ -49,7 +49,13 @@ function gitCommand(repoRoot: string, args: string[]): boolean {
 function gitResolveCommit(repoRoot: string, ref: string): string | null {
   if (!existsSync(repoRoot)) return null;
   try {
-    return execFileSync("git", ["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`], { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() || null;
+    return (
+      execFileSync("git", ["rev-parse", "--verify", "--end-of-options", `${ref}^{commit}`], {
+        cwd: repoRoot,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim() || null
+    );
   } catch {
     return null;
   }

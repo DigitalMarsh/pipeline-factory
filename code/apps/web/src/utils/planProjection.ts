@@ -41,7 +41,11 @@ export function planFromRevisionDraft(item: PlanRevisionDraft, fallbackExplorerP
     status: "DRAFT",
     projectId: item.projectId,
     sourceExplorerThreadId: item.sourceExplorerThreadId,
-    ...(item.explorerPlanId ? { explorerPlanId: item.explorerPlanId } : fallbackExplorerPlanId ? { explorerPlanId: fallbackExplorerPlanId } : {}),
+    ...(item.explorerPlanId
+      ? { explorerPlanId: item.explorerPlanId }
+      : fallbackExplorerPlanId
+        ? { explorerPlanId: fallbackExplorerPlanId }
+        : {}),
     sourceTurnId: item.sourceTurnId,
     providerThreadId: item.providerThreadId,
     providerTurnId: item.providerTurnId,

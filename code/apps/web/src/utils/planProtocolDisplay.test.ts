@@ -40,7 +40,9 @@ const artifact = {
 
 describe("plan protocol display", () => {
   it("**当前形状同样渲染为可执行方案**（回归：解析器只认 V1 时，每一份方案都显示「校验失败」）", () => {
-    const result = parsePlanProtocolDisplay(`已补充功能范围与排除项。\n<pipeline-factory-plan-status>READY</pipeline-factory-plan-status>\n<pipeline-factory-plan>${JSON.stringify(artifact)}</pipeline-factory-plan>`);
+    const result = parsePlanProtocolDisplay(
+      `已补充功能范围与排除项。\n<pipeline-factory-plan-status>READY</pipeline-factory-plan-status>\n<pipeline-factory-plan>${JSON.stringify(artifact)}</pipeline-factory-plan>`,
+    );
 
     expect(result).toEqual({
       kind: "ready",
@@ -69,23 +71,29 @@ describe("plan protocol display", () => {
   });
 
   it("缺目标时算非法（当前形状必须有 objective.goal）", () => {
-    const noGoal = parsePlanProtocolDisplay('<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>{"title":"只有标题"}</pipeline-factory-plan>');
+    const noGoal = parsePlanProtocolDisplay(
+      '<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>{"title":"只有标题"}</pipeline-factory-plan>',
+    );
 
     expect(noGoal.kind).toBe("invalid");
   });
 
   it("hides an incomplete protocol while it is still streaming", () => {
-    const result = parsePlanProtocolDisplay(`<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>{"title":"Personal`);
+    const result = parsePlanProtocolDisplay(
+      `<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>{"title":"Personal`,
+    );
 
     expect(result.kind).toBe("generating");
     if (result.kind === "generating") {
       expect(result.text).not.toContain("pipeline-factory-plan");
-      expect(result.text).not.toContain("{\"title\"");
+      expect(result.text).not.toContain('{"title"');
     }
   });
 
   it("hides malformed protocol content without affecting ordinary text", () => {
-    const invalid = parsePlanProtocolDisplay("前置说明 <pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>{bad}</pipeline-factory-plan>");
+    const invalid = parsePlanProtocolDisplay(
+      "前置说明 <pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>{bad}</pipeline-factory-plan>",
+    );
     const plain = parsePlanProtocolDisplay("普通消息：请选择你偏好的实现方式。");
 
     expect(invalid).toMatchObject({ kind: "invalid", text: "前置说明 结构化计划校验失败，请继续完善。" });
@@ -96,13 +104,15 @@ describe("plan protocol display", () => {
 
 describe("助手消息的可读文本", () => {
   it("READY 时把方案标题接在正文后面", () => {
-    const content = '先说两句 <pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>{"title":"接入登录","objective":{"goal":"g"}}</pipeline-factory-plan>';
+    const content =
+      '先说两句 <pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>{"title":"接入登录","objective":{"goal":"g"}}</pipeline-factory-plan>';
 
     expect(readableAssistantText(content)).toBe("先说两句 完整执行方案已生成：接入登录");
   });
 
   it("只有协议没有正文时只留提示句，不留多余空格", () => {
-    const content = '<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>{"title":"接入登录","objective":{"goal":"g"}}</pipeline-factory-plan>';
+    const content =
+      '<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>{"title":"接入登录","objective":{"goal":"g"}}</pipeline-factory-plan>';
 
     expect(readableAssistantText(content)).toBe("完整执行方案已生成：接入登录");
   });
@@ -112,7 +122,13 @@ describe("助手消息的可读文本", () => {
   });
 
   it("生成中与校验失败都回退到展示对象自带的提示语", () => {
-    expect(readableAssistantText("说明 <pipeline-factory-plan-status>GENERATING</pipeline-factory-plan-status>")).toBe("说明 正在整理结构化计划…");
-    expect(readableAssistantText("说明 <pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>{bad}</pipeline-factory-plan>")).toBe("说明 结构化计划校验失败，请继续完善。");
+    expect(readableAssistantText("说明 <pipeline-factory-plan-status>GENERATING</pipeline-factory-plan-status>")).toBe(
+      "说明 正在整理结构化计划…",
+    );
+    expect(
+      readableAssistantText(
+        "说明 <pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>{bad}</pipeline-factory-plan>",
+      ),
+    ).toBe("说明 结构化计划校验失败，请继续完善。");
   });
 });

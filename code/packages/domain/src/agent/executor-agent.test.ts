@@ -11,16 +11,27 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { ExecutorAgent, inspectWorkspaceScope, parseExecutorReport } from "./executor-agent.js";
 import { resolveExecutorWorkingDirectory } from "../tools/executor-working-directory.js";
-import { InMemoryPipelineStore, LifecycleHookRunner, PlanService, Scheduler, ToolGateway, type AgentLoop, type ModelEvent, type ModelGateway, type ModelRequest } from "../index.js";
+import {
+  InMemoryPipelineStore,
+  LifecycleHookRunner,
+  PlanService,
+  Scheduler,
+  ToolGateway,
+  type AgentLoop,
+  type ModelEvent,
+  type ModelGateway,
+  type ModelRequest,
+} from "../index.js";
 import { DEFAULT_PROJECT_SETTINGS } from "../project/project.js";
 import { planContractFixture } from "../plan/plan-fixture.js";
 import { DurableToolRuntime } from "../tools/tool-runtime.js";
 
-const executionReport = (taskId: string) => `<pipeline-factory-execution-report>${JSON.stringify({
-  completedTaskIds: [taskId],
-  changedPaths: ["src/implemented.ts"],
-  report: "Task completed with verification-ready evidence",
-})}</pipeline-factory-execution-report>`;
+const executionReport = (taskId: string) =>
+  `<pipeline-factory-execution-report>${JSON.stringify({
+    completedTaskIds: [taskId],
+    changedPaths: ["src/implemented.ts"],
+    report: "Task completed with verification-ready evidence",
+  })}</pipeline-factory-execution-report>`;
 
 const temporaryWorkspaces: string[] = [];
 
@@ -33,19 +44,36 @@ async function createQueuedRun(saveRun = true, include = ["src/**"], artifactPat
   temporaryWorkspaces.push(workspacePath);
   const store = new InMemoryPipelineStore();
   const plans = new PlanService(store);
-  const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "explorer-1", title: "Executor plan", resolvedContract: planContractFixture({
-    goal: "Implement the feature",
-    acceptanceCriteria: ["The feature works"],
-    includePaths: include,
-    excludePaths: [".env"],
-    artifact: { path: artifactPath },
-    tasks: [{ id: "task-1", title: "Implement the feature", dependencies: [], status: "READY" }],
-    verification: { commandIds: ["project.test"] },
-  }) });
+  const plan = plans.createCandidatePlan({
+    projectId: "project-1",
+    sourceExplorerThreadId: "explorer-1",
+    title: "Executor plan",
+    resolvedContract: planContractFixture({
+      goal: "Implement the feature",
+      acceptanceCriteria: ["The feature works"],
+      includePaths: include,
+      excludePaths: [".env"],
+      artifact: { path: artifactPath },
+      tasks: [{ id: "task-1", title: "Implement the feature", dependencies: [], status: "READY" }],
+      verification: { commandIds: ["project.test"] },
+    }),
+  });
   plans.confirm(plan.id, "user-1");
   plans.enqueue(plan.id);
   plans.dispatch(plan.id);
-  const run = { id: "run-1", projectId: "project-1", planId: plan.id, planRevision: 1, status: "IN_PROGRESS" as const, branch: "factory/run-1", workspacePath, baseCommit: "abc", executionThreadId: "execution-thread-1", createdAt: store.now(), startedAt: store.now() };
+  const run = {
+    id: "run-1",
+    projectId: "project-1",
+    planId: plan.id,
+    planRevision: 1,
+    status: "IN_PROGRESS" as const,
+    branch: "factory/run-1",
+    workspacePath,
+    baseCommit: "abc",
+    executionThreadId: "execution-thread-1",
+    createdAt: store.now(),
+    startedAt: store.now(),
+  };
   if (saveRun) {
     store.saveRun(run);
     store.saveExecutionThread({ id: run.executionThreadId, runId: run.id, state: "ACTIVE", journal: [] });
@@ -55,11 +83,13 @@ async function createQueuedRun(saveRun = true, include = ["src/**"], artifactPat
 
 describe("ExecutorAgent", () => {
   it("normalizes provider reports that return changed paths as an array", () => {
-    const report = parseExecutorReport(`<pipeline-factory-execution-report>${JSON.stringify({
-      completedTaskIds: ["task-1"],
-      pathsWithinScope: ["README.md", "docs/guide.md"],
-      report: "All work completed",
-    })}</pipeline-factory-execution-report>`);
+    const report = parseExecutorReport(
+      `<pipeline-factory-execution-report>${JSON.stringify({
+        completedTaskIds: ["task-1"],
+        pathsWithinScope: ["README.md", "docs/guide.md"],
+        report: "All work completed",
+      })}</pipeline-factory-execution-report>`,
+    );
 
     expect(report).toEqual({
       completedTaskIds: ["task-1"],
@@ -69,25 +99,33 @@ describe("ExecutorAgent", () => {
   });
 
   it("accepts structured active and blocked task facts", () => {
-    expect(parseExecutorReport(`<pipeline-factory-execution-report>${JSON.stringify({
-      completedTaskIds: ["task-1"],
-      changedPaths: [],
-      report: "Task 1 completed; task 2 is blocked",
-      activeTaskId: "task-2",
-      blockedTaskId: "task-3",
-      blockedReason: "No Git remote",
-    })}</pipeline-factory-execution-report>`)).toMatchObject({ activeTaskId: "task-2", blockedTaskId: "task-3", blockedReason: "No Git remote" });
+    expect(
+      parseExecutorReport(
+        `<pipeline-factory-execution-report>${JSON.stringify({
+          completedTaskIds: ["task-1"],
+          changedPaths: [],
+          report: "Task 1 completed; task 2 is blocked",
+          activeTaskId: "task-2",
+          blockedTaskId: "task-3",
+          blockedReason: "No Git remote",
+        })}</pipeline-factory-execution-report>`,
+      ),
+    ).toMatchObject({ activeTaskId: "task-2", blockedTaskId: "task-3", blockedReason: "No Git remote" });
   });
 
   it("treats null optional task facts as absent instead of failing the report", () => {
-    expect(parseExecutorReport(`<pipeline-factory-execution-report>${JSON.stringify({
-      completedTaskIds: ["task-1", "task-2"],
-      changedPaths: ["docs/pear-introduction.md"],
-      report: "All tasks completed",
-      activeTaskId: null,
-      blockedTaskId: null,
-      blockedReason: null,
-    })}</pipeline-factory-execution-report>`)).toEqual({
+    expect(
+      parseExecutorReport(
+        `<pipeline-factory-execution-report>${JSON.stringify({
+          completedTaskIds: ["task-1", "task-2"],
+          changedPaths: ["docs/pear-introduction.md"],
+          report: "All tasks completed",
+          activeTaskId: null,
+          blockedTaskId: null,
+          blockedReason: null,
+        })}</pipeline-factory-execution-report>`,
+      ),
+    ).toEqual({
       completedTaskIds: ["task-1", "task-2"],
       changedPaths: ["docs/pear-introduction.md"],
       report: "All tasks completed",
@@ -95,12 +133,16 @@ describe("ExecutorAgent", () => {
   });
 
   it("still rejects optional task facts of the wrong type", () => {
-    expect(parseExecutorReport(`<pipeline-factory-execution-report>${JSON.stringify({
-      completedTaskIds: ["task-1"],
-      changedPaths: [],
-      report: "Done",
-      activeTaskId: 42,
-    })}</pipeline-factory-execution-report>`)).toBeNull();
+    expect(
+      parseExecutorReport(
+        `<pipeline-factory-execution-report>${JSON.stringify({
+          completedTaskIds: ["task-1"],
+          changedPaths: [],
+          report: "Done",
+          activeTaskId: 42,
+        })}</pipeline-factory-execution-report>`,
+      ),
+    ).toBeNull();
   });
 
   it("checks the actual Git diff instead of trusting the model scope claim", async () => {
@@ -116,7 +158,9 @@ describe("ExecutorAgent", () => {
       await writeFile(join(workspace, "README.md"), "changed\n");
       await writeFile(join(workspace, "docs", "guide.md"), "guide\n");
 
-      await expect(inspectWorkspaceScope({ workspacePath: workspace, baseCommit: "HEAD", include: ["docs"], exclude: [] })).resolves.toEqual({
+      await expect(
+        inspectWorkspaceScope({ workspacePath: workspace, baseCommit: "HEAD", include: ["docs"], exclude: [] }),
+      ).resolves.toEqual({
         changedPaths: ["README.md", "docs/guide.md"],
         outsidePaths: ["README.md"],
         pathsWithinScope: false,
@@ -146,9 +190,27 @@ describe("ExecutorAgent", () => {
           failureHandling: ["Keep the form values on failure"],
           risks: ["Old clients may still call the legacy endpoint; keep a compatibility route."],
         },
-        repository: { projectId: "project-1", name: "Test", repoRoot: "/repo", baseBranch: "main", baseCommit: "abc", configVersion: 1, configHash: "sha256:test" },
+        repository: {
+          projectId: "project-1",
+          name: "Test",
+          repoRoot: "/repo",
+          baseBranch: "main",
+          baseCommit: "abc",
+          configVersion: 1,
+          configHash: "sha256:test",
+        },
         scope: { includePaths: ["src/**"], excludePaths: [".env"] },
-        tasks: [{ id: "task-1", title: "Implement the feature", dependencies: [], status: "READY" as const, changes: [{ path: "src/implemented.ts", action: "modify" as const, detail: "Update the handler to pass the current project id." }] }],
+        tasks: [
+          {
+            id: "task-1",
+            title: "Implement the feature",
+            dependencies: [],
+            status: "READY" as const,
+            changes: [
+              { path: "src/implemented.ts", action: "modify" as const, detail: "Update the handler to pass the current project id." },
+            ],
+          },
+        ],
         dependencies: ["Use the existing package manager and lockfile."],
         dependsOnPlanIds: [],
         conflicts: [],
@@ -166,8 +228,12 @@ describe("ExecutorAgent", () => {
         yield { type: "text.delta", text: executionReport(plan.resolvedContract.tasks[0]!.id) };
         yield { type: "turn.completed" };
       },
-      async answerUserInput() { return undefined; },
-      async cancel() { return undefined; },
+      async answerUserInput() {
+        return undefined;
+      },
+      async cancel() {
+        return undefined;
+      },
     };
 
     await new ExecutorAgent(store, model).run(run, detailedRevision);
@@ -193,11 +259,25 @@ describe("ExecutorAgent", () => {
       configFor: () => ({ model: "gpt-5.6-luna", loopMode: "provider-controlled" }),
       capabilities: () => ({ supportsStructuredUserInput: true, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
       async *stream(): AsyncIterable<ModelEvent> {
-        yield { type: "turn.input_required", request: { requestId: "request-1", threadId: "provider-thread", turnId: "provider-turn", itemId: "item-1", questions: [], isBlocking: true } };
+        yield {
+          type: "turn.input_required",
+          request: {
+            requestId: "request-1",
+            threadId: "provider-thread",
+            turnId: "provider-turn",
+            itemId: "item-1",
+            questions: [],
+            isBlocking: true,
+          },
+        };
         yield { type: "turn.completed" };
       },
-      async answerUserInput() { throw new Error("不该被调用：Run 没有回答入口"); },
-      async cancel() { return undefined; },
+      async answerUserInput() {
+        throw new Error("不该被调用：Run 没有回答入口");
+      },
+      async cancel() {
+        return undefined;
+      },
     };
 
     const loop = await new ExecutorAgent(store, model).run(run, plan);
@@ -220,8 +300,12 @@ describe("ExecutorAgent", () => {
         yield { type: "text.delta", text: executionReport(plan.resolvedContract.tasks[0]!.id) };
         yield { type: "turn.completed" };
       },
-      async answerUserInput() { return undefined; },
-      async cancel() { return undefined; },
+      async answerUserInput() {
+        return undefined;
+      },
+      async cancel() {
+        return undefined;
+      },
     };
 
     await new ExecutorAgent(store, model).run(run, plan);
@@ -238,7 +322,16 @@ describe("ExecutorAgent", () => {
    */
   it("**把待投递的「引导」交给模型**，并在同一个步骤边界记账成已消费", async () => {
     const { store, plan, run } = await createQueuedRun();
-    store.saveRunGuidance({ id: "guidance-steer", runId: run.id, content: "先别动 docs/ 下面的东西", mode: "STEER", status: "PENDING", authorId: "local-user", createdAt: store.now(), consumedAt: null });
+    store.saveRunGuidance({
+      id: "guidance-steer",
+      runId: run.id,
+      content: "先别动 docs/ 下面的东西",
+      mode: "STEER",
+      status: "PENDING",
+      authorId: "local-user",
+      createdAt: store.now(),
+      consumedAt: null,
+    });
     const seenByModel: string[] = [];
     let calls = 0;
     const model: ModelGateway = {
@@ -247,13 +340,21 @@ describe("ExecutorAgent", () => {
       async *stream(request: ModelRequest): AsyncIterable<ModelEvent> {
         calls += 1;
         // 第一步**故意不给报告**：gate 判 `EXECUTION_REPORT_MISSING` 继续，于是有了第二个步骤边界。
-        if (calls === 1) { yield { type: "text.delta", text: "step one" }; yield { type: "turn.completed" }; return; }
+        if (calls === 1) {
+          yield { type: "text.delta", text: "step one" };
+          yield { type: "turn.completed" };
+          return;
+        }
         seenByModel.push(...request.messages.map((message) => String(message.content)));
         yield { type: "text.delta", text: executionReport(plan.resolvedContract.tasks[0]!.id) };
         yield { type: "turn.completed" };
       },
-      async answerUserInput() { return undefined; },
-      async cancel() { return undefined; },
+      async answerUserInput() {
+        return undefined;
+      },
+      async cancel() {
+        return undefined;
+      },
     };
 
     await new ExecutorAgent(store, model).run(run, plan);
@@ -263,7 +364,9 @@ describe("ExecutorAgent", () => {
     expect(store.listRunGuidance(run.id, { status: "PENDING" })).toHaveLength(0);
     expect(store.listRunGuidance(run.id, { status: "CONSUMED" })).toHaveLength(1);
     const journal = store.getExecutionThread(run.executionThreadId)!.journal;
-    expect(journal.filter((entry) => entry.payload.action === "guidance-consumed").map((entry) => entry.payload.guidanceId)).toEqual(["guidance-steer"]);
+    expect(journal.filter((entry) => entry.payload.action === "guidance-consumed").map((entry) => entry.payload.guidanceId)).toEqual([
+      "guidance-steer",
+    ]);
   });
 
   it("rejects an included artifact directory that escapes through a symlink", async () => {
@@ -271,7 +374,9 @@ describe("ExecutorAgent", () => {
     const outside = await mkdtemp(join(tmpdir(), "pipeline-executor-outside-"));
     try {
       await symlink(outside, join(workspace, "code"));
-      await expect(resolveExecutorWorkingDirectory(workspace, ["code/personal-site/**"])).rejects.toThrow("EXECUTOR_WORKING_DIRECTORY_SYMLINK_BLOCKED");
+      await expect(resolveExecutorWorkingDirectory(workspace, ["code/personal-site/**"])).rejects.toThrow(
+        "EXECUTOR_WORKING_DIRECTORY_SYMLINK_BLOCKED",
+      );
     } finally {
       await Promise.all([rm(workspace, { recursive: true, force: true }), rm(outside, { recursive: true, force: true })]);
     }
@@ -288,19 +393,34 @@ describe("ExecutorAgent", () => {
         yield { type: "text.delta", text: executionReport(plan.resolvedContract.tasks[0]!.id) };
         yield { type: "turn.completed" };
       },
-      async answerUserInput() { return undefined; },
-      async cancel() { return undefined; },
+      async answerUserInput() {
+        return undefined;
+      },
+      async cancel() {
+        return undefined;
+      },
     };
-    const gateway = new ToolGateway({ role: "executor", workspaceRoot: run.workspacePath!, registeredCommandIds: new Set(["project.test"]) });
+    const gateway = new ToolGateway({
+      role: "executor",
+      workspaceRoot: run.workspacePath!,
+      registeredCommandIds: new Set(["project.test"]),
+    });
     const agent = new ExecutorAgent(store, model, new DurableToolRuntime(store, gateway));
 
     const loop = await agent.run(run, plan);
 
     expect(loop.state).toBe("COMPLETED");
     expect(store.getRun(run.id)?.status).toBe("READY_FOR_VERIFY");
-    expect(store.getExecutionThread(run.executionThreadId)?.telemetry).toMatchObject({ model: "gpt-5.6-luna", reasoningEffort: null, usage: { inputTokens: 100, outputTokens: 40, reasoningTokens: 12, totalTokens: 140 }, usageSource: "provider" });
+    expect(store.getExecutionThread(run.executionThreadId)?.telemetry).toMatchObject({
+      model: "gpt-5.6-luna",
+      reasoningEffort: null,
+      usage: { inputTokens: 100, outputTokens: 40, reasoningTokens: 12, totalTokens: 140 },
+      usageSource: "provider",
+    });
     expect(store.getExecutionThread(run.executionThreadId)?.telemetry?.durationMs).toEqual(expect.any(Number));
-    expect(store.getExecutionThread(run.executionThreadId)?.journal.map((entry) => entry.type)).toEqual(expect.arrayContaining(["MODEL_OUTPUT", "TASK_PROGRESS"]));
+    expect(store.getExecutionThread(run.executionThreadId)?.journal.map((entry) => entry.type)).toEqual(
+      expect.arrayContaining(["MODEL_OUTPUT", "TASK_PROGRESS"]),
+    );
     const taskStatus = store.getExecutionThread(run.executionThreadId)?.journal.find((entry) => entry.payload.action === "task-status");
     const completedTaskIds = taskStatus?.payload.completedTaskIds;
     expect(Array.isArray(completedTaskIds) && completedTaskIds.includes("task-1")).toBe(true);
@@ -319,8 +439,12 @@ describe("ExecutorAgent", () => {
         for (const chunk of [report.slice(0, 12), report.slice(12, 40), report.slice(40)]) yield { type: "text.delta", text: chunk };
         yield { type: "turn.completed" };
       },
-      async answerUserInput() { return undefined; },
-      async cancel() { return undefined; },
+      async answerUserInput() {
+        return undefined;
+      },
+      async cancel() {
+        return undefined;
+      },
     };
 
     await new ExecutorAgent(store, model).run(run, plan);
@@ -335,9 +459,16 @@ describe("ExecutorAgent", () => {
     const model: ModelGateway = {
       configFor: () => ({ model: "gpt-5.6-luna", loopMode: "provider-controlled" }),
       capabilities: () => ({ supportsStructuredUserInput: false, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
-      async *stream() { yield { type: "text.delta", text: "已完成，请进入验证" }; yield { type: "turn.completed" }; },
-      async answerUserInput() { return undefined; },
-      async cancel() { return undefined; },
+      async *stream() {
+        yield { type: "text.delta", text: "已完成，请进入验证" };
+        yield { type: "turn.completed" };
+      },
+      async answerUserInput() {
+        return undefined;
+      },
+      async cancel() {
+        return undefined;
+      },
     };
     const agent = new ExecutorAgent(store, model);
 
@@ -353,9 +484,16 @@ describe("ExecutorAgent", () => {
     const model: ModelGateway = {
       configFor: () => ({ model: "gpt-5.6-luna", loopMode: "provider-controlled" }),
       capabilities: () => ({ supportsStructuredUserInput: false, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
-      async *stream() { yield { type: "text.delta", text: "not finished" }; yield { type: "turn.completed" }; },
-      async answerUserInput() { return undefined; },
-      async cancel() { return undefined; },
+      async *stream() {
+        yield { type: "text.delta", text: "not finished" };
+        yield { type: "turn.completed" };
+      },
+      async answerUserInput() {
+        return undefined;
+      },
+      async cancel() {
+        return undefined;
+      },
     };
 
     await new ExecutorAgent(store, model, undefined, { maxSteps: 1 }).run(run, plan);
@@ -370,13 +508,37 @@ describe("ExecutorAgent", () => {
       capabilities: () => ({ supportsStructuredUserInput: false, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
       async *stream() {
         // summary 就是"这条活动到底是什么"：命令原文、被改动的文件路径。UI 的标题靠它。
-        yield { type: "provider.activity", phase: "started", itemId: "exec-1", itemType: "commandExecution", activityKind: "command", outcome: "running", title: null, summary: "npm install --ignore-scripts", providerItemId: "exec-1" };
-        yield { type: "provider.activity", phase: "completed", itemId: "exec-1", itemType: "commandExecution", activityKind: "command", outcome: "succeeded", title: null, summary: "npm install --ignore-scripts", providerItemId: "exec-1" };
+        yield {
+          type: "provider.activity",
+          phase: "started",
+          itemId: "exec-1",
+          itemType: "commandExecution",
+          activityKind: "command",
+          outcome: "running",
+          title: null,
+          summary: "npm install --ignore-scripts",
+          providerItemId: "exec-1",
+        };
+        yield {
+          type: "provider.activity",
+          phase: "completed",
+          itemId: "exec-1",
+          itemType: "commandExecution",
+          activityKind: "command",
+          outcome: "succeeded",
+          title: null,
+          summary: "npm install --ignore-scripts",
+          providerItemId: "exec-1",
+        };
         yield { type: "text.delta", text: "done" };
         yield { type: "turn.completed" };
       },
-      async answerUserInput() { return undefined; },
-      async cancel() { return undefined; },
+      async answerUserInput() {
+        return undefined;
+      },
+      async cancel() {
+        return undefined;
+      },
     };
 
     await new ExecutorAgent(store, model, undefined, { maxSteps: 1 }).run(run, plan);
@@ -396,13 +558,37 @@ describe("ExecutorAgent", () => {
       configFor: () => ({ model: "gpt-5.6-luna", loopMode: "provider-controlled" }),
       capabilities: () => ({ supportsStructuredUserInput: false, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
       async *stream() {
-        yield { type: "provider.activity", phase: "completed", itemId: "rs-1", itemType: "thinking", activityKind: "reasoning", outcome: "not-applicable", title: null, summary: longReasoning, providerItemId: "rs-1" };
-        yield { type: "provider.activity", phase: "completed", itemId: "exec-1", itemType: "commandExecution", activityKind: "command", outcome: "succeeded", title: null, summary: longCommand, providerItemId: "exec-1" };
+        yield {
+          type: "provider.activity",
+          phase: "completed",
+          itemId: "rs-1",
+          itemType: "thinking",
+          activityKind: "reasoning",
+          outcome: "not-applicable",
+          title: null,
+          summary: longReasoning,
+          providerItemId: "rs-1",
+        };
+        yield {
+          type: "provider.activity",
+          phase: "completed",
+          itemId: "exec-1",
+          itemType: "commandExecution",
+          activityKind: "command",
+          outcome: "succeeded",
+          title: null,
+          summary: longCommand,
+          providerItemId: "exec-1",
+        };
         yield { type: "text.delta", text: "done" };
         yield { type: "turn.completed" };
       },
-      async answerUserInput() { return undefined; },
-      async cancel() { return undefined; },
+      async answerUserInput() {
+        return undefined;
+      },
+      async cancel() {
+        return undefined;
+      },
     };
 
     await new ExecutorAgent(store, model, undefined, { maxSteps: 1 }).run(run, plan);
@@ -426,12 +612,24 @@ describe("ExecutorAgent", () => {
       capabilities: () => ({ supportsStructuredUserInput: false, supportsToolCalls: true, supportedLoopModes: ["factory-controlled"] }),
       async *stream() {
         modelCalls += 1;
-        if (modelCalls === 1) yield { type: "tool.call", call: { callId: "write-1", tool: "write_file", input: { path: "src/generated.ts", content: "export const generated = true;\n" } } };
+        if (modelCalls === 1)
+          yield {
+            type: "tool.call",
+            call: {
+              callId: "write-1",
+              tool: "write_file",
+              input: { path: "src/generated.ts", content: "export const generated = true;\n" },
+            },
+          };
         else yield { type: "text.delta", text: executionReport(plan.resolvedContract.tasks[0]!.id) };
         yield { type: "turn.completed" };
       },
-      async answerUserInput() { return undefined; },
-      async cancel() { return undefined; },
+      async answerUserInput() {
+        return undefined;
+      },
+      async cancel() {
+        return undefined;
+      },
     };
 
     try {
@@ -478,12 +676,20 @@ describe("ExecutorAgent", () => {
         observedConfigs.push(config);
         return { supportsStructuredUserInput: false, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] };
       },
-      async *stream() { yield { type: "turn.completed" }; },
-      async answerUserInput() { return undefined; },
-      async cancel() { return undefined; },
+      async *stream() {
+        yield { type: "turn.completed" };
+      },
+      async answerUserInput() {
+        return undefined;
+      },
+      async cancel() {
+        return undefined;
+      },
     };
 
-    await expect(new ExecutorAgent(store, model, undefined, { maxSteps: 1 }).run(run, revision)).rejects.toThrow("MODEL_CAPABILITY_UNAVAILABLE");
+    await expect(new ExecutorAgent(store, model, undefined, { maxSteps: 1 }).run(run, revision)).rejects.toThrow(
+      "MODEL_CAPABILITY_UNAVAILABLE",
+    );
     expect(observedConfigs).toMatchObject([{ backend: "claude-agent-sdk", loopMode: "factory-controlled" }]);
   });
 
@@ -493,21 +699,49 @@ describe("ExecutorAgent", () => {
     const scheduler = new Scheduler({
       store,
       workspace: {
-        create: async () => { order.push("worktree.add"); return { path: "/tmp/project", branch: "factory/run-2", baseCommit: "abc" }; },
+        create: async () => {
+          order.push("worktree.add");
+          return { path: "/tmp/project", branch: "factory/run-2", baseCommit: "abc" };
+        },
         remove: async () => undefined,
       },
-      hooks: new LifecycleHookRunner(async (command) => { order.push(command.commandId); return { exitCode: 0, stdout: "", stderr: "" }; }),
+      hooks: new LifecycleHookRunner(async (command) => {
+        order.push(command.commandId);
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }),
       executor: {
         start: async (run, revision) => {
           order.push("executor.start");
           const latestThread = store.getExecutionThread(run.executionThreadId)!;
           store.saveExecutionThread({
             ...latestThread,
-            journal: [...latestThread.journal, { sequence: latestThread.journal.length + 1, type: "TASK_PROGRESS", occurredAt: store.now(), payload: { event: "agent.loop.started" } }],
+            journal: [
+              ...latestThread.journal,
+              {
+                sequence: latestThread.journal.length + 1,
+                type: "TASK_PROGRESS",
+                occurredAt: store.now(),
+                payload: { event: "agent.loop.started" },
+              },
+            ],
           });
           expect(run.workspacePath).toBe("/tmp/project");
           expect(revision.planId).toBe(plan.planId);
-          return { id: "loop-1", ownerType: "run", ownerId: run.id, role: "executor", mode: "provider-controlled", state: "CREATED", stepCount: 0, maxSteps: 40, startedAt: null, completedAt: null, providerThreadId: null, providerTurnId: null, checkpointJson: null } satisfies AgentLoop;
+          return {
+            id: "loop-1",
+            ownerType: "run",
+            ownerId: run.id,
+            role: "executor",
+            mode: "provider-controlled",
+            state: "CREATED",
+            stepCount: 0,
+            maxSteps: 40,
+            startedAt: null,
+            completedAt: null,
+            providerThreadId: null,
+            providerTurnId: null,
+            checkpointJson: null,
+          } satisfies AgentLoop;
         },
       },
     });
@@ -517,6 +751,8 @@ describe("ExecutorAgent", () => {
     expect(run.status).toBe("IN_PROGRESS");
     expect(order).toEqual(["worktree.add", "project.start", "executor.start"]);
     expect(store.listEvents().some((event) => event.type === "run.executor.event")).toBe(true);
-    expect(store.getExecutionThread(run.executionThreadId)?.journal.some((entry) => entry.payload.event === "agent.loop.started")).toBe(true);
+    expect(store.getExecutionThread(run.executionThreadId)?.journal.some((entry) => entry.payload.event === "agent.loop.started")).toBe(
+      true,
+    );
   });
 });

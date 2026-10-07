@@ -13,7 +13,9 @@ export type SseReplayGate = {
 export function createSseReplayGate(): SseReplayGate {
   let ready = false;
   return {
-    get ready() { return ready; },
+    get ready() {
+      return ready;
+    },
     accept(eventName: string): boolean {
       if (eventName === "stream.ready") {
         ready = true;
@@ -21,6 +23,8 @@ export function createSseReplayGate(): SseReplayGate {
       }
       return ready;
     },
-    markReady() { ready = true; },
+    markReady() {
+      ready = true;
+    },
   };
 }

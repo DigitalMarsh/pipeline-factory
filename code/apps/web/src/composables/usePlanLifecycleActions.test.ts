@@ -105,11 +105,44 @@ function setup(options: { candidate?: Plan | null; revisionDraft?: PlanRevisionD
   const refreshPlanProjection = vi.fn(async () => undefined);
   const openRunView = vi.fn(async () => undefined);
   const actions = usePlanLifecycleActions({
-    projectId, project, thread, activeExplorerPlan, selectedRequirementPlan, candidate, revisionDraft,
-    detailPlan, enqueued, projectRuns, busy, error, drawerOpen, drawerTab, contextPanel,
-    refreshPlanProjection, openRunView,
+    projectId,
+    project,
+    thread,
+    activeExplorerPlan,
+    selectedRequirementPlan,
+    candidate,
+    revisionDraft,
+    detailPlan,
+    enqueued,
+    projectRuns,
+    busy,
+    error,
+    drawerOpen,
+    drawerTab,
+    contextPanel,
+    refreshPlanProjection,
+    openRunView,
   });
-  return { ...actions, projectId, project, thread, activeExplorerPlan, selectedRequirementPlan, candidate, revisionDraft, detailPlan, enqueued, projectRuns, busy, error, drawerOpen, drawerTab, contextPanel, refreshPlanProjection, openRunView };
+  return {
+    ...actions,
+    projectId,
+    project,
+    thread,
+    activeExplorerPlan,
+    selectedRequirementPlan,
+    candidate,
+    revisionDraft,
+    detailPlan,
+    enqueued,
+    projectRuns,
+    busy,
+    error,
+    drawerOpen,
+    drawerTab,
+    contextPanel,
+    refreshPlanProjection,
+    openRunView,
+  };
 }
 
 beforeEach(() => {
@@ -134,7 +167,12 @@ describe("confirmPlan", () => {
   it("确认 V1 Candidate 后刷新投影并打开 Plan drawer", async () => {
     const s = setup();
     const confirmed = plan("plan-1", { status: "READY" });
-    vi.mocked(api.confirmPlan).mockResolvedValue({ plan: confirmed, run: null, dispatch: null, confirmation: { stage: "FROZEN", attempt: 1, retryable: false } });
+    vi.mocked(api.confirmPlan).mockResolvedValue({
+      plan: confirmed,
+      run: null,
+      dispatch: null,
+      confirmation: { stage: "FROZEN", attempt: 1, retryable: false },
+    });
 
     await s.confirmPlan();
 
@@ -149,7 +187,10 @@ describe("confirmPlan", () => {
   it("READY_TO_CONFIRM 的 Revision Draft 走草稿端点", async () => {
     const s = setup({ candidate: plan("plan-1"), revisionDraft: draft() });
     const confirmed = plan("plan-1", { revision: 2, status: "READY" });
-    vi.mocked(api.confirmRevisionDraft).mockResolvedValue({ plan: confirmed, confirmation: { stage: "FROZEN", attempt: 1, retryable: false } });
+    vi.mocked(api.confirmRevisionDraft).mockResolvedValue({
+      plan: confirmed,
+      confirmation: { stage: "FROZEN", attempt: 1, retryable: false },
+    });
 
     await s.confirmPlan();
 
@@ -171,7 +212,10 @@ describe("confirmPlan", () => {
     const s = setup({ candidate: null, revisionDraft: draft() });
     // 抽屉里显示的是草稿投影出来的 V2：id 与 revision 都来自 draft。
     const shown = plan("plan-1", { revision: 2 });
-    vi.mocked(api.confirmRevisionDraft).mockResolvedValue({ plan: plan("plan-1", { revision: 2, status: "READY" }), confirmation: { stage: "FROZEN", attempt: 1, retryable: false } });
+    vi.mocked(api.confirmRevisionDraft).mockResolvedValue({
+      plan: plan("plan-1", { revision: 2, status: "READY" }),
+      confirmation: { stage: "FROZEN", attempt: 1, retryable: false },
+    });
 
     await s.confirmPlan(shown);
 
@@ -192,7 +236,12 @@ describe("confirmPlan", () => {
 
   it("服务端确认停在 DRAFT 时写入错误并保持忙碌状态已释放", async () => {
     const s = setup();
-    vi.mocked(api.confirmPlan).mockResolvedValue({ plan: plan("plan-1", { status: "DRAFT" }), run: null, dispatch: { lastError: "missing verify" } as never, confirmation: { stage: "VALIDATION_FAILED", attempt: 1, retryable: true } });
+    vi.mocked(api.confirmPlan).mockResolvedValue({
+      plan: plan("plan-1", { status: "DRAFT" }),
+      run: null,
+      dispatch: { lastError: "missing verify" } as never,
+      confirmation: { stage: "VALIDATION_FAILED", attempt: 1, retryable: true },
+    });
 
     await s.confirmPlan();
 
@@ -256,7 +305,11 @@ describe("startPlanRun 与 revisePlanConfiguration", () => {
     const s = setup();
     const input = plan("plan-1", { status: "ENQUEUED" });
     const started = run("run-1");
-    vi.mocked(api.startPlanRun).mockResolvedValue({ plan: plan("plan-1", { status: "DISPATCHED" }), run: started, dispatch: { waitReason: null } as never });
+    vi.mocked(api.startPlanRun).mockResolvedValue({
+      plan: plan("plan-1", { status: "DISPATCHED" }),
+      run: started,
+      dispatch: { waitReason: null } as never,
+    });
 
     await s.startPlanRun(input);
 
@@ -267,7 +320,10 @@ describe("startPlanRun 与 revisePlanConfiguration", () => {
 
   it("配置缺失但命令已注册时创建新 Revision并切到 confirmed", async () => {
     const s = setup();
-    const input = plan("plan-1", { status: "DISPATCHED", dispatch: { status: "WAITING", waitReason: "NEEDS_CONFIGURATION", lastError: "missing registered commands: verify" } as never });
+    const input = plan("plan-1", {
+      status: "DISPATCHED",
+      dispatch: { status: "WAITING", waitReason: "NEEDS_CONFIGURATION", lastError: "missing registered commands: verify" } as never,
+    });
     vi.mocked(api.revisePlanConfiguration).mockResolvedValue({ plan: input });
 
     await s.revisePlanConfiguration(input);

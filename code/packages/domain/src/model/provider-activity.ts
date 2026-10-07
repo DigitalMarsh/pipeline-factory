@@ -75,10 +75,29 @@ export type ProviderActivityOutcome = "running" | "succeeded" | "failed" | "unkn
  * 不是"做成了没有"；会话重建同理。而钩子、子任务、权限被拒是有的（前两者会成功也会失败，
  * 后者本身就是"被拒"这个结论）。
  */
-const OUTCOME_FREE_KINDS: readonly ProviderActivityKind[] = ["reasoning", "message", "session", "compaction", "rate-limit", "retry", "warning", "review"];
+const OUTCOME_FREE_KINDS: readonly ProviderActivityKind[] = [
+  "reasoning",
+  "message",
+  "session",
+  "compaction",
+  "rate-limit",
+  "retry",
+  "warning",
+  "review",
+];
 
 /** ④「Provider 说的」的运行事实。**这一类不进会话正文**——它是"机器在说话"，不是模型或你的发言。 */
-const RUNTIME_KINDS: readonly ProviderActivityKind[] = ["session", "compaction", "hook", "task", "rate-limit", "retry", "permission", "warning", "review"];
+const RUNTIME_KINDS: readonly ProviderActivityKind[] = [
+  "session",
+  "compaction",
+  "hook",
+  "task",
+  "rate-limit",
+  "retry",
+  "permission",
+  "warning",
+  "review",
+];
 
 /**
  * ④ 里**需要浮到用户眼前**的那几类：常态收进诊断区，这几类要在 Run 头上冒出来
@@ -91,9 +110,24 @@ const RUNTIME_KINDS: readonly ProviderActivityKind[] = ["session", "compaction",
 const RUNTIME_ALERT_KINDS: readonly ProviderActivityKind[] = ["rate-limit", "retry", "permission", "warning", "review"];
 
 const ACTIVITY_KINDS: readonly ProviderActivityKind[] = [
-  "reasoning", "message",
-  "command", "file-change", "tool", "mcp", "search", "media", "subagent",
-  "session", "compaction", "hook", "task", "rate-limit", "retry", "permission", "warning", "review",
+  "reasoning",
+  "message",
+  "command",
+  "file-change",
+  "tool",
+  "mcp",
+  "search",
+  "media",
+  "subagent",
+  "session",
+  "compaction",
+  "hook",
+  "task",
+  "rate-limit",
+  "retry",
+  "permission",
+  "warning",
+  "review",
   "other",
 ];
 const ACTIVITY_OUTCOMES: readonly ProviderActivityOutcome[] = ["running", "succeeded", "failed", "unknown", "not-applicable"];
@@ -149,12 +183,23 @@ export type ProviderActivityInput = {
  * 成败判定：**两个 Provider 共用一张词表**。
  * 先看有没有明确的失败证据（Provider 的失败词或 error 原因），再看成功词，最后按阶段回落。
  */
-export function activityOutcome(input: Pick<ProviderActivityInput, "phase" | "status" | "error"> & { kind: ProviderActivityKind }): ProviderActivityOutcome {
+export function activityOutcome(
+  input: Pick<ProviderActivityInput, "phase" | "status" | "error"> & { kind: ProviderActivityKind },
+): ProviderActivityOutcome {
   if (isOutcomeFreeKind(input.kind)) return "not-applicable";
   const status = input.status?.trim().toLowerCase();
   // `declined` 与 `denied` 是同一件事的两个拼法：Codex 用前者的原生词表（CommandExecutionStatus），
   // Claude 用后者的 permission_denied。它是**明确的失败证据**，不能落进下面的"按阶段回落"。
-  if (input.error || status === "failed" || status === "error" || status === "denied" || status === "declined" || status === "cancelled" || status === "canceled") return "failed";
+  if (
+    input.error ||
+    status === "failed" ||
+    status === "error" ||
+    status === "denied" ||
+    status === "declined" ||
+    status === "cancelled" ||
+    status === "canceled"
+  )
+    return "failed";
   if (status === "success" || status === "succeeded" || status === "completed" || status === "complete") return "succeeded";
   return input.phase === "started" ? "running" : "unknown";
 }
@@ -248,13 +293,35 @@ function matchKind(itemType: string, table: Partial<Record<ProviderActivityKind,
 }
 
 /** Codex 的完整分类；返回字段名与 `ModelEvent.provider.activity` 对齐，便于调用点直接展开。 */
-export function classifyCodexActivity(input: ProviderActivityInput): { activityKind: ProviderActivityKind; outcome: ProviderActivityOutcome } {
+export function classifyCodexActivity(input: ProviderActivityInput): {
+  activityKind: ProviderActivityKind;
+  outcome: ProviderActivityOutcome;
+} {
   const activityKind = codexActivityKind(input.itemType);
-  return { activityKind, outcome: activityOutcome({ kind: activityKind, phase: input.phase, ...(input.status === undefined ? {} : { status: input.status }), ...(input.error === undefined ? {} : { error: input.error }) }) };
+  return {
+    activityKind,
+    outcome: activityOutcome({
+      kind: activityKind,
+      phase: input.phase,
+      ...(input.status === undefined ? {} : { status: input.status }),
+      ...(input.error === undefined ? {} : { error: input.error }),
+    }),
+  };
 }
 
 /** Claude 的完整分类；返回字段名与 `ModelEvent.provider.activity` 对齐。 */
-export function classifyClaudeActivity(input: ProviderActivityInput): { activityKind: ProviderActivityKind; outcome: ProviderActivityOutcome } {
+export function classifyClaudeActivity(input: ProviderActivityInput): {
+  activityKind: ProviderActivityKind;
+  outcome: ProviderActivityOutcome;
+} {
   const activityKind = claudeActivityKind(input.itemType, input.toolName);
-  return { activityKind, outcome: activityOutcome({ kind: activityKind, phase: input.phase, ...(input.status === undefined ? {} : { status: input.status }), ...(input.error === undefined ? {} : { error: input.error }) }) };
+  return {
+    activityKind,
+    outcome: activityOutcome({
+      kind: activityKind,
+      phase: input.phase,
+      ...(input.status === undefined ? {} : { status: input.status }),
+      ...(input.error === undefined ? {} : { error: input.error }),
+    }),
+  };
 }

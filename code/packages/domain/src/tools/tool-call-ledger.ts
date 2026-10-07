@@ -55,5 +55,7 @@ export class ToolCallLedger {
     return recovered;
   }
 
-  list(): ToolCallLedgerEntry[] { return [...this.entries.values()]; }
+  list(): ToolCallLedgerEntry[] {
+    return [...this.entries.values()];
+  }
 }

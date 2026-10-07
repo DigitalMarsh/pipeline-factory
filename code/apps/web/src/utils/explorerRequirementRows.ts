@@ -19,8 +19,15 @@ export type ExplorerRequirementRow = {
 };
 
 const CONFIRMED_PLAN_STATUSES = new Set([
-  "READY", "ENQUEUED", "DISPATCHED", "IN_PROGRESS", "VERIFYING",
-  "MERGE_READY", "MERGED", "BLOCKED", "NEEDS_PLAN_CHANGE",
+  "READY",
+  "ENQUEUED",
+  "DISPATCHED",
+  "IN_PROGRESS",
+  "VERIFYING",
+  "MERGE_READY",
+  "MERGED",
+  "BLOCKED",
+  "NEEDS_PLAN_CHANGE",
 ]);
 
 function planIdentity(plan: Plan): string {
@@ -28,8 +35,7 @@ function planIdentity(plan: Plan): string {
 }
 
 export function isConversationArtifactPlan(plan: Plan | null | undefined): boolean {
-  return plan?.resolvedContract?.artifact?.mode === "CONVERSATION"
-    || plan?.generatedSpec?.artifact?.mode === "CONVERSATION";
+  return plan?.resolvedContract?.artifact?.mode === "CONVERSATION" || plan?.generatedSpec?.artifact?.mode === "CONVERSATION";
 }
 
 function planBelongsToRequirement(plan: Plan, requirement: ExplorerPlan): boolean {
@@ -39,19 +45,22 @@ function planBelongsToRequirement(plan: Plan, requirement: ExplorerPlan): boolea
 }
 
 function currentPlanFor(requirement: ExplorerPlan, plans: Plan[]): Plan | null {
-  return plans
-    .filter((plan) => planBelongsToRequirement(plan, requirement))
-    .sort((left, right) => right.revision - left.revision || right.lastEventAt.localeCompare(left.lastEventAt))[0] ?? null;
+  return (
+    plans
+      .filter((plan) => planBelongsToRequirement(plan, requirement))
+      .sort((left, right) => right.revision - left.revision || right.lastEventAt.localeCompare(left.lastEventAt))[0] ?? null
+  );
 }
 
 function runFor(plan: Plan | null, runs: Run[]): Run | null {
   if (!plan) return null;
   const identity = planIdentity(plan);
   const linkedRunId = plan.runId ?? plan.dispatch?.runId ?? null;
-  return runs
-    .filter((run) => (linkedRunId && run.id === linkedRunId)
-      || (run.planId === identity && run.planRevision === plan.revision))
-    .sort((left, right) => (right.startedAt ?? right.createdAt).localeCompare(left.startedAt ?? left.createdAt))[0] ?? null;
+  return (
+    runs
+      .filter((run) => (linkedRunId && run.id === linkedRunId) || (run.planId === identity && run.planRevision === plan.revision))
+      .sort((left, right) => (right.startedAt ?? right.createdAt).localeCompare(left.startedAt ?? left.createdAt))[0] ?? null
+  );
 }
 
 function planStatusFor(requirement: ExplorerPlan, plan: Plan | null): RequirementStatus {
@@ -84,31 +93,31 @@ function taskStatusFor(plan: Plan | null, run: Run | null): RequirementStatus {
     if (["COMPLETED", "MERGED"].includes(run.status)) return { label: "运行完", tone: "success" };
     if (run.status === "RECOVERING") return { label: "需要恢复", tone: "attention" };
     if (run.status === "MERGE_READY") return { label: "待处理", tone: "attention" };
-    if (["FAILED", "CANCELLED", "BLOCKED", "NEEDS_PLAN_CHANGE", "STALE"].includes(run.status)) return { label: "待处理", tone: "attention" };
+    if (["FAILED", "CANCELLED", "BLOCKED", "NEEDS_PLAN_CHANGE", "STALE"].includes(run.status))
+      return { label: "待处理", tone: "attention" };
     return { label: `未知状态：${run.status}`, tone: "neutral" };
   }
   if (isConversationArtifactPlan(plan)) return { label: "待处理", tone: "attention" };
   const dispatch = plan.dispatch;
   if (plan.status === "MERGED" || dispatch?.status === "COMPLETED") return { label: "运行完", tone: "success" };
-  if (["MERGE_READY", "BLOCKED", "NEEDS_PLAN_CHANGE"].includes(plan.status)
-    || dispatch?.status === "NEEDS_REVIEW" || dispatch?.status === "BLOCKED"
-    || dispatch?.waitReason === "NEEDS_CONFIGURATION") return { label: "待处理", tone: "attention" };
+  if (
+    ["MERGE_READY", "BLOCKED", "NEEDS_PLAN_CHANGE"].includes(plan.status) ||
+    dispatch?.status === "NEEDS_REVIEW" ||
+    dispatch?.status === "BLOCKED" ||
+    dispatch?.waitReason === "NEEDS_CONFIGURATION"
+  )
+    return { label: "待处理", tone: "attention" };
   if (plan.status === "READY") return { label: "待入队", tone: "neutral" };
-  if (["ENQUEUED", "DISPATCHED"].includes(plan.status)
-    || ["QUEUED", "WAITING", "DISPATCHING"].includes(dispatch?.status ?? "")) {
+  if (["ENQUEUED", "DISPATCHED"].includes(plan.status) || ["QUEUED", "WAITING", "DISPATCHING"].includes(dispatch?.status ?? "")) {
     return { label: "已入队/已派发", tone: "progress" };
   }
-  if (["IN_PROGRESS", "VERIFYING"].includes(plan.status)
-    || ["RUNNING", "VERIFYING"].includes(dispatch?.status ?? "")) return { label: "运行中", tone: "progress" };
+  if (["IN_PROGRESS", "VERIFYING"].includes(plan.status) || ["RUNNING", "VERIFYING"].includes(dispatch?.status ?? ""))
+    return { label: "运行中", tone: "progress" };
   return { label: `未知状态：${plan.status}`, tone: "neutral" };
 }
 
 /** 每个 ExplorerPlan 保留一行，需求序号是稳定排序依据。 */
-export function projectExplorerRequirementRows(
-  explorerPlans: ExplorerPlan[],
-  plans: Plan[],
-  runs: Run[],
-): ExplorerRequirementRow[] {
+export function projectExplorerRequirementRows(explorerPlans: ExplorerPlan[], plans: Plan[], runs: Run[]): ExplorerRequirementRow[] {
   return [...explorerPlans]
     .sort((left, right) => left.ordinal - right.ordinal || left.id.localeCompare(right.id))
     .map((explorerPlan) => {

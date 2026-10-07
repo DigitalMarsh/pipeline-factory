@@ -9,12 +9,16 @@ describe("agent loop presentation", () => {
   });
 
   it("labels an incomplete plan with the missing areas", () => {
-    expect(formatAgentLoopGate({ lastGate: { action: "continue", reason: "PLAN_INCOMPLETE:完整方案缺少验收标准与验证命令" } })).toBe("方案未完成 · 验收标准与验证命令");
+    expect(formatAgentLoopGate({ lastGate: { action: "continue", reason: "PLAN_INCOMPLETE:完整方案缺少验收标准与验证命令" } })).toBe(
+      "方案未完成 · 验收标准与验证命令",
+    );
     expect(formatAgentLoopGate({ lastGate: { action: "complete", reason: "PLAN_READY" } })).toBe("方案已就绪");
   });
 
   it("maps terminal database errors to the user-facing message", () => {
-    expect(formatAgentLoopTerminal({ terminal: { code: "DATABASE_BUSY", message: "数据库写入暂时繁忙" } })).toBe("DATABASE_BUSY · 数据库写入暂时繁忙");
+    expect(formatAgentLoopTerminal({ terminal: { code: "DATABASE_BUSY", message: "数据库写入暂时繁忙" } })).toBe(
+      "DATABASE_BUSY · 数据库写入暂时繁忙",
+    );
     expect(formatAgentLoopTerminal({ terminal: null })).toBeNull();
   });
 

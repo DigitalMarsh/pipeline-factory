@@ -7,7 +7,17 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { ExplorerThreadService, InMemoryPipelineStore, LifecycleHookRunner, PlanService, ProjectService, Scheduler, SqlitePipelineStore, validateGeneratedPlanSpec, type ModelGateway } from "../index.js";
+import {
+  ExplorerThreadService,
+  InMemoryPipelineStore,
+  LifecycleHookRunner,
+  PlanService,
+  ProjectService,
+  Scheduler,
+  SqlitePipelineStore,
+  validateGeneratedPlanSpec,
+  type ModelGateway,
+} from "../index.js";
 import { planContractFixture } from "../plan/plan-fixture.js";
 
 describe("ProjectService", () => {
@@ -30,8 +40,20 @@ describe("ProjectService", () => {
       verification: { mode: "NONE" },
       merge: { strategy: "manual", requireHumanMerge: true },
     };
-    expect(validateGeneratedPlanSpec({ ...spec, tasks: [{ id: "task-1", title: "one", dependencies: [] }, { id: "task-1", title: "duplicate", dependencies: [] }] }).map((issue) => issue.code)).toContain("DUPLICATE");
-    expect(validateGeneratedPlanSpec({ ...spec, tasks: [{ id: "task-1", title: "one", dependencies: ["missing"] }] }).some((issue) => issue.message.includes("不存在的任务"))).toBe(true);
+    expect(
+      validateGeneratedPlanSpec({
+        ...spec,
+        tasks: [
+          { id: "task-1", title: "one", dependencies: [] },
+          { id: "task-1", title: "duplicate", dependencies: [] },
+        ],
+      }).map((issue) => issue.code),
+    ).toContain("DUPLICATE");
+    expect(
+      validateGeneratedPlanSpec({ ...spec, tasks: [{ id: "task-1", title: "one", dependencies: ["missing"] }] }).some((issue) =>
+        issue.message.includes("不存在的任务"),
+      ),
+    ).toBe(true);
   });
   it("creates a project with a versioned configuration", () => {
     const store = new InMemoryPipelineStore();
@@ -61,16 +83,40 @@ describe("ProjectService", () => {
   it("rejects unsafe runtime settings before persisting a project", () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);
-    const base = { id: "project-settings", name: "Settings", repoRoot: "/repo/settings", defaultBranch: "main", worktreeRoot: "/tmp/settings-worktrees" };
+    const base = {
+      id: "project-settings",
+      name: "Settings",
+      repoRoot: "/repo/settings",
+      defaultBranch: "main",
+      worktreeRoot: "/tmp/settings-worktrees",
+    };
 
     expect(() => projects.create({ ...base, settings: { concurrency: { maxParallelRuns: 0 } } })).toThrow(/maxParallelRuns/i);
-    expect(() => projects.create({ ...base, id: "project-settings-command", settings: { commands: [{ commandId: "bad", argv: [] as never }] } })).toThrow(/argv/i);
-    expect(() => projects.create({ ...base, id: "project-settings-hook", settings: { hooks: { start: { commandId: "hook", maxAttempts: 0 } } } })).toThrow(/maxAttempts/i);
-    expect(() => projects.create({ ...base, id: "project-settings-blocking", settings: { hooks: { start: { commandId: "hook", blocking: "yes" as never } } } })).toThrow(/blocking/i);
+    expect(() =>
+      projects.create({ ...base, id: "project-settings-command", settings: { commands: [{ commandId: "bad", argv: [] as never }] } }),
+    ).toThrow(/argv/i);
+    expect(() =>
+      projects.create({ ...base, id: "project-settings-hook", settings: { hooks: { start: { commandId: "hook", maxAttempts: 0 } } } }),
+    ).toThrow(/maxAttempts/i);
+    expect(() =>
+      projects.create({
+        ...base,
+        id: "project-settings-blocking",
+        settings: { hooks: { start: { commandId: "hook", blocking: "yes" as never } } },
+      }),
+    ).toThrow(/blocking/i);
     // blocking 只对 start 有意义（cleanup 恒为不阻塞）。**拒绝而不是忽略**：静默吞掉它等于让
     // "我明明配了阻塞"在 finish() 里无声失效。
-    expect(() => projects.create({ ...base, id: "project-settings-cleanup-blocking", settings: { hooks: { cleanup: { commandId: "hook", blocking: false } } } })).toThrow(/only supported on the start hook/i);
-    expect(() => projects.create({ ...base, id: "project-settings-artifact", settings: { defaultArtifactMode: "NOPE" as never } })).toThrow(/defaultArtifactMode/i);
+    expect(() =>
+      projects.create({
+        ...base,
+        id: "project-settings-cleanup-blocking",
+        settings: { hooks: { cleanup: { commandId: "hook", blocking: false } } },
+      }),
+    ).toThrow(/only supported on the start hook/i);
+    expect(() => projects.create({ ...base, id: "project-settings-artifact", settings: { defaultArtifactMode: "NOPE" as never } })).toThrow(
+      /defaultArtifactMode/i,
+    );
   });
 
   /**
@@ -81,10 +127,19 @@ describe("ProjectService", () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);
     // 一个 repoRoot 只能挂一个 Project，所以三条各自换一个根目录。
-    const base = (id: string) => ({ id, name: "Artifact", repoRoot: `/repo/${id}`, defaultBranch: "main", worktreeRoot: `/tmp/${id}-worktrees` });
+    const base = (id: string) => ({
+      id,
+      name: "Artifact",
+      repoRoot: `/repo/${id}`,
+      defaultBranch: "main",
+      worktreeRoot: `/tmp/${id}-worktrees`,
+    });
 
     expect(projects.create(base("project-artifact-default")).settings.defaultArtifactMode).toBe("REPOSITORY_FILE");
-    expect(projects.create({ ...base("project-artifact-review"), settings: { defaultArtifactMode: "CONVERSATION" } }).settings.defaultArtifactMode).toBe("CONVERSATION");
+    expect(
+      projects.create({ ...base("project-artifact-review"), settings: { defaultArtifactMode: "CONVERSATION" } }).settings
+        .defaultArtifactMode,
+    ).toBe("CONVERSATION");
     // 没写这一格的 Project（本字段之前落库的那批）读出来也要有值，而不是 undefined 漏到消费方。
     expect(projects.create(base("project-artifact-legacy")).settings.defaultArtifactMode).toBe("REPOSITORY_FILE");
   });
@@ -94,15 +149,36 @@ describe("ProjectService", () => {
     // catalog 由组合根按配置注入；domain 默认不持有配置，所以没有 catalog 时不校验取值。
     const projects = new ProjectService(store, {
       has: (id) => id === "codex-app-server" || id === "deepseek",
-      effortLevelsFor: (id) => (id === "codex-app-server" ? ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"] : ["low", "medium", "high", "xhigh", "max"]),
+      effortLevelsFor: (id) =>
+        id === "codex-app-server"
+          ? ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+          : ["low", "medium", "high", "xhigh", "max"],
     });
-    const base = { id: "project-backend", name: "Backend", repoRoot: "/repo/backend", defaultBranch: "main", worktreeRoot: "/tmp/backend-worktrees" };
+    const base = {
+      id: "project-backend",
+      name: "Backend",
+      repoRoot: "/repo/backend",
+      defaultBranch: "main",
+      worktreeRoot: "/tmp/backend-worktrees",
+    };
 
-    expect(() => projects.create({ ...base, settings: { models: { explorer: { model: "x", backend: "typo" } } } })).toThrow(/models\.explorer\.backend "typo" is not a configured model backend/);
+    expect(() => projects.create({ ...base, settings: { models: { explorer: { model: "x", backend: "typo" } } } })).toThrow(
+      /models\.explorer\.backend "typo" is not a configured model backend/,
+    );
     // Claude 侧只认 5 档：配 minimal 会被后端静默丢弃，所以在保存时就拒绝，而不是等到运行期。
-    expect(() => projects.create({ ...base, id: "project-effort", settings: { models: { executor: { model: "x", backend: "deepseek", reasoningEffort: "minimal" } } } })).toThrow(/reasoningEffort "minimal" is not supported by backend deepseek; supported: low, medium, high, xhigh, max/);
+    expect(() =>
+      projects.create({
+        ...base,
+        id: "project-effort",
+        settings: { models: { executor: { model: "x", backend: "deepseek", reasoningEffort: "minimal" } } },
+      }),
+    ).toThrow(/reasoningEffort "minimal" is not supported by backend deepseek; supported: low, medium, high, xhigh, max/);
 
-    const created = projects.create({ ...base, id: "project-ok", settings: { models: { executor: { model: "deepseek-chat", backend: "deepseek", reasoningEffort: "high" } } } });
+    const created = projects.create({
+      ...base,
+      id: "project-ok",
+      settings: { models: { executor: { model: "deepseek-chat", backend: "deepseek", reasoningEffort: "high" } } },
+    });
     expect(created.settings.models.executor).toMatchObject({ backend: "deepseek", reasoningEffort: "high" });
 
     // backend: null 表示"清除覆盖、跟随全局"：不区分它的话，控制台第一次保存就会把当前全局后端固化进
@@ -118,11 +194,29 @@ describe("ProjectService", () => {
     const base = { id: "project-tags", name: "Tags", repoRoot: "/repo/tags", defaultBranch: "main", worktreeRoot: "/tmp/tags-worktrees" };
 
     // tag 是 Plan 选验证子集的词表：空白与重复会让"命中哪条命令"变得不可预测，直接拒绝。
-    expect(() => projects.create({ ...base, settings: { commands: [{ commandId: "project.test", argv: ["true"], tags: ["unit", "unit"] }] } })).toThrow(/must not contain duplicates/);
-    expect(() => projects.create({ ...base, id: "project-tags-pad", settings: { commands: [{ commandId: "project.test", argv: ["true"], tags: [" unit "] }] } })).toThrow(/must not contain surrounding whitespace/);
-    expect(() => projects.create({ ...base, id: "project-tags-empty", settings: { commands: [{ commandId: "project.test", argv: ["true"], tags: [""] }] } })).toThrow(/non-empty strings/);
+    expect(() =>
+      projects.create({ ...base, settings: { commands: [{ commandId: "project.test", argv: ["true"], tags: ["unit", "unit"] }] } }),
+    ).toThrow(/must not contain duplicates/);
+    expect(() =>
+      projects.create({
+        ...base,
+        id: "project-tags-pad",
+        settings: { commands: [{ commandId: "project.test", argv: ["true"], tags: [" unit "] }] },
+      }),
+    ).toThrow(/must not contain surrounding whitespace/);
+    expect(() =>
+      projects.create({
+        ...base,
+        id: "project-tags-empty",
+        settings: { commands: [{ commandId: "project.test", argv: ["true"], tags: [""] }] },
+      }),
+    ).toThrow(/non-empty strings/);
 
-    const created = projects.create({ ...base, id: "project-tags-ok", settings: { commands: [{ commandId: "project.test", argv: ["true"], tags: ["unit", "docs"] }] } });
+    const created = projects.create({
+      ...base,
+      id: "project-tags-ok",
+      settings: { commands: [{ commandId: "project.test", argv: ["true"], tags: ["unit", "docs"] }] },
+    });
     expect(created.settings.commands[0]?.tags).toEqual(["unit", "docs"]);
   });
 
@@ -141,7 +235,14 @@ describe("ProjectService", () => {
   it("persists and snapshots an explicit project short name", () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);
-    const created = projects.create({ id: "project-short", name: "Demo Project", shortName: "DP", repoRoot: "/repo/short", defaultBranch: "main", worktreeRoot: "/tmp/short-worktrees" });
+    const created = projects.create({
+      id: "project-short",
+      name: "Demo Project",
+      shortName: "DP",
+      repoRoot: "/repo/short",
+      defaultBranch: "main",
+      worktreeRoot: "/tmp/short-worktrees",
+    });
 
     expect(created).toMatchObject({ name: "Demo Project", shortName: "DP", configVersion: 1 });
     const originalHash = created.configHash;
@@ -177,7 +278,17 @@ describe("ProjectService", () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);
     projects.create({ id: "project-1", name: "Demo", repoRoot: "/repo/demo", defaultBranch: "main", worktreeRoot: "/tmp/demo-worktrees" });
-    const baseRun = { projectId: "project-1", planId: "plan-1", planRevision: 1, branch: "factory/run", workspacePath: "/tmp/demo-worktrees/run", baseCommit: "abc", executionThreadId: "execution-1", createdAt: store.now(), startedAt: store.now() };
+    const baseRun = {
+      projectId: "project-1",
+      planId: "plan-1",
+      planRevision: 1,
+      branch: "factory/run",
+      workspacePath: "/tmp/demo-worktrees/run",
+      baseCommit: "abc",
+      executionThreadId: "execution-1",
+      createdAt: store.now(),
+      startedAt: store.now(),
+    };
     for (const [index, status] of (["MERGE_READY", "READY_FOR_VERIFY", "VERIFYING"] as const).entries()) {
       store.saveRun({ ...baseRun, id: `run-${index}`, status });
     }
@@ -195,17 +306,42 @@ describe("ProjectService", () => {
     // 英文 "has active runs"——用户看到的现象是"我明明改了，怎么还是老模型"。
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);
-    projects.create({ id: "project-1", name: "Demo", repoRoot: "/repo/demo", defaultBranch: "main", worktreeRoot: "/tmp/demo-worktrees", settings: { commands: [{ commandId: "project.cleanup", argv: ["true"], enabled: true, category: "lifecycle" }] } });
-    store.saveRun({ id: "run-active", projectId: "project-1", planId: "plan-1", planRevision: 1, status: "IN_PROGRESS", branch: "factory/run-active", workspacePath: "/tmp/demo-worktrees/run-active", baseCommit: "abc", executionThreadId: "execution-1", createdAt: store.now(), startedAt: store.now() });
+    projects.create({
+      id: "project-1",
+      name: "Demo",
+      repoRoot: "/repo/demo",
+      defaultBranch: "main",
+      worktreeRoot: "/tmp/demo-worktrees",
+      settings: { commands: [{ commandId: "project.cleanup", argv: ["true"], enabled: true, category: "lifecycle" }] },
+    });
+    store.saveRun({
+      id: "run-active",
+      projectId: "project-1",
+      planId: "plan-1",
+      planRevision: 1,
+      status: "IN_PROGRESS",
+      branch: "factory/run-active",
+      workspacePath: "/tmp/demo-worktrees/run-active",
+      baseCommit: "abc",
+      executionThreadId: "execution-1",
+      createdAt: store.now(),
+      startedAt: store.now(),
+    });
 
-    const updated = projects.update("project-1", { settings: { models: { executor: { model: "claude-opus-5", backend: "claude-agent-sdk" } } } });
+    const updated = projects.update("project-1", {
+      settings: { models: { executor: { model: "claude-opus-5", backend: "claude-agent-sdk" } } },
+    });
     expect(updated.settings.models.executor).toMatchObject({ model: "claude-opus-5", backend: "claude-agent-sdk" });
 
     // 路径、分支照旧要挡：运行中的 Worktree 就在 worktreeRoot 下，分支还牵着合并。
     expect(() => projects.update("project-1", { repoRoot: "/repo/other" })).toThrow(/active runs/i);
     expect(() => projects.update("project-1", { defaultBranch: "release" })).toThrow(/active runs/i);
     // hooks 也要挡：`PATCH /hooks` 那条路由本来就有自己的活动 Run 守卫，不能从这里开后门。
-    expect(() => projects.update("project-1", { settings: { hooks: { cleanup: { commandId: "project.cleanup", enabled: true, timeoutMs: 1000, maxAttempts: 1 } } } })).toThrow(/active runs/i);
+    expect(() =>
+      projects.update("project-1", {
+        settings: { hooks: { cleanup: { commandId: "project.cleanup", enabled: true, timeoutMs: 1000, maxAttempts: 1 } } },
+      }),
+    ).toThrow(/active runs/i);
   });
 
   it("freezes the project snapshot when a plan is confirmed", () => {
@@ -214,14 +350,23 @@ describe("ProjectService", () => {
     projects.create({ id: "project-1", name: "Demo", repoRoot: "/repo/demo", defaultBranch: "main", worktreeRoot: "/tmp/demo-worktrees" });
     const plans = new PlanService(store, projects);
     plans.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Frozen plan",
-      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Frozen plan" }) });
+    const plan = plans.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "thread-1",
+      title: "Frozen plan",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Frozen plan" }),
+    });
 
     plans.confirm(plan.id, "local-user");
     const revision = plans.getRevision(plan.id, 1);
     projects.update("project-1", { name: "Changed", expectedConfigVersion: 1 });
 
-    expect(revision.projectConfigSnapshot).toMatchObject({ projectId: "project-1", name: "Demo", repoRoot: "/repo/demo", configVersion: 1 });
+    expect(revision.projectConfigSnapshot).toMatchObject({
+      projectId: "project-1",
+      name: "Demo",
+      repoRoot: "/repo/demo",
+      configVersion: 1,
+    });
     expect(revision.projectConfigHash).toBe(revision.projectConfigSnapshot!.configHash);
   });
 
@@ -240,13 +385,15 @@ describe("ProjectService", () => {
     });
 
     expect(project).toMatchObject({ id: "project-demo", name: "ai-tools", currentExplorerThreadId: "explorer-current" });
-    expect(projects.bootstrapLegacy({
-      id: "project-demo",
-      name: "ignored",
-      repoRoot: "/repo/ai-tools",
-      defaultBranch: "main",
-      worktreeRoot: "/tmp/other",
-    })).toMatchObject({ id: "project-demo", name: "ai-tools", currentExplorerThreadId: "explorer-current" });
+    expect(
+      projects.bootstrapLegacy({
+        id: "project-demo",
+        name: "ignored",
+        repoRoot: "/repo/ai-tools",
+        defaultBranch: "main",
+        worktreeRoot: "/tmp/other",
+      }),
+    ).toMatchObject({ id: "project-demo", name: "ai-tools", currentExplorerThreadId: "explorer-current" });
   });
 
   it("repairs an unmodified legacy seed when the static project root changes", () => {
@@ -288,13 +435,25 @@ describe("ProjectService", () => {
     let requestCwd: string | undefined;
     const model: ModelGateway = {
       configFor: () => ({ model: "stub" }),
-      async *stream(request) { requestCwd = request.cwd; yield { type: "turn.completed" }; },
-      async answerUserInput() { return undefined; },
-      async cancel() { return undefined; },
+      async *stream(request) {
+        requestCwd = request.cwd;
+        yield { type: "turn.completed" };
+      },
+      async answerUserInput() {
+        return undefined;
+      },
+      async cancel() {
+        return undefined;
+      },
     };
     const explorer = new ExplorerThreadService(store, model, { cwdForProject: (projectId) => projects.get(projectId).repoRoot });
 
-    await explorer.startTurn({ threadId: "explorer-1", explorerPlanId: store.listExplorerPlans("explorer-1")[0]!.id, content: "Inspect the repository", clientTurnId: "turn-1" });
+    await explorer.startTurn({
+      threadId: "explorer-1",
+      explorerPlanId: store.listExplorerPlans("explorer-1")[0]!.id,
+      content: "Inspect the repository",
+      clientTurnId: "turn-1",
+    });
 
     expect(requestCwd).toBe("/repo/demo");
   });
@@ -304,15 +463,31 @@ describe("ProjectService", () => {
     const databasePath = join(directory, "factory.sqlite");
     const firstStore = new SqlitePipelineStore(databasePath);
     const firstProjects = new ProjectService(firstStore);
-    firstProjects.create({ id: "project-sqlite", name: "SQLite", shortName: "SQL", repoRoot: "/repo/sqlite", defaultBranch: "main", worktreeRoot: "/tmp/sqlite-worktrees" });
+    firstProjects.create({
+      id: "project-sqlite",
+      name: "SQLite",
+      shortName: "SQL",
+      repoRoot: "/repo/sqlite",
+      defaultBranch: "main",
+      worktreeRoot: "/tmp/sqlite-worktrees",
+    });
     firstProjects.update("project-sqlite", { name: "SQLite Updated", expectedConfigVersion: 1 });
     const firstPlans = new PlanService(firstStore, firstProjects);
     const thread = firstPlans.registerThread({ id: "sqlite-candidates", projectId: "project-sqlite", parentThreadId: null });
     const requirement = firstStore.listExplorerPlans(thread.id)[0]!;
-    const candidate = firstPlans.createCandidatePlan({ projectId: "project-sqlite", sourceExplorerThreadId: thread.id, explorerPlanId: requirement.id, title: "Saved candidate",
-      resolvedContract: planContractFixture({ store: firstStore, projectId: "project-sqlite", title: "Saved candidate" }) });
+    const candidate = firstPlans.createCandidatePlan({
+      projectId: "project-sqlite",
+      sourceExplorerThreadId: thread.id,
+      explorerPlanId: requirement.id,
+      title: "Saved candidate",
+      resolvedContract: planContractFixture({ store: firstStore, projectId: "project-sqlite", title: "Saved candidate" }),
+    });
     firstPlans.selectCandidate(requirement.id, null);
-    firstStore.updateExplorerPlan({ ...firstStore.getExplorerPlan(requirement.id)!, providerThreadId: "provider-requirement-1", repositoryContextKey: "repository-v2" });
+    firstStore.updateExplorerPlan({
+      ...firstStore.getExplorerPlan(requirement.id)!,
+      providerThreadId: "provider-requirement-1",
+      repositoryContextKey: "repository-v2",
+    });
     firstStore.close();
 
     const reopened = new SqlitePipelineStore(databasePath);
@@ -325,18 +500,39 @@ describe("ProjectService", () => {
 
     expect(project).toMatchObject({ id: "project-sqlite", name: "SQLite Updated", shortName: "SQL", configVersion: 2 });
     expect(history.map((item) => item.version)).toEqual([1, 2]);
-    expect(restoredRequirement).toMatchObject({ candidatePlanId: null, newPlanRequested: true, providerThreadId: "provider-requirement-1", repositoryContextKey: "repository-v2" });
+    expect(restoredRequirement).toMatchObject({
+      candidatePlanId: null,
+      newPlanRequested: true,
+      providerThreadId: "provider-requirement-1",
+      repositoryContextKey: "repository-v2",
+    });
     expect(candidateVersions).toMatchObject([{ id: candidate.id, revision: 1, title: "Saved candidate", status: "DRAFT" }]);
   });
 
   it("runs confirmed plans with the immutable project snapshot adapters", async () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);
-    projects.create({ id: "project-snapshot", name: "Snapshot", repoRoot: "/repo/snapshot", defaultBranch: "main", worktreeRoot: "/tmp/snapshot-worktrees", settings: { commands: [{ commandId: "project.test", category: "verification", enabled: true, argv: ["true"] }, { commandId: "project.typecheck", category: "verification", enabled: true, argv: ["true"] }] } });
+    projects.create({
+      id: "project-snapshot",
+      name: "Snapshot",
+      repoRoot: "/repo/snapshot",
+      defaultBranch: "main",
+      worktreeRoot: "/tmp/snapshot-worktrees",
+      settings: {
+        commands: [
+          { commandId: "project.test", category: "verification", enabled: true, argv: ["true"] },
+          { commandId: "project.typecheck", category: "verification", enabled: true, argv: ["true"] },
+        ],
+      },
+    });
     const plans = new PlanService(store, projects);
     plans.registerThread({ id: "thread-snapshot", projectId: "project-snapshot", parentThreadId: null });
-    const plan = plans.createCandidatePlan({ projectId: "project-snapshot", sourceExplorerThreadId: "thread-snapshot", title: "Snapshot execution",
-      resolvedContract: planContractFixture({ store, projectId: "project-snapshot", title: "Snapshot execution" }) });
+    const plan = plans.createCandidatePlan({
+      projectId: "project-snapshot",
+      sourceExplorerThreadId: "thread-snapshot",
+      title: "Snapshot execution",
+      resolvedContract: planContractFixture({ store, projectId: "project-snapshot", title: "Snapshot execution" }),
+    });
     plans.confirm(plan.id, "local-user");
     plans.enqueue(plan.id);
     plans.dispatch(plan.id);
@@ -344,11 +540,19 @@ describe("ProjectService", () => {
     const resolved: string[] = [];
     const scheduler = new Scheduler({
       store,
-      workspace: { create: async () => { throw new Error("default workspace must not be used"); }, remove: async () => undefined },
+      workspace: {
+        create: async () => {
+          throw new Error("default workspace must not be used");
+        },
+        remove: async () => undefined,
+      },
       hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
       workspaceFactory: (snapshot) => {
         resolved.push(`workspace:${snapshot.repoRoot}:${snapshot.worktreeRoot}`);
-        return { create: async () => ({ path: "/tmp/snapshot-worktrees/run", branch: "factory/run", baseCommit: "abc" }), remove: async () => undefined };
+        return {
+          create: async () => ({ path: "/tmp/snapshot-worktrees/run", branch: "factory/run", baseCommit: "abc" }),
+          remove: async () => undefined,
+        };
       },
       hookRunnerFactory: (snapshot) => {
         resolved.push(`hooks:${snapshot.repoRoot}`);
@@ -373,7 +577,14 @@ describe("ProjectService legacy model migration", () => {
   const codexModels = { explorer: "gpt-5.6-luna", executor: "gpt-5.6-luna" };
 
   function createLegacyProject(store: InMemoryPipelineStore, projects: ProjectService, id = "project-legacy") {
-    return projects.create({ id, name: "Legacy", repoRoot: `/repo/${id}`, defaultBranch: "main", worktreeRoot: `/tmp/${id}-worktrees`, settings: legacySettings });
+    return projects.create({
+      id,
+      name: "Legacy",
+      repoRoot: `/repo/${id}`,
+      defaultBranch: "main",
+      worktreeRoot: `/tmp/${id}-worktrees`,
+      settings: legacySettings,
+    });
   }
 
   it("replaces legacy DeepSeek model slugs once and records a new config revision", () => {
@@ -398,7 +609,13 @@ describe("ProjectService legacy model migration", () => {
   it("leaves projects that already use a supported model and archived projects untouched", () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);
-    const current = projects.create({ id: "project-current", name: "Current", repoRoot: "/repo/current", defaultBranch: "main", worktreeRoot: "/tmp/current-worktrees" });
+    const current = projects.create({
+      id: "project-current",
+      name: "Current",
+      repoRoot: "/repo/current",
+      defaultBranch: "main",
+      worktreeRoot: "/tmp/current-worktrees",
+    });
     const archived = createLegacyProject(store, projects, "project-archived");
     projects.archive("project-archived");
 
@@ -438,17 +655,31 @@ describe("ProjectService legacy model migration", () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);
     const before = createLegacyProject(store, projects, "project-switch");
-    projects.update("project-switch", { settings: { models: { explorer: { model: "gpt-5.6-luna" }, executor: { model: "gpt-5.6-luna" } } } });
+    projects.update("project-switch", {
+      settings: { models: { explorer: { model: "gpt-5.6-luna" }, executor: { model: "gpt-5.6-luna" } } },
+    });
 
     // 切到 Claude 后端：gpt-* 是上一个家族留下的 slug，按角色配置的模型替换；mode 等其余字段保留。
-    expect(projects.migrateForeignFamilyModels({ familyForRole: { explorer: "claude", executor: "claude" }, models: { explorer: "claude-opus-5", executor: "claude-sonnet-5" } }).map((project) => project.id)).toEqual(["project-switch"]);
+    expect(
+      projects
+        .migrateForeignFamilyModels({
+          familyForRole: { explorer: "claude", executor: "claude" },
+          models: { explorer: "claude-opus-5", executor: "claude-sonnet-5" },
+        })
+        .map((project) => project.id),
+    ).toEqual(["project-switch"]);
 
     const after = store.getProject("project-switch")!;
     expect(after.settings.models.explorer).toMatchObject({ model: "claude-opus-5", mode: "plan" });
     expect(after.settings.models.executor).toMatchObject({ model: "claude-sonnet-5", mode: "default" });
     expect(after.configVersion).toBeGreaterThan(before.configVersion);
     // 幂等：第二次没有可迁移的 slug。
-    expect(projects.migrateForeignFamilyModels({ familyForRole: { explorer: "claude", executor: "claude" }, models: { explorer: "claude-opus-5", executor: "claude-sonnet-5" } })).toEqual([]);
+    expect(
+      projects.migrateForeignFamilyModels({
+        familyForRole: { explorer: "claude", executor: "claude" },
+        models: { explorer: "claude-opus-5", executor: "claude-sonnet-5" },
+      }),
+    ).toEqual([]);
   });
 
   it("migrates each role against its own family so a split-backend project keeps both slugs", () => {
@@ -465,7 +696,12 @@ describe("ProjectService legacy model migration", () => {
     });
 
     // 用单一家族判定的旧实现会把其中一个角色正确的 slug 改坏；逐角色判定必须两个都不动。
-    expect(projects.migrateForeignFamilyModels({ familyForRole: { explorer: "openai", executor: "claude" }, models: { explorer: "gpt-5.6-luna", executor: "claude-opus-5" } })).toEqual([]);
+    expect(
+      projects.migrateForeignFamilyModels({
+        familyForRole: { explorer: "openai", executor: "claude" },
+        models: { explorer: "gpt-5.6-luna", executor: "claude-opus-5" },
+      }),
+    ).toEqual([]);
     expect(store.getProject("project-split")!.settings.models.explorer.model).toBe("gpt-5.6-sol");
     expect(store.getProject("project-split")!.settings.models.executor.model).toBe("claude-sonnet-5");
   });
@@ -483,7 +719,14 @@ describe("ProjectService legacy model migration", () => {
       settings: { models: { explorer: { model: "gpt-5.6-luna" }, executor: { model: "gpt-5.6-luna", backend: "claude-agent-sdk" } } },
     });
 
-    expect(projects.migrateForeignFamilyModels({ familyForRole: { explorer: "claude", executor: "claude" }, models: { explorer: "claude-opus-5", executor: "claude-opus-5" } }).map((project) => project.id)).toEqual(["project-pinned"]);
+    expect(
+      projects
+        .migrateForeignFamilyModels({
+          familyForRole: { explorer: "claude", executor: "claude" },
+          models: { explorer: "claude-opus-5", executor: "claude-opus-5" },
+        })
+        .map((project) => project.id),
+    ).toEqual(["project-pinned"]);
     const after = store.getProject("project-pinned")!;
     // explorer 没固定后端 → 按全局家族迁移；executor 固定了后端 → 原样保留。
     expect(after.settings.models.explorer.model).toBe("claude-opus-5");
@@ -503,7 +746,12 @@ describe("ProjectService legacy model migration", () => {
       settings: { models: { explorer: { model: "my-local-alias" }, executor: { model: "claude-sonnet-5" } } },
     });
 
-    expect(projects.migrateForeignFamilyModels({ familyForRole: { explorer: "claude", executor: "claude" }, models: { explorer: "claude-opus-5", executor: "claude-opus-5" } })).toEqual([]);
+    expect(
+      projects.migrateForeignFamilyModels({
+        familyForRole: { explorer: "claude", executor: "claude" },
+        models: { explorer: "claude-opus-5", executor: "claude-opus-5" },
+      }),
+    ).toEqual([]);
     expect(store.getProject("project-custom")!.settings.models.explorer.model).toBe("my-local-alias");
     expect(store.getProject("project-custom")!.settings.models.executor.model).toBe("claude-sonnet-5");
   });

@@ -10,7 +10,11 @@ import { executionMessageDetails, executionMessageDiagnosticsTitle } from "./exe
 
 describe("executionMessageDetails", () => {
   it("keeps the order people ask about: which turn, which call, which provider session", () => {
-    expect(executionMessageDetails({ modelStep: 3, callId: "call-1", providerThreadId: "thread-1" })).toEqual(["Turn #3", "Call call-1", "Provider session linked"]);
+    expect(executionMessageDetails({ modelStep: 3, callId: "call-1", providerThreadId: "thread-1" })).toEqual([
+      "Turn #3",
+      "Call call-1",
+      "Provider session linked",
+    ]);
   });
 
   it("prefers the Factory call id and only falls back to the provider item id", () => {

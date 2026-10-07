@@ -38,7 +38,10 @@ const emit = defineEmits<{ "update:modelValue": [value: boolean] }>();
       </div>
 
       <section v-for="(section, index) in explorerPolicySections" :key="section.title" class="policy-section">
-        <div class="section-heading"><span>{{ String(index + 1).padStart(2, "0") }}</span><strong>{{ section.title }}</strong></div>
+        <div class="section-heading">
+          <span>{{ String(index + 1).padStart(2, "0") }}</span
+          ><strong>{{ section.title }}</strong>
+        </div>
         <ul class="policy-list">
           <li v-for="item in section.items" :key="item"><span class="policy-check">✓</span>{{ item }}</li>
         </ul>

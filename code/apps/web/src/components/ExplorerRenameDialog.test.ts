@@ -6,7 +6,8 @@ import ExplorerRenameDialog from "./ExplorerRenameDialog.vue";
 const ElDialogStub = defineComponent({
   props: { modelValue: { type: Boolean, default: false } },
   setup(props, { slots }) {
-    return () => props.modelValue ? h("div", { class: "explorer-rename-dialog" }, [slots.header?.(), slots.default?.(), slots.footer?.()]) : null;
+    return () =>
+      props.modelValue ? h("div", { class: "explorer-rename-dialog" }, [slots.header?.(), slots.default?.(), slots.footer?.()]) : null;
   },
 });
 

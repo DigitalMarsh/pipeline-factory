@@ -40,7 +40,18 @@ import type { ModelUsage, ModelUsageScope } from "../model/usage.js";
 import type { CommandResult } from "../platform/commands.js";
 
 /** Run 的执行、验证、合并和恢复状态；BLOCKED 需要人工关注。 */
-export type RunStatus = "QUEUED" | "STARTING" | "IN_PROGRESS" | "READY_FOR_VERIFY" | "VERIFYING" | "MERGE_READY" | "BLOCKED" | "NEEDS_PLAN_CHANGE" | "STALE" | "RECOVERING" | "CANCELLED";
+export type RunStatus =
+  | "QUEUED"
+  | "STARTING"
+  | "IN_PROGRESS"
+  | "READY_FOR_VERIFY"
+  | "VERIFYING"
+  | "MERGE_READY"
+  | "BLOCKED"
+  | "NEEDS_PLAN_CHANGE"
+  | "STALE"
+  | "RECOVERING"
+  | "CANCELLED";
 /** ExecutionThread 的展示状态，承载 Run 的实时模型输出和控制事实。 */
 export type ExecutionThreadState = "ACTIVE" | "PAUSED" | "BLOCKED" | "CANCELLED" | "COMPLETED";
 /**
@@ -50,7 +61,18 @@ export type ExecutionThreadState = "ACTIVE" | "PAUSED" | "BLOCKED" | "CANCELLED"
  * 曾经的 `REPAIR` / `COMMIT` 两个成员没有任何写入点，真出现也只会掉进执行会话的
  * `unclassified` 显示成"未识别"；它们在最近一次清点里被删掉。
  */
-export type JournalEntryType = "RUN_CREATED" | "HOOK_COMPLETED" | "HOOK_FAILED" | "HOOK_SKIPPED" | "MODEL_OUTPUT" | "PROVIDER_ACTIVITY" | "TOOL_CALL" | "TASK_PROGRESS" | "USER_GUIDANCE" | "VERIFICATION" | "RECOVERY";
+export type JournalEntryType =
+  | "RUN_CREATED"
+  | "HOOK_COMPLETED"
+  | "HOOK_FAILED"
+  | "HOOK_SKIPPED"
+  | "MODEL_OUTPUT"
+  | "PROVIDER_ACTIVITY"
+  | "TOOL_CALL"
+  | "TASK_PROGRESS"
+  | "USER_GUIDANCE"
+  | "VERIFICATION"
+  | "RECOVERY";
 
 /** 跨模型轮次、Plan 任务和 Provider 调用的稳定关联字段。 */
 export type ExecutionJournalCorrelation = {

@@ -161,7 +161,9 @@ async function start(mode, only) {
   if (only !== "api") {
     // dev 下 API 仍按 config 的 serveWeb 决定是否顺带托管构建产物，这不会干扰 5173 的开发流程，
     // 但容易让人误以为改代码不生效——所以显式提示。
-    console.log(`注意：开发请访问 ${WEB_URL}（vite dev server）。${API_URL} 是 API 端口${SERVE_WEB ? "，若已构建也会托管一份构建产物" : ""}。`);
+    console.log(
+      `注意：开发请访问 ${WEB_URL}（vite dev server）。${API_URL} 是 API 端口${SERVE_WEB ? "，若已构建也会托管一份构建产物" : ""}。`,
+    );
   }
   return true;
 }
@@ -235,7 +237,11 @@ async function startWeb() {
 
 /** 等到健康检查通过；进程提前退出时立刻失败，并把日志尾部打出来，不用等人去翻文件。 */
 async function awaitReady(label, pid, url, displayUrl, logFile) {
-  const ready = await waitFor(() => fetchOk(url), READY_TIMEOUT_MS, () => isAlive(pid));
+  const ready = await waitFor(
+    () => fetchOk(url),
+    READY_TIMEOUT_MS,
+    () => isAlive(pid),
+  );
   if (ready) {
     report(`${label} 已启动`, pid, displayUrl, logFile);
     return true;
@@ -353,7 +359,9 @@ function describe(label, pidFile, url, port, healthy) {
     return false;
   }
   if (!alive) {
-    console.log(listener ? `${label}: PID 文件已过期，端口仍由 PID ${listener} 占用但健康检查失败` : `${label}: 已停止（PID ${recorded} 不存在）`);
+    console.log(
+      listener ? `${label}: PID 文件已过期，端口仍由 PID ${listener} 占用但健康检查失败` : `${label}: 已停止（PID ${recorded} 不存在）`,
+    );
     return false;
   }
   console.log(`${label}: 进程运行但未就绪（PID: ${recorded}，健康检查失败）`);
@@ -408,8 +416,14 @@ function sleepSync(ms) {
 function listeningPid(port) {
   try {
     // lsof 在无匹配时以非零码退出，被下面的 catch 吞掉，语义正好是"没有监听者"。
-    const output = execFileSync("lsof", ["-nP", `-tiTCP:${port}`, "-sTCP:LISTEN"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
-    const first = output.split("\n").map((line) => line.trim()).find(Boolean);
+    const output = execFileSync("lsof", ["-nP", `-tiTCP:${port}`, "-sTCP:LISTEN"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const first = output
+      .split("\n")
+      .map((line) => line.trim())
+      .find(Boolean);
     return first && /^\d+$/.test(first) ? Number(first) : null;
   } catch {
     return null;

@@ -74,7 +74,8 @@ export function usePlanDetailDrawer(deps: PlanDetailDrawerDeps) {
     const requestedProjectId = deps.projectId.value;
     const requestToken = deps.projectScopeToken();
     const requestVersion = ++detailRequestVersion;
-    const isCurrentDetailRequest = () => requestVersion === detailRequestVersion && deps.projectId.value === requestedProjectId && deps.projectScopeToken() === requestToken;
+    const isCurrentDetailRequest = () =>
+      requestVersion === detailRequestVersion && deps.projectId.value === requestedProjectId && deps.projectScopeToken() === requestToken;
     drawerTab.value = "plan";
     // 先把已经加载好的 Explorer/Plan 投影留在抽屉里，等详情接口补齐冻结版本与调度元数据。
     detailPlan.value = plan;
@@ -92,7 +93,12 @@ export function usePlanDetailDrawer(deps: PlanDetailDrawerDeps) {
       void loadVerificationSuiteOptions(requestedProjectId, requestToken);
     }
     const currentRevisionDraft = deps.revisionDraft.value;
-    if (currentRevisionDraft && planId === currentRevisionDraft.planId && currentRevisionDraft.status !== "CONFIRMED" && currentRevisionDraft.status !== "DISCARDED") {
+    if (
+      currentRevisionDraft &&
+      planId === currentRevisionDraft.planId &&
+      currentRevisionDraft.status !== "CONFIRMED" &&
+      currentRevisionDraft.status !== "DISCARDED"
+    ) {
       detailPlan.value = deps.planFromRevisionDraft(currentRevisionDraft);
       detailLatestRevision.value = currentRevisionDraft.targetRevision;
       try {
@@ -111,22 +117,32 @@ export function usePlanDetailDrawer(deps: PlanDetailDrawerDeps) {
     if (!isCandidate) {
       // Merge reconciliation can take longer than the read-only Plan fetch. Keep it
       // in the background so a slow scheduler never leaves the shared drawer loading.
-      void api.reconcileProjectMerges(requestedProjectId).then((report) => {
-        if (deps.projectId.value !== requestedProjectId || deps.projectScopeToken() !== requestToken) return;
-        const diagnostic = plan.runId ? report.items.find((item) => item.runId === plan.runId && item.reason) : undefined;
-        if (diagnostic?.reason) ElMessage.warning(`Merge 状态检测：${diagnostic.reason}`);
-      }).catch((caught) => {
-        if (deps.projectId.value === requestedProjectId && deps.projectScopeToken() === requestToken) {
-          ElMessage.warning(`Merge 状态检测失败，已展示最近保存的状态：${caught instanceof Error ? caught.message : "暂不可用"}`);
-        }
-      });
+      void api
+        .reconcileProjectMerges(requestedProjectId)
+        .then((report) => {
+          if (deps.projectId.value !== requestedProjectId || deps.projectScopeToken() !== requestToken) return;
+          const diagnostic = plan.runId ? report.items.find((item) => item.runId === plan.runId && item.reason) : undefined;
+          if (diagnostic?.reason) ElMessage.warning(`Merge 状态检测：${diagnostic.reason}`);
+        })
+        .catch((caught) => {
+          if (deps.projectId.value === requestedProjectId && deps.projectScopeToken() === requestToken) {
+            ElMessage.warning(`Merge 状态检测失败，已展示最近保存的状态：${caught instanceof Error ? caught.message : "暂不可用"}`);
+          }
+        });
     }
     try {
       const response = await api.getPlan(planId);
       if (!isCurrentDetailRequest()) return;
       const resolvedContract = response.revision?.resolvedContract ?? response.plan.resolvedContract ?? plan.resolvedContract;
       const generatedSpec = response.plan.generatedSpec ?? plan.generatedSpec;
-      detailPlan.value = { ...plan, ...response.plan, ...(generatedSpec ? { generatedSpec } : {}), ...(resolvedContract ? { resolvedContract } : {}), dispatch: response.dispatch, mergeRequest: response.mergeRequest };
+      detailPlan.value = {
+        ...plan,
+        ...response.plan,
+        ...(generatedSpec ? { generatedSpec } : {}),
+        ...(resolvedContract ? { resolvedContract } : {}),
+        dispatch: response.dispatch,
+        mergeRequest: response.mergeRequest,
+      };
       detailLatestRevision.value = response.plan.revision;
       if (isCandidate) {
         detailVersionSource.value = "candidate";
@@ -166,7 +182,12 @@ export function usePlanDetailDrawer(deps: PlanDetailDrawerDeps) {
       } else {
         const response = await api.getPlanRevision(planId, revisionNumber);
         if (requestVersion !== detailRequestVersion) return;
-        detailPlan.value = { ...current, revision: response.revision.revision, status: "READY", ...(response.revision.resolvedContract ? { resolvedContract: response.revision.resolvedContract } : {}) };
+        detailPlan.value = {
+          ...current,
+          revision: response.revision.revision,
+          status: "READY",
+          ...(response.revision.resolvedContract ? { resolvedContract: response.revision.resolvedContract } : {}),
+        };
       }
     } catch (caught) {
       if (requestVersion !== detailRequestVersion) return;
@@ -185,15 +206,24 @@ export function usePlanDetailDrawer(deps: PlanDetailDrawerDeps) {
    */
   const detailVerificationSuiteOptions = ref<string[]>([]);
   const verificationSuitesSaving = ref(false);
-  const canEditVerificationSuites = computed(() => !deps.isReadOnly?.() && detailPlan.value?.status === "DRAFT" && Boolean(detailPlan.value?.generatedSpec && detailPlan.value?.resolvedContract));
+  const canEditVerificationSuites = computed(
+    () =>
+      !deps.isReadOnly?.() &&
+      detailPlan.value?.status === "DRAFT" &&
+      Boolean(detailPlan.value?.generatedSpec && detailPlan.value?.resolvedContract),
+  );
 
   async function loadVerificationSuiteOptions(projectId: string, requestToken: number): Promise<void> {
     try {
       const response = await api.project(projectId);
       if (deps.projectId.value !== projectId || deps.projectScopeToken() !== requestToken) return;
-      detailVerificationSuiteOptions.value = [...new Set(response.project.settings.commands
-        .filter((command) => command.category === "verification" && command.enabled !== false)
-        .flatMap((command) => command.tags ?? []))].sort();
+      detailVerificationSuiteOptions.value = [
+        ...new Set(
+          response.project.settings.commands
+            .filter((command) => command.category === "verification" && command.enabled !== false)
+            .flatMap((command) => command.tags ?? []),
+        ),
+      ].sort();
     } catch {
       // 取不到词表不阻塞详情：编辑区退化成"暂时无法选择"，而不是整页报错。
       detailVerificationSuiteOptions.value = [];
@@ -207,7 +237,8 @@ export function usePlanDetailDrawer(deps: PlanDetailDrawerDeps) {
     verificationSuitesSaving.value = true;
     try {
       const response = await api.updatePlanVerificationSuites(planId, suites);
-      if (detailPlan.value && (detailPlan.value.id ?? detailPlan.value.planId) === planId) detailPlan.value = { ...detailPlan.value, ...response.plan };
+      if (detailPlan.value && (detailPlan.value.id ?? detailPlan.value.planId) === planId)
+        detailPlan.value = { ...detailPlan.value, ...response.plan };
       ElMessage.success(suites.length ? "验证子集已保存" : "已回到项目默认验证集");
     } catch (caught) {
       ElMessage.error(caught instanceof Error ? `验证子集保存失败：${caught.message}` : "验证子集保存失败");
@@ -216,7 +247,12 @@ export function usePlanDetailDrawer(deps: PlanDetailDrawerDeps) {
     }
   }
   const dependenciesSaving = ref(false);
-  const canEditDependencies = computed(() => !deps.isReadOnly?.() && detailPlan.value?.status === "DRAFT" && Boolean(detailPlan.value?.generatedSpec || detailPlan.value?.resolvedContract));
+  const canEditDependencies = computed(
+    () =>
+      !deps.isReadOnly?.() &&
+      detailPlan.value?.status === "DRAFT" &&
+      Boolean(detailPlan.value?.generatedSpec || detailPlan.value?.resolvedContract),
+  );
 
   async function loadDependencyOptions(projectId: string, planId: string, requestToken: number): Promise<void> {
     try {
@@ -239,7 +275,8 @@ export function usePlanDetailDrawer(deps: PlanDetailDrawerDeps) {
     dependenciesSaving.value = true;
     try {
       const response = await api.updatePlanDependencies(planId, planIds);
-      if (detailPlan.value && (detailPlan.value.id ?? detailPlan.value.planId) === planId) detailPlan.value = { ...detailPlan.value, ...response.plan };
+      if (detailPlan.value && (detailPlan.value.id ?? detailPlan.value.planId) === planId)
+        detailPlan.value = { ...detailPlan.value, ...response.plan };
       ElMessage.success("前置 Plan 已保存");
     } catch (caught) {
       ElMessage.error(caught instanceof Error ? `前置 Plan 保存失败：${caught.message}` : "前置 Plan 保存失败");

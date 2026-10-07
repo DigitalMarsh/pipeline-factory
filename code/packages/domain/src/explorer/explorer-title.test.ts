@@ -23,8 +23,12 @@ function model(): ModelGateway {
       yield { type: "text.delta", text: "Stub response" };
       yield { type: "turn.completed" };
     },
-    async answerUserInput() { return undefined; },
-    async cancel() { return undefined; },
+    async answerUserInput() {
+      return undefined;
+    },
+    async cancel() {
+      return undefined;
+    },
   };
 }
 
@@ -66,10 +70,8 @@ describe("Explorer title rules", () => {
   });
 
   it("normalizes a model response into a short single-line title", () => {
-    expect(normalizeExplorerTitle("```text\n\"订单取消流程优化。\"\n```"))
-      .toBe("订单取消流程优化");
-    expect(normalizeExplorerTitle("**“订单取消流程优化”**。"))
-      .toBe("订单取消流程优化");
+    expect(normalizeExplorerTitle('```text\n"订单取消流程优化。"\n```')).toBe("订单取消流程优化");
+    expect(normalizeExplorerTitle("**“订单取消流程优化”**。")).toBe("订单取消流程优化");
     expect(normalizeExplorerTitle("   ")).toBeNull();
   });
 
@@ -77,7 +79,12 @@ describe("Explorer title rules", () => {
     const store = new InMemoryPipelineStore();
     const explorer = new ExplorerService(store).create({ projectId: "project-1", createdAt: "2026-08-29T05:45:15.000Z" });
     let calls = 0;
-    const titleGenerator: ExplorerTitleGenerator = { generate: async () => { calls += 1; return "订单取消流程优化"; } };
+    const titleGenerator: ExplorerTitleGenerator = {
+      generate: async () => {
+        calls += 1;
+        return "订单取消流程优化";
+      },
+    };
     const service = new ExplorerThreadService(store, model(), { titleGenerator });
     const events: string[] = [];
     service.subscribeEvents(explorer.id, (event) => events.push(event.type));
@@ -86,7 +93,11 @@ describe("Explorer title rules", () => {
     await service.startTurn({ threadId: explorer.id, explorerPlanId, content: "请优化订单取消流程", clientTurnId: "turn-1" });
     await waitFor(() => store.listTurns(explorer.id).some((turn) => turn.role === "assistant" && turn.status === "COMPLETED"));
     expect(store.getThread(explorer.id)).toMatchObject({ title: "探索-20260829-13:45:15", titleSource: "AUTO", titleStatus: "GENERATED" });
-    expect(store.getExplorerPlan(explorerPlanId)).toMatchObject({ title: "请优化订单取消流程", titleSource: "AUTO", latestUserMessageSummary: "请优化订单取消流程" });
+    expect(store.getExplorerPlan(explorerPlanId)).toMatchObject({
+      title: "请优化订单取消流程",
+      titleSource: "AUTO",
+      latestUserMessageSummary: "请优化订单取消流程",
+    });
     expect(events).not.toContain("explorer.title.updated");
 
     await service.backfillTitles();
@@ -97,10 +108,19 @@ describe("Explorer title rules", () => {
     const store = new InMemoryPipelineStore();
     createProject(store, "project-1", "P1");
     const explorer = new ExplorerService(store).create({ projectId: "project-1", createdAt: "2026-08-29T05:45:15.000Z" });
-    const titleGenerator: ExplorerTitleGenerator = { generate: async () => { throw new Error("title unavailable"); } };
+    const titleGenerator: ExplorerTitleGenerator = {
+      generate: async () => {
+        throw new Error("title unavailable");
+      },
+    };
     const service = new ExplorerThreadService(store, model(), { titleGenerator });
 
-    await service.startTurn({ threadId: explorer.id, explorerPlanId: store.listExplorerPlans(explorer.id)[0]!.id, content: "请分析登录问题", clientTurnId: "turn-1" });
+    await service.startTurn({
+      threadId: explorer.id,
+      explorerPlanId: store.listExplorerPlans(explorer.id)[0]!.id,
+      content: "请分析登录问题",
+      clientTurnId: "turn-1",
+    });
     await waitFor(() => store.listTurns(explorer.id).some((turn) => turn.role === "assistant" && turn.status === "COMPLETED"));
     expect(store.getThread(explorer.id)).toMatchObject({ title: "P1-20260829-13:45:15", titleSource: "AUTO", titleStatus: "GENERATED" });
   });
@@ -110,10 +130,20 @@ describe("Explorer title rules", () => {
     const explorer = new ExplorerService(store).create({ projectId: "project-1", createdAt: "2026-08-29T05:45:15.000Z" });
     store.updateThread({ ...explorer, title: "探索-20260829-13:45:15", titleStatus: "PLACEHOLDER" });
     let resolveTitle!: (title: string) => void;
-    const titleGenerator: ExplorerTitleGenerator = { generate: () => new Promise((resolve) => { resolveTitle = resolve; }) };
+    const titleGenerator: ExplorerTitleGenerator = {
+      generate: () =>
+        new Promise((resolve) => {
+          resolveTitle = resolve;
+        }),
+    };
     const service = new ExplorerThreadService(store, model(), { titleGenerator });
 
-    await service.startTurn({ threadId: explorer.id, explorerPlanId: store.listExplorerPlans(explorer.id)[0]!.id, content: "请优化订单流程", clientTurnId: "turn-1" });
+    await service.startTurn({
+      threadId: explorer.id,
+      explorerPlanId: store.listExplorerPlans(explorer.id)[0]!.id,
+      content: "请优化订单流程",
+      clientTurnId: "turn-1",
+    });
     await waitFor(() => store.getThread(explorer.id)?.titleStatus === "GENERATING");
     new ExplorerService(store).rename(explorer.id, "我手动命名的探索");
     resolveTitle("订单流程优化");
@@ -126,12 +156,34 @@ describe("Explorer title rules", () => {
     const store = new InMemoryPipelineStore();
     const oldCreated = new ExplorerService(store).create({ projectId: "project-1", createdAt: "2026-08-28T05:45:15.000Z" });
     const oldDefault = store.updateThread({ ...oldCreated, title: "探索-20260828-13:45:15", titleStatus: "PLACEHOLDER" });
-    store.saveTurn({ id: "old-user", threadId: oldDefault.id, role: "user", content: "请增加个人信息管理", status: "COMPLETED", createdAt: "2026-08-28T05:46:00.000Z", sequence: 1 });
+    store.saveTurn({
+      id: "old-user",
+      threadId: oldDefault.id,
+      role: "user",
+      content: "请增加个人信息管理",
+      status: "COMPLETED",
+      createdAt: "2026-08-28T05:46:00.000Z",
+      sequence: 1,
+    });
     const empty = new ExplorerService(store).create({ projectId: "project-1", createdAt: "2026-08-28T05:47:15.000Z" });
     createProject(store, "project-1", "P1");
-    const custom = new ExplorerService(store).create({ projectId: "project-1", title: "我保留的名称", createdAt: "2026-08-28T05:48:15.000Z" });
-    store.saveTurn({ id: "custom-user", threadId: custom.id, role: "user", content: "不应覆盖", status: "COMPLETED", createdAt: "2026-08-28T05:49:00.000Z", sequence: 1 });
-    const titleGenerator: ExplorerTitleGenerator = { generate: async ({ content }) => content === "请增加个人信息管理" ? "个人信息管理" : "不应被使用" };
+    const custom = new ExplorerService(store).create({
+      projectId: "project-1",
+      title: "我保留的名称",
+      createdAt: "2026-08-28T05:48:15.000Z",
+    });
+    store.saveTurn({
+      id: "custom-user",
+      threadId: custom.id,
+      role: "user",
+      content: "不应覆盖",
+      status: "COMPLETED",
+      createdAt: "2026-08-28T05:49:00.000Z",
+      sequence: 1,
+    });
+    const titleGenerator: ExplorerTitleGenerator = {
+      generate: async ({ content }) => (content === "请增加个人信息管理" ? "个人信息管理" : "不应被使用"),
+    };
     const service = new ExplorerThreadService(store, model(), { titleGenerator });
 
     await service.backfillTitles();

@@ -4,12 +4,41 @@
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  */
 import { describe, expect, it } from "vitest";
-import { InMemoryPipelineStore, PlanService, ProjectService, type AgentLoop, type ExplorerInputRequest, type ExplorerTurn, type Run } from "../index.js";
+import {
+  InMemoryPipelineStore,
+  PlanService,
+  ProjectService,
+  type AgentLoop,
+  type ExplorerInputRequest,
+  type ExplorerTurn,
+  type Run,
+} from "../index.js";
 import { RecoveryCoordinator } from "./recovery-coordinator.js";
 import { planContractFixture } from "../plan/plan-fixture.js";
 
-function loop(store: InMemoryPipelineStore, id: string, state: AgentLoop["state"], providerThreadId: string | null = null, providerTurnId: string | null = null, ownerId = `run-${id}`): AgentLoop {
-  const value: AgentLoop = { id, ownerType: "run", ownerId, role: "executor", mode: "provider-controlled", state, stepCount: 2, maxSteps: 40, startedAt: store.now(), completedAt: null, providerThreadId, providerTurnId, checkpointJson: null };
+function loop(
+  store: InMemoryPipelineStore,
+  id: string,
+  state: AgentLoop["state"],
+  providerThreadId: string | null = null,
+  providerTurnId: string | null = null,
+  ownerId = `run-${id}`,
+): AgentLoop {
+  const value: AgentLoop = {
+    id,
+    ownerType: "run",
+    ownerId,
+    role: "executor",
+    mode: "provider-controlled",
+    state,
+    stepCount: 2,
+    maxSteps: 40,
+    startedAt: store.now(),
+    completedAt: null,
+    providerThreadId,
+    providerTurnId,
+    checkpointJson: null,
+  };
   store.saveAgentLoop(value);
   return value;
 }
@@ -19,15 +48,78 @@ describe("RecoveryCoordinator", () => {
     const store = new InMemoryPipelineStore();
     store.saveThread({ id: "explorer-1", projectId: "project-1", parentThreadId: null });
     const thread = { ...store.getThread("explorer-1")!, state: "WAITING_FOR_INPUT" as const, messageCount: 2 };
-    const turn: ExplorerTurn = { id: "turn-1", threadId: thread.id, role: "assistant", content: "已开始分析", status: "WAITING_FOR_INPUT", createdAt: store.now(), sequence: 2 };
-    const request: ExplorerInputRequest = { id: "input-1", threadId: thread.id, localTurnId: turn.id, providerRequestId: "request-1", providerThreadId: "provider-thread", providerTurnId: "provider-turn", itemId: "item-1", questions: [], isBlocking: true, status: "OPEN", createdAt: store.now(), answeredAt: null, answeredBy: null, redactedAnswerSummary: null };
+    const turn: ExplorerTurn = {
+      id: "turn-1",
+      threadId: thread.id,
+      role: "assistant",
+      content: "已开始分析",
+      status: "WAITING_FOR_INPUT",
+      createdAt: store.now(),
+      sequence: 2,
+    };
+    const request: ExplorerInputRequest = {
+      id: "input-1",
+      threadId: thread.id,
+      localTurnId: turn.id,
+      providerRequestId: "request-1",
+      providerThreadId: "provider-thread",
+      providerTurnId: "provider-turn",
+      itemId: "item-1",
+      questions: [],
+      isBlocking: true,
+      status: "OPEN",
+      createdAt: store.now(),
+      answeredAt: null,
+      answeredBy: null,
+      redactedAnswerSummary: null,
+    };
     store.updateThread(thread);
-    store.saveTurn({ id: "user-1", threadId: thread.id, role: "user", content: "请探索", status: "COMPLETED", createdAt: store.now(), sequence: 1 });
+    store.saveTurn({
+      id: "user-1",
+      threadId: thread.id,
+      role: "user",
+      content: "请探索",
+      status: "COMPLETED",
+      createdAt: store.now(),
+      sequence: 1,
+    });
     store.saveTurn(turn);
     store.saveInputRequest(request);
-    store.saveAgentLoop({ id: "explorer-loop", ownerType: "explorer-turn", ownerId: turn.id, role: "explorer", mode: "provider-controlled", state: "WAITING_FOR_INPUT", stepCount: 1, maxSteps: 40, startedAt: store.now(), completedAt: null, providerThreadId: "provider-thread", providerTurnId: "provider-turn", checkpointJson: null });
-    for (const [id, state] of [["explorer-running", "RUNNING"], ["explorer-paused", "PAUSED"], ["explorer-recovering", "RECOVERING"]] as const) {
-      store.saveAgentLoop({ id, ownerType: "explorer-turn", ownerId: `missing-${id}`, role: "explorer", mode: "provider-controlled", state, stepCount: 1, maxSteps: 40, startedAt: store.now(), completedAt: null, providerThreadId: null, providerTurnId: null, checkpointJson: null });
+    store.saveAgentLoop({
+      id: "explorer-loop",
+      ownerType: "explorer-turn",
+      ownerId: turn.id,
+      role: "explorer",
+      mode: "provider-controlled",
+      state: "WAITING_FOR_INPUT",
+      stepCount: 1,
+      maxSteps: 40,
+      startedAt: store.now(),
+      completedAt: null,
+      providerThreadId: "provider-thread",
+      providerTurnId: "provider-turn",
+      checkpointJson: null,
+    });
+    for (const [id, state] of [
+      ["explorer-running", "RUNNING"],
+      ["explorer-paused", "PAUSED"],
+      ["explorer-recovering", "RECOVERING"],
+    ] as const) {
+      store.saveAgentLoop({
+        id,
+        ownerType: "explorer-turn",
+        ownerId: `missing-${id}`,
+        role: "explorer",
+        mode: "provider-controlled",
+        state,
+        stepCount: 1,
+        maxSteps: 40,
+        startedAt: store.now(),
+        completedAt: null,
+        providerThreadId: null,
+        providerTurnId: null,
+        checkpointJson: null,
+      });
     }
 
     new RecoveryCoordinator(store).recover();
@@ -37,7 +129,10 @@ describe("RecoveryCoordinator", () => {
     expect(store.getAgentLoop("explorer-paused")).toMatchObject({ state: "FAILED", completedAt: expect.any(String) });
     expect(store.getAgentLoop("explorer-recovering")).toMatchObject({ state: "FAILED", completedAt: expect.any(String) });
     expect(store.getInputRequest(request.id)).toMatchObject({ status: "RECOVERY_REQUIRED" });
-    expect(store.listTurns(thread.id).find((item) => item.id === turn.id)).toMatchObject({ status: "FAILED", error: "STRUCTURED_INPUT_RECOVERY_REQUIRED" });
+    expect(store.listTurns(thread.id).find((item) => item.id === turn.id)).toMatchObject({
+      status: "FAILED",
+      error: "STRUCTURED_INPUT_RECOVERY_REQUIRED",
+    });
     expect(store.getThread(thread.id)).toMatchObject({ state: "ACTIVE" });
   });
 
@@ -57,7 +152,17 @@ describe("RecoveryCoordinator", () => {
     const store = new InMemoryPipelineStore();
     loop(store, "side-effect", "RUNNING", "provider-thread", "provider-turn");
     loop(store, "input", "WAITING_FOR_INPUT", "provider-thread", "provider-turn");
-    store.saveToolCall({ callId: "call-1", loopId: "side-effect", role: "executor", tool: "write_file", status: "UNKNOWN", inputHash: "hash", result: null, startedAt: store.now(), completedAt: null });
+    store.saveToolCall({
+      callId: "call-1",
+      loopId: "side-effect",
+      role: "executor",
+      tool: "write_file",
+      status: "UNKNOWN",
+      inputHash: "hash",
+      result: null,
+      startedAt: store.now(),
+      completedAt: null,
+    });
 
     new RecoveryCoordinator(store).recover();
 
@@ -71,11 +176,27 @@ describe("RecoveryCoordinator", () => {
     projects.create({ id: "project-1", name: "Demo", repoRoot: "/repo/demo", defaultBranch: "main", worktreeRoot: "/tmp/demo-worktrees" });
     const plans = new PlanService(store, projects);
     plans.registerThread({ id: "explorer-1", projectId: "project-1", parentThreadId: null });
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "explorer-1", title: "Orphaned run",
-      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Orphaned run" }) });
+    const plan = plans.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "explorer-1",
+      title: "Orphaned run",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Orphaned run" }),
+    });
     plans.confirm(plan.id, "user-1");
     plans.enqueue(plan.id);
-    const run: Run = { id: "run-orphaned", projectId: "project-1", planId: plan.id, planRevision: 1, status: "IN_PROGRESS", branch: "factory/run-orphaned", workspacePath: "/tmp/demo-worktrees/run-orphaned", baseCommit: "abc", executionThreadId: "execution-orphaned", createdAt: store.now(), startedAt: store.now() };
+    const run: Run = {
+      id: "run-orphaned",
+      projectId: "project-1",
+      planId: plan.id,
+      planRevision: 1,
+      status: "IN_PROGRESS",
+      branch: "factory/run-orphaned",
+      workspacePath: "/tmp/demo-worktrees/run-orphaned",
+      baseCommit: "abc",
+      executionThreadId: "execution-orphaned",
+      createdAt: store.now(),
+      startedAt: store.now(),
+    };
     store.saveRun(run);
     store.updatePlan({ ...plan, status: "IN_PROGRESS", runId: run.id });
     loop(store, "orphaned", "RUNNING", null, null, run.id);
@@ -95,11 +216,27 @@ describe("RecoveryCoordinator", () => {
     projects.create({ id: "project-1", name: "Demo", repoRoot: "/repo/demo", defaultBranch: "main", worktreeRoot: "/tmp/demo-worktrees" });
     const plans = new PlanService(store, projects);
     plans.registerThread({ id: "explorer-1", projectId: "project-1", parentThreadId: null });
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "explorer-1", title: "Restarted run",
-      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Restarted run" }) });
+    const plan = plans.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "explorer-1",
+      title: "Restarted run",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Restarted run" }),
+    });
     plans.confirm(plan.id, "user-1");
     plans.enqueue(plan.id);
-    const run: Run = { id: "run-restarted", projectId: "project-1", planId: plan.id, planRevision: 1, status: "IN_PROGRESS", branch: "factory/run-restarted", workspacePath: "/tmp/demo-worktrees/run-restarted", baseCommit: "abc", executionThreadId: "execution-restarted", createdAt: store.now(), startedAt: store.now() };
+    const run: Run = {
+      id: "run-restarted",
+      projectId: "project-1",
+      planId: plan.id,
+      planRevision: 1,
+      status: "IN_PROGRESS",
+      branch: "factory/run-restarted",
+      workspacePath: "/tmp/demo-worktrees/run-restarted",
+      baseCommit: "abc",
+      executionThreadId: "execution-restarted",
+      createdAt: store.now(),
+      startedAt: store.now(),
+    };
     store.saveRun(run);
     store.updatePlan({ ...plan, status: "IN_PROGRESS", runId: run.id });
     loop(store, "restarted", "RUNNING", "provider-thread-1", "provider-turn-1", run.id);
@@ -118,11 +255,27 @@ describe("RecoveryCoordinator", () => {
     projects.create({ id: "project-1", name: "Demo", repoRoot: "/repo/demo", defaultBranch: "main", worktreeRoot: "/tmp/demo-worktrees" });
     const plans = new PlanService(store, projects);
     plans.registerThread({ id: "explorer-1", projectId: "project-1", parentThreadId: null });
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "explorer-1", title: "Stale plan projection",
-      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Stale plan projection" }) });
+    const plan = plans.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "explorer-1",
+      title: "Stale plan projection",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Stale plan projection" }),
+    });
     plans.confirm(plan.id, "user-1");
     plans.enqueue(plan.id);
-    const run: Run = { id: "run-blocked", projectId: "project-1", planId: plan.id, planRevision: 1, status: "BLOCKED", branch: "factory/run-blocked", workspacePath: null, baseCommit: "abc", executionThreadId: "execution-blocked", createdAt: store.now(), startedAt: store.now() };
+    const run: Run = {
+      id: "run-blocked",
+      projectId: "project-1",
+      planId: plan.id,
+      planRevision: 1,
+      status: "BLOCKED",
+      branch: "factory/run-blocked",
+      workspacePath: null,
+      baseCommit: "abc",
+      executionThreadId: "execution-blocked",
+      createdAt: store.now(),
+      startedAt: store.now(),
+    };
     store.saveRun(run);
     store.updatePlan({ ...plan, status: "IN_PROGRESS", runId: run.id });
 
@@ -137,11 +290,27 @@ describe("RecoveryCoordinator", () => {
     projects.create({ id: "project-1", name: "Demo", repoRoot: "/repo/demo", defaultBranch: "main", worktreeRoot: "/tmp/demo-worktrees" });
     const plans = new PlanService(store, projects);
     plans.registerThread({ id: "explorer-1", projectId: "project-1", parentThreadId: null });
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "explorer-1", title: "Keep merged plan",
-      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Keep merged plan" }) });
+    const plan = plans.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "explorer-1",
+      title: "Keep merged plan",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Keep merged plan" }),
+    });
     plans.confirm(plan.id, "user-1");
     plans.enqueue(plan.id);
-    const run: Run = { id: "run-merge-ready", projectId: "project-1", planId: plan.id, planRevision: 1, status: "MERGE_READY", branch: "factory/run-merge-ready", workspacePath: null, baseCommit: "abc", executionThreadId: "execution-merge-ready", createdAt: store.now(), startedAt: store.now() };
+    const run: Run = {
+      id: "run-merge-ready",
+      projectId: "project-1",
+      planId: plan.id,
+      planRevision: 1,
+      status: "MERGE_READY",
+      branch: "factory/run-merge-ready",
+      workspacePath: null,
+      baseCommit: "abc",
+      executionThreadId: "execution-merge-ready",
+      createdAt: store.now(),
+      startedAt: store.now(),
+    };
     store.saveRun(run);
     store.updatePlan({ ...plan, status: "MERGED", runId: run.id });
 

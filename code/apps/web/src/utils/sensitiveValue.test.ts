@@ -43,7 +43,8 @@ describe("展示边界的脱敏", () => {
 describe("推理正文（与工具结果走同一个口）", () => {
   it("模型复述出的凭据同样会被抹掉", () => {
     // 模型可能把它读到的令牌、邮箱原样写进推理里——推理正文从 240 放到 2000 之后尤其值得挡一道。
-    const reasoning = "I read config.js and it contains api_key: sk-live-9f2a, so I will avoid printing it. Ops contact is ops@example.com.";
+    const reasoning =
+      "I read config.js and it contains api_key: sk-live-9f2a, so I will avoid printing it. Ops contact is ops@example.com.";
     const shown = presentableText(reasoning);
 
     expect(shown).not.toContain("sk-live-9f2a");

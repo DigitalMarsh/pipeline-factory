@@ -28,7 +28,16 @@
  */
 
 import { ClaudeAgentSdkGateway, CodexAppServerGateway, OpenAIModelGateway, StubModelGateway } from "@pipeline-factory/domain";
-import type { ModelCapabilities, ModelEvent, ModelGateway, ModelInputAnswers, ModelRole, ModelRoleConfig, ModelRequest, ProviderEndpoint } from "@pipeline-factory/domain";
+import type {
+  ModelCapabilities,
+  ModelEvent,
+  ModelGateway,
+  ModelInputAnswers,
+  ModelRole,
+  ModelRoleConfig,
+  ModelRequest,
+  ProviderEndpoint,
+} from "@pipeline-factory/domain";
 import { resolveModelBackends, roleBackendId, type FactoryConfig, type ResolvedModelBackend } from "../config.js";
 
 const CLAUDE_ENDPOINT_PROBE_TIMEOUT_MS = 2_000;
@@ -124,7 +133,9 @@ export class RoutingModelGateway implements ModelGateway {
     if (!role) {
       const explorer = this.backendIdFor("explorer");
       const executor = this.backendIdFor("executor");
-      return explorer === executor ? this.instantiateFingerprint(explorer) : { backend: "mixed", endpoint: null, source: "provider-settings", cliVersion: null, credentialSource: null, providerModel: null };
+      return explorer === executor
+        ? this.instantiateFingerprint(explorer)
+        : { backend: "mixed", endpoint: null, source: "provider-settings", cliVersion: null, credentialSource: null, providerModel: null };
     }
     // 传了角色就按该角色生效的后端点回答（注意 role 是**角色名**，不是后端 id），
     // 并尊重调用点这次真正会用的那份覆盖配置（见上面的说明）。
@@ -156,7 +167,14 @@ export class RoutingModelGateway implements ModelGateway {
     const gateway = this.instance(id);
     const fingerprint = gateway.describeEndpoint?.();
     if (fingerprint) return fingerprint;
-    return { backend: this.options.backends.get(id)?.kind ?? id, endpoint: null, source: "provider-settings", cliVersion: null, credentialSource: null, providerModel: null };
+    return {
+      backend: this.options.backends.get(id)?.kind ?? id,
+      endpoint: null,
+      source: "provider-settings",
+      cliVersion: null,
+      credentialSource: null,
+      providerModel: null,
+    };
   }
 
   /** 请求覆盖优先于角色默认；都缺省时回到全局默认。 */
@@ -166,7 +184,9 @@ export class RoutingModelGateway implements ModelGateway {
 
   /** 记账用：本次 stream 的 conversationId 实际落在了哪个后端。 */
   private ownerOfConversation(request: ModelRequest): string {
-    return request.conversationId ? this.owners.get(request.conversationId) ?? this.backendIdFor(request.role, request.modelConfig) : this.backendIdFor(request.role, request.modelConfig);
+    return request.conversationId
+      ? (this.owners.get(request.conversationId) ?? this.backendIdFor(request.role, request.modelConfig))
+      : this.backendIdFor(request.role, request.modelConfig);
   }
 }
 
@@ -208,7 +228,11 @@ type ModelRoleConfigLike = {
 };
 
 /** 一个后端定义 → 具体实现。缺必需字段在这里抛，错误信息指向配置项本身。 */
-function createBackendGateway(backend: ResolvedModelBackend, roles: Record<ModelRole, ModelRoleConfigLike>, maxSteps: number): ModelGateway {
+function createBackendGateway(
+  backend: ResolvedModelBackend,
+  roles: Record<ModelRole, ModelRoleConfigLike>,
+  maxSteps: number,
+): ModelGateway {
   const kind = backend.kind;
   if (kind === "stub") return new StubModelGateway(roles as never);
   if (kind === "claude-agent-sdk") {
@@ -225,12 +249,26 @@ function createBackendGateway(backend: ResolvedModelBackend, roles: Record<Model
   }
   if (kind === "openai-responses") {
     const openai = backend.openai;
-    if (!openai?.apiKey) throw new Error(`Factory configuration requires an apiKey for the openai-responses backend${backend.source === "registry" ? ` "${backend.id}"` : ""}`);
+    if (!openai?.apiKey)
+      throw new Error(
+        `Factory configuration requires an apiKey for the openai-responses backend${backend.source === "registry" ? ` "${backend.id}"` : ""}`,
+      );
     return new OpenAIModelGateway({ apiKey: openai.apiKey, roles: roles as never, ...(openai.baseUrl ? { baseUrl: openai.baseUrl } : {}) });
   }
   const appServer = backend.codexAppServer;
-  if (!appServer) throw new Error(`Factory configuration requires model.codexAppServer (or a model.backends entry) for the codex-app-server backend`);
-  return new CodexAppServerGateway({ roles: roles as never, command: appServer.command, args: appServer.args, cwd: appServer.cwd, startupTimeoutMs: appServer.startupTimeoutMs, requestTimeoutMs: appServer.requestTimeoutMs, maxRestarts: appServer.maxRestarts, clientName: appServer.clientName, clientVersion: appServer.clientVersion });
+  if (!appServer)
+    throw new Error(`Factory configuration requires model.codexAppServer (or a model.backends entry) for the codex-app-server backend`);
+  return new CodexAppServerGateway({
+    roles: roles as never,
+    command: appServer.command,
+    args: appServer.args,
+    cwd: appServer.cwd,
+    startupTimeoutMs: appServer.startupTimeoutMs,
+    requestTimeoutMs: appServer.requestTimeoutMs,
+    maxRestarts: appServer.maxRestarts,
+    clientName: appServer.clientName,
+    clientVersion: appServer.clientVersion,
+  });
 }
 
 /**
@@ -247,7 +285,10 @@ export async function probeClaudeEndpoint(config: FactoryConfig): Promise<void> 
       await fetch(baseUrl, { method: "GET", signal: AbortSignal.timeout(CLAUDE_ENDPOINT_PROBE_TIMEOUT_MS) });
     } catch (error) {
       // `cause` 要留着：启动失败的原因常常是 DNS/证书/端口这类底层错误，摘要文本看不出来。
-      throw new Error(`Claude Agent endpoint ${baseUrl} (backend "${backend.id}") is not reachable: ${error instanceof Error ? error.message : String(error)}. Start the provider proxy (e.g. cc-switch) or fix model.claudeAgent.baseUrl before launching.`, { cause: error });
+      throw new Error(
+        `Claude Agent endpoint ${baseUrl} (backend "${backend.id}") is not reachable: ${error instanceof Error ? error.message : String(error)}. Start the provider proxy (e.g. cc-switch) or fix model.claudeAgent.baseUrl before launching.`,
+        { cause: error },
+      );
     }
   }
 }

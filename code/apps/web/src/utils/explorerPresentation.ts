@@ -35,24 +35,28 @@ export function explorerDisplayTitle(item: ExplorerThread | null): string {
  */
 export function inputStatusLabel(request: Pick<ExplorerInputRequest, "id" | "status">, inFlightRequestId: string | null): string {
   if (inFlightRequestId === request.id) return "提交中";
-  return ({
-    OPEN: "等待回答",
-    SUBMITTING: "提交中",
-    ANSWERED: "已回答",
-    CANCELLED: "已取消",
-    RECOVERY_REQUIRED: "需要恢复",
-  } as Record<ExplorerInputRequest["status"], string>)[request.status];
+  return (
+    {
+      OPEN: "等待回答",
+      SUBMITTING: "提交中",
+      ANSWERED: "已回答",
+      CANCELLED: "已取消",
+      RECOVERY_REQUIRED: "需要恢复",
+    } as Record<ExplorerInputRequest["status"], string>
+  )[request.status];
 }
 
 /** 条目状态文案。与执行线程的 `executionMessageStatusLabel` 同一套词。 */
 export function activityStatusLabel(item: Pick<ExplorerActivityItem, "status">): string {
-  return ({
-    RUNNING: "进行中",
-    COMPLETED: "已完成",
-    FAILED: "失败",
-    WAITING: "等待中",
-    UNKNOWN: "状态未知",
-  } as Record<ExplorerActivityItem["status"], string>)[item.status];
+  return (
+    {
+      RUNNING: "进行中",
+      COMPLETED: "已完成",
+      FAILED: "失败",
+      WAITING: "等待中",
+      UNKNOWN: "状态未知",
+    } as Record<ExplorerActivityItem["status"], string>
+  )[item.status];
 }
 
 /**
@@ -110,7 +114,15 @@ const ACTIVITY_LABELS: Partial<Record<ExplorerActivityItem["kind"], string>> = {
 };
 
 /** 工具类的七种：名字、身份、正文的摆法完全相同，只有标签不同。 */
-const TOOL_LINE_KINDS: ReadonlySet<ExplorerActivityItem["kind"]> = new Set(["COMMAND", "FILE_CHANGE", "TOOL_CALL", "MCP_CALL", "SUBAGENT", "WEB_SEARCH", "IMAGE_GENERATION"]);
+const TOOL_LINE_KINDS: ReadonlySet<ExplorerActivityItem["kind"]> = new Set([
+  "COMMAND",
+  "FILE_CHANGE",
+  "TOOL_CALL",
+  "MCP_CALL",
+  "SUBAGENT",
+  "WEB_SEARCH",
+  "IMAGE_GENERATION",
+]);
 
 /** 主标识放不下整条命令，截断到可读长度。 */
 function truncateLine(value: string): string | null {
@@ -148,7 +160,7 @@ export function explorerActivityLine(item: ExplorerActivityItem): ExplorerActivi
       const count = item.details?.messageCount;
       return { label, name: null, reference: typeof count === "number" ? `${count} 条消息` : null, body: "" };
     }
-  case "GATE":
+    case "GATE":
       // 门禁的动作（blocked）是判定结论本身，比标签重要。
       return { label, name: detailsText(item, "action"), reference: null, body: item.summary };
     case "UNCLASSIFIED":
@@ -319,7 +331,13 @@ export function explorerMessageClass(type: ExplorerMessageType): MessageClass {
  * `packages/domain/src/platform/provider-payload.ts`），这里只把它取出来给展开区用。
  * 取不到的键**不写**：`undefined` 是"Provider 没给"，空串是"Provider 说这里什么都没有"。
  */
-export function explorerActivityResult(activity: ExplorerActivityItem): { arguments?: unknown; result?: unknown; output?: string | undefined; exitCode?: number | undefined; durationMs?: number | undefined } {
+export function explorerActivityResult(activity: ExplorerActivityItem): {
+  arguments?: unknown;
+  result?: unknown;
+  output?: string | undefined;
+  exitCode?: number | undefined;
+  durationMs?: number | undefined;
+} {
   const details = activity.details ?? {};
   return {
     ...(details.arguments === undefined ? {} : { arguments: details.arguments }),
@@ -339,7 +357,12 @@ export function explorerActivityResult(activity: ExplorerActivityItem): { argume
  * 三条判据都来自既有的表，所以**新增一类 ④ 不需要回来改这里**。
  */
 export function explorerRuntimeFacts(activities: readonly ExplorerActivityItem[]): ExplorerActivityItem[] {
-  return activities.filter((activity) => EXPLORER_MESSAGE_CLASSES[activity.kind] === "provider" && EXPLORER_DISPLAY_MODES[activity.kind] === "hidden" && activity.kind !== "PROVIDER_MESSAGE");
+  return activities.filter(
+    (activity) =>
+      EXPLORER_MESSAGE_CLASSES[activity.kind] === "provider" &&
+      EXPLORER_DISPLAY_MODES[activity.kind] === "hidden" &&
+      activity.kind !== "PROVIDER_MESSAGE",
+  );
 }
 
 /**
@@ -353,7 +376,12 @@ export function runtimeFactTitle(activity: ExplorerActivityItem): string {
 }
 
 /** 诊断区里那几类**需要立刻浮出来**的（额度、重试、权限被拒、告警）；其余 ④ 只在展开时看。 */
-const RUNTIME_ALERT_KINDS: ReadonlySet<ExplorerActivityKind> = new Set(["RATE_LIMIT", "PROVIDER_RETRY", "PERMISSION_DENIED", "PROVIDER_WARNING"]);
+const RUNTIME_ALERT_KINDS: ReadonlySet<ExplorerActivityKind> = new Set([
+  "RATE_LIMIT",
+  "PROVIDER_RETRY",
+  "PERMISSION_DENIED",
+  "PROVIDER_WARNING",
+]);
 
 /** 这条运行事实要不要浮到用户眼前。与 `packages/domain/src/model/provider-activity.ts` 的 `isRuntimeAlertKind` 同义。 */
 export function isRuntimeAlert(activity: ExplorerActivityItem): boolean {

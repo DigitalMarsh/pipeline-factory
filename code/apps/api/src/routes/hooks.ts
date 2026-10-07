@@ -44,14 +44,35 @@ export function registerHookRoutes(app: FastifyInstance, deps: HookRouteDeps): v
     const project = store.getProject(params.data.projectId);
     if (project) {
       const lifecycle = {
-        ...(body.data.start ? { start: { commandId: body.data.start.commandId, ...(body.data.start.enabled === undefined ? {} : { enabled: body.data.start.enabled }), ...(body.data.start.timeoutMs === undefined ? {} : { timeoutMs: body.data.start.timeoutMs }), ...(body.data.start.maxAttempts === undefined ? {} : { maxAttempts: body.data.start.maxAttempts }), ...(body.data.start.blocking === undefined ? {} : { blocking: body.data.start.blocking }) } } : {}),
-        ...(body.data.cleanup ? { cleanup: { commandId: body.data.cleanup.commandId, ...(body.data.cleanup.enabled === undefined ? {} : { enabled: body.data.cleanup.enabled }), ...(body.data.cleanup.timeoutMs === undefined ? {} : { timeoutMs: body.data.cleanup.timeoutMs }), ...(body.data.cleanup.maxAttempts === undefined ? {} : { maxAttempts: body.data.cleanup.maxAttempts }) } } : {}),
+        ...(body.data.start
+          ? {
+              start: {
+                commandId: body.data.start.commandId,
+                ...(body.data.start.enabled === undefined ? {} : { enabled: body.data.start.enabled }),
+                ...(body.data.start.timeoutMs === undefined ? {} : { timeoutMs: body.data.start.timeoutMs }),
+                ...(body.data.start.maxAttempts === undefined ? {} : { maxAttempts: body.data.start.maxAttempts }),
+                ...(body.data.start.blocking === undefined ? {} : { blocking: body.data.start.blocking }),
+              },
+            }
+          : {}),
+        ...(body.data.cleanup
+          ? {
+              cleanup: {
+                commandId: body.data.cleanup.commandId,
+                ...(body.data.cleanup.enabled === undefined ? {} : { enabled: body.data.cleanup.enabled }),
+                ...(body.data.cleanup.timeoutMs === undefined ? {} : { timeoutMs: body.data.cleanup.timeoutMs }),
+                ...(body.data.cleanup.maxAttempts === undefined ? {} : { maxAttempts: body.data.cleanup.maxAttempts }),
+              },
+            }
+          : {}),
       };
       try {
         projects.update(params.data.projectId, { settings: { hooks: lifecycle } });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        return reply.code(/active runs/i.test(message) ? 409 : 422).send({ code: /active runs/i.test(message) ? "PROJECT_HAS_ACTIVE_RUNS" : "HOOK_SETTINGS_INVALID", error: message });
+        return reply
+          .code(/active runs/i.test(message) ? 409 : 422)
+          .send({ code: /active runs/i.test(message) ? "PROJECT_HAS_ACTIVE_RUNS" : "HOOK_SETTINGS_INVALID", error: message });
       }
     }
     return { projectId: params.data.projectId, lifecycle: body.data };

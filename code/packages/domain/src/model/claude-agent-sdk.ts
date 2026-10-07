@@ -34,13 +34,31 @@
  *      ~/.claude/projects/ 下，所以重建前先用 getSessionInfo 确认它在不在，见 resolveResume()。
  */
 
-import { getSessionInfo, query, type CanUseTool, type Options, type PermissionMode, type PermissionResult, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import {
+  getSessionInfo,
+  query,
+  type CanUseTool,
+  type Options,
+  type PermissionMode,
+  type PermissionResult,
+  type SDKMessage,
+} from "@anthropic-ai/claude-agent-sdk";
 import { EXPLORER_PLAN_INSTRUCTIONS } from "../platform/plan-requirements.js";
 import { replayConversation, resolveModelMode } from "./provider-session.js";
 import { classifyClaudeActivity, type ProviderActivityKind } from "./provider-activity.js";
 import { normalizeModelUsage } from "./usage.js";
 import type { ModelInputAnswers, ModelInputQuestion, ModelInputRequest } from "../explorer/types.js";
-import type { ModelCapabilities, ModelEvent, ModelGateway, ModelMessage, ModelRequest, ModelMode, ModelRole, ModelRoleConfig, ProviderEndpoint } from "./types.js";
+import type {
+  ModelCapabilities,
+  ModelEvent,
+  ModelGateway,
+  ModelMessage,
+  ModelRequest,
+  ModelMode,
+  ModelRole,
+  ModelRoleConfig,
+  ProviderEndpoint,
+} from "./types.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -162,14 +180,18 @@ export class ClaudeAgentSdkGateway implements ModelGateway {
   private readonly reported: ReportedEndpoint = { cliVersion: null, credentialSource: null, providerModel: null };
 
   constructor(private readonly options: ClaudeAgentSdkGatewayOptions) {
-    this.queryFactory = options.queryFactory ?? (async ({ prompt, options: queryOptions }) => {
-      const handle = query({ prompt, options: queryOptions });
-      return { stream: () => handle, interrupt: () => handle.interrupt() };
-    });
+    this.queryFactory =
+      options.queryFactory ??
+      (async ({ prompt, options: queryOptions }) => {
+        const handle = query({ prompt, options: queryOptions });
+        return { stream: () => handle, interrupt: () => handle.interrupt() };
+      });
     this.sessionExists = options.sessionExists ?? (async (sessionId, cwd) => (await getSessionInfo(sessionId, { dir: cwd })) !== undefined);
   }
 
-  configFor(role: ModelRole): ModelRoleConfig { return this.options.roles[role]; }
+  configFor(role: ModelRole): ModelRoleConfig {
+    return this.options.roles[role];
+  }
 
   capabilities(role: ModelRole): ModelCapabilities {
     // 结构化提问只有 Explorer 有回传通道（见维护提示 3）；工具循环归 Claude 引擎自己管，
@@ -178,7 +200,9 @@ export class ClaudeAgentSdkGateway implements ModelGateway {
   }
 
   /** 端点指纹：配置里写到哪一层，加上 init 消息自报的 CLI 版本/凭据来源/模型名。 */
-  describeEndpoint(): ProviderEndpoint { return endpointOf(this.options.baseUrl, this.reported); }
+  describeEndpoint(): ProviderEndpoint {
+    return endpointOf(this.options.baseUrl, this.reported);
+  }
 
   async answerUserInput(input: { requestId: string | number; answers: ModelInputAnswers }): Promise<void> {
     const pending = this.pendingQuestions.get(String(input.requestId));
@@ -216,16 +240,39 @@ export class ClaudeAgentSdkGateway implements ModelGateway {
       if (resume.rebuilt) {
         // 让时间线上能看出"会话为什么换了"，而不是静默开一条新会话。
         // 会话重建没有成败概念 → activityKind: "session"，outcome 由分类器判为 not-applicable（UI 不显示状态）。
-        events.push({ type: "provider.activity", phase: "completed", itemId: resume.sessionId ?? "provider-session", itemType: "providerSession", ...classifyClaudeActivity({ itemType: "providerSession", phase: "completed" }), title: "Provider session rebuilt", summary: "The previous provider session was no longer on disk; the local transcript was replayed into a new one.", providerItemId: resume.sessionId ?? "provider-session" });
+        events.push({
+          type: "provider.activity",
+          phase: "completed",
+          itemId: resume.sessionId ?? "provider-session",
+          itemType: "providerSession",
+          ...classifyClaudeActivity({ itemType: "providerSession", phase: "completed" }),
+          title: "Provider session rebuilt",
+          summary: "The previous provider session was no longer on disk; the local transcript was replayed into a new one.",
+          providerItemId: resume.sessionId ?? "provider-session",
+        });
       }
-      const prompt = resume.rebuilt ? replayConversation(request.messages) : (request.continuationPrompt ?? latestUserMessage(request.messages));
-      const handle = await this.queryFactory({ prompt, options: this.buildOptions(request, roleConfig, mode, controller, conversationId, cwd, resume, events, stderrTail) });
+      const prompt = resume.rebuilt
+        ? replayConversation(request.messages)
+        : (request.continuationPrompt ?? latestUserMessage(request.messages));
+      const handle = await this.queryFactory({
+        prompt,
+        options: this.buildOptions(request, roleConfig, mode, controller, conversationId, cwd, resume, events, stderrTail),
+      });
       this.activeTurns.set(conversationId, { handle, controller });
       // tool_use 带工具名、tool_result 不带。这张表让两者归到**同一个类别**、并让合并后的标题保持
       // 工具名而不是退化成 toolUseId。**每轮一张**（不是实例级）：随流结束一起释放，不跨轮泄漏。
       const toolCalls = new Map<string, string>();
       for await (const message of handle.stream()) {
-        for (const event of mapMessage(message, { role: request.role, resumedSessionId: resume.rebuilt ? undefined : resume.sessionId, conversationId, sessionIds: this.sessionIds, reported: this.reported, toolCalls, endpoint: () => this.describeEndpoint() })) events.push(event);
+        for (const event of mapMessage(message, {
+          role: request.role,
+          resumedSessionId: resume.rebuilt ? undefined : resume.sessionId,
+          conversationId,
+          sessionIds: this.sessionIds,
+          reported: this.reported,
+          toolCalls,
+          endpoint: () => this.describeEndpoint(),
+        }))
+          events.push(event);
       }
     })();
 
@@ -288,7 +335,9 @@ export class ClaudeAgentSdkGateway implements ModelGateway {
       includePartialMessages: true,
       env: this.buildEnvironment(),
       canUseTool: this.buildCanUseTool(request, conversationId, events),
-      stderr: (data: string) => { pushBounded(stderrTail, data.trim()); },
+      stderr: (data: string) => {
+        pushBounded(stderrTail, data.trim());
+      },
       systemPrompt: { type: "preset", preset: "claude_code", ...(systemPromptAppend ? { append: systemPromptAppend } : {}) },
       ...(this.options.maxTurns === undefined ? {} : { maxTurns: this.options.maxTurns }),
       ...(this.options.settingsPath ? { settings: this.options.settingsPath } : {}),
@@ -321,11 +370,17 @@ export class ClaudeAgentSdkGateway implements ModelGateway {
       // 越出会话目录的请求一律拒绝：cwd 就是沙箱边界（Explorer = 仓库根只读，
       // Executor = Run Worktree）。这是本适配器唯一的安全策略。
       if (options.blockedPath) {
-        return { behavior: "deny", message: `${toolName} would access ${options.blockedPath}, which is outside this session's working directory.` };
+        return {
+          behavior: "deny",
+          message: `${toolName} would access ${options.blockedPath}, which is outside this session's working directory.`,
+        };
       }
       if (toolName !== "AskUserQuestion") return { behavior: "allow" };
       if (request.role !== "explorer") {
-        return { behavior: "deny", message: "Structured questions are not available in this session; continue with the information you already have." };
+        return {
+          behavior: "deny",
+          message: "Structured questions are not available in this session; continue with the information you already have.",
+        };
       }
       const questions = readQuestions(input);
       if (questions.length === 0) return { behavior: "deny", message: "AskUserQuestion was called without usable questions." };
@@ -431,7 +486,20 @@ function* mapMessage(message: SDKMessage, context: MapContext): Generator<ModelE
         context.toolCalls.set(block.id, block.name);
         // `input` 是这次调用的**结构化参数**（文件路径、命令原文、查询串…）。此前它只被揉成一行
         // 摘要塞进 title，界面上"这次调用到底传了什么"没有原料。原样落库，展示时脱敏+截断。
-        yield { type: "provider.activity", phase: "started", itemId: block.id, itemType: "tool_use", ...classifyClaudeActivity({ itemType: "tool_use", phase: "started", status: "started", toolName: block.name }), title: block.name, summary: summarizeToolInput(block.name, block.input as JsonObject), arguments: block.input, toolName: block.name, status: "started", providerItemId: block.id, providerThreadId: message.session_id };
+        yield {
+          type: "provider.activity",
+          phase: "started",
+          itemId: block.id,
+          itemType: "tool_use",
+          ...classifyClaudeActivity({ itemType: "tool_use", phase: "started", status: "started", toolName: block.name }),
+          title: block.name,
+          summary: summarizeToolInput(block.name, block.input as JsonObject),
+          arguments: block.input,
+          toolName: block.name,
+          status: "started",
+          providerItemId: block.id,
+          providerThreadId: message.session_id,
+        };
         continue;
       }
       // **推理（②）**：`thinking` 块此前整块被丢掉——全仓 `grep thinking` 在 domain/web 的 src 里
@@ -460,7 +528,27 @@ function* mapMessage(message: SDKMessage, context: MapContext): Generator<ModelE
       const error = block.isError ? (block.summary ?? "Tool call failed") : undefined;
       // `summary` 是**一行的可读摘要**（两个 Provider 同义），`result` 是**完整返回**。
       // 两者都留：前者给紧凑的动作行，后者给展开后的详情。此前只有前者，于是"结果"没有原料。
-      yield { type: "provider.activity", phase: "completed", itemId: block.toolUseId, itemType: "tool_result", ...classifyClaudeActivity({ itemType: "tool_result", phase: "completed", status, ...(toolName === undefined ? {} : { toolName }), ...(error === undefined ? {} : { error }) }), title: toolName ?? block.toolUseId, summary: block.summary, result: block.result, status, ...(toolName === undefined ? {} : { toolName }), ...(error === undefined ? {} : { error }), providerItemId: block.toolUseId, providerThreadId: message.session_id };
+      yield {
+        type: "provider.activity",
+        phase: "completed",
+        itemId: block.toolUseId,
+        itemType: "tool_result",
+        ...classifyClaudeActivity({
+          itemType: "tool_result",
+          phase: "completed",
+          status,
+          ...(toolName === undefined ? {} : { toolName }),
+          ...(error === undefined ? {} : { error }),
+        }),
+        title: toolName ?? block.toolUseId,
+        summary: block.summary,
+        result: block.result,
+        status,
+        ...(toolName === undefined ? {} : { toolName }),
+        ...(error === undefined ? {} : { error }),
+        providerItemId: block.toolUseId,
+        providerThreadId: message.session_id,
+      };
     }
     return;
   }
@@ -471,19 +559,32 @@ function* mapMessage(message: SDKMessage, context: MapContext): Generator<ModelE
     // 不是**每次都浮现**：这里只送值得看一眼的两档。
     if (info.status === "allowed") return;
     const rejected = info.status === "rejected";
-    yield runtimeActivity({
-      id: `rate-limit:${message.uuid}`,
-      itemType: "rate_limit",
-      kind: "rate-limit",
-      title: rejected ? "配额已用尽" : "配额接近上限",
-      summary: [info.rateLimitType ? `窗口 ${info.rateLimitType}` : null, info.utilization === undefined ? null : `已用 ${Math.round(info.utilization * 100)}%`, info.resetsAt === undefined ? null : `重置于 ${new Date(info.resetsAt * 1000).toLocaleString("zh-CN")}`].filter(Boolean).join(" · ") || "Provider 上报了配额状态。",
-      status: "warning",
-    }, message.session_id);
+    yield runtimeActivity(
+      {
+        id: `rate-limit:${message.uuid}`,
+        itemType: "rate_limit",
+        kind: "rate-limit",
+        title: rejected ? "配额已用尽" : "配额接近上限",
+        summary:
+          [
+            info.rateLimitType ? `窗口 ${info.rateLimitType}` : null,
+            info.utilization === undefined ? null : `已用 ${Math.round(info.utilization * 100)}%`,
+            info.resetsAt === undefined ? null : `重置于 ${new Date(info.resetsAt * 1000).toLocaleString("zh-CN")}`,
+          ]
+            .filter(Boolean)
+            .join(" · ") || "Provider 上报了配额状态。",
+        status: "warning",
+      },
+      message.session_id,
+    );
     return;
   }
   if (message.type === "auth_status") {
     if (!message.error) return;
-    yield runtimeActivity({ id: `auth:${message.uuid}`, itemType: "auth_status", kind: "warning", title: "鉴权异常", summary: message.error, status: "failed" }, message.session_id);
+    yield runtimeActivity(
+      { id: `auth:${message.uuid}`, itemType: "auth_status", kind: "warning", title: "鉴权异常", summary: message.error, status: "failed" },
+      message.session_id,
+    );
     return;
   }
   if (message.type !== "result") return;
@@ -506,15 +607,47 @@ function* mapMessage(message: SDKMessage, context: MapContext): Generator<ModelE
 
 /** 一段推理。它是 ②「模型说的」，但**不是对你说的话**——呈现层据此给它更淡的一档。 */
 function reasoningActivity(itemId: string, text: string, sessionId: string): ModelEvent {
-  return { type: "provider.activity", phase: "completed", itemId, itemType: "thinking", ...classifyClaudeActivity({ itemType: "thinking", phase: "completed" }), title: null, summary: text, providerItemId: itemId, providerThreadId: sessionId };
+  return {
+    type: "provider.activity",
+    phase: "completed",
+    itemId,
+    itemType: "thinking",
+    ...classifyClaudeActivity({ itemType: "thinking", phase: "completed" }),
+    title: null,
+    summary: text,
+    providerItemId: itemId,
+    providerThreadId: sessionId,
+  };
 }
 
 /** 一条 ④「Provider 说的」运行事实（不是模型做的，也不是你说的）。形态与 item 那条一致。 */
-function runtimeActivity(input: { id: string; itemType: string; kind: ProviderActivityKind; title: string; summary: string; status?: string; error?: string; durationMs?: number }, sessionId: string | undefined): ModelEvent {
-  const classification = classifyClaudeActivity({ itemType: input.itemType, phase: "completed", ...(input.status === undefined ? {} : { status: input.status }), ...(input.error === undefined ? {} : { error: input.error }) });
+function runtimeActivity(
+  input: {
+    id: string;
+    itemType: string;
+    kind: ProviderActivityKind;
+    title: string;
+    summary: string;
+    status?: string;
+    error?: string;
+    durationMs?: number;
+  },
+  sessionId: string | undefined,
+): ModelEvent {
+  const classification = classifyClaudeActivity({
+    itemType: input.itemType,
+    phase: "completed",
+    ...(input.status === undefined ? {} : { status: input.status }),
+    ...(input.error === undefined ? {} : { error: input.error }),
+  });
   return {
-    type: "provider.activity", phase: "completed", itemId: input.id, itemType: input.itemType, ...classification,
-    title: input.title, summary: input.summary,
+    type: "provider.activity",
+    phase: "completed",
+    itemId: input.id,
+    itemType: input.itemType,
+    ...classification,
+    title: input.title,
+    summary: input.summary,
     ...(input.durationMs === undefined ? {} : { durationMs: input.durationMs }),
     ...(input.status ? { status: input.status } : {}),
     ...(input.error ? { error: input.error } : {}),
@@ -537,93 +670,160 @@ function systemRuntimeFact(message: SDKMessage & { type: "system"; session_id?: 
   const subtype = (message as { subtype?: string }).subtype;
   switch (subtype) {
     case "compact_boundary": {
-      const meta = (message as unknown as { compact_metadata?: { trigger?: string; pre_tokens?: number; post_tokens?: number; duration_ms?: number } }).compact_metadata;
+      const meta = (
+        message as unknown as { compact_metadata?: { trigger?: string; pre_tokens?: number; post_tokens?: number; duration_ms?: number } }
+      ).compact_metadata;
       const before = meta?.pre_tokens;
       const after = meta?.post_tokens;
       const size = before === undefined ? null : after === undefined ? `压缩前 ${before} tokens` : `${before} → ${after} tokens`;
-      return runtimeActivity({
-        id: `compaction:${(message as unknown as { uuid?: string }).uuid ?? String(before ?? "")}`,
-        itemType: "compact_boundary",
-        kind: "compaction",
-        title: "上下文已压缩",
-        // `pre_tokens → post_tokens` 是 OpenClaw 那条压缩分隔线上写的同一件事：
-        // "上下文在这里变小了"。拿不到 token 数就只说压缩发生了，不编一个数字。
-        summary: `Provider ${meta?.trigger === "manual" ? "手动" : "自动"}压缩了上下文${size ? `：${size}` : ""}。`,
-        ...(typeof meta?.duration_ms === "number" ? { durationMs: meta.duration_ms } : {}),
-      }, sessionId);
+      return runtimeActivity(
+        {
+          id: `compaction:${(message as unknown as { uuid?: string }).uuid ?? String(before ?? "")}`,
+          itemType: "compact_boundary",
+          kind: "compaction",
+          title: "上下文已压缩",
+          // `pre_tokens → post_tokens` 是 OpenClaw 那条压缩分隔线上写的同一件事：
+          // "上下文在这里变小了"。拿不到 token 数就只说压缩发生了，不编一个数字。
+          summary: `Provider ${meta?.trigger === "manual" ? "手动" : "自动"}压缩了上下文${size ? `：${size}` : ""}。`,
+          ...(typeof meta?.duration_ms === "number" ? { durationMs: meta.duration_ms } : {}),
+        },
+        sessionId,
+      );
     }
     case "api_retry": {
-      const m = message as unknown as { attempt?: number; max_retries?: number; retry_delay_ms?: number; error?: string; error_status?: number | null };
-      return runtimeActivity({
-        id: `retry:${sessionId ?? ""}:${m.attempt ?? 0}:${m.error_status ?? ""}`,
-        itemType: "api_retry",
-        kind: "retry",
-        title: "正在自动重试",
-        summary: [`第 ${m.attempt ?? "?"}/${m.max_retries ?? "?"} 次`, typeof m.retry_delay_ms === "number" ? `${Math.round(m.retry_delay_ms / 1000)} 秒后重试` : null, m.error ? `原因 ${m.error}` : null].filter(Boolean).join(" · ") || "Provider 正在自动重试。",
-        status: "warning",
-      }, sessionId);
+      const m = message as unknown as {
+        attempt?: number;
+        max_retries?: number;
+        retry_delay_ms?: number;
+        error?: string;
+        error_status?: number | null;
+      };
+      return runtimeActivity(
+        {
+          id: `retry:${sessionId ?? ""}:${m.attempt ?? 0}:${m.error_status ?? ""}`,
+          itemType: "api_retry",
+          kind: "retry",
+          title: "正在自动重试",
+          summary:
+            [
+              `第 ${m.attempt ?? "?"}/${m.max_retries ?? "?"} 次`,
+              typeof m.retry_delay_ms === "number" ? `${Math.round(m.retry_delay_ms / 1000)} 秒后重试` : null,
+              m.error ? `原因 ${m.error}` : null,
+            ]
+              .filter(Boolean)
+              .join(" · ") || "Provider 正在自动重试。",
+          status: "warning",
+        },
+        sessionId,
+      );
     }
     case "permission_denied": {
       const m = message as unknown as { tool_name?: string; message?: string; decision_reason?: string };
-      return runtimeActivity({
-        id: `permission:${(message as unknown as { uuid?: string }).uuid ?? m.tool_name ?? "denied"}`,
-        itemType: "permission_denied",
-        kind: "permission",
-        title: `权限被拒 · ${m.tool_name ?? "工具"}`,
-        summary: m.message ?? m.decision_reason ?? "这一次工具调用被权限策略拒绝。",
-        status: "denied",
-      }, sessionId);
+      return runtimeActivity(
+        {
+          id: `permission:${(message as unknown as { uuid?: string }).uuid ?? m.tool_name ?? "denied"}`,
+          itemType: "permission_denied",
+          kind: "permission",
+          title: `权限被拒 · ${m.tool_name ?? "工具"}`,
+          summary: m.message ?? m.decision_reason ?? "这一次工具调用被权限策略拒绝。",
+          status: "denied",
+        },
+        sessionId,
+      );
     }
     case "task_started":
     case "task_progress":
     case "task_updated":
     case "task_notification": {
-      const m = message as unknown as { task_id?: string; tool_use_id?: string; description?: string; summary?: string; status?: string; subagent_type?: string; patch?: { status?: string; description?: string; error?: string }; usage?: { duration_ms?: number } };
+      const m = message as unknown as {
+        task_id?: string;
+        tool_use_id?: string;
+        description?: string;
+        summary?: string;
+        status?: string;
+        subagent_type?: string;
+        patch?: { status?: string; description?: string; error?: string };
+        usage?: { duration_ms?: number };
+      };
       const id = m.tool_use_id ?? m.task_id ?? "task";
       const status = m.status ?? m.patch?.status;
       const label = m.description ?? m.patch?.description ?? m.summary ?? "后台子任务";
-      return runtimeActivity({
-        id: `task:${id}`,
-        itemType: `task_${subtype.slice(5)}`,
-        kind: "task",
-        title: `子任务 · ${label}`,
-        summary: [m.subagent_type ? `类型 ${m.subagent_type}` : null, status ? `状态 ${status}` : null, m.patch?.error ?? null].filter(Boolean).join(" · ") || "后台子任务有更新。",
-        ...(status ? { status } : {}),
-        ...(typeof m.usage?.duration_ms === "number" ? { durationMs: m.usage.duration_ms } : {}),
-      }, sessionId);
+      return runtimeActivity(
+        {
+          id: `task:${id}`,
+          itemType: `task_${subtype.slice(5)}`,
+          kind: "task",
+          title: `子任务 · ${label}`,
+          summary:
+            [m.subagent_type ? `类型 ${m.subagent_type}` : null, status ? `状态 ${status}` : null, m.patch?.error ?? null]
+              .filter(Boolean)
+              .join(" · ") || "后台子任务有更新。",
+          ...(status ? { status } : {}),
+          ...(typeof m.usage?.duration_ms === "number" ? { durationMs: m.usage.duration_ms } : {}),
+        },
+        sessionId,
+      );
     }
     case "background_tasks_changed": {
       const m = message as unknown as { tasks?: Array<{ task_id: string; description: string }> };
       const count = m.tasks?.length ?? 0;
-      return runtimeActivity({ id: `background-tasks:${sessionId ?? ""}`, itemType: "background_tasks_changed", kind: "task", title: "后台任务已变化", summary: count > 0 ? `${count} 个后台任务在跑：${m.tasks?.map((t) => t.description).join(" · ")}` : "当前没有后台任务。" }, sessionId);
+      return runtimeActivity(
+        {
+          id: `background-tasks:${sessionId ?? ""}`,
+          itemType: "background_tasks_changed",
+          kind: "task",
+          title: "后台任务已变化",
+          summary: count > 0 ? `${count} 个后台任务在跑：${m.tasks?.map((t) => t.description).join(" · ")}` : "当前没有后台任务。",
+        },
+        sessionId,
+      );
     }
     case "hook_started":
     case "hook_progress":
     case "hook_response": {
-      const m = message as unknown as { hook_id?: string; hook_name?: string; hook_event?: string; output?: string; exit_code?: number; outcome?: string };
+      const m = message as unknown as {
+        hook_id?: string;
+        hook_name?: string;
+        hook_event?: string;
+        output?: string;
+        exit_code?: number;
+        outcome?: string;
+      };
       const name = m.hook_name ?? m.hook_event ?? "hook";
       const failed = m.outcome === "error" || (m.exit_code !== undefined && m.exit_code !== 0);
-      return runtimeActivity({
-        id: `hook:${m.hook_id ?? name}`,
-        itemType: `hook_${subtype.slice(5)}`,
-        kind: "hook",
-        title: `钩子 · ${name}`,
-        summary: m.output?.trim() || (subtype === "hook_started" ? "钩子开始执行。" : "钩子执行结束。"),
-        status: subtype === "hook_started" ? "started" : failed ? "failed" : "succeeded",
-        ...(failed ? { error: m.output?.trim() || `钩子以退出码 ${m.exit_code} 结束。` } : {}),
-      }, sessionId);
+      return runtimeActivity(
+        {
+          id: `hook:${m.hook_id ?? name}`,
+          itemType: `hook_${subtype.slice(5)}`,
+          kind: "hook",
+          title: `钩子 · ${name}`,
+          summary: m.output?.trim() || (subtype === "hook_started" ? "钩子开始执行。" : "钩子执行结束。"),
+          status: subtype === "hook_started" ? "started" : failed ? "failed" : "succeeded",
+          ...(failed ? { error: m.output?.trim() || `钩子以退出码 ${m.exit_code} 结束。` } : {}),
+        },
+        sessionId,
+      );
     }
     case "informational": {
       const m = message as unknown as { content?: string; level?: string };
       // `info` / `notice` / `suggestion` 每轮都有，只有 `warning` 值得往上传。
       if (m.level !== "warning") return null;
-      return runtimeActivity({ id: `informational:${(message as unknown as { uuid?: string }).uuid ?? ""}`, itemType: "informational", kind: "warning", title: "Provider 警告", summary: m.content || "Provider 报告了一条警告。", status: "warning" }, sessionId);
+      return runtimeActivity(
+        {
+          id: `informational:${(message as unknown as { uuid?: string }).uuid ?? ""}`,
+          itemType: "informational",
+          kind: "warning",
+          title: "Provider 警告",
+          summary: m.content || "Provider 报告了一条警告。",
+          status: "warning",
+        },
+        sessionId,
+      );
     }
     default:
       return null;
   }
 }
-
 
 /** 本适配器内部的事件队列；把回调式事件（canUseTool）与生成器式事件合到一条流上。 */
 class ModelEventQueue implements AsyncIterable<ModelEvent> {
@@ -672,7 +872,10 @@ function latestUserMessage(messages: ModelMessage[]): string {
 }
 
 function systemInstructions(messages: ModelMessage[]): string {
-  return messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n");
+  return messages
+    .filter((message) => message.role === "system")
+    .map((message) => message.content)
+    .join("\n\n");
 }
 
 /** 读取 AskUserQuestion 的输入；形状见 Claude Code 的 AskUserQuestionInput（1-4 题、每题 2-4 选项）。 */
@@ -683,13 +886,15 @@ function readQuestions(input: JsonObject): ProviderQuestion[] {
     const value = question as JsonObject;
     const text = typeof value.question === "string" ? value.question.trim() : "";
     if (!text) return [];
-    const options = Array.isArray(value.options) ? value.options.flatMap((option) => {
-      if (!option || typeof option !== "object") return [];
-      const item = option as JsonObject;
-      const label = typeof item.label === "string" ? item.label : "";
-      if (!label) return [];
-      return [{ label, description: typeof item.description === "string" ? item.description : "" }];
-    }) : [];
+    const options = Array.isArray(value.options)
+      ? value.options.flatMap((option) => {
+          if (!option || typeof option !== "object") return [];
+          const item = option as JsonObject;
+          const label = typeof item.label === "string" ? item.label : "";
+          if (!label) return [];
+          return [{ label, description: typeof item.description === "string" ? item.description : "" }];
+        })
+      : [];
     return [{ question: text, header: typeof value.header === "string" ? value.header : "", options }];
   });
 }
@@ -732,7 +937,14 @@ function readToolResults(content: unknown): Array<{ toolUseId: string; summary: 
     if (!block || typeof block !== "object") return [];
     const value = block as JsonObject;
     if (value.type !== "tool_result" || typeof value.tool_use_id !== "string") return [];
-    return [{ toolUseId: value.tool_use_id, summary: summarizeToolResult(value.content), result: value.content, isError: value.is_error === true }];
+    return [
+      {
+        toolUseId: value.tool_use_id,
+        summary: summarizeToolResult(value.content),
+        result: value.content,
+        isError: value.is_error === true,
+      },
+    ];
   });
 }
 
@@ -747,7 +959,12 @@ function summarizeToolInput(toolName: string, input: JsonObject): string | null 
 function summarizeToolResult(content: unknown): string | null {
   if (typeof content === "string") return content.trim().slice(0, 200) || null;
   if (!Array.isArray(content)) return null;
-  const text = content.flatMap((part) => part && typeof part === "object" && typeof (part as JsonObject).text === "string" ? [(part as JsonObject).text as string] : []).join("\n").trim();
+  const text = content
+    .flatMap((part) =>
+      part && typeof part === "object" && typeof (part as JsonObject).text === "string" ? [(part as JsonObject).text as string] : [],
+    )
+    .join("\n")
+    .trim();
   return text ? text.slice(0, 200) : null;
 }
 

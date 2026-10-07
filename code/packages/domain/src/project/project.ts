@@ -7,13 +7,7 @@ import { createHash } from "node:crypto";
 import { basename, isAbsolute, resolve } from "node:path";
 import { freezeDeep } from "../platform/freeze.js";
 import { isRecord } from "../platform/guards.js";
-import type {
-  HookDefinition,
-  ModelRoleConfig,
-  PipelineStore,
-  RegisteredCommandDefinition,
-  RunStatus,
-} from "../index.js";
+import type { HookDefinition, ModelRoleConfig, PipelineStore, RegisteredCommandDefinition, RunStatus } from "../index.js";
 
 /** Project 生命周期状态；ARCHIVED 保留历史但关闭新的写入和执行入口。 */
 export type ProjectStatus = "ACTIVE" | "ARCHIVED";
@@ -192,11 +186,7 @@ export type ProjectSummary = {
 };
 
 /** 占用并发槽位的 Run 状态；QUEUED 和终态不占用执行中的槽位。 */
-export const EXECUTION_SLOT_RUN_STATUSES: ReadonlySet<RunStatus> = new Set<RunStatus>([
-  "STARTING",
-  "IN_PROGRESS",
-  "VERIFYING",
-]);
+export const EXECUTION_SLOT_RUN_STATUSES: ReadonlySet<RunStatus> = new Set<RunStatus>(["STARTING", "IN_PROGRESS", "VERIFYING"]);
 
 /** 新 Project 的安全默认值；具体项目可在创建向导中显式覆盖。 */
 export const DEFAULT_PROJECT_SETTINGS: ProjectSettings = {
@@ -236,7 +226,11 @@ function assertFiniteInteger(value: unknown, field: string, minimum: number): as
 }
 
 function assertStringArray(value: unknown, field: string, allowEmpty = true): asserts value is string[] {
-  if (!Array.isArray(value) || (!allowEmpty && value.length === 0) || value.some((item) => typeof item !== "string" || item.trim() === "")) {
+  if (
+    !Array.isArray(value) ||
+    (!allowEmpty && value.length === 0) ||
+    value.some((item) => typeof item !== "string" || item.trim() === "")
+  ) {
     throw new Error(`${field} must be an array of non-empty strings`);
   }
 }
@@ -258,13 +252,20 @@ function validateRoleBackend(model: ModelRoleConfig, role: "explorer" | "executo
   if (!catalog.has(model.backend)) throw new Error(`models.${role}.backend "${model.backend}" is not a configured model backend`);
   const levels = catalog.effortLevelsFor(model.backend);
   if (model.reasoningEffort && levels.length > 0 && !levels.includes(model.reasoningEffort)) {
-    throw new Error(`models.${role}.reasoningEffort "${model.reasoningEffort}" is not supported by backend ${model.backend}; supported: ${levels.join(", ")}`);
+    throw new Error(
+      `models.${role}.reasoningEffort "${model.reasoningEffort}" is not supported by backend ${model.backend}; supported: ${levels.join(", ")}`,
+    );
   }
 }
 
 function validateProjectSettings(settings: ProjectSettings, catalog?: ModelBackendCatalog | undefined): void {
   assertFiniteInteger(settings.concurrency.maxParallelRuns, "concurrency.maxParallelRuns", 1);
-  if (settings.concurrency.conflictScope !== undefined && settings.concurrency.conflictScope !== "declared" && settings.concurrency.conflictScope !== "overlap") throw new Error("concurrency.conflictScope must be declared or overlap");
+  if (
+    settings.concurrency.conflictScope !== undefined &&
+    settings.concurrency.conflictScope !== "declared" &&
+    settings.concurrency.conflictScope !== "overlap"
+  )
+    throw new Error("concurrency.conflictScope must be declared or overlap");
   assertFiniteInteger(settings.concurrency.defaultTimeoutMs, "concurrency.defaultTimeoutMs", 1);
   assertFiniteInteger(settings.concurrency.executionTimeoutMs, "concurrency.executionTimeoutMs", 1);
   assertFiniteInteger(settings.concurrency.maxAutoContinuationTurns, "concurrency.maxAutoContinuationTurns", 0);
@@ -273,35 +274,53 @@ function validateProjectSettings(settings: ProjectSettings, catalog?: ModelBacke
   if (!Array.isArray(settings.commands)) throw new Error("commands must be an array");
   const commandIds = new Set<string>();
   for (const command of settings.commands) {
-    if (!isRecord(command) || typeof command.commandId !== "string" || command.commandId.trim() === "") throw new Error("commandId must be a non-empty string");
+    if (!isRecord(command) || typeof command.commandId !== "string" || command.commandId.trim() === "")
+      throw new Error("commandId must be a non-empty string");
     if (commandIds.has(command.commandId)) throw new Error(`Duplicate commandId ${command.commandId}`);
     commandIds.add(command.commandId);
-    if (!["verification", "lifecycle", "executor-tool", "unclassified"].includes(command.category ?? "unclassified")) throw new Error(`command ${command.commandId}.category is invalid`);
-    if (command.enabled !== undefined && typeof command.enabled !== "boolean") throw new Error(`command ${command.commandId}.enabled must be a boolean`);
-    if (command.description !== undefined && (typeof command.description !== "string" || !command.description.trim())) throw new Error(`command ${command.commandId}.description must be a non-empty string`);
+    if (!["verification", "lifecycle", "executor-tool", "unclassified"].includes(command.category ?? "unclassified"))
+      throw new Error(`command ${command.commandId}.category is invalid`);
+    if (command.enabled !== undefined && typeof command.enabled !== "boolean")
+      throw new Error(`command ${command.commandId}.enabled must be a boolean`);
+    if (command.description !== undefined && (typeof command.description !== "string" || !command.description.trim()))
+      throw new Error(`command ${command.commandId}.description must be a non-empty string`);
     if (command.timeoutMs !== undefined) assertFiniteInteger(command.timeoutMs, `command ${command.commandId}.timeoutMs`, 1);
     assertStringArray(command.argv, `command ${command.commandId}.argv`, false);
     // tags 是 Plan 选验证子集用的词表；空标签没有意义（选不出任何东西），直接拒绝。
     if (command.tags !== undefined) {
       assertStringArray(command.tags, `command ${command.commandId}.tags`);
-      if (command.tags.some((tag) => tag !== tag.trim())) throw new Error(`command ${command.commandId}.tags must not contain surrounding whitespace`);
-      if (new Set(command.tags).size !== command.tags.length) throw new Error(`command ${command.commandId}.tags must not contain duplicates`);
+      if (command.tags.some((tag) => tag !== tag.trim()))
+        throw new Error(`command ${command.commandId}.tags must not contain surrounding whitespace`);
+      if (new Set(command.tags).size !== command.tags.length)
+        throw new Error(`command ${command.commandId}.tags must not contain duplicates`);
     }
     if (command.environment !== undefined) {
-      if (!isRecord(command.environment) || Object.entries(command.environment).some(([key, value]) => !key.trim() || typeof value !== "string")) throw new Error(`command ${command.commandId}.environment must contain string values`);
+      if (
+        !isRecord(command.environment) ||
+        Object.entries(command.environment).some(([key, value]) => !key.trim() || typeof value !== "string")
+      )
+        throw new Error(`command ${command.commandId}.environment must contain string values`);
     }
   }
   assertStringArray(settings.defaultVerificationCommandIds, "defaultVerificationCommandIds");
-  if (settings.defaultArtifactMode !== undefined && settings.defaultArtifactMode !== "CONVERSATION" && settings.defaultArtifactMode !== "REPOSITORY_FILE") throw new Error("defaultArtifactMode must be CONVERSATION or REPOSITORY_FILE");
-  if (new Set(settings.defaultVerificationCommandIds).size !== settings.defaultVerificationCommandIds.length) throw new Error("defaultVerificationCommandIds must not contain duplicates");
+  if (
+    settings.defaultArtifactMode !== undefined &&
+    settings.defaultArtifactMode !== "CONVERSATION" &&
+    settings.defaultArtifactMode !== "REPOSITORY_FILE"
+  )
+    throw new Error("defaultArtifactMode must be CONVERSATION or REPOSITORY_FILE");
+  if (new Set(settings.defaultVerificationCommandIds).size !== settings.defaultVerificationCommandIds.length)
+    throw new Error("defaultVerificationCommandIds must not contain duplicates");
   for (const commandId of settings.defaultVerificationCommandIds) {
     const command = settings.commands.find((item) => item.commandId === commandId);
-    if (!command || command.category !== "verification" || command.enabled === false) throw new Error(`default verification command ${commandId} must be an enabled verification command`);
+    if (!command || command.category !== "verification" || command.enabled === false)
+      throw new Error(`default verification command ${commandId} must be an enabled verification command`);
   }
 
   if (!isRecord(settings.hooks)) throw new Error("hooks must be an object");
   for (const [name, hook] of Object.entries(settings.hooks)) {
-    if (!isRecord(hook) || typeof hook.commandId !== "string" || hook.commandId.trim() === "") throw new Error(`${name}.commandId must be a non-empty string`);
+    if (!isRecord(hook) || typeof hook.commandId !== "string" || hook.commandId.trim() === "")
+      throw new Error(`${name}.commandId must be a non-empty string`);
     if (hook.enabled !== undefined && typeof hook.enabled !== "boolean") throw new Error(`${name}.enabled must be a boolean`);
     if (hook.timeoutMs !== undefined) assertFiniteInteger(hook.timeoutMs, `${name}.timeoutMs`, 1);
     if (hook.maxAttempts !== undefined) assertFiniteInteger(hook.maxAttempts, `${name}.maxAttempts`, 1);
@@ -310,15 +329,22 @@ function validateProjectSettings(settings: ProjectSettings, catalog?: ModelBacke
     // **拒绝而不是忽略**：静默吞掉它等于让"我明明配了阻塞"在 finish() 里无声失效。
     if (name !== "start" && hook.blocking !== undefined) throw new Error(`${name}.blocking is only supported on the start hook`);
     const command = settings.commands.find((item) => item.commandId === hook.commandId);
-    if (!command || command.category !== "lifecycle" || command.enabled === false) throw new Error(`${name}.commandId must reference an enabled lifecycle command`);
+    if (!command || command.category !== "lifecycle" || command.enabled === false)
+      throw new Error(`${name}.commandId must reference an enabled lifecycle command`);
   }
 
   for (const role of ["explorer", "executor"] as const) {
     const model = settings.models[role];
-    if (!isRecord(model) || typeof model.model !== "string" || model.model.trim() === "") throw new Error(`models.${role}.model must be a non-empty string`);
-    if (model.temperature !== undefined && (typeof model.temperature !== "number" || !Number.isFinite(model.temperature) || model.temperature < 0 || model.temperature > 2)) throw new Error(`models.${role}.temperature must be between 0 and 2`);
+    if (!isRecord(model) || typeof model.model !== "string" || model.model.trim() === "")
+      throw new Error(`models.${role}.model must be a non-empty string`);
+    if (
+      model.temperature !== undefined &&
+      (typeof model.temperature !== "number" || !Number.isFinite(model.temperature) || model.temperature < 0 || model.temperature > 2)
+    )
+      throw new Error(`models.${role}.temperature must be between 0 and 2`);
     if (model.maxOutputTokens !== undefined) assertFiniteInteger(model.maxOutputTokens, `models.${role}.maxOutputTokens`, 1);
-    if (model.backend !== undefined && (typeof model.backend !== "string" || !model.backend.trim())) throw new Error(`models.${role}.backend must be a non-empty string`);
+    if (model.backend !== undefined && (typeof model.backend !== "string" || !model.backend.trim()))
+      throw new Error(`models.${role}.backend must be a non-empty string`);
     // 有目录时才校验取值：domain 不认识"有哪些后端"，那是配置层的事实。
     // 校验放在这里而不是路由层，是因为 settings 只有这一条校验入口（见 normalizeProjectSettings）。
     if (catalog) validateRoleBackend(model, role, catalog);
@@ -330,19 +356,39 @@ function validateProjectSettings(settings: ProjectSettings, catalog?: ModelBacke
 }
 
 /** 合并并校验局部 Settings，返回可安全保存和快照的完整配置。 */
-export function normalizeProjectSettings(input?: ProjectSettingsInput, base: ProjectSettings = DEFAULT_PROJECT_SETTINGS, catalog?: ModelBackendCatalog | undefined): ProjectSettings {
+export function normalizeProjectSettings(
+  input?: ProjectSettingsInput,
+  base: ProjectSettings = DEFAULT_PROJECT_SETTINGS,
+  catalog?: ModelBackendCatalog | undefined,
+): ProjectSettings {
   const value = input ?? {};
   if (!isRecord(value)) throw new Error("settings must be an object");
   if (value.concurrency !== undefined && !isRecord(value.concurrency)) throw new Error("concurrency must be an object");
   if (value.commands !== undefined && !Array.isArray(value.commands)) throw new Error("commands must be an array");
-  if (value.defaultVerificationCommandIds !== undefined && !Array.isArray(value.defaultVerificationCommandIds)) throw new Error("defaultVerificationCommandIds must be an array");
+  if (value.defaultVerificationCommandIds !== undefined && !Array.isArray(value.defaultVerificationCommandIds))
+    throw new Error("defaultVerificationCommandIds must be an array");
   if (value.hooks !== undefined && !isRecord(value.hooks)) throw new Error("hooks must be an object");
   if (value.models !== undefined && !isRecord(value.models)) throw new Error("models must be an object");
   if (value.toolPolicy !== undefined && !isRecord(value.toolPolicy)) throw new Error("toolPolicy must be an object");
   const settings: ProjectSettings = {
     concurrency: { ...base.concurrency, ...value.concurrency },
-    commands: value.commands ? value.commands.map((command) => ({ ...command, category: command.category ?? "unclassified", enabled: command.enabled ?? false, argv: [...command.argv] as [string, ...string[]], ...(command.environment ? { environment: { ...command.environment } } : {}), ...(command.tags ? { tags: [...command.tags] } : {}) })) : clone(base.commands).map((command) => ({ ...command, category: command.category ?? "unclassified", enabled: command.enabled ?? false })),
-    defaultVerificationCommandIds: value.defaultVerificationCommandIds ? [...value.defaultVerificationCommandIds] : [...base.defaultVerificationCommandIds],
+    commands: value.commands
+      ? value.commands.map((command) => ({
+          ...command,
+          category: command.category ?? "unclassified",
+          enabled: command.enabled ?? false,
+          argv: [...command.argv] as [string, ...string[]],
+          ...(command.environment ? { environment: { ...command.environment } } : {}),
+          ...(command.tags ? { tags: [...command.tags] } : {}),
+        }))
+      : clone(base.commands).map((command) => ({
+          ...command,
+          category: command.category ?? "unclassified",
+          enabled: command.enabled ?? false,
+        })),
+    defaultVerificationCommandIds: value.defaultVerificationCommandIds
+      ? [...value.defaultVerificationCommandIds]
+      : [...base.defaultVerificationCommandIds],
     // 老配置行没有这一格：缺省即 REPOSITORY_FILE，与全新 Project 一致（理由见 ProjectSettings 里的说明）。
     defaultArtifactMode: value.defaultArtifactMode ?? base.defaultArtifactMode ?? "REPOSITORY_FILE",
     hooks: { ...base.hooks, ...value.hooks },
@@ -354,7 +400,9 @@ export function normalizeProjectSettings(input?: ProjectSettingsInput, base: Pro
       ...base.toolPolicy,
       ...value.toolPolicy,
       allowedMcpTools: value.toolPolicy?.allowedMcpTools ? [...value.toolPolicy.allowedMcpTools] : [...base.toolPolicy.allowedMcpTools],
-      allowedPluginTools: value.toolPolicy?.allowedPluginTools ? [...value.toolPolicy.allowedPluginTools] : [...base.toolPolicy.allowedPluginTools],
+      allowedPluginTools: value.toolPolicy?.allowedPluginTools
+        ? [...value.toolPolicy.allowedPluginTools]
+        : [...base.toolPolicy.allowedPluginTools],
     },
   };
   validateProjectSettings(settings, catalog);
@@ -362,7 +410,18 @@ export function normalizeProjectSettings(input?: ProjectSettingsInput, base: Pro
 }
 
 function projectHash(input: Pick<Project, "name" | "shortName" | "repoRoot" | "defaultBranch" | "worktreeRoot" | "settings">): string {
-  return `sha256:${createHash("sha256").update(JSON.stringify({ name: input.name, shortName: input.shortName, repoRoot: input.repoRoot, defaultBranch: input.defaultBranch, worktreeRoot: input.worktreeRoot, settings: input.settings })).digest("hex")}`;
+  return `sha256:${createHash("sha256")
+    .update(
+      JSON.stringify({
+        name: input.name,
+        shortName: input.shortName,
+        repoRoot: input.repoRoot,
+        defaultBranch: input.defaultBranch,
+        worktreeRoot: input.worktreeRoot,
+        settings: input.settings,
+      }),
+    )
+    .digest("hex")}`;
 }
 
 /** 从当前 Project 生成深拷贝快照；快照不含运行时可变字段。 */
@@ -416,7 +475,10 @@ export function knownModelFamily(slug: string): ModelFamily | null {
  * 所有高风险路径或运行策略变更都会递增 configVersion，并为历史 Plan 保留旧快照。
  */
 export class ProjectService {
-  constructor(private readonly store: PipelineStore, private readonly modelCatalog?: ModelBackendCatalog | undefined) {}
+  constructor(
+    private readonly store: PipelineStore,
+    private readonly modelCatalog?: ModelBackendCatalog | undefined,
+  ) {}
 
   /** 创建唯一绑定一个 Git 根目录的 Project，并保存初始配置版本。 */
   create(input: CreateProjectInput): Project {
@@ -426,7 +488,8 @@ export class ProjectService {
     const repoRoot = normalizeAbsolutePath(input.repoRoot, "repoRoot");
     const worktreeRoot = normalizeAbsolutePath(input.worktreeRoot, "worktreeRoot");
     assertProjectPaths(repoRoot, worktreeRoot);
-    if (this.store.listProjects().some((project) => project.repoRoot === repoRoot)) throw new Error(`A project already uses repoRoot ${repoRoot}`);
+    if (this.store.listProjects().some((project) => project.repoRoot === repoRoot))
+      throw new Error(`A project already uses repoRoot ${repoRoot}`);
     const createdAt = this.store.now();
     const settings = normalizeProjectSettings(input.settings, DEFAULT_PROJECT_SETTINGS, this.modelCatalog);
     const project: Project = {
@@ -474,14 +537,16 @@ export class ProjectService {
         return this.update(input.id ?? existing.id, repair);
       }
       if (existing.currentExplorerThreadId) return existing;
-      const current = this.store.listThreads()
+      const current = this.store
+        .listThreads()
         .filter((thread) => thread.projectId === existing.id && thread.state !== "ARCHIVED")
         .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt))[0];
       if (!current) return existing;
       return this.store.updateProject({ ...existing, currentExplorerThreadId: current.id, updatedAt: this.store.now() });
     }
     const project = this.create(input);
-    const current = this.store.listThreads()
+    const current = this.store
+      .listThreads()
       .filter((thread) => thread.projectId === project.id && thread.state !== "ARCHIVED")
       .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt))[0];
     if (!current) return project;
@@ -525,7 +590,10 @@ export class ProjectService {
    * 只替换 `model` 字段并保留 mode/temperature/loopMode/backend；有活动 Run 的 Project 跳过，
    * 等下次启动重试（与 migrateLegacyModels 同一套保守策略）。
    */
-  migrateForeignFamilyModels(input: { familyForRole: Record<"explorer" | "executor", ModelFamily>; models: { explorer: string; executor: string } }): Project[] {
+  migrateForeignFamilyModels(input: {
+    familyForRole: Record<"explorer" | "executor", ModelFamily>;
+    models: { explorer: string; executor: string };
+  }): Project[] {
     const migrated: Project[] = [];
     for (const project of this.list("ACTIVE")) {
       const replacements: ProjectSettingsInput["models"] = {};
@@ -554,25 +622,39 @@ export class ProjectService {
 
   /** 按状态列出 Project，结果按名称稳定排序以供 Catalog 使用。 */
   list(status?: ProjectStatus): Project[] {
-    return this.store.listProjects().filter((project) => !status || project.status === status).sort((a, b) => a.name.localeCompare(b.name));
+    return this.store
+      .listProjects()
+      .filter((project) => !status || project.status === status)
+      .sort((a, b) => a.name.localeCompare(b.name));
   }
 
   /** 更新 Project 配置；expectedConfigVersion 用于阻止并发编辑覆盖最新版本。 */
   update(projectId: string, input: UpdateProjectInput): Project {
     const project = this.get(projectId);
     if (project.status === "ARCHIVED") throw new Error(`Project ${projectId} is archived`);
-    if (input.expectedConfigVersion !== undefined && input.expectedConfigVersion !== project.configVersion) throw new Error(`Project ${projectId} configuration version conflict`);
+    if (input.expectedConfigVersion !== undefined && input.expectedConfigVersion !== project.configVersion)
+      throw new Error(`Project ${projectId} configuration version conflict`);
     const name = input.name === undefined ? project.name : input.name.trim();
     if (!name) throw new Error("Project name is required");
     const shortName = input.shortName === undefined ? project.shortName : input.shortName.trim() || name;
     const repoRoot = input.repoRoot === undefined ? project.repoRoot : normalizeAbsolutePath(input.repoRoot, "repoRoot");
-    const worktreeRoot = input.worktreeRoot === undefined ? project.worktreeRoot : normalizeAbsolutePath(input.worktreeRoot, "worktreeRoot");
+    const worktreeRoot =
+      input.worktreeRoot === undefined ? project.worktreeRoot : normalizeAbsolutePath(input.worktreeRoot, "worktreeRoot");
     assertProjectPaths(repoRoot, worktreeRoot);
-    if (repoRoot !== project.repoRoot && this.store.listProjects().some((item) => item.id !== projectId && item.repoRoot === repoRoot)) throw new Error(`A project already uses repoRoot ${repoRoot}`);
-    const nextSettings = input.settings ? normalizeProjectSettings(input.settings, project.settings, this.modelCatalog) : clone(project.settings);
+    if (repoRoot !== project.repoRoot && this.store.listProjects().some((item) => item.id !== projectId && item.repoRoot === repoRoot))
+      throw new Error(`A project already uses repoRoot ${repoRoot}`);
+    const nextSettings = input.settings
+      ? normalizeProjectSettings(input.settings, project.settings, this.modelCatalog)
+      : clone(project.settings);
     const defaultBranch = input.defaultBranch === undefined ? project.defaultBranch : input.defaultBranch.trim();
     if (!defaultBranch) throw new Error("defaultBranch is required");
-    const changed = name !== project.name || shortName !== project.shortName || repoRoot !== project.repoRoot || worktreeRoot !== project.worktreeRoot || defaultBranch !== project.defaultBranch || JSON.stringify(nextSettings) !== JSON.stringify(project.settings);
+    const changed =
+      name !== project.name ||
+      shortName !== project.shortName ||
+      repoRoot !== project.repoRoot ||
+      worktreeRoot !== project.worktreeRoot ||
+      defaultBranch !== project.defaultBranch ||
+      JSON.stringify(nextSettings) !== JSON.stringify(project.settings);
     if (!changed) return project;
     /**
      * "高风险" = 会动到**正在跑的 Run 脚下那块地**的改动，只有两种：
@@ -588,7 +670,10 @@ export class ProjectService {
      */
     const pathsChanged = repoRoot !== project.repoRoot || worktreeRoot !== project.worktreeRoot || defaultBranch !== project.defaultBranch;
     const hooksChanged = JSON.stringify(nextSettings.hooks) !== JSON.stringify(project.settings.hooks);
-    if ((pathsChanged || hooksChanged) && hasActiveRun(this.store, projectId)) throw new Error(`Project ${projectId} has active runs（仓库路径、Worktree、默认分支与 hooks 的改动需要先等这些 Run 结束；模型与其他执行设置可以随时改）`);
+    if ((pathsChanged || hooksChanged) && hasActiveRun(this.store, projectId))
+      throw new Error(
+        `Project ${projectId} has active runs（仓库路径、Worktree、默认分支与 hooks 的改动需要先等这些 Run 结束；模型与其他执行设置可以随时改）`,
+      );
     const updated: Project = {
       ...project,
       name,
@@ -603,7 +688,11 @@ export class ProjectService {
     };
     const saved = this.store.updateProject(updated);
     this.saveConfigRevision(saved);
-    this.store.appendEvent({ type: "project.config.updated", aggregateId: projectId, payload: { projectId, configVersion: saved.configVersion, configHash: saved.configHash } });
+    this.store.appendEvent({
+      type: "project.config.updated",
+      aggregateId: projectId,
+      payload: { projectId, configVersion: saved.configVersion, configHash: saved.configHash },
+    });
     return saved;
   }
 
@@ -612,7 +701,12 @@ export class ProjectService {
     const project = this.get(projectId);
     if (project.status === "ARCHIVED") return project;
     if (hasActiveRun(this.store, projectId)) throw new Error(`Project ${projectId} has active runs`);
-    const archived = this.store.updateProject({ ...project, status: "ARCHIVED", archivedAt: this.store.now(), updatedAt: this.store.now() });
+    const archived = this.store.updateProject({
+      ...project,
+      status: "ARCHIVED",
+      archivedAt: this.store.now(),
+      updatedAt: this.store.now(),
+    });
     this.store.appendEvent({ type: "project.archived", aggregateId: projectId, payload: { projectId } });
     return archived;
   }
@@ -654,7 +748,15 @@ export class ProjectService {
     const threads = this.store.listThreads().filter((thread) => thread.projectId === projectId);
     const plans = this.store.listPlans().filter((plan) => plan.projectId === projectId);
     const runs = this.store.listRuns().filter((run) => run.projectId === projectId);
-    const lastActivityAt = [project.updatedAt, ...threads.map((thread) => thread.lastActivityAt), ...plans.map((plan) => plan.lastEventAt), ...runs.map((run) => run.startedAt ?? run.createdAt)].sort().at(-1) ?? null;
+    const lastActivityAt =
+      [
+        project.updatedAt,
+        ...threads.map((thread) => thread.lastActivityAt),
+        ...plans.map((plan) => plan.lastEventAt),
+        ...runs.map((run) => run.startedAt ?? run.createdAt),
+      ]
+        .sort()
+        .at(-1) ?? null;
     return {
       project,
       currentExplorerThread: project.currentExplorerThreadId,
@@ -662,12 +764,20 @@ export class ProjectService {
       planCount: plans.length,
       runCount: runs.length,
       activeRunCount: runs.filter((run) => EXECUTION_SLOT_RUN_STATUSES.has(run.status)).length,
-      needsAttentionCount: plans.filter((plan) => Boolean(plan.attentionReason) || plan.status === "BLOCKED" || plan.status === "NEEDS_PLAN_CHANGE").length,
+      needsAttentionCount: plans.filter(
+        (plan) => Boolean(plan.attentionReason) || plan.status === "BLOCKED" || plan.status === "NEEDS_PLAN_CHANGE",
+      ).length,
       lastActivityAt,
     };
   }
 
   private saveConfigRevision(project: Project): void {
-    this.store.saveProjectConfigRevision({ projectId: project.id, version: project.configVersion, hash: project.configHash, snapshot: projectSnapshot(project), createdAt: project.updatedAt });
+    this.store.saveProjectConfigRevision({
+      projectId: project.id,
+      version: project.configVersion,
+      hash: project.configHash,
+      snapshot: projectSnapshot(project),
+      createdAt: project.updatedAt,
+    });
   }
 }

@@ -38,9 +38,17 @@ const ElPopoverStub = defineComponent({
   props: { visible: Boolean },
   emits: ["update:visible"],
   setup(props, { emit, slots }) {
-    return () => h("div", { class: "popover-stub", onClick: (event: MouseEvent) => {
-      if ((event.target as HTMLElement).closest(".explorer-header-status-trigger")) emit("update:visible", !props.visible);
-    } }, [slots.reference?.(), props.visible ? slots.default?.() : null]);
+    return () =>
+      h(
+        "div",
+        {
+          class: "popover-stub",
+          onClick: (event: MouseEvent) => {
+            if ((event.target as HTMLElement).closest(".explorer-header-status-trigger")) emit("update:visible", !props.visible);
+          },
+        },
+        [slots.reference?.(), props.visible ? slots.default?.() : null],
+      );
   },
 });
 const ElButtonStub = defineComponent({
@@ -54,29 +62,41 @@ function mountStatus(initialDiagnostics: ExplorerThread["exploration"]["diagnost
   document.body.appendChild(host);
   const threadId = ref("thread-1");
   let pauseCount = 0;
-  const app = createApp(defineComponent({
-    setup() {
-      return () => h(ExplorerHeaderStatus, {
-        requirements,
-        completed: progress.completed,
-        diagnostics: initialDiagnostics,
-        progress: { ...progress, diagnostics: initialDiagnostics },
-        agentLoop: loop,
-        agentLoopLabel: "Running",
-        agentLoopGateLabel: null,
-        agentLoopTerminalLabel: null,
-        agentLoopCompletionLabel: null,
-        threadId: threadId.value,
-        paused: false,
-        runtimeFacts: [],
-        onTogglePause: () => { pauseCount += 1; },
-      });
-    },
-  }));
+  const app = createApp(
+    defineComponent({
+      setup() {
+        return () =>
+          h(ExplorerHeaderStatus, {
+            requirements,
+            completed: progress.completed,
+            diagnostics: initialDiagnostics,
+            progress: { ...progress, diagnostics: initialDiagnostics },
+            agentLoop: loop,
+            agentLoopLabel: "Running",
+            agentLoopGateLabel: null,
+            agentLoopTerminalLabel: null,
+            agentLoopCompletionLabel: null,
+            threadId: threadId.value,
+            paused: false,
+            runtimeFacts: [],
+            onTogglePause: () => {
+              pauseCount += 1;
+            },
+          });
+      },
+    }),
+  );
   app.component("el-popover", ElPopoverStub);
   app.component("el-button", ElButtonStub);
   app.mount(host);
-  return { app, host, threadId, get pauseCount() { return pauseCount; } };
+  return {
+    app,
+    host,
+    threadId,
+    get pauseCount() {
+      return pauseCount;
+    },
+  };
 }
 
 function statusTrigger(host: HTMLElement, card: "requirements" | "provider-loop" | "exploration"): HTMLButtonElement {

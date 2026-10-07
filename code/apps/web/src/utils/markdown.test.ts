@@ -9,19 +9,9 @@ import { renderMarkdown } from "./markdown";
 
 describe("renderMarkdown", () => {
   it("renders the GFM blocks that appear in Explorer messages", () => {
-    const html = renderMarkdown([
-      "## 问题清单",
-      "",
-      "**A 类：准确性错误**",
-      "",
-      "- `BOOLEAN` 只是别名",
-      "",
-      "1. 第一项",
-      "",
-      "> 引用",
-      "",
-      "---",
-    ].join("\n"));
+    const html = renderMarkdown(
+      ["## 问题清单", "", "**A 类：准确性错误**", "", "- `BOOLEAN` 只是别名", "", "1. 第一项", "", "> 引用", "", "---"].join("\n"),
+    );
 
     expect(html).toContain("<h2");
     expect(html).toContain("问题清单");
@@ -34,18 +24,20 @@ describe("renderMarkdown", () => {
   });
 
   it("renders fenced code, tables and task lists", () => {
-    const html = renderMarkdown([
-      "```sql",
-      "SELECT 1;",
-      "```",
-      "",
-      "| # | 位置 | 问题 |",
-      "| --- | --- | --- |",
-      "| A1 | L32 | 类型错误 |",
-      "",
-      "- [x] 已完成",
-      "- [ ] 待处理",
-    ].join("\n"));
+    const html = renderMarkdown(
+      [
+        "```sql",
+        "SELECT 1;",
+        "```",
+        "",
+        "| # | 位置 | 问题 |",
+        "| --- | --- | --- |",
+        "| A1 | L32 | 类型错误 |",
+        "",
+        "- [x] 已完成",
+        "- [ ] 待处理",
+      ].join("\n"),
+    );
 
     expect(html).toContain('class="language-sql"');
     expect(html).toContain("SELECT 1;");
@@ -74,15 +66,17 @@ describe("renderMarkdown", () => {
   });
 
   it("removes scripts, event handlers, images and unsafe links", () => {
-    const html = renderMarkdown([
-      "<script>alert(1)</script>",
-      "",
-      "<img src=x onerror=alert(1)>",
-      "",
-      "[危险](javascript:alert(1))",
-      "",
-      "[数据](data:text/html;base64,PHNjcmlwdD4=)",
-    ].join("\n"));
+    const html = renderMarkdown(
+      [
+        "<script>alert(1)</script>",
+        "",
+        "<img src=x onerror=alert(1)>",
+        "",
+        "[危险](javascript:alert(1))",
+        "",
+        "[数据](data:text/html;base64,PHNjcmlwdD4=)",
+      ].join("\n"),
+    );
 
     expect(html).not.toContain("<script");
     expect(html).not.toContain("<img");

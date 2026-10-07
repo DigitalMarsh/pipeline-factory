@@ -5,9 +5,24 @@
  */
 import { describe, expect, it } from "vitest";
 import type { ExplorerActivityItem, Plan } from "../types";
-import { findPlanForActivity, getPlanTimelineTarget, planActivityBindings, planAnchorId, planAnchorKey, planForActivity, planIdentity, planIdentityOrNull, planTimelineItems } from "./planTimeline";
+import {
+  findPlanForActivity,
+  getPlanTimelineTarget,
+  planActivityBindings,
+  planAnchorId,
+  planAnchorKey,
+  planForActivity,
+  planIdentity,
+  planIdentityOrNull,
+  planTimelineItems,
+} from "./planTimeline";
 
-const activity = (turnId: string, title: string, occurredAt = "2026-08-29T10:00:00.000Z", providerItemId?: string): ExplorerActivityItem => ({
+const activity = (
+  turnId: string,
+  title: string,
+  occurredAt = "2026-08-29T10:00:00.000Z",
+  providerItemId?: string,
+): ExplorerActivityItem => ({
   id: `activity-${turnId}-${providerItemId ?? occurredAt}`,
   explorerId: "explorer-1",
   turnId,

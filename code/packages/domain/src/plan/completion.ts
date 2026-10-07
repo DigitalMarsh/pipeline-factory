@@ -56,17 +56,31 @@ export type PlanCompletionAssessment = {
  */
 function missingExplorerDetail(spec: GeneratedPlanSpec): PlanValidationIssue[] {
   const issues: PlanValidationIssue[] = [];
-  if (!spec.objective.context?.length) issues.push({ path: "objective.context", code: "REQUIRED", area: "目标与用户范围", message: "必须写出现状与调查发现：在仓库里看到了什么、依据是什么。" });
-  if (!spec.design.risks?.length) issues.push({ path: "design.risks", code: "REQUIRED", area: "技术方案与关键约束", message: "必须写出风险与回滚。" });
+  if (!spec.objective.context?.length)
+    issues.push({
+      path: "objective.context",
+      code: "REQUIRED",
+      area: "目标与用户范围",
+      message: "必须写出现状与调查发现：在仓库里看到了什么、依据是什么。",
+    });
+  if (!spec.design.risks?.length)
+    issues.push({ path: "design.risks", code: "REQUIRED", area: "技术方案与关键约束", message: "必须写出风险与回滚。" });
   spec.tasks.forEach((task, index) => {
-    if (!task.changes?.length) issues.push({ path: `tasks[${index}].changes`, code: "REQUIRED", area: "实施任务、依赖与冲突", message: `任务 ${task.id} 必须写明要动哪些文件、怎么动。` });
+    if (!task.changes?.length)
+      issues.push({
+        path: `tasks[${index}].changes`,
+        code: "REQUIRED",
+        area: "实施任务、依赖与冲突",
+        message: `任务 ${task.id} 必须写明要动哪些文件、怎么动。`,
+      });
   });
   return issues;
 }
 
 export function assessPlanCompletion(content: string): PlanCompletionAssessment {
   const candidates = planProtocolCandidates(content);
-  if (candidates.length === 0) return { status: "INCOMPLETE", missing: [...REQUIRED_PLAN_AREAS], completed: [], diagnostics: [], artifact: null };
+  if (candidates.length === 0)
+    return { status: "INCOMPLETE", missing: [...REQUIRED_PLAN_AREAS], completed: [], diagnostics: [], artifact: null };
 
   let sawReadyCandidate = false;
   let latestIncomplete: PlanCompletionAssessment | null = null;
@@ -79,12 +93,32 @@ export function assessPlanCompletion(content: string): PlanCompletionAssessment 
   }
   if (latestIncomplete) {
     const latest = [...candidates].reverse().find((candidate) => candidate.status === "READY");
-    const repeats = latest ? candidates.filter((candidate) => candidate.status === "READY" && candidate.artifactText === latest.artifactText).length : 0;
-    if (repeats > 1) return { ...latestIncomplete, diagnostics: [...latestIncomplete.diagnostics, { path: "$", code: "DUPLICATE", area: "完整执行契约", message: "本轮已重复输出相同的未通过 READY 协议块；请按字段诊断修改后再提交。" }] };
+    const repeats = latest
+      ? candidates.filter((candidate) => candidate.status === "READY" && candidate.artifactText === latest.artifactText).length
+      : 0;
+    if (repeats > 1)
+      return {
+        ...latestIncomplete,
+        diagnostics: [
+          ...latestIncomplete.diagnostics,
+          {
+            path: "$",
+            code: "DUPLICATE",
+            area: "完整执行契约",
+            message: "本轮已重复输出相同的未通过 READY 协议块；请按字段诊断修改后再提交。",
+          },
+        ],
+      };
     return latestIncomplete;
   }
   return sawReadyCandidate
-    ? { status: "INCOMPLETE", missing: ["完整执行契约"], completed: [], diagnostics: [{ path: "$", code: "INVALID", area: "完整执行契约", message: "READY 协议块不完整。" }], artifact: null }
+    ? {
+        status: "INCOMPLETE",
+        missing: ["完整执行契约"],
+        completed: [],
+        diagnostics: [{ path: "$", code: "INVALID", area: "完整执行契约", message: "READY 协议块不完整。" }],
+        artifact: null,
+      }
     : { status: "INCOMPLETE", missing: [...REQUIRED_PLAN_AREAS], completed: [], diagnostics: [], artifact: null };
 }
 
@@ -111,16 +145,37 @@ function planProtocolCandidates(content: string): Array<{ status: string; artifa
   return statusMatches.flatMap((statusMatch, index) => {
     const statusEnd = (statusMatch.index ?? 0) + statusMatch[0].length;
     const nextStatusStart = statusMatches[index + 1]?.index ?? content.length;
-    const plan = planMatches.find((candidate) => (candidate.index ?? -1) >= statusEnd && (candidate.index ?? content.length) < nextStatusStart);
+    const plan = planMatches.find(
+      (candidate) => (candidate.index ?? -1) >= statusEnd && (candidate.index ?? content.length) < nextStatusStart,
+    );
     const statusText = statusMatch[1];
-    return plan && typeof plan[1] === "string" && typeof statusText === "string" ? [{ status: statusText.trim().toUpperCase(), artifactText: plan[1] }] : [];
+    return plan && typeof plan[1] === "string" && typeof statusText === "string"
+      ? [{ status: statusText.trim().toUpperCase(), artifactText: plan[1] }]
+      : [];
   });
 }
 
 function assessPlanArtifact(artifactText: string): PlanCompletionAssessment {
   let parsed: unknown;
-  try { parsed = JSON.parse(artifactText); } catch { return { status: "INCOMPLETE", missing: ["完整执行契约"], completed: [], diagnostics: [{ path: "$", code: "INVALID", area: "完整执行契约", message: "必须是严格 JSON，不能使用代码围栏或残缺 JSON。" }], artifact: null }; }
-  if (!isRecord(parsed)) return { status: "INCOMPLETE", missing: ["完整执行契约"], completed: [], diagnostics: [{ path: "$", code: "INVALID", area: "完整执行契约", message: "必须是 JSON 对象。" }], artifact: null };
+  try {
+    parsed = JSON.parse(artifactText);
+  } catch {
+    return {
+      status: "INCOMPLETE",
+      missing: ["完整执行契约"],
+      completed: [],
+      diagnostics: [{ path: "$", code: "INVALID", area: "完整执行契约", message: "必须是严格 JSON，不能使用代码围栏或残缺 JSON。" }],
+      artifact: null,
+    };
+  }
+  if (!isRecord(parsed))
+    return {
+      status: "INCOMPLETE",
+      missing: ["完整执行契约"],
+      completed: [],
+      diagnostics: [{ path: "$", code: "INVALID", area: "完整执行契约", message: "必须是 JSON 对象。" }],
+      artifact: null,
+    };
   // 只认当前形状（`schemaVersion: 2` 的 generated spec）。V1 扁平合同已经不再支持：
   // 那种产物既解析不出可执行契约，也不会被确认——它以"校验失败"的诊断回到 Explorer，
   // 让模型重新产出一份合规的方案。
@@ -133,12 +188,30 @@ function assessPlanArtifact(artifactText: string): PlanCompletionAssessment {
     const detailIssues = missingExplorerDetail(generatedSpec);
     if (detailIssues.length > 0) {
       const missing = [...new Set(detailIssues.map((item) => item.area))];
-      return { status: "INCOMPLETE", missing, completed: REQUIRED_PLAN_AREAS.filter((area) => !missing.includes(area)), diagnostics: detailIssues, artifact: null };
+      return {
+        status: "INCOMPLETE",
+        missing,
+        completed: REQUIRED_PLAN_AREAS.filter((area) => !missing.includes(area)),
+        diagnostics: detailIssues,
+        artifact: null,
+      };
     }
-    return { status: "READY", missing: [], completed: [...REQUIRED_PLAN_AREAS], diagnostics: [], artifact: { title: generatedSpec.title, generatedSpec } };
+    return {
+      status: "READY",
+      missing: [],
+      completed: [...REQUIRED_PLAN_AREAS],
+      diagnostics: [],
+      artifact: { title: generatedSpec.title, generatedSpec },
+    };
   } catch (error) {
     const diagnostics = error instanceof GeneratedPlanSpecValidationError ? error.issues : validateGeneratedPlanSpec(parsed);
     const missing = [...new Set(diagnostics.map((item) => item.area))];
-    return { status: "INCOMPLETE", missing: missing.length ? missing : ["完整执行契约"], completed: REQUIRED_PLAN_AREAS.filter((area) => !missing.includes(area)), diagnostics, artifact: null };
+    return {
+      status: "INCOMPLETE",
+      missing: missing.length ? missing : ["完整执行契约"],
+      completed: REQUIRED_PLAN_AREAS.filter((area) => !missing.includes(area)),
+      diagnostics,
+      artifact: null,
+    };
   }
 }

@@ -10,7 +10,18 @@
  *   必须保证"不动 journal"这条不变式仍然成立——这里有一条用例专门钉它。
  */
 import { describe, expect, it } from "vitest";
-import { InMemoryPipelineStore, LifecycleHookRunner, PlanService, ProjectService, Scheduler, type AgentLoop, type ExecutorContinuation, type PlanRevision, type Run, type RunStatus } from "../index.js";
+import {
+  InMemoryPipelineStore,
+  LifecycleHookRunner,
+  PlanService,
+  ProjectService,
+  Scheduler,
+  type AgentLoop,
+  type ExecutorContinuation,
+  type PlanRevision,
+  type Run,
+  type RunStatus,
+} from "../index.js";
 import { planContractFixture } from "../plan/plan-fixture.js";
 import { parseExecutorReport } from "../agent/executor-agent.js";
 
@@ -28,9 +39,26 @@ async function seedRun(options: { runStatus?: RunStatus; threadState?: "ACTIVE" 
   const projects = new ProjectService(store);
   // `planContractFixture` 的合同里声明了这两条验证命令，派发前会核对它们**已登记且启用**
   // （RUN_PREREQUISITES_UNSATISFIED），所以 fixture 必须把它们登记上。
-  projects.create({ id: "project-continuation", name: "Continuation", repoRoot: "/repo/continuation", defaultBranch: "main", worktreeRoot: "/tmp/continuation-worktrees", settings: { commands: [{ commandId: "project.test", category: "verification", enabled: true, argv: ["true"] }, { commandId: "project.typecheck", category: "verification", enabled: true, argv: ["true"] }] } });
+  projects.create({
+    id: "project-continuation",
+    name: "Continuation",
+    repoRoot: "/repo/continuation",
+    defaultBranch: "main",
+    worktreeRoot: "/tmp/continuation-worktrees",
+    settings: {
+      commands: [
+        { commandId: "project.test", category: "verification", enabled: true, argv: ["true"] },
+        { commandId: "project.typecheck", category: "verification", enabled: true, argv: ["true"] },
+      ],
+    },
+  });
   const plans = new PlanService(store, projects);
-  const plan = plans.createCandidatePlan({ projectId: "project-continuation", sourceExplorerThreadId: "thread-1", title: "Continuation", resolvedContract: planContractFixture({ store, projectId: "project-continuation", title: "Continuation" }) });
+  const plan = plans.createCandidatePlan({
+    projectId: "project-continuation",
+    sourceExplorerThreadId: "thread-1",
+    title: "Continuation",
+    resolvedContract: planContractFixture({ store, projectId: "project-continuation", title: "Continuation" }),
+  });
   plans.confirm(plan.id, "user-1");
   plans.enqueue(plan.id);
   plans.dispatch(plan.id);
@@ -38,7 +66,10 @@ async function seedRun(options: { runStatus?: RunStatus; threadState?: "ACTIVE" 
   const starts: Seeded["starts"] = [];
   const scheduler = new Scheduler({
     store,
-    workspace: { create: async (input) => ({ path: `/tmp/continuation/${input.runId}`, branch: input.branch, baseCommit: input.baseCommit }), remove: async () => undefined },
+    workspace: {
+      create: async (input) => ({ path: `/tmp/continuation/${input.runId}`, branch: input.branch, baseCommit: input.baseCommit }),
+      remove: async () => undefined,
+    },
     hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
     executor: {
       start: async (run, _revision, continuation) => {
@@ -72,7 +103,8 @@ async function seedRun(options: { runStatus?: RunStatus; threadState?: "ACTIVE" 
     store.saveExecutionThread({ ...thread, state: options.threadState });
   }
   // 上一轮的 Loop 已经跑完（留下 providerThreadId，续跑要接上它）；run-1 是刚才 start 建的那条。
-  for (const loop of store.listAgentLoops(run.id)) store.updateAgentLoop({ ...loop, state: "COMPLETED", completedAt: store.now(), providerThreadId: "provider-thread-1" });
+  for (const loop of store.listAgentLoops(run.id))
+    store.updateAgentLoop({ ...loop, state: "COMPLETED", completedAt: store.now(), providerThreadId: "provider-thread-1" });
   return { store, scheduler, run, revision, starts };
 }
 
@@ -102,8 +134,20 @@ describe("补充要求：投递之后真的驱动 Agent", () => {
     setPlanStatus(store, run.planId, "MERGE_READY");
     // 上一轮报过 task-1 完成（结构化事实 + 老格式报告各一条，两种来源都要认）。
     const taskIds = store.getRevision(run.planId, run.planRevision)!.resolvedContract.tasks.map((task) => task.id);
-    store.appendExecutionJournal({ executionThreadId: run.executionThreadId, runId: run.id, type: "TASK_PROGRESS", payload: { action: "task-status", completedTaskIds: [taskIds[0]] } });
-    store.appendExecutionJournal({ executionThreadId: run.executionThreadId, runId: run.id, type: "MODEL_OUTPUT", payload: { text: `<pipeline-factory-execution-report>${JSON.stringify({ completedTaskIds: taskIds.slice(1), changedPaths: [], report: "done" })}</pipeline-factory-execution-report>` } });
+    store.appendExecutionJournal({
+      executionThreadId: run.executionThreadId,
+      runId: run.id,
+      type: "TASK_PROGRESS",
+      payload: { action: "task-status", completedTaskIds: [taskIds[0]] },
+    });
+    store.appendExecutionJournal({
+      executionThreadId: run.executionThreadId,
+      runId: run.id,
+      type: "MODEL_OUTPUT",
+      payload: {
+        text: `<pipeline-factory-execution-report>${JSON.stringify({ completedTaskIds: taskIds.slice(1), changedPaths: [], report: "done" })}</pipeline-factory-execution-report>`,
+      },
+    });
 
     await scheduler.addGuidance(run.id, "再补一个边界用例");
 
@@ -117,11 +161,23 @@ describe("补充要求：投递之后真的驱动 Agent", () => {
   it("**任务/步骤状态一个字都不动** —— 续跑不改 journal，界面因此保持原样", async () => {
     const { store, scheduler, run } = await seedRun({ runStatus: "MERGE_READY", threadState: "COMPLETED" });
     setPlanStatus(store, run.planId, "MERGE_READY");
-    store.appendExecutionJournal({ executionThreadId: run.executionThreadId, runId: run.id, type: "TASK_PROGRESS", payload: { action: "task-lifecycle", taskId: "task-1", state: "DONE" } });
-    store.appendExecutionJournal({ executionThreadId: run.executionThreadId, runId: run.id, type: "TASK_PROGRESS", payload: { action: "task-lifecycle", taskId: "task-2", state: "IN_PROGRESS" } });
-    const taskLifecycleFacts = () => store.getExecutionThread(run.executionThreadId)!.journal
-      .filter((entry) => entry.type === "TASK_PROGRESS" && entry.payload.action === "task-lifecycle")
-      .map((entry) => JSON.stringify(entry.payload));
+    store.appendExecutionJournal({
+      executionThreadId: run.executionThreadId,
+      runId: run.id,
+      type: "TASK_PROGRESS",
+      payload: { action: "task-lifecycle", taskId: "task-1", state: "DONE" },
+    });
+    store.appendExecutionJournal({
+      executionThreadId: run.executionThreadId,
+      runId: run.id,
+      type: "TASK_PROGRESS",
+      payload: { action: "task-lifecycle", taskId: "task-2", state: "IN_PROGRESS" },
+    });
+    const taskLifecycleFacts = () =>
+      store
+        .getExecutionThread(run.executionThreadId)!
+        .journal.filter((entry) => entry.type === "TASK_PROGRESS" && entry.payload.action === "task-lifecycle")
+        .map((entry) => JSON.stringify(entry.payload));
     const before = taskLifecycleFacts();
 
     await scheduler.addGuidance(run.id, "只剩 task-2 了，把它做完");
@@ -143,7 +199,11 @@ describe("补充要求：投递之后真的驱动 Agent", () => {
   it("**BLOCKED 与已取消的 Run 拒绝补充要求，且不产生任何状态写入**", async () => {
     for (const status of ["BLOCKED", "NEEDS_PLAN_CHANGE", "CANCELLED", "STALE"] as const) {
       const { store, scheduler, run } = await seedRun({ runStatus: status, threadState: "COMPLETED" });
-      const before = { run: store.getRun(run.id)!.status, thread: store.getExecutionThread(run.executionThreadId)!.state, journal: store.getExecutionThread(run.executionThreadId)!.journal.length };
+      const before = {
+        run: store.getRun(run.id)!.status,
+        thread: store.getExecutionThread(run.executionThreadId)!.state,
+        journal: store.getExecutionThread(run.executionThreadId)!.journal.length,
+      };
 
       await expect(scheduler.addGuidance(run.id, "试试")).rejects.toThrow(new RegExp(status));
 
@@ -181,7 +241,7 @@ describe("补充要求：投递之后真的驱动 Agent", () => {
     expect(store.listRunGuidance(run.id, { status: "PENDING" })).toHaveLength(1);
   });
 
-  it("`mode: \"steer\"` 时记成 STEER 交给正在跑的 Loop，而不是排队起新的一轮", async () => {
+  it('`mode: "steer"` 时记成 STEER 交给正在跑的 Loop，而不是排队起新的一轮', async () => {
     const { store, scheduler, run } = await seedRun({ runStatus: "IN_PROGRESS", threadState: "ACTIVE" });
     for (const loop of store.listAgentLoops(run.id)) store.updateAgentLoop({ ...loop, state: "RUNNING", completedAt: null });
 
@@ -195,7 +255,16 @@ describe("补充要求：投递之后真的驱动 Agent", () => {
   it("**排队的要求在 Run 停下时被取走** —— 那正是「排队」两个字的兑现", async () => {
     const { store, scheduler, run, starts } = await seedRun({ runStatus: "MERGE_READY", threadState: "COMPLETED" });
     setPlanStatus(store, run.planId, "MERGE_READY");
-    store.saveRunGuidance({ id: "guidance-queued", runId: run.id, content: "排队的补充", mode: "QUEUE", status: "PENDING", authorId: "local-user", createdAt: store.now(), consumedAt: null });
+    store.saveRunGuidance({
+      id: "guidance-queued",
+      runId: run.id,
+      content: "排队的补充",
+      mode: "QUEUE",
+      status: "PENDING",
+      authorId: "local-user",
+      createdAt: store.now(),
+      consumedAt: null,
+    });
     const startsBefore = starts.length;
 
     const continued = await scheduler.consumeQueuedGuidance(run.id);
@@ -209,7 +278,17 @@ describe("补充要求：投递之后真的驱动 Agent", () => {
   it("**开新的一轮之前把旧的合并请求作废** —— 不做就会把没重新验证过的改动一起合进去", async () => {
     const { store, scheduler, run } = await seedRun({ runStatus: "MERGE_READY", threadState: "COMPLETED" });
     setPlanStatus(store, run.planId, "MERGE_READY");
-    store.saveMergeRequest({ id: "merge-1", runId: run.id, planId: run.planId, sourceCommit: "commit-before-continuation", targetBranch: "main", status: "OPEN", humanConfirmationRequired: true, createdAt: store.now(), mergedAt: null });
+    store.saveMergeRequest({
+      id: "merge-1",
+      runId: run.id,
+      planId: run.planId,
+      sourceCommit: "commit-before-continuation",
+      targetBranch: "main",
+      status: "OPEN",
+      humanConfirmationRequired: true,
+      createdAt: store.now(),
+      mergedAt: null,
+    });
 
     await scheduler.addGuidance(run.id, "再来一轮");
 
@@ -223,7 +302,9 @@ describe("补充要求的解析工具", () => {
   it("老格式（只有 MODEL_OUTPUT 报告）里的完成任务同样被认出来", () => {
     // 这条不是"顺手加的"：兼容路径是 continueRun 给模型的那份清单的一部分，
     // 认不出来就会让模型把已经做完的步骤再做一遍。
-    const report = parseExecutorReport(`some prose\n<pipeline-factory-execution-report>{"completedTaskIds":["task-1"],"changedPaths":[],"report":"ok"}</pipeline-factory-execution-report>`);
+    const report = parseExecutorReport(
+      `some prose\n<pipeline-factory-execution-report>{"completedTaskIds":["task-1"],"changedPaths":[],"report":"ok"}</pipeline-factory-execution-report>`,
+    );
     expect(report?.completedTaskIds).toEqual(["task-1"]);
   });
 });

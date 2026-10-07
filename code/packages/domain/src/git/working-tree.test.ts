@@ -96,7 +96,12 @@ describe("Worktree 创建的干净闸门", () => {
 
   it("白名单一路传到 git 命令上（否则计划文件一落盘就锁死派发）", async () => {
     const git = fakeGit(() => ({ stdout: "" }));
-    await new LocalGitWorktreeAdapter({ projectRoot: "/repo", worktreeRoot: "/wt", ignoreDirtyPaths: ["docs/pipeline/plans"], runGit: git.runGit }).create(input);
+    await new LocalGitWorktreeAdapter({
+      projectRoot: "/repo",
+      worktreeRoot: "/wt",
+      ignoreDirtyPaths: ["docs/pipeline/plans"],
+      runGit: git.runGit,
+    }).create(input);
 
     expect(git.calls.find((args) => args[0] === "status")).toContain(":(exclude)docs/pipeline/plans");
   });

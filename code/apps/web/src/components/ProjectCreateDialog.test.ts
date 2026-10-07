@@ -12,7 +12,8 @@ vi.mock("../api", () => ({
 const ElDialogStub = defineComponent({
   props: { modelValue: { type: Boolean, default: false } },
   setup(props, { slots }) {
-    return () => props.modelValue ? h("div", { class: "project-create-dialog" }, [slots.header?.(), slots.default?.(), slots.footer?.()]) : null;
+    return () =>
+      props.modelValue ? h("div", { class: "project-create-dialog" }, [slots.header?.(), slots.default?.(), slots.footer?.()]) : null;
   },
 });
 

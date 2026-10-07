@@ -30,7 +30,13 @@ export type PlanTaskChange = {
   detail: string;
 };
 
-export type PlanTaskShape = { id: string; title: string; dependencies: string[]; status?: "PENDING" | "READY" | "DONE"; changes?: PlanTaskChange[] | undefined };
+export type PlanTaskShape = {
+  id: string;
+  title: string;
+  dependencies: string[];
+  status?: "PENDING" | "READY" | "DONE";
+  changes?: PlanTaskChange[] | undefined;
+};
 
 export type GeneratedPlanSpec = {
   schemaVersion: 2;
@@ -78,10 +84,24 @@ export type ResolvedPlanContract = {
   objective: GeneratedPlanSpec["objective"];
   design: GeneratedPlanSpec["design"];
   conflicts: string[];
-  repository: { projectId: string; name: string; repoRoot: string; baseBranch: string; baseCommit: string; configVersion: number; configHash: string };
+  repository: {
+    projectId: string;
+    name: string;
+    repoRoot: string;
+    baseBranch: string;
+    baseCommit: string;
+    configVersion: number;
+    configHash: string;
+  };
   scope: GeneratedPlanSpec["scope"];
   /** 冻结后的步骤清单；`status` 恒为计划态（见 PlanTaskShape 的说明）。 */
-  tasks: Array<{ id: string; title: string; dependencies: string[]; status: "PENDING" | "READY" | "DONE"; changes?: PlanTaskChange[] | undefined }>;
+  tasks: Array<{
+    id: string;
+    title: string;
+    dependencies: string[];
+    status: "PENDING" | "READY" | "DONE";
+    changes?: PlanTaskChange[] | undefined;
+  }>;
   /** Human-readable execution prerequisites; these are not CandidatePlan IDs. */
   dependencies: string[];
   /**
@@ -123,7 +143,14 @@ function objectAt(source: Record<string, unknown>, key: string, area: string, is
   return {};
 }
 
-function stringAt(source: Record<string, unknown>, key: string, path: string, area: string, issues: PlanValidationIssue[], required = true): string | undefined {
+function stringAt(
+  source: Record<string, unknown>,
+  key: string,
+  path: string,
+  area: string,
+  issues: PlanValidationIssue[],
+  required = true,
+): string | undefined {
   const value = source[key];
   if (value === undefined && !required) return undefined;
   if (typeof value !== "string" || !value.trim()) {
@@ -133,7 +160,14 @@ function stringAt(source: Record<string, unknown>, key: string, path: string, ar
   return value.trim();
 }
 
-function stringsAt(source: Record<string, unknown>, key: string, path: string, area: string, issues: PlanValidationIssue[], nonEmpty = false): string[] {
+function stringsAt(
+  source: Record<string, unknown>,
+  key: string,
+  path: string,
+  area: string,
+  issues: PlanValidationIssue[],
+  nonEmpty = false,
+): string[] {
   const value = source[key];
   if (!Array.isArray(value)) {
     issue(issues, path, value === undefined ? "REQUIRED" : "INVALID", area, "必须是字符串数组。");
@@ -147,15 +181,21 @@ function stringsAt(source: Record<string, unknown>, key: string, path: string, a
 /** A scope entry is always a repository-relative path or glob. */
 export function assertSafeProjectRelativeGlob(value: string, field = "scope path"): string {
   const normalized = value.trim().replaceAll("\\", "/");
-  if (!normalized || normalized.startsWith("/") || /^[a-zA-Z]:\//.test(normalized) || normalized.split("/").includes("..")) throw new Error(`${field} must be a project-root-relative path or glob`);
-  if (normalized.includes("\0") || /\b(do not|concept|anything|all files)\b/i.test(normalized)) throw new Error(`${field} must be a concrete project-root-relative path or glob`);
+  if (!normalized || normalized.startsWith("/") || /^[a-zA-Z]:\//.test(normalized) || normalized.split("/").includes(".."))
+    throw new Error(`${field} must be a project-root-relative path or glob`);
+  if (normalized.includes("\0") || /\b(do not|concept|anything|all files)\b/i.test(normalized))
+    throw new Error(`${field} must be a concrete project-root-relative path or glob`);
   return normalized;
 }
 
 function safePaths(paths: string[], path: string, area: string, issues: PlanValidationIssue[]): string[] {
   return paths.map((value) => {
-    try { return assertSafeProjectRelativeGlob(value, path); }
-    catch { issue(issues, path, "INVALID", area, "必须是项目根相对路径或 glob，不能使用绝对路径、.. 或概念性描述。"); return value; }
+    try {
+      return assertSafeProjectRelativeGlob(value, path);
+    } catch {
+      issue(issues, path, "INVALID", area, "必须是项目根相对路径或 glob，不能使用绝对路径、.. 或概念性描述。");
+      return value;
+    }
   });
 }
 
@@ -163,7 +203,13 @@ function safePaths(paths: string[], path: string, area: string, issues: PlanVali
  * 可选字符串数组：**不存在就跳过**（历史 spec 没有这些键），存在时必须是至少一项的字符串数组。
  * 空数组一律拒绝——它是自相矛盾的声明（"有风险"却一条不写），与 `verification.suites` 同一条约定。
  */
-function optionalStringsAt(source: Record<string, unknown>, key: string, path: string, area: string, issues: PlanValidationIssue[]): string[] | undefined {
+function optionalStringsAt(
+  source: Record<string, unknown>,
+  key: string,
+  path: string,
+  area: string,
+  issues: PlanValidationIssue[],
+): string[] | undefined {
   if (source[key] === undefined) return undefined;
   const value = stringsAt(source, key, path, area, issues);
   if (value.length === 0) issue(issues, path, "INVALID", area, "如填写，必须是至少一项的字符串数组。");
@@ -175,18 +221,34 @@ function optionalTaskChanges(rawTask: Record<string, unknown>, path: string, iss
   const value = rawTask.changes;
   if (value === undefined) return undefined;
   if (!Array.isArray(value) || value.length === 0) {
-    issue(issues, `${path}.changes`, "INVALID", "实施任务、依赖与冲突", "如填写，必须是至少一项的数组，每项形如 { path, action, detail }。");
+    issue(
+      issues,
+      `${path}.changes`,
+      "INVALID",
+      "实施任务、依赖与冲突",
+      "如填写，必须是至少一项的数组，每项形如 { path, action, detail }。",
+    );
     return undefined;
   }
   const changes: PlanTaskChange[] = [];
   value.forEach((rawChange, index) => {
     const changePath = `${path}.changes[${index}]`;
-    if (!isRecord(rawChange)) { issue(issues, changePath, "INVALID", "实施任务、依赖与冲突", "必须是对象。"); return; }
+    if (!isRecord(rawChange)) {
+      issue(issues, changePath, "INVALID", "实施任务、依赖与冲突", "必须是对象。");
+      return;
+    }
     const filePath = stringAt(rawChange, "path", `${changePath}.path`, "实施任务、依赖与冲突", issues);
     const detail = stringAt(rawChange, "detail", `${changePath}.detail`, "实施任务、依赖与冲突", issues);
     const action = rawChange.action;
     const validAction = action === "create" || action === "modify" || action === "delete";
-    if (!validAction) issue(issues, `${changePath}.action`, action === undefined ? "REQUIRED" : "INVALID", "实施任务、依赖与冲突", "必须为 create、modify 或 delete。");
+    if (!validAction)
+      issue(
+        issues,
+        `${changePath}.action`,
+        action === undefined ? "REQUIRED" : "INVALID",
+        "实施任务、依赖与冲突",
+        "必须为 create、modify 或 delete。",
+      );
     if (filePath) safePaths([filePath], `${changePath}.path`, "实施任务、依赖与冲突", issues);
     if (!filePath || !detail || !validAction) return;
     changes.push({ path: filePath, action, detail });
@@ -204,9 +266,11 @@ export function validateGeneratedPlanSpec(value: unknown): PlanValidationIssue[]
 
   const artifact = objectAt(source, "artifact", "产物模式", issues);
   const mode = artifact.mode;
-  if (mode !== "CONVERSATION" && mode !== "REPOSITORY_FILE") issue(issues, "artifact.mode", mode === undefined ? "REQUIRED" : "INVALID", "产物模式", "必须为 CONVERSATION 或 REPOSITORY_FILE。");
+  if (mode !== "CONVERSATION" && mode !== "REPOSITORY_FILE")
+    issue(issues, "artifact.mode", mode === undefined ? "REQUIRED" : "INVALID", "产物模式", "必须为 CONVERSATION 或 REPOSITORY_FILE。");
   const artifactPath = stringAt(artifact, "path", "artifact.path", "产物模式", issues, mode === "REPOSITORY_FILE");
-  if (mode === "CONVERSATION" && artifact.path !== undefined) issue(issues, "artifact.path", "MODE_CONFLICT", "产物模式", "CONVERSATION 模式不能设置仓库文件路径。");
+  if (mode === "CONVERSATION" && artifact.path !== undefined)
+    issue(issues, "artifact.path", "MODE_CONFLICT", "产物模式", "CONVERSATION 模式不能设置仓库文件路径。");
   if (artifactPath) safePaths([artifactPath], "artifact.path", "产物模式", issues);
 
   const objective = objectAt(source, "objective", "目标与用户范围", issues);
@@ -224,48 +288,102 @@ export function validateGeneratedPlanSpec(value: unknown): PlanValidationIssue[]
   optionalStringsAt(design, "risks", "design.risks", "技术方案与关键约束", issues);
 
   const scope = objectAt(source, "scope", "功能范围与排除项", issues);
-  const includePaths = safePaths(stringsAt(scope, "includePaths", "scope.includePaths", "功能范围与排除项", issues, mode === "REPOSITORY_FILE"), "scope.includePaths", "功能范围与排除项", issues);
-  safePaths(stringsAt(scope, "excludePaths", "scope.excludePaths", "功能范围与排除项", issues), "scope.excludePaths", "功能范围与排除项", issues);
-  if (mode === "CONVERSATION" && includePaths.length > 0) issue(issues, "scope.includePaths", "MODE_CONFLICT", "功能范围与排除项", "CONVERSATION 模式必须为空数组。");
-  if (mode === "REPOSITORY_FILE" && artifactPath && !includePaths.includes(artifactPath.replaceAll("\\", "/"))) issue(issues, "scope.includePaths", "MODE_CONFLICT", "功能范围与排除项", "必须包含 artifact.path。");
+  const includePaths = safePaths(
+    stringsAt(scope, "includePaths", "scope.includePaths", "功能范围与排除项", issues, mode === "REPOSITORY_FILE"),
+    "scope.includePaths",
+    "功能范围与排除项",
+    issues,
+  );
+  safePaths(
+    stringsAt(scope, "excludePaths", "scope.excludePaths", "功能范围与排除项", issues),
+    "scope.excludePaths",
+    "功能范围与排除项",
+    issues,
+  );
+  if (mode === "CONVERSATION" && includePaths.length > 0)
+    issue(issues, "scope.includePaths", "MODE_CONFLICT", "功能范围与排除项", "CONVERSATION 模式必须为空数组。");
+  if (mode === "REPOSITORY_FILE" && artifactPath && !includePaths.includes(artifactPath.replaceAll("\\", "/")))
+    issue(issues, "scope.includePaths", "MODE_CONFLICT", "功能范围与排除项", "必须包含 artifact.path。");
 
   const rawTasks = source.tasks;
   const taskIds: string[] = [];
   const taskDependencies: Array<{ id: string; dependencies: string[] }> = [];
-  if (!Array.isArray(rawTasks) || rawTasks.length === 0) issue(issues, "tasks", rawTasks === undefined ? "REQUIRED" : "INVALID", "实施任务、依赖与冲突", "必须是至少包含一个任务的数组。");
-  else rawTasks.forEach((rawTask, index) => {
-    const path = `tasks[${index}]`;
-    if (!isRecord(rawTask)) { issue(issues, path, "INVALID", "实施任务、依赖与冲突", "必须是对象。"); return; }
-    const id = stringAt(rawTask, "id", `${path}.id`, "实施任务、依赖与冲突", issues);
-    stringAt(rawTask, "title", `${path}.title`, "实施任务、依赖与冲突", issues);
-    const dependencies = stringsAt(rawTask, "dependencies", `${path}.dependencies`, "实施任务、依赖与冲突", issues);
-    optionalTaskChanges(rawTask, path, issues);
-    if (rawTask.status !== undefined && rawTask.status !== "PENDING" && rawTask.status !== "READY" && rawTask.status !== "DONE") issue(issues, `${path}.status`, "INVALID", "实施任务、依赖与冲突", "只能为 PENDING、READY 或 DONE。");
-    if (id) { taskIds.push(id); taskDependencies.push({ id, dependencies }); }
-  });
+  if (!Array.isArray(rawTasks) || rawTasks.length === 0)
+    issue(issues, "tasks", rawTasks === undefined ? "REQUIRED" : "INVALID", "实施任务、依赖与冲突", "必须是至少包含一个任务的数组。");
+  else
+    rawTasks.forEach((rawTask, index) => {
+      const path = `tasks[${index}]`;
+      if (!isRecord(rawTask)) {
+        issue(issues, path, "INVALID", "实施任务、依赖与冲突", "必须是对象。");
+        return;
+      }
+      const id = stringAt(rawTask, "id", `${path}.id`, "实施任务、依赖与冲突", issues);
+      stringAt(rawTask, "title", `${path}.title`, "实施任务、依赖与冲突", issues);
+      const dependencies = stringsAt(rawTask, "dependencies", `${path}.dependencies`, "实施任务、依赖与冲突", issues);
+      optionalTaskChanges(rawTask, path, issues);
+      if (rawTask.status !== undefined && rawTask.status !== "PENDING" && rawTask.status !== "READY" && rawTask.status !== "DONE")
+        issue(issues, `${path}.status`, "INVALID", "实施任务、依赖与冲突", "只能为 PENDING、READY 或 DONE。");
+      if (id) {
+        taskIds.push(id);
+        taskDependencies.push({ id, dependencies });
+      }
+    });
   if (new Set(taskIds).size !== taskIds.length) issue(issues, "tasks", "DUPLICATE", "实施任务、依赖与冲突", "任务 id 必须唯一。");
   const knownTaskIds = new Set(taskIds);
-  for (const task of taskDependencies) for (const dependency of task.dependencies) if (!knownTaskIds.has(dependency)) issue(issues, `tasks.${task.id}.dependencies`, "INVALID", "实施任务、依赖与冲突", `引用了不存在的任务 ${dependency}。`);
+  for (const task of taskDependencies)
+    for (const dependency of task.dependencies)
+      if (!knownTaskIds.has(dependency))
+        issue(issues, `tasks.${task.id}.dependencies`, "INVALID", "实施任务、依赖与冲突", `引用了不存在的任务 ${dependency}。`);
   stringsAt(source, "dependencies", "dependencies", "实施任务、依赖与冲突", issues);
   stringsAt(source, "conflicts", "conflicts", "实施任务、依赖与冲突", issues);
 
   const execution = objectAt(source, "execution", "实施任务、依赖与冲突", issues);
   // `execution.executorModelRole` / `execution.toolPolicy` 不再被读取，但**故意不报 FORBIDDEN**：
   // 库里已有的 CandidatePlan 带着这两个键，报错会让它们连 confirm 都过不去。忽略是这里的正确语义。
-  if (execution.maxRepairAttempts !== undefined && (!Number.isInteger(execution.maxRepairAttempts) || Number(execution.maxRepairAttempts) < 0)) issue(issues, "execution.maxRepairAttempts", "INVALID", "实施任务、依赖与冲突", "如填写，必须是非负整数。");
+  if (
+    execution.maxRepairAttempts !== undefined &&
+    (!Number.isInteger(execution.maxRepairAttempts) || Number(execution.maxRepairAttempts) < 0)
+  )
+    issue(issues, "execution.maxRepairAttempts", "INVALID", "实施任务、依赖与冲突", "如填写，必须是非负整数。");
 
   const verification = objectAt(source, "verification", "验收标准与验证命令", issues);
-  if (verification.mode !== "PROJECT_DEFAULT" && verification.mode !== "NONE") issue(issues, "verification.mode", verification.mode === undefined ? "REQUIRED" : "INVALID", "验收标准与验证命令", "必须为 PROJECT_DEFAULT 或 NONE。");
-  const suites = verification.suites === undefined ? [] : stringsAt(verification, "suites", "verification.suites", "验收标准与验证命令", issues);
-  if (verification.suites !== undefined && suites.length === 0) issue(issues, "verification.suites", "INVALID", "验收标准与验证命令", "如填写，必须是至少一项的字符串数组；不要用空数组表达“全部”。");
-  if (verification.suites !== undefined && verification.mode === "NONE") issue(issues, "verification.suites", "MODE_CONFLICT", "验收标准与验证命令", "verification.mode 为 NONE 时不能声明 suites。");
-  if (mode === "CONVERSATION" && verification.mode !== "NONE") issue(issues, "verification.mode", "MODE_CONFLICT", "验收标准与验证命令", "CONVERSATION 模式必须为 NONE。");
+  if (verification.mode !== "PROJECT_DEFAULT" && verification.mode !== "NONE")
+    issue(
+      issues,
+      "verification.mode",
+      verification.mode === undefined ? "REQUIRED" : "INVALID",
+      "验收标准与验证命令",
+      "必须为 PROJECT_DEFAULT 或 NONE。",
+    );
+  const suites =
+    verification.suites === undefined ? [] : stringsAt(verification, "suites", "verification.suites", "验收标准与验证命令", issues);
+  if (verification.suites !== undefined && suites.length === 0)
+    issue(issues, "verification.suites", "INVALID", "验收标准与验证命令", "如填写，必须是至少一项的字符串数组；不要用空数组表达“全部”。");
+  if (verification.suites !== undefined && verification.mode === "NONE")
+    issue(issues, "verification.suites", "MODE_CONFLICT", "验收标准与验证命令", "verification.mode 为 NONE 时不能声明 suites。");
+  if (mode === "CONVERSATION" && verification.mode !== "NONE")
+    issue(issues, "verification.mode", "MODE_CONFLICT", "验收标准与验证命令", "CONVERSATION 模式必须为 NONE。");
 
   const merge = objectAt(source, "merge", "合并策略与人工确认", issues);
-  if (merge.strategy !== "manual" && merge.strategy !== "fast-forward" && merge.strategy !== "squash") issue(issues, "merge.strategy", merge.strategy === undefined ? "REQUIRED" : "INVALID", "合并策略与人工确认", "必须为 manual、fast-forward 或 squash。");
-  if (merge.requireHumanMerge !== true) issue(issues, "merge.requireHumanMerge", merge.requireHumanMerge === undefined ? "REQUIRED" : "INVALID", "合并策略与人工确认", "必须为 true。");
+  if (merge.strategy !== "manual" && merge.strategy !== "fast-forward" && merge.strategy !== "squash")
+    issue(
+      issues,
+      "merge.strategy",
+      merge.strategy === undefined ? "REQUIRED" : "INVALID",
+      "合并策略与人工确认",
+      "必须为 manual、fast-forward 或 squash。",
+    );
+  if (merge.requireHumanMerge !== true)
+    issue(
+      issues,
+      "merge.requireHumanMerge",
+      merge.requireHumanMerge === undefined ? "REQUIRED" : "INVALID",
+      "合并策略与人工确认",
+      "必须为 true。",
+    );
 
-  for (const field of ["repository", "baseBranch", "baseCommit", "configVersion", "configHash", "verificationCommandIds"]) if (field in source) issue(issues, field, "FORBIDDEN", "Factory 自动补全", "只能由 Factory 基于当前 Project 与 Git 基线补全。");
+  for (const field of ["repository", "baseBranch", "baseCommit", "configVersion", "configHash", "verificationCommandIds"])
+    if (field in source) issue(issues, field, "FORBIDDEN", "Factory 自动补全", "只能由 Factory 基于当前 Project 与 Git 基线补全。");
   if ("commandIds" in verification) issue(issues, "verification.commandIds", "FORBIDDEN", "Factory 自动补全", "只能由 Factory 补全。");
   return issues;
 }
@@ -285,15 +403,49 @@ export function parseGeneratedPlanSpec(value: unknown): GeneratedPlanSpec {
   return {
     schemaVersion: 2,
     title: String(source.title).trim(),
-    artifact: { mode: artifact.mode as PlanArtifactMode, ...(typeof artifact.path === "string" ? { path: assertSafeProjectRelativeGlob(artifact.path, "artifact.path") } : {}) },
-    objective: { goal: String(objective.goal).trim(), ...(objective.context === undefined ? {} : { context: normalize(objective.context) }), audience: normalize(objective.audience), acceptanceCriteria: normalize(objective.acceptanceCriteria), outOfScope: normalize(objective.outOfScope) },
-    design: { technicalConstraints: normalize(design.technicalConstraints), dataSecurity: normalize(design.dataSecurity), failureHandling: normalize(design.failureHandling), ...(design.risks === undefined ? {} : { risks: normalize(design.risks) }) },
-    scope: { includePaths: normalize(scope.includePaths).map((path) => assertSafeProjectRelativeGlob(path, "scope.includePaths")), excludePaths: normalize(scope.excludePaths).map((path) => assertSafeProjectRelativeGlob(path, "scope.excludePaths")) },
-    tasks: (source.tasks as Array<Record<string, unknown>>).map((task) => ({ id: String(task.id).trim(), title: String(task.title).trim(), dependencies: normalize(task.dependencies), status: (task.status as "PENDING" | "READY" | "DONE" | undefined) ?? "READY", ...(task.changes === undefined ? {} : { changes: (task.changes as Array<Record<string, unknown>>).map((change) => ({ path: assertSafeProjectRelativeGlob(String(change.path), "tasks.changes.path"), action: change.action as PlanTaskChange["action"], detail: String(change.detail).trim() })) } ) })),
+    artifact: {
+      mode: artifact.mode as PlanArtifactMode,
+      ...(typeof artifact.path === "string" ? { path: assertSafeProjectRelativeGlob(artifact.path, "artifact.path") } : {}),
+    },
+    objective: {
+      goal: String(objective.goal).trim(),
+      ...(objective.context === undefined ? {} : { context: normalize(objective.context) }),
+      audience: normalize(objective.audience),
+      acceptanceCriteria: normalize(objective.acceptanceCriteria),
+      outOfScope: normalize(objective.outOfScope),
+    },
+    design: {
+      technicalConstraints: normalize(design.technicalConstraints),
+      dataSecurity: normalize(design.dataSecurity),
+      failureHandling: normalize(design.failureHandling),
+      ...(design.risks === undefined ? {} : { risks: normalize(design.risks) }),
+    },
+    scope: {
+      includePaths: normalize(scope.includePaths).map((path) => assertSafeProjectRelativeGlob(path, "scope.includePaths")),
+      excludePaths: normalize(scope.excludePaths).map((path) => assertSafeProjectRelativeGlob(path, "scope.excludePaths")),
+    },
+    tasks: (source.tasks as Array<Record<string, unknown>>).map((task) => ({
+      id: String(task.id).trim(),
+      title: String(task.title).trim(),
+      dependencies: normalize(task.dependencies),
+      status: (task.status as "PENDING" | "READY" | "DONE" | undefined) ?? "READY",
+      ...(task.changes === undefined
+        ? {}
+        : {
+            changes: (task.changes as Array<Record<string, unknown>>).map((change) => ({
+              path: assertSafeProjectRelativeGlob(String(change.path), "tasks.changes.path"),
+              action: change.action as PlanTaskChange["action"],
+              detail: String(change.detail).trim(),
+            })),
+          }),
+    })),
     dependencies: normalize(source.dependencies),
     conflicts: normalize(source.conflicts),
     execution: { maxRepairAttempts: typeof execution.maxRepairAttempts === "number" ? execution.maxRepairAttempts : undefined },
-    verification: { mode: verification.mode as "PROJECT_DEFAULT" | "NONE", ...(verification.suites === undefined ? {} : { suites: normalize(verification.suites) }) },
+    verification: {
+      mode: verification.mode as "PROJECT_DEFAULT" | "NONE",
+      ...(verification.suites === undefined ? {} : { suites: normalize(verification.suites) }),
+    },
     merge: { strategy: merge.strategy as GeneratedPlanSpec["merge"]["strategy"], requireHumanMerge: true },
   };
 }
@@ -307,31 +459,75 @@ export function parseGeneratedPlanSpec(value: unknown): GeneratedPlanSpec {
  *   3) 声明了合法 tag 但一条默认命令都没命中 → 抛错，而不是退化成一个空的验证集
  *      （那会被记成"验证通过"式的假象）。
  */
-function selectVerificationCommands(defaults: string[], enabledVerification: Map<string, RegisteredCommandDefinition>, suites: string[]): string[] {
+function selectVerificationCommands(
+  defaults: string[],
+  enabledVerification: Map<string, RegisteredCommandDefinition>,
+  suites: string[],
+): string[] {
   if (suites.length === 0) return [...defaults];
   const knownTags = new Set([...enabledVerification.values()].flatMap((command) => command.tags ?? []));
   const unknown = suites.filter((suite) => !knownTags.has(suite));
   if (unknown.length > 0) {
     const declared = [...knownTags].sort().join(", ");
-    throw new Error(`Plan verification suites are not declared by this Project: ${unknown.join(", ")}. Declared tags: ${declared || "(none)"}`);
+    throw new Error(
+      `Plan verification suites are not declared by this Project: ${unknown.join(", ")}. Declared tags: ${declared || "(none)"}`,
+    );
   }
   const selected = defaults.filter((commandId) => {
     const tags = enabledVerification.get(commandId)?.tags ?? [];
     return suites.some((suite) => tags.includes(suite));
   });
-  if (selected.length === 0) throw new Error(`Plan verification suites ${suites.join(", ")} match none of the Project default verification commands (${defaults.join(", ")})`);
+  if (selected.length === 0)
+    throw new Error(
+      `Plan verification suites ${suites.join(", ")} match none of the Project default verification commands (${defaults.join(", ")})`,
+    );
   return selected;
 }
 
 export function resolvePlanContract(specValue: unknown, project: ProjectExecutionSnapshot, baseline: GitBaseline): ResolvedPlanContract {
   const spec = parseGeneratedPlanSpec(specValue);
-  if (!baseline.baseBranch.trim() || !baseline.baseCommit.trim() || /^(HEAD|unknown|unverified)$/i.test(baseline.baseCommit.trim())) throw new Error("Factory must resolve a verified Git baseline before creating a plan");
+  if (!baseline.baseBranch.trim() || !baseline.baseCommit.trim() || /^(HEAD|unknown|unverified)$/i.test(baseline.baseCommit.trim()))
+    throw new Error("Factory must resolve a verified Git baseline before creating a plan");
   const defaults = project.settings.defaultVerificationCommandIds ?? [];
-  const enabledVerification = new Map(project.settings.commands.filter((command) => command.category === "verification" && command.enabled !== false).map((command) => [command.commandId, command]));
+  const enabledVerification = new Map(
+    project.settings.commands
+      .filter((command) => command.category === "verification" && command.enabled !== false)
+      .map((command) => [command.commandId, command]),
+  );
   if (defaults.some((id) => !enabledVerification.has(id))) throw new Error("Project default verification commands are invalid");
   const mode = spec.verification.mode === "NONE" || defaults.length === 0 ? "NONE" : "PROJECT_DEFAULT";
   // 解析后的 commandIds 才是执行事实；请求过的 suites 留在 generatedSpec 里可审计。
-  const commandIds = mode === "PROJECT_DEFAULT" ? selectVerificationCommands(defaults, enabledVerification, spec.verification.suites ?? []) : [];
+  const commandIds =
+    mode === "PROJECT_DEFAULT" ? selectVerificationCommands(defaults, enabledVerification, spec.verification.suites ?? []) : [];
   const technicalConstraints = [...new Set([...spec.design.technicalConstraints, ...spec.dependencies])];
-  return { schemaVersion: 2, artifact: spec.artifact, objective: spec.objective, design: { ...spec.design, technicalConstraints }, conflicts: spec.conflicts, repository: { projectId: project.projectId, name: project.name, repoRoot: project.repoRoot, baseBranch: baseline.baseBranch, baseCommit: baseline.baseCommit, configVersion: project.configVersion, configHash: project.configHash }, scope: spec.scope, tasks: spec.tasks.map((task) => ({ ...task, status: task.status ?? "READY" })), dependencies: spec.dependencies, dependsOnPlanIds: [], execution: { executorModelRole: EXECUTOR_ROLE, toolPolicy: EXECUTOR_TOOL_POLICY, maxRepairAttempts: Number.isInteger(spec.execution.maxRepairAttempts) && spec.execution.maxRepairAttempts! >= 0 ? spec.execution.maxRepairAttempts! : project.settings.concurrency.maxRepairAttempts }, verification: { mode, commandIds }, merge: { strategy: spec.merge.strategy, requireHumanMerge: true } };
+  return {
+    schemaVersion: 2,
+    artifact: spec.artifact,
+    objective: spec.objective,
+    design: { ...spec.design, technicalConstraints },
+    conflicts: spec.conflicts,
+    repository: {
+      projectId: project.projectId,
+      name: project.name,
+      repoRoot: project.repoRoot,
+      baseBranch: baseline.baseBranch,
+      baseCommit: baseline.baseCommit,
+      configVersion: project.configVersion,
+      configHash: project.configHash,
+    },
+    scope: spec.scope,
+    tasks: spec.tasks.map((task) => ({ ...task, status: task.status ?? "READY" })),
+    dependencies: spec.dependencies,
+    dependsOnPlanIds: [],
+    execution: {
+      executorModelRole: EXECUTOR_ROLE,
+      toolPolicy: EXECUTOR_TOOL_POLICY,
+      maxRepairAttempts:
+        Number.isInteger(spec.execution.maxRepairAttempts) && spec.execution.maxRepairAttempts! >= 0
+          ? spec.execution.maxRepairAttempts!
+          : project.settings.concurrency.maxRepairAttempts,
+    },
+    verification: { mode, commandIds },
+    merge: { strategy: spec.merge.strategy, requireHumanMerge: true },
+  };
 }

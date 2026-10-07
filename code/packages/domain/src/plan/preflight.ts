@@ -63,7 +63,9 @@ type SyncGitRunner = (args: string[], cwd: string, input?: string) => CommandRes
  * `configuredPlanDirectory` 由组合根传入：工作区检查的白名单必须与"Plan 落盘目录"同源，
  * 否则 Factory 自己写的计划文件会让每次确认都报"工作区脏"。
  */
-export function createLocalPlanPreflightInspector(options: { configuredPlanDirectory?: string | undefined; runGit?: SyncGitRunner | undefined } = {}): PlanPreflightInspector {
+export function createLocalPlanPreflightInspector(
+  options: { configuredPlanDirectory?: string | undefined; runGit?: SyncGitRunner | undefined } = {},
+): PlanPreflightInspector {
   const runGit = options.runGit ?? defaultSyncGit;
 
   return (input) => {
@@ -73,7 +75,12 @@ export function createLocalPlanPreflightInspector(options: { configuredPlanDirec
     // 仓库本身读不到时不做任何路径判断——"查不出来"和"不存在"是两件事，
     // 把它们混为一谈会用一条误报挡住整个确认流程。
     if (!isRepository(input.repoRoot, runGit)) {
-      warnings.push({ severity: "warning", code: "INSPECTION_UNAVAILABLE", message: `无法读取受管工程的 Git 状态（${input.repoRoot}），本次未做路径预检。`, paths: [] });
+      warnings.push({
+        severity: "warning",
+        code: "INSPECTION_UNAVAILABLE",
+        message: `无法读取受管工程的 Git 状态（${input.repoRoot}），本次未做路径预检。`,
+        paths: [],
+      });
       return { blocking, warnings };
     }
 
@@ -87,7 +94,12 @@ export function createLocalPlanPreflightInspector(options: { configuredPlanDirec
     if (!batch.available) {
       // 查不出来 ≠ 不存在：宁可只出一句"本次未做路径预检"，也不要凭一次失败的 git 调用
       // 把每个 Plan 都判成非法。工作区检查照做——它是独立的一次调用。
-      warnings.push({ severity: "warning", code: "INSPECTION_UNAVAILABLE", message: "无法读取 Git 基线内容，本次未做路径预检。", paths: [] });
+      warnings.push({
+        severity: "warning",
+        code: "INSPECTION_UNAVAILABLE",
+        message: "无法读取 Git 基线内容，本次未做路径预检。",
+        paths: [],
+      });
     } else {
       const missing = includeFiles.filter((path) => !batch.existing.has(path));
       if (missing.length > 0) {
@@ -100,7 +112,12 @@ export function createLocalPlanPreflightInspector(options: { configuredPlanDirec
       }
 
       if (artifactPath && !batch.existing.has(artifactPath)) {
-        warnings.push({ severity: "warning", code: "ARTIFACT_MISSING", message: `产物路径在基线里不存在，Run 会新建它：${artifactPath}`, paths: [artifactPath] });
+        warnings.push({
+          severity: "warning",
+          code: "ARTIFACT_MISSING",
+          message: `产物路径在基线里不存在，Run 会新建它：${artifactPath}`,
+          paths: [artifactPath],
+        });
       }
     }
 
@@ -108,11 +125,21 @@ export function createLocalPlanPreflightInspector(options: { configuredPlanDirec
     const repoRelative = planDirectoryRepoPath({ projectRoot: input.repoRoot, planDirectory });
     const status = runGit(workingTreeStatusArgs(repoRelative ? [repoRelative] : undefined), input.repoRoot);
     if (status.exitCode !== 0) {
-      warnings.push({ severity: "warning", code: "INSPECTION_UNAVAILABLE", message: "无法读取工作区状态，本次未判断工作区是否干净。", paths: [] });
+      warnings.push({
+        severity: "warning",
+        code: "INSPECTION_UNAVAILABLE",
+        message: "无法读取工作区状态，本次未判断工作区是否干净。",
+        paths: [],
+      });
     } else {
       const dirty = parseWorkingTreeStatus(status.stdout);
       if (dirty.length > 0) {
-        warnings.push({ severity: "warning", code: "WORKING_TREE_DIRTY", message: `受管工程有 ${dirty.length} 个未提交改动，派发 Run 会被阻塞；请先提交或 stash。`, paths: dirty });
+        warnings.push({
+          severity: "warning",
+          code: "WORKING_TREE_DIRTY",
+          message: `受管工程有 ${dirty.length} 个未提交改动，派发 Run 会被阻塞；请先提交或 stash。`,
+          paths: dirty,
+        });
       }
     }
 
@@ -139,7 +166,12 @@ function collectConcreteFiles(includePaths: readonly string[], artifactPath: str
  * `available` 是"这次查询本身有没有成功"：命令失败时**不能**把返回值当成"全都不存在"——
  * 那会让每个 Plan 都被判成非法。调用方据此只出一句"本次未做路径预检"。
  */
-function existingPaths(repoRoot: string, baseCommit: string, paths: readonly string[], runGit: SyncGitRunner): { available: boolean; existing: Set<string> } {
+function existingPaths(
+  repoRoot: string,
+  baseCommit: string,
+  paths: readonly string[],
+  runGit: SyncGitRunner,
+): { available: boolean; existing: Set<string> } {
   const existing = new Set<string>();
   if (paths.length === 0) return { available: true, existing };
   const result = runGit(["cat-file", "--batch-check"], repoRoot, `${paths.map((path) => `${baseCommit}:${path}`).join("\n")}\n`);
@@ -159,11 +191,21 @@ function isRepository(repoRoot: string, runGit: SyncGitRunner): boolean {
 /** 与 git/merge-inspector.ts 的 gitCommand 同一形态：非 0 退出码走 exitCode，不 reject。`input` 供 stdin 用。 */
 function defaultSyncGit(args: string[], cwd: string, input?: string): CommandResult {
   try {
-    const stdout = execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["pipe", "pipe", "pipe"], maxBuffer: 16 * 1024 * 1024, ...(input === undefined ? {} : { input }) });
+    const stdout = execFileSync("git", args, {
+      cwd,
+      encoding: "utf8",
+      stdio: ["pipe", "pipe", "pipe"],
+      maxBuffer: 16 * 1024 * 1024,
+      ...(input === undefined ? {} : { input }),
+    });
     return { exitCode: 0, stdout, stderr: "" };
   } catch (error) {
     const failure = error as { status?: number | null; stdout?: string; stderr?: string };
-    return { exitCode: typeof failure.status === "number" ? failure.status : 1, stdout: failure.stdout ?? "", stderr: failure.stderr ?? String(error) };
+    return {
+      exitCode: typeof failure.status === "number" ? failure.status : 1,
+      stdout: failure.stdout ?? "",
+      stderr: failure.stderr ?? String(error),
+    };
   }
 }
 

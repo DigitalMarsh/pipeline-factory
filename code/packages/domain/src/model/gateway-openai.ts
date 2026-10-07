@@ -37,10 +37,18 @@ export type ModelResult = { text: string; requestId: string | null; model: strin
 /** OpenAI Responses API 的最小响应端口，便于测试替换 fetch。 */
 export type ModelFetchResponse = { ok: boolean; status: number; json(): Promise<unknown> };
 /** 可注入的 HTTP 调用函数，避免 Domain 直接绑定全局 fetch。 */
-export type ModelFetch = (url: string, init: { method: "POST"; headers: Record<string, string>; body: string; signal?: AbortSignal | undefined }) => Promise<ModelFetchResponse>;
+export type ModelFetch = (
+  url: string,
+  init: { method: "POST"; headers: Record<string, string>; body: string; signal?: AbortSignal | undefined },
+) => Promise<ModelFetchResponse>;
 
 /** OpenAI ModelGateway 配置；apiKey 由运行环境提供，不应持久化到 Project。 */
-export type OpenAIModelGatewayOptions = { apiKey: string; roles: Record<ModelRole, ModelRoleConfig>; baseUrl?: string | undefined; fetchFn?: ModelFetch | undefined };
+export type OpenAIModelGatewayOptions = {
+  apiKey: string;
+  roles: Record<ModelRole, ModelRoleConfig>;
+  baseUrl?: string | undefined;
+  fetchFn?: ModelFetch | undefined;
+};
 
 /** OpenAI Responses API 适配器；API Key 只从运行时配置读取。 */
 export class OpenAIModelGateway implements ModelGateway {
@@ -49,15 +57,19 @@ export class OpenAIModelGateway implements ModelGateway {
 
   constructor(private readonly options: OpenAIModelGatewayOptions) {
     this.baseUrl = options.baseUrl ?? "https://api.openai.com/v1/responses";
-    this.fetchFn = options.fetchFn ?? (async (url, init) => {
-      const requestInit: RequestInit = { method: init.method, headers: init.headers, body: init.body };
-      if (init.signal) requestInit.signal = init.signal;
-      const response = await fetch(url, requestInit);
-      return { ok: response.ok, status: response.status, json: () => response.json() };
-    });
+    this.fetchFn =
+      options.fetchFn ??
+      (async (url, init) => {
+        const requestInit: RequestInit = { method: init.method, headers: init.headers, body: init.body };
+        if (init.signal) requestInit.signal = init.signal;
+        const response = await fetch(url, requestInit);
+        return { ok: response.ok, status: response.status, json: () => response.json() };
+      });
   }
 
-  configFor(role: ModelRole): ModelRoleConfig { return this.options.roles[role]; }
+  configFor(role: ModelRole): ModelRoleConfig {
+    return this.options.roles[role];
+  }
 
   /**
    * 端点指纹：本后端的端点是配置里写死的 URL，凭据是 config 里的 apiKey（只记"来自哪个配置项"）。
@@ -80,22 +92,43 @@ export class OpenAIModelGateway implements ModelGateway {
 
   async complete(request: ModelRequest): Promise<ModelResult> {
     const config = { ...this.configFor(request.role), ...(request.modelConfig ?? {}) };
-    const input = request.continuationPrompt ? [...request.messages, { role: "user" as const, content: request.continuationPrompt }] : request.messages;
+    const input = request.continuationPrompt
+      ? [...request.messages, { role: "user" as const, content: request.continuationPrompt }]
+      : request.messages;
     const body: Record<string, unknown> = { model: config.model, input, stream: false };
     if (request.tools?.length) body.tools = request.tools;
     if (config.temperature !== undefined) body.temperature = config.temperature;
     if (config.maxOutputTokens !== undefined) body.max_output_tokens = config.maxOutputTokens;
-    const response = await this.fetchFn(this.baseUrl, { method: "POST", headers: { authorization: `Bearer ${this.options.apiKey}`, "content-type": "application/json" }, body: JSON.stringify(body), signal: request.signal });
+    const response = await this.fetchFn(this.baseUrl, {
+      method: "POST",
+      headers: { authorization: `Bearer ${this.options.apiKey}`, "content-type": "application/json" },
+      body: JSON.stringify(body),
+      signal: request.signal,
+    });
     if (!response.ok) throw new Error(`OpenAI Responses API failed with status ${response.status}`);
-    const payload = await response.json() as Record<string, unknown>;
-    return { text: typeof payload.output_text === "string" ? payload.output_text : extractResponseText(payload), requestId: typeof payload.id === "string" ? payload.id : null, model: config.model, usage: normalizeModelUsage(payload.usage) };
+    const payload = (await response.json()) as Record<string, unknown>;
+    return {
+      text: typeof payload.output_text === "string" ? payload.output_text : extractResponseText(payload),
+      requestId: typeof payload.id === "string" ? payload.id : null,
+      model: config.model,
+      usage: normalizeModelUsage(payload.usage),
+    };
   }
 
   async *stream(request: ModelRequest): AsyncIterable<ModelEvent> {
-    if (request.signal?.aborted) { yield { type: "turn.cancelled" }; return; }
+    if (request.signal?.aborted) {
+      yield { type: "turn.cancelled" };
+      return;
+    }
     try {
       const result = await this.complete(request);
-      if (result.usage) yield { type: "model.usage", usage: result.usage, scope: "turn", ...(request.providerThreadId ? { providerThreadId: request.providerThreadId } : {}) };
+      if (result.usage)
+        yield {
+          type: "model.usage",
+          usage: result.usage,
+          scope: "turn",
+          ...(request.providerThreadId ? { providerThreadId: request.providerThreadId } : {}),
+        };
       yield { type: "text.delta", text: result.text };
       yield { type: "turn.completed" };
     } catch (error) {
@@ -108,7 +141,9 @@ export class OpenAIModelGateway implements ModelGateway {
     throw new Error("OpenAI Responses backend does not support Codex structured user input");
   }
 
-  async cancel(): Promise<void> { return undefined; }
+  async cancel(): Promise<void> {
+    return undefined;
+  }
 }
 
 /** 端点指纹只取 host[:port]：URL 里可能带查询串或路径参数，不记进事件。 */
@@ -123,10 +158,16 @@ function hostOf(url: string): string {
 function extractResponseText(payload: Record<string, unknown>): string {
   const output = payload.output;
   if (!Array.isArray(output)) return "";
-  return output.flatMap((item) => {
-    if (!item || typeof item !== "object") return [];
-    const content = (item as Record<string, unknown>).content;
-    if (!Array.isArray(content)) return [];
-    return content.flatMap((part) => part && typeof part === "object" && typeof (part as Record<string, unknown>).text === "string" ? [(part as Record<string, unknown>).text as string] : []);
-  }).join("");
+  return output
+    .flatMap((item) => {
+      if (!item || typeof item !== "object") return [];
+      const content = (item as Record<string, unknown>).content;
+      if (!Array.isArray(content)) return [];
+      return content.flatMap((part) =>
+        part && typeof part === "object" && typeof (part as Record<string, unknown>).text === "string"
+          ? [(part as Record<string, unknown>).text as string]
+          : [],
+      );
+    })
+    .join("");
 }

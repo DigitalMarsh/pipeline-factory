@@ -46,7 +46,15 @@ function countAt(record: JsonRecord | undefined, key: string): number | undefine
 }
 
 /** 界面要从一份 Plan 契约里取的摘要字段。 */
-type PlanSummary = { title: string; goal: string; includeCount: number; excludeCount: number; taskCount: number; acceptanceCount: number; verificationCount: number };
+type PlanSummary = {
+  title: string;
+  goal: string;
+  includeCount: number;
+  excludeCount: number;
+  taskCount: number;
+  acceptanceCount: number;
+  verificationCount: number;
+};
 
 /**
  * 从 Plan 契约里取摘要。**只认当前形状**：`objective.goal` / `scope.includePaths` /

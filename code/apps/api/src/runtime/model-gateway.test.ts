@@ -37,15 +37,32 @@ function fakeGateway(label: string, options: { capabilities?: ModelCapabilities;
     closed,
     configFor: () => ({ model: `${label}-model` }),
     ...(options.capabilities ? { capabilities: () => options.capabilities! } : {}),
-    describeEndpoint: () => ({ backend: label, endpoint: `${label}-endpoint`, source: "config", cliVersion: null, credentialSource: null, providerModel: null }),
+    describeEndpoint: () => ({
+      backend: label,
+      endpoint: `${label}-endpoint`,
+      source: "config",
+      cliVersion: null,
+      credentialSource: null,
+      providerModel: null,
+    }),
     async *stream(_request: ModelRequest): AsyncIterable<ModelEvent> {
       calls.push("stream");
-      if (options.inputRequestId) yield { type: "turn.input_required", request: { requestId: options.inputRequestId, threadId: "t", turnId: "turn", itemId: "item", questions: [], isBlocking: true } };
+      if (options.inputRequestId)
+        yield {
+          type: "turn.input_required",
+          request: { requestId: options.inputRequestId, threadId: "t", turnId: "turn", itemId: "item", questions: [], isBlocking: true },
+        };
       yield { type: "turn.completed" };
     },
-    async answerUserInput(input) { answered.push(input.requestId); },
-    async cancel(request) { cancelled.push(request.conversationId); },
-    async close() { closed.push("closed"); },
+    async answerUserInput(input) {
+      answered.push(input.requestId);
+    },
+    async cancel(request) {
+      cancelled.push(request.conversationId);
+    },
+    async close() {
+      closed.push("closed");
+    },
   };
   return gateway;
 }
@@ -91,10 +108,21 @@ describe("RoutingModelGateway", () => {
   it("lets a request-level config override the role default (Project override path)", async () => {
     const codex = fakeGateway("codex-app-server");
     const deepseek = fakeGateway("deepseek");
-    const gateway = router({ explorer: "codex-app-server", executor: "codex-app-server", gateways: [codex, deepseek], ids: ["codex-app-server", "deepseek"] });
+    const gateway = router({
+      explorer: "codex-app-server",
+      executor: "codex-app-server",
+      gateways: [codex, deepseek],
+      ids: ["codex-app-server", "deepseek"],
+    });
 
     // 这正是 Project 覆盖的形态：executor 角色默认 codex，但项目把 backend 覆盖成 deepseek。
-    await drain(gateway.stream({ role: "executor", modelConfig: { model: "deepseek-chat", backend: "deepseek" }, messages: [{ role: "user", content: "execute" }] }));
+    await drain(
+      gateway.stream({
+        role: "executor",
+        modelConfig: { model: "deepseek-chat", backend: "deepseek" },
+        messages: [{ role: "user", content: "execute" }],
+      }),
+    );
 
     expect(codex.calls).toEqual([]);
     expect(deepseek.calls).toEqual(["stream"]);
@@ -117,7 +145,9 @@ describe("RoutingModelGateway", () => {
     const gateway = router({ explorer: "codex-app-server", executor: "codex-app-server", gateways: [codex] });
 
     // 静默成功会让模型一直等输入，用户只看到"卡住"——所以这里必须是抛错。
-    await expect(gateway.answerUserInput({ requestId: "unknown", answers: {} })).rejects.toThrow(/No model backend is known for input request unknown/);
+    await expect(gateway.answerUserInput({ requestId: "unknown", answers: {} })).rejects.toThrow(
+      /No model backend is known for input request unknown/,
+    );
   });
 
   it("broadcasts an unrouted cancel to every instantiated backend", async () => {
@@ -169,24 +199,44 @@ describe("RoutingModelGateway", () => {
   it("takes the endpoint fingerprint from the backend the Project will actually use", () => {
     const codex = fakeGateway("codex-app-server");
     const claude = fakeGateway("claude-agent-sdk");
-    const gateway = router({ explorer: "codex-app-server", executor: "codex-app-server", gateways: [codex, claude], ids: ["codex-app-server", "claude-agent-sdk"] });
+    const gateway = router({
+      explorer: "codex-app-server",
+      executor: "codex-app-server",
+      gateways: [codex, claude],
+      ids: ["codex-app-server", "claude-agent-sdk"],
+    });
 
     // 全局执行侧是 codex；这一份请求把它覆盖成 claude。
     expect(gateway.describeEndpoint("executor")).toMatchObject({ backend: "codex-app-server" });
-    expect(gateway.describeEndpoint("executor", { model: "claude-opus-5", backend: "claude-agent-sdk" })).toMatchObject({ backend: "claude-agent-sdk" });
+    expect(gateway.describeEndpoint("executor", { model: "claude-opus-5", backend: "claude-agent-sdk" })).toMatchObject({
+      backend: "claude-agent-sdk",
+    });
     // 覆盖里没写 backend（"跟随全局"）时退回角色默认，不编一个。
     expect(gateway.describeEndpoint("executor", { model: "claude-opus-5" })).toMatchObject({ backend: "codex-app-server" });
     // 不传角色时那份覆盖配置**无从归属**（不知道它是给哪个角色的），一律按角色默认回答：
     // 这里两个角色都是 codex，所以答案是 codex，而不是被传进来的 claude 覆盖带跑。
-    expect(gateway.describeEndpoint(undefined, { model: "claude-opus-5", backend: "claude-agent-sdk" })).toMatchObject({ backend: "codex-app-server" });
+    expect(gateway.describeEndpoint(undefined, { model: "claude-opus-5", backend: "claude-agent-sdk" })).toMatchObject({
+      backend: "codex-app-server",
+    });
   });
 
   it("takes capabilities from the backend the Project will actually use", () => {
-    const codex = fakeGateway("codex-app-server", { capabilities: { supportsStructuredUserInput: true, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] } });
-    const deepseek = fakeGateway("deepseek", { capabilities: { supportsStructuredUserInput: true, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] } });
-    const gateway = router({ explorer: "codex-app-server", executor: "codex-app-server", gateways: [codex, deepseek], ids: ["codex-app-server", "deepseek"] });
+    const codex = fakeGateway("codex-app-server", {
+      capabilities: { supportsStructuredUserInput: true, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] },
+    });
+    const deepseek = fakeGateway("deepseek", {
+      capabilities: { supportsStructuredUserInput: true, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] },
+    });
+    const gateway = router({
+      explorer: "codex-app-server",
+      executor: "codex-app-server",
+      gateways: [codex, deepseek],
+      ids: ["codex-app-server", "deepseek"],
+    });
 
-    expect(gateway.capabilities("executor", { model: "x", backend: "deepseek" })).toMatchObject({ supportedLoopModes: ["provider-controlled"] });
+    expect(gateway.capabilities("executor", { model: "x", backend: "deepseek" })).toMatchObject({
+      supportedLoopModes: ["provider-controlled"],
+    });
     expect(gateway.capabilities("executor")).toMatchObject({ supportedLoopModes: ["provider-controlled"] });
   });
 

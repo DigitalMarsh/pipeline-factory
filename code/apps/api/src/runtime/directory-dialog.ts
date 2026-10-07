@@ -35,7 +35,10 @@ export type DirectoryDialogResult = { path: string } | { cancelled: true };
 export type DirectoryDialogErrorCode = "DIALOG_UNSUPPORTED" | "DIALOG_TIMEOUT" | "DIALOG_FAILED";
 
 export class DirectoryDialogError extends Error {
-  constructor(readonly code: DirectoryDialogErrorCode, message: string) {
+  constructor(
+    readonly code: DirectoryDialogErrorCode,
+    message: string,
+  ) {
     super(message);
     this.name = "DirectoryDialogError";
   }
@@ -57,13 +60,15 @@ type DialogCandidate = {
  */
 export function directoryDialogCandidates(platform: NodeJS.Platform): DialogCandidate[] {
   if (platform === "darwin") {
-    return [{
-      command: "osascript",
-      args: ["-e", `POSIX path of (choose folder with prompt "${DIRECTORY_DIALOG_PROMPT}")`],
-      // AppleScript 的"用户取消"是错误号 -128；文案会随系统语言变（中文是"用户已取消。"），
-      // 所以先认错误号，再兜一层中英文关键词。
-      cancelled: (result) => result.exitCode !== 0 && /-128|cancel|取消/i.test(result.stderr),
-    }];
+    return [
+      {
+        command: "osascript",
+        args: ["-e", `POSIX path of (choose folder with prompt "${DIRECTORY_DIALOG_PROMPT}")`],
+        // AppleScript 的"用户取消"是错误号 -128；文案会随系统语言变（中文是"用户已取消。"），
+        // 所以先认错误号，再兜一层中英文关键词。
+        cancelled: (result) => result.exitCode !== 0 && /-128|cancel|取消/i.test(result.stderr),
+      },
+    ];
   }
   if (platform === "win32") {
     const script = [
@@ -74,17 +79,26 @@ export function directoryDialogCandidates(platform: NodeJS.Platform): DialogCand
     ].join("; ");
     // 取消时正常退出、只是没有输出。
     const cancelled = (result: DialogProcessResult) => result.exitCode === 0 && !result.stdout.trim();
-    return [{ command: "powershell", args: ["-NoProfile", "-STA", "-Command", script], cancelled }, { command: "pwsh", args: ["-NoProfile", "-Command", script], cancelled }];
+    return [
+      { command: "powershell", args: ["-NoProfile", "-STA", "-Command", script], cancelled },
+      { command: "pwsh", args: ["-NoProfile", "-Command", script], cancelled },
+    ];
   }
   if (platform === "linux") {
     const cancelled = (result: DialogProcessResult) => result.exitCode === 1 && !result.stdout.trim();
-    return [{ command: "zenity", args: ["--file-selection", "--directory", `--title=${DIRECTORY_DIALOG_PROMPT}`], cancelled }, { command: "kdialog", args: ["--getexistingdirectory", process.env.HOME ?? "."], cancelled }];
+    return [
+      { command: "zenity", args: ["--file-selection", "--directory", `--title=${DIRECTORY_DIALOG_PROMPT}`], cancelled },
+      { command: "kdialog", args: ["--getexistingdirectory", process.env.HOME ?? "."], cancelled },
+    ];
   }
   return [];
 }
 
 /** 把一次子进程结果翻译成"选到了 / 取消了 / 失败了"。纯函数，便于按平台单测。 */
-export function interpretDialogOutcome(candidate: DialogCandidate, result: DialogProcessResult): { kind: "path"; path: string } | { kind: "cancelled" } | { kind: "failed"; message: string } {
+export function interpretDialogOutcome(
+  candidate: DialogCandidate,
+  result: DialogProcessResult,
+): { kind: "path"; path: string } | { kind: "cancelled" } | { kind: "failed"; message: string } {
   if (candidate.cancelled(result)) return { kind: "cancelled" };
   const path = result.stdout.trim();
   if (result.exitCode === 0 && path) return { kind: "path", path };
@@ -98,7 +112,11 @@ export function interpretDialogOutcome(candidate: DialogCandidate, result: Dialo
  */
 export async function chooseDirectory(options: { platform?: NodeJS.Platform; timeoutMs?: number } = {}): Promise<DirectoryDialogResult> {
   const candidates = directoryDialogCandidates(options.platform ?? process.platform);
-  if (!candidates.length) throw new DirectoryDialogError("DIALOG_UNSUPPORTED", `当前平台（${options.platform ?? process.platform}）不支持弹出系统目录选择框，请手动输入绝对路径。`);
+  if (!candidates.length)
+    throw new DirectoryDialogError(
+      "DIALOG_UNSUPPORTED",
+      `当前平台（${options.platform ?? process.platform}）不支持弹出系统目录选择框，请手动输入绝对路径。`,
+    );
   let lastMissing = "";
   for (const candidate of candidates) {
     let result: DialogProcessResult;
@@ -106,13 +124,26 @@ export async function chooseDirectory(options: { platform?: NodeJS.Platform; tim
       const output = await execFileAsync(candidate.command, candidate.args, { timeout: options.timeoutMs ?? DIRECTORY_DIALOG_TIMEOUT_MS });
       result = { exitCode: 0, stdout: String(output.stdout), stderr: String(output.stderr) };
     } catch (error) {
-      const failure = error as NodeJS.ErrnoException & { code?: string | number; killed?: boolean; signal?: string; stdout?: string; stderr?: string };
+      const failure = error as NodeJS.ErrnoException & {
+        code?: string | number;
+        killed?: boolean;
+        signal?: string;
+        stdout?: string;
+        stderr?: string;
+      };
       // 没装这个命令：换下一个候选，全都没装才报 UNSUPPORTED。
-      if (failure.code === "ENOENT") { lastMissing = candidate.command; continue; }
+      if (failure.code === "ENOENT") {
+        lastMissing = candidate.command;
+        continue;
+      }
       // **只有 Node 自己按 timeout 杀的才算超时**（那时 `killed` 为真）。别的信号只说明这个子进程
       // 被外部打断了（用户关了对话框、系统回收、进程被杀）——报成"等待选择超时"是在说谎，
       // 而且会把"再试一次就好"错写成"你等了五分钟"。
-      if (failure.killed) throw new DirectoryDialogError("DIALOG_TIMEOUT", `等待选择超时（${Math.round((options.timeoutMs ?? DIRECTORY_DIALOG_TIMEOUT_MS) / 1000)} 秒），对话框已关闭。请重试或手动输入路径。`);
+      if (failure.killed)
+        throw new DirectoryDialogError(
+          "DIALOG_TIMEOUT",
+          `等待选择超时（${Math.round((options.timeoutMs ?? DIRECTORY_DIALOG_TIMEOUT_MS) / 1000)} 秒），对话框已关闭。请重试或手动输入路径。`,
+        );
       result = {
         exitCode: typeof failure.code === "number" ? failure.code : null,
         stdout: failure.stdout ?? "",

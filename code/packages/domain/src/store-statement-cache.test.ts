@@ -39,7 +39,9 @@ function spyOnPrepare(): { count: () => number } {
     calls += 1;
     return original.call(this, sql);
   };
-  activeSpies.push(() => { DatabaseSync.prototype.prepare = original; });
+  activeSpies.push(() => {
+    DatabaseSync.prototype.prepare = original;
+  });
   return { count: () => calls };
 }
 
@@ -68,11 +70,23 @@ describe("SqlitePipelineStore 的语句缓存", () => {
     const { store, prepareCalls } = openStore();
     const projects = new ProjectService(store);
 
-    projects.create({ id: "project-cache", name: "Cache Project", repoRoot: "/repo/cache", defaultBranch: "main", worktreeRoot: "/tmp/cache-worktrees" });
+    projects.create({
+      id: "project-cache",
+      name: "Cache Project",
+      repoRoot: "/repo/cache",
+      defaultBranch: "main",
+      worktreeRoot: "/tmp/cache-worktrees",
+    });
     const afterCreate = prepareCalls();
 
     // 再建一个同名不同 id 的项目：INSERT 那条 SQL 已在缓存里，不该产生新的编译。
-    projects.create({ id: "project-cache-2", name: "Cache Project", repoRoot: "/repo/cache-2", defaultBranch: "main", worktreeRoot: "/tmp/cache-worktrees-2" });
+    projects.create({
+      id: "project-cache-2",
+      name: "Cache Project",
+      repoRoot: "/repo/cache-2",
+      defaultBranch: "main",
+      worktreeRoot: "/tmp/cache-worktrees-2",
+    });
 
     expect(prepareCalls()).toBe(afterCreate);
   });
@@ -80,7 +94,13 @@ describe("SqlitePipelineStore 的语句缓存", () => {
   it("命中缓存不改变结果：写入后读到的仍是最新值", () => {
     const { store } = openStore();
     const projects = new ProjectService(store);
-    const project = projects.create({ id: "project-fresh", name: "Before", repoRoot: "/repo/fresh", defaultBranch: "main", worktreeRoot: "/tmp/fresh-worktrees" });
+    const project = projects.create({
+      id: "project-fresh",
+      name: "Before",
+      repoRoot: "/repo/fresh",
+      defaultBranch: "main",
+      worktreeRoot: "/tmp/fresh-worktrees",
+    });
 
     expect(store.getProject(project.id)?.name).toBe("Before");
     // 第一次读已经把 SELECT 与 UPSERT 都编译并缓存了；改完再读必须看到新值，

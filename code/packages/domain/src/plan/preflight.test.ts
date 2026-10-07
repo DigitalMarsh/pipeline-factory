@@ -22,11 +22,15 @@ function fakeGit(input: { objects?: string[]; status?: string; statusExitCode?: 
     // 如实模拟 `cat-file --batch-check`：按 stdin 的行、**顺序一一对应**地输出；
     // 不存在的以 ` missing` 结尾。假的实现与真命令形状不一致，测试就会测到假的东西。
     if (args[0] === "cat-file" && args[1] === "--batch-check") {
-      if (input.batchExitCode !== undefined && input.batchExitCode !== 0) return { exitCode: input.batchExitCode, stdout: "", stderr: "boom" };
-      const lines = (stdin ?? "").split("\n").filter(Boolean).map((spec) => {
-        const path = spec.slice(spec.indexOf(":") + 1);
-        return objects.has(path) ? `${"a".repeat(40)} blob 1` : `${spec} missing`;
-      });
+      if (input.batchExitCode !== undefined && input.batchExitCode !== 0)
+        return { exitCode: input.batchExitCode, stdout: "", stderr: "boom" };
+      const lines = (stdin ?? "")
+        .split("\n")
+        .filter(Boolean)
+        .map((spec) => {
+          const path = spec.slice(spec.indexOf(":") + 1);
+          return objects.has(path) ? `${"a".repeat(40)} blob 1` : `${spec} missing`;
+        });
       return { exitCode: 0, stdout: lines.length ? `${lines.join("\n")}\n` : "", stderr: "" };
     }
     return { exitCode: 0, stdout: "", stderr: "" };
@@ -111,7 +115,11 @@ describe("Plan 预检的判定边界", () => {
     const runGit = (args: string[], _cwd?: string, stdin?: string): CommandResult => {
       calls.push(args);
       if (args[0] === "cat-file") {
-        const stdout = (stdin ?? "").split("\n").filter(Boolean).map((spec) => `${spec} missing`).join("\n");
+        const stdout = (stdin ?? "")
+          .split("\n")
+          .filter(Boolean)
+          .map((spec) => `${spec} missing`)
+          .join("\n");
         return { exitCode: 0, stdout, stderr: "" };
       }
       return { exitCode: 0, stdout: "", stderr: "" };
@@ -126,15 +134,35 @@ describe("确认闸门", () => {
   function setup(inspector = createLocalPlanPreflightInspector({ runGit: fakeGit() })) {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);
-    projects.create({ id: "project-1", name: "Preflight Project", repoRoot: "/repo", defaultBranch: "main", worktreeRoot: "/tmp/worktrees" });
+    projects.create({
+      id: "project-1",
+      name: "Preflight Project",
+      repoRoot: "/repo",
+      defaultBranch: "main",
+      worktreeRoot: "/tmp/worktrees",
+    });
     const plans = new PlanService(store, projects, inspector);
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Preflight plan",
-      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Preflight plan" }) });
+    const plan = plans.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "thread-1",
+      title: "Preflight plan",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Preflight plan" }),
+    });
     return { plans, plan };
   }
 
   it("阻断级问题让确认失败，且错误码可被路由识别", () => {
-    const { plans, plan } = setup(() => ({ blocking: [{ severity: "blocking", code: "PATH_MISSING", message: "计划要处理的文件在基线里不存在：src/missing.ts", paths: ["src/missing.ts"] }], warnings: [] }));
+    const { plans, plan } = setup(() => ({
+      blocking: [
+        {
+          severity: "blocking",
+          code: "PATH_MISSING",
+          message: "计划要处理的文件在基线里不存在：src/missing.ts",
+          paths: ["src/missing.ts"],
+        },
+      ],
+      warnings: [],
+    }));
 
     expect(() => plans.confirm(plan.id, "user-1")).toThrow(/^PLAN_PREFLIGHT_FAILED:/);
     // 失败必须是**没有冻结**：Revision 不可回滚，冻结了再抛错就会留下一个"确认了一半"的 Plan。
@@ -143,7 +171,10 @@ describe("确认闸门", () => {
   });
 
   it("只有警告时确认照常通过", () => {
-    const { plans, plan } = setup(() => ({ blocking: [], warnings: [{ severity: "warning", code: "WORKING_TREE_DIRTY", message: "受管工程有 1 个未提交改动", paths: ["src/a.ts"] }] }));
+    const { plans, plan } = setup(() => ({
+      blocking: [],
+      warnings: [{ severity: "warning", code: "WORKING_TREE_DIRTY", message: "受管工程有 1 个未提交改动", paths: ["src/a.ts"] }],
+    }));
 
     expect(plans.confirm(plan.id, "user-1").status).toBe("READY");
   });
@@ -153,8 +184,12 @@ describe("确认闸门", () => {
     const projects = new ProjectService(store);
     projects.create({ id: "project-1", name: "Plain Project", repoRoot: "/repo", defaultBranch: "main", worktreeRoot: "/tmp/worktrees" });
     const plans = new PlanService(store, projects);
-    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Plain plan",
-      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Plain plan" }) });
+    const plan = plans.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "thread-1",
+      title: "Plain plan",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Plain plan" }),
+    });
 
     expect(plans.confirm(plan.id, "user-1").status).toBe("READY");
   });

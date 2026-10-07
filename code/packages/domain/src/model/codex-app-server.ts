@@ -12,7 +12,17 @@ import { normalizeModelUsage } from "./usage.js";
 // check-cycles.mjs 也据此判定这条边已被切断。P2 期间它指向 ../index.js；批 E 建 model/types.ts
 // 后改指 ./types.js（边仍是 type-only，判定不变）—— 至此 model/ 下四个 ModelGateway 实现
 // 都直接从同一处契约取类型，不再有实现经由 barrel 绕一圈。
-import type { ModelCapabilities, ModelEvent, ModelGateway, ModelMessage, ModelMessagePhase, ModelRequest, ModelRole, ModelRoleConfig, ProviderEndpoint } from "./types.js";
+import type {
+  ModelCapabilities,
+  ModelEvent,
+  ModelGateway,
+  ModelMessage,
+  ModelMessagePhase,
+  ModelRequest,
+  ModelRole,
+  ModelRoleConfig,
+  ProviderEndpoint,
+} from "./types.js";
 
 type JsonObject = Record<string, unknown>;
 /** JSON-RPC 请求和通知使用的 Provider request id。 */
@@ -29,7 +39,10 @@ export type CodexThreadStartParams = {
   approvalPolicy: "never" | "on-request";
   baseInstructions?: string;
   developerInstructions?: string;
-  collaborationMode?: { mode: "plan" | "default"; settings: { model: string; reasoning_effort: string | null; developer_instructions: string | null } };
+  collaborationMode?: {
+    mode: "plan" | "default";
+    settings: { model: string; reasoning_effort: string | null; developer_instructions: string | null };
+  };
 };
 
 /** 启动 Provider turn 的输入和可取消信号。 */
@@ -39,7 +52,10 @@ export type CodexTurnStartParams = {
   model: string;
   effort?: string;
   cwd?: string;
-  collaborationMode?: { mode: "plan" | "default"; settings: { model: string; reasoning_effort: string | null; developer_instructions: string | null } };
+  collaborationMode?: {
+    mode: "plan" | "default";
+    settings: { model: string; reasoning_effort: string | null; developer_instructions: string | null };
+  };
   signal?: AbortSignal;
 };
 
@@ -123,7 +139,9 @@ class NotificationSubscription implements AsyncIterableIterator<CodexAppServerEv
     return Promise.resolve({ value: undefined, done: true });
   }
 
-  [Symbol.asyncIterator](): AsyncIterableIterator<CodexAppServerEvent> { return this; }
+  [Symbol.asyncIterator](): AsyncIterableIterator<CodexAppServerEvent> {
+    return this;
+  }
 }
 
 /** 通过 stdio JSON-RPC 管理 Codex App Server 进程、请求超时、通知订阅和重启。 */
@@ -165,19 +183,25 @@ export class CodexAppServerClient implements CodexAppServerSession {
     let turnId: string | undefined;
     let removeAbortListener: (() => void) | undefined;
     try {
-      const result = await this.request("turn/start", {
-        threadId: params.threadId,
-        input: params.input,
-        model: params.model,
-        ...(params.effort ? { effort: params.effort } : {}),
-        ...(params.cwd ? { cwd: params.cwd } : {}),
-        ...(params.collaborationMode ? { collaborationMode: params.collaborationMode } : {}),
-      }, params.signal);
+      const result = await this.request(
+        "turn/start",
+        {
+          threadId: params.threadId,
+          input: params.input,
+          model: params.model,
+          ...(params.effort ? { effort: params.effort } : {}),
+          ...(params.cwd ? { cwd: params.cwd } : {}),
+          ...(params.collaborationMode ? { collaborationMode: params.collaborationMode } : {}),
+        },
+        params.signal,
+      );
       const turn = getObject(result, "turn");
       turnId = getString(turn, "id");
       if (!turnId) throw new Error("Codex App Server returned turn/start without a turn id");
       if (params.signal) {
-        const onAbort = () => { void this.interrupt(params.threadId, turnId!).catch(() => undefined); };
+        const onAbort = () => {
+          void this.interrupt(params.threadId, turnId!).catch(() => undefined);
+        };
         params.signal.addEventListener("abort", onAbort, { once: true });
         removeAbortListener = () => params.signal?.removeEventListener("abort", onAbort);
       }
@@ -254,10 +278,15 @@ export class CodexAppServerClient implements CodexAppServerSession {
     this.process.once("exit", (code, signal) => {
       if (!this.closing) this.handleProcessFailure(new Error(`Codex App Server exited with ${signal ?? code ?? "unknown status"}`));
     });
-    await this.request("initialize", {
-      clientInfo: { name: this.options.clientName, version: this.options.clientVersion },
-      capabilities: { experimentalApi: true },
-    }, undefined, this.options.startupTimeoutMs);
+    await this.request(
+      "initialize",
+      {
+        clientInfo: { name: this.options.clientName, version: this.options.clientVersion },
+        capabilities: { experimentalApi: true },
+      },
+      undefined,
+      this.options.startupTimeoutMs,
+    );
     this.initialized = true;
   }
 
@@ -322,7 +351,11 @@ export class CodexAppServerClient implements CodexAppServerSession {
       return;
     }
     if (typeof message.method !== "string" || !message.params || typeof message.params !== "object") return;
-    const event: CodexAppServerEvent = { ...(id === undefined ? {} : { id: id as CodexRequestId }), method: message.method, params: message.params as JsonObject };
+    const event: CodexAppServerEvent = {
+      ...(id === undefined ? {} : { id: id as CodexRequestId }),
+      method: message.method,
+      params: message.params as JsonObject,
+    };
     for (const subscription of this.subscriptions) subscription.push(event);
   }
 
@@ -365,19 +398,24 @@ export class CodexAppServerGateway implements ModelGateway {
   private readonly pendingInputSessions = new Map<string, CodexAppServerSession>();
 
   constructor(private readonly options: CodexAppServerGatewayOptions) {
-    this.sessionFactory = options.sessionFactory ?? (async () => new CodexAppServerClient({
-      command: options.command ?? "codex",
-      args: options.args ?? ["app-server", "--stdio"],
-      cwd: options.cwd ?? process.cwd(),
-      startupTimeoutMs: options.startupTimeoutMs ?? 15_000,
-      requestTimeoutMs: options.requestTimeoutMs ?? 120_000,
-      maxRestarts: options.maxRestarts ?? 3,
-      clientName: options.clientName ?? "pipeline-factory",
-      clientVersion: options.clientVersion ?? "4.0.0",
-    }));
+    this.sessionFactory =
+      options.sessionFactory ??
+      (async () =>
+        new CodexAppServerClient({
+          command: options.command ?? "codex",
+          args: options.args ?? ["app-server", "--stdio"],
+          cwd: options.cwd ?? process.cwd(),
+          startupTimeoutMs: options.startupTimeoutMs ?? 15_000,
+          requestTimeoutMs: options.requestTimeoutMs ?? 120_000,
+          maxRestarts: options.maxRestarts ?? 3,
+          clientName: options.clientName ?? "pipeline-factory",
+          clientVersion: options.clientVersion ?? "4.0.0",
+        }));
   }
 
-  configFor(role: ModelRole): ModelRoleConfig { return this.options.roles[role]; }
+  configFor(role: ModelRole): ModelRoleConfig {
+    return this.options.roles[role];
+  }
 
   /**
    * 端点指纹：Codex 侧没有可配的 baseUrl，能担保的只有"我们启动了哪个 CLI"，
@@ -408,7 +446,8 @@ export class CodexAppServerGateway implements ModelGateway {
       const session = await this.getSession(request.conversationId ?? request.role);
       const roleConfig = { ...this.configFor(request.role), ...(request.modelConfig ?? {}) };
       const mode = resolveModelMode(request, roleConfig);
-      let providerThreadId = request.providerThreadId ?? (request.conversationId ? this.providerThreads.get(request.conversationId) : undefined);
+      let providerThreadId =
+        request.providerThreadId ?? (request.conversationId ? this.providerThreads.get(request.conversationId) : undefined);
       let rebuilt = false;
       if (providerThreadId) {
         if (request.conversationId) this.providerThreads.set(request.conversationId, providerThreadId);
@@ -427,9 +466,10 @@ export class CodexAppServerGateway implements ModelGateway {
         }
       }
       if (!providerThreadId) {
-        const developerInstructions = request.role === "explorer" && mode === "plan"
-          ? [EXPLORER_PLAN_INSTRUCTIONS, roleConfig.developerInstructions].filter(Boolean).join("\n\n")
-          : roleConfig.developerInstructions;
+        const developerInstructions =
+          request.role === "explorer" && mode === "plan"
+            ? [EXPLORER_PLAN_INSTRUCTIONS, roleConfig.developerInstructions].filter(Boolean).join("\n\n")
+            : roleConfig.developerInstructions;
         providerThreadId = await session.startThread({
           model: roleConfig.model,
           cwd: request.cwd ?? process.cwd(),
@@ -437,13 +477,29 @@ export class CodexAppServerGateway implements ModelGateway {
           approvalPolicy: request.role === "explorer" ? "never" : "on-request",
           ...(systemInstructions(request.messages) ? { baseInstructions: systemInstructions(request.messages) } : {}),
           ...(developerInstructions ? { developerInstructions } : {}),
-          collaborationMode: { mode, settings: { model: roleConfig.model, reasoning_effort: roleConfig.reasoningEffort ?? null, developer_instructions: roleConfig.developerInstructions ?? null } },
+          collaborationMode: {
+            mode,
+            settings: {
+              model: roleConfig.model,
+              reasoning_effort: roleConfig.reasoningEffort ?? null,
+              developer_instructions: roleConfig.developerInstructions ?? null,
+            },
+          },
         });
         if (request.conversationId) this.providerThreads.set(request.conversationId, providerThreadId);
         yield { type: "thread.started", threadId: providerThreadId };
         if (rebuilt) {
           // 让时间线上能看出"线程 id 为什么变了"，而不是静默换一条线程。
-          yield { type: "provider.activity", phase: "completed", itemId: providerThreadId, itemType: "providerSession", ...classifyCodexActivity({ itemType: "providerSession", phase: "completed" }), title: "Provider session rebuilt", summary: "The previous provider session was gone; the local transcript was replayed into a new one.", providerItemId: providerThreadId };
+          yield {
+            type: "provider.activity",
+            phase: "completed",
+            itemId: providerThreadId,
+            itemType: "providerSession",
+            ...classifyCodexActivity({ itemType: "providerSession", phase: "completed" }),
+            title: "Provider session rebuilt",
+            summary: "The previous provider session was gone; the local transcript was replayed into a new one.",
+            providerItemId: providerThreadId,
+          };
         }
       }
       // 常规续接只发最新一条用户消息（历史在 Provider 侧）；重建出来的线程没有那份历史，
@@ -455,12 +511,19 @@ export class CodexAppServerGateway implements ModelGateway {
         model: roleConfig.model,
         ...(roleConfig.reasoningEffort ? { effort: roleConfig.reasoningEffort } : {}),
         ...(request.cwd ? { cwd: request.cwd } : {}),
-        collaborationMode: { mode, settings: { model: roleConfig.model, reasoning_effort: roleConfig.reasoningEffort ?? null, developer_instructions: roleConfig.developerInstructions ?? null } },
+        collaborationMode: {
+          mode,
+          settings: {
+            model: roleConfig.model,
+            reasoning_effort: roleConfig.reasoningEffort ?? null,
+            developer_instructions: roleConfig.developerInstructions ?? null,
+          },
+        },
         ...(request.signal ? { signal: request.signal } : {}),
       })) {
         const eventTurnId = getEventTurnId(event.params);
         const mapped = mapCodexEvent(event, { providerThreadId, ...(eventTurnId ? { providerTurnId: eventTurnId } : {}) });
-        const mappedEvents = mapped ? Array.isArray(mapped) ? mapped : [mapped] : [];
+        const mappedEvents = mapped ? (Array.isArray(mapped) ? mapped : [mapped]) : [];
         for (const mappedEvent of mappedEvents) {
           if (mappedEvent.type === "turn.input_required") {
             if (event.id === undefined) throw new Error("Codex App Server input request did not include a JSON-RPC id");
@@ -500,23 +563,43 @@ export class CodexAppServerGateway implements ModelGateway {
   private async getSession(_key: string): Promise<CodexAppServerSession> {
     if (this.session) return this.session;
     if (!this.sessionPromise) {
-      this.sessionPromise = this.sessionFactory().then((session) => {
-        this.session = session;
-        return session;
-      }).catch((error: unknown) => {
-        this.sessionPromise = null;
-        throw error;
-      });
+      this.sessionPromise = this.sessionFactory()
+        .then((session) => {
+          this.session = session;
+          return session;
+        })
+        .catch((error: unknown) => {
+          this.sessionPromise = null;
+          throw error;
+        });
     }
     return this.sessionPromise;
   }
 }
 
 /** 把外部通知转换成内部统一 ModelEvent；未知通知安全忽略而不伪造模型输出。 */
-function mapCodexEvent(event: CodexAppServerEvent, source: { providerThreadId?: string; providerTurnId?: string } = {}): ModelEvent | ModelEvent[] | null {
-  if (event.method.includes("tokenUsage") || event.method.includes("token_usage") || event.method === "thread/tokenUsage/updated" || event.method === "thread/usage/updated") {
+function mapCodexEvent(
+  event: CodexAppServerEvent,
+  source: { providerThreadId?: string; providerTurnId?: string } = {},
+): ModelEvent | ModelEvent[] | null {
+  if (
+    event.method.includes("tokenUsage") ||
+    event.method.includes("token_usage") ||
+    event.method === "thread/tokenUsage/updated" ||
+    event.method === "thread/usage/updated"
+  ) {
     const usage = extractCodexUsage(event.params);
-    return usage ? [{ type: "model.usage", usage, scope: "total", ...(source.providerThreadId ? { providerThreadId: source.providerThreadId } : {}), ...(source.providerTurnId ? { providerTurnId: source.providerTurnId } : {}) }] : null;
+    return usage
+      ? [
+          {
+            type: "model.usage",
+            usage,
+            scope: "total",
+            ...(source.providerThreadId ? { providerThreadId: source.providerThreadId } : {}),
+            ...(source.providerTurnId ? { providerTurnId: source.providerTurnId } : {}),
+          },
+        ]
+      : null;
   }
   if (event.method === "item/agentMessage/delta") {
     const text = getString(event.params, "delta");
@@ -524,7 +607,13 @@ function mapCodexEvent(event: CodexAppServerEvent, source: { providerThreadId?: 
     const providerThreadId = getString(event.params, "threadId") ?? source.providerThreadId;
     const providerTurnId = getEventTurnId(event.params) ?? source.providerTurnId;
     const providerItemId = getString(event.params, "itemId") ?? getString(getObject(event.params, "item"), "id");
-    return { type: "text.delta", text, ...(providerThreadId ? { providerThreadId } : {}), ...(providerTurnId ? { providerTurnId } : {}), ...(providerItemId ? { providerItemId } : {}) };
+    return {
+      type: "text.delta",
+      text,
+      ...(providerThreadId ? { providerThreadId } : {}),
+      ...(providerTurnId ? { providerTurnId } : {}),
+      ...(providerItemId ? { providerItemId } : {}),
+    };
   }
   if (event.method === "item/started" || event.method === "item/completed") {
     const item = getObject(event.params, "item");
@@ -543,22 +632,45 @@ function mapCodexEvent(event: CodexAppServerEvent, source: { providerThreadId?: 
     // **推理的文字在数组里**：Codex 的 `reasoning` item 是 `{ content: string[], summary: string[] }`，
     // 而下面这几个 `getString` 只认字符串——于是推理正文整段丢掉，界面上只剩一个「推理」标签。
     // 只取 `summary[]`（Provider 自己给的推理摘要）：`content[]` 是原始思维链，按本仓的立场不展示。
-    const summary = (itemType === "reasoning" ? joinStrings(item, "summary") : null)
-      ?? getString(item, "command") ?? getString(item, "text") ?? null;
+    const summary =
+      (itemType === "reasoning" ? joinStrings(item, "summary") : null) ?? getString(item, "command") ?? getString(item, "text") ?? null;
     const server = getObject(item, "server");
     const serverName = getString(item, "serverName") ?? getString(server, "name");
     const toolName = getString(item, "toolName") ?? (itemType.toLowerCase().includes("tool") ? getString(item, "name") : undefined);
     const exitCode = numberField(item, "exitCode");
     const status = getString(item, "status") ?? (exitCode === undefined ? undefined : exitCode === 0 ? "succeeded" : "failed");
-    const error = getString(item, "error") ?? getString(getObject(item, "error"), "message")
-      ?? (exitCode !== undefined && exitCode !== 0 ? `Provider command exited with code ${exitCode}` : undefined);
+    const error =
+      getString(item, "error") ??
+      getString(getObject(item, "error"), "message") ??
+      (exitCode !== undefined && exitCode !== 0 ? `Provider command exited with code ${exitCode}` : undefined);
     const providerThreadId = getString(event.params, "threadId") ?? source.providerThreadId;
     const providerTurnId = getEventTurnId(event.params) ?? source.providerTurnId;
     const phase = event.method === "item/started" ? "started" : "completed";
     // 中立词表在**这里**翻译，而不是留给消费方：`itemType` / `status` 是 Codex 的原生词，
     // 只有本文件知道它们的含义（见 model/provider-activity.ts 的模块注释）。
-    const classification = classifyCodexActivity({ itemType, phase, ...(status === undefined ? {} : { status }), ...(error === undefined ? {} : { error }) });
-    return { type: "provider.activity", phase, itemId, itemType, ...classification, title, summary, ...structuredItemPayload(itemType, item), ...(toolName ? { toolName } : {}), ...(serverName ? { serverName } : {}), ...(status ? { status } : {}), ...(error ? { error } : {}), ...(providerThreadId ? { providerThreadId } : {}), ...(providerTurnId ? { providerTurnId } : {}), providerItemId: itemId };
+    const classification = classifyCodexActivity({
+      itemType,
+      phase,
+      ...(status === undefined ? {} : { status }),
+      ...(error === undefined ? {} : { error }),
+    });
+    return {
+      type: "provider.activity",
+      phase,
+      itemId,
+      itemType,
+      ...classification,
+      title,
+      summary,
+      ...structuredItemPayload(itemType, item),
+      ...(toolName ? { toolName } : {}),
+      ...(serverName ? { serverName } : {}),
+      ...(status ? { status } : {}),
+      ...(error ? { error } : {}),
+      ...(providerThreadId ? { providerThreadId } : {}),
+      ...(providerTurnId ? { providerTurnId } : {}),
+      providerItemId: itemId,
+    };
   }
   if (event.method === "item/tool/requestUserInput") {
     const request = event.params;
@@ -573,16 +685,24 @@ function mapCodexEvent(event: CodexAppServerEvent, source: { providerThreadId?: 
       const header = getString(value, "header");
       const text = getString(value, "question");
       if (!id || !header || !text) return [];
-      const options = value.options === null ? null : Array.isArray(value.options) ? value.options.flatMap((option) => {
-        if (!option || typeof option !== "object") return [];
-        const item = option as JsonObject;
-        const label = getString(item, "label");
-        const description = getString(item, "description");
-        return label && description ? [{ label, description }] : [];
-      }) : null;
+      const options =
+        value.options === null
+          ? null
+          : Array.isArray(value.options)
+            ? value.options.flatMap((option) => {
+                if (!option || typeof option !== "object") return [];
+                const item = option as JsonObject;
+                const label = getString(item, "label");
+                const description = getString(item, "description");
+                return label && description ? [{ label, description }] : [];
+              })
+            : null;
       return [{ id, header, question: text, isOther: value.isOther === true, isSecret: value.isSecret === true, options }];
     });
-    return { type: "turn.input_required", request: { requestId: event.id ?? "", threadId, turnId, itemId, questions, isBlocking: request.isBlocking === true } };
+    return {
+      type: "turn.input_required",
+      request: { requestId: event.id ?? "", threadId, turnId, itemId, questions, isBlocking: request.isBlocking === true },
+    };
   }
   // ── ④「Provider 说的」运行事实 ────────────────────────────────────────────
   // 这些不是模型做的，也不是你说的，而是会话设施在报告自己的状态。它们走**同一套**
@@ -590,42 +710,96 @@ function mapCodexEvent(event: CodexAppServerEvent, source: { providerThreadId?: 
   // 一处要同步的地方），靠 `activityKind` 落进 ④ 组——消费方用 `isRuntimeKind()` 把它们挡在
   // 会话正文之外，收进 Run 头诊断区。
   if (event.method === "thread/compacted") {
-    return runtimeFact({ id: `compaction:${getString(event.params, "turnId") ?? getString(event.params, "threadId") ?? "unknown"}`, itemType: "threadCompacted", activityKind: "compaction", title: "上下文已压缩", summary: "Provider 在这一轮压缩了上下文。" }, source);
+    return runtimeFact(
+      {
+        id: `compaction:${getString(event.params, "turnId") ?? getString(event.params, "threadId") ?? "unknown"}`,
+        itemType: "threadCompacted",
+        activityKind: "compaction",
+        title: "上下文已压缩",
+        summary: "Provider 在这一轮压缩了上下文。",
+      },
+      source,
+    );
   }
   if (event.method === "hook/started" || event.method === "hook/completed") {
     const run = getObject(event.params, "run");
     const name = getString(run, "eventName") ?? "hook";
     const started = event.method === "hook/started";
     const durationMs = numberField(run, "durationMs");
-    const status = started ? "started" : getString(run, "status") ?? "completed";
+    const status = started ? "started" : (getString(run, "status") ?? "completed");
     const statusMessage = getString(run, "statusMessage");
-    return runtimeFact({
-      id: getString(run, "id") ?? `hook:${name}:${getString(event.params, "turnId") ?? source.providerTurnId ?? ""}`,
-      itemType: started ? "hook_started" : "hook_completed",
-      activityKind: "hook",
-      title: `钩子 · ${name}`,
-      summary: started ? "钩子开始执行。" : "钩子执行结束。",
-      status,
-      ...(durationMs === undefined ? {} : { durationMs }),
-      ...(statusMessage ? { error: statusMessage } : {}),
-    }, source);
+    return runtimeFact(
+      {
+        id: getString(run, "id") ?? `hook:${name}:${getString(event.params, "turnId") ?? source.providerTurnId ?? ""}`,
+        itemType: started ? "hook_started" : "hook_completed",
+        activityKind: "hook",
+        title: `钩子 · ${name}`,
+        summary: started ? "钩子开始执行。" : "钩子执行结束。",
+        status,
+        ...(durationMs === undefined ? {} : { durationMs }),
+        ...(statusMessage ? { error: statusMessage } : {}),
+      },
+      source,
+    );
   }
   if (event.method === "account/rateLimits/updated") {
-    return runtimeFact({ id: `rate-limits:${source.providerThreadId ?? "account"}`, itemType: "accountRateLimits", activityKind: "rate-limit", title: "配额已更新", summary: "Provider 上报了新的账号配额。" }, source);
+    return runtimeFact(
+      {
+        id: `rate-limits:${source.providerThreadId ?? "account"}`,
+        itemType: "accountRateLimits",
+        activityKind: "rate-limit",
+        title: "配额已更新",
+        summary: "Provider 上报了新的账号配额。",
+      },
+      source,
+    );
   }
-  if (event.method === "warning" || event.method === "guardianWarning" || event.method === "configWarning" || event.method === "windows/worldWritableWarning") {
+  if (
+    event.method === "warning" ||
+    event.method === "guardianWarning" ||
+    event.method === "configWarning" ||
+    event.method === "windows/worldWritableWarning"
+  ) {
     const message = getString(event.params, "message") ?? getString(event.params, "summary") ?? "Provider 报告了一条警告。";
-    return runtimeFact({ id: `warning:${event.method}:${source.providerThreadId ?? ""}:${message.slice(0, 40)}`, itemType: event.method, activityKind: "warning", title: "Provider 警告", summary: message, status: "warning" }, source);
+    return runtimeFact(
+      {
+        id: `warning:${event.method}:${source.providerThreadId ?? ""}:${message.slice(0, 40)}`,
+        itemType: event.method,
+        activityKind: "warning",
+        title: "Provider 警告",
+        summary: message,
+        status: "warning",
+      },
+      source,
+    );
   }
   if (event.method === "deprecationNotice") {
     const summary = getString(event.params, "summary") ?? "Provider 报告了一条弃用提示。";
     const details = getString(event.params, "details");
-    return runtimeFact({ id: `deprecation:${summary.slice(0, 40)}`, itemType: "deprecationNotice", activityKind: "warning", title: "弃用提示", summary: [summary, details].filter(Boolean).join(" "), status: "warning" }, source);
+    return runtimeFact(
+      {
+        id: `deprecation:${summary.slice(0, 40)}`,
+        itemType: "deprecationNotice",
+        activityKind: "warning",
+        title: "弃用提示",
+        summary: [summary, details].filter(Boolean).join(" "),
+        status: "warning",
+      },
+      source,
+    );
   }
   if (event.method !== "turn/completed") return null;
   const turn = getObject(event.params, "turn");
   const usage = extractCodexUsage(turn) ?? extractCodexUsage(event.params);
-  const usageEvent = usage ? { type: "model.usage" as const, usage, scope: "turn" as const, ...(source.providerThreadId ? { providerThreadId: source.providerThreadId } : {}), ...(source.providerTurnId ? { providerTurnId: source.providerTurnId } : {}) } : null;
+  const usageEvent = usage
+    ? {
+        type: "model.usage" as const,
+        usage,
+        scope: "turn" as const,
+        ...(source.providerThreadId ? { providerThreadId: source.providerThreadId } : {}),
+        ...(source.providerTurnId ? { providerTurnId: source.providerTurnId } : {}),
+      }
+    : null;
   const status = getString(turn, "status");
   if (status === "interrupted") return usageEvent ? [usageEvent, { type: "turn.cancelled" }] : { type: "turn.cancelled" };
   if (status === "failed") {
@@ -647,7 +821,16 @@ function messagePhaseOf(item: JsonObject): ModelMessagePhase | null {
  * 构造出来的形态与 item 那条一模一样，消费方不必分两路读。
  */
 function runtimeFact(
-  input: { id: string; itemType: string; activityKind: ProviderActivityKind; title: string; summary: string; status?: string; error?: string; durationMs?: number },
+  input: {
+    id: string;
+    itemType: string;
+    activityKind: ProviderActivityKind;
+    title: string;
+    summary: string;
+    status?: string;
+    error?: string;
+    durationMs?: number;
+  },
   source: { providerThreadId?: string; providerTurnId?: string },
 ): ModelEvent {
   return {
@@ -656,7 +839,12 @@ function runtimeFact(
     itemId: input.id,
     itemType: input.itemType,
     activityKind: input.activityKind,
-    outcome: activityOutcome({ kind: input.activityKind, phase: "completed", ...(input.status === undefined ? {} : { status: input.status }), ...(input.error === undefined ? {} : { error: input.error }) }),
+    outcome: activityOutcome({
+      kind: input.activityKind,
+      phase: "completed",
+      ...(input.status === undefined ? {} : { status: input.status }),
+      ...(input.error === undefined ? {} : { error: input.error }),
+    }),
     title: input.title,
     summary: input.summary,
     ...(input.durationMs === undefined ? {} : { durationMs: input.durationMs }),
@@ -676,7 +864,10 @@ function runtimeFact(
  * 输出类字段落库保留原样，**脱敏与截断发生在展示边界**（`apps/web/src/utils/sensitiveValue.ts`），
  * 这样排障与审计仍然拿得到全量数据。
  */
-function structuredItemPayload(itemType: string, item: JsonObject): { arguments?: unknown; result?: unknown; output?: string; exitCode?: number; durationMs?: number } {
+function structuredItemPayload(
+  itemType: string,
+  item: JsonObject,
+): { arguments?: unknown; result?: unknown; output?: string; exitCode?: number; durationMs?: number } {
   const payload: { arguments?: unknown; result?: unknown; output?: string; exitCode?: number; durationMs?: number } = {};
   const durationMs = numberField(item, "durationMs");
   if (durationMs !== undefined) payload.durationMs = durationMs;
@@ -706,13 +897,16 @@ function latestUserMessage(messages: ModelMessage[]): string {
 }
 
 function systemInstructions(messages: ModelMessage[]): string {
-  return messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n");
+  return messages
+    .filter((message) => message.role === "system")
+    .map((message) => message.content)
+    .join("\n\n");
 }
 
 function getObject(value: unknown, key: string): JsonObject {
   if (!value || typeof value !== "object") return {};
   const candidate = (value as JsonObject)[key];
-  return candidate && typeof candidate === "object" ? candidate as JsonObject : {};
+  return candidate && typeof candidate === "object" ? (candidate as JsonObject) : {};
 }
 
 function getString(value: unknown, key: string): string | undefined {
@@ -747,7 +941,12 @@ function getEventTurnId(params: JsonObject): string | undefined {
 function extractCodexUsage(value: unknown): ReturnType<typeof normalizeModelUsage> {
   if (!value || typeof value !== "object") return null;
   const candidate = value as JsonObject;
-  const usage = candidate.usage ?? candidate.tokenUsage ?? candidate.token_usage ?? getObject(candidate, "response").usage ?? getObject(candidate, "turn").usage;
+  const usage =
+    candidate.usage ??
+    candidate.tokenUsage ??
+    candidate.token_usage ??
+    getObject(candidate, "response").usage ??
+    getObject(candidate, "turn").usage;
   const direct = normalizeModelUsage(usage);
   if (direct) return direct;
   if (usage && typeof usage === "object") {

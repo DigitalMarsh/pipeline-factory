@@ -6,7 +6,11 @@
 import { lstat, mkdir, realpath } from "node:fs/promises";
 import { isAbsolute, join, relative, resolve, sep, posix } from "node:path";
 
-export async function resolveExecutorWorkingDirectory(workspaceRoot: string, includePaths: string[], artifactPath?: string): Promise<string> {
+export async function resolveExecutorWorkingDirectory(
+  workspaceRoot: string,
+  includePaths: string[],
+  artifactPath?: string,
+): Promise<string> {
   const root = await realpath(workspaceRoot);
   const relativeDirectory = artifactPath ? scopeDirectory(artifactPath) : commonScopeDirectory(includePaths);
   const target = resolve(root, relativeDirectory);
@@ -35,7 +39,7 @@ export async function resolveExecutorWorkingDirectory(workspaceRoot: string, inc
 
 function commonScopeDirectory(includePaths: string[]): string {
   if (includePaths.length === 0) return ".";
-  const directories = includePaths.map(scopeDirectory).map((value) => value === "." ? [] : value.split("/"));
+  const directories = includePaths.map(scopeDirectory).map((value) => (value === "." ? [] : value.split("/")));
   const common: string[] = [];
   for (let index = 0; index < Math.min(...directories.map((parts) => parts.length)); index += 1) {
     const part = directories[0]?.[index];
@@ -52,12 +56,20 @@ function scopeDirectory(scopePath: string): string {
   if (parts.some((part) => part === "..")) throw new Error("EXECUTOR_SCOPE_PATH_ESCAPES_WORKSPACE");
 
   const wildcardIndex = normalized.search(/[?*[\]{}]/);
-  const directory = wildcardIndex >= 0
-    ? normalized.slice(0, wildcardIndex).replace(/\/+$/, "")
-    : posix.extname(normalized) ? posix.dirname(normalized) : normalized;
+  const directory =
+    wildcardIndex >= 0
+      ? normalized.slice(0, wildcardIndex).replace(/\/+$/, "")
+      : posix.extname(normalized)
+        ? posix.dirname(normalized)
+        : normalized;
   const safeDirectory = directory || ".";
   const normalizedDirectory = posix.normalize(safeDirectory);
-  if (normalizedDirectory === ".git" || normalizedDirectory.startsWith(".git/") || normalizedDirectory === ".env" || normalizedDirectory.startsWith(".env/")) {
+  if (
+    normalizedDirectory === ".git" ||
+    normalizedDirectory.startsWith(".git/") ||
+    normalizedDirectory === ".env" ||
+    normalizedDirectory.startsWith(".env/")
+  ) {
     throw new Error("EXECUTOR_WORKING_DIRECTORY_PROTECTED");
   }
   return normalizedDirectory;

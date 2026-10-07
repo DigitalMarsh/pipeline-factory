@@ -48,15 +48,15 @@ export function normalizedLifecycleStatus(status: string, plan?: Plan): PlanLife
 }
 
 export function lifecycleLabel(status: PlanLifecycleStatus): string {
-  return PLAN_LIFECYCLE_STEPS.find((step) => step.status === status)?.label
-    ?? PLAN_LIFECYCLE_EXCEPTIONS.find((step) => step.status === status)?.label
-    ?? status.replaceAll("_", " ");
+  return (
+    PLAN_LIFECYCLE_STEPS.find((step) => step.status === status)?.label ??
+    PLAN_LIFECYCLE_EXCEPTIONS.find((step) => step.status === status)?.label ??
+    status.replaceAll("_", " ")
+  );
 }
 
 function fallbackLifecycle(plan: Plan): PlanLifecycleEntry[] {
-  const entries: PlanLifecycleEntry[] = [
-    { status: "DRAFT", occurredAt: plan.createdAt ?? null, revision: plan.revision, current: false },
-  ];
+  const entries: PlanLifecycleEntry[] = [{ status: "DRAFT", occurredAt: plan.createdAt ?? null, revision: plan.revision, current: false }];
   if (plan.confirmedAt) entries.push({ status: "READY", occurredAt: plan.confirmedAt, revision: plan.revision, current: false });
   if (plan.queuedAt) entries.push({ status: "ENQUEUED", occurredAt: plan.queuedAt, revision: plan.revision, current: false });
   if (plan.dispatchedAt) entries.push({ status: "DISPATCHED", occurredAt: plan.dispatchedAt, revision: plan.revision, current: false });
@@ -77,12 +77,15 @@ export function lifecycleEntriesFor(plan: Plan): PlanLifecycleEntry[] {
     });
   }
   const hasConfirmation = Boolean(plan.confirmedAt) || entries.some((entry) => entry.status === "READY");
-  const progressedWithoutConfirmation = !hasConfirmation && (
-    entries.some((entry) => entry.status !== "DRAFT")
-    || PLAN_LIFECYCLE_PROGRESS_STATUSES.includes(currentStatus)
-  );
+  const progressedWithoutConfirmation =
+    !hasConfirmation && (entries.some((entry) => entry.status !== "DRAFT") || PLAN_LIFECYCLE_PROGRESS_STATUSES.includes(currentStatus));
   if (progressedWithoutConfirmation) {
-    const draft = entries.find((entry) => entry.status === "DRAFT") ?? { status: "DRAFT" as const, occurredAt: plan.createdAt ?? null, revision: plan.revision, current: false };
+    const draft = entries.find((entry) => entry.status === "DRAFT") ?? {
+      status: "DRAFT" as const,
+      occurredAt: plan.createdAt ?? null,
+      revision: plan.revision,
+      current: false,
+    };
     const existingBlocked = entries.find((entry) => entry.status === "BLOCKED");
     return [
       { ...draft, current: false },
@@ -94,7 +97,9 @@ export function lifecycleEntriesFor(plan: Plan): PlanLifecycleEntry[] {
       },
     ];
   }
-  const order = new Map<PlanLifecycleStatus, number>([...PLAN_LIFECYCLE_STEPS, ...PLAN_LIFECYCLE_EXCEPTIONS].map((step, index) => [step.status, index]));
+  const order = new Map<PlanLifecycleStatus, number>(
+    [...PLAN_LIFECYCLE_STEPS, ...PLAN_LIFECYCLE_EXCEPTIONS].map((step, index) => [step.status, index]),
+  );
   return entries
     .sort((a, b) => (order.get(a.status) ?? Number.MAX_SAFE_INTEGER) - (order.get(b.status) ?? Number.MAX_SAFE_INTEGER))
     .map((entry) => ({ ...entry, current: entry.status === currentStatus }));

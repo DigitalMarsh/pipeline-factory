@@ -5,12 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { planContractFixture } from "./plan/plan-fixture.js";
-import {
-  InMemoryPipelineStore,
-  LifecycleHookRunner,
-  PlanService,
-  type CommandExecutor,
-} from "./index.js";
+import { InMemoryPipelineStore, LifecycleHookRunner, PlanService, type CommandExecutor } from "./index.js";
 
 describe("PlanService", () => {
   it("puts a confirmed plan in the manual Enqueued stage without dispatching it", () => {
@@ -71,9 +66,16 @@ describe("PlanService", () => {
   it("keeps conversation artifacts reviewable but rejects every execution entry", () => {
     const store = new InMemoryPipelineStore();
     const service = new PlanService(store);
-    const created = service.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Conversation plan",
-      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Conversation plan" }) });
-    store.updatePlan({ ...created, resolvedContract: { ...created.resolvedContract, artifact: { ...created.resolvedContract.artifact, mode: "CONVERSATION" } } });
+    const created = service.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "thread-1",
+      title: "Conversation plan",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Conversation plan" }),
+    });
+    store.updatePlan({
+      ...created,
+      resolvedContract: { ...created.resolvedContract, artifact: { ...created.resolvedContract.artifact, mode: "CONVERSATION" } },
+    });
     expect(service.confirm(created.id, "user-1").status).toBe("READY");
     expect(() => service.enqueue(created.id)).toThrow("CONVERSATION_ARTIFACT_NOT_EXECUTABLE");
     expect(() => service.dispatch(created.id)).toThrow("CONVERSATION_ARTIFACT_NOT_EXECUTABLE");
@@ -84,12 +86,24 @@ describe("PlanService", () => {
     const service = new PlanService(store);
     service.registerThread({ id: "root", projectId: "project-1", parentThreadId: null });
     service.registerThread({ id: "successor", projectId: "project-1", parentThreadId: "root" });
-    const confirmed = service.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "root", title: "Confirmed",
-      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Confirmed" }) });
-    const queued = service.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "successor", title: "Queued",
-      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Queued" }) });
-    const draft = service.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "root", title: "Draft",
-      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Draft" }) });
+    const confirmed = service.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "root",
+      title: "Confirmed",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Confirmed" }),
+    });
+    const queued = service.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "successor",
+      title: "Queued",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Queued" }),
+    });
+    const draft = service.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "root",
+      title: "Draft",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Draft" }),
+    });
     service.confirm(confirmed.id, "user-1");
     service.enqueue(confirmed.id);
     service.confirm(queued.id, "user-1");
@@ -103,10 +117,18 @@ describe("PlanService", () => {
     const store = new InMemoryPipelineStore();
     const service = new PlanService(store);
     service.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
-    const confirmed = service.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Confirmed but not queued",
-      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Confirmed but not queued" }) });
-    const queued = service.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Already queued",
-      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Already queued" }) });
+    const confirmed = service.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "thread-1",
+      title: "Confirmed but not queued",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Confirmed but not queued" }),
+    });
+    const queued = service.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "thread-1",
+      title: "Already queued",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Already queued" }),
+    });
 
     service.confirm(confirmed.id, "user-1");
     service.confirm(queued.id, "user-1");
@@ -164,12 +186,22 @@ describe("LifecycleHookRunner", () => {
   it("retries a failed lifecycle hook within its configured attempt bound", async () => {
     let calls = 0;
     const runner = new LifecycleHookRunner(async () => ({ exitCode: ++calls === 2 ? 0 : 1, stdout: `attempt-${calls}`, stderr: "" }));
-    const context = { projectId: "project-1", runId: "run-1", workspacePath: "/tmp/worktree", branch: "factory/run-1", baseCommit: "abc123", exitReason: "running" } as const;
+    const context = {
+      projectId: "project-1",
+      runId: "run-1",
+      workspacePath: "/tmp/worktree",
+      branch: "factory/run-1",
+      baseCommit: "abc123",
+      exitReason: "running",
+    } as const;
 
     const result = await runner.runStart({ commandId: "project.start", maxAttempts: 2 }, context);
 
     expect(result).toMatchObject({ status: "completed", blocked: false, result: { stdout: "attempt-2" } });
-    expect(result.attempts.map((attempt) => [attempt.attempt, attempt.status])).toEqual([[1, "failed"], [2, "completed"]]);
+    expect(result.attempts.map((attempt) => [attempt.attempt, attempt.status])).toEqual([
+      [1, "failed"],
+      [2, "completed"],
+    ]);
   });
 
   /**
@@ -179,12 +211,31 @@ describe("LifecycleHookRunner", () => {
    */
   it("**`blocking: false` 的启动钩子失败只提醒，不阻塞；缺省仍是阻塞**", async () => {
     const runner = new LifecycleHookRunner(async () => ({ exitCode: 1, stdout: "", stderr: "codegraph: command not found" }));
-    const context = { projectId: "project-1", runId: "run-1", workspacePath: "/tmp/worktree", branch: "factory/run-1", baseCommit: "abc123", exitReason: "running" } as const;
+    const context = {
+      projectId: "project-1",
+      runId: "run-1",
+      workspacePath: "/tmp/worktree",
+      branch: "factory/run-1",
+      baseCommit: "abc123",
+      exitReason: "running",
+    } as const;
 
-    await expect(runner.runStart({ commandId: "project.codegraph-init", blocking: false }, context)).resolves.toMatchObject({ status: "failed", blocked: false, needsAttention: true });
+    await expect(runner.runStart({ commandId: "project.codegraph-init", blocking: false }, context)).resolves.toMatchObject({
+      status: "failed",
+      blocked: false,
+      needsAttention: true,
+    });
     // 不写这个键的项目行为与本字段引入前逐字一致。
-    await expect(runner.runStart({ commandId: "project.start" }, context)).resolves.toMatchObject({ status: "failed", blocked: true, needsAttention: false });
+    await expect(runner.runStart({ commandId: "project.start" }, context)).resolves.toMatchObject({
+      status: "failed",
+      blocked: true,
+      needsAttention: false,
+    });
     // cleanup 没有这个开关：Run 已经结束，没有"往下走"可言，配了也不看。
-    await expect(runner.runCleanup({ commandId: "project.cleanup", blocking: true }, context)).resolves.toMatchObject({ status: "failed", blocked: false, needsAttention: true });
+    await expect(runner.runCleanup({ commandId: "project.cleanup", blocking: true }, context)).resolves.toMatchObject({
+      status: "failed",
+      blocked: false,
+      needsAttention: true,
+    });
   });
 });

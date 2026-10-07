@@ -29,7 +29,13 @@ function walkPlanTo(store: InMemoryPipelineStore, planId: string, target: (typeo
 function fixture() {
   const store = new InMemoryPipelineStore();
   const projects = new ProjectService(store);
-  const project = projects.create({ id: "project-activity", name: "Activity", repoRoot: "/repo/activity", defaultBranch: "main", worktreeRoot: "/tmp/activity-worktrees" });
+  const project = projects.create({
+    id: "project-activity",
+    name: "Activity",
+    repoRoot: "/repo/activity",
+    defaultBranch: "main",
+    worktreeRoot: "/tmp/activity-worktrees",
+  });
   const plans = new PlanService(store, projects);
   return { store, projects, project, plans };
 }
@@ -37,13 +43,33 @@ function fixture() {
 describe("daily activity projection", () => {
   it("groups today's execution, merge and block facts by the day they happened", () => {
     const { store, projects, project, plans } = fixture();
-    const executed = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "thread-activity", title: "Executed plan", resolvedContract: planContractFixture({ store, projectId: project.id, title: "Executed plan" }) });
-    const merged = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "thread-activity", title: "Merged plan", resolvedContract: planContractFixture({ store, projectId: project.id, title: "Merged plan" }) });
-    const blocked = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "thread-activity", title: "Blocked plan", resolvedContract: planContractFixture({ store, projectId: project.id, title: "Blocked plan" }) });
+    const executed = plans.createCandidatePlan({
+      projectId: project.id,
+      sourceExplorerThreadId: "thread-activity",
+      title: "Executed plan",
+      resolvedContract: planContractFixture({ store, projectId: project.id, title: "Executed plan" }),
+    });
+    const merged = plans.createCandidatePlan({
+      projectId: project.id,
+      sourceExplorerThreadId: "thread-activity",
+      title: "Merged plan",
+      resolvedContract: planContractFixture({ store, projectId: project.id, title: "Merged plan" }),
+    });
+    const blocked = plans.createCandidatePlan({
+      projectId: project.id,
+      sourceExplorerThreadId: "thread-activity",
+      title: "Blocked plan",
+      resolvedContract: planContractFixture({ store, projectId: project.id, title: "Blocked plan" }),
+    });
 
     walkPlanTo(store, executed.id, "MERGE_READY");
     walkPlanTo(store, merged.id, "MERGED");
-    updatePlanStatus(store, store.getPlan(blocked.id)!, { status: "BLOCKED", attentionReason: "verification failed" }, "verification failed");
+    updatePlanStatus(
+      store,
+      store.getPlan(blocked.id)!,
+      { status: "BLOCKED", attentionReason: "verification failed" },
+      "verification failed",
+    );
 
     const activity = dailyActivity(store, projects, project.id);
 
@@ -65,14 +91,43 @@ describe("daily activity projection", () => {
 
   it("keeps a Plan's first entry into a state and reports only runs started on an earlier day as cross-day", () => {
     const { store, projects, project, plans } = fixture();
-    const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "thread-activity", title: "Flapping plan", resolvedContract: planContractFixture({ store, projectId: project.id, title: "Flapping plan" }) });
+    const plan = plans.createCandidatePlan({
+      projectId: project.id,
+      sourceExplorerThreadId: "thread-activity",
+      title: "Flapping plan",
+      resolvedContract: planContractFixture({ store, projectId: project.id, title: "Flapping plan" }),
+    });
     walkPlanTo(store, plan.id, "MERGE_READY");
     // 同日再次进入同一状态（例如被退回后重新验证通过）：日报里仍然只出现一次。
     updatePlanStatus(store, store.getPlan(plan.id)!, { status: "BLOCKED" });
     updatePlanStatus(store, store.getPlan(plan.id)!, { status: "MERGE_READY" });
 
-    store.saveRun({ id: "run-old", projectId: project.id, planId: plan.id, planRevision: 1, status: "IN_PROGRESS", branch: "factory/run-old", workspacePath: "/tmp/run-old", baseCommit: "abc", executionThreadId: "thread-old", createdAt: "2020-01-01T00:00:00.000Z", startedAt: "2020-01-01T00:00:00.000Z" });
-    store.saveRun({ id: "run-today", projectId: project.id, planId: plan.id, planRevision: 1, status: "IN_PROGRESS", branch: "factory/run-today", workspacePath: "/tmp/run-today", baseCommit: "abc", executionThreadId: "thread-today", createdAt: new Date().toISOString(), startedAt: new Date().toISOString() });
+    store.saveRun({
+      id: "run-old",
+      projectId: project.id,
+      planId: plan.id,
+      planRevision: 1,
+      status: "IN_PROGRESS",
+      branch: "factory/run-old",
+      workspacePath: "/tmp/run-old",
+      baseCommit: "abc",
+      executionThreadId: "thread-old",
+      createdAt: "2020-01-01T00:00:00.000Z",
+      startedAt: "2020-01-01T00:00:00.000Z",
+    });
+    store.saveRun({
+      id: "run-today",
+      projectId: project.id,
+      planId: plan.id,
+      planRevision: 1,
+      status: "IN_PROGRESS",
+      branch: "factory/run-today",
+      workspacePath: "/tmp/run-today",
+      baseCommit: "abc",
+      executionThreadId: "thread-today",
+      createdAt: new Date().toISOString(),
+      startedAt: new Date().toISOString(),
+    });
 
     const activity = dailyActivity(store, projects, project.id);
 
@@ -83,7 +138,12 @@ describe("daily activity projection", () => {
 
   it("returns empty groups for another day and rejects a date that is not a real calendar day", () => {
     const { store, projects, project, plans } = fixture();
-    const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "thread-activity", title: "Today only", resolvedContract: planContractFixture({ store, projectId: project.id, title: "Today only" }) });
+    const plan = plans.createCandidatePlan({
+      projectId: project.id,
+      sourceExplorerThreadId: "thread-activity",
+      title: "Today only",
+      resolvedContract: planContractFixture({ store, projectId: project.id, title: "Today only" }),
+    });
     walkPlanTo(store, plan.id, "MERGED");
 
     expect(dailyActivity(store, projects, project.id, "2020-01-02").mergedToday).toEqual([]);

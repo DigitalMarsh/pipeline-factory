@@ -27,7 +27,11 @@ export function selectCurrentExplorer(store: PipelineStore, thread: ExplorerThre
   const project = store.getProject(thread.projectId);
   if (project && project.currentExplorerThreadId !== thread.id) {
     store.updateProject({ ...project, currentExplorerThreadId: thread.id, updatedAt: store.now() });
-    store.appendEvent({ type: "project.explorer.selected", aggregateId: project.id, payload: { projectId: project.id, explorerId: thread.id } });
+    store.appendEvent({
+      type: "project.explorer.selected",
+      aggregateId: project.id,
+      payload: { projectId: project.id, explorerId: thread.id },
+    });
   }
 }
 

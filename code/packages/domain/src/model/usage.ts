@@ -21,18 +21,31 @@ export type ModelUsage = {
 };
 export type ModelUsageScope = "turn" | "total";
 
-const usageField = (value: unknown): number | null => typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+const usageField = (value: unknown): number | null => (typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null);
 
 /** 兼容 OpenAI snake_case、App Server camelCase 及其嵌套 reasoning 字段。 */
 export function normalizeModelUsage(value: unknown): ModelUsage | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const candidate = value as Record<string, unknown>;
-  const outputDetails = candidate.output_tokens_details && typeof candidate.output_tokens_details === "object" ? candidate.output_tokens_details as Record<string, unknown> : {};
-  const outputDetailsCamel = candidate.outputTokensDetails && typeof candidate.outputTokensDetails === "object" ? candidate.outputTokensDetails as Record<string, unknown> : {};
+  const outputDetails =
+    candidate.output_tokens_details && typeof candidate.output_tokens_details === "object"
+      ? (candidate.output_tokens_details as Record<string, unknown>)
+      : {};
+  const outputDetailsCamel =
+    candidate.outputTokensDetails && typeof candidate.outputTokensDetails === "object"
+      ? (candidate.outputTokensDetails as Record<string, unknown>)
+      : {};
   const usage: ModelUsage = {
     inputTokens: usageField(candidate.input_tokens ?? candidate.inputTokens),
     outputTokens: usageField(candidate.output_tokens ?? candidate.outputTokens),
-    reasoningTokens: usageField(candidate.reasoning_tokens ?? candidate.reasoningTokens ?? candidate.reasoning_output_tokens ?? candidate.reasoningOutputTokens ?? outputDetails.reasoning_tokens ?? outputDetailsCamel.reasoningTokens),
+    reasoningTokens: usageField(
+      candidate.reasoning_tokens ??
+        candidate.reasoningTokens ??
+        candidate.reasoning_output_tokens ??
+        candidate.reasoningOutputTokens ??
+        outputDetails.reasoning_tokens ??
+        outputDetailsCamel.reasoningTokens,
+    ),
     totalTokens: usageField(candidate.total_tokens ?? candidate.totalTokens),
   };
   return Object.values(usage).some((item) => item !== null) ? usage : null;
@@ -48,7 +61,8 @@ export function mergeModelUsage(previous: ModelUsage | null, incoming: ModelUsag
       totalTokens: incoming.totalTokens ?? previous?.totalTokens ?? null,
     };
   }
-  const add = (before: number | null | undefined, after: number | null): number | null => before === null || before === undefined ? after : after === null ? before : before + after;
+  const add = (before: number | null | undefined, after: number | null): number | null =>
+    before === null || before === undefined ? after : after === null ? before : before + after;
   return {
     inputTokens: add(previous?.inputTokens, incoming.inputTokens),
     outputTokens: add(previous?.outputTokens, incoming.outputTokens),

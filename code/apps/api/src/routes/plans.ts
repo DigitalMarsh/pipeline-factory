@@ -42,7 +42,15 @@
  */
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
-import type { AgentLoopRunner, MergeService, PipelineStore, PlanDispatchCoordinator, PlanService, PlanStatus, Scheduler } from "@pipeline-factory/domain";
+import type {
+  AgentLoopRunner,
+  MergeService,
+  PipelineStore,
+  PlanDispatchCoordinator,
+  PlanService,
+  PlanStatus,
+  Scheduler,
+} from "@pipeline-factory/domain";
 import { actorBody, projectThreadParams } from "../schemas/common.js";
 import { planIdParams, planRevisionParams, revisionDraftBody, revisionDraftParams, threadPlanQuery } from "../schemas/plans.js";
 import { explorerCandidateQuery, projectExplorerParams, projectExplorerPlanParams } from "../schemas/explorers.js";
@@ -83,7 +91,16 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
   const confirmPlanFlow = async (planId: string, revision: number, actorId: string) => {
     if (dispatchCoordinator) {
       const result = await dispatchCoordinator.confirmAndDispatch(planId, revision, actorId);
-      return { plan: result.plan, run: result.run, dispatch: result.state, confirmation: { stage: result.state.phase ?? result.state.status, attempt: result.state.attempt, retryable: !result.run && result.state.status !== "COMPLETED" } };
+      return {
+        plan: result.plan,
+        run: result.run,
+        dispatch: result.state,
+        confirmation: {
+          stage: result.state.phase ?? result.state.status,
+          attempt: result.state.attempt,
+          retryable: !result.run && result.state.status !== "COMPLETED",
+        },
+      };
     }
     const plan = plans.confirm(planId, actorId, revision);
     return { plan, run: null, dispatch: null, confirmation: { stage: "FROZEN", attempt: 1, retryable: true } };
@@ -105,7 +122,8 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
     const params = projectThreadParams.safeParse(request.params);
     const query = threadPlanQuery.safeParse(request.query ?? {});
     if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid project plan query" });
-    if (!store.getProject(params.data.projectId)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
+    if (!store.getProject(params.data.projectId))
+      return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
     const statuses = query.data.status?.split(",").filter(Boolean) as PlanStatus[] | undefined;
     try {
       const result = plans.query({
@@ -166,21 +184,35 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     const explorer = store.getThread(params.data.explorerId);
     if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
-    return { items: plans.listExplorerThreadPlans(explorer.id).map((plan) => ({ ...plan, ...planProjection(store, plan), dispatch: store.getDispatchState(plan.id) ?? null })) };
+    return {
+      items: plans
+        .listExplorerThreadPlans(explorer.id)
+        .map((plan) => ({ ...plan, ...planProjection(store, plan), dispatch: store.getDispatchState(plan.id) ?? null })),
+    };
   });
 
   app.get("/api/v4/projects/:projectId/candidate-plans", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    if (!store.getProject(params.data.projectId)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
-    return { items: plans.listProjectPlanCandidates(params.data.projectId).map((plan) => ({ ...plan, ...planProjection(store, plan), dispatch: store.getDispatchState(plan.id) ?? null })) };
+    if (!store.getProject(params.data.projectId))
+      return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
+    return {
+      items: plans
+        .listProjectPlanCandidates(params.data.projectId)
+        .map((plan) => ({ ...plan, ...planProjection(store, plan), dispatch: store.getDispatchState(plan.id) ?? null })),
+    };
   });
 
   app.get("/api/v4/projects/:projectId/tasks", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    if (!store.getProject(params.data.projectId)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
-    return { items: plans.listProjectTasks(params.data.projectId).map((plan) => ({ ...plan, ...planProjection(store, plan), dispatch: store.getDispatchState(plan.id) ?? null })) };
+    if (!store.getProject(params.data.projectId))
+      return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
+    return {
+      items: plans
+        .listProjectTasks(params.data.projectId)
+        .map((plan) => ({ ...plan, ...planProjection(store, plan), dispatch: store.getDispatchState(plan.id) ?? null })),
+    };
   });
 
   app.post("/api/v4/projects/:projectId/explorers/:explorerId/explorer-plans/:explorerPlanId/selected-plan", async (request, reply) => {
@@ -189,9 +221,19 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid selected Plan" });
     const explorer = store.getThread(params.data.explorerId);
     const requirement = store.getExplorerPlan(params.data.explorerPlanId);
-    if (!explorer || explorer.projectId !== params.data.projectId || !requirement || requirement.explorerThreadId !== explorer.id || requirement.projectId !== explorer.projectId) return reply.code(404).send({ error: "ExplorerPlan not found" });
-    try { return { explorerPlan: plans.selectCandidate(requirement.id, body.data.planId) }; }
-    catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "Plan cannot be selected" }); }
+    if (
+      !explorer ||
+      explorer.projectId !== params.data.projectId ||
+      !requirement ||
+      requirement.explorerThreadId !== explorer.id ||
+      requirement.projectId !== explorer.projectId
+    )
+      return reply.code(404).send({ error: "ExplorerPlan not found" });
+    try {
+      return { explorerPlan: plans.selectCandidate(requirement.id, body.data.planId) };
+    } catch (error) {
+      return reply.code(409).send({ error: error instanceof Error ? error.message : "Plan cannot be selected" });
+    }
   });
 
   app.get("/api/v4/projects/:projectId/explorers/:explorerId/candidate", async (request, reply) => {
@@ -205,11 +247,25 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
       const explorerPlan = store.getExplorerPlan(explorerPlanId);
       if (!explorerPlan || explorerPlan.explorerThreadId !== explorer.id) return reply.code(404).send({ error: "ExplorerPlan not found" });
     }
-    const requirement = explorerPlanId ? store.getExplorerPlan(explorerPlanId) : explorer.activeExplorerPlanId ? store.getExplorerPlan(explorer.activeExplorerPlanId) : undefined;
+    const requirement = explorerPlanId
+      ? store.getExplorerPlan(explorerPlanId)
+      : explorer.activeExplorerPlanId
+        ? store.getExplorerPlan(explorer.activeExplorerPlanId)
+        : undefined;
     const selected = requirement?.candidatePlanId ? store.getPlan(requirement.candidatePlanId) : undefined;
-    const legacyCandidate = requirement && !requirement.newPlanRequested && !requirement.candidatePlanId
-      ? store.listPlans().filter((plan) => plan.projectId === explorer.projectId && plan.sourceExplorerThreadId === explorer.id && plan.explorerPlanId === requirement.id && plan.status === "DRAFT").sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
-      : undefined;
+    const legacyCandidate =
+      requirement && !requirement.newPlanRequested && !requirement.candidatePlanId
+        ? store
+            .listPlans()
+            .filter(
+              (plan) =>
+                plan.projectId === explorer.projectId &&
+                plan.sourceExplorerThreadId === explorer.id &&
+                plan.explorerPlanId === requirement.id &&
+                plan.status === "DRAFT",
+            )
+            .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
+        : undefined;
     const candidate = selected?.status === "DRAFT" && selected.sourceExplorerThreadId === explorer.id ? selected : legacyCandidate;
     if (!candidate) return reply.code(404).send({ error: "Candidate plan not found" });
     return { plan: { ...candidate, ...planProjection(store, candidate) } };
@@ -221,7 +277,8 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     const explorer = store.getThread(params.data.explorerId);
     if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
-    if (!explorer.activeRevisionDraftId) return reply.code(404).send({ code: "REVISION_DRAFT_NOT_FOUND", error: "No active revision draft" });
+    if (!explorer.activeRevisionDraftId)
+      return reply.code(404).send({ code: "REVISION_DRAFT_NOT_FOUND", error: "No active revision draft" });
     const draft = store.getRevisionDraft(explorer.activeRevisionDraftId);
     if (!draft || draft.projectId !== explorer.projectId || !["EDITING", "READY_TO_CONFIRM", "BASE_CHANGED"].includes(draft.status)) {
       return reply.code(404).send({ code: "REVISION_DRAFT_NOT_FOUND", error: "No active revision draft" });
@@ -235,8 +292,14 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
     try {
       const plan = plans.get(params.data.planId);
       if (ensurePlanProject(plan.projectId, reply) === null) return;
-      return { plan: { ...plan, ...planProjection(store, plan) }, items: plans.listRevisions(plan.id), drafts: store.listRevisionDrafts(plan.id) };
-    } catch { return reply.code(404).send({ code: "PLAN_NOT_FOUND", error: "Plan not found" }); }
+      return {
+        plan: { ...plan, ...planProjection(store, plan) },
+        items: plans.listRevisions(plan.id),
+        drafts: store.listRevisionDrafts(plan.id),
+      };
+    } catch {
+      return reply.code(404).send({ code: "PLAN_NOT_FOUND", error: "Plan not found" });
+    }
   });
 
   app.get("/api/v4/plans/:planId/candidate-versions", async (request, reply) => {
@@ -245,9 +308,15 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
     try {
       const plan = plans.get(params.data.planId);
       if (ensurePlanProject(plan.projectId, reply) === null) return;
-      const items = store.listCandidateVersions(plan.id).map((version) => ({ ...version, isLatest: version.revision === plan.revision, readOnly: version.revision !== plan.revision || plan.status !== "DRAFT" }));
+      const items = store.listCandidateVersions(plan.id).map((version) => ({
+        ...version,
+        isLatest: version.revision === plan.revision,
+        readOnly: version.revision !== plan.revision || plan.status !== "DRAFT",
+      }));
       return { planId: plan.id, latestRevision: plan.revision, items };
-    } catch { return reply.code(404).send({ code: "PLAN_NOT_FOUND", error: "Plan not found" }); }
+    } catch {
+      return reply.code(404).send({ code: "PLAN_NOT_FOUND", error: "Plan not found" });
+    }
   });
 
   app.get("/api/v4/plans/:planId/candidate-versions/:revision", async (request, reply) => {
@@ -258,8 +327,15 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
       if (ensurePlanProject(plan.projectId, reply) === null) return;
       const version = store.listCandidateVersions(plan.id).find((item) => item.revision === params.data.revision);
       if (!version) return reply.code(404).send({ code: "CANDIDATE_VERSION_NOT_FOUND", error: "Candidate version not found" });
-      return { planId: plan.id, latestRevision: plan.revision, version, readOnly: version.revision !== plan.revision || plan.status !== "DRAFT" };
-    } catch { return reply.code(404).send({ code: "PLAN_NOT_FOUND", error: "Plan not found" }); }
+      return {
+        planId: plan.id,
+        latestRevision: plan.revision,
+        version,
+        readOnly: version.revision !== plan.revision || plan.status !== "DRAFT",
+      };
+    } catch {
+      return reply.code(404).send({ code: "PLAN_NOT_FOUND", error: "Plan not found" });
+    }
   });
 
   app.get("/api/v4/plans/:planId/revisions/:revision", async (request, reply) => {
@@ -269,27 +345,55 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
       const plan = plans.get(params.data.planId);
       if (ensurePlanProject(plan.projectId, reply) === null) return;
       const revision = plans.getRevision(plan.id, params.data.revision);
-      return { plan: { ...plan, ...planProjection(store, plan) }, planId: plan.id, revision, runs: store.listRuns().filter((run) => run.planId === plan.id && run.planRevision === revision.revision) };
-    } catch { return reply.code(404).send({ code: "REVISION_NOT_FOUND", error: "Plan revision not found" }); }
+      return {
+        plan: { ...plan, ...planProjection(store, plan) },
+        planId: plan.id,
+        revision,
+        runs: store.listRuns().filter((run) => run.planId === plan.id && run.planRevision === revision.revision),
+      };
+    } catch {
+      return reply.code(404).send({ code: "REVISION_NOT_FOUND", error: "Plan revision not found" });
+    }
   });
 
   app.post("/api/v4/plans/:planId/revisions/:revision/drafts", async (request, reply) => {
     const params = planRevisionParams.safeParse(request.params);
     const body = revisionDraftBody.safeParse(request.body ?? {});
-    if (!params.success || !body.success || body.data.fromRevision !== params.data.revision) return reply.code(400).send({ error: "Invalid revision draft request" });
+    if (!params.success || !body.success || body.data.fromRevision !== params.data.revision)
+      return reply.code(400).send({ error: "Invalid revision draft request" });
     try {
       const plan = plans.get(params.data.planId);
       if (ensurePlanProject(plan.projectId, reply, true) === null) return;
       const thread = store.getThread(body.data.explorerThreadId);
-      if (!thread || thread.projectId !== plan.projectId) return reply.code(404).send({ code: "EXPLORER_THREAD_PROJECT_MISMATCH", error: "ExplorerThread does not belong to Plan Project" });
-      const unmerged = store.listRuns().filter((run) => run.planId === plan.id && run.planRevision === params.data.revision && !merger.findByRun(run.id)?.mergedAt && (run.workspacePath !== null || !["CANCELLED", "STALE"].includes(run.status)));
-      if (unmerged.length && !body.data.discardUnmergedRun) return reply.code(409).send({ code: "UNMERGED_RUN_CONFIRMATION_REQUIRED", error: "Revision has an unmerged Run/worktree; explicit discardUnmergedRun is required", runs: unmerged.map((run) => run.id) });
+      if (!thread || thread.projectId !== plan.projectId)
+        return reply.code(404).send({ code: "EXPLORER_THREAD_PROJECT_MISMATCH", error: "ExplorerThread does not belong to Plan Project" });
+      const unmerged = store
+        .listRuns()
+        .filter(
+          (run) =>
+            run.planId === plan.id &&
+            run.planRevision === params.data.revision &&
+            !merger.findByRun(run.id)?.mergedAt &&
+            (run.workspacePath !== null || !["CANCELLED", "STALE"].includes(run.status)),
+        );
+      if (unmerged.length && !body.data.discardUnmergedRun)
+        return reply.code(409).send({
+          code: "UNMERGED_RUN_CONFIRMATION_REQUIRED",
+          error: "Revision has an unmerged Run/worktree; explicit discardUnmergedRun is required",
+          runs: unmerged.map((run) => run.id),
+        });
       if (unmerged.length) {
-        if (!scheduler) return reply.code(503).send({ code: "CLEANUP_UNAVAILABLE", error: "Scheduler is required to clean an unmerged Run" });
+        if (!scheduler)
+          return reply.code(503).send({ code: "CLEANUP_UNAVAILABLE", error: "Scheduler is required to clean an unmerged Run" });
         for (const run of unmerged) {
-          for (const loop of store.listAgentLoops(run.executionThreadId)) if (loop.state === "RUNNING" || loop.state === "WAITING_FOR_INPUT" || loop.state === "PAUSED") await loopController.cancel(loop.id, "revision_superseded");
+          for (const loop of store.listAgentLoops(run.executionThreadId))
+            if (loop.state === "RUNNING" || loop.state === "WAITING_FOR_INPUT" || loop.state === "PAUSED")
+              await loopController.cancel(loop.id, "revision_superseded");
           await scheduler.finish(run.id, "cancelled", {}, "revision_superseded");
-          if (store.listHookExecutions(run.id).some((hook) => hook.hookType === "cleanup" && hook.status === "failed")) return reply.code(409).send({ code: "CLEANUP_FAILED", error: "Cleanup hook failed; RevisionDraft was not created", runId: run.id });
+          if (store.listHookExecutions(run.id).some((hook) => hook.hookType === "cleanup" && hook.status === "failed"))
+            return reply
+              .code(409)
+              .send({ code: "CLEANUP_FAILED", error: "Cleanup hook failed; RevisionDraft was not created", runId: run.id });
         }
       }
       const draft = plans.createRevisionDraft({ ...body.data, planId: plan.id, explorerThreadId: thread.id });
@@ -304,7 +408,8 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
     const params = revisionDraftParams.safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     const draft = store.getRevisionDraft(params.data.draftId);
-    if (!draft || draft.planId !== params.data.planId) return reply.code(404).send({ code: "REVISION_DRAFT_NOT_FOUND", error: "RevisionDraft not found" });
+    if (!draft || draft.planId !== params.data.planId)
+      return reply.code(404).send({ code: "REVISION_DRAFT_NOT_FOUND", error: "RevisionDraft not found" });
     if (ensurePlanProject(draft.projectId, reply) === null) return;
     return { draft };
   });
@@ -314,13 +419,16 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
     const body = actorBody.safeParse(request.body ?? {});
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid revision confirmation" });
     const draft = store.getRevisionDraft(params.data.draftId);
-    if (!draft || draft.planId !== params.data.planId) return reply.code(404).send({ code: "REVISION_DRAFT_NOT_FOUND", error: "RevisionDraft not found" });
+    if (!draft || draft.planId !== params.data.planId)
+      return reply.code(404).send({ code: "REVISION_DRAFT_NOT_FOUND", error: "RevisionDraft not found" });
     if (ensurePlanProject(draft.projectId, reply, true) === null) return;
     try {
       const plan = plans.confirmRevisionDraft(draft.draftId, body.data.actorId);
       return await confirmPlanFlow(plan.id, plan.revision, body.data.actorId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return reply.code(409).send({ code: message, error: message });
     }
-    catch (error) { const message = error instanceof Error ? error.message : String(error); return reply.code(409).send({ code: message, error: message }); }
   });
 
   app.post("/api/v4/plans/:planId/revision-drafts/:draftId/discard", async (request, reply) => {
@@ -328,10 +436,15 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
     const body = actorBody.safeParse(request.body ?? {});
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid revision discard" });
     const draft = store.getRevisionDraft(params.data.draftId);
-    if (!draft || draft.planId !== params.data.planId) return reply.code(404).send({ code: "REVISION_DRAFT_NOT_FOUND", error: "RevisionDraft not found" });
+    if (!draft || draft.planId !== params.data.planId)
+      return reply.code(404).send({ code: "REVISION_DRAFT_NOT_FOUND", error: "RevisionDraft not found" });
     if (ensurePlanProject(draft.projectId, reply, true) === null) return;
-    try { return { draft: plans.discardRevisionDraft(draft.draftId, body.data.actorId) }; }
-    catch (error) { const message = error instanceof Error ? error.message : String(error); return reply.code(409).send({ code: message, error: message }); }
+    try {
+      return { draft: plans.discardRevisionDraft(draft.draftId, body.data.actorId) };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return reply.code(409).send({ code: message, error: message });
+    }
   });
 
   app.post("/api/v4/plans/:planId/revisions/:revision/enqueue", async (request, reply) => {
@@ -340,9 +453,12 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
     try {
       const plan = plans.get(params.data.planId);
       if (ensurePlanProject(plan.projectId, reply, true) === null) return;
-      if (plan.revision !== params.data.revision) return reply.code(409).send({ code: "REVISION_NOT_LATEST", error: "Only the latest revision can be enqueued" });
+      if (plan.revision !== params.data.revision)
+        return reply.code(409).send({ code: "REVISION_NOT_LATEST", error: "Only the latest revision can be enqueued" });
       return { plan: plans.enqueue(plan.id), dispatch: null };
-    } catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "Plan cannot be enqueued" }); }
+    } catch (error) {
+      return reply.code(409).send({ error: error instanceof Error ? error.message : "Plan cannot be enqueued" });
+    }
   });
 
   app.post("/api/v4/plans/:planId/revisions/:revision/run", async (request, reply) => {
@@ -352,15 +468,23 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
     try {
       const plan = plans.get(params.data.planId);
       if (ensurePlanProject(plan.projectId, reply, true) === null) return;
-      if (plan.revision !== params.data.revision) return reply.code(409).send({ code: "REVISION_NOT_LATEST", error: "Only the latest revision can be dispatched" });
+      if (plan.revision !== params.data.revision)
+        return reply.code(409).send({ code: "REVISION_NOT_LATEST", error: "Only the latest revision can be dispatched" });
       if (dispatchCoordinator) {
         const dispatched = await dispatchCoordinator.dispatch(plan.id);
-        return { plan: dispatched.plan, run: dispatched.state.runId ? store.getRun(dispatched.state.runId) ?? null : null, dispatch: dispatched.state };
+        return {
+          plan: dispatched.plan,
+          run: dispatched.state.runId ? (store.getRun(dispatched.state.runId) ?? null) : null,
+          dispatch: dispatched.state,
+        };
       }
       const project = store.getProject(plan.projectId);
       const dispatchedPlan = plans.dispatch(plan.id);
       return { plan: dispatchedPlan, run: await scheduler.start(plan.id, project?.settings.hooks ?? {}), dispatch: null };
-    } catch (error) { const message = error instanceof Error ? error.message : String(error); return reply.code(409).send({ code: "RUN_START_FAILED", error: message }); }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return reply.code(409).send({ code: "RUN_START_FAILED", error: message });
+    }
   });
 
   app.get("/api/v4/plans/:planId", async (request, reply) => {
@@ -370,7 +494,13 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
       const plan = plans.get(params.data.planId);
       if (ensurePlanProject(plan.projectId, reply) === null) return;
       const revision = store.getRevision(plan.id, plan.revision);
-      return { plan: { ...plan, ...planProjection(store, plan) }, revision: revision ?? null, projectSnapshot: revision?.projectConfigSnapshot ?? null, dispatch: dispatchCoordinator?.state(plan.id) ?? store.getDispatchState(plan.id) ?? null, mergeRequest: plan.runId ? merger.findByRun(plan.runId) ?? null : null };
+      return {
+        plan: { ...plan, ...planProjection(store, plan) },
+        revision: revision ?? null,
+        projectSnapshot: revision?.projectConfigSnapshot ?? null,
+        dispatch: dispatchCoordinator?.state(plan.id) ?? store.getDispatchState(plan.id) ?? null,
+        mergeRequest: plan.runId ? (merger.findByRun(plan.runId) ?? null) : null,
+      };
     } catch {
       return reply.code(404).send({ error: "Plan not found" });
     }
@@ -383,7 +513,8 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
     try {
       const plan = plans.get(params.data.planId);
       if (ensurePlanProject(plan.projectId, reply, true) === null) return;
-      if (plan.revision !== params.data.revision) return reply.code(409).send({ code: "REVISION_NOT_LATEST", error: "Only the latest candidate version can be confirmed" });
+      if (plan.revision !== params.data.revision)
+        return reply.code(409).send({ code: "REVISION_NOT_LATEST", error: "Only the latest candidate version can be confirmed" });
       return await confirmPlanFlow(plan.id, params.data.revision, body.data.actorId);
     } catch (error) {
       const stage = error instanceof Error && error.message.includes("not found") ? "VALIDATING" : "VALIDATION_FAILED";
@@ -393,13 +524,16 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
 
   app.post("/api/v4/plans/:planId/confirm", async (request, reply) => {
     const params = planIdParams.safeParse(request.params);
-    const body = z.object({ actorId: z.string().min(1).default("local-user"), revision: z.number().int().positive().optional() }).safeParse(request.body ?? {});
+    const body = z
+      .object({ actorId: z.string().min(1).default("local-user"), revision: z.number().int().positive().optional() })
+      .safeParse(request.body ?? {});
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid confirmation request" });
     try {
       const plan = plans.get(params.data.planId);
       if (ensurePlanProject(plan.projectId, reply, true) === null) return;
       const revision = body.data.revision ?? plan.revision;
-      if (plan.revision !== revision) return reply.code(409).send({ code: "REVISION_NOT_LATEST", error: "Only the latest candidate version can be confirmed" });
+      if (plan.revision !== revision)
+        return reply.code(409).send({ code: "REVISION_NOT_LATEST", error: "Only the latest candidate version can be confirmed" });
       return await confirmPlanFlow(plan.id, revision, body.data.actorId);
     } catch (error) {
       return reply.code(409).send(domainErrorReply(error, "Plan cannot be confirmed", "VALIDATION_FAILED"));
@@ -412,7 +546,9 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
    */
   app.put("/api/v4/plans/:planId/dependencies", async (request, reply) => {
     const params = planIdParams.safeParse(request.params);
-    const body = z.object({ dependsOnPlanIds: z.array(z.string().min(1)), actorId: z.string().min(1).default("local-user") }).safeParse(request.body ?? {});
+    const body = z
+      .object({ dependsOnPlanIds: z.array(z.string().min(1)), actorId: z.string().min(1).default("local-user") })
+      .safeParse(request.body ?? {});
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid plan dependency request" });
     try {
       const plan = plans.get(params.data.planId);
@@ -431,7 +567,9 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
    */
   app.put("/api/v4/plans/:planId/verification-suites", async (request, reply) => {
     const params = planIdParams.safeParse(request.params);
-    const body = z.object({ suites: z.array(z.string().min(1)), actorId: z.string().min(1).default("local-user") }).safeParse(request.body ?? {});
+    const body = z
+      .object({ suites: z.array(z.string().min(1)), actorId: z.string().min(1).default("local-user") })
+      .safeParse(request.body ?? {});
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid verification suite request" });
     try {
       const plan = plans.get(params.data.planId);
@@ -465,7 +603,8 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
     try {
       const plan = plans.get(params.data.planId);
       if (ensurePlanProject(plan.projectId, reply, true) === null) return;
-      if (plan.revision > 1) return reply.code(409).send({ code: "REVISION_REQUIRED", error: "Use the revision-specific enqueue endpoint" });
+      if (plan.revision > 1)
+        return reply.code(409).send({ code: "REVISION_REQUIRED", error: "Use the revision-specific enqueue endpoint" });
       return { plan: plans.enqueue(params.data.planId), dispatch: null };
     } catch (error) {
       return reply.code(409).send({ error: error instanceof Error ? error.message : "Plan cannot be enqueued" });
@@ -497,14 +636,21 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
       if (plan.revision > 1) return reply.code(409).send({ code: "REVISION_REQUIRED", error: "Use the revision-specific run endpoint" });
       if (dispatchCoordinator) {
         const dispatched = await dispatchCoordinator.dispatch(plan.id);
-        return { plan: dispatched.plan, run: dispatched.state.runId ? store.getRun(dispatched.state.runId) ?? null : null, dispatch: dispatched.state };
+        return {
+          plan: dispatched.plan,
+          run: dispatched.state.runId ? (store.getRun(dispatched.state.runId) ?? null) : null,
+          dispatch: dispatched.state,
+        };
       }
       const project = store.getProject(plan.projectId);
       const dispatchedPlan = plans.dispatch(plan.id);
       return { plan: dispatchedPlan, run: await scheduler.start(plan.id, project?.settings.hooks ?? {}), dispatch: null };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Run cannot be started";
-      return reply.code(409).send({ code: /RUN_PREREQUISITES_UNSATISFIED/.test(message) ? "RUN_PREREQUISITES_UNSATISFIED" : "RUN_START_FAILED", error: message });
+      return reply.code(409).send({
+        code: /RUN_PREREQUISITES_UNSATISFIED/.test(message) ? "RUN_PREREQUISITES_UNSATISFIED" : "RUN_START_FAILED",
+        error: message,
+      });
     }
   });
 }

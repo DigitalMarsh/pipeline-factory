@@ -4,18 +4,44 @@
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  */
 import { describe, expect, it } from "vitest";
-import { allInputQuestionsAnswered, buildInputAnswers, hasFreeformInput, hasSelectableOptions, inputAnswerDisplayLabels, inputAnswerDisplayText, inputAnswerLabels, inputQuestionComplete, nextInputQuestionIndex, previousInputQuestionIndex, redactedAnswerSummary, resolveQuestionAnswers } from "./explorerInput";
+import {
+  allInputQuestionsAnswered,
+  buildInputAnswers,
+  hasFreeformInput,
+  hasSelectableOptions,
+  inputAnswerDisplayLabels,
+  inputAnswerDisplayText,
+  inputAnswerLabels,
+  inputQuestionComplete,
+  nextInputQuestionIndex,
+  previousInputQuestionIndex,
+  redactedAnswerSummary,
+  resolveQuestionAnswers,
+} from "./explorerInput";
 import type { ExplorerInputProgress } from "./explorerInputProgressDraft";
 import type { ExplorerInputRequest, ModelInputQuestion } from "../types";
 
 describe("explorer structured input", () => {
   const questions = [
-    { id: "choice", header: "Choice", question: "Pick", isOther: false, isSecret: false, options: [{ label: "A", description: "one" }, { label: "B", description: "two" }] },
+    {
+      id: "choice",
+      header: "Choice",
+      question: "Pick",
+      isOther: false,
+      isSecret: false,
+      options: [
+        { label: "A", description: "one" },
+        { label: "B", description: "two" },
+      ],
+    },
     { id: "other", header: "Other", question: "Explain", isOther: true, isSecret: false, options: null },
   ];
 
   it("accepts multiple declared option answers and other text", () => {
-    expect(buildInputAnswers(questions, { choice: ["A", "B"], other: ["custom"] })).toEqual({ choice: { answers: ["A", "B"] }, other: { answers: ["custom"] } });
+    expect(buildInputAnswers(questions, { choice: ["A", "B"], other: ["custom"] })).toEqual({
+      choice: { answers: ["A", "B"] },
+      other: { answers: ["custom"] },
+    });
   });
 
   it("rejects unknown and undeclared option values", () => {
@@ -26,17 +52,62 @@ describe("explorer structured input", () => {
   it("keeps secret answers out of the redacted summary", () => {
     const secretQuestion = [{ id: "token", header: "Token", question: "Enter token", isOther: true, isSecret: true, options: null }];
     expect(buildInputAnswers(secretQuestion, { token: ["top-secret"] })).toEqual({ token: { answers: ["top-secret"] } });
-    expect(redactedAnswerSummary({ id: "input-1", threadId: "thread-1", localTurnId: "turn-1", providerRequestId: "request-1", providerThreadId: "provider-thread-1", providerTurnId: "provider-turn-1", itemId: "item-1", questions: secretQuestion, isBlocking: true, status: "OPEN", createdAt: "2026-01-01T00:00:00.000Z", answeredAt: null, answeredBy: null, redactedAnswerSummary: null }, { token: ["top-secret"] })).toEqual({ token: { answerCount: 1, secret: true } });
+    expect(
+      redactedAnswerSummary(
+        {
+          id: "input-1",
+          threadId: "thread-1",
+          localTurnId: "turn-1",
+          providerRequestId: "request-1",
+          providerThreadId: "provider-thread-1",
+          providerTurnId: "provider-turn-1",
+          itemId: "item-1",
+          questions: secretQuestion,
+          isBlocking: true,
+          status: "OPEN",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          answeredAt: null,
+          answeredBy: null,
+          redactedAnswerSummary: null,
+        },
+        { token: ["top-secret"] },
+      ),
+    ).toEqual({ token: { answerCount: 1, secret: true } });
   });
 
   it("returns non-secret labels for the conversation stream and masks secret answers", () => {
-    const request = { id: "input-1", threadId: "thread-1", localTurnId: "turn-1", providerRequestId: "request-1", providerThreadId: "provider-thread-1", providerTurnId: "provider-turn-1", itemId: "item-1", questions: [...questions, { id: "token", header: "Token", question: "Enter token", isOther: true, isSecret: true, options: null }], isBlocking: true, status: "ANSWERED" as const, createdAt: "2026-01-01T00:00:00.000Z", answeredAt: "2026-01-01T00:01:00.000Z", answeredBy: "local-user", redactedAnswerSummary: { choice: { answerCount: 1, secret: false, answers: ["A"] }, token: { answerCount: 1, secret: true } } };
+    const request = {
+      id: "input-1",
+      threadId: "thread-1",
+      localTurnId: "turn-1",
+      providerRequestId: "request-1",
+      providerThreadId: "provider-thread-1",
+      providerTurnId: "provider-turn-1",
+      itemId: "item-1",
+      questions: [...questions, { id: "token", header: "Token", question: "Enter token", isOther: true, isSecret: true, options: null }],
+      isBlocking: true,
+      status: "ANSWERED" as const,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      answeredAt: "2026-01-01T00:01:00.000Z",
+      answeredBy: "local-user",
+      redactedAnswerSummary: { choice: { answerCount: 1, secret: false, answers: ["A"] }, token: { answerCount: 1, secret: true } },
+    };
     expect(inputAnswerLabels(request.questions[0]!, request.redactedAnswerSummary)).toEqual(["A"]);
     expect(inputAnswerLabels(request.questions[2]!, request.redactedAnswerSummary)).toEqual(["已隐藏"]);
   });
 
   it("keeps declared choices visible when a question also allows other input", () => {
-    const question = { id: "choice-with-other", header: "Choice", question: "Pick", isOther: true, isSecret: false, options: [{ label: "A", description: "one" }, { label: "B", description: "two" }] };
+    const question = {
+      id: "choice-with-other",
+      header: "Choice",
+      question: "Pick",
+      isOther: true,
+      isSecret: false,
+      options: [
+        { label: "A", description: "one" },
+        { label: "B", description: "two" },
+      ],
+    };
     expect(hasSelectableOptions(question)).toBe(true);
     expect(hasFreeformInput(question)).toBe(true);
     expect(resolveQuestionAnswers(question, ["A"], "")).toEqual(["A"]);
@@ -57,7 +128,18 @@ describe("explorer structured input", () => {
   });
 });
 
-const question = (overrides: Partial<ModelInputQuestion> = {}): ModelInputQuestion => ({ id: "choice", header: "Choice", question: "Pick", isOther: true, isSecret: false, options: [{ label: "A", description: "one" }, { label: "B", description: "two" }], ...overrides });
+const question = (overrides: Partial<ModelInputQuestion> = {}): ModelInputQuestion => ({
+  id: "choice",
+  header: "Choice",
+  question: "Pick",
+  isOther: true,
+  isSecret: false,
+  options: [
+    { label: "A", description: "one" },
+    { label: "B", description: "two" },
+  ],
+  ...overrides,
+});
 
 const request = (overrides: Partial<ExplorerInputRequest> = {}): ExplorerInputRequest => ({
   id: "input-1",
@@ -77,7 +159,13 @@ const request = (overrides: Partial<ExplorerInputRequest> = {}): ExplorerInputRe
   ...overrides,
 });
 
-const progress = (overrides: Partial<ExplorerInputProgress> = {}): ExplorerInputProgress => ({ requestId: "input-1", currentIndex: 0, values: {}, otherValues: {}, ...overrides });
+const progress = (overrides: Partial<ExplorerInputProgress> = {}): ExplorerInputProgress => ({
+  requestId: "input-1",
+  currentIndex: 0,
+  values: {},
+  otherValues: {},
+  ...overrides,
+});
 
 describe("答案展示（草稿优先）", () => {
   it("本地草稿优先于服务端已提交答案", () => {
@@ -89,7 +177,9 @@ describe("答案展示（草稿优先）", () => {
   it("草稿属于另一张请求时不借用，回落到服务端答案", () => {
     const withAnswer = request({ redactedAnswerSummary: { choice: { answerCount: 1, secret: false, answers: ["A"] } } });
 
-    expect(inputAnswerDisplayLabels(withAnswer, question(), progress({ requestId: "input-other", values: { choice: ["B"] } }))).toEqual(["A"]);
+    expect(inputAnswerDisplayLabels(withAnswer, question(), progress({ requestId: "input-other", values: { choice: ["B"] } }))).toEqual([
+      "A",
+    ]);
   });
 
   it("密钥题的本地草稿也隐藏，不让明文出现在屏幕上", () => {
@@ -108,11 +198,15 @@ describe("答案展示（草稿优先）", () => {
 
 describe("回答行文案", () => {
   it("有答案就显示答案，哪怕请求还在提交中", () => {
-    expect(inputAnswerDisplayText(request({ status: "SUBMITTING" }), question(), progress({ values: { choice: ["A"] } }), "input-1")).toBe("A");
+    expect(inputAnswerDisplayText(request({ status: "SUBMITTING" }), question(), progress({ values: { choice: ["A"] } }), "input-1")).toBe(
+      "A",
+    );
   });
 
   it("多个答案用顿号连接", () => {
-    expect(inputAnswerDisplayText(request({ status: "ANSWERED" }), question(), progress({ values: { choice: ["A", "B"] } }), null)).toBe("A、B");
+    expect(inputAnswerDisplayText(request({ status: "ANSWERED" }), question(), progress({ values: { choice: ["A", "B"] } }), null)).toBe(
+      "A、B",
+    );
   });
 
   it("没答案时按状态给过程文案，本地在途标记优先", () => {

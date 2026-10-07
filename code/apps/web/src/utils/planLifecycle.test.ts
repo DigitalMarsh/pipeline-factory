@@ -23,10 +23,14 @@ function plan(overrides: Partial<Plan> = {}): Plan {
 
 describe("plan lifecycle presentation", () => {
   it("uses the fixed lifecycle order and keeps unknown times empty", () => {
-    const entries = lifecycleEntriesFor(plan({ lifecycle: [
-      { status: "DISPATCHED", occurredAt: null, revision: 3, current: true },
-      { status: "DRAFT", occurredAt: "2026-09-19T01:00:00.000Z", revision: 3, current: false },
-    ] }));
+    const entries = lifecycleEntriesFor(
+      plan({
+        lifecycle: [
+          { status: "DISPATCHED", occurredAt: null, revision: 3, current: true },
+          { status: "DRAFT", occurredAt: "2026-09-19T01:00:00.000Z", revision: 3, current: false },
+        ],
+      }),
+    );
 
     expect(entries.map((entry) => entry.status)).toEqual(["DRAFT", "DISPATCHED"]);
     expect(entries.find((entry) => entry.status === "DISPATCHED")?.occurredAt).toBeNull();
@@ -34,11 +38,17 @@ describe("plan lifecycle presentation", () => {
   });
 
   it("keeps an exception after the normal lifecycle and marks it current", () => {
-    const entries = lifecycleEntriesFor(plan({ status: "BLOCKED", attentionReason: "Verification failed", lifecycle: [
-      { status: "DRAFT", occurredAt: "2026-09-19T01:00:00.000Z", revision: 3, current: false },
-      { status: "IN_PROGRESS", occurredAt: "2026-09-19T01:10:00.000Z", revision: 3, current: false },
-      { status: "BLOCKED", occurredAt: "2026-09-19T01:11:00.000Z", revision: 3, current: true, reason: "Verification failed" },
-    ] }));
+    const entries = lifecycleEntriesFor(
+      plan({
+        status: "BLOCKED",
+        attentionReason: "Verification failed",
+        lifecycle: [
+          { status: "DRAFT", occurredAt: "2026-09-19T01:00:00.000Z", revision: 3, current: false },
+          { status: "IN_PROGRESS", occurredAt: "2026-09-19T01:10:00.000Z", revision: 3, current: false },
+          { status: "BLOCKED", occurredAt: "2026-09-19T01:11:00.000Z", revision: 3, current: true, reason: "Verification failed" },
+        ],
+      }),
+    );
 
     expect(entries.at(-1)?.status).toBe("BLOCKED");
     expect(entries.at(-1)?.current).toBe(true);
@@ -53,7 +63,15 @@ describe("plan lifecycle presentation", () => {
     expect(normalizedLifecycleStatus("QUEUED")).toBe("QUEUED");
     expect(normalizedLifecycleStatus("STARTING")).toBe("STARTING");
     expect(normalizedLifecycleStatus("VERIFYING")).toBe("VERIFYING");
-    const entries = lifecycleEntriesFor(plan({ status: "MERGE_READY", confirmedAt: null, queuedAt: "2026-09-19T01:02:00.000Z", dispatchedAt: "2026-09-19T01:03:00.000Z", createdAt: "" }));
+    const entries = lifecycleEntriesFor(
+      plan({
+        status: "MERGE_READY",
+        confirmedAt: null,
+        queuedAt: "2026-09-19T01:02:00.000Z",
+        dispatchedAt: "2026-09-19T01:03:00.000Z",
+        createdAt: "",
+      }),
+    );
     expect(entries.map((entry) => entry.status)).toEqual(["DRAFT", "BLOCKED"]);
     expect(entries.at(-1)).toMatchObject({ current: true, occurredAt: null });
   });

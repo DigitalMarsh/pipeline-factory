@@ -30,7 +30,8 @@ describe("两条对话线共用的消息词表", () => {
 
   it("只有一边才有的那几种各自登记在案，不混进共用词表", () => {
     // 执行侧独有的 5 类：冻结方案、执行报告协议、Plan 任务、Run 级事件、恢复流程。
-    for (const type of ["PLAN", "MODEL_REPORT", "TASK_LIFECYCLE", "RUN_ACTIVITY", "RECOVERY"]) expect(SHARED_MESSAGE_TYPES).not.toContain(type);
+    for (const type of ["PLAN", "MODEL_REPORT", "TASK_LIFECYCLE", "RUN_ACTIVITY", "RECOVERY"])
+      expect(SHARED_MESSAGE_TYPES).not.toContain(type);
     // 探索侧独有的 2 类：候选方案与结构化提问卡。
     for (const type of ["CANDIDATE_PLAN", "INPUT_REQUEST"]) expect(SHARED_MESSAGE_TYPES).not.toContain(type);
   });

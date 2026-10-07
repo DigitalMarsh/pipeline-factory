@@ -94,7 +94,10 @@ export function planContractFixture(options: PlanFixtureOptions = {}): ResolvedP
       toolPolicy: options.execution?.toolPolicy ?? EXECUTOR_TOOL_POLICY,
       maxRepairAttempts: options.execution?.maxRepairAttempts ?? 2,
     },
-    verification: { mode: options.verification?.mode ?? "PROJECT_DEFAULT", commandIds: options.verification?.commandIds ?? ["project.test", "project.typecheck"] },
+    verification: {
+      mode: options.verification?.mode ?? "PROJECT_DEFAULT",
+      commandIds: options.verification?.commandIds ?? ["project.test", "project.typecheck"],
+    },
     merge: { strategy: options.merge?.strategy ?? "manual", requireHumanMerge: true },
   };
 }

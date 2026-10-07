@@ -68,7 +68,10 @@ const turnStub = { id: "turn-1" } as unknown as ExplorerTurn;
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
   return { promise, resolve, reject };
 }
 
@@ -84,7 +87,9 @@ function setup(options: { activeExplorerPlanId?: string | null; threadId?: strin
   const thread = ref<ExplorerThread | null>(
     options.threadId === null ? null : ({ id: options.threadId ?? "explorer-1" } as unknown as ExplorerThread),
   );
-  const activeExplorerPlanId = ref<string | null>(options.activeExplorerPlanId === undefined ? "requirement-1" : options.activeExplorerPlanId);
+  const activeExplorerPlanId = ref<string | null>(
+    options.activeExplorerPlanId === undefined ? "requirement-1" : options.activeExplorerPlanId,
+  );
   const inputDialog = ref<ExplorerInputDialogHandle | null>(null);
   const composable = useExplorerInputRequests({ projectId, thread, activeExplorerPlanId, inputDialog });
   return { ...composable, projectId, thread, activeExplorerPlanId, inputDialog };
@@ -95,7 +100,14 @@ function dialogStub(): { handle: ExplorerInputDialogHandle; submitted: () => num
   const failed: string[] = [];
   let submitted = 0;
   return {
-    handle: { onSubmitted: () => { submitted += 1; }, onFailed: (message) => { failed.push(message); } },
+    handle: {
+      onSubmitted: () => {
+        submitted += 1;
+      },
+      onFailed: (message) => {
+        failed.push(message);
+      },
+    },
     submitted: () => submitted,
     failed: () => failed,
   };
@@ -184,7 +196,6 @@ describe("SSE 输入请求接缝", () => {
     expect(s.inputDialogOpen.value).toBe(false);
   });
 });
-
 
 describe("草稿的载入与清理", () => {
   it("SUBMITTING 的请求会把已存的草稿载入 inputProgress", () => {

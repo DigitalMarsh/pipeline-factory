@@ -61,7 +61,11 @@ export function renderPlanDocument(input: PlanDocumentInput): string {
 
   const lines: string[] = [];
   lines.push(`# ${input.title}`, "");
-  lines.push("> 本文件由 Pipeline Factory 在**确认 Plan 时**写入，是 Revision 的落盘副本，与 Factory 中冻结的契约一致。", "> 手工修改不会影响 Factory 中的契约：要改方案请回到 Explorer 生成新版本。", "");
+  lines.push(
+    "> 本文件由 Pipeline Factory 在**确认 Plan 时**写入，是 Revision 的落盘副本，与 Factory 中冻结的契约一致。",
+    "> 手工修改不会影响 Factory 中的契约：要改方案请回到 Explorer 生成新版本。",
+    "",
+  );
   lines.push("| 项 | 值 |", "| --- | --- |");
   lines.push(`| Plan | \`${input.planId}\` |`);
   lines.push(`| Revision | ${input.revision} |`);
@@ -102,7 +106,12 @@ export function renderPlanDocument(input: PlanDocumentInput): string {
     if (design.risks?.length) lines.push("## 风险与回滚", "", ...bullets(design.risks), "");
   }
 
-  lines.push("## 验证", "", verification.length > 0 ? `项目验证命令：${verification.map((id) => `\`${id}\``).join("、")}` : "（无验证命令，或由项目默认值决定）", "");
+  lines.push(
+    "## 验证",
+    "",
+    verification.length > 0 ? `项目验证命令：${verification.map((id) => `\`${id}\``).join("、")}` : "（无验证命令，或由项目默认值决定）",
+    "",
+  );
   lines.push("## 合并", "", `策略：${merge.strategy}${merge.requireHumanMerge ? "（需要人工确认合并）" : ""}`, "");
   return `${lines.join("\n").trimEnd()}\n`;
 }

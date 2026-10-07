@@ -3,7 +3,21 @@
   维护提示：需求及执行入口由 ExplorerView 的当前线程清单承载。
 -->
 <script setup lang="ts">
-import { ArrowDown, ArrowRight, Connection, Delete, EditPen, FolderOpened, MoreFilled, Plus, Refresh, Setting, VideoPause, VideoPlay, View } from "@element-plus/icons-vue";
+import {
+  ArrowDown,
+  ArrowRight,
+  Connection,
+  Delete,
+  EditPen,
+  FolderOpened,
+  MoreFilled,
+  Plus,
+  Refresh,
+  Setting,
+  VideoPause,
+  VideoPlay,
+  View,
+} from "@element-plus/icons-vue";
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import type { ExplorerThread, Project } from "../types";
 import { explorerListRows } from "../utils/explorerGroups";
@@ -13,28 +27,31 @@ import { explorerThreadStateLabel, projectStatusLabel } from "../utils/entitySta
 type LeftPanel = "projects" | "explorers";
 type ThreadActionCommand = "toggle-pause" | "rename" | "policy" | "refresh" | "delete";
 
-const props = withDefaults(defineProps<{
-  panel: LeftPanel;
-  thread: ExplorerThread | null;
-  project?: Project | null;
-  projects: Project[];
-  explorers: ExplorerThread[];
-  creatingExplorer?: boolean;
-  projectActionId?: string | null;
-  showArchived?: boolean;
-  explorerActionId?: string | null;
-  explorerLoading?: boolean;
-  explorerError?: string | null;
-  explorerPaused?: boolean;
-  projectExecutionActive?: boolean;
-}>(), {
-  showArchived: false,
-  explorerActionId: null,
-  explorerLoading: false,
-  explorerError: null,
-  explorerPaused: false,
-  projectExecutionActive: false,
-});
+const props = withDefaults(
+  defineProps<{
+    panel: LeftPanel;
+    thread: ExplorerThread | null;
+    project?: Project | null;
+    projects: Project[];
+    explorers: ExplorerThread[];
+    creatingExplorer?: boolean;
+    projectActionId?: string | null;
+    showArchived?: boolean;
+    explorerActionId?: string | null;
+    explorerLoading?: boolean;
+    explorerError?: string | null;
+    explorerPaused?: boolean;
+    projectExecutionActive?: boolean;
+  }>(),
+  {
+    showArchived: false,
+    explorerActionId: null,
+    explorerLoading: false,
+    explorerError: null,
+    explorerPaused: false,
+    projectExecutionActive: false,
+  },
+);
 const emit = defineEmits<{
   "select-panel": [panel: LeftPanel];
   "select-project": [projectId: string];
@@ -90,8 +107,9 @@ onBeforeUnmount(() => {
   document.removeEventListener("keydown", closeProjectSwitcherOnKeydown);
 });
 
-
-const visibleExplorers = computed(() => props.showArchived ? props.explorers : props.explorers.filter((explorer) => explorer.state !== "ARCHIVED"));
+const visibleExplorers = computed(() =>
+  props.showArchived ? props.explorers : props.explorers.filter((explorer) => explorer.state !== "ARCHIVED"),
+);
 
 /**
  * 线程按**创建日**分组（今天 / 昨天 / 日期）。摊平成"日期头 + 行"，模板一次 v-for 渲染
@@ -154,10 +172,19 @@ function emitThreadAction(command: string | number): void {
                 <span class="project-context-count">{{ props.explorers.length }} 条探索线程</span>
               </span>
             </span>
-            <el-tag v-if="props.project" size="small" effect="light" :type="projectStatusTagType(props.project.status)">{{ projectStatusLabel(props.project.status) }}</el-tag>
+            <el-tag v-if="props.project" size="small" effect="light" :type="projectStatusTagType(props.project.status)">{{
+              projectStatusLabel(props.project.status)
+            }}</el-tag>
             <ArrowDown :class="['project-context-arrow', { open: projectSwitcherOpen }]" :size="16" aria-hidden="true" />
           </button>
-          <div v-if="projectSwitcherOpen" id="inline-project-switcher" class="inline-project-switcher" data-inline-project-switcher role="listbox" aria-label="选择项目">
+          <div
+            v-if="projectSwitcherOpen"
+            id="inline-project-switcher"
+            class="inline-project-switcher"
+            data-inline-project-switcher
+            role="listbox"
+            aria-label="选择项目"
+          >
             <button
               v-for="availableProject in props.projects"
               :key="availableProject.id"
@@ -170,8 +197,13 @@ function emitThreadAction(command: string | number): void {
               @click="selectInlineProject(availableProject.id)"
             >
               <span class="left-list-icon"><FolderOpened :size="15" /></span>
-              <span class="inline-project-option-copy"><strong>{{ availableProject.name }}</strong><small>{{ availableProject.repoRoot }}</small></span>
-              <el-tag size="small" effect="light" :type="projectStatusTagType(availableProject.status)">{{ projectStatusLabel(availableProject.status) }}</el-tag>
+              <span class="inline-project-option-copy"
+                ><strong>{{ availableProject.name }}</strong
+                ><small>{{ availableProject.repoRoot }}</small></span
+              >
+              <el-tag size="small" effect="light" :type="projectStatusTagType(availableProject.status)">{{
+                projectStatusLabel(availableProject.status)
+              }}</el-tag>
             </button>
           </div>
         </div>
@@ -198,14 +230,35 @@ function emitThreadAction(command: string | number): void {
             @click="emit('select-project', availableProject.id)"
           >
             <span class="left-list-icon"><FolderOpened :size="16" /></span>
-            <span class="left-list-copy"><strong>{{ availableProject.name }}<span v-if="availableProject.shortName && availableProject.shortName !== availableProject.name" class="left-list-short-name">{{ availableProject.shortName }}</span></strong><small>{{ availableProject.repoRoot }}</small></span>
-            <el-tag size="small" effect="light" :type="projectStatusTagType(availableProject.status)">{{ projectStatusLabel(availableProject.status) }}</el-tag>
+            <span class="left-list-copy"
+              ><strong
+                >{{ availableProject.name
+                }}<span
+                  v-if="availableProject.shortName && availableProject.shortName !== availableProject.name"
+                  class="left-list-short-name"
+                  >{{ availableProject.shortName }}</span
+                ></strong
+              ><small>{{ availableProject.repoRoot }}</small></span
+            >
+            <el-tag size="small" effect="light" :type="projectStatusTagType(availableProject.status)">{{
+              projectStatusLabel(availableProject.status)
+            }}</el-tag>
           </button>
           <div class="project-list-actions" aria-label="项目操作">
-            <button type="button" class="project-list-action" data-project-action="open-explorer" @click.stop="emit('open-project', availableProject.id)">
+            <button
+              type="button"
+              class="project-list-action"
+              data-project-action="open-explorer"
+              @click.stop="emit('open-project', availableProject.id)"
+            >
               打开探索 <ArrowRight :size="12" />
             </button>
-            <button type="button" class="project-list-action" data-project-action="settings" @click.stop="emit('open-project-settings', availableProject.id)">
+            <button
+              type="button"
+              class="project-list-action"
+              data-project-action="settings"
+              @click.stop="emit('open-project-settings', availableProject.id)"
+            >
               <Setting :size="12" /> 设置
             </button>
             <button
@@ -267,7 +320,12 @@ function emitThreadAction(command: string | number): void {
         <div v-if="props.explorerLoading" class="explorer-list-state" data-explorer-list-state="loading" role="status" aria-live="polite">
           正在加载 Explorer 线程…
         </div>
-        <div v-else-if="props.explorerError" class="explorer-list-state explorer-list-state-error" data-explorer-list-state="error" role="alert">
+        <div
+          v-else-if="props.explorerError"
+          class="explorer-list-state explorer-list-state-error"
+          data-explorer-list-state="error"
+          role="alert"
+        >
           {{ props.explorerError }}
         </div>
         <div v-else-if="!visibleExplorers.length" class="explorer-list-state" data-explorer-list-state="empty">
@@ -275,65 +333,86 @@ function emitThreadAction(command: string | number): void {
           <span>点击上方按钮开始一次全新的探索。</span>
         </div>
         <template v-for="row in explorerRows" :key="row.key">
-        <div v-if="row.kind === 'day'" class="explorer-day-heading" :data-explorer-day="row.day">
-          <span>{{ row.label }}</span>
-          <small>{{ row.count }}</small>
-        </div>
-        <article
-          v-else-if="row.explorer"
-          class="explorer-list-row"
-          :class="{ active: row.explorer.id === props.thread?.id }"
-          :data-explorer-id="row.explorer.id"
-        >
-          <div class="explorer-thread-row-head">
-            <button
-              class="explorer-list-item"
-              :class="{ active: row.explorer.id === props.thread?.id }"
-              type="button"
-              :data-explorer-id="row.explorer.id"
-              :aria-label="`Explorer Thread：${row.explorer.title}`"
-              :aria-current="row.explorer.id === props.thread?.id ? 'page' : undefined"
-              @click="emit('select-explorer', row.explorer.id)"
-            >
-              <span class="left-list-copy"><strong>{{ row.explorer.title }}</strong></span>
-              <el-tag size="small" effect="light" :type="explorerThreadStatusTagType(row.explorer.state)">{{ explorerThreadStateLabel(row.explorer.state) }}</el-tag>
-            </button>
-            <div v-if="row.explorer.id === props.thread?.id" class="explorer-thread-row-actions" @click.stop>
-              <el-dropdown placement="bottom-end" popper-class="thread-action-popper" :disabled="Boolean(props.explorerActionId)" @command="emitThreadAction">
-                <el-button text circle class="explorer-thread-menu-trigger" aria-label="线程操作" title="线程操作"><MoreFilled :size="16" /></el-button>
-                <template #dropdown>
-                  <el-dropdown-menu class="thread-action-menu">
-                    <li class="thread-action-menu-heading" role="presentation">线程操作</li>
-                    <el-dropdown-item command="toggle-pause">
-                      <span class="thread-action-menu-item">
-                        <VideoPlay v-if="props.explorerPaused" :size="16" />
-                        <VideoPause v-else :size="16" />
-                        <span>{{ props.explorerPaused ? "恢复循环" : "暂停循环" }}</span>
-                      </span>
-                    </el-dropdown-item>
-                    <el-dropdown-item command="rename"><span class="thread-action-menu-item"><EditPen :size="16" /><span>重命名线程</span></span></el-dropdown-item>
-                    <el-dropdown-item command="policy"><span class="thread-action-menu-item"><View :size="16" /><span>查看策略</span></span></el-dropdown-item>
-                    <el-dropdown-item command="refresh"><span class="thread-action-menu-item"><Refresh :size="16" /><span>刷新线程</span></span></el-dropdown-item>
-                    <el-dropdown-item command="delete" class="thread-action-danger"><span class="thread-action-menu-item"><Delete :size="16" /><span>删除线程</span></span></el-dropdown-item>
-                  </el-dropdown-menu>
-                </template>
-              </el-dropdown>
+          <div v-if="row.kind === 'day'" class="explorer-day-heading" :data-explorer-day="row.day">
+            <span>{{ row.label }}</span>
+            <small>{{ row.count }}</small>
+          </div>
+          <article
+            v-else-if="row.explorer"
+            class="explorer-list-row"
+            :class="{ active: row.explorer.id === props.thread?.id }"
+            :data-explorer-id="row.explorer.id"
+          >
+            <div class="explorer-thread-row-head">
+              <button
+                class="explorer-list-item"
+                :class="{ active: row.explorer.id === props.thread?.id }"
+                type="button"
+                :data-explorer-id="row.explorer.id"
+                :aria-label="`Explorer Thread：${row.explorer.title}`"
+                :aria-current="row.explorer.id === props.thread?.id ? 'page' : undefined"
+                @click="emit('select-explorer', row.explorer.id)"
+              >
+                <span class="left-list-copy"
+                  ><strong>{{ row.explorer.title }}</strong></span
+                >
+                <el-tag size="small" effect="light" :type="explorerThreadStatusTagType(row.explorer.state)">{{
+                  explorerThreadStateLabel(row.explorer.state)
+                }}</el-tag>
+              </button>
+              <div v-if="row.explorer.id === props.thread?.id" class="explorer-thread-row-actions" @click.stop>
+                <el-dropdown
+                  placement="bottom-end"
+                  popper-class="thread-action-popper"
+                  :disabled="Boolean(props.explorerActionId)"
+                  @command="emitThreadAction"
+                >
+                  <el-button text circle class="explorer-thread-menu-trigger" aria-label="线程操作" title="线程操作"
+                    ><MoreFilled :size="16"
+                  /></el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu class="thread-action-menu">
+                      <li class="thread-action-menu-heading" role="presentation">线程操作</li>
+                      <el-dropdown-item command="toggle-pause">
+                        <span class="thread-action-menu-item">
+                          <VideoPlay v-if="props.explorerPaused" :size="16" />
+                          <VideoPause v-else :size="16" />
+                          <span>{{ props.explorerPaused ? "恢复循环" : "暂停循环" }}</span>
+                        </span>
+                      </el-dropdown-item>
+                      <el-dropdown-item command="rename"
+                        ><span class="thread-action-menu-item"><EditPen :size="16" /><span>重命名线程</span></span></el-dropdown-item
+                      >
+                      <el-dropdown-item command="policy"
+                        ><span class="thread-action-menu-item"><View :size="16" /><span>查看策略</span></span></el-dropdown-item
+                      >
+                      <el-dropdown-item command="refresh"
+                        ><span class="thread-action-menu-item"><Refresh :size="16" /><span>刷新线程</span></span></el-dropdown-item
+                      >
+                      <el-dropdown-item command="delete" class="thread-action-danger"
+                        ><span class="thread-action-menu-item"><Delete :size="16" /><span>删除线程</span></span></el-dropdown-item
+                      >
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+              </div>
             </div>
-          </div>
-          <div class="explorer-list-actions">
-            <button
-              type="button"
-              :class="['explorer-list-action', { archived: row.explorer.state === 'ARCHIVED' }]"
-              :data-explorer-action="row.explorer.state === 'ARCHIVED' ? 'activate' : 'archive'"
-              :disabled="props.explorerActionId === row.explorer.id || (row.explorer.state !== 'ARCHIVED' && row.explorer.id === props.thread?.id)"
-              :aria-busy="props.explorerActionId === row.explorer.id ? 'true' : undefined"
-              :aria-label="explorerArchiveAriaLabel(row.explorer)"
-              @click.stop="emit('archive-explorer', row.explorer.id)"
-            >
-              {{ explorerArchiveLabel(row.explorer) }}
-            </button>
-          </div>
-        </article>
+            <div class="explorer-list-actions">
+              <button
+                type="button"
+                :class="['explorer-list-action', { archived: row.explorer.state === 'ARCHIVED' }]"
+                :data-explorer-action="row.explorer.state === 'ARCHIVED' ? 'activate' : 'archive'"
+                :disabled="
+                  props.explorerActionId === row.explorer.id || (row.explorer.state !== 'ARCHIVED' && row.explorer.id === props.thread?.id)
+                "
+                :aria-busy="props.explorerActionId === row.explorer.id ? 'true' : undefined"
+                :aria-label="explorerArchiveAriaLabel(row.explorer)"
+                @click.stop="emit('archive-explorer', row.explorer.id)"
+              >
+                {{ explorerArchiveLabel(row.explorer) }}
+              </button>
+            </div>
+          </article>
         </template>
       </div>
     </section>
@@ -341,6 +420,14 @@ function emitThreadAction(command: string | number): void {
 </template>
 
 <style scoped>
-.project-execution-entry.active { border-color:#62b5ee; background:#28517f; box-shadow:inset 3px 0 #62b5ee,0 0 0 1px #62b5ee33; }
-.project-execution-entry.active .left-panel-create-icon { background:#3978b4; }
+.project-execution-entry.active {
+  border-color: #62b5ee;
+  background: #28517f;
+  box-shadow:
+    inset 3px 0 #62b5ee,
+    0 0 0 1px #62b5ee33;
+}
+.project-execution-entry.active .left-panel-create-icon {
+  background: #3978b4;
+}
 </style>

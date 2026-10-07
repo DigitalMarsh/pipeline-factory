@@ -11,7 +11,15 @@
  *   新增投影时若确实需要按 Plan 读表，请在这里把该表登记为"允许随行数增长"，不要直接放宽整个断言。
  */
 import { describe, expect, it } from "vitest";
-import { ExplorerService, InMemoryPipelineStore, PlanService, ProjectService, type CandidatePlan, type PipelineStore, planContractFixture } from "@pipeline-factory/domain";
+import {
+  ExplorerService,
+  InMemoryPipelineStore,
+  PlanService,
+  ProjectService,
+  type CandidatePlan,
+  type PipelineStore,
+  planContractFixture,
+} from "@pipeline-factory/domain";
 import { decoratePlanRows, planProjection } from "./plan-lifecycle.js";
 
 /** 记录三张"按 Plan 反复读就会爆"的表被读了几次。 */
@@ -19,20 +27,44 @@ class CountingStore extends InMemoryPipelineStore {
   listRunsCalls = 0;
   listMergeRequestsCalls = 0;
   listChangeProposalsCalls = 0;
-  override listRuns() { this.listRunsCalls += 1; return super.listRuns(); }
-  override listMergeRequests() { this.listMergeRequestsCalls += 1; return super.listMergeRequests(); }
-  override listChangeProposals(runId?: string) { this.listChangeProposalsCalls += 1; return super.listChangeProposals(runId); }
-  resetCounts() { this.listRunsCalls = 0; this.listMergeRequestsCalls = 0; this.listChangeProposalsCalls = 0; }
+  override listRuns() {
+    this.listRunsCalls += 1;
+    return super.listRuns();
+  }
+  override listMergeRequests() {
+    this.listMergeRequestsCalls += 1;
+    return super.listMergeRequests();
+  }
+  override listChangeProposals(runId?: string) {
+    this.listChangeProposalsCalls += 1;
+    return super.listChangeProposals(runId);
+  }
+  resetCounts() {
+    this.listRunsCalls = 0;
+    this.listMergeRequestsCalls = 0;
+    this.listChangeProposalsCalls = 0;
+  }
 }
 
 function seedPlans(store: PipelineStore, count: number): Array<{ planId: string; revision: number; projectId: string }> {
   const projects = new ProjectService(store);
-  const project = projects.create({ id: "project-lifecycle", name: "Lifecycle Project", repoRoot: "/repo/lifecycle", defaultBranch: "main", worktreeRoot: "/tmp/lifecycle-worktrees" });
+  const project = projects.create({
+    id: "project-lifecycle",
+    name: "Lifecycle Project",
+    repoRoot: "/repo/lifecycle",
+    defaultBranch: "main",
+    worktreeRoot: "/tmp/lifecycle-worktrees",
+  });
   const explorer = new ExplorerService(store).create({ projectId: project.id, title: "Lifecycle Explorer" });
   const plans = new PlanService(store, projects);
   const rows: Array<{ planId: string; revision: number; projectId: string }> = [];
   for (let index = 0; index < count; index += 1) {
-    const plan = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: explorer.id, title: `Plan ${index}`, resolvedContract: planContractFixture({ store, projectId: project.id, title: `Plan ${index}` }) });
+    const plan = plans.createCandidatePlan({
+      projectId: project.id,
+      sourceExplorerThreadId: explorer.id,
+      title: `Plan ${index}`,
+      resolvedContract: planContractFixture({ store, projectId: project.id, title: `Plan ${index}` }),
+    });
     rows.push({ planId: plan.id, revision: plan.revision, projectId: project.id });
   }
   return rows;

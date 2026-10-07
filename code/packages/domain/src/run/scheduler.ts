@@ -80,13 +80,24 @@ export type SchedulerOptions = {
  * 顶开会把真问题盖住——那两种该走「创建更新版本」。`QUEUED` / `STARTING` 也不在：Run 还没跑起来，
  * 此时该补的是 Plan 而不是执行。
  */
-const ACCEPTS_GUIDANCE_RUN_STATUSES: ReadonlySet<RunStatus> = new Set<RunStatus>(["IN_PROGRESS", "READY_FOR_VERIFY", "VERIFYING", "MERGE_READY", "RECOVERING"]);
+const ACCEPTS_GUIDANCE_RUN_STATUSES: ReadonlySet<RunStatus> = new Set<RunStatus>([
+  "IN_PROGRESS",
+  "READY_FOR_VERIFY",
+  "VERIFYING",
+  "MERGE_READY",
+  "RECOVERING",
+]);
 
 /**
  * Loop **活着**（进程里还有执行协程）的状态。`RECOVERING` 与所有终态都算没有——前者是进程重启后
  * 被判死的 Loop，把它当成"正在跑"会让一个需要恢复的 Run 永远起不来新的一轮。
  */
-const LIVE_RUN_LOOP_STATES: ReadonlySet<AgentLoop["state"]> = new Set<AgentLoop["state"]>(["CREATED", "RUNNING", "WAITING_FOR_INPUT", "PAUSED"]);
+const LIVE_RUN_LOOP_STATES: ReadonlySet<AgentLoop["state"]> = new Set<AgentLoop["state"]>([
+  "CREATED",
+  "RUNNING",
+  "WAITING_FOR_INPUT",
+  "PAUSED",
+]);
 
 /**
  * 协调 Plan 队列、Worktree、Hook、Executor、Verification 和 Run 状态。
@@ -126,11 +137,36 @@ export class Scheduler {
     const baseBranchLeaf = await this.runBranchLeaf(plan, revision, createdAt);
     const createOrReuse = (): { run: Run; thread: ExecutionThread; created: boolean } => {
       const raced = this.options.store.listRuns().find((run) => run.planId === planId && run.planRevision === revision.revision);
-      if (raced) return { run: raced, thread: this.options.store.getExecutionThread(raced.executionThreadId) ?? { id: raced.executionThreadId, runId: raced.id, state: "ACTIVE", journal: [] }, created: false };
-      const branchLeaf = allocateRunBranchLeaf(baseBranchLeaf, this.options.store.listRuns().map((run) => run.branch));
+      if (raced)
+        return {
+          run: raced,
+          thread: this.options.store.getExecutionThread(raced.executionThreadId) ?? {
+            id: raced.executionThreadId,
+            runId: raced.id,
+            state: "ACTIVE",
+            journal: [],
+          },
+          created: false,
+        };
+      const branchLeaf = allocateRunBranchLeaf(
+        baseBranchLeaf,
+        this.options.store.listRuns().map((run) => run.branch),
+      );
       const runId = this.options.store.nextId("run");
       const thread: ExecutionThread = { id: this.options.store.nextId("execution-thread"), runId, state: "ACTIVE", journal: [] };
-      const run: Run = { id: runId, projectId: plan.projectId, planId: plan.id, planRevision: revision.revision, status: "STARTING", branch: runBranchName(branchLeaf), workspacePath: null, baseCommit: revision.resolvedContract.repository.baseCommit, executionThreadId: thread.id, createdAt, startedAt: null };
+      const run: Run = {
+        id: runId,
+        projectId: plan.projectId,
+        planId: plan.id,
+        planRevision: revision.revision,
+        status: "STARTING",
+        branch: runBranchName(branchLeaf),
+        workspacePath: null,
+        baseCommit: revision.resolvedContract.repository.baseCommit,
+        executionThreadId: thread.id,
+        createdAt,
+        startedAt: null,
+      };
       this.options.store.saveRun(run);
       this.options.store.saveExecutionThread(thread);
       this.append(thread.id, "RUN_CREATED", { planId: plan.id, revision: revision.revision });
@@ -148,7 +184,12 @@ export class Scheduler {
     // 同时把 BLOCKED 事实写回 Plan 和 ExecutionThread，便于 UI 显示可诊断原因。
     let workspace: Workspace;
     try {
-      workspace = await workspaceAdapter.create({ projectId: plan.projectId, runId: run.id, branch: run.branch, baseCommit: run.baseCommit });
+      workspace = await workspaceAdapter.create({
+        projectId: plan.projectId,
+        runId: run.id,
+        branch: run.branch,
+        baseCommit: run.baseCommit,
+      });
     } catch (error) {
       // 工作区不干净（PROJECT_WORKING_TREE_DIRTY）、baseCommit 不存在、git 不可用都走这里。
       // **不能让它变成未捕获异常**：那样 Run 会停在"已创建但没有 worktree"的半状态，
@@ -158,14 +199,26 @@ export class Scheduler {
       thread.state = "BLOCKED";
       this.setThreadState(thread.id, "BLOCKED");
       this.append(thread.id, "TASK_PROGRESS", { state: "BLOCKED", reason });
-      updatePlanStatus(this.options.store, plan, { runId: run.id, status: "BLOCKED", attentionReason: reason, lastEventAt: this.options.store.now() }, reason);
+      updatePlanStatus(
+        this.options.store,
+        plan,
+        { runId: run.id, status: "BLOCKED", attentionReason: reason, lastEventAt: this.options.store.now() },
+        reason,
+      );
       this.options.store.saveRun(run);
       return run;
     }
     run.workspacePath = workspace.path;
     run.baseCommit = workspace.baseCommit;
     this.options.store.saveRun(run);
-    const startResult = await hookRunner.runStart(executionHooks.start, { projectId: plan.projectId, runId: run.id, workspacePath: workspace.path, branch: workspace.branch, baseCommit: workspace.baseCommit, exitReason: "running" });
+    const startResult = await hookRunner.runStart(executionHooks.start, {
+      projectId: plan.projectId,
+      runId: run.id,
+      workspacePath: workspace.path,
+      branch: workspace.branch,
+      baseCommit: workspace.baseCommit,
+      exitReason: "running",
+    });
     this.recordHookExecutions(run.id, startResult);
     // 判 BLOCKED 要用 `blocked` 而不是 `status === "failed"`：配了 blocking: false 的启动钩子
     // 失败后 Run 还要继续往下走（见 run/hooks.ts 维护提示 1）。载荷里的 `blocking` 是给
@@ -177,28 +230,47 @@ export class Scheduler {
       run.status = "BLOCKED";
       thread.state = "BLOCKED";
       this.setThreadState(thread.id, "BLOCKED");
-      updatePlanStatus(this.options.store, plan, { runId: run.id, status: "BLOCKED", attentionReason: "start hook failed", lastEventAt: this.options.store.now() }, "start hook failed");
+      updatePlanStatus(
+        this.options.store,
+        plan,
+        { runId: run.id, status: "BLOCKED", attentionReason: "start hook failed", lastEventAt: this.options.store.now() },
+        "start hook failed",
+      );
       this.options.store.saveRun(run);
       return run;
     }
     run.status = "IN_PROGRESS";
     run.startedAt = this.options.store.now();
     // 失败且非阻塞时上面已经写过 HOOK_FAILED，这里不能再写一条 HOOK_COMPLETED。
-    if (startResult.status !== "failed") this.append(thread.id, startResult.status === "skipped" ? "HOOK_SKIPPED" : "HOOK_COMPLETED", { hook: "start" });
-    if (!revision.projectConfigSnapshot) this.append(thread.id, "TASK_PROGRESS", { action: "legacy_plan_revision", reason: "Project configuration snapshot unavailable; using legacy/global runtime settings" });
+    if (startResult.status !== "failed")
+      this.append(thread.id, startResult.status === "skipped" ? "HOOK_SKIPPED" : "HOOK_COMPLETED", { hook: "start" });
+    if (!revision.projectConfigSnapshot)
+      this.append(thread.id, "TASK_PROGRESS", {
+        action: "legacy_plan_revision",
+        reason: "Project configuration snapshot unavailable; using legacy/global runtime settings",
+      });
     updatePlanStatus(this.options.store, plan, { runId: run.id, status: "IN_PROGRESS", lastEventAt: run.startedAt });
     this.options.store.saveRun(run);
     if (this.options.executor) {
       try {
         const loop = await this.options.executor.start(run, revision);
         this.append(thread.id, "TASK_PROGRESS", { action: "executor_loop_created", loopId: loop.id });
-        this.options.store.appendEvent({ type: "run.executor.event", aggregateId: run.id, payload: { executionThreadId: thread.id, action: "executor_loop_created", loopId: loop.id } });
+        this.options.store.appendEvent({
+          type: "run.executor.event",
+          aggregateId: run.id,
+          payload: { executionThreadId: thread.id, action: "executor_loop_created", loopId: loop.id },
+        });
       } catch (error) {
         run.status = "BLOCKED";
         this.setThreadState(thread.id, "BLOCKED");
         const reason = error instanceof Error ? error.message : String(error);
         this.append(thread.id, "RECOVERY", { action: "executor_loop_start_failed", reason });
-        updatePlanStatus(this.options.store, plan, { runId: run.id, status: "BLOCKED", attentionReason: reason, lastEventAt: this.options.store.now() }, reason);
+        updatePlanStatus(
+          this.options.store,
+          plan,
+          { runId: run.id, status: "BLOCKED", attentionReason: reason, lastEventAt: this.options.store.now() },
+          reason,
+        );
         this.options.store.saveRun(run);
       }
     }
@@ -209,7 +281,11 @@ export class Scheduler {
     let summary = normalizeRunBranchSlug(plan.title) ?? "change";
     if (this.options.branchNameGenerator) {
       try {
-        summary = await this.options.branchNameGenerator.generate({ createdAt, planTitle: plan.title, goal: revision.resolvedContract.objective.goal });
+        summary = await this.options.branchNameGenerator.generate({
+          createdAt,
+          planTitle: plan.title,
+          goal: revision.resolvedContract.objective.goal,
+        });
       } catch {
         summary = "change";
       }
@@ -218,13 +294,23 @@ export class Scheduler {
   }
 
   /** 完成或取消 Run，按同一 Revision 执行 Worktree 清理和 Cleanup Hook。 */
-  async finish(runId: string, exitReason: string, hooks: { cleanup?: HookDefinition | undefined } = {}, cancellationReason = exitReason): Promise<Run> {
+  async finish(
+    runId: string,
+    exitReason: string,
+    hooks: { cleanup?: HookDefinition | undefined } = {},
+    cancellationReason = exitReason,
+  ): Promise<Run> {
     const run = this.run(runId);
     if (run.status === "CANCELLED") {
       if (exitReason === "cancelled") {
         const plan = this.options.store.getPlan(run.planId);
         if (plan && plan.status !== "BLOCKED" && plan.status !== "MERGED") {
-          updatePlanStatus(this.options.store, plan, { status: "BLOCKED", attentionReason: `Run cancelled: ${cancellationReason}`, lastEventAt: this.options.store.now() }, `Run cancelled: ${cancellationReason}`);
+          updatePlanStatus(
+            this.options.store,
+            plan,
+            { status: "BLOCKED", attentionReason: `Run cancelled: ${cancellationReason}`, lastEventAt: this.options.store.now() },
+            `Run cancelled: ${cancellationReason}`,
+          );
         }
       }
       return run;
@@ -237,9 +323,20 @@ export class Scheduler {
     if (run.workspacePath) {
       await workspaceAdapter.remove({ path: run.workspacePath, branch: run.branch, baseCommit: run.baseCommit });
     }
-    const cleanupResult = await hookRunner.runCleanup(executionHooks.cleanup, { projectId: run.projectId, runId: run.id, workspacePath: run.workspacePath ?? "", branch: run.branch, baseCommit: run.baseCommit, exitReason });
+    const cleanupResult = await hookRunner.runCleanup(executionHooks.cleanup, {
+      projectId: run.projectId,
+      runId: run.id,
+      workspacePath: run.workspacePath ?? "",
+      branch: run.branch,
+      baseCommit: run.baseCommit,
+      exitReason,
+    });
     this.recordHookExecutions(run.id, cleanupResult);
-    this.append(thread.id, cleanupResult.status === "failed" ? "HOOK_FAILED" : cleanupResult.status === "skipped" ? "HOOK_SKIPPED" : "HOOK_COMPLETED", { hook: "cleanup", exitReason });
+    this.append(
+      thread.id,
+      cleanupResult.status === "failed" ? "HOOK_FAILED" : cleanupResult.status === "skipped" ? "HOOK_SKIPPED" : "HOOK_COMPLETED",
+      { hook: "cleanup", exitReason },
+    );
     if (cleanupResult.needsAttention) {
       const plan = this.options.store.getPlan(run.planId);
       if (plan) this.options.store.updatePlan({ ...plan, attentionReason: "cleanup hook failed", lastEventAt: this.options.store.now() });
@@ -249,7 +346,13 @@ export class Scheduler {
     this.options.store.saveRun(run);
     if (exitReason === "cancelled") {
       const plan = this.options.store.getPlan(run.planId);
-      if (plan) updatePlanStatus(this.options.store, plan, { status: "BLOCKED", attentionReason: `Run cancelled: ${cancellationReason}`, lastEventAt: this.options.store.now() }, `Run cancelled: ${cancellationReason}`);
+      if (plan)
+        updatePlanStatus(
+          this.options.store,
+          plan,
+          { status: "BLOCKED", attentionReason: `Run cancelled: ${cancellationReason}`, lastEventAt: this.options.store.now() },
+          `Run cancelled: ${cancellationReason}`,
+        );
     }
     return run;
   }
@@ -269,7 +372,10 @@ export class Scheduler {
    *      "失败=提醒，不=阻塞"一致（见 run/hooks.ts 维护提示 1）。
    *   3) cleanup hook **只在这里或 finish() 里跑一次**：两条路径都以 `workspacePath` 是否还在为准。
    */
-  async releaseWorkspace(runId: string, hooks: { cleanup?: HookDefinition | undefined } = {}): Promise<{ released: boolean; worktreeRemoved: boolean; cleanupNeedsAttention: boolean; error?: string }> {
+  async releaseWorkspace(
+    runId: string,
+    hooks: { cleanup?: HookDefinition | undefined } = {},
+  ): Promise<{ released: boolean; worktreeRemoved: boolean; cleanupNeedsAttention: boolean; error?: string }> {
     const run = this.run(runId);
     if (!run.workspacePath) return { released: false, worktreeRemoved: false, cleanupNeedsAttention: false };
     const revision = this.options.store.getRevision(run.planId, run.planRevision);
@@ -292,14 +398,37 @@ export class Scheduler {
       }
     }
     if (worktreeRemoved) this.options.store.saveRun({ ...run, workspacePath: null });
-    if (thread) this.append(thread.id, worktreeRemoved ? "HOOK_COMPLETED" : "HOOK_FAILED", { hook: "worktree-release", exitReason: "merged", worktreeRemoved, ...(error ? { error } : {}) });
+    if (thread)
+      this.append(thread.id, worktreeRemoved ? "HOOK_COMPLETED" : "HOOK_FAILED", {
+        hook: "worktree-release",
+        exitReason: "merged",
+        worktreeRemoved,
+        ...(error ? { error } : {}),
+      });
 
-    const cleanupResult = await hookRunner.runCleanup(executionHooks.cleanup, { projectId: run.projectId, runId: run.id, workspacePath: run.workspacePath, branch: run.branch, baseCommit: run.baseCommit, exitReason: "merged" });
+    const cleanupResult = await hookRunner.runCleanup(executionHooks.cleanup, {
+      projectId: run.projectId,
+      runId: run.id,
+      workspacePath: run.workspacePath,
+      branch: run.branch,
+      baseCommit: run.baseCommit,
+      exitReason: "merged",
+    });
     this.recordHookExecutions(run.id, cleanupResult);
-    if (thread) this.append(thread.id, cleanupResult.status === "failed" ? "HOOK_FAILED" : cleanupResult.status === "skipped" ? "HOOK_SKIPPED" : "HOOK_COMPLETED", { hook: "cleanup", exitReason: "merged" });
+    if (thread)
+      this.append(
+        thread.id,
+        cleanupResult.status === "failed" ? "HOOK_FAILED" : cleanupResult.status === "skipped" ? "HOOK_SKIPPED" : "HOOK_COMPLETED",
+        { hook: "cleanup", exitReason: "merged" },
+      );
     if (cleanupResult.needsAttention) {
       const plan = this.options.store.getPlan(run.planId);
-      if (plan) this.options.store.updatePlan({ ...plan, attentionReason: "cleanup hook failed after merge", lastEventAt: this.options.store.now() });
+      if (plan)
+        this.options.store.updatePlan({
+          ...plan,
+          attentionReason: "cleanup hook failed after merge",
+          lastEventAt: this.options.store.now(),
+        });
     }
     return { released: true, worktreeRemoved, cleanupNeedsAttention: Boolean(cleanupResult.needsAttention), ...(error ? { error } : {}) };
   }
@@ -330,7 +459,8 @@ export class Scheduler {
   resume(runId: string): Run {
     const run = this.run(runId);
     const thread = this.thread(run.executionThreadId);
-    if (run.status !== "IN_PROGRESS" || thread.state !== "PAUSED") throw new Error(`Run ${runId} cannot be resumed from ${run.status}/${thread.state}`);
+    if (run.status !== "IN_PROGRESS" || thread.state !== "PAUSED")
+      throw new Error(`Run ${runId} cannot be resumed from ${run.status}/${thread.state}`);
     this.setThreadState(thread.id, "ACTIVE");
     this.append(thread.id, "TASK_PROGRESS", { action: "resumed", runId });
     this.options.store.appendEvent({ type: "run.resumed", aggregateId: run.id, payload: { executionThreadId: thread.id } });
@@ -350,14 +480,18 @@ export class Scheduler {
    * `mode` 省略或 `"auto"` 时：没有在跑的 Loop 就起新的一轮，有就**排队**（不打断、也不偷偷插话）。
    * 想让它插进正在跑的那一轮，必须显式选 `"steer"`。
    */
-  async addGuidance(runId: string, content: string, options: { mode?: RunGuidanceMode | "auto" | undefined; actorId?: string | undefined } = {}): Promise<{ thread: ExecutionThread; guidance: RunGuidance; continued: boolean }> {
+  async addGuidance(
+    runId: string,
+    content: string,
+    options: { mode?: RunGuidanceMode | "auto" | undefined; actorId?: string | undefined } = {},
+  ): Promise<{ thread: ExecutionThread; guidance: RunGuidance; continued: boolean }> {
     const run = this.run(runId);
     const thread = this.thread(run.executionThreadId);
     this.assertAcceptsGuidance(run);
     const runningLoop = this.runningRunLoop(run.id);
     const requested = options.mode === undefined || options.mode === "auto" ? undefined : options.mode;
     // 没有在跑的 Loop 时两种模式等价（都得起新的一轮），行上就记 QUEUE —— 那正是接下来实际走的那条路。
-    const mode: RunGuidanceMode = runningLoop ? requested ?? "QUEUE" : "QUEUE";
+    const mode: RunGuidanceMode = runningLoop ? (requested ?? "QUEUE") : "QUEUE";
     const guidance = this.options.store.saveRunGuidance({
       id: this.options.store.nextId("guidance"),
       runId: run.id,
@@ -369,8 +503,19 @@ export class Scheduler {
       consumedAt: null,
     });
     const taskId = this.recordedActiveTaskId(thread.journal);
-    this.append(thread.id, "USER_GUIDANCE", { content, runId, guidanceId: guidance.id, delivery: mode, status: "PENDING", ...(taskId ? { taskId } : {}) });
-    this.options.store.appendEvent({ type: "run.guidance.added", aggregateId: run.id, payload: { executionThreadId: thread.id, guidanceId: guidance.id, mode } });
+    this.append(thread.id, "USER_GUIDANCE", {
+      content,
+      runId,
+      guidanceId: guidance.id,
+      delivery: mode,
+      status: "PENDING",
+      ...(taskId ? { taskId } : {}),
+    });
+    this.options.store.appendEvent({
+      type: "run.guidance.added",
+      aggregateId: run.id,
+      payload: { executionThreadId: thread.id, guidanceId: guidance.id, mode },
+    });
     // STEER 不动它：正在跑的那个 Loop 会在下一个步骤边界自己取走（见 AgentLoopEngine.takePendingGuidance）。
     if (runningLoop) return { thread: this.thread(thread.id), guidance, continued: false };
     // **暂停中的 Run 也不现在起一轮**：线程 PAUSED 是用户按下的暂停，它要么等着被 resume、要么等 Loop
@@ -408,13 +553,23 @@ export class Scheduler {
     // **声明过的合法边**（今天由恢复对账在用），不是新开的一条路；`RECOVERING` 的 Run 其 Plan
     // 本来就是 IN_PROGRESS，不用动。
     const plan = this.options.store.getPlan(run.planId);
-    if (plan && plan.status === "MERGE_READY") updatePlanStatus(this.options.store, plan, { status: "IN_PROGRESS", attentionReason: null, lastEventAt: this.options.store.now() });
+    if (plan && plan.status === "MERGE_READY")
+      updatePlanStatus(this.options.store, plan, { status: "IN_PROGRESS", attentionReason: null, lastEventAt: this.options.store.now() });
     this.options.store.saveRun({ ...run, status: "IN_PROGRESS" });
     this.setThreadState(thread.id, "ACTIVE");
     const consumedAt = this.options.store.now();
     for (const item of guidance) this.options.store.updateRunGuidance({ ...item, status: "CONSUMED", consumedAt });
-    const completedTaskIds = this.completedTaskIdsFromJournal(thread.journal, new Set(revision.resolvedContract.tasks.map((task) => task.id)));
-    this.append(thread.id, "TASK_PROGRESS", { action: "continuation", guidanceIds: guidance.map((item) => item.id), consumedAt, completedTaskIds, tasksUnchanged: true });
+    const completedTaskIds = this.completedTaskIdsFromJournal(
+      thread.journal,
+      new Set(revision.resolvedContract.tasks.map((task) => task.id)),
+    );
+    this.append(thread.id, "TASK_PROGRESS", {
+      action: "continuation",
+      guidanceIds: guidance.map((item) => item.id),
+      consumedAt,
+      completedTaskIds,
+      tasksUnchanged: true,
+    });
     const previousProviderThreadId = this.latestRunLoop(run.id)?.providerThreadId ?? undefined;
     try {
       const loop = await this.options.executor.start(this.run(runId), revision, {
@@ -423,7 +578,11 @@ export class Scheduler {
         ...(previousProviderThreadId ? { previousProviderThreadId } : {}),
       });
       this.append(thread.id, "TASK_PROGRESS", { action: "executor_loop_created", loopId: loop.id, continuation: true });
-      this.options.store.appendEvent({ type: "run.executor.event", aggregateId: run.id, payload: { executionThreadId: thread.id, action: "executor_loop_created", loopId: loop.id, continuation: true } });
+      this.options.store.appendEvent({
+        type: "run.executor.event",
+        aggregateId: run.id,
+        payload: { executionThreadId: thread.id, action: "executor_loop_created", loopId: loop.id, continuation: true },
+      });
       return true;
     } catch (error) {
       // 与 start() 同一条映射：起不来就 BLOCKED 并写明原因，别让 Run 停在"已回到 IN_PROGRESS 却没人跑"
@@ -433,7 +592,13 @@ export class Scheduler {
       this.setThreadState(thread.id, "BLOCKED");
       this.append(thread.id, "RECOVERY", { action: "continuation_start_failed", reason });
       const latestPlan = this.options.store.getPlan(run.planId);
-      if (latestPlan) updatePlanStatus(this.options.store, latestPlan, { runId: run.id, status: "BLOCKED", attentionReason: reason, lastEventAt: this.options.store.now() }, reason);
+      if (latestPlan)
+        updatePlanStatus(
+          this.options.store,
+          latestPlan,
+          { runId: run.id, status: "BLOCKED", attentionReason: reason, lastEventAt: this.options.store.now() },
+          reason,
+        );
       return false;
     }
   }
@@ -456,9 +621,8 @@ export class Scheduler {
   /** 一个 Run 允许接受补充要求的那些状态；其余一律拒绝并说明该走哪条路。 */
   private assertAcceptsGuidance(run: Run): void {
     if (ACCEPTS_GUIDANCE_RUN_STATUSES.has(run.status)) return;
-    const hint = run.status === "BLOCKED" || run.status === "NEEDS_PLAN_CHANGE"
-      ? " revise the plan (创建更新版本) instead of steering this Run"
-      : "";
+    const hint =
+      run.status === "BLOCKED" || run.status === "NEEDS_PLAN_CHANGE" ? " revise the plan (创建更新版本) instead of steering this Run" : "";
     throw new Error(`Run ${run.id} is ${run.status} and no longer accepts guidance;${hint}`);
   }
 
@@ -471,9 +635,13 @@ export class Scheduler {
   }
 
   private latestRunLoop(runId: string): AgentLoop | undefined {
-    return this.options.store.listAgentLoops(runId)
+    return this.options.store
+      .listAgentLoops(runId)
       .filter((loop) => loop.ownerType === "run")
-      .reduce<AgentLoop | undefined>((latest, loop) => (!latest || (loop.startedAt ?? "") >= (latest.startedAt ?? "") ? loop : latest), undefined);
+      .reduce<AgentLoop | undefined>(
+        (latest, loop) => (!latest || (loop.startedAt ?? "") >= (latest.startedAt ?? "") ? loop : latest),
+        undefined,
+      );
   }
 
   /**
@@ -515,7 +683,13 @@ export class Scheduler {
         for (const taskId of completed) if (typeof taskId === "string" && validTaskIds.has(taskId)) done.add(taskId);
         continue;
       }
-      if (entry.payload.action === "task-lifecycle" && entry.payload.state === "DONE" && typeof entry.payload.taskId === "string" && validTaskIds.has(entry.payload.taskId)) done.add(entry.payload.taskId);
+      if (
+        entry.payload.action === "task-lifecycle" &&
+        entry.payload.state === "DONE" &&
+        typeof entry.payload.taskId === "string" &&
+        validTaskIds.has(entry.payload.taskId)
+      )
+        done.add(entry.payload.taskId);
     }
     flushReportText();
     return [...done];
@@ -552,7 +726,8 @@ export class Scheduler {
         if (entry.payload.state === "IN_PROGRESS") activeTaskId = taskId;
         else if (taskId && activeTaskId === taskId) activeTaskId = undefined;
       }
-      if (entry.payload.action === "task-status") activeTaskId = typeof entry.payload.activeTaskId === "string" ? entry.payload.activeTaskId : undefined;
+      if (entry.payload.action === "task-status")
+        activeTaskId = typeof entry.payload.activeTaskId === "string" ? entry.payload.activeTaskId : undefined;
     }
     return activeTaskId;
   }

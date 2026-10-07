@@ -42,9 +42,10 @@ export function registerAgentLoopRoutes(app: FastifyInstance, deps: AgentLoopRou
   const { store, loopController } = deps;
 
   /** 游标为 0 = 首次连接取尾部窗口；其余情况从游标向前读（详见 routes/workbench.ts 的同类说明）。 */
-  const batchOptions = (loopId: string, afterSequence: number) => afterSequence === 0
-    ? { aggregateId: loopId, limit: AGENT_LOOP_INITIAL_REPLAY_LIMIT, limitFrom: "tail" as const }
-    : { aggregateId: loopId, afterSequence, limit: AGENT_LOOP_POLL_LIMIT, limitFrom: "head" as const };
+  const batchOptions = (loopId: string, afterSequence: number) =>
+    afterSequence === 0
+      ? { aggregateId: loopId, limit: AGENT_LOOP_INITIAL_REPLAY_LIMIT, limitFrom: "tail" as const }
+      : { aggregateId: loopId, afterSequence, limit: AGENT_LOOP_POLL_LIMIT, limitFrom: "head" as const };
 
   app.get("/api/v4/agent-loops/:loopId", async (request, reply) => {
     const params = agentLoopParams.safeParse(request.params);
@@ -91,7 +92,12 @@ export function registerAgentLoopRoutes(app: FastifyInstance, deps: AgentLoopRou
       const currentDiagnostics = current ? loopDiagnostics(store, current) : null;
       for (const event of events) {
         cursor = event.sequence;
-        sse.send(event.sequence, event.type, { loopId: params.data.loopId, sequence: event.sequence, ...event.payload, diagnostics: currentDiagnostics });
+        sse.send(event.sequence, event.type, {
+          loopId: params.data.loopId,
+          sequence: event.sequence,
+          ...event.payload,
+          diagnostics: currentDiagnostics,
+        });
       }
     };
     send();
@@ -108,7 +114,9 @@ export function registerAgentLoopRoutes(app: FastifyInstance, deps: AgentLoopRou
     try {
       const paused = await loopController.pause(loop.id, body.data.reason);
       return { loop: projectAgentLoopResponse(store, paused) };
-    } catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "AgentLoop cannot be paused" }); }
+    } catch (error) {
+      return reply.code(409).send({ error: error instanceof Error ? error.message : "AgentLoop cannot be paused" });
+    }
   });
 
   app.post("/api/v4/agent-loops/:loopId/resume", async (request, reply) => {
@@ -119,7 +127,9 @@ export function registerAgentLoopRoutes(app: FastifyInstance, deps: AgentLoopRou
     try {
       const resumed = await loopController.resume(loop.id);
       return { loop: projectAgentLoopResponse(store, resumed) };
-    } catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "AgentLoop cannot be resumed" }); }
+    } catch (error) {
+      return reply.code(409).send({ error: error instanceof Error ? error.message : "AgentLoop cannot be resumed" });
+    }
   });
 
   app.post("/api/v4/agent-loops/:loopId/cancel", async (request, reply) => {
@@ -131,7 +141,9 @@ export function registerAgentLoopRoutes(app: FastifyInstance, deps: AgentLoopRou
     try {
       const cancelled = await loopController.cancel(loop.id, body.data.reason);
       return { loop: projectAgentLoopResponse(store, cancelled) };
-    } catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "AgentLoop cannot be cancelled" }); }
+    } catch (error) {
+      return reply.code(409).send({ error: error instanceof Error ? error.message : "AgentLoop cannot be cancelled" });
+    }
   });
 
   app.get("/api/v4/projects/:projectId/explorer-thread/agent-loops", async (request, reply) => {
@@ -141,8 +153,19 @@ export function registerAgentLoopRoutes(app: FastifyInstance, deps: AgentLoopRou
     const thread = findProjectThread(store, params.data.projectId, query.data.threadId);
     if (!thread) return reply.code(404).send({ error: "ExplorerThread not found" });
     const explorerPlan = store.getExplorerPlan(query.data.explorerPlanId);
-    if (!explorerPlan || explorerPlan.explorerThreadId !== thread.id || explorerPlan.projectId !== thread.projectId) return reply.code(404).send({ error: "ExplorerPlan not found" });
-    const turnIds = new Set(store.listTurns(thread.id).filter((turn) => turn.explorerPlanId === explorerPlan.id).map((turn) => turn.id));
-    return { items: store.listAgentLoops().filter((loop) => loop.ownerType === "explorer-turn" && turnIds.has(loop.ownerId)).map((loop) => projectAgentLoopResponse(store, loop)) };
+    if (!explorerPlan || explorerPlan.explorerThreadId !== thread.id || explorerPlan.projectId !== thread.projectId)
+      return reply.code(404).send({ error: "ExplorerPlan not found" });
+    const turnIds = new Set(
+      store
+        .listTurns(thread.id)
+        .filter((turn) => turn.explorerPlanId === explorerPlan.id)
+        .map((turn) => turn.id),
+    );
+    return {
+      items: store
+        .listAgentLoops()
+        .filter((loop) => loop.ownerType === "explorer-turn" && turnIds.has(loop.ownerId))
+        .map((loop) => projectAgentLoopResponse(store, loop)),
+    };
   });
 }

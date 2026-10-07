@@ -7,7 +7,14 @@
  *   `completed` 不在成功白名单里——全库 343 条"状态未知"、0 条成功。这里逐对断言，防止两边再次分叉。
  */
 import { describe, expect, it } from "vitest";
-import { activityOutcome, classifyClaudeActivity, classifyCodexActivity, isOutcomeFreeKind, isRuntimeAlertKind, isRuntimeKind } from "./provider-activity.js";
+import {
+  activityOutcome,
+  classifyClaudeActivity,
+  classifyCodexActivity,
+  isOutcomeFreeKind,
+  isRuntimeAlertKind,
+  isRuntimeKind,
+} from "./provider-activity.js";
 
 describe("provider 活动的中立词表", () => {
   it("同一条命令：两个 Provider 给出同一个类别与同一个成败", () => {
@@ -19,8 +26,19 @@ describe("provider 活动的中立词表", () => {
   });
 
   it("同一条失败的命令：两个 Provider 都给 failed", () => {
-    const codex = classifyCodexActivity({ itemType: "commandExecution", phase: "completed", status: "failed", error: "Provider command exited with code 1" });
-    const claude = classifyClaudeActivity({ itemType: "tool_result", phase: "completed", status: "failed", toolName: "Bash", error: "exit 1" });
+    const codex = classifyCodexActivity({
+      itemType: "commandExecution",
+      phase: "completed",
+      status: "failed",
+      error: "Provider command exited with code 1",
+    });
+    const claude = classifyClaudeActivity({
+      itemType: "tool_result",
+      phase: "completed",
+      status: "failed",
+      toolName: "Bash",
+      error: "exit 1",
+    });
 
     expect(codex).toEqual({ activityKind: "command", outcome: "failed" });
     expect(claude).toEqual(codex);
@@ -43,10 +61,22 @@ describe("provider 活动的中立词表", () => {
 
   it("没有成败概念的类别返回 not-applicable，而不是 unknown", () => {
     // 推理流 / 用户消息 / 会话重建：给它们挂状态标签是噪音（全库 210/343 条属于这一类）。
-    expect(classifyCodexActivity({ itemType: "reasoning", phase: "completed" })).toEqual({ activityKind: "reasoning", outcome: "not-applicable" });
-    expect(classifyCodexActivity({ itemType: "userMessage", phase: "completed" })).toEqual({ activityKind: "message", outcome: "not-applicable" });
-    expect(classifyCodexActivity({ itemType: "providerSession", phase: "completed" })).toEqual({ activityKind: "session", outcome: "not-applicable" });
-    expect(classifyClaudeActivity({ itemType: "providerSession", phase: "completed" })).toEqual({ activityKind: "session", outcome: "not-applicable" });
+    expect(classifyCodexActivity({ itemType: "reasoning", phase: "completed" })).toEqual({
+      activityKind: "reasoning",
+      outcome: "not-applicable",
+    });
+    expect(classifyCodexActivity({ itemType: "userMessage", phase: "completed" })).toEqual({
+      activityKind: "message",
+      outcome: "not-applicable",
+    });
+    expect(classifyCodexActivity({ itemType: "providerSession", phase: "completed" })).toEqual({
+      activityKind: "session",
+      outcome: "not-applicable",
+    });
+    expect(classifyClaudeActivity({ itemType: "providerSession", phase: "completed" })).toEqual({
+      activityKind: "session",
+      outcome: "not-applicable",
+    });
 
     expect(isOutcomeFreeKind("reasoning")).toBe(true);
     expect(isOutcomeFreeKind("command")).toBe(false);
@@ -78,8 +108,10 @@ describe("四组类别与它们各自该有的归宿", () => {
     // 词表里漏了最后一个，于是"Provider 说这条命令被拒了"被显示成「状态未知」——
     // 而"被拒"与"没记录到"是两句完全不同的话。
     expect(activityOutcome({ kind: "command", phase: "completed", status: "declined" })).toBe("failed");
-    expect(classifyCodexActivity({ itemType: "commandExecution", phase: "completed", status: "declined" }))
-      .toEqual({ activityKind: "command", outcome: "failed" });
+    expect(classifyCodexActivity({ itemType: "commandExecution", phase: "completed", status: "declined" })).toEqual({
+      activityKind: "command",
+      outcome: "failed",
+    });
     // Claude 侧的同一个事实拼作 permission_denied，两条词表必须落在同一格。
     expect(classifyClaudeActivity({ itemType: "permission_denied", phase: "completed", status: "denied" }).outcome).toBe("failed");
   });
@@ -88,10 +120,24 @@ describe("四组类别与它们各自该有的归宿", () => {
     // 实测：本机库里 `plan`（58 条）与 `contextCompaction`（3 条）此前都落进 other，
     // 界面上显示成「未识别」——整篇规划文档与"上下文压缩发生在此处"被标成了认不出来的东西。
     const kinds = [
-      "userMessage", "hookPrompt", "agentMessage", "plan", "reasoning", "commandExecution",
-      "fileChange", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "subAgentActivity",
-      "webSearch", "imageView", "imageGeneration", "sleep", "contextCompaction",
-      "enteredReviewMode", "exitedReviewMode",
+      "userMessage",
+      "hookPrompt",
+      "agentMessage",
+      "plan",
+      "reasoning",
+      "commandExecution",
+      "fileChange",
+      "mcpToolCall",
+      "dynamicToolCall",
+      "collabAgentToolCall",
+      "subAgentActivity",
+      "webSearch",
+      "imageView",
+      "imageGeneration",
+      "sleep",
+      "contextCompaction",
+      "enteredReviewMode",
+      "exitedReviewMode",
     ];
     const unknown = kinds.filter((itemType) => classifyCodexActivity({ itemType, phase: "completed" }).activityKind === "other");
     // `sleep` 是唯一一个还没定归宿的（等待既不是动作也不是运行事实）——记在这里，别让它悄悄变多。
@@ -129,7 +175,9 @@ describe("四组类别与它们各自该有的归宿", () => {
       expect(isOutcomeFreeKind(kind)).toBe(true);
     }
     // 钩子挂了、子任务失败了、权限被拒了——这三件事本身就是结论，不能被静默成"信息"。
-    expect(classifyClaudeActivity({ itemType: "hook_response", phase: "completed", status: "failed", error: "exit 1" }).outcome).toBe("failed");
+    expect(classifyClaudeActivity({ itemType: "hook_response", phase: "completed", status: "failed", error: "exit 1" }).outcome).toBe(
+      "failed",
+    );
     expect(classifyClaudeActivity({ itemType: "task_notification", phase: "completed", status: "failed" }).outcome).toBe("failed");
     expect(isOutcomeFreeKind("hook")).toBe(false);
     expect(isOutcomeFreeKind("task")).toBe(false);

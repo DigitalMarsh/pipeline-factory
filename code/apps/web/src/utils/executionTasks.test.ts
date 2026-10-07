@@ -12,7 +12,18 @@ const tasks = [
 
 describe("projectExecutionTasks", () => {
   it("projects structured task progress and the next dependency-ready task", () => {
-    const result = projectExecutionTasks(tasks, [{ sequence: 8, type: "TASK_PROGRESS", occurredAt: "2026-09-06T03:00:00.000Z", payload: { action: "task-status", completedTaskIds: ["task-1"], activeTaskId: "task-2" } }], "IN_PROGRESS");
+    const result = projectExecutionTasks(
+      tasks,
+      [
+        {
+          sequence: 8,
+          type: "TASK_PROGRESS",
+          occurredAt: "2026-09-06T03:00:00.000Z",
+          payload: { action: "task-status", completedTaskIds: ["task-1"], activeTaskId: "task-2" },
+        },
+      ],
+      "IN_PROGRESS",
+    );
 
     expect(result).toMatchObject([
       { id: "task-1", status: "DONE", evidenceSequence: 8 },
@@ -22,7 +33,23 @@ describe("projectExecutionTasks", () => {
   });
 
   it("keeps a blocked task and reason without marking unrelated tasks failed", () => {
-    const result = projectExecutionTasks(tasks, [{ sequence: 9, type: "TASK_PROGRESS", occurredAt: "2026-09-06T03:00:00.000Z", payload: { action: "task-status", completedTaskIds: ["task-1", "task-2"], blockedTaskId: "task-3", blockedReason: "No Git remote" } }], "BLOCKED");
+    const result = projectExecutionTasks(
+      tasks,
+      [
+        {
+          sequence: 9,
+          type: "TASK_PROGRESS",
+          occurredAt: "2026-09-06T03:00:00.000Z",
+          payload: {
+            action: "task-status",
+            completedTaskIds: ["task-1", "task-2"],
+            blockedTaskId: "task-3",
+            blockedReason: "No Git remote",
+          },
+        },
+      ],
+      "BLOCKED",
+    );
 
     expect(result).toMatchObject([
       { id: "task-1", status: "DONE" },
@@ -32,12 +59,23 @@ describe("projectExecutionTasks", () => {
   });
 
   it("supports legacy report blocks without trusting ordinary model prose", () => {
-    const result = projectExecutionTasks(tasks, [
-      { sequence: 2, type: "MODEL_OUTPUT", occurredAt: "2026-09-06T03:00:00.000Z", payload: { text: "已完成 task-1。" } },
-      { sequence: 3, type: "TASK_PROGRESS", occurredAt: "2026-09-06T03:00:01.000Z", payload: { event: "agent.model.completed" } },
-      { sequence: 4, type: "MODEL_OUTPUT", occurredAt: "2026-09-06T03:00:02.000Z", payload: { text: `<pipeline-factory-execution-report>${JSON.stringify({ completedTaskIds: ["task-1"], changedPaths: [], report: "done" })}</pipeline-factory-execution-report>` } },
-      { sequence: 5, type: "TASK_PROGRESS", occurredAt: "2026-09-06T03:00:03.000Z", payload: { event: "agent.model.completed" } },
-    ], "BLOCKED");
+    const result = projectExecutionTasks(
+      tasks,
+      [
+        { sequence: 2, type: "MODEL_OUTPUT", occurredAt: "2026-09-06T03:00:00.000Z", payload: { text: "已完成 task-1。" } },
+        { sequence: 3, type: "TASK_PROGRESS", occurredAt: "2026-09-06T03:00:01.000Z", payload: { event: "agent.model.completed" } },
+        {
+          sequence: 4,
+          type: "MODEL_OUTPUT",
+          occurredAt: "2026-09-06T03:00:02.000Z",
+          payload: {
+            text: `<pipeline-factory-execution-report>${JSON.stringify({ completedTaskIds: ["task-1"], changedPaths: [], report: "done" })}</pipeline-factory-execution-report>`,
+          },
+        },
+        { sequence: 5, type: "TASK_PROGRESS", occurredAt: "2026-09-06T03:00:03.000Z", payload: { event: "agent.model.completed" } },
+      ],
+      "BLOCKED",
+    );
 
     expect(result[0]).toMatchObject({ id: "task-1", status: "DONE", evidenceSequence: 4 });
     expect(result[1]?.status).toBe("PENDING");

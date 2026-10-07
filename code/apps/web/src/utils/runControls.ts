@@ -13,7 +13,9 @@ export function canTerminateRun(runStatus: string): boolean {
 
 /** Returns whether the Run Control surface has at least one executable action. */
 export function hasRunControlActions(runStatus: string, threadState: string): boolean {
-  return canTerminateRun(runStatus) || canPauseRun(runStatus, threadState) || runStatus === "IN_PROGRESS" || runStatus === "READY_FOR_VERIFY";
+  return (
+    canTerminateRun(runStatus) || canPauseRun(runStatus, threadState) || runStatus === "IN_PROGRESS" || runStatus === "READY_FOR_VERIFY"
+  );
 }
 
 /**

@@ -12,7 +12,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import ProviderUsageFooter from "./ProviderUsageFooter.vue";
 
 const mounted: Array<{ app: ReturnType<typeof createApp>; host: HTMLElement }> = [];
-afterEach(() => { mounted.splice(0).forEach(({ app, host }) => { app.unmount(); host.remove(); }); });
+afterEach(() => {
+  mounted.splice(0).forEach(({ app, host }) => {
+    app.unmount();
+    host.remove();
+  });
+});
 
 function mount(props: Record<string, unknown>) {
   const host = document.createElement("div");
@@ -44,6 +49,8 @@ describe("ProviderUsageFooter", () => {
 
   it("only claims a source when the caller says the value did not come from a run", () => {
     expect(mount({}).querySelector(".provider-usage-source")).toBeNull();
-    expect(mount({ sourceNote: "按本 Run 冻结的项目配置" }).querySelector(".provider-usage-source")?.textContent).toBe("按本 Run 冻结的项目配置");
+    expect(mount({ sourceNote: "按本 Run 冻结的项目配置" }).querySelector(".provider-usage-source")?.textContent).toBe(
+      "按本 Run 冻结的项目配置",
+    );
   });
 });

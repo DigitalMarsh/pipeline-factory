@@ -11,12 +11,34 @@ import ExecutionHeaderStatus from "../components/ExecutionHeaderStatus.vue";
 import PlanDetailDrawer from "../components/PlanDetailDrawer.vue";
 import ProviderUsageFooter from "../components/ProviderUsageFooter.vue";
 import { api } from "../api";
-import type { AgentLoopStep, ExecutionTask, ExecutionThread, MergeRequest, Plan, PlanTask, Run, RunJournalEvent, VerificationRun } from "../types";
+import type {
+  AgentLoopStep,
+  ExecutionTask,
+  ExecutionThread,
+  MergeRequest,
+  Plan,
+  PlanTask,
+  Run,
+  RunJournalEvent,
+  VerificationRun,
+} from "../types";
 import { streamStatusTagType } from "../utils/statusTag";
 import ExecutionMessageRow from "../components/ExecutionMessageRow.vue";
-import { executionMessageWeight, foldsIntoProcess, isRuntimeFactItem, projectExecutionJournal, type ExecutionJournalEntry, type ExecutionPlanSnapshot, type ExecutionStreamItem } from "../utils/executionStream";
+import {
+  executionMessageWeight,
+  foldsIntoProcess,
+  isRuntimeFactItem,
+  projectExecutionJournal,
+  type ExecutionJournalEntry,
+  type ExecutionPlanSnapshot,
+  type ExecutionStreamItem,
+} from "../utils/executionStream";
 import { durationBetween, formatDuration } from "../utils/duration";
-import { executionModelSourceNote as executionModelSourceNoteFor, formatProviderContextUsage, resolveExecutionModelIdentity } from "../utils/executionTelemetry";
+import {
+  executionModelSourceNote as executionModelSourceNoteFor,
+  formatProviderContextUsage,
+  resolveExecutionModelIdentity,
+} from "../utils/executionTelemetry";
 import { useModelBackends } from "../composables/useModelBackends";
 import { executionTaskStatusLabel, executionTaskStatusType, executionTaskSummary, projectExecutionTasks } from "../utils/executionTasks";
 import { canContinueRun, canTerminateRun } from "../utils/runControls";
@@ -29,7 +51,13 @@ const route = useRoute();
 const router = useRouter();
 const props = withDefaults(defineProps<{ embedded?: boolean; projectId?: string; runId?: string }>(), { embedded: false });
 const emit = defineEmits<{ (event: "close"): void; (event: "open-plan", plan: Plan): void }>();
-type ExecutionConversationGroup = { id: string; kind: "plan" | "task" | "user" | "unattributed" | "pending"; task?: ExecutionTask; tasks?: ExecutionTask[]; items: ExecutionStreamItem[] };
+type ExecutionConversationGroup = {
+  id: string;
+  kind: "plan" | "task" | "user" | "unattributed" | "pending";
+  task?: ExecutionTask;
+  tasks?: ExecutionTask[];
+  items: ExecutionStreamItem[];
+};
 const embedded = computed(() => props.embedded);
 const projectId = computed(() => props.projectId ?? String(route.params.projectId ?? ""));
 const runId = computed(() => props.runId ?? String(route.params.runId ?? ""));
@@ -68,7 +96,9 @@ let planDetailRequestToken = 0;
 // ExecutionThread journal 是持久化事实，conversation projection 只负责把事实转换为可读消息。
 // sequence 同时作为 SSE 游标，重连时从最后一条已接受的事件继续回放。
 const loopStatusLabel = computed(() => formatAgentLoopState(executorLoop.value?.state, "无活动 Loop"));
-const streamState = computed<"live" | "reconnecting" | "saved">(() => runStreamConnected.value ? "live" : ["IN_PROGRESS", "STARTING"].includes(run.value?.status ?? "") ? "reconnecting" : "saved");
+const streamState = computed<"live" | "reconnecting" | "saved">(() =>
+  runStreamConnected.value ? "live" : ["IN_PROGRESS", "STARTING"].includes(run.value?.status ?? "") ? "reconnecting" : "saved",
+);
 const executionStatusLabel = computed(() => ({ live: "实时", reconnecting: "重连中", saved: "已保存" })[streamState.value]);
 const executionBlockReason = computed(() => {
   for (const entry of [...(thread.value?.journal ?? [])].reverse()) {
@@ -77,7 +107,9 @@ const executionBlockReason = computed(() => {
   }
   return null;
 });
-const executionTasks = computed<ExecutionTask[]>(() => projectExecutionTasks(planTasks.value, thread.value?.journal ?? [], run.value?.status ?? ""));
+const executionTasks = computed<ExecutionTask[]>(() =>
+  projectExecutionTasks(planTasks.value, thread.value?.journal ?? [], run.value?.status ?? ""),
+);
 const executionTaskCounts = computed(() => executionTaskSummary(executionTasks.value));
 /**
  * Run 级活动：没有归属于任何执行步骤的 activity 条目——Run 的创建、生命周期钩子、验证、
@@ -114,7 +146,9 @@ const executionConversationGroups = computed<ExecutionConversationGroup[]>(() =>
   if (userMessages.length) groups.push({ id: "user", kind: "user", items: userMessages });
   // 剩下的才是真正的归因缺口：本该落进某个执行步骤、却没有归属的模型 / 工具条目。
   // 现代 Run 不产生这类条目，它们集中在 2026-09-25 之前的数据里。
-  const unattributed = executionMessages.value.filter((item) => item.kind !== "plan" && item.kind !== "user" && !isRunActivity(item) && (!item.taskId || !taskIds.has(item.taskId)));
+  const unattributed = executionMessages.value.filter(
+    (item) => item.kind !== "plan" && item.kind !== "user" && !isRunActivity(item) && (!item.taskId || !taskIds.has(item.taskId)),
+  );
   if (unattributed.length) groups.push({ id: "unattributed", kind: "unattributed", items: unattributed });
   return collapsePendingTaskGroups(groups);
 });
@@ -134,7 +168,10 @@ function collapsePendingTaskGroups(groups: ExecutionConversationGroup[]): Execut
     pending = [];
   };
   for (const group of groups) {
-    if (group.kind === "task" && group.task && group.items.length === 0) { pending.push(group.task); continue; }
+    if (group.kind === "task" && group.task && group.items.length === 0) {
+      pending.push(group.task);
+      continue;
+    }
     flush();
     collapsed.push(group);
   }
@@ -213,11 +250,38 @@ const executionPhaseSteps = computed(() => {
   const verificationStatus = verification.value?.status;
   const steps = [
     { key: "execute", label: "执行", detail: counts.total > 0 ? `${counts.completed}/${counts.total} 步骤` : "等待派发" },
-    { key: "verify", label: "验证", detail: verificationStatus === "PASSED" ? "已通过" : verificationStatus === "FAILED" || verificationStatus === "BLOCKED" ? "未通过" : verificationStatus === "SKIPPED" ? "已跳过" : "未开始" },
-    { key: "merge", label: "合并", detail: mergeStatus === "MERGED" ? "已合并" : mergeStatus === "OPEN" ? "等待人工合并" : status === "MERGE_READY" ? "可创建 Merge request" : "未开始" },
+    {
+      key: "verify",
+      label: "验证",
+      detail:
+        verificationStatus === "PASSED"
+          ? "已通过"
+          : verificationStatus === "FAILED" || verificationStatus === "BLOCKED"
+            ? "未通过"
+            : verificationStatus === "SKIPPED"
+              ? "已跳过"
+              : "未开始",
+    },
+    {
+      key: "merge",
+      label: "合并",
+      detail:
+        mergeStatus === "MERGED"
+          ? "已合并"
+          : mergeStatus === "OPEN"
+            ? "等待人工合并"
+            : status === "MERGE_READY"
+              ? "可创建 Merge request"
+              : "未开始",
+    },
   ];
   // 当前阶段由 Run 状态决定；BLOCKED / CANCELLED 停在它当时所在的那一步，不往前推。
-  const current = status === "MERGE_READY" || mergeStatus ? "merge" : verificationStatus || status === "VERIFYING" || status === "READY_FOR_VERIFY" ? "verify" : "execute";
+  const current =
+    status === "MERGE_READY" || mergeStatus
+      ? "merge"
+      : verificationStatus || status === "VERIFYING" || status === "READY_FOR_VERIFY"
+        ? "verify"
+        : "execute";
   const currentIndex = current === "merge" ? 2 : current === "verify" ? 1 : 0;
   return steps.map((step, index) => ({ ...step, current: index === currentIndex, done: index < currentIndex }));
 });
@@ -237,7 +301,9 @@ const executionExecutorConfig = computed(() => {
   if (!configured && !roleBackend) return null;
   return { model: configured?.model ?? null, backend: configured?.backend ?? roleBackend };
 });
-const executionModelIdentity = computed(() => resolveExecutionModelIdentity(executionTelemetry.value, executionExecutorConfig.value, modelCatalog.value));
+const executionModelIdentity = computed(() =>
+  resolveExecutionModelIdentity(executionTelemetry.value, executionExecutorConfig.value, modelCatalog.value),
+);
 /**
  * 项目**当前**的执行配置。与这份 Run 用的那份不一致时说明"配置改了但这份 Run 还用着旧的"——
  * 已确认的 Plan 及其 Run 用的是确认时冻结的配置（见 utils/executionTelemetry.ts 的说明）。
@@ -250,7 +316,9 @@ const executionContextUsage = computed(() => formatProviderContextUsage(executio
  * 见 utils/executionMessageDetails.ts 的模块头——那行"什么该收"的规则在那边有单测。
  */
 const expandedExecutionItems = ref<Set<string>>(new Set());
-function isExecutionItemExpanded(id: string): boolean { return expandedExecutionItems.value.has(id); }
+function isExecutionItemExpanded(id: string): boolean {
+  return expandedExecutionItems.value.has(id);
+}
 function toggleExecutionItem(id: string): void {
   const next = new Set(expandedExecutionItems.value);
   if (next.has(id)) next.delete(id);
@@ -262,7 +330,9 @@ function toggleExecutionItem(id: string): void {
  * 收起的是**这一组的消息**，步骤头本身始终在——它就是"这里还有一个 task"的那一行。
  */
 const collapsedTaskGroups = ref<Set<string>>(new Set());
-function isTaskGroupCollapsed(groupId: string): boolean { return collapsedTaskGroups.value.has(groupId); }
+function isTaskGroupCollapsed(groupId: string): boolean {
+  return collapsedTaskGroups.value.has(groupId);
+}
 function toggleTaskGroup(groupId: string): void {
   const next = new Set(collapsedTaskGroups.value);
   if (next.has(groupId)) next.delete(groupId);
@@ -284,7 +354,11 @@ function expandTaskGroup(groupId: string): void {
  */
 const canSendExecutionMessage = computed(() => canContinueRun(run.value?.status ?? ""));
 /** 还有一轮在跑吗——决定补充要求是"交给这一轮"还是"起新的一轮"。 */
-const executorLoopRunning = computed(() => (run.value?.agentLoops ?? []).some((loop) => loop.role === "executor" && ["CREATED", "RUNNING", "WAITING_FOR_INPUT", "PAUSED"].includes(loop.state)));
+const executorLoopRunning = computed(() =>
+  (run.value?.agentLoops ?? []).some(
+    (loop) => loop.role === "executor" && ["CREATED", "RUNNING", "WAITING_FOR_INPUT", "PAUSED"].includes(loop.state),
+  ),
+);
 /** 一轮还在跑时的投递方式；没在跑时它不参与，服务端按 `auto` 自己定。 */
 const executionGuidanceMode = ref<"steer" | "queue">("queue");
 /** 输入框为什么不可用——空串表示可用。 */
@@ -298,7 +372,11 @@ const executionComposerDisabledReason = computed(() => {
 
 function rebuildExecutionMessages(): void {
   const currentThread = thread.value;
-  executionMessages.value = projectExecutionJournal(currentThread?.journal ?? [], currentThread?.state ?? run.value?.status ?? "ACTIVE", executionPlan.value ?? undefined);
+  executionMessages.value = projectExecutionJournal(
+    currentThread?.journal ?? [],
+    currentThread?.state ?? run.value?.status ?? "ACTIVE",
+    executionPlan.value ?? undefined,
+  );
 }
 
 function executionPlanSnapshot(runValue: Run, revision: { resolvedContract?: Plan["resolvedContract"] }): ExecutionPlanSnapshot {
@@ -347,8 +425,11 @@ function focusExecutionTask(task: ExecutionTask): void {
   // 从状态卡跳到一个被收起的步骤时，先把它展开——否则"跳过去"看起来什么都没发生。
   expandTaskGroup(`task-${task.id}`);
   void nextTick(() => {
-    const target = (task.evidenceSequence ? executionTimeline.value?.querySelector<HTMLElement>(`[data-sequence="${task.evidenceSequence}"]`) : null)
-      ?? Array.from(executionTimeline.value?.querySelectorAll<HTMLElement>("[data-task-id]") ?? []).find((element) => element.dataset.taskId === task.id);
+    const target =
+      (task.evidenceSequence ? executionTimeline.value?.querySelector<HTMLElement>(`[data-sequence="${task.evidenceSequence}"]`) : null) ??
+      Array.from(executionTimeline.value?.querySelectorAll<HTMLElement>("[data-task-id]") ?? []).find(
+        (element) => element.dataset.taskId === task.id,
+      );
     target?.scrollIntoView({ behavior: "smooth", block: "center" });
   });
 }
@@ -383,7 +464,8 @@ async function openPlanDetail(): Promise<void> {
       api.getPlanRevision(currentRun.planId, currentRun.planRevision),
     ]);
     if (requestToken !== planDetailRequestToken) return;
-    const resolvedContract = revisionResponse.revision.resolvedContract ?? detailResponse.revision?.resolvedContract ?? detailResponse.plan.resolvedContract;
+    const resolvedContract =
+      revisionResponse.revision.resolvedContract ?? detailResponse.revision?.resolvedContract ?? detailResponse.plan.resolvedContract;
     const revisions = historyResponse.items.map((item) => item.revision);
     planDetailRevisions.value = Array.from(new Set([...revisions, currentRun.planRevision])).sort((left, right) => left - right);
     planDetail.value = {
@@ -425,7 +507,12 @@ function appendRunJournalEvent(event: RunJournalEvent): void {
   if (!currentThread || event.sequence <= runEventSequence) return;
   const shouldFollow = isAtExecutionLatest();
   const entry: ExecutionJournalEntry = { sequence: event.sequence, type: event.type, occurredAt: event.occurredAt, payload: event.payload };
-  const nextThread: ExecutionThread = { ...currentThread, state: event.threadState ?? currentThread.state, journal: [...currentThread.journal, entry], ...(event.threadTelemetry === undefined ? {} : { telemetry: event.threadTelemetry }) };
+  const nextThread: ExecutionThread = {
+    ...currentThread,
+    state: event.threadState ?? currentThread.state,
+    journal: [...currentThread.journal, entry],
+    ...(event.threadTelemetry === undefined ? {} : { telemetry: event.threadTelemetry }),
+  };
   thread.value = nextThread;
   runEventSequence = event.sequence;
   if (event.runStatus && run.value) run.value = { ...run.value, status: event.runStatus };
@@ -442,17 +529,38 @@ function applyStreamTelemetry(event: { threadTelemetry?: ExecutionThread["teleme
 
 /** 仅为仍可能产生事实的 Run 建立 SSE；终态 Run 依赖已加载的持久化 journal。 */
 function connectRunEvents(): void {
-  if (!run.value || typeof EventSource === "undefined" || ["BLOCKED", "CANCELLED", "MERGE_READY", "MERGED"].includes(run.value.status)) return;
+  if (!run.value || typeof EventSource === "undefined" || ["BLOCKED", "CANCELLED", "MERGE_READY", "MERGED"].includes(run.value.status))
+    return;
   runEventSource?.close();
   runEventSource = new EventSource(api.runEventsUrl(run.value.id, runEventSequence));
-  runEventSource.addEventListener("open", () => { runStreamConnected.value = true; });
-  runEventSource.addEventListener("stream.ready", (raw) => { runStreamConnected.value = true; try { applyStreamTelemetry(JSON.parse((raw as MessageEvent).data) as { threadTelemetry?: ExecutionThread["telemetry"] }); } catch { /* Initial GET remains the source of truth. */ } });
-  runEventSource.addEventListener("telemetry.updated", (raw) => { try { applyStreamTelemetry(JSON.parse((raw as MessageEvent).data) as { threadTelemetry?: ExecutionThread["telemetry"] }); } catch { /* The next poll or reconnect will recover the latest snapshot. */ } });
-  runEventSource.addEventListener("journal.entry", (raw) => {
-    try { appendRunJournalEvent(JSON.parse((raw as MessageEvent).data) as RunJournalEvent); }
-    catch { /* The next reconnect will replay from the last accepted sequence. */ }
+  runEventSource.addEventListener("open", () => {
+    runStreamConnected.value = true;
   });
-  runEventSource.addEventListener("error", () => { runStreamConnected.value = false; });
+  runEventSource.addEventListener("stream.ready", (raw) => {
+    runStreamConnected.value = true;
+    try {
+      applyStreamTelemetry(JSON.parse((raw as MessageEvent).data) as { threadTelemetry?: ExecutionThread["telemetry"] });
+    } catch {
+      /* Initial GET remains the source of truth. */
+    }
+  });
+  runEventSource.addEventListener("telemetry.updated", (raw) => {
+    try {
+      applyStreamTelemetry(JSON.parse((raw as MessageEvent).data) as { threadTelemetry?: ExecutionThread["telemetry"] });
+    } catch {
+      /* The next poll or reconnect will recover the latest snapshot. */
+    }
+  });
+  runEventSource.addEventListener("journal.entry", (raw) => {
+    try {
+      appendRunJournalEvent(JSON.parse((raw as MessageEvent).data) as RunJournalEvent);
+    } catch {
+      /* The next reconnect will replay from the last accepted sequence. */
+    }
+  });
+  runEventSource.addEventListener("error", () => {
+    runStreamConnected.value = false;
+  });
 }
 
 /** 清理 EventSource 和连接状态，避免离开页面后继续轮询服务端。 */
@@ -478,8 +586,9 @@ async function load() {
       const report = await api.reconcileProjectMerges(requestProjectId);
       const diagnostic = report.items.find((item) => item.runId === requestRunId && item.reason);
       if (diagnostic?.reason) ElMessage.warning(`Merge 状态检测：${diagnostic.reason}`);
+    } catch (caught) {
+      ElMessage.warning(`Merge 状态检测失败，已展示最近保存的状态：${caught instanceof Error ? caught.message : "暂不可用"}`);
     }
-    catch (caught) { ElMessage.warning(`Merge 状态检测失败，已展示最近保存的状态：${caught instanceof Error ? caught.message : "暂不可用"}`); }
     const response = await api.getRun(requestRunId);
     if (!requestScope.isCurrent(requestToken, `${requestProjectId}:${requestRunId}`)) return;
     run.value = response.run;
@@ -488,8 +597,11 @@ async function load() {
     // 项目**当前**配置只服务于一条提示（"配置改了但这份 Run 还用旧的"）；取不到不影响 Run 本身。
     try {
       const snapshot = await api.project(requestProjectId);
-      if (requestScope.isCurrent(requestToken, `${requestProjectId}:${requestRunId}`)) projectExecutorConfig.value = snapshot.project.settings.models.executor ?? null;
-    } catch { /* 提示缺失不影响主流程 */ }
+      if (requestScope.isCurrent(requestToken, `${requestProjectId}:${requestRunId}`))
+        projectExecutorConfig.value = snapshot.project.settings.models.executor ?? null;
+    } catch {
+      /* 提示缺失不影响主流程 */
+    }
     verification.value = response.verification;
     mergeRequest.value = response.mergeRequest;
     try {
@@ -498,7 +610,9 @@ async function load() {
       executionPlan.value = executionPlanSnapshot(response.run, revisionResponse.revision);
       planTasks.value = executionPlan.value.tasks;
       rebuildExecutionMessages();
-    } catch (caught) { error.value = describeRunLoadError(caught, "plan-revision"); }
+    } catch (caught) {
+      error.value = describeRunLoadError(caught, "plan-revision");
+    }
     const loopId = response.run.agentLoops?.[0]?.id;
     executorSteps.value = [];
     if (loopId) {
@@ -506,7 +620,9 @@ async function load() {
         const stepsResponse = await api.agentLoopSteps(loopId);
         if (!requestScope.isCurrent(requestToken, `${requestProjectId}:${requestRunId}`)) return;
         executorSteps.value = stepsResponse.items;
-      } catch (caught) { error.value = describeRunLoadError(caught, "agent-loop"); }
+      } catch (caught) {
+        error.value = describeRunLoadError(caught, "agent-loop");
+      }
     }
     sourceCommit.value = response.mergeRequest?.sourceCommit ?? response.run.baseCommit;
     // Reconciliation is the source of truth for the confirmation input. Reset it
@@ -514,10 +630,13 @@ async function load() {
     targetCommit.value = response.mergeRequest?.detectedTargetCommit ?? response.run.baseCommit;
   } catch (caught) {
     if (requestScope.isCurrent(requestToken, `${requestProjectId}:${requestRunId}`)) error.value = describeRunLoadError(caught, "run");
+  } finally {
+    if (requestScope.isCurrent(requestToken, `${requestProjectId}:${requestRunId}`)) loading.value = false;
   }
-  finally { if (requestScope.isCurrent(requestToken, `${requestProjectId}:${requestRunId}`)) loading.value = false; }
 }
-function notifyError(caught: unknown) { error.value = caught instanceof Error ? caught.message : "操作失败，请稍后重试"; }
+function notifyError(caught: unknown) {
+  error.value = caught instanceof Error ? caught.message : "操作失败，请稍后重试";
+}
 async function controlExecutorLoop(action: "pause" | "resume" | "cancel") {
   if (!executorLoop.value || actionBusy.value) return;
   actionBusy.value = true;
@@ -526,8 +645,11 @@ async function controlExecutorLoop(action: "pause" | "resume" | "cancel") {
     if (action === "resume") await api.resumeAgentLoop(executorLoop.value.id);
     if (action === "cancel") await api.cancelAgentLoop(executorLoop.value.id, "user_requested");
     await load();
-  } catch (caught) { notifyError(caught); }
-  finally { actionBusy.value = false; }
+  } catch (caught) {
+    notifyError(caught);
+  } finally {
+    actionBusy.value = false;
+  }
 }
 async function togglePause() {
   if (!run.value || actionBusy.value) return;
@@ -536,30 +658,45 @@ async function togglePause() {
     const response = thread.value?.state === "PAUSED" ? await api.resumeRun(run.value.id) : await api.pauseRun(run.value.id);
     run.value = response.run;
     setExecutionThread(response.thread);
-  } catch (caught) { notifyError(caught); }
-  finally { actionBusy.value = false; }
+  } catch (caught) {
+    notifyError(caught);
+  } finally {
+    actionBusy.value = false;
+  }
 }
 /** 终止前要求二次确认；服务端会同步取消关联 AgentLoop 并执行 cleanup。 */
 async function terminateRun() {
   if (!run.value || actionBusy.value || !canTerminateRun(run.value.status)) return;
   try {
-    await ElMessageBox.confirm("Terminate this run? The confirmed Plan will remain in history.", "终止 Run", { confirmButtonText: "Terminate", cancelButtonText: "Keep running", type: "warning" });
-  } catch { return; }
+    await ElMessageBox.confirm("Terminate this run? The confirmed Plan will remain in history.", "终止 Run", {
+      confirmButtonText: "Terminate",
+      cancelButtonText: "Keep running",
+      type: "warning",
+    });
+  } catch {
+    return;
+  }
   actionBusy.value = true;
   try {
     await api.cancelRun(run.value.id, "user_requested");
     ElMessage.success("Run 已终止");
     if (embedded.value) await load();
     else await router.push(`/projects/${projectId.value}/plans`);
-  } catch (caught) { notifyError(caught); }
-  finally { actionBusy.value = false; }
+  } catch (caught) {
+    notifyError(caught);
+  } finally {
+    actionBusy.value = false;
+  }
 }
 function closeView(): void {
   if (embedded.value) {
     emit("close");
     return;
   }
-  void router.push({ path: `/projects/${projectId.value}/explorer`, query: { explorerId: route.query.explorerId, explorerPlanId: route.query.explorerPlanId, contextPanel: "plan-center" } });
+  void router.push({
+    path: `/projects/${projectId.value}/explorer`,
+    query: { explorerId: route.query.explorerId, explorerPlanId: route.query.explorerPlanId, contextPanel: "plan-center" },
+  });
 }
 async function sendExecutionMessage() {
   const content = executionDraft.value.trim();
@@ -573,10 +710,19 @@ async function sendExecutionMessage() {
     if (result.run) run.value = { ...run.value, ...result.run };
     executionDraft.value = "";
     // 说清它到底发生了什么：排队的要求还没到模型手里，和"已发送"不是一回事。
-    ElMessage.success(result.continued ? "已发送，执行线程重新开工" : result.guidance.status === "CONSUMED" ? "已发送到执行线程" : "已排队，等这一轮结束后自动开工");
+    ElMessage.success(
+      result.continued
+        ? "已发送，执行线程重新开工"
+        : result.guidance.status === "CONSUMED"
+          ? "已发送到执行线程"
+          : "已排队，等这一轮结束后自动开工",
+    );
+  } catch (caught) {
+    notifyError(caught);
+  } finally {
+    actionBusy.value = false;
+    sendingExecutionMessage.value = false;
   }
-  catch (caught) { notifyError(caught); }
-  finally { actionBusy.value = false; sendingExecutionMessage.value = false; }
 }
 function handleExecutionComposerKeydown(event: KeyboardEvent): void {
   if (!shouldSubmitComposer(event)) return;
@@ -587,23 +733,40 @@ function handleExecutionComposerKeydown(event: KeyboardEvent): void {
 async function verifyRun() {
   if (!run.value || actionBusy.value) return;
   actionBusy.value = true;
-  try { verification.value = (await api.verifyRun(run.value.id)).verification; await load(); ElMessage.success("验证完成"); }
-  catch (caught) { notifyError(caught); }
-  finally { actionBusy.value = false; }
+  try {
+    verification.value = (await api.verifyRun(run.value.id)).verification;
+    await load();
+    ElMessage.success("验证完成");
+  } catch (caught) {
+    notifyError(caught);
+  } finally {
+    actionBusy.value = false;
+  }
 }
 async function createReview() {
   if (!run.value || !sourceCommit.value.trim() || actionBusy.value) return;
   actionBusy.value = true;
-  try { mergeRequest.value = (await api.createMergeRequest(run.value.id, sourceCommit.value.trim())).mergeRequest; await load(); }
-  catch (caught) { notifyError(caught); }
-  finally { actionBusy.value = false; }
+  try {
+    mergeRequest.value = (await api.createMergeRequest(run.value.id, sourceCommit.value.trim())).mergeRequest;
+    await load();
+  } catch (caught) {
+    notifyError(caught);
+  } finally {
+    actionBusy.value = false;
+  }
 }
 async function confirmMerged() {
   if (!mergeRequest.value || !targetCommit.value.trim() || actionBusy.value) return;
   actionBusy.value = true;
-  try { mergeRequest.value = (await api.confirmMerged(mergeRequest.value.id, targetCommit.value.trim())).mergeRequest; await load(); ElMessage.success("已确认合并到目标 Commit"); }
-  catch (caught) { notifyError(caught); }
-  finally { actionBusy.value = false; }
+  try {
+    mergeRequest.value = (await api.confirmMerged(mergeRequest.value.id, targetCommit.value.trim())).mergeRequest;
+    await load();
+    ElMessage.success("已确认合并到目标 Commit");
+  } catch (caught) {
+    notifyError(caught);
+  } finally {
+    actionBusy.value = false;
+  }
 }
 type RunControlAction = "terminate" | "pause" | "resume" | "verify";
 type LoopControlAction = "pause" | "resume" | "cancel";
@@ -621,14 +784,34 @@ function updateSourceCommit(value: string): void {
 function updateTargetCommit(value: string): void {
   targetCommit.value = value;
 }
-watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load().then(() => { if (run.value) connectRunEvents(); }); });
-  onMounted(async () => { telemetryTimer = setInterval(() => { if (executionTelemetry.value?.completedAt === null || executionTelemetry.value?.durationMs === null) telemetryNow.value = Date.now(); }, 1000); void loadModelBackends(); await load(); connectRunEvents(); scrollExecutionToLatest(); });
-  onBeforeUnmount(() => { requestScope.invalidate(); closeRunEvents(); if (telemetryTimer) clearInterval(telemetryTimer); });
+watch([projectId, runId], () => {
+  resetPlanDetail();
+  closeRunEvents();
+  void load().then(() => {
+    if (run.value) connectRunEvents();
+  });
+});
+onMounted(async () => {
+  telemetryTimer = setInterval(() => {
+    if (executionTelemetry.value?.completedAt === null || executionTelemetry.value?.durationMs === null) telemetryNow.value = Date.now();
+  }, 1000);
+  void loadModelBackends();
+  await load();
+  connectRunEvents();
+  scrollExecutionToLatest();
+});
+onBeforeUnmount(() => {
+  requestScope.invalidate();
+  closeRunEvents();
+  if (telemetryTimer) clearInterval(telemetryTimer);
+});
 </script>
 
 <template>
   <div v-loading="loading" :class="['detail-page', 'run-detail-page', { 'detail-page-embedded': embedded }]">
-    <div v-if="!embedded" class="detail-top"><el-button text @click="closeView"><ArrowLeft :size="15" /> 返回</el-button></div>
+    <div v-if="!embedded" class="detail-top">
+      <el-button text @click="closeView"><ArrowLeft :size="15" /> 返回</el-button>
+    </div>
     <div v-if="error" class="demo-notice"><Warning :size="14" /> {{ error }}</div>
     <template v-if="run">
       <div class="detail-heading">
@@ -636,7 +819,18 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
           <h1>执行运行</h1>
         </div>
         <div class="detail-heading-plan">
-          <p class="execution-plan-link-row"><span>方案</span><button type="button" class="execution-plan-link" :aria-label="`查看方案 ${run.planId} 第 ${run.planRevision} 版详情`" @click="openPlanDetail"><code>{{ run.planId }}</code><span>· 第 {{ run.planRevision }} 版</span></button></p>
+          <p class="execution-plan-link-row">
+            <span>方案</span
+            ><button
+              type="button"
+              class="execution-plan-link"
+              :aria-label="`查看方案 ${run.planId} 第 ${run.planRevision} 版详情`"
+              @click="openPlanDetail"
+            >
+              <code>{{ run.planId }}</code
+              ><span>· 第 {{ run.planRevision }} 版</span>
+            </button>
+          </p>
         </div>
         <ExecutionHeaderStatus
           :run="run"
@@ -646,7 +840,7 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
           :tasks="executionTasks"
           :task-counts="executionTaskCounts"
           :run-activity="runActivityItems"
-            :runtime-facts="runtimeFactItems"
+          :runtime-facts="runtimeFactItems"
           :selected-task-id="selectedTaskId"
           :executor-loop="executorLoop"
           :executor-steps="executorSteps"
@@ -666,11 +860,26 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
           @update:target-commit="updateTargetCommit"
         />
       </div>
-      <div v-if="run.status === 'BLOCKED' && executionBlockReason" class="run-blocked-notice" role="alert"><Warning :size="16" /><div><strong>为什么停下</strong><span>{{ executionBlockReason }}</span></div></div>
+      <div v-if="run.status === 'BLOCKED' && executionBlockReason" class="run-blocked-notice" role="alert">
+        <Warning :size="16" />
+        <div>
+          <strong>为什么停下</strong><span>{{ executionBlockReason }}</span>
+        </div>
+      </div>
       <section class="execution-conversation-panel">
-        <div class="journal-heading"><div><div class="eyebrow">执行会话</div><h2>Executor 在做什么</h2></div><el-tag size="small" effect="light" :type="streamStatusTagType(streamState)" role="status">{{ executionStatusLabel }}</el-tag></div>
+        <div class="journal-heading">
+          <div>
+            <div class="eyebrow">执行会话</div>
+            <h2>Executor 在做什么</h2>
+          </div>
+          <el-tag size="small" effect="light" :type="streamStatusTagType(streamState)" role="status">{{ executionStatusLabel }}</el-tag>
+        </div>
         <ol class="execution-phase-strip" aria-label="执行阶段">
-          <li v-for="(phase, index) in executionPhaseSteps" :key="phase.key" :class="['execution-phase', { current: phase.current, done: phase.done }]">
+          <li
+            v-for="(phase, index) in executionPhaseSteps"
+            :key="phase.key"
+            :class="['execution-phase', { current: phase.current, done: phase.done }]"
+          >
             <span class="execution-phase-mark">{{ phase.done ? "✓" : index + 1 }}</span>
             <strong>{{ phase.label }}</strong>
             <small>{{ phase.detail }}</small>
@@ -678,63 +887,159 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
         </ol>
         <div class="execution-conversation-stage">
           <div ref="executionTimeline" class="execution-conversation" @scroll="updateExecutionScrollState">
-          <div v-if="!executionMessages.length" class="empty-state"><Document :size="28" /><h3>等待 Executor 的活动</h3><p>Run 启动后，执行会话会出现在这里。</p></div>
-          <section v-for="group in executionConversationGroups" :key="group.id" :class="['execution-conversation-group', `execution-conversation-group-${group.kind}`, { selected: selectedTaskId === group.task?.id, collapsed: isTaskGroupCollapsed(group.id) }]" :data-task-id="group.task?.id">
-            <button v-if="group.task" type="button" class="execution-task-stream-heading" :aria-expanded="!isTaskGroupCollapsed(group.id)" :aria-controls="`execution-task-stream-${group.id}`" @click="toggleTaskGroup(group.id)">
-              <span class="execution-task-stream-step">计划任务</span>
-              <strong>{{ group.task.title }}</strong>
-              <el-tag size="small" effect="light" :type="executionTaskStatusType(group.task.status)">{{ executionTaskStatusLabel(group.task.status) }}</el-tag>
-              <span class="execution-task-stream-count">{{ visibleItems(group).length }} 条</span>
-              <span v-if="foldedItems(group).length" class="execution-task-stream-quiet">{{ foldedItems(group).length }} 条过程记录</span>
-              <ArrowUp v-if="!isTaskGroupCollapsed(group.id)" :size="14" /><ArrowDown v-else :size="14" />
-              <small v-if="group.task.blockedReason">{{ group.task.blockedReason }}</small>
-            </button>
-            <button v-else-if="group.kind === 'unattributed'" type="button" class="execution-task-stream-heading execution-unattributed-heading" :aria-expanded="!isTaskGroupCollapsed(group.id)" :aria-controls="`execution-task-stream-${group.id}`" @click="toggleTaskGroup(group.id)">
-              <span class="execution-task-stream-step">未归属</span><strong>未归属事件</strong><span class="execution-task-stream-count">{{ visibleItems(group).length }} 条</span><ArrowUp v-if="!isTaskGroupCollapsed(group.id)" :size="14" /><ArrowDown v-else :size="14" /><small>这些事件没有记录所属的执行步骤，只出现在早期 Run 的数据里。</small>
-            </button>
-            <div v-else-if="group.kind === 'pending'" class="execution-pending-steps">
-              <span class="execution-task-stream-step">待处理</span>
-              <strong>{{ (group.tasks ?? []).length }} 个执行步骤尚未开始</strong>
-              <small>{{ (group.tasks ?? []).map((task) => task.title).join(" · ") }}</small>
+            <div v-if="!executionMessages.length" class="empty-state">
+              <Document :size="28" />
+              <h3>等待 Executor 的活动</h3>
+              <p>Run 启动后，执行会话会出现在这里。</p>
             </div>
-            <div v-if="group.kind !== 'pending' && !isTaskGroupCollapsed(group.id)" :id="`execution-task-stream-${group.id}`" class="execution-task-stream-items">
-            <!-- **过程记录折在上面**（照 OpenClaw 的 `Worked for …`）：先交代这一步花了多久、折了多少条，
+            <section
+              v-for="group in executionConversationGroups"
+              :key="group.id"
+              :class="[
+                'execution-conversation-group',
+                `execution-conversation-group-${group.kind}`,
+                { selected: selectedTaskId === group.task?.id, collapsed: isTaskGroupCollapsed(group.id) },
+              ]"
+              :data-task-id="group.task?.id"
+            >
+              <button
+                v-if="group.task"
+                type="button"
+                class="execution-task-stream-heading"
+                :aria-expanded="!isTaskGroupCollapsed(group.id)"
+                :aria-controls="`execution-task-stream-${group.id}`"
+                @click="toggleTaskGroup(group.id)"
+              >
+                <span class="execution-task-stream-step">计划任务</span>
+                <strong>{{ group.task.title }}</strong>
+                <el-tag size="small" effect="light" :type="executionTaskStatusType(group.task.status)">{{
+                  executionTaskStatusLabel(group.task.status)
+                }}</el-tag>
+                <span class="execution-task-stream-count">{{ visibleItems(group).length }} 条</span>
+                <span v-if="foldedItems(group).length" class="execution-task-stream-quiet">{{ foldedItems(group).length }} 条过程记录</span>
+                <ArrowUp v-if="!isTaskGroupCollapsed(group.id)" :size="14" /><ArrowDown v-else :size="14" />
+                <small v-if="group.task.blockedReason">{{ group.task.blockedReason }}</small>
+              </button>
+              <button
+                v-else-if="group.kind === 'unattributed'"
+                type="button"
+                class="execution-task-stream-heading execution-unattributed-heading"
+                :aria-expanded="!isTaskGroupCollapsed(group.id)"
+                :aria-controls="`execution-task-stream-${group.id}`"
+                @click="toggleTaskGroup(group.id)"
+              >
+                <span class="execution-task-stream-step">未归属</span><strong>未归属事件</strong
+                ><span class="execution-task-stream-count">{{ visibleItems(group).length }} 条</span
+                ><ArrowUp v-if="!isTaskGroupCollapsed(group.id)" :size="14" /><ArrowDown v-else :size="14" /><small
+                  >这些事件没有记录所属的执行步骤，只出现在早期 Run 的数据里。</small
+                >
+              </button>
+              <div v-else-if="group.kind === 'pending'" class="execution-pending-steps">
+                <span class="execution-task-stream-step">待处理</span>
+                <strong>{{ (group.tasks ?? []).length }} 个执行步骤尚未开始</strong>
+                <small>{{ (group.tasks ?? []).map((task) => task.title).join(" · ") }}</small>
+              </div>
+              <div
+                v-if="group.kind !== 'pending' && !isTaskGroupCollapsed(group.id)"
+                :id="`execution-task-stream-${group.id}`"
+                class="execution-task-stream-items"
+              >
+                <!-- **过程记录折在上面**（照 OpenClaw 的 `Worked for …`）：先交代这一步花了多久、折了多少条，
                  再让结论自己说话。展开后是**真实的行**，不是一张只写了标题的清单。
                  失败项与"未识别"不折进来——那是这一步里唯一需要你动手的东西。 -->
-            <details v-if="foldedItems(group).length" class="execution-folded-log">
-              <summary>
-                <span>{{ foldedItems(group).length }} 条过程记录</span>
-                <small v-if="stepDuration(group)">用时 {{ stepDuration(group) }}</small>
-                <small v-if="failedCount(group)">{{ failedCount(group) }} 个失败留在外面</small>
-                <small v-if="unclassifiedCount(group)">{{ unclassifiedCount(group) }} 条未识别</small>
-              </summary>
-              <div class="execution-folded-list">
-                <ExecutionMessageRow v-for="item in foldedItems(group)" :key="item.id" :item="item" :expanded="isExecutionItemExpanded(item.id)" @toggle-details="toggleExecutionItem" @view-plan="openPlanDetail" />
+                <details v-if="foldedItems(group).length" class="execution-folded-log">
+                  <summary>
+                    <span>{{ foldedItems(group).length }} 条过程记录</span>
+                    <small v-if="stepDuration(group)">用时 {{ stepDuration(group) }}</small>
+                    <small v-if="failedCount(group)">{{ failedCount(group) }} 个失败留在外面</small>
+                    <small v-if="unclassifiedCount(group)">{{ unclassifiedCount(group) }} 条未识别</small>
+                  </summary>
+                  <div class="execution-folded-list">
+                    <ExecutionMessageRow
+                      v-for="item in foldedItems(group)"
+                      :key="item.id"
+                      :item="item"
+                      :expanded="isExecutionItemExpanded(item.id)"
+                      @toggle-details="toggleExecutionItem"
+                      @view-plan="openPlanDetail"
+                    />
+                  </div>
+                </details>
+                <p v-if="group.task && !visibleItems(group).length && !foldedItems(group).length" class="execution-task-stream-empty">
+                  {{ taskGroupEmptyNote(group.task) }}
+                </p>
+                <ExecutionMessageRow
+                  v-for="item in visibleItems(group)"
+                  :key="item.id"
+                  :item="item"
+                  :expanded="isExecutionItemExpanded(item.id)"
+                  @toggle-details="toggleExecutionItem"
+                  @view-plan="openPlanDetail"
+                />
               </div>
-            </details>
-            <p v-if="group.task && !visibleItems(group).length && !foldedItems(group).length" class="execution-task-stream-empty">{{ taskGroupEmptyNote(group.task) }}</p>
-            <ExecutionMessageRow v-for="item in visibleItems(group)" :key="item.id" :item="item" :expanded="isExecutionItemExpanded(item.id)" @toggle-details="toggleExecutionItem" @view-plan="openPlanDetail" />
-            </div>
-          </section>
+            </section>
           </div>
-          <el-button v-if="showScrollToLatest" class="execution-scroll-latest" size="small" @click="scrollExecutionToLatest">跳到最新</el-button>
+          <el-button v-if="showScrollToLatest" class="execution-scroll-latest" size="small" @click="scrollExecutionToLatest"
+            >跳到最新</el-button
+          >
         </div>
         <div class="composer execution-composer">
           <div class="composer-input">
-            <textarea v-model="executionDraft" aria-label="执行会话消息" :placeholder="canSendExecutionMessage ? (executorLoopRunning ? '补充要求，交给正在跑的这一轮…' : '补充要求，执行线程会重新开工…') : executionComposerDisabledReason" :disabled="actionBusy || !canSendExecutionMessage" @keydown="handleExecutionComposerKeydown" />
+            <textarea
+              v-model="executionDraft"
+              aria-label="执行会话消息"
+              :placeholder="
+                canSendExecutionMessage
+                  ? executorLoopRunning
+                    ? '补充要求，交给正在跑的这一轮…'
+                    : '补充要求，执行线程会重新开工…'
+                  : executionComposerDisabledReason
+              "
+              :disabled="actionBusy || !canSendExecutionMessage"
+              @keydown="handleExecutionComposerKeydown"
+            />
             <!-- 一轮还在跑时才有得选：排队 = 等它结束再起一轮；引导 = 下一个步骤边界插进这一轮。
                  没在跑时两种等价，不由用户选。 -->
-            <label v-if="canSendExecutionMessage && executorLoopRunning" class="composer-guidance-mode"><span>投递</span><select v-model="executionGuidanceMode" :disabled="actionBusy" aria-label="补充要求的投递方式"><option value="queue">排队 · 这一轮结束后再开工</option><option value="steer">引导 · 下一轮生效</option></select></label>
+            <label v-if="canSendExecutionMessage && executorLoopRunning" class="composer-guidance-mode"
+              ><span>投递</span
+              ><select v-model="executionGuidanceMode" :disabled="actionBusy" aria-label="补充要求的投递方式">
+                <option value="queue">排队 · 这一轮结束后再开工</option>
+                <option value="steer">引导 · 下一轮生效</option>
+              </select></label
+            >
             <span v-else class="composer-mode">Run 模式</span>
           </div>
           <div class="composer-footer">
-            <ProviderUsageFooter :model="executionModelIdentity.model" :backend="executionModelIdentity.backend" :context="executionContextUsage" context-note="仅结束时由 provider 上报" :source-note="executionModelSourceNote" />
+            <ProviderUsageFooter
+              :model="executionModelIdentity.model"
+              :backend="executionModelIdentity.backend"
+              :context="executionContextUsage"
+              context-note="仅结束时由 provider 上报"
+              :source-note="executionModelSourceNote"
+            />
             <span v-if="sendingExecutionMessage" class="composer-status" role="status" aria-live="polite">消息已发送 · 等待 Executor…</span>
-            <el-button class="composer-send" type="primary" circle :loading="sendingExecutionMessage" :disabled="!executionDraft.trim() || !canSendExecutionMessage || actionBusy" aria-label="发送消息" :title="actionBusy ? '正在发送消息' : '发送消息'" @click="sendExecutionMessage"><ArrowUp :size="18" /></el-button>
+            <el-button
+              class="composer-send"
+              type="primary"
+              circle
+              :loading="sendingExecutionMessage"
+              :disabled="!executionDraft.trim() || !canSendExecutionMessage || actionBusy"
+              aria-label="发送消息"
+              :title="actionBusy ? '正在发送消息' : '发送消息'"
+              @click="sendExecutionMessage"
+              ><ArrowUp :size="18"
+            /></el-button>
           </div>
         </div>
       </section>
     </template>
-    <PlanDetailDrawer v-model="planDetailOpen" :plan="planDetail" :error="planDetailError" :revisions="planDetailRevisions" :read-only="true" @select-revision="selectPlanRevision" />
+    <PlanDetailDrawer
+      v-model="planDetailOpen"
+      :plan="planDetail"
+      :error="planDetailError"
+      :revisions="planDetailRevisions"
+      :read-only="true"
+      @select-revision="selectPlanRevision"
+    />
   </div>
 </template>

@@ -33,7 +33,10 @@ describe("missingVerificationCommands", () => {
     const missing = missingVerificationCommands({
       resolvedContract: { verification: { mode: "PROJECT_DEFAULT", commandIds: ["project.test", "project.lint"] } },
       // project.test 是 verification 且启用 → 已注册；project.lint 同 id 但被停用 → 仍缺。
-      commands: [command("project.test", { category: "verification", enabled: true }), command("project.lint", { category: "verification", enabled: false })],
+      commands: [
+        command("project.test", { category: "verification", enabled: true }),
+        command("project.lint", { category: "verification", enabled: false }),
+      ],
     });
 
     expect(missing).toEqual(["project.lint"]);

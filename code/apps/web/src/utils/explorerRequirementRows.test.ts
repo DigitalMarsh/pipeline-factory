@@ -60,11 +60,7 @@ function run(planId: string, status: string, overrides: Partial<Run> = {}): Run 
 
 describe("projectExplorerRequirementRows", () => {
   it("sorts by requirement ordinal and keeps plans scoped to their ExplorerPlan", () => {
-    const rows = projectExplorerRequirementRows(
-      [requirement("req-2", 2), requirement("req-1", 1)],
-      [plan("req-2", "READY")],
-      [],
-    );
+    const rows = projectExplorerRequirementRows([requirement("req-2", 2), requirement("req-1", 1)], [plan("req-2", "READY")], []);
 
     expect(rows.map((row) => row.explorerPlan.id)).toEqual(["req-1", "req-2"]);
     expect(rows[0]?.plan).toBeNull();
@@ -75,10 +71,14 @@ describe("projectExplorerRequirementRows", () => {
   });
 
   it("maps unanswered questions and generated drafts to their user-facing states", () => {
-    const rows = projectExplorerRequirementRows([
-      requirement("waiting", 1, { runtimeStatus: "WAITING_FOR_INPUT" }),
-      requirement("candidate", 2, { candidatePlanId: "plan-candidate" }),
-    ], [plan("candidate", "DRAFT")], []);
+    const rows = projectExplorerRequirementRows(
+      [
+        requirement("waiting", 1, { runtimeStatus: "WAITING_FOR_INPUT" }),
+        requirement("candidate", 2, { candidatePlanId: "plan-candidate" }),
+      ],
+      [plan("candidate", "DRAFT")],
+      [],
+    );
 
     expect(rows[0]?.planStatus.label).toBe("待回答问题");
     expect(rows[1]?.planStatus.label).toBe("待确认");
@@ -111,7 +111,9 @@ describe("projectExplorerRequirementRows", () => {
         plan("contract", "READY", { resolvedContract: { artifact: { mode: "CONVERSATION" } } as NonNullable<Plan["resolvedContract"]> }),
         plan("resolved", "READY", { resolvedContract: { artifact: { mode: "CONVERSATION" } } as NonNullable<Plan["resolvedContract"]> }),
         plan("generated", "READY", { generatedSpec: { artifact: { mode: "CONVERSATION" } } as NonNullable<Plan["generatedSpec"]> }),
-        plan("repository", "READY", { resolvedContract: { artifact: { mode: "REPOSITORY_FILE" } } as NonNullable<Plan["resolvedContract"]> }),
+        plan("repository", "READY", {
+          resolvedContract: { artifact: { mode: "REPOSITORY_FILE" } } as NonNullable<Plan["resolvedContract"]>,
+        }),
       ],
       [],
     );
@@ -125,11 +127,11 @@ describe("projectExplorerRequirementRows", () => {
     const unknownPlan = plan("unknown", "READY" as Plan["status"]);
     (unknownPlan as { status: string }).status = "SOMETHING_NEW";
     const unknownRun = run("plan-unknown-run", "SOMETHING_NEW" as Run["status"]);
-    const rows = projectExplorerRequirementRows([
-      requirement("candidate", 1, { candidatePlanId: "candidate-id" }),
-      requirement("unknown", 2),
-      requirement("unknown-run", 3),
-    ], [candidate, unknownPlan, plan("unknown-run", "READY", { runId: "run-unknown-run" })], [unknownRun]);
+    const rows = projectExplorerRequirementRows(
+      [requirement("candidate", 1, { candidatePlanId: "candidate-id" }), requirement("unknown", 2), requirement("unknown-run", 3)],
+      [candidate, unknownPlan, plan("unknown-run", "READY", { runId: "run-unknown-run" })],
+      [unknownRun],
+    );
 
     expect(rows[0]?.plan?.id).toBe("candidate-id");
     expect(rows[0]?.planStatus.label).toBe("待确认");

@@ -40,13 +40,21 @@ export type MergeRequestRouteDeps = {
  * MERGE_READY 时 `Scheduler.finish()` 并不会被调用，Worktree 因此会一直留在磁盘上。
  * 任何异常都被降级成返回值里的一条 error，不影响 MERGED 这个事实。
  */
-async function releaseMergedWorkspace(scheduler: Scheduler, store: PipelineStore, mergeRequest: MergeRequest): Promise<{ worktreeRemoved: boolean; cleanupNeedsAttention: boolean; error?: string } | null> {
+async function releaseMergedWorkspace(
+  scheduler: Scheduler,
+  store: PipelineStore,
+  mergeRequest: MergeRequest,
+): Promise<{ worktreeRemoved: boolean; cleanupNeedsAttention: boolean; error?: string } | null> {
   const run = store.getRun(mergeRequest.runId);
   if (!run) return null;
   try {
     // hook 的优先级与 Scheduler.finish 一致：冻结快照优先，这里给的是当前 Project 的 cleanup 设置。
     const result = await scheduler.releaseWorkspace(run.id, store.getProject(run.projectId)?.settings.hooks ?? {});
-    return { worktreeRemoved: result.worktreeRemoved, cleanupNeedsAttention: result.cleanupNeedsAttention, ...(result.error ? { error: result.error } : {}) };
+    return {
+      worktreeRemoved: result.worktreeRemoved,
+      cleanupNeedsAttention: result.cleanupNeedsAttention,
+      ...(result.error ? { error: result.error } : {}),
+    };
   } catch (error) {
     return { worktreeRemoved: false, cleanupNeedsAttention: false, error: error instanceof Error ? error.message : String(error) };
   }
@@ -65,8 +73,11 @@ export function registerMergeRequestRoutes(app: FastifyInstance, deps: MergeRequ
     if (existing) return { mergeRequest: existing };
     const verification = store.getVerificationRun(run.id);
     if (!verification) return reply.code(409).send({ error: "A passed VerificationRun is required" });
-    try { return { mergeRequest: merger.createRequest(run, verification, body.data.sourceCommit) }; }
-    catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "MergeRequest cannot be created" }); }
+    try {
+      return { mergeRequest: merger.createRequest(run, verification, body.data.sourceCommit) };
+    } catch (error) {
+      return reply.code(409).send({ error: error instanceof Error ? error.message : "MergeRequest cannot be created" });
+    }
   });
 
   app.get("/api/v4/runs/:runId/merge-request", async (request, reply) => {
@@ -100,18 +111,22 @@ export function registerMergeRequestRoutes(app: FastifyInstance, deps: MergeRequ
       // responding so the UI never observes a stale NEEDS_REVIEW dispatch projection.
       if (dispatchCoordinator) await dispatchCoordinator.wake();
       return { mergeRequest, ...(workspace ? { workspace } : {}) };
+    } catch (error) {
+      return reply.code(409).send({ error: error instanceof Error ? error.message : "MergeRequest cannot be confirmed" });
     }
-    catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "MergeRequest cannot be confirmed" }); }
   });
 
   app.post("/api/v4/projects/:projectId/merge-reconciliation", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    if (!store.getProject(params.data.projectId)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
+    if (!store.getProject(params.data.projectId))
+      return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
     try {
       return merger.reconcileProject(params.data.projectId);
     } catch (error) {
-      return reply.code(409).send({ code: "MERGE_RECONCILIATION_FAILED", error: error instanceof Error ? error.message : "Merge reconciliation failed" });
+      return reply
+        .code(409)
+        .send({ code: "MERGE_RECONCILIATION_FAILED", error: error instanceof Error ? error.message : "Merge reconciliation failed" });
     }
   });
 }

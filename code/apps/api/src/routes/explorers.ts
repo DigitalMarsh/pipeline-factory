@@ -34,8 +34,31 @@
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { ExplorerDeleteBlockedError, projectExplorerActivity, type AgentLoop, type DomainEvent, type ExplorerActivityItem, type ExplorerPlan, type ExplorerService, type ExplorerThread, type ExplorerThreadService, type ExplorerTurn, type PipelineStore } from "@pipeline-factory/domain";
-import { projectExplorerParams, projectExplorerPlanParams, explorerActivityQuery, explorerCreateBody, explorerRenameBody, v4AnswerBody, v4InputQuery, v4ThreadQuery, v4ThreadStatusQuery, v4TurnBody } from "../schemas/explorers.js";
+import {
+  ExplorerDeleteBlockedError,
+  projectExplorerActivity,
+  type AgentLoop,
+  type DomainEvent,
+  type ExplorerActivityItem,
+  type ExplorerPlan,
+  type ExplorerService,
+  type ExplorerThread,
+  type ExplorerThreadService,
+  type ExplorerTurn,
+  type PipelineStore,
+} from "@pipeline-factory/domain";
+import {
+  projectExplorerParams,
+  projectExplorerPlanParams,
+  explorerActivityQuery,
+  explorerCreateBody,
+  explorerRenameBody,
+  v4AnswerBody,
+  v4InputQuery,
+  v4ThreadQuery,
+  v4ThreadStatusQuery,
+  v4TurnBody,
+} from "../schemas/explorers.js";
 import { projectThreadParams } from "../schemas/common.js";
 import { openSseChannel } from "../http/sse.js";
 import { planProjection } from "../projections/plan-lifecycle.js";
@@ -66,7 +89,11 @@ export type ExplorerRouteDeps = {
  *   与其它活动的相对顺序），不是等价优化。真要收敛，得让**写侧**按"文本段"落一条事实
  *   （见 agent-loop.ts 的 flushTextDelta），而不是在读侧猜。没有等价性测试不要改这里。
  */
-function planActivityInput(store: PipelineStore, explorer: ExplorerThread, explorerPlan: ExplorerPlan): { turns: ExplorerTurn[]; loops: AgentLoop[]; activity: ExplorerActivityItem[] } {
+function planActivityInput(
+  store: PipelineStore,
+  explorer: ExplorerThread,
+  explorerPlan: ExplorerPlan,
+): { turns: ExplorerTurn[]; loops: AgentLoop[]; activity: ExplorerActivityItem[] } {
   const turns = store.listTurns(explorer.id).filter((turn) => turn.explorerPlanId === explorerPlan.id);
   const turnIds = new Set(turns.map((turn) => turn.id));
   const loops = store.listAgentLoops().filter((loop) => loop.ownerType === "explorer-turn" && turnIds.has(loop.ownerId));
@@ -83,7 +110,11 @@ export function registerExplorerRoutes(app: FastifyInstance, deps: ExplorerRoute
     const body = explorerCreateBody.safeParse(request.body ?? {});
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid Explorer creation request" });
     try {
-      const explorer = explorers.create({ projectId: params.data.projectId, ...(body.data.title ? { title: body.data.title } : {}), ...(body.data.originThreadId ? { originThreadId: body.data.originThreadId } : {}) });
+      const explorer = explorers.create({
+        projectId: params.data.projectId,
+        ...(body.data.title ? { title: body.data.title } : {}),
+        ...(body.data.originThreadId ? { originThreadId: body.data.originThreadId } : {}),
+      });
       return reply.code(201).send({ explorer });
     } catch (error) {
       return reply.code(409).send({ error: error instanceof Error ? error.message : "Explorer cannot be created" });
@@ -130,18 +161,46 @@ export function registerExplorerRoutes(app: FastifyInstance, deps: ExplorerRoute
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     const explorer = store.getThread(params.data.explorerId);
     const explorerPlan = store.getExplorerPlan(params.data.explorerPlanId);
-    if (!explorer || explorer.projectId !== params.data.projectId || !explorerPlan || explorerPlan.explorerThreadId !== explorer.id || explorerPlan.projectId !== explorer.projectId) {
+    if (
+      !explorer ||
+      explorer.projectId !== params.data.projectId ||
+      !explorerPlan ||
+      explorerPlan.explorerThreadId !== explorer.id ||
+      explorerPlan.projectId !== explorer.projectId
+    ) {
       return reply.code(404).send({ error: "ExplorerPlan not found" });
     }
     const { turns, loops, activity } = planActivityInput(store, explorer, explorerPlan);
     const selectedCandidate = explorerPlan.candidatePlanId ? store.getPlan(explorerPlan.candidatePlanId) : undefined;
-    const legacyCandidate = !explorerPlan.newPlanRequested && !explorerPlan.candidatePlanId
-      ? store.listPlans().filter((plan) => plan.projectId === explorer.projectId && plan.sourceExplorerThreadId === explorer.id && plan.explorerPlanId === explorerPlan.id && plan.status === "DRAFT").sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
-      : undefined;
-    const candidate = selectedCandidate?.status === "DRAFT" ? selectedCandidate : legacyCandidate ?? null;
+    const legacyCandidate =
+      !explorerPlan.newPlanRequested && !explorerPlan.candidatePlanId
+        ? store
+            .listPlans()
+            .filter(
+              (plan) =>
+                plan.projectId === explorer.projectId &&
+                plan.sourceExplorerThreadId === explorer.id &&
+                plan.explorerPlanId === explorerPlan.id &&
+                plan.status === "DRAFT",
+            )
+            .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
+        : undefined;
+    const candidate = selectedCandidate?.status === "DRAFT" ? selectedCandidate : (legacyCandidate ?? null);
     const draft = explorer.activeRevisionDraftId ? store.getRevisionDraft(explorer.activeRevisionDraftId) : undefined;
-    const revisionDraft = draft && draft.explorerPlanId === explorerPlan.id && ["EDITING", "READY_TO_CONFIRM", "BASE_CHANGED"].includes(draft.status) ? draft : null;
-    return { explorerPlan, turns, activity, inputRequests: store.listInputRequests(explorer.id).filter((item) => item.explorerPlanId === explorerPlan.id), candidate: candidate ? { ...candidate, ...planProjection(store, candidate) } : null, revisionDraft, loops: loops.map((loop) => projectAgentLoopResponse(store, loop)), lastEventSequence: store.getLastEventSequence(explorer.id) };
+    const revisionDraft =
+      draft && draft.explorerPlanId === explorerPlan.id && ["EDITING", "READY_TO_CONFIRM", "BASE_CHANGED"].includes(draft.status)
+        ? draft
+        : null;
+    return {
+      explorerPlan,
+      turns,
+      activity,
+      inputRequests: store.listInputRequests(explorer.id).filter((item) => item.explorerPlanId === explorerPlan.id),
+      candidate: candidate ? { ...candidate, ...planProjection(store, candidate) } : null,
+      revisionDraft,
+      loops: loops.map((loop) => projectAgentLoopResponse(store, loop)),
+      lastEventSequence: store.getLastEventSequence(explorer.id),
+    };
   });
 
   app.post("/api/v4/projects/:projectId/explorers/:explorerId/explorer-plans/:explorerPlanId/rename", async (request, reply) => {
@@ -207,12 +266,25 @@ export function registerExplorerRoutes(app: FastifyInstance, deps: ExplorerRoute
     if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
     try {
       const result = explorers.delete(explorer.id);
-      return { deletedExplorerId: explorer.id, replacementExplorer: result.replacementExplorer, project: result.project, deleted: result.deleted };
+      return {
+        deletedExplorerId: explorer.id,
+        replacementExplorer: result.replacementExplorer,
+        project: result.project,
+        deleted: result.deleted,
+      };
     } catch (error) {
       if (error instanceof ExplorerDeleteBlockedError) {
-        return reply.code(409).send({ code: error.code, error: error.message, message: error.message, activeRunIds: error.activeRunIds, activeLoopIds: error.activeLoopIds });
+        return reply.code(409).send({
+          code: error.code,
+          error: error.message,
+          message: error.message,
+          activeRunIds: error.activeRunIds,
+          activeLoopIds: error.activeLoopIds,
+        });
       }
-      return reply.code(409).send({ code: "EXPLORER_DELETE_FAILED", error: error instanceof Error ? error.message : "Explorer cannot be deleted" });
+      return reply
+        .code(409)
+        .send({ code: "EXPLORER_DELETE_FAILED", error: error instanceof Error ? error.message : "Explorer cannot be deleted" });
     }
   });
 
@@ -223,9 +295,12 @@ export function registerExplorerRoutes(app: FastifyInstance, deps: ExplorerRoute
     const explorer = store.getThread(params.data.explorerId);
     if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
     const explorerPlan = store.getExplorerPlan(query.data.explorerPlanId);
-    if (!explorerPlan || explorerPlan.explorerThreadId !== explorer.id || explorerPlan.projectId !== explorer.projectId) return reply.code(404).send({ error: "ExplorerPlan not found" });
+    if (!explorerPlan || explorerPlan.explorerThreadId !== explorer.id || explorerPlan.projectId !== explorer.projectId)
+      return reply.code(404).send({ error: "ExplorerPlan not found" });
     const { activity } = planActivityInput(store, explorer, explorerPlan);
-    const items = activity.filter((item) => item.explorerPlanId === explorerPlan.id).filter((item) => !query.data.afterSequence || item.sequence > query.data.afterSequence);
+    const items = activity
+      .filter((item) => item.explorerPlanId === explorerPlan.id)
+      .filter((item) => !query.data.afterSequence || item.sequence > query.data.afterSequence);
     return { items, lastEventSequence: store.getLastEventSequence(explorer.id) };
   });
 
@@ -236,8 +311,18 @@ export function registerExplorerRoutes(app: FastifyInstance, deps: ExplorerRoute
     const thread = findProjectThread(store, params.data.projectId, body.data.threadId);
     if (!thread) return reply.code(404).send({ error: "ExplorerThread not found" });
     try {
-      const accepted = await explorerThread.startTurn({ threadId: body.data.threadId, explorerPlanId: body.data.explorerPlanId, content: body.data.content, clientTurnId: body.data.clientTurnId });
-      return reply.code(202).send({ turn: { user: accepted.user, assistant: accepted.assistant }, eventsUrl: accepted.eventsUrl, loopId: accepted.loopId, state: accepted.assistant.status });
+      const accepted = await explorerThread.startTurn({
+        threadId: body.data.threadId,
+        explorerPlanId: body.data.explorerPlanId,
+        content: body.data.content,
+        clientTurnId: body.data.clientTurnId,
+      });
+      return reply.code(202).send({
+        turn: { user: accepted.user, assistant: accepted.assistant },
+        eventsUrl: accepted.eventsUrl,
+        loopId: accepted.loopId,
+        state: accepted.assistant.status,
+      });
     } catch (error) {
       return reply.code(409).send({ error: error instanceof Error ? error.message : "ExplorerThread turn cannot be started" });
     }
@@ -250,8 +335,12 @@ export function registerExplorerRoutes(app: FastifyInstance, deps: ExplorerRoute
     const thread = findProjectThread(store, params.data.projectId, query.data.threadId);
     if (!thread) return reply.code(404).send({ error: "ExplorerThread not found" });
     const explorerPlan = store.getExplorerPlan(query.data.explorerPlanId);
-    if (!explorerPlan || explorerPlan.explorerThreadId !== thread.id || explorerPlan.projectId !== thread.projectId) return reply.code(404).send({ error: "ExplorerPlan not found" });
-    return { items: store.listTurns(thread.id).filter((turn) => turn.explorerPlanId === explorerPlan.id), lastEventSequence: store.getLastEventSequence(thread.id) };
+    if (!explorerPlan || explorerPlan.explorerThreadId !== thread.id || explorerPlan.projectId !== thread.projectId)
+      return reply.code(404).send({ error: "ExplorerPlan not found" });
+    return {
+      items: store.listTurns(thread.id).filter((turn) => turn.explorerPlanId === explorerPlan.id),
+      lastEventSequence: store.getLastEventSequence(thread.id),
+    };
   });
 
   app.get("/api/v4/projects/:projectId/explorer-thread/input-requests", async (request, reply) => {
@@ -261,7 +350,8 @@ export function registerExplorerRoutes(app: FastifyInstance, deps: ExplorerRoute
     const thread = findProjectThread(store, params.data.projectId, query.data.threadId);
     if (!thread) return reply.code(404).send({ error: "ExplorerThread not found" });
     const explorerPlan = store.getExplorerPlan(query.data.explorerPlanId);
-    if (!explorerPlan || explorerPlan.explorerThreadId !== thread.id || explorerPlan.projectId !== thread.projectId) return reply.code(404).send({ error: "ExplorerPlan not found" });
+    if (!explorerPlan || explorerPlan.explorerThreadId !== thread.id || explorerPlan.projectId !== thread.projectId)
+      return reply.code(404).send({ error: "ExplorerPlan not found" });
     return { items: store.listInputRequests(thread.id, query.data.status).filter((item) => item.explorerPlanId === explorerPlan.id) };
   });
 
@@ -272,8 +362,16 @@ export function registerExplorerRoutes(app: FastifyInstance, deps: ExplorerRoute
     const inputRequest = store.getInputRequest(params.data.requestId);
     const thread = inputRequest ? findProjectThread(store, params.data.projectId, inputRequest.threadId) : undefined;
     if (!thread) return reply.code(404).send({ error: "ExplorerThread not found" });
-    try { const result = await explorerThread.answerInput({ threadId: thread.id, requestId: params.data.requestId, answers: body.data.answers, clientRequestId: body.data.clientRequestId, actorId: body.data.actorId }); return result; }
-    catch (error) {
+    try {
+      const result = await explorerThread.answerInput({
+        threadId: thread.id,
+        requestId: params.data.requestId,
+        answers: body.data.answers,
+        clientRequestId: body.data.clientRequestId,
+        actorId: body.data.actorId,
+      });
+      return result;
+    } catch (error) {
       const message = error instanceof Error ? error.message : "Input answer failed";
       return reply.code(message.includes("recovery is required") ? 503 : 409).send({ error: message });
     }
@@ -281,12 +379,17 @@ export function registerExplorerRoutes(app: FastifyInstance, deps: ExplorerRoute
 
   app.post("/api/v4/projects/:projectId/explorer-thread/turns/:turnId/cancel", async (request, reply) => {
     const params = z.object({ projectId: z.string().min(1), turnId: z.string().min(1) }).safeParse(request.params);
-    const body = z.object({ threadId: z.string().min(1), reason: z.string().trim().min(1).max(500).default("user_cancelled") }).safeParse(request.body ?? {});
+    const body = z
+      .object({ threadId: z.string().min(1), reason: z.string().trim().min(1).max(500).default("user_cancelled") })
+      .safeParse(request.body ?? {});
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid v4 cancel request" });
     const thread = findProjectThread(store, params.data.projectId, body.data.threadId);
     if (!thread) return reply.code(404).send({ error: "ExplorerThread not found" });
-    try { return { turn: await explorerThread.cancelTurn({ threadId: thread.id, turnId: params.data.turnId, reason: body.data.reason }) }; }
-    catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "Turn cannot be cancelled" }); }
+    try {
+      return { turn: await explorerThread.cancelTurn({ threadId: thread.id, turnId: params.data.turnId, reason: body.data.reason }) };
+    } catch (error) {
+      return reply.code(409).send({ error: error instanceof Error ? error.message : "Turn cannot be cancelled" });
+    }
   });
 
   // Explorer SSE 使用 Last-Event-ID 与数据库事件序列回放，断线重连不会丢失已持久化消息。
@@ -297,17 +400,26 @@ export function registerExplorerRoutes(app: FastifyInstance, deps: ExplorerRoute
     const thread = findProjectThread(store, params.data.projectId, query.data.threadId);
     if (!thread) return reply.code(404).send({ error: "ExplorerThread not found" });
     const explorerPlan = store.getExplorerPlan(query.data.explorerPlanId);
-    if (!explorerPlan || explorerPlan.explorerThreadId !== thread.id || explorerPlan.projectId !== thread.projectId) return reply.code(404).send({ error: "ExplorerPlan not found" });
+    if (!explorerPlan || explorerPlan.explorerThreadId !== thread.id || explorerPlan.projectId !== thread.projectId)
+      return reply.code(404).send({ error: "ExplorerPlan not found" });
     const headerSequence = Number(request.headers["last-event-id"] ?? 0) || 0;
     let cursor = Math.max(query.data.afterSequence ?? 0, headerSequence);
     const afterSequence = cursor;
     // 订阅式通道：不传 poll，帧由 subscribeEvents 的回调推。unsubscribe 要等 subscribeEvents
     // 返回才拿得到，所以走 onClose 登记（见 http/sse.ts 维护提示 4）。
     const sse = openSseChannel(request, reply);
-    const send = (event: { sequence: number; type: string; payload: Record<string, unknown> }) => { cursor = event.sequence; const type = event.type.startsWith("explorer.") ? event.type.slice("explorer.".length) : event.type; sse.send(event.sequence, type, event.payload); };
-    const unsubscribe = explorerThread.subscribeEvents(thread.id, (event) => {
-      if (event.payload.explorerPlanId === explorerPlan.id) send(event);
-    }, afterSequence);
+    const send = (event: { sequence: number; type: string; payload: Record<string, unknown> }) => {
+      cursor = event.sequence;
+      const type = event.type.startsWith("explorer.") ? event.type.slice("explorer.".length) : event.type;
+      sse.send(event.sequence, type, event.payload);
+    };
+    const unsubscribe = explorerThread.subscribeEvents(
+      thread.id,
+      (event) => {
+        if (event.payload.explorerPlanId === explorerPlan.id) send(event);
+      },
+      afterSequence,
+    );
     sse.onClose(unsubscribe);
     cursor = Math.max(cursor, store.getLastEventSequence(thread.id));
     sse.ready(cursor, { afterSequence: cursor, explorerPlanId: explorerPlan.id });

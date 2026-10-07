@@ -25,10 +25,21 @@ describe("BuiltinToolExecutor", () => {
     directories.push(workspace);
     const gateway = new ToolGateway({ role: "executor", workspaceRoot: workspace });
 
-    await expect(gateway.call(call("write_file", { path: "src/index.ts", content: "export const answer = 42;\n" }))).resolves.toMatchObject({ allowed: true, result: { path: "src/index.ts" } });
-    await expect(gateway.call(call("read_file", { path: "src/index.ts" }, "read-1"))).resolves.toMatchObject({ allowed: true, result: { path: "src/index.ts", content: "export const answer = 42;\n" } });
-    await expect(gateway.call(call("list_files", { path: "src" }, "list-1"))).resolves.toMatchObject({ allowed: true, result: { files: ["src/index.ts"] } });
-    await expect(gateway.call(call("search_text", { query: "answer", path: "." }, "search-1"))).resolves.toMatchObject({ allowed: true, result: { matches: [{ path: "src/index.ts", line: 1 }] } });
+    await expect(gateway.call(call("write_file", { path: "src/index.ts", content: "export const answer = 42;\n" }))).resolves.toMatchObject(
+      { allowed: true, result: { path: "src/index.ts" } },
+    );
+    await expect(gateway.call(call("read_file", { path: "src/index.ts" }, "read-1"))).resolves.toMatchObject({
+      allowed: true,
+      result: { path: "src/index.ts", content: "export const answer = 42;\n" },
+    });
+    await expect(gateway.call(call("list_files", { path: "src" }, "list-1"))).resolves.toMatchObject({
+      allowed: true,
+      result: { files: ["src/index.ts"] },
+    });
+    await expect(gateway.call(call("search_text", { query: "answer", path: "." }, "search-1"))).resolves.toMatchObject({
+      allowed: true,
+      result: { matches: [{ path: "src/index.ts", line: 1 }] },
+    });
   });
 
   it("runs registered commands with a bounded workspace context", async () => {
@@ -51,7 +62,12 @@ describe("BuiltinToolExecutor", () => {
     const result = await gateway.call(call("run_registered_command", { commandId: "project.test", timeoutMs: 5_000 }));
 
     expect(result).toMatchObject({ allowed: true, result: commandResult });
-    expect(invocations[0]).toMatchObject({ commandId: "project.test", cwd: workspace, timeoutMs: 5_000, context: { workspacePath: workspace } });
+    expect(invocations[0]).toMatchObject({
+      commandId: "project.test",
+      cwd: workspace,
+      timeoutMs: 5_000,
+      context: { workspacePath: workspace },
+    });
   });
 
   it("routes explicitly allowed MCP tools through the same audited gateway", async () => {
@@ -70,8 +86,14 @@ describe("BuiltinToolExecutor", () => {
       },
     });
 
-    await expect(gateway.call(call("mcp:docs:search", { query: "rate limits" }))).resolves.toMatchObject({ allowed: true, result: { matches: 1 } });
-    await expect(gateway.call(call("mcp:docs:write", { content: "nope" }, "mcp-denied"))).resolves.toMatchObject({ allowed: false, reason: expect.stringMatching(/MCP|allow/i) });
+    await expect(gateway.call(call("mcp:docs:search", { query: "rate limits" }))).resolves.toMatchObject({
+      allowed: true,
+      result: { matches: 1 },
+    });
+    await expect(gateway.call(call("mcp:docs:write", { content: "nope" }, "mcp-denied"))).resolves.toMatchObject({
+      allowed: false,
+      reason: expect.stringMatching(/MCP|allow/i),
+    });
     expect(calls).toEqual([{ name: "mcp:docs:search", input: { query: "rate limits" } }]);
   });
 
@@ -85,8 +107,14 @@ describe("BuiltinToolExecutor", () => {
     const gateway = new ToolGateway({ role: "executor", workspaceRoot: workspace });
 
     await expect(gateway.call(call("read_file", { path: ".env" }))).resolves.toMatchObject({ allowed: false });
-    await expect(gateway.call(call("read_file", { path: "link/secret.txt" }, "outside-1"))).resolves.toMatchObject({ allowed: false, reason: expect.stringMatching(/workspace|boundary|symlink/i) });
-    await expect(gateway.call(call("list_files", { path: "." }, "list-protected"))).resolves.toMatchObject({ allowed: true, result: { files: ["link"] } });
+    await expect(gateway.call(call("read_file", { path: "link/secret.txt" }, "outside-1"))).resolves.toMatchObject({
+      allowed: false,
+      reason: expect.stringMatching(/workspace|boundary|symlink/i),
+    });
+    await expect(gateway.call(call("list_files", { path: "." }, "list-protected"))).resolves.toMatchObject({
+      allowed: true,
+      result: { files: ["link"] },
+    });
     expect(await readFile(join(workspace, ".env"), "utf8")).toBe("TOP_SECRET=1");
   });
 });

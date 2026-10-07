@@ -6,7 +6,15 @@
  */
 import { describe, expect, it } from "vitest";
 import { executionTaskStatusType } from "./executionTasks.js";
-import { explorerThreadStatusTagType, inputStatusTagType, projectExecutionStatusTagType, projectStatusTagType, requirementStatusTagType, statusTagType, streamStatusTagType } from "./statusTag.js";
+import {
+  explorerThreadStatusTagType,
+  inputStatusTagType,
+  projectExecutionStatusTagType,
+  projectStatusTagType,
+  requirementStatusTagType,
+  statusTagType,
+  streamStatusTagType,
+} from "./statusTag.js";
 
 describe("statusTagType", () => {
   it("完成是 success、失败是 danger、进行中是 warning，其余中性", () => {

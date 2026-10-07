@@ -4,7 +4,15 @@
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  */
 import { describe, expect, it } from "vitest";
-import { EXECUTION_MESSAGE_WEIGHTS, EXECUTION_ROW_KINDS, executionMessageWeight, executionRowKind, foldsIntoProcess, projectExecutionJournal, type ExecutionPlanSnapshot } from "./executionStream";
+import {
+  EXECUTION_MESSAGE_WEIGHTS,
+  EXECUTION_ROW_KINDS,
+  executionMessageWeight,
+  executionRowKind,
+  foldsIntoProcess,
+  projectExecutionJournal,
+  type ExecutionPlanSnapshot,
+} from "./executionStream";
 
 describe("projectExecutionJournal", () => {
   const plan: ExecutionPlanSnapshot = {
@@ -20,11 +28,15 @@ describe("projectExecutionJournal", () => {
   };
 
   it("prepends the frozen Plan snapshot without changing journal order", () => {
-    const items = projectExecutionJournal([
-      { sequence: 1, type: "RUN_CREATED", occurredAt: "2026-08-30T07:00:00.000Z", payload: { planId: "plan-1", revision: 2 } },
-      { sequence: 2, type: "MODEL_OUTPUT", occurredAt: "2026-08-30T07:00:01.000Z", payload: { text: "开始执行" } },
-      { sequence: 3, type: "USER_GUIDANCE", occurredAt: "2026-08-30T07:00:02.000Z", payload: { content: "保持范围不变" } },
-    ], "COMPLETED", plan);
+    const items = projectExecutionJournal(
+      [
+        { sequence: 1, type: "RUN_CREATED", occurredAt: "2026-08-30T07:00:00.000Z", payload: { planId: "plan-1", revision: 2 } },
+        { sequence: 2, type: "MODEL_OUTPUT", occurredAt: "2026-08-30T07:00:01.000Z", payload: { text: "开始执行" } },
+        { sequence: 3, type: "USER_GUIDANCE", occurredAt: "2026-08-30T07:00:02.000Z", payload: { content: "保持范围不变" } },
+      ],
+      "COMPLETED",
+      plan,
+    );
 
     expect(items[0]).toMatchObject({ kind: "plan", title: "已收到方案", sequence: 0, plan });
     expect(items.slice(1).map((item) => item.sequence)).toEqual([1, 2, 3]);
@@ -33,15 +45,33 @@ describe("projectExecutionJournal", () => {
   });
 
   it("merges model deltas and keeps user guidance and execution activity readable", () => {
-    const items = projectExecutionJournal([
-      { sequence: 1, type: "RUN_CREATED", occurredAt: "2026-08-30T07:00:00.000Z", payload: { planId: "plan-1", revision: 1 } },
-      { sequence: 2, type: "MODEL_OUTPUT", occurredAt: "2026-08-30T07:00:01.000Z", payload: { text: "正在读取" } },
-      { sequence: 3, type: "MODEL_OUTPUT", occurredAt: "2026-08-30T07:00:01.100Z", payload: { text: "计划" } },
-      { sequence: 4, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:02.000Z", payload: { event: "agent.model.completed", step: 1 } },
-      { sequence: 5, type: "TOOL_CALL", occurredAt: "2026-08-30T07:00:03.000Z", payload: { action: "requested", tool: "read_file", callId: "call-1" } },
-      { sequence: 6, type: "USER_GUIDANCE", occurredAt: "2026-08-30T07:00:04.000Z", payload: { content: "只修改批准范围内的文件" } },
-      { sequence: 7, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:05.000Z", payload: { state: "BLOCKED", reason: "MAX_DURATION_EXCEEDED" } },
-    ], "BLOCKED");
+    const items = projectExecutionJournal(
+      [
+        { sequence: 1, type: "RUN_CREATED", occurredAt: "2026-08-30T07:00:00.000Z", payload: { planId: "plan-1", revision: 1 } },
+        { sequence: 2, type: "MODEL_OUTPUT", occurredAt: "2026-08-30T07:00:01.000Z", payload: { text: "正在读取" } },
+        { sequence: 3, type: "MODEL_OUTPUT", occurredAt: "2026-08-30T07:00:01.100Z", payload: { text: "计划" } },
+        {
+          sequence: 4,
+          type: "TASK_PROGRESS",
+          occurredAt: "2026-08-30T07:00:02.000Z",
+          payload: { event: "agent.model.completed", step: 1 },
+        },
+        {
+          sequence: 5,
+          type: "TOOL_CALL",
+          occurredAt: "2026-08-30T07:00:03.000Z",
+          payload: { action: "requested", tool: "read_file", callId: "call-1" },
+        },
+        { sequence: 6, type: "USER_GUIDANCE", occurredAt: "2026-08-30T07:00:04.000Z", payload: { content: "只修改批准范围内的文件" } },
+        {
+          sequence: 7,
+          type: "TASK_PROGRESS",
+          occurredAt: "2026-08-30T07:00:05.000Z",
+          payload: { state: "BLOCKED", reason: "MAX_DURATION_EXCEEDED" },
+        },
+      ],
+      "BLOCKED",
+    );
 
     expect(items).toHaveLength(6);
     expect(items[1]).toMatchObject({ kind: "model", role: "assistant", content: "正在读取计划", status: "COMPLETED" });
@@ -52,30 +82,63 @@ describe("projectExecutionJournal", () => {
   });
 
   it("marks a trailing model message as running while the execution thread is active", () => {
-    const items = projectExecutionJournal([
-      { sequence: 1, type: "MODEL_OUTPUT", occurredAt: "2026-08-30T07:00:00.000Z", payload: { text: "仍在处理" } },
-    ], "ACTIVE");
+    const items = projectExecutionJournal(
+      [{ sequence: 1, type: "MODEL_OUTPUT", occurredAt: "2026-08-30T07:00:00.000Z", payload: { text: "仍在处理" } }],
+      "ACTIVE",
+    );
 
     expect(items).toEqual([expect.objectContaining({ kind: "model", content: "仍在处理", status: "RUNNING" })]);
   });
 
   it("turns the execution report protocol into a readable assistant message", () => {
-    const items = projectExecutionJournal([
-      { sequence: 1, type: "MODEL_OUTPUT", occurredAt: "2026-08-30T07:00:00.000Z", payload: { text: `<pipeline-factory-execution-report>${JSON.stringify({ completedTaskIds: ["task-1", "task-2"], changedPaths: ["docs/guide.md"], report: "已完成内容与格式复核" })}</pipeline-factory-execution-report>` } },
-      { sequence: 2, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:01.000Z", payload: { action: "task-status", completedTaskIds: ["task-1", "task-2"] } },
-    ], "BLOCKED");
+    const items = projectExecutionJournal(
+      [
+        {
+          sequence: 1,
+          type: "MODEL_OUTPUT",
+          occurredAt: "2026-08-30T07:00:00.000Z",
+          payload: {
+            text: `<pipeline-factory-execution-report>${JSON.stringify({ completedTaskIds: ["task-1", "task-2"], changedPaths: ["docs/guide.md"], report: "已完成内容与格式复核" })}</pipeline-factory-execution-report>`,
+          },
+        },
+        {
+          sequence: 2,
+          type: "TASK_PROGRESS",
+          occurredAt: "2026-08-30T07:00:01.000Z",
+          payload: { action: "task-status", completedTaskIds: ["task-1", "task-2"] },
+        },
+      ],
+      "BLOCKED",
+    );
 
-    expect(items[0]).toMatchObject({ kind: "model", title: "执行报告", content: "已完成内容与格式复核\n\n已完成 2 个任务 · 改动 1 个文件" });
+    expect(items[0]).toMatchObject({
+      kind: "model",
+      title: "执行报告",
+      content: "已完成内容与格式复核\n\n已完成 2 个任务 · 改动 1 个文件",
+    });
     expect(items.some((item) => item.detail.includes("<pipeline-factory-execution-report>"))).toBe(false);
   });
 
   it("shows model turns and context compaction while hiding empty continuation events", () => {
-    const items = projectExecutionJournal([
-      { sequence: 1, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:00.000Z", payload: { event: "agent.step.started", step: 1 } },
-      { sequence: 2, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:01.000Z", payload: { event: "agent.model.completed", step: 1 } },
-      { sequence: 3, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:02.000Z", payload: { event: "agent.context.compacted", messageCount: 4 } },
-      { sequence: 4, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:03.000Z", payload: { event: "continue" } },
-    ], "ACTIVE");
+    const items = projectExecutionJournal(
+      [
+        { sequence: 1, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:00.000Z", payload: { event: "agent.step.started", step: 1 } },
+        {
+          sequence: 2,
+          type: "TASK_PROGRESS",
+          occurredAt: "2026-08-30T07:00:01.000Z",
+          payload: { event: "agent.model.completed", step: 1 },
+        },
+        {
+          sequence: 3,
+          type: "TASK_PROGRESS",
+          occurredAt: "2026-08-30T07:00:02.000Z",
+          payload: { event: "agent.context.compacted", messageCount: 4 },
+        },
+        { sequence: 4, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:03.000Z", payload: { event: "continue" } },
+      ],
+      "ACTIVE",
+    );
 
     expect(items).toEqual([
       expect.objectContaining({ title: "模型轮次 · #1", status: "COMPLETED", modelStep: 1 }),
@@ -84,22 +147,76 @@ describe("projectExecutionJournal", () => {
   });
 
   it("folds repeated reports with unchanged task progress into one card", () => {
-    const report = (text: string, sequence: number) => ({ sequence, type: "MODEL_OUTPUT", occurredAt: `2026-08-30T07:00:0${sequence}.000Z`, payload: { text: `<pipeline-factory-execution-report>${JSON.stringify({ completedTaskIds: ["task-1"], changedPaths: [], report: text })}</pipeline-factory-execution-report>` } });
-    const items = projectExecutionJournal([report("第一轮完成", 1), { sequence: 2, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:02.000Z", payload: { action: "task-status", completedTaskIds: ["task-1"] } }, { sequence: 2.5, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:02.500Z", payload: { event: "agent.model.completed", step: 1 } }, report("没有新的可执行内容", 3), { sequence: 4, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:04.000Z", payload: { action: "task-status", completedTaskIds: ["task-1"] } }], "BLOCKED");
+    const report = (text: string, sequence: number) => ({
+      sequence,
+      type: "MODEL_OUTPUT",
+      occurredAt: `2026-08-30T07:00:0${sequence}.000Z`,
+      payload: {
+        text: `<pipeline-factory-execution-report>${JSON.stringify({ completedTaskIds: ["task-1"], changedPaths: [], report: text })}</pipeline-factory-execution-report>`,
+      },
+    });
+    const items = projectExecutionJournal(
+      [
+        report("第一轮完成", 1),
+        {
+          sequence: 2,
+          type: "TASK_PROGRESS",
+          occurredAt: "2026-08-30T07:00:02.000Z",
+          payload: { action: "task-status", completedTaskIds: ["task-1"] },
+        },
+        {
+          sequence: 2.5,
+          type: "TASK_PROGRESS",
+          occurredAt: "2026-08-30T07:00:02.500Z",
+          payload: { event: "agent.model.completed", step: 1 },
+        },
+        report("没有新的可执行内容", 3),
+        {
+          sequence: 4,
+          type: "TASK_PROGRESS",
+          occurredAt: "2026-08-30T07:00:04.000Z",
+          payload: { action: "task-status", completedTaskIds: ["task-1"] },
+        },
+      ],
+      "BLOCKED",
+    );
 
     expect(items.filter((item) => item.title === "执行报告")).toHaveLength(1);
     expect(items.find((item) => item.title === "执行报告")?.repetitionCount).toBe(2);
   });
 
   it("does not leak an incomplete report protocol into the conversation", () => {
-    const items = projectExecutionJournal([{ sequence: 1, type: "MODEL_OUTPUT", occurredAt: "2026-08-30T07:00:00.000Z", payload: { text: "<pipeline-factory-execution-report>{\"completedTaskIds\":[\"task-1\"]" } }], "ACTIVE");
+    const items = projectExecutionJournal(
+      [
+        {
+          sequence: 1,
+          type: "MODEL_OUTPUT",
+          occurredAt: "2026-08-30T07:00:00.000Z",
+          payload: { text: '<pipeline-factory-execution-report>{"completedTaskIds":["task-1"]' },
+        },
+      ],
+      "ACTIVE",
+    );
 
     expect(items[0]).toMatchObject({ title: "执行报告", content: "执行报告仍在生成中。" });
   });
 
   it("动作类消息说清「做的是什么」：标题用 Provider 给的 summary", () => {
     const items = projectExecutionJournal([
-      { sequence: 1, type: "PROVIDER_ACTIVITY", occurredAt: "2026-08-30T07:00:00.000Z", payload: { phase: "completed", itemId: "exec-1", providerItemId: "exec-1", itemType: "commandExecution", activityKind: "command", outcome: "succeeded", summary: "npm install --ignore-scripts" } },
+      {
+        sequence: 1,
+        type: "PROVIDER_ACTIVITY",
+        occurredAt: "2026-08-30T07:00:00.000Z",
+        payload: {
+          phase: "completed",
+          itemId: "exec-1",
+          providerItemId: "exec-1",
+          itemType: "commandExecution",
+          activityKind: "command",
+          outcome: "succeeded",
+          summary: "npm install --ignore-scripts",
+        },
+      },
     ]);
 
     // 没有 summary 时卡片只能写「命令 · 已完成 · Provider reported success」——等于没说。
@@ -108,7 +225,18 @@ describe("projectExecutionJournal", () => {
 
   it("老事件没有 summary 时退回类别标签，不编造内容", () => {
     const items = projectExecutionJournal([
-      { sequence: 1, type: "PROVIDER_ACTIVITY", occurredAt: "2026-08-30T07:00:00.000Z", payload: { phase: "completed", itemId: "exec-1", providerItemId: "exec-1", itemType: "commandExecution", providerStatus: "completed" } },
+      {
+        sequence: 1,
+        type: "PROVIDER_ACTIVITY",
+        occurredAt: "2026-08-30T07:00:00.000Z",
+        payload: {
+          phase: "completed",
+          itemId: "exec-1",
+          providerItemId: "exec-1",
+          itemType: "commandExecution",
+          providerStatus: "completed",
+        },
+      },
     ]);
 
     expect(items[0]).toMatchObject({ title: "命令", detail: "执行成功", messageType: "COMMAND" });
@@ -116,7 +244,20 @@ describe("projectExecutionJournal", () => {
 
   it("标题里的命令截断到可读长度，不把整行长命令铺出来", () => {
     const items = projectExecutionJournal([
-      { sequence: 1, type: "PROVIDER_ACTIVITY", occurredAt: "2026-08-30T07:00:00.000Z", payload: { phase: "started", itemId: "exec-1", providerItemId: "exec-1", itemType: "commandExecution", activityKind: "command", outcome: "running", summary: `npm run ${"x".repeat(200)}` } },
+      {
+        sequence: 1,
+        type: "PROVIDER_ACTIVITY",
+        occurredAt: "2026-08-30T07:00:00.000Z",
+        payload: {
+          phase: "started",
+          itemId: "exec-1",
+          providerItemId: "exec-1",
+          itemType: "commandExecution",
+          activityKind: "command",
+          outcome: "running",
+          summary: `npm run ${"x".repeat(200)}`,
+        },
+      },
     ]);
 
     expect(items[0]?.title.length).toBeLessThanOrEqual("命令 · ".length + 80);
@@ -168,14 +309,30 @@ describe("消息清单的权重", () => {
     expect(EXECUTION_MESSAGE_WEIGHTS.RECOVERY).toBe("answer");
 
     const items = projectExecutionJournal([
-      { sequence: 1, type: "TASK_PROGRESS", occurredAt: "2026-08-30T07:00:00.000Z", payload: { state: "BLOCKED", reason: "MAX_DURATION_EXCEEDED" } },
+      {
+        sequence: 1,
+        type: "TASK_PROGRESS",
+        occurredAt: "2026-08-30T07:00:00.000Z",
+        payload: { state: "BLOCKED", reason: "MAX_DURATION_EXCEEDED" },
+      },
     ]);
     expect(items[0]).toMatchObject({ messageType: "RECOVERY", status: "FAILED" });
     expect(executionMessageWeight(items[0]!)).toBe("answer");
   });
 
   it("`phase` 决定一段正文是「过程」还是「结论」，**拿不到就当结论**（不折判不准的正文）", () => {
-    const base = { id: "x", kind: "model", role: "assistant", title: "执行说明", content: "", detail: "", status: "COMPLETED", occurredAt: "2026-08-30T07:00:00.000Z", sequence: 1, messageType: "ASSISTANT_MESSAGE" } as const;
+    const base = {
+      id: "x",
+      kind: "model",
+      role: "assistant",
+      title: "执行说明",
+      content: "",
+      detail: "",
+      status: "COMPLETED",
+      occurredAt: "2026-08-30T07:00:00.000Z",
+      sequence: 1,
+      messageType: "ASSISTANT_MESSAGE",
+    } as const;
 
     expect(executionMessageWeight({ ...base, phase: "commentary" })).toBe("process");
     expect(executionMessageWeight({ ...base, phase: "final_answer" })).toBe("answer");
@@ -187,7 +344,18 @@ describe("消息清单的权重", () => {
   });
 
   it("折起来的三条判据：过程、已跑完、不是失败", () => {
-    const item = { id: "x", kind: "tool", role: "system", title: "命令 · pnpm test", content: "", detail: "", status: "COMPLETED", occurredAt: "2026-08-30T07:00:00.000Z", sequence: 1, messageType: "COMMAND" } as const;
+    const item = {
+      id: "x",
+      kind: "tool",
+      role: "system",
+      title: "命令 · pnpm test",
+      content: "",
+      detail: "",
+      status: "COMPLETED",
+      occurredAt: "2026-08-30T07:00:00.000Z",
+      sequence: 1,
+      messageType: "COMMAND",
+    } as const;
 
     expect(foldsIntoProcess(item, { stepRunning: false })).toBe(true);
     // 还在跑：照 OpenClaw，live 内容留在日志外面。
@@ -203,11 +371,27 @@ describe("消息清单的权重", () => {
     const items = projectExecutionJournal([
       // 两条事件的 providerItemId 不同 → 投影成两张卡片，标记正好被切在中间。
       // 上一条的尾巴被"结尾未闭合"的规则削掉了，剩下的一半本会原样铺在下一条的正文里。
-      { sequence: 1, type: "MODEL_OUTPUT", occurredAt: "2026-08-30T07:00:00.000Z", payload: { text: "开始执行 <pipeline-factory-task", providerItemId: "item-a" } },
-      { sequence: 2, type: "MODEL_OUTPUT", occurredAt: "2026-08-30T07:00:01.000Z", payload: { text: '-progress>{"taskId":"task-1","state":"started"}</pipeline-factory-task-progress>已完成第一步。', providerItemId: "item-b" } },
+      {
+        sequence: 1,
+        type: "MODEL_OUTPUT",
+        occurredAt: "2026-08-30T07:00:00.000Z",
+        payload: { text: "开始执行 <pipeline-factory-task", providerItemId: "item-a" },
+      },
+      {
+        sequence: 2,
+        type: "MODEL_OUTPUT",
+        occurredAt: "2026-08-30T07:00:01.000Z",
+        payload: {
+          text: '-progress>{"taskId":"task-1","state":"started"}</pipeline-factory-task-progress>已完成第一步。',
+          providerItemId: "item-b",
+        },
+      },
     ]);
 
-    const bodies = items.filter((item) => item.kind === "model").map((item) => item.content).join("\n");
+    const bodies = items
+      .filter((item) => item.kind === "model")
+      .map((item) => item.content)
+      .join("\n");
     expect(bodies).not.toContain("progress>");
     expect(bodies).not.toContain("taskId");
     expect(bodies).toContain("已完成第一步。");
@@ -215,18 +399,36 @@ describe("消息清单的权重", () => {
 
   it("**标记尾巴后面直接接正文时也只削尾巴**（实测形态：`factory-task-progress>` 后就是「开始执行…」）", () => {
     const items = projectExecutionJournal([
-      { sequence: 1, type: "MODEL_OUTPUT", occurredAt: "2026-08-30T07:00:00.000Z", payload: { text: "开始执行 <pipeline-factory-task", providerItemId: "item-a" } },
-      { sequence: 2, type: "MODEL_OUTPUT", occurredAt: "2026-08-30T07:00:01.000Z", payload: { text: "actory-task-progress>\n开始执行 task-1：核对现有路由与校验链路。", providerItemId: "item-b" } },
+      {
+        sequence: 1,
+        type: "MODEL_OUTPUT",
+        occurredAt: "2026-08-30T07:00:00.000Z",
+        payload: { text: "开始执行 <pipeline-factory-task", providerItemId: "item-a" },
+      },
+      {
+        sequence: 2,
+        type: "MODEL_OUTPUT",
+        occurredAt: "2026-08-30T07:00:01.000Z",
+        payload: { text: "actory-task-progress>\n开始执行 task-1：核对现有路由与校验链路。", providerItemId: "item-b" },
+      },
     ]);
 
-    const bodies = items.filter((item) => item.kind === "model").map((item) => item.content).join("\n");
+    const bodies = items
+      .filter((item) => item.kind === "model")
+      .map((item) => item.content)
+      .join("\n");
     expect(bodies).not.toContain("progress>");
     expect(bodies).toContain("开始执行 task-1：核对现有路由与校验链路。");
   });
 
   it("普通正文不会被标记清理误伤", () => {
     const items = projectExecutionJournal([
-      { sequence: 1, type: "MODEL_OUTPUT", occurredAt: "2026-08-30T07:00:00.000Z", payload: { text: "读取 src/App.vue 并在 100ms 内完成——这行没有标记。" } },
+      {
+        sequence: 1,
+        type: "MODEL_OUTPUT",
+        occurredAt: "2026-08-30T07:00:00.000Z",
+        payload: { text: "读取 src/App.vue 并在 100ms 内完成——这行没有标记。" },
+      },
     ]);
 
     expect(items[0]?.content).toBe("读取 src/App.vue 并在 100ms 内完成——这行没有标记。");
@@ -234,10 +436,38 @@ describe("消息清单的权重", () => {
 
   it("失败原因翻成人话，但认不出来就原样显示（不猜意思）", () => {
     const exitCode = projectExecutionJournal([
-      { sequence: 1, type: "PROVIDER_ACTIVITY", occurredAt: "2026-08-30T07:00:00.000Z", payload: { phase: "completed", itemId: "exec-1", providerItemId: "exec-1", itemType: "commandExecution", activityKind: "command", outcome: "failed", providerStatus: "failed", reason: "Provider command exited with code 1" } },
+      {
+        sequence: 1,
+        type: "PROVIDER_ACTIVITY",
+        occurredAt: "2026-08-30T07:00:00.000Z",
+        payload: {
+          phase: "completed",
+          itemId: "exec-1",
+          providerItemId: "exec-1",
+          itemType: "commandExecution",
+          activityKind: "command",
+          outcome: "failed",
+          providerStatus: "failed",
+          reason: "Provider command exited with code 1",
+        },
+      },
     ]);
     const unknown = projectExecutionJournal([
-      { sequence: 1, type: "PROVIDER_ACTIVITY", occurredAt: "2026-08-30T07:00:00.000Z", payload: { phase: "completed", itemId: "exec-2", providerItemId: "exec-2", itemType: "commandExecution", activityKind: "command", outcome: "failed", providerStatus: "failed", reason: "workspace is not writable" } },
+      {
+        sequence: 1,
+        type: "PROVIDER_ACTIVITY",
+        occurredAt: "2026-08-30T07:00:00.000Z",
+        payload: {
+          phase: "completed",
+          itemId: "exec-2",
+          providerItemId: "exec-2",
+          itemType: "commandExecution",
+          activityKind: "command",
+          outcome: "failed",
+          providerStatus: "failed",
+          reason: "workspace is not writable",
+        },
+      },
     ]);
 
     expect(exitCode[0]?.detail).toBe("命令退出码 1");
@@ -246,7 +476,12 @@ describe("消息清单的权重", () => {
 
   it("正文被清空时不产生空卡片（只剩标题与时间的卡片是纯噪音）", () => {
     const items = projectExecutionJournal([
-      { sequence: 1, type: "MODEL_OUTPUT", occurredAt: "2026-08-30T07:00:00.000Z", payload: { text: "actory-task-progress>", providerItemId: "item-b" } },
+      {
+        sequence: 1,
+        type: "MODEL_OUTPUT",
+        occurredAt: "2026-08-30T07:00:00.000Z",
+        payload: { text: "actory-task-progress>", providerItemId: "item-b" },
+      },
     ]);
 
     expect(items.filter((item) => item.kind === "model")).toHaveLength(0);
@@ -254,7 +489,19 @@ describe("消息清单的权重", () => {
 
   it("认不出来的活动标成「未识别」，不伪装成已知类别", () => {
     const items = projectExecutionJournal([
-      { sequence: 1, type: "PROVIDER_ACTIVITY", occurredAt: "2026-08-30T07:00:00.000Z", payload: { phase: "completed", itemId: "x-1", providerItemId: "x-1", itemType: "somethingBrandNew", activityKind: "other", outcome: "unknown" } },
+      {
+        sequence: 1,
+        type: "PROVIDER_ACTIVITY",
+        occurredAt: "2026-08-30T07:00:00.000Z",
+        payload: {
+          phase: "completed",
+          itemId: "x-1",
+          providerItemId: "x-1",
+          itemType: "somethingBrandNew",
+          activityKind: "other",
+          outcome: "unknown",
+        },
+      },
     ]);
 
     expect(items[0]).toMatchObject({ messageType: "UNCLASSIFIED" });
@@ -274,8 +521,35 @@ describe("动作的结构化载荷", () => {
     // 因为条目的形态是 `started` 先建出来的，而 `output` / `exitCode` 只在 `completed` 那条上。
     // 合并不搬这几个字段，journal 里躺着完整 stdout，界面上却连按钮都不出现。
     const items = projectExecutionJournal([
-      { sequence: 1, type: "PROVIDER_ACTIVITY", occurredAt: at, payload: { phase: "started", itemId: "exec-1", providerItemId: "exec-1", itemType: "commandExecution", activityKind: "command", outcome: "running" } },
-      { sequence: 2, type: "PROVIDER_ACTIVITY", occurredAt: at, payload: { phase: "completed", itemId: "exec-1", providerItemId: "exec-1", itemType: "commandExecution", activityKind: "command", outcome: "succeeded", output: "pwd\n/repo", exitCode: 0, durationMs: 12 } },
+      {
+        sequence: 1,
+        type: "PROVIDER_ACTIVITY",
+        occurredAt: at,
+        payload: {
+          phase: "started",
+          itemId: "exec-1",
+          providerItemId: "exec-1",
+          itemType: "commandExecution",
+          activityKind: "command",
+          outcome: "running",
+        },
+      },
+      {
+        sequence: 2,
+        type: "PROVIDER_ACTIVITY",
+        occurredAt: at,
+        payload: {
+          phase: "completed",
+          itemId: "exec-1",
+          providerItemId: "exec-1",
+          itemType: "commandExecution",
+          activityKind: "command",
+          outcome: "succeeded",
+          output: "pwd\n/repo",
+          exitCode: 0,
+          durationMs: 12,
+        },
+      },
     ]);
 
     expect(items).toHaveLength(1);
@@ -285,8 +559,33 @@ describe("动作的结构化载荷", () => {
   it("先到的那一条已经有载荷时不会被后来的空值抹掉", () => {
     // `fileChange` 的 `changes` 在 started 那条上就带着了；结束那条没有再给一遍。
     const items = projectExecutionJournal([
-      { sequence: 1, type: "PROVIDER_ACTIVITY", occurredAt: at, payload: { phase: "started", itemId: "fc-1", providerItemId: "fc-1", itemType: "fileChange", activityKind: "file-change", outcome: "running", result: [{ path: "README.md" }] } },
-      { sequence: 2, type: "PROVIDER_ACTIVITY", occurredAt: at, payload: { phase: "completed", itemId: "fc-1", providerItemId: "fc-1", itemType: "fileChange", activityKind: "file-change", outcome: "succeeded" } },
+      {
+        sequence: 1,
+        type: "PROVIDER_ACTIVITY",
+        occurredAt: at,
+        payload: {
+          phase: "started",
+          itemId: "fc-1",
+          providerItemId: "fc-1",
+          itemType: "fileChange",
+          activityKind: "file-change",
+          outcome: "running",
+          result: [{ path: "README.md" }],
+        },
+      },
+      {
+        sequence: 2,
+        type: "PROVIDER_ACTIVITY",
+        occurredAt: at,
+        payload: {
+          phase: "completed",
+          itemId: "fc-1",
+          providerItemId: "fc-1",
+          itemType: "fileChange",
+          activityKind: "file-change",
+          outcome: "succeeded",
+        },
+      },
     ]);
 
     expect(items).toHaveLength(1);

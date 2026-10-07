@@ -16,7 +16,19 @@ describe("plan controls", () => {
   });
 });
 
-const plan = (id: string, overrides: Partial<Plan> = {}): Plan => ({ id, title: id, revision: 1, status: "DRAFT", projectId: "project-1", sourceExplorerThreadId: "explorer-1", queuedAt: null, runId: null, lastEventAt: "2026-08-29T10:00:00.000Z", attentionReason: null, ...overrides });
+const plan = (id: string, overrides: Partial<Plan> = {}): Plan => ({
+  id,
+  title: id,
+  revision: 1,
+  status: "DRAFT",
+  projectId: "project-1",
+  sourceExplorerThreadId: "explorer-1",
+  queuedAt: null,
+  runId: null,
+  lastEventAt: "2026-08-29T10:00:00.000Z",
+  attentionReason: null,
+  ...overrides,
+});
 
 describe("候选判定", () => {
   it("用身份比较，刷新后对象引用变了也仍然认出候选", () => {

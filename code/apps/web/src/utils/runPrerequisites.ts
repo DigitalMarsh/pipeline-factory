@@ -8,7 +8,10 @@ type PlanWithDispatch = { dispatch?: DispatchWaitState | null };
 export function parseMissingRunCommands(message: string): string[] {
   const match = message.match(/(?:RUN_PREREQUISITES_UNSATISFIED:\s*)?missing registered commands:\s*(.+)$/i);
   if (!match?.[1]) return [];
-  return match[1].split(",").map((commandId) => commandId.trim()).filter(Boolean);
+  return match[1]
+    .split(",")
+    .map((commandId) => commandId.trim())
+    .filter(Boolean);
 }
 
 /**
@@ -26,7 +29,10 @@ export function configurationBlockedCommands(plan: PlanWithDispatch): string[] {
  * 少注册一条就返回 false —— 否则会造出一个同样跑不起来的新 Revision，
  * 用户看到的是"重建了但还是失败"，比不给入口更糟。
  */
-export function canCreateConfigurationRevision(plan: PlanWithDispatch, project: { settings: { commands: Array<{ commandId: string }> } } | null): boolean {
+export function canCreateConfigurationRevision(
+  plan: PlanWithDispatch,
+  project: { settings: { commands: Array<{ commandId: string }> } } | null,
+): boolean {
   const missingCommands = configurationBlockedCommands(plan);
   if (!missingCommands.length || !project) return false;
   const registered = new Set(project.settings.commands.map((command) => command.commandId));

@@ -67,7 +67,14 @@ export type { ExplorerPlanRequirement } from "./platform/plan-requirements.js";
 export { redactAuditPayload, redactAuditText } from "./platform/redaction.js";
 // 命令执行端口与它的本地实现。defaultProcessRunner 是模块私有（只出现在默认参数里），不转发。
 export { RegisteredCommandExecutor } from "./platform/commands.js";
-export type { CommandExecutor, CommandInvocation, CommandResult, HookContext, ProcessRunner, RegisteredCommandDefinition } from "./platform/commands.js";
+export type {
+  CommandExecutor,
+  CommandInvocation,
+  CommandResult,
+  HookContext,
+  ProcessRunner,
+  RegisteredCommandDefinition,
+} from "./platform/commands.js";
 
 // ─────────────────────────── store/：审计事件与持久化 ───────────────────────────
 // DomainEvent 的 id / sequence / occurredAt 由 Store 赋值、脱敏也在 appendEvent 内完成，
@@ -80,12 +87,34 @@ export { InMemoryPipelineStore } from "./store/in-memory-store.js";
 export { SqlitePipelineStore } from "./store/sqlite-store.js";
 
 // ─────────────────────────── plan/：Plan 类型、合同校验与状态机 ───────────────────────────
-export type { ApprovedChangeProposal, CandidatePlan, ChangeProposal, ChangeProposalStatus, CreateCandidatePlanInput, CreateChangeProposalInput, CreateRevisionDraftInput, PlanLifecycleEntry, PlanLifecycleStatus, PlanRevisionDraft, PlanRevisionDraftStatus, PlanRevision, PlanStatus } from "./plan/types.js";
+export type {
+  ApprovedChangeProposal,
+  CandidatePlan,
+  ChangeProposal,
+  ChangeProposalStatus,
+  CreateCandidatePlanInput,
+  CreateChangeProposalInput,
+  CreateRevisionDraftInput,
+  PlanLifecycleEntry,
+  PlanLifecycleStatus,
+  PlanRevisionDraft,
+  PlanRevisionDraftStatus,
+  PlanRevision,
+  PlanStatus,
+} from "./plan/types.js";
 export { updatePlanStatus } from "./plan/status-transition.js";
 export { assessPlanCompletion } from "./plan/completion.js";
 export type { PlanArtifact, PlanCompletionAssessment } from "./plan/completion.js";
 export { assertSafeProjectRelativeGlob, parseGeneratedPlanSpec, resolvePlanContract, validateGeneratedPlanSpec } from "./plan/plan-spec.js";
-export type { GeneratedPlanSpec, GitBaseline, PlanArtifactMode, PlanTaskChange, PlanValidationIssue, PlanValidationIssueCode, ResolvedPlanContract } from "./plan/plan-spec.js";
+export type {
+  GeneratedPlanSpec,
+  GitBaseline,
+  PlanArtifactMode,
+  PlanTaskChange,
+  PlanValidationIssue,
+  PlanValidationIssueCode,
+  ResolvedPlanContract,
+} from "./plan/plan-spec.js";
 export type { PlanIndexRow, PlanQuery, PlanQueryProjection, PlanQueryResult, PlanQuerySort } from "./plan/query.js";
 export { PlanService } from "./plan/service.js";
 // 跨包共用的**测试夹具**（见 plan/plan-fixture.ts）：api 与 web 的用例也要造一份已解析契约，
@@ -105,8 +134,31 @@ export { planDocumentFileName, renderPlanDocument, writePlanDocument } from "./p
 export type { PlanDocumentInput } from "./plan/plan-archive.js";
 
 // ─────────────────────────── explorer/：探索会话、需求分区与结构化追问 ───────────────────────────
-export type { CreateExplorerInput, ExplorerDeletionInput, ExplorerDeletionSummary, ExplorerInputRequest, ExplorerInputRequestStatus, ExplorerPlan, ExplorerThread, ExplorerThreadContextSummary, ExplorerThreadState, ExplorerTurn, ModelInputAnswers, ModelInputQuestion, ModelInputRequest, PlanExploration, PlanExplorationStatus, RegisterThreadInput } from "./explorer/types.js";
-export { composeExplorerTitle, explorerTimestamp, ModelExplorerTitleGenerator, normalizeExplorerTitle, placeholderExplorerTitle } from "./explorer/explorer-title.js";
+export type {
+  CreateExplorerInput,
+  ExplorerDeletionInput,
+  ExplorerDeletionSummary,
+  ExplorerInputRequest,
+  ExplorerInputRequestStatus,
+  ExplorerPlan,
+  ExplorerThread,
+  ExplorerThreadContextSummary,
+  ExplorerThreadState,
+  ExplorerTurn,
+  ModelInputAnswers,
+  ModelInputQuestion,
+  ModelInputRequest,
+  PlanExploration,
+  PlanExplorationStatus,
+  RegisterThreadInput,
+} from "./explorer/types.js";
+export {
+  composeExplorerTitle,
+  explorerTimestamp,
+  ModelExplorerTitleGenerator,
+  normalizeExplorerTitle,
+  placeholderExplorerTitle,
+} from "./explorer/explorer-title.js";
 export type { ExplorerTitleGenerator, ExplorerTitleSource, ExplorerTitleStatus } from "./explorer/explorer-title.js";
 export { projectExplorerActivity } from "./explorer/explorer-activity.js";
 export type { ExplorerActivityInput, ExplorerActivityItem, ExplorerActivityKind } from "./explorer/explorer-activity.js";
@@ -115,10 +167,39 @@ export { ExplorerDeleteBlockedError, ExplorerService } from "./explorer/service.
 export { ExplorerThreadService } from "./explorer/thread-service.js";
 
 // ─────────────────────────── run/：Run 状态机、journal、分支、验证与合并 ───────────────────────────
-export type { ExecutionJournalCorrelation, ExecutionJournalEntry, ExecutionJournalPayload, ExecutionTelemetry, ExecutionThread, ExecutionThreadState, ExecutionThreadSummary, JournalEntryType, MergeReconciliationItem, MergeReconciliationOutcome, MergeReconciliationReport, MergeRequest, RepairExecutor, Run, RunGuidance, RunGuidanceMode, RunGuidanceStatus, RunStatus, VerificationCommandExecutor, VerificationRun, VerificationStatus } from "./run/types.js";
+export type {
+  ExecutionJournalCorrelation,
+  ExecutionJournalEntry,
+  ExecutionJournalPayload,
+  ExecutionTelemetry,
+  ExecutionThread,
+  ExecutionThreadState,
+  ExecutionThreadSummary,
+  JournalEntryType,
+  MergeReconciliationItem,
+  MergeReconciliationOutcome,
+  MergeReconciliationReport,
+  MergeRequest,
+  RepairExecutor,
+  Run,
+  RunGuidance,
+  RunGuidanceMode,
+  RunGuidanceStatus,
+  RunStatus,
+  VerificationCommandExecutor,
+  VerificationRun,
+  VerificationStatus,
+} from "./run/types.js";
 export { LifecycleHookRunner } from "./run/hooks.js";
 export type { HookDefinition, HookExecution, HookRunResult } from "./run/hooks.js";
-export { allocateRunBranchLeaf, composeRunBranchLeaf, ModelRunBranchNameGenerator, normalizeRunBranchSlug, runBranchDate, runBranchName } from "./run/run-branch.js";
+export {
+  allocateRunBranchLeaf,
+  composeRunBranchLeaf,
+  ModelRunBranchNameGenerator,
+  normalizeRunBranchSlug,
+  runBranchDate,
+  runBranchName,
+} from "./run/run-branch.js";
 export type { RunBranchNameGenerator, RunBranchNameInput } from "./run/run-branch.js";
 export { Scheduler } from "./run/scheduler.js";
 export type { SchedulerOptions } from "./run/scheduler.js";
@@ -128,31 +209,91 @@ export { ChangeProposalService } from "./run/change-proposal.js";
 export { VerificationService } from "./run/verification.js";
 export { MergeService } from "./run/merge.js";
 export { PlanDispatchCoordinator } from "./run/dispatch-coordinator.js";
-export type { PlanDispatchCoordinatorOptions, PlanDispatchPhase, PlanDispatchState, PlanDispatchStatus, PlanDispatchWaitReason } from "./run/dispatch-coordinator.js";
+export type {
+  PlanDispatchCoordinatorOptions,
+  PlanDispatchPhase,
+  PlanDispatchState,
+  PlanDispatchStatus,
+  PlanDispatchWaitReason,
+} from "./run/dispatch-coordinator.js";
 export { RecoveryCoordinator } from "./run/recovery-coordinator.js";
 
 // ─────────────────────────── agent/：Agent Loop、终止门与 Executor ───────────────────────────
 export type { ProjectExecutionMessage, ProjectExecutionThread, ProjectExecutionTurnStatus } from "./agent/types.js";
 export { AGENT_LOOP_DIAGNOSTIC_STEP_TYPES, AgentLoopEngine, projectAgentLoopDiagnostics } from "./agent/agent-loop.js";
-export type { AgentLoop, AgentLoopDiagnostics, AgentLoopInput, AgentLoopMode, AgentLoopResult, AgentLoopState, AgentLoopStep, AgentLoopStepInput, AgentLoopStepStatus, AgentLoopRunner, AgentStepType, GateContext, GateDecision, TerminationGate } from "./agent/agent-loop.js";
+export type {
+  AgentLoop,
+  AgentLoopDiagnostics,
+  AgentLoopInput,
+  AgentLoopMode,
+  AgentLoopResult,
+  AgentLoopState,
+  AgentLoopStep,
+  AgentLoopStepInput,
+  AgentLoopStepStatus,
+  AgentLoopRunner,
+  AgentStepType,
+  GateContext,
+  GateDecision,
+  TerminationGate,
+} from "./agent/agent-loop.js";
 export { PlanCompletenessGate, TaskProgressGate } from "./agent/termination-gates.js";
 export { ExecutorAgent, inspectWorkspaceScope, parseExecutorReport } from "./agent/executor-agent.js";
-export type { ExecutorAgentOptions, ExecutorContinuation, ExecutorReport, WorkspaceScopeInspection, WorkspaceScopeInspector } from "./agent/executor-agent.js";
-export { PROJECT_EXECUTION_MODELS, PROJECT_EXECUTION_REASONING_EFFORTS, ProjectExecutionThreadService } from "./agent/project-execution-thread.js";
+export type {
+  ExecutorAgentOptions,
+  ExecutorContinuation,
+  ExecutorReport,
+  WorkspaceScopeInspection,
+  WorkspaceScopeInspector,
+} from "./agent/executor-agent.js";
+export {
+  PROJECT_EXECUTION_MODELS,
+  PROJECT_EXECUTION_REASONING_EFFORTS,
+  ProjectExecutionThreadService,
+} from "./agent/project-execution-thread.js";
 export type { ProjectExecutionThreadServiceOptions, ProjectExecutionThreadSnapshot } from "./agent/project-execution-thread.js";
 
 // ─────────────────────────── model/：ModelGateway 端口与三个实现 ───────────────────────────
-export type { ModelCapabilities, ModelEvent, ModelGateway, ModelMessage, ModelMessagePhase, ModelRequest, ModelRole, ModelRoleConfig, ModelToolDefinition, ProviderEndpoint } from "./model/types.js";
+export type {
+  ModelCapabilities,
+  ModelEvent,
+  ModelGateway,
+  ModelMessage,
+  ModelMessagePhase,
+  ModelRequest,
+  ModelRole,
+  ModelRoleConfig,
+  ModelToolDefinition,
+  ProviderEndpoint,
+} from "./model/types.js";
 export { mergeModelUsage, normalizeModelUsage } from "./model/usage.js";
 export type { ModelUsage, ModelUsageScope } from "./model/usage.js";
 // 中立的活动词表：`provider.activity` 的消费方（Agent Loop、执行会话投影）一律读 activityKind / outcome，
 // 不要回到 `itemType` / `status` 这两个 Provider 原生字符串上做判断（见 model/provider-activity.ts）。
-export { activityOutcome, classifyClaudeActivity, classifyCodexActivity, claudeActivityKind, codexActivityKind, isOutcomeFreeKind, isProviderActivityKind, isProviderActivityOutcome } from "./model/provider-activity.js";
+export {
+  activityOutcome,
+  classifyClaudeActivity,
+  classifyCodexActivity,
+  claudeActivityKind,
+  codexActivityKind,
+  isOutcomeFreeKind,
+  isProviderActivityKind,
+  isProviderActivityOutcome,
+} from "./model/provider-activity.js";
 export type { ProviderActivityInput, ProviderActivityKind, ProviderActivityOutcome } from "./model/provider-activity.js";
 // 三个 ModelGateway 实现并列：codex-app-server（生产，真流式）、gateway-openai（HTTP 适配器）、
 // stub-gateway（测试替身）。apiKey 一律由组合根注入，本目录不读任何环境变量、不落库。
 export { CodexAppServerClient, CodexAppServerGateway } from "./model/codex-app-server.js";
-export type { CodexAppServerClientOptions, CodexAppServerEvent, CodexAppServerGatewayOptions, CodexAppServerSession, CodexAppServerSessionFactory, CodexSpawnProcess, CodexThreadStartParams, CodexTurnStartParams } from "./model/codex-app-server.js";
+export type {
+  CodexAppServerClientOptions,
+  CodexAppServerEvent,
+  CodexAppServerGatewayOptions,
+  CodexAppServerSession,
+  CodexAppServerSessionFactory,
+  CodexSpawnProcess,
+  CodexThreadStartParams,
+  CodexTurnStartParams,
+} from "./model/codex-app-server.js";
 export { ClaudeAgentSdkGateway } from "./model/claude-agent-sdk.js";
 export type { ClaudeAgentSdkGatewayOptions, ClaudeQueryFactory, ClaudeQueryHandle } from "./model/claude-agent-sdk.js";
 export { OpenAIModelGateway } from "./model/gateway-openai.js";
@@ -168,11 +309,32 @@ export type { ToolExecutionContext, ToolRuntime } from "./tools/tool-runtime.js"
 export { BuiltinToolExecutor } from "./tools/builtin-tool-executor.js";
 export type { BuiltinToolContext, BuiltinToolExecutorOptions } from "./tools/builtin-tool-executor.js";
 export { McpClient, McpToolRegistry } from "./tools/mcp.js";
-export type { McpClientOptions, McpRpcTransport, McpServerConfig, McpToolCallResult, McpToolDefinition, McpToolRegistryOptions, QualifiedMcpTool } from "./tools/mcp.js";
+export type {
+  McpClientOptions,
+  McpRpcTransport,
+  McpServerConfig,
+  McpToolCallResult,
+  McpToolDefinition,
+  McpToolRegistryOptions,
+  QualifiedMcpTool,
+} from "./tools/mcp.js";
 export { PluginRegistry, PluginToolBridge } from "./tools/plugin.js";
-export type { PluginManifest, PluginRegistryOptions, PluginStatus, PluginTool, PluginToolDefinition, PluginToolHandler } from "./tools/plugin.js";
+export type {
+  PluginManifest,
+  PluginRegistryOptions,
+  PluginStatus,
+  PluginTool,
+  PluginToolDefinition,
+  PluginToolHandler,
+} from "./tools/plugin.js";
 export { ComputerUseBridge } from "./tools/computer-use.js";
-export type { ComputerUseAction, ComputerUseBridgeOptions, ComputerUseEvent, ComputerUseHostAdapter, ComputerUseScreenshot } from "./tools/computer-use.js";
+export type {
+  ComputerUseAction,
+  ComputerUseBridgeOptions,
+  ComputerUseEvent,
+  ComputerUseHostAdapter,
+  ComputerUseScreenshot,
+} from "./tools/computer-use.js";
 export { ToolCallLedger } from "./tools/tool-call-ledger.js";
 export type { ToolCallLedgerEntry, ToolCallLedgerStatus } from "./tools/tool-call-ledger.js";
 
@@ -186,4 +348,16 @@ export type { GitMergeInspector } from "./git/merge-inspector.js";
 
 // ─────────────────────────── project/：项目聚合与配置快照 ───────────────────────────
 export { EXECUTION_SLOT_RUN_STATUSES, knownModelFamily, ProjectService } from "./project/project.js";
-export type { CreateProjectInput, ModelBackendCatalog, ModelFamily, Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings, ProjectSettingsInput, ProjectStatus, ProjectSummary, UpdateProjectInput } from "./project/project.js";
+export type {
+  CreateProjectInput,
+  ModelBackendCatalog,
+  ModelFamily,
+  Project,
+  ProjectConfigRevision,
+  ProjectExecutionSnapshot,
+  ProjectSettings,
+  ProjectSettingsInput,
+  ProjectStatus,
+  ProjectSummary,
+  UpdateProjectInput,
+} from "./project/project.js";

@@ -24,7 +24,13 @@ const KIND_LABELS: Record<ModelBackendDescriptor["kind"], string> = {
 /** 该后端不消费 reasoningEffort 时回退的完整词表（与配置 schema 的取值一致）。 */
 const FULL_REASONING_EFFORTS = ["minimal", "low", "medium", "high", "xhigh", "max", "ultra"];
 
-export type ModelBackendOption = { id: string; label: string; kind: ModelBackendDescriptor["kind"]; endpoint: string | null; endpointSource: "config" | "provider-settings" };
+export type ModelBackendOption = {
+  id: string;
+  label: string;
+  kind: ModelBackendDescriptor["kind"];
+  endpoint: string | null;
+  endpointSource: "config" | "provider-settings";
+};
 
 export function findBackend(catalog: ModelBackendsResponse | null, backendId: string | null | undefined): ModelBackendDescriptor | null {
   if (!catalog || !backendId) return null;
@@ -54,12 +60,17 @@ export function backendLabel(catalog: ModelBackendsResponse | null, backendId: s
 export function endpointHint(catalog: ModelBackendsResponse | null, backendId: string | null | undefined): string | null {
   const backend = findBackend(catalog, backendId);
   if (!backend) return null;
-  if (backend.endpointSource === "provider-settings") return backend.endpoint ? `CLI ${backend.endpoint}` : "由 CLI 自己的设置（cc-switch）解析";
+  if (backend.endpointSource === "provider-settings")
+    return backend.endpoint ? `CLI ${backend.endpoint}` : "由 CLI 自己的设置（cc-switch）解析";
   return backend.endpoint ?? null;
 }
 
 /** 选择某个后端时该显示的模型候选；当前值始终并入，避免手写模型名被下拉框改掉。 */
-export function modelOptionsFor(catalog: ModelBackendsResponse | null, backendId: string | null | undefined, ...configured: Array<string | null | undefined>): string[] {
+export function modelOptionsFor(
+  catalog: ModelBackendsResponse | null,
+  backendId: string | null | undefined,
+  ...configured: Array<string | null | undefined>
+): string[] {
   const fromCatalog = findBackend(catalog, backendId)?.models ?? [];
   return [...new Set([...fromCatalog, ...configured.filter((value): value is string => Boolean(value))])];
 }
@@ -95,18 +106,26 @@ export function backendSwitchAdjustment(
   const foreign = Boolean(owner) && owner!.kind !== target.kind;
   const model = foreign && target.models.length > 0 && !target.models.includes(current.model) ? target.models[0]! : null;
   // 新后端不消费这个字段（levels 为空）时不表态——"空数组 = 不消费"，不是"什么都不接受"（见本文件维护提示 2）。
-  const clearReasoningEffort = target.reasoningEfforts.length > 0 && Boolean(current.reasoningEffort) && !target.reasoningEfforts.includes(current.reasoningEffort);
+  const clearReasoningEffort =
+    target.reasoningEfforts.length > 0 && Boolean(current.reasoningEffort) && !target.reasoningEfforts.includes(current.reasoningEffort);
   return { model, clearReasoningEffort };
 }
 
 /** 选择某个后端时该显示的推理强度；空值那一项由调用方自己加（它的文案随页面而变）。 */
-export function reasoningOptionsFor(catalog: ModelBackendsResponse | null, backendId: string | null | undefined): Array<{ value: string; label: string }> {
+export function reasoningOptionsFor(
+  catalog: ModelBackendsResponse | null,
+  backendId: string | null | undefined,
+): Array<{ value: string; label: string }> {
   const levels = findBackend(catalog, backendId)?.reasoningEfforts ?? [];
   return (levels.length > 0 ? levels : FULL_REASONING_EFFORTS).map((value) => ({ value, label: value }));
 }
 
 /** 当前值不在该后端的推理强度表里时，把它也列出来 —— 否则用户看不到自己配了什么。 */
-export function reasoningOptionsWith(catalog: ModelBackendsResponse | null, backendId: string | null | undefined, current: string): Array<{ value: string; label: string }> {
+export function reasoningOptionsWith(
+  catalog: ModelBackendsResponse | null,
+  backendId: string | null | undefined,
+  current: string,
+): Array<{ value: string; label: string }> {
   const options = reasoningOptionsFor(catalog, backendId);
   if (!current || options.some((option) => option.value === current)) return options;
   return [...options, { value: current, label: `${current}（当前值，后端可能忽略）` }];

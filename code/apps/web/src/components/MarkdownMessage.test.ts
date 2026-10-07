@@ -13,7 +13,13 @@ function mountMessage(source: Ref<string>, streaming: Ref<boolean>) {
   document.body.appendChild(host);
   const app = createApp(defineComponent({ setup: () => () => h(MarkdownMessage, { source: source.value, streaming: streaming.value }) }));
   app.mount(host);
-  return { host, unmount: () => { app.unmount(); host.remove(); } };
+  return {
+    host,
+    unmount: () => {
+      app.unmount();
+      host.remove();
+    },
+  };
 }
 
 describe("MarkdownMessage", () => {

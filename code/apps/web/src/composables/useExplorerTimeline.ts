@@ -33,10 +33,35 @@ export type ExplorerTimelineDeps = {
 };
 
 export function useExplorerTimeline(deps: ExplorerTimelineDeps) {
-  const belongsToActivePlan = (planId: string | null | undefined): boolean => belongsToExplorerPlan(planId, deps.activeExplorerPlan.value?.id ?? null);
+  const belongsToActivePlan = (planId: string | null | undefined): boolean =>
+    belongsToExplorerPlan(planId, deps.activeExplorerPlan.value?.id ?? null);
 
   const visibleTurns = computed(() => deps.turns.value.filter((turn) => belongsToActivePlan(turn.explorerPlanId)));
-  const visibleActivity = computed(() => (deps.activity.value.length ? deps.activity.value : visibleTurns.value.map((turn) => ({ id: `fallback-${turn.id}`, explorerId: turn.threadId, turnId: turn.id, sequence: turn.sequence, kind: turn.role === "user" ? "USER_MESSAGE" : "ASSISTANT_MESSAGE", status: turn.status === "FAILED" ? "FAILED" : turn.status === "RUNNING" ? "RUNNING" : turn.status === "WAITING_FOR_INPUT" || turn.status === "QUEUED" ? "WAITING" : "COMPLETED", title: turn.role === "user" ? "You" : "Plan Explorer", summary: turn.role === "assistant" ? readableAssistantText(turnContent(turn)) : turnContent(turn), details: turn.error ? { error: turn.error } : null, occurredAt: turn.createdAt, explorerPlanId: turn.explorerPlanId })) as ExplorerActivityItem[]).filter((item) => belongsToActivePlan(item.explorerPlanId)));
+  const visibleActivity = computed(() =>
+    (deps.activity.value.length
+      ? deps.activity.value
+      : (visibleTurns.value.map((turn) => ({
+          id: `fallback-${turn.id}`,
+          explorerId: turn.threadId,
+          turnId: turn.id,
+          sequence: turn.sequence,
+          kind: turn.role === "user" ? "USER_MESSAGE" : "ASSISTANT_MESSAGE",
+          status:
+            turn.status === "FAILED"
+              ? "FAILED"
+              : turn.status === "RUNNING"
+                ? "RUNNING"
+                : turn.status === "WAITING_FOR_INPUT" || turn.status === "QUEUED"
+                  ? "WAITING"
+                  : "COMPLETED",
+          title: turn.role === "user" ? "You" : "Plan Explorer",
+          summary: turn.role === "assistant" ? readableAssistantText(turnContent(turn)) : turnContent(turn),
+          details: turn.error ? { error: turn.error } : null,
+          occurredAt: turn.createdAt,
+          explorerPlanId: turn.explorerPlanId,
+        })) as ExplorerActivityItem[])
+    ).filter((item) => belongsToActivePlan(item.explorerPlanId)),
+  );
   const visibleInputRequests = computed(() => deps.inputRequests.value.filter((item) => belongsToActivePlan(item.explorerPlanId)));
 
   const activeTaskPlans = computed<Plan[]>(() => deps.allPlans.value.filter((plan) => belongsToActivePlan(plan.explorerPlanId)));

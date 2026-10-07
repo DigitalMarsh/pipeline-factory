@@ -45,7 +45,10 @@ describe("ModelGateway", () => {
       },
     });
 
-    await expect(gateway.complete({ role: "executor", messages: [{ role: "user", content: "execute" }] })).resolves.toMatchObject({ text: "model response", requestId: "resp-1" });
+    await expect(gateway.complete({ role: "executor", messages: [{ role: "user", content: "execute" }] })).resolves.toMatchObject({
+      text: "model response",
+      requestId: "resp-1",
+    });
     expect(requestBody).toMatchObject({ model: "gpt-executor", stream: false });
   });
 
@@ -53,14 +56,31 @@ describe("ModelGateway", () => {
     const gateway = new OpenAIModelGateway({
       apiKey: "test-key",
       roles: { explorer: { model: "gpt-explorer" }, executor: { model: "gpt-executor" } },
-      fetchFn: async () => ({ ok: true, status: 200, json: async () => ({ id: "resp-usage", output_text: "long enough to never be used as an estimate", usage: { input_tokens: 120, output_tokens: 45, total_tokens: 165, output_tokens_details: { reasoning_tokens: 17 } } }) }),
+      fetchFn: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          id: "resp-usage",
+          output_text: "long enough to never be used as an estimate",
+          usage: { input_tokens: 120, output_tokens: 45, total_tokens: 165, output_tokens_details: { reasoning_tokens: 17 } },
+        }),
+      }),
     });
 
-    await expect(gateway.complete({ role: "executor", messages: [{ role: "user", content: "execute" }] })).resolves.toMatchObject({ usage: { inputTokens: 120, outputTokens: 45, reasoningTokens: 17, totalTokens: 165 } });
+    await expect(gateway.complete({ role: "executor", messages: [{ role: "user", content: "execute" }] })).resolves.toMatchObject({
+      usage: { inputTokens: 120, outputTokens: 45, reasoningTokens: 17, totalTokens: 165 },
+    });
   });
 
   it("reports provider-controlled capability boundaries", () => {
-    const gateway = new OpenAIModelGateway({ apiKey: "test-key", roles: { explorer: { model: "gpt-explorer" }, executor: { model: "gpt-executor" } } });
-    expect(gateway.capabilities("executor")).toEqual({ supportsStructuredUserInput: false, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] });
+    const gateway = new OpenAIModelGateway({
+      apiKey: "test-key",
+      roles: { explorer: { model: "gpt-explorer" }, executor: { model: "gpt-executor" } },
+    });
+    expect(gateway.capabilities("executor")).toEqual({
+      supportsStructuredUserInput: false,
+      supportsToolCalls: false,
+      supportedLoopModes: ["provider-controlled"],
+    });
   });
 });

@@ -34,7 +34,9 @@ const emit = defineEmits<{
 
 /** 头像只给"不是正文"的行：你自己说的话（`user`）与模型的正文（`model`）都不该挂一个字母块。 */
 const showsAvatar = computed(() => props.item.kind !== "user" && props.item.kind !== "model");
-const avatarText = computed(() => (props.item.kind === "plan" ? "PL" : props.item.kind === "model" ? "EX" : props.item.kind === "tool" ? "TL" : "·"));
+const avatarText = computed(() =>
+  props.item.kind === "plan" ? "PL" : props.item.kind === "model" ? "EX" : props.item.kind === "tool" ? "TL" : "·",
+);
 const details = computed(() => executionMessageDetails(props.item));
 
 function toggleDetails(): void {
@@ -52,18 +54,36 @@ function viewPlan(): void {
     :data-task-id="item.taskId"
     :data-model-step="item.modelStep"
     :title="executionMessageDiagnosticsTitle(item)"
-    :class="['execution-message', `execution-message-${item.kind}`, { failed: item.status === 'FAILED', waiting: item.status === 'WAITING', running: item.status === 'RUNNING', unknown: item.status === 'UNKNOWN', mine: item.role === 'user' }]"
+    :class="[
+      'execution-message',
+      `execution-message-${item.kind}`,
+      {
+        failed: item.status === 'FAILED',
+        waiting: item.status === 'WAITING',
+        running: item.status === 'RUNNING',
+        unknown: item.status === 'UNKNOWN',
+        mine: item.role === 'user',
+      },
+    ]"
   >
     <div v-if="showsAvatar" class="execution-message-avatar">{{ avatarText }}</div>
     <div class="execution-message-body">
       <div class="execution-message-meta">
         <strong>{{ item.title }}</strong>
-        <el-tag v-if="item.status !== 'INFO'" size="small" effect="light" :type="statusTagType(item.status)">{{ executionMessageStatusLabel(item.status) }}</el-tag>
-        <span class="execution-message-time">{{ new Date(item.occurredAt).toLocaleTimeString('zh-CN') }}</span>
-        <button v-if="details.length" type="button" class="execution-message-toggle" :aria-expanded="expanded" @click="toggleDetails">{{ expanded ? '收起详情' : '详情' }}</button>
+        <el-tag v-if="item.status !== 'INFO'" size="small" effect="light" :type="statusTagType(item.status)">{{
+          executionMessageStatusLabel(item.status)
+        }}</el-tag>
+        <span class="execution-message-time">{{ new Date(item.occurredAt).toLocaleTimeString("zh-CN") }}</span>
+        <button v-if="details.length" type="button" class="execution-message-toggle" :aria-expanded="expanded" @click="toggleDetails">
+          {{ expanded ? "收起详情" : "详情" }}
+        </button>
       </div>
-      <div v-if="expanded" class="execution-message-details"><span v-for="detail in details" :key="detail">{{ detail }}</span></div>
-      <template v-if="item.kind === 'plan' && item.plan"><ExecutionPlanCard :item-id="item.id" :plan="item.plan" @view="viewPlan" /></template>
+      <div v-if="expanded" class="execution-message-details">
+        <span v-for="detail in details" :key="detail">{{ detail }}</span>
+      </div>
+      <template v-if="item.kind === 'plan' && item.plan"
+        ><ExecutionPlanCard :item-id="item.id" :plan="item.plan" @view="viewPlan"
+      /></template>
       <template v-else-if="item.kind === 'model'"><ExecutionModelRow :item="item" /></template>
       <template v-else-if="item.kind === 'user'"><ExecutionUserRow :item="item" /></template>
       <template v-else-if="item.kind === 'divider'"><ExecutionDividerRow :item="item" /></template>

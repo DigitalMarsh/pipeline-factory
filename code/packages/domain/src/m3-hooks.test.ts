@@ -9,23 +9,55 @@ import { RegisteredCommandExecutor, type HookContext } from "./index.js";
 describe("RegisteredCommandExecutor", () => {
   it("inherits the host PATH when a command does not declare an environment", async () => {
     const executor = new RegisteredCommandExecutor([{ commandId: "project.test", argv: ["node", "-e", "process.exit(0)"] }]);
-    const context: HookContext = { projectId: "project-1", runId: "run-1", workspacePath: process.cwd(), branch: "factory/run-1", baseCommit: "abc", exitReason: "running" };
+    const context: HookContext = {
+      projectId: "project-1",
+      runId: "run-1",
+      workspacePath: process.cwd(),
+      branch: "factory/run-1",
+      baseCommit: "abc",
+      exitReason: "running",
+    };
 
-    await expect(executor.execute({ commandId: "project.test", cwd: process.cwd(), timeoutMs: 5000, context })).resolves.toMatchObject({ exitCode: 0 });
+    await expect(executor.execute({ commandId: "project.test", cwd: process.cwd(), timeoutMs: 5000, context })).resolves.toMatchObject({
+      exitCode: 0,
+    });
   });
 
   it("runs only fixed registered argv and injects structured HookContext", async () => {
     let received: { argv: string[]; cwd: string; timeoutMs: number; env: Record<string, string> } | null = null;
-    const executor = new RegisteredCommandExecutor([
-      { commandId: "project.start", argv: ["node", "scripts/start.mjs"], environment: { PIPELINE_TEST_FIXED: "fixed-from-config" } },
-    ], async (argv, cwd, timeoutMs, env) => {
-      received = { argv, cwd, timeoutMs, env };
-      return { exitCode: 0, stdout: "ready", stderr: "" };
-    });
-    const context: HookContext = { projectId: "project-1", runId: "run-1", workspacePath: "/tmp/worktree", branch: "factory/run-1", baseCommit: "abc", exitReason: "running" };
+    const executor = new RegisteredCommandExecutor(
+      [{ commandId: "project.start", argv: ["node", "scripts/start.mjs"], environment: { PIPELINE_TEST_FIXED: "fixed-from-config" } }],
+      async (argv, cwd, timeoutMs, env) => {
+        received = { argv, cwd, timeoutMs, env };
+        return { exitCode: 0, stdout: "ready", stderr: "" };
+      },
+    );
+    const context: HookContext = {
+      projectId: "project-1",
+      runId: "run-1",
+      workspacePath: "/tmp/worktree",
+      branch: "factory/run-1",
+      baseCommit: "abc",
+      exitReason: "running",
+    };
     await executor.execute({ commandId: "project.start", cwd: "/tmp/worktree", timeoutMs: 5000, context });
 
-    expect(received).toMatchObject({ argv: ["node", "scripts/start.mjs"], cwd: "/tmp/worktree", timeoutMs: 5000, env: { PIPELINE_TEST_FIXED: "fixed-from-config", PIPELINE_PROJECT_ID: "project-1", PIPELINE_RUN_ID: "run-1", PIPELINE_WORKSPACE_PATH: "/tmp/worktree", PIPELINE_BRANCH: "factory/run-1", PIPELINE_BASE_COMMIT: "abc", PIPELINE_EXIT_REASON: "running" } });
-    await expect(executor.execute({ commandId: "unregistered", cwd: "/tmp/worktree", timeoutMs: 5000, context })).resolves.toMatchObject({ exitCode: 127 });
+    expect(received).toMatchObject({
+      argv: ["node", "scripts/start.mjs"],
+      cwd: "/tmp/worktree",
+      timeoutMs: 5000,
+      env: {
+        PIPELINE_TEST_FIXED: "fixed-from-config",
+        PIPELINE_PROJECT_ID: "project-1",
+        PIPELINE_RUN_ID: "run-1",
+        PIPELINE_WORKSPACE_PATH: "/tmp/worktree",
+        PIPELINE_BRANCH: "factory/run-1",
+        PIPELINE_BASE_COMMIT: "abc",
+        PIPELINE_EXIT_REASON: "running",
+      },
+    });
+    await expect(executor.execute({ commandId: "unregistered", cwd: "/tmp/worktree", timeoutMs: 5000, context })).resolves.toMatchObject({
+      exitCode: 127,
+    });
   });
 });

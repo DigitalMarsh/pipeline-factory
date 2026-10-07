@@ -4,11 +4,17 @@ import type { PlanDispatchState, PlanDispatchWaitReason } from "../types";
 
 describe("run prerequisites", () => {
   it("extracts missing registered command ids from the API error", () => {
-    expect(parseMissingRunCommands("RUN_PREREQUISITES_UNSATISFIED: missing registered commands: project.test, project.typecheck")).toEqual(["project.test", "project.typecheck"]);
+    expect(parseMissingRunCommands("RUN_PREREQUISITES_UNSATISFIED: missing registered commands: project.test, project.typecheck")).toEqual([
+      "project.test",
+      "project.typecheck",
+    ]);
   });
 
   it("extracts missing registered command ids from a scheduler waiting reason", () => {
-    expect(parseMissingRunCommands("Missing registered commands: project.test, project.typecheck")).toEqual(["project.test", "project.typecheck"]);
+    expect(parseMissingRunCommands("Missing registered commands: project.test, project.typecheck")).toEqual([
+      "project.test",
+      "project.typecheck",
+    ]);
   });
 
   it("ignores unrelated errors", () => {
@@ -16,13 +22,18 @@ describe("run prerequisites", () => {
   });
 });
 
-const waitingPlan = (waitReason: PlanDispatchWaitReason | null, lastError: string | null): { dispatch: Pick<PlanDispatchState, "waitReason" | "lastError"> } => ({ dispatch: { waitReason, lastError } });
+const waitingPlan = (
+  waitReason: PlanDispatchWaitReason | null,
+  lastError: string | null,
+): { dispatch: Pick<PlanDispatchState, "waitReason" | "lastError"> } => ({ dispatch: { waitReason, lastError } });
 
 const projectWith = (...commandIds: string[]) => ({ settings: { commands: commandIds.map((commandId) => ({ commandId })) } });
 
 describe("配置缺失的 Plan", () => {
   it("只在 NEEDS_CONFIGURATION 时报告缺失命令", () => {
-    expect(configurationBlockedCommands(waitingPlan("NEEDS_CONFIGURATION", "missing registered commands: project.test"))).toEqual(["project.test"]);
+    expect(configurationBlockedCommands(waitingPlan("NEEDS_CONFIGURATION", "missing registered commands: project.test"))).toEqual([
+      "project.test",
+    ]);
   });
 
   it("lastError 里恰好有同样字样但等待原因不是配置时，不上报", () => {
@@ -50,7 +61,11 @@ describe("能否一键重建 Revision", () => {
   });
 
   it("没有 Project 或没有缺失命令时都不允许", () => {
-    expect(canCreateConfigurationRevision(waitingPlan("NEEDS_CONFIGURATION", "missing registered commands: project.test"), null)).toBe(false);
-    expect(canCreateConfigurationRevision(waitingPlan("NEEDS_CONFIGURATION", "no missing commands here"), projectWith("project.test"))).toBe(false);
+    expect(canCreateConfigurationRevision(waitingPlan("NEEDS_CONFIGURATION", "missing registered commands: project.test"), null)).toBe(
+      false,
+    );
+    expect(
+      canCreateConfigurationRevision(waitingPlan("NEEDS_CONFIGURATION", "no missing commands here"), projectWith("project.test")),
+    ).toBe(false);
   });
 });

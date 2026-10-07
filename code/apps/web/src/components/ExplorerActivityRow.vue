@@ -34,7 +34,11 @@ const expanded = ref(false);
   <article
     :id="activityTarget(activity, index)"
     :data-nav-key="activityTarget(activity, index)"
-    :class="['loop-activity-card', `activity-${mode}`, { waiting: activity.status === 'WAITING', failed: activity.status === 'FAILED', running: activity.status === 'RUNNING' }]"
+    :class="[
+      'loop-activity-card',
+      `activity-${mode}`,
+      { waiting: activity.status === 'WAITING', failed: activity.status === 'FAILED', running: activity.status === 'RUNNING' },
+    ]"
   >
     <span class="thread-mark" />
     <div class="loop-activity-copy">
@@ -48,7 +52,9 @@ const expanded = ref(false);
       <code v-if="line.reference" class="activity-reference">{{ line.reference }}</code>
       <!-- 「显示结果」是两条对话线共用的效果：默认只占一行，需要时展开看这一调用到底做了什么。 -->
       <div v-if="canExpand" class="activity-result-shell">
-        <button type="button" class="activity-result-toggle" :aria-expanded="expanded" @click="expanded = !expanded">{{ expanded ? '收起结果' : '显示结果' }}</button>
+        <button type="button" class="activity-result-toggle" :aria-expanded="expanded" @click="expanded = !expanded">
+          {{ expanded ? "收起结果" : "显示结果" }}
+        </button>
         <ActivityResultDetails v-if="expanded" v-bind="payload" />
       </div>
     </div>

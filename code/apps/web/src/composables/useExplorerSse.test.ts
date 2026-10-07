@@ -17,8 +17,13 @@ import { useExplorerSse } from "./useExplorerSse";
 
 vi.mock("../api", () => ({
   api: {
-    explorerEventsUrl: vi.fn((projectId: string, threadId: string, planId: string, after?: number) => `explorer://${projectId}/${threadId}/${planId}?after=${after ?? "none"}`),
-    explorerRequirementStatusEventsUrl: vi.fn((projectId: string, threadId: string, after?: number) => `requirement://${projectId}/${threadId}?after=${after ?? "none"}`),
+    explorerEventsUrl: vi.fn(
+      (projectId: string, threadId: string, planId: string, after?: number) =>
+        `explorer://${projectId}/${threadId}/${planId}?after=${after ?? "none"}`,
+    ),
+    explorerRequirementStatusEventsUrl: vi.fn(
+      (projectId: string, threadId: string, after?: number) => `requirement://${projectId}/${threadId}?after=${after ?? "none"}`,
+    ),
     agentLoopEventsUrl: vi.fn((loopId: string) => `loop://${loopId}`),
     getExplorerTurns: vi.fn(),
     inputRequests: vi.fn(),
@@ -41,17 +46,20 @@ class FakeEventSource {
     this.listeners.set(name, [...(this.listeners.get(name) ?? []), listener]);
   }
 
-  close() { this.closed = true; }
+  close() {
+    this.closed = true;
+  }
 
   async emit(name: string, payload: unknown = {}) {
     for (const listener of this.listeners.get(name) ?? []) await listener({ data: JSON.stringify(payload) });
   }
 }
 
-const thread = (id = "explorer-1") => ({ id, title: "旧标题", titleStatus: "PLACEHOLDER" } as unknown as ExplorerThread);
-const explorerPlan = (id: string, runtimeStatus?: ExplorerPlan["runtimeStatus"]) => ({ id, explorerThreadId: "explorer-1", runtimeStatus } as unknown as ExplorerPlan);
-const turn = (id: string, content = "原文"): ExplorerTurn => ({ id, content } as unknown as ExplorerTurn);
-const request = (id: string): ExplorerInputRequest => ({ id } as unknown as ExplorerInputRequest);
+const thread = (id = "explorer-1") => ({ id, title: "旧标题", titleStatus: "PLACEHOLDER" }) as unknown as ExplorerThread;
+const explorerPlan = (id: string, runtimeStatus?: ExplorerPlan["runtimeStatus"]) =>
+  ({ id, explorerThreadId: "explorer-1", runtimeStatus }) as unknown as ExplorerPlan;
+const turn = (id: string, content = "原文"): ExplorerTurn => ({ id, content }) as unknown as ExplorerTurn;
+const request = (id: string): ExplorerInputRequest => ({ id }) as unknown as ExplorerInputRequest;
 
 function setup(options: { withLoop?: boolean; sequence?: number | null } = {}) {
   const projectId = ref("project-1");
@@ -92,7 +100,28 @@ function setup(options: { withLoop?: boolean; sequence?: number | null } = {}) {
     adoptInputRequest,
     load,
   });
-  return { ...sse, projectId, thread: currentThread, explorers, activeExplorerPlan, explorerPlans, turns, agentLoop, explorerPaused, explorerEventSequence, refreshActivity, refreshPlanProjection, scheduleProjectionRefresh, cancelProjectionRefresh, adoptInputRequest, load, isCurrentProjectScope, setToken: (next: number) => { token = next; } };
+  return {
+    ...sse,
+    projectId,
+    thread: currentThread,
+    explorers,
+    activeExplorerPlan,
+    explorerPlans,
+    turns,
+    agentLoop,
+    explorerPaused,
+    explorerEventSequence,
+    refreshActivity,
+    refreshPlanProjection,
+    scheduleProjectionRefresh,
+    cancelProjectionRefresh,
+    adoptInputRequest,
+    load,
+    isCurrentProjectScope,
+    setToken: (next: number) => {
+      token = next;
+    },
+  };
 }
 
 beforeEach(() => {
@@ -104,7 +133,9 @@ beforeEach(() => {
   vi.mocked(api.getExplorerTurns).mockResolvedValue({ items: [], lastEventSequence: 0 });
   vi.mocked(api.inputRequests).mockResolvedValue({ items: [] });
 });
-afterEach(() => { vi.unstubAllGlobals(); });
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("需求 Turn 通道", () => {
   it("用投影游标建连、即时合并 delta，并把终态刷新交给回调", async () => {
@@ -159,7 +190,12 @@ describe("需求状态通道与生命周期", () => {
     const s = setup({ sequence: 3 });
     s.connectRequirementStatusEvents();
     const source = FakeEventSource.instances[0]!;
-    await source.emit("requirement.status", { explorerPlanId: "plan-1", status: "RUNNING", occurredAt: "2026-09-01T10:00:00Z", turnId: null });
+    await source.emit("requirement.status", {
+      explorerPlanId: "plan-1",
+      status: "RUNNING",
+      occurredAt: "2026-09-01T10:00:00Z",
+      turnId: null,
+    });
     expect(s.explorerPlans.value[0]?.runtimeStatus).toBe("RUNNING");
 
     s.connectEvents();

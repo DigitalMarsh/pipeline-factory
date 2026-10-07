@@ -17,9 +17,47 @@ import { parsePlanProtocolDisplay } from "./planProtocolDisplay";
 /** 领域层的活动投影要一堆持久化事实才能跑；这里只造跑通所需的最小集合。 */
 function domainActivitySummary(content: string): { summary: string; details: Record<string, unknown> | null } {
   const items = projectExplorerActivity({
-    turns: [{ id: "assistant-1", threadId: "explorer-1", role: "assistant", content: "", status: "COMPLETED", createdAt: "2026-10-01T00:00:00.000Z", sequence: 1 }],
-    loops: [{ id: "loop-1", ownerType: "explorer-turn", ownerId: "assistant-1", role: "explorer", mode: "provider-controlled", state: "COMPLETED", stepCount: 1, maxSteps: 40, startedAt: "2026-10-01T00:00:00.000Z", completedAt: "2026-10-01T00:00:02.000Z", providerThreadId: null, providerTurnId: null, checkpointJson: null }],
-    steps: [{ loopId: "loop-1", sequence: 1, stepType: "MODEL_TEXT_DELTA", status: "COMPLETED", callId: null, providerThreadId: null, providerTurnId: null, payload: { text: content }, occurredAt: "2026-10-01T00:00:01.000Z" }],
+    turns: [
+      {
+        id: "assistant-1",
+        threadId: "explorer-1",
+        role: "assistant",
+        content: "",
+        status: "COMPLETED",
+        createdAt: "2026-10-01T00:00:00.000Z",
+        sequence: 1,
+      },
+    ],
+    loops: [
+      {
+        id: "loop-1",
+        ownerType: "explorer-turn",
+        ownerId: "assistant-1",
+        role: "explorer",
+        mode: "provider-controlled",
+        state: "COMPLETED",
+        stepCount: 1,
+        maxSteps: 40,
+        startedAt: "2026-10-01T00:00:00.000Z",
+        completedAt: "2026-10-01T00:00:02.000Z",
+        providerThreadId: null,
+        providerTurnId: null,
+        checkpointJson: null,
+      },
+    ],
+    steps: [
+      {
+        loopId: "loop-1",
+        sequence: 1,
+        stepType: "MODEL_TEXT_DELTA",
+        status: "COMPLETED",
+        callId: null,
+        providerThreadId: null,
+        providerTurnId: null,
+        payload: { text: content },
+        occurredAt: "2026-10-01T00:00:01.000Z",
+      },
+    ],
   });
   const item = items.find((candidate) => candidate.kind === "ASSISTANT_MESSAGE");
   return { summary: item?.summary ?? "", details: (item?.details as Record<string, unknown> | null) ?? null };
@@ -29,7 +67,12 @@ const artifact = {
   schemaVersion: 2,
   title: "需求5：修复现有项目添加任务时所属项目不合法",
   artifact: { mode: "REPOSITORY_FILE", path: "doc/需求5-任务归属修复方案.md" },
-  objective: { goal: "修复新增任务未传递所属项目 ID 的问题", audience: ["使用者"], acceptanceCriteria: ["缺失时返回 400", "不存在时返回 404"], outOfScope: ["不重构列表页"] },
+  objective: {
+    goal: "修复新增任务未传递所属项目 ID 的问题",
+    audience: ["使用者"],
+    acceptanceCriteria: ["缺失时返回 400", "不存在时返回 404"],
+    outOfScope: ["不重构列表页"],
+  },
   design: { technicalConstraints: [], dataSecurity: [], failureHandling: [] },
   scope: { includePaths: ["code/src/App.vue", "code/server/routes/tasks.js", "doc/**"], excludePaths: ["code/data/**", "node_modules/**"] },
   tasks: [{ id: "task-1", title: "新增项目级任务创建接口", dependencies: [] }],
@@ -55,9 +98,7 @@ function protocol(spec: unknown): string {
 }
 
 describe("Plan 协议解析：领域层与 web 两份实现一致", () => {
-  it.each([
-    { name: "当前形状的契约", content: protocol(artifact) },
-  ])("$name：两边都判为 READY，且摘要字段相同", ({ content }) => {
+  it.each([{ name: "当前形状的契约", content: protocol(artifact) }])("$name：两边都判为 READY，且摘要字段相同", ({ content }) => {
     const domain = domainActivitySummary(content);
     const web = parsePlanProtocolDisplay(content);
 
@@ -85,7 +126,10 @@ describe("Plan 协议解析：领域层与 web 两份实现一致", () => {
   });
 
   it.each([
-    { name: "JSON 非法", content: "<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>{bad}</pipeline-factory-plan>" },
+    {
+      name: "JSON 非法",
+      content: "<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>{bad}</pipeline-factory-plan>",
+    },
     { name: "缺目标字段", content: protocol({ title: "只有标题" }) },
     // V1 扁平契约已经不再支持：两边都必须判非法。留在这张表里是为了钉住"两份实现结论一致"——
     // 它是**唯一**一条覆盖"历史上曾经合法的形状"的夹具。

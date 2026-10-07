@@ -86,8 +86,11 @@ export function registerExecutionThreadRoutes(app: FastifyInstance, deps: Execut
     const query = projectExecutionEventsQuery.safeParse(request.query ?? {});
     if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid project execution event query" });
     let threadId: string;
-    try { threadId = projectExecution.get(params.data.projectId).thread.id; }
-    catch (error) { return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: error instanceof Error ? error.message : "Project not found" }); }
+    try {
+      threadId = projectExecution.get(params.data.projectId).thread.id;
+    } catch (error) {
+      return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: error instanceof Error ? error.message : "Project not found" });
+    }
     const headerSequence = Number(request.headers["last-event-id"] ?? "0") || 0;
     let cursor = Math.max(query.data.afterSequence ?? 0, headerSequence);
     const sse = openSseChannel(request, reply, { poll: () => send() });

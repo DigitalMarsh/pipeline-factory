@@ -11,7 +11,19 @@ import type { ExplorerPlan, ExplorerThread, Project } from "../types";
 const styles = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../styles.css"), "utf8");
 const source = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "./ThreadRail.vue"), "utf8");
 
-function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplorer = false, projectActionId: string | null = null, includeArchived = false, showArchived = false, explorerLoading = false, explorerError: string | null = null, explorerItems?: ExplorerThread[], planCenterActive = false, planCenterCount = 2, projectExecutionActive = false) {
+function mountRail(
+  panel: "projects" | "explorers" = "explorers",
+  creatingExplorer = false,
+  projectActionId: string | null = null,
+  includeArchived = false,
+  showArchived = false,
+  explorerLoading = false,
+  explorerError: string | null = null,
+  explorerItems?: ExplorerThread[],
+  planCenterActive = false,
+  planCenterCount = 2,
+  projectExecutionActive = false,
+) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   let createExplorerCount = 0;
@@ -28,60 +40,158 @@ function mountRail(panel: "projects" | "explorers" = "explorers", creatingExplor
   const openedProjectIds: string[] = [];
   const settingsProjectIds: string[] = [];
   const archivedProjectIds: string[] = [];
-  const thread = { id: "explorer-1", projectId: "project-1", title: "Current exploration", state: "ACTIVE", contextMode: "FRESH", messageCount: 2, lastActivityAt: "2026-09-02T14:00:00.000Z" } as unknown as ExplorerThread;
-  const project = { id: "project-1", name: "Project 1", repoRoot: "/tmp/project-1", status: "ACTIVE", currentExplorerThreadId: "explorer-1" } as unknown as Project;
+  const thread = {
+    id: "explorer-1",
+    projectId: "project-1",
+    title: "Current exploration",
+    state: "ACTIVE",
+    contextMode: "FRESH",
+    messageCount: 2,
+    lastActivityAt: "2026-09-02T14:00:00.000Z",
+  } as unknown as ExplorerThread;
+  const project = {
+    id: "project-1",
+    name: "Project 1",
+    repoRoot: "/tmp/project-1",
+    status: "ACTIVE",
+    currentExplorerThreadId: "explorer-1",
+  } as unknown as Project;
   const projects = [
     { id: "project-1", name: "Project 1", repoRoot: "/tmp/project-1", status: "ACTIVE" },
     { id: "project-2", name: "Project 2", repoRoot: "/tmp/project-2", status: "ARCHIVED" },
   ] as unknown as Project[];
-  const explorers = explorerItems ?? [
-    { id: "explorer-1", projectId: "project-1", title: "Current exploration", state: "ACTIVE", contextMode: "FRESH", messageCount: 2, lastActivityAt: "2026-09-02T14:00:00.000Z" },
-    { id: "explorer-2", projectId: "project-1", title: "Second exploration", state: "COMPLETED", contextMode: "FRESH", messageCount: 4, lastActivityAt: "2026-09-01T14:00:00.000Z" },
-    ...(includeArchived ? [{ id: "explorer-3", projectId: "project-1", title: "Archived exploration", state: "ARCHIVED", contextMode: "FRESH", messageCount: 1, lastActivityAt: "2026-08-31T14:00:00.000Z" }] : []),
-  ] as unknown as ExplorerThread[];
+  const explorers =
+    explorerItems ??
+    ([
+      {
+        id: "explorer-1",
+        projectId: "project-1",
+        title: "Current exploration",
+        state: "ACTIVE",
+        contextMode: "FRESH",
+        messageCount: 2,
+        lastActivityAt: "2026-09-02T14:00:00.000Z",
+      },
+      {
+        id: "explorer-2",
+        projectId: "project-1",
+        title: "Second exploration",
+        state: "COMPLETED",
+        contextMode: "FRESH",
+        messageCount: 4,
+        lastActivityAt: "2026-09-01T14:00:00.000Z",
+      },
+      ...(includeArchived
+        ? [
+            {
+              id: "explorer-3",
+              projectId: "project-1",
+              title: "Archived exploration",
+              state: "ARCHIVED",
+              contextMode: "FRESH",
+              messageCount: 1,
+              lastActivityAt: "2026-08-31T14:00:00.000Z",
+            },
+          ]
+        : []),
+    ] as unknown as ExplorerThread[]);
   const requirements = [
-    { id: "requirement-1", explorerThreadId: "explorer-1", projectId: "project-1", ordinal: 1, title: "Plan 1 / 待探索", titleSource: "AUTO", titleStatus: "PLACEHOLDER", latestUserMessageSummary: "写一份苹果的简介", runtimeStatus: "COMPLETED" },
-    { id: "requirement-2", explorerThreadId: "explorer-1", projectId: "project-1", ordinal: 2, title: "Plan 2 / 待探索", titleSource: "AUTO", titleStatus: "PLACEHOLDER", latestUserMessageSummary: "写一份香蕉的简介", runtimeStatus: "QUEUED" },
-  ] as unknown as ExplorerPlan[];
-  const app = createApp(defineComponent({
-    setup() {
-      const activePanel = ref(panel);
-      const archivedVisible = ref(showArchived);
-      return () => h(ThreadRail, {
-        panel: activePanel.value,
-        thread,
-        project,
-        projects,
-        explorers,
-        showArchived: archivedVisible.value,
-        explorerLoading,
-        explorerError,
-        creatingExplorer,
-        projectActionId,
-        planCenterActive,
-        planCenterCount,
-        requirements,
-        activeExplorerPlanId: "requirement-1",
-        explorerPaused: false,
-        projectExecutionActive,
-        onCreateExplorer: () => { createExplorerCount += 1; },
-        onCreateProject: () => { createProjectCount += 1; },
-        onSelectPanel: (value: "projects" | "explorers") => { selectedPanel = value; activePanel.value = value; },
-        onSelectPlanCenter: () => { selectedPlanCenter = true; },
-        onSelectProject: (projectId: string) => { selectedProjectId = projectId; },
-        onSelectExplorer: (explorerId: string) => { selectedExplorerId = explorerId; },
-        onSelectProjectExecution: () => { selectedProjectExecution = true; },
-        onSelectExplorerPlan: (explorerPlanId: string) => { selectedExplorerPlanId = explorerPlanId; },
-        onRenameExplorerPlan: (explorerPlanId: string) => { renamedExplorerPlanId = explorerPlanId; },
-        onThreadAction: (command: string) => { threadAction = command; },
-        onToggleShowArchived: (value: boolean) => { archivedVisible.value = value; },
-        onArchiveExplorer: (explorerId: string) => { archivedExplorerId = explorerId; },
-        onOpenProject: (projectId: string) => { openedProjectIds.push(projectId); },
-        onOpenProjectSettings: (projectId: string) => { settingsProjectIds.push(projectId); },
-        onArchiveProject: (projectId: string) => { archivedProjectIds.push(projectId); },
-      });
+    {
+      id: "requirement-1",
+      explorerThreadId: "explorer-1",
+      projectId: "project-1",
+      ordinal: 1,
+      title: "Plan 1 / 待探索",
+      titleSource: "AUTO",
+      titleStatus: "PLACEHOLDER",
+      latestUserMessageSummary: "写一份苹果的简介",
+      runtimeStatus: "COMPLETED",
     },
-  }));
+    {
+      id: "requirement-2",
+      explorerThreadId: "explorer-1",
+      projectId: "project-1",
+      ordinal: 2,
+      title: "Plan 2 / 待探索",
+      titleSource: "AUTO",
+      titleStatus: "PLACEHOLDER",
+      latestUserMessageSummary: "写一份香蕉的简介",
+      runtimeStatus: "QUEUED",
+    },
+  ] as unknown as ExplorerPlan[];
+  const app = createApp(
+    defineComponent({
+      setup() {
+        const activePanel = ref(panel);
+        const archivedVisible = ref(showArchived);
+        return () =>
+          h(ThreadRail, {
+            panel: activePanel.value,
+            thread,
+            project,
+            projects,
+            explorers,
+            showArchived: archivedVisible.value,
+            explorerLoading,
+            explorerError,
+            creatingExplorer,
+            projectActionId,
+            planCenterActive,
+            planCenterCount,
+            requirements,
+            activeExplorerPlanId: "requirement-1",
+            explorerPaused: false,
+            projectExecutionActive,
+            onCreateExplorer: () => {
+              createExplorerCount += 1;
+            },
+            onCreateProject: () => {
+              createProjectCount += 1;
+            },
+            onSelectPanel: (value: "projects" | "explorers") => {
+              selectedPanel = value;
+              activePanel.value = value;
+            },
+            onSelectPlanCenter: () => {
+              selectedPlanCenter = true;
+            },
+            onSelectProject: (projectId: string) => {
+              selectedProjectId = projectId;
+            },
+            onSelectExplorer: (explorerId: string) => {
+              selectedExplorerId = explorerId;
+            },
+            onSelectProjectExecution: () => {
+              selectedProjectExecution = true;
+            },
+            onSelectExplorerPlan: (explorerPlanId: string) => {
+              selectedExplorerPlanId = explorerPlanId;
+            },
+            onRenameExplorerPlan: (explorerPlanId: string) => {
+              renamedExplorerPlanId = explorerPlanId;
+            },
+            onThreadAction: (command: string) => {
+              threadAction = command;
+            },
+            onToggleShowArchived: (value: boolean) => {
+              archivedVisible.value = value;
+            },
+            onArchiveExplorer: (explorerId: string) => {
+              archivedExplorerId = explorerId;
+            },
+            onOpenProject: (projectId: string) => {
+              openedProjectIds.push(projectId);
+            },
+            onOpenProjectSettings: (projectId: string) => {
+              settingsProjectIds.push(projectId);
+            },
+            onArchiveProject: (projectId: string) => {
+              archivedProjectIds.push(projectId);
+            },
+          });
+      },
+    }),
+  );
   app.component("el-tree", ElTree);
   app.component("el-button", ElButton);
   app.component("el-dropdown", ElDropdown);
@@ -181,15 +291,21 @@ describe("ThreadRail left workspace navigation", () => {
   });
 
   it("uses compact styling for the project context card", () => {
-    expect(styles).toContain(".project-context-title-row { display: flex; min-width: 0; align-items: center; width: 100%;");
-    expect(styles).toContain(".project-context-name { display: block; min-width: 0; flex: 1 1 auto; margin-top: 0; overflow: hidden;");
+    // **CSS 的换行与缩进不是这条断言的判据**：Prettier 会把一条规则从"一行写完"重排成"一行一声明"，
+    // 而规则本身一个字都没变。断言的是**声明序列**，所以两边都先把连续空白压成单个空格再比——
+    // 这样它测的是样式，不是排版。
+    const flat = (text: string) => text.replace(/\s+/g, " ");
+    expect(flat(styles)).toContain(flat(".project-context-title-row { display: flex; min-width: 0; align-items: center; width: 100%;"));
+    expect(flat(styles)).toContain(
+      flat(".project-context-name { display: block; min-width: 0; flex: 1 1 auto; margin-top: 0; overflow: hidden;"),
+    );
     expect(styles).not.toContain(".project-context-path");
-    expect(styles).toContain(".project-context-summary { display: flex; min-width: 0; align-items: center; margin-top: 0;");
-    expect(styles).toContain(".project-context-card { display: flex; min-width: 0; align-items: center; gap: 8px;");
+    expect(flat(styles)).toContain(flat(".project-context-summary { display: flex; min-width: 0; align-items: center; margin-top: 0;"));
+    expect(flat(styles)).toContain(flat(".project-context-card { display: flex; min-width: 0; align-items: center; gap: 8px;"));
     // 状态标签改用 `el-tag`（尺寸由组件决定），这条手写规则随之外迁——与 `project-context-path` 同样是"不该再有"的断言。
     expect(styles).not.toContain(".project-context-status");
-    expect(styles).toContain(".left-panel-header { flex: 0 0 auto; min-width: 0; padding: 0 5px 8px;");
-    expect(styles).toContain(".left-panel-scroll { min-height: 0; flex: 1 1 auto; overflow-y: auto; padding: 8px 1px 2px;");
+    expect(flat(styles)).toContain(flat(".left-panel-header { flex: 0 0 auto; min-width: 0; padding: 0 5px 8px;"));
+    expect(flat(styles)).toContain(flat(".left-panel-scroll { min-height: 0; flex: 1 1 auto; overflow-y: auto; padding: 8px 1px 2px;"));
   });
 
   it("emits a selected inline project and closes the switcher", async () => {
@@ -294,16 +410,20 @@ describe("ThreadRail left workspace navigation", () => {
     const explorerRows = [...mounted.host.querySelectorAll<HTMLButtonElement>("button[data-explorer-id]")];
 
     expect(mounted.host.querySelector(".thread-identity")).toBeNull();
-    expect(mounted.host.querySelector("[aria-label=\"Open Explorer history\"]")).toBeNull();
+    expect(mounted.host.querySelector('[aria-label="Open Explorer history"]')).toBeNull();
     expect(explorerRows).toHaveLength(2);
-    expect(explorerRows.map((row) => row.textContent)).toEqual(expect.arrayContaining([expect.stringContaining("Current exploration"), expect.stringContaining("Second exploration")]));
+    expect(explorerRows.map((row) => row.textContent)).toEqual(
+      expect.arrayContaining([expect.stringContaining("Current exploration"), expect.stringContaining("Second exploration")]),
+    );
     expect(currentThread?.querySelector(".explorer-list-item .left-list-icon")).toBeNull();
     expect(currentThread?.querySelector(".explorer-list-item small")).toBeNull();
     expect(currentThread?.querySelector(".explorer-list-item")?.textContent ?? "").not.toContain("messages");
     expect(currentThread?.querySelector(".explorer-list-item")?.textContent ?? "").not.toContain("explorer-1");
     expect(currentThread?.classList.contains("active")).toBe(true);
     expect(currentThread?.getAttribute("aria-current")).toBe("page");
-    expect(mounted.host.querySelector<HTMLButtonElement>('button[data-explorer-id="explorer-2"]')?.classList.contains("active")).toBe(false);
+    expect(mounted.host.querySelector<HTMLButtonElement>('button[data-explorer-id="explorer-2"]')?.classList.contains("active")).toBe(
+      false,
+    );
 
     mounted.app.unmount();
     mounted.host.remove();
@@ -360,8 +480,26 @@ describe("ThreadRail left workspace navigation", () => {
     const todayAt = (hour: number) => new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, 5).toISOString();
     const yesterdayAt = (hour: number) => new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, hour, 5).toISOString();
     const mounted = mountRail("explorers", false, null, false, false, false, null, [
-      { id: "explorer-today", projectId: "project-1", title: "今天开的", state: "ACTIVE", contextMode: "FRESH", messageCount: 1, createdAt: todayAt(9), lastActivityAt: todayAt(9) },
-      { id: "explorer-yesterday", projectId: "project-1", title: "昨天开的", state: "COMPLETED", contextMode: "FRESH", messageCount: 2, createdAt: yesterdayAt(21), lastActivityAt: yesterdayAt(21) },
+      {
+        id: "explorer-today",
+        projectId: "project-1",
+        title: "今天开的",
+        state: "ACTIVE",
+        contextMode: "FRESH",
+        messageCount: 1,
+        createdAt: todayAt(9),
+        lastActivityAt: todayAt(9),
+      },
+      {
+        id: "explorer-yesterday",
+        projectId: "project-1",
+        title: "昨天开的",
+        state: "COMPLETED",
+        contextMode: "FRESH",
+        messageCount: 2,
+        createdAt: yesterdayAt(21),
+        lastActivityAt: yesterdayAt(21),
+      },
     ] as unknown as ExplorerThread[]);
 
     // 分组按**创建日**：线程标题本身就是创建时刻，按活动日分组会与它显示的名字自相矛盾。
@@ -400,9 +538,13 @@ describe("ThreadRail left workspace navigation", () => {
 
   it("disables archiving the current Explorer and emits row archive actions", async () => {
     const mounted = mountRail("explorers", false, null, true, true);
-    const currentArchive = mounted.host.querySelector<HTMLButtonElement>('[data-explorer-id="explorer-1"] [data-explorer-action="archive"]');
+    const currentArchive = mounted.host.querySelector<HTMLButtonElement>(
+      '[data-explorer-id="explorer-1"] [data-explorer-action="archive"]',
+    );
     const otherArchive = mounted.host.querySelector<HTMLButtonElement>('[data-explorer-id="explorer-2"] [data-explorer-action="archive"]');
-    const archivedActivate = mounted.host.querySelector<HTMLButtonElement>('[data-explorer-id="explorer-3"] [data-explorer-action="activate"]');
+    const archivedActivate = mounted.host.querySelector<HTMLButtonElement>(
+      '[data-explorer-id="explorer-3"] [data-explorer-action="activate"]',
+    );
 
     expect(currentArchive?.disabled).toBe(true);
     expect(currentArchive?.getAttribute("aria-label")).toContain("当前线程");

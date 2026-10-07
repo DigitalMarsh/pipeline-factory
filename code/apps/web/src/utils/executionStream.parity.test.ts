@@ -13,7 +13,13 @@ import { legacyActivityKind, legacyActivityOutcome, projectExecutionJournal, typ
 /** 有代表性的老事件载荷（本次改动之前写入的 journal 没有 activityKind / outcome）。 */
 const SAMPLES: Array<{ name: string; itemType: string; phase: "started" | "completed"; status?: string; reason?: string }> = [
   { name: "codex 命令成功", itemType: "commandExecution", phase: "completed", status: "completed" },
-  { name: "codex 命令失败", itemType: "commandExecution", phase: "completed", status: "failed", reason: "Provider command exited with code 1" },
+  {
+    name: "codex 命令失败",
+    itemType: "commandExecution",
+    phase: "completed",
+    status: "failed",
+    reason: "Provider command exited with code 1",
+  },
   { name: "codex 命令进行中", itemType: "commandExecution", phase: "started" },
   { name: "codex 文件变更", itemType: "fileChange", phase: "completed", status: "completed" },
   { name: "codex 推理", itemType: "reasoning", phase: "completed" },
@@ -25,16 +31,30 @@ const SAMPLES: Array<{ name: string; itemType: string; phase: "started" | "compl
 
 describe("web 的中立词表镜像与领域实现一致", () => {
   it.each(SAMPLES)("$name", (sample) => {
-    const domain = classifyCodexActivity({ itemType: sample.itemType, phase: sample.phase, ...(sample.status === undefined ? {} : { status: sample.status }), ...(sample.reason === undefined ? {} : { error: sample.reason }) });
+    const domain = classifyCodexActivity({
+      itemType: sample.itemType,
+      phase: sample.phase,
+      ...(sample.status === undefined ? {} : { status: sample.status }),
+      ...(sample.reason === undefined ? {} : { error: sample.reason }),
+    });
     const kind = legacyActivityKind(sample.itemType);
-    const outcome = legacyActivityOutcome({ kind, phase: sample.phase, ...(sample.status === undefined ? {} : { status: sample.status }), ...(sample.reason === undefined ? {} : { reason: sample.reason }) });
+    const outcome = legacyActivityOutcome({
+      kind,
+      phase: sample.phase,
+      ...(sample.status === undefined ? {} : { status: sample.status }),
+      ...(sample.reason === undefined ? {} : { reason: sample.reason }),
+    });
 
     expect({ activityKind: kind, outcome }).toEqual(domain);
   });
 
   it("镜像里的成败词表与领域实现同源", () => {
-    expect(activityOutcome({ kind: "command", phase: "completed", status: "completed" })).toBe(legacyActivityOutcome({ kind: "command", phase: "completed", status: "completed" }));
-    expect(activityOutcome({ kind: "command", phase: "completed", status: "succeeded" })).toBe(legacyActivityOutcome({ kind: "command", phase: "completed", status: "succeeded" }));
+    expect(activityOutcome({ kind: "command", phase: "completed", status: "completed" })).toBe(
+      legacyActivityOutcome({ kind: "command", phase: "completed", status: "completed" }),
+    );
+    expect(activityOutcome({ kind: "command", phase: "completed", status: "succeeded" })).toBe(
+      legacyActivityOutcome({ kind: "command", phase: "completed", status: "succeeded" }),
+    );
     expect(activityOutcome({ kind: "command", phase: "completed" })).toBe(legacyActivityOutcome({ kind: "command", phase: "completed" }));
   });
 });
@@ -45,9 +65,22 @@ describe("Provider 活动在页面上的成败呈现", () => {
   }
 
   it("**成功的命令显示为已完成**（回归：曾经全库 0 条成功，全被显示成状态未知）", () => {
-    const items = projectExecutionJournal(journal([
-      { sequence: 1, type: "PROVIDER_ACTIVITY", payload: { phase: "completed", itemId: "exec-1", providerItemId: "exec-1", itemType: "commandExecution", activityKind: "command", outcome: "succeeded" } },
-    ]));
+    const items = projectExecutionJournal(
+      journal([
+        {
+          sequence: 1,
+          type: "PROVIDER_ACTIVITY",
+          payload: {
+            phase: "completed",
+            itemId: "exec-1",
+            providerItemId: "exec-1",
+            itemType: "commandExecution",
+            activityKind: "command",
+            outcome: "succeeded",
+          },
+        },
+      ]),
+    );
 
     expect(items).toHaveLength(1);
     expect(items[0]?.status).toBe("COMPLETED");
@@ -57,18 +90,43 @@ describe("Provider 活动在页面上的成败呈现", () => {
   });
 
   it("老事件也走同一张词表：completed 判为成功，不再落到状态未知", () => {
-    const items = projectExecutionJournal(journal([
-      { sequence: 1, type: "PROVIDER_ACTIVITY", payload: { phase: "completed", itemId: "exec-1", providerItemId: "exec-1", itemType: "commandExecution", providerStatus: "completed" } },
-    ]));
+    const items = projectExecutionJournal(
+      journal([
+        {
+          sequence: 1,
+          type: "PROVIDER_ACTIVITY",
+          payload: {
+            phase: "completed",
+            itemId: "exec-1",
+            providerItemId: "exec-1",
+            itemType: "commandExecution",
+            providerStatus: "completed",
+          },
+        },
+      ]),
+    );
 
     expect(items[0]?.status).toBe("COMPLETED");
     expect(items[0]?.outcome).toBe("succeeded");
   });
 
   it("推理流不挂状态标签（not-applicable → INFO），也不再被标成未记录", () => {
-    const items = projectExecutionJournal(journal([
-      { sequence: 1, type: "PROVIDER_ACTIVITY", payload: { phase: "completed", itemId: "rs-1", providerItemId: "rs-1", itemType: "reasoning", activityKind: "reasoning", outcome: "not-applicable" } },
-    ]));
+    const items = projectExecutionJournal(
+      journal([
+        {
+          sequence: 1,
+          type: "PROVIDER_ACTIVITY",
+          payload: {
+            phase: "completed",
+            itemId: "rs-1",
+            providerItemId: "rs-1",
+            itemType: "reasoning",
+            activityKind: "reasoning",
+            outcome: "not-applicable",
+          },
+        },
+      ]),
+    );
 
     expect(items[0]?.status).toBe("INFO");
     expect(items[0]?.outcome).toBe("not-applicable");
@@ -76,10 +134,35 @@ describe("Provider 活动在页面上的成败呈现", () => {
   });
 
   it("类别标签来自中立词表，两个 Provider 的同一种活动给出同一个标题前缀", () => {
-    const items = projectExecutionJournal(journal([
-      { sequence: 1, type: "PROVIDER_ACTIVITY", payload: { phase: "completed", itemId: "exec-1", providerItemId: "exec-1", itemType: "commandExecution", activityKind: "command", outcome: "succeeded" } },
-      { sequence: 2, type: "PROVIDER_ACTIVITY", payload: { phase: "completed", itemId: "tool-1", providerItemId: "tool-1", itemType: "tool_result", activityKind: "command", outcome: "succeeded", toolName: "Bash" } },
-    ]));
+    const items = projectExecutionJournal(
+      journal([
+        {
+          sequence: 1,
+          type: "PROVIDER_ACTIVITY",
+          payload: {
+            phase: "completed",
+            itemId: "exec-1",
+            providerItemId: "exec-1",
+            itemType: "commandExecution",
+            activityKind: "command",
+            outcome: "succeeded",
+          },
+        },
+        {
+          sequence: 2,
+          type: "PROVIDER_ACTIVITY",
+          payload: {
+            phase: "completed",
+            itemId: "tool-1",
+            providerItemId: "tool-1",
+            itemType: "tool_result",
+            activityKind: "command",
+            outcome: "succeeded",
+            toolName: "Bash",
+          },
+        },
+      ]),
+    );
 
     expect(items[0]?.title).toBe("命令");
     expect(items[1]?.title).toBe("命令 · Bash");

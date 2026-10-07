@@ -46,7 +46,9 @@ export async function inspectGitRepository(inputPath: string): Promise<{ repoRoo
       const result = await execFileAsync("git", ["rev-parse", "--abbrev-ref", "HEAD"], { cwd: gitRoot });
       const branch = String(result.stdout).trim();
       if (branch && branch !== "HEAD") defaultBranch = branch;
-    } catch { /* Detached or unavailable branch metadata keeps the safe default. */ }
+    } catch {
+      /* Detached or unavailable branch metadata keeps the safe default. */
+    }
   }
   return { repoRoot: gitRoot, defaultBranch };
 }
@@ -65,5 +67,7 @@ export function detectDefaultBranch(repoRoot: string): string {
   try {
     const value = execFileSync("git", ["symbolic-ref", "--short", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).trim();
     return value || "main";
-  } catch { return "main"; }
+  } catch {
+    return "main";
+  }
 }

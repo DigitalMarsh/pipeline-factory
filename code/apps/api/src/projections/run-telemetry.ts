@@ -30,7 +30,10 @@ export type RunExecutorConfig = { model: string | null; backend: string | null; 
  * 这次 Run 的 executor 配置：**Revision 快照优先**（Plan Confirm 时冻结、执行真正用的那份），
  * 没有快照（老数据）才回退当前项目设置。两者都没有时返回 null —— 不编造模型名。
  */
-export function resolveRunExecutorConfig(store: PipelineStore, run: { planId: string; planRevision: number; projectId?: string | undefined }): RunExecutorConfig | null {
+export function resolveRunExecutorConfig(
+  store: PipelineStore,
+  run: { planId: string; planRevision: number; projectId?: string | undefined },
+): RunExecutorConfig | null {
   const snapshot = store.getRevision(run.planId, run.planRevision)?.projectConfigSnapshot?.settings.models.executor;
   const current = run.projectId ? store.getProject(run.projectId)?.settings.models.executor : undefined;
   const executor = snapshot ?? current;
@@ -39,13 +42,18 @@ export function resolveRunExecutorConfig(store: PipelineStore, run: { planId: st
 }
 
 /** 为没有 telemetry_json 的历史 Run 提供只读投影；不会回写旧数据或估算 token。 */
-export function projectRunThreadTelemetry(store: PipelineStore, run: { id: string; planId: string; planRevision: number; projectId?: string | undefined }, thread: ExecutionThread): ExecutionThread {
+export function projectRunThreadTelemetry(
+  store: PipelineStore,
+  run: { id: string; planId: string; planRevision: number; projectId?: string | undefined },
+  thread: ExecutionThread,
+): ExecutionThread {
   const loop = store.listAgentLoops(run.id).find((item) => item.role === "executor");
   const executorConfig = resolveRunExecutorConfig(store, run);
   const existing = thread.telemetry;
   const startedAt = existing?.startedAt ?? loop?.startedAt ?? null;
   const completedAt = existing?.completedAt ?? loop?.completedAt ?? null;
-  const durationMs = existing?.durationMs ?? (startedAt && completedAt ? Math.max(0, Date.parse(completedAt) - Date.parse(startedAt)) : null);
+  const durationMs =
+    existing?.durationMs ?? (startedAt && completedAt ? Math.max(0, Date.parse(completedAt) - Date.parse(startedAt)) : null);
   const telemetry: ExecutionTelemetry = {
     model: existing?.model ?? executorConfig?.model ?? null,
     reasoningEffort: existing?.reasoningEffort ?? executorConfig?.reasoningEffort ?? null,

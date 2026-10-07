@@ -62,7 +62,12 @@ describe("RepositoryContextCache", () => {
 
     // 改了设置就是另一个配置版本：缓存键含 configVersion/configHash，真实系统里这两样必然一起变
     // （否则这个缓存就会把旧摘要发给模型）。这里照实写，不靠"换个临时目录碰巧换 key"。
-    const reviewOnly = { ...repositoryProject(), configVersion: 2, configHash: "config-b", settings: { defaultArtifactMode: "CONVERSATION" } } as unknown as Project;
+    const reviewOnly = {
+      ...repositoryProject(),
+      configVersion: 2,
+      configHash: "config-b",
+      settings: { defaultArtifactMode: "CONVERSATION" },
+    } as unknown as Project;
     expect(cache.get(reviewOnly).summary).toContain("Plan artifact mode: CONVERSATION");
   });
 

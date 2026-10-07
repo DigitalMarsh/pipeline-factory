@@ -7,24 +7,49 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { InMemoryPipelineStore, LifecycleHookRunner, LocalGitWorktreeAdapter, PlanService, ProjectService, Scheduler, type RunBranchNameGenerator } from "./index.js";
+import {
+  InMemoryPipelineStore,
+  LifecycleHookRunner,
+  LocalGitWorktreeAdapter,
+  PlanService,
+  ProjectService,
+  Scheduler,
+  type RunBranchNameGenerator,
+} from "./index.js";
 import { planContractFixture } from "./plan/plan-fixture.js";
 
 describe("Scheduler and ExecutionThread", () => {
   it("fails before creating a worktree when frozen verification commands are not registered", async () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);
-    projects.create({ id: "project-preflight", name: "Preflight", repoRoot: "/repo/preflight", defaultBranch: "main", worktreeRoot: "/tmp/preflight", settings: { commands: [{ commandId: "project.test", category: "verification", enabled: true, argv: ["true"] }] } });
+    projects.create({
+      id: "project-preflight",
+      name: "Preflight",
+      repoRoot: "/repo/preflight",
+      defaultBranch: "main",
+      worktreeRoot: "/tmp/preflight",
+      settings: { commands: [{ commandId: "project.test", category: "verification", enabled: true, argv: ["true"] }] },
+    });
     const plans = new PlanService(store, projects);
-    const plan = plans.createCandidatePlan({ projectId: "project-preflight", sourceExplorerThreadId: "thread-preflight", title: "Preflight",
-      resolvedContract: planContractFixture({ store, projectId: "project-preflight", title: "Preflight" }) });
+    const plan = plans.createCandidatePlan({
+      projectId: "project-preflight",
+      sourceExplorerThreadId: "thread-preflight",
+      title: "Preflight",
+      resolvedContract: planContractFixture({ store, projectId: "project-preflight", title: "Preflight" }),
+    });
     plans.confirm(plan.id, "user-1");
     plans.enqueue(plan.id);
     plans.dispatch(plan.id);
     let created = false;
     const scheduler = new Scheduler({
       store,
-      workspace: { create: async () => { created = true; return { path: "/tmp/preflight/run", branch: "factory/run", baseCommit: "abc" }; }, remove: async () => undefined },
+      workspace: {
+        create: async () => {
+          created = true;
+          return { path: "/tmp/preflight/run", branch: "factory/run", baseCommit: "abc" };
+        },
+        remove: async () => undefined,
+      },
       hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
     });
 
@@ -34,8 +59,12 @@ describe("Scheduler and ExecutionThread", () => {
   it("creates a run, workspace and thread in order, then records the start hook", async () => {
     const store = new InMemoryPipelineStore();
     const planService = new PlanService(store);
-    const plan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Run a plan",
-      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Run a plan" }) });
+    const plan = planService.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "thread-1",
+      title: "Run a plan",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Run a plan" }),
+    });
     planService.confirm(plan.id, "user-1");
     planService.enqueue(plan.id);
     planService.dispatch(plan.id);
@@ -43,16 +72,28 @@ describe("Scheduler and ExecutionThread", () => {
     const scheduler = new Scheduler({
       store,
       workspace: {
-        create: async () => { order.push("worktree.add"); return { path: "/tmp/run-1", branch: "factory/run-1", baseCommit: "abc" }; },
-        remove: async () => { order.push("worktree.remove"); },
+        create: async () => {
+          order.push("worktree.add");
+          return { path: "/tmp/run-1", branch: "factory/run-1", baseCommit: "abc" };
+        },
+        remove: async () => {
+          order.push("worktree.remove");
+        },
       },
-      hooks: new LifecycleHookRunner(async (command) => { order.push(command.commandId); return { exitCode: 0, stdout: "ok", stderr: "" }; }),
+      hooks: new LifecycleHookRunner(async (command) => {
+        order.push(command.commandId);
+        return { exitCode: 0, stdout: "ok", stderr: "" };
+      }),
     });
 
     const run = await scheduler.start(plan.id, { start: { commandId: "project.start" } });
     expect(run).toMatchObject({ planId: plan.id, planRevision: 1, status: "IN_PROGRESS", executionThreadId: expect.any(String) });
     expect(order).toEqual(["worktree.add", "project.start"]);
-    expect(scheduler.thread(run.executionThreadId).journal.map((entry) => entry.type)).toEqual(["RUN_CREATED", "HOOK_COMPLETED", "TASK_PROGRESS"]);
+    expect(scheduler.thread(run.executionThreadId).journal.map((entry) => entry.type)).toEqual([
+      "RUN_CREATED",
+      "HOOK_COMPLETED",
+      "TASK_PROGRESS",
+    ]);
     expect(scheduler.thread(run.executionThreadId).journal.at(-1)).toMatchObject({
       type: "TASK_PROGRESS",
       payload: { action: "legacy_plan_revision" },
@@ -62,8 +103,12 @@ describe("Scheduler and ExecutionThread", () => {
   it("uses the generated readable branch for the Run and Worktree", async () => {
     const store = new InMemoryPipelineStore();
     const planService = new PlanService(store);
-    const plan = planService.createCandidatePlan({ projectId: "project-branch-name", sourceExplorerThreadId: "thread-branch-name", title: "Vue introduction",
-      resolvedContract: planContractFixture({ store, projectId: "project-branch-name", title: "Vue introduction" }) });
+    const plan = planService.createCandidatePlan({
+      projectId: "project-branch-name",
+      sourceExplorerThreadId: "thread-branch-name",
+      title: "Vue introduction",
+      resolvedContract: planContractFixture({ store, projectId: "project-branch-name", title: "Vue introduction" }),
+    });
     planService.confirm(plan.id, "user-1");
     planService.enqueue(plan.id);
     planService.dispatch(plan.id);
@@ -92,15 +137,26 @@ describe("Scheduler and ExecutionThread", () => {
   it("falls back to change when branch summary generation fails", async () => {
     const store = new InMemoryPipelineStore();
     const planService = new PlanService(store);
-    const plan = planService.createCandidatePlan({ projectId: "project-branch-fallback", sourceExplorerThreadId: "thread-branch-fallback", title: "中文需求",
-      resolvedContract: planContractFixture({ store, projectId: "project-branch-fallback", title: "中文需求" }) });
+    const plan = planService.createCandidatePlan({
+      projectId: "project-branch-fallback",
+      sourceExplorerThreadId: "thread-branch-fallback",
+      title: "中文需求",
+      resolvedContract: planContractFixture({ store, projectId: "project-branch-fallback", title: "中文需求" }),
+    });
     planService.confirm(plan.id, "user-1");
     planService.enqueue(plan.id);
     planService.dispatch(plan.id);
     const scheduler = new Scheduler({
       store,
-      branchNameGenerator: { generate: async () => { throw new Error("model unavailable"); } },
-      workspace: { create: async (input) => ({ path: `/tmp/${input.runId}`, branch: input.branch, baseCommit: input.baseCommit }), remove: async () => undefined },
+      branchNameGenerator: {
+        generate: async () => {
+          throw new Error("model unavailable");
+        },
+      },
+      workspace: {
+        create: async (input) => ({ path: `/tmp/${input.runId}`, branch: input.branch, baseCommit: input.baseCommit }),
+        remove: async () => undefined,
+      },
       hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
     });
 
@@ -112,15 +168,22 @@ describe("Scheduler and ExecutionThread", () => {
   it("persists every bounded lifecycle hook attempt", async () => {
     const store = new InMemoryPipelineStore();
     const planService = new PlanService(store);
-    const plan = planService.createCandidatePlan({ projectId: "project-hooks", sourceExplorerThreadId: "thread-hooks", title: "Hook audit",
-      resolvedContract: planContractFixture({ store, projectId: "project-hooks", title: "Hook audit" }) });
+    const plan = planService.createCandidatePlan({
+      projectId: "project-hooks",
+      sourceExplorerThreadId: "thread-hooks",
+      title: "Hook audit",
+      resolvedContract: planContractFixture({ store, projectId: "project-hooks", title: "Hook audit" }),
+    });
     planService.confirm(plan.id, "user-1");
     planService.enqueue(plan.id);
     planService.dispatch(plan.id);
     let calls = 0;
     const scheduler = new Scheduler({
       store,
-      workspace: { create: async () => ({ path: "/tmp/hook-audit", branch: "factory/hook-audit", baseCommit: "abc" }), remove: async () => undefined },
+      workspace: {
+        create: async () => ({ path: "/tmp/hook-audit", branch: "factory/hook-audit", baseCommit: "abc" }),
+        remove: async () => undefined,
+      },
       hooks: new LifecycleHookRunner(async () => ({ exitCode: ++calls === 2 ? 0 : 1, stdout: `attempt-${calls}`, stderr: "" })),
     });
 
@@ -136,14 +199,21 @@ describe("Scheduler and ExecutionThread", () => {
   it("blocks a run after start failure and never opens an Executor turn", async () => {
     const store = new InMemoryPipelineStore();
     const planService = new PlanService(store);
-    const plan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Blocked run",
-      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Blocked run" }) });
+    const plan = planService.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "thread-1",
+      title: "Blocked run",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Blocked run" }),
+    });
     planService.confirm(plan.id, "user-1");
     planService.enqueue(plan.id);
     planService.dispatch(plan.id);
     const scheduler = new Scheduler({
       store,
-      workspace: { create: async () => ({ path: "/tmp/run-2", branch: "factory/run-2", baseCommit: "abc" }), remove: async () => undefined },
+      workspace: {
+        create: async () => ({ path: "/tmp/run-2", branch: "factory/run-2", baseCommit: "abc" }),
+        remove: async () => undefined,
+      },
       hooks: new LifecycleHookRunner(async () => ({ exitCode: 1, stdout: "", stderr: "environment failed" })),
     });
 
@@ -162,14 +232,21 @@ describe("Scheduler and ExecutionThread", () => {
   it("**非阻塞的启动钩子失败后照常开 Executor，失败只留在 journal 里**", async () => {
     const store = new InMemoryPipelineStore();
     const planService = new PlanService(store);
-    const plan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Soft hook",
-      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Soft hook" }) });
+    const plan = planService.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "thread-1",
+      title: "Soft hook",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Soft hook" }),
+    });
     planService.confirm(plan.id, "user-1");
     planService.enqueue(plan.id);
     planService.dispatch(plan.id);
     const scheduler = new Scheduler({
       store,
-      workspace: { create: async () => ({ path: "/tmp/run-2b", branch: "factory/run-2b", baseCommit: "abc" }), remove: async () => undefined },
+      workspace: {
+        create: async () => ({ path: "/tmp/run-2b", branch: "factory/run-2b", baseCommit: "abc" }),
+        remove: async () => undefined,
+      },
       hooks: new LifecycleHookRunner(async () => ({ exitCode: 1, stdout: "", stderr: "codegraph: command not found" })),
     });
 
@@ -178,7 +255,9 @@ describe("Scheduler and ExecutionThread", () => {
 
     expect(run.status).toBe("IN_PROGRESS");
     expect(journal.filter((entry) => entry.type === "HOOK_FAILED")).toEqual([
-      expect.objectContaining({ payload: expect.objectContaining({ hook: "start", blocking: false, stderr: "codegraph: command not found" }) }),
+      expect.objectContaining({
+        payload: expect.objectContaining({ hook: "start", blocking: false, stderr: "codegraph: command not found" }),
+      }),
     ]);
     expect(journal.some((entry) => entry.type === "HOOK_COMPLETED")).toBe(false);
     // 审计照旧：失败的那次尝试一条不少地进了 HookExecution。
@@ -188,16 +267,28 @@ describe("Scheduler and ExecutionThread", () => {
   it("removes the workspace before running cleanup and keeps cleanup failure as attention", async () => {
     const store = new InMemoryPipelineStore();
     const planService = new PlanService(store);
-    const plan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Cleanup run",
-      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Cleanup run" }) });
+    const plan = planService.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "thread-1",
+      title: "Cleanup run",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Cleanup run" }),
+    });
     planService.confirm(plan.id, "user-1");
     planService.enqueue(plan.id);
     planService.dispatch(plan.id);
     const order: string[] = [];
     const scheduler = new Scheduler({
       store,
-      workspace: { create: async () => ({ path: "/tmp/run-3", branch: "factory/run-3", baseCommit: "abc" }), remove: async () => { order.push("worktree.remove"); } },
-      hooks: new LifecycleHookRunner(async (command) => { order.push(command.commandId); return { exitCode: 1, stdout: "", stderr: "cleanup failed" }; }),
+      workspace: {
+        create: async () => ({ path: "/tmp/run-3", branch: "factory/run-3", baseCommit: "abc" }),
+        remove: async () => {
+          order.push("worktree.remove");
+        },
+      },
+      hooks: new LifecycleHookRunner(async (command) => {
+        order.push(command.commandId);
+        return { exitCode: 1, stdout: "", stderr: "cleanup failed" };
+      }),
     });
     const run = await scheduler.start(plan.id);
     await scheduler.finish(run.id, "completed", { cleanup: { commandId: "project.cleanup" } });
@@ -209,8 +300,12 @@ describe("Scheduler and ExecutionThread", () => {
   it("releases a merged Run's worktree once and keeps the branch", async () => {
     const store = new InMemoryPipelineStore();
     const planService = new PlanService(store);
-    const plan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Merged plan",
-      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Merged plan" }) });
+    const plan = planService.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "thread-1",
+      title: "Merged plan",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Merged plan" }),
+    });
     planService.confirm(plan.id, "user-1");
     planService.enqueue(plan.id);
     planService.dispatch(plan.id);
@@ -220,8 +315,16 @@ describe("Scheduler and ExecutionThread", () => {
     const cleanupRuns: string[] = [];
     const scheduler = new Scheduler({
       store,
-      workspace: { create: async () => ({ path: workspacePath, branch: "factory/run-merged", baseCommit: "abc" }), remove: async (workspace) => { removed.push(workspace.path); } },
-      hooks: new LifecycleHookRunner(async (command) => { cleanupRuns.push(command.commandId); return { exitCode: 0, stdout: "", stderr: "" }; }),
+      workspace: {
+        create: async () => ({ path: workspacePath, branch: "factory/run-merged", baseCommit: "abc" }),
+        remove: async (workspace) => {
+          removed.push(workspace.path);
+        },
+      },
+      hooks: new LifecycleHookRunner(async (command) => {
+        cleanupRuns.push(command.commandId);
+        return { exitCode: 0, stdout: "", stderr: "" };
+      }),
     });
     try {
       const run = await scheduler.start(plan.id);
@@ -246,7 +349,14 @@ describe("Scheduler and ExecutionThread", () => {
 
   it("validates the base commit before creating a real Git worktree", async () => {
     const commands: string[][] = [];
-    const adapter = new LocalGitWorktreeAdapter({ projectRoot: "/repo", worktreeRoot: "/worktrees", runGit: async (args) => { commands.push(args); return { exitCode: 0, stdout: "abc", stderr: "" }; } });
+    const adapter = new LocalGitWorktreeAdapter({
+      projectRoot: "/repo",
+      worktreeRoot: "/worktrees",
+      runGit: async (args) => {
+        commands.push(args);
+        return { exitCode: 0, stdout: "abc", stderr: "" };
+      },
+    });
     await adapter.create({ projectId: "project-1", runId: "run-1", branch: "factory/20260906-vue-intro", baseCommit: "abc" });
     await adapter.remove({ path: "/worktrees/20260906-vue-intro", branch: "factory/20260906-vue-intro", baseCommit: "abc" });
     // 第二条是"工作区必须干净"的检查（见 git/working-tree.ts）：基线恒等于 baseCommit 之后，
@@ -262,14 +372,21 @@ describe("Scheduler and ExecutionThread", () => {
   it("uses the persisted run status after verification changes it", async () => {
     const store = new InMemoryPipelineStore();
     const planService = new PlanService(store);
-    const plan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Fresh run state",
-      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Fresh run state" }) });
+    const plan = planService.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "thread-1",
+      title: "Fresh run state",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Fresh run state" }),
+    });
     planService.confirm(plan.id, "user-1");
     planService.enqueue(plan.id);
     planService.dispatch(plan.id);
     const scheduler = new Scheduler({
       store,
-      workspace: { create: async () => ({ path: "/tmp/run-4", branch: "factory/run-4", baseCommit: "abc" }), remove: async () => undefined },
+      workspace: {
+        create: async () => ({ path: "/tmp/run-4", branch: "factory/run-4", baseCommit: "abc" }),
+        remove: async () => undefined,
+      },
       hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
     });
 
@@ -283,14 +400,21 @@ describe("Scheduler and ExecutionThread", () => {
   it("synchronizes the Plan when a cancelled Run reaches finish twice", async () => {
     const store = new InMemoryPipelineStore();
     const planService = new PlanService(store);
-    const plan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Cancelled run race",
-      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Cancelled run race" }) });
+    const plan = planService.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "thread-1",
+      title: "Cancelled run race",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Cancelled run race" }),
+    });
     planService.confirm(plan.id, "user-1");
     planService.enqueue(plan.id);
     planService.dispatch(plan.id);
     const scheduler = new Scheduler({
       store,
-      workspace: { create: async () => ({ path: "/tmp/run-race", branch: "factory/run-race", baseCommit: "abc" }), remove: async () => undefined },
+      workspace: {
+        create: async () => ({ path: "/tmp/run-race", branch: "factory/run-race", baseCommit: "abc" }),
+        remove: async () => undefined,
+      },
       hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
     });
 
@@ -306,21 +430,32 @@ describe("Scheduler and ExecutionThread", () => {
   it.each(["READY_FOR_VERIFY", "MERGE_READY"] as const)("does not count %s as an execution slot", async (status) => {
     const store = new InMemoryPipelineStore();
     const planService = new PlanService(store);
-    const firstPlan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "First plan",
-      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "First plan" }) });
+    const firstPlan = planService.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "thread-1",
+      title: "First plan",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "First plan" }),
+    });
     planService.confirm(firstPlan.id, "user-1");
     planService.enqueue(firstPlan.id);
     planService.dispatch(firstPlan.id);
     const scheduler = new Scheduler({
       store,
-      workspace: { create: async ({ runId }) => ({ path: `/tmp/${runId}`, branch: `factory/${runId}`, baseCommit: "abc" }), remove: async () => undefined },
+      workspace: {
+        create: async ({ runId }) => ({ path: `/tmp/${runId}`, branch: `factory/${runId}`, baseCommit: "abc" }),
+        remove: async () => undefined,
+      },
       hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
     });
 
     const firstRun = await scheduler.start(firstPlan.id);
     store.saveRun({ ...firstRun, status });
-    const secondPlan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Second plan",
-      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Second plan" }) });
+    const secondPlan = planService.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "thread-1",
+      title: "Second plan",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Second plan" }),
+    });
     planService.confirm(secondPlan.id, "user-1");
     planService.enqueue(secondPlan.id);
     planService.dispatch(secondPlan.id);

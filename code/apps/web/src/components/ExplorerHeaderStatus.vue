@@ -60,12 +60,22 @@ const requirementSummary = computed(() => {
   if (pendingCount.value) return `${completedCount.value}/${props.requirements.length} 项已完成`;
   return `${completedCount.value}/${props.requirements.length} 项已满足`;
 });
-const requirementMeta = computed(() => invalidCount.value ? `问题 ${props.diagnostics.length}` : pendingCount.value ? `待补齐 ${pendingCount.value}` : "全部完成");
+const requirementMeta = computed(() =>
+  invalidCount.value ? `问题 ${props.diagnostics.length}` : pendingCount.value ? `待补齐 ${pendingCount.value}` : "全部完成",
+);
 // `PAUSED` 此前被硬编码成英文 `Paused` 覆盖掉传进来的标签——同一个状态两处两个词。现在一律走共用的状态文案。
-const loopSummary = computed(() => props.agentLoop ? formatAgentLoopState(props.agentLoop.state) : props.agentLoopLabel);
-const loopMeta = computed(() => props.agentLoop ? `回合 ${props.agentLoop.stepCount}/${props.agentLoop.maxSteps}` : "等待启动");
-const progressSummary = computed(() => props.progress.status === "READY" ? "方案已就绪" : props.progress.lastAssessedTurnId ? "探索中" : "未评估");
-const progressMeta = computed(() => props.progress.status === "READY" ? "完整方案已生成" : props.progress.missing.length ? `待确认 ${props.progress.missing.length} 项` : "等待首轮评估");
+const loopSummary = computed(() => (props.agentLoop ? formatAgentLoopState(props.agentLoop.state) : props.agentLoopLabel));
+const loopMeta = computed(() => (props.agentLoop ? `回合 ${props.agentLoop.stepCount}/${props.agentLoop.maxSteps}` : "等待启动"));
+const progressSummary = computed(() =>
+  props.progress.status === "READY" ? "方案已就绪" : props.progress.lastAssessedTurnId ? "探索中" : "未评估",
+);
+const progressMeta = computed(() =>
+  props.progress.status === "READY"
+    ? "完整方案已生成"
+    : props.progress.missing.length
+      ? `待确认 ${props.progress.missing.length} 项`
+      : "等待首轮评估",
+);
 /**
  * ④ 里**需要立刻浮出来**的那一条（配额、重试、权限被拒、告警，或任何失败）。
  * 常态收在下面那一节里，这几类要在卡片上看得见——"常态不打扰、异常必须显眼"。
@@ -90,9 +100,12 @@ function toggleCard(card: StatusCard): void {
   updateCardVisibility(card, activeCard.value !== card);
 }
 
-watch(() => props.threadId, () => {
-  activeCard.value = null;
-});
+watch(
+  () => props.threadId,
+  () => {
+    activeCard.value = null;
+  },
+);
 </script>
 
 <template>
@@ -170,7 +183,9 @@ watch(() => props.threadId, () => {
             <span :class="['explorer-header-status-card', `tone-${loopTone}`]">
               <span class="header-status-card-label">Provider 循环</span>
               <strong class="header-status-card-value">{{ loopSummary }}</strong>
-              <small class="header-status-card-meta">{{ runtimeAlert ? runtimeAlert.summary || runtimeFactTitle(runtimeAlert) : loopMeta }}</small>
+              <small class="header-status-card-meta">{{
+                runtimeAlert ? runtimeAlert.summary || runtimeFactTitle(runtimeAlert) : loopMeta
+              }}</small>
             </span>
           </button>
         </template>
@@ -189,16 +204,25 @@ watch(() => props.threadId, () => {
               <span class="eyebrow">Explorer 的 Provider 回合循环</span>
               <strong>{{ agentLoopLabel }}</strong>
             </div>
-            <span class="agent-loop-budget">Provider 回合 {{ agentLoop.stepCount }} / {{ agentLoop.maxSteps }} · 活动 {{ agentLoop.diagnostics?.providerActivityCount ?? 0 }}</span>
+            <span class="agent-loop-budget"
+              >Provider 回合 {{ agentLoop.stepCount }} / {{ agentLoop.maxSteps }} · 活动
+              {{ agentLoop.diagnostics?.providerActivityCount ?? 0 }}</span
+            >
             <div v-if="agentLoopGateLabel || agentLoopTerminalLabel || agentLoopCompletionLabel" class="agent-loop-status">
               <span v-if="agentLoopGateLabel" class="agent-loop-diagnostic">{{ agentLoopGateLabel }}</span>
               <span v-if="agentLoopTerminalLabel" class="agent-loop-terminal">{{ agentLoopTerminalLabel }}</span>
               <span v-if="agentLoopCompletionLabel" class="agent-loop-complete">{{ agentLoopCompletionLabel }}</span>
             </div>
-            <el-button v-if="agentLoop.state === 'RUNNING' || agentLoop.state === 'PAUSED'" class="agent-loop-action" size="small" plain @click="emit('toggle-pause')">
+            <el-button
+              v-if="agentLoop.state === 'RUNNING' || agentLoop.state === 'PAUSED'"
+              class="agent-loop-action"
+              size="small"
+              plain
+              @click="emit('toggle-pause')"
+            >
               <VideoPlay v-if="paused" :size="14" />
               <VideoPause v-else :size="14" />
-              {{ paused ? '恢复 Loop' : '暂停 Loop' }}
+              {{ paused ? "恢复 Loop" : "暂停 Loop" }}
             </el-button>
           </div>
           <div v-else class="explorer-header-status-empty" role="status">
@@ -207,8 +231,14 @@ watch(() => props.threadId, () => {
           </div>
 
           <div v-if="runtimeFacts.length" class="run-activity-block">
-            <div class="evidence-heading"><div><span class="eyebrow">Provider 运行事实</span><strong>Provider 运行事实</strong></div><span class="run-activity-count">{{ runtimeFacts.length }} 条</span></div>
-            <p class="execution-header-status-description">Provider 自己报的运行时状态：上下文压缩、自动重试、配额、钩子、后台任务、权限被拒。它们不是模型做的动作，所以不进时间线；需要你动手的那几条会同时浮到上面那张卡上。</p>
+            <div class="evidence-heading">
+              <div><span class="eyebrow">Provider 运行事实</span><strong>Provider 运行事实</strong></div>
+              <span class="run-activity-count">{{ runtimeFacts.length }} 条</span>
+            </div>
+            <p class="execution-header-status-description">
+              Provider
+              自己报的运行时状态：上下文压缩、自动重试、配额、钩子、后台任务、权限被拒。它们不是模型做的动作，所以不进时间线；需要你动手的那几条会同时浮到上面那张卡上。
+            </p>
             <ol class="run-activity-list">
               <li v-for="item in runtimeFacts" :key="item.id" :class="['run-activity-item', `tone-${item.status.toLowerCase()}`]">
                 <span class="run-activity-time">{{ new Date(item.occurredAt).toLocaleTimeString("zh-CN") }}</span>
@@ -256,11 +286,15 @@ watch(() => props.threadId, () => {
             <InfoFilled :size="15" aria-hidden="true" />
           </div>
 
-          <div v-if="progress.status === 'INCOMPLETE' && progress.lastAssessedTurnId" class="exploration-progress exploration-progress-incomplete" role="status">
+          <div
+            v-if="progress.status === 'INCOMPLETE' && progress.lastAssessedTurnId"
+            class="exploration-progress exploration-progress-incomplete"
+            role="status"
+          >
             <Refresh :size="15" />
             <div>
               <strong>方案仍在探索中</strong>
-              <span>本轮结束不代表设计完成，Explorer 正在继续确认：{{ progress.missing.join('、') }}</span>
+              <span>本轮结束不代表设计完成，Explorer 正在继续确认：{{ progress.missing.join("、") }}</span>
             </div>
           </div>
           <div v-else-if="progress.status === 'READY'" class="exploration-progress exploration-progress-ready" role="status">

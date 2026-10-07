@@ -17,22 +17,59 @@
  *      所以**修好之后两个来源本就一致**，这条优先级的翻转只会纠正旧记录、不会覆盖新事实。
  */
 import { describe, expect, it } from "vitest";
-import { InMemoryPipelineStore, PlanService, ProjectService, type ExecutionTelemetry, type PlanRevision , planContractFixture } from "@pipeline-factory/domain";
+import {
+  InMemoryPipelineStore,
+  PlanService,
+  ProjectService,
+  type ExecutionTelemetry,
+  type PlanRevision,
+  planContractFixture,
+} from "@pipeline-factory/domain";
 import { projectRunThreadTelemetry, resolveRunExecutorConfig } from "./run-telemetry.js";
 
 /** `frozenBackend: null` 表示冻结配置里**没写**后端——那一格就跟随全局，只能由指纹回答。 */
 function seed(store: InMemoryPipelineStore, telemetry: ExecutionTelemetry | null, frozenBackend: string | null = "claude-agent-sdk") {
   const projects = new ProjectService(store);
-  const project = projects.create({ id: "project-1", name: "Demo", repoRoot: "/repo/demo", defaultBranch: "main", worktreeRoot: "/tmp/demo-worktrees" });
+  const project = projects.create({
+    id: "project-1",
+    name: "Demo",
+    repoRoot: "/repo/demo",
+    defaultBranch: "main",
+    worktreeRoot: "/tmp/demo-worktrees",
+  });
   const plans = new PlanService(store, projects);
-  const candidate = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: "explorer-1", title: "Run telemetry", resolvedContract: planContractFixture({ store, projectId: project.id, title: "Run telemetry" }) });
+  const candidate = plans.createCandidatePlan({
+    projectId: project.id,
+    sourceExplorerThreadId: "explorer-1",
+    title: "Run telemetry",
+    resolvedContract: planContractFixture({ store, projectId: project.id, title: "Run telemetry" }),
+  });
   const snapshot = projects.snapshot(project.id);
   // 快照里的 executor 与"当前项目设置"**故意不同**：只有这样才测得出"快照优先"。
   const revision = {
-    planId: candidate.id, revision: 1, resolvedContract: candidate.resolvedContract, artifactHash: "sha256:test",
-    confirmedBy: "tester", confirmedAt: store.now(), sourceExplorerThreadId: "explorer-1",
-    projectConfigVersion: snapshot.configVersion, projectConfigHash: snapshot.configHash,
-    projectConfigSnapshot: { ...snapshot, settings: { ...snapshot.settings, models: { ...snapshot.settings.models, executor: { ...snapshot.settings.models.executor, model: "frozen-at-confirm", ...(frozenBackend ? { backend: frozenBackend } : {}) } } } },
+    planId: candidate.id,
+    revision: 1,
+    resolvedContract: candidate.resolvedContract,
+    artifactHash: "sha256:test",
+    confirmedBy: "tester",
+    confirmedAt: store.now(),
+    sourceExplorerThreadId: "explorer-1",
+    projectConfigVersion: snapshot.configVersion,
+    projectConfigHash: snapshot.configHash,
+    projectConfigSnapshot: {
+      ...snapshot,
+      settings: {
+        ...snapshot.settings,
+        models: {
+          ...snapshot.settings.models,
+          executor: {
+            ...snapshot.settings.models.executor,
+            model: "frozen-at-confirm",
+            ...(frozenBackend ? { backend: frozenBackend } : {}),
+          },
+        },
+      },
+    },
   } as unknown as PlanRevision;
   store.saveRevision(revision);
   const thread = store.saveExecutionThread({ id: "execution-thread-1", runId: "run-1", state: "ACTIVE", journal: [], telemetry });
@@ -42,10 +79,15 @@ function seed(store: InMemoryPipelineStore, telemetry: ExecutionTelemetry | null
 }
 
 const recorded: ExecutionTelemetry = {
-  model: "gpt-5.6-luna", reasoningEffort: "high", backend: "codex-app-server",
-  startedAt: "2026-10-01T02:52:14.765Z", completedAt: "2026-10-01T02:55:22.200Z", durationMs: 187435,
+  model: "gpt-5.6-luna",
+  reasoningEffort: "high",
+  backend: "codex-app-server",
+  startedAt: "2026-10-01T02:52:14.765Z",
+  completedAt: "2026-10-01T02:55:22.200Z",
+  durationMs: 187435,
   usage: { inputTokens: 191197, outputTokens: 2313, reasoningTokens: 738, totalTokens: 193510 },
-  usageSource: "provider", usageScope: "total",
+  usageSource: "provider",
+  usageScope: "total",
 };
 
 describe("projectRunThreadTelemetry", () => {
@@ -57,7 +99,13 @@ describe("projectRunThreadTelemetry", () => {
 
     // 这条就是那个真实缺陷的回归断言：漏搬 backend 时它会变成 undefined。
     // 注意 backend 的**取值**来自冻结配置而不是记录（见下面的用例与文件头维护提示 2）。
-    expect(projected).toMatchObject({ model: "gpt-5.6-luna", backend: "claude-agent-sdk", reasoningEffort: "high", durationMs: 187435, usageSource: "provider" });
+    expect(projected).toMatchObject({
+      model: "gpt-5.6-luna",
+      backend: "claude-agent-sdk",
+      reasoningEffort: "high",
+      durationMs: 187435,
+      usageSource: "provider",
+    });
     expect(projected?.usage?.inputTokens).toBe(191197);
   });
 
@@ -101,7 +149,21 @@ describe("projectRunThreadTelemetry", () => {
   it("still reports the run window from the executor loop when telemetry is empty", () => {
     const store = new InMemoryPipelineStore();
     const seeded = seed(store, null);
-    store.saveAgentLoop({ id: "loop-1", ownerType: "run", ownerId: "run-1", role: "executor", mode: "provider-controlled", state: "COMPLETED", stepCount: 3, maxSteps: 40, startedAt: "2026-10-01T02:52:14.765Z", completedAt: "2026-10-01T02:55:22.200Z", providerThreadId: null, providerTurnId: null, checkpointJson: null });
+    store.saveAgentLoop({
+      id: "loop-1",
+      ownerType: "run",
+      ownerId: "run-1",
+      role: "executor",
+      mode: "provider-controlled",
+      state: "COMPLETED",
+      stepCount: 3,
+      maxSteps: 40,
+      startedAt: "2026-10-01T02:52:14.765Z",
+      completedAt: "2026-10-01T02:55:22.200Z",
+      providerThreadId: null,
+      providerTurnId: null,
+      checkpointJson: null,
+    });
 
     const projected = projectRunThreadTelemetry(store, seeded.run, seeded.thread).telemetry;
 
@@ -115,7 +177,11 @@ describe("resolveRunExecutorConfig", () => {
     const store = new InMemoryPipelineStore();
     const seeded = seed(store, null);
 
-    expect(resolveRunExecutorConfig(store, seeded.run)).toEqual({ model: "frozen-at-confirm", backend: "claude-agent-sdk", reasoningEffort: null });
+    expect(resolveRunExecutorConfig(store, seeded.run)).toEqual({
+      model: "frozen-at-confirm",
+      backend: "claude-agent-sdk",
+      reasoningEffort: null,
+    });
   });
 
   it("returns null instead of inventing a model when neither source exists", () => {

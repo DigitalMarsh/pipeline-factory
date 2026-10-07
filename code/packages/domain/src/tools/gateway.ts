@@ -39,7 +39,14 @@ export type ToolGatewayOptions = {
 };
 
 const READ_ONLY_TOOLS = new Set<ToolName>(["read_file", "list_files", "git_status", "git_diff", "git_log", "search_text"]);
-const EXECUTOR_TOOLS = new Set<ToolName>([...READ_ONLY_TOOLS, "write_file", "apply_patch", "run_registered_command", "run_verification", "git_commit"]);
+const EXECUTOR_TOOLS = new Set<ToolName>([
+  ...READ_ONLY_TOOLS,
+  "write_file",
+  "apply_patch",
+  "run_registered_command",
+  "run_verification",
+  "git_commit",
+]);
 const PROTECTED_PATHS = new Set(["package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "tsconfig.json"]);
 
 /** 汇总 Builtin、MCP、Plugin 和 Computer Use 工具，并执行统一白名单检查。 */
@@ -68,24 +75,34 @@ export class ToolGateway {
       return result;
     }
     try {
-      const value = this.options.handler ? await this.options.handler(call, context) : await this.builtin.execute(call, { workspacePath: context?.workspacePath ?? this.workspaceRoot, ...(context ?? {}) });
+      const value = this.options.handler
+        ? await this.options.handler(call, context)
+        : await this.builtin.execute(call, { workspacePath: context?.workspacePath ?? this.workspaceRoot, ...(context ?? {}) });
       return this.save({ callId: call.callId, allowed: true, reason: null, result: value, audited: true });
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      if (isToolExecutionFailure(reason)) return this.save({ callId: call.callId, allowed: true, reason: null, result: { error: reason }, audited: true });
-      if (/outside the configured workspace boundary|Protected secrets|repository internals/i.test(reason)) return this.save({ callId: call.callId, allowed: false, status: "DENIED", reason, result: null, audited: true });
+      if (isToolExecutionFailure(reason))
+        return this.save({ callId: call.callId, allowed: true, reason: null, result: { error: reason }, audited: true });
+      if (/outside the configured workspace boundary|Protected secrets|repository internals/i.test(reason))
+        return this.save({ callId: call.callId, allowed: false, status: "DENIED", reason, result: null, audited: true });
       throw error;
     }
   }
 
   private validate(call: ToolCall): string | null {
     if (call.tool.startsWith("mcp:")) {
-      if (!this.mcpAllowedTools.has(call.tool)) return this.options.role === "explorer" ? "Explorer MCP tool is not explicitly allowed" : "MCP tool is not allowed by Executor policy";
+      if (!this.mcpAllowedTools.has(call.tool))
+        return this.options.role === "explorer"
+          ? "Explorer MCP tool is not explicitly allowed"
+          : "MCP tool is not allowed by Executor policy";
       if (!this.options.builtin?.mcpToolExecutor && !this.options.handler) return "MCP tool executor is not configured";
       return null;
     }
     if (call.tool.startsWith("plugin:")) {
-      if (!this.pluginAllowedTools.has(call.tool)) return this.options.role === "explorer" ? "Explorer plugin tool is not explicitly allowed" : "Plugin tool is not allowed by Executor policy";
+      if (!this.pluginAllowedTools.has(call.tool))
+        return this.options.role === "explorer"
+          ? "Explorer plugin tool is not explicitly allowed"
+          : "Plugin tool is not allowed by Executor policy";
       if (!this.options.builtin?.pluginToolExecutor && !this.options.handler) return "Plugin tool executor is not configured";
       return null;
     }
@@ -95,21 +112,28 @@ export class ToolGateway {
       return null;
     }
     const allowedTools = this.options.role === "explorer" ? READ_ONLY_TOOLS : EXECUTOR_TOOLS;
-    if (!allowedTools.has(call.tool)) return this.options.role === "explorer" ? "Explorer is read-only; this tool is disabled" : "Tool is not allowed by Executor policy";
+    if (!allowedTools.has(call.tool))
+      return this.options.role === "explorer" ? "Explorer is read-only; this tool is disabled" : "Tool is not allowed by Executor policy";
     if (["read_file", "write_file", "apply_patch"].includes(call.tool)) {
       const path = call.input.path;
-      if (call.tool !== "apply_patch" && (typeof path !== "string" || !this.isInsideWorkspace(path))) return "Path is outside the workspace boundary";
-      if (typeof path === "string" && this.isProtectedPath(path)) return "Protected secrets, project configuration and Git internals are not accessible";
+      if (call.tool !== "apply_patch" && (typeof path !== "string" || !this.isInsideWorkspace(path)))
+        return "Path is outside the workspace boundary";
+      if (typeof path === "string" && this.isProtectedPath(path))
+        return "Protected secrets, project configuration and Git internals are not accessible";
     }
     if (["list_files", "search_text", "git_diff"].includes(call.tool)) {
       const path = call.input.path;
-      if (path !== undefined && (typeof path !== "string" || !this.isInsideWorkspace(path))) return "Path is outside the workspace boundary";
-      if (typeof path === "string" && this.isProtectedPath(path)) return "Protected secrets, project configuration and Git internals are not accessible";
+      if (path !== undefined && (typeof path !== "string" || !this.isInsideWorkspace(path)))
+        return "Path is outside the workspace boundary";
+      if (typeof path === "string" && this.isProtectedPath(path))
+        return "Protected secrets, project configuration and Git internals are not accessible";
     }
     if (call.tool === "git_commit" && call.input.paths !== undefined) {
       const paths = call.input.paths;
-      if (!Array.isArray(paths) || paths.some((path) => typeof path !== "string" || !this.isInsideWorkspace(path))) return "Commit paths must stay inside the workspace boundary";
-      if (paths.some((path) => this.isProtectedPath(path as string))) return "Protected secrets, project configuration and Git internals are not accessible";
+      if (!Array.isArray(paths) || paths.some((path) => typeof path !== "string" || !this.isInsideWorkspace(path)))
+        return "Commit paths must stay inside the workspace boundary";
+      if (paths.some((path) => this.isProtectedPath(path as string)))
+        return "Protected secrets, project configuration and Git internals are not accessible";
     }
     if (["run_registered_command", "run_verification"].includes(call.tool)) {
       const commandId = call.input.commandId;
@@ -120,16 +144,28 @@ export class ToolGateway {
 
   private isInsideWorkspace(path: string): boolean {
     const target = resolve(this.workspaceRoot, path);
-    return target === this.workspaceRoot || target.startsWith(`${this.workspaceRoot}${sep}`) && (!isAbsolute(path) || target.startsWith(`${this.workspaceRoot}${sep}`));
+    return (
+      target === this.workspaceRoot ||
+      (target.startsWith(`${this.workspaceRoot}${sep}`) && (!isAbsolute(path) || target.startsWith(`${this.workspaceRoot}${sep}`)))
+    );
   }
 
   private isProtectedPath(path: string): boolean {
     const normalized = relative(this.workspaceRoot, resolve(this.workspaceRoot, path)).split(sep).join("/");
     const basename = normalized.split("/").at(-1) ?? normalized;
-    return normalized === ".git" || normalized.startsWith(".git/") || normalized.startsWith(".env") || PROTECTED_PATHS.has(normalized) || PROTECTED_PATHS.has(basename);
+    return (
+      normalized === ".git" ||
+      normalized.startsWith(".git/") ||
+      normalized.startsWith(".env") ||
+      PROTECTED_PATHS.has(normalized) ||
+      PROTECTED_PATHS.has(basename)
+    );
   }
 
-  private save(result: ToolCallResult): ToolCallResult { this.calls.set(result.callId, result); return result; }
+  private save(result: ToolCallResult): ToolCallResult {
+    this.calls.set(result.callId, result);
+    return result;
+  }
 }
 
 function isToolExecutionFailure(reason: string): boolean {

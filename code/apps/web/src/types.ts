@@ -3,7 +3,18 @@
  *
  * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
  */
-export type PlanStatus = "DRAFT" | "DISCARDED" | "READY" | "ENQUEUED" | "DISPATCHED" | "IN_PROGRESS" | "VERIFYING" | "MERGE_READY" | "MERGED" | "BLOCKED" | "NEEDS_PLAN_CHANGE";
+export type PlanStatus =
+  | "DRAFT"
+  | "DISCARDED"
+  | "READY"
+  | "ENQUEUED"
+  | "DISPATCHED"
+  | "IN_PROGRESS"
+  | "VERIFYING"
+  | "MERGE_READY"
+  | "MERGED"
+  | "BLOCKED"
+  | "NEEDS_PLAN_CHANGE";
 export type PlanLifecycleStatus = PlanStatus | "NEEDS_CONFIGURATION";
 export type PlanLifecycleEntry = {
   status: PlanLifecycleStatus;
@@ -16,7 +27,8 @@ export type PlanLifecycleEntry = {
 };
 export type ExecutionThreadSummary = { id: string; runId: string; state: string } | null;
 export type PlanDispatchStatus = "QUEUED" | "WAITING" | "DISPATCHING" | "RUNNING" | "VERIFYING" | "NEEDS_REVIEW" | "BLOCKED" | "COMPLETED";
-export type PlanDispatchWaitReason = "WAITING_DEPENDENCY" | "WAITING_CONFLICT" | "WAITING_PROJECT_CAPACITY" | "WAITING_GLOBAL_CAPACITY" | "NEEDS_CONFIGURATION";
+export type PlanDispatchWaitReason =
+  "WAITING_DEPENDENCY" | "WAITING_CONFLICT" | "WAITING_PROJECT_CAPACITY" | "WAITING_GLOBAL_CAPACITY" | "NEEDS_CONFIGURATION";
 export type PlanDispatchState = Readonly<{
   planId: string;
   revision?: number;
@@ -28,7 +40,23 @@ export type PlanDispatchState = Readonly<{
   attempt: number;
   updatedAt: string;
   lastError: string | null;
-  phase?: "VALIDATING" | "VALIDATION_FAILED" | "FROZEN" | "ENQUEUING" | "ENQUEUE_FAILED" | "ENQUEUED" | "DISPATCHING" | "DISPATCH_FAILED" | "DISPATCHED" | "STARTING_RUN" | "RUN_STARTED" | "WAITING" | "RUN_START_FAILED" | "NEEDS_REVIEW" | "ATTENTION" | "COMPLETED";
+  phase?:
+    | "VALIDATING"
+    | "VALIDATION_FAILED"
+    | "FROZEN"
+    | "ENQUEUING"
+    | "ENQUEUE_FAILED"
+    | "ENQUEUED"
+    | "DISPATCHING"
+    | "DISPATCH_FAILED"
+    | "DISPATCHED"
+    | "STARTING_RUN"
+    | "RUN_STARTED"
+    | "WAITING"
+    | "RUN_START_FAILED"
+    | "NEEDS_REVIEW"
+    | "ATTENTION"
+    | "COMPLETED";
   automatic?: boolean;
   confirmedBy?: string | null;
 }>;
@@ -51,7 +79,16 @@ export type ProjectSettings = {
     maxRepairAttempts: number;
   };
   /** 命令定义。`tags` 只对 verification 命令有意义：Plan 的 `verification.suites` 用它选验证子集。 */
-  commands: Array<{ commandId: string; category?: "verification" | "lifecycle" | "executor-tool" | "unclassified"; description?: string; enabled?: boolean; argv: string[]; environment?: Record<string, string>; timeoutMs?: number; tags?: string[] }>;
+  commands: Array<{
+    commandId: string;
+    category?: "verification" | "lifecycle" | "executor-tool" | "unclassified";
+    description?: string;
+    enabled?: boolean;
+    argv: string[];
+    environment?: Record<string, string>;
+    timeoutMs?: number;
+    tags?: string[];
+  }>;
   defaultVerificationCommandIds?: string[];
   /** 探索产出 Plan 时默认的产物模式；工厂把它注入探索提示词，模型据此不再逐次询问。缺省 REPOSITORY_FILE。 */
   defaultArtifactMode?: "CONVERSATION" | "REPOSITORY_FILE";
@@ -61,8 +98,26 @@ export type ProjectSettings = {
     cleanup?: { commandId: string; enabled?: boolean; timeoutMs?: number; maxAttempts?: number };
   };
   models: {
-    explorer: { model: string; backend?: string; mode?: string; loopMode?: string; temperature?: number; maxOutputTokens?: number; reasoningEffort?: string; developerInstructions?: string };
-    executor: { model: string; backend?: string; mode?: string; loopMode?: string; temperature?: number; maxOutputTokens?: number; reasoningEffort?: string; developerInstructions?: string };
+    explorer: {
+      model: string;
+      backend?: string;
+      mode?: string;
+      loopMode?: string;
+      temperature?: number;
+      maxOutputTokens?: number;
+      reasoningEffort?: string;
+      developerInstructions?: string;
+    };
+    executor: {
+      model: string;
+      backend?: string;
+      mode?: string;
+      loopMode?: string;
+      temperature?: number;
+      maxOutputTokens?: number;
+      reasoningEffort?: string;
+      developerInstructions?: string;
+    };
   };
   toolPolicy: { allowedMcpTools: string[]; allowedPluginTools: string[]; computerUseEnabled: boolean };
 };
@@ -96,7 +151,10 @@ export type ProjectSummary = {
   lastActivityAt: string | null;
 };
 
-export type ProjectCatalogSummary = Omit<ProjectSummary, "project" | "currentExplorerThread"> & { currentExplorerThread: string | null; currentExplorerTitle: string | null };
+export type ProjectCatalogSummary = Omit<ProjectSummary, "project" | "currentExplorerThread"> & {
+  currentExplorerThread: string | null;
+  currentExplorerTitle: string | null;
+};
 export type ProjectCatalogItem = Project & { summary: ProjectCatalogSummary };
 
 /** Explorer 工作区的前端投影；providerThreadId 仅用于诊断，不作为本地主键。 */
@@ -121,7 +179,12 @@ export type ExplorerThread = {
     status: "INCOMPLETE" | "READY";
     missing: string[];
     completed: string[];
-    diagnostics: Array<{ path: string; code: "REQUIRED" | "INVALID" | "FORBIDDEN" | "MODE_CONFLICT" | "DUPLICATE"; area: string; message: string }>;
+    diagnostics: Array<{
+      path: string;
+      code: "REQUIRED" | "INVALID" | "FORBIDDEN" | "MODE_CONFLICT" | "DUPLICATE";
+      area: string;
+      message: string;
+    }>;
     candidatePlanId: string | null;
     lastAssessedTurnId: string | null;
   };
@@ -155,7 +218,12 @@ export type ExplorerPlan = {
     status: "INCOMPLETE" | "READY";
     missing: string[];
     completed: string[];
-    diagnostics: Array<{ path: string; code: "REQUIRED" | "INVALID" | "FORBIDDEN" | "MODE_CONFLICT" | "DUPLICATE"; area: string; message: string }>;
+    diagnostics: Array<{
+      path: string;
+      code: "REQUIRED" | "INVALID" | "FORBIDDEN" | "MODE_CONFLICT" | "DUPLICATE";
+      area: string;
+      message: string;
+    }>;
     candidatePlanId: string | null;
     lastAssessedTurnId: string | null;
   };
@@ -336,7 +404,17 @@ export type ExplorerRealtimeEvent = {
   payload: Record<string, unknown>;
 };
 
-export type AgentLoopState = "CREATED" | "RUNNING" | "WAITING_FOR_INPUT" | "PAUSED" | "RECOVERING" | "BLOCKED" | "COMPLETED" | "FAILED" | "CANCELLED" | "NEEDS_RECONCILIATION";
+export type AgentLoopState =
+  | "CREATED"
+  | "RUNNING"
+  | "WAITING_FOR_INPUT"
+  | "PAUSED"
+  | "RECOVERING"
+  | "BLOCKED"
+  | "COMPLETED"
+  | "FAILED"
+  | "CANCELLED"
+  | "NEEDS_RECONCILIATION";
 
 export type AgentLoop = {
   id: string;
@@ -450,9 +528,57 @@ export type Plan = {
   mergeRequest?: MergeRequest | null;
 };
 
-export type PlanDetail = { plan: Plan; revision: { artifactHash: string; resolvedContract?: ResolvedPlanContract } | null; projectSnapshot: { repoRoot: string; configVersion: number; configHash: string } | null; dispatch: PlanDispatchState | null; mergeRequest: MergeRequest | null };
-export type PlanRevisionDraft = { draftId: string; planId: string; projectId: string; basedOnRevision: number; targetRevision: number; status: "EDITING" | "READY_TO_CONFIRM" | "CONFIRMED" | "DISCARDED" | "BASE_CHANGED"; title: string; resolvedContract?: ResolvedPlanContract; sourceExplorerThreadId: string; sourceTurnId: string | null; explorerPlanId?: string | undefined; providerThreadId: string | null; providerTurnId: string | null; providerItemId: string | null; baseBranch: string; baseCommit: string; createdAt: string; updatedAt: string; confirmedAt: string | null };
-export type ResolvedPlanContract = { schemaVersion: 2; artifact?: { mode: "CONVERSATION" | "REPOSITORY_FILE"; path?: string }; objective: { goal: string; context?: string[]; audience?: string[]; acceptanceCriteria: string[]; outOfScope: string[] }; design?: { technicalConstraints: string[]; dataSecurity: string[]; failureHandling: string[]; risks?: string[] }; conflicts?: string[]; repository: { projectId: string; name: string; repoRoot: string; baseBranch: string; baseCommit: string; configVersion: number; configHash: string }; scope: { includePaths: string[]; excludePaths: string[] }; tasks: PlanTask[]; dependencies: string[]; dependsOnPlanIds: string[]; execution: { executorModelRole: string; toolPolicy: string; maxRepairAttempts: number }; verification: { mode: "PROJECT_DEFAULT" | "NONE"; commandIds: string[] }; merge: { strategy: string; requireHumanMerge: true } };
+export type PlanDetail = {
+  plan: Plan;
+  revision: { artifactHash: string; resolvedContract?: ResolvedPlanContract } | null;
+  projectSnapshot: { repoRoot: string; configVersion: number; configHash: string } | null;
+  dispatch: PlanDispatchState | null;
+  mergeRequest: MergeRequest | null;
+};
+export type PlanRevisionDraft = {
+  draftId: string;
+  planId: string;
+  projectId: string;
+  basedOnRevision: number;
+  targetRevision: number;
+  status: "EDITING" | "READY_TO_CONFIRM" | "CONFIRMED" | "DISCARDED" | "BASE_CHANGED";
+  title: string;
+  resolvedContract?: ResolvedPlanContract;
+  sourceExplorerThreadId: string;
+  sourceTurnId: string | null;
+  explorerPlanId?: string | undefined;
+  providerThreadId: string | null;
+  providerTurnId: string | null;
+  providerItemId: string | null;
+  baseBranch: string;
+  baseCommit: string;
+  createdAt: string;
+  updatedAt: string;
+  confirmedAt: string | null;
+};
+export type ResolvedPlanContract = {
+  schemaVersion: 2;
+  artifact?: { mode: "CONVERSATION" | "REPOSITORY_FILE"; path?: string };
+  objective: { goal: string; context?: string[]; audience?: string[]; acceptanceCriteria: string[]; outOfScope: string[] };
+  design?: { technicalConstraints: string[]; dataSecurity: string[]; failureHandling: string[]; risks?: string[] };
+  conflicts?: string[];
+  repository: {
+    projectId: string;
+    name: string;
+    repoRoot: string;
+    baseBranch: string;
+    baseCommit: string;
+    configVersion: number;
+    configHash: string;
+  };
+  scope: { includePaths: string[]; excludePaths: string[] };
+  tasks: PlanTask[];
+  dependencies: string[];
+  dependsOnPlanIds: string[];
+  execution: { executorModelRole: string; toolPolicy: string; maxRepairAttempts: number };
+  verification: { mode: "PROJECT_DEFAULT" | "NONE"; commandIds: string[] };
+  merge: { strategy: string; requireHumanMerge: true };
+};
 
 /** Execution Run 的页面投影，关联冻结 Revision、Worktree 和 Executor Loop。 */
 export type Run = {

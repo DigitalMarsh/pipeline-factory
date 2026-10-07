@@ -64,7 +64,11 @@ function readSse(port: number, path: string, headers: Record<string, string> = {
       settled = true;
       clearTimeout(timer);
       response.destroy();
-      resolve({ status: response.statusCode, headers: response.headers, frames: buffer.split("\n\n").filter((frame) => frame.trim() !== "") });
+      resolve({
+        status: response.statusCode,
+        headers: response.headers,
+        frames: buffer.split("\n\n").filter((frame) => frame.trim() !== ""),
+      });
     };
     const request = httpGet({ host: "127.0.0.1", port, path, headers: { accept: "text/event-stream", ...headers } }, (response) => {
       let buffer = "";
@@ -81,14 +85,38 @@ function readSse(port: number, path: string, headers: Record<string, string> = {
 }
 
 async function seedProject(store: InMemoryPipelineStore): Promise<void> {
-  await new ProjectService(store).create({ id: "project-1", name: "project-1", repoRoot: "/repo/project-1", defaultBranch: "main", worktreeRoot: "/tmp/project-1-worktrees", settings: { commands: [] } });
+  await new ProjectService(store).create({
+    id: "project-1",
+    name: "project-1",
+    repoRoot: "/repo/project-1",
+    defaultBranch: "main",
+    worktreeRoot: "/tmp/project-1-worktrees",
+    settings: { commands: [] },
+  });
 }
 
 describe("SSE 路由（真实 HTTP）", () => {
   it("轮询式：runs/events 先回放 journal 帧，再发 stream.ready", async () => {
     const store = new InMemoryPipelineStore();
-    store.saveRun({ id: "run-sse", projectId: "project-1", planId: "plan-1", planRevision: 1, status: "IN_PROGRESS", branch: "b", workspacePath: "/tmp/ws", baseCommit: "abc", executionThreadId: "thread-sse", createdAt: store.now(), startedAt: store.now() });
-    store.saveExecutionThread({ id: "thread-sse", runId: "run-sse", state: "ACTIVE", journal: [{ sequence: 1, type: "RUN_CREATED", occurredAt: store.now(), payload: { planId: "plan-1" } }] });
+    store.saveRun({
+      id: "run-sse",
+      projectId: "project-1",
+      planId: "plan-1",
+      planRevision: 1,
+      status: "IN_PROGRESS",
+      branch: "b",
+      workspacePath: "/tmp/ws",
+      baseCommit: "abc",
+      executionThreadId: "thread-sse",
+      createdAt: store.now(),
+      startedAt: store.now(),
+    });
+    store.saveExecutionThread({
+      id: "thread-sse",
+      runId: "run-sse",
+      state: "ACTIVE",
+      journal: [{ sequence: 1, type: "RUN_CREATED", occurredAt: store.now(), payload: { planId: "plan-1" } }],
+    });
     const app = createApp({ store, seed: false });
     apps.push(app);
     const port = await listen(app);
@@ -114,7 +142,10 @@ describe("SSE 路由（真实 HTTP）", () => {
     apps.push(app);
     const port = await listen(app);
 
-    const response = await readSse(port, `/api/v4/projects/project-1/explorer-thread/events?threadId=${thread.id}&explorerPlanId=${plan.id}`);
+    const response = await readSse(
+      port,
+      `/api/v4/projects/project-1/explorer-thread/events?threadId=${thread.id}&explorerPlanId=${plan.id}`,
+    );
 
     expect(response.status).toBe(200);
     expect(response.headers["content-type"]).toBe("text/event-stream");
@@ -130,7 +161,19 @@ describe("SSE 路由（真实 HTTP）", () => {
 
   it("CORS 头继承 @fastify/cors 的判定：带 Origin 时反射该 Origin，不带时回落到 *", async () => {
     const store = new InMemoryPipelineStore();
-    store.saveRun({ id: "run-cors", projectId: "project-1", planId: "plan-1", planRevision: 1, status: "IN_PROGRESS", branch: "b", workspacePath: "/tmp/ws", baseCommit: "abc", executionThreadId: "thread-cors", createdAt: store.now(), startedAt: store.now() });
+    store.saveRun({
+      id: "run-cors",
+      projectId: "project-1",
+      planId: "plan-1",
+      planRevision: 1,
+      status: "IN_PROGRESS",
+      branch: "b",
+      workspacePath: "/tmp/ws",
+      baseCommit: "abc",
+      executionThreadId: "thread-cors",
+      createdAt: store.now(),
+      startedAt: store.now(),
+    });
     store.saveExecutionThread({ id: "thread-cors", runId: "run-cors", state: "ACTIVE", journal: [] });
     const app = createApp({ store, seed: false });
     apps.push(app);
@@ -168,7 +211,21 @@ describe("SSE 路由的事件读取必须是有界的", () => {
 
   it("agent-loops/:loopId/events 每一次 listEvents 都带 limit，且首次连接取尾部窗口", async () => {
     const store = new RecordingStore();
-    store.saveAgentLoop({ id: "loop-sse", ownerType: "run", ownerId: "run-sse", role: "executor", mode: "provider-controlled", state: "RUNNING", stepCount: 0, maxSteps: 4, startedAt: store.now(), completedAt: null, providerThreadId: null, providerTurnId: null, checkpointJson: null });
+    store.saveAgentLoop({
+      id: "loop-sse",
+      ownerType: "run",
+      ownerId: "run-sse",
+      role: "executor",
+      mode: "provider-controlled",
+      state: "RUNNING",
+      stepCount: 0,
+      maxSteps: 4,
+      startedAt: store.now(),
+      completedAt: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      checkpointJson: null,
+    });
     store.appendEvent({ type: "agent.loop.started", aggregateId: "loop-sse", payload: { role: "executor" } });
     store.appendEvent({ type: "agent.step.gate_checked", aggregateId: "loop-sse", payload: { action: "continue" } });
     const app = createApp({ store, seed: false });

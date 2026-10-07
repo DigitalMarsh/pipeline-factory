@@ -36,7 +36,7 @@ describe("project workspace routes", () => {
   it("resolves the root entry from the remembered project before active-project fallback", () => {
     expect(routerDefaultsSource).toContain("pipeline-factory:last-project-id");
     expect(routerDefaultsSource).toContain("localStorage.getItem(LAST_PROJECT_STORAGE_KEY)");
-    expect(routerDefaultsSource).toContain("status === \"ACTIVE\"");
+    expect(routerDefaultsSource).toContain('status === "ACTIVE"');
     expect(routerSource).toContain('return "/projects"');
     expect(routerSource).toContain("/explorer");
   });

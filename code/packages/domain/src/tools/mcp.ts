@@ -57,7 +57,10 @@ export class McpClient {
   private transport: McpRpcTransport | undefined;
   private connected = false;
 
-  constructor(private readonly config: McpServerConfig, private readonly options: McpClientOptions = {}) {}
+  constructor(
+    private readonly config: McpServerConfig,
+    private readonly options: McpClientOptions = {},
+  ) {}
 
   async connect(): Promise<void> {
     if (this.connected) return;
@@ -75,8 +78,9 @@ export class McpClient {
   async listTools(): Promise<McpToolDefinition[]> {
     await this.connect();
     const result = await this.transport!.request("tools/list", {});
-    if (!result || typeof result !== "object" || !Array.isArray((result as Record<string, unknown>).tools)) throw new Error("MCP tools/list returned an invalid result");
-    return (result as { tools: unknown[] }).tools.flatMap((tool) => isToolDefinition(tool) ? [tool] : []);
+    if (!result || typeof result !== "object" || !Array.isArray((result as Record<string, unknown>).tools))
+      throw new Error("MCP tools/list returned an invalid result");
+    return (result as { tools: unknown[] }).tools.flatMap((tool) => (isToolDefinition(tool) ? [tool] : []));
   }
 
   async callTool(name: string, input: Record<string, unknown>): Promise<McpToolCallResult> {
@@ -109,7 +113,10 @@ export class McpToolRegistry {
   private readonly clients = new Map<string, McpClient>();
   private readonly discovered = new Map<string, QualifiedMcpTool>();
 
-  constructor(private readonly configs: readonly McpServerConfig[], private readonly options: McpToolRegistryOptions = {}) {}
+  constructor(
+    private readonly configs: readonly McpServerConfig[],
+    private readonly options: McpToolRegistryOptions = {},
+  ) {}
 
   async discover(): Promise<QualifiedMcpTool[]> {
     this.discovered.clear();
@@ -168,14 +175,26 @@ function validateInput(schema: Record<string, unknown> | undefined, input: Recor
     const expected = (definition as Record<string, unknown>).type;
     if (typeof expected !== "string") continue;
     const actual = typeof input[key];
-    if ((expected === "integer" && (!Number.isInteger(input[key]) || actual !== "number")) || (expected !== "integer" && expected !== "number" && actual !== expected)) throw new Error("MCP tool input field " + key + " has an invalid type");
+    if (
+      (expected === "integer" && (!Number.isInteger(input[key]) || actual !== "number")) ||
+      (expected !== "integer" && expected !== "number" && actual !== expected)
+    )
+      throw new Error("MCP tool input field " + key + " has an invalid type");
   }
 }
 
 function createTransport(config: McpServerConfig): Promise<McpRpcTransport> {
   if (config.transport === "stdio") {
     if (!config.command) return Promise.reject(new Error("MCP stdio server " + config.name + " has no command"));
-    return Promise.resolve(new StdioMcpTransport(config.command, config.args ?? [], config.cwd ?? process.cwd(), config.environment ?? {}, config.requestTimeoutMs ?? 120_000));
+    return Promise.resolve(
+      new StdioMcpTransport(
+        config.command,
+        config.args ?? [],
+        config.cwd ?? process.cwd(),
+        config.environment ?? {},
+        config.requestTimeoutMs ?? 120_000,
+      ),
+    );
   }
   if (!config.url) return Promise.reject(new Error("MCP Streamable HTTP server " + config.name + " has no URL"));
   return Promise.resolve(new StreamableHttpMcpTransport(config.url, config.headers ?? {}, config.requestTimeoutMs ?? 120_000));
@@ -183,12 +202,21 @@ function createTransport(config: McpServerConfig): Promise<McpRpcTransport> {
 
 class StdioMcpTransport implements McpRpcTransport {
   private readonly child: ChildProcessWithoutNullStreams;
-  private readonly pending = new Map<string, { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }>();
+  private readonly pending = new Map<
+    string,
+    { resolve: (value: unknown) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> }
+  >();
   private buffer = "";
   private nextId = 1;
   private closed = false;
 
-  constructor(command: string, args: readonly string[], cwd: string, environment: Readonly<Record<string, string>>, private readonly timeoutMs: number) {
+  constructor(
+    command: string,
+    args: readonly string[],
+    cwd: string,
+    environment: Readonly<Record<string, string>>,
+    private readonly timeoutMs: number,
+  ) {
     this.child = spawn(command, [...args], { cwd, env: { ...process.env, ...environment }, stdio: ["pipe", "pipe", "pipe"] });
     this.child.stdout.setEncoding("utf8");
     this.child.stdout.on("data", (chunk: string) => this.read(String(chunk)));
@@ -243,7 +271,8 @@ class StdioMcpTransport implements McpRpcTransport {
         if (!pending) continue;
         this.pending.delete(String(id));
         clearTimeout(pending.timer);
-        if (message.error && typeof message.error === "object") pending.reject(new Error(String((message.error as Record<string, unknown>).message ?? "MCP request failed")));
+        if (message.error && typeof message.error === "object")
+          pending.reject(new Error(String((message.error as Record<string, unknown>).message ?? "MCP request failed")));
         else pending.resolve(message.result);
       } catch {
         this.failAll(new Error("MCP stdio transport received invalid JSON"));
@@ -264,7 +293,11 @@ class StreamableHttpMcpTransport implements McpRpcTransport {
   private sessionId: string | undefined;
   private closed = false;
 
-  constructor(private readonly url: string, private readonly headers: Readonly<Record<string, string>>, private readonly timeoutMs: number) {}
+  constructor(
+    private readonly url: string,
+    private readonly headers: Readonly<Record<string, string>>,
+    private readonly timeoutMs: number,
+  ) {}
 
   async request(method: string, params: Record<string, unknown>): Promise<unknown> {
     if (this.closed) throw new Error("MCP HTTP transport is closed");
@@ -286,7 +319,12 @@ class StreamableHttpMcpTransport implements McpRpcTransport {
     try {
       const response = await fetch(this.url, {
         method: "POST",
-        headers: { accept: "application/json, text/event-stream", "content-type": "application/json", ...this.headers, ...(this.sessionId ? { "mcp-session-id": this.sessionId } : {}) },
+        headers: {
+          accept: "application/json, text/event-stream",
+          "content-type": "application/json",
+          ...this.headers,
+          ...(this.sessionId ? { "mcp-session-id": this.sessionId } : {}),
+        },
         body: JSON.stringify(message),
         signal: controller.signal,
       });
@@ -299,7 +337,8 @@ class StreamableHttpMcpTransport implements McpRpcTransport {
       const value = contentType.includes("text/event-stream") ? parseSse(body) : JSON.parse(body);
       if (!value || typeof value !== "object") throw new Error("MCP HTTP response was invalid");
       const messageValue = value as Record<string, unknown>;
-      if (messageValue.error && typeof messageValue.error === "object") throw new Error(String((messageValue.error as Record<string, unknown>).message ?? "MCP HTTP request failed"));
+      if (messageValue.error && typeof messageValue.error === "object")
+        throw new Error(String((messageValue.error as Record<string, unknown>).message ?? "MCP HTTP request failed"));
       return messageValue.result;
     } finally {
       clearTimeout(timer);
@@ -308,7 +347,12 @@ class StreamableHttpMcpTransport implements McpRpcTransport {
 }
 
 function parseSse(body: string): unknown {
-  const data = body.split(/\r?\n/).filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).filter(Boolean).at(-1);
+  const data = body
+    .split(/\r?\n/)
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trim())
+    .filter(Boolean)
+    .at(-1);
   if (!data) throw new Error("MCP HTTP event stream did not contain a data message");
   return JSON.parse(data);
 }

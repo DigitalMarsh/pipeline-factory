@@ -29,7 +29,11 @@ import type { ExplorerInputRequest, ExplorerThread } from "../types";
 import { belongsToExplorerPlan } from "../utils/explorerScope";
 import { inputStatusLabel as inputStatusText } from "../utils/explorerPresentation";
 import { inputAnswerDisplayLabels, inputAnswerDisplayText } from "../utils/explorerInput";
-import { clearExplorerInputProgressDraft, loadExplorerInputProgressDraft, saveExplorerInputProgressDraft } from "../utils/explorerInputProgressDraft";
+import {
+  clearExplorerInputProgressDraft,
+  loadExplorerInputProgressDraft,
+  saveExplorerInputProgressDraft,
+} from "../utils/explorerInputProgressDraft";
 import type { ExplorerInputProgress, ExplorerInputProgressScope } from "../utils/explorerInputProgressDraft";
 
 /** `ExplorerInputDialog` 暴露给父组件的两个回调；模板 ref 的类型写在这里以免视图与 composable 各写一份。 */
@@ -52,7 +56,12 @@ export function useExplorerInputRequests(deps: ExplorerInputRequestDeps) {
   const inputDialogOpen = ref(false);
   const inputAnswerInFlight = ref<string | null>(null);
 
-  const inputCardRequest = computed(() => pendingInput.value ?? inputRequests.value.find((item) => belongsToActivePlan(item.explorerPlanId) && item.status === "SUBMITTING") ?? recoveryInput.value);
+  const inputCardRequest = computed(
+    () =>
+      pendingInput.value ??
+      inputRequests.value.find((item) => belongsToActivePlan(item.explorerPlanId) && item.status === "SUBMITTING") ??
+      recoveryInput.value,
+  );
 
   function belongsToActivePlan(planId: string | null | undefined): boolean {
     return belongsToExplorerPlan(planId, deps.activeExplorerPlanId.value);
@@ -75,7 +84,7 @@ export function useExplorerInputRequests(deps: ExplorerInputRequestDeps) {
     inputRequests.value = items;
     pendingInput.value = nextPending;
     recoveryInput.value = nextRecovery;
-    inputProgress.value = draftRequest && scope ? existingProgress ?? loadExplorerInputProgressDraft(scope, draftRequest) : null;
+    inputProgress.value = draftRequest && scope ? (existingProgress ?? loadExplorerInputProgressDraft(scope, draftRequest)) : null;
     if (scope) {
       for (const request of activeRequests) {
         if (request.status === "ANSWERED" || request.status === "CANCELLED") {
@@ -184,7 +193,9 @@ export function useExplorerInputRequests(deps: ExplorerInputRequestDeps) {
       pendingInput.value = null;
       inputProgress.value = null;
       ElMessage.info("本轮已取消");
-    } catch (caught) { ElMessage.error(caught instanceof Error ? caught.message : "取消本轮失败"); }
+    } catch (caught) {
+      ElMessage.error(caught instanceof Error ? caught.message : "取消本轮失败");
+    }
   }
 
   return {

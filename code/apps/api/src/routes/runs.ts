@@ -25,7 +25,15 @@
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import type { AgentLoopRunner, MergeService, PipelineStore, PlanService, Scheduler, VerificationCommandExecutor, VerificationService } from "@pipeline-factory/domain";
+import type {
+  AgentLoopRunner,
+  MergeService,
+  PipelineStore,
+  PlanService,
+  Scheduler,
+  VerificationCommandExecutor,
+  VerificationService,
+} from "@pipeline-factory/domain";
 import { guidanceBody } from "../schemas/runs.js";
 import { loopEventsQuery } from "../schemas/agent-loops.js";
 import { loopReasonBody, projectThreadParams } from "../schemas/common.js";
@@ -75,13 +83,20 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
       const newEntries = projectedThread?.journal.filter((item) => item.sequence > cursor) ?? [];
       for (const entry of newEntries) {
         cursor = entry.sequence;
-        sse.send(entry.sequence, "journal.entry", { runId: run.id, runStatus: currentRun?.status ?? null, threadState: projectedThread?.state ?? null, threadTelemetry: projectedThread?.telemetry ?? null, ...entry });
+        sse.send(entry.sequence, "journal.entry", {
+          runId: run.id,
+          runStatus: currentRun?.status ?? null,
+          threadState: projectedThread?.state ?? null,
+          threadTelemetry: projectedThread?.telemetry ?? null,
+          ...entry,
+        });
       }
       const telemetry = projectedThread?.telemetry ?? null;
       const telemetryKey = JSON.stringify(telemetry);
       // telemetry.updated 不属于事件序列，所以 id 传 null（不写 id 行）：否则 Last-Event-ID 会被
       // 推到一个并不存在的事件序号上，重连时按它回放会丢事件。
-      if (telemetryKey !== lastTelemetryKey && newEntries.length === 0 && lastTelemetryKey !== null) sse.send(null, "telemetry.updated", { runId: run.id, threadTelemetry: telemetry });
+      if (telemetryKey !== lastTelemetryKey && newEntries.length === 0 && lastTelemetryKey !== null)
+        sse.send(null, "telemetry.updated", { runId: run.id, threadTelemetry: telemetry });
       lastTelemetryKey = telemetryKey;
       return telemetry;
     };
@@ -96,9 +111,12 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
     if (!scheduler) return reply.code(503).send({ error: "Scheduler is not configured for this API instance" });
     try {
       const run = scheduler.run(params.data.runId);
-      return { run: await scheduler.finish(params.data.runId, body.data.exitReason, store.getProject(run.projectId)?.settings.hooks ?? {}) };
+      return {
+        run: await scheduler.finish(params.data.runId, body.data.exitReason, store.getProject(run.projectId)?.settings.hooks ?? {}),
+      };
+    } catch (error) {
+      return reply.code(409).send({ error: error instanceof Error ? error.message : "Run cannot be finished" });
     }
-    catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "Run cannot be finished" }); }
   });
 
   app.post("/api/v4/runs/:runId/cancel", async (request, reply) => {
@@ -111,9 +129,12 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
       const cancellableStatuses = new Set(["STARTING", "IN_PROGRESS", "READY_FOR_VERIFY", "VERIFYING", "RECOVERING", "BLOCKED"]);
       if (!cancellableStatuses.has(run.status)) throw new Error(`Run ${run.id} cannot be cancelled from ${run.status}`);
       const cancellableLoopStates = new Set(["CREATED", "RUNNING", "WAITING_FOR_INPUT", "PAUSED", "RECOVERING"]);
-      for (const loop of store.listAgentLoops(run.id).filter((item) => cancellableLoopStates.has(item.state))) await loopController.cancel(loop.id, body.data.reason);
+      for (const loop of store.listAgentLoops(run.id).filter((item) => cancellableLoopStates.has(item.state)))
+        await loopController.cancel(loop.id, body.data.reason);
       return { run: await scheduler.finish(run.id, "cancelled", store.getProject(run.projectId)?.settings.hooks ?? {}, body.data.reason) };
-    } catch (error) { return reply.code(409).send({ code: "RUN_CANCEL_FAILED", error: error instanceof Error ? error.message : "Run cannot be cancelled" }); }
+    } catch (error) {
+      return reply.code(409).send({ code: "RUN_CANCEL_FAILED", error: error instanceof Error ? error.message : "Run cannot be cancelled" });
+    }
   });
 
   app.post("/api/v4/runs/:runId/pause", async (request, reply) => {
@@ -154,12 +175,13 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
     if (!scheduler) return reply.code(503).send({ error: "Scheduler is not configured for this API instance" });
     try {
       // HTTP 用大写风格与领域枚举不同（`steer` vs `STEER`）：这一层就是那条翻译边，别把它下推。
-      const mode = body.data.mode === "steer" ? "STEER" as const : body.data.mode === "queue" ? "QUEUE" as const : "auto" as const;
+      const mode = body.data.mode === "steer" ? ("STEER" as const) : body.data.mode === "queue" ? ("QUEUE" as const) : ("auto" as const);
       const { thread, guidance, continued } = await scheduler.addGuidance(params.data.runId, body.data.content, { mode });
       const run = store.getRun(params.data.runId);
       return { thread: run ? projectRunThreadTelemetry(store, run, thread) : thread, guidance, continued, run: run ?? null };
+    } catch (error) {
+      return reply.code(409).send({ error: error instanceof Error ? error.message : "Guidance cannot be added" });
     }
-    catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "Guidance cannot be added" }); }
   });
 
   app.post("/api/v4/runs/:runId/verify", async (request, reply) => {
@@ -204,7 +226,13 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
     const executionThread = store.getExecutionThread(run.executionThreadId);
     // `executorConfig` 是"这次 Run 该用哪个 executor"的答案（Revision 快照优先）。
     // 遥测要**这一轮跑完**才有值，界面在运行中只能靠它回答"现在用的是什么模型"。
-    return { run: { ...run, agentLoops: store.listAgentLoops(run.id) }, executionThread: executionThread ? projectRunThreadTelemetry(store, run, executionThread) : null, executorConfig: resolveRunExecutorConfig(store, run), verification: store.getVerificationRun(run.id) ?? null, mergeRequest: merger.findByRun(run.id) ?? null };
+    return {
+      run: { ...run, agentLoops: store.listAgentLoops(run.id) },
+      executionThread: executionThread ? projectRunThreadTelemetry(store, run, executionThread) : null,
+      executorConfig: resolveRunExecutorConfig(store, run),
+      verification: store.getVerificationRun(run.id) ?? null,
+      mergeRequest: merger.findByRun(run.id) ?? null,
+    };
   });
 
   app.get("/api/v4/execution-threads/:threadId", async (request, reply) => {

@@ -13,5 +13,7 @@ defineProps<{ item: ExecutionStreamItem }>();
 
 <template>
   <MarkdownMessage :source="item.content" :streaming="item.status === 'RUNNING'" />
-  <small v-if="item.detail || item.unrecordedFields?.length" class="execution-message-note">{{ item.detail || item.unrecordedFields?.join(' · ') }}</small>
+  <small v-if="item.detail || item.unrecordedFields?.length" class="execution-message-note">{{
+    item.detail || item.unrecordedFields?.join(" · ")
+  }}</small>
 </template>

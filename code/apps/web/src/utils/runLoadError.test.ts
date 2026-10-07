@@ -18,7 +18,9 @@ describe("describeRunLoadError", () => {
   });
 
   it("keeps an auxiliary AgentLoop failure from masquerading as a missing Run", () => {
-    expect(describeRunLoadError(new ApiRequestError("AgentLoop not found", 404), "agent-loop")).toBe("Run 已加载，但 Agent Loop 详情暂时不可用");
+    expect(describeRunLoadError(new ApiRequestError("AgentLoop not found", 404), "agent-loop")).toBe(
+      "Run 已加载，但 Agent Loop 详情暂时不可用",
+    );
   });
 
   it("encodes the Run id before building the detail request URL", async () => {

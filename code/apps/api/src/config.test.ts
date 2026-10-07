@@ -20,20 +20,44 @@ describe("Factory configuration", () => {
     const directory = mkdtempSync(join(tmpdir(), "pipeline-factory-config-"));
     directories.push(directory);
     const configPath = join(directory, "pipeline-factory.config.json");
-    writeFileSync(configPath, JSON.stringify({
-      server: { host: "127.0.0.1", port: 4399 },
-      storage: { databasePath: "./var/factory.sqlite", worktreeRoot: "./var/worktrees" },
-      project: { root: "./project", commands: [{ commandId: "project.test", argv: ["node", "scripts/test.mjs"], environment: { PATH: "/usr/bin" } }] },
-      model: {
-        backend: "codex-app-server",
-        codexAppServer: { command: "codex", args: ["app-server", "--stdio"], cwd: "./project", startupTimeoutMs: 5000, requestTimeoutMs: 10000, maxRestarts: 2 },
-        roles: { explorer: { model: "gpt-5", temperature: 0.1 }, executor: { model: "gpt-5", temperature: 0 } },
-      },
-      runtime: { globalConcurrency: 4, projectConcurrency: 2, defaultTimeoutMs: 120000 },
-      mcp: { servers: [{ name: "docs", transport: "streamable-http", url: "http://127.0.0.1:8787/mcp", allowedTools: ["search"], requestTimeoutMs: 5000 }] },
-      plugins: { directories: ["./plugins"], supportedApiMajor: 1, allowedTools: ["plugin:com.example.docs:search"] },
-      computerUse: { enabled: true, requireApproval: true, timeoutMs: 5000 },
-    }), "utf8");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        server: { host: "127.0.0.1", port: 4399 },
+        storage: { databasePath: "./var/factory.sqlite", worktreeRoot: "./var/worktrees" },
+        project: {
+          root: "./project",
+          commands: [{ commandId: "project.test", argv: ["node", "scripts/test.mjs"], environment: { PATH: "/usr/bin" } }],
+        },
+        model: {
+          backend: "codex-app-server",
+          codexAppServer: {
+            command: "codex",
+            args: ["app-server", "--stdio"],
+            cwd: "./project",
+            startupTimeoutMs: 5000,
+            requestTimeoutMs: 10000,
+            maxRestarts: 2,
+          },
+          roles: { explorer: { model: "gpt-5", temperature: 0.1 }, executor: { model: "gpt-5", temperature: 0 } },
+        },
+        runtime: { globalConcurrency: 4, projectConcurrency: 2, defaultTimeoutMs: 120000 },
+        mcp: {
+          servers: [
+            {
+              name: "docs",
+              transport: "streamable-http",
+              url: "http://127.0.0.1:8787/mcp",
+              allowedTools: ["search"],
+              requestTimeoutMs: 5000,
+            },
+          ],
+        },
+        plugins: { directories: ["./plugins"], supportedApiMajor: 1, allowedTools: ["plugin:com.example.docs:search"] },
+        computerUse: { enabled: true, requireApproval: true, timeoutMs: 5000 },
+      }),
+      "utf8",
+    );
 
     const config = loadFactoryConfig(configPath);
 
@@ -78,20 +102,32 @@ describe("Factory configuration", () => {
     mkdirSync(join(directory, "apps/api"), { recursive: true });
     writeFileSync(join(directory, "config/pipeline-factory.config.json"), "{}", "utf8");
 
-    expect(resolveConfigPath("./config/pipeline-factory.config.json", join(directory, "apps/api"))).toBe(join(directory, "config/pipeline-factory.config.json"));
+    expect(resolveConfigPath("./config/pipeline-factory.config.json", join(directory, "apps/api"))).toBe(
+      join(directory, "config/pipeline-factory.config.json"),
+    );
   });
 
   it("accepts the Claude Agent SDK backend with an optional endpoint override", () => {
     const directory = mkdtempSync(join(tmpdir(), "pipeline-factory-config-"));
     directories.push(directory);
     const configPath = join(directory, "claude.json");
-    writeFileSync(configPath, JSON.stringify({
-      model: {
-        backend: "claude-agent-sdk",
-        claudeAgent: { baseUrl: "http://127.0.0.1:15721", authToken: "token", settingsPath: "./claude-settings.json", env: { CLAUDE_CODE_USE_BEDROCK: "0" }, maxTurns: 12 },
-        roles: { explorer: { model: "claude-opus-5", mode: "plan" }, executor: { model: "claude-opus-5", mode: "default" } },
-      },
-    }), "utf8");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        model: {
+          backend: "claude-agent-sdk",
+          claudeAgent: {
+            baseUrl: "http://127.0.0.1:15721",
+            authToken: "token",
+            settingsPath: "./claude-settings.json",
+            env: { CLAUDE_CODE_USE_BEDROCK: "0" },
+            maxTurns: 12,
+          },
+          roles: { explorer: { model: "claude-opus-5", mode: "plan" }, executor: { model: "claude-opus-5", mode: "default" } },
+        },
+      }),
+      "utf8",
+    );
 
     const config = loadFactoryConfig(configPath);
 
@@ -120,19 +156,29 @@ describe("Factory configuration", () => {
     const directory = mkdtempSync(join(tmpdir(), "pipeline-factory-config-"));
     directories.push(directory);
     const configPath = join(directory, "split.json");
-    writeFileSync(configPath, JSON.stringify({
-      model: {
-        backend: "codex-app-server",
-        codexAppServer: { cwd: "./project" },
-        backends: {
-          deepseek: { kind: "claude-agent-sdk", baseUrl: "https://api.deepseek.com/anthropic", authToken: "t", settingsPath: "./claude.json", models: ["deepseek-chat"] },
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        model: {
+          backend: "codex-app-server",
+          codexAppServer: { cwd: "./project" },
+          backends: {
+            deepseek: {
+              kind: "claude-agent-sdk",
+              baseUrl: "https://api.deepseek.com/anthropic",
+              authToken: "t",
+              settingsPath: "./claude.json",
+              models: ["deepseek-chat"],
+            },
+          },
+          roles: {
+            explorer: { model: "gpt-5.6-sol", backend: "codex-app-server" },
+            executor: { model: "deepseek-chat", backend: "deepseek" },
+          },
         },
-        roles: {
-          explorer: { model: "gpt-5.6-sol", backend: "codex-app-server" },
-          executor: { model: "deepseek-chat", backend: "deepseek" },
-        },
-      },
-    }), "utf8");
+      }),
+      "utf8",
+    );
 
     const config = loadFactoryConfig(configPath);
     const backends = resolveModelBackends(config.model);
@@ -150,9 +196,16 @@ describe("Factory configuration", () => {
     directories.push(directory);
     const configPath = join(directory, "implicit.json");
     // 一个注册表项都不写：两个角色仍可各选一个 agent —— 这是"探索 Codex、执行 Claude"的最小写法。
-    writeFileSync(configPath, JSON.stringify({
-      model: { backend: "codex-app-server", roles: { explorer: { model: "gpt-5.6-sol" }, executor: { model: "claude-opus-5", backend: "claude-agent-sdk" } } },
-    }), "utf8");
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        model: {
+          backend: "codex-app-server",
+          roles: { explorer: { model: "gpt-5.6-sol" }, executor: { model: "claude-opus-5", backend: "claude-agent-sdk" } },
+        },
+      }),
+      "utf8",
+    );
 
     const config = loadFactoryConfig(configPath);
     const backends = resolveModelBackends(config.model);
@@ -171,6 +224,8 @@ describe("Factory configuration", () => {
 
     const config = loadFactoryConfig(configPath);
     // 启动期失败而不是等第一个回合：错误信息直接列出可用 id。
-    expect(() => resolveModelBackends(config.model)).toThrow(/model\.roles\.executor\.backend "typo" is not defined.*Known backends: codex-app-server, claude-agent-sdk, openai-responses, stub/s);
+    expect(() => resolveModelBackends(config.model)).toThrow(
+      /model\.roles\.executor\.backend "typo" is not defined.*Known backends: codex-app-server, claude-agent-sdk, openai-responses, stub/s,
+    );
   });
 });

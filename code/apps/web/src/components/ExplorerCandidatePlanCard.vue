@@ -26,8 +26,12 @@ const emit = defineEmits<{ view: [plan: Plan]; confirm: [plan: Plan]; enqueue: [
 
 const taskCount = computed(() => props.plan.resolvedContract?.tasks.length ?? props.plan.tasks?.length ?? 0);
 const scopeCount = computed(() => props.plan.resolvedContract?.scope.includePaths.length ?? props.plan.include?.length ?? 0);
-const verificationCount = computed(() => props.plan.resolvedContract?.verification.commandIds.length ?? props.plan.verificationCommands?.length ?? 0);
-const goal = computed(() => props.plan.resolvedContract?.objective.goal ?? props.plan.goal ?? "从这条探索线程生成的一份完整、可审阅的执行契约。");
+const verificationCount = computed(
+  () => props.plan.resolvedContract?.verification.commandIds.length ?? props.plan.verificationCommands?.length ?? 0,
+);
+const goal = computed(
+  () => props.plan.resolvedContract?.objective.goal ?? props.plan.goal ?? "从这条探索线程生成的一份完整、可审阅的执行契约。",
+);
 const statusText = computed(() => planStatusLabel(props.plan.status));
 /** 对话产物（CONVERSATION）能确认、但不能入队执行——这一条要说在按钮上方，别让人确认完才发现。 */
 const conversationArtifact = computed(() => isConversationArtifactPlan(props.plan));
@@ -45,9 +49,15 @@ const conversationArtifact = computed(() => isConversationArtifactPlan(props.pla
     </div>
     <p class="candidate-summary">{{ goal }}</p>
     <div class="candidate-stats">
-      <div><span>执行步骤</span><strong>{{ taskCount }}</strong></div>
-      <div><span>范围条目</span><strong>{{ scopeCount }}</strong></div>
-      <div><span>验证</span><strong>{{ verificationCount }} 项检查</strong></div>
+      <div>
+        <span>执行步骤</span><strong>{{ taskCount }}</strong>
+      </div>
+      <div>
+        <span>范围条目</span><strong>{{ scopeCount }}</strong>
+      </div>
+      <div>
+        <span>验证</span><strong>{{ verificationCount }} 项检查</strong>
+      </div>
       <div><span>合并</span><strong class="risk-low">人工审阅</strong></div>
     </div>
     <p v-if="conversationArtifact" class="candidate-notice">
@@ -55,8 +65,12 @@ const conversationArtifact = computed(() => isConversationArtifactPlan(props.pla
     </p>
     <div class="candidate-actions">
       <el-button v-if="isCandidate" @click="emit('view', plan)">查看方案 <Right :size="15" /></el-button>
-      <el-button v-if="isCandidate && plan.status === 'DRAFT'" type="primary" :loading="busy" @click="emit('confirm', plan)">确认方案 <Check :size="15" /></el-button>
-      <el-button v-else-if="isCandidate && plan.status === 'READY'" type="primary" :loading="busy" @click="emit('enqueue', plan)">入队方案 <ArrowDown :size="15" /></el-button>
+      <el-button v-if="isCandidate && plan.status === 'DRAFT'" type="primary" :loading="busy" @click="emit('confirm', plan)"
+        >确认方案 <Check :size="15"
+      /></el-button>
+      <el-button v-else-if="isCandidate && plan.status === 'READY'" type="primary" :loading="busy" @click="emit('enqueue', plan)"
+        >入队方案 <ArrowDown :size="15"
+      /></el-button>
       <span v-else class="confirmed-note"><CircleCheck :size="15" /> {{ statusText }}</span>
     </div>
   </div>

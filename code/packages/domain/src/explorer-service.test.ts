@@ -13,9 +13,21 @@ describe("ExplorerService", () => {
     const explorers = new ExplorerService(store);
     const plans = new PlanService(store);
     const oldExplorer = explorers.create({ projectId: "project-1", title: "Old design" });
-    store.saveTurn({ id: "old-turn", threadId: oldExplorer.id, role: "user", content: "old requirement", status: "COMPLETED", createdAt: store.now(), sequence: 1 });
-    const oldPlan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: oldExplorer.id, title: "Old plan",
-      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Old plan" }) });
+    store.saveTurn({
+      id: "old-turn",
+      threadId: oldExplorer.id,
+      role: "user",
+      content: "old requirement",
+      status: "COMPLETED",
+      createdAt: store.now(),
+      sequence: 1,
+    });
+    const oldPlan = plans.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: oldExplorer.id,
+      title: "Old plan",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Old plan" }),
+    });
     plans.confirm(oldPlan.id, "user-1");
     plans.enqueue(oldPlan.id);
 
@@ -48,7 +60,13 @@ describe("ExplorerService", () => {
   it("keeps multiple active Explorers and updates only the selected Explorer", () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);
-    projects.create({ id: "project-1", name: "Project", repoRoot: "/repo/project", defaultBranch: "main", worktreeRoot: "/tmp/project-worktrees" });
+    projects.create({
+      id: "project-1",
+      name: "Project",
+      repoRoot: "/repo/project",
+      defaultBranch: "main",
+      worktreeRoot: "/tmp/project-worktrees",
+    });
     const explorers = new ExplorerService(store);
 
     const first = explorers.create({ projectId: "project-1", title: "First" });
@@ -63,7 +81,15 @@ describe("ExplorerService", () => {
     const store = new InMemoryPipelineStore();
     const explorers = new ExplorerService(store);
     const explorer = explorers.create({ projectId: "project-1", title: "Archive me" });
-    store.saveTurn({ id: "turn-1", threadId: explorer.id, role: "user", content: "keep this", status: "COMPLETED", createdAt: store.now(), sequence: 1 });
+    store.saveTurn({
+      id: "turn-1",
+      threadId: explorer.id,
+      role: "user",
+      content: "keep this",
+      status: "COMPLETED",
+      createdAt: store.now(),
+      sequence: 1,
+    });
 
     const archived = explorers.archive(explorer.id);
 
@@ -75,7 +101,13 @@ describe("ExplorerService", () => {
   it("rejects archiving the Project's current Explorer", () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);
-    projects.create({ id: "project-1", name: "Project", repoRoot: "/repo/project", defaultBranch: "main", worktreeRoot: "/tmp/project-worktrees" });
+    projects.create({
+      id: "project-1",
+      name: "Project",
+      repoRoot: "/repo/project",
+      defaultBranch: "main",
+      worktreeRoot: "/tmp/project-worktrees",
+    });
     const explorers = new ExplorerService(store);
     const explorer = explorers.create({ projectId: "project-1", title: "Current Explorer" });
 
@@ -87,9 +119,19 @@ describe("ExplorerService", () => {
     const store = new InMemoryPipelineStore();
     const explorer = new ExplorerService(store).create({ projectId: "project-1", title: "Archived Explorer" });
     store.updateThread({ ...explorer, state: "ARCHIVED" });
-    const service = new ExplorerThreadService(store, new StubModelGateway({ explorer: { model: "explorer" }, executor: { model: "executor" } }));
+    const service = new ExplorerThreadService(
+      store,
+      new StubModelGateway({ explorer: { model: "explorer" }, executor: { model: "executor" } }),
+    );
 
-    await expect(service.startTurn({ threadId: explorer.id, explorerPlanId: store.listExplorerPlans(explorer.id)[0]!.id, content: "继续探索", clientTurnId: "archived-turn" })).rejects.toThrow("ExplorerThread " + explorer.id + " is archived");
+    await expect(
+      service.startTurn({
+        threadId: explorer.id,
+        explorerPlanId: store.listExplorerPlans(explorer.id)[0]!.id,
+        content: "继续探索",
+        clientTurnId: "archived-turn",
+      }),
+    ).rejects.toThrow("ExplorerThread " + explorer.id + " is archived");
     expect(store.listTurns(explorer.id)).toEqual([]);
   });
 });

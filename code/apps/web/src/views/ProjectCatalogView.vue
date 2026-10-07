@@ -4,7 +4,18 @@
 -->
 <script setup lang="ts">
 import { onMounted, ref } from "vue";
-import { ArrowRight, ChatDotRound, Clock, Connection, FolderOpened, Plus, Refresh, Setting, VideoPlay, Warning } from "@element-plus/icons-vue";
+import {
+  ArrowRight,
+  ChatDotRound,
+  Clock,
+  Connection,
+  FolderOpened,
+  Plus,
+  Refresh,
+  Setting,
+  VideoPlay,
+  Warning,
+} from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useRouter } from "vue-router";
 import { api } from "../api";
@@ -22,9 +33,13 @@ const createOpen = ref(false);
 async function load() {
   loading.value = true;
   error.value = null;
-  try { projects.value = (await api.projects()).items; }
-  catch (caught) { error.value = caught instanceof Error ? caught.message : "API 未连接"; }
-  finally { loading.value = false; }
+  try {
+    projects.value = (await api.projects()).items;
+  } catch (caught) {
+    error.value = caught instanceof Error ? caught.message : "API 未连接";
+  } finally {
+    loading.value = false;
+  }
 }
 
 /** 打开创建向导，表单状态与已存在 Project 清单隔离。 */
@@ -41,7 +56,11 @@ function handleProjectCreated(project: Project) {
 async function toggleArchive(project: Project) {
   try {
     if (project.status === "ACTIVE") {
-      await ElMessageBox.confirm("归档后项目历史仍可查看，但不能创建新的 Explorer Turn 或 Run。", `归档 ${project.name}？`, { type: "warning", confirmButtonText: "归档项目", cancelButtonText: "取消" });
+      await ElMessageBox.confirm("归档后项目历史仍可查看，但不能创建新的 Explorer Turn 或 Run。", `归档 ${project.name}？`, {
+        type: "warning",
+        confirmButtonText: "归档项目",
+        cancelButtonText: "取消",
+      });
       await api.archiveProject(project.id);
       ElMessage.success("项目已归档");
     } else {
@@ -67,7 +86,9 @@ function activityLabel(value: string | null) {
   if (!value) return "暂无活动";
   return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
 }
-onMounted(() => { void load(); });
+onMounted(() => {
+  void load();
+});
 </script>
 
 <template>
@@ -78,23 +99,54 @@ onMounted(() => { void load(); });
         <h1>项目</h1>
         <p>每个 Project 对应一个 Git 仓库，并独立保存 Explorer、Plan、Run 和执行配置。</p>
       </div>
-      <div class="catalog-actions"><el-button plain @click="load"><Refresh :size="15" /> Refresh</el-button><el-button type="primary" @click="openCreate"><Plus :size="15" /> 新建项目</el-button></div>
+      <div class="catalog-actions">
+        <el-button plain @click="load"><Refresh :size="15" /> Refresh</el-button
+        ><el-button type="primary" @click="openCreate"><Plus :size="15" /> 新建项目</el-button>
+      </div>
     </div>
 
     <div v-if="error" class="catalog-alert"><Warning :size="15" /> {{ error }}</div>
     <div v-loading="loading" class="project-card-grid">
       <article v-for="project in projects" :key="project.id" class="project-card" :class="{ archived: project.status === 'ARCHIVED' }">
-        <div class="project-card-top"><div class="project-card-icon"><FolderOpened :size="20" /></div><el-tag :type="project.status === 'ACTIVE' ? 'success' : 'info'" effect="light">{{ projectStatusLabel(project.status) }}</el-tag></div>
-        <button class="project-card-title" type="button" @click="openProject(project)"><strong>{{ project.name }}<small v-if="project.shortName && project.shortName !== project.name">{{ project.shortName }}</small></strong><ArrowRight :size="16" /></button>
+        <div class="project-card-top">
+          <div class="project-card-icon"><FolderOpened :size="20" /></div>
+          <el-tag :type="project.status === 'ACTIVE' ? 'success' : 'info'" effect="light">{{ projectStatusLabel(project.status) }}</el-tag>
+        </div>
+        <button class="project-card-title" type="button" @click="openProject(project)">
+          <strong
+            >{{ project.name }}<small v-if="project.shortName && project.shortName !== project.name">{{ project.shortName }}</small></strong
+          ><ArrowRight :size="16" />
+        </button>
         <code class="project-id">{{ project.id }}</code>
-        <div class="project-path"><FolderOpened :size="14" /><span>{{ project.repoRoot }}</span></div>
-        <div class="project-current"><ChatDotRound :size="13" /><span>当前探索线程</span><code :title="project.summary.currentExplorerThread ?? undefined">{{ project.summary.currentExplorerTitle ?? project.summary.currentExplorerThread ?? "未选择" }}</code></div>
-        <div class="project-facts"><span><Connection :size="13" />{{ project.defaultBranch }}</span><span><VideoPlay :size="13" />{{ project.summary.activeRunCount }} 个在跑</span></div>
-        <div class="project-facts project-facts-secondary"><span><Warning :size="13" />{{ project.summary.needsAttentionCount }} 项待处理</span><span><Clock :size="13" />{{ activityLabel(project.summary.lastActivityAt) }}</span></div>
-        <div class="project-card-footer"><el-button text size="small" @click="openProject(project)">打开探索</el-button><el-button text size="small" @click="openSettings(project)"><Setting :size="13" /> 设置</el-button><el-button text size="small" @click="toggleArchive(project)">{{ project.status === 'ACTIVE' ? '归档' : '启用' }}</el-button></div>
+        <div class="project-path">
+          <FolderOpened :size="14" /><span>{{ project.repoRoot }}</span>
+        </div>
+        <div class="project-current">
+          <ChatDotRound :size="13" /><span>当前探索线程</span
+          ><code :title="project.summary.currentExplorerThread ?? undefined">{{
+            project.summary.currentExplorerTitle ?? project.summary.currentExplorerThread ?? "未选择"
+          }}</code>
+        </div>
+        <div class="project-facts">
+          <span><Connection :size="13" />{{ project.defaultBranch }}</span
+          ><span><VideoPlay :size="13" />{{ project.summary.activeRunCount }} 个在跑</span>
+        </div>
+        <div class="project-facts project-facts-secondary">
+          <span><Warning :size="13" />{{ project.summary.needsAttentionCount }} 项待处理</span
+          ><span><Clock :size="13" />{{ activityLabel(project.summary.lastActivityAt) }}</span>
+        </div>
+        <div class="project-card-footer">
+          <el-button text size="small" @click="openProject(project)">打开探索</el-button
+          ><el-button text size="small" @click="openSettings(project)"><Setting :size="13" /> 设置</el-button
+          ><el-button text size="small" @click="toggleArchive(project)">{{ project.status === "ACTIVE" ? "归档" : "启用" }}</el-button>
+        </div>
       </article>
-      <button class="project-add-card" type="button" @click="openCreate"><span><Plus :size="20" /></span><strong>添加 Git Project</strong><small>配置仓库目录、Worktree 和运行策略</small></button>
-      <div v-if="!loading && !projects.length" class="catalog-empty"><FolderOpened :size="30" /><strong>还没有 Project</strong><span>导入一个本地 Git 仓库开始使用。</span></div>
+      <button class="project-add-card" type="button" @click="openCreate">
+        <span><Plus :size="20" /></span><strong>添加 Git Project</strong><small>配置仓库目录、Worktree 和运行策略</small>
+      </button>
+      <div v-if="!loading && !projects.length" class="catalog-empty">
+        <FolderOpened :size="30" /><strong>还没有 Project</strong><span>导入一个本地 Git 仓库开始使用。</span>
+      </div>
     </div>
 
     <ProjectCreateDialog v-model="createOpen" @project-created="handleProjectCreated" />
@@ -102,36 +154,254 @@ onMounted(() => { void load(); });
 </template>
 
 <style scoped>
-.project-catalog-page { min-height: calc(100vh - 60px); padding: 39px 54px 54px; background: #f8fafc; }
-.catalog-heading { display: flex; justify-content: space-between; align-items: flex-end; gap: 30px; max-width: 1180px; margin: 0 auto 28px; }
-.catalog-heading h1 { margin: 7px 0 6px; color: #1c2a3d; font-size: 28px; letter-spacing: -.05em; }
-.catalog-heading p { margin: 0; color: #7e8b9d; font-size: 12px; }
-.catalog-actions { display: flex; gap: 8px; }
-.catalog-actions .el-button { font-size: 11px; }
-.catalog-alert { display: flex; align-items: center; gap: 8px; max-width: 1180px; margin: 0 auto 16px; padding: 11px 13px; border: 1px solid #f1d6da; border-radius: 7px; background: #fff6f7; color: #a3535e; font-size: 11px; }
-.project-card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(285px, 1fr)); gap: 15px; max-width: 1180px; margin: auto; min-height: 180px; }
-.project-card, .project-add-card { min-height: 235px; padding: 18px; border: 1px solid #e0e7f0; border-radius: 10px; background: #fff; box-shadow: 0 5px 18px rgba(36, 59, 94, .04); }
-.project-card.archived { opacity: .72; }
-.project-card-top { display: flex; align-items: center; justify-content: space-between; }
-.project-card-icon { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 9px; background: #edf3ff; color: #4d7be4; }
-.project-card-title { display: flex; align-items: center; justify-content: space-between; width: 100%; margin: 18px 0 4px; padding: 0; border: 0; background: transparent; color: #33445d; cursor: pointer; text-align: left; }
-.project-card-title strong { overflow: hidden; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }.project-card-title strong small { margin-left: 7px; color: #7893bd; font-size: 10px; font-weight: 700; }
-.project-card-title:hover { color: #3f75dd; }
-.project-id { color: #9ba7b6; font-size: 9px; }
-.project-path { display: flex; gap: 7px; align-items: center; margin-top: 17px; color: #77869b; font: 10px ui-monospace, monospace; }
-.project-path span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.project-current { display: flex; align-items: center; gap: 6px; margin-top: 15px; color: #8b98a9; font-size: 10px; }
-.project-current code { overflow: hidden; margin-left: auto; color: #657ba9; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-.project-facts { display: flex; gap: 15px; margin-top: 17px; color: #9aa6b6; font-size: 10px; }
-.project-facts span { display: flex; align-items: center; gap: 5px; }
-.project-facts-secondary { margin-top: 9px; }
-.project-card-footer { display: flex; gap: 0; margin-top: 19px; padding-top: 11px; border-top: 1px solid #edf0f4; }
-.project-card-footer .el-button { padding: 0 7px; font-size: 10px; }
-.project-add-card { display: grid; place-items: center; align-content: center; gap: 8px; border-style: dashed; color: #8190a4; cursor: pointer; text-align: center; }
-.project-add-card:hover { border-color: #9bb7f0; background: #fbfdff; color: #4d77d1; }
-.project-add-card > span { display: grid; place-items: center; width: 39px; height: 39px; border-radius: 50%; background: #edf3ff; color: #4e7ae0; }
-.project-add-card strong { font-size: 12px; }.project-add-card small { color: #a0acbb; font-size: 10px; }
-.catalog-empty { grid-column: 1 / -1; display: grid; justify-items: center; gap: 8px; padding: 46px; border: 1px dashed #dbe3ed; border-radius: 10px; color: #a5b0bd; }.catalog-empty strong { color: #627188; font-size: 13px; }.catalog-empty span { font-size: 10px; }
-.project-dialog-intro { margin-bottom: 18px; padding: 11px 12px; border: 1px solid #dbe7ff; border-radius: 7px; background: #f6f9ff; color: #7083a4; font-size: 10px; line-height: 1.5; }.dialog-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }.form-help { display: block; margin-top: 5px; color: #9aa6b6; font-size: 9px; }
-@media (max-width: 760px) { .project-catalog-page { padding: 28px 20px; }.catalog-heading { display: block; }.catalog-actions { margin-top: 17px; }.dialog-form-grid { grid-template-columns: 1fr; } }
+.project-catalog-page {
+  min-height: calc(100vh - 60px);
+  padding: 39px 54px 54px;
+  background: #f8fafc;
+}
+.catalog-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 30px;
+  max-width: 1180px;
+  margin: 0 auto 28px;
+}
+.catalog-heading h1 {
+  margin: 7px 0 6px;
+  color: #1c2a3d;
+  font-size: 28px;
+  letter-spacing: -0.05em;
+}
+.catalog-heading p {
+  margin: 0;
+  color: #7e8b9d;
+  font-size: 12px;
+}
+.catalog-actions {
+  display: flex;
+  gap: 8px;
+}
+.catalog-actions .el-button {
+  font-size: 11px;
+}
+.catalog-alert {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 1180px;
+  margin: 0 auto 16px;
+  padding: 11px 13px;
+  border: 1px solid #f1d6da;
+  border-radius: 7px;
+  background: #fff6f7;
+  color: #a3535e;
+  font-size: 11px;
+}
+.project-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(285px, 1fr));
+  gap: 15px;
+  max-width: 1180px;
+  margin: auto;
+  min-height: 180px;
+}
+.project-card,
+.project-add-card {
+  min-height: 235px;
+  padding: 18px;
+  border: 1px solid #e0e7f0;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 5px 18px rgba(36, 59, 94, 0.04);
+}
+.project-card.archived {
+  opacity: 0.72;
+}
+.project-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.project-card-icon {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 9px;
+  background: #edf3ff;
+  color: #4d7be4;
+}
+.project-card-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin: 18px 0 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #33445d;
+  cursor: pointer;
+  text-align: left;
+}
+.project-card-title strong {
+  overflow: hidden;
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-card-title strong small {
+  margin-left: 7px;
+  color: #7893bd;
+  font-size: 10px;
+  font-weight: 700;
+}
+.project-card-title:hover {
+  color: #3f75dd;
+}
+.project-id {
+  color: #9ba7b6;
+  font-size: 9px;
+}
+.project-path {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  margin-top: 17px;
+  color: #77869b;
+  font:
+    10px ui-monospace,
+    monospace;
+}
+.project-path span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-current {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 15px;
+  color: #8b98a9;
+  font-size: 10px;
+}
+.project-current code {
+  overflow: hidden;
+  margin-left: auto;
+  color: #657ba9;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-facts {
+  display: flex;
+  gap: 15px;
+  margin-top: 17px;
+  color: #9aa6b6;
+  font-size: 10px;
+}
+.project-facts span {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.project-facts-secondary {
+  margin-top: 9px;
+}
+.project-card-footer {
+  display: flex;
+  gap: 0;
+  margin-top: 19px;
+  padding-top: 11px;
+  border-top: 1px solid #edf0f4;
+}
+.project-card-footer .el-button {
+  padding: 0 7px;
+  font-size: 10px;
+}
+.project-add-card {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  border-style: dashed;
+  color: #8190a4;
+  cursor: pointer;
+  text-align: center;
+}
+.project-add-card:hover {
+  border-color: #9bb7f0;
+  background: #fbfdff;
+  color: #4d77d1;
+}
+.project-add-card > span {
+  display: grid;
+  place-items: center;
+  width: 39px;
+  height: 39px;
+  border-radius: 50%;
+  background: #edf3ff;
+  color: #4e7ae0;
+}
+.project-add-card strong {
+  font-size: 12px;
+}
+.project-add-card small {
+  color: #a0acbb;
+  font-size: 10px;
+}
+.catalog-empty {
+  grid-column: 1 / -1;
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 46px;
+  border: 1px dashed #dbe3ed;
+  border-radius: 10px;
+  color: #a5b0bd;
+}
+.catalog-empty strong {
+  color: #627188;
+  font-size: 13px;
+}
+.catalog-empty span {
+  font-size: 10px;
+}
+.project-dialog-intro {
+  margin-bottom: 18px;
+  padding: 11px 12px;
+  border: 1px solid #dbe7ff;
+  border-radius: 7px;
+  background: #f6f9ff;
+  color: #7083a4;
+  font-size: 10px;
+  line-height: 1.5;
+}
+.dialog-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 13px;
+}
+.form-help {
+  display: block;
+  margin-top: 5px;
+  color: #9aa6b6;
+  font-size: 9px;
+}
+@media (max-width: 760px) {
+  .project-catalog-page {
+    padding: 28px 20px;
+  }
+  .catalog-heading {
+    display: block;
+  }
+  .catalog-actions {
+    margin-top: 17px;
+  }
+  .dialog-form-grid {
+    grid-template-columns: 1fr;
+  }
+}
 </style>

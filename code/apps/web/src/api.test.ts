@@ -8,7 +8,8 @@ import { api } from "./api";
 
 describe("api request errors", () => {
   it("loads the API health endpoint and preserves health request failures", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch")
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(new Response(JSON.stringify({ status: "ok", model: "gpt-5.6-luna" }), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ error: "API unavailable" }), { status: 500 }));
 
@@ -20,25 +21,39 @@ describe("api request errors", () => {
   });
 
   it("loads confirmed plans for an Explorer through the dedicated projection", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ items: [{ planId: "plan-1", status: "READY" }] }), { status: 200 }));
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ items: [{ planId: "plan-1", status: "READY" }] }), { status: 200 }));
 
-    await expect(api.explorerConfirmedPlans("project-1", "explorer-1")).resolves.toMatchObject({ items: [{ planId: "plan-1", status: "READY" }] });
+    await expect(api.explorerConfirmedPlans("project-1", "explorer-1")).resolves.toMatchObject({
+      items: [{ planId: "plan-1", status: "READY" }],
+    });
     expect(fetchSpy).toHaveBeenCalledWith("/api/v4/projects/project-1/explorers/explorer-1/confirmed-plans", { headers: {} });
 
     fetchSpy.mockRestore();
   });
 
   it("loads a Candidate plan scoped to the active Explorer Task", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ plan: { id: "plan-1", explorerPlanId: "task-1", status: "DRAFT" } }), { status: 200 }));
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        new Response(JSON.stringify({ plan: { id: "plan-1", explorerPlanId: "task-1", status: "DRAFT" } }), { status: 200 }),
+      );
 
     await expect(api.explorerCandidate("project-1", "explorer-1", "task-1")).resolves.toMatchObject({ plan: { explorerPlanId: "task-1" } });
-    expect(fetchSpy).toHaveBeenCalledWith("/api/v4/projects/project-1/explorers/explorer-1/candidate?explorerPlanId=task-1", { headers: {} });
+    expect(fetchSpy).toHaveBeenCalledWith("/api/v4/projects/project-1/explorers/explorer-1/candidate?explorerPlanId=task-1", {
+      headers: {},
+    });
 
     fetchSpy.mockRestore();
   });
 
   it("reconciles external merges through the project-scoped endpoint", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ projectId: "project-1", checkedAt: "2026-09-06T00:00:00.000Z", items: [] }), { status: 200 }));
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        new Response(JSON.stringify({ projectId: "project-1", checkedAt: "2026-09-06T00:00:00.000Z", items: [] }), { status: 200 }),
+      );
 
     await expect(api.reconcileProjectMerges("project-1")).resolves.toMatchObject({ projectId: "project-1", items: [] });
     expect(fetchSpy).toHaveBeenCalledWith("/api/v4/projects/project-1/merge-reconciliation", { method: "POST", headers: {} });
@@ -47,9 +62,13 @@ describe("api request errors", () => {
   });
 
   it("renames an Explorer through the existing typed endpoint", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ explorer: { id: "explorer-1", title: "Renamed thread" } }), { status: 200 }));
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ explorer: { id: "explorer-1", title: "Renamed thread" } }), { status: 200 }));
 
-    await expect(api.renameExplorer("project-1", "explorer-1", "Renamed thread")).resolves.toMatchObject({ explorer: { title: "Renamed thread" } });
+    await expect(api.renameExplorer("project-1", "explorer-1", "Renamed thread")).resolves.toMatchObject({
+      explorer: { title: "Renamed thread" },
+    });
     expect(fetchSpy).toHaveBeenCalledWith("/api/v4/projects/project-1/explorers/explorer-1/rename", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -60,16 +79,31 @@ describe("api request errors", () => {
   });
 
   it("deletes an Explorer through the project-scoped DELETE endpoint", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ deletedExplorerId: "explorer-1", replacementExplorer: { id: "explorer-2" }, project: { id: "project-1" }, deleted: { taskCount: 1, planCount: 2, runCount: 0 } }), { status: 200 }));
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          deletedExplorerId: "explorer-1",
+          replacementExplorer: { id: "explorer-2" },
+          project: { id: "project-1" },
+          deleted: { taskCount: 1, planCount: 2, runCount: 0 },
+        }),
+        { status: 200 },
+      ),
+    );
 
-    await expect(api.deleteExplorer("project/1", "explorer/1")).resolves.toMatchObject({ deletedExplorerId: "explorer-1", deleted: { planCount: 2 } });
+    await expect(api.deleteExplorer("project/1", "explorer/1")).resolves.toMatchObject({
+      deletedExplorerId: "explorer-1",
+      deleted: { planCount: 2 },
+    });
     expect(fetchSpy).toHaveBeenCalledWith("/api/v4/projects/project%2F1/explorers/explorer%2F1", { method: "DELETE", headers: {} });
 
     fetchSpy.mockRestore();
   });
 
   it("creates a configuration revision through the Plan recovery endpoint", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ plan: { id: "plan-1", revision: 2, status: "READY" } }), { status: 200 }));
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ plan: { id: "plan-1", revision: 2, status: "READY" } }), { status: 200 }));
 
     await expect(api.revisePlanConfiguration("plan-1")).resolves.toMatchObject({ plan: { revision: 2, status: "READY" } });
     expect(fetchSpy).toHaveBeenCalledWith("/api/v4/plans/plan-1/revise-configuration", {
@@ -82,7 +116,9 @@ describe("api request errors", () => {
   });
 
   it("preserves the HTTP status for a missing Run", async () => {
-    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ error: "Run not found" }), { status: 404 }));
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ error: "Run not found" }), { status: 404 }));
 
     await expect(api.getRun("run-1")).rejects.toMatchObject({ name: "ApiRequestError", status: 404, message: "Run not found" });
 

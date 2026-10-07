@@ -94,12 +94,12 @@ export class ModelRunBranchNameGenerator implements RunBranchNameGenerator {
         // 与起标题同理：借用 explorer 角色的命名调用必须是 default 模式，不能继承探索的 plan 语义。
         mode: "default",
         conversationId: `run-branch-${input.createdAt}`,
-        messages: [{
-          role: "user",
-          content: RUN_BRANCH_SUMMARY_PROMPT
-            .replace("{{PLAN_TITLE}}", input.planTitle)
-            .replace("{{PLAN_GOAL}}", input.goal),
-        }],
+        messages: [
+          {
+            role: "user",
+            content: RUN_BRANCH_SUMMARY_PROMPT.replace("{{PLAN_TITLE}}", input.planTitle).replace("{{PLAN_GOAL}}", input.goal),
+          },
+        ],
         signal: controller.signal,
       })) {
         if (event.type === "text.delta") text += event.text;

@@ -78,7 +78,12 @@ export function composeExplorerTitle(createdAt: string, title: string): string {
 
 /** 清理 Markdown、前缀和尾部标点，并限制标题长度以保证导航栏可读。 */
 export function normalizeExplorerTitle(value: string): string | null {
-  let title = value.trim().replace(/^```(?:text|markdown)?\s*/i, "").replace(/\s*```$/i, "").split(/\r?\n/, 1)[0]!.trim();
+  let title = value
+    .trim()
+    .replace(/^```(?:text|markdown)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .split(/\r?\n/, 1)[0]!
+    .trim();
   title = title.replace(/[。.!！?？:：,，;；、…]+$/u, "").trim();
   title = title
     .replace(/^#{1,6}\s*/, "")

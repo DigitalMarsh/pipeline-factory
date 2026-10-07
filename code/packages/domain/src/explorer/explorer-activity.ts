@@ -151,12 +151,26 @@ const KIND_BY_ACTIVITY: Record<ProviderActivityKind, ExplorerActivityKind> = {
  * **不各自列白名单**——中立词表里 `isRuntimeKind()` 是那条判据的唯一定义处。
  */
 export const EXPLORER_RUNTIME_KINDS: ReadonlySet<ExplorerActivityKind> = new Set([
-  "PROVIDER_COMPACTION", "PERMISSION_DENIED", "RATE_LIMIT", "PROVIDER_RETRY",
-  "BACKGROUND_TASK", "HOOK", "PROVIDER_WARNING", "SESSION",
+  "PROVIDER_COMPACTION",
+  "PERMISSION_DENIED",
+  "RATE_LIMIT",
+  "PROVIDER_RETRY",
+  "BACKGROUND_TASK",
+  "HOOK",
+  "PROVIDER_WARNING",
+  "SESSION",
 ]);
 
 /** 工具类条目：它们按身份键合成一条，且正文/名字的摆法相同。 */
-const TOOL_KINDS: ReadonlySet<ExplorerActivityKind> = new Set(["COMMAND", "FILE_CHANGE", "TOOL_CALL", "MCP_CALL", "SUBAGENT", "WEB_SEARCH", "IMAGE_GENERATION"]);
+const TOOL_KINDS: ReadonlySet<ExplorerActivityKind> = new Set([
+  "COMMAND",
+  "FILE_CHANGE",
+  "TOOL_CALL",
+  "MCP_CALL",
+  "SUBAGENT",
+  "WEB_SEARCH",
+  "IMAGE_GENERATION",
+]);
 
 /**
  * 需要按身份键合并的类别 = 任何**有身份**的条目：工具类，加上推理、Provider 回声与未识别项，
@@ -164,7 +178,15 @@ const TOOL_KINDS: ReadonlySet<ExplorerActivityKind> = new Set(["COMMAND", "FILE_
  * 判据是身份本身，不是类别清单——`itemId` / `callId` 就是"这是同一个活动"的定义，
  * 条目的类别只决定它长什么样（见模块头 2）。
  */
-const MERGED_KINDS: ReadonlySet<ExplorerActivityKind> = new Set([...TOOL_KINDS, "REASONING", "PROVIDER_MESSAGE", "SESSION", "UNCLASSIFIED", "HOOK", "BACKGROUND_TASK"]);
+const MERGED_KINDS: ReadonlySet<ExplorerActivityKind> = new Set([
+  ...TOOL_KINDS,
+  "REASONING",
+  "PROVIDER_MESSAGE",
+  "SESSION",
+  "UNCLASSIFIED",
+  "HOOK",
+  "BACKGROUND_TASK",
+]);
 
 function countArray(record: Record<string, unknown>, key: string): number | undefined {
   const value = record[key];
@@ -192,13 +214,16 @@ function nonEmptyString(value: unknown): string | undefined {
 }
 
 function formatPlanActivity(content: string, providerItemId: string | null = null): PlanActivityDisplay {
-  const withProviderItem = (details: Record<string, unknown> | null): Record<string, unknown> | null => providerItemId ? { ...(details ?? {}), providerItemId } : details;
+  const withProviderItem = (details: Record<string, unknown> | null): Record<string, unknown> | null =>
+    providerItemId ? { ...(details ?? {}), providerItemId } : details;
   const hasProtocol = STATUS_OPEN_TAG.test(content) || PLAN_OPEN_TAG.test(content);
   if (!hasProtocol) return { summary: content, details: withProviderItem(null) };
 
   const prose = stripPlanProtocol(content);
   const candidates = planProtocolCandidates(content);
-  const displayable = [...candidates].reverse().find((candidate) => candidate.status === "READY" && parsePlanArtifact(candidate.artifactText));
+  const displayable = [...candidates]
+    .reverse()
+    .find((candidate) => candidate.status === "READY" && parsePlanArtifact(candidate.artifactText));
   const latest = candidates.at(-1);
   if (displayable) {
     const parsed = parsePlanArtifact(displayable.artifactText)!;
@@ -208,10 +233,16 @@ function formatPlanActivity(content: string, providerItemId: string | null = nul
     };
   }
   if (latest?.status !== "READY" || !latest.artifactText) {
-    return { summary: [prose, "正在整理结构化计划…"].filter(Boolean).join(" "), details: withProviderItem({ planProtocol: true, status: "GENERATING" }) };
+    return {
+      summary: [prose, "正在整理结构化计划…"].filter(Boolean).join(" "),
+      details: withProviderItem({ planProtocol: true, status: "GENERATING" }),
+    };
   }
 
-  return { summary: [prose, "结构化计划校验失败，请继续完善。"].filter(Boolean).join(" "), details: withProviderItem({ planProtocol: true, status: "INVALID" }) };
+  return {
+    summary: [prose, "结构化计划校验失败，请继续完善。"].filter(Boolean).join(" "),
+    details: withProviderItem({ planProtocol: true, status: "INVALID" }),
+  };
 }
 
 function planProtocolCandidates(content: string): Array<{ status: string; artifactText: string }> {
@@ -220,7 +251,9 @@ function planProtocolCandidates(content: string): Array<{ status: string; artifa
   return statusMatches.flatMap((statusMatch, index) => {
     const statusEnd = (statusMatch.index ?? 0) + statusMatch[0].length;
     const nextStatusStart = statusMatches[index + 1]?.index ?? content.length;
-    const plan = planMatches.find((candidate) => (candidate.index ?? -1) >= statusEnd && (candidate.index ?? content.length) < nextStatusStart);
+    const plan = planMatches.find(
+      (candidate) => (candidate.index ?? -1) >= statusEnd && (candidate.index ?? content.length) < nextStatusStart,
+    );
     return plan?.[1] && typeof statusMatch[1] === "string" ? [{ status: statusMatch[1].trim().toUpperCase(), artifactText: plan[1] }] : [];
   });
 }
@@ -274,7 +307,12 @@ export function projectExplorerActivity(input: ExplorerActivityInput): ExplorerA
   const result: ActivityWithOrder[] = [];
   let order = 0;
   const append = (item: Omit<ExplorerActivityItem, "id" | "sequence">, stableSequence: number): ActivityWithOrder => {
-    const appended: ActivityWithOrder = { ...item, id: `activity-${item.turnId}-${stableSequence}-${result.length}`, sequence: result.length + 1, order: order++ };
+    const appended: ActivityWithOrder = {
+      ...item,
+      id: `activity-${item.turnId}-${stableSequence}-${result.length}`,
+      sequence: result.length + 1,
+      order: order++,
+    };
     result.push(appended);
     return appended;
   };
@@ -282,7 +320,20 @@ export function projectExplorerActivity(input: ExplorerActivityInput): ExplorerA
   // Turn 是对话主序列，Loop Step 只补充模型推理、工具和门禁活动；最终序号按发生时间重新归一化。
   for (const turn of [...input.turns].sort((a, b) => a.sequence - b.sequence)) {
     if (turn.role === "user") {
-      append({ explorerId: turn.threadId, ...(turn.explorerPlanId ? { explorerPlanId: turn.explorerPlanId } : {}), turnId: turn.id, kind: "USER_MESSAGE", status: "COMPLETED", title: "You", summary: turn.content, details: null, occurredAt: turn.createdAt }, turn.sequence);
+      append(
+        {
+          explorerId: turn.threadId,
+          ...(turn.explorerPlanId ? { explorerPlanId: turn.explorerPlanId } : {}),
+          turnId: turn.id,
+          kind: "USER_MESSAGE",
+          status: "COMPLETED",
+          title: "You",
+          summary: turn.content,
+          details: null,
+          occurredAt: turn.createdAt,
+        },
+        turn.sequence,
+      );
       continue;
     }
 
@@ -310,7 +361,20 @@ export function projectExplorerActivity(input: ExplorerActivityInput): ExplorerA
           if (providerItemId) openAssistant.details = { ...(openAssistant.details ?? {}), providerItemId };
           continue;
         }
-        openAssistant = append({ explorerId: turn.threadId, ...(turn.explorerPlanId ? { explorerPlanId: turn.explorerPlanId } : {}), turnId: turn.id, kind: "ASSISTANT_MESSAGE", status: assistantActivityStatus(turn.status), title: "Plan Explorer", summary: text, details: providerItemId ? { providerItemId } : null, occurredAt: step.occurredAt }, step.sequence);
+        openAssistant = append(
+          {
+            explorerId: turn.threadId,
+            ...(turn.explorerPlanId ? { explorerPlanId: turn.explorerPlanId } : {}),
+            turnId: turn.id,
+            kind: "ASSISTANT_MESSAGE",
+            status: assistantActivityStatus(turn.status),
+            title: "Plan Explorer",
+            summary: text,
+            details: providerItemId ? { providerItemId } : null,
+            occurredAt: step.occurredAt,
+          },
+          step.sequence,
+        );
         continue;
       }
       openAssistant = null;
@@ -335,10 +399,42 @@ export function projectExplorerActivity(input: ExplorerActivityInput): ExplorerA
     }
     if (!assistantText && turn.content.trim()) {
       const display = formatPlanActivity(turn.content);
-      append({ explorerId: turn.threadId, ...(turn.explorerPlanId ? { explorerPlanId: turn.explorerPlanId } : {}), turnId: turn.id, kind: "ASSISTANT_MESSAGE", status: turn.status === "FAILED" ? "FAILED" : "COMPLETED", title: "Plan Explorer", summary: display.summary, details: turn.error ? { error: turn.error, ...(display.details ?? {}) } : display.details, occurredAt: turn.createdAt }, assistantSequence);
+      append(
+        {
+          explorerId: turn.threadId,
+          ...(turn.explorerPlanId ? { explorerPlanId: turn.explorerPlanId } : {}),
+          turnId: turn.id,
+          kind: "ASSISTANT_MESSAGE",
+          status: turn.status === "FAILED" ? "FAILED" : "COMPLETED",
+          title: "Plan Explorer",
+          summary: display.summary,
+          details: turn.error ? { error: turn.error, ...(display.details ?? {}) } : display.details,
+          occurredAt: turn.createdAt,
+        },
+        assistantSequence,
+      );
     }
     if (!steps.length && !turn.content.trim()) {
-      append({ explorerId: turn.threadId, ...(turn.explorerPlanId ? { explorerPlanId: turn.explorerPlanId } : {}), turnId: turn.id, kind: "TURN_STATUS", status: turn.status === "WAITING_FOR_INPUT" || turn.status === "QUEUED" ? "WAITING" : turn.status === "FAILED" ? "FAILED" : "RUNNING", title: "Plan Explorer", summary: turn.status === "WAITING_FOR_INPUT" ? "等待输入" : turn.status === "QUEUED" ? "已排队，等待 worker 接手" : "Plan Explorer 正在处理", details: turn.error ? { error: turn.error } : null, occurredAt: turn.createdAt }, turn.sequence);
+      append(
+        {
+          explorerId: turn.threadId,
+          ...(turn.explorerPlanId ? { explorerPlanId: turn.explorerPlanId } : {}),
+          turnId: turn.id,
+          kind: "TURN_STATUS",
+          status:
+            turn.status === "WAITING_FOR_INPUT" || turn.status === "QUEUED" ? "WAITING" : turn.status === "FAILED" ? "FAILED" : "RUNNING",
+          title: "Plan Explorer",
+          summary:
+            turn.status === "WAITING_FOR_INPUT"
+              ? "等待输入"
+              : turn.status === "QUEUED"
+                ? "已排队，等待 worker 接手"
+                : "Plan Explorer 正在处理",
+          details: turn.error ? { error: turn.error } : null,
+          occurredAt: turn.createdAt,
+        },
+        turn.sequence,
+      );
     }
   }
 
@@ -410,7 +506,11 @@ function statusFromOutcome(outcome: ProviderActivityOutcome, phase: "started" | 
  * Provider 从来没表达过。带 `outcome`（或带 `status` / `error` 这两条成败证据）之后一律按中立成败判，
  * 与执行侧 `projectExecutionJournal` 同一条规则。
  */
-function providerStatusFor(payload: Record<string, unknown>, kind: ProviderActivityKind, phase: "started" | "completed"): ExplorerActivityItem["status"] {
+function providerStatusFor(
+  payload: Record<string, unknown>,
+  kind: ProviderActivityKind,
+  phase: "started" | "completed",
+): ExplorerActivityItem["status"] {
   const status = nonEmptyString(payload.providerStatus);
   const error = nonEmptyString(payload.error);
   if (isProviderActivityOutcome(payload.outcome)) return statusFromOutcome(payload.outcome, phase);
@@ -427,7 +527,12 @@ function readActivityKind(value: unknown, itemType: string, toolName: string | u
 
 function activityFromStep(turn: ExplorerTurn, step: AgentLoopStep): Omit<ExplorerActivityItem, "id" | "sequence"> | null {
   const payload = step.payload;
-  const base: ActivitySource = { explorerId: turn.threadId, ...(turn.explorerPlanId ? { explorerPlanId: turn.explorerPlanId } : {}), turnId: turn.id, occurredAt: step.occurredAt };
+  const base: ActivitySource = {
+    explorerId: turn.threadId,
+    ...(turn.explorerPlanId ? { explorerPlanId: turn.explorerPlanId } : {}),
+    turnId: turn.id,
+    occurredAt: step.occurredAt,
+  };
   if (step.stepType === "PROVIDER_ACTIVITY") {
     const itemType = nonEmptyString(payload.itemType) ?? "provider-item";
     const phase = payload.phase === "completed" ? "completed" : "started";
@@ -438,7 +543,7 @@ function activityFromStep(turn: ExplorerTurn, step: AgentLoopStep): Omit<Explore
     // 名字只有一个来源：Provider 给的 title，其次工具名（带 Server 前缀），其次空串——
     // 空的时候由呈现层把 summary 顶上（命令原文、文件路径都是"在跑什么"）。
     const serverName = nonEmptyString(payload.serverName);
-    const title = nonEmptyString(payload.title) ?? (toolName ? `${serverName ? `${serverName}/` : ""}${toolName}` : serverName ?? "");
+    const title = nonEmptyString(payload.title) ?? (toolName ? `${serverName ? `${serverName}/` : ""}${toolName}` : (serverName ?? ""));
     // Provider 没给摘要就**交空串**，不要补 "Provider activity started." 这类句子：那两句话把
     // 「有没有摘要」这个可判定的事实，变成了一句要靠字符串识别才能认出的文案，而它本身什么都没说。
     //
@@ -447,24 +552,58 @@ function activityFromStep(turn: ExplorerTurn, step: AgentLoopStep): Omit<Explore
     // 2000 与展示边界那一档同值（`apps/web/src/utils/sensitiveValue.ts`）。
     const summary = (nonEmptyString(payload.summary) ?? "").slice(0, activityKind === "reasoning" ? 2_000 : 240);
     const itemId = nonEmptyString(payload.itemId) ?? nonEmptyString(payload.providerItemId);
-    return { ...base, kind: KIND_BY_ACTIVITY[activityKind], status, title, summary, details: { itemId: itemId ?? null, itemType, providerControlled: true, ...structuredDetails(payload), ...(toolName ? { toolName } : {}), ...(serverName ? { serverName } : {}), ...(reason ? { reason } : {}) } };
+    return {
+      ...base,
+      kind: KIND_BY_ACTIVITY[activityKind],
+      status,
+      title,
+      summary,
+      details: {
+        itemId: itemId ?? null,
+        itemType,
+        providerControlled: true,
+        ...structuredDetails(payload),
+        ...(toolName ? { toolName } : {}),
+        ...(serverName ? { serverName } : {}),
+        ...(reason ? { reason } : {}),
+      },
+    };
   }
   // 轮次开始只是一条"这一轮跑起来了"的标记，正文留空——呈现层会退回行首标签（"推理"），
   // 比摆一句 `Plan Explorer started step 3.` 更少噪音，也不必为它想一句中文。
-  if (step.stepType === "MODEL_STARTED") return { ...base, kind: "REASONING", status: "RUNNING", title: "", summary: "", details: { step: payload.step ?? step.sequence } };
+  if (step.stepType === "MODEL_STARTED")
+    return { ...base, kind: "REASONING", status: "RUNNING", title: "", summary: "", details: { step: payload.step ?? step.sequence } };
   if (step.stepType === "TOOL_REQUESTED") return toolStep(base, "RUNNING", nonEmptyString(payload.tool), step.callId, null);
   // 一次调用的四种结束：正常完成、被策略拒绝、执行失败、需要人工对账。
   // 后两种此前**连一行都没有**（这里没有分支，静默掉了）——"工具失败了"在时间线上看不见。
   if (step.stepType === "TOOL_COMPLETED") return toolStep(base, "COMPLETED", null, step.callId, nonEmptyString(payload.reason));
-  if (step.stepType === "TOOL_FAILED" || step.stepType === "TOOL_NEEDS_RECONCILIATION" || step.stepType === "TOOL_DENIED") return toolStep(base, "FAILED", null, step.callId, nonEmptyString(payload.reason));
-  if (step.stepType === "CONTEXT_COMPACTED") return { ...base, kind: "CONTEXT", status: "COMPLETED", title: "Context checkpointed", summary: "The loop saved a checkpoint before continuing.", details: { messageCount: payload.messageCount ?? null } };
+  if (step.stepType === "TOOL_FAILED" || step.stepType === "TOOL_NEEDS_RECONCILIATION" || step.stepType === "TOOL_DENIED")
+    return toolStep(base, "FAILED", null, step.callId, nonEmptyString(payload.reason));
+  if (step.stepType === "CONTEXT_COMPACTED")
+    return {
+      ...base,
+      kind: "CONTEXT",
+      status: "COMPLETED",
+      title: "Context checkpointed",
+      summary: "The loop saved a checkpoint before continuing.",
+      details: { messageCount: payload.messageCount ?? null },
+    };
   // 门禁只在**拦截**时成行：实测本机库 90 条判定里 complete 51 / continue 39 / blocked 0——
   // 每轮都写一行"一切正常"是刷屏，而"这一轮为什么停下"已经由回合状态本身说清了。
-  if (step.stepType === "GATE_CHECKED") return payload.action === "blocked"
-    ? { ...base, kind: "GATE", status: "FAILED", title: "Gate checked", summary: nonEmptyString(payload.reason) ?? "The termination gate blocked this step.", details: { action: payload.action ?? null } }
-    : null;
+  if (step.stepType === "GATE_CHECKED")
+    return payload.action === "blocked"
+      ? {
+          ...base,
+          kind: "GATE",
+          status: "FAILED",
+          title: "Gate checked",
+          summary: nonEmptyString(payload.reason) ?? "The termination gate blocked this step.",
+          details: { action: payload.action ?? null },
+        }
+      : null;
   // 同轮次开始：状态标签已经说了"已完成"，不再补一句 `The model step completed.` 的机械话。
-  if (step.stepType === "MODEL_COMPLETED") return { ...base, kind: "TURN_STATUS", status: "COMPLETED", title: "", summary: "", details: { step: payload.step ?? step.sequence } };
+  if (step.stepType === "MODEL_COMPLETED")
+    return { ...base, kind: "TURN_STATUS", status: "COMPLETED", title: "", summary: "", details: { step: payload.step ?? step.sequence } };
   return null;
 }
 
@@ -474,7 +613,13 @@ function activityFromStep(turn: ExplorerTurn, step: AgentLoopStep): Omit<Explore
  * 两者都放 `details` 而不是 `summary`：`summary` 在呈现层是"没别的可说了就把我当名字用"的位置，
  * 把一句失败原因放进去，一次没有开始记录的调用就会被读成叫这个名字。
  */
-function toolStep(base: ActivitySource, status: ExplorerActivityItem["status"], tool: string | null | undefined, callId: string | null, reason: string | null | undefined): Omit<ExplorerActivityItem, "id" | "sequence"> {
+function toolStep(
+  base: ActivitySource,
+  status: ExplorerActivityItem["status"],
+  tool: string | null | undefined,
+  callId: string | null,
+  reason: string | null | undefined,
+): Omit<ExplorerActivityItem, "id" | "sequence"> {
   return {
     ...base,
     kind: "TOOL_CALL",

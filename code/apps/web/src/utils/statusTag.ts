@@ -22,48 +22,56 @@ export type StatusTagType = "primary" | "success" | "info" | "warning" | "danger
 
 /** 执行会话条目（`ExecutionStreamItem`）与探索活动（`ExplorerActivityItem`）共用的状态取值。 */
 export function statusTagType(status: "RUNNING" | "COMPLETED" | "WAITING" | "FAILED" | "INFO" | "UNKNOWN"): StatusTagType {
-  return ({
-    RUNNING: "warning",
-    COMPLETED: "success",
-    WAITING: "info",
-    FAILED: "danger",
-    INFO: "info",
-    UNKNOWN: "info",
-  } as const)[status];
+  return (
+    {
+      RUNNING: "warning",
+      COMPLETED: "success",
+      WAITING: "info",
+      FAILED: "danger",
+      INFO: "info",
+      UNKNOWN: "info",
+    } as const
+  )[status];
 }
 
 /** 结构化提问卡的状态机（见 `docs/消息类型及事件状态机流程图.md` §1.3 B）。 */
 export function inputStatusTagType(status: ExplorerInputRequest["status"]): StatusTagType {
-  return ({
-    OPEN: "info",
-    SUBMITTING: "primary",
-    ANSWERED: "success",
-    CANCELLED: "info",
-    RECOVERY_REQUIRED: "danger",
-  } as const)[status];
+  return (
+    {
+      OPEN: "info",
+      SUBMITTING: "primary",
+      ANSWERED: "success",
+      CANCELLED: "info",
+      RECOVERY_REQUIRED: "danger",
+    } as const
+  )[status];
 }
 
 /** 需求清单里那两个状态（`explorerRequirementRows` 的 `tone`）→ 标签类型。五种 tone 与五种类型一一对应。 */
 export function requirementStatusTagType(tone: RequirementStatusTone): StatusTagType {
-  return ({
-    progress: "primary",
-    attention: "warning",
-    success: "success",
-    danger: "danger",
-    neutral: "info",
-  } as const)[tone];
+  return (
+    {
+      progress: "primary",
+      attention: "warning",
+      success: "success",
+      danger: "danger",
+      neutral: "info",
+    } as const
+  )[tone];
 }
 
 /** 项目执行线程面板（对话框 C）里助手消息的状态。与 `ProjectExecutionMessage.status` 同集合。 */
 export function projectExecutionStatusTagType(status: ProjectExecutionMessage["status"]): StatusTagType {
-  return ({
-    QUEUED: "info",
-    RUNNING: "warning",
-    COMPLETED: "success",
-    FAILED: "danger",
-    CANCELLED: "info",
-    RECOVERY_REQUIRED: "danger",
-  } as const)[status];
+  return (
+    {
+      QUEUED: "info",
+      RUNNING: "warning",
+      COMPLETED: "success",
+      FAILED: "danger",
+      CANCELLED: "info",
+      RECOVERY_REQUIRED: "danger",
+    } as const
+  )[status];
 }
 
 /** 项目状态（左侧栏的项目头与项目切换列表）。 */

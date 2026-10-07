@@ -30,7 +30,8 @@ export class VerificationService {
 
   /** 执行验证命令，失败时最多按 Plan contract 重试 repair。 */
   async verify(run: Run, revision: PlanRevision, execute: VerificationCommandExecutor, repair?: RepairExecutor): Promise<VerificationRun> {
-    if (run.status !== "IN_PROGRESS" && run.status !== "READY_FOR_VERIFY") throw new Error(`Run ${run.id} cannot be verified from ${run.status}`);
+    if (run.status !== "IN_PROGRESS" && run.status !== "READY_FOR_VERIFY")
+      throw new Error(`Run ${run.id} cannot be verified from ${run.status}`);
     run.status = "VERIFYING";
     this.store?.saveRun(run);
     const verifyingPlan = this.store?.getPlan(run.planId);
@@ -40,7 +41,15 @@ export class VerificationService {
     const commandIds = revision.resolvedContract.verification.commandIds;
     if (revision.resolvedContract.verification.mode === "NONE" || commandIds.length === 0) {
       run.status = "MERGE_READY";
-      const verification: VerificationRun = { id: `verification-${randomUUID().slice(0, 12)}`, runId: run.id, status: "SKIPPED", reason: "NO_PROJECT_VERIFICATION_COMMANDS", repairAttempts: 0, commandResults: [], completedAt: this.store?.now() ?? new Date().toISOString() };
+      const verification: VerificationRun = {
+        id: `verification-${randomUUID().slice(0, 12)}`,
+        runId: run.id,
+        status: "SKIPPED",
+        reason: "NO_PROJECT_VERIFICATION_COMMANDS",
+        repairAttempts: 0,
+        commandResults: [],
+        completedAt: this.store?.now() ?? new Date().toISOString(),
+      };
       this.record(run, verification);
       return verification;
     }
@@ -52,17 +61,34 @@ export class VerificationService {
       for (const commandId of commandIds) {
         const result = await execute(commandId, run);
         commandResults.push({ commandId, result });
-        if (result.exitCode !== 0) { failed = true; break; }
+        if (result.exitCode !== 0) {
+          failed = true;
+          break;
+        }
       }
       if (!failed) {
         run.status = "MERGE_READY";
-        const verification = { id: `verification-${randomUUID().slice(0, 12)}`, runId: run.id, status: "PASSED" as const, repairAttempts, commandResults: [...commandResults], completedAt: this.store?.now() ?? new Date().toISOString() };
+        const verification = {
+          id: `verification-${randomUUID().slice(0, 12)}`,
+          runId: run.id,
+          status: "PASSED" as const,
+          repairAttempts,
+          commandResults: [...commandResults],
+          completedAt: this.store?.now() ?? new Date().toISOString(),
+        };
         this.record(run, verification);
         return verification;
       }
       if (!repair || repairAttempts >= revision.resolvedContract.execution.maxRepairAttempts) {
         run.status = "BLOCKED";
-        const verification = { id: `verification-${randomUUID().slice(0, 12)}`, runId: run.id, status: repairAttempts >= revision.resolvedContract.execution.maxRepairAttempts ? "BLOCKED" as const : "FAILED" as const, repairAttempts, commandResults: [...commandResults], completedAt: this.store?.now() ?? new Date().toISOString() };
+        const verification = {
+          id: `verification-${randomUUID().slice(0, 12)}`,
+          runId: run.id,
+          status: repairAttempts >= revision.resolvedContract.execution.maxRepairAttempts ? ("BLOCKED" as const) : ("FAILED" as const),
+          repairAttempts,
+          commandResults: [...commandResults],
+          completedAt: this.store?.now() ?? new Date().toISOString(),
+        };
         this.record(run, verification);
         return verification;
       }
@@ -70,7 +96,14 @@ export class VerificationService {
       const repaired = await repair(run, repairAttempts);
       if (!repaired && repairAttempts >= revision.resolvedContract.execution.maxRepairAttempts) {
         run.status = "BLOCKED";
-        const verification = { id: `verification-${randomUUID().slice(0, 12)}`, runId: run.id, status: "BLOCKED" as const, repairAttempts, commandResults: [...commandResults], completedAt: this.store?.now() ?? new Date().toISOString() };
+        const verification = {
+          id: `verification-${randomUUID().slice(0, 12)}`,
+          runId: run.id,
+          status: "BLOCKED" as const,
+          repairAttempts,
+          commandResults: [...commandResults],
+          completedAt: this.store?.now() ?? new Date().toISOString(),
+        };
         this.record(run, verification);
         return verification;
       }
@@ -83,16 +116,31 @@ export class VerificationService {
     this.store.saveRun(run);
     const plan = this.store.getPlan(run.planId);
     if (plan && plan.runId === run.id) {
-      updatePlanStatus(this.store, plan, {
-        status: verification.status === "PASSED" || verification.status === "SKIPPED" ? "MERGE_READY" : "BLOCKED",
-        attentionReason: verification.status === "PASSED" || verification.status === "SKIPPED" ? null : "Verification failed",
-        lastEventAt: verification.completedAt,
-      }, verification.status === "PASSED" || verification.status === "SKIPPED" ? null : "Verification failed");
+      updatePlanStatus(
+        this.store,
+        plan,
+        {
+          status: verification.status === "PASSED" || verification.status === "SKIPPED" ? "MERGE_READY" : "BLOCKED",
+          attentionReason: verification.status === "PASSED" || verification.status === "SKIPPED" ? null : "Verification failed",
+          lastEventAt: verification.completedAt,
+        },
+        verification.status === "PASSED" || verification.status === "SKIPPED" ? null : "Verification failed",
+      );
     }
     const thread = this.store.getExecutionThread(run.executionThreadId);
     if (thread) {
-      this.store.appendExecutionJournal({ executionThreadId: thread.id, runId: thread.runId, type: "VERIFICATION", occurredAt: verification.completedAt, payload: verification });
+      this.store.appendExecutionJournal({
+        executionThreadId: thread.id,
+        runId: thread.runId,
+        type: "VERIFICATION",
+        occurredAt: verification.completedAt,
+        payload: verification,
+      });
     }
-    this.store.appendEvent({ type: "verification.completed", aggregateId: run.id, payload: { ...verification, planId: run.planId, revision: run.planRevision } });
+    this.store.appendEvent({
+      type: "verification.completed",
+      aggregateId: run.id,
+      payload: { ...verification, planId: run.planId, revision: run.planRevision },
+    });
   }
 }

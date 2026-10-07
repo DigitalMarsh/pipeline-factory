@@ -18,8 +18,10 @@ defineProps<{ item: ExecutionStreamItem }>();
 <template>
   <div class="timeline-divider execution-divider">
     <span class="timeline-divider-rule" />
-    <span class="timeline-divider-label"><span class="thread-mark" />Factory · 上下文压缩<em v-if="item.detail">{{ item.detail }}</em></span>
-    <time>{{ new Date(item.occurredAt).toLocaleTimeString('zh-CN') }}</time>
+    <span class="timeline-divider-label"
+      ><span class="thread-mark" />Factory · 上下文压缩<em v-if="item.detail">{{ item.detail }}</em></span
+    >
+    <time>{{ new Date(item.occurredAt).toLocaleTimeString("zh-CN") }}</time>
     <span class="timeline-divider-rule" />
   </div>
 </template>

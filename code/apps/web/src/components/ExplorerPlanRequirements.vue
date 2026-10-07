@@ -32,7 +32,9 @@ const completionSummary = computed(() => {
   return `${completedCount.value}/${props.requirements.length} 项已满足`;
 });
 
-function issuesFor(label: string): Issue[] { return diagnosticsByArea.value.get(label) ?? []; }
+function issuesFor(label: string): Issue[] {
+  return diagnosticsByArea.value.get(label) ?? [];
+}
 function stateFor(requirement: Requirement): "complete" | "invalid" | "pending" {
   if (issuesFor(requirement.label).length) return "invalid";
   return props.completed.includes(requirement.label) ? "complete" : "pending";
@@ -43,13 +45,19 @@ function toggleExpanded(): void {
   userToggled.value = true;
 }
 
-watch(() => props.diagnostics.length, (count, previousCount) => {
-  if (count > 0 && previousCount === 0 && !userToggled.value) expanded.value = true;
-});
+watch(
+  () => props.diagnostics.length,
+  (count, previousCount) => {
+    if (count > 0 && previousCount === 0 && !userToggled.value) expanded.value = true;
+  },
+);
 </script>
 
 <template>
-  <section :class="['explorer-plan-requirements', { expanded, 'has-diagnostics': issueCount > 0 }]" aria-labelledby="plan-requirements-title">
+  <section
+    :class="['explorer-plan-requirements', { expanded, 'has-diagnostics': issueCount > 0 }]"
+    aria-labelledby="plan-requirements-title"
+  >
     <div class="plan-requirements-summary">
       <button
         class="plan-requirements-toggle"
@@ -71,21 +79,33 @@ watch(() => props.diagnostics.length, (count, previousCount) => {
           <el-tag size="small" effect="light" type="success">{{ completionSummary }}</el-tag>
           <el-tag v-if="pendingCount" size="small" effect="light" type="warning">待补齐 {{ pendingCount }}</el-tag>
           <el-tag v-if="issueCount" size="small" effect="light" type="danger">问题 {{ issueCount }}</el-tag>
-          <span class="plan-requirements-toggle-label">{{ expanded ? '收起详情' : '展开详情' }}</span>
-          <span class="plan-requirements-toggle-icon" aria-hidden="true">{{ expanded ? '−' : '+' }}</span>
+          <span class="plan-requirements-toggle-label">{{ expanded ? "收起详情" : "展开详情" }}</span>
+          <span class="plan-requirements-toggle-icon" aria-hidden="true">{{ expanded ? "−" : "+" }}</span>
         </span>
       </button>
     </div>
     <div v-show="expanded" :id="detailsId" class="plan-requirements-details" role="region" aria-labelledby="plan-requirements-title">
       <div class="plan-requirements-grid" role="list">
-        <article v-for="requirement in requirements" :key="requirement.key" :class="['plan-requirement-row', stateFor(requirement)]" role="listitem">
-          <span class="plan-requirement-status" :aria-label="stateFor(requirement)"><CircleCheck v-if="stateFor(requirement) === 'complete'" :size="11" /><Warning v-else-if="stateFor(requirement) === 'invalid'" :size="11" /><span v-else class="plan-requirement-dot" /></span>
+        <article
+          v-for="requirement in requirements"
+          :key="requirement.key"
+          :class="['plan-requirement-row', stateFor(requirement)]"
+          role="listitem"
+        >
+          <span class="plan-requirement-status" :aria-label="stateFor(requirement)"
+            ><CircleCheck v-if="stateFor(requirement) === 'complete'" :size="11" /><Warning
+              v-else-if="stateFor(requirement) === 'invalid'"
+              :size="11" /><span v-else class="plan-requirement-dot"
+          /></span>
           <div>
             <strong>{{ requirement.label }}</strong>
-            <small>必填：{{ requirement.requiredFields.join('、') }}</small>
-            <small v-if="requirement.optionalFields.length">可由 Factory 补全：{{ requirement.optionalFields.join('、') }}</small>
+            <small>必填：{{ requirement.requiredFields.join("、") }}</small>
+            <small v-if="requirement.optionalFields.length">可由 Factory 补全：{{ requirement.optionalFields.join("、") }}</small>
             <ul v-if="issuesFor(requirement.label).length" class="plan-requirement-issues">
-              <li v-for="item in issuesFor(requirement.label)" :key="`${item.path}:${item.message}`"><code>{{ item.path }}</code>：{{ item.message }}</li>
+              <li v-for="item in issuesFor(requirement.label)" :key="`${item.path}:${item.message}`">
+                <code>{{ item.path }}</code
+                >：{{ item.message }}
+              </li>
             </ul>
           </div>
         </article>

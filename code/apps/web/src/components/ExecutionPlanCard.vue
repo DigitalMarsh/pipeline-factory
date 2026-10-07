@@ -25,16 +25,26 @@ const expanded = ref(false);
       :aria-expanded="expanded"
       :aria-controls="`execution-plan-details-${itemId}`"
       @click="expanded = !expanded"
-    >{{ expanded ? '收起 Plan 摘要' : '展开 Plan 摘要' }}</button>
+    >
+      {{ expanded ? "收起 Plan 摘要" : "展开 Plan 摘要" }}
+    </button>
     <div v-if="expanded" :id="`execution-plan-details-${itemId}`" class="execution-plan-message-details">
       <div class="execution-plan-message-stats">
-        <span><strong>{{ plan.tasks.length }}</strong> 个任务</span>
-        <span><strong>{{ plan.acceptanceCriteria.length }}</strong> 条验收标准</span>
-        <span><strong>{{ plan.verificationCommandIds.length }}</strong> 条验证命令</span>
+        <span
+          ><strong>{{ plan.tasks.length }}</strong> 个任务</span
+        >
+        <span
+          ><strong>{{ plan.acceptanceCriteria.length }}</strong> 条验收标准</span
+        >
+        <span
+          ><strong>{{ plan.verificationCommandIds.length }}</strong> 条验证命令</span
+        >
       </div>
       <div v-if="plan.tasks.length" class="execution-plan-message-section">
         <span class="execution-plan-message-label">任务</span>
-        <ul><li v-for="task in plan.tasks" :key="task.id ?? task.title">{{ task.title }}</li></ul>
+        <ul>
+          <li v-for="task in plan.tasks" :key="task.id ?? task.title">{{ task.title }}</li>
+        </ul>
       </div>
       <div class="execution-plan-message-scope">
         <div>

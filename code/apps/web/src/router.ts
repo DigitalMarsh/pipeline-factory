@@ -46,7 +46,13 @@ export const router = createRouter({
     { path: "/projects/new", component: ProjectCreateView },
     { path: "/projects/:projectId/execute", component: ProjectExecuteView },
     { path: "/projects/:projectId/explorer", component: ExplorerView },
-    { path: "/projects/:projectId/plans", redirect: (to) => ({ path: `/projects/${encodeURIComponent(String(to.params.projectId))}/explorer`, query: { ...to.query, contextPanel: "plan-center" } }) },
+    {
+      path: "/projects/:projectId/plans",
+      redirect: (to) => ({
+        path: `/projects/${encodeURIComponent(String(to.params.projectId))}/explorer`,
+        query: { ...to.query, contextPanel: "plan-center" },
+      }),
+    },
     { path: "/projects/:projectId/runs/:runId", component: RunDetailView },
     { path: "/projects/:projectId/settings", redirect: (to) => settingsRedirect(to) },
     { path: "/projects/:projectId/settings/hooks", redirect: (to) => settingsRedirect(to, "hooks") },

@@ -29,20 +29,13 @@ const unreadable = computed(() => !hasBody.value && isProviderControlled(props.a
 </script>
 
 <template>
-  <article
-    :id="activityTarget(activity, index)"
-    :data-nav-key="activityTarget(activity, index)"
-    class="timeline-note"
-    :class="{ running }"
-  >
+  <article :id="activityTarget(activity, index)" :data-nav-key="activityTarget(activity, index)" class="timeline-note" :class="{ running }">
     <span class="thread-mark" :class="{ 'thread-mark-live': running }" />
     <details v-if="hasBody" class="timeline-reasoning" :open="running">
       <summary>推理</summary>
       <p>{{ body }}</p>
     </details>
-    <p v-else class="timeline-reasoning-plain">
-      推理<span v-if="unreadable" class="timeline-reasoning-unreadable"> · 未提供正文</span>
-    </p>
+    <p v-else class="timeline-reasoning-plain">推理<span v-if="unreadable" class="timeline-reasoning-unreadable"> · 未提供正文</span></p>
     <time>{{ formatTurnTime(activity.occurredAt) }}</time>
   </article>
 </template>

@@ -23,7 +23,15 @@ describe("Plugin registry and bridge", () => {
     const registry = new PluginRegistry({ supportedApiMajor: 1, bridge });
     registry.register(manifest, async (toolName, input) => ({ toolName, query: input.query }));
 
-    expect(registry.listTools()).toEqual([{ name: "plugin:com.example.docs:search", pluginId: manifest.id, toolName: "search", description: "Search docs", inputSchema: { type: "object" } }]);
+    expect(registry.listTools()).toEqual([
+      {
+        name: "plugin:com.example.docs:search",
+        pluginId: manifest.id,
+        toolName: "search",
+        description: "Search docs",
+        inputSchema: { type: "object" },
+      },
+    ]);
     await expect(bridge.call("plugin:com.example.docs:search", { query: "limits" })).resolves.toMatchObject({ query: "limits" });
     registry.disable(manifest.id, "maintenance");
     await expect(bridge.call("plugin:com.example.docs:search", {})).rejects.toThrow(/disabled/i);

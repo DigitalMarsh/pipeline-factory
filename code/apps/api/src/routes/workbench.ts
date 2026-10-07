@@ -38,7 +38,12 @@ const WORKBENCH_EVENT_POLL_LIMIT = 500;
 
 const activityParams = z.object({ projectId: z.string().min(1) });
 /** `date` 由投影校验（必须是真实存在的本地日历日）；这里只约束形状。 */
-const activityQuery = z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() });
+const activityQuery = z.object({
+  date: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
+});
 
 export type WorkbenchRouteDeps = {
   store: PipelineStore;
@@ -54,7 +59,8 @@ export function registerWorkbenchRoutes(app: FastifyInstance, deps: WorkbenchRou
   app.get("/api/v4/workbench", async (request, reply) => {
     const query = workbenchQuery.safeParse(request.query ?? {});
     if (!query.success) return reply.code(400).send({ error: "Invalid Workbench query" });
-    if (!store.getProject(query.data.projectId)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${query.data.projectId} not found` });
+    if (!store.getProject(query.data.projectId))
+      return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${query.data.projectId} not found` });
     return workbenchSnapshot(store, projects, query.data.projectId);
   });
 
@@ -68,7 +74,13 @@ export function registerWorkbenchRoutes(app: FastifyInstance, deps: WorkbenchRou
     const query = activityQuery.safeParse(request.query ?? {});
     if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid activity query" });
     try {
-      return dailyActivity(store, projects, params.data.projectId, query.data.date ?? localToday(), deps.config?.storage.eventRetentionDays ?? 0);
+      return dailyActivity(
+        store,
+        projects,
+        params.data.projectId,
+        query.data.date ?? localToday(),
+        deps.config?.storage.eventRetentionDays ?? 0,
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : "Activity unavailable";
       if (/not found/i.test(message)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: message });
@@ -79,13 +91,15 @@ export function registerWorkbenchRoutes(app: FastifyInstance, deps: WorkbenchRou
   app.get("/api/v4/workbench/events", async (request, reply) => {
     const query = workbenchQuery.safeParse(request.query ?? {});
     if (!query.success) return reply.code(400).send({ error: "Invalid Workbench event query" });
-    if (!store.getProject(query.data.projectId)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `PROJECT_NOT_FOUND: ${query.data.projectId}` });
+    if (!store.getProject(query.data.projectId))
+      return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `PROJECT_NOT_FOUND: ${query.data.projectId}` });
     // 游标为 0 = 首次连接：只取尾部窗口（与 workbenchSnapshot 的窗口语义一致）。
     // 其余情况是"从游标接着读"，必须用 head —— 用 tail 会在游标落后时反复读到最新那一批，
     // 而游标又推进到本批末尾，中间的事件被永久跳过。
-    const batchOptions = (afterSequence: number) => afterSequence === 0
-      ? { limit: WORKBENCH_EVENT_TAIL_LIMIT, limitFrom: "tail" as const }
-      : { afterSequence, limit: WORKBENCH_EVENT_POLL_LIMIT, limitFrom: "head" as const };
+    const batchOptions = (afterSequence: number) =>
+      afterSequence === 0
+        ? { limit: WORKBENCH_EVENT_TAIL_LIMIT, limitFrom: "tail" as const }
+        : { afterSequence, limit: WORKBENCH_EVENT_POLL_LIMIT, limitFrom: "head" as const };
     const eventsForProject = (afterSequence: number) => {
       const pending = store.listEvents(batchOptions(afterSequence));
       if (pending.length === 0) return pending;

@@ -12,37 +12,109 @@ import PlanDetailContent from "./PlanDetailContent.vue";
 import type { Plan } from "../types";
 
 const mounted: Array<{ app: ReturnType<typeof createApp>; host: HTMLElement }> = [];
-afterEach(() => { mounted.splice(0).forEach(({ app, host }) => { app.unmount(); host.remove(); }); });
+afterEach(() => {
+  mounted.splice(0).forEach(({ app, host }) => {
+    app.unmount();
+    host.remove();
+  });
+});
 
 const ElButtonStub = defineComponent({
   props: { disabled: Boolean, loading: Boolean, size: String, type: String },
   emits: ["click"],
   setup(props, { slots, emit }) {
-    return () => h("button", { type: "button", disabled: props.disabled, onClick: (event: Event) => emit("click", event) }, slots.default?.());
+    return () =>
+      h("button", { type: "button", disabled: props.disabled, onClick: (event: Event) => emit("click", event) }, slots.default?.());
   },
 });
 
 function candidatePlan(overrides: Partial<Plan> = {}): Plan {
   return {
-    id: "plan-1", planId: "plan-1", title: "Candidate", revision: 1, status: "DRAFT", projectId: "project-1",
-    sourceExplorerThreadId: "explorer-1", queuedAt: null, dispatchedAt: null, runId: null, lastEventAt: "2026-10-01T00:00:00.000Z", attentionReason: null,
+    id: "plan-1",
+    planId: "plan-1",
+    title: "Candidate",
+    revision: 1,
+    status: "DRAFT",
+    projectId: "project-1",
+    sourceExplorerThreadId: "explorer-1",
+    queuedAt: null,
+    dispatchedAt: null,
+    runId: null,
+    lastEventAt: "2026-10-01T00:00:00.000Z",
+    attentionReason: null,
     generatedSpec: {
-      schemaVersion: 2, title: "Candidate", artifact: { mode: "REPOSITORY_FILE", path: "docs/guide.md" },
-      objective: { goal: "goal", context: ["现有详情页已经返回日期字段。"], audience: ["devs"], acceptanceCriteria: ["ok"], outOfScope: [] },
-      design: { technicalConstraints: ["markdown"], dataSecurity: ["none"], failureHandling: ["keep"], risks: ["旧浏览器样式兼容；失败时保留列表视图。"] },
+      schemaVersion: 2,
+      title: "Candidate",
+      artifact: { mode: "REPOSITORY_FILE", path: "docs/guide.md" },
+      objective: {
+        goal: "goal",
+        context: ["现有详情页已经返回日期字段。"],
+        audience: ["devs"],
+        acceptanceCriteria: ["ok"],
+        outOfScope: [],
+      },
+      design: {
+        technicalConstraints: ["markdown"],
+        dataSecurity: ["none"],
+        failureHandling: ["keep"],
+        risks: ["旧浏览器样式兼容；失败时保留列表视图。"],
+      },
       scope: { includePaths: ["docs/guide.md"], excludePaths: [] },
-      tasks: [{ id: "docs", title: "Update guide", dependencies: [], changes: [{ path: "docs/guide.md", action: "modify", detail: "更新使用说明示例。" }] }],
-      dependencies: [], conflicts: [], execution: {}, verification: { mode: "PROJECT_DEFAULT", suites: ["docs"] }, merge: { strategy: "manual", requireHumanMerge: true },
+      tasks: [
+        {
+          id: "docs",
+          title: "Update guide",
+          dependencies: [],
+          changes: [{ path: "docs/guide.md", action: "modify", detail: "更新使用说明示例。" }],
+        },
+      ],
+      dependencies: [],
+      conflicts: [],
+      execution: {},
+      verification: { mode: "PROJECT_DEFAULT", suites: ["docs"] },
+      merge: { strategy: "manual", requireHumanMerge: true },
     },
     resolvedContract: {
-      schemaVersion: 2, artifact: { mode: "REPOSITORY_FILE", path: "docs/guide.md" },
-      objective: { goal: "goal", context: ["现有详情页已经返回日期字段。"], audience: ["devs"], acceptanceCriteria: ["ok"], outOfScope: [] },
-      design: { technicalConstraints: ["markdown"], dataSecurity: ["none"], failureHandling: ["keep"], risks: ["旧浏览器样式兼容；失败时保留列表视图。"] },
-      conflicts: [], repository: { projectId: "project-1", name: "P", repoRoot: "/repo", baseBranch: "main", baseCommit: "abc", configVersion: 1, configHash: "h" },
+      schemaVersion: 2,
+      artifact: { mode: "REPOSITORY_FILE", path: "docs/guide.md" },
+      objective: {
+        goal: "goal",
+        context: ["现有详情页已经返回日期字段。"],
+        audience: ["devs"],
+        acceptanceCriteria: ["ok"],
+        outOfScope: [],
+      },
+      design: {
+        technicalConstraints: ["markdown"],
+        dataSecurity: ["none"],
+        failureHandling: ["keep"],
+        risks: ["旧浏览器样式兼容；失败时保留列表视图。"],
+      },
+      conflicts: [],
+      repository: {
+        projectId: "project-1",
+        name: "P",
+        repoRoot: "/repo",
+        baseBranch: "main",
+        baseCommit: "abc",
+        configVersion: 1,
+        configHash: "h",
+      },
       scope: { includePaths: ["docs/guide.md"], excludePaths: [] },
-      tasks: [{ id: "docs", title: "Update guide", dependencies: [], status: "READY", changes: [{ path: "docs/guide.md", action: "modify", detail: "更新使用说明示例。" }] }],
-      dependencies: [], dependsOnPlanIds: [], execution: { executorModelRole: "executor", toolPolicy: "executor-scoped-write", maxRepairAttempts: 1 },
-      verification: { mode: "PROJECT_DEFAULT", commandIds: ["docs.validate"] }, merge: { strategy: "manual", requireHumanMerge: true },
+      tasks: [
+        {
+          id: "docs",
+          title: "Update guide",
+          dependencies: [],
+          status: "READY",
+          changes: [{ path: "docs/guide.md", action: "modify", detail: "更新使用说明示例。" }],
+        },
+      ],
+      dependencies: [],
+      dependsOnPlanIds: [],
+      execution: { executorModelRole: "executor", toolPolicy: "executor-scoped-write", maxRepairAttempts: 1 },
+      verification: { mode: "PROJECT_DEFAULT", commandIds: ["docs.validate"] },
+      merge: { strategy: "manual", requireHumanMerge: true },
     },
     ...overrides,
   } as Plan;
@@ -53,8 +125,18 @@ function conversationPlan(): Plan {
   // 对话产物两处声明都要改：投影可能来自 generatedSpec 或 resolvedContract。
   return {
     ...base,
-    generatedSpec: { ...base.generatedSpec!, artifact: { mode: "CONVERSATION" }, scope: { includePaths: [], excludePaths: [] }, verification: { mode: "NONE" } },
-    resolvedContract: { ...base.resolvedContract!, artifact: { mode: "CONVERSATION" }, scope: { includePaths: [], excludePaths: [] }, verification: { mode: "NONE", commandIds: [] } },
+    generatedSpec: {
+      ...base.generatedSpec!,
+      artifact: { mode: "CONVERSATION" },
+      scope: { includePaths: [], excludePaths: [] },
+      verification: { mode: "NONE" },
+    },
+    resolvedContract: {
+      ...base.resolvedContract!,
+      artifact: { mode: "CONVERSATION" },
+      scope: { includePaths: [], excludePaths: [] },
+      verification: { mode: "NONE", commandIds: [] },
+    },
   };
 }
 
@@ -85,7 +167,8 @@ describe("PlanDetailContent scheduling editors", () => {
     expect(boxes.map((box) => box.checked)).toEqual([true, false]);
 
     // 没有改动时保存按钮是禁用的（避免把"没变"也写一遍）。
-    const save = () => [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("保存验证子集"));
+    const save = () =>
+      [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("保存验证子集"));
     expect(save()?.disabled).toBe(true);
 
     const unitBox = boxes[1]!;
@@ -138,7 +221,8 @@ describe("PlanDetailContent plan design details", () => {
   });
 });
 describe("PlanDetailContent conversation artifact warning", () => {
-  const confirmButton = (host: HTMLElement) => [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("确认 V"));
+  const confirmButton = (host: HTMLElement) =>
+    [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("确认 V"));
 
   it("warns before confirming a conversation artifact, and still allows confirming it", () => {
     const { host } = mount({ plan: conversationPlan() });

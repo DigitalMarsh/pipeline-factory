@@ -13,13 +13,17 @@ export function redactAuditPayload(value: Record<string, unknown>): Record<strin
 
 /** 对 Hook/命令输出做不改变普通文本的秘密和邮箱脱敏。 */
 export function redactAuditText(value: string): string {
-  return value.replace(BEARER, "Bearer [REDACTED]").replace(SENSITIVE_ASSIGNMENT, (match) => `${match.slice(0, match.search(/[:=]/) + 1)}[REDACTED]`).replace(EMAIL, "[REDACTED_EMAIL]");
+  return value
+    .replace(BEARER, "Bearer [REDACTED]")
+    .replace(SENSITIVE_ASSIGNMENT, (match) => `${match.slice(0, match.search(/[:=]/) + 1)}[REDACTED]`)
+    .replace(EMAIL, "[REDACTED_EMAIL]");
 }
 
 function redactValue(value: unknown, key?: string): unknown {
   if (key && SENSITIVE_KEY.test(key)) return "[REDACTED]";
   if (typeof value === "string") return redactAuditText(value);
   if (Array.isArray(value)) return value.map((item) => redactValue(item));
-  if (isRecord(value)) return Object.fromEntries(Object.entries(value).map(([childKey, childValue]) => [childKey, redactValue(childValue, childKey)]));
+  if (isRecord(value))
+    return Object.fromEntries(Object.entries(value).map(([childKey, childValue]) => [childKey, redactValue(childValue, childKey)]));
   return value;
 }

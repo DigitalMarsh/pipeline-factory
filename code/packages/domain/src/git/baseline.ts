@@ -29,10 +29,15 @@ import type { Project } from "../project/project.js";
 
 export function verifiedProjectBaseline(project: Project): { baseBranch: string; baseCommit: string } {
   try {
-    const baseCommit = execFileSync("git", ["rev-parse", "--verify", `${project.defaultBranch}^{commit}`], { cwd: project.repoRoot, encoding: "utf8" }).trim();
+    const baseCommit = execFileSync("git", ["rev-parse", "--verify", `${project.defaultBranch}^{commit}`], {
+      cwd: project.repoRoot,
+      encoding: "utf8",
+    }).trim();
     if (!baseCommit) throw new Error("empty commit");
     return { baseBranch: project.defaultBranch, baseCommit };
   } catch (error) {
-    throw new Error(`Project ${project.id} has no verified Git baseline: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    throw new Error(`Project ${project.id} has no verified Git baseline: ${error instanceof Error ? error.message : String(error)}`, {
+      cause: error,
+    });
   }
 }

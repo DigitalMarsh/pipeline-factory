@@ -24,20 +24,24 @@ export type TaskTreeItem = {
 
 export function taskDisplayTitle(task: ExplorerPlan): string {
   const legacyTitle = task.title.replace(new RegExp(`^(?:Plan|Task) ${task.ordinal}\\s*(?:[/：:]\\s*)?`), "").trim();
-  const label = task.titleSource === "MANUAL" ? (legacyTitle || task.title) : (task.latestUserMessageSummary || legacyTitle || "待探索");
+  const label = task.titleSource === "MANUAL" ? legacyTitle || task.title : task.latestUserMessageSummary || legacyTitle || "待探索";
   return `需求${task.ordinal}：${label}`;
 }
 
 export function taskRuntimeLabel(task: ExplorerPlan): string {
-  return ({
-    QUEUED: "排队中",
-    RUNNING: "运行中",
-    WAITING_FOR_INPUT: "等待输入",
-    PAUSED: "已暂停",
-    COMPLETED: "已完成",
-    FAILED: "失败",
-    CANCELLED: "已取消",
-  } as Record<string, string>)[task.runtimeStatus ?? ""] ?? "待探索";
+  return (
+    (
+      {
+        QUEUED: "排队中",
+        RUNNING: "运行中",
+        WAITING_FOR_INPUT: "等待输入",
+        PAUSED: "已暂停",
+        COMPLETED: "已完成",
+        FAILED: "失败",
+        CANCELLED: "已取消",
+      } as Record<string, string>
+    )[task.runtimeStatus ?? ""] ?? "待探索"
+  );
 }
 
 /**
@@ -55,7 +59,11 @@ export function buildTaskTree(tasks: ExplorerPlan[], plans: Plan[], activities: 
   return [...tasks]
     .sort((left, right) => left.ordinal - right.ordinal)
     .map((task) => {
-      const plan = [...uniquePlans.values()].find((candidate) => candidate.explorerPlanId === task.id || (task.candidatePlanId !== null && planIdentity(candidate) === task.candidatePlanId)) ?? null;
+      const plan =
+        [...uniquePlans.values()].find(
+          (candidate) =>
+            candidate.explorerPlanId === task.id || (task.candidatePlanId !== null && planIdentity(candidate) === task.candidatePlanId),
+        ) ?? null;
       return {
         task,
         plan,

@@ -68,12 +68,14 @@ export class PluginToolBridge {
   }
 
   listTools(): PluginTool[] {
-    return [...this.plugins.values()].flatMap((plugin) => plugin.manifest.tools.map((tool) => ({
-      ...tool,
-      name: qualify(plugin.manifest.id, tool.name),
-      pluginId: plugin.manifest.id,
-      toolName: tool.name,
-    })));
+    return [...this.plugins.values()].flatMap((plugin) =>
+      plugin.manifest.tools.map((tool) => ({
+        ...tool,
+        name: qualify(plugin.manifest.id, tool.name),
+        pluginId: plugin.manifest.id,
+        toolName: tool.name,
+      })),
+    );
   }
 
   async call(qualifiedName: string, input: Record<string, unknown>): Promise<unknown> {
@@ -112,7 +114,8 @@ export class PluginRegistry {
 
   register(manifest: PluginManifest, handler?: PluginToolHandler): void {
     validateManifest(manifest, this.supportedApiMajor);
-    if (this.bridge.listTools().some((tool) => tool.pluginId === manifest.id)) throw new Error("Plugin " + manifest.id + " is already registered");
+    if (this.bridge.listTools().some((tool) => tool.pluginId === manifest.id))
+      throw new Error("Plugin " + manifest.id + " is already registered");
     this.bridge.register(manifest, handler);
   }
 
@@ -167,7 +170,8 @@ function parseQualifiedName(qualifiedName: string): { pluginId: string; toolName
 
 /** 拒绝缺少身份、工具或不兼容 API major version 的插件。 */
 function validateManifest(manifest: PluginManifest, supportedApiMajor: number): void {
-  if (!manifest.id || !manifest.name || !manifest.version || !manifest.apiVersion || !Array.isArray(manifest.tools)) throw new Error("Invalid plugin manifest");
+  if (!manifest.id || !manifest.name || !manifest.version || !manifest.apiVersion || !Array.isArray(manifest.tools))
+    throw new Error("Invalid plugin manifest");
   const apiMajor = Number.parseInt(manifest.apiVersion.split(".")[0] ?? "", 10);
   if (!Number.isInteger(apiMajor) || apiMajor !== supportedApiMajor) throw new Error("Plugin API version is incompatible");
   if (manifest.tools.some((tool) => !tool.name)) throw new Error("Plugin manifest contains an invalid tool");
@@ -184,7 +188,11 @@ function validateInput(schema: Record<string, unknown> | undefined, input: Recor
     const expected = (definition as Record<string, unknown>).type;
     if (typeof expected !== "string") continue;
     const actual = typeof input[key];
-    if ((expected === "integer" && (!Number.isInteger(input[key]) || actual !== "number")) || (expected !== "integer" && expected !== "number" && actual !== expected)) throw new Error("Plugin tool input field " + key + " has an invalid type");
+    if (
+      (expected === "integer" && (!Number.isInteger(input[key]) || actual !== "number")) ||
+      (expected !== "integer" && expected !== "number" && actual !== expected)
+    )
+      throw new Error("Plugin tool input field " + key + " has an invalid type");
   }
 }
 

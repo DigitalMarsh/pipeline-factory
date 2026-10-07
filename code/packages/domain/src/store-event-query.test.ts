@@ -48,7 +48,10 @@ describe("listEvents filtering", () => {
 
   it("filters by event type without dropping the aggregate restriction", () => {
     assertBothStores((store) => {
-      const events = store.listEvents({ aggregateIds: ["plan-a", "run-a", "merge-a"], types: ["plan.confirmed", "verification.completed"] });
+      const events = store.listEvents({
+        aggregateIds: ["plan-a", "run-a", "merge-a"],
+        types: ["plan.confirmed", "verification.completed"],
+      });
 
       expect(events.map((event) => event.type)).toEqual(["plan.confirmed", "verification.completed"]);
     });
@@ -57,7 +60,11 @@ describe("listEvents filtering", () => {
   it("treats an empty filter list as no filter rather than as an empty result", () => {
     assertBothStores((store) => {
       expect(store.listEvents({ types: [] }).map((event) => event.type)).toEqual([
-        "plan.confirmed", "plan.enqueued", "explorer.turn.text.delta", "verification.completed", "merge.detected",
+        "plan.confirmed",
+        "plan.enqueued",
+        "explorer.turn.text.delta",
+        "verification.completed",
+        "merge.detected",
       ]);
       expect(store.listEvents({ aggregateIds: [] })).toHaveLength(5);
     });

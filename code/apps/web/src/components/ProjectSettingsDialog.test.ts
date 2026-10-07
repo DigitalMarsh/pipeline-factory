@@ -13,8 +13,24 @@ vi.mock("../api", () => ({
     // 后端目录：两个后端、各自一组模型与推理强度。控制台的 agent/模型/推理强度三个下拉全部由它驱动。
     modelBackends: vi.fn(async () => ({
       backends: [
-        { id: "codex-app-server", kind: "codex-app-server", source: "implicit", models: ["gpt-6-sol", "gpt-5.6-luna"], reasoningEfforts: ["low", "high"], endpoint: "codex app-server --stdio", endpointSource: "provider-settings" },
-        { id: "deepseek", kind: "claude-agent-sdk", source: "registry", models: ["deepseek-chat"], reasoningEfforts: ["low", "medium", "high", "xhigh", "max"], endpoint: "api.deepseek.com", endpointSource: "config" },
+        {
+          id: "codex-app-server",
+          kind: "codex-app-server",
+          source: "implicit",
+          models: ["gpt-6-sol", "gpt-5.6-luna"],
+          reasoningEfforts: ["low", "high"],
+          endpoint: "codex app-server --stdio",
+          endpointSource: "provider-settings",
+        },
+        {
+          id: "deepseek",
+          kind: "claude-agent-sdk",
+          source: "registry",
+          models: ["deepseek-chat"],
+          reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+          endpoint: "api.deepseek.com",
+          endpointSource: "config",
+        },
       ],
       roles: { explorer: "codex-app-server", executor: "codex-app-server" },
       defaultBackend: "codex-app-server",
@@ -25,7 +41,8 @@ vi.mock("../api", () => ({
 const ElDialogStub = defineComponent({
   props: { modelValue: { type: Boolean, default: false } },
   setup(props, { slots }) {
-    return () => props.modelValue ? h("div", { class: "project-settings-dialog" }, [slots.header?.(), slots.default?.(), slots.footer?.()]) : null;
+    return () =>
+      props.modelValue ? h("div", { class: "project-settings-dialog" }, [slots.header?.(), slots.default?.(), slots.footer?.()]) : null;
   },
 });
 
@@ -36,9 +53,33 @@ const ElButtonStub = defineComponent({
   },
 });
 
-const ElTagStub = defineComponent({ setup(_, { slots }) { return () => h("span", slots.default?.()); } });
-const ElSwitchStub = defineComponent({ props: { modelValue: Boolean, disabled: Boolean }, setup() { return () => h("input", { type: "checkbox" }); } });
-const ElCheckboxStub = defineComponent({ props: { modelValue: Boolean, label: String, disabled: Boolean }, emits: ["update:modelValue"], setup(props, { slots, emit }) { return () => h("label", [h("input", { type: "checkbox", checked: props.modelValue, disabled: props.disabled, onChange: (event: Event) => emit("update:modelValue", (event.target as HTMLInputElement).checked) }), slots.default?.() ?? props.label]); } });
+const ElTagStub = defineComponent({
+  setup(_, { slots }) {
+    return () => h("span", slots.default?.());
+  },
+});
+const ElSwitchStub = defineComponent({
+  props: { modelValue: Boolean, disabled: Boolean },
+  setup() {
+    return () => h("input", { type: "checkbox" });
+  },
+});
+const ElCheckboxStub = defineComponent({
+  props: { modelValue: Boolean, label: String, disabled: Boolean },
+  emits: ["update:modelValue"],
+  setup(props, { slots, emit }) {
+    return () =>
+      h("label", [
+        h("input", {
+          type: "checkbox",
+          checked: props.modelValue,
+          disabled: props.disabled,
+          onChange: (event: Event) => emit("update:modelValue", (event.target as HTMLInputElement).checked),
+        }),
+        slots.default?.() ?? props.label,
+      ]);
+  },
+});
 
 function project(): Project {
   return {
@@ -53,7 +94,13 @@ function project(): Project {
     configVersion: 3,
     configHash: "hash-3",
     settings: {
-      concurrency: { maxParallelRuns: 2, defaultTimeoutMs: 120000, executionTimeoutMs: 1800000, maxAutoContinuationTurns: 0, maxRepairAttempts: 2 },
+      concurrency: {
+        maxParallelRuns: 2,
+        defaultTimeoutMs: 120000,
+        executionTimeoutMs: 1800000,
+        maxAutoContinuationTurns: 0,
+        maxRepairAttempts: 2,
+      },
       commands: [{ commandId: "project.test", argv: ["pnpm", "test"], environment: { NODE_ENV: "test" } }],
       hooks: {},
       models: { explorer: { model: "gpt-5.6-luna" }, executor: { model: "gpt-5.6-luna" } },
@@ -98,13 +145,15 @@ describe("ProjectSettingsDialog", () => {
     await nextTick();
 
     expect(mounted.host.textContent).toContain("项目标识");
-    expect(mounted.host.querySelector<HTMLInputElement>('input[disabled]')?.value).toBe("project-1");
+    expect(mounted.host.querySelector<HTMLInputElement>("input[disabled]")?.value).toBe("project-1");
     const shortName = mounted.host.querySelector<HTMLInputElement>('input[placeholder="例如：PF"]');
     if (shortName) {
       shortName.value = "P1X";
       shortName.dispatchEvent(new Event("input", { bubbles: true }));
     }
-    const save = [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("保存项目配置"));
+    const save = [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+      button.textContent?.includes("保存项目配置"),
+    );
     save?.click();
     await nextTick();
     await nextTick();
@@ -123,7 +172,9 @@ describe("ProjectSettingsDialog", () => {
     await nextTick();
     await nextTick();
 
-    const execution = [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("执行"));
+    const execution = [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+      button.textContent?.includes("执行"),
+    );
     execution?.click();
     await nextTick();
 
@@ -142,7 +193,9 @@ describe("ProjectSettingsDialog", () => {
     await nextTick();
     await nextTick();
 
-    const modelsTab = [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("模型与工具"));
+    const modelsTab = [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+      button.textContent?.includes("模型与工具"),
+    );
     modelsTab?.click();
     await nextTick();
     // 顺序：Explorer agent / model / reasoning，然后 Executor 三项。agent 是本次新增的那一列。
@@ -164,21 +217,28 @@ describe("ProjectSettingsDialog", () => {
     selects[3]!.value = "deepseek";
     selects[3]!.dispatchEvent(new Event("change", { bubbles: true }));
     await nextTick();
-    const executorModelOptions = [...mounted.host.querySelectorAll<HTMLSelectElement>(".settings-form-grid select")[4]!.options].map((option) => option.value);
+    const executorModelOptions = [...mounted.host.querySelectorAll<HTMLSelectElement>(".settings-form-grid select")[4]!.options].map(
+      (option) => option.value,
+    );
     expect(executorModelOptions).toContain("deepseek-chat");
-    const save = [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("保存项目配置"));
+    const save = [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+      button.textContent?.includes("保存项目配置"),
+    );
     save?.click();
     await nextTick();
     await nextTick();
 
-    expect(api.updateProject).toHaveBeenCalledWith("project-1", expect.objectContaining({
-      settings: expect.objectContaining({
-        models: expect.objectContaining({
-          explorer: expect.objectContaining({ model: "gpt-6-sol", reasoningEffort: "high", backend: null }),
-          executor: expect.objectContaining({ backend: "deepseek" }),
+    expect(api.updateProject).toHaveBeenCalledWith(
+      "project-1",
+      expect.objectContaining({
+        settings: expect.objectContaining({
+          models: expect.objectContaining({
+            explorer: expect.objectContaining({ model: "gpt-6-sol", reasoningEffort: "high", backend: null }),
+            executor: expect.objectContaining({ backend: "deepseek" }),
+          }),
         }),
       }),
-    }));
+    );
     mounted.app.unmount();
     mounted.host.remove();
   });
@@ -204,7 +264,9 @@ describe("ProjectSettingsDialog 的页脚按钮", () => {
   };
 
   const executorAgent = (host: HTMLElement): HTMLSelectElement =>
-    [...host.querySelectorAll("select")].find((select) => select.closest("label")?.textContent?.trim().startsWith("执行侧 Agent")) as HTMLSelectElement;
+    [...host.querySelectorAll("select")].find((select) =>
+      select.closest("label")?.textContent?.trim().startsWith("执行侧 Agent"),
+    ) as HTMLSelectElement;
 
   const footerText = (host: HTMLElement): string => host.querySelector(".settings-dialog-footer")?.textContent ?? "";
 
@@ -244,11 +306,14 @@ describe("ProjectSettingsDialog 的页脚按钮", () => {
     await nextTick();
 
     // 保存真的发出去了，而且带上了新的 backend；然后才关。此前这里只有一次 `close()`。
-    expect(api.updateProject).toHaveBeenCalledWith("project-1", expect.objectContaining({
-      settings: expect.objectContaining({
-        models: expect.objectContaining({ executor: expect.objectContaining({ backend: "codex-app-server" }) }),
+    expect(api.updateProject).toHaveBeenCalledWith(
+      "project-1",
+      expect.objectContaining({
+        settings: expect.objectContaining({
+          models: expect.objectContaining({ executor: expect.objectContaining({ backend: "codex-app-server" }) }),
+        }),
       }),
-    }));
+    );
     expect(mounted.updates).toEqual([false]);
 
     mounted.app.unmount();
@@ -279,12 +344,14 @@ describe("启动钩子（Worktree 初始化入口）", () => {
     return mounted;
   };
 
-  const blockingBox = (host: HTMLElement): HTMLInputElement => host.querySelector<HTMLInputElement>('.hook-blocking input[type="checkbox"]')!;
+  const blockingBox = (host: HTMLElement): HTMLInputElement =>
+    host.querySelector<HTMLInputElement>('.hook-blocking input[type="checkbox"]')!;
   const saveButton = (host: HTMLElement): HTMLButtonElement | undefined =>
     [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("保存项目配置"));
   /** 最近一次保存提交出去的 start 钩子；载荷形状断言全部走它。 */
   const savedStartHook = (): Record<string, unknown> | undefined => {
-    const payload = vi.mocked(api.updateProject).mock.calls.at(-1)?.[1] as { settings?: { hooks?: { start?: Record<string, unknown> } } } | undefined;
+    const payload = vi.mocked(api.updateProject).mock.calls.at(-1)?.[1] as
+      { settings?: { hooks?: { start?: Record<string, unknown> } } } | undefined;
     return payload?.settings?.hooks?.start;
   };
 
@@ -356,7 +423,9 @@ describe("启动钩子（Worktree 初始化入口）", () => {
  */
 describe("默认产物模式", () => {
   const artifactModeSelect = (host: HTMLElement): HTMLSelectElement | null =>
-    [...host.querySelectorAll<HTMLSelectElement>(".settings-form-grid select")].find((select) => select.closest("label")?.textContent?.trim().startsWith("默认产物模式")) ?? null;
+    [...host.querySelectorAll<HTMLSelectElement>(".settings-form-grid select")].find((select) =>
+      select.closest("label")?.textContent?.trim().startsWith("默认产物模式"),
+    ) ?? null;
 
   it("**缺省是 REPOSITORY_FILE**，改成 CONVERSATION 时会进载荷", async () => {
     const initial = project();
@@ -380,7 +449,10 @@ describe("默认产物模式", () => {
     await nextTick();
     await nextTick();
 
-    expect(api.updateProject).toHaveBeenCalledWith("project-1", expect.objectContaining({ settings: expect.objectContaining({ defaultArtifactMode: "CONVERSATION" }) }));
+    expect(api.updateProject).toHaveBeenCalledWith(
+      "project-1",
+      expect.objectContaining({ settings: expect.objectContaining({ defaultArtifactMode: "CONVERSATION" }) }),
+    );
 
     mounted.app.unmount();
     mounted.host.remove();

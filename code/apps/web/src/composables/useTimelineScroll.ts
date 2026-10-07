@@ -56,7 +56,9 @@ export function useTimelineScroll(timeline: Ref<HTMLElement | null>, deps: Timel
       activePlanKey.value = current;
       return;
     }
-    const activeMessage = current.startsWith("message-") ? deps.visibleActivity.value.find((item) => activityTarget(item, 0) === current) : null;
+    const activeMessage = current.startsWith("message-")
+      ? deps.visibleActivity.value.find((item) => activityTarget(item, 0) === current)
+      : null;
     activePlanKey.value = activeMessage ? planAnchorKey(planForActivity(activeMessage, deps.planBindings.value)) : "";
   }
 

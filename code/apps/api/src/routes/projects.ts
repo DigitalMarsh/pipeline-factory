@@ -40,22 +40,24 @@ export function registerProjectRoutes(app: FastifyInstance, deps: ProjectRouteDe
   app.get("/api/v4/projects", async (request) => {
     const query = z.object({ status: z.enum(["ACTIVE", "ARCHIVED"]).optional() }).safeParse(request.query ?? {});
     const list = query.success ? projects.list(query.data.status) : projects.list();
-    return { items: list.map((project) => {
-      const summary = projects.summary(project.id);
-      return {
-        ...project,
-        summary: {
-          currentExplorerThread: summary.currentExplorerThread,
-          currentExplorerTitle: summary.currentExplorerThread ? store.getThread(summary.currentExplorerThread)?.title ?? null : null,
-          threadCount: summary.threadCount,
-          planCount: summary.planCount,
-          runCount: summary.runCount,
-          activeRunCount: summary.activeRunCount,
-          needsAttentionCount: summary.needsAttentionCount,
-          lastActivityAt: summary.lastActivityAt,
-        },
-      };
-    }) };
+    return {
+      items: list.map((project) => {
+        const summary = projects.summary(project.id);
+        return {
+          ...project,
+          summary: {
+            currentExplorerThread: summary.currentExplorerThread,
+            currentExplorerTitle: summary.currentExplorerThread ? (store.getThread(summary.currentExplorerThread)?.title ?? null) : null,
+            threadCount: summary.threadCount,
+            planCount: summary.planCount,
+            runCount: summary.runCount,
+            activeRunCount: summary.activeRunCount,
+            needsAttentionCount: summary.needsAttentionCount,
+            lastActivityAt: summary.lastActivityAt,
+          },
+        };
+      }),
+    };
   });
 
   app.post("/api/v4/projects", async (request, reply) => {
@@ -65,7 +67,8 @@ export function registerProjectRoutes(app: FastifyInstance, deps: ProjectRouteDe
       const repository = await inspectGitRepository(body.data.repoRoot);
       const defaultBranch = body.data.defaultBranch ?? repository.defaultBranch;
       await assertGitBranch(repository.repoRoot, defaultBranch);
-      const worktreeRoot = body.data.worktreeRoot ?? resolvePath(dirname(repository.repoRoot), `.${basename(repository.repoRoot)}-pipeline-worktrees`);
+      const worktreeRoot =
+        body.data.worktreeRoot ?? resolvePath(dirname(repository.repoRoot), `.${basename(repository.repoRoot)}-pipeline-worktrees`);
       let project = projects.create({
         ...(body.data.id ? { id: body.data.id } : {}),
         name: body.data.name,
@@ -76,7 +79,9 @@ export function registerProjectRoutes(app: FastifyInstance, deps: ProjectRouteDe
         ...(body.data.settings ? { settings: body.data.settings as ProjectSettingsInput } : {}),
       });
       const existingExplorer = store.listThreads().find((thread) => thread.projectId === project.id && thread.state !== "ARCHIVED");
-      const explorerThread = existingExplorer ?? plans.registerThread({ id: store.nextId("explorer"), projectId: project.id, parentThreadId: null, title: "New Explorer" });
+      const explorerThread =
+        existingExplorer ??
+        plans.registerThread({ id: store.nextId("explorer"), projectId: project.id, parentThreadId: null, title: "New Explorer" });
       project = projects.selectExplorer(project.id, explorerThread.id);
       return reply.code(201).send({ project, explorer: explorerThread });
     } catch (error) {
@@ -111,7 +116,8 @@ export function registerProjectRoutes(app: FastifyInstance, deps: ProjectRouteDe
   app.get("/api/v4/projects/:projectId/summary", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    if (!store.getProject(params.data.projectId)) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
+    if (!store.getProject(params.data.projectId))
+      return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
     return { summary: projects.summary(params.data.projectId) };
   });
 
@@ -127,7 +133,11 @@ export function registerProjectRoutes(app: FastifyInstance, deps: ProjectRouteDe
       const updated = projects.update(params.data.projectId, {
         ...(body.data.name ? { name: body.data.name } : {}),
         ...(body.data.shortName !== undefined ? { shortName: body.data.shortName } : {}),
-        ...(repository ? { repoRoot: repository.repoRoot, ...(body.data.defaultBranch ? {} : { defaultBranch: repository.defaultBranch }) } : body.data.repoRoot ? { repoRoot: body.data.repoRoot } : {}),
+        ...(repository
+          ? { repoRoot: repository.repoRoot, ...(body.data.defaultBranch ? {} : { defaultBranch: repository.defaultBranch }) }
+          : body.data.repoRoot
+            ? { repoRoot: body.data.repoRoot }
+            : {}),
         ...(body.data.defaultBranch ? { defaultBranch: body.data.defaultBranch } : {}),
         ...(body.data.worktreeRoot ? { worktreeRoot: body.data.worktreeRoot } : {}),
         ...(body.data.expectedConfigVersion ? { expectedConfigVersion: body.data.expectedConfigVersion } : {}),
@@ -136,7 +146,15 @@ export function registerProjectRoutes(app: FastifyInstance, deps: ProjectRouteDe
       return { project: updated };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const code = /not found/i.test(message) ? "PROJECT_NOT_FOUND" : /configuration version conflict/i.test(message) ? "CONFIG_VERSION_CONFLICT" : /active runs/i.test(message) ? "PROJECT_HAS_ACTIVE_RUNS" : /Git repository|branch|does not exist|absolute path/i.test(message) ? "INVALID_GIT_REPOSITORY" : "PROJECT_UPDATE_FAILED";
+      const code = /not found/i.test(message)
+        ? "PROJECT_NOT_FOUND"
+        : /configuration version conflict/i.test(message)
+          ? "CONFIG_VERSION_CONFLICT"
+          : /active runs/i.test(message)
+            ? "PROJECT_HAS_ACTIVE_RUNS"
+            : /Git repository|branch|does not exist|absolute path/i.test(message)
+              ? "INVALID_GIT_REPOSITORY"
+              : "PROJECT_UPDATE_FAILED";
       return reply.code(code === "INVALID_GIT_REPOSITORY" ? 422 : code === "PROJECT_NOT_FOUND" ? 404 : 409).send({ code, error: message });
     }
   });
@@ -144,29 +162,51 @@ export function registerProjectRoutes(app: FastifyInstance, deps: ProjectRouteDe
   app.post("/api/v4/projects/:projectId/archive", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    try { return { project: projects.archive(params.data.projectId) }; }
-    catch (error) { const message = error instanceof Error ? error.message : String(error); return reply.code(/not found/i.test(message) ? 404 : 409).send({ code: /not found/i.test(message) ? "PROJECT_NOT_FOUND" : "PROJECT_HAS_ACTIVE_RUNS", error: message }); }
+    try {
+      return { project: projects.archive(params.data.projectId) };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return reply
+        .code(/not found/i.test(message) ? 404 : 409)
+        .send({ code: /not found/i.test(message) ? "PROJECT_NOT_FOUND" : "PROJECT_HAS_ACTIVE_RUNS", error: message });
+    }
   });
 
   app.post("/api/v4/projects/:projectId/activate", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    try { return { project: projects.activate(params.data.projectId) }; }
-    catch (error) { const message = error instanceof Error ? error.message : String(error); return reply.code(/not found/i.test(message) ? 404 : 409).send({ code: /not found/i.test(message) ? "PROJECT_NOT_FOUND" : "PROJECT_ACTIVATION_FAILED", error: message }); }
+    try {
+      return { project: projects.activate(params.data.projectId) };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return reply
+        .code(/not found/i.test(message) ? 404 : 409)
+        .send({ code: /not found/i.test(message) ? "PROJECT_NOT_FOUND" : "PROJECT_ACTIVATION_FAILED", error: message });
+    }
   });
 
   app.post("/api/v4/projects/:projectId/select-explorer", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
     const body = projectSelectExplorerBody.safeParse(request.body ?? {});
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid Explorer selection request" });
-    try { return { project: projects.selectExplorer(params.data.projectId, body.data.explorerId) }; }
-    catch (error) { const message = error instanceof Error ? error.message : String(error); return reply.code(/Project .* not found/i.test(message) ? 404 : 409).send({ code: /Project .* not found/i.test(message) ? "PROJECT_NOT_FOUND" : "EXPLORER_SELECTION_FAILED", error: message }); }
+    try {
+      return { project: projects.selectExplorer(params.data.projectId, body.data.explorerId) };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return reply
+        .code(/Project .* not found/i.test(message) ? 404 : 409)
+        .send({ code: /Project .* not found/i.test(message) ? "PROJECT_NOT_FOUND" : "EXPLORER_SELECTION_FAILED", error: message });
+    }
   });
 
   app.get("/api/v4/projects/:projectId/config-history", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    try { return { items: projects.configHistory(params.data.projectId) }; }
-    catch (error) { const message = error instanceof Error ? error.message : String(error); return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: message }); }
+    try {
+      return { items: projects.configHistory(params.data.projectId) };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: message });
+    }
   });
 }

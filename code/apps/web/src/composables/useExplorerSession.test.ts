@@ -15,11 +15,11 @@ import { describe, expect, it } from "vitest";
 import type { ExplorerActivityItem, ExplorerThread, ExplorerTurn, Project, Run } from "../types";
 import { useExplorerSession } from "./useExplorerSession";
 
-const project = (id: string) => ({ id } as unknown as Project);
-const thread = (id: string) => ({ id } as unknown as ExplorerThread);
-const turn = (id: string) => ({ id } as unknown as ExplorerTurn);
-const activity = (id: string) => ({ id } as unknown as ExplorerActivityItem);
-const run = (id: string) => ({ id } as unknown as Run);
+const project = (id: string) => ({ id }) as unknown as Project;
+const thread = (id: string) => ({ id }) as unknown as ExplorerThread;
+const turn = (id: string) => ({ id }) as unknown as ExplorerTurn;
+const activity = (id: string) => ({ id }) as unknown as ExplorerActivityItem;
+const run = (id: string) => ({ id }) as unknown as Run;
 
 function setup(initialProjectId = "project-1") {
   const projectId = ref(initialProjectId);

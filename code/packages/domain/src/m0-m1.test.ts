@@ -10,11 +10,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { planContractFixture } from "./plan/plan-fixture.js";
-import {
-  PlanService,
-  SqlitePipelineStore,
-  ToolGateway,
-} from "./index.js";
+import { PlanService, SqlitePipelineStore, ToolGateway } from "./index.js";
 
 const tempDirectories: string[] = [];
 
@@ -56,15 +52,66 @@ describe("SQLite pipeline persistence", () => {
         sequence INTEGER NOT NULL
       );
     `);
-    legacy.prepare("INSERT INTO explorer_threads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run("legacy-default", "project-1", "New Explorer", "FRESH", null, null, null, "ACTIVE", 1, null, "2026-08-29T05:50:00.000Z", "INCOMPLETE", "[]", "[]", null, null);
-    legacy.prepare("INSERT INTO explorer_threads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run("legacy-custom", "project-1", "已有人工名", "FRESH", null, null, null, "ACTIVE", 1, null, "2026-08-29T05:55:00.000Z", "INCOMPLETE", "[]", "[]", null, null);
-    legacy.prepare("INSERT INTO explorer_turns VALUES (?, ?, ?, ?, ?, ?)").run("legacy-turn", "legacy-default", "user", "历史需求", "2026-08-29T05:45:15.000Z", 1);
-    legacy.prepare("INSERT INTO explorer_turns VALUES (?, ?, ?, ?, ?, ?)").run("custom-turn", "legacy-custom", "user", "人工线程", "2026-08-29T05:46:15.000Z", 1);
+    legacy
+      .prepare("INSERT INTO explorer_threads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(
+        "legacy-default",
+        "project-1",
+        "New Explorer",
+        "FRESH",
+        null,
+        null,
+        null,
+        "ACTIVE",
+        1,
+        null,
+        "2026-08-29T05:50:00.000Z",
+        "INCOMPLETE",
+        "[]",
+        "[]",
+        null,
+        null,
+      );
+    legacy
+      .prepare("INSERT INTO explorer_threads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(
+        "legacy-custom",
+        "project-1",
+        "已有人工名",
+        "FRESH",
+        null,
+        null,
+        null,
+        "ACTIVE",
+        1,
+        null,
+        "2026-08-29T05:55:00.000Z",
+        "INCOMPLETE",
+        "[]",
+        "[]",
+        null,
+        null,
+      );
+    legacy
+      .prepare("INSERT INTO explorer_turns VALUES (?, ?, ?, ?, ?, ?)")
+      .run("legacy-turn", "legacy-default", "user", "历史需求", "2026-08-29T05:45:15.000Z", 1);
+    legacy
+      .prepare("INSERT INTO explorer_turns VALUES (?, ?, ?, ?, ?, ?)")
+      .run("custom-turn", "legacy-custom", "user", "人工线程", "2026-08-29T05:46:15.000Z", 1);
     legacy.close();
 
     const reopened = new SqlitePipelineStore(databasePath);
-    expect(reopened.getThread("legacy-default")).toMatchObject({ createdAt: "2026-08-29T05:45:15.000Z", title: "New Explorer", titleSource: "AUTO", titleStatus: "PLACEHOLDER" });
-    expect(reopened.getThread("legacy-custom")).toMatchObject({ createdAt: "2026-08-29T05:46:15.000Z", title: "已有人工名", titleSource: "MANUAL" });
+    expect(reopened.getThread("legacy-default")).toMatchObject({
+      createdAt: "2026-08-29T05:45:15.000Z",
+      title: "New Explorer",
+      titleSource: "AUTO",
+      titleStatus: "PLACEHOLDER",
+    });
+    expect(reopened.getThread("legacy-custom")).toMatchObject({
+      createdAt: "2026-08-29T05:46:15.000Z",
+      title: "已有人工名",
+      titleSource: "MANUAL",
+    });
     reopened.close();
   });
 
@@ -73,13 +120,28 @@ describe("SQLite pipeline persistence", () => {
     tempDirectories.push(directory);
     const databasePath = join(directory, "factory.sqlite");
     const firstStore = new SqlitePipelineStore(databasePath);
-    const explorer = firstStore.saveThread({ id: "explorer-title", projectId: "project-1", parentThreadId: null, createdAt: "2026-08-29T05:45:15.000Z" });
-    expect(explorer).toMatchObject({ title: "探索-20260829-13:45:15", createdAt: "2026-08-29T05:45:15.000Z", titleSource: "AUTO", titleStatus: "PLACEHOLDER" });
+    const explorer = firstStore.saveThread({
+      id: "explorer-title",
+      projectId: "project-1",
+      parentThreadId: null,
+      createdAt: "2026-08-29T05:45:15.000Z",
+    });
+    expect(explorer).toMatchObject({
+      title: "探索-20260829-13:45:15",
+      createdAt: "2026-08-29T05:45:15.000Z",
+      titleSource: "AUTO",
+      titleStatus: "PLACEHOLDER",
+    });
     firstStore.updateThread({ ...explorer, title: "20260829-13:45:15-订单流程优化", titleStatus: "GENERATED" });
     firstStore.close();
 
     const reopened = new SqlitePipelineStore(databasePath);
-    expect(reopened.getThread(explorer.id)).toMatchObject({ title: "20260829-13:45:15-订单流程优化", createdAt: "2026-08-29T05:45:15.000Z", titleSource: "AUTO", titleStatus: "GENERATED" });
+    expect(reopened.getThread(explorer.id)).toMatchObject({
+      title: "20260829-13:45:15-订单流程优化",
+      createdAt: "2026-08-29T05:45:15.000Z",
+      titleSource: "AUTO",
+      titleStatus: "GENERATED",
+    });
     reopened.close();
   });
 
@@ -107,11 +169,32 @@ describe("SQLite pipeline persistence", () => {
     // 契约列从这一版起是必填事实：没有它的 CandidatePlan 读不出来（见 store 的 resolvedContractFromRow）。
     // 这条用例保的是"缺 source_turn_id / provider_* 这些新列的老行仍能读出来"，与契约无关。
     const legacyContract = JSON.stringify(planContractFixture({ title: "Legacy plan" }));
-    legacy.prepare("INSERT INTO candidate_plans (id, project_id, source_explorer_thread_id, title, revision, status, created_at, last_event_at, resolved_contract_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run("legacy-plan", "project-1", "thread-1", "Legacy plan", 1, "DRAFT", "2026-08-29T10:00:00.000Z", "2026-08-29T10:00:00.000Z", legacyContract);
+    legacy
+      .prepare(
+        "INSERT INTO candidate_plans (id, project_id, source_explorer_thread_id, title, revision, status, created_at, last_event_at, resolved_contract_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        "legacy-plan",
+        "project-1",
+        "thread-1",
+        "Legacy plan",
+        1,
+        "DRAFT",
+        "2026-08-29T10:00:00.000Z",
+        "2026-08-29T10:00:00.000Z",
+        legacyContract,
+      );
     legacy.close();
 
     const reopened = new SqlitePipelineStore(databasePath);
-    expect(reopened.getPlan("legacy-plan")).toMatchObject({ id: "legacy-plan", createdAt: "2026-08-29T10:00:00.000Z", sourceTurnId: null, providerThreadId: null, providerTurnId: null, providerItemId: null });
+    expect(reopened.getPlan("legacy-plan")).toMatchObject({
+      id: "legacy-plan",
+      createdAt: "2026-08-29T10:00:00.000Z",
+      sourceTurnId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      providerItemId: null,
+    });
     reopened.close();
   });
 
@@ -137,12 +220,36 @@ describe("SQLite pipeline persistence", () => {
       resolved_contract_json TEXT
     )`);
     const legacyContract = JSON.stringify(planContractFixture({ title: "Legacy queued" }));
-    legacy.prepare("INSERT INTO candidate_plans (id, project_id, source_explorer_thread_id, title, revision, status, created_at, queued_at, last_event_at, resolved_contract_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run("legacy-queued", "project-1", "thread-1", "Legacy queued", 1, "QUEUED", "2026-08-29T10:00:00.000Z", "2026-08-29T10:02:00.000Z", "2026-08-29T10:02:00.000Z", legacyContract);
+    legacy
+      .prepare(
+        "INSERT INTO candidate_plans (id, project_id, source_explorer_thread_id, title, revision, status, created_at, queued_at, last_event_at, resolved_contract_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        "legacy-queued",
+        "project-1",
+        "thread-1",
+        "Legacy queued",
+        1,
+        "QUEUED",
+        "2026-08-29T10:00:00.000Z",
+        "2026-08-29T10:02:00.000Z",
+        "2026-08-29T10:02:00.000Z",
+        legacyContract,
+      );
     legacy.close();
 
     const reopened = new SqlitePipelineStore(databasePath);
-    expect(reopened.getPlan("legacy-queued")).toMatchObject({ status: "BLOCKED", queuedAt: "2026-08-29T10:02:00.000Z", dispatchedAt: "2026-08-29T10:02:00.000Z", attentionReason: expect.stringMatching(/confirmation record/i) });
-    expect(reopened.listEvents().at(-1)).toMatchObject({ type: "plan.status.changed", aggregateId: "legacy-queued", payload: { fromStatus: "DISPATCHED", toStatus: "BLOCKED" } });
+    expect(reopened.getPlan("legacy-queued")).toMatchObject({
+      status: "BLOCKED",
+      queuedAt: "2026-08-29T10:02:00.000Z",
+      dispatchedAt: "2026-08-29T10:02:00.000Z",
+      attentionReason: expect.stringMatching(/confirmation record/i),
+    });
+    expect(reopened.listEvents().at(-1)).toMatchObject({
+      type: "plan.status.changed",
+      aggregateId: "legacy-queued",
+      payload: { fromStatus: "DISPATCHED", toStatus: "BLOCKED" },
+    });
     reopened.close();
   });
 
@@ -153,8 +260,12 @@ describe("SQLite pipeline persistence", () => {
     const firstStore = new SqlitePipelineStore(databasePath);
     const firstService = new PlanService(firstStore);
     firstService.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
-    const plan = firstService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Persist me",
-      resolvedContract: planContractFixture({ store: firstStore, projectId: "project-1", title: "Persist me" }) });
+    const plan = firstService.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "thread-1",
+      title: "Persist me",
+      resolvedContract: planContractFixture({ store: firstStore, projectId: "project-1", title: "Persist me" }),
+    });
     firstService.confirm(plan.id, "user-1");
     firstService.enqueue(plan.id);
     firstStore.close();
@@ -172,8 +283,12 @@ describe("SQLite pipeline persistence", () => {
     const firstStore = new SqlitePipelineStore(databasePath);
     const firstService = new PlanService(firstStore);
     firstService.registerThread({ id: "discard-thread", projectId: "project-1", parentThreadId: null });
-    const plan = firstService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "discard-thread", title: "Persist discarded",
-      resolvedContract: planContractFixture({ store: firstStore, projectId: "project-1", title: "Persist discarded" }) });
+    const plan = firstService.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "discard-thread",
+      title: "Persist discarded",
+      resolvedContract: planContractFixture({ store: firstStore, projectId: "project-1", title: "Persist discarded" }),
+    });
     firstService.discard(plan.id, "user-1");
     firstStore.close();
 
@@ -188,14 +303,34 @@ describe("SQLite pipeline persistence", () => {
     tempDirectories.push(directory);
     const databasePath = join(directory, "factory.sqlite");
     const firstStore = new SqlitePipelineStore(databasePath);
-    const run = { id: "run-1", projectId: "project-1", planId: "plan-1", planRevision: 1, status: "IN_PROGRESS" as const, branch: "factory/run-1", workspacePath: "/tmp/run-1", baseCommit: "abc", executionThreadId: "execution-thread-1", createdAt: new Date().toISOString(), startedAt: new Date().toISOString() };
+    const run = {
+      id: "run-1",
+      projectId: "project-1",
+      planId: "plan-1",
+      planRevision: 1,
+      status: "IN_PROGRESS" as const,
+      branch: "factory/run-1",
+      workspacePath: "/tmp/run-1",
+      baseCommit: "abc",
+      executionThreadId: "execution-thread-1",
+      createdAt: new Date().toISOString(),
+      startedAt: new Date().toISOString(),
+    };
     firstStore.saveRun(run);
-    firstStore.saveExecutionThread({ id: run.executionThreadId, runId: run.id, state: "ACTIVE", journal: [{ sequence: 1, type: "RUN_CREATED", occurredAt: new Date().toISOString(), payload: { planId: run.planId } }] });
+    firstStore.saveExecutionThread({
+      id: run.executionThreadId,
+      runId: run.id,
+      state: "ACTIVE",
+      journal: [{ sequence: 1, type: "RUN_CREATED", occurredAt: new Date().toISOString(), payload: { planId: run.planId } }],
+    });
     firstStore.close();
 
     const reopened = new SqlitePipelineStore(databasePath);
     expect(reopened.getRun(run.id)).toMatchObject({ id: run.id, status: "IN_PROGRESS" });
-    expect(reopened.getExecutionThread(run.executionThreadId)?.journal[0]).toMatchObject({ type: "RUN_CREATED", payload: { planId: run.planId } });
+    expect(reopened.getExecutionThread(run.executionThreadId)?.journal[0]).toMatchObject({
+      type: "RUN_CREATED",
+      payload: { planId: run.planId },
+    });
     reopened.close();
   });
 });
@@ -203,23 +338,38 @@ describe("SQLite pipeline persistence", () => {
 describe("ToolGateway", () => {
   it("denies Explorer writes, commands and commits while allowing read-only tools", async () => {
     const gateway = new ToolGateway({ role: "explorer", workspaceRoot: "/tmp/project" });
-    await expect(gateway.call({ callId: randomUUID(), tool: "read_file", input: { path: "README.md" } })).resolves.toMatchObject({ allowed: true });
-    await expect(gateway.call({ callId: randomUUID(), tool: "write_file", input: { path: "README.md", content: "nope" } })).resolves.toMatchObject({ allowed: false, reason: expect.stringMatching(/read.only/i) });
-    await expect(gateway.call({ callId: randomUUID(), tool: "run_command", input: { commandId: "test" } })).resolves.toMatchObject({ allowed: false });
-    await expect(gateway.call({ callId: randomUUID(), tool: "git_commit", input: { message: "nope" } })).resolves.toMatchObject({ allowed: false });
+    await expect(gateway.call({ callId: randomUUID(), tool: "read_file", input: { path: "README.md" } })).resolves.toMatchObject({
+      allowed: true,
+    });
+    await expect(
+      gateway.call({ callId: randomUUID(), tool: "write_file", input: { path: "README.md", content: "nope" } }),
+    ).resolves.toMatchObject({ allowed: false, reason: expect.stringMatching(/read.only/i) });
+    await expect(gateway.call({ callId: randomUUID(), tool: "run_command", input: { commandId: "test" } })).resolves.toMatchObject({
+      allowed: false,
+    });
+    await expect(gateway.call({ callId: randomUUID(), tool: "git_commit", input: { message: "nope" } })).resolves.toMatchObject({
+      allowed: false,
+    });
   });
 
   it("enforces scoped paths for Executor file access", async () => {
     const gateway = new ToolGateway({ role: "executor", workspaceRoot: "/tmp/project" });
-    await expect(gateway.call({ callId: randomUUID(), tool: "write_file", input: { path: "src/index.ts", content: "export {}" } })).resolves.toMatchObject({ allowed: true });
-    await expect(gateway.call({ callId: randomUUID(), tool: "write_file", input: { path: "../outside.txt", content: "nope" } })).resolves.toMatchObject({ allowed: false, reason: expect.stringMatching(/path/i) });
+    await expect(
+      gateway.call({ callId: randomUUID(), tool: "write_file", input: { path: "src/index.ts", content: "export {}" } }),
+    ).resolves.toMatchObject({ allowed: true });
+    await expect(
+      gateway.call({ callId: randomUUID(), tool: "write_file", input: { path: "../outside.txt", content: "nope" } }),
+    ).resolves.toMatchObject({ allowed: false, reason: expect.stringMatching(/path/i) });
   });
 
   it("protects secrets, repository internals, lockfiles and project configuration for both roles", async () => {
     for (const role of ["explorer", "executor"] as const) {
       const gateway = new ToolGateway({ role, workspaceRoot: "/tmp/project" });
       for (const path of [".env", ".git/config", "package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "tsconfig.json"]) {
-        await expect(gateway.call({ callId: `${role}-${path}`, tool: "read_file", input: { path } })).resolves.toMatchObject({ allowed: false, reason: expect.stringMatching(/protected|secret|internals/i) });
+        await expect(gateway.call({ callId: `${role}-${path}`, tool: "read_file", input: { path } })).resolves.toMatchObject({
+          allowed: false,
+          reason: expect.stringMatching(/protected|secret|internals/i),
+        });
       }
     }
   });

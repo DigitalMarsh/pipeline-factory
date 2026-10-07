@@ -12,7 +12,7 @@ describe("global project selector", () => {
 
   it("keeps the Explorer view instance stable across project changes", () => {
     expect(appSource).toContain('module === "explore" ? module');
-    expect(appSource).toContain('`${module}:${projectId}`');
+    expect(appSource).toContain("`${module}:${projectId}`");
   });
 
   it("does not expose the global Workbench entry", () => {

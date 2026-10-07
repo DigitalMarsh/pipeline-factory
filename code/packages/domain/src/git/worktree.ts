@@ -46,7 +46,12 @@ export type GitCommandRunner = (args: string[], cwd: string) => Promise<CommandR
  * `ignoreDirtyPaths` 是工作区干净检查的白名单（相对 projectRoot 的 git pathspec），
  * 只应放行 Factory 自己写的产物（Plan 落盘目录）——见 git/working-tree.ts 的维护提示 1。
  */
-export type LocalGitWorktreeOptions = { projectRoot: string; worktreeRoot: string; ignoreDirtyPaths?: readonly string[] | undefined; runGit?: GitCommandRunner | undefined };
+export type LocalGitWorktreeOptions = {
+  projectRoot: string;
+  worktreeRoot: string;
+  ignoreDirtyPaths?: readonly string[] | undefined;
+  runGit?: GitCommandRunner | undefined;
+};
 
 /** 使用 Git 创建和移除 Run 专属 Worktree；执行目录与只读 Explorer 的 repoRoot 分离。 */
 export class LocalGitWorktreeAdapter implements WorkspaceAdapter {
@@ -63,7 +68,11 @@ export class LocalGitWorktreeAdapter implements WorkspaceAdapter {
     const verified = await this.runGit(["rev-parse", "--verify", input.baseCommit], this.options.projectRoot);
     if (verified.exitCode !== 0) throw new Error(`Base commit ${input.baseCommit} could not be verified`);
     // 干净检查在 worktree add **之前**（顺序理由见类头维护提示 2）。
-    const inspection = await inspectWorkingTree({ repoRoot: this.options.projectRoot, ...(this.options.ignoreDirtyPaths ? { ignorePaths: this.options.ignoreDirtyPaths } : {}), runGit: this.runGit });
+    const inspection = await inspectWorkingTree({
+      repoRoot: this.options.projectRoot,
+      ...(this.options.ignoreDirtyPaths ? { ignorePaths: this.options.ignoreDirtyPaths } : {}),
+      runGit: this.runGit,
+    });
     if (!inspection.clean) throw workingTreeDirtyError(inspection.paths);
     const created = await this.runGit(["worktree", "add", "-b", input.branch, path, input.baseCommit], this.options.projectRoot);
     if (created.exitCode !== 0) throw new Error(`Git worktree could not be created: ${created.stderr}`);
@@ -79,7 +88,8 @@ export class LocalGitWorktreeAdapter implements WorkspaceAdapter {
 
 function defaultGitCommand(args: string[], cwd: string): Promise<CommandResult> {
   return new Promise((resolveResult) => {
-    execFile("git", args, { cwd, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => resolveResult({ exitCode: error ? 1 : 0, stdout: String(stdout), stderr: String(stderr) }));
+    execFile("git", args, { cwd, maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) =>
+      resolveResult({ exitCode: error ? 1 : 0, stdout: String(stdout), stderr: String(stderr) }),
+    );
   });
 }
-

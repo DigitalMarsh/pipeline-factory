@@ -76,14 +76,19 @@ export class ComputerUseBridge {
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     this.emit({ type: "started", requestId, action: input.action.type });
     try {
-      const operation = input.action.type === "screenshot"
-        ? this.options.adapter.screenshot(controller.signal)
-        : this.options.adapter.perform(input.action, controller.signal);
+      const operation =
+        input.action.type === "screenshot"
+          ? this.options.adapter.screenshot(controller.signal)
+          : this.options.adapter.perform(input.action, controller.signal);
       const result = await raceAbort(operation, controller.signal, requestId);
       this.emit({ type: "completed", requestId, action: input.action.type });
       return result;
     } catch (error) {
-      const reason = controller.signal.aborted ? "Computer Use action timed out or was cancelled" : error instanceof Error ? error.message : String(error);
+      const reason = controller.signal.aborted
+        ? "Computer Use action timed out or was cancelled"
+        : error instanceof Error
+          ? error.message
+          : String(error);
       this.emit({ type: controller.signal.aborted ? "cancelled" : "failed", requestId, action: input.action.type, reason });
       throw new Error(reason, { cause: error });
     } finally {
@@ -108,12 +113,15 @@ async function raceAbort<T>(operation: Promise<T>, signal: AbortSignal, requestI
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => reject(new Error("Computer Use action " + requestId + " was cancelled"));
     signal.addEventListener("abort", onAbort, { once: true });
-    operation.then((value) => {
-      signal.removeEventListener("abort", onAbort);
-      resolve(value);
-    }, (error) => {
-      signal.removeEventListener("abort", onAbort);
-      reject(error);
-    });
+    operation.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
   });
 }

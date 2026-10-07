@@ -14,9 +14,20 @@ import { z } from "zod";
 
 export const hookBody = z.object({
   start: z
-    .object({ commandId: z.string().min(1), enabled: z.boolean().optional(), timeoutMs: z.number().int().positive().optional(), maxAttempts: z.number().int().min(1).max(5).optional(), blocking: z.boolean().optional() })
+    .object({
+      commandId: z.string().min(1),
+      enabled: z.boolean().optional(),
+      timeoutMs: z.number().int().positive().optional(),
+      maxAttempts: z.number().int().min(1).max(5).optional(),
+      blocking: z.boolean().optional(),
+    })
     .optional(),
   cleanup: z
-    .object({ commandId: z.string().min(1), enabled: z.boolean().optional(), timeoutMs: z.number().int().positive().optional(), maxAttempts: z.number().int().min(1).max(5).optional() })
+    .object({
+      commandId: z.string().min(1),
+      enabled: z.boolean().optional(),
+      timeoutMs: z.number().int().positive().optional(),
+      maxAttempts: z.number().int().min(1).max(5).optional(),
+    })
     .optional(),
 });

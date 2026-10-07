@@ -3,7 +3,13 @@
  */
 import { describe, expect, it } from "vitest";
 import type { ExplorerActivityItem, ExplorerInputRequest } from "../types";
-import { buildExplorerTimeline, explorerPlanAnchorId, explorerTimelineMessageType, explorerTimelineTarget, inputRequestTarget } from "./explorerTimeline";
+import {
+  buildExplorerTimeline,
+  explorerPlanAnchorId,
+  explorerTimelineMessageType,
+  explorerTimelineTarget,
+  inputRequestTarget,
+} from "./explorerTimeline";
 
 const activity = (id: string, kind: ExplorerActivityItem["kind"], occurredAt: string): ExplorerActivityItem => ({
   id,
@@ -26,7 +32,16 @@ const inputRequest = (id: string, createdAt: string, status: ExplorerInputReques
   providerThreadId: "provider-thread-1",
   providerTurnId: "provider-turn-1",
   itemId: `item-${id}`,
-  questions: [{ id: "goal", header: "Goal", question: "What should we build?", isOther: false, isSecret: false, options: [{ label: "A", description: "Option A" }] }],
+  questions: [
+    {
+      id: "goal",
+      header: "Goal",
+      question: "What should we build?",
+      isOther: false,
+      isSecret: false,
+      options: [{ label: "A", description: "Option A" }],
+    },
+  ],
   isBlocking: true,
   status,
   createdAt,
@@ -38,10 +53,7 @@ const inputRequest = (id: string, createdAt: string, status: ExplorerInputReques
 describe("Explorer timeline projection", () => {
   it("inserts generated input between the surrounding messages by created time", () => {
     const items = buildExplorerTimeline(
-      [
-        activity("turn-1", "USER_MESSAGE", "2026-09-01T10:00:00.000Z"),
-        activity("turn-3", "ASSISTANT_MESSAGE", "2026-09-01T10:05:00.000Z"),
-      ],
+      [activity("turn-1", "USER_MESSAGE", "2026-09-01T10:00:00.000Z"), activity("turn-3", "ASSISTANT_MESSAGE", "2026-09-01T10:05:00.000Z")],
       [inputRequest("input-2", "2026-09-01T10:02:00.000Z")],
     );
 
@@ -52,10 +64,7 @@ describe("Explorer timeline projection", () => {
     // 结构化输入的生命周期行不再需要在这里过滤：投影层已经不产出它们
     // （写步骤与写 input_requests 行是同一次调用，见 explorer-activity.ts 的模块注释 3）。
     const items = buildExplorerTimeline(
-      [
-        activity("turn-1", "ASSISTANT_MESSAGE", "2026-09-01T10:00:00.000Z"),
-        activity("turn-3", "COMMAND", "2026-09-01T10:06:00.000Z"),
-      ],
+      [activity("turn-1", "ASSISTANT_MESSAGE", "2026-09-01T10:00:00.000Z"), activity("turn-3", "COMMAND", "2026-09-01T10:06:00.000Z")],
       [inputRequest("input-2", "2026-09-01T10:02:00.000Z")],
     );
 

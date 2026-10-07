@@ -23,6 +23,18 @@ export function createDefaultVerificationExecutor(store: PipelineStore, config: 
     const revision = store.getRevision(run.planId, run.planRevision);
     const snapshot = revision?.projectConfigSnapshot;
     const snapshotCommands = snapshot ? new RegisteredCommandExecutor(snapshot.settings.commands) : commands;
-    return snapshotCommands.execute({ commandId, cwd: run.workspacePath, timeoutMs: snapshot?.settings.concurrency.defaultTimeoutMs ?? 120_000, context: { projectId: run.projectId, runId: run.id, workspacePath: run.workspacePath, branch: run.branch, baseCommit: run.baseCommit, exitReason: "verification" } });
+    return snapshotCommands.execute({
+      commandId,
+      cwd: run.workspacePath,
+      timeoutMs: snapshot?.settings.concurrency.defaultTimeoutMs ?? 120_000,
+      context: {
+        projectId: run.projectId,
+        runId: run.id,
+        workspacePath: run.workspacePath,
+        branch: run.branch,
+        baseCommit: run.baseCommit,
+        exitReason: "verification",
+      },
+    });
   };
 }

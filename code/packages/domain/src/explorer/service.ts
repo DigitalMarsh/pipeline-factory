@@ -31,7 +31,10 @@ import type { CreateExplorerInput, ExplorerDeletionInput, ExplorerDeletionSummar
 export class ExplorerDeleteBlockedError extends Error {
   readonly code = "EXPLORER_DELETE_BLOCKED" as const;
 
-  constructor(readonly activeRunIds: string[], readonly activeLoopIds: string[]) {
+  constructor(
+    readonly activeRunIds: string[],
+    readonly activeLoopIds: string[],
+  ) {
     super("ExplorerThread has active execution work; pause or cancel it before deleting the thread");
     this.name = "ExplorerDeleteBlockedError";
   }
@@ -46,7 +49,8 @@ export class ExplorerService {
   /** 创建 Project 内的新 ExplorerThread，可显式继承来源线程。 */
   create(input: CreateExplorerInput): ExplorerThread {
     const origin = input.originThreadId ? this.store.getThread(input.originThreadId) : undefined;
-    if (input.originThreadId && (!origin || origin.projectId !== input.projectId)) throw new Error("Origin Explorer does not belong to this project");
+    if (input.originThreadId && (!origin || origin.projectId !== input.projectId))
+      throw new Error("Origin Explorer does not belong to this project");
     let thread = this.store.saveThread({
       id: this.store.nextId("explorer"),
       projectId: input.projectId,
@@ -59,8 +63,24 @@ export class ExplorerService {
     if (thread.titleSource === "AUTO" && thread.titleStatus === "PLACEHOLDER") {
       thread = this.store.updateThread({ ...thread, title: projectPlaceholderExplorerTitle(this.store, thread), titleStatus: "GENERATED" });
     }
-    this.store.appendEvent({ type: "explorer.created", aggregateId: thread.id, payload: { projectId: thread.projectId, contextMode: thread.contextMode, originThreadId: thread.originThreadId, explorerPlanId: thread.activeExplorerPlanId, turnId: null, loopId: null } });
-    if (origin) this.store.appendEvent({ type: "explorer.continued", aggregateId: thread.id, payload: { originThreadId: origin.id, explorerPlanId: thread.activeExplorerPlanId, turnId: null, loopId: null } });
+    this.store.appendEvent({
+      type: "explorer.created",
+      aggregateId: thread.id,
+      payload: {
+        projectId: thread.projectId,
+        contextMode: thread.contextMode,
+        originThreadId: thread.originThreadId,
+        explorerPlanId: thread.activeExplorerPlanId,
+        turnId: null,
+        loopId: null,
+      },
+    });
+    if (origin)
+      this.store.appendEvent({
+        type: "explorer.continued",
+        aggregateId: thread.id,
+        payload: { originThreadId: origin.id, explorerPlanId: thread.activeExplorerPlanId, turnId: null, loopId: null },
+      });
     selectCurrentExplorer(this.store, thread);
     return thread;
   }
@@ -92,8 +112,17 @@ export class ExplorerService {
     const plan = defaultExplorerPlan(explorer, this.store.nextId("explorer-plan"), (plans.at(-1)?.ordinal ?? 0) + 1, createdAt);
     this.store.saveExplorerPlan(plan);
     const contextSummary = explorer.contextSummary ?? defaultThreadContextSummary(createdAt);
-    const updatedThread = this.store.updateThread({ ...explorer, activeExplorerPlanId: plan.id, contextSummary: { ...contextSummary, updatedAt: createdAt, openPlanIds: [...new Set([...contextSummary.openPlanIds, plan.id])] }, lastActivityAt: createdAt });
-    this.store.appendEvent({ type: "explorer.plan.created", aggregateId: explorer.id, payload: { explorerId: explorer.id, explorerPlanId: plan.id, turnId: null, loopId: null, ordinal: plan.ordinal } });
+    const updatedThread = this.store.updateThread({
+      ...explorer,
+      activeExplorerPlanId: plan.id,
+      contextSummary: { ...contextSummary, updatedAt: createdAt, openPlanIds: [...new Set([...contextSummary.openPlanIds, plan.id])] },
+      lastActivityAt: createdAt,
+    });
+    this.store.appendEvent({
+      type: "explorer.plan.created",
+      aggregateId: explorer.id,
+      payload: { explorerId: explorer.id, explorerPlanId: plan.id, turnId: null, loopId: null, ordinal: plan.ordinal },
+    });
     void updatedThread;
     return plan;
   }
@@ -102,7 +131,8 @@ export class ExplorerService {
   activatePlan(explorerId: string, explorerPlanId: string): ExplorerPlan {
     const explorer = this.get(explorerId);
     const plan = this.store.getExplorerPlan(explorerPlanId);
-    if (!plan || plan.explorerThreadId !== explorer.id || plan.projectId !== explorer.projectId) throw new Error("ExplorerPlan does not belong to this ExplorerThread");
+    if (!plan || plan.explorerThreadId !== explorer.id || plan.projectId !== explorer.projectId)
+      throw new Error("ExplorerPlan does not belong to this ExplorerThread");
     this.store.updateThread({ ...explorer, activeExplorerPlanId: plan.id, lastActivityAt: this.store.now() });
     return plan;
   }
@@ -113,14 +143,27 @@ export class ExplorerService {
     if (!plan || plan.explorerThreadId !== explorer.id) throw new Error("ExplorerPlan does not belong to this ExplorerThread");
     const normalized = title.trim();
     if (!normalized) throw new Error("ExplorerPlan title cannot be empty");
-    const updated = this.store.updateExplorerPlan({ ...plan, title: normalized, titleSource: "MANUAL", titleStatus: "GENERATED", lastActivityAt: this.store.now() });
-    this.store.appendEvent({ type: "explorer.plan.renamed", aggregateId: explorer.id, payload: { explorerId: explorer.id, explorerPlanId: plan.id, turnId: null, loopId: null, title: normalized } });
+    const updated = this.store.updateExplorerPlan({
+      ...plan,
+      title: normalized,
+      titleSource: "MANUAL",
+      titleStatus: "GENERATED",
+      lastActivityAt: this.store.now(),
+    });
+    this.store.appendEvent({
+      type: "explorer.plan.renamed",
+      aggregateId: explorer.id,
+      payload: { explorerId: explorer.id, explorerPlanId: plan.id, turnId: null, loopId: null, title: normalized },
+    });
     return updated;
   }
 
   /** 只列出指定 Project 的线程，按最近活动倒序。 */
   list(projectId: string): ExplorerThread[] {
-    return this.store.listThreads().filter((thread) => thread.projectId === projectId).sort((a, b) => Number(b.state === "ACTIVE") - Number(a.state === "ACTIVE") || b.lastActivityAt.localeCompare(a.lastActivityAt));
+    return this.store
+      .listThreads()
+      .filter((thread) => thread.projectId === projectId)
+      .sort((a, b) => Number(b.state === "ACTIVE") - Number(a.state === "ACTIVE") || b.lastActivityAt.localeCompare(a.lastActivityAt));
   }
 
   /** 归档线程并保留其 Turn、Plan 和事件历史。 */
@@ -130,7 +173,11 @@ export class ExplorerService {
     const project = this.store.getProject(explorer.projectId);
     if (project?.currentExplorerThreadId === explorerId) throw new Error("Current Explorer cannot be archived");
     const archived = this.store.updateThread({ ...explorer, state: "ARCHIVED", lastActivityAt: this.store.now() });
-    this.store.appendEvent({ type: "explorer.archived", aggregateId: explorerId, payload: { explorerId, explorerPlanId: explorer.activeExplorerPlanId, turnId: null, loopId: null } });
+    this.store.appendEvent({
+      type: "explorer.archived",
+      aggregateId: explorerId,
+      payload: { explorerId, explorerPlanId: explorer.activeExplorerPlanId, turnId: null, loopId: null },
+    });
     return archived;
   }
 
@@ -139,7 +186,11 @@ export class ExplorerService {
     const explorer = this.get(explorerId);
     if (explorer.state === "ACTIVE") return explorer;
     const active = this.store.updateThread({ ...explorer, state: "ACTIVE", lastActivityAt: this.store.now() });
-    this.store.appendEvent({ type: "explorer.activated", aggregateId: explorerId, payload: { explorerId, explorerPlanId: active.activeExplorerPlanId, turnId: null, loopId: null } });
+    this.store.appendEvent({
+      type: "explorer.activated",
+      aggregateId: explorerId,
+      payload: { explorerId, explorerPlanId: active.activeExplorerPlanId, turnId: null, loopId: null },
+    });
     selectCurrentExplorer(this.store, active);
     return active;
   }
@@ -149,7 +200,13 @@ export class ExplorerService {
     const explorer = this.get(explorerId);
     const normalized = title.trim();
     if (!normalized) throw new Error("Explorer title cannot be empty");
-    return this.store.updateThread({ ...explorer, title: normalized, titleSource: "MANUAL", titleStatus: "GENERATED", lastActivityAt: this.store.now() });
+    return this.store.updateThread({
+      ...explorer,
+      title: normalized,
+      titleSource: "MANUAL",
+      titleStatus: "GENERATED",
+      lastActivityAt: this.store.now(),
+    });
   }
 
   /** 删除线程及其全部业务投影；审计事件保留，已结束 Run 的 worktree 不做文件系统清理。 */
@@ -163,19 +220,29 @@ export class ExplorerService {
     const turns = this.store.listTurns(explorer.id);
     const turnIds = turns.map((turn) => turn.id);
     const turnIdSet = new Set(turnIds);
-    const plans = this.store.listPlans().filter((plan) => plan.sourceExplorerThreadId === explorer.id || (plan.explorerPlanId ? explorerPlanIdSet.has(plan.explorerPlanId) : false));
+    const plans = this.store
+      .listPlans()
+      .filter(
+        (plan) => plan.sourceExplorerThreadId === explorer.id || (plan.explorerPlanId ? explorerPlanIdSet.has(plan.explorerPlanId) : false),
+      );
     const planIds = plans.map((plan) => plan.id);
     const planIdSet = new Set(planIds);
     const runs = this.store.listRuns().filter((run) => planIdSet.has(run.planId));
     const runIds = runs.map((run) => run.id);
     const runIdSet = new Set(runIds);
-    const loops = this.store.listAgentLoops().filter((loop) => (loop.ownerType === "explorer-turn" && turnIdSet.has(loop.ownerId)) || (loop.ownerType === "run" && runIdSet.has(loop.ownerId)));
+    const loops = this.store
+      .listAgentLoops()
+      .filter(
+        (loop) =>
+          (loop.ownerType === "explorer-turn" && turnIdSet.has(loop.ownerId)) || (loop.ownerType === "run" && runIdSet.has(loop.ownerId)),
+      );
     const activeLoopStates = new Set(["CREATED", "RUNNING", "WAITING_FOR_INPUT", "PAUSED", "RECOVERING"]);
     const activeRunIds = runs.filter((run) => EXPLORER_DELETE_ACTIVE_RUN_STATUSES.has(run.status)).map((run) => run.id);
     const activeLoopIds = loops.filter((loop) => activeLoopStates.has(loop.state)).map((loop) => loop.id);
     if (activeRunIds.length || activeLoopIds.length) throw new ExplorerDeleteBlockedError(activeRunIds, activeLoopIds);
 
-    const replacementCandidate = this.store.listThreads()
+    const replacementCandidate = this.store
+      .listThreads()
       .filter((thread) => thread.projectId === explorer.projectId && thread.id !== explorer.id && thread.state !== "ARCHIVED")
       .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt))[0];
     const input: Omit<ExplorerDeletionInput, "replacementExplorerId"> = {
@@ -193,7 +260,18 @@ export class ExplorerService {
     const remove = () => {
       const replacementExplorer = replacementCandidate ?? this.create({ projectId: explorer.projectId });
       const deleted = this.store.deleteExplorerCascade({ ...input, replacementExplorerId: replacementExplorer.id });
-      this.store.appendEvent({ type: "explorer.deleted", aggregateId: explorer.id, payload: { projectId: explorer.projectId, explorerId: explorer.id, replacementExplorerId: replacementExplorer.id, taskCount: deleted.taskCount, planCount: deleted.planCount, runCount: deleted.runCount } });
+      this.store.appendEvent({
+        type: "explorer.deleted",
+        aggregateId: explorer.id,
+        payload: {
+          projectId: explorer.projectId,
+          explorerId: explorer.id,
+          replacementExplorerId: replacementExplorer.id,
+          taskCount: deleted.taskCount,
+          planCount: deleted.planCount,
+          runCount: deleted.runCount,
+        },
+      });
       const savedProject = this.store.getProject(explorer.projectId);
       if (!savedProject) throw new Error(`Project ${explorer.projectId} not found after Explorer deletion`);
       return { replacementExplorer: this.store.getThread(replacementExplorer.id) as ExplorerThread, project: savedProject, deleted };

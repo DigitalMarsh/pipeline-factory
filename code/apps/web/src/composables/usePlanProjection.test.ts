@@ -31,10 +31,10 @@ vi.mock("../api", () => ({
   },
 }));
 
-const thread = (id = "explorer-1", overrides: Partial<ExplorerThread> = {}) => ({ id, ...overrides } as unknown as ExplorerThread);
-const explorerPlan = (id: string, overrides: Partial<ExplorerPlan> = {}) => ({ id, ...overrides } as unknown as ExplorerPlan);
-const turn = (id: string): ExplorerTurn => ({ id } as unknown as ExplorerTurn);
-const activity = (id: string): ExplorerActivityItem => ({ id } as unknown as ExplorerActivityItem);
+const thread = (id = "explorer-1", overrides: Partial<ExplorerThread> = {}) => ({ id, ...overrides }) as unknown as ExplorerThread;
+const explorerPlan = (id: string, overrides: Partial<ExplorerPlan> = {}) => ({ id, ...overrides }) as unknown as ExplorerPlan;
+const turn = (id: string): ExplorerTurn => ({ id }) as unknown as ExplorerTurn;
+const activity = (id: string): ExplorerActivityItem => ({ id }) as unknown as ExplorerActivityItem;
 
 const plan = (id: string, overrides: Partial<Plan> = {}): Plan => ({
   id,
@@ -75,7 +75,10 @@ const draft = (overrides: Partial<PlanRevisionDraft> = {}): PlanRevisionDraft =>
 function deferred<T>() {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
   return { promise, resolve, reject };
 }
 
@@ -89,7 +92,9 @@ function setup(options: { projectId?: string; threadId?: string | null; activePl
   const inputDialogOpen = ref(false);
   const pendingInput = ref<{ isBlocking?: boolean } | null>(null);
   const inputRequests: unknown[][] = [];
-  const setInputRequests = vi.fn((items: unknown[]) => { inputRequests.push(items); });
+  const setInputRequests = vi.fn((items: unknown[]) => {
+    inputRequests.push(items);
+  });
   let token = 1;
   const isCurrentProjectScope = vi.fn(() => true);
   const projection = usePlanProjection({
@@ -106,7 +111,23 @@ function setup(options: { projectId?: string; threadId?: string | null; activePl
     isCurrentProjectScope,
     routeExplorerPlanId: () => options.activePlanId ?? null,
   });
-  return { ...projection, projectId, thread: sessionThread, turns, activity, agentLoop, explorerPaused, inputDialogOpen, pendingInput, inputRequests, setInputRequests, isCurrentProjectScope, setToken: (next: number) => { token = next; } };
+  return {
+    ...projection,
+    projectId,
+    thread: sessionThread,
+    turns,
+    activity,
+    agentLoop,
+    explorerPaused,
+    inputDialogOpen,
+    pendingInput,
+    inputRequests,
+    setInputRequests,
+    isCurrentProjectScope,
+    setToken: (next: number) => {
+      token = next;
+    },
+  };
 }
 
 beforeEach(() => {
@@ -195,7 +216,14 @@ describe("applyPlanProjection 与 workspace", () => {
     expect(s.explorerEventSequence.value).toBe(8);
 
     vi.mocked(api.explorerPlanWorkspace).mockResolvedValue({
-      explorerPlan: explorerPlan("ep-1"), turns: [], activity: [], inputRequests: [], candidate: null, revisionDraft: null, loops: [], lastEventSequence: 3,
+      explorerPlan: explorerPlan("ep-1"),
+      turns: [],
+      activity: [],
+      inputRequests: [],
+      candidate: null,
+      revisionDraft: null,
+      loops: [],
+      lastEventSequence: 3,
     });
     await s.loadActivePlanWorkspace("explorer-1", "ep-1", "project-1", 1);
     expect(s.explorerEventSequence.value).toBe(8);
@@ -213,11 +241,22 @@ describe("refreshPlanProjection 的竞态与路由回退", () => {
     const s = setup({ activePlanId: "ep-route" });
     s.thread.value = thread();
     vi.mocked(api.explorer).mockResolvedValue({ explorer: thread("explorer-1", { activeExplorerPlanId: "ep-server" }) });
-    vi.mocked(api.explorerPlanGroups).mockResolvedValue({ items: [explorerPlan("ep-first"), explorerPlan("ep-route"), explorerPlan("ep-server")] });
+    vi.mocked(api.explorerPlanGroups).mockResolvedValue({
+      items: [explorerPlan("ep-first"), explorerPlan("ep-route"), explorerPlan("ep-server")],
+    });
     vi.mocked(api.explorerPlans).mockResolvedValue({ items: [], nextCursor: null });
     vi.mocked(api.explorerConfirmedPlans).mockResolvedValue({ items: [] });
     vi.mocked(api.explorerThreadPlans).mockResolvedValue({ items: [] });
-    vi.mocked(api.explorerPlanWorkspace).mockResolvedValue({ explorerPlan: explorerPlan("ep-route"), turns: [], activity: [], inputRequests: [], candidate: null, revisionDraft: null, loops: [], lastEventSequence: 2 });
+    vi.mocked(api.explorerPlanWorkspace).mockResolvedValue({
+      explorerPlan: explorerPlan("ep-route"),
+      turns: [],
+      activity: [],
+      inputRequests: [],
+      candidate: null,
+      revisionDraft: null,
+      loops: [],
+      lastEventSequence: 2,
+    });
 
     await s.refreshPlanProjection();
 

@@ -57,8 +57,17 @@ export class ChangeProposalService {
     };
     this.store.saveChangeProposal(proposal);
     this.store.saveRun({ ...run, status: "NEEDS_PLAN_CHANGE" });
-    updatePlanStatus(this.store, plan, { status: "NEEDS_PLAN_CHANGE", attentionReason: input.reason, lastEventAt: proposal.createdAt }, input.reason);
-    this.store.appendEvent({ type: "change.proposal.created", aggregateId: proposal.id, payload: { runId: run.id, planId: plan.id, revision: plan.revision, reason: input.reason, requestedChanges: input.requestedChanges } });
+    updatePlanStatus(
+      this.store,
+      plan,
+      { status: "NEEDS_PLAN_CHANGE", attentionReason: input.reason, lastEventAt: proposal.createdAt },
+      input.reason,
+    );
+    this.store.appendEvent({
+      type: "change.proposal.created",
+      aggregateId: proposal.id,
+      payload: { runId: run.id, planId: plan.id, revision: plan.revision, reason: input.reason, requestedChanges: input.requestedChanges },
+    });
     return proposal;
   }
 
@@ -71,7 +80,11 @@ export class ChangeProposalService {
       if (!proposal.revision) throw new Error(`Approved ChangeProposal ${proposal.id} is missing its revision`);
       const revision = this.store.getRevision(plan.id, proposal.revision);
       if (!revision) throw new Error(`ChangeProposal ${proposal.id} revision is missing`);
-      const run = plan.runId ? this.store.getRun(plan.runId) ?? null : this.store.listRuns().find((item) => item.planId === plan.id && item.planRevision === revision.revision && item.id !== proposal.runId) ?? null;
+      const run = plan.runId
+        ? (this.store.getRun(plan.runId) ?? null)
+        : (this.store
+            .listRuns()
+            .find((item) => item.planId === plan.id && item.planRevision === revision.revision && item.id !== proposal.runId) ?? null);
       return { proposal, plan, revision, run };
     }
     if (proposal.status !== "OPEN") throw new Error(`ChangeProposal ${proposal.id} cannot be approved from ${proposal.status}`);
@@ -83,17 +96,46 @@ export class ChangeProposalService {
       planId: plan.id,
       revision: revisionNumber,
       resolvedContract: proposal.resolvedContract,
-      artifactHash: `sha256:${createHash("sha256").update(JSON.stringify({ resolvedContract: proposal.resolvedContract, projectConfigSnapshot })).digest("hex")}`,
+      artifactHash: `sha256:${createHash("sha256")
+        .update(JSON.stringify({ resolvedContract: proposal.resolvedContract, projectConfigSnapshot }))
+        .digest("hex")}`,
       confirmedBy: actorId,
       confirmedAt,
       sourceExplorerThreadId: plan.sourceExplorerThreadId,
       ...(plan.explorerPlanId ? { explorerPlanId: plan.explorerPlanId } : {}),
-      ...(projectConfigSnapshot ? { projectConfigVersion: projectConfigSnapshot.configVersion, projectConfigHash: projectConfigSnapshot.configHash, projectConfigSnapshot } : {}),
+      ...(projectConfigSnapshot
+        ? {
+            projectConfigVersion: projectConfigSnapshot.configVersion,
+            projectConfigHash: projectConfigSnapshot.configHash,
+            projectConfigSnapshot,
+          }
+        : {}),
     });
     this.store.saveRevision(revision);
-    const approvedProposal = this.store.updateChangeProposal({ ...proposal, status: "APPROVED", decidedAt: confirmedAt, decidedBy: actorId, revision: revisionNumber });
-    const enqueuedPlan = updatePlanStatus(this.store, plan, { revision: revisionNumber, resolvedContract: proposal.resolvedContract, status: "ENQUEUED", confirmedBy: actorId, confirmedAt, queuedAt: confirmedAt, dispatchedAt: null, runId: null, attentionReason: null, lastEventAt: confirmedAt });
-    this.store.appendEvent({ type: "change.proposal.approved", aggregateId: proposal.id, payload: { actorId, revision: revisionNumber, planId: plan.id } });
+    const approvedProposal = this.store.updateChangeProposal({
+      ...proposal,
+      status: "APPROVED",
+      decidedAt: confirmedAt,
+      decidedBy: actorId,
+      revision: revisionNumber,
+    });
+    const enqueuedPlan = updatePlanStatus(this.store, plan, {
+      revision: revisionNumber,
+      resolvedContract: proposal.resolvedContract,
+      status: "ENQUEUED",
+      confirmedBy: actorId,
+      confirmedAt,
+      queuedAt: confirmedAt,
+      dispatchedAt: null,
+      runId: null,
+      attentionReason: null,
+      lastEventAt: confirmedAt,
+    });
+    this.store.appendEvent({
+      type: "change.proposal.approved",
+      aggregateId: proposal.id,
+      payload: { actorId, revision: revisionNumber, planId: plan.id },
+    });
     return { proposal: approvedProposal, plan: enqueuedPlan, revision, run: null };
   }
 }

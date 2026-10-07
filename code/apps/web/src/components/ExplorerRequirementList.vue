@@ -50,14 +50,27 @@ const emit = defineEmits<{
           :data-explorer-plan-id="row.explorerPlan.id"
         >
           <div class="requirement-cell requirement-name-cell" role="cell">
-            <button class="requirement-name-button" type="button" :aria-current="row.explorerPlan.id === activeExplorerPlanId ? 'true' : undefined" @click="emit('select', row.explorerPlan.id)">
+            <button
+              class="requirement-name-button"
+              type="button"
+              :aria-current="row.explorerPlan.id === activeExplorerPlanId ? 'true' : undefined"
+              @click="emit('select', row.explorerPlan.id)"
+            >
               <span class="requirement-ordinal">{{ row.explorerPlan.ordinal }}</span>
               <span class="requirement-name-copy">
                 <strong>{{ row.title }}</strong>
-                <small>{{ row.explorerPlan.latestUserMessageSummary ?? '尚未开始探索' }}</small>
+                <small>{{ row.explorerPlan.latestUserMessageSummary ?? "尚未开始探索" }}</small>
               </span>
             </button>
-            <button class="requirement-rename-button" type="button" :aria-label="`重命名${row.title}`" :disabled="disabled" @click="emit('rename', row.explorerPlan.id)"><EditPen :size="14" /></button>
+            <button
+              class="requirement-rename-button"
+              type="button"
+              :aria-label="`重命名${row.title}`"
+              :disabled="disabled"
+              @click="emit('rename', row.explorerPlan.id)"
+            >
+              <EditPen :size="14" />
+            </button>
           </div>
           <div class="requirement-cell" role="cell">
             <button
@@ -65,7 +78,9 @@ const emit = defineEmits<{
               class="requirement-status-button"
               :aria-label="`${row.title}，Plan 状态：${row.planStatus.label}，打开探索对话`"
               @click="emit('explore', row.explorerPlan.id)"
-            ><el-tag size="small" effect="light" :type="requirementStatusTagType(row.planStatus.tone)">{{ row.planStatus.label }}</el-tag></button>
+            >
+              <el-tag size="small" effect="light" :type="requirementStatusTagType(row.planStatus.tone)">{{ row.planStatus.label }}</el-tag>
+            </button>
           </div>
           <div class="requirement-cell" role="cell">
             <button
@@ -74,7 +89,9 @@ const emit = defineEmits<{
               type="button"
               :aria-label="`查看 ${row.title} 的结构化 Plan，第 ${row.plan.revision} 版`"
               @click="emit('viewPlan', row.explorerPlan.id)"
-            ><Document :size="15" /> 查看 V{{ row.plan.revision }}</button>
+            >
+              <Document :size="15" /> 查看 V{{ row.plan.revision }}
+            </button>
             <span v-else class="requirement-unavailable" aria-label="尚无结构化 Plan">—</span>
           </div>
           <div class="requirement-cell" role="cell">
@@ -84,7 +101,9 @@ const emit = defineEmits<{
               class="requirement-status-button"
               :aria-label="`${row.title}，任务状态：${row.taskStatus.label}，打开 Run`"
               @click="emit('openTask', row.explorerPlan.id)"
-            ><el-tag size="small" effect="light" :type="requirementStatusTagType(row.taskStatus.tone)">{{ row.taskStatus.label }}</el-tag></button>
+            >
+              <el-tag size="small" effect="light" :type="requirementStatusTagType(row.taskStatus.tone)">{{ row.taskStatus.label }}</el-tag>
+            </button>
             <span v-else class="requirement-unavailable">—</span>
           </div>
         </article>

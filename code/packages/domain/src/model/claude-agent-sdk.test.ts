@@ -16,19 +16,46 @@ import type { ModelEvent, ModelRequest } from "../index.js";
 const message = (value: unknown): SDKMessage => value as SDKMessage;
 
 function initMessage(sessionId: string, reported: Record<string, unknown> = {}): SDKMessage {
-  return message({ type: "system", subtype: "init", session_id: sessionId, cwd: "/tmp/repo", tools: [], model: "claude-opus-5", permissionMode: "default", ...reported });
+  return message({
+    type: "system",
+    subtype: "init",
+    session_id: sessionId,
+    cwd: "/tmp/repo",
+    tools: [],
+    model: "claude-opus-5",
+    permissionMode: "default",
+    ...reported,
+  });
 }
 
 function textDelta(sessionId: string, text: string): SDKMessage {
-  return message({ type: "stream_event", session_id: sessionId, uuid: `uuid-${text}`, event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } } });
+  return message({
+    type: "stream_event",
+    session_id: sessionId,
+    uuid: `uuid-${text}`,
+    event: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } },
+  });
 }
 
 function assistantToolUse(sessionId: string, id: string, name: string, input: Record<string, unknown>): SDKMessage {
-  return message({ type: "assistant", session_id: sessionId, uuid: `uuid-${id}`, message: { role: "assistant", content: [{ type: "tool_use", id, name, input }] } });
+  return message({
+    type: "assistant",
+    session_id: sessionId,
+    uuid: `uuid-${id}`,
+    message: { role: "assistant", content: [{ type: "tool_use", id, name, input }] },
+  });
 }
 
 function toolResult(sessionId: string, toolUseId: string, text: string, isError = false): SDKMessage {
-  return message({ type: "user", session_id: sessionId, uuid: `uuid-${toolUseId}`, message: { role: "user", content: [{ type: "tool_result", tool_use_id: toolUseId, content: [{ type: "text", text }], is_error: isError }] } });
+  return message({
+    type: "user",
+    session_id: sessionId,
+    uuid: `uuid-${toolUseId}`,
+    message: {
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: toolUseId, content: [{ type: "text", text }], is_error: isError }],
+    },
+  });
 }
 
 function resultMessage(sessionId: string, input: Record<string, unknown> = {}): SDKMessage {
@@ -60,22 +87,23 @@ function createFactory(
 ): (input: { prompt: string; options: Options }) => Promise<ClaudeQueryHandle> {
   return async ({ prompt, options }) => {
     const handle: ClaudeQueryHandle = {
-      stream: () => script({
-        options,
-        sessionId: SessionIds.next(),
-        runPermission: async (toolName, input, requestId, toolUseID) => {
-          const canUseTool = options.canUseTool;
-          if (!canUseTool) return null;
-          const controller = new AbortController();
-          return await canUseTool(toolName, input, {
-            signal: controller.signal,
-            suggestions: [],
-            toolUseID,
-            requestId,
-            decisionReason: "test",
-          } as unknown as Parameters<NonNullable<Options["canUseTool"]>>[2]);
-        },
-      }),
+      stream: () =>
+        script({
+          options,
+          sessionId: SessionIds.next(),
+          runPermission: async (toolName, input, requestId, toolUseID) => {
+            const canUseTool = options.canUseTool;
+            if (!canUseTool) return null;
+            const controller = new AbortController();
+            return await canUseTool(toolName, input, {
+              signal: controller.signal,
+              suggestions: [],
+              toolUseID,
+              requestId,
+              decisionReason: "test",
+            } as unknown as Parameters<NonNullable<Options["canUseTool"]>>[2]);
+          },
+        }),
       interrupt: async () => undefined,
     };
     captures.push({ prompt, options, handle });
@@ -131,10 +159,21 @@ describe("ClaudeAgentSdkGateway", () => {
     const events = await collect(gateway.stream(explorerRequest()));
 
     expect(events[0]).toMatchObject({ type: "thread.started", threadId: captures[0]?.options.resume ?? expect.any(String) });
-    expect(events.filter((event) => event.type === "text.delta").map((event) => (event as { text: string }).text).join("")).toBe("先看订单模块");
-    expect(events).toContainEqual(expect.objectContaining({ type: "provider.activity", phase: "started", toolName: "Read", itemId: "tool-1" }));
-    expect(events).toContainEqual(expect.objectContaining({ type: "provider.activity", phase: "completed", status: "succeeded", itemId: "tool-1" }));
-    expect(events).toContainEqual(expect.objectContaining({ type: "model.usage", usage: expect.objectContaining({ inputTokens: 100, outputTokens: 20 }) }));
+    expect(
+      events
+        .filter((event) => event.type === "text.delta")
+        .map((event) => (event as { text: string }).text)
+        .join(""),
+    ).toBe("先看订单模块");
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: "provider.activity", phase: "started", toolName: "Read", itemId: "tool-1" }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: "provider.activity", phase: "completed", status: "succeeded", itemId: "tool-1" }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: "model.usage", usage: expect.objectContaining({ inputTokens: 100, outputTokens: 20 }) }),
+    );
     expect(events.at(-1)).toEqual({ type: "turn.completed" });
     expect(events.some((event) => event.type === "turn.failed")).toBe(false);
   });
@@ -143,7 +182,14 @@ describe("ClaudeAgentSdkGateway", () => {
     const captures: Capture[] = [];
     let permissionResult: unknown;
     const questions = [
-      { question: "Which colour do you prefer?", header: "Colour", options: [{ label: "Red", description: "warm" }, { label: "Blue", description: "cool" }] },
+      {
+        question: "Which colour do you prefer?",
+        header: "Colour",
+        options: [
+          { label: "Red", description: "warm" },
+          { label: "Blue", description: "cool" },
+        ],
+      },
     ];
     const gateway = new ClaudeAgentSdkGateway({
       roles,
@@ -156,7 +202,9 @@ describe("ClaudeAgentSdkGateway", () => {
     });
 
     const events: ModelEvent[] = [];
-    const consume = (async () => { for await (const event of gateway.stream(explorerRequest())) events.push(event); })();
+    const consume = (async () => {
+      for await (const event of gateway.stream(explorerRequest())) events.push(event);
+    })();
     await waitFor(() => events.some((event) => event.type === "turn.input_required"));
 
     const request = events.find((event) => event.type === "turn.input_required");
@@ -165,7 +213,19 @@ describe("ClaudeAgentSdkGateway", () => {
         requestId: "req-1",
         itemId: "tool-ask",
         isBlocking: true,
-        questions: [{ id: "0", header: "Colour", question: "Which colour do you prefer?", isOther: true, isSecret: false, options: [{ label: "Red", description: "warm" }, { label: "Blue", description: "cool" }] }],
+        questions: [
+          {
+            id: "0",
+            header: "Colour",
+            question: "Which colour do you prefer?",
+            isOther: true,
+            isSecret: false,
+            options: [
+              { label: "Red", description: "warm" },
+              { label: "Blue", description: "cool" },
+            ],
+          },
+        ],
       },
     });
 
@@ -173,14 +233,26 @@ describe("ClaudeAgentSdkGateway", () => {
     await consume;
 
     // 回传形状：allow + updatedInput.answers，键是题目原文（CLI 侧的输出契约就是"题目原文 -> 答案"）。
-    expect(permissionResult).toEqual({ behavior: "allow", updatedInput: { questions, answers: { "Which colour do you prefer?": "Blue" } } });
+    expect(permissionResult).toEqual({
+      behavior: "allow",
+      updatedInput: { questions, answers: { "Which colour do you prefer?": "Blue" } },
+    });
     expect(events.at(-1)).toEqual({ type: "turn.completed" });
   });
 
   it("joins multi-select answers with a comma and keeps the option list verbatim", async () => {
     const captures: Capture[] = [];
     let permissionResult: unknown;
-    const questions = [{ question: "Which features?", header: "Features", options: [{ label: "A", description: "" }, { label: "B", description: "" }] }];
+    const questions = [
+      {
+        question: "Which features?",
+        header: "Features",
+        options: [
+          { label: "A", description: "" },
+          { label: "B", description: "" },
+        ],
+      },
+    ];
     const gateway = new ClaudeAgentSdkGateway({
       roles,
       sessionExists: async () => true,
@@ -191,7 +263,9 @@ describe("ClaudeAgentSdkGateway", () => {
       }),
     });
     const events: ModelEvent[] = [];
-    const consume = (async () => { for await (const event of gateway.stream(explorerRequest())) events.push(event); })();
+    const consume = (async () => {
+      for await (const event of gateway.stream(explorerRequest())) events.push(event);
+    })();
     await waitFor(() => events.some((event) => event.type === "turn.input_required"));
     await gateway.answerUserInput({ requestId: "req-multi", answers: { "0": { answers: ["A", "B"] } } });
     await consume;
@@ -206,7 +280,12 @@ describe("ClaudeAgentSdkGateway", () => {
       sessionExists: async () => true,
       queryFactory: createFactory(captures, async function* ({ sessionId, runPermission }) {
         yield initMessage(sessionId);
-        permissionResult = await runPermission("AskUserQuestion", { questions: [{ question: "ok?", options: [] }] }, "req-exec", "tool-exec");
+        permissionResult = await runPermission(
+          "AskUserQuestion",
+          { questions: [{ question: "ok?", options: [] }] },
+          "req-exec",
+          "tool-exec",
+        );
         yield resultMessage(sessionId);
       }),
     });
@@ -263,20 +342,26 @@ describe("ClaudeAgentSdkGateway", () => {
       }),
     });
 
-    const events = await collect(gateway.stream(explorerRequest({
-      providerThreadId: "session-gone",
-      messages: [
-        { role: "user", content: "先看看订单模块" },
-        { role: "assistant", content: "订单模块有三个入口" },
-        { role: "user", content: "那取消流程呢" },
-      ],
-    })));
+    const events = await collect(
+      gateway.stream(
+        explorerRequest({
+          providerThreadId: "session-gone",
+          messages: [
+            { role: "user", content: "先看看订单模块" },
+            { role: "assistant", content: "订单模块有三个入口" },
+            { role: "user", content: "那取消流程呢" },
+          ],
+        }),
+      ),
+    );
 
     // 不再 resume（会话已经不在磁盘上），而是把本地整段对话回放进去。
     expect(captures[0]?.options.resume).toBeUndefined();
     expect(captures[0]?.prompt).toContain("订单模块有三个入口");
     expect(captures[0]?.prompt).toContain("那取消流程呢");
-    expect(events).toContainEqual(expect.objectContaining({ type: "provider.activity", itemType: "providerSession", title: "Provider session rebuilt" }));
+    expect(events).toContainEqual(
+      expect.objectContaining({ type: "provider.activity", itemType: "providerSession", title: "Provider session rebuilt" }),
+    );
     expect(events.some((event) => event.type === "turn.failed")).toBe(false);
   });
 
@@ -335,7 +420,14 @@ describe("ClaudeAgentSdkGateway", () => {
     // init 到达后另一半补齐：CLI 自报的版本、凭据来源与实际模型名，随 thread.started 一起进 Run 记录。
     expect(events[0]).toMatchObject({
       type: "thread.started",
-      endpoint: { backend: "claude-agent-sdk", endpoint: "127.0.0.1:15721", source: "config", cliVersion: "2.1.283", credentialSource: "none", providerModel: "claude-opus-5" },
+      endpoint: {
+        backend: "claude-agent-sdk",
+        endpoint: "127.0.0.1:15721",
+        source: "config",
+        cliVersion: "2.1.283",
+        credentialSource: "none",
+        providerModel: "claude-opus-5",
+      },
     });
     expect(gateway.describeEndpoint()).toMatchObject({ cliVersion: "2.1.283", credentialSource: "none", providerModel: "claude-opus-5" });
   });
@@ -355,7 +447,9 @@ describe("ClaudeAgentSdkGateway", () => {
     // 指纹必须如实记成 null + provider-settings，而不是把"未配置"美化成某个默认端点。
     expect(gateway.describeEndpoint()).toMatchObject({ endpoint: null, source: "provider-settings", cliVersion: null });
     const events = await collect(gateway.stream(explorerRequest()));
-    expect(events[0]).toMatchObject({ endpoint: { endpoint: null, source: "provider-settings", cliVersion: "2.1.283", credentialSource: "ANTHROPIC_API_KEY" } });
+    expect(events[0]).toMatchObject({
+      endpoint: { endpoint: null, source: "provider-settings", cliVersion: "2.1.283", credentialSource: "ANTHROPIC_API_KEY" },
+    });
   });
 
   it("reports a provider-side failure instead of finishing with an empty answer", async () => {
@@ -365,7 +459,13 @@ describe("ClaudeAgentSdkGateway", () => {
       sessionExists: async () => true,
       queryFactory: createFactory(captures, async function* () {
         yield initMessage("session-failed");
-        yield message({ type: "assistant", session_id: "session-failed", uuid: "uuid-error", error: "authentication_failed", message: { role: "assistant", content: [] } });
+        yield message({
+          type: "assistant",
+          session_id: "session-failed",
+          uuid: "uuid-error",
+          error: "authentication_failed",
+          message: { role: "assistant", content: [] },
+        });
         yield resultMessage("session-failed", { is_error: true, result: "Not logged in · Please run /login" });
       }),
     });
@@ -389,18 +489,24 @@ describe("ClaudeAgentSdkGateway", () => {
         yield initMessage(sessionId);
         await new Promise((_resolve, reject) => {
           const timer = setTimeout(() => undefined, 500);
-          controller.signal.addEventListener("abort", () => {
-            clearTimeout(timer);
-            const error = new Error("aborted");
-            error.name = "AbortError";
-            reject(error);
-          }, { once: true });
+          controller.signal.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(timer);
+              const error = new Error("aborted");
+              error.name = "AbortError";
+              reject(error);
+            },
+            { once: true },
+          );
         });
         yield resultMessage(sessionId);
       }),
     });
 
-    const consume = (async () => { for await (const event of gateway.stream(explorerRequest({ signal: controller.signal }))) events.push(event); })();
+    const consume = (async () => {
+      for await (const event of gateway.stream(explorerRequest({ signal: controller.signal }))) events.push(event);
+    })();
     await waitFor(() => events.some((event) => event.type === "thread.started"));
     controller.abort();
     await consume;
@@ -467,7 +573,9 @@ describe("Claude 侧的数据层：读什么、为什么读", () => {
     const gateway = new ClaudeAgentSdkGateway({
       roles,
       sessionExists: async () => true,
-      queryFactory: createFactory(captures, async function* ({ sessionId }) { yield* script(sessionId); }),
+      queryFactory: createFactory(captures, async function* ({ sessionId }) {
+        yield* script(sessionId);
+      }),
     });
     return await collect(gateway.stream(explorerRequest()));
   }
@@ -475,17 +583,35 @@ describe("Claude 侧的数据层：读什么、为什么读", () => {
   it("**读 `thinking` 块** —— 此前整块被丢掉，Claude 侧的推理在界面上从来不存在", async () => {
     const events = await run(async function* (sessionId) {
       yield initMessage(sessionId);
-      yield message({ type: "assistant", session_id: sessionId, uuid: "uuid-think", message: { role: "assistant", content: [{ type: "thinking", thinking: "先看订单与退款的耦合点。", signature: "sig" }] } });
+      yield message({
+        type: "assistant",
+        session_id: sessionId,
+        uuid: "uuid-think",
+        message: { role: "assistant", content: [{ type: "thinking", thinking: "先看订单与退款的耦合点。", signature: "sig" }] },
+      });
       yield resultMessage(sessionId);
     });
 
-    expect(events).toContainEqual(expect.objectContaining({ type: "provider.activity", activityKind: "reasoning", outcome: "not-applicable", itemType: "thinking", summary: "先看订单与退款的耦合点。" }));
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "provider.activity",
+        activityKind: "reasoning",
+        outcome: "not-applicable",
+        itemType: "thinking",
+        summary: "先看订单与退款的耦合点。",
+      }),
+    );
   });
 
   it("安全脱敏过的思考留下一条**看得见的事实**，而不是静默消失", async () => {
     const events = await run(async function* (sessionId) {
       yield initMessage(sessionId);
-      yield message({ type: "assistant", session_id: sessionId, uuid: "uuid-redacted", message: { role: "assistant", content: [{ type: "redacted_thinking", data: "opaque" }] } });
+      yield message({
+        type: "assistant",
+        session_id: sessionId,
+        uuid: "uuid-redacted",
+        message: { role: "assistant", content: [{ type: "redacted_thinking", data: "opaque" }] },
+      });
       yield resultMessage(sessionId);
     });
 
@@ -495,7 +621,12 @@ describe("Claude 侧的数据层：读什么、为什么读", () => {
   it("一条空思考不留行（没有内容就没有可说的）", async () => {
     const events = await run(async function* (sessionId) {
       yield initMessage(sessionId);
-      yield message({ type: "assistant", session_id: sessionId, uuid: "uuid-empty", message: { role: "assistant", content: [{ type: "thinking", thinking: "   " }] } });
+      yield message({
+        type: "assistant",
+        session_id: sessionId,
+        uuid: "uuid-empty",
+        message: { role: "assistant", content: [{ type: "thinking", thinking: "   " }] },
+      });
       yield resultMessage(sessionId);
     });
 
@@ -521,43 +652,132 @@ describe("Claude 侧的数据层：读什么、为什么读", () => {
   it("压缩边界带上 token 数 —— 与 OpenClaw 那条分隔线写的是同一件事", async () => {
     const events = await run(async function* (sessionId) {
       yield initMessage(sessionId);
-      yield message({ type: "system", subtype: "compact_boundary", session_id: sessionId, uuid: "uuid-compact", compact_metadata: { trigger: "auto", pre_tokens: 120_000, post_tokens: 8_000, duration_ms: 900 } });
+      yield message({
+        type: "system",
+        subtype: "compact_boundary",
+        session_id: sessionId,
+        uuid: "uuid-compact",
+        compact_metadata: { trigger: "auto", pre_tokens: 120_000, post_tokens: 8_000, duration_ms: 900 },
+      });
       yield resultMessage(sessionId);
     });
 
-    expect(events).toContainEqual(expect.objectContaining({ type: "provider.activity", activityKind: "compaction", itemType: "compact_boundary", summary: "Provider 自动压缩了上下文：120000 → 8000 tokens。", durationMs: 900 }));
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "provider.activity",
+        activityKind: "compaction",
+        itemType: "compact_boundary",
+        summary: "Provider 自动压缩了上下文：120000 → 8000 tokens。",
+        durationMs: 900,
+      }),
+    );
   });
 
   it("重试 / 权限被拒 / 配额 / 子任务 / 钩子 / 警告各归自己的类别", async () => {
     const events = await run(async function* (sessionId) {
       yield initMessage(sessionId);
-      yield message({ type: "system", subtype: "api_retry", session_id: sessionId, uuid: "uuid-retry", attempt: 2, max_retries: 5, retry_delay_ms: 4_000, error_status: 529, error: "overloaded" });
-      yield message({ type: "system", subtype: "permission_denied", session_id: sessionId, uuid: "uuid-perm", tool_name: "Bash", tool_use_id: "tool-2", message: "策略拒绝写入仓库之外的路径。" });
-      yield message({ type: "rate_limit_event", session_id: sessionId, uuid: "uuid-rate", rate_limit_info: { status: "rejected", rateLimitType: "five_hour" } });
-      yield message({ type: "system", subtype: "task_started", session_id: sessionId, uuid: "uuid-task", task_id: "task-1", tool_use_id: "tool-3", description: "扫描依赖", subagent_type: "Explore" });
-      yield message({ type: "system", subtype: "task_notification", session_id: sessionId, uuid: "uuid-task-done", task_id: "task-1", tool_use_id: "tool-3", status: "completed", output_file: "/tmp/out", summary: "扫完了" });
-      yield message({ type: "system", subtype: "hook_response", session_id: sessionId, uuid: "uuid-hook", hook_id: "hook-1", hook_name: "lint", hook_event: "PostToolUse", output: "ok", stdout: "ok", stderr: "", exit_code: 0, outcome: "success" });
-      yield message({ type: "system", subtype: "informational", session_id: sessionId, uuid: "uuid-info", level: "warning", content: "配置里有一个不认识的键。" });
+      yield message({
+        type: "system",
+        subtype: "api_retry",
+        session_id: sessionId,
+        uuid: "uuid-retry",
+        attempt: 2,
+        max_retries: 5,
+        retry_delay_ms: 4_000,
+        error_status: 529,
+        error: "overloaded",
+      });
+      yield message({
+        type: "system",
+        subtype: "permission_denied",
+        session_id: sessionId,
+        uuid: "uuid-perm",
+        tool_name: "Bash",
+        tool_use_id: "tool-2",
+        message: "策略拒绝写入仓库之外的路径。",
+      });
+      yield message({
+        type: "rate_limit_event",
+        session_id: sessionId,
+        uuid: "uuid-rate",
+        rate_limit_info: { status: "rejected", rateLimitType: "five_hour" },
+      });
+      yield message({
+        type: "system",
+        subtype: "task_started",
+        session_id: sessionId,
+        uuid: "uuid-task",
+        task_id: "task-1",
+        tool_use_id: "tool-3",
+        description: "扫描依赖",
+        subagent_type: "Explore",
+      });
+      yield message({
+        type: "system",
+        subtype: "task_notification",
+        session_id: sessionId,
+        uuid: "uuid-task-done",
+        task_id: "task-1",
+        tool_use_id: "tool-3",
+        status: "completed",
+        output_file: "/tmp/out",
+        summary: "扫完了",
+      });
+      yield message({
+        type: "system",
+        subtype: "hook_response",
+        session_id: sessionId,
+        uuid: "uuid-hook",
+        hook_id: "hook-1",
+        hook_name: "lint",
+        hook_event: "PostToolUse",
+        output: "ok",
+        stdout: "ok",
+        stderr: "",
+        exit_code: 0,
+        outcome: "success",
+      });
+      yield message({
+        type: "system",
+        subtype: "informational",
+        session_id: sessionId,
+        uuid: "uuid-info",
+        level: "warning",
+        content: "配置里有一个不认识的键。",
+      });
       yield resultMessage(sessionId);
     });
 
-    const kinds = events.flatMap((event) => event.type === "provider.activity" ? [event.activityKind] : []);
+    const kinds = events.flatMap((event) => (event.type === "provider.activity" ? [event.activityKind] : []));
     expect(kinds).toEqual(["retry", "permission", "rate-limit", "task", "task", "hook", "warning"]);
     // 被拒是一次**明确的失败**，不是"状态未知"。
     expect(events).toContainEqual(expect.objectContaining({ activityKind: "permission", status: "denied" }));
     expect(events).toContainEqual(expect.objectContaining({ activityKind: "permission", outcome: "failed" }));
     // 常态噪音不上传：`level: "info"` 的那一类一律不发。
-    expect(events.some((event) => event.type === "provider.activity" && event.itemType === "informational" && event.summary === "info")).toBe(false);
+    expect(
+      events.some((event) => event.type === "provider.activity" && event.itemType === "informational" && event.summary === "info"),
+    ).toBe(false);
   });
 
   it("每轮都来的 `allowed` 配额与 `info` 提示不上传（「常态收进诊断区」说的是记录，不是每次都浮现）", async () => {
     const events = await run(async function* (sessionId) {
       yield initMessage(sessionId);
       yield message({ type: "rate_limit_event", session_id: sessionId, uuid: "uuid-rate-ok", rate_limit_info: { status: "allowed" } });
-      yield message({ type: "system", subtype: "informational", session_id: sessionId, uuid: "uuid-info-ok", level: "info", content: "你好" });
+      yield message({
+        type: "system",
+        subtype: "informational",
+        session_id: sessionId,
+        uuid: "uuid-info-ok",
+        level: "info",
+        content: "你好",
+      });
       yield resultMessage(sessionId);
     });
 
-    expect(events.some((event) => event.type === "provider.activity" && (event.activityKind === "rate-limit" || event.activityKind === "warning"))).toBe(false);
+    expect(
+      events.some(
+        (event) => event.type === "provider.activity" && (event.activityKind === "rate-limit" || event.activityKind === "warning"),
+      ),
+    ).toBe(false);
   });
 });

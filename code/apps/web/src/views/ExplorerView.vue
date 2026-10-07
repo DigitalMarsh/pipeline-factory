@@ -4,7 +4,19 @@
 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { ArrowDown, ArrowUp, Check, Close, Connection, Document, InfoFilled, Refresh, Right, VideoPause, Warning } from "@element-plus/icons-vue";
+import {
+  ArrowDown,
+  ArrowUp,
+  Check,
+  Close,
+  Connection,
+  Document,
+  InfoFilled,
+  Refresh,
+  Right,
+  VideoPause,
+  Warning,
+} from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 import { api } from "../api";
@@ -44,10 +56,28 @@ import { readableAssistantText } from "../utils/planProtocolDisplay";
 import { planForActivity as planForActivityIn } from "../utils/planTimeline";
 import { taskDisplayTitle } from "../utils/taskTree";
 import { projectPathForModule } from "../utils/projectRoutes";
-import { explorerTimelineTarget as activityTarget, explorerPlanAnchorId, explorerTimelineMessageType, inputRequestTarget } from "../utils/explorerTimeline";
-import { assistantActivityLabel, explorerDisplayMode, explorerDisplayTitle, explorerRuntimeFacts, formatTurnTime, EXPLORER_ROW_MODES, type ExplorerRowMode } from "../utils/explorerPresentation";
+import {
+  explorerTimelineTarget as activityTarget,
+  explorerPlanAnchorId,
+  explorerTimelineMessageType,
+  inputRequestTarget,
+} from "../utils/explorerTimeline";
+import {
+  assistantActivityLabel,
+  explorerDisplayMode,
+  explorerDisplayTitle,
+  explorerRuntimeFacts,
+  formatTurnTime,
+  EXPLORER_ROW_MODES,
+  type ExplorerRowMode,
+} from "../utils/explorerPresentation";
 import type { ExplorerDisplayMode } from "../utils/explorerPresentation";
-import { formatAgentLoopCompletion, formatAgentLoopGate, formatAgentLoopState, formatAgentLoopTerminal } from "../utils/agentLoopPresentation";
+import {
+  formatAgentLoopCompletion,
+  formatAgentLoopGate,
+  formatAgentLoopState,
+  formatAgentLoopTerminal,
+} from "../utils/agentLoopPresentation";
 import { canCreateConfigurationRevision as canCreateConfigurationRevisionFor } from "../utils/runPrerequisites";
 
 import { useExplorerInputRequests, type ExplorerInputDialogHandle } from "../composables/useExplorerInputRequests";
@@ -69,7 +99,20 @@ const projectExecutionMode = computed(() => route.query.workspace === "project-e
  * 需求投影与工作区加载见下方 `usePlanProjection`——它是唯一同时写会话状态与投影状态的地方，
  * 也正是 `projectScopeToken` / `isCurrentProjectScope` 以入参传下去的原因。
  */
-const { project, projects, thread, explorers, turns, activity, projectRuns, projectScopeToken, beginProjectScope, invalidateProjectScope, isCurrentProjectScope, resetSessionState } = useExplorerSession({ projectId });
+const {
+  project,
+  projects,
+  thread,
+  explorers,
+  turns,
+  activity,
+  projectRuns,
+  projectScopeToken,
+  beginProjectScope,
+  invalidateProjectScope,
+  isCurrentProjectScope,
+  resetSessionState,
+} = useExplorerSession({ projectId });
 
 const projectCreateOpen = ref(false);
 const projectSettingsOpen = ref(false);
@@ -80,7 +123,13 @@ const planRequirements = ref<ExplorerPlanRequirement[]>([]);
 const draft = ref("");
 const requirementDrafts = new Map<string, string>();
 const pendingSendPlanIds = ref<Set<string>>(new Set());
-type FailedExplorerSend = { content: string; clientTurnId: string; optimisticUserId: string; assistantActivityId: string; failedAssistantTurnId: string | null };
+type FailedExplorerSend = {
+  content: string;
+  clientTurnId: string;
+  optimisticUserId: string;
+  assistantActivityId: string;
+  failedAssistantTurnId: string | null;
+};
 const failedExplorerSends = new Map<string, FailedExplorerSend>();
 const policyOpen = ref(false);
 const renameDialogOpen = ref(false);
@@ -108,27 +157,51 @@ const explorerModel = ref("gpt-5.6-luna");
  * 与 `explorerModel`（来自 /health 的全局模型名）分开算，但同样只用于展示"这一轮是谁在跑"。
  */
 const { catalog: modelCatalog, load: loadModelBackends } = useModelBackends();
-const explorerBackendLabel = computed(() => backendLabel(modelCatalog.value, project.value?.settings.models.explorer.backend || modelCatalog.value?.roles.explorer));
+const explorerBackendLabel = computed(() =>
+  backendLabel(modelCatalog.value, project.value?.settings.models.explorer.backend || modelCatalog.value?.roles.explorer),
+);
 const inputDialog = ref<ExplorerInputDialogHandle | null>(null);
 const mounted = ref(false);
 // A delete already loads the replacement thread explicitly. Suppress the
 // route watcher for that one navigation so the old thread cannot race the
 // replacement load and overwrite the page-level error banner.
 let suppressNextExplorerRouteReload = false;
-const activeRunId = computed(() => typeof route.query.runId === "string" ? route.query.runId : null);
+const activeRunId = computed(() => (typeof route.query.runId === "string" ? route.query.runId : null));
 const planCenterCount = ref(0);
 const contextUsage = computed(() => formatContextUsage(turns.value));
 const agentLoopLabel = computed(() => formatAgentLoopState(agentLoop.value?.state));
 const agentLoopGateLabel = computed(() => formatAgentLoopGate(agentLoop.value?.diagnostics));
 const agentLoopTerminalLabel = computed(() => formatAgentLoopTerminal(agentLoop.value?.diagnostics));
-const agentLoopCompletionLabel = computed(() => agentLoop.value ? formatAgentLoopCompletion(agentLoop.value) : null);
+const agentLoopCompletionLabel = computed(() => (agentLoop.value ? formatAgentLoopCompletion(agentLoop.value) : null));
 /**
  * 结构化输入请求（模型反问、答案提交、草稿进度）交给 composable。
  * 传进去的是 `activeExplorerPlan` **解析后**的 id——原始 `activeExplorerPlanId` ref
  * 还会回退到 thread / explorerPlans[0]，两条链路必须一致，否则会错位。
  * `inputDialog` 的模板 ref 留在本文件——`ref="inputDialog"` 要求它是个顶层绑定。
  */
-const { pendingInput, inputRequests, inputProgress, inputDialogOpen, inputAnswerInFlight, inputCardRequest, setInputRequests, adoptInputRequest, resetInputState, inputAnswerLabelsFor, inputAnswerText, inputStatusLabel, openInputRequest, updateInputProgress, submitInput, cancelInput } = useExplorerInputRequests({ projectId, thread, activeExplorerPlanId: computed(() => activeExplorerPlan.value?.id ?? null), inputDialog });
+const {
+  pendingInput,
+  inputRequests,
+  inputProgress,
+  inputDialogOpen,
+  inputAnswerInFlight,
+  inputCardRequest,
+  setInputRequests,
+  adoptInputRequest,
+  resetInputState,
+  inputAnswerLabelsFor,
+  inputAnswerText,
+  inputStatusLabel,
+  openInputRequest,
+  updateInputProgress,
+  submitInput,
+  cancelInput,
+} = useExplorerInputRequests({
+  projectId,
+  thread,
+  activeExplorerPlanId: computed(() => activeExplorerPlan.value?.id ?? null),
+  inputDialog,
+});
 
 /**
  * 需求投影（需求分组 / 候选 / 确认 / 入队 / 派发、当前需求的工作区与活动）交给 composable。
@@ -142,18 +215,72 @@ const { pendingInput, inputRequests, inputProgress, inputDialogOpen, inputAnswer
  * `routeExplorerPlanId` 用 getter 而不是 ref：投影只需要"路由上请求的需求 id"这一个值，
  * 不值得为此把 vue-router 的 route 对象交给 composable。
  */
-const { explorerPlans, threadPlans, activeExplorerPlanId, candidate, revisionDraft, enqueued, explorerEventSequence, activeExplorerPlan, allPlans, planFromRevisionDraft, applyPlanProjection, loadActivePlanWorkspace, refreshPlanProjection, refreshActivity, scheduleProjectionRefresh, cancelProjectionRefresh, beginPlanProjection, isCurrentPlanProjection, resetPlanProjection } = usePlanProjection({ projectId, thread, turns, activity, agentLoop, explorerPaused, inputDialogOpen, pendingInput, setInputRequests, projectScopeToken, isCurrentProjectScope, routeExplorerPlanId: () => typeof route.query.explorerPlanId === "string" ? route.query.explorerPlanId : null });
+const {
+  explorerPlans,
+  threadPlans,
+  activeExplorerPlanId,
+  candidate,
+  revisionDraft,
+  enqueued,
+  explorerEventSequence,
+  activeExplorerPlan,
+  allPlans,
+  planFromRevisionDraft,
+  applyPlanProjection,
+  loadActivePlanWorkspace,
+  refreshPlanProjection,
+  refreshActivity,
+  scheduleProjectionRefresh,
+  cancelProjectionRefresh,
+  beginPlanProjection,
+  isCurrentPlanProjection,
+  resetPlanProjection,
+} = usePlanProjection({
+  projectId,
+  thread,
+  turns,
+  activity,
+  agentLoop,
+  explorerPaused,
+  inputDialogOpen,
+  pendingInput,
+  setInputRequests,
+  projectScopeToken,
+  isCurrentProjectScope,
+  routeExplorerPlanId: () => (typeof route.query.explorerPlanId === "string" ? route.query.explorerPlanId : null),
+});
 
-const requirementRows = computed(() => projectExplorerRequirementRows(
-  explorerPlans.value,
-  [...threadPlans.value, ...(candidate.value ? [candidate.value] : [])],
-  projectRuns.value,
-));
-const selectedRequirementRow = computed(() => requirementRows.value.find((row) => row.explorerPlan.id === activeExplorerPlan.value?.id) ?? null);
-const sharedDrawerTitle = computed(() => selectedRequirementRow.value?.title ?? (activeExplorerPlan.value ? taskDisplayTitle(activeExplorerPlan.value) : "需求详情"));
+const requirementRows = computed(() =>
+  projectExplorerRequirementRows(
+    explorerPlans.value,
+    [...threadPlans.value, ...(candidate.value ? [candidate.value] : [])],
+    projectRuns.value,
+  ),
+);
+const selectedRequirementRow = computed(
+  () => requirementRows.value.find((row) => row.explorerPlan.id === activeExplorerPlan.value?.id) ?? null,
+);
+const sharedDrawerTitle = computed(
+  () => selectedRequirementRow.value?.title ?? (activeExplorerPlan.value ? taskDisplayTitle(activeExplorerPlan.value) : "需求详情"),
+);
 const taskPanelPlan = computed(() => selectedRequirementRow.value?.plan ?? null);
-const explorationProgress = computed(() => activeExplorerPlan.value?.exploration ?? thread.value?.exploration ?? { status: "INCOMPLETE" as const, missing: [], completed: [], diagnostics: [], candidatePlanId: null, lastAssessedTurnId: null });
-const activePlanBusy = computed(() => visibleTurns.value.some((turn) => turn.status === "RUNNING" || turn.status === "WAITING_FOR_INPUT" || turn.status === "PAUSED" || turn.status === "QUEUED"));
+const explorationProgress = computed(
+  () =>
+    activeExplorerPlan.value?.exploration ??
+    thread.value?.exploration ?? {
+      status: "INCOMPLETE" as const,
+      missing: [],
+      completed: [],
+      diagnostics: [],
+      candidatePlanId: null,
+      lastAssessedTurnId: null,
+    },
+);
+const activePlanBusy = computed(() =>
+  visibleTurns.value.some(
+    (turn) => turn.status === "RUNNING" || turn.status === "WAITING_FOR_INPUT" || turn.status === "PAUSED" || turn.status === "QUEUED",
+  ),
+);
 const activePlanWaitingForInput = computed(() => visibleTurns.value.some((turn) => turn.status === "WAITING_FOR_INPUT"));
 const sendingCurrentPlan = computed(() => Boolean(activeExplorerPlan.value && pendingSendPlanIds.value.has(activeExplorerPlan.value.id)));
 
@@ -162,14 +289,36 @@ const sendingCurrentPlan = computed(() => Boolean(activeExplorerPlan.value && pe
  * 后者要拿这里的 drawerOpen / drawerTab / detailPlan 去在确认、入队之后刷新并切页签。
  * 路由形状不下沉——打开详情后的 URL 同步由 onOpened 回调留在视图里。
  */
-const { drawerOpen, drawerTab, detailPlan, detailRevisions, detailLatestRevision, detailLoadError, detailDependencyOptions, dependenciesSaving, canEditDependencies, detailVerificationSuiteOptions, verificationSuitesSaving, canEditVerificationSuites, openPlanDetail, selectPlanRevision, saveDependencies, saveVerificationSuites, resetDetailState } = usePlanDetailDrawer({
+const {
+  drawerOpen,
+  drawerTab,
+  detailPlan,
+  detailRevisions,
+  detailLatestRevision,
+  detailLoadError,
+  detailDependencyOptions,
+  dependenciesSaving,
+  canEditDependencies,
+  detailVerificationSuiteOptions,
+  verificationSuitesSaving,
+  canEditVerificationSuites,
+  openPlanDetail,
+  selectPlanRevision,
+  saveDependencies,
+  saveVerificationSuites,
+  resetDetailState,
+} = usePlanDetailDrawer({
   projectId,
   projectScopeToken,
   revisionDraft,
   planFromRevisionDraft,
-  isReadOnly: () => Boolean(detailPlan.value && detailLatestRevision.value !== null && detailPlan.value.revision !== detailLatestRevision.value),
+  isReadOnly: () =>
+    Boolean(detailPlan.value && detailLatestRevision.value !== null && detailPlan.value.revision !== detailLatestRevision.value),
   onOpened: (plan) => {
-    void router.replace({ path: route.path, query: { ...route.query, ...(plan.explorerPlanId ? { explorerPlanId: plan.explorerPlanId } : {}), requirementTab: "plan" } });
+    void router.replace({
+      path: route.path,
+      query: { ...route.query, ...(plan.explorerPlanId ? { explorerPlanId: plan.explorerPlanId } : {}), requirementTab: "plan" },
+    });
   },
 });
 
@@ -205,7 +354,13 @@ function canCreateConfigurationRevision(plan: Plan): boolean {
  * 需求范围内的 Turn / Activity / 输入 / Plan 投影成消息时间线，交给 composable。
  * `activeTaskPlans` 是它内部的中间量，不再暴露给视图。
  */
-const { visibleTurns, visibleActivity, visibleInputRequests, planBindings, timelineItems } = useExplorerTimeline({ turns, activity, inputRequests, allPlans, activeExplorerPlan });
+const { visibleTurns, visibleActivity, visibleInputRequests, planBindings, timelineItems } = useExplorerTimeline({
+  turns,
+  activity,
+  inputRequests,
+  allPlans,
+  activeExplorerPlan,
+});
 
 /**
  * ④「Provider 说的」运行事实：压缩边界、自动重试、配额、钩子、后台任务、权限被拒、告警。
@@ -219,7 +374,9 @@ const runtimeFacts = computed(() => explorerRuntimeFacts(visibleActivity.value))
  * （`EXPLORER_DISPLAY_MODES`，见 utils/explorerPresentation.ts）。视图不再自己判断
  * "这一类要不要出现"——呈现方式是产品决定，集中在一张表里，改那里即可。
  */
-const renderedTimelineItems = computed(() => timelineItems.value.filter((item) => explorerDisplayMode(explorerTimelineMessageType(item)) !== "hidden"));
+const renderedTimelineItems = computed(() =>
+  timelineItems.value.filter((item) => explorerDisplayMode(explorerTimelineMessageType(item)) !== "hidden"),
+);
 const showCandidatePlanCard = explorerDisplayMode("CANDIDATE_PLAN") !== "hidden";
 
 /**
@@ -241,7 +398,8 @@ function rowMode(activity: ExplorerActivityItem): ExplorerRowMode | null {
  * 时间线滚动状态（"是否已到底"与两条激活键）交给 composable。
  * `timeline` 的模板 ref 留在本文件——`ref="timeline"` 要求它是个顶层绑定。
  */
-const { activePlanKey, activeTimelineKey, jumpToLatest, jumpToTimelineTarget, showScrollToLatest, updateTimelineScrollState } = useTimelineScroll(timeline, { visibleActivity, planBindings });
+const { activePlanKey, activeTimelineKey, jumpToLatest, jumpToTimelineTarget, showScrollToLatest, updateTimelineScrollState } =
+  useTimelineScroll(timeline, { visibleActivity, planBindings });
 
 /**
  * 三条 SSE 通道及其生命周期交给 composable；视图只提供状态 ref、刷新回调与 load 回调。
@@ -319,7 +477,10 @@ async function deleteCurrentThread(): Promise<void> {
     invalidateProjectScope();
     resetThreadState();
     project.value = response.project;
-    explorers.value = [response.replacementExplorer, ...explorers.value.filter((item) => item.id !== response.deletedExplorerId && item.id !== response.replacementExplorer.id)];
+    explorers.value = [
+      response.replacementExplorer,
+      ...explorers.value.filter((item) => item.id !== response.deletedExplorerId && item.id !== response.replacementExplorer.id),
+    ];
     thread.value = response.replacementExplorer;
     suppressNextExplorerRouteReload = true;
     try {
@@ -360,7 +521,7 @@ async function renameThread(title: string) {
     const response = await api.renameExplorer(requestProjectId, requestThreadId, title);
     if (!isCurrentProjectScope(requestProjectId) || thread.value?.id !== requestThreadId) return;
     thread.value = response.explorer;
-    explorers.value = explorers.value.map((item) => item.id === requestThreadId ? response.explorer : item);
+    explorers.value = explorers.value.map((item) => (item.id === requestThreadId ? response.explorer : item));
     renameDialogOpen.value = false;
     ElMessage.success("Thread renamed");
   } catch (caught) {
@@ -375,11 +536,16 @@ async function renameThread(title: string) {
 async function toggleExplorerPause() {
   if (agentLoop.value && ["RUNNING", "PAUSED"].includes(agentLoop.value.state)) {
     try {
-      const response = agentLoop.value.state === "PAUSED" ? await api.resumeAgentLoop(agentLoop.value.id) : await api.pauseAgentLoop(agentLoop.value.id, "user_requested");
+      const response =
+        agentLoop.value.state === "PAUSED"
+          ? await api.resumeAgentLoop(agentLoop.value.id)
+          : await api.pauseAgentLoop(agentLoop.value.id, "user_requested");
       agentLoop.value = response.loop;
       explorerPaused.value = response.loop.state === "PAUSED";
       ElMessage.info(explorerPaused.value ? "Explorer Loop 已暂停" : "Explorer Loop 已恢复");
-    } catch (caught) { ElMessage.error(caught instanceof Error ? caught.message : "Explorer Loop 控制失败"); }
+    } catch (caught) {
+      ElMessage.error(caught instanceof Error ? caught.message : "Explorer Loop 控制失败");
+    }
     return;
   }
   explorerPaused.value = !explorerPaused.value;
@@ -452,22 +618,39 @@ async function keepEditingPlan(plan: Plan): Promise<void> {
     try {
       await api.selectCandidatePlan(projectId.value, plan.sourceExplorerThreadId, plan.explorerPlanId, planId);
       drawerOpen.value = false;
-      await router.push({ path: `/projects/${projectId.value}/explorer`, query: { explorerId: plan.sourceExplorerThreadId, explorerPlanId: plan.explorerPlanId, contextPanel: "plans" } });
+      await router.push({
+        path: `/projects/${projectId.value}/explorer`,
+        query: { explorerId: plan.sourceExplorerThreadId, explorerPlanId: plan.explorerPlanId, contextPanel: "plans" },
+      });
       ElMessage.success(`已打开 ${plan.title} · V${plan.revision}；下一次完整 READY 会保存为 V${plan.revision + 1}`);
     } catch (caught) {
       ElMessage.error(caught instanceof Error ? caught.message : "Plan 编辑入口加载失败");
-    } finally { busy.value = false; }
+    } finally {
+      busy.value = false;
+    }
     return;
   }
   busy.value = true;
   try {
     let result;
     try {
-      result = await api.createRevisionDraft(planId, plan.revision, { explorerThreadId: plan.sourceExplorerThreadId, discardUnmergedRun: false, clientRequestId: `keep-editing-${planId}-${plan.revision}` });
+      result = await api.createRevisionDraft(planId, plan.revision, {
+        explorerThreadId: plan.sourceExplorerThreadId,
+        discardUnmergedRun: false,
+        clientRequestId: `keep-editing-${planId}-${plan.revision}`,
+      });
     } catch (caught) {
       if (!(caught instanceof Error) || !caught.message.includes("UNMERGED_RUN_CONFIRMATION_REQUIRED")) throw caught;
-      await ElMessageBox.confirm("This revision has an unmerged Run. Continuing will terminate its Executor, remove its worktree, and run cleanup hooks. The Run, ExecutionThread, and audit journal are retained permanently.", "Discard unmerged execution", { type: "warning", confirmButtonText: "Clean up and edit V" + String(plan.revision + 1), cancelButtonText: "Cancel" });
-      result = await api.createRevisionDraft(planId, plan.revision, { explorerThreadId: plan.sourceExplorerThreadId, discardUnmergedRun: true, clientRequestId: `keep-editing-cleanup-${planId}-${plan.revision}` });
+      await ElMessageBox.confirm(
+        "This revision has an unmerged Run. Continuing will terminate its Executor, remove its worktree, and run cleanup hooks. The Run, ExecutionThread, and audit journal are retained permanently.",
+        "Discard unmerged execution",
+        { type: "warning", confirmButtonText: "Clean up and edit V" + String(plan.revision + 1), cancelButtonText: "Cancel" },
+      );
+      result = await api.createRevisionDraft(planId, plan.revision, {
+        explorerThreadId: plan.sourceExplorerThreadId,
+        discardUnmergedRun: true,
+        clientRequestId: `keep-editing-cleanup-${planId}-${plan.revision}`,
+      });
     }
     drawerOpen.value = false;
     await router.push({ path: `/projects/${projectId.value}/explorer`, query: { ...route.query, explorerId: result.explorerThread.id } });
@@ -477,12 +660,24 @@ async function keepEditingPlan(plan: Plan): Promise<void> {
     ElMessage.success(`Editing ${planId} · V${plan.revision} → V${result.draft.targetRevision}`);
   } catch (caught) {
     if (caught !== "cancel") ElMessage.error(caught instanceof Error ? caught.message : "Keep editing failed");
-  } finally { busy.value = false; }
+  } finally {
+    busy.value = false;
+  }
 }
 
 function syncPanelStateFromRoute() {
   const routeContextPanel = route.query.contextPanel;
-  if (routeContextPanel === "candidate" || routeContextPanel === "plans" || routeContextPanel === "confirmed" || routeContextPanel === "enqueued" || routeContextPanel === "dispatched" || routeContextPanel === "active" || routeContextPanel === "attention" || routeContextPanel === "plan-center") contextPanel.value = routeContextPanel;
+  if (
+    routeContextPanel === "candidate" ||
+    routeContextPanel === "plans" ||
+    routeContextPanel === "confirmed" ||
+    routeContextPanel === "enqueued" ||
+    routeContextPanel === "dispatched" ||
+    routeContextPanel === "active" ||
+    routeContextPanel === "attention" ||
+    routeContextPanel === "plan-center"
+  )
+    contextPanel.value = routeContextPanel;
 }
 
 function panelStateQuery() {
@@ -532,7 +727,11 @@ async function createExplorer() {
     explorers.value = [created.explorer, ...explorers.value.filter((item) => item.id !== created.explorer.id)];
     explorerError.value = null;
     thread.value = created.explorer;
-    try { project.value = (await api.selectProjectExplorer(requestProjectId, created.explorer.id)).project; } catch { /* Legacy API instances may not have a Project registry yet. */ }
+    try {
+      project.value = (await api.selectProjectExplorer(requestProjectId, created.explorer.id)).project;
+    } catch {
+      /* Legacy API instances may not have a Project registry yet. */
+    }
     await router.push({ path: route.path, query: explorerRouteQuery(created.explorer.id), hash: "" });
     const requestToken = beginProjectScope(requestProjectId);
     loading.value = true;
@@ -548,7 +747,10 @@ async function createExplorer() {
 }
 
 function switchProject(selectedProjectId: string) {
-  void router.push({ path: projectPathForModule("explore", selectedProjectId), query: { contextPanel: contextPanel.value, ...(projectExecutionMode.value ? { workspace: "project-execution" } : {}) } });
+  void router.push({
+    path: projectPathForModule("explore", selectedProjectId),
+    query: { contextPanel: contextPanel.value, ...(projectExecutionMode.value ? { workspace: "project-execution" } : {}) },
+  });
 }
 
 function selectProjectExecution() {
@@ -605,7 +807,7 @@ function consumeSettingsQuery() {
 }
 
 async function handleProjectSettingsSaved(savedProject: Project) {
-  projects.value = projects.value.map((item) => item.id === savedProject.id ? { ...item, ...savedProject } : item);
+  projects.value = projects.value.map((item) => (item.id === savedProject.id ? { ...item, ...savedProject } : item));
   if (project.value?.id === savedProject.id) project.value = savedProject;
   if (project.value?.id === savedProject.id) await refreshPlanProjection();
 }
@@ -619,14 +821,18 @@ async function toggleProjectArchive(selectedProjectId: string) {
   try {
     let response: { project: Project };
     if (selectedProject.status === "ACTIVE") {
-      await ElMessageBox.confirm("归档后项目历史仍可查看，但不能创建新的 Explorer Turn 或 Run。", `归档 ${selectedProject.name}？`, { type: "warning", confirmButtonText: "归档项目", cancelButtonText: "取消" });
+      await ElMessageBox.confirm("归档后项目历史仍可查看，但不能创建新的 Explorer Turn 或 Run。", `归档 ${selectedProject.name}？`, {
+        type: "warning",
+        confirmButtonText: "归档项目",
+        cancelButtonText: "取消",
+      });
       response = await api.archiveProject(selectedProjectId);
       ElMessage.success("项目已归档");
     } else {
       response = await api.activateProject(selectedProjectId);
       ElMessage.success("项目已恢复");
     }
-    projects.value = projects.value.map((item) => item.id === selectedProjectId ? { ...item, ...response.project } : item);
+    projects.value = projects.value.map((item) => (item.id === selectedProjectId ? { ...item, ...response.project } : item));
     if (project.value?.id === selectedProjectId) project.value = response.project;
   } catch (caught) {
     if (caught === "cancel" || caught === "close") return;
@@ -645,7 +851,11 @@ async function selectExplorer(explorerId: string) {
   resetThreadState();
   const selected = explorers.value.find((item) => item.id === explorerId);
   if (selected?.state !== "ARCHIVED") {
-    try { project.value = (await api.selectProjectExplorer(projectId.value, explorerId)).project; } catch { /* Keep navigation available for legacy API instances. */ }
+    try {
+      project.value = (await api.selectProjectExplorer(projectId.value, explorerId)).project;
+    } catch {
+      /* Keep navigation available for legacy API instances. */
+    }
   }
   await router.push({ path: route.path, query: explorerRouteQuery(explorerId), hash: "" });
 }
@@ -665,17 +875,32 @@ async function selectExplorerPlan(explorerPlanId: string, shouldScroll = true): 
   thread.value = { ...currentThread, activeExplorerPlanId: selectedPlan.id };
   try {
     const activation = await api.activateExplorerPlan(requestProjectId, currentThread.id, selectedPlan.id);
-    if (!isCurrentProjectScope(requestProjectId, requestToken) || !isCurrentPlanProjection(requestVersion) || thread.value?.id !== currentThread.id) return;
+    if (
+      !isCurrentProjectScope(requestProjectId, requestToken) ||
+      !isCurrentPlanProjection(requestVersion) ||
+      thread.value?.id !== currentThread.id
+    )
+      return;
     thread.value = activation.explorer;
-    explorers.value = explorers.value.map((item) => item.id === currentThread.id ? activation.explorer : item);
+    explorers.value = explorers.value.map((item) => (item.id === currentThread.id ? activation.explorer : item));
     try {
       const planGroupsResponse = await api.explorerPlanGroups(requestProjectId, currentThread.id);
-      if (!isCurrentProjectScope(requestProjectId, requestToken) || !isCurrentPlanProjection(requestVersion) || thread.value?.id !== currentThread.id) return;
+      if (
+        !isCurrentProjectScope(requestProjectId, requestToken) ||
+        !isCurrentPlanProjection(requestVersion) ||
+        thread.value?.id !== currentThread.id
+      )
+        return;
       explorerPlans.value = planGroupsResponse.items;
     } catch {
       // Task workspace switching remains available when the background tree refresh is temporarily unavailable.
     }
-    if (!isCurrentProjectScope(requestProjectId, requestToken) || !isCurrentPlanProjection(requestVersion) || thread.value?.id !== currentThread.id) return;
+    if (
+      !isCurrentProjectScope(requestProjectId, requestToken) ||
+      !isCurrentPlanProjection(requestVersion) ||
+      thread.value?.id !== currentThread.id
+    )
+      return;
     await router.replace({ path: route.path, query: explorerRouteQuery(currentThread.id, selectedPlan.id), hash: route.hash });
     await loadActivePlanWorkspace(currentThread.id, selectedPlan.id, requestProjectId, requestToken);
     if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== currentThread.id) return;
@@ -712,7 +937,10 @@ async function openAddRequirementDialog(): Promise<void> {
     drawerTab.value = "explorer";
     drawerOpen.value = true;
     draft.value = description;
-    await router.replace({ path: route.path, query: { ...route.query, explorerId: currentThread.id, explorerPlanId: response.explorerPlan.id, requirementTab: "explorer" } });
+    await router.replace({
+      path: route.path,
+      query: { ...route.query, explorerId: currentThread.id, explorerPlanId: response.explorerPlan.id, requirementTab: "explorer" },
+    });
     await nextTick();
     document.querySelector<HTMLTextAreaElement>(".drawer-conversation-column .composer textarea")?.focus();
     await sendTurn();
@@ -738,7 +966,10 @@ async function openRequirementChat(explorerPlanId: string): Promise<void> {
   if (activeExplorerPlan.value?.id !== explorerPlanId) await selectExplorerPlan(explorerPlanId, false);
   if (activeExplorerPlan.value?.id !== explorerPlanId) return;
   drawerOpen.value = true;
-  await router.replace({ path: route.path, query: { ...route.query, explorerId: thread.value?.id, explorerPlanId, requirementTab: "explorer" } });
+  await router.replace({
+    path: route.path,
+    query: { ...route.query, explorerId: thread.value?.id, explorerPlanId, requirementTab: "explorer" },
+  });
 }
 
 async function returnToCurrentRequirementChat(): Promise<void> {
@@ -764,7 +995,12 @@ async function openRequirementTask(explorerPlanId: string): Promise<void> {
   if (runId) {
     await openRunView(runId, thread.value?.id, explorerPlanId);
   } else {
-    const query: Record<string, string | string[] | null | undefined> = { ...route.query, explorerId: thread.value?.id, explorerPlanId, requirementTab: "task" };
+    const query: Record<string, string | string[] | null | undefined> = {
+      ...route.query,
+      explorerId: thread.value?.id,
+      explorerPlanId,
+      requirementTab: "task",
+    };
     delete query.runId;
     await router.replace({ path: route.path, query });
   }
@@ -809,10 +1045,15 @@ async function renameExplorerPlan(explorerPlanId: string): Promise<void> {
   const current = explorerPlans.value.find((plan) => plan.id === explorerPlanId);
   if (!currentThread || !current) return;
   try {
-    const { value } = await ElMessageBox.prompt("输入需求名称", "重命名需求", { inputValue: current.title, confirmButtonText: "保存", cancelButtonText: "取消", inputValidator: (value) => Boolean(value.trim()) || "名称不能为空" });
+    const { value } = await ElMessageBox.prompt("输入需求名称", "重命名需求", {
+      inputValue: current.title,
+      confirmButtonText: "保存",
+      cancelButtonText: "取消",
+      inputValidator: (value) => Boolean(value.trim()) || "名称不能为空",
+    });
     const response = await api.renameExplorerPlan(projectId.value, currentThread.id, explorerPlanId, value.trim());
     if (thread.value?.id !== currentThread.id) return;
-    explorerPlans.value = explorerPlans.value.map((plan) => plan.id === explorerPlanId ? response.explorerPlan : plan);
+    explorerPlans.value = explorerPlans.value.map((plan) => (plan.id === explorerPlanId ? response.explorerPlan : plan));
     ElMessage.success("需求已重命名");
   } catch (caught) {
     if (caught === "cancel" || caught === "close") return;
@@ -833,15 +1074,19 @@ async function toggleExplorerArchive(explorerId: string) {
   try {
     if (selected.state === "ARCHIVED") {
       const response = await api.activateExplorer(projectId.value, explorerId);
-      explorers.value = explorers.value.map((item) => item.id === explorerId ? response.explorer : item);
+      explorers.value = explorers.value.map((item) => (item.id === explorerId ? response.explorer : item));
       if (thread.value?.id === explorerId) thread.value = response.explorer;
       else await selectExplorer(explorerId);
       ElMessage.success("线程已恢复");
       return;
     }
-    await ElMessageBox.confirm("归档后线程历史仍可查看，但不能继续创建新的 Explorer Turn。", `归档 ${selected.title}？`, { type: "warning", confirmButtonText: "归档线程", cancelButtonText: "取消" });
+    await ElMessageBox.confirm("归档后线程历史仍可查看，但不能继续创建新的 Explorer Turn。", `归档 ${selected.title}？`, {
+      type: "warning",
+      confirmButtonText: "归档线程",
+      cancelButtonText: "取消",
+    });
     const response = await api.archiveExplorer(projectId.value, explorerId);
-    explorers.value = explorers.value.map((item) => item.id === explorerId ? response.explorer : item);
+    explorers.value = explorers.value.map((item) => (item.id === explorerId ? response.explorer : item));
     ElMessage.success("线程已归档");
   } catch (caught) {
     if (caught === "cancel" || caught === "close") return;
@@ -866,9 +1111,17 @@ async function loadExplorerDetails(selected: ExplorerThread, requestProjectId: s
     threadPlans.value = threadPlansResponse.items;
     const routePlanId = typeof route.query.explorerPlanId === "string" ? route.query.explorerPlanId : null;
     const routeRun = typeof route.query.runId === "string" ? projectRuns.value.find((run) => run.id === route.query.runId) : undefined;
-    const runPlan = routeRun ? threadPlans.value.find((plan) => (plan.planId ?? plan.id) === routeRun.planId && plan.revision === routeRun.planRevision) : undefined;
+    const runPlan = routeRun
+      ? threadPlans.value.find((plan) => (plan.planId ?? plan.id) === routeRun.planId && plan.revision === routeRun.planRevision)
+      : undefined;
     const runExplorerPlanId = runPlan?.explorerPlanId;
-    activeExplorerPlanId.value = explorerPlans.value.some((plan) => plan.id === routePlanId) ? routePlanId : explorerPlans.value.some((plan) => plan.id === runExplorerPlanId) ? runExplorerPlanId ?? null : explorerPlans.value.some((plan) => plan.id === selected.activeExplorerPlanId) ? selected.activeExplorerPlanId ?? null : explorerPlans.value[0]?.id ?? null;
+    activeExplorerPlanId.value = explorerPlans.value.some((plan) => plan.id === routePlanId)
+      ? routePlanId
+      : explorerPlans.value.some((plan) => plan.id === runExplorerPlanId)
+        ? (runExplorerPlanId ?? null)
+        : explorerPlans.value.some((plan) => plan.id === selected.activeExplorerPlanId)
+          ? (selected.activeExplorerPlanId ?? null)
+          : (explorerPlans.value[0]?.id ?? null);
     const projection = normalizePlanProjection(selected, null, plansResponse.items);
     applyPlanProjection(projection, confirmedResponse?.items ?? [], null);
     const workspaceLoaded = await loadActivePlanWorkspace(selected.id, activeExplorerPlanId.value, requestProjectId, requestToken);
@@ -895,7 +1148,15 @@ async function loadExplorerDetails(selected: ExplorerThread, requestProjectId: s
 }
 
 async function loadExplorerDirectory(requestProjectId: string, requestToken: number): Promise<boolean> {
-  const [healthResponse, projectListResponse, projectResponse, explorerResponse, projectRunsResponse, requirementsResponse] = await Promise.all([optional(() => api.health()), optional(() => api.projects()), api.project(requestProjectId), api.explorers(requestProjectId), api.projectRuns(requestProjectId), optional(() => api.explorerPlanRequirements())]);
+  const [healthResponse, projectListResponse, projectResponse, explorerResponse, projectRunsResponse, requirementsResponse] =
+    await Promise.all([
+      optional(() => api.health()),
+      optional(() => api.projects()),
+      api.project(requestProjectId),
+      api.explorers(requestProjectId),
+      api.projectRuns(requestProjectId),
+      optional(() => api.explorerPlanRequirements()),
+    ]);
   if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
   projects.value = projectListResponse?.items ?? [];
   project.value = projectResponse.project;
@@ -914,21 +1175,31 @@ async function loadExplorerDirectory(requestProjectId: string, requestToken: num
 
   const routeExplorerId = typeof route.query.explorerId === "string" ? route.query.explorerId : null;
   let selected = routeExplorerId ? explorerResponse.items.find((item) => item.id === routeExplorerId) : undefined;
-  if (!routeExplorerId && projectResponse.project.currentExplorerThreadId) selected = explorerResponse.items.find((item) => item.id === projectResponse.project.currentExplorerThreadId);
+  if (!routeExplorerId && projectResponse.project.currentExplorerThreadId)
+    selected = explorerResponse.items.find((item) => item.id === projectResponse.project.currentExplorerThreadId);
   if (!routeExplorerId && thread.value) selected = explorerResponse.items.find((item) => item.id === thread.value?.id);
-  if (!selected) selected = explorerResponse.items.find((item) => item.state !== "ARCHIVED" && item.contextMode === "FRESH" && item.messageCount === 0);
+  if (!selected)
+    selected = explorerResponse.items.find((item) => item.state !== "ARCHIVED" && item.contextMode === "FRESH" && item.messageCount === 0);
   if (!selected) {
     selected = (await api.createExplorer(requestProjectId)).explorer;
     if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
     explorers.value = [selected, ...explorers.value.filter((item) => item.id !== selected?.id)];
-    try { project.value = (await api.selectProjectExplorer(requestProjectId, selected.id)).project; } catch { /* Keep the directory usable for legacy API instances. */ }
+    try {
+      project.value = (await api.selectProjectExplorer(requestProjectId, selected.id)).project;
+    } catch {
+      /* Keep the directory usable for legacy API instances. */
+    }
     if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
   }
   if (!selected) return false;
   thread.value = selected;
   const loaded = await loadExplorerDetails(selected, requestProjectId, requestToken);
   if (!isCurrentProjectScope(requestProjectId, requestToken)) return false;
-  if (typeof route.query.explorerId !== "string" || route.query.explorerId !== selected.id || route.query.explorerPlanId !== activeExplorerPlanId.value) {
+  if (
+    typeof route.query.explorerId !== "string" ||
+    route.query.explorerId !== selected.id ||
+    route.query.explorerPlanId !== activeExplorerPlanId.value
+  ) {
     await router.replace({ path: route.path, query: explorerRouteQuery(selected.id, activeExplorerPlanId.value, true), hash: route.hash });
   }
   return loaded;
@@ -961,32 +1232,93 @@ async function load(): Promise<boolean> {
 /** 先乐观写入用户消息，再由 v4 API/SSE 补齐 Provider 输出和 Plan 活动。 */
 async function sendTurn(): Promise<boolean> {
   const content = draft.value.trim();
-  if (!content || activePlanBusy.value || sendingCurrentPlan.value || busy.value || !thread.value || thread.value.state === "ARCHIVED" || project.value?.status === "ARCHIVED") return false;
+  if (
+    !content ||
+    activePlanBusy.value ||
+    sendingCurrentPlan.value ||
+    busy.value ||
+    !thread.value ||
+    thread.value.state === "ARCHIVED" ||
+    project.value?.status === "ARCHIVED"
+  )
+    return false;
   const requestProjectId = projectId.value;
   const requestThreadId = thread.value.id;
   const requestToken = projectScopeToken();
   const now = new Date().toISOString();
   const currentPlanId = activeExplorerPlan.value?.id ?? thread.value.activeExplorerPlanId ?? undefined;
-  if (!currentPlanId) { ElMessage.error("请先选择一个需求再发送消息"); return false; }
+  if (!currentPlanId) {
+    ElMessage.error("请先选择一个需求再发送消息");
+    return false;
+  }
   requirementDrafts.delete(currentPlanId);
   const previousFailure = failedExplorerSends.get(currentPlanId);
   const retrying = previousFailure?.content === content ? previousFailure : null;
   const optimisticUser = retrying
-    ? turns.value.find((turn) => turn.id === retrying.optimisticUserId) ?? createOptimisticUserTurn({ id: retrying.optimisticUserId, threadId: requestThreadId, content, createdAt: now, sequence: turns.value.length + 1 })
-    : createOptimisticUserTurn({ id: `local-user-${Date.now()}`, threadId: requestThreadId, content, createdAt: now, sequence: turns.value.length + 1 });
+    ? (turns.value.find((turn) => turn.id === retrying.optimisticUserId) ??
+      createOptimisticUserTurn({
+        id: retrying.optimisticUserId,
+        threadId: requestThreadId,
+        content,
+        createdAt: now,
+        sequence: turns.value.length + 1,
+      }))
+    : createOptimisticUserTurn({
+        id: `local-user-${Date.now()}`,
+        threadId: requestThreadId,
+        content,
+        createdAt: now,
+        sequence: turns.value.length + 1,
+      });
   optimisticUser.explorerPlanId = currentPlanId;
   let assistantActivityId = retrying?.assistantActivityId ?? "";
   if (retrying) {
     if (retrying.failedAssistantTurnId) turns.value = turns.value.filter((turn) => turn.id !== retrying.failedAssistantTurnId);
     if (!turns.value.some((turn) => turn.id === optimisticUser.id)) turns.value = [...turns.value, optimisticUser];
-    activity.value = activity.value.map((item) => item.id === retrying.assistantActivityId ? { ...item, status: "RUNNING", summary: "Plan Explorer 正在处理…", occurredAt: now } : item);
+    activity.value = activity.value.map((item) =>
+      item.id === retrying.assistantActivityId ? { ...item, status: "RUNNING", summary: "Plan Explorer 正在处理…", occurredAt: now } : item,
+    );
   } else {
     turns.value = [...turns.value, optimisticUser];
     assistantActivityId = `local-assistant-activity-${Date.now()}`;
-    const optimisticAssistant: ExplorerActivityItem = { id: assistantActivityId, explorerId: optimisticUser.threadId, turnId: `local-assistant-turn-${Date.now()}`, sequence: optimisticUser.sequence + 1, kind: "ASSISTANT_MESSAGE", status: "RUNNING", title: "Plan Explorer", summary: "Plan Explorer 正在处理…", details: null, occurredAt: new Date().toISOString(), explorerPlanId: currentPlanId };
-    activity.value = [...activity.value, { id: `local-user-activity-${optimisticUser.id}`, explorerId: optimisticUser.threadId, turnId: optimisticUser.id, sequence: optimisticUser.sequence, kind: "USER_MESSAGE", status: "COMPLETED", title: "You", summary: content, details: null, occurredAt: now, explorerPlanId: currentPlanId }, optimisticAssistant];
+    const optimisticAssistant: ExplorerActivityItem = {
+      id: assistantActivityId,
+      explorerId: optimisticUser.threadId,
+      turnId: `local-assistant-turn-${Date.now()}`,
+      sequence: optimisticUser.sequence + 1,
+      kind: "ASSISTANT_MESSAGE",
+      status: "RUNNING",
+      title: "Plan Explorer",
+      summary: "Plan Explorer 正在处理…",
+      details: null,
+      occurredAt: new Date().toISOString(),
+      explorerPlanId: currentPlanId,
+    };
+    activity.value = [
+      ...activity.value,
+      {
+        id: `local-user-activity-${optimisticUser.id}`,
+        explorerId: optimisticUser.threadId,
+        turnId: optimisticUser.id,
+        sequence: optimisticUser.sequence,
+        kind: "USER_MESSAGE",
+        status: "COMPLETED",
+        title: "You",
+        summary: content,
+        details: null,
+        occurredAt: now,
+        explorerPlanId: currentPlanId,
+      },
+      optimisticAssistant,
+    ];
   }
-  const failedSend: FailedExplorerSend = retrying ?? { content, clientTurnId: `client-turn-${Date.now()}`, optimisticUserId: optimisticUser.id, assistantActivityId, failedAssistantTurnId: null };
+  const failedSend: FailedExplorerSend = retrying ?? {
+    content,
+    clientTurnId: `client-turn-${Date.now()}`,
+    optimisticUserId: optimisticUser.id,
+    assistantActivityId,
+    failedAssistantTurnId: null,
+  };
   failedExplorerSends.set(currentPlanId, failedSend);
   draft.value = "";
   pendingSendPlanIds.value = new Set([...pendingSendPlanIds.value, currentPlanId]);
@@ -1005,17 +1337,35 @@ async function sendTurn(): Promise<boolean> {
     activity.value = activity.value.filter((item) => item.id !== failedSend.assistantActivityId);
     failedExplorerSends.delete(currentPlanId);
     await refreshActivity();
-    if (thread.value) thread.value = { ...thread.value, messageCount: thread.value.messageCount + 2, lastActivityAt: response.turn.assistant.createdAt };
+    if (thread.value)
+      thread.value = { ...thread.value, messageCount: thread.value.messageCount + 2, lastActivityAt: response.turn.assistant.createdAt };
     ElMessage.success("消息已发送");
     return true;
   } catch (caught) {
     if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== requestThreadId) return false;
     const message = caught instanceof Error ? caught.message : "API 未连接";
     const failedAssistantTurnId = `local-assistant-${Date.now()}`;
-    turns.value = [...turns.value, { id: failedAssistantTurnId, threadId: optimisticUser.threadId, role: "assistant", content: `消息发送失败：${message}。保留原描述，可在此需求中重试。`, status: "FAILED", error: message, createdAt: new Date().toISOString(), sequence: optimisticUser.sequence + 1, explorerPlanId: currentPlanId }];
+    turns.value = [
+      ...turns.value,
+      {
+        id: failedAssistantTurnId,
+        threadId: optimisticUser.threadId,
+        role: "assistant",
+        content: `消息发送失败：${message}。保留原描述，可在此需求中重试。`,
+        status: "FAILED",
+        error: message,
+        createdAt: new Date().toISOString(),
+        sequence: optimisticUser.sequence + 1,
+        explorerPlanId: currentPlanId,
+      },
+    ];
     failedExplorerSends.set(currentPlanId, { ...failedSend, failedAssistantTurnId });
     draft.value = content;
-    activity.value = activity.value.map((item) => item.id === failedSend.assistantActivityId ? { ...item, status: "FAILED", summary: `消息发送失败：${message}。请重试。`, occurredAt: new Date().toISOString() } : item);
+    activity.value = activity.value.map((item) =>
+      item.id === failedSend.assistantActivityId
+        ? { ...item, status: "FAILED", summary: `消息发送失败：${message}。请重试。`, occurredAt: new Date().toISOString() }
+        : item,
+    );
     ElMessage.error(`消息发送失败：${message}。可以在当前需求中重试。`);
     return false;
   } finally {
@@ -1037,7 +1387,9 @@ function reloadExplorer() {
   closeEvents();
   invalidateProjectScope();
   resetThreadState();
-  void load().then((loaded) => { if (loaded && mounted.value) connectEvents(); });
+  void load().then((loaded) => {
+    if (loaded && mounted.value) connectEvents();
+  });
 }
 async function reloadSelectedExplorer() {
   const requestProjectId = projectId.value;
@@ -1065,7 +1417,9 @@ watch(projectId, (next, previous) => {
   closeEvents();
   invalidateProjectScope();
   resetProjectState(next);
-  void load().then((loaded) => { if (loaded && mounted.value) connectEvents(); });
+  void load().then((loaded) => {
+    if (loaded && mounted.value) connectEvents();
+  });
 });
 watch(projectExecutionMode, (active, previous) => {
   if (!mounted.value || active === previous) return;
@@ -1080,18 +1434,31 @@ watch(projectExecutionMode, (active, previous) => {
     void reloadSelectedExplorer();
   }
 });
-watch(() => route.query.explorerId, (routeExplorerId, previousExplorerId) => {
-  if (!mounted.value || routeExplorerId === previousExplorerId || routeExplorerId === thread.value?.id) return;
-  if (suppressNextExplorerRouteReload) {
-    suppressNextExplorerRouteReload = false;
-    return;
-  }
-  void reloadSelectedExplorer();
-});
-watch(() => route.query.explorerPlanId, (routePlanId, previousPlanId) => {
-  if (!mounted.value || routePlanId === previousPlanId || !thread.value || typeof routePlanId !== "string" || routePlanId === activeExplorerPlan.value?.id) return;
-  void selectExplorerPlan(routePlanId, true);
-});
+watch(
+  () => route.query.explorerId,
+  (routeExplorerId, previousExplorerId) => {
+    if (!mounted.value || routeExplorerId === previousExplorerId || routeExplorerId === thread.value?.id) return;
+    if (suppressNextExplorerRouteReload) {
+      suppressNextExplorerRouteReload = false;
+      return;
+    }
+    void reloadSelectedExplorer();
+  },
+);
+watch(
+  () => route.query.explorerPlanId,
+  (routePlanId, previousPlanId) => {
+    if (
+      !mounted.value ||
+      routePlanId === previousPlanId ||
+      !thread.value ||
+      typeof routePlanId !== "string" ||
+      routePlanId === activeExplorerPlan.value?.id
+    )
+      return;
+    void selectExplorerPlan(routePlanId, true);
+  },
+);
 watch(activeRunId, (runId) => {
   if (!runId) return;
   drawerTab.value = "task";
@@ -1099,13 +1466,30 @@ watch(activeRunId, (runId) => {
 });
 // 必须同时挂 watch 与 onMounted 两处：从 Explorer 自己跳到 `?settings=1` 时组件不重挂（只是 query 变了）。
 watch(() => route.query.settings, consumeSettingsQuery);
-watch(() => route.query.requirementTab, (tab) => {
-  if (tab !== "explorer" && tab !== "plan" && tab !== "task") return;
-  drawerTab.value = tab;
-  drawerOpen.value = true;
+watch(
+  () => route.query.requirementTab,
+  (tab) => {
+    if (tab !== "explorer" && tab !== "plan" && tab !== "task") return;
+    drawerTab.value = tab;
+    drawerOpen.value = true;
+  },
+);
+onMounted(() => {
+  mounted.value = true;
+  syncPanelStateFromRoute();
+  consumeSettingsQuery();
+  void loadModelBackends();
+  void load().then((loaded) => {
+    if (loaded) connectEvents();
+  });
+  syncHashPanel(route.hash);
 });
-onMounted(() => { mounted.value = true; syncPanelStateFromRoute(); consumeSettingsQuery(); void loadModelBackends(); void load().then((loaded) => { if (loaded) connectEvents(); }); syncHashPanel(route.hash); });
-onBeforeUnmount(() => { mounted.value = false; invalidateProjectScope(); closeEvents(); closeRequirementStatusEvents(); });
+onBeforeUnmount(() => {
+  mounted.value = false;
+  invalidateProjectScope();
+  closeEvents();
+  closeRequirementStatusEvents();
+});
 </script>
 
 <template>
@@ -1180,9 +1564,35 @@ onBeforeUnmount(() => { mounted.value = false; invalidateProjectScope(); closeEv
           <el-button text circle aria-label="关闭详情抽屉" @click="closeSharedDrawer"><Close /></el-button>
         </header>
         <nav class="shared-drawer-tabs" role="tablist" aria-label="需求详情类型">
-          <button type="button" role="tab" :aria-selected="drawerTab === 'explorer'" :class="{ active: drawerTab === 'explorer' }" @click="switchDrawerTab('explorer')">探索对话</button>
-          <button type="button" role="tab" :aria-selected="drawerTab === 'plan'" :disabled="!selectedRequirementRow?.plan" :class="{ active: drawerTab === 'plan' }" @click="switchDrawerTab('plan')">Plan 详情</button>
-          <button type="button" role="tab" :aria-selected="drawerTab === 'task'" :disabled="!taskPanelPlan || selectedRequirementRow?.taskStatus.label === '—'" :class="{ active: drawerTab === 'task' }" @click="switchDrawerTab('task')">Run</button>
+          <button
+            type="button"
+            role="tab"
+            :aria-selected="drawerTab === 'explorer'"
+            :class="{ active: drawerTab === 'explorer' }"
+            @click="switchDrawerTab('explorer')"
+          >
+            探索对话
+          </button>
+          <button
+            type="button"
+            role="tab"
+            :aria-selected="drawerTab === 'plan'"
+            :disabled="!selectedRequirementRow?.plan"
+            :class="{ active: drawerTab === 'plan' }"
+            @click="switchDrawerTab('plan')"
+          >
+            Plan 详情
+          </button>
+          <button
+            type="button"
+            role="tab"
+            :aria-selected="drawerTab === 'task'"
+            :disabled="!taskPanelPlan || selectedRequirementRow?.taskStatus.label === '—'"
+            :class="{ active: drawerTab === 'task' }"
+            @click="switchDrawerTab('task')"
+          >
+            Run
+          </button>
         </nav>
         <div class="shared-drawer-content">
           <section v-if="drawerTab === 'plan'" class="shared-drawer-pane plan-detail-pane" role="tabpanel" aria-label="Plan 详情">
@@ -1208,102 +1618,341 @@ onBeforeUnmount(() => { mounted.value = false; invalidateProjectScope(); closeEv
             />
           </section>
           <section v-if="drawerTab === 'task'" class="shared-drawer-pane task-detail-pane" role="tabpanel" aria-label="Run">
-            <RunDetailView v-if="activeRunId" :key="activeRunId" embedded :project-id="projectId" :run-id="activeRunId" @close="closeRunView" @open-plan="openPlanDetail" />
+            <RunDetailView
+              v-if="activeRunId"
+              :key="activeRunId"
+              embedded
+              :project-id="projectId"
+              :run-id="activeRunId"
+              @close="closeRunView"
+              @open-plan="openPlanDetail"
+            />
             <template v-else-if="taskPanelPlan">
-              <header class="task-detail-heading"><div class="eyebrow">执行 · 第 {{ taskPanelPlan.revision }} 版</div><h3>{{ taskPanelPlan.title }}</h3><p>任务状态：{{ selectedRequirementRow?.taskStatus.label ?? '—' }}</p></header>
-              <div v-if="taskPanelPlan.status === 'READY' && isConversationArtifactPlan(taskPanelPlan)" class="task-action-panel task-action-attention"><strong>此 Plan 是对话产物，不能入队执行。</strong><p>请在探索对话中改为“仓库文件”产物，指定目标路径后确认新版本。</p><el-button type="primary" plain @click="returnToCurrentRequirementChat">返回探索对话修订</el-button></div>
-              <div v-else-if="taskPanelPlan.status === 'READY'" class="task-action-panel"><strong>Plan 已确认，可以入队。</strong><p>入队和开始运行是两个独立步骤。</p><el-button type="primary" :loading="busy" @click="enqueuePlan(taskPanelPlan)"><ArrowDown :size="15" /> 入队</el-button></div>
-              <div v-else-if="taskPanelPlan.status === 'ENQUEUED'" class="task-action-panel"><strong>Plan 已入队，等待明确开始运行。</strong><p>开始运行后会进入该需求的 Run 对话。</p><el-button type="primary" :loading="busy" @click="startPlanRun(taskPanelPlan)"><Right :size="15" /> 开始运行</el-button></div>
-              <div v-else-if="taskPanelPlan.dispatch?.waitReason === 'NEEDS_CONFIGURATION'" class="task-action-panel task-action-attention"><strong>等待处理项目执行配置</strong><p>{{ taskPanelPlan.dispatch.lastError ?? '此 Plan 需要项目验证命令配置。' }}</p><el-button plain @click="openProjectSettingsDialog(taskPanelPlan.projectId)">配置项目命令</el-button><el-button v-if="canCreateConfigurationRevision(taskPanelPlan)" type="primary" :loading="busy" @click="revisePlanConfiguration(taskPanelPlan)">创建更新版本</el-button></div>
-              <div v-else class="task-action-panel"><strong>{{ selectedRequirementRow?.taskStatus.label ?? '任务状态未知' }}</strong><p>{{ taskPanelPlan.dispatch?.lastError ?? taskPanelPlan.attentionReason ?? '当前任务正在等待执行状态更新。' }}</p><el-button plain @click="refreshThread"><Refresh :size="14" /> 刷新状态</el-button></div>
-              <el-button class="task-plan-link" text @click="openPlanDetail(taskPanelPlan)"><Document :size="15" /> 查看结构化 Plan</el-button>
+              <header class="task-detail-heading">
+                <div class="eyebrow">执行 · 第 {{ taskPanelPlan.revision }} 版</div>
+                <h3>{{ taskPanelPlan.title }}</h3>
+                <p>任务状态：{{ selectedRequirementRow?.taskStatus.label ?? "—" }}</p>
+              </header>
+              <div
+                v-if="taskPanelPlan.status === 'READY' && isConversationArtifactPlan(taskPanelPlan)"
+                class="task-action-panel task-action-attention"
+              >
+                <strong>此 Plan 是对话产物，不能入队执行。</strong>
+                <p>请在探索对话中改为“仓库文件”产物，指定目标路径后确认新版本。</p>
+                <el-button type="primary" plain @click="returnToCurrentRequirementChat">返回探索对话修订</el-button>
+              </div>
+              <div v-else-if="taskPanelPlan.status === 'READY'" class="task-action-panel">
+                <strong>Plan 已确认，可以入队。</strong>
+                <p>入队和开始运行是两个独立步骤。</p>
+                <el-button type="primary" :loading="busy" @click="enqueuePlan(taskPanelPlan)"><ArrowDown :size="15" /> 入队</el-button>
+              </div>
+              <div v-else-if="taskPanelPlan.status === 'ENQUEUED'" class="task-action-panel">
+                <strong>Plan 已入队，等待明确开始运行。</strong>
+                <p>开始运行后会进入该需求的 Run 对话。</p>
+                <el-button type="primary" :loading="busy" @click="startPlanRun(taskPanelPlan)"><Right :size="15" /> 开始运行</el-button>
+              </div>
+              <div v-else-if="taskPanelPlan.dispatch?.waitReason === 'NEEDS_CONFIGURATION'" class="task-action-panel task-action-attention">
+                <strong>等待处理项目执行配置</strong>
+                <p>{{ taskPanelPlan.dispatch.lastError ?? "此 Plan 需要项目验证命令配置。" }}</p>
+                <el-button plain @click="openProjectSettingsDialog(taskPanelPlan.projectId)">配置项目命令</el-button
+                ><el-button
+                  v-if="canCreateConfigurationRevision(taskPanelPlan)"
+                  type="primary"
+                  :loading="busy"
+                  @click="revisePlanConfiguration(taskPanelPlan)"
+                  >创建更新版本</el-button
+                >
+              </div>
+              <div v-else class="task-action-panel">
+                <strong>{{ selectedRequirementRow?.taskStatus.label ?? "任务状态未知" }}</strong>
+                <p>{{ taskPanelPlan.dispatch?.lastError ?? taskPanelPlan.attentionReason ?? "当前任务正在等待执行状态更新。" }}</p>
+                <el-button plain @click="refreshThread"><Refresh :size="14" /> 刷新状态</el-button>
+              </div>
+              <el-button class="task-plan-link" text @click="openPlanDetail(taskPanelPlan)"
+                ><Document :size="15" /> 查看结构化 Plan</el-button
+              >
             </template>
-            <div v-else class="shared-drawer-empty"><strong>当前需求还没有可执行 Plan</strong><p>Plan 确认并进入任务阶段后，这里会显示入队操作和 Run 对话。</p></div>
+            <div v-else class="shared-drawer-empty">
+              <strong>当前需求还没有可执行 Plan</strong>
+              <p>Plan 确认并进入任务阶段后，这里会显示入队操作和 Run 对话。</p>
+            </div>
           </section>
-              <section v-if="drawerTab === 'explorer'" class="conversation-column drawer-conversation-column">
-      <ProjectExecutionThreadPanel v-if="projectExecutionMode" :project-id="projectId" :project="project" />
-      <template v-else>
-      <div v-if="!activeRunId" class="conversation-header">
-        <div class="conversation-header-copy">
-          <h1 :title="explorerDisplayTitle(thread)">{{ explorerDisplayTitle(thread) }}</h1>
-          <p v-if="revisionDraft" class="revision-draft-banner" role="status">Editing {{ revisionDraft.planId }} · V{{ revisionDraft.basedOnRevision }} → V{{ revisionDraft.targetRevision }} · {{ revisionDraft.status === 'READY_TO_CONFIRM' ? '可确认' : revisionDraft.status === 'BASE_CHANGED' ? '基线已变' : '继续编辑' }}</p>
-        </div>
-        <div class="conversation-header-aside">
-          <ExplorerHeaderStatus
-            :requirements="planRequirements"
-            :completed="explorationProgress.completed"
-            :diagnostics="explorationProgress.diagnostics"
-            :progress="explorationProgress"
-            :agent-loop="agentLoop"
-            :agent-loop-label="agentLoopLabel"
-            :agent-loop-gate-label="agentLoopGateLabel"
-            :agent-loop-terminal-label="agentLoopTerminalLabel"
-            :agent-loop-completion-label="agentLoopCompletionLabel"
-            :thread-id="thread?.id ?? ''"
-            :paused="explorerPaused"
-            :runtime-facts="runtimeFacts"
-            @toggle-pause="toggleExplorerPause"
-          />
-        </div>
-      </div>
-      <div v-if="!activeRunId && explorerPaused" class="demo-notice pause-notice"><VideoPause :size="14" /> 探索线程已暂停；恢复之前不能发起新的回合。<el-button text @click="toggleExplorerPause">恢复</el-button></div>
-      <div v-if="!activeRunId && error" class="demo-notice"><Refresh :size="14" /> {{ error }} <el-button text @click="load">重试</el-button></div>
-      <div v-if="!activeRunId" class="timeline-stage">
-      <div class="timeline-shell">
-      <div ref="timeline" v-loading="loading" class="timeline" @scroll="updateTimelineScrollState">
-        <div :id="activeExplorerPlan ? explorerPlanAnchorId(activeExplorerPlan.id) : undefined" :data-nav-key="activeExplorerPlan ? `explorer-plan-${activeExplorerPlan.id}` : undefined" class="explorer-plan-anchor" aria-hidden="true" />
-        <div class="timeline-day">{{ visibleTurns.length ? '探索活动' : '新建探索' }}</div>
-        <div v-if="!visibleActivity.length && !visibleInputRequests.length && !candidate" class="timeline-empty"><Connection :size="24" /><strong>{{ activeExplorerPlan ? taskDisplayTitle(activeExplorerPlan) : '开始一次全新的需求探索' }}</strong><span>当前需求还没有消息；切换需求不会删除其他对话内容。</span></div>
-        <template v-for="(item, index) in renderedTimelineItems" :key="item.key">
-          <article v-if="item.kind === 'input'" :id="inputRequestTarget(item.request)" :data-nav-key="`input:${item.request.id}`" :class="['input-request-card', 'timeline-input-request', { recovery: item.request.status === 'RECOVERY_REQUIRED', answered: item.request.status === 'ANSWERED', cancelled: item.request.status === 'CANCELLED' }]">
-            <div class="input-request-card-icon"><Check v-if="item.request.status === 'ANSWERED'" :size="16" /><Warning v-else-if="item.request.status === 'RECOVERY_REQUIRED' || item.request.status === 'CANCELLED'" :size="16" /><InfoFilled v-else :size="16" /></div>
-            <div class="input-request-card-body">
-              <div class="message-meta"><strong>Plan Explorer 输入</strong><el-tag size="small" effect="light" :type="inputStatusTagType(item.request.status)">{{ inputStatusLabel(item.request) }}</el-tag></div>
-              <div class="input-request-event-times"><span><strong>问题生成</strong><time>{{ formatTurnTime(item.request.createdAt) }}</time></span><span v-if="item.request.answeredAt"><strong>回答提交</strong><time>{{ formatTurnTime(item.request.answeredAt) }}</time></span></div>
-              <p v-if="item.request.status === 'SUBMITTING' || inputAnswerInFlight === item.request.id">已提交的答案正在等待 Provider 确认。刷新后会保留非敏感答案草稿，请勿重复提交。</p>
-              <p v-else-if="item.request.status === 'RECOVERY_REQUIRED'">App Server 在回答确认前中断。本次回答不会自动重试，请恢复 Provider 会话后从此线程继续。</p>
-              <p v-else-if="item.request.status === 'CANCELLED'">本次结构化输入已取消，问题和当时的时间点仍保留在对话记录中。</p>
-              <p v-else-if="item.request.status === 'ANSWERED'">本轮结构化问题与回答已按原始时间线保留。</p>
-              <p v-else>{{ item.request.questions.length }} 个结构化问题正在等待回答，回答后本轮才能继续。</p>
-              <div class="input-request-section-label">问题与回答</div>
-              <div class="input-stream-questions">
-                <div v-for="(question, questionIndex) in item.request.questions" :key="question.id" class="input-stream-question">
-                  <span class="question-index">{{ questionIndex + 1 }}</span>
-                  <div><strong>{{ question.header }}</strong><p>{{ question.question }}</p><small :class="{ answered: inputAnswerLabelsFor(item.request, question).length }">回答：{{ inputAnswerText(item.request, question) }}</small></div>
+          <section v-if="drawerTab === 'explorer'" class="conversation-column drawer-conversation-column">
+            <ProjectExecutionThreadPanel v-if="projectExecutionMode" :project-id="projectId" :project="project" />
+            <template v-else>
+              <div v-if="!activeRunId" class="conversation-header">
+                <div class="conversation-header-copy">
+                  <h1 :title="explorerDisplayTitle(thread)">{{ explorerDisplayTitle(thread) }}</h1>
+                  <p v-if="revisionDraft" class="revision-draft-banner" role="status">
+                    Editing {{ revisionDraft.planId }} · V{{ revisionDraft.basedOnRevision }} → V{{ revisionDraft.targetRevision }} ·
+                    {{
+                      revisionDraft.status === "READY_TO_CONFIRM"
+                        ? "可确认"
+                        : revisionDraft.status === "BASE_CHANGED"
+                          ? "基线已变"
+                          : "继续编辑"
+                    }}
+                  </p>
+                </div>
+                <div class="conversation-header-aside">
+                  <ExplorerHeaderStatus
+                    :requirements="planRequirements"
+                    :completed="explorationProgress.completed"
+                    :diagnostics="explorationProgress.diagnostics"
+                    :progress="explorationProgress"
+                    :agent-loop="agentLoop"
+                    :agent-loop-label="agentLoopLabel"
+                    :agent-loop-gate-label="agentLoopGateLabel"
+                    :agent-loop-terminal-label="agentLoopTerminalLabel"
+                    :agent-loop-completion-label="agentLoopCompletionLabel"
+                    :thread-id="thread?.id ?? ''"
+                    :paused="explorerPaused"
+                    :runtime-facts="runtimeFacts"
+                    @toggle-pause="toggleExplorerPause"
+                  />
                 </div>
               </div>
-            </div>
-            <el-button v-if="pendingInput?.id === item.request.id && inputAnswerInFlight !== item.request.id" type="primary" plain @click="openInputRequest">回答</el-button>
-          </article>
-          <article v-else-if="activityMode(item.activity) === 'text'" :id="activityTarget(item.activity, index)" :data-nav-key="activityTarget(item.activity, index)" :class="['timeline-user-text', { 'failed-message': item.activity.status === 'FAILED' }]">
-            <span class="timeline-user-mark" aria-hidden="true">›</span>
-            <div class="timeline-user-body">
-              <MarkdownMessage :source="item.activity.summary" />
-              <time>{{ formatTurnTime(item.activity.occurredAt) }}</time>
-            </div>
-          </article>
-          <article v-else-if="activityMode(item.activity) === 'prose'" :id="activityTarget(item.activity, index)" :data-nav-key="activityTarget(item.activity, index)" :class="['timeline-assistant-prose', { 'failed-message': item.activity.status === 'FAILED' }]">
-            <div class="timeline-assistant-body"><div class="timeline-assistant-meta"><span class="thread-mark" :class="{ 'thread-mark-live': item.activity.status === 'RUNNING' }" /><strong>{{ item.activity.title }}</strong><el-tag size="small" effect="light" :type="statusTagType(item.activity.status)">{{ assistantActivityLabel(item.activity) }}</el-tag><span>{{ formatTurnTime(item.activity.occurredAt) }}</span></div><MarkdownMessage :source="readableAssistantText(item.activity.summary)" :streaming="item.activity.status === 'RUNNING'" /><ExplorerCandidatePlanCard v-if="showCandidatePlanCard && planForActivity(item.activity)" :plan="planForActivity(item.activity)!" :is-candidate="isCandidatePlan(planForActivity(item.activity))" :busy="busy" @view="openPlanDetail" @confirm="confirmPlan" @enqueue="enqueuePlan" /></div>
-          </article>
-          <template v-else-if="activityMode(item.activity) === 'reasoning'"><ExplorerReasoningRow :activity="item.activity" :index="index" /></template>
-          <template v-else-if="activityMode(item.activity) === 'divider'"><ExplorerDividerRow :activity="item.activity" :index="index" /></template>
-          <template v-else-if="rowMode(item.activity)"><ExplorerActivityRow :activity="item.activity" :index="index" :mode="rowMode(item.activity)!" /></template>
-          <article v-else class="timeline-unknown-row">未识别的行型：{{ activityMode(item.activity) }}（{{ item.activity.kind }}）</article>
-        </template>
-      </div>
-      <button v-if="showScrollToLatest" class="scroll-to-latest" type="button" aria-label="跳到最新消息" title="跳到最新消息" @click="jumpToLatest"><img class="scroll-to-latest-image" :src="scrollToLatestIcon" alt="" /></button>
-      </div>
-      </div>
-      <div v-if="!activeRunId" class="composer"><div class="composer-input"><textarea v-model="draft" :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || explorerPaused" aria-label="探索消息" placeholder="继续探索，或提出修改…" @keydown="handleComposerKeydown" /><span class="composer-mode">Plan 模式</span></div><div class="composer-footer"><ProviderUsageFooter :model="explorerModel" :backend="explorerBackendLabel" :context="contextUsage" context-note="estimated" /><span v-if="inputAnswerInFlight || inputCardRequest?.status === 'SUBMITTING'" class="composer-status" role="status" aria-live="polite">正在提交结构化答案，确认后本轮会继续…</span><span v-else-if="pendingInput" class="composer-status" role="status" aria-live="polite">请先回答上方结构化问题，再继续探索。</span><span v-else-if="sendingCurrentPlan" class="composer-status" role="status" aria-live="polite">消息已发送 · 等待 Plan Explorer…</span><el-button class="composer-send" type="primary" circle :loading="activePlanBusy && !activePlanWaitingForInput || sendingCurrentPlan" :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || !draft.trim() || explorerPaused || activePlanBusy || sendingCurrentPlan || busy" aria-label="发送消息" :title="pendingInput ? '请先回答上方结构化问题' : activePlanBusy ? '当前需求回合执行中，完成后可继续' : '发送消息'" @click="sendTurn"><ArrowUp :size="18" /></el-button></div></div>
-      </template>
-    </section>
+              <div v-if="!activeRunId && explorerPaused" class="demo-notice pause-notice">
+                <VideoPause :size="14" /> 探索线程已暂停；恢复之前不能发起新的回合。<el-button text @click="toggleExplorerPause"
+                  >恢复</el-button
+                >
+              </div>
+              <div v-if="!activeRunId && error" class="demo-notice">
+                <Refresh :size="14" /> {{ error }} <el-button text @click="load">重试</el-button>
+              </div>
+              <div v-if="!activeRunId" class="timeline-stage">
+                <div class="timeline-shell">
+                  <div ref="timeline" v-loading="loading" class="timeline" @scroll="updateTimelineScrollState">
+                    <div
+                      :id="activeExplorerPlan ? explorerPlanAnchorId(activeExplorerPlan.id) : undefined"
+                      :data-nav-key="activeExplorerPlan ? `explorer-plan-${activeExplorerPlan.id}` : undefined"
+                      class="explorer-plan-anchor"
+                      aria-hidden="true"
+                    />
+                    <div class="timeline-day">{{ visibleTurns.length ? "探索活动" : "新建探索" }}</div>
+                    <div v-if="!visibleActivity.length && !visibleInputRequests.length && !candidate" class="timeline-empty">
+                      <Connection :size="24" /><strong>{{
+                        activeExplorerPlan ? taskDisplayTitle(activeExplorerPlan) : "开始一次全新的需求探索"
+                      }}</strong
+                      ><span>当前需求还没有消息；切换需求不会删除其他对话内容。</span>
+                    </div>
+                    <template v-for="(item, index) in renderedTimelineItems" :key="item.key">
+                      <article
+                        v-if="item.kind === 'input'"
+                        :id="inputRequestTarget(item.request)"
+                        :data-nav-key="`input:${item.request.id}`"
+                        :class="[
+                          'input-request-card',
+                          'timeline-input-request',
+                          {
+                            recovery: item.request.status === 'RECOVERY_REQUIRED',
+                            answered: item.request.status === 'ANSWERED',
+                            cancelled: item.request.status === 'CANCELLED',
+                          },
+                        ]"
+                      >
+                        <div class="input-request-card-icon">
+                          <Check v-if="item.request.status === 'ANSWERED'" :size="16" /><Warning
+                            v-else-if="item.request.status === 'RECOVERY_REQUIRED' || item.request.status === 'CANCELLED'"
+                            :size="16"
+                          /><InfoFilled v-else :size="16" />
+                        </div>
+                        <div class="input-request-card-body">
+                          <div class="message-meta">
+                            <strong>Plan Explorer 输入</strong
+                            ><el-tag size="small" effect="light" :type="inputStatusTagType(item.request.status)">{{
+                              inputStatusLabel(item.request)
+                            }}</el-tag>
+                          </div>
+                          <div class="input-request-event-times">
+                            <span
+                              ><strong>问题生成</strong><time>{{ formatTurnTime(item.request.createdAt) }}</time></span
+                            ><span v-if="item.request.answeredAt"
+                              ><strong>回答提交</strong><time>{{ formatTurnTime(item.request.answeredAt) }}</time></span
+                            >
+                          </div>
+                          <p v-if="item.request.status === 'SUBMITTING' || inputAnswerInFlight === item.request.id">
+                            已提交的答案正在等待 Provider 确认。刷新后会保留非敏感答案草稿，请勿重复提交。
+                          </p>
+                          <p v-else-if="item.request.status === 'RECOVERY_REQUIRED'">
+                            App Server 在回答确认前中断。本次回答不会自动重试，请恢复 Provider 会话后从此线程继续。
+                          </p>
+                          <p v-else-if="item.request.status === 'CANCELLED'">
+                            本次结构化输入已取消，问题和当时的时间点仍保留在对话记录中。
+                          </p>
+                          <p v-else-if="item.request.status === 'ANSWERED'">本轮结构化问题与回答已按原始时间线保留。</p>
+                          <p v-else>{{ item.request.questions.length }} 个结构化问题正在等待回答，回答后本轮才能继续。</p>
+                          <div class="input-request-section-label">问题与回答</div>
+                          <div class="input-stream-questions">
+                            <div
+                              v-for="(question, questionIndex) in item.request.questions"
+                              :key="question.id"
+                              class="input-stream-question"
+                            >
+                              <span class="question-index">{{ questionIndex + 1 }}</span>
+                              <div>
+                                <strong>{{ question.header }}</strong>
+                                <p>{{ question.question }}</p>
+                                <small :class="{ answered: inputAnswerLabelsFor(item.request, question).length }"
+                                  >回答：{{ inputAnswerText(item.request, question) }}</small
+                                >
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                        <el-button
+                          v-if="pendingInput?.id === item.request.id && inputAnswerInFlight !== item.request.id"
+                          type="primary"
+                          plain
+                          @click="openInputRequest"
+                          >回答</el-button
+                        >
+                      </article>
+                      <article
+                        v-else-if="activityMode(item.activity) === 'text'"
+                        :id="activityTarget(item.activity, index)"
+                        :data-nav-key="activityTarget(item.activity, index)"
+                        :class="['timeline-user-text', { 'failed-message': item.activity.status === 'FAILED' }]"
+                      >
+                        <span class="timeline-user-mark" aria-hidden="true">›</span>
+                        <div class="timeline-user-body">
+                          <MarkdownMessage :source="item.activity.summary" />
+                          <time>{{ formatTurnTime(item.activity.occurredAt) }}</time>
+                        </div>
+                      </article>
+                      <article
+                        v-else-if="activityMode(item.activity) === 'prose'"
+                        :id="activityTarget(item.activity, index)"
+                        :data-nav-key="activityTarget(item.activity, index)"
+                        :class="['timeline-assistant-prose', { 'failed-message': item.activity.status === 'FAILED' }]"
+                      >
+                        <div class="timeline-assistant-body">
+                          <div class="timeline-assistant-meta">
+                            <span class="thread-mark" :class="{ 'thread-mark-live': item.activity.status === 'RUNNING' }" /><strong>{{
+                              item.activity.title
+                            }}</strong
+                            ><el-tag size="small" effect="light" :type="statusTagType(item.activity.status)">{{
+                              assistantActivityLabel(item.activity)
+                            }}</el-tag
+                            ><span>{{ formatTurnTime(item.activity.occurredAt) }}</span>
+                          </div>
+                          <MarkdownMessage
+                            :source="readableAssistantText(item.activity.summary)"
+                            :streaming="item.activity.status === 'RUNNING'"
+                          /><ExplorerCandidatePlanCard
+                            v-if="showCandidatePlanCard && planForActivity(item.activity)"
+                            :plan="planForActivity(item.activity)!"
+                            :is-candidate="isCandidatePlan(planForActivity(item.activity))"
+                            :busy="busy"
+                            @view="openPlanDetail"
+                            @confirm="confirmPlan"
+                            @enqueue="enqueuePlan"
+                          />
+                        </div>
+                      </article>
+                      <template v-else-if="activityMode(item.activity) === 'reasoning'"
+                        ><ExplorerReasoningRow :activity="item.activity" :index="index"
+                      /></template>
+                      <template v-else-if="activityMode(item.activity) === 'divider'"
+                        ><ExplorerDividerRow :activity="item.activity" :index="index"
+                      /></template>
+                      <template v-else-if="rowMode(item.activity)"
+                        ><ExplorerActivityRow :activity="item.activity" :index="index" :mode="rowMode(item.activity)!"
+                      /></template>
+                      <article v-else class="timeline-unknown-row">
+                        未识别的行型：{{ activityMode(item.activity) }}（{{ item.activity.kind }}）
+                      </article>
+                    </template>
+                  </div>
+                  <button
+                    v-if="showScrollToLatest"
+                    class="scroll-to-latest"
+                    type="button"
+                    aria-label="跳到最新消息"
+                    title="跳到最新消息"
+                    @click="jumpToLatest"
+                  >
+                    <img class="scroll-to-latest-image" :src="scrollToLatestIcon" alt="" />
+                  </button>
+                </div>
+              </div>
+              <div v-if="!activeRunId" class="composer">
+                <div class="composer-input">
+                  <textarea
+                    v-model="draft"
+                    :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || explorerPaused"
+                    aria-label="探索消息"
+                    placeholder="继续探索，或提出修改…"
+                    @keydown="handleComposerKeydown"
+                  /><span class="composer-mode">Plan 模式</span>
+                </div>
+                <div class="composer-footer">
+                  <ProviderUsageFooter
+                    :model="explorerModel"
+                    :backend="explorerBackendLabel"
+                    :context="contextUsage"
+                    context-note="estimated"
+                  /><span
+                    v-if="inputAnswerInFlight || inputCardRequest?.status === 'SUBMITTING'"
+                    class="composer-status"
+                    role="status"
+                    aria-live="polite"
+                    >正在提交结构化答案，确认后本轮会继续…</span
+                  ><span v-else-if="pendingInput" class="composer-status" role="status" aria-live="polite"
+                    >请先回答上方结构化问题，再继续探索。</span
+                  ><span v-else-if="sendingCurrentPlan" class="composer-status" role="status" aria-live="polite"
+                    >消息已发送 · 等待 Plan Explorer…</span
+                  ><el-button
+                    class="composer-send"
+                    type="primary"
+                    circle
+                    :loading="(activePlanBusy && !activePlanWaitingForInput) || sendingCurrentPlan"
+                    :disabled="
+                      !thread ||
+                      thread?.state === 'ARCHIVED' ||
+                      project?.status === 'ARCHIVED' ||
+                      !draft.trim() ||
+                      explorerPaused ||
+                      activePlanBusy ||
+                      sendingCurrentPlan ||
+                      busy
+                    "
+                    aria-label="发送消息"
+                    :title="pendingInput ? '请先回答上方结构化问题' : activePlanBusy ? '当前需求回合执行中，完成后可继续' : '发送消息'"
+                    @click="sendTurn"
+                    ><ArrowUp :size="18"
+                  /></el-button>
+                </div>
+              </div>
+            </template>
+          </section>
         </div>
       </div>
     </el-drawer>
-    <ExplorerInputDialog ref="inputDialog" v-model="inputDialogOpen" :request="pendingInput" :progress="inputProgress" @submit="submitInput" @cancel="cancelInput" @progress="updateInputProgress" />
+    <ExplorerInputDialog
+      ref="inputDialog"
+      v-model="inputDialogOpen"
+      :request="pendingInput"
+      :progress="inputProgress"
+      @submit="submitInput"
+      @cancel="cancelInput"
+      @progress="updateInputProgress"
+    />
     <ProjectCreateDialog v-model="projectCreateOpen" @project-created="handleProjectCreated" />
-    <ProjectSettingsDialog :model-value="projectSettingsOpen" :project-id="projectSettingsProjectId" :initial-tab="projectSettingsInitialTab" @update:model-value="closeProjectSettings" @saved="handleProjectSettingsSaved" />
-    <ExplorerRenameDialog v-model="renameDialogOpen" :initial-title="thread?.title ?? ''" :saving="renameSaving" :error="renameError" @submit="renameThread" />
+    <ProjectSettingsDialog
+      :model-value="projectSettingsOpen"
+      :project-id="projectSettingsProjectId"
+      :initial-tab="projectSettingsInitialTab"
+      @update:model-value="closeProjectSettings"
+      @saved="handleProjectSettingsSaved"
+    />
+    <ExplorerRenameDialog
+      v-model="renameDialogOpen"
+      :initial-title="thread?.title ?? ''"
+      :saving="renameSaving"
+      :error="renameError"
+      @submit="renameThread"
+    />
     <ExplorerPolicyDrawer :model-value="policyOpen" @update:model-value="setPolicyOpen" />
   </div>
 </template>

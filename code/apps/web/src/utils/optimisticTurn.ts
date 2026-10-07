@@ -15,6 +15,8 @@ export function createOptimisticUserTurn(input: OptimisticUserTurnInput): Explor
 
 /** 用服务端事实替换临时用户消息，并只追加一次 assistant 占位，避免重试重复显示。 */
 export function settleOptimisticTurn(turns: ExplorerTurn[], optimisticUserId: string, serverTurn: ExplorerTurnPair): ExplorerTurn[] {
-  const replaced = turns.map((turn) => turn.id === optimisticUserId ? serverTurn.user : turn);
-  return replaced.some((turn) => turn.id === serverTurn.user.id) ? [...replaced, serverTurn.assistant] : [...replaced, serverTurn.user, serverTurn.assistant];
+  const replaced = turns.map((turn) => (turn.id === optimisticUserId ? serverTurn.user : turn));
+  return replaced.some((turn) => turn.id === serverTurn.user.id)
+    ? [...replaced, serverTurn.assistant]
+    : [...replaced, serverTurn.user, serverTurn.assistant];
 }

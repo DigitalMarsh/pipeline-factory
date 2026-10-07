@@ -19,17 +19,21 @@
  *      留在这里只会让人以为它们是 Plan 能到达的状态。
  */
 export function planStatusLabel(status: string): string {
-  return ({
-    DRAFT: "草稿",
-    DISCARDED: "已丢弃",
-    READY: "已确认",
-    ENQUEUED: "已入队",
-    DISPATCHED: "已派发",
-    IN_PROGRESS: "执行中",
-    VERIFYING: "验证中",
-    MERGE_READY: "待合并",
-    MERGED: "已合并",
-    BLOCKED: "已阻塞",
-    NEEDS_PLAN_CHANGE: "需要改计划",
-  } as Record<string, string>)[status] ?? status;
+  return (
+    (
+      {
+        DRAFT: "草稿",
+        DISCARDED: "已丢弃",
+        READY: "已确认",
+        ENQUEUED: "已入队",
+        DISPATCHED: "已派发",
+        IN_PROGRESS: "执行中",
+        VERIFYING: "验证中",
+        MERGE_READY: "待合并",
+        MERGED: "已合并",
+        BLOCKED: "已阻塞",
+        NEEDS_PLAN_CHANGE: "需要改计划",
+      } as Record<string, string>
+    )[status] ?? status
+  );
 }

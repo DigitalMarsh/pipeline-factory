@@ -67,12 +67,24 @@ export type ExecutionModelIdentity = { model: string; backend: string; source: E
  * `source` 让界面说清这个值是哪来的：不要把配置值当成跑过的记录展示。
  * `model` 与 `backend` 不拆开混搭——它们是同一次写入的一对事实，混搭会造出一个从未存在过的组合。
  */
-export function resolveExecutionModelIdentity(telemetry: ExecutionTelemetry | null | undefined, executorConfig: { model: string | null; backend: string | null } | null | undefined, catalog: ModelBackendsResponse | null = null): ExecutionModelIdentity {
+export function resolveExecutionModelIdentity(
+  telemetry: ExecutionTelemetry | null | undefined,
+  executorConfig: { model: string | null; backend: string | null } | null | undefined,
+  catalog: ModelBackendsResponse | null = null,
+): ExecutionModelIdentity {
   if (telemetry?.model || telemetry?.backend) {
-    return { model: telemetry.model || "未记录", backend: telemetry.backend ? backendLabel(catalog, telemetry.backend) : "未记录", source: "recorded" };
+    return {
+      model: telemetry.model || "未记录",
+      backend: telemetry.backend ? backendLabel(catalog, telemetry.backend) : "未记录",
+      source: "recorded",
+    };
   }
   if (executorConfig?.model || executorConfig?.backend) {
-    return { model: executorConfig.model || "未记录", backend: executorConfig.backend ? backendLabel(catalog, executorConfig.backend) : "未记录", source: "configured" };
+    return {
+      model: executorConfig.model || "未记录",
+      backend: executorConfig.backend ? backendLabel(catalog, executorConfig.backend) : "未记录",
+      source: "configured",
+    };
   }
   return { model: "未记录", backend: "未记录", source: "unknown" };
 }
@@ -85,7 +97,10 @@ export function resolveExecutionModelIdentity(telemetry: ExecutionTelemetry | nu
  * 取模型的写法），新模型要等下一个 Plan Revision 才生效。这里把这件事写在页面上，
  * 而不是指望用户去读 Plan 详情里的冻结快照。
  */
-export function executionModelSourceNote(identity: ExecutionModelIdentity, currentExecutor: { model: string | null } | null | undefined): string {
+export function executionModelSourceNote(
+  identity: ExecutionModelIdentity,
+  currentExecutor: { model: string | null } | null | undefined,
+): string {
   const base = identity.source === "recorded" ? "本次执行记录" : identity.source === "configured" ? "按本 Run 冻结的项目配置" : "";
   const current = currentExecutor?.model ?? null;
   const inUse = identity.source === "unknown" ? null : identity.model;

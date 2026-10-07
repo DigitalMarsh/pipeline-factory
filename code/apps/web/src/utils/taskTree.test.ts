@@ -63,7 +63,11 @@ describe("task tree", () => {
   });
 
   it("deduplicates lifecycle projections and never guesses an unassociated Plan", () => {
-    const items = buildTaskTree([task("task-1", 1)], [plan("plan-1", "task-1"), plan("plan-1-copy", "task-1"), { ...plan("orphan", ""), id: "orphan" }], []);
+    const items = buildTaskTree(
+      [task("task-1", 1)],
+      [plan("plan-1", "task-1"), plan("plan-1-copy", "task-1"), { ...plan("orphan", ""), id: "orphan" }],
+      [],
+    );
 
     expect(items).toHaveLength(1);
     expect(items[0]!.plan?.explorerPlanId).toBe("task-1");

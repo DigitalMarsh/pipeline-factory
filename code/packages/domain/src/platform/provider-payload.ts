@@ -52,5 +52,12 @@ export function structuredProviderPayload(payload: Record<string, unknown>): Rec
 
 /** 这一份结构化载荷里有没有东西可展开。空对象与"没有"是一回事——别为它渲染一个空的展开按钮。 */
 export function hasStructuredPayload(fields: Record<string, unknown>): boolean {
-  return Object.values(fields).some((value) => value !== undefined && value !== null && value !== "" && !(isRecord(value) && Object.keys(value).length === 0) && !(Array.isArray(value) && value.length === 0));
+  return Object.values(fields).some(
+    (value) =>
+      value !== undefined &&
+      value !== null &&
+      value !== "" &&
+      !(isRecord(value) && Object.keys(value).length === 0) &&
+      !(Array.isArray(value) && value.length === 0),
+  );
 }

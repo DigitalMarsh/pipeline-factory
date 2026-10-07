@@ -32,7 +32,20 @@
 /** 工具调用角色；Explorer 和 Executor 使用不同的允许集合。 */
 export type ToolRole = "explorer" | "executor";
 /** 内置、MCP、Plugin 和宿主工具的统一名称。 */
-export type ToolName = "read_file" | "list_files" | "git_status" | "git_diff" | "git_log" | "search_text" | "write_file" | "apply_patch" | "run_command" | "run_registered_command" | "run_verification" | "git_commit" | string;
+export type ToolName =
+  | "read_file"
+  | "list_files"
+  | "git_status"
+  | "git_diff"
+  | "git_log"
+  | "search_text"
+  | "write_file"
+  | "apply_patch"
+  | "run_command"
+  | "run_registered_command"
+  | "run_verification"
+  | "git_commit"
+  | string;
 
 /** 一次模型发起的工具调用；callId 用于幂等、审计和恢复。 */
 export type ToolCall = {

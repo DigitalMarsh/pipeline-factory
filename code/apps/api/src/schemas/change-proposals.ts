@@ -7,4 +7,9 @@
  */
 import { z } from "zod";
 
-export const changeProposalBody = z.object({ reason: z.string().trim().min(1).max(4_000), requestedChanges: z.array(z.string().trim().min(1).max(2_000)).min(1).max(50), resolvedContract: z.record(z.unknown()), createdBy: z.string().min(1).default("executor") });
+export const changeProposalBody = z.object({
+  reason: z.string().trim().min(1).max(4_000),
+  requestedChanges: z.array(z.string().trim().min(1).max(2_000)).min(1).max(50),
+  resolvedContract: z.record(z.unknown()),
+  createdBy: z.string().min(1).default("executor"),
+});

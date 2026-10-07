@@ -25,7 +25,15 @@ type Report = TaskProgressPayload;
 export function projectExecutionTasks(tasks: PlanTask[], journal: ExecutionJournalEntry[], runStatus: string): ExecutionTask[] {
   const projected: ExecutionTask[] = tasks
     .filter((task): task is PlanTask & { id: string } => typeof task.id === "string" && task.id.trim().length > 0)
-    .map((task) => ({ ...task, id: task.id, status: "PENDING" as ExecutionTaskStatus, evidenceSequence: null, blockedReason: null, startedAt: null, completedAt: null }));
+    .map((task) => ({
+      ...task,
+      id: task.id,
+      status: "PENDING" as ExecutionTaskStatus,
+      evidenceSequence: null,
+      blockedReason: null,
+      startedAt: null,
+      completedAt: null,
+    }));
   const byId = new Map(projected.map((task) => [task.id, task]));
   let hasTaskProgressFact = false;
 
@@ -74,7 +82,7 @@ export function projectExecutionTasks(tasks: PlanTask[], journal: ExecutionJourn
         hasTaskProgressFact = true;
         task.status = state;
         task.evidenceSequence = entry.sequence;
-        task.blockedReason = state === "BLOCKED" ? typeof entry.payload.reason === "string" ? entry.payload.reason : null : null;
+        task.blockedReason = state === "BLOCKED" ? (typeof entry.payload.reason === "string" ? entry.payload.reason : null) : null;
         // 开始 / 完成时刻**只认任务自己报的那两条**（见 `ExecutionTask.startedAt` 的说明）。
         // 第一次见到 IN_PROGRESS 就定下来，不随后续重复事件改写；DONE 同理。
         if (state === "IN_PROGRESS" && !task.startedAt) task.startedAt = entry.occurredAt;
@@ -108,7 +116,13 @@ export function projectExecutionTasks(tasks: PlanTask[], journal: ExecutionJourn
   return projected;
 }
 
-export function executionTaskSummary(tasks: ExecutionTask[]): { completed: number; total: number; blocked: number; active: number; unknown: number } {
+export function executionTaskSummary(tasks: ExecutionTask[]): {
+  completed: number;
+  total: number;
+  blocked: number;
+  active: number;
+  unknown: number;
+} {
   return {
     completed: tasks.filter((task) => task.status === "DONE").length,
     total: tasks.length,
@@ -119,7 +133,12 @@ export function executionTaskSummary(tasks: ExecutionTask[]): { completed: numbe
 }
 
 export function executionTaskStatusLabel(status: ExecutionTaskStatus): string {
-  return ({ PENDING: "待处理", IN_PROGRESS: "进行中", DONE: "已完成", BLOCKED: "已阻塞", UNKNOWN: "状态未知" } as Record<ExecutionTaskStatus, string>)[status];
+  return (
+    { PENDING: "待处理", IN_PROGRESS: "进行中", DONE: "已完成", BLOCKED: "已阻塞", UNKNOWN: "状态未知" } as Record<
+      ExecutionTaskStatus,
+      string
+    >
+  )[status];
 }
 
 export function executionTaskStatusType(status: ExecutionTaskStatus): "success" | "warning" | "danger" | "info" {

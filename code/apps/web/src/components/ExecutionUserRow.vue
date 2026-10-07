@@ -11,6 +11,10 @@ defineProps<{ item: ExecutionStreamItem }>();
 </script>
 
 <template>
-  <div class="execution-user-text"><span class="execution-user-mark" aria-hidden="true">›</span><MarkdownMessage :source="item.content" /></div>
-  <small v-if="item.detail || item.unrecordedFields?.length" class="execution-message-note">{{ item.detail || item.unrecordedFields?.join(' · ') }}</small>
+  <div class="execution-user-text">
+    <span class="execution-user-mark" aria-hidden="true">›</span><MarkdownMessage :source="item.content" />
+  </div>
+  <small v-if="item.detail || item.unrecordedFields?.length" class="execution-message-note">{{
+    item.detail || item.unrecordedFields?.join(" · ")
+  }}</small>
 </template>

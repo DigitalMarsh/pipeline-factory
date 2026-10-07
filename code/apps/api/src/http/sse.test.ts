@@ -25,21 +25,42 @@ function harness(computedCorsOrigin?: string): Harness {
   let headers: Record<string, unknown> = {};
   let hijacked = false;
   const raw = {
-    writeHead: (_status: number, value: Record<string, unknown>) => { headers = value; return raw; },
-    write: (chunk: string) => { written.push(chunk); return true; },
+    writeHead: (_status: number, value: Record<string, unknown>) => {
+      headers = value;
+      return raw;
+    },
+    write: (chunk: string) => {
+      written.push(chunk);
+      return true;
+    },
   };
   const emitter = new EventEmitter();
   const request = { raw: emitter } as unknown as FastifyRequest;
   const reply = {
     raw,
-    hijack: () => { hijacked = true; },
+    hijack: () => {
+      hijacked = true;
+    },
     getHeader: () => computedCorsOrigin,
   } as unknown as FastifyReply;
-  return { request, reply, close: () => { emitter.emit("close"); }, written, headers: () => headers, hijacked: () => hijacked };
+  return {
+    request,
+    reply,
+    close: () => {
+      emitter.emit("close");
+    },
+    written,
+    headers: () => headers,
+    hijacked: () => hijacked,
+  };
 }
 
-beforeEach(() => { vi.useFakeTimers(); });
-afterEach(() => { vi.useRealTimers(); });
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("openSseChannel", () => {
   it("劫持响应并写 text/event-stream 头", () => {
@@ -119,8 +140,12 @@ describe("openSseChannel", () => {
     const order: string[] = [];
     const h = harness();
     const sse = openSseChannel(h.request, h.reply, { poll });
-    sse.onClose(() => { order.push("first"); });
-    sse.onClose(() => { order.push("second"); });
+    sse.onClose(() => {
+      order.push("first");
+    });
+    sse.onClose(() => {
+      order.push("second");
+    });
     vi.advanceTimersByTime(SSE_POLL_MS);
     expect(poll).toHaveBeenCalledTimes(1);
 

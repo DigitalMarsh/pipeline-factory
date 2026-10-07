@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ExplorerInputRequest } from "../types";
-import { clearExplorerInputProgressDraft, explorerInputProgressDraftKey, loadExplorerInputProgressDraft, saveExplorerInputProgressDraft } from "./explorerInputProgressDraft";
+import {
+  clearExplorerInputProgressDraft,
+  explorerInputProgressDraftKey,
+  loadExplorerInputProgressDraft,
+  saveExplorerInputProgressDraft,
+} from "./explorerInputProgressDraft";
 
 const scope = { projectId: "project-1", threadId: "explorer-1", explorerPlanId: "requirement-1" };
 const request: ExplorerInputRequest = {
@@ -29,7 +34,9 @@ function memoryStorage() {
   return {
     getItem: (key: string) => values.get(key) ?? null,
     setItem: (key: string, value: string) => values.set(key, value),
-    removeItem: (key: string) => { values.delete(key); },
+    removeItem: (key: string) => {
+      values.delete(key);
+    },
     values,
   };
 }
@@ -37,12 +44,17 @@ function memoryStorage() {
 describe("Explorer input progress drafts", () => {
   it("restores non-secret selections and never stores secret answers", () => {
     const storage = memoryStorage();
-    saveExplorerInputProgressDraft(scope, request, {
-      requestId: request.id,
-      currentIndex: 1,
-      values: { delivery: ["Markdown 文件"], credential: [] },
-      otherValues: { credential: "private-token" },
-    }, storage);
+    saveExplorerInputProgressDraft(
+      scope,
+      request,
+      {
+        requestId: request.id,
+        currentIndex: 1,
+        values: { delivery: ["Markdown 文件"], credential: [] },
+        otherValues: { credential: "private-token" },
+      },
+      storage,
+    );
 
     const raw = storage.values.get(explorerInputProgressDraftKey(scope, request.id));
     expect(raw).toContain("Markdown 文件");
@@ -57,12 +69,17 @@ describe("Explorer input progress drafts", () => {
 
   it("clamps the restored question index and clears a completed request draft", () => {
     const storage = memoryStorage();
-    saveExplorerInputProgressDraft(scope, request, {
-      requestId: request.id,
-      currentIndex: 99,
-      values: { delivery: ["Markdown 文件"] },
-      otherValues: {},
-    }, storage);
+    saveExplorerInputProgressDraft(
+      scope,
+      request,
+      {
+        requestId: request.id,
+        currentIndex: 99,
+        values: { delivery: ["Markdown 文件"] },
+        otherValues: {},
+      },
+      storage,
+    );
     expect(loadExplorerInputProgressDraft(scope, request, storage)?.currentIndex).toBe(1);
 
     clearExplorerInputProgressDraft(scope, request.id, storage);

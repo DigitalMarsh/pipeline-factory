@@ -57,7 +57,11 @@ export function usePlanLifecycleActions(deps: PlanLifecycleActionsDeps) {
     const activeDraft = deps.revisionDraft.value;
     if (activeDraft && activeDraft.planId === id) {
       if (activeDraft.status !== "READY_TO_CONFIRM") {
-        ElMessage.info(activeDraft.status === "BASE_CHANGED" ? "默认分支已变，确认前需要先给这份修订草稿 rebase。" : "继续探索，等这份修订草稿可以确认。");
+        ElMessage.info(
+          activeDraft.status === "BASE_CHANGED"
+            ? "默认分支已变，确认前需要先给这份修订草稿 rebase。"
+            : "继续探索，等这份修订草稿可以确认。",
+        );
         return;
       }
       deps.busy.value = true;
@@ -151,7 +155,16 @@ export function usePlanLifecycleActions(deps: PlanLifecycleActionsDeps) {
 
   async function revisePlanConfiguration(plan: Plan): Promise<void> {
     const id = plan.id ?? plan.planId;
-    if (!id || plan.status !== "DISPATCHED" || plan.runId || plan.dispatch?.status !== "WAITING" || plan.dispatch.waitReason !== "NEEDS_CONFIGURATION" || !canCreateConfigurationRevision(plan, deps.project.value) || deps.busy.value) return;
+    if (
+      !id ||
+      plan.status !== "DISPATCHED" ||
+      plan.runId ||
+      plan.dispatch?.status !== "WAITING" ||
+      plan.dispatch.waitReason !== "NEEDS_CONFIGURATION" ||
+      !canCreateConfigurationRevision(plan, deps.project.value) ||
+      deps.busy.value
+    )
+      return;
     deps.busy.value = true;
     deps.error.value = null;
     try {
@@ -179,8 +192,14 @@ export function usePlanLifecycleActions(deps: PlanLifecycleActionsDeps) {
     const activeDraft = deps.revisionDraft.value;
     if (activeDraft && activeDraft.planId === id) {
       try {
-        await ElMessageBox.confirm(`丢弃修订 V${activeDraft.targetRevision}？已确认的 V${activeDraft.basedOnRevision} 保持不变。`, "丢弃修订草稿", { confirmButtonText: "丢弃修订", cancelButtonText: "继续编辑", type: "warning" });
-      } catch { return; }
+        await ElMessageBox.confirm(
+          `丢弃修订 V${activeDraft.targetRevision}？已确认的 V${activeDraft.basedOnRevision} 保持不变。`,
+          "丢弃修订草稿",
+          { confirmButtonText: "丢弃修订", cancelButtonText: "继续编辑", type: "warning" },
+        );
+      } catch {
+        return;
+      }
       deps.busy.value = true;
       try {
         await api.discardRevisionDraft(id, activeDraft.draftId);
@@ -195,7 +214,11 @@ export function usePlanLifecycleActions(deps: PlanLifecycleActionsDeps) {
       return;
     }
     try {
-      await ElMessageBox.confirm(`丢弃「${plan.title}」？这个方案会保留为已丢弃，且不能再确认、入队或启动。`, "丢弃方案", { confirmButtonText: "丢弃方案", cancelButtonText: "继续编辑", type: "warning" });
+      await ElMessageBox.confirm(`丢弃「${plan.title}」？这个方案会保留为已丢弃，且不能再确认、入队或启动。`, "丢弃方案", {
+        confirmButtonText: "丢弃方案",
+        cancelButtonText: "继续编辑",
+        type: "warning",
+      });
     } catch {
       return;
     }

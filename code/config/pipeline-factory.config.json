@@ -19,7 +19,11 @@
     "root": "../../",
     "commands": [
       { "commandId": "project.test", "argv": ["node", "-e", "process.exit(0)"], "environment": { "PATH": "/usr/local/bin:/usr/bin:/bin" } },
-      { "commandId": "project.typecheck", "argv": ["node", "-e", "process.exit(0)"], "environment": { "PATH": "/usr/local/bin:/usr/bin:/bin" } }
+      {
+        "commandId": "project.typecheck",
+        "argv": ["node", "-e", "process.exit(0)"],
+        "environment": { "PATH": "/usr/local/bin:/usr/bin:/bin" }
+      }
     ]
   },
   "model": {
@@ -34,7 +38,7 @@
       "clientName": "pipeline-factory",
       "clientVersion": "4.0.0"
     },
-      "roles": {
+    "roles": {
       "explorer": {
         "model": "gpt-5.6-luna",
         "mode": "plan",
