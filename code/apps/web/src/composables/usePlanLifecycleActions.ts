@@ -186,7 +186,10 @@ export function usePlanLifecycleActions(deps: PlanLifecycleActionsDeps) {
   }
 
   async function discardPlan(plan: Plan | null = deps.candidate.value) {
-    if (!plan || plan.status !== "DRAFT" || deps.busy.value) return;
+    // 判据与领域侧的 `canDiscardPlanStatus` 同源，**两边必须一起改**：能丢的是"还没真正开始执行"
+    // 的状态（待确认 / 已确认但没入队 / 卡住）。这里不挡住的话，点「丢弃」在 BLOCKED 方案上会
+    // **什么都不发生**——而按钮就在那儿，看起来像坏了。
+    if (!plan || !["DRAFT", "READY", "BLOCKED", "NEEDS_PLAN_CHANGE"].includes(plan.status) || deps.busy.value) return;
     const id = plan.id ?? plan.planId;
     if (!id) return;
     const activeDraft = deps.revisionDraft.value;

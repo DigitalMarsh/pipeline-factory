@@ -347,6 +347,29 @@ describe("discardPlan", () => {
     expect(s.drawerOpen.value).toBe(false);
   });
 
+  /**
+   * **卡住的方案也能丢弃。** 客户端此前和领域侧一样写着"只有 DRAFT"，于是那颗按钮在 BLOCKED 方案上
+   * 点下去**什么都不发生**——而按钮就在那儿，看起来像坏了。判据与 `canDiscardPlanStatus` 同源，
+   * 这里钉的是"别再把它窄回去"，顺带钉住另一头：执行中的方案仍然不能丢。
+   */
+  it("**BLOCKED 的方案照样能丢**，执行中的仍然不能", async () => {
+    const blocked = setup();
+    blocked.candidate.value = plan("plan-blocked", { status: "BLOCKED" });
+    vi.mocked(api.discardPlan).mockResolvedValue({ plan: plan("plan-blocked", { status: "DISCARDED" }) });
+
+    await blocked.discardPlan();
+
+    expect(api.discardPlan).toHaveBeenCalledWith("plan-blocked");
+
+    const running = setup();
+    running.candidate.value = plan("plan-running", { status: "IN_PROGRESS" });
+    vi.mocked(api.discardPlan).mockClear();
+
+    await running.discardPlan();
+
+    expect(api.discardPlan).not.toHaveBeenCalled();
+  });
+
   it("Revision Draft 走 discardRevisionDraft 且不走普通 Plan 端点", async () => {
     const s = setup({ candidate: plan("plan-1"), revisionDraft: draft() });
     vi.mocked(api.discardRevisionDraft).mockResolvedValue({ draft: draft({ status: "DISCARDED" }) });

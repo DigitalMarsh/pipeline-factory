@@ -26,7 +26,7 @@ import { missingVerificationCommands } from "./contract.js";
 import { writePlanDocument } from "./plan-archive.js";
 import { emptyPlanPreflight } from "./preflight.js";
 import type { PlanPreflightInspector } from "./preflight.js";
-import { updatePlanStatus } from "./status-transition.js";
+import { canDiscardPlanStatus, updatePlanStatus } from "./status-transition.js";
 import { freezeRevision } from "../platform/freeze.js";
 import { verifiedProjectBaseline } from "../git/baseline.js";
 import { ProjectService } from "../project/project.js";
@@ -539,12 +539,24 @@ export class PlanService {
   }
 
   /** 丢弃仍处于 DRAFT 的候选计划；记录审计事件且不生成后续执行事实。 */
+  /**
+   * 丢弃一个方案。**判据与状态表同源**（`canDiscardPlanStatus`）：这里只是把它翻译成一句人能读的错，
+   * 以及顺手清掉调度投影。
+   *
+   * 两类东西要一起处理，否则会留下"指向一个已丢弃方案"的孤儿：
+   *   1) **调度投影**（`plan_dispatch_states`）——卡住的方案往往正躺在 Plan 中心里显示成"待处理"。
+   *      删它而不是把它标成别的状态：这份投影说的是"这个方案还排不排队"，而它已经不拍了
+   *      （`reviseConfiguration` 对同一件事用的是同一个动作）。
+   *   2) **未合并的 Run 与 worktree** 不在这里处理：它们的回收有自己的一条路（`finish` /
+   *      `releaseWorkspace`），丢弃只负责让方案不再往前走。
+   */
   discard(planId: string, actorId: string): CandidatePlan {
     const plan = this.get(planId);
-    if (plan.status !== "DRAFT") throw new Error(`Plan ${planId} cannot be discarded from ${plan.status}`);
+    if (!canDiscardPlanStatus(plan.status)) throw new Error(`Plan ${planId} cannot be discarded from ${plan.status}`);
     const discardedAt = this.store.now();
     const updated = updatePlanStatus(this.store, plan, { status: "DISCARDED", lastEventAt: discardedAt });
     this.store.appendEvent({ type: "plan.discarded", aggregateId: planId, payload: { actorId } });
+    this.store.deleteDispatchState(planId);
     return updated;
   }
 

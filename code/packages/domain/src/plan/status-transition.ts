@@ -73,10 +73,28 @@ const PLAN_STATUS_MAIN_TRANSITIONS: Record<PlanStatus, readonly PlanStatus[]> = 
  */
 const PLAN_STATUS_RESET_TARGETS: readonly PlanStatus[] = ["BLOCKED", "READY", "NEEDS_PLAN_CHANGE"];
 
+/**
+ * 能被**丢弃**的状态：还没有真正开始执行、也没有活着的 Run 的那些。
+ *
+ * `DRAFT`（没确认）、`READY`（确认了但没入队）、`BLOCKED` / `NEEDS_PLAN_CHANGE`（卡住了，人已经
+ * 决定不要它）。**排除**的是：`ENQUEUED` / `DISPATCHED`（正排在调度队列里）、`IN_PROGRESS` /
+ * `VERIFYING`（有 Run 在跑）、`MERGE_READY`（活干完了、在等人合并——丢它会让一份待合并的成果失去
+ * 归属）、`MERGED`（已经合进去了，无可丢弃）。
+ *
+ * 为什么此前只允许 `DRAFT`：丢弃当初是为"确认之前反悔"设计的。但**一个建错的需求否则是永久的**
+ * ——它只能改名，不能收掉，而 `BLOCKED` 恰恰是最需要收掉的那一类（卡住了、又不打算改计划）。
+ */
+const DISCARDABLE_PLAN_STATUSES: readonly PlanStatus[] = ["DRAFT", "READY", "BLOCKED", "NEEDS_PLAN_CHANGE"];
+
+/** 这个状态能不能被丢弃；`PlanService.discard` 与 `canTransitionPlanStatus` 共用它。 */
+export function canDiscardPlanStatus(from: PlanStatus): boolean {
+  return DISCARDABLE_PLAN_STATUSES.includes(from);
+}
+
 /** 这一步转换合法吗。（`from === to` 不算转换，调用方自己跳过。） */
 export function canTransitionPlanStatus(from: PlanStatus, to: PlanStatus): boolean {
   if (from === "DISCARDED") return false;
-  if (to === "DISCARDED") return from === "DRAFT";
+  if (to === "DISCARDED") return canDiscardPlanStatus(from);
   if (PLAN_STATUS_RESET_TARGETS.includes(to)) return true;
   return PLAN_STATUS_MAIN_TRANSITIONS[from].includes(to);
 }

@@ -1022,6 +1022,14 @@ function updateSharedDrawer(open: boolean): void {
 function switchDrawerTab(tab: SharedDrawerTab): void {
   if (tab === "plan" && !selectedRequirementRow.value?.plan) return;
   if (tab === "task" && (!taskPanelPlan.value || selectedRequirementRow.value?.taskStatus.label === "—")) return;
+  /**
+   * **点页签就打开抽屉**，不靠下面那次 `router.replace` 触发 watch 来开。
+   *
+   * 刷新后 URL 里还留着 `requirementTab`（抽屉的关闭才清它），于是页签已经是"选中"态而抽屉是关的；
+   * 这时再点同一个页签，`router.replace` 写进去的值没变，路由 watch 不触发，面板就开不了。
+   * 面板开不开由这个函数说了算，路由只负责记住。
+   */
+  drawerOpen.value = true;
   if (tab === "plan" && selectedRequirementRow.value?.plan) {
     void openPlanDetail(selectedRequirementRow.value.plan);
     return;
@@ -1133,9 +1141,16 @@ async function loadExplorerDetails(selected: ExplorerThread, requestProjectId: s
       drawerTab.value = "task";
       drawerOpen.value = true;
     } else if (routePlanId && activeExplorerPlan.value) {
+      /**
+       * **只记住页签，不打开抽屉** —— 刷新页面不该弹出右侧面板。
+       *
+       * `explorerPlanId` 是"当前选中哪个需求"的**常规路由状态**：每选中一个需求都会写进 URL。
+       * 按它打开抽屉，等于"每次刷新都自动弹一次面板"，而用户并没有要求看它（实测报障）。
+       * 要打开由用户自己点。页签仍然按 URL 记住，这样他点开时落在原来那一页。
+       *
+       * `runId` 那条不在此列：它只在明确"看这条 Run"时才会出现在地址里，属于有意的深链接。
+       */
       drawerTab.value = routeDrawerTab === "plan" || routeDrawerTab === "task" ? routeDrawerTab : "explorer";
-      drawerOpen.value = true;
-      if (drawerTab.value === "plan" && selectedRequirementRow.value?.plan) void openPlanDetail(selectedRequirementRow.value.plan);
     }
     await nextTick();
     updateTimelineScrollState();

@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { planContractFixture } from "./plan/plan-fixture.js";
-import { InMemoryPipelineStore, LifecycleHookRunner, PlanService, type CommandExecutor } from "./index.js";
+import { InMemoryPipelineStore, LifecycleHookRunner, PlanService, type CandidatePlan, type CommandExecutor } from "./index.js";
 
 describe("PlanService", () => {
   it("puts a confirmed plan in the manual Enqueued stage without dispatching it", () => {
@@ -140,7 +140,7 @@ describe("PlanService", () => {
     ]);
   });
 
-  it("discards only a draft plan and blocks every execution transition", () => {
+  it("discards a draft plan and blocks every execution transition", () => {
     const store = new InMemoryPipelineStore();
     const service = new PlanService(store);
     const plan = service.createCandidatePlan({
@@ -158,6 +158,70 @@ describe("PlanService", () => {
     expect(() => service.confirm(plan.id, "user-1")).toThrow(/cannot be confirmed/i);
     expect(() => service.enqueue(plan.id)).toThrow(/must be confirmed/i);
     expect(service.listThreadPlans("thread-1")).toEqual([]);
+  });
+
+  /**
+   * **丢弃不再只限 `DRAFT`。**
+   *
+   * 此前只允许从 `DRAFT` 丢弃（那本来是为"确认之前反悔"设计的），代价是**一个建错的需求是永久的**
+   * ——它只能改名，不能收掉。而真正最需要收掉的恰恰是 `BLOCKED` / `NEEDS_PLAN_CHANGE` 那两类：
+   * 卡住了、又不打算改计划。这条是照着这个缺口加的。
+   *
+   * 边界同样要钉住：**有 Run 在跑或已经合进去的方案不能丢**，否则会留下一份没有归属的执行成果。
+   */
+  it("**卡住或已确认未入队的方案也能丢弃**，但执行中与已合并的不能", () => {
+    const store = new InMemoryPipelineStore();
+    const service = new PlanService(store);
+    service.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
+    const make = (title: string) =>
+      service.createCandidatePlan({
+        projectId: "project-1",
+        sourceExplorerThreadId: "thread-1",
+        title,
+        resolvedContract: planContractFixture({ store, projectId: "project-1", title }),
+      });
+    // 直接把 fixture 摆到目标状态（不走真实路径，本用例测的是判据本身）。
+    const at = (title: string, status: CandidatePlan["status"]) => {
+      const plan = make(title);
+      store.updatePlan({ ...plan, status });
+      return plan;
+    };
+
+    for (const status of ["BLOCKED", "NEEDS_PLAN_CHANGE", "READY"] as const) {
+      expect(service.discard(at(`${status} plan`, status).id, "user-1")).toMatchObject({ status: "DISCARDED" });
+    }
+    for (const status of ["IN_PROGRESS", "VERIFYING", "MERGE_READY", "MERGED"] as const) {
+      expect(() => service.discard(at(`${status} plan`, status).id, "user-1")).toThrow(/cannot be discarded/i);
+    }
+  });
+
+  it("丢弃时顺手清掉调度投影 —— 否则 Plan 中心里还留着一条指向已丢弃方案的待处理", () => {
+    const store = new InMemoryPipelineStore();
+    const service = new PlanService(store);
+    const plan = service.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "thread-1",
+      title: "Blocked with a dispatch row",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Blocked with a dispatch row" }),
+    });
+    store.updatePlan({ ...plan, status: "BLOCKED" });
+    store.saveDispatchState({
+      planId: plan.id,
+      revision: 1,
+      projectId: "project-1",
+      status: "BLOCKED",
+      queuedAt: store.now(),
+      runId: null,
+      attempt: 1,
+      waitReason: null,
+      updatedAt: store.now(),
+      lastError: "stuck",
+    });
+    expect(store.getDispatchState(plan.id)).toBeDefined();
+
+    service.discard(plan.id, "user-1");
+
+    expect(store.getDispatchState(plan.id)).toBeUndefined();
   });
 });
 

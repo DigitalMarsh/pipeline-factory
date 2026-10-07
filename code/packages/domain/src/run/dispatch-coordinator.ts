@@ -481,6 +481,13 @@ export class PlanDispatchCoordinator {
   private async syncRun(run: Run): Promise<void> {
     const plan = this.options.store.getPlan(run.planId);
     if (plan && plan.revision !== run.planRevision && plan.runId !== run.id) return;
+    /**
+     * **已丢弃的方案不再有调度投影。** 投影的来源是 **Run**，而 Run 并不知道自己的方案已经被丢了：
+     * `discard` 把投影清掉之后，这里每遇一次唤醒就会按 Run 的状态把它写回来（实测：清掉 **6ms**
+     * 之后就被写成 `BLOCKED`/`ATTENTION`，于是 Plan 中心里还挂着一条指向已丢弃方案的"待处理"）。
+     * 判据所以必须放在这一侧——方案丢了，投影就不该再跟着它走。
+     */
+    if (plan?.status === "DISCARDED") return;
     const current = this.state(run.planId) ?? (plan ? this.newQueuedState(plan) : undefined);
     if (!current) return;
     switch (run.status) {

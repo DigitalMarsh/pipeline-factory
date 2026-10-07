@@ -121,6 +121,36 @@ describe("PlanDispatchCoordinator", () => {
     expect(dispatched.state).toMatchObject({ planId: plan.id, status: "RUNNING", waitReason: null });
   });
 
+  /**
+   * **已丢弃的方案不再有调度投影。**
+   *
+   * 投影的来源是 **Run**，而 Run 并不知道自己的方案已经被丢了：`discard` 把投影清掉之后，这里每遇
+   * 一次唤醒都会按 Run 的状态把它写回来——实测清掉 **6ms** 之后就被写成 `BLOCKED`/`ATTENTION`，
+   * 于是 Plan 中心里还挂着一条指向已丢弃方案的"待处理"。这条钉的是"写不回来"。
+   */
+  it("**丢弃之后不再按 Run 的状态重建调度投影**", async () => {
+    const store = new InMemoryPipelineStore();
+    const plans = new PlanService(store);
+    const plan = createPlan(store, plans, "Discarded while its run is stopped");
+    const coordinator = new coordinatorModule.PlanDispatchCoordinator({ store, plans, scheduler: schedulerFor(store) });
+    await dispatch(coordinator, plans, plan.id);
+
+    // 让这个 Run 停下来，投影里于是有一条 BLOCKED（这正是丢弃之后会被写回来的那条）。
+    const run = store.listRuns().find((item) => item.planId === plan.id)!;
+    store.saveRun({ ...run, status: "BLOCKED" });
+    await coordinator.wake();
+    expect(coordinator.state(plan.id)?.status).toBe("BLOCKED");
+
+    // 丢弃：`discard` 会清掉投影，而下面的这一次唤醒必须**不再把它写回来**。
+    store.updatePlan({ ...store.getPlan(plan.id)!, status: "BLOCKED" });
+    plans.discard(plan.id, "user-1");
+    expect(coordinator.state(plan.id)).toBeUndefined();
+
+    await coordinator.wake();
+
+    expect(coordinator.state(plan.id)).toBeUndefined();
+  });
+
   it("dispatches an explicitly started Plan automatically and keeps repeated wake idempotent", async () => {
     const store = new InMemoryPipelineStore();
     const plans = new PlanService(store);

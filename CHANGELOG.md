@@ -1,5 +1,61 @@
 # Changelog
 
+## 2026-10-07 — 需求能丢掉了；顺带修掉"刷新就弹右侧面板"
+
+起因是那条探针需求清不掉：**这个产品没有"删除需求"的路**。查到底——API 上需求只有
+`create` / `rename` / `activate`（`/explorers/:id/archive` 归档的是整个探索线程，会牵连别的需求）；
+`PlanService.discard` 只允许从 `DRAFT` 丢弃；存储层只有线程级的 `deleteExplorerCascade`。
+于是**一个建错的需求是永久的**，它只能改名。而最需要收掉的恰恰是 `BLOCKED` / `NEEDS_PLAN_CHANGE`：
+卡住了、又不打算改计划。
+
+### Changed
+
+- **`canDiscardPlanStatus`**（`plan/status-transition.ts`）成为"哪些状态能丢"的唯一判据，与
+  `canTransitionPlanStatus` 同源：**`DRAFT` / `READY` / `BLOCKED` / `NEEDS_PLAN_CHANGE`**——
+  都是"还没真正开始执行、也没有活着的 Run"的那些。**排除** `ENQUEUED` / `DISPATCHED`（正排在队列里）、
+  `IN_PROGRESS` / `VERIFYING`（有 Run 在跑）、`MERGE_READY`（活干完了在等人合并，丢它会让一份待合并的
+  成果失去归属）、`MERGED`。`PlanService.discard` 改用同一判据；走既有的 `DISCARDED` 状态与
+  `plan.discarded` 事件，**不引入新的删除语义**。
+- **客户端判据同源**（`usePlanLifecycleActions.discardPlan`）。它此前也写着"只有 DRAFT"——那颗按钮在
+  BLOCKED 方案上点下去**什么都不发生**，而按钮就在那儿，看起来像坏了。
+
+### Fixed
+
+- **丢弃清掉的调度投影会被立刻写回来。** `discard` 顺手删掉 `plan_dispatch_states` 之后，
+  `PlanDispatchCoordinator.syncRun` 6 毫秒后就按 **Run 的状态**又写了一条 `BLOCKED`/`ATTENTION`
+  （实测：`plan.discarded` 之后紧跟着一条 `plan.dispatch.state.changed`）。投影的来源是 Run，而 Run
+  并不知道自己的方案已经被丢了——所以判据必须放在那一侧：**已丢弃的方案不再有调度投影**。
+  不修的话，Plan 中心里会永远挂着一条指向已丢弃方案的"待处理"。
+- **刷新页面不再自动弹出右侧抽屉**（用户报）。`explorerPlanId` 是"当前选中哪个需求"的**常规路由状态**
+  ——每选中一个需求都会写进 URL，而加载路径按它打开抽屉，等于"每次刷新都弹一次面板"。
+  改成：**只按 URL 记住页签，不打开**，要看得用户自己点（点开时落在原来那一页）。
+  `runId` 那条深链接不在此列：它只在明确"看这条 Run"时才会出现在地址里。
+
+### 验证
+
+- 领域 3 条新用例：可丢与不可丢的两侧逐个断言（`ALL_STATUSES` 全覆盖 + 六个执行态明确排除）；
+  丢弃清掉调度投影；**丢弃之后不再按 Run 的状态重建**（这条验过：把守卫注释掉它就会红）。
+- web 2 条：客户端判据在 `BLOCKED` 上真的发出请求、在 `IN_PROGRESS` 上仍然不发；刷新路径里那句
+  "紧跟页签赋值的打开"没有了。
+- **真跑一次**：对探针方案 `plan-944bb076-899`（`BLOCKED`）调
+  `POST /api/v4/plans/:id/discard` → **HTTP 200**，库里变成 `DISCARDED`，`plan.discarded` 事件在位。
+- `pnpm verify` 六阶段全绿：domain 428 / api 117 / web 583。
+
+### 没做：把探针的行从库里删掉
+
+原计划里"(a) 直接删那些行"这一步**没有执行**——它需要对本机 SQLite 做读写，而这一轮里这类操作被
+环境的策略连续拦了两次（`Data Exfiltration` / 分类器拒绝）。已经把该做的准备都做好了：
+
+- **备份已留**：`.runtime/pipeline-factory.sqlite.before-probe-cleanup`（18 MB，用 SQLite 自己的
+  backup API 取的，WAL 下直接 `cp` 可能拿到不一致的副本）。
+- **范围已列清楚**：探针的四个 id（需求 `explorer-plan-f15d3f00-933`、方案 `plan-944bb076-899`、
+  Run `run-f6a705ef-6b2`、执行线程 `execution-thread-82d00391-c8c`）在 **16 张表**里共 **555 行**
+  （其中 `domain_events` 282、`execution_journal` 257，其余是单行）。
+
+它已经处于 `DISCARDED`，所以剩下的只是"从库里彻底抹掉"这一件面子上的事，不影响任何行为。
+需要的话，把多出来的那个 `node --watch` 停掉（现在有两个，只有一个真正占着 4310）再跑一次。
+
+
 ## 2026-10-07 — 补充要求：真跑一次之后挖出来的五个问题
 
 上一轮把「补充要求」接通之后做了一次真跑（在 project4 新建一条需求：改 `code/README.md`，确认 → 派发 →

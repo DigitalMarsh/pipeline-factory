@@ -833,3 +833,32 @@ describe("推理行：有正文可折叠，没有正文就明说", () => {
     expect(flat(explorerStylesSource)).toContain(flat(".timeline-reasoning-unreadable"));
   });
 });
+
+/**
+ * **刷新页面不该弹出右侧面板。**
+ *
+ * `explorerPlanId` 是"当前选中哪个需求"的**常规路由状态**——每选中一个需求都会写进 URL。加载路径
+ * 按它打开抽屉，等于"每次刷新都自动弹一次"，而用户并没有要求看它。页签仍然按 URL 记住，这样他点开
+ * 时落在原来那一页。
+ */
+describe("Explorer 的右侧抽屉不在刷新时自动打开", () => {
+  it("**只记住页签，不打开抽屉**", () => {
+    // 判据不是"页面上没有 `drawerOpen.value = true`"——别处还有合法的打开（用户点击、Run 深链接）。
+    // 要证的是：加载路径里那句**紧跟页签赋值**的打开没有了。
+    expect(flat(explorerViewSource)).not.toContain(
+      flat('routeDrawerTab === "task" ? routeDrawerTab : "explorer"; drawerOpen.value = true;'),
+    );
+    expect(flat(explorerViewSource)).toContain(flat('routeDrawerTab === "task" ? routeDrawerTab : "explorer";'));
+  });
+
+  /**
+   * 上一条把"打开"从加载路径里摘掉之后，**点页签这条路必须自己把抽屉打开**：刷新后 URL 里还留着
+   * `requirementTab`（只有关闭才清它），于是页签已是"选中"态而抽屉是关的——这时再点同一个页签，
+   * `router.replace` 写进去的值没变，路由 watch 不触发，面板就再也开不了。
+   */
+  it("点页签就打开抽屉，不靠路由 watch 补这一下", () => {
+    const switchDrawerTab = explorerViewSource.match(/function switchDrawerTab\(tab: SharedDrawerTab\): void \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(switchDrawerTab).not.toBe("");
+    expect(flat(switchDrawerTab)).toContain(flat("drawerOpen.value = true;"));
+  });
+});

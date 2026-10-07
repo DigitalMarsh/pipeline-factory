@@ -64,9 +64,16 @@ describe("Plan 状态转换表", () => {
     }
   });
 
-  it("DISCARDED 只能从 DRAFT 进，且它自己出不去——真正不可逆的终态只有它", () => {
+  it("**DISCARDED 能从「还没开始执行」的状态进**，且它自己出不去——真正不可逆的终态只有它", () => {
+    // 可丢的是"还没真正开始执行"的那些：待确认、已确认未入队、以及卡住的两类。
+    // 此前只允许 DRAFT，代价是**一个建错的需求是永久的**（只能改名），而 BLOCKED 恰恰最需要收掉。
+    const discardable = new Set(["DRAFT", "READY", "BLOCKED", "NEEDS_PLAN_CHANGE"]);
     for (const from of ALL_STATUSES) {
-      expect(canTransitionPlanStatus(from, "DISCARDED"), `${from} → DISCARDED`).toBe(from === "DRAFT");
+      expect(canTransitionPlanStatus(from, "DISCARDED"), `${from} → DISCARDED`).toBe(discardable.has(from));
+    }
+    // 另一头同样要钉住：有 Run 在跑、或已经合进去的，一律不能丢——否则留下一份没有归属的执行成果。
+    for (const from of ["ENQUEUED", "DISPATCHED", "IN_PROGRESS", "VERIFYING", "MERGE_READY", "MERGED"] as const) {
+      expect(canTransitionPlanStatus(from, "DISCARDED"), `${from} → DISCARDED`).toBe(false);
     }
     expect(canTransitionPlanStatus("DISCARDED", "DRAFT")).toBe(false);
     expect(canTransitionPlanStatus("DISCARDED", "BLOCKED")).toBe(false);
