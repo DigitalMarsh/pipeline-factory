@@ -55,6 +55,7 @@ export type DomainEvent = {
     | "explorer.activated"
     | "explorer.continued"
     | "explorer.plan.created"
+    | "explorer.plan.deleted"
     | "explorer.plan.renamed"
     | "explorer.plan.selected"
     | "explorer.turn.accepted"

@@ -148,6 +148,27 @@ export type ExplorerDeletionSummary = {
   runCount: number;
 };
 
+/**
+ * 删除**线程里的一条需求**所需的关联集合。
+ *
+ * 与 `ExplorerDeletionInput` 的两个区别是刻意的：
+ *   1) 没有 `replacementExplorerId`——线程不删，项目上的当前线程指针不用动；
+ *   2) 这里列的 id 全部由调用方**按需求**算好（不是按线程）——store 侧只按 id 删行，
+ *      并按 `explorerPlanIds` 处理两处只有需求级才有的关联（回合、结构化提问），
+ *      再不去碰线程行。线程行上的六个指针由 ExplorerService 用既有的 updateThread 写回。
+ */
+export type ExplorerPlanDeletionInput = {
+  projectId: string;
+  explorerId: string;
+  explorerPlanIds: string[];
+  turnIds: string[];
+  planIds: string[];
+  runIds: string[];
+  executionThreadIds: string[];
+  agentLoopIds: string[];
+  inputRequestIds: string[];
+};
+
 /** 注册已有 Provider 关联的本地 ExplorerThread。 */
 export type RegisterThreadInput = {
   id: string;

@@ -1,5 +1,82 @@
 # Changelog
 
+## 2026-10-07 — 需求清单里能删掉一条需求了
+
+上一轮把**方案**从"只能丢草稿"放宽到"还没开始执行的都能丢"，但那只解决了一半：**丢弃动的是 Plan，
+需求行还在清单里**。project4 那条线程下有 9 条需求，其中 8 条是反复试同一个问题留下的近重复——
+要的是"把这一条从清单里删掉"，不是"把它的方案标成已丢弃"。
+
+而这个产品**删得掉线程，删不掉线程里的一条需求**：`ExplorerService.delete` 是按线程级联的，
+它继而下调的 `deleteExplorerCascade` 里还有一大半 SQL 条件是按 `input.explorerId`（**线程**）匹配的
+——`explorer_turns.thread_id`、`explorer_input_requests.thread_id`、`plans.source_explorer_thread_id`、
+`explorer_plans.explorer_thread_id`，最后还有一句 `DELETE FROM explorer_threads`。所以"删一条需求"
+既不能直接调它，也没有任何 API。
+
+### Added
+
+- **`ExplorerService.deletePlan(explorerId, explorerPlanId)`**：删掉这条需求，连同它名下的候选方案与
+  全部版本 / 修订 / 修订草稿、调度与查询投影、由它派生的 Run 及执行线程 / 执行日志 / 钩子执行 / 验证轮次 /
+  合并请求 / 补充要求、它名下（含"owner 是回合"那条）的 loop 与 steps、以及结构化提问。
+  **不碰线程行本身**，也不删 `domain_events`（审计事件保留——与「删除线程」一致）。
+- **`Store.deleteExplorerPlanCascade`**（内存 + SQLite 两套实现）：只按 id 删行，与线程级那段逐条对应，
+  差别只有两处且都是故意的——**没有 `DELETE FROM explorer_threads`**；三张挂在需求上的表按
+  `explorer_plan_id` 匹配，而线程级那边用的是 `thread_id` / `source_explorer_thread_id`。
+  线程行上的指针不在 store 里改：**用既有的 `updateThread` 由 service 写回**，这样两个 store 实现都不必
+  各自重写一遍"谁接任"的判定。
+- `DELETE /api/v4/projects/:projectId/explorers/:explorerId/explorer-plans/:explorerPlanId`，
+  返回 `{ deletedExplorerPlanId, explorer, explorerPlans, deleted }`——顺手把刷新后的清单一起给回来，
+  前端就不用再拉一次（少一次漂移的机会）。归属校验照抄 `workspace` 那条：不属于本线程的方案一律 404。
+- 需求清单每行末尾一个删除按钮（与重命名铅笔并排，悬停才红），确认框写明代价：
+  "结构化 Plan、执行记录与执行日志会一起删除，无法恢复；已结束运行的本地 worktree 不会自动清理"。
+
+### 两条护栏
+
+- **有在跑的就不给删**：直接复用删除线程那把尺（`EXPLORER_DELETE_ACTIVE_RUN_STATUSES` +
+  `ExplorerDeleteBlockedError`），没有另起一套判据。待合并、已取消、已阻塞、`STALE` 都放行。
+  （`MERGED` 不在这一串里：它是 **Plan** 的状态，Run 上不存在——合并后 Run 停在 `MERGE_READY`。）
+- **线程里最后一条需求不给删**：线程必须至少有一条（`listPlans()` 在没有需求时会当场补一条空的），
+  放行的话用户看到的是"删了但清单没变"。抛错比静默重建诚实。
+
+  为此新加了 `ExplorerPlanDeleteForbiddenError`（code `EXPLORER_PLAN_DELETE_FORBIDDEN`），
+  与"还有在跑的"那类 409（`EXPLORER_DELETE_BLOCKED`）**分成两个 code**：一个是"先停掉再来"，
+  一个是"规则上就不许"，前端给的说法完全不同（"先把它停掉再删" / "线程至少要留一条"）——
+  压成同一个 code 的话，界面只剩一句笼统的失败。
+
+### 收指针：不是置空，是镜像
+
+删掉一条需求后，线程行上有**六个指针**指着它：`active_explorer_plan_id`、`candidate_plan_id`、
+`last_assessed_turn_id`、`active_revision_draft_id`、`context_summary_json`（`openPlanIds` + `completedPlans`）、
+`message_count`。退回的办法不是置空，而是**镜像剩下的最后一条需求**（按 ordinal）——线程级的
+`candidate_plan_id` / `last_assessed_turn_id` / `exploration_*` 本来就是"最后评估过的那条需求"的投影
+（`thread-service` 每轮都这么写），置空会让界面显示成"这条线程还没评估过"，而它明明有。
+这套回落规则与上一轮手工清探针时逐列核出来的是同一条。
+
+### 一处顺带的改动
+
+`ApiRequestError` 现在带上出错响应的 JSON 体（`body`）。此前只有 `status` 与 message，而**同一个 409
+下可能有好几种原因**——删除需求的两种 409 就是这么回事，前端拿不到 `code` 就只能笼统报一句失败。
+顺带把"`error` 字段不是字符串时 message 变成 `[object Object]`"也修了（路由里有几处 `error` 传的是
+`zod` 的 `flatten()` 对象）。
+
+### 验证
+
+- **领域 13 条**（内存 + SQLite 各跑一遍）：三条需求的线程里删中间那条，另外两条的回合 / 方案 / Run /
+  loop / 事件**一条不少**，线程行的指针落到剩下的最后一条、`messageCount` 相应减少；删当前选中的那条时
+  活动需求落到剩下的一条；有在跑的 Run 就拒**且一行都没删**（事务回滚），Run 停了但探索 loop 还 PAUSED
+  同样拒；跑过但停了的（`MERGE_READY` / `CANCELLED` / `BLOCKED` / `STALE` / `NEEDS_PLAN_CHANGE`）放行；
+  最后一条拒；别的线程的需求拒。
+- **API 4 条**：200 的形状与剩下的清单、最后一条 409 `EXPLORER_PLAN_DELETE_FORBIDDEN`、
+  有在跑的 409 `EXPLORER_DELETE_BLOCKED`（带 `activeRunIds`）、跨线程 404。
+- **web 8 条**：清单每一行都有删除按钮且 aria-label 带标题、点第几行只发那一条的 id、重命名按钮没被串；
+  视图侧接上了处理函数、确认框的三句代价、两个 code 的两种说法、以及"只有删掉的是当前打开的那条时才换选中项"。
+- **浏览器**：project4 那条 9 条需求的线程里，9 行的删除按钮与 aria-label 都对，点第一行弹出的确认框
+  标题「永久删除需求」与正文（一起删 / 无法恢复 / worktree 不自动清理）逐字正确。
+  **但真正按下"永久删除"的那一下没做成**——这一轮里它被判成不可逆的本地破坏而拦下了，
+  所以"删成功之后清单变 8 条、刷新后仍是 8 条"这一步**只在测试里验过，没有在真实数据上验过**。
+  要做的话：在那个弹框上点「永久删除」（挑一条"待处理"的，别挑"需要恢复"的——那类会被守卫拒掉）。
+- `pnpm verify` 六阶段全绿：domain 441 / api 121 / web 592。
+
+
 ## 2026-10-07 — 需求能丢掉了；顺带修掉"刷新就弹右侧面板"
 
 起因是那条探针需求清不掉：**这个产品没有"删除需求"的路**。查到底——API 上需求只有

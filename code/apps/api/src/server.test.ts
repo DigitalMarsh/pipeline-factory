@@ -686,6 +686,111 @@ describe("Pipeline Factory v4 API", () => {
     expect(store.getThread("active-delete-thread")).toBeDefined();
   });
 
+  it("deletes one requirement and reports the surviving list", async () => {
+    const store = new InMemoryPipelineStore();
+    const project = createTestProject(store, "project-requirement-delete");
+    const explorers = new ExplorerService(store);
+    const explorer = explorers.create({ projectId: project.id, title: "Thread" });
+    const first = store.listExplorerPlans(explorer.id)[0]!;
+    const second = explorers.createPlan(explorer.id);
+    const third = explorers.createPlan(explorer.id);
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "DELETE",
+      url: `/api/v4/projects/${project.id}/explorers/${explorer.id}/explorer-plans/${second.id}`,
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ deletedExplorerPlanId: second.id, deleted: { taskCount: 1, planCount: 0, runCount: 0 } });
+    expect(response.json().explorerPlans.map((plan: { id: string }) => plan.id)).toEqual([first.id, third.id]);
+    expect(response.json().explorer).toMatchObject({ id: explorer.id, activeExplorerPlanId: third.id });
+    expect(store.getExplorerPlan(second.id)).toBeUndefined();
+    expect(store.getThread(explorer.id)).toBeDefined();
+  });
+
+  it("refuses to delete the last requirement of a thread", async () => {
+    const store = new InMemoryPipelineStore();
+    const project = createTestProject(store, "project-requirement-last");
+    const explorers = new ExplorerService(store);
+    const explorer = explorers.create({ projectId: project.id, title: "Only one" });
+    const only = store.listExplorerPlans(explorer.id)[0]!;
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "DELETE",
+      url: `/api/v4/projects/${project.id}/explorers/${explorer.id}/explorer-plans/${only.id}`,
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: "EXPLORER_PLAN_DELETE_FORBIDDEN", reason: "LAST_REQUIREMENT" });
+    expect(store.getExplorerPlan(only.id)).toBeDefined();
+  });
+
+  it("rejects deleting a requirement that has an active Run", async () => {
+    const store = new InMemoryPipelineStore();
+    const project = createTestProject(store, "project-requirement-active");
+    const projects = new ProjectService(store);
+    const explorers = new ExplorerService(store);
+    const explorer = explorers.create({ projectId: project.id, title: "Thread" });
+    const first = store.listExplorerPlans(explorer.id)[0]!;
+    const second = explorers.createPlan(explorer.id);
+    const plan = new PlanService(store, projects).createCandidatePlan({
+      projectId: project.id,
+      sourceExplorerThreadId: explorer.id,
+      explorerPlanId: second.id,
+      title: "Running plan",
+      resolvedContract: planContractFixture({ store, projectId: project.id, title: "Running plan" }),
+    });
+    store.saveRun({
+      id: "requirement-delete-run",
+      projectId: project.id,
+      planId: plan.id,
+      planRevision: 1,
+      status: "IN_PROGRESS",
+      branch: "factory/requirement-delete-run",
+      workspacePath: "/tmp/requirement-delete-worktree",
+      baseCommit: "HEAD",
+      executionThreadId: "requirement-delete-execution",
+      createdAt: store.now(),
+      startedAt: store.now(),
+    });
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "DELETE",
+      url: `/api/v4/projects/${project.id}/explorers/${explorer.id}/explorer-plans/${second.id}`,
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: "EXPLORER_DELETE_BLOCKED", activeRunIds: ["requirement-delete-run"] });
+    expect(store.getExplorerPlan(second.id)).toBeDefined();
+    expect(store.getPlan(plan.id)).toBeDefined();
+    expect(store.getExplorerPlan(first.id)).toBeDefined();
+  });
+
+  it("does not allow deleting a requirement through another thread", async () => {
+    const store = new InMemoryPipelineStore();
+    const project = createTestProject(store, "project-requirement-owner");
+    const explorers = new ExplorerService(store);
+    const explorer = explorers.create({ projectId: project.id, title: "Thread" });
+    const other = explorers.create({ projectId: project.id, title: "Other thread" });
+    const foreign = store.listExplorerPlans(other.id)[0]!;
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+
+    const response = await app.inject({
+      method: "DELETE",
+      url: `/api/v4/projects/${project.id}/explorers/${explorer.id}/explorer-plans/${foreign.id}`,
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(store.getExplorerPlan(foreign.id)).toBeDefined();
+  });
+
   it("does not allow deleting an Explorer through another Project", async () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);

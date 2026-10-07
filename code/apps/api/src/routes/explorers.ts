@@ -1,6 +1,6 @@
 /**
- * 模块职责：Explorer 域的 20 条路由 —— ExplorerThread 的目录 / 创建 / 详情 / 归档 / 激活 /
- *   重命名 / 删除 / 活动时间线，ExplorerPlan 的列表 / 创建 / 工作区快照 / 重命名 / 激活，
+ * 模块职责：Explorer 域的 21 条路由 —— ExplorerThread 的目录 / 创建 / 详情 / 归档 / 激活 /
+ *   重命名 / 删除 / 活动时间线，ExplorerPlan 的列表 / 创建 / 工作区快照 / 重命名 / 激活 / **删除**，
  *   以及 `/explorer-thread/*` 的回合、输入请求、事件流（两条 SSE）。
  *
  * 两个 service 的区分（名字只差一个字母，用途完全不同）：
@@ -26,8 +26,11 @@
  *   3) 需求状态流（`requirement-status/events`）推送前必须过
  *      `sanitizeExplorerRequirementStatusEvent`：它只转发"属于这个 Thread 且属于这个 Project"
  *      的需求状态事件，且把 payload 收敛成四个字段。**这是内容不外泄的防线，不是可省的过滤**。
- *   4) 删除路由捕获 `ExplorerDeleteBlockedError` 并回 409 带 `activeRunIds` / `activeLoopIds`：
+ *   4) 两条删除路由捕获 `ExplorerDeleteBlockedError` 并回 409 带 `activeRunIds` / `activeLoopIds`：
  *      前端靠这两个数组显示"还有哪些运行挡着"。改成统一的 409 会让界面说不清原因。
+ *      删**一条需求**那条还多一种 409：`ExplorerPlanDeleteForbiddenError`（最后一条需求不许删）。
+ *      两者**刻意不同码**——"先停掉再来"与"规则上就不许"要给出完全不同的建议。
+ *      另外它先按 `explorerPlanId` 查一次归属：不属于本线程的一律 404，与 `workspace` 那条同一口径。
  *   5) `/explorer-thread/turns` 与 `/input-requests/:requestId/answer` 里 503 与 409 的分界是
  *      `message.includes("recovery is required")`——同 `routes/projects.ts` 那样按文案分状态码，
  *      改领域侧措辞要连这里一起改。
@@ -36,6 +39,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
   ExplorerDeleteBlockedError,
+  ExplorerPlanDeleteForbiddenError,
   projectExplorerActivity,
   type AgentLoop,
   type DomainEvent,
@@ -226,6 +230,49 @@ export function registerExplorerRoutes(app: FastifyInstance, deps: ExplorerRoute
       return { explorerPlan, explorer: explorers.get(explorer.id) };
     } catch (error) {
       return reply.code(404).send({ error: error instanceof Error ? error.message : "ExplorerPlan not found" });
+    }
+  });
+
+  /**
+   * 删除一条需求（连同它名下的方案、Run、执行日志与提问）。
+   *
+   * 错误码与「删除线程」那条**刻意分两种 409**：`EXPLORER_DELETE_BLOCKED` 是"还有在跑的，
+   * 先停掉"（可重试），`EXPLORER_PLAN_DELETE_FAILED` 是"这条删不动"（如最后一条需求）。
+   * 前端据此给不同的说法，而不是笼统报一句失败。
+   */
+  app.delete("/api/v4/projects/:projectId/explorers/:explorerId/explorer-plans/:explorerPlanId", async (request, reply) => {
+    const params = projectExplorerPlanParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
+    const explorer = store.getThread(params.data.explorerId);
+    if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
+    // 归属校验照抄 workspace 那条：不属于本线程的方案一律 404，不区分"不存在"与"不属于你"。
+    const explorerPlan = store.getExplorerPlan(params.data.explorerPlanId);
+    if (!explorerPlan || explorerPlan.explorerThreadId !== explorer.id || explorerPlan.projectId !== explorer.projectId)
+      return reply.code(404).send({ error: "ExplorerPlan not found" });
+    try {
+      const result = explorers.deletePlan(explorer.id, params.data.explorerPlanId);
+      return {
+        deletedExplorerPlanId: params.data.explorerPlanId,
+        explorer: result.explorer,
+        explorerPlans: result.explorerPlans,
+        deleted: result.deleted,
+      };
+    } catch (error) {
+      if (error instanceof ExplorerDeleteBlockedError) {
+        return reply.code(409).send({
+          code: error.code,
+          error: error.message,
+          message: error.message,
+          activeRunIds: error.activeRunIds,
+          activeLoopIds: error.activeLoopIds,
+        });
+      }
+      if (error instanceof ExplorerPlanDeleteForbiddenError) {
+        return reply.code(409).send({ code: error.code, error: error.message, message: error.message, reason: error.reason });
+      }
+      return reply
+        .code(409)
+        .send({ code: "EXPLORER_PLAN_DELETE_FAILED", error: error instanceof Error ? error.message : "ExplorerPlan cannot be deleted" });
     }
   });
 

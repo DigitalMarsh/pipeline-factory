@@ -71,6 +71,7 @@ import type {
   ExplorerInputRequest,
   ExplorerInputRequestStatus,
   ExplorerPlan,
+  ExplorerPlanDeletionInput,
   ExplorerThread,
   ExplorerThreadState,
   ExplorerTurn,
@@ -2363,6 +2364,80 @@ export class SqlitePipelineStore implements PipelineStore {
         this.statement("DELETE FROM idempotency_keys WHERE scope = ? AND key = ?").run(String(row.scope), String(row.key));
     }
     this.statement("DELETE FROM explorer_threads WHERE id = ? AND project_id = ?").run(input.explorerId, input.projectId);
+    return { taskCount: input.explorerPlanIds.length, planCount: input.planIds.length, runCount: input.runIds.length };
+  }
+
+  /**
+   * 删一条需求名下的行。与上一段逐条对应，差别只有两处，且都是**故意的**：
+   *   1) **没有 `DELETE FROM explorer_threads`**——线程还在，只是少了一条需求；
+   *   2) 三张挂在需求上的表按 `explorer_plan_id` 匹配，而线程级那边用的是 `thread_id` / `source_explorer_thread_id`。
+   * 线程行上的指针由 ExplorerService 用 updateThread 写回，这里不碰。
+   */
+  deleteExplorerPlanCascade(input: ExplorerPlanDeletionInput): ExplorerDeletionSummary {
+    const explorerPlanScope = sqlIn("explorer_plan_id", input.explorerPlanIds);
+    const planIds = sqlIn("plan_id", input.planIds);
+    const planEntityIds = sqlIn("id", input.planIds);
+    const runIds = sqlIn("run_id", input.runIds);
+    const runEntityIds = sqlIn("id", input.runIds);
+    const loopIds = sqlIn("loop_id", input.agentLoopIds);
+    const loopEntityIds = sqlIn("id", input.agentLoopIds);
+    const executionThreadEntityIds = sqlIn("id", input.executionThreadIds);
+    const explorerPlanEntityIds = sqlIn("id", input.explorerPlanIds);
+
+    if (runIds) {
+      this.statement(`DELETE FROM execution_journal WHERE ${runIds.clause}`).run(...runIds.values);
+      this.statement(`DELETE FROM hook_executions WHERE ${runIds.clause}`).run(...runIds.values);
+      this.statement(`DELETE FROM verification_runs WHERE ${runIds.clause}`).run(...runIds.values);
+      this.statement(`DELETE FROM merge_requests WHERE ${runIds.clause}`).run(...runIds.values);
+      this.statement(`DELETE FROM run_guidance WHERE ${runIds.clause}`).run(...runIds.values);
+    }
+    if (loopIds) {
+      this.statement(`DELETE FROM agent_loop_steps WHERE ${loopIds.clause}`).run(...loopIds.values);
+      this.statement(`DELETE FROM tool_calls WHERE ${loopIds.clause}`).run(...loopIds.values);
+      if (loopEntityIds) this.statement(`DELETE FROM agent_loops WHERE ${loopEntityIds.clause}`).run(...loopEntityIds.values);
+    }
+    if (executionThreadEntityIds)
+      this.statement(`DELETE FROM execution_threads WHERE ${executionThreadEntityIds.clause}`).run(...executionThreadEntityIds.values);
+    if (runEntityIds) this.statement(`DELETE FROM runs WHERE ${runEntityIds.clause}`).run(...runEntityIds.values);
+    if (planIds) {
+      this.statement(`DELETE FROM change_proposals WHERE ${planIds.clause}`).run(...planIds.values);
+      this.statement(`DELETE FROM plan_dispatch_states WHERE ${planIds.clause}`).run(...planIds.values);
+      this.statement(`DELETE FROM plan_revisions WHERE ${planIds.clause}`).run(...planIds.values);
+      this.statement(`DELETE FROM plan_revision_drafts WHERE ${planIds.clause}`).run(...planIds.values);
+      this.statement(`DELETE FROM candidate_plan_versions WHERE ${planIds.clause}`).run(...planIds.values);
+      this.statement(`DELETE FROM plan_query_projection WHERE ${planIds.clause}`).run(...planIds.values);
+      if (planEntityIds) this.statement(`DELETE FROM candidate_plans WHERE ${planEntityIds.clause}`).run(...planEntityIds.values);
+    }
+    if (explorerPlanScope) {
+      // 三张挂在**需求**上的表：线程级那边按 thread_id / source_explorer_thread_id 匹配，这里按需求。
+      this.statement(`DELETE FROM explorer_turns WHERE ${explorerPlanScope.clause}`).run(...explorerPlanScope.values);
+      this.statement(`DELETE FROM explorer_input_requests WHERE ${explorerPlanScope.clause}`).run(...explorerPlanScope.values);
+      // 修订草稿两头都可能挂：按方案挂（plan_id），或按需求挂（explorer_plan_id）。两条都扫。
+      this.statement(`DELETE FROM plan_revision_drafts WHERE ${explorerPlanScope.clause}`).run(...explorerPlanScope.values);
+    }
+    if (explorerPlanEntityIds)
+      this.statement(`DELETE FROM explorer_plans WHERE ${explorerPlanEntityIds.clause}`).run(...explorerPlanEntityIds.values);
+
+    const deletedIds = new Set([
+      ...input.explorerPlanIds,
+      ...input.turnIds,
+      ...input.planIds,
+      ...input.runIds,
+      ...input.executionThreadIds,
+      ...input.agentLoopIds,
+      ...input.inputRequestIds,
+    ]);
+    const idempotencyRows = this.statement("SELECT scope, key, result_json FROM idempotency_keys").all() as unknown as SqliteRow[];
+    for (const row of idempotencyRows) {
+      let result: unknown;
+      try {
+        result = JSON.parse(String(row.result_json));
+      } catch {
+        continue;
+      }
+      if (containsAnyString(result, deletedIds))
+        this.statement("DELETE FROM idempotency_keys WHERE scope = ? AND key = ?").run(String(row.scope), String(row.key));
+    }
     return { taskCount: input.explorerPlanIds.length, planCount: input.planIds.length, runCount: input.runIds.length };
   }
 

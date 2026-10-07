@@ -134,6 +134,7 @@ const REQUIRED_PORT_METHOD_NAMES = [
   "getLastEventSequence",
   "pruneEvents",
   "deleteExplorerCascade",
+  "deleteExplorerPlanCascade",
   "getIdempotency",
   "saveIdempotency",
 ] as const satisfies readonly (keyof PipelineStore)[];

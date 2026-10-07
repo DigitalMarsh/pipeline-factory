@@ -43,6 +43,7 @@ import type {
   ExplorerInputRequest,
   ExplorerInputRequestStatus,
   ExplorerPlan,
+  ExplorerPlanDeletionInput,
   ExplorerThread,
   ExplorerTurn,
   HookExecution,
@@ -648,6 +649,62 @@ export class InMemoryPipelineStore implements PipelineStore {
     for (const [id, plan] of this.explorerPlans)
       if (explorerPlanIds.has(id) || plan.explorerThreadId === input.explorerId) this.explorerPlans.delete(id);
     this.threads.delete(input.explorerId);
+    for (const [key, result] of this.idempotency) if (containsAnyString(result, deletedIds)) this.idempotency.delete(key);
+    return { taskCount: input.explorerPlanIds.length, planCount: input.planIds.length, runCount: input.runIds.length };
+  }
+
+  /**
+   * 删一条需求名下的行。与上一段的差别恰好是那几处"按 explorerId 匹配"的地方——这里是按
+   * explorerPlanIds 匹配，而且**不动 threads**：线程还在，指针由 ExplorerService 写回。
+   */
+  deleteExplorerPlanCascade(input: ExplorerPlanDeletionInput): ExplorerDeletionSummary {
+    const explorerPlanIds = new Set(input.explorerPlanIds);
+    const planIds = new Set(input.planIds);
+    const runIds = new Set(input.runIds);
+    const executionThreadIds = new Set(input.executionThreadIds);
+    const agentLoopIds = new Set(input.agentLoopIds);
+    const inputRequestIds = new Set(input.inputRequestIds);
+    const deletedIds = new Set([
+      ...explorerPlanIds,
+      ...input.turnIds,
+      ...planIds,
+      ...runIds,
+      ...executionThreadIds,
+      ...agentLoopIds,
+      ...inputRequestIds,
+    ]);
+
+    for (const [key, proposal] of this.changeProposals)
+      if (runIds.has(proposal.runId) || planIds.has(proposal.planId)) this.changeProposals.delete(key);
+    for (const key of [...this.dispatchStates.keys()]) if (planIds.has(key)) this.dispatchStates.delete(key);
+    for (const key of [...this.revisions.keys()]) if (planIds.has(key.split(":")[0] ?? "")) this.revisions.delete(key);
+    for (const [key, draft] of this.revisionDrafts)
+      if (planIds.has(draft.planId) || (draft.explorerPlanId ? explorerPlanIds.has(draft.explorerPlanId) : false))
+        this.revisionDrafts.delete(key);
+    for (const [key, projection] of this.planQueryProjections) if (planIds.has(projection.planId)) this.planQueryProjections.delete(key);
+    for (const [key, execution] of this.hookExecutions) if (runIds.has(execution.runId)) this.hookExecutions.delete(key);
+    for (const [key, verification] of this.verificationRuns) if (runIds.has(verification.runId)) this.verificationRuns.delete(key);
+    for (const [key, request] of this.mergeRequests)
+      if (runIds.has(request.runId) || planIds.has(request.planId)) this.mergeRequests.delete(key);
+    for (const [key, guidance] of this.runGuidance) if (runIds.has(guidance.runId)) this.runGuidance.delete(key);
+    for (const runId of runIds) this.runs.delete(runId);
+    for (const executionThreadId of executionThreadIds) this.executionThreads.delete(executionThreadId);
+    for (const call of [...this.toolCalls.values()]) if (agentLoopIds.has(call.loopId)) this.toolCalls.delete(call.callId);
+    for (const loopId of agentLoopIds) {
+      this.agentLoopSteps.delete(loopId);
+      this.agentLoops.delete(loopId);
+    }
+    for (const [id, request] of this.inputRequests)
+      if (inputRequestIds.has(id) || (request.explorerPlanId ? explorerPlanIds.has(request.explorerPlanId) : false))
+        this.inputRequests.delete(id);
+    // turns 是按 threadId 归组的数组，这里只摘掉这一条需求的回合——整组删掉会把同线程其他需求也带走。
+    for (const [threadId, turns] of this.turns) {
+      const kept = turns.filter((turn) => (turn.explorerPlanId ? !explorerPlanIds.has(turn.explorerPlanId) : true));
+      if (kept.length) this.turns.set(threadId, kept);
+      else this.turns.delete(threadId);
+    }
+    for (const planId of planIds) this.plans.delete(planId);
+    for (const explorerPlanId of explorerPlanIds) this.explorerPlans.delete(explorerPlanId);
     for (const [key, result] of this.idempotency) if (containsAnyString(result, deletedIds)) this.idempotency.delete(key);
     return { taskCount: input.explorerPlanIds.length, planCount: input.planIds.length, runCount: input.runIds.length };
   }

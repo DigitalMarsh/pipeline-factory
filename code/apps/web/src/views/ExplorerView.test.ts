@@ -862,3 +862,35 @@ describe("Explorer 的右侧抽屉不在刷新时自动打开", () => {
     expect(flat(switchDrawerTab)).toContain(flat("drawerOpen.value = true;"));
   });
 });
+
+/**
+ * **删一条需求**：不可恢复的动作，界面这一侧负责三件事——接上按钮、说清代价、把服务端的两种拒绝
+ * 翻成人话。**判据不在前端**（"哪些 Run 状态算在跑"只有服务端一份），所以这里不测"什么情况下按钮
+ * 变灰"——那件事本来就不该发生在这个文件里。
+ */
+describe("需求清单的删除动作", () => {
+  it("行内的删除按钮接上了处理函数，传的是那条需求的 id", () => {
+    expect(flat(explorerViewSource)).toContain(flat('@remove="deleteExplorerPlan"'));
+    expect(flat(explorerViewSource)).toContain(flat("api.deleteExplorerPlan(requestProjectId, currentThread.id, explorerPlanId)"));
+  });
+
+  it("确认框写明代价：一起删、不可恢复、worktree 不自动清理", () => {
+    expect(flat(explorerViewSource)).toContain(flat("会一起删除，无法恢复"));
+    expect(flat(explorerViewSource)).toContain(flat("本地 worktree 不会自动清理"));
+    expect(flat(explorerViewSource)).toContain(flat('confirmButtonText: "永久删除"'));
+  });
+
+  it("两种 409 各给一句人话：「还有在跑的」去停掉，「最后一条」不必白费劲", () => {
+    expect(flat(explorerViewSource)).toContain(flat('code === "EXPLORER_DELETE_BLOCKED"'));
+    expect(flat(explorerViewSource)).toContain(flat('code === "EXPLORER_PLAN_DELETE_FORBIDDEN"'));
+    expect(flat(explorerViewSource)).toContain(flat("先把它停掉再删"));
+    expect(flat(explorerViewSource)).toContain(flat("线程至少要留一条"));
+  });
+
+  it("删掉的正好是当前打开的那条时，才落到服务端给的接任者上", () => {
+    expect(flat(explorerViewSource)).toContain(
+      flat("if (activeExplorerPlanId.value === explorerPlanId && response.explorer.activeExplorerPlanId)"),
+    );
+    expect(flat(explorerViewSource)).toContain(flat("await selectExplorerPlan(response.explorer.activeExplorerPlanId)"));
+  });
+});

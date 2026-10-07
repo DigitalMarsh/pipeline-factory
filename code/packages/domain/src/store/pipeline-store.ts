@@ -45,6 +45,7 @@ import type {
   ExplorerInputRequest,
   ExplorerInputRequestStatus,
   ExplorerPlan,
+  ExplorerPlanDeletionInput,
   ExplorerThread,
   ExplorerTurn,
   HookExecution,
@@ -198,6 +199,12 @@ export type PipelineStore = {
    */
   pruneEvents(input: EventPruneInput): { deleted: number };
   deleteExplorerCascade(input: ExplorerDeletionInput): ExplorerDeletionSummary;
+  /**
+   * 删除线程里**一条需求**名下的全部行。与 deleteExplorerCascade 的关键差别：**不碰线程行**——
+   * 线程还在，只是少了一条需求，所以线程上那几个指针由 ExplorerService 用 updateThread 写回，
+   * 两个 store 实现都不必各自重写"谁接任"的判定。同样不删 domain_events（审计事件保留）。
+   */
+  deleteExplorerPlanCascade(input: ExplorerPlanDeletionInput): ExplorerDeletionSummary;
   getIdempotency(scope: string, key: string): Record<string, unknown> | undefined;
   saveIdempotency(scope: string, key: string, result: Record<string, unknown>): void;
   /** Optional store-level transaction used for startup recovery atomicity. */

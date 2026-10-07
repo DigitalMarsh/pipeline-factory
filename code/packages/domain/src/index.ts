@@ -141,6 +141,7 @@ export type {
   ExplorerInputRequest,
   ExplorerInputRequestStatus,
   ExplorerPlan,
+  ExplorerPlanDeletionInput,
   ExplorerThread,
   ExplorerThreadContextSummary,
   ExplorerThreadState,
@@ -162,8 +163,9 @@ export {
 export type { ExplorerTitleGenerator, ExplorerTitleSource, ExplorerTitleStatus } from "./explorer/explorer-title.js";
 export { projectExplorerActivity } from "./explorer/explorer-activity.js";
 export type { ExplorerActivityInput, ExplorerActivityItem, ExplorerActivityKind } from "./explorer/explorer-activity.js";
-// ExplorerDeleteBlockedError 是公共契约：api 侧按 instanceof / code 把它映射成 409。
-export { ExplorerDeleteBlockedError, ExplorerService } from "./explorer/service.js";
+// ExplorerDeleteBlockedError / ExplorerPlanDeleteForbiddenError 是公共契约：api 侧按 instanceof / code
+// 把它们映射成**两种不同的 409**（"先停掉再来" vs "规则上不许"），前端据此给不同的说法。
+export { ExplorerDeleteBlockedError, ExplorerPlanDeleteForbiddenError, ExplorerService } from "./explorer/service.js";
 export { ExplorerThreadService } from "./explorer/thread-service.js";
 
 // ─────────────────────────── run/：Run 状态机、journal、分支、验证与合并 ───────────────────────────

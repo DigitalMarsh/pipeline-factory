@@ -3,7 +3,7 @@
   维护提示：行数据由 ExplorerView 按当前线程投影，组件不加载其他线程内容。
 -->
 <script setup lang="ts">
-import { Document, EditPen, Plus } from "@element-plus/icons-vue";
+import { Delete, Document, EditPen, Plus } from "@element-plus/icons-vue";
 import type { ExplorerRequirementRow } from "../utils/explorerRequirementRows";
 import { requirementStatusTagType } from "../utils/statusTag";
 
@@ -20,6 +20,7 @@ const emit = defineEmits<{
   viewPlan: [explorerPlanId: string];
   openTask: [explorerPlanId: string];
   rename: [explorerPlanId: string];
+  remove: [explorerPlanId: string];
 }>();
 </script>
 
@@ -70,6 +71,21 @@ const emit = defineEmits<{
               @click="emit('rename', row.explorerPlan.id)"
             >
               <EditPen :size="14" />
+            </button>
+            <!--
+              「删除」不能像重命名那样只发个事件就走：它不可恢复（方案、Run、执行日志一起没），
+              确认框与错误提示都在 ExplorerView 里——**能不能删也由服务端说了算**，
+              前端不预判（预判就等于把"哪些 Run 状态算在跑"抄成第二份事实来源）。
+            -->
+            <button
+              class="requirement-delete-button"
+              type="button"
+              data-requirement-action="delete"
+              :aria-label="`删除${row.title}`"
+              :disabled="disabled"
+              @click="emit('remove', row.explorerPlan.id)"
+            >
+              <Delete :size="14" />
             </button>
           </div>
           <div class="requirement-cell" role="cell">

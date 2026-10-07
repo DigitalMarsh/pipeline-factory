@@ -36,6 +36,12 @@ export class ApiRequestError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    /**
+     * 出错响应的 JSON 体（能解析出来才有）。**同一个状态码下可能有好几种原因**——比如删除需求
+     * 的两种 409（`EXPLORER_DELETE_BLOCKED` 是"还有在跑的，先停掉"，`EXPLORER_PLAN_DELETE_FAILED`
+     * 是"这条删不动"），调用方要靠里面的 `code` 才给得出不同的说法。只留 status 就只能笼统报一句。
+     */
+    readonly body?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "ApiRequestError";
@@ -47,8 +53,11 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const headers = { ...(init?.headers ?? {}) } as Record<string, string>;
   if (init?.body && !Object.keys(headers).some((key) => key.toLowerCase() === "content-type")) headers["content-type"] = "application/json";
   const response = await fetch(url, { ...init, headers });
-  if (!response.ok)
-    throw new ApiRequestError((await response.json().catch(() => null))?.error ?? `请求失败：${response.status}`, response.status);
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+    const message = typeof body?.error === "string" ? body.error : `请求失败：${response.status}`;
+    throw new ApiRequestError(message, response.status, body ?? undefined);
+  }
   return response.json() as Promise<T>;
 }
 
@@ -209,6 +218,22 @@ export const api = {
     request<{ explorerPlan: ExplorerPlan; explorer: ExplorerThread }>(
       `/api/v4/projects/${projectId}/explorers/${encodeURIComponent(explorerId)}/explorer-plans/${encodeURIComponent(explorerPlanId)}/activate`,
       { method: "POST" },
+    ),
+  /**
+   * 删除一条需求：它的方案、Run、执行日志与提问一起没。不可恢复（审计事件除外）。
+   *
+   * 两种 409 要分开看：`EXPLORER_DELETE_BLOCKED`（还有在跑的 Run/Loop，先停掉再来）与
+   * `EXPLORER_PLAN_DELETE_FAILED`（这条删不动，例如线程的最后一条需求）。见 ApiRequestError.body。
+   */
+  deleteExplorerPlan: (projectId: string, explorerId: string, explorerPlanId: string) =>
+    request<{
+      deletedExplorerPlanId: string;
+      explorer: ExplorerThread;
+      explorerPlans: ExplorerPlan[];
+      deleted: { taskCount: number; planCount: number; runCount: number };
+    }>(
+      `/api/v4/projects/${encodeURIComponent(projectId)}/explorers/${encodeURIComponent(explorerId)}/explorer-plans/${encodeURIComponent(explorerPlanId)}`,
+      { method: "DELETE" },
     ),
   explorerPlans: (projectId: string, explorerId: string, query = "") =>
     request<{ items: Plan[]; nextCursor: string | null }>(

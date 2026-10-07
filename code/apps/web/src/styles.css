@@ -6303,6 +6303,36 @@ a {
   opacity: 0.25;
 }
 
+/* 删除与重命名同一副骨架、同一处淡入；只有悬停色不同——不可恢复的那个动作才配红。 */
+.requirement-delete-button {
+  display: grid;
+  width: 25px;
+  height: 25px;
+  flex: 0 0 25px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #8292a8;
+  cursor: pointer;
+  opacity: 0.5;
+}
+.requirement-name-cell:hover .requirement-delete-button,
+.requirement-delete-button:focus-visible {
+  opacity: 1;
+}
+.requirement-delete-button:hover,
+.requirement-delete-button:focus-visible {
+  background: #fdeced;
+  color: #c4565f;
+  outline: 0;
+}
+.requirement-delete-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.25;
+}
+
 .requirement-plan-link {
   display: inline-flex;
   align-items: center;

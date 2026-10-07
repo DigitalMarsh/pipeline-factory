@@ -19,7 +19,7 @@ import {
 } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
-import { api } from "../api";
+import { ApiRequestError, api } from "../api";
 import type { AgentLoop, ExplorerActivityItem, ExplorerThread, Plan, Project } from "../types";
 import PlanDetailContent from "../components/PlanDetailContent.vue";
 import ExplorerPolicyDrawer from "../components/ExplorerPolicyDrawer.vue";
@@ -1069,6 +1069,62 @@ async function renameExplorerPlan(explorerPlanId: string): Promise<void> {
   }
 }
 
+/**
+ * 删除一条需求（连同它的方案、Run、执行日志与提问，不可恢复）。
+ *
+ * 两处刻意的分寸：
+ *   1) **前端不预判能不能删**：能不能删由服务端说了算（有在跑的 Run/Loop 就拒，最后一条也拒）。
+ *      在前端复刻一套"哪些 Run 状态算在跑"，就多了一份随时会漂的事实来源。这里只负责把
+ *      服务端回来的两个 code 翻成人话——它们对应两种完全不同的处置（去停掉 / 别白费劲）。
+ *   2) 删掉的**正好是当前打开的那条**时才动选中项，落到服务端指定的接任者上；否则什么都不动，
+ *      用户看的是别的需求，不该被跳走。
+ */
+async function deleteExplorerPlan(explorerPlanId: string): Promise<void> {
+  const currentThread = thread.value;
+  const current = explorerPlans.value.find((plan) => plan.id === explorerPlanId);
+  const requestProjectId = projectId.value;
+  if (!currentThread || !current || !requestProjectId || explorerActionId.value) return;
+  try {
+    await ElMessageBox.confirm(
+      `「${current.title}」的结构化 Plan、执行记录与执行日志会一起删除，无法恢复。已结束运行的本地 worktree 不会自动清理。`,
+      "永久删除需求",
+      { type: "warning", confirmButtonText: "永久删除", cancelButtonText: "取消", distinguishCancelAndClose: true },
+    );
+  } catch (caught) {
+    if (caught === "cancel" || caught === "close") return;
+    throw caught;
+  }
+  // 用 explorerActionId 当"有 explorer 动作在飞"的门闩（与删除线程、归档线程共用同一个），
+  // 防止确认框刚关掉时的连点。
+  explorerActionId.value = explorerPlanId;
+  error.value = null;
+  try {
+    const response = await api.deleteExplorerPlan(requestProjectId, currentThread.id, explorerPlanId);
+    if (thread.value?.id !== currentThread.id) return;
+    explorerPlans.value = response.explorerPlans;
+    thread.value = response.explorer;
+    explorers.value = explorers.value.map((item) => (item.id === response.explorer.id ? response.explorer : item));
+    ElMessage.success(`已删除「${current.title}」`);
+    if (activeExplorerPlanId.value === explorerPlanId && response.explorer.activeExplorerPlanId)
+      await selectExplorerPlan(response.explorer.activeExplorerPlanId);
+  } catch (caught) {
+    if (caught === "cancel" || caught === "close") return;
+    const code = caught instanceof ApiRequestError ? caught.body?.code : undefined;
+    const message =
+      code === "EXPLORER_DELETE_BLOCKED"
+        ? "这条需求还有在跑的 Run 或探索回合，先把它停掉再删。"
+        : code === "EXPLORER_PLAN_DELETE_FORBIDDEN"
+          ? "线程里最后一条需求不能删——线程至少要留一条。要清掉整条线程，用左栏的「删除线程」。"
+          : caught instanceof Error
+            ? `删除需求失败：${caught.message}`
+            : "删除需求失败";
+    error.value = message;
+    ElMessage.error(message);
+  } finally {
+    if (projectId.value === requestProjectId) explorerActionId.value = null;
+  }
+}
+
 async function toggleExplorerArchive(explorerId: string) {
   if (explorerActionId.value) return;
   const selected = explorers.value.find((item) => item.id === explorerId);
@@ -1557,6 +1613,7 @@ onBeforeUnmount(() => {
           @view-plan="openRequirementPlan"
           @open-task="openRequirementTask"
           @rename="renameExplorerPlan"
+          @remove="deleteExplorerPlan"
         />
       </template>
     </section>
