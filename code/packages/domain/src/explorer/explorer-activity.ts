@@ -579,12 +579,20 @@ function activityFromStep(turn: ExplorerTurn, step: AgentLoopStep): Omit<Explore
   if (step.stepType === "TOOL_COMPLETED") return toolStep(base, "COMPLETED", null, step.callId, nonEmptyString(payload.reason));
   if (step.stepType === "TOOL_FAILED" || step.stepType === "TOOL_NEEDS_RECONCILIATION" || step.stepType === "TOOL_DENIED")
     return toolStep(base, "FAILED", null, step.callId, nonEmptyString(payload.reason));
-  if (step.stepType === "CONTEXT_COMPACTED")
+  /**
+   * 续跑检查点：一轮跑完、门禁说"接着做"，Loop 把这一轮正文与续跑提示推进 `messages` 并写下 checkpoint。
+   *
+   * **旧名 `CONTEXT_COMPACTED` 一并认**：库里还有 52 条历史步骤用它，而那个名字是错的——
+   * 它从没压缩过任何东西（改名的理由见 AgentStepType 上那条注释）。判据放宽到 `string` 是必须的：
+   * `AgentStepType` 里已经没有旧名了，直接比会让 TS 认为"没有交集"，也会让老数据静默地不再成行。
+   */
+  const stepType: string = step.stepType;
+  if (stepType === "LOOP_CHECKPOINTED" || stepType === "CONTEXT_COMPACTED")
     return {
       ...base,
       kind: "CONTEXT",
       status: "COMPLETED",
-      title: "Context checkpointed",
+      title: "Loop checkpointed",
       summary: "The loop saved a checkpoint before continuing.",
       details: { messageCount: payload.messageCount ?? null },
     };

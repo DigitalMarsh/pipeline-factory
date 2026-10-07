@@ -118,7 +118,7 @@ export type DomainEvent = {
     | "agent.step.tool_needs_reconciliation"
     | "agent.step.input_required"
     | "agent.step.input_resolved"
-    | "agent.step.context_compacted"
+    | "agent.step.loop_checkpointed"
     | "agent.step.gate_checked"
     | "agent.step.loop_suspended"
     | "agent.step.loop_resumed"
@@ -136,7 +136,7 @@ export type DomainEvent = {
     | "agent.tool.failed"
     | "agent.tool.needs_reconciliation"
     | "agent.gate.checked"
-    | "agent.context.compacted";
+    | "agent.loop.checkpointed";
   aggregateId: string;
   occurredAt: string;
   payload: Record<string, unknown>;

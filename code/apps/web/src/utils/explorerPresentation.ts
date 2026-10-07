@@ -95,10 +95,14 @@ const ACTIVITY_LABELS: Partial<Record<ExplorerActivityItem["kind"], string>> = {
   WEB_SEARCH: "联网搜索",
   IMAGE_GENERATION: "生成图片",
   UNCLASSIFIED: "未识别",
-  // 这三类不是模型说的话，是 **Factory 自己记的**（终止门禁、上下文压缩、模型轮次标记与调度占位）。
+  // 这三类不是模型说的话，是 **Factory 自己记的**（终止门禁、续跑检查点、模型轮次标记与调度占位）。
   // 行首那个点说的是"线程侧"，这三个词说的是"线程侧里的哪一边"——名字只在有歧义的地方出现，
   // 模型那一侧（正文 / 推理 / 调用）不点名，因为它就是这条线程本身。
-  CONTEXT: "Factory · 上下文压缩",
+  //
+  // `CONTEXT` 曾写作「Factory · 上下文压缩」，**是错的**：那条步骤只是"一轮跑完、Factory 让接着做下一项"
+  // 之前打的检查点，`messages` 只增不减，什么都没压。真被压缩只有 Provider 自己压那一种（④ 的
+  // `PROVIDER_COMPACTION`，标签「上下文已压缩」）——两者一度被写成同一件事，用户看到"探索没聊几句却老在压缩"。
+  CONTEXT: "Factory · 续跑检查点",
   GATE: "Factory · 执行门禁",
   TURN_STATUS: "Factory · 模型轮次",
   PROVIDER_MESSAGE: "消息回显",
@@ -226,7 +230,7 @@ export type ExplorerSharedMessageType = Extract<ExplorerMessageType, SharedMessa
  * - `prose`：铺开的正文（模型的回复——左侧、带一行 meta，内嵌的方案卡照旧挂在这里面）
  * - `line`：调用行——命令 / 文件 / 工具 / MCP，交代"谁在跑、跑完没、是哪一次调用"（**与执行侧同名**）
  * - `reasoning`：推理行——背景音，最轻的一档，不该有卡片的重量
- * - `divider`：分隔行——上下文压缩是会话在这里换了上下文，是边界不是事件
+ * - `divider`：分隔行——续跑检查点是"这一轮跑完、Factory 让接着做下一项"的边界，是边界不是事件
  * - `gate`：判定行——门禁给出的是**结论**（拦截），不是过程
  * - `turn-status`：状态行——回合占位与未识别的活动，虚线框，比调用行更淡
  * - `hidden`：不渲染
@@ -239,7 +243,7 @@ export type ExplorerDisplayMode = "card" | "text" | "prose" | "line" | "reasonin
  * 判据是每条消息对"看懂这次探索"的贡献：**人说的话与模型的回复都是铺开的正文**（`text` / `prose`——
  * 它们本来就是一段话，外面的白底边框不承载任何信息），方案与结构化输入是 `card`；
  * 七类调用按**语义**同归 `line`（标签与状态标签区分命令 / 文件 / 工具 / MCP / 子代理 / 搜索 / 生图），
- * 门禁是判定，回合状态是占位，推理是背景音，上下文压缩是分隔。
+ * 门禁是判定，回合状态是占位，推理是背景音，续跑检查点是分隔。
  *
  * **④「Provider 说的」一律 `hidden`**：那是"机器在说话"，不是模型或你的发言。它们的归宿是
  * 头部状态卡的「Provider 运行事实」一节（`explorerRuntimeFacts()`），与"不进会话正文"是同一条判据。

@@ -132,6 +132,8 @@ describe("projectExecutionJournal", () => {
         {
           sequence: 3,
           type: "TASK_PROGRESS",
+          // **这里刻意用旧名**：库里几十条老 Run 的 journal 存的还是 `agent.context.compacted`，
+          // 按游标重放时它们照样得渲染成"续跑检查点"，不能因为改了名就静默消失。
           occurredAt: "2026-08-30T07:00:02.000Z",
           payload: { event: "agent.context.compacted", messageCount: 4 },
         },
@@ -142,8 +144,24 @@ describe("projectExecutionJournal", () => {
 
     expect(items).toEqual([
       expect.objectContaining({ title: "模型轮次 · #1", status: "COMPLETED", modelStep: 1 }),
-      expect.objectContaining({ title: "上下文已压缩", status: "INFO" }),
+      expect.objectContaining({ title: "续跑检查点", status: "INFO" }),
     ]);
+  });
+
+  it("新名字（agent.loop.checkpointed）走同一条渲染", () => {
+    const items = projectExecutionJournal(
+      [
+        {
+          sequence: 1,
+          type: "TASK_PROGRESS",
+          occurredAt: "2026-08-30T07:00:01.000Z",
+          payload: { event: "agent.loop.checkpointed", messageCount: 4 },
+        },
+      ],
+      "ACTIVE",
+    );
+
+    expect(items).toEqual([expect.objectContaining({ title: "续跑检查点", status: "INFO", messageType: "CONTEXT" })]);
   });
 
   it("folds repeated reports with unchanged task progress into one card", () => {

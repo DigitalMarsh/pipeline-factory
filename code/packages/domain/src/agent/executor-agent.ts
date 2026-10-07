@@ -532,7 +532,7 @@ export class ExecutorAgent {
             : null;
       this.updateTelemetry(run.executionThreadId, { completedAt, durationMs });
     }
-    if (event.type === "agent.step.started" || event.type === "agent.model.completed" || event.type === "agent.context.compacted") {
+    if (event.type === "agent.step.started" || event.type === "agent.model.completed" || event.type === "agent.loop.checkpointed") {
       this.append(run.executionThreadId, "TASK_PROGRESS", {
         event: event.type,
         ...association,

@@ -86,10 +86,10 @@ describe("Run detail execution conversation", () => {
     expect(flat(runDetailSource)).toContain(flat("foldsIntoProcess(item, { stepRunning:"));
   });
 
-  it("上下文压缩在执行侧也是**分隔线**，与探索侧同形", () => {
+  it("续跑检查点在执行侧也是**分隔线**，与探索侧同形", () => {
     // 它是会话边界不是事件——画成又一条活动行，读的人不会意识到分界在哪。
     expect(flat(executionDividerRowSource)).toContain(flat("timeline-divider"));
-    expect(flat(executionDividerRowSource)).toContain(flat("Factory · 上下文压缩"));
+    expect(flat(executionDividerRowSource)).toContain(flat("Factory · 续跑检查点"));
   });
 
   it("推理是**可折叠的推理卡**，与探索侧同形", () => {

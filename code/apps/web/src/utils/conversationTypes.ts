@@ -54,7 +54,10 @@ export const SHARED_MESSAGE_TYPES = [
   /** 生成图片 */
   "IMAGE_GENERATION",
   // ④ Provider 说的：会话设施在报告自己的状态。**不进会话正文**。
-  /** Provider 侧的上下文压缩边界（与 ⑤ 的 `CONTEXT` 是两件事：那是 Factory 自己压的） */
+  /**
+   * Provider 侧的上下文压缩边界。**这才是真的压缩了上下文**——与 ⑤ 的 `CONTEXT` 是两件事：
+   * 那个只是 Factory 打的续跑检查点（`LOOP_CHECKPOINTED`），一个字节都没压。
+   */
   "PROVIDER_COMPACTION",
   /** 权限被拒：Codex 的 `declined` 命令，Claude 的 `permission_denied` */
   "PERMISSION_DENIED",

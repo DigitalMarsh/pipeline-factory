@@ -33,7 +33,16 @@ export type AgentStepType =
   | "TOOL_NEEDS_RECONCILIATION"
   | "INPUT_REQUIRED"
   | "INPUT_RESOLVED"
-  | "CONTEXT_COMPACTED"
+  /**
+   * 一轮跑完、门禁说"接着做"时打的检查点：这一轮的正文与续跑提示已经推进 `messages`，
+   * checkpoint（步骤号 / Provider 会话 / 消息条数 / 末段正文）也已经落库。
+   *
+   * **它不压缩任何东西。** 名字以前叫 `CONTEXT_COMPACTED`，与它实际干的事对不上——
+   * `messages` 只有 push，全仓没有一处删减（上下文真被压缩只有 Provider 自己压那一种，
+   * 走 ④ 类的 `PROVIDER_COMPACTION`）。库里还留着 52 条用旧名的历史步骤，
+   * 所以投影要两种都认（见 explorer/explorer-activity.ts）。
+   */
+  | "LOOP_CHECKPOINTED"
   | "GATE_CHECKED"
   | "LOOP_SUSPENDED"
   | "LOOP_RESUMED"
@@ -586,7 +595,7 @@ export class AgentLoopEngine implements AgentLoopRunner {
       }, TEXT_DELTA_FLUSH_INTERVAL_MS);
     };
 
-    // 每一轮只允许一个模型步骤；步骤完成后先过 gate，再决定是否继续上下文压缩。
+    // 每一轮只允许一个模型步骤；步骤完成后先过 gate，再决定是否接着做下一轮。
     // 这保证“模型说完成”不会绕过 Plan/Task 的业务门禁，也为暂停和恢复留下 checkpoint。
     try {
       for (;;) {
@@ -957,8 +966,10 @@ export class AgentLoopEngine implements AgentLoopRunner {
           }),
         };
         this.store.updateAgentLoop(loop);
-        this.appendStep(loop, "CONTEXT_COMPACTED", "COMPLETED", { messageCount: messages.length });
-        this.emit(loop, "agent.context.compacted", { messageCount: messages.length });
+        // 名字是"检查点"，不是"压缩"：上面刚往 messages 里 push 了两条，什么都没被删掉。
+        // 见 AgentStepType 里那条注释——它以前叫 CONTEXT_COMPACTED，界面上因此长期显示"上下文压缩"。
+        this.appendStep(loop, "LOOP_CHECKPOINTED", "COMPLETED", { messageCount: messages.length });
+        this.emit(loop, "agent.loop.checkpointed", { messageCount: messages.length });
       }
     } finally {
       // 任何退出路径都不能留下未清理的定时器，也不能留下没落库的正文段。

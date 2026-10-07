@@ -174,12 +174,14 @@ describe("各类过程活动各摆什么", () => {
     expect(isProviderControlled(factory)).toBe(false);
   });
 
-  it("上下文压缩：摆的是消息条数，不是一句过程说明", () => {
+  it("续跑检查点：摆的是消息条数，不是一句过程说明", () => {
     const line = explorerActivityLine(
       activity("CONTEXT", { summary: "The loop saved a checkpoint before continuing.", details: { messageCount: 12 } }),
     );
 
-    expect(line).toEqual({ label: "Factory · 上下文压缩", name: null, reference: "12 条消息", body: "" });
+    // 标签**不能**写"上下文压缩"：这条步骤只写了 checkpoint，一个字节都没压（⑤ 的 CONTEXT
+    // 与 ④ 的 PROVIDER_COMPACTION 曾被写成同一件事，见 explorerPresentation 里那段注释）。
+    expect(line).toEqual({ label: "Factory · 续跑检查点", name: null, reference: "12 条消息", body: "" });
   });
 
   it("门禁：拦截是结论本身，占 name 那一格", () => {

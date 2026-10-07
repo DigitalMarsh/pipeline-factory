@@ -1286,8 +1286,11 @@ function projectExecutionActivity(
     if (payload.action === "task-status") return null;
     const event = stringValue(payload.event) ?? "";
     if (event === "continue") return null;
-    if (event === "agent.context.compacted")
-      return activity(entry, "上下文已压缩", "模型上下文已刷新", "INFO", { ...association, messageType: "CONTEXT" });
+    // 续跑检查点。**新旧两个名字都认**：老 Run 的 journal 里存的还是旧名
+    // （`agent.context.compacted`，库里几十条），而那个名字是错的——它从没压缩过任何东西，
+    // 只是"这一轮跑完、Factory 让接着做下一项"之前打的 checkpoint。
+    if (event === "agent.loop.checkpointed" || event === "agent.context.compacted")
+      return activity(entry, "续跑检查点", "已保存检查点，继续下一轮", "INFO", { ...association, messageType: "CONTEXT" });
     if (event === "agent.gate.checked")
       return activity(
         entry,

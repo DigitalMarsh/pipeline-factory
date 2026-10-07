@@ -234,6 +234,8 @@ export function useExplorerSse(deps: ExplorerSseDeps) {
       "agent.step.tool_needs_reconciliation",
       "agent.step.input_required",
       "agent.step.input_resolved",
+      // 新旧两个名字都留着：SSE 是按游标重放的，老事件里存的是旧名。
+      "agent.step.loop_checkpointed",
       "agent.step.context_compacted",
       "agent.step.gate_checked",
       "agent.provider.activity",

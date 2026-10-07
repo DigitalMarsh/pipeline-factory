@@ -124,7 +124,7 @@ const executionTasks = computed<ExecutionTask[]>(() =>
 const executionTaskCounts = computed(() => executionTaskSummary(executionTasks.value));
 /**
  * Run 级活动：没有归属于任何执行步骤的 activity 条目——Run 的创建、生命周期钩子、验证、
- * 门禁、上下文压缩、暂停 / 恢复。它们讲的是整个 Run，不属于任何一步，所以**不留在执行会话里**，
+ * 门禁、续跑检查点、暂停 / 恢复。它们讲的是整个 Run，不属于任何一步，所以**不留在执行会话里**，
  * 改由顶部 RUN CONTEXT 卡片承载（见 ExecutionHeaderStatus 的「Run 级活动」一节）。
  *
  * 判据只用 kind + taskId：`activity` 且无 taskId。曾经这里按"事件类型是否为 RUN_CREATED /

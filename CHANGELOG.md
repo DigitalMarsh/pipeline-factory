@@ -1,5 +1,47 @@
 # Changelog
 
+## 2026-10-07 — 「上下文压缩」是个错名字：它从没压过
+
+报障：探索线程里**老是冒出"上下文压缩"**，而探索根本没聊几句——"这不合理"。
+
+**确实不合理，因为根本没有压缩。** 顺着那条行往上查：
+
+- 它来自 Loop 里的一个步骤，追加在**每轮跑完、门禁说"接着做"**的时候（`agent-loop.ts`）；
+- 看它前后几行：把这一轮的正文 push 进 `messages`、把续跑提示 push 进 `messages`、写一个
+  checkpoint（步骤号 / Provider 会话 / 消息条数 / 末段正文）——**两次 push，零次删除**；
+- 全仓搜 `messages` 的删减（`slice` / `splice` / `shift` / 重新赋值）：**一处都没有**；
+- 连领域侧的投影英文文案都写的是 `"The loop saved a checkpoint before continuing."`——
+  **代码自己知道它是检查点，只有那个名字和界面上的中文标签说是"压缩"。**
+
+真的压缩只有一种：**Provider 自己压**（Codex 的 `thread/compacted`、Claude 的 `system/compact_boundary`），
+走 ④ 类的 `PROVIDER_COMPACTION`，标签「上下文已压缩」，进的是头部诊断区而不是时间线。
+⑤ 的 `CONTEXT` 与它**被写成了同一件事**，于是"探索没聊几句却老在压缩"。
+
+### Changed
+
+- 步骤类型 `CONTEXT_COMPACTED` → **`LOOP_CHECKPOINTED`**，事件 `agent.step.context_compacted` →
+  `agent.step.loop_checkpointed`、`agent.context.compacted` → `agent.loop.checkpointed`
+  （后者顺带归到它真正的兄弟那一族：`agent.loop.started` / `resumed` / `paused` / `cancelled` / …）。
+- 界面文案：⑤ `CONTEXT` 的标签从「Factory · 上下文压缩」改成 **「Factory · 续跑检查点」**（探索侧与执行侧
+  同形，两处都改）；执行侧那句详情从「模型上下文已刷新」改成「已保存检查点，继续下一轮」。
+  ④ 的「上下文已压缩」**保持不动**——那一条才是真的。
+- 老数据照读：库里还有 **52 条历史步骤 + 53 条事件**用旧名，所以投影、执行侧的事件判据与 SSE 白名单
+  **新旧两个名字都认**（`packages/domain/src/explorer/explorer-activity.ts` 里那处判据特意放宽到
+  `string`：`AgentStepType` 里已经没有旧名，直接比会让 TS 判"没有交集"，也会让老数据静默地不再成行）。
+- `docs/消息类型及事件状态机流程图.md` **8 处**跟着订正（§0.1 的产者清单、§1.1 清单表、§1.3 的 23 号
+  逐条说明、§2.3 的状态表、§3.1 的类型对照、§4.2 的映射图、§5/§6 的两处对照）。其中 §6.4 那行原本写
+  "与 OpenClaw / Hermes 一致"，现在改成**形一致、概念不同**——它们画的是真压过的后果，我们画的是
+  "这一轮跑完、接着做下一项"的边界。
+
+### 验证
+
+- `pnpm verify` 六阶段全绿：domain 441 / api 121 / web 593（新增一条：新事件名走同一条渲染）。
+- **老数据在浏览器里真的改了口**（两侧都是历史行，库里存的还是旧名）：
+  - 探索侧需求10：`Factory · 续跑检查点 · 3 条消息 20:56`；
+  - 执行侧 run-ff037bc2-26d：4 条 `Factory · 续跑检查点 已保存检查点，继续下一轮`；
+  - 两页全文搜「上下文压缩」：**0 处**。
+
+
 ## 2026-10-07 — 需求清单里能删掉一条需求了
 
 上一轮把**方案**从"只能丢草稿"放宽到"还没开始执行的都能丢"，但那只解决了一半：**丢弃动的是 Plan，
