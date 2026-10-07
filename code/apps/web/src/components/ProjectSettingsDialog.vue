@@ -17,7 +17,21 @@ type CommandForm = { commandId: string; category: "verification" | "lifecycle" |
 type ModelRolePayload = { model: string; backend: string | null; mode: string; loopMode: string; reasoningEffort?: string };
 type ProjectSettingsPatch = Omit<ProjectSettings, "concurrency" | "models"> & { concurrency: Omit<ProjectSettings["concurrency"], "maxParallelRuns" | "maxAutoContinuationTurns">; models: { explorer: ModelRolePayload; executor: ModelRolePayload } };
 
-const props = defineProps<{ modelValue: boolean; projectId: string | null }>();
+/**
+ * 页签的唯一清单：导航按钮与"能不能跳到某个页签"的判定共用它。
+ * 判定不是多余的——`initialTab` 可能来自一条旧书签的 `?tab=`，取值不认时不能把 `activeTab`
+ * 设成一个没有对应 section 的字符串（那会落到模板末尾的 `v-else`，显示"模型与工具"而导航上
+ * 一个按钮都不高亮）。
+ */
+const SETTINGS_TABS = [
+  { key: "general", label: "常规" },
+  { key: "execution", label: "执行" },
+  { key: "commands", label: "命令" },
+  { key: "hooks", label: "钩子" },
+  { key: "models", label: "模型与工具" },
+] as const;
+
+const props = defineProps<{ modelValue: boolean; projectId: string | null; initialTab?: string | null | undefined }>();
 const emit = defineEmits<{ "update:modelValue": [value: boolean]; saved: [project: Project] }>();
 const requestScope = createProjectRequestScope();
 const project = ref<Project | null>(null);
@@ -26,7 +40,24 @@ const saving = ref(false);
 const validating = ref(false);
 const saved = ref(false);
 const error = ref<string | null>(null);
-const activeTab = ref("general");
+/** 只认清单里的页签：`initialTab` 来自一条可能已经过期的 `?tab=`。 */
+function knownSettingsTab(value: string | null | undefined): string | null {
+  return value && SETTINGS_TABS.some((item) => item.key === value) ? value : null;
+}
+
+const activeTab = ref(knownSettingsTab(props.initialTab) ?? "general");
+/**
+ * 只在**显式给了 `initialTab` 时**改当前页签（旧 `/projects/:id/settings?tab=` 链接重定向过来的
+ * 那条路，见 router.ts 与 ExplorerView 的 consumeSettingsQuery）。没给就保持上次停留的页签——
+ * 从左侧项目列表打开设置时不会有"每次都跳回常规"这种意外。
+ *
+ * 初始化与 watch 两处都要：真实流程里 `modelValue` 是 false → true，watch 会触发；但组件也可能
+ * 一挂载就是打开的（不然 `initialTab` 会被无声忽略）。
+ */
+watch(() => props.modelValue, (open) => {
+  const tab = knownSettingsTab(props.initialTab);
+  if (open && tab) activeTab.value = tab;
+});
 const form = reactive({
   name: "", shortName: "", repoRoot: "", defaultBranch: "", worktreeRoot: "", configVersion: 0,
   defaultTimeoutMs: 120000, executionTimeoutMs: 1800000, maxRepairAttempts: 2, conflictScope: "declared" as "declared" | "overlap",
@@ -213,7 +244,7 @@ onBeforeUnmount(() => requestScope.invalidate());
     <div class="settings-dialog-body" v-loading="loading">
       <div v-if="error" class="settings-error"><Warning :size="15" /> {{ error }}</div>
       <div v-if="project" class="settings-shell">
-        <nav class="settings-tabs" aria-label="项目设置"><button v-for="item in [{ key: 'general', label: '常规' }, { key: 'execution', label: '执行' }, { key: 'commands', label: '命令' }, { key: 'hooks', label: '钩子' }, { key: 'models', label: '模型与工具' }]" :key="item.key" type="button" :class="{ active: activeTab === item.key }" @click="activeTab = item.key"><Setting v-if="item.key === 'general'" :size="14" /><Connection v-else-if="item.key === 'execution'" :size="14" /><FolderOpened v-else-if="item.key === 'commands'" :size="14" /><CircleCheck v-else :size="14" />{{ item.label }}</button></nav>
+        <nav class="settings-tabs" aria-label="项目设置"><button v-for="item in SETTINGS_TABS" :key="item.key" type="button" :class="{ active: activeTab === item.key }" @click="activeTab = item.key"><Setting v-if="item.key === 'general'" :size="14" /><Connection v-else-if="item.key === 'execution'" :size="14" /><FolderOpened v-else-if="item.key === 'commands'" :size="14" /><CircleCheck v-else :size="14" />{{ item.label }}</button></nav>
         <main class="settings-content">
           <section v-if="activeTab === 'general'" class="settings-section"><div class="section-title"><div><h2>项目标识</h2><p>Project 是 Factory 内部稳定实体，独立于 Provider Thread 和工作目录。</p></div></div><div class="settings-form-grid"><label>项目名称<input v-model="form.name" :disabled="project.status === 'ARCHIVED'" /></label><label>项目简称<input v-model="form.shortName" placeholder="例如：PF" :disabled="project.status === 'ARCHIVED'" /></label><label>项目 ID<input :value="project.id" disabled /></label><label class="wide">Git 仓库根目录<div class="input-with-button"><input v-model="form.repoRoot" :disabled="project.status === 'ARCHIVED'" /><el-button plain :loading="validating" :disabled="project.status === 'ARCHIVED'" @click="validateRepository">校验 Git</el-button></div></label><label>默认分支<input v-model="form.defaultBranch" :disabled="project.status === 'ARCHIVED'" /></label><label>Worktree 根目录<input v-model="form.worktreeRoot" :disabled="project.status === 'ARCHIVED'" /></label></div><div class="settings-notice"><InfoFilled :size="16" /><div><strong>目录边界</strong><p>Explorer 使用仓库根目录只读分析；Run 始终使用 Worktree 写入。仓库目录、Worktree 和分支修改需要没有运行中的 Run。</p></div></div></section>
           <section v-else-if="activeTab === 'execution'" class="settings-section"><div class="section-title"><div><h2>执行策略</h2><p>这些设置会在下一次 Plan Confirm 时冻结。</p></div></div><div class="settings-form-grid"><label>默认超时（毫秒）<input v-model.number="form.defaultTimeoutMs" :disabled="project.status === 'ARCHIVED'" type="number" min="1000" /></label><label>执行超时（毫秒）<input v-model.number="form.executionTimeoutMs" :disabled="project.status === 'ARCHIVED'" type="number" min="1000" /></label><label>最大修复次数<input v-model.number="form.maxRepairAttempts" :disabled="project.status === 'ARCHIVED'" type="number" min="0" max="20" /></label><label>冲突范围<select v-model="form.conflictScope" :disabled="project.status === 'ARCHIVED'"><option value="declared">只看声明的冲突键</option><option value="overlap">声明的键 + scope 重叠</option></select><small class="field-hint">scope 重叠会把同一个目录下不同文件的改动也串行——更保守，只在探索产出的冲突键不可靠时才开。</small></label></div><div class="settings-notice"><InfoFilled :size="16" /><div><strong>快照策略</strong><p>已确认 Plan 和运行中的 Run 使用自己的 Project 配置快照；修改这里不会改变历史执行。</p></div></div></section>

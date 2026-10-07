@@ -65,7 +65,7 @@ function project(): Project {
   };
 }
 
-function mountDialog() {
+function mountDialog(options: { initialTab?: string } = {}) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const updates: boolean[] = [];
@@ -73,6 +73,7 @@ function mountDialog() {
   const app = createApp(ProjectSettingsDialog, {
     modelValue: true,
     projectId: "project-1",
+    ...options,
     "onUpdate:modelValue": (value: boolean) => updates.push(value),
     onSaved: (value: Project) => saved.push(value),
   });
@@ -342,6 +343,54 @@ describe("启动钩子（Worktree 初始化入口）", () => {
     const mounted = await openHooksTab(initial);
 
     expect(blockingBox(mounted.host).checked).toBe(false);
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+});
+
+/**
+ * `initialTab` 只为一条路存在：旧 `/projects/:id/settings?tab=` 地址重定向到 Explorer 时，
+ * 把用户原本要看的页签带过来（见 router.ts 与 ExplorerView 的 consumeSettingsQuery）。
+ * 它必须**只在这条路上**改变行为——从左侧项目列表打开设置是没带页签的，那时保持上次停留的
+ * 那一页才是对的。
+ */
+describe("项目设置对话框的页签入口", () => {
+  const sectionTitle = (host: HTMLElement) => host.querySelector(".settings-section h2")?.textContent ?? "";
+  const activeTab = (host: HTMLElement) => host.querySelector(".settings-tabs button.active")?.textContent?.trim() ?? "";
+
+  const mountAt = async (initialTab?: string) => {
+    vi.mocked(api.project).mockResolvedValue({ project: project(), summary: {} as never });
+    const mounted = mountDialog(initialTab === undefined ? {} : { initialTab });
+    await nextTick();
+    await nextTick();
+    return mounted;
+  };
+
+  it("给了页签就落在那一页（旧 `?tab=hooks` 的那条路）", async () => {
+    const mounted = await mountAt("hooks");
+
+    expect(activeTab(mounted.host)).toContain("钩子");
+    expect(sectionTitle(mounted.host)).toBe("生命周期钩子");
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  it("**取了一个不认的页签时不乱跳** —— 否则会落到末尾那个 v-else 分支，显示「模型与工具」而导航上一个按钮都不高亮", async () => {
+    const mounted = await mountAt("nope");
+
+    expect(activeTab(mounted.host)).toContain("常规");
+    expect(sectionTitle(mounted.host)).toBe("项目标识");
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  it("不给页签时是常规页（从项目列表打开设置走的就是这条）", async () => {
+    const mounted = await mountAt();
+
+    expect(activeTab(mounted.host)).toContain("常规");
 
     mounted.app.unmount();
     mounted.host.remove();

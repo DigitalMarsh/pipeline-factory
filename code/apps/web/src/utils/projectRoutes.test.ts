@@ -3,8 +3,8 @@ import { normalizeProjectId } from "./projectRoutes";
 import * as routeUtils from "./projectRoutes";
 
 const workspaceRoutes = routeUtils as unknown as {
-  projectModuleForPath: (path: string) => "explore" | "execute" | "settings" | null;
-  projectPathForModule: (module: "explore" | "execute" | "settings", projectId: string) => string;
+  projectModuleForPath: (path: string) => "explore" | "execute" | null;
+  projectPathForModule: (module: "explore" | "execute", projectId: string) => string;
   createProjectRequestScope: () => {
     begin: (projectId: string) => number;
     invalidate: () => void;
@@ -25,14 +25,19 @@ describe("normalizeProjectId", () => {
 });
 
 describe("project workspace routing", () => {
-  it("preserves Explore, Execute and Settings when switching projects", () => {
+  it("preserves Explore and Execute when switching projects", () => {
     expect(workspaceRoutes.projectModuleForPath("/projects/alpha/explorer")).toBe("explore");
     expect(workspaceRoutes.projectModuleForPath("/projects/alpha/plans")).toBe("execute");
     expect(workspaceRoutes.projectModuleForPath("/projects/alpha/runs/run-1")).toBe("execute");
-    expect(workspaceRoutes.projectModuleForPath("/projects/alpha/settings/hooks")).toBe("settings");
     expect(workspaceRoutes.projectPathForModule("explore", "beta")).toBe("/projects/beta/explorer");
     expect(workspaceRoutes.projectPathForModule("execute", "beta")).toBe("/projects/beta/plans");
-    expect(workspaceRoutes.projectPathForModule("settings", "beta")).toBe("/projects/beta/settings");
+  });
+
+  it("**没有 settings 这个模块** —— 它是 Explorer 里的对话框，不是一个可停留的页面", () => {
+    // 退役整页设置时最容易漏的一处：这个模块当初只是给顶部切换器算 router-view 的 key 用的。
+    // 留着它，"设置页"就仍然是一个能被寻址的工作区，而那个页面已经不存在了。
+    expect(workspaceRoutes.projectModuleForPath("/projects/alpha/settings")).toBeNull();
+    expect(workspaceRoutes.projectModuleForPath("/projects/alpha/settings/hooks")).toBeNull();
   });
 });
 

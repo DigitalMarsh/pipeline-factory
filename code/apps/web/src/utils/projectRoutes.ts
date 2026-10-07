@@ -8,21 +8,26 @@ export function normalizeProjectId(projectId: string | null | undefined): string
   return normalized || null;
 }
 
-export type ProjectWorkspaceModule = "explore" | "execute" | "settings";
+/**
+ * Project 工作区里的"模块"。**没有 `settings`**：项目设置现在是 Explorer 里的对话框
+ * （见 `views/ExplorerView.vue` 的 `openProjectSettingsDialog`），不再是一个可停留的页面，
+ * 所以它不该参与"切项目时保持同类模块"的判断。旧的 `/settings` 地址由 router 重定向成
+ * `explorer?settings=1`。
+ */
+export type ProjectWorkspaceModule = "explore" | "execute";
 
 /** 根据当前地址识别 Project 工作区，供顶部切换器保持同类模块。 */
 export function projectModuleForPath(path: string): ProjectWorkspaceModule | null {
   const segment = path.split("?")[0]?.split("#")[0]?.split("/")[3];
   if (segment === "explorer") return "explore";
   if (segment === "plans" || segment === "runs") return "execute";
-  if (segment === "settings") return "settings";
   return null;
 }
 
 /** 生成项目切换后的稳定工作区地址；Run 统一回到目标项目 Execute。 */
 export function projectPathForModule(module: ProjectWorkspaceModule, projectId: string): string {
   const encodedProjectId = encodeURIComponent(projectId);
-  const suffix = module === "explore" ? "explorer" : module === "execute" ? "plans" : "settings";
+  const suffix = module === "explore" ? "explorer" : "plans";
   return `/projects/${encodedProjectId}/${suffix}`;
 }
 

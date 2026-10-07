@@ -569,6 +569,20 @@ describe("Explorer project settings wiring", () => {
     expect(explorerViewSource).toContain("@open-project-settings=\"openProjectSettingsDialog\"");
     expect(explorerViewSource).not.toContain("/settings`);");
   });
+
+  /**
+   * 旧 `/projects/:id/settings(/*)` 重定向过来时带的 `settings=1`。三处缺一不可，而且每一处
+   * 缺了都只表现为"某个入口打不开设置"，不会报错：
+   *   - onMounted 里那次调用：整页 → Explorer 的**冷**跳转（书签、外链）；
+   *   - `watch(route.query.settings)`：已经在 Explorer 里时再跳到这个地址，组件不重挂；
+   *   - `delete query.settings`：一次性消费，否则关掉对话框后一刷新它又自己弹开。
+   */
+  it("consumes the retired settings address exactly once, and on both entry paths", () => {
+    expect(explorerViewSource).toContain("watch(() => route.query.settings, consumeSettingsQuery)");
+    expect(explorerViewSource).toContain("syncPanelStateFromRoute(); consumeSettingsQuery();");
+    expect(explorerViewSource).toContain("delete query.settings");
+    expect(explorerViewSource).toContain(':initial-tab="projectSettingsInitialTab"');
+  });
 });
 
 describe("Project catalog project creation wiring", () => {

@@ -1,5 +1,48 @@
 # Changelog
 
+## 2026-10-07 — 退役整页「项目设置」，只留 Explorer 里的对话框
+
+上一轮给 project4 配启动钩子时撞到的一件事：整页设置（`/projects/:id/settings`）的**命令编辑器
+根本登记不出一条 lifecycle 命令**。它只有「命令 ID / 参数 / 验证标签 / 环境变量白名单」，
+分类与启用是**从库里已有的那条原样带回去**的（见它 payload 里那段 `stored`）——所以新登记的命令
+会落成 `category: "unclassified"` + `enabled: false`，而钩子校验要求引用一条**已启用的 lifecycle
+命令**，必然被拒。对话框那版编辑器字段是全的，两个界面看起来在做同一件事，能力不一样。
+
+查下去，那一页本来就是退役途中的残留，不是"另一个功能更弱的入口"：
+
+- `ExplorerView.test.ts` 早就在断言 **"opens project settings in a modal without leaving the
+  Explorer"**，并且显式 `not.toContain("/settings`);")`——方向早就定了；
+- `ProjectWorkspaceModule` 里的 `"settings"` 只有一处消费（`App.vue` 拿它算 router-view 的 key），
+  而那个模块现在已经不是一个"可停留的页面"；
+- `ProjectManagementDialog` 的 `open-settings` 事件**没有任何消费方**（顺带记一笔：那个组件本身
+  也是不可达的，与刚删掉的 HookSettingsView 同属一批残留，本次没动）。
+
+### Changed
+
+- **删掉 `views/ProjectSettingsView.vue`**（约 340 行，含它自己那份 scoped 样式）。
+- **两条老地址改成重定向**而不是直接删：`/projects/:id/settings` 与 `/settings/hooks` 都指向
+  Explorer，并带上 `settings=1`。删掉的代价是旧链接静默落到目录页，看起来像"这个项目坏了"；
+  带 flag 是为了**保住语义**——用户输的那个地址本来就想要设置，重定向过去就得把对话框打开。
+  `/settings/hooks` 额外补一个默认页签 `hooks`（旧页面与对话框用的是同一套页签键）。
+- **ExplorerView 一次性消费** `settings=1`：`onMounted`（冷跳转）与 `watch(route.query.settings)`
+  （已经在 Explorer 里时不重挂）两处都要，打开后立刻把参数摘掉——不摘的话关掉对话框刷新会自己
+  又弹开。`tab` 一并透传给对话框的 `initialTab`。
+- **`ProjectWorkspaceModule` 去掉 `"settings"`**：留着它，"设置页"就仍然是一个能被寻址的工作区。
+- `ProjectSettingsDialog` 的页签清单提成 `SETTINGS_TABS`，导航与取值校验共用；`initialTab` 只认
+  清单里的键——旧 `?tab=` 可能是任意字符串，不认时会把 `activeTab` 设成一个没有对应 section 的
+  值，落到模板末尾的 `v-else`，显示「模型与工具」而导航上一个按钮都不高亮。
+
+### 验证
+
+- 浏览器实测四条（project4 的真实数据）：`/settings?tab=commands` → 落到 Explorer、对话框开在
+  「命令」页签、地址栏里的 `settings` 与 `tab` 都已被摘掉；`/settings/hooks` → 「钩子」页签；
+  重定向后的地址**刷新不会自动弹开**（一次性消费生效）；左侧项目列表那条路照旧打开在「常规」
+  （没带页签时保持默认）。控制台无报错。
+- 无孤儿全局 CSS 需要清：被删组件的样式是 `<style scoped>`，随文件一起消失；它与 `styles.css`
+  共用的三个类（`saved-note` / `settings-notice` / `eyebrow`）都还有别的使用方。
+- `pnpm verify`：domain 405 / api 112 / web **579**（+6）全绿，无新增值级循环依赖。
+
+
 ## 2026-10-07 — 启动钩子：Worktree 初始化不必硬编码，且失败策略可配
 
 起因是执行线程里反复出现的一句话：

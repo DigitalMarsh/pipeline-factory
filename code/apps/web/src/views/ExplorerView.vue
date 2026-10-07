@@ -78,6 +78,8 @@ const { project, projects, thread, explorers, turns, activity, projectRuns, proj
 const projectCreateOpen = ref(false);
 const projectSettingsOpen = ref(false);
 const projectSettingsProjectId = ref<string | null>(null);
+/** 只有旧 `/settings?tab=` 重定向过来时才非空（见 consumeSettingsQuery）。 */
+const projectSettingsInitialTab = ref<string | null>(null);
 const planRequirements = ref<ExplorerPlanRequirement[]>([]);
 const draft = ref("");
 const requirementDrafts = new Map<string, string>();
@@ -650,14 +652,35 @@ async function handleProjectCreated(createdProject: Project) {
   await router.push({ path: projectPathForModule("explore", createdProject.id), query: { contextPanel: contextPanel.value }, hash: "" });
 }
 
-function openProjectSettingsDialog(selectedProjectId: string) {
+function openProjectSettingsDialog(selectedProjectId: string, tab: string | null = null) {
   projectSettingsProjectId.value = selectedProjectId;
+  projectSettingsInitialTab.value = tab;
   projectSettingsOpen.value = true;
 }
 
 function closeProjectSettings(value: boolean) {
   projectSettingsOpen.value = value;
-  if (!value) projectSettingsProjectId.value = null;
+  if (!value) {
+    projectSettingsProjectId.value = null;
+    projectSettingsInitialTab.value = null;
+  }
+}
+
+/**
+ * 退役的「项目设置」整页地址重定向到这里时带的 `settings=1`（见 router.ts）。
+ *
+ * **一次性消费**：打开对话框后立刻把参数摘掉。不摘的话有两个后果——在同一个项目里再导航到
+ * 这个地址不会触发（query 没变，组件不重挂），以及用户关掉对话框后一刷新它又自己弹开。
+ */
+function consumeSettingsQuery() {
+  if (route.query.settings !== "1") return;
+  const target = projectId.value;
+  const tab = typeof route.query.tab === "string" ? route.query.tab : null;
+  if (target) openProjectSettingsDialog(target, tab);
+  const query = { ...route.query };
+  delete query.settings;
+  delete query.tab;
+  void router.replace({ path: route.path, query, hash: route.hash });
 }
 
 async function handleProjectSettingsSaved(savedProject: Project) {
@@ -1170,12 +1193,14 @@ watch(activeRunId, (runId) => {
   drawerTab.value = "task";
   drawerOpen.value = true;
 });
+// 必须同时挂 watch 与 onMounted 两处：从 Explorer 自己跳到 `?settings=1` 时组件不重挂（只是 query 变了）。
+watch(() => route.query.settings, consumeSettingsQuery);
 watch(() => route.query.requirementTab, (tab) => {
   if (tab !== "explorer" && tab !== "plan" && tab !== "task") return;
   drawerTab.value = tab;
   drawerOpen.value = true;
 });
-onMounted(() => { mounted.value = true; syncPanelStateFromRoute(); void loadModelBackends(); void load().then((loaded) => { if (loaded) connectEvents(); }); syncHashPanel(route.hash); });
+onMounted(() => { mounted.value = true; syncPanelStateFromRoute(); consumeSettingsQuery(); void loadModelBackends(); void load().then((loaded) => { if (loaded) connectEvents(); }); syncHashPanel(route.hash); });
 onBeforeUnmount(() => { mounted.value = false; invalidateProjectScope(); closeEvents(); closeRequirementStatusEvents(); });
 </script>
 
@@ -1373,7 +1398,7 @@ onBeforeUnmount(() => { mounted.value = false; invalidateProjectScope(); closeEv
     </el-drawer>
     <ExplorerInputDialog ref="inputDialog" v-model="inputDialogOpen" :request="pendingInput" :progress="inputProgress" @submit="submitInput" @cancel="cancelInput" @progress="updateInputProgress" />
     <ProjectCreateDialog v-model="projectCreateOpen" @project-created="handleProjectCreated" />
-    <ProjectSettingsDialog :model-value="projectSettingsOpen" :project-id="projectSettingsProjectId" @update:model-value="closeProjectSettings" @saved="handleProjectSettingsSaved" />
+    <ProjectSettingsDialog :model-value="projectSettingsOpen" :project-id="projectSettingsProjectId" :initial-tab="projectSettingsInitialTab" @update:model-value="closeProjectSettings" @saved="handleProjectSettingsSaved" />
     <ExplorerRenameDialog v-model="renameDialogOpen" :initial-title="thread?.title ?? ''" :saving="renameSaving" :error="renameError" @submit="renameThread" />
     <ExplorerPolicyDrawer :model-value="policyOpen" @update:model-value="setPolicyOpen" />
   </div>
