@@ -6,7 +6,7 @@
 
 代码注释规范见仓库根目录的 [`docs/COMMENTING.md`](../docs/COMMENTING.md)。
 
-- `packages/domain`：Plan 状态、ExplorerThread 谱系投影、生命周期 Hook 领域服务。
+- `packages/domain`：Plan 状态、ExplorerThread 谱系推导、生命周期 Hook 领域服务。
 - `apps/api`：Node.js + Fastify API，提供 ExplorerThread、Plan confirm/enqueue、Plan 查询、Hook 配置和 v4 SSE/结构化输入接口。
 - `apps/web`：Vue 3 + Vite + Element Plus 控制台，提供 ExplorerThread 工作区、Full Plan 抽屉、结构化选择弹窗和 Plan Center。
 
@@ -234,7 +234,7 @@ Run 终态会触发协调器重新评估，排队的 Plan 因此自动让位。*
 
 新 Explorer 只能产出 `GeneratedPlanSpec`（`schemaVersion: 2`）。模型可以声明目标、范围、任务、验证模式和合并意图，但不能提供项目 ID、仓库路径、Git branch/commit、配置版本/哈希或任何命令 ID。Factory 在候选生成时用已绑定 Project、真实 Git 基线和冻结的 Project 配置解析为 `ResolvedPlanContract`；绝对路径、`..` 路径穿越和概念性 scope 会被拒绝。Project 配置在 Confirm 前变化会使 Candidate 过期，已 Confirm 的 Revision 始终使用冻结快照。
 
-**契约只有这一份**：Executor、Verifier、Merge 与界面都读它。曾经与它并存的 V1 扁平合同（`contract` 字段）是一份有损投影（`dependsOnPlanIds` 恒为 `[]`、`priority` 归 0），字段名短反而被界面优先读，已经整个删掉——类型、投影函数、库里那四列都不在了。
+**契约只有这一份**：Executor、Verifier、Merge 与界面都读它。曾经与它并存的 V1 扁平合同（`contract` 字段）是一份有损副本（`dependsOnPlanIds` 恒为 `[]`、`priority` 归 0），字段名短反而被界面优先读，已经整个删掉——类型、生成那份副本的函数、库里那四列都不在了。
 
 契约里有一对很容易混的字段：`dependencies` 是**模型写的自然语言先决条件**（"需要 Node.js 22"），`dependsOnPlanIds` 是 **Factory-owned 的前置 Plan id**（解析时恒为 `[]`，只能由人经 `PUT /api/v4/plans/:planId/dependencies` 设置，dispatch 拿它做 `WAITING_DEPENDENCY` 判定）。两者不能互相顶替——共用同一个字段的结果就是等一个名叫"需要 Node.js 22"的 Plan。
 

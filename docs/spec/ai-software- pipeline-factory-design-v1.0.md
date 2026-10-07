@@ -160,7 +160,7 @@ Scheduler 周期运行或被事件唤醒，对 QUEUED、WAITING_DEPENDENCY 和 W
 1. 先判断依赖是否全部 MERGED；否则标记 WAITING_DEPENDENCY，并记录未满足的 Plan 和目标状态。
 2. 再判断冲突键是否被活动 Assignment 持有；否则标记 WAITING_CONFLICT，并记录持有 Run。
 3. 再判断项目和全局容量、兼容 Slot、基线 Commit 以及工作树安全前提。
-4. 条件满足时，在一个短事务中创建 Run、Assignment、Lease，锁定冲突键，并将 Plan 投影为 IN_PROGRESS。
+4. 条件满足时，在一个短事务中创建 Run、Assignment、Lease，锁定冲突键，并将 Plan 的状态置为 IN_PROGRESS。
 5. Dispatcher 创建或登记 Workspace、Branch 和基线 Commit，随后按 Runtime 能力决定绑定已有 Thread、请求用户创建 Thread，或自动驱动 Thread。
 6. 资源映射完成后写入 DISPATCHED 事件；Executor 开始工作并定期更新心跳。
 
@@ -183,7 +183,7 @@ Executor 只能在 Factory 分配的 Workspace 中工作，执行提示必须包
 3. 验证失败时，Executor 只能在 `max_fix_attempts` 范围内修复，然后重新执行受影响的验证命令；每次修复都记录原因和差异。
 4. 达到上限、出现越界修改、命令未登记或运行环境不满足时，Run 进入 FAILED 或 BLOCKED，并生成 Needs Attention 项。
 5. 全部验证通过后，Factory 检查提交 SHA 存在、提交祖先为 Run 的 base_commit、提交范围未越界，然后生成 Review 和 MergeRequest。
-6. 提交成功并完成证据收集后，Run 进入 SUCCEEDED，Plan 在同一事务中投影为 MERGE_READY。缺少提交时不得进入 MERGE_READY。
+6. 提交成功并完成证据收集后，Run 进入 SUCCEEDED，Plan 的状态在同一事务里置为 MERGE_READY。缺少提交时不得进入 MERGE_READY。
 
 #### G. Review、人工合并和闭环
 
@@ -284,7 +284,7 @@ FactoryProject
 | Feature | Explorer 侧的业务目标 | 可有多个 Plan；不参与一次 Run 的资源分配 |
 | Plan | 长期生产工单 | 逻辑 ID 稳定，内容通过 Revision 演进 |
 | PlanRevision | 某一版已审阅的计划快照 | 发布后不可修改，保存内容哈希和基线 Commit |
-| PlanTask | Revision 中可验证的最小任务 | 有序、可依赖、可报告进度；状态由 Run 投影产生 |
+| PlanTask | Revision 中可验证的最小任务 | 有序、可依赖、可报告进度；状态由 Run 推导产生 |
 | Run | 一次执行尝试 | 每次失败、取消或人工重试都可产生新 Run |
 | ExecutorSlot | 逻辑并发容量 | 没有业务上下文，不等同于 Codex Thread |
 | Assignment | Run 对 Slot 的一次占用 | 通过 Lease 防止服务失联后永久占用资源 |
@@ -391,7 +391,7 @@ CREATED → ALLOCATING → DISPATCHED → RUNNING → VERIFYING → SUCCEEDED
                                       └→ CANCELLED
 ~~~
 
-SUCCEEDED 表示执行与验证成功；Run 的可合并投影为 MERGE_READY，Plan 在同一事务中进入 MERGE_READY。
+SUCCEEDED 表示执行与验证成功；Run 可合并时，Plan 的状态置为 MERGE_READY，Plan 在同一事务中进入 MERGE_READY。
 
 Run 必须记录：plan_revision_id、attempt、base_commit、workspace_id、codex_thread_ref_id、当前 Task、开始/结束时间、最后心跳、验证结果、提交 SHA 和错误摘要。
 
@@ -433,7 +433,7 @@ status: ACTIVE
 5. 存在满足 executor.profile 的空闲 Slot。
 6. base.commit 仍然可解析，且项目工作树没有违反安全前提。
 
-不能调度时不报失败，而是投影为 WAITING_DEPENDENCY 或 WAITING_CONFLICT，依赖/锁变化后重新评估。
+不能调度时不报失败，而是置为 WAITING_DEPENDENCY 或 WAITING_CONFLICT，依赖/锁变化后重新评估。
 
 ### 5.2 V1 算法
 
@@ -573,7 +573,7 @@ idempotency_keys
 }
 ~~~
 
-事件是审计和恢复依据；当前状态是可重建投影。任何 Application Service 状态变化都必须在同一事务写入事件。
+事件是审计和恢复依据；当前状态是可重建的推导结果。任何 Application Service 状态变化都必须在同一事务写入事件。
 
 ## 9. 安全与恢复
 

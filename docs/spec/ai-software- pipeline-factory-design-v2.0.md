@@ -156,7 +156,7 @@ Scheduler 对 QUEUED 计划按 `priority DESC、queued_at ASC、plan_id ASC` 排
 2. 检查显式冲突键是否被活动 Run 持有。
 3. 检查全局和项目并发上限、兼容 Executor Profile 与 Lease 容量。
 4. 检查 base Commit 是否仍可解析，项目根目录和 Worktree 根目录是否满足安全前提。
-5. 在短事务中创建 Run、Assignment、Lease 和资源锁，并将 Plan 投影为 `IN_PROGRESS`。
+5. 在短事务中创建 Run、Assignment、Lease 和资源锁，并将 Plan 的状态置为 `IN_PROGRESS`。
 6. 创建隔离 Workspace 和 Branch，登记 base Commit。
 7. 创建独立 ExecutionThread，写入 Run 的执行契约和 PlanRevision 引用。
 8. 资源准备完成后发送第一个 Executor turn；若准备失败，Run 进入 BLOCKED 或 RECOVERING，不伪造 RUNNING。
@@ -327,7 +327,7 @@ CREATED → ACTIVE → WAITING_INPUT → ACTIVE
 
 ### 4.4 v2 Plan Artifact
 
-v2 使用全新的 Schema，Artifact 的状态不由正文维护，而由 Registry 投影维护。
+v2 使用全新的 Schema，Artifact 的状态不由正文维护，而由 Registry 推导维护。
 
 ~~~yaml
 schema_version: "2"

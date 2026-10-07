@@ -80,7 +80,7 @@ PlanRevision ── enqueue ──► Scheduler
 | 层 | 技术 | 责任 |
 |---|---|---|
 | Backend | Node.js、TypeScript、Fastify | REST、SSE、Application Service 和本地控制台 API |
-| Storage | SQLite WAL、外键、短事务 | Registry、事件、Journal、查询投影和幂等键 |
+| Storage | SQLite WAL、外键、短事务 | Registry、事件、Journal、查询副本和幂等键 |
 | Validation | Zod、TypeScript type-check | API、Plan Artifact、配置和 Tool 参数校验 |
 | Agent Runtime | ModelGateway、ToolGateway | 模型会话、流式消息、工具策略和本地资源执行 |
 | Frontend | Vue 3、Vite、TypeScript、Element Plus | ExplorerThread、Plan Center、Run 和 Review UI |
@@ -105,7 +105,7 @@ PlanRevision ── enqueue ──► Scheduler
 2. ExplorerThread 是项目长期上下文；PlanRevision 是一次不可变执行契约。
 3. 模型只能提出工具调用，ToolGateway 决定工具是否允许和如何执行。
 4. Verifier 与 Executor 解耦，模型不能伪造验证成功。
-5. 已下发 Plan 的查询使用持久化投影，不依赖模型会话在线。
+5. 已下发 Plan 的查询使用持久化副本，不依赖模型会话在线。
 6. 生命周期脚本是项目资源准备/清理钩子，不是 Plan 的自由命令。
 
 ## 3. ExplorerThread 设计
@@ -400,9 +400,9 @@ type PlanIndexRow = {
 };
 ```
 
-### 6.3 查询投影
+### 6.3 查询副本
 
-Plan 查询从 `plan_query_projection` 读取，不调用模型、不读取执行线程消息，也不依赖 ExplorerThread 在线。状态变化通过事件更新投影，查询接口支持游标分页和稳定排序。
+Plan 查询从 `plan_query_projection` 读取，不调用模型、不读取执行线程消息，也不依赖 ExplorerThread 在线。状态变化通过事件更新那份副本，查询接口支持游标分页和稳定排序。
 
 默认排序为 `queued_at DESC、plan_id DESC`。同一 Plan 的状态以 Registry 当前状态为准，事件时间用于展示最后变化。
 
@@ -422,7 +422,7 @@ Plan 查询从 `plan_query_projection` 读取，不调用模型、不读取执�
 ├───────────────┬───────────────────────────┬─────────────────┤
 │ ExplorerThread│ 对话时间线                 │ Thread Context  │
 │ 固定左栏       │ Plan Mode 对话             │ 当前 Candidate  │
-│               │ Plan 事件卡片               │ Plan 清单投影    │
+│               │ Plan 事件卡片               │ Plan 清单副本    │
 │ 项目入口       │ Confirm / Enqueue 节点      │ Plan 详情抽屉    │
 │ Plan Center   │ Run / Verify / Merge 事件   │                 │
 └───────────────┴───────────────────────────┴─────────────────┘
@@ -702,7 +702,7 @@ idempotency_keys
 
 ### M4：Verifier、Plan 查询与 Merge
 
-实现确定性验证、有限修复、提交证据、Plan 查询投影、Plan Center API、Review/MergeRequest 和人工 confirm_merged。
+实现确定性验证、有限修复、提交证据、Plan 查询副本、Plan Center API、Review/MergeRequest 和人工 confirm_merged。
 
 验收：查询正确覆盖线程谱系；验证失败按上限重试；没有有效提交或目标 Commit 不匹配时不能进入 MERGED。
 
