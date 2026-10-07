@@ -11,13 +11,11 @@ import ExecutionHeaderStatus from "../components/ExecutionHeaderStatus.vue";
 import PlanDetailDrawer from "../components/PlanDetailDrawer.vue";
 import ProviderUsageFooter from "../components/ProviderUsageFooter.vue";
 import { api } from "../api";
-import MarkdownMessage from "../components/MarkdownMessage.vue";
 import type { AgentLoopStep, ExecutionTask, ExecutionThread, MergeRequest, Plan, PlanTask, Run, RunJournalEvent, VerificationRun } from "../types";
-import { statusTagType, streamStatusTagType } from "../utils/statusTag";
+import { streamStatusTagType } from "../utils/statusTag";
 import ExecutionMessageRow from "../components/ExecutionMessageRow.vue";
 import { executionMessageWeight, foldsIntoProcess, isRuntimeFactItem, projectExecutionJournal, type ExecutionJournalEntry, type ExecutionPlanSnapshot, type ExecutionStreamItem } from "../utils/executionStream";
 import { durationBetween, formatDuration } from "../utils/duration";
-import { executionMessageDetails, executionMessageDiagnosticsTitle } from "../utils/executionMessageDetails";
 import { executionModelSourceNote as executionModelSourceNoteFor, formatProviderContextUsage, resolveExecutionModelIdentity } from "../utils/executionTelemetry";
 import { useModelBackends } from "../composables/useModelBackends";
 import { executionTaskStatusLabel, executionTaskStatusType, executionTaskSummary, projectExecutionTasks } from "../utils/executionTasks";
@@ -629,7 +627,7 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
 </script>
 
 <template>
-  <div :class="['detail-page', 'run-detail-page', { 'detail-page-embedded': embedded }]" v-loading="loading">
+  <div v-loading="loading" :class="['detail-page', 'run-detail-page', { 'detail-page-embedded': embedded }]">
     <div v-if="!embedded" class="detail-top"><el-button text @click="closeView"><ArrowLeft :size="15" /> 返回</el-button></div>
     <div v-if="error" class="demo-notice"><Warning :size="14" /> {{ error }}</div>
     <template v-if="run">

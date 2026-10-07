@@ -17,6 +17,12 @@ const html = computed(() => renderMarkdown(displayed.value));
 
 <template>
   <div class="markdown-body" :aria-live="streaming ? 'polite' : undefined">
+    <!--
+      `v-html` 是这一条链唯一允许的注入点，而它注入的不是原始文本：`renderMarkdown` 先过 marked、
+      再过 `utils/markdown.ts` 的清洗（去掉 script/style/iframe、事件属性、javascript: 链接，外链强制
+      noopener），所以这里渲染的是**我们生成的** HTML。要动它，先看那个文件的维护提示。
+    -->
+    <!-- eslint-disable-next-line vue/no-v-html -- 见上：内容来自 renderMarkdown 的清洗结果，不是用户原文 -->
     <div class="markdown-content" v-html="html" />
     <span v-if="streaming" class="processing-dots" aria-hidden="true"><i /><i /><i /></span>
   </div>

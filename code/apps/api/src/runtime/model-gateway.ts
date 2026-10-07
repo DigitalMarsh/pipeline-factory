@@ -246,7 +246,8 @@ export async function probeClaudeEndpoint(config: FactoryConfig): Promise<void> 
     try {
       await fetch(baseUrl, { method: "GET", signal: AbortSignal.timeout(CLAUDE_ENDPOINT_PROBE_TIMEOUT_MS) });
     } catch (error) {
-      throw new Error(`Claude Agent endpoint ${baseUrl} (backend "${backend.id}") is not reachable: ${error instanceof Error ? error.message : String(error)}. Start the provider proxy (e.g. cc-switch) or fix model.claudeAgent.baseUrl before launching.`);
+      // `cause` 要留着：启动失败的原因常常是 DNS/证书/端口这类底层错误，摘要文本看不出来。
+      throw new Error(`Claude Agent endpoint ${baseUrl} (backend "${backend.id}") is not reachable: ${error instanceof Error ? error.message : String(error)}. Start the provider proxy (e.g. cc-switch) or fix model.claudeAgent.baseUrl before launching.`, { cause: error });
     }
   }
 }

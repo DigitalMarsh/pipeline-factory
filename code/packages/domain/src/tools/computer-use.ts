@@ -85,7 +85,7 @@ export class ComputerUseBridge {
     } catch (error) {
       const reason = controller.signal.aborted ? "Computer Use action timed out or was cancelled" : error instanceof Error ? error.message : String(error);
       this.emit({ type: controller.signal.aborted ? "cancelled" : "failed", requestId, action: input.action.type, reason });
-      throw new Error(reason);
+      throw new Error(reason, { cause: error });
     } finally {
       clearTimeout(timer);
       this.active.delete(requestId);

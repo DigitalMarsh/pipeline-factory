@@ -27,7 +27,7 @@
  *      与紧随其后的 `prepare(...).run()`）——那里每条语句只执行一次，缓存没有收益，却会让句柄
  *      跨越后续的 ALTER 存活，平白引入"schema 变了但语句已编译"的疑问。见 statement() 的注释。
  */
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { containsAnyString, defaultExplorerPlan, defaultPlanExploration, defaultThreadContextSummary, isVerificationRun, parsePlanValidationIssues, parseStringArray, parseThreadContextSummary, summarizeExplorerMessage, threadTitleMetadata } from "./records.js";
 import { planQueryProjectionFor, type PlanQueryProjection } from "../plan/query.js";
@@ -43,7 +43,7 @@ import type { AgentLoop, AgentLoopStep, AgentLoopStepInput } from "../agent/agen
 import type { ExplorerTitleSource, ExplorerTitleStatus } from "../explorer/explorer-title.js";
 import type { PlanDispatchState } from "../run/dispatch-coordinator.js";
 import type { Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings } from "../project/project.js";
-import type { GeneratedPlanSpec, ResolvedPlanContract, PlanValidationIssue } from "../plan/plan-spec.js";
+import type { GeneratedPlanSpec, ResolvedPlanContract } from "../plan/plan-spec.js";
 import type {
   CandidatePlan,
   ChangeProposal,

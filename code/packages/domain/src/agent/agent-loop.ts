@@ -150,7 +150,7 @@ export function projectAgentLoopDiagnostics(loop: AgentLoop, steps: AgentLoopSte
   return { providerActivityCount: providerItems.size, lastGate, terminal: { code, message: diagnosticMessage(code) } };
 }
 
-import type { ModelEvent, ModelGateway, ModelMessage, ModelMessagePhase, ModelRequest, ModelRole, ToolCall } from "../index.js";
+import type { ModelEvent, ModelGateway, ModelMessage, ModelMessagePhase, ModelRequest } from "../index.js";
 import type { PipelineStore } from "../index.js";
 import type { ToolRuntime } from "../tools/tool-runtime.js";
 

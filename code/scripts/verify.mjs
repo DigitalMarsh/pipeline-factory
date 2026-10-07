@@ -35,6 +35,11 @@ const counts = [];
 try {
   runStage("domain build", "pnpm", ["--filter", "@pipeline-factory/domain", "build"]);
   runStage("typecheck", "pnpm", ["--recursive", "--no-bail", "typecheck"]);
+  // 代码规范：ESLint 只报**不依赖类型信息**的那一层（见 eslint.config.js 的说明），所以它与上面的
+  // typecheck 不重复，而是补上 tsc 看不见的那一类（未使用的声明、Vue 模板属性顺序、被吞掉的错误原因）。
+  // Prettier 不在这里：它此刻对 267 个文件有意见，一旦真跑 `--write` 会是一个覆盖全仓的改动，
+  // 那该是一次**独立决定**，不是夹在验证门禁里的事。要开就加 runStage("format", "pnpm", ["format:check"])。
+  runStage("lint", "pnpm", ["lint"]);
   for (const pkg of PACKAGES) runTests(pkg);
   runStage("cycle check", process.execPath, [join(HERE, "check-cycles.mjs")]);
 } finally {

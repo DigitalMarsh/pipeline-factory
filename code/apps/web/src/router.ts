@@ -10,7 +10,7 @@ import ProjectCatalogView from "./views/ProjectCatalogView.vue";
 import ProjectExecuteView from "./views/WorkbenchView.vue";
 import ProjectCreateView from "./views/ProjectCreateView.vue";
 import { api } from "./api";
-import { LAST_PROJECT_STORAGE_KEY, readLastProjectId, rememberProjectId, selectDefaultProjectId } from "./routerDefaults";
+import { readLastProjectId, rememberProjectId, selectDefaultProjectId } from "./routerDefaults";
 export { LAST_PROJECT_STORAGE_KEY, selectDefaultProjectId } from "./routerDefaults";
 
 async function resolveRootRoute(): Promise<string> {

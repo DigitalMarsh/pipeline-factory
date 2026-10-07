@@ -17,7 +17,7 @@
  */
 import { nextTick, type Ref } from "vue";
 import { api } from "../api";
-import type { AgentLoop, ExplorerActivityItem, ExplorerInputRequest, ExplorerPlan, ExplorerThread, ExplorerTurn } from "../types";
+import type { AgentLoop, ExplorerInputRequest, ExplorerPlan, ExplorerThread, ExplorerTurn } from "../types";
 import { createSseReplayGate } from "../utils/sseReplayGate";
 import { scrollTimelineToLatest } from "../utils/scrollTimeline";
 import { PROJECTION_REFRESH_INTERVAL_MS } from "./usePlanProjection";

@@ -1,5 +1,62 @@
 # Changelog
 
+## 2026-10-07 — 接入 ESLint / typescript-eslint / eslint-plugin-vue / Prettier
+
+装之前先量了一遍仓库的形状，因为**"装上工具"与"把现有代码全量重排"是两件事**，代价差了两个数量级：
+342 个 TS/Vue 文件，最长的一行 6317 字符（`ProjectSettingsDialog.vue` 的样式块），代码行的行长中位数 46、
+p90 是 125、p99 是 283。
+
+### Added
+
+- 根 `eslint.config.js`（flat config，ESLint 10 只有这一种）。三条范围约定都写在文件头：只查
+  `src` 与 `scripts` 不碰 `dist`；**Node 与浏览器全局变量按目录分开**（混在一起会让 `apps/api` 里写
+  `document`、`apps/web` 里写 `process` 都不报错）；Prettier 放最后。
+- 根 `.prettierrc.json` + `.prettierignore`。`printWidth: 140` 是照仓库自己的分布挑的——p90 = 125、
+  p95 = 163，140 落在作者本来就在写的区间里，只打断真正的离群行。其余取值（双引号、分号、两空格、
+  `trailingComma: all`）与现有代码一致。
+- 根 `package.json` 补 `lint` / `lint:fix` / `format` / `format:check` 四个脚本；
+  `scripts/verify.mjs` 增加 **lint 阶段**。
+
+### Changed
+
+- **删掉 73 处死代码**（ESLint 报出来、逐条确认过）：未使用的 import 与局部绑定、再往上一层的级联
+  （删掉一个 computed 之后它依赖的计数器也变成没人用）。其中 `ExplorerView.vue` 一个人就 26 处，
+  最深处连删三层——`contextMenuItems` → `candidateCount`/`dispatchedCount`/… → 它们依赖的
+  `activeRuns`、`dispatched`。这些都是功能删掉后留下的残骸，删之前逐条 grep 确认过只有声明那一处
+  引用，之后由 `vue-tsc`（会检查模板）与 578 条 web 用例兜底。
+- 7 处 `throw new Error(...)` 在 `catch` 里补上 `{ cause: error }`：外层那句是给人看的摘要，底下
+  Provider/SQLite/网络报的原文只有 `cause` 留得住。
+- `codex-app-server.ts` 的 `removeAbortListener` 由 `let` + 事后赋值改成 `const`（只赋一次；唯一读它的是
+  超时回调，那个回调在初始化之后才跑，没有暂时性死区问题）。
+
+### 两处**有意的**规则取舍（都写在配置里，不是沉默地关掉）
+
+- **Vue 插件只挂在 `.vue` 上**，不是整个 web 目录。`one-component-per-file` /
+  `component-definition-name-casing` / `require-default-prop` 说的是**单文件组件**的形状，而本仓库
+  `.ts` 里唯一出现组件的地方是测试的 `defineComponent` 桩件（一个文件给 ElDialog / ElButton / ElTag
+  各造一个）；对它们套 SFC 规则会报出 53 条与实际风险无关的噪声。
+- **`vue/require-default-prop` 关闭**：本仓库的 SFC 全是 `<script setup lang="ts">`，可选 prop 已由类型
+  说清楚（`project?: Project`），再加 JS 层 `default` 是把同一件事写两遍。
+
+`vue/no-v-html` **没有关**——那一条是真信号，所以给唯一一处注入了行内豁免并写明理由（内容来自
+`utils/markdown.ts` 的清洗结果，不是用户原文）。
+
+### 明确不做：没有跑 `prettier --write`
+
+`prettier --check .` 此刻对 **267 个文件**有意见。全量重排是一次覆盖全仓的改动，而且现在有别的会话
+正在改这些文件——它该是一次**独立的、可以单独回滚的决定**，不是夹在"装工具"里顺手做的事。
+工具已经就位：`pnpm format` 一条命令。等真跑了，再把 `format:check` 加进 verify 的那一行是现成的
+（注释里已经写好位置）。
+
+### 验证
+
+- `pnpm lint` 干净（`--max-warnings=0` 语义上等价，当前 0 error / 0 warning）。
+- `pnpm verify` 六阶段全绿：domain build → typecheck → **lint** → 三个包的用例
+  （domain 420 / api 117 / web 578）→ 循环依赖检查。
+- 三条 web 用例的源码断言跟着改（它们断言的是被删掉的那几行 destructuring 的字面量）；改的是断言
+  文本，判据没变——它们要证的仍是"ExplorerView 把这些 composable 的返回值接上了"。
+
+
 ## 2026-10-07 — 执行完了但没合并，想再让 Agent 补一轮：输入框点不动
 
 报障原话："执行线程执行完成了，但是未合并。状态还是运行中…我需要继续让 agent 做一些工作，补充探索

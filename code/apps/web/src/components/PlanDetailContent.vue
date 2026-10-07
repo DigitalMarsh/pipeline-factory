@@ -91,7 +91,7 @@ const mergeRequest = computed(() => props.plan?.mergeRequest ?? null);
 
 <template>
   <div class="plan-detail-content">
-    <div class="drawer-shell" v-if="plan">
+    <div v-if="plan" class="drawer-shell">
       <div class="drawer-header"><div><div class="eyebrow">完整执行契约</div><h2>查看方案</h2></div><el-button text circle aria-label="Close" @click="emit('close')"><Close /></el-button></div>
       <div class="drawer-plan-title"><div class="plan-file-icon"><DocumentChecked :size="22" /></div><div><h3>{{ plan.title }}</h3><p>{{ planId }} · Revision {{ plan.revision }}</p></div><el-tag :type="statusTagType" effect="light">{{ planStatusText }}</el-tag></div>
       <div v-if="props.error" class="settings-error" role="status">{{ props.error }}，当前显示已加载的计划内容。</div>

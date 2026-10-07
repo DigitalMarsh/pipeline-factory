@@ -51,7 +51,7 @@ function scopeDirectory(scopePath: string): string {
   const parts = normalized.split("/").filter(Boolean);
   if (parts.some((part) => part === "..")) throw new Error("EXECUTOR_SCOPE_PATH_ESCAPES_WORKSPACE");
 
-  const wildcardIndex = normalized.search(/[?*\[\]{}]/);
+  const wildcardIndex = normalized.search(/[?*[\]{}]/);
   const directory = wildcardIndex >= 0
     ? normalized.slice(0, wildcardIndex).replace(/\/+$/, "")
     : posix.extname(normalized) ? posix.dirname(normalized) : normalized;

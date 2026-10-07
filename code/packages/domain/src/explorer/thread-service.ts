@@ -35,13 +35,10 @@ import type { PipelineStore } from "../store/pipeline-store.js";
 import type { AgentLoop, AgentLoopEvent, AgentLoopRunner } from "../agent/agent-loop.js";
 import type { ExplorerTitleGenerator } from "./explorer-title.js";
 import type {
-  CandidatePlan,
-  CreateExplorerInput,
   DomainEvent,
   ModelGateway,
   ModelRoleConfig,
   ExplorerInputRequest,
-  ExplorerInputRequestStatus,
   ExplorerPlan,
   ExplorerThread,
   ExplorerThreadContextSummary,
@@ -49,7 +46,6 @@ import type {
   ModelInputAnswers,
   ModelInputQuestion,
   ModelInputRequest,
-  RegisterThreadInput,
 } from "../index.js";
 
 /**
@@ -332,7 +328,8 @@ export class ExplorerThreadService {
       const recovery = { ...request, status: "RECOVERY_REQUIRED" as const };
       this.store.updateInputRequest(recovery);
       this.publish(this.store.appendEvent({ type: "explorer.turn.failed", aggregateId: input.threadId, payload: { inputRequestId: request.id, turnId: request.localTurnId, explorerPlanId: request.explorerPlanId ?? null, loopId: job.loopId ?? null, recoveryRequired: true, error: error instanceof Error ? error.message : String(error) } }));
-      throw new Error(`Structured input response is uncertain; recovery is required: ${error instanceof Error ? error.message : String(error)}`);
+      // `cause` 是给排障留的：这一句是给用户看的"要恢复"，底下 Provider 报的才是原因。
+      throw new Error(`Structured input response is uncertain; recovery is required: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
     }
     const answered: ExplorerInputRequest = {
       ...request,

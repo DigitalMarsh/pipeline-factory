@@ -77,6 +77,9 @@ const REQUIRED_PORT_METHOD_NAMES = [
 
 /** 端口里**可选**的方法：按端口注释，两侧不必都提供（当前 subscribeEvents 两侧都有、runInTransaction 只有 SQLite）。 */
 const OPTIONAL_PORT_METHOD_NAMES = ["subscribeEvents", "runInTransaction"] as const satisfies readonly (keyof PipelineStore)[];
+// 它只被下面那个类型用（`typeof ...`），而 ESLint 不把类型位置算作使用——这里显式引用一次，
+// 与下面 `void portMethodListIsComplete;` 同一个理由：清单本身是**给人读的文档**，不该被当成死代码。
+void OPTIONAL_PORT_METHOD_NAMES;
 
 /** 漏写一个端口方法就在这里编译不过：清单必须与 keyof PipelineStore 完全一致。 */
 type AssertNever<Value extends never> = Value;

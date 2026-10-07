@@ -1225,11 +1225,10 @@ describe("Pipeline Factory v4 API", () => {
         yield { type: "turn.completed" };
       },
       async answerUserInput() { resumeOrder.push("answer-called"); },
-      async cancel() { undefined; },
+      async cancel() { /* 本用例不走取消路径 */ },
     };
     const app = createApp({ store, model, seed: false });
     apps.push(app);
-    const plans = new (await import("@pipeline-factory/domain")).PlanService(store);
     const accepted = await app.inject({ method: "POST", url: "/api/v4/projects/project-1/explorer-thread/turns", payload: { threadId: "thread-1", explorerPlanId, content: "继续探索", clientTurnId: "client-1" } });
     expect(accepted.statusCode).toBe(202);
     expect(accepted.json().turn.assistant.status).toBe("RUNNING");

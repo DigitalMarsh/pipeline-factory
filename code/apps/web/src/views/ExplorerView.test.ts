@@ -165,7 +165,7 @@ describe("Explorer requirement list and shared drawer", () => {
   it("shows the selected Plan immediately while full details load and ignores stale detail responses", () => {
     // 抽屉详情已抽到 composable（P7 第三级），断言跟着搬过去——校验的性质不变：
     // 先把已知的 Plan 落进抽屉再等接口，以及用请求代际丢弃过期响应。
-    const openPlanDetailSource = planDetailDrawerComposableSource.match(/async function openPlanDetail\(plan: Plan\): Promise<void> \{[\s\S]*?\n  \}/)?.[0] ?? "";
+    const openPlanDetailSource = planDetailDrawerComposableSource.match(/async function openPlanDetail\(plan: Plan\): Promise<void> \{[\s\S]*?\n {2}\}/)?.[0] ?? "";
     expect(openPlanDetailSource).toContain("detailPlan.value = plan");
     expect(openPlanDetailSource.indexOf("detailPlan.value = plan")).toBeLessThan(openPlanDetailSource.indexOf("await api.getPlan(planId)"));
     expect(openPlanDetailSource).toContain("requestVersion === detailRequestVersion");
@@ -208,7 +208,7 @@ describe("Explorer requirement list and shared drawer", () => {
     expect(planLifecycleActionsComposableSource).toContain("async function revisePlanConfiguration(plan: Plan): Promise<void>");
     expect(planLifecycleActionsComposableSource).toContain("function handlePlanCenterConfigurationRevised(): void");
     expect(planLifecycleActionsComposableSource).toContain("async function discardPlan(plan: Plan | null = deps.candidate.value)");
-    expect(explorerViewSource).toContain("const { confirmPlan, enqueuePlan, startPlanRun, revisePlanConfiguration, handlePlanCenterConfigurationRevised, discardPlan } = usePlanLifecycleActions(");
+    expect(explorerViewSource).toContain("const { confirmPlan, enqueuePlan, startPlanRun, revisePlanConfiguration, discardPlan } = usePlanLifecycleActions(");
     expect(explorerViewSource).toContain('drawerTab.value = "task"');
     expect(explorerViewSource).toContain("taskPanelPlan.status === 'READY' && isConversationArtifactPlan(taskPanelPlan)");
     expect(explorerViewSource).toContain("返回探索对话修订");
@@ -243,7 +243,7 @@ describe("Explorer thread and drawer state", () => {
     // composable 的 resetDetailState 执行——两半都要断言，只测一半会让另一半能悄悄漏掉。
     const resetSource = explorerViewSource.match(/function resetThreadState\(\) \{[\s\S]*?\n\}/)?.[0] ?? "";
     expect(resetSource).toContain("resetDetailState()");
-    const resetDetailSource = planDetailDrawerComposableSource.match(/function resetDetailState\(\): void \{[\s\S]*?\n  \}/)?.[0] ?? "";
+    const resetDetailSource = planDetailDrawerComposableSource.match(/function resetDetailState\(\): void \{[\s\S]*?\n {2}\}/)?.[0] ?? "";
     expect(resetDetailSource).toContain("drawerOpen.value = false");
     expect(resetDetailSource).toContain("detailPlan.value = null");
     // 同时作废在途请求，否则切换线程后旧线程的响应会回填进新线程的抽屉。
@@ -366,7 +366,7 @@ describe("Explorer inline message presentation", () => {
     // 视图这一侧换成"解构了哪些状态"与"委托给了谁"（`api.explorerPlanWorkspace` 在视图里
     // 已经一个字都不剩，只断言"视图里没有"是不够的——那样空文件也能过）。
     expect(planProjectionComposableSource).toContain("const explorerPlans = ref<ExplorerPlan[]>([]);");
-    expect(explorerViewSource).toContain("enqueued, dispatched, explorerEventSequence, activeExplorerPlan, allPlans, planFromRevisionDraft, applyPlanProjection, loadActivePlanWorkspace, refreshPlanProjection");
+    expect(explorerViewSource).toContain("enqueued, explorerEventSequence, activeExplorerPlan, allPlans, planFromRevisionDraft, applyPlanProjection, loadActivePlanWorkspace, refreshPlanProjection");
     expect(explorerViewSource).toContain("api.explorerPlanGroups(requestProjectId, selected.id)");
     expect(explorerViewSource).toContain("api.createExplorerPlan(projectId.value, currentThread.id)");
     expect(planProjectionComposableSource).toContain("api.explorerPlanWorkspace(requestProjectId, explorerId, explorerPlanId)");
@@ -526,7 +526,7 @@ describe("Explorer plan projection extraction", () => {
     expect(explorerSseComposableSource).toContain("deps.explorerEventSequence.value ?? undefined");
     expect(explorerSseComposableSource).toContain("new EventSource(api.explorerEventsUrl");
     expect(explorerSseComposableSource).toContain("eventSource.addEventListener(\"turn.input_required\"");
-    expect(explorerViewSource).toContain("const { connectEvents, connectRequirementStatusEvents, connectLoopEvents, connectLoopEventsIfConnected, closeEvents, closeRequirementStatusEvents } = useExplorerSse(");
+    expect(explorerViewSource).toContain("const { connectEvents, connectLoopEvents, connectLoopEventsIfConnected, closeEvents, closeRequirementStatusEvents } = useExplorerSse(");
     expect(explorerViewSource).not.toContain("new EventSource(");
     expect(explorerViewSource).not.toContain("let eventSource");
     expect(explorerViewSource).not.toContain("function refreshTurnsAfterEvent");

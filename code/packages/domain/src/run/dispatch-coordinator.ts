@@ -353,7 +353,6 @@ export class PlanDispatchCoordinator {
       await this.syncRun(run);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const refreshed = this.options.store.getPlan(plan.id) ?? plan;
       // 只有"缺命令"这一条会在 start 时才暴露（它依赖冻结快照的校验）。容量与冲突都在
       // evaluateWait 里**派发前**判定，所以这里不再需要匹配 Scheduler 的并发错误文本。
       const waitAfterFailure = /RUN_PREREQUISITES_UNSATISFIED|missing registered commands/i.test(message)

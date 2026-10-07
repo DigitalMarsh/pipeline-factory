@@ -743,7 +743,9 @@ export async function inspectWorkspaceScope(input: { workspacePath: string; base
     const outsidePaths = changedPaths.filter((path) => !matchesAnyPath(path, input.include) || matchesAnyPath(path, input.exclude ?? []));
     return { changedPaths, outsidePaths, pathsWithinScope: outsidePaths.length === 0 };
   } catch (error) {
-    throw new Error(`WORKSPACE_SCOPE_CHECK_FAILED: ${error instanceof Error ? error.message : String(error)}`);
+    // `cause` 保留原始错误：这一层把 git/fspath 的细节压成了一句可读原因，但排查时仍然需要看到
+    // 底下到底报了什么（`message` 里那一段只是它的摘要）。
+    throw new Error(`WORKSPACE_SCOPE_CHECK_FAILED: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
   }
 }
 

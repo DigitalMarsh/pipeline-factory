@@ -14,12 +14,24 @@
     "stop": "node scripts/service.mjs stop",
     "status": "node scripts/service.mjs status",
     "check:cycles": "node scripts/check-cycles.mjs",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "verify": "node scripts/verify.mjs"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^22.10.5",
+    "eslint": "^10.12.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-plugin-vue": "^10.11.1",
+    "globals": "^17.13.0",
+    "prettier": "^3.9.9",
+    "tsx": "^4.19.2",
     "typescript": "^5.7.3",
+    "typescript-eslint": "^8.71.1",
     "vitest": "^3.0.5",
-    "tsx": "^4.19.2"
+    "vue-eslint-parser": "^10.4.1"
   }
 }

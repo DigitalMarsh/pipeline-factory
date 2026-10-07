@@ -159,6 +159,10 @@ describe("AgentLoopEngine", () => {
     store.saveAgentLoop({ id: "completed-loop", ownerType: "run", ownerId: "run-1", role: "executor", mode: "provider-controlled", state: "COMPLETED", stepCount: 1, maxSteps: 4, startedAt: store.now(), completedAt: store.now(), providerThreadId: null, providerTurnId: null, checkpointJson: null });
     const model: ModelGateway = {
       configFor: () => ({ model: "executor" }),
+      // 这个生成器**故意不 yield**：它要在被迭代的第一时间抛错，用来证明"重复 id 的 Loop 根本不会
+      // 走到模型那一步"。把它改写成别的形状（比如返回一个会 reject 的 async 函数）会让这条断言
+      // 测的东西变味——它测的正是"迭代时才抛"这件事。
+      // eslint-disable-next-line require-yield -- 见上
       async *stream() { throw new Error("the duplicate loop must not call the model"); },
       async answerUserInput() { return undefined; },
       async cancel() { return undefined; },

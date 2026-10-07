@@ -26,7 +26,7 @@ import { projectPlaceholderExplorerTitle, selectCurrentExplorer } from "./thread
 import { defaultExplorerPlan, defaultThreadContextSummary } from "../store/records.js";
 import type { PipelineStore } from "../store/pipeline-store.js";
 import type { Project } from "../project/project.js";
-import type { CreateExplorerInput, ExplorerDeletionInput, ExplorerDeletionSummary, ExplorerPlan, ExplorerThread, Run } from "../index.js";
+import type { CreateExplorerInput, ExplorerDeletionInput, ExplorerDeletionSummary, ExplorerPlan, ExplorerThread } from "../index.js";
 
 export class ExplorerDeleteBlockedError extends Error {
   readonly code = "EXPLORER_DELETE_BLOCKED" as const;

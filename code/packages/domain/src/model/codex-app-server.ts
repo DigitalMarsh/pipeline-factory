@@ -266,7 +266,6 @@ export class CodexAppServerClient implements CodexAppServerSession {
     if (signal?.aborted) return Promise.reject(createAbortError());
     const id = String(this.nextRequestId++);
     return new Promise((resolve, reject) => {
-      let removeAbortListener: (() => void) | undefined;
       const timer = setTimeout(() => {
         this.pending.delete(id);
         removeAbortListener?.();
@@ -277,7 +276,9 @@ export class CodexAppServerClient implements CodexAppServerSession {
         clearTimeout(timer);
         reject(createAbortError());
       };
-      removeAbortListener = signal ? () => signal.removeEventListener("abort", onAbort) : undefined;
+      // 声明在这里而不是函数顶部：它只被赋值一次，而唯一读它的地方是上面的超时回调——那个回调
+      // 在本次初始化之后才会执行，所以没有暂时性死区问题（`const` 而不是 `let` 也是这个意思）。
+      const removeAbortListener = signal ? () => signal.removeEventListener("abort", onAbort) : undefined;
       if (signal) signal.addEventListener("abort", onAbort, { once: true });
       this.pending.set(id, { resolve, reject, timer, ...(removeAbortListener ? { removeAbortListener } : {}) });
       try {

@@ -243,7 +243,7 @@ onBeforeUnmount(() => requestScope.invalidate());
 <template>
   <el-dialog :model-value="props.modelValue" class="project-settings-dialog" width="min(980px, calc(100vw - 24px))" :close-on-click-modal="false" :before-close="handleBeforeClose" destroy-on-close @update:model-value="emit('update:modelValue', $event)">
     <template #header><div class="settings-dialog-heading"><div><div class="eyebrow">项目设置</div><h1>{{ project?.name || '项目设置' }}</h1><p>{{ project?.repoRoot || '管理仓库、执行和模型配置' }}</p></div><div class="settings-heading-actions"><el-tag :type="project?.status === 'ACTIVE' ? 'success' : 'info'">{{ project?.status === 'ACTIVE' ? '启用中' : '已归档' }}</el-tag><span>{{ statusText }}</span></div></div></template>
-    <div class="settings-dialog-body" v-loading="loading">
+    <div v-loading="loading" class="settings-dialog-body">
       <div v-if="error" class="settings-error"><Warning :size="15" /> {{ error }}</div>
       <div v-if="project" class="settings-shell">
         <nav class="settings-tabs" aria-label="项目设置"><button v-for="item in SETTINGS_TABS" :key="item.key" type="button" :class="{ active: activeTab === item.key }" @click="activeTab = item.key"><Setting v-if="item.key === 'general'" :size="14" /><Connection v-else-if="item.key === 'execution'" :size="14" /><FolderOpened v-else-if="item.key === 'commands'" :size="14" /><CircleCheck v-else :size="14" />{{ item.label }}</button></nav>

@@ -49,7 +49,6 @@ import type {
   JournalEntryType,
   LifecycleHookRunner,
   PlanRevision,
-  Project,
   Run,
   RunGuidance,
   RunGuidanceMode,

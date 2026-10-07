@@ -31,29 +31,22 @@ import { freezeRevision } from "../platform/freeze.js";
 import { verifiedProjectBaseline } from "../git/baseline.js";
 import { ProjectService } from "../project/project.js";
 import { selectCurrentExplorer } from "../explorer/thread-selection.js";
-import { decodePlanCursor, encodePlanCursor, planQueryProjectionFor } from "./query.js";
+import { decodePlanCursor, encodePlanCursor } from "./query.js";
 import type { PipelineStore } from "../store/pipeline-store.js";
 import type { GeneratedPlanSpec, ResolvedPlanContract } from "./plan-spec.js";
 import type { PlanArtifact } from "./completion.js";
-import type { Project } from "../project/project.js";
 import type {
-  ApprovedChangeProposal,
   CandidatePlan,
-  ChangeProposal,
   CreateCandidatePlanInput,
   CreateRevisionDraftInput,
   ExplorerPlan,
   ExplorerThread,
-  ExecutionThreadSummary,
   PlanIndexRow,
-  PlanLifecycleEntry,
   PlanQuery,
-  PlanQueryProjection,
   PlanQueryResult,
   PlanQuerySort,
   PlanRevisionDraft,
   PlanRevision,
-  PlanStatus,
   RegisterThreadInput,
 } from "../index.js";
 
@@ -288,7 +281,7 @@ export class PlanService {
     if (!project) throw new Error(`Project ${draft.projectId} not found`);
     const baseline = verifiedProjectBaseline(project);
     if (baseline.baseCommit !== draft.baseCommit || baseline.baseBranch !== draft.baseBranch) {
-      const changed = this.store.updateRevisionDraft(Object.freeze({ ...draft, status: "BASE_CHANGED", updatedAt: this.store.now() }));
+      this.store.updateRevisionDraft(Object.freeze({ ...draft, status: "BASE_CHANGED", updatedAt: this.store.now() }));
       throw new Error("BASE_CHANGED");
     }
     // 与 confirm 同一道闸门：修订版冻结前也要过预检——否则"改一版再确认"就是绕过它的后门。

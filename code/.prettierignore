@@ -1,0 +1,13 @@
+# 生成物与本机状态：不是给人改的，格式化它们只会让 diff 失真。
+**/dist/**
+**/node_modules/**
+**/coverage/**
+
+# 本机运行时数据（SQLite 与它的 WAL/SHM、Run 的 worktree）。
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+.pipeline-worktrees/
+
+# 锁文件由 pnpm 自己写，格式由它决定。
+pnpm-lock.yaml

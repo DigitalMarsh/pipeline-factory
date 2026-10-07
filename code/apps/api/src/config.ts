@@ -220,7 +220,7 @@ export function loadFactoryConfig(configPath = resolveConfigPath(undefined)): Fa
   try {
     raw = JSON.parse(readFileSync(absoluteConfigPath, "utf8")) as unknown;
   } catch (error) {
-    throw new Error(`Unable to read Factory configuration ${absoluteConfigPath}: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`Unable to read Factory configuration ${absoluteConfigPath}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
   }
   const parsed = configSchema.safeParse(raw);
   if (!parsed.success) throw new Error(`Invalid Factory configuration ${absoluteConfigPath}: ${parsed.error.message}`);

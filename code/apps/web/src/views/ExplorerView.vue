@@ -4,11 +4,11 @@
 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { ArrowDown, ArrowUp, Check, CircleCheck, Close, Connection, Document, InfoFilled, Plus, Promotion, Refresh, Right, VideoPause, Warning } from "@element-plus/icons-vue";
+import { ArrowDown, ArrowUp, Check, Close, Connection, Document, InfoFilled, Refresh, Right, VideoPause, Warning } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 import { api } from "../api";
-import type { AgentLoop, ExplorerActivityItem, ExplorerPlan, ExplorerThread, ExplorerTurn, Plan, Project, Run } from "../types";
+import type { AgentLoop, ExplorerActivityItem, ExplorerThread, Plan, Project } from "../types";
 import PlanDetailContent from "../components/PlanDetailContent.vue";
 import ExplorerPolicyDrawer from "../components/ExplorerPolicyDrawer.vue";
 import ThreadRail from "../components/ThreadRail.vue";
@@ -20,7 +20,6 @@ import { optional } from "../utils/optional";
 import { closePolicyPanel, openPolicyPanel } from "../utils/policyPanel";
 import { createOptimisticUserTurn, settleOptimisticTurn } from "../utils/optimisticTurn";
 import { shouldSubmitComposer } from "../utils/composerKeyboard";
-import { isExplorerTurnProcessing } from "../utils/turnStatus";
 import { inputStatusTagType, statusTagType } from "../utils/statusTag";
 import { formatContextUsage } from "../utils/explorerStatus";
 import ExplorerInputDialog from "../components/ExplorerInputDialog.vue";
@@ -42,15 +41,12 @@ import { backendLabel } from "../utils/modelCatalog";
 import { useModelBackends } from "../composables/useModelBackends";
 import { isCandidatePlan as isCandidatePlanFor } from "../utils/planControls";
 import { readableAssistantText } from "../utils/planProtocolDisplay";
-import { planAnchorId, planAnchorKey, planForActivity as planForActivityIn, planIdentity } from "../utils/planTimeline";
+import { planForActivity as planForActivityIn } from "../utils/planTimeline";
 import { taskDisplayTitle } from "../utils/taskTree";
-import { isConfirmedPlanRevision, resolvePlanVersionHistory } from "../utils/planVersionHistory";
 import { projectPathForModule } from "../utils/projectRoutes";
 import { explorerTimelineTarget as activityTarget, explorerPlanAnchorId, explorerTimelineMessageType, inputRequestTarget } from "../utils/explorerTimeline";
 import { assistantActivityLabel, explorerDisplayMode, explorerDisplayTitle, explorerRuntimeFacts, formatTurnTime, EXPLORER_ROW_MODES, type ExplorerRowMode } from "../utils/explorerPresentation";
 import type { ExplorerDisplayMode } from "../utils/explorerPresentation";
-import { planStatusLabel as statusLabel } from "../utils/planStatus";
-
 import { formatAgentLoopCompletion, formatAgentLoopGate, formatAgentLoopState, formatAgentLoopTerminal } from "../utils/agentLoopPresentation";
 import { canCreateConfigurationRevision as canCreateConfigurationRevisionFor } from "../utils/runPrerequisites";
 
@@ -119,27 +115,8 @@ const mounted = ref(false);
 // route watcher for that one navigation so the old thread cannot race the
 // replacement load and overwrite the page-level error banner.
 let suppressNextExplorerRouteReload = false;
-const candidateCount = computed(() => candidate.value ? 1 : 0);
-const confirmedCount = computed(() => confirmedPlans.value.length);
-const enqueuedCount = computed(() => enqueued.value.length);
-const dispatchedCount = computed(() => dispatched.value.length);
-const activeRuns = computed(() => projectRuns.value.filter((run) => ["STARTING", "IN_PROGRESS", "VERIFYING"].includes(run.status)));
-const activeRunCount = computed(() => activeRuns.value.length);
 const activeRunId = computed(() => typeof route.query.runId === "string" ? route.query.runId : null);
-const needsAttentionCount = computed(() => dispatched.value.filter((plan) => plan.status === "BLOCKED" || plan.status === "NEEDS_PLAN_CHANGE" || Boolean(plan.attentionReason)).length);
-const attentionPlans = computed(() => dispatched.value.filter((plan) => plan.status === "BLOCKED" || plan.status === "NEEDS_PLAN_CHANGE" || Boolean(plan.attentionReason)));
 const planCenterCount = ref(0);
-const contextPanelTitle = computed(() => ({ candidate: "当前候选 Plan", plans: "当前线程 Plans", confirmed: "已确认方案", enqueued: "已入队方案", dispatched: "已派发方案", active: "运行中任务", attention: "待处理事项", "plan-center": "项目 Plan 与任务中心" } as const)[contextPanel.value]);
-const contextPanelCount = computed(() => contextPanel.value === "candidate" ? candidateCount.value : contextPanel.value === "plans" ? threadPlans.value.length : contextPanel.value === "confirmed" ? confirmedCount.value : contextPanel.value === "enqueued" ? enqueuedCount.value : contextPanel.value === "dispatched" ? dispatchedCount.value : contextPanel.value === "active" ? activeRunCount.value : contextPanel.value === "attention" ? needsAttentionCount.value : planCenterCount.value);
-const contextMenuItems = computed(() => [
-  { key: "candidate" as ContextPanel, label: "候选方案", railLabel: "候选", entryClass: "context-entry-candidate", count: candidateCount.value, icon: Promotion },
-  { key: "plans" as ContextPanel, label: "当前线程 Plans", railLabel: "Plans", entryClass: "context-entry-plans", count: threadPlans.value.length, icon: Document },
-  { key: "confirmed" as ContextPanel, label: "已确认方案", railLabel: "已确认", entryClass: "context-entry-confirmed", count: confirmedCount.value, icon: Check },
-  { key: "enqueued" as ContextPanel, label: "已入队方案", railLabel: "已入队", entryClass: "context-entry-enqueued", count: enqueuedCount.value, icon: ArrowDown },
-  { key: "dispatched" as ContextPanel, label: "已派发方案", railLabel: "已派发", entryClass: "context-entry-dispatched", count: dispatchedCount.value, icon: CircleCheck },
-  { key: "active" as ContextPanel, label: "运行中任务", railLabel: "运行中", entryClass: "context-entry-active", count: activeRunCount.value, icon: Connection },
-  { key: "attention" as ContextPanel, label: "待处理事项", railLabel: "待处理", entryClass: "context-entry-attention", count: needsAttentionCount.value, icon: Warning },
-]);
 const contextUsage = computed(() => formatContextUsage(turns.value));
 const agentLoopLabel = computed(() => formatAgentLoopState(agentLoop.value?.state));
 const agentLoopGateLabel = computed(() => formatAgentLoopGate(agentLoop.value?.diagnostics));
@@ -151,7 +128,7 @@ const agentLoopCompletionLabel = computed(() => agentLoop.value ? formatAgentLoo
  * 还会回退到 thread / explorerPlans[0]，两条链路必须一致，否则会错位。
  * `inputDialog` 的模板 ref 留在本文件——`ref="inputDialog"` 要求它是个顶层绑定。
  */
-const { pendingInput, recoveryInput, inputRequests, inputProgress, inputDialogOpen, inputAnswerInFlight, inputCardRequest, setInputRequests, adoptInputRequest, resetInputState, inputAnswerLabelsFor, inputAnswerText, inputStatusLabel, openInputRequest, updateInputProgress, submitInput, cancelInput } = useExplorerInputRequests({ projectId, thread, activeExplorerPlanId: computed(() => activeExplorerPlan.value?.id ?? null), inputDialog });
+const { pendingInput, inputRequests, inputProgress, inputDialogOpen, inputAnswerInFlight, inputCardRequest, setInputRequests, adoptInputRequest, resetInputState, inputAnswerLabelsFor, inputAnswerText, inputStatusLabel, openInputRequest, updateInputProgress, submitInput, cancelInput } = useExplorerInputRequests({ projectId, thread, activeExplorerPlanId: computed(() => activeExplorerPlan.value?.id ?? null), inputDialog });
 
 /**
  * 需求投影（需求分组 / 候选 / 确认 / 入队 / 派发、当前需求的工作区与活动）交给 composable。
@@ -165,7 +142,7 @@ const { pendingInput, recoveryInput, inputRequests, inputProgress, inputDialogOp
  * `routeExplorerPlanId` 用 getter 而不是 ref：投影只需要"路由上请求的需求 id"这一个值，
  * 不值得为此把 vue-router 的 route 对象交给 composable。
  */
-const { explorerPlans, threadPlans, activeExplorerPlanId, candidate, revisionDraft, confirmedPlans, enqueued, dispatched, explorerEventSequence, activeExplorerPlan, allPlans, planFromRevisionDraft, applyPlanProjection, loadActivePlanWorkspace, refreshPlanProjection, refreshActivity, scheduleProjectionRefresh, cancelProjectionRefresh, beginPlanProjection, isCurrentPlanProjection, resetPlanProjection } = usePlanProjection({ projectId, thread, turns, activity, agentLoop, explorerPaused, inputDialogOpen, pendingInput, setInputRequests, projectScopeToken, isCurrentProjectScope, routeExplorerPlanId: () => typeof route.query.explorerPlanId === "string" ? route.query.explorerPlanId : null });
+const { explorerPlans, threadPlans, activeExplorerPlanId, candidate, revisionDraft, enqueued, explorerEventSequence, activeExplorerPlan, allPlans, planFromRevisionDraft, applyPlanProjection, loadActivePlanWorkspace, refreshPlanProjection, refreshActivity, scheduleProjectionRefresh, cancelProjectionRefresh, beginPlanProjection, isCurrentPlanProjection, resetPlanProjection } = usePlanProjection({ projectId, thread, turns, activity, agentLoop, explorerPaused, inputDialogOpen, pendingInput, setInputRequests, projectScopeToken, isCurrentProjectScope, routeExplorerPlanId: () => typeof route.query.explorerPlanId === "string" ? route.query.explorerPlanId : null });
 
 const requirementRows = computed(() => projectExplorerRequirementRows(
   explorerPlans.value,
@@ -179,36 +156,13 @@ const explorationProgress = computed(() => activeExplorerPlan.value?.exploration
 const activePlanBusy = computed(() => visibleTurns.value.some((turn) => turn.status === "RUNNING" || turn.status === "WAITING_FOR_INPUT" || turn.status === "PAUSED" || turn.status === "QUEUED"));
 const activePlanWaitingForInput = computed(() => visibleTurns.value.some((turn) => turn.status === "WAITING_FOR_INPUT"));
 const sendingCurrentPlan = computed(() => Boolean(activeExplorerPlan.value && pendingSendPlanIds.value.has(activeExplorerPlan.value.id)));
-const activePlans = computed<Plan[]>(() => activeRuns.value.map((run) => {
-  const existing = allPlans.value.find((plan) => planIdentity(plan) === run.planId || plan.planId === run.planId || plan.id === run.planId);
-  const status: Plan["status"] = run.status === "VERIFYING" ? "VERIFYING" : "IN_PROGRESS";
-  if (existing) {
-    return { ...existing, status, runId: run.id, executionThread: { id: run.executionThreadId, runId: run.id, state: run.status } };
-  }
-  return {
-    id: run.planId,
-    planId: run.planId,
-    title: `Plan ${run.planId}`,
-    revision: run.planRevision,
-    status,
-    projectId: run.projectId,
-    sourceExplorerThreadId: "",
-    queuedAt: null,
-    dispatchedAt: null,
-    runId: run.id,
-    lastEventAt: run.startedAt ?? run.createdAt,
-    attentionReason: null,
-    createdAt: run.createdAt,
-    executionThread: { id: run.executionThreadId, runId: run.id, state: run.status },
-  };
-}));
 
 /**
  * 共享抽屉的 Plan 详情状态交给 composable。它必须建在 usePlanLifecycleActions **之前**：
  * 后者要拿这里的 drawerOpen / drawerTab / detailPlan 去在确认、入队之后刷新并切页签。
  * 路由形状不下沉——打开详情后的 URL 同步由 onOpened 回调留在视图里。
  */
-const { drawerOpen, drawerTab, detailPlan, detailRevisions, detailConfirmedRevisions, detailLatestRevision, detailVersionSource, detailLoadError, detailDependencyOptions, dependenciesSaving, canEditDependencies, detailVerificationSuiteOptions, verificationSuitesSaving, canEditVerificationSuites, openPlanDetail, selectPlanRevision, saveDependencies, saveVerificationSuites, resetDetailState } = usePlanDetailDrawer({
+const { drawerOpen, drawerTab, detailPlan, detailRevisions, detailLatestRevision, detailLoadError, detailDependencyOptions, dependenciesSaving, canEditDependencies, detailVerificationSuiteOptions, verificationSuitesSaving, canEditVerificationSuites, openPlanDetail, selectPlanRevision, saveDependencies, saveVerificationSuites, resetDetailState } = usePlanDetailDrawer({
   projectId,
   projectScopeToken,
   revisionDraft,
@@ -223,7 +177,7 @@ const { drawerOpen, drawerTab, detailPlan, detailRevisions, detailConfirmedRevis
  * Plan 生命周期写操作（确认 / 入队 / Run / 丢弃 / 配置修订）交给 composable。
  * 它只收状态 ref 与两个组合根回调；路由和需求清单的具体形状不下沉。
  */
-const { confirmPlan, enqueuePlan, startPlanRun, revisePlanConfiguration, handlePlanCenterConfigurationRevised, discardPlan } = usePlanLifecycleActions({
+const { confirmPlan, enqueuePlan, startPlanRun, revisePlanConfiguration, discardPlan } = usePlanLifecycleActions({
   projectId,
   project,
   thread,
@@ -293,7 +247,7 @@ const { activePlanKey, activeTimelineKey, jumpToLatest, jumpToTimelineTarget, sh
  * 三条 SSE 通道及其生命周期交给 composable；视图只提供状态 ref、刷新回调与 load 回调。
  * `explorerEventSequence` 由 usePlanProjection 持有，SSE 侧只读它构造续传 URL。
  */
-const { connectEvents, connectRequirementStatusEvents, connectLoopEvents, connectLoopEventsIfConnected, closeEvents, closeRequirementStatusEvents } = useExplorerSse({
+const { connectEvents, connectLoopEvents, connectLoopEventsIfConnected, closeEvents, closeRequirementStatusEvents } = useExplorerSse({
   projectId,
   thread,
   explorers,
@@ -526,10 +480,6 @@ async function keepEditingPlan(plan: Plan): Promise<void> {
   } finally { busy.value = false; }
 }
 
-function selectContextPanel(selection: ContextPanel) {
-  contextPanel.value = selection;
-}
-
 function syncPanelStateFromRoute() {
   const routeContextPanel = route.query.contextPanel;
   if (routeContextPanel === "candidate" || routeContextPanel === "plans" || routeContextPanel === "confirmed" || routeContextPanel === "enqueued" || routeContextPanel === "dispatched" || routeContextPanel === "active" || routeContextPanel === "attention" || routeContextPanel === "plan-center") contextPanel.value = routeContextPanel;
@@ -551,20 +501,6 @@ function explorerRouteQuery(explorerId?: string, explorerPlanId?: string | null,
   return { ...query, ...panelStateQuery() };
 }
 
-function planEventTime(value: string): string {
-  return new Date(value).toLocaleString("zh-CN", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-}
-
-function runRoutePath(runId: string, explorerId?: string | null, explorerPlanId?: string | null): string {
-  const query = new URLSearchParams();
-  const sourceExplorerId = explorerId ?? thread.value?.id;
-  if (sourceExplorerId) query.set("explorerId", sourceExplorerId);
-  if (explorerPlanId) query.set("explorerPlanId", explorerPlanId);
-  query.set("contextPanel", contextPanel.value);
-  query.set("runId", runId);
-  return `/projects/${encodeURIComponent(projectId.value)}/explorer?${query.toString()}`;
-}
-
 async function openRunView(runId: string, explorerId?: string | null, explorerPlanId?: string | null): Promise<void> {
   if (!runId) return;
   drawerTab.value = "task";
@@ -581,21 +517,6 @@ async function closeRunView(): Promise<void> {
   const query = { ...route.query };
   delete query.runId;
   await router.push({ path: route.path, query, hash: route.hash });
-}
-
-function openPlanRun(plan: Plan): void {
-  const runId = plan.runId ?? plan.dispatch?.runId;
-  if (!runId) return;
-  void openRunView(runId, plan.sourceExplorerThreadId, plan.explorerPlanId ?? null);
-}
-
-async function openProjectRun(run: Run): Promise<void> {
-  try {
-    const plan = await api.getPlan(run.planId);
-    await openRunView(run.id, plan.plan.sourceExplorerThreadId, plan.plan.explorerPlanId ?? null);
-  } catch {
-    await openRunView(run.id);
-  }
 }
 
 async function createExplorer() {
@@ -899,17 +820,6 @@ async function renameExplorerPlan(explorerPlanId: string): Promise<void> {
   }
 }
 
-function selectPlanFromCard(plan: Plan, event?: MouseEvent): void {
-  const target = event?.target as HTMLElement | null;
-  if (target?.closest("button, a, .el-button")) return;
-  if (plan.explorerPlanId) void selectExplorerPlan(plan.explorerPlanId);
-}
-
-function planRequirementLabel(plan: Plan): string {
-  const requirement = explorerPlans.value.find((item) => item.id === plan.explorerPlanId);
-  return requirement ? taskDisplayTitle(requirement) : "需求分区";
-}
-
 async function toggleExplorerArchive(explorerId: string) {
   if (explorerActionId.value) return;
   const selected = explorers.value.find((item) => item.id === explorerId);
@@ -1121,12 +1031,6 @@ function handleComposerKeydown(event: KeyboardEvent) {
   if (!shouldSubmitComposer(event)) return;
   event.preventDefault();
   void sendTurn();
-}
-
-function mergeTurn(turn: ExplorerTurn) {
-  const index = turns.value.findIndex((item) => item.id === turn.id);
-  if (index < 0) turns.value = [...turns.value, turn];
-  else turns.value = turns.value.map((item) => item.id === turn.id ? { ...item, ...turn } : item);
 }
 
 function reloadExplorer() {
@@ -1346,7 +1250,7 @@ onBeforeUnmount(() => { mounted.value = false; invalidateProjectScope(); closeEv
       <div v-if="!activeRunId && error" class="demo-notice"><Refresh :size="14" /> {{ error }} <el-button text @click="load">重试</el-button></div>
       <div v-if="!activeRunId" class="timeline-stage">
       <div class="timeline-shell">
-      <div ref="timeline" class="timeline" v-loading="loading" @scroll="updateTimelineScrollState">
+      <div ref="timeline" v-loading="loading" class="timeline" @scroll="updateTimelineScrollState">
         <div :id="activeExplorerPlan ? explorerPlanAnchorId(activeExplorerPlan.id) : undefined" :data-nav-key="activeExplorerPlan ? `explorer-plan-${activeExplorerPlan.id}` : undefined" class="explorer-plan-anchor" aria-hidden="true" />
         <div class="timeline-day">{{ visibleTurns.length ? '探索活动' : '新建探索' }}</div>
         <div v-if="!visibleActivity.length && !visibleInputRequests.length && !candidate" class="timeline-empty"><Connection :size="24" /><strong>{{ activeExplorerPlan ? taskDisplayTitle(activeExplorerPlan) : '开始一次全新的需求探索' }}</strong><span>当前需求还没有消息；切换需求不会删除其他对话内容。</span></div>

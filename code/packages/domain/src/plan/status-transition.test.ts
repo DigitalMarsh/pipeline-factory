@@ -29,7 +29,7 @@ function fixture() {
 
 describe("Plan 状态转换表", () => {
   it("主路径一步步走通，每一步都落在表里", () => {
-    const { store, planId, current } = fixture();
+    const { store, current } = fixture();
     let from = current().status;
     for (const status of MAIN_PATH) {
       expect(canTransitionPlanStatus(from, status), `${from} → ${status}`).toBe(true);

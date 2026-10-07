@@ -438,7 +438,7 @@ describe("ExplorerThread", () => {
         answer = { type: "turn.input_required", request: { requestId: input.requestId, threadId: "provider-thread-1", turnId: "provider-turn-1", itemId: "item-1", questions: [], isBlocking: true } };
         resumeOrder.push("answer-called");
       },
-      async cancel() { undefined; },
+      async cancel() { /* 本用例不走取消路径 */ },
     };
 
     const service = new ExplorerThreadService(store, model, { maxSteps: 1 });

@@ -33,6 +33,6 @@ export function verifiedProjectBaseline(project: Project): { baseBranch: string;
     if (!baseCommit) throw new Error("empty commit");
     return { baseBranch: project.defaultBranch, baseCommit };
   } catch (error) {
-    throw new Error(`Project ${project.id} has no verified Git baseline: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`Project ${project.id} has no verified Git baseline: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
   }
 }

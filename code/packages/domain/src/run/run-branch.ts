@@ -50,6 +50,9 @@ export function normalizeRunBranchSlug(value: string): string | null {
     .replace(/\s*```$/i, "")
     .replace(/^["'“‘「『]+|["'”’」』]+$/gu, "")
     .normalize("NFKD")
+    // 有意匹配控制字符：这一行的目的就是**把所有非 ASCII 字符换成空格**再走 slug 化，
+    // `\x00-\x7F` 是"可打印 ASCII 的全集"这个意图最直白的写法（写成 ` -~` 反而看不出这层意思）。
+    // eslint-disable-next-line no-control-regex -- 见上
     .replace(/[^\x00-\x7F]+/g, " ")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")

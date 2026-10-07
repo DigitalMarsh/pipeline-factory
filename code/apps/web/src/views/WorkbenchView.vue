@@ -235,7 +235,7 @@ onBeforeUnmount(() => { requestScope.invalidate(); closeEvents(); });
       <button type="button" :class="{ active: mobilePanel === 'context' }" @click="mobilePanel = 'context'">上下文</button>
     </nav>
 
-    <div class="workbench-layout" v-loading="loading">
+    <div v-loading="loading" class="workbench-layout">
       <aside class="workbench-history" :class="{ 'mobile-panel-hidden': mobilePanel !== 'history' }">
         <div class="workbench-panel-heading"><div><span class="eyebrow">任务</span><h2>任务中心</h2></div><span class="history-count">{{ visiblePlans.length }}</span></div>
         <div class="history-buckets" role="group" aria-label="任务分区">

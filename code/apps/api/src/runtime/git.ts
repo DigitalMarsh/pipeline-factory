@@ -33,7 +33,7 @@ export async function inspectGitRepository(inputPath: string): Promise<{ repoRoo
     const result = await execFileAsync("git", ["rev-parse", "--show-toplevel"], { cwd: candidate });
     gitRoot = await realpath(String(result.stdout).trim());
   } catch (error) {
-    throw new Error(`Path is not a Git repository: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`Path is not a Git repository: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
   }
   if (gitRoot !== candidate) throw new Error(`Path must be the Git repository root: ${gitRoot}`);
   let defaultBranch = "main";

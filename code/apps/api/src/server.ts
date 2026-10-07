@@ -54,7 +54,6 @@ import {
   type ModelFamily,
   type ModelRole,
   type Project,
-  type AgentLoop,
   type AgentLoopRunner,
 } from "@pipeline-factory/domain";
 import { detectDefaultBranch } from "./runtime/git.js";
