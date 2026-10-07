@@ -92,6 +92,4 @@ export const api = {
   createMergeRequest: (runId: string, sourceCommit: string) => request<{ mergeRequest: MergeRequest }>(`/api/v4/runs/${runId}/merge-request`, { method: "POST", body: JSON.stringify({ sourceCommit }) }),
   getMergeRequest: (mergeRequestId: string) => request<{ mergeRequest: MergeRequest }>(`/api/v4/merge-requests/${mergeRequestId}`),
   confirmMerged: (mergeRequestId: string, targetCommit: string) => request<{ mergeRequest: MergeRequest }>(`/api/v4/merge-requests/${mergeRequestId}/confirm-merged`, { method: "POST", body: JSON.stringify({ targetCommit }) }),
-  getProjectHooks: (projectId: string) => request<{ projectId: string; lifecycle: { start?: { commandId: string; enabled?: boolean; timeoutMs?: number; maxAttempts?: number }; cleanup?: { commandId: string; enabled?: boolean; timeoutMs?: number; maxAttempts?: number } } }>(`/api/v4/projects/${projectId}/settings/hooks`),
-  saveProjectHooks: (projectId: string, lifecycle: Record<string, unknown>) => request<{ projectId: string; lifecycle: Record<string, unknown> }>(`/api/v4/projects/${projectId}/settings/hooks`, { method: "PUT", body: JSON.stringify(lifecycle) }),
 };
