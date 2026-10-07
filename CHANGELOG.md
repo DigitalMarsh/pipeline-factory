@@ -1,5 +1,47 @@
 # Changelog
 
+## 2026-10-07 — 分支名/工作区名的时间戳**到秒**（`factory/20261007-214805-slug`）
+
+报障：跑一条需求时 Run 直接 BLOCKED，界面上那张"为什么停下"写着
+
+> Git worktree could not be created: 准备工作区（新分支 `factory/20261007-fix-task-project-validation`）
+> 致命错误: 一个名为 `factory/20261007-fix-task-project-validation` 的分支已经存在
+
+查下来是**两件事叠在一起**：
+
+1. **戳只到天**——`composeRunBranchLeaf` 用 `runBranchDate` 拼 `20261007-<slug>`。同一天里标题相近的
+   两条需求，模型给的英文摘要也会相同（那几条需求的标题本来就是同一句），于是算出**同一个叶子**；
+2. **分配时问错了对象**——`allocateRunBranchLeaf` 的"已占用"集合取自
+   `store.listRuns().map(run => run.branch)`，即"库里还记着的 Run 分支"。可决定 git 收不收这个名字的是
+   **仓库里的分支**。两者会分家：仓库里那条分支确实在（连同名 worktree 目录都在），而它的 Run 行早就
+   被删了，库里查不到，分配器于是判"没占"，原样发下去 → `git worktree add -b` 撞名。
+
+### Changed
+
+**戳从"年月日"改成"年月日-时分秒"**（Asia/Shanghai，`hourCycle: "h23"`——只写 `hour12: false`
+在部分 ICU 版本上会把午夜给成 `24`）：
+
+```
+factory/20261001-add-project-gantt-view          ← 老样子
+factory/20261007-214805-fix-task-project-validation   ← 现在
+```
+
+- `runBranchDate` → **`runBranchStamp`**（名字跟着语义走：它不再是"日期"）。形状 `factory/<戳>-<slug>`
+  不变，你仓库里已有的分支照旧读得懂。
+- worktree 目录名 = 分支叶子，所以它也跟着带上时分秒（`20261007-214805-fix-task-project-validation`）。
+- `allocateRunBranchLeaf` 留着当**二级防线**，但它只对付"同一秒 + 同一个 slug"那种真正的同时撞；
+  注释里写明了它的输入是"库里记着的分支"而**不是**仓库、以及为什么先不改成问 git
+  （要给 `WorkspaceAdapter` 加方法、十二处测试桩跟着改，而秒级戳之后这条路的收益已经很小）。
+
+### 验证
+
+- `run-branch.test.ts` 5 条：**午夜走 h23 给 `000000` 而不是 `240000`**；同一天不同秒 → **不同的叶子**；
+  同一秒（毫秒不同）→ 同一个叶子（那点交给分配器）；slug 归一化与模型调用照旧。
+- `m3-run.test.ts` 两条断言跟着格式更新（`factory/\d{8}-\d{6}-vue-intro`），它们本身就是
+  "分支名会传给 Run 与 Worktree"的既有回归网。
+- `pnpm verify` 全绿：domain 444 / api 121 / web 599，运行库无悬空引用。
+
+
 ## 2026-10-07 — 悬空引用检查收进 scripts，并挂进 verify
 
 这一轮靠一个临时脚本扫运行库，两回各挖出真残留：**探针那条需求**（按四个 id 扫，漏掉了按 `loop_id`

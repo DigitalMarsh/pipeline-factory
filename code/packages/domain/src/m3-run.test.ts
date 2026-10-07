@@ -129,7 +129,9 @@ describe("Scheduler and ExecutionThread", () => {
 
     const run = await scheduler.start(plan.id);
 
-    expect(run.branch).toMatch(/^factory\/\d{8}-vue-intro$/);
+    // 戳是**年月日-时分秒**（见 runBranchStamp）：只到天的话，同一天里标题相近的两次 Run
+    // 会算出同一个叶子，而那就是分支名——撞上就把 Run 打成 BLOCKED。
+    expect(run.branch).toMatch(/^factory\/\d{8}-\d{6}-vue-intro$/);
     expect(workspaceInput).toMatchObject({ runId: run.id, branch: run.branch });
     expect(run.workspacePath).toBe(`/tmp/${run.branch.split("/").at(-1)}`);
   });
@@ -162,7 +164,7 @@ describe("Scheduler and ExecutionThread", () => {
 
     const run = await scheduler.start(plan.id);
 
-    expect(run.branch).toMatch(/^factory\/\d{8}-change$/);
+    expect(run.branch).toMatch(/^factory\/\d{8}-\d{6}-change$/);
   });
 
   it("persists every bounded lifecycle hook attempt", async () => {

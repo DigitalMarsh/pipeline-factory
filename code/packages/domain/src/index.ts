@@ -199,8 +199,8 @@ export {
   composeRunBranchLeaf,
   ModelRunBranchNameGenerator,
   normalizeRunBranchSlug,
-  runBranchDate,
   runBranchName,
+  runBranchStamp,
 } from "./run/run-branch.js";
 export type { RunBranchNameGenerator, RunBranchNameInput } from "./run/run-branch.js";
 export { Scheduler } from "./run/scheduler.js";
