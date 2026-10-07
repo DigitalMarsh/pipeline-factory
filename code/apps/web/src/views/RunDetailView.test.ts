@@ -194,11 +194,25 @@ describe("Run detail execution conversation", () => {
   it("uses a persistent Explorer-style composer for execution messages", () => {
     expect(runDetailSource).toContain('import { shouldSubmitComposer } from "../utils/composerKeyboard"');
     expect(runDetailSource).toContain('const executionDraft = ref("")');
-    expect(runDetailSource).toContain('const canSendExecutionMessage = computed(() => Boolean(thread.value && !["CANCELLED", "COMPLETED"].includes(thread.value.state)))');
+    /**
+     * **输入框的可用性判的是 Run 的状态，不是线程的状态。**
+     *
+     * 这里此前是 `Boolean(thread.value && !["CANCELLED", "COMPLETED"].includes(thread.value.state))`，
+     * 而执行一收尾线程就被置成 `COMPLETED`——于是输入框**恰好在最需要它的那一刻**禁用：执行完了、
+     * 还没合并、想再让 Agent 补一轮（那次报障就是这个）。线程状态回答的是"上一轮 Loop 还在不在"，
+     * Run 状态才回答"这个 Run 还需不需要人说话"。
+     */
+    expect(runDetailSource).toContain('const canSendExecutionMessage = computed(() => canContinueRun(run.value?.status ?? ""))');
+    expect(runDetailSource).not.toContain('!["CANCELLED", "COMPLETED"].includes(thread.value.state)');
+    // 一轮还在跑时给「排队 / 引导」两种投递方式；没在跑时两种等价，不由用户选。
+    expect(runDetailSource).toContain("composer-guidance-mode");
+    expect(runDetailSource).toContain('const executionGuidanceMode = ref<"steer" | "queue">("queue")');
     expect(runDetailSource).toContain('class="execution-conversation-stage"');
     expect(runDetailSource).toContain('class="composer execution-composer"');
-    expect(runDetailSource).toContain('placeholder="与执行线程沟通，或提出修改…"');
-    expect(runDetailSource).toContain('<span class="composer-mode">Run 模式</span>');
+    expect(runDetailSource).toContain('aria-label="执行会话消息"');
+    // 占位文案随"这一轮在不在跑"变，并且不可用时如实说明原因，而不是只把框灰掉。
+    expect(runDetailSource).toContain("executionComposerDisabledReason");
+    expect(runDetailSource).toContain('class="composer-mode">Run 模式</span>');
     expect(runDetailSource).toContain('@keydown="handleExecutionComposerKeydown"');
     expect(runDetailSource).toContain('function handleExecutionComposerKeydown(event: KeyboardEvent): void');
     expect(runDetailSource).toContain('class="composer-send"');

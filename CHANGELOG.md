@@ -1,5 +1,84 @@
 # Changelog
 
+## 2026-10-07 — 执行完了但没合并，想再让 Agent 补一轮：输入框点不动
+
+报障原话："执行线程执行完成了，但是未合并。状态还是运行中…我需要继续让 agent 做一些工作，补充探索
+未发现的问题。问题是现在页面上文本输入框无法点击。"
+
+查下来**不是一个坏按钮，是这条能力从来没接通**，而且断在不止一处：
+
+1. **输入框为什么禁用**：`executor-agent` 在 Loop 一收尾（`READY_FOR_VERIFY`）就把 ExecutionThread
+   置成 `COMPLETED`，而 `canSendExecutionMessage` 与 `Scheduler.addGuidance` 都拒绝 `COMPLETED`
+   线程。判据用错了对象——线程状态回答的是"上一轮 Loop 还在不在"，Run 状态才回答"这个 Run 还需不需要
+   人说话"，于是输入框**恰好在最需要它的那一刻**禁用。
+2. **就算放开也没用**：`USER_GUIDANCE` 全仓只有一个消费方——web 时间线的渲染。执行侧 Loop 只读
+   `MODEL_OUTPUT` 拼报告，**从不读这条**。实测：全库仅 2 条 `USER_GUIDANCE`，两条**之后**的
+   `MODEL_OUTPUT` 都是 **0 条**。
+3. **还有第二个同样的死胡同**：进程重启后 Loop 被判死，Run 进入 `RECOVERING`（project4 有 3 条），
+   界面标着「需要恢复」，能做的只有取消。
+
+### Added
+
+- **补充要求的两种投递方式**（按 Codex 的排队/引导，但实现在领域层）：
+  - 新表 `run_guidance`（`id/runId/content/mode/status/authorId/createdAt/consumedAt`），两种模式共用。
+    落库是必须的：排队要活到这一轮结束、引导要活到下一个步骤边界，都可能跨进程重启。
+  - **引导（STEER）**：`AgentLoopEngine` 在**每个步骤边界**（下一次 `stream()` 之前）通过
+    `AgentLoopInput.takePendingGuidance` 取走该 Run 的待投递项，作为 `user` 消息推进会话。
+    **只在下一个 Provider 回合生效**——插不进正在跑的那一个回合中间，界面据此写「引导 · 下一轮生效」。
+  - **排队（QUEUE）**：留在表里，Loop 进终态时由 `Scheduler.consumeQueuedGuidance` 取走并**起新的一轮**。
+- `Scheduler.continueRun(runId, guidance)`：用补充要求为**同一个 Run** 起一轮新的 Executor Loop。
+  状态回退走既有写入口——Run → `IN_PROGRESS`、Plan → `IN_PROGRESS`（`MERGE_READY → IN_PROGRESS`
+  是状态表里**已经声明过的合法边**，此前由恢复对账在用）、ExecutionThread → `ACTIVE`。
+  新那一轮的提问里带着补充要求与**已完成步骤清单**，并沿用上一轮 Loop 的 `providerThreadId`
+  （两个网关都支持续用同一个会话，而 `conversationId` 恒为 `run.id`）。
+- 设置页/Run 详情：输入框的可用性判据改成 `canContinueRun(runStatus)`；一轮还在跑时给「排队 / 引导」
+  二选一；草稿占位文案随状态变化，不可用时**说明原因**而不是只把框灰掉。
+- `POST /api/v4/runs/:runId/guidance` 扩成 `{ content, mode: "auto" | "steer" | "queue" }`，
+  返回 `{ thread, guidance, continued, run }`。
+
+### Fixed
+
+- **`MergeRequest` 加 `SUPERSEDED`**，`createRequest` 的幂等判据从"这个 run 已有请求"收窄成
+  "**同一个 sourceCommit**"。不修的话：从 `MERGE_READY` 回去重做后，旧请求会被原样返回，而
+  `confirmMerged` 只校验"旧 sourceCommit 是新 targetCommit 的祖先"——**没重新验证过的改动会跟着
+  一起被合进去**。`findMergeRequestByRun` 现在跳过被作废的那些。
+- 暂停中的 Run 只收下补充要求、不当场发动：随手把 `PAUSED` 线程翻回 `ACTIVE` 等于把用户的暂停作废，
+  而且紧接着的 `resume` 会因线程已不是 `PAUSED` 而失败（这条是被既有 API 测试当场抓住的）。
+- `addGuidance` 返回的是**重新读出来的**那一行：`continueRun` 刚把它标成已消费，返回构造时那份会让
+  界面以为它还挂着。
+
+### 语义（用户定下的）
+
+**起续跑那一轮时，Run 按业务流程重走一遍，但任务/步骤状态一个字都不动。** 后者不是"顺便"做到的：
+任务完成度从来不是持久状态（`allTasksComplete` 由本轮报告的 `completedTaskIds` 现算），任务行是 UI
+从 journal 的 `TASK_PROGRESS` 推导的——**不动 journal 就自然保持原样**，某个未完成步骤被这次补完了
+则靠新报告翻成完成。由此有两条必须写进提示词的约束：报告里的 `completedTaskIds` 要覆盖**全部**任务 id
+（否则判定永远是 `TASKS_INCOMPLETE`，白跑步骤并可能撞上 `MAX_STEPS_EXCEEDED`），以及补充要求
+**突破不了冻结的计划范围**（越界会被 gate 以 `PATH_OUTSIDE_SCOPE` 拦下，那种情况该走「创建更新版本」）。
+
+### 明确不做
+
+`BLOCKED` / `NEEDS_PLAN_CHANGE` 不放行——它们常常意味着"计划本身有问题"，用一句话把它们顶开会把真
+问题盖住。也不使用 Codex 的 `thread/queue/add`：队列必须是我方 Run 生命周期看得见的东西（验证与合并
+要等"没有待办补充要求"才能往下走），Provider 的队列在它自己的内存里、重启就没了，Claude 侧也没有对应能力。
+
+### 验证
+
+- 领域 11 条新用例（`src/run/run-continuation.test.ts`）：MERGE_READY / RECOVERING 上续跑的三处状态
+  回退与"接着上一轮会话"；**任务状态不重置**（续跑前后 `task-lifecycle` 事实逐字一致）；四种不该受理
+  的状态被拒且**零写入**；暂停中只收下不发动；正在跑时只排队；`steer` 记成 STEER；排队项在 Run 停下时
+  被取走；旧合并请求被作废。另有 executor 侧 1 条钉住"引导真的进了模型收到的 messages 且只消费一次"，
+  以及 store 契约 2 条（两种实现一致）。
+- API 1 条新用例：认不出来的 `mode` 在入口被 400 拒掉；没有在跑的 Loop 时 `auto` 收下并记成
+  `QUEUE`/`PENDING`（那正是接下来实际走的那条路）。既有那条 guidance 用例改为覆盖新语义。
+- web：`canContinueRun` 的可用性表、Run 详情输入框判据与投递方式的源码断言。
+- 浏览器实测（project4 那条真实的 `MERGE_READY` Run）：输入框由**禁用**变为可用、占位文案是
+  「补充要求，执行线程会重新开工…」、没在跑的 Loop 时**不出现**投递方式选择器、任务行仍显示
+  「已完成」；控制台无报错。**没有真的发出去**——那会起一个真实的 Run（改 worktree、花额度），
+  留给用户自己按第一下。
+- `pnpm verify`：domain 420 / api 117 / web 578 全绿，无新增值级循环依赖。
+
+
 ## 2026-10-07 — 用量栏的 Agent 显示成 codex：端点指纹只吃了角色名
 
 报障：项目里把执行侧 Agent 设成 Claude Code，"执行页面看着也像 Claude，但左下方那个 Agent 显示

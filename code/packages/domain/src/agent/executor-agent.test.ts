@@ -231,6 +231,41 @@ describe("ExecutorAgent", () => {
     expect(requestCwd).toMatch(/code\/personal-site$/);
   });
 
+  /**
+   * 「引导」真正的落点：它必须在**下一个步骤边界**作为一条 user 消息交到模型手里，并且在同一个
+   * 时刻被记账成已消费。少了前半句就是"写了没人看"（那正是这条链原来的状态），少了后半句界面
+   * 就只能一直显示「待处理」。
+   */
+  it("**把待投递的「引导」交给模型**，并在同一个步骤边界记账成已消费", async () => {
+    const { store, plan, run } = await createQueuedRun();
+    store.saveRunGuidance({ id: "guidance-steer", runId: run.id, content: "先别动 docs/ 下面的东西", mode: "STEER", status: "PENDING", authorId: "local-user", createdAt: store.now(), consumedAt: null });
+    const seenByModel: string[] = [];
+    let calls = 0;
+    const model: ModelGateway = {
+      configFor: () => ({ model: "gpt-5.6-luna", loopMode: "provider-controlled" }),
+      capabilities: () => ({ supportsStructuredUserInput: false, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
+      async *stream(request: ModelRequest): AsyncIterable<ModelEvent> {
+        calls += 1;
+        // 第一步**故意不给报告**：gate 判 `EXECUTION_REPORT_MISSING` 继续，于是有了第二个步骤边界。
+        if (calls === 1) { yield { type: "text.delta", text: "step one" }; yield { type: "turn.completed" }; return; }
+        seenByModel.push(...request.messages.map((message) => String(message.content)));
+        yield { type: "text.delta", text: executionReport(plan.resolvedContract.tasks[0]!.id) };
+        yield { type: "turn.completed" };
+      },
+      async answerUserInput() { return undefined; },
+      async cancel() { return undefined; },
+    };
+
+    await new ExecutorAgent(store, model).run(run, plan);
+
+    expect(calls).toBeGreaterThanOrEqual(2);
+    expect(seenByModel.join("\n")).toContain("先别动 docs/ 下面的东西");
+    expect(store.listRunGuidance(run.id, { status: "PENDING" })).toHaveLength(0);
+    expect(store.listRunGuidance(run.id, { status: "CONSUMED" })).toHaveLength(1);
+    const journal = store.getExecutionThread(run.executionThreadId)!.journal;
+    expect(journal.filter((entry) => entry.payload.action === "guidance-consumed").map((entry) => entry.payload.guidanceId)).toEqual(["guidance-steer"]);
+  });
+
   it("rejects an included artifact directory that escapes through a symlink", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "pipeline-executor-symlink-"));
     const outside = await mkdtemp(join(tmpdir(), "pipeline-executor-outside-"));

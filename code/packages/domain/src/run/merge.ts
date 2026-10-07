@@ -37,7 +37,12 @@ export class MergeService {
     if (run.status !== "MERGE_READY" || (verification.status !== "PASSED" && verification.status !== "SKIPPED")) throw new Error("MergeRequest requires completed verification evidence");
     if (verification.runId !== run.id) throw new Error("Verification evidence must belong to the same run");
     const existing = this.store.findMergeRequestByRun(run.id);
-    if (existing) return existing;
+    // **幂等的判据是"同一个 sourceCommit"**，不是"这个 Run 已有请求"。这个 Run 可能被补充要求
+    // 推回去重做过（`MERGE_READY → IN_PROGRESS`），那份旧请求指向的是**更早**的 commit：
+    // 原地返回它，而 `confirmMerged` 只校验"旧 sourceCommit 是新 targetCommit 的祖先"，
+    // 于是新做的、还没重新验证过的改动会跟着一起被合进去。作废它，让下面照常建新的。
+    if (existing && existing.sourceCommit === sourceCommit) return existing;
+    if (existing) this.store.updateMergeRequest({ ...existing, status: "SUPERSEDED" });
     const project = this.store.getProject(run.projectId);
     if (project && this.options.git && !this.options.git.commitExists(project.repoRoot, sourceCommit)) {
       throw new Error(`Source commit ${sourceCommit} could not be verified in the project repository`);

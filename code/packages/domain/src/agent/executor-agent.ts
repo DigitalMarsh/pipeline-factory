@@ -56,6 +56,21 @@ export type WorkspaceScopeInspection = {
 
 export type WorkspaceScopeInspector = (input: { workspacePath: string; baseCommit: string; include: string[]; exclude?: string[] }) => Promise<WorkspaceScopeInspection>;
 
+/**
+ * 一次"补充要求"驱动的续跑。它与首次执行的差别只有两处：问模型什么、以及**接不接得上上一轮的会话**。
+ *
+ * `completedTaskIds` 是**这个 Run 之前已经完成的步骤**，来自 journal（`task-status` 报告的并集）。
+ * 它必须进提示词：`allTasksComplete` 要求报告里的 `completedTaskIds` 覆盖**全部**任务 id，
+ * 而续跑那一轮只做了剩下的那部分——不明说，模型只报本次新完成的那一个，判定永远是
+ * `TASKS_INCOMPLETE`，白跑步骤并可能撞上 `MAX_STEPS_EXCEEDED`。
+ */
+export type ExecutorContinuation = {
+  guidance: string;
+  completedTaskIds: readonly string[];
+  /** 上一轮 Loop 的 Provider 会话标识；传下去才接得上同一段对话（Codex 用它 resumeThread）。 */
+  previousProviderThreadId?: string | undefined;
+};
+
 /** Executor Agent 的运行限制；ProjectExecutionSnapshot 优先于全局默认策略。 */
 export type ExecutorAgentOptions = {
   maxSteps?: number;
@@ -65,6 +80,11 @@ export type ExecutorAgentOptions = {
   mode?: AgentLoopMode;
   toolRuntimeFactory?: (run: Run, revision: PlanRevision) => ToolRuntime;
   workspaceScopeInspector?: WorkspaceScopeInspector;
+  /**
+   * Run 的执行停下时（Loop 进终态 → Run 被置成 `READY_FOR_VERIFY` / `BLOCKED` / `CANCELLED`）通知一声。
+   * 组合根用它去消费"排队中的补充要求"——那件事属于 Scheduler，本类不该知道它，所以这里只是一个回调。
+   */
+  onRunStopped?: (runId: string) => void;
 };
 
 /**
@@ -95,7 +115,7 @@ export class ExecutorAgent {
   }
 
   /** 异步启动 Executor Loop；RunDetail 可通过 AgentLoop/SSE 观察实时进度。 */
-  async start(run: Run, revision: PlanRevision): Promise<AgentLoop> {
+  async start(run: Run, revision: PlanRevision, input: ExecutorContinuation | undefined = undefined): Promise<AgentLoop> {
     this.assertRunnable(run, revision);
     const workspaceRoot = run.workspacePath!;
     const commandWorkingDirectory = await resolveExecutorWorkingDirectory(workspaceRoot, revision.resolvedContract.scope.includePaths, revision.resolvedContract.artifact.path);
@@ -119,21 +139,16 @@ export class ExecutorAgent {
       // Run 会话没有回答入口：执行会话里没有回答结构化提问的 UI。让 Loop 在模型提问时
       // 直接以 STRUCTURED_INPUT_UNSUPPORTED 阻塞，而不是挂进等不到答案的 WAITING_FOR_INPUT。
       allowStructuredInput: false,
+      // 每个步骤边界把这一轮之前投递进来的"引导"交给模型（见 takePendingSteers 与
+      // AgentLoopInput.takePendingGuidance）。续跑那一轮同样吃它。
+      takePendingGuidance: () => this.takePendingSteers(run),
       ...(maxDurationMs === undefined ? {} : { maxDurationMs }),
       ...(this.options.maxRepeatedToolCalls === undefined ? {} : { maxRepeatedToolCalls: this.options.maxRepeatedToolCalls }),
       ...(this.options.maxNoProgressSteps === undefined ? {} : { maxNoProgressSteps: this.options.maxNoProgressSteps }),
       providerCommandTimeoutMs: revision.projectConfigSnapshot?.settings.concurrency.defaultTimeoutMs ?? 120_000,
       workspacePath: run.workspacePath!,
       ...(toolRuntime ? { toolRuntime } : {}),
-      modelRequest: {
-        conversationId: run.id,
-        modelConfig: projectConfig,
-        cwd: commandWorkingDirectory,
-        messages: [
-          { role: "system", content: this.systemInstructions(revision, workspaceRoot, commandWorkingDirectory) },
-          { role: "user", content: `Execute the approved plan: ${revision.planId}@${revision.revision}.` },
-        ],
-      },
+      modelRequest: this.modelRequest(run, revision, workspaceRoot, commandWorkingDirectory, projectConfig, input),
       gate: { evaluate },
       onEvent: (event) => this.handleEvent(run, event, openToolCalls, revision),
     });
@@ -160,21 +175,15 @@ export class ExecutorAgent {
       maxSteps: this.options.maxSteps ?? 40,
       // 同上：Run 会话没有回答入口。
       allowStructuredInput: false,
+      // 同步变体同样要在步骤边界把「引导」交出去——两个入口共用同一套投递语义。
+      takePendingGuidance: () => this.takePendingSteers(run),
       ...(maxDurationMs === undefined ? {} : { maxDurationMs }),
       ...(this.options.maxRepeatedToolCalls === undefined ? {} : { maxRepeatedToolCalls: this.options.maxRepeatedToolCalls }),
       ...(this.options.maxNoProgressSteps === undefined ? {} : { maxNoProgressSteps: this.options.maxNoProgressSteps }),
       providerCommandTimeoutMs: revision.projectConfigSnapshot?.settings.concurrency.defaultTimeoutMs ?? 120_000,
       workspacePath: run.workspacePath!,
       ...(toolRuntime ? { toolRuntime } : {}),
-      modelRequest: {
-        conversationId: run.id,
-        modelConfig: projectConfig,
-        cwd: commandWorkingDirectory,
-        messages: [
-          { role: "system", content: this.systemInstructions(revision, workspaceRoot, commandWorkingDirectory) },
-          { role: "user", content: `Execute the approved plan: ${revision.planId}@${revision.revision}.` },
-        ],
-      },
+      modelRequest: this.modelRequest(run, revision, workspaceRoot, commandWorkingDirectory, projectConfig, undefined),
       gate: { evaluate: async (context) => gate.evaluate({ ...context, ...(await this.progressContext(run, revision, context.content ?? "", openToolCalls)) }) },
       onEvent: (event) => this.handleEvent(run, event, openToolCalls, revision),
     });
@@ -237,6 +246,47 @@ export class ExecutorAgent {
       hasPendingChangeProposal: this.store.listChangeProposals(run.id).some((proposal) => proposal.status === "OPEN"),
       ...(report ? {} : { reportError: parsedReport.error ?? "EXECUTION_REPORT_INVALID_OR_MISSING" }),
     };
+  }
+
+  /**
+   * 这一轮问模型什么。首次执行与续跑共用，差别只在第二条 user 消息。
+   *
+   * **每次都重发系统提示**：它是 Executor 的章程（范围、报告协议、任务标记），续跑那一轮同样需要。
+   * 若某个 Provider 忽略会话中途的 system 消息，章程仍会从网关的 developerInstructions 那条通道到达
+   * （见 model/types.ts 维护提示 9），所以这里不为了迁就它而把章程塞进 user 消息里。
+   */
+  private modelRequest(run: Run, revision: PlanRevision, workspaceRoot: string, commandWorkingDirectory: string, projectConfig: ModelRoleConfig, continuation: ExecutorContinuation | undefined) {
+    return {
+      conversationId: run.id,
+      modelConfig: projectConfig,
+      cwd: commandWorkingDirectory,
+      ...(continuation?.previousProviderThreadId ? { providerThreadId: continuation.previousProviderThreadId } : {}),
+      messages: [
+        { role: "system" as const, content: this.systemInstructions(revision, workspaceRoot, commandWorkingDirectory) },
+        { role: "user" as const, content: continuation ? this.continuationPrompt(continuation) : `Execute the approved plan: ${revision.planId}@${revision.revision}.` },
+      ],
+    };
+  }
+
+  /**
+   * 补充要求那一条 user 消息。
+   *
+   * 两句话不能省：**已完成的步骤要列出来**（否则模型会从头再做一遍），以及**报告要覆盖全部任务**
+   * （`allTasksComplete` 的判据是报告里的 `completedTaskIds` 覆盖全部 id，只报本轮做的那些会被判成
+   * 未完成，白跑步骤并可能撞上 MAX_STEPS_EXCEEDED）。最后一句是范围边界：冻结的 include scope
+   * 改不了，越界会被 gate 以 PATH_OUTSIDE_SCOPE 直接拦下——让它说出来，好过让它去撞。
+   */
+  private continuationPrompt(continuation: ExecutorContinuation): string {
+    const done = continuation.completedTaskIds.length > 0
+      ? `Tasks already completed in earlier rounds of this Run — do not redo them: ${continuation.completedTaskIds.join(", ")}.`
+      : "No task has been reported complete in this Run yet.";
+    return [
+      "The operator added a requirement to this Run after an earlier round had stopped. Continue the same Run and the same worktree.",
+      done,
+      `Additional requirement:\n${continuation.guidance}`,
+      "When you finish, give the full execution report as usual, and make completedTaskIds cover EVERY task of the plan — including the ones already completed in earlier rounds. A report that lists only what you did this round is treated as incomplete.",
+      "Work only inside the approved include scope. If this requirement needs files outside it, say so instead of editing them.",
+    ].join("\n\n");
   }
 
   /** 将冻结的 Plan 合同和 Project 配置注入模型，确保执行阶段不读取当前 Project。 */
@@ -522,6 +572,24 @@ export class ExecutorAgent {
     if (loop.state === "CANCELLED") this.setRunStatus(run, "CANCELLED");
   }
 
+  /**
+   * 取走这个 Run 待投递的**引导**（人补充的要求），按已消费记账，返回内容交给 Loop 作为 user 消息。
+   * Loop 在每个步骤边界调用它一次（见 `AgentLoopInput.takePendingGuidance`）。
+   *
+   * 为什么记账要分两处：投递那一刻写的 journal 是「待处理」（人可能投完就把页面关了），这一条
+   * `guidance-consumed` 才是"真的交给模型了"。界面据此把那一行从待处理翻成已生效，不必猜。
+   */
+  private async takePendingSteers(run: Run): Promise<readonly string[]> {
+    const pending = this.store.listRunGuidance(run.id, { mode: "STEER", status: "PENDING" });
+    if (pending.length === 0) return [];
+    const consumedAt = this.store.now();
+    for (const item of pending) {
+      this.store.updateRunGuidance({ ...item, status: "CONSUMED", consumedAt });
+      this.append(run.executionThreadId, "TASK_PROGRESS", { action: "guidance-consumed", guidanceId: item.id, delivery: "STEER", consumedAt });
+    }
+    return pending.map((item) => item.content);
+  }
+
   private setRunStatus(run: Run, status: "READY_FOR_VERIFY" | "BLOCKED" | "CANCELLED", reason?: string): void {
     // 收尾：正文若正好卡在最后一段（之后没有任何别的条目），它还没有落库的理由就消失了。
     this.flushModelOutput(run.executionThreadId);
@@ -535,6 +603,10 @@ export class ExecutorAgent {
       if (status === "BLOCKED") updatePlanStatus(this.store, plan, { status: "BLOCKED", attentionReason: reason ?? "Executor loop blocked", lastEventAt: this.store.now() }, reason ?? "Executor loop blocked");
       else this.store.updatePlan({ ...plan, lastEventAt: this.store.now() });
     }
+    // 通知组合根"这个 Run 的执行停了"。**排队中的补充要求由它去消费**——那件事属于 Scheduler
+    // （它才知道 Run/Plan/Thread 该怎么回退），本类反过来依赖 Scheduler 会把这条边绕成环。
+    // 放在这个唯一的收尾出口上：三条终态映射都经过这里，没有第二条路要同步。
+    this.options.onRunStopped?.(run.id);
   }
 
   private append(threadId: string, type: import("../index.js").JournalEntryType, payload: Record<string, unknown>): void {

@@ -486,7 +486,8 @@ export type MergeRequest = {
   planId: string;
   sourceCommit: string;
   targetBranch: string;
-  status: "OPEN" | "MERGED";
+  /** `SUPERSEDED` = 这个 Run 后来又被补充要求推回去重做了一轮，此请求指向的 commit 已经不是最新的。 */
+  status: "OPEN" | "MERGED" | "SUPERSEDED";
   humanConfirmationRequired: true;
   createdAt: string;
   mergedAt: string | null;
@@ -522,6 +523,22 @@ export type ExecutionJournalPayload = Record<string, unknown> & {
   providerTurnId?: string;
   providerItemId?: string;
   callId?: string;
+};
+
+/**
+ * 一条补充要求及其投递状态。
+ * `mode` 是投递方式：`STEER` 在正在跑的那一轮的下一个步骤边界生效，`QUEUE` 等它结束后起新的一轮。
+ * **`status === "PENDING"` 时必须显示成「待处理」**——它还没到模型手里，显示成已生效就是在骗人。
+ */
+export type RunGuidance = {
+  id: string;
+  runId: string;
+  content: string;
+  mode: "STEER" | "QUEUE";
+  status: "PENDING" | "CONSUMED" | "CANCELLED";
+  authorId: string;
+  createdAt: string;
+  consumedAt: string | null;
 };
 
 export type ExecutionThread = {

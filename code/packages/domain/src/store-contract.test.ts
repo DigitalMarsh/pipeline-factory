@@ -66,6 +66,7 @@ const REQUIRED_PORT_METHOD_NAMES = [
   "savePlanQueryProjection", "listPlanQueryProjection",
   "saveVerificationRun", "getVerificationRun", "listVerificationRuns",
   "saveMergeRequest", "getMergeRequest", "findMergeRequestByRun", "listMergeRequests", "updateMergeRequest",
+  "saveRunGuidance", "updateRunGuidance", "listRunGuidance",
   "saveAgentLoop", "getAgentLoop", "listAgentLoops", "updateAgentLoop",
   "appendAgentLoopStep", "listAgentLoopSteps", "getLastAgentLoopStepSequence", "recoverAgentLoops",
   "saveToolCall", "getToolCall", "listToolCalls", "updateToolCall",
@@ -414,6 +415,41 @@ describe("store contract: Run 与合并状态", () => {
       store.updateMergeRequest({ ...store.getMergeRequest("merge-1")!, status: "MERGED", mergedAt: store.now() });
 
       expect(store.getMergeRequest("merge-1")?.status).toBe("MERGED");
+    });
+  });
+
+  /**
+   * `SUPERSEDED` 必须被 findByRun 跳过：那个请求指向的 commit 已经被补充轮次取代，
+   * 把它当成"这个 Run 的合并请求"返回，`createRequest` 的幂等就会命中过期的东西。
+   */
+  it("skips a superseded MergeRequest when looking one up by Run", () => {
+    assertBothStores((store) => {
+      store.saveMergeRequest({ id: "merge-1", runId: "run-1", planId: "plan-1", sourceCommit: "abc", targetBranch: "main", status: "SUPERSEDED", humanConfirmationRequired: true, createdAt: store.now(), mergedAt: null });
+
+      expect(store.findMergeRequestByRun("run-1")).toBeUndefined();
+      // 按 id 仍读得到——它是审计事实，只是不再是"当前那个"。
+      expect(store.getMergeRequest("merge-1")?.status).toBe("SUPERSEDED");
+    });
+  });
+
+  it("round-trips Run guidance with its delivery mode and consumption", () => {
+    assertBothStores((store) => {
+      const createdAt = store.now();
+      store.saveRunGuidance({ id: "guidance-1", runId: "run-1", content: "顺便把空指针也修了", mode: "QUEUE", status: "PENDING", authorId: "local-user", createdAt, consumedAt: null });
+      store.saveRunGuidance({ id: "guidance-2", runId: "run-1", content: "先看 X", mode: "STEER", status: "PENDING", authorId: "local-user", createdAt, consumedAt: null });
+      store.saveRunGuidance({ id: "guidance-3", runId: "run-2", content: "别的 Run", mode: "STEER", status: "PENDING", authorId: "local-user", createdAt, consumedAt: null });
+
+      expect(store.listRunGuidance("run-1").map((item) => item.id)).toEqual(["guidance-1", "guidance-2"]);
+      // 两个过滤器各自生效，也都能组合。
+      expect(store.listRunGuidance("run-1", { mode: "STEER" }).map((item) => item.id)).toEqual(["guidance-2"]);
+      expect(store.listRunGuidance("run-1", { mode: "QUEUE", status: "PENDING" }).map((item) => item.id)).toEqual(["guidance-1"]);
+      // 别的 Run 的一条都不串进来。
+      expect(store.listRunGuidance("run-1", { status: "PENDING" })).toHaveLength(2);
+
+      store.updateRunGuidance({ ...store.listRunGuidance("run-1")[0]!, status: "CONSUMED", consumedAt: store.now() });
+
+      expect(store.listRunGuidance("run-1", { status: "PENDING" }).map((item) => item.id)).toEqual(["guidance-2"]);
+      expect(store.listRunGuidance("run-1", { status: "CONSUMED" })[0]?.consumedAt).not.toBeNull();
     });
   });
 

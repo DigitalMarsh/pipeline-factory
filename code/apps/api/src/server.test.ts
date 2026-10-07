@@ -1147,6 +1147,33 @@ describe("Pipeline Factory v4 API", () => {
     expect(store.getExecutionThread(started.json().run.executionThreadId)?.journal.some((entry) => entry.type === "USER_GUIDANCE")).toBe(true);
   });
 
+  /**
+   * `mode` 是投递方式，不是"这条要求重不重要"。HTTP 用小写、领域枚举用大写，这一层是那条翻译边——
+   * 认不出来的取值必须在**入口**就被拒，而不是等到投递时才发现它落进了一个没人懂的分支。
+   */
+  it("validates the guidance delivery mode at the edge", async () => {
+    const store = new InMemoryPipelineStore();
+    createTestProject(store);
+    const plans = new PlanService(store);
+    plans.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
+    const plan = plans.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Guidance modes", resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Guidance modes" }) });
+    plans.confirm(plan.id, "user-1");
+    plans.enqueue(plan.id);
+    const scheduler = new Scheduler({ store, workspace: { create: async () => ({ path: "/tmp/run", branch: "factory/run", baseCommit: "abc" }), remove: async () => undefined }, hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })) });
+    const app = createApp({ store, scheduler, seed: false });
+    apps.push(app);
+    const started = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/run` });
+    const runId = started.json().run.id as string;
+
+    const unknown = await app.inject({ method: "POST", url: `/api/v4/runs/${runId}/guidance`, payload: { content: "试试", mode: "shout" } });
+    expect(unknown.statusCode).toBe(400);
+
+    // 没有在跑的 Loop 时 `auto` 与两种显式模式等价：都收下，都记成 QUEUE（那正是接下来实际走的那条路）。
+    const auto = await app.inject({ method: "POST", url: `/api/v4/runs/${runId}/guidance`, payload: { content: "补一句", mode: "auto" } });
+    expect(auto.statusCode).toBe(200);
+    expect(auto.json().guidance).toMatchObject({ mode: "QUEUE", status: "PENDING" });
+  });
+
   it("terminates a run and synchronizes its Plan status", async () => {
     const store = new InMemoryPipelineStore();
     createTestProject(store);

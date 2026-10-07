@@ -66,6 +66,9 @@ import type {
   HookExecution,
   JournalEntryType,
   MergeRequest,
+  RunGuidance,
+  RunGuidanceMode,
+  RunGuidanceStatus,
   ModelInputQuestion,
   PersistedToolCall,
   PlanExplorationStatus,
@@ -476,6 +479,16 @@ export class SqlitePipelineStore implements PipelineStore {
         created_at TEXT NOT NULL,
         merged_at TEXT,
         detected_target_commit TEXT
+      );
+      CREATE TABLE IF NOT EXISTS run_guidance (
+        id TEXT PRIMARY KEY,
+        run_id TEXT NOT NULL,
+        content TEXT NOT NULL,
+        mode TEXT NOT NULL,
+        status TEXT NOT NULL,
+        author_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        consumed_at TEXT
       );
       CREATE TABLE IF NOT EXISTS agent_loops (
         id TEXT PRIMARY KEY,
@@ -1119,7 +1132,9 @@ export class SqlitePipelineStore implements PipelineStore {
   }
 
   findMergeRequestByRun(runId: string): MergeRequest | undefined {
-    const row = this.statement("SELECT * FROM merge_requests WHERE run_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1").get(runId) as SqliteRow | undefined;
+    // 跳过 `SUPERSEDED`：那个请求指向的 commit 已经被后续的补充轮次取代，把它当作"这个 Run 的
+    // 合并请求"返回会让 `createRequest` 的幂等直接命中一个过期的东西（见 MergeRequest.status 的说明）。
+    const row = this.statement("SELECT * FROM merge_requests WHERE run_id = ? AND status != 'SUPERSEDED' ORDER BY created_at DESC, rowid DESC LIMIT 1").get(runId) as SqliteRow | undefined;
     return row ? this.mergeRequestFromRow(row) : undefined;
   }
 
@@ -1131,6 +1146,32 @@ export class SqlitePipelineStore implements PipelineStore {
   updateMergeRequest(request: MergeRequest): MergeRequest {
     this.statement("UPDATE merge_requests SET status = ?, merged_at = ?, detected_target_commit = ? WHERE id = ?").run(request.status, request.mergedAt, request.detectedTargetCommit ?? null, request.id);
     return this.getMergeRequest(request.id) as MergeRequest;
+  }
+
+  saveRunGuidance(guidance: RunGuidance): RunGuidance {
+    this.statement("INSERT OR IGNORE INTO run_guidance (id, run_id, content, mode, status, author_id, created_at, consumed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(guidance.id, guidance.runId, guidance.content, guidance.mode, guidance.status, guidance.authorId, guidance.createdAt, guidance.consumedAt);
+    return this.listRunGuidance(guidance.runId).find((item) => item.id === guidance.id) as RunGuidance;
+  }
+
+  updateRunGuidance(guidance: RunGuidance): RunGuidance {
+    this.statement("UPDATE run_guidance SET status = ?, consumed_at = ? WHERE id = ?").run(guidance.status, guidance.consumedAt, guidance.id);
+    return guidance;
+  }
+
+  listRunGuidance(runId: string, filter: { mode?: RunGuidanceMode; status?: RunGuidanceStatus } = {}): RunGuidance[] {
+    const rows = this.statement("SELECT * FROM run_guidance WHERE run_id = ? ORDER BY created_at ASC, rowid ASC").all(runId) as unknown as SqliteRow[];
+    return rows
+      .map((row) => ({
+        id: String(row.id),
+        runId: String(row.run_id),
+        content: String(row.content),
+        mode: String(row.mode) as RunGuidanceMode,
+        status: String(row.status) as RunGuidanceStatus,
+        authorId: String(row.author_id),
+        createdAt: String(row.created_at),
+        consumedAt: row.consumed_at === null || row.consumed_at === undefined ? null : String(row.consumed_at),
+      }))
+      .filter((item) => (filter.mode === undefined || item.mode === filter.mode) && (filter.status === undefined || item.status === filter.status));
   }
 
   saveAgentLoop(loop: AgentLoop): AgentLoop {
@@ -1341,6 +1382,7 @@ export class SqlitePipelineStore implements PipelineStore {
       this.statement(`DELETE FROM hook_executions WHERE ${runIds.clause}`).run(...runIds.values);
       this.statement(`DELETE FROM verification_runs WHERE ${runIds.clause}`).run(...runIds.values);
       this.statement(`DELETE FROM merge_requests WHERE ${runIds.clause}`).run(...runIds.values);
+      this.statement(`DELETE FROM run_guidance WHERE ${runIds.clause}`).run(...runIds.values);
     }
     if (loopIds) {
       this.statement(`DELETE FROM agent_loop_steps WHERE ${loopIds.clause}`).run(...loopIds.values);

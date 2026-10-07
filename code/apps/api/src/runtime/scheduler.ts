@@ -25,12 +25,16 @@ import { planStorageFor } from "./plan-directory.js";
 /** 用全局配置组装默认 Scheduler；每个 Run 启动后再由 Revision 快照解析项目级适配器。 */
 export function createDefaultScheduler(store: PipelineStore, config: FactoryConfig, model: ModelGateway, mcpRegistry?: McpToolRegistry, pluginRegistry?: PluginRegistry, computerUse?: ComputerUseBridge): Scheduler {
   const definitions = readCommandDefinitions(config);
+  // **延迟绑定**：Scheduler 与 ExecutorAgent 互相需要——后者要在 Run 停下时通知前者去消费"排队中的
+  // 补充要求"。回调只可能在 Run 真的停下时被调用，而那时两边都已构造完，所以一个空槽就够，
+  // 不必为此把其中一边改成 setter 或者把 ExecutorAgent 的构造拆成两段。
+  const schedulerRef: { current?: Scheduler } = {};
   const commands = new RegisteredCommandExecutor(definitions);
   const registeredCommandIds = new Set(definitions.map((definition) => definition.commandId));
   const mcpAllowedTools = new Set(config.mcp.servers.flatMap((server) => server.allowedTools.map((tool) => "mcp:" + server.name + ":" + tool)));
   const projectCommands = (snapshot: ProjectExecutionSnapshot) => new RegisteredCommandExecutor(snapshot.settings.commands);
   const projectDefinitions = (snapshot: ProjectExecutionSnapshot) => [...snapshot.settings.commands];
-  return new Scheduler({
+  const scheduler = new Scheduler({
     store,
     branchNameGenerator: new ModelRunBranchNameGenerator(model),
     workspace: new LocalGitWorktreeAdapter({ projectRoot: config.project.root, worktreeRoot: config.storage.worktreeRoot, ignoreDirtyPaths: planStorageFor(config, config.project.root).ignoreDirtyPaths }),
@@ -41,6 +45,9 @@ export function createDefaultScheduler(store: PipelineStore, config: FactoryConf
       return new LifecycleHookRunner(snapshotCommands.execute.bind(snapshotCommands), { cleanupCwd: snapshot.repoRoot });
     },
     executor: new ExecutorAgent(store, model, undefined, {
+      // Run 的执行停下时，去把排队中的补充要求取出来起一轮（它属于 Scheduler：Run/Plan/Thread
+      // 怎么回退是那边的规则）。没有排队的就是一次空转。
+      onRunStopped: (runId) => { void schedulerRef.current?.consumeQueuedGuidance(runId); },
       maxSteps: config.model.loop.maxSteps,
       maxDurationMs: config.model.loop.maxDurationMs,
       maxRepeatedToolCalls: config.model.loop.maxRepeatedToolCalls,
@@ -86,4 +93,6 @@ export function createDefaultScheduler(store: PipelineStore, config: FactoryConf
       },
     }),
   });
+  schedulerRef.current = scheduler;
+  return scheduler;
 }

@@ -3,7 +3,7 @@
  *
  * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
  */
-import type { AgentLoop, AgentLoopStep, DailyActivity, ExecutionThread, ExplorerActivityItem, ExplorerInputRequest, ExplorerPlan, ExplorerThread, ExplorerTurn, MergeRequest, ModelBackendsResponse, Plan, PlanDetail, PlanDispatchState, PlanRevisionDraft, Project, ProjectCatalogItem, ProjectExecutionThread, ProjectExecutionThreadSnapshot, ProjectSummary, Run, ToolCall, VerificationRun, WorkbenchSnapshot, WorkbenchEvent } from "./types";
+import type { AgentLoop, AgentLoopStep, DailyActivity, ExecutionThread, ExplorerActivityItem, ExplorerInputRequest, ExplorerPlan, ExplorerThread, ExplorerTurn, MergeRequest, ModelBackendsResponse, Plan, PlanDetail, PlanDispatchState, PlanRevisionDraft, Project, ProjectCatalogItem, ProjectExecutionThread, ProjectExecutionThreadSnapshot, ProjectSummary, Run, RunGuidance, ToolCall, VerificationRun, WorkbenchSnapshot, WorkbenchEvent } from "./types";
 
 export class ApiRequestError extends Error {
   constructor(message: string, readonly status: number) {
@@ -121,7 +121,11 @@ export const api = {
   cancelRun: (runId: string, reason = "user_requested") => request<{ run: Run }>(`/api/v4/runs/${runId}/cancel`, { method: "POST", body: JSON.stringify({ reason }) }),
   pauseRun: (runId: string) => request<{ run: Run; thread: ExecutionThread }>(`/api/v4/runs/${runId}/pause`, { method: "POST" }),
   resumeRun: (runId: string) => request<{ run: Run; thread: ExecutionThread }>(`/api/v4/runs/${runId}/resume`, { method: "POST" }),
-  addRunGuidance: (runId: string, content: string) => request<{ thread: ExecutionThread }>(`/api/v4/runs/${runId}/guidance`, { method: "POST", body: JSON.stringify({ content }) }),
+  /**
+   * 投递补充要求。`mode` 是投递方式：`steer` 交给正在跑的那一轮（下一个步骤边界生效）、`queue`
+   * 等这一轮结束后起新的一轮、`auto` 交给服务端按"有没有在跑的 Loop"自己选。
+   */
+  addRunGuidance: (runId: string, content: string, mode: "auto" | "steer" | "queue" = "auto") => request<{ thread: ExecutionThread; guidance: RunGuidance; continued: boolean; run: Run | null }>(`/api/v4/runs/${runId}/guidance`, { method: "POST", body: JSON.stringify({ content, mode }) }),
   verifyRun: (runId: string) => request<{ verification: VerificationRun }>(`/api/v4/runs/${runId}/verify`, { method: "POST" }),
   createMergeRequest: (runId: string, sourceCommit: string) => request<{ mergeRequest: MergeRequest }>(`/api/v4/runs/${runId}/merge-request`, { method: "POST", body: JSON.stringify({ sourceCommit }) }),
   getMergeRequest: (mergeRequestId: string) => request<{ mergeRequest: MergeRequest }>(`/api/v4/merge-requests/${mergeRequestId}`),

@@ -61,6 +61,9 @@ import type {
   ProjectExecutionThread,
   RegisterThreadInput,
   Run,
+  RunGuidance,
+  RunGuidanceMode,
+  RunGuidanceStatus,
   VerificationRun,
 } from "../index.js";
 
@@ -157,6 +160,10 @@ export type PipelineStore = {
   findMergeRequestByRun(runId: string): MergeRequest | undefined;
   listMergeRequests(): MergeRequest[];
   updateMergeRequest(request: MergeRequest): MergeRequest;
+  saveRunGuidance(guidance: RunGuidance): RunGuidance;
+  updateRunGuidance(guidance: RunGuidance): RunGuidance;
+  /** 按创建顺序返回某个 Run 的补充要求；两个过滤条件都可省略（省略即不筛）。 */
+  listRunGuidance(runId: string, filter?: { mode?: RunGuidanceMode; status?: RunGuidanceStatus }): RunGuidance[];
   saveAgentLoop(loop: AgentLoop): AgentLoop;
   getAgentLoop(loopId: string): AgentLoop | undefined;
   listAgentLoops(ownerId?: string): AgentLoop[];

@@ -143,12 +143,45 @@ export type MergeRequest = {
   planId: string;
   sourceCommit: string;
   targetBranch: string;
-  status: "OPEN" | "MERGED";
+  /**
+   * `SUPERSEDED` = 这个 Run 后来又被补充要求推回去重做了一轮，**这个请求指向的 commit 已经不是
+   * 最新的那份工作了**。它必须存在：`createRequest` 按 run 幂等，而 `confirmMerged` 只校验
+   * "旧 sourceCommit 是新 targetCommit 的祖先"——没有这个状态，重新开工之后旧的 OPEN 请求会被
+   * 原样返回，**没验过的新改动会跟着旧请求一起被合进去**。
+   */
+  status: "OPEN" | "MERGED" | "SUPERSEDED";
   humanConfirmationRequired: true;
   createdAt: string;
   mergedAt: string | null;
   /** 最近一次只读 Git reconciliation 观察到的目标提交；人工创建的请求为空。 */
   detectedTargetCommit?: string | null;
+};
+
+/**
+ * 补充要求的**投递方式**。两种都落在这张表里，区别只是"什么时候取出来"：
+ *   `STEER` —— 在正在跑的那个 Loop 的**下一个步骤边界**投递给模型（下一轮生效，不是打断当前回合）；
+ *   `QUEUE` —— 留在表里，等这一轮进终态后由 Scheduler 取走，拼成一条要求**起新的一轮**。
+ */
+export type RunGuidanceMode = "STEER" | "QUEUE";
+/** `PENDING` = 还没投递出去（界面必须显示成「待处理」，不能显示成已生效）。 */
+export type RunGuidanceStatus = "PENDING" | "CONSUMED" | "CANCELLED";
+
+/**
+ * 一条提交给执行线程的补充要求。
+ *
+ * 为什么它必须**落库**而不是放在内存里：`QUEUE` 要活到 Loop 结束（可能跨进程重启），
+ * `STEER` 也可能还没等到下一个步骤边界进程就被重启了。丢了它 = 用户以为说了、Agent 没听见，
+ * 而这正是这次要修的病。
+ */
+export type RunGuidance = {
+  id: string;
+  runId: string;
+  content: string;
+  mode: RunGuidanceMode;
+  status: RunGuidanceStatus;
+  authorId: string;
+  createdAt: string;
+  consumedAt: string | null;
 };
 
 export type MergeReconciliationOutcome = "DETECTED" | "ALREADY_OPEN" | "NOT_MERGED" | "UNAVAILABLE" | "ALREADY_MERGED";

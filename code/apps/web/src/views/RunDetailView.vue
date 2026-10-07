@@ -21,7 +21,7 @@ import { executionMessageDetails, executionMessageDiagnosticsTitle } from "../ut
 import { executionModelSourceNote as executionModelSourceNoteFor, formatProviderContextUsage, resolveExecutionModelIdentity } from "../utils/executionTelemetry";
 import { useModelBackends } from "../composables/useModelBackends";
 import { executionTaskStatusLabel, executionTaskStatusType, executionTaskSummary, projectExecutionTasks } from "../utils/executionTasks";
-import { canTerminateRun } from "../utils/runControls";
+import { canContinueRun, canTerminateRun } from "../utils/runControls";
 import { describeRunLoadError } from "../utils/runLoadError";
 import { createProjectRequestScope } from "../utils/projectRoutes";
 import { formatAgentLoopState } from "../utils/agentLoopPresentation";
@@ -277,7 +277,26 @@ function expandTaskGroup(groupId: string): void {
   next.delete(groupId);
   collapsedTaskGroups.value = next;
 }
-const canSendExecutionMessage = computed(() => Boolean(thread.value && !["CANCELLED", "COMPLETED"].includes(thread.value.state)));
+/**
+ * 还能不能补充要求：判据是 **Run 的状态**，不是线程的状态。
+ *
+ * 原来判的是 `thread.state !== COMPLETED`，而执行一收尾线程就被置成 `COMPLETED`——于是恰好在
+ * "执行完了、还没合并、想再让它补一轮"这一刻输入框是禁用的（报障现场）。线程状态回答的是
+ * "上一轮 Loop 还在不在"，Run 状态才回答"这个 Run 还需不需要人说话"。
+ */
+const canSendExecutionMessage = computed(() => canContinueRun(run.value?.status ?? ""));
+/** 还有一轮在跑吗——决定补充要求是"交给这一轮"还是"起新的一轮"。 */
+const executorLoopRunning = computed(() => (run.value?.agentLoops ?? []).some((loop) => loop.role === "executor" && ["CREATED", "RUNNING", "WAITING_FOR_INPUT", "PAUSED"].includes(loop.state)));
+/** 一轮还在跑时的投递方式；没在跑时它不参与，服务端按 `auto` 自己定。 */
+const executionGuidanceMode = ref<"steer" | "queue">("queue");
+/** 输入框为什么不可用——空串表示可用。 */
+const executionComposerDisabledReason = computed(() => {
+  if (canSendExecutionMessage.value) return "";
+  const status = run.value?.status ?? "";
+  if (status === "BLOCKED" || status === "NEEDS_PLAN_CHANGE") return "这个 Run 卡在计划上，请改计划（创建更新版本）而不是补充要求";
+  if (status === "CANCELLED" || status === "STALE") return "这个 Run 已经结束";
+  return status ? `Run 处于 ${status}，不接受补充要求` : "";
+});
 
 function rebuildExecutionMessages(): void {
   const currentThread = thread.value;
@@ -549,7 +568,15 @@ async function sendExecutionMessage() {
   if (!run.value || !canSendExecutionMessage.value || !content || actionBusy.value) return;
   actionBusy.value = true;
   sendingExecutionMessage.value = true;
-  try { setExecutionThread((await api.addRunGuidance(run.value.id, content)).thread); executionDraft.value = ""; ElMessage.success("已发送到执行线程"); }
+  try {
+    // 一轮还在跑时由用户选"引导 / 排队"；没在跑时两种等价，交给服务端按实际状态自己定（`auto`）。
+    const result = await api.addRunGuidance(run.value.id, content, executorLoopRunning.value ? executionGuidanceMode.value : "auto");
+    setExecutionThread(result.thread);
+    if (result.run) run.value = { ...run.value, ...result.run };
+    executionDraft.value = "";
+    // 说清它到底发生了什么：排队的要求还没到模型手里，和"已发送"不是一回事。
+    ElMessage.success(result.continued ? "已发送，执行线程重新开工" : result.guidance.status === "CONSUMED" ? "已发送到执行线程" : "已排队，等这一轮结束后自动开工");
+  }
   catch (caught) { notifyError(caught); }
   finally { actionBusy.value = false; sendingExecutionMessage.value = false; }
 }
@@ -696,8 +723,11 @@ watch([projectId, runId], () => { resetPlanDetail(); closeRunEvents(); void load
         </div>
         <div class="composer execution-composer">
           <div class="composer-input">
-            <textarea v-model="executionDraft" aria-label="执行会话消息" placeholder="与执行线程沟通，或提出修改…" :disabled="actionBusy || !canSendExecutionMessage" @keydown="handleExecutionComposerKeydown" />
-            <span class="composer-mode">Run 模式</span>
+            <textarea v-model="executionDraft" aria-label="执行会话消息" :placeholder="canSendExecutionMessage ? (executorLoopRunning ? '补充要求，交给正在跑的这一轮…' : '补充要求，执行线程会重新开工…') : executionComposerDisabledReason" :disabled="actionBusy || !canSendExecutionMessage" @keydown="handleExecutionComposerKeydown" />
+            <!-- 一轮还在跑时才有得选：排队 = 等它结束再起一轮；引导 = 下一个步骤边界插进这一轮。
+                 没在跑时两种等价，不由用户选。 -->
+            <label v-if="canSendExecutionMessage && executorLoopRunning" class="composer-guidance-mode"><span>投递</span><select v-model="executionGuidanceMode" :disabled="actionBusy" aria-label="补充要求的投递方式"><option value="queue">排队 · 这一轮结束后再开工</option><option value="steer">引导 · 下一轮生效</option></select></label>
+            <span v-else class="composer-mode">Run 模式</span>
           </div>
           <div class="composer-footer">
             <ProviderUsageFooter :model="executionModelIdentity.model" :backend="executionModelIdentity.backend" :context="executionContextUsage" context-note="仅结束时由 provider 上报" :source-note="executionModelSourceNote" />

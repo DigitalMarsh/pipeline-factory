@@ -115,7 +115,7 @@ export { ExplorerDeleteBlockedError, ExplorerService } from "./explorer/service.
 export { ExplorerThreadService } from "./explorer/thread-service.js";
 
 // ─────────────────────────── run/：Run 状态机、journal、分支、验证与合并 ───────────────────────────
-export type { ExecutionJournalCorrelation, ExecutionJournalEntry, ExecutionJournalPayload, ExecutionTelemetry, ExecutionThread, ExecutionThreadState, ExecutionThreadSummary, JournalEntryType, MergeReconciliationItem, MergeReconciliationOutcome, MergeReconciliationReport, MergeRequest, RepairExecutor, Run, RunStatus, VerificationCommandExecutor, VerificationRun, VerificationStatus } from "./run/types.js";
+export type { ExecutionJournalCorrelation, ExecutionJournalEntry, ExecutionJournalPayload, ExecutionTelemetry, ExecutionThread, ExecutionThreadState, ExecutionThreadSummary, JournalEntryType, MergeReconciliationItem, MergeReconciliationOutcome, MergeReconciliationReport, MergeRequest, RepairExecutor, Run, RunGuidance, RunGuidanceMode, RunGuidanceStatus, RunStatus, VerificationCommandExecutor, VerificationRun, VerificationStatus } from "./run/types.js";
 export { LifecycleHookRunner } from "./run/hooks.js";
 export type { HookDefinition, HookExecution, HookRunResult } from "./run/hooks.js";
 export { allocateRunBranchLeaf, composeRunBranchLeaf, ModelRunBranchNameGenerator, normalizeRunBranchSlug, runBranchDate, runBranchName } from "./run/run-branch.js";
@@ -137,7 +137,7 @@ export { AGENT_LOOP_DIAGNOSTIC_STEP_TYPES, AgentLoopEngine, projectAgentLoopDiag
 export type { AgentLoop, AgentLoopDiagnostics, AgentLoopInput, AgentLoopMode, AgentLoopResult, AgentLoopState, AgentLoopStep, AgentLoopStepInput, AgentLoopStepStatus, AgentLoopRunner, AgentStepType, GateContext, GateDecision, TerminationGate } from "./agent/agent-loop.js";
 export { PlanCompletenessGate, TaskProgressGate } from "./agent/termination-gates.js";
 export { ExecutorAgent, inspectWorkspaceScope, parseExecutorReport } from "./agent/executor-agent.js";
-export type { ExecutorAgentOptions, ExecutorReport, WorkspaceScopeInspection, WorkspaceScopeInspector } from "./agent/executor-agent.js";
+export type { ExecutorAgentOptions, ExecutorContinuation, ExecutorReport, WorkspaceScopeInspection, WorkspaceScopeInspector } from "./agent/executor-agent.js";
 export { PROJECT_EXECUTION_MODELS, PROJECT_EXECUTION_REASONING_EFFORTS, ProjectExecutionThreadService } from "./agent/project-execution-thread.js";
 export type { ProjectExecutionThreadServiceOptions, ProjectExecutionThreadSnapshot } from "./agent/project-execution-thread.js";
 

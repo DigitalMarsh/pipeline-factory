@@ -43,6 +43,9 @@ import type {
   JournalEntryType,
   MergeRequest,
   PersistedToolCall,
+  RunGuidance,
+  RunGuidanceMode,
+  RunGuidanceStatus,
   PlanRevisionDraft,
   PlanRevision,
   ProjectExecutionMessage,
@@ -71,6 +74,7 @@ export class InMemoryPipelineStore implements PipelineStore {
   private readonly planQueryProjections = new Map<string, PlanQueryProjection>();
   private readonly verificationRuns = new Map<string, VerificationRun>();
   private readonly mergeRequests = new Map<string, MergeRequest>();
+  private readonly runGuidance = new Map<string, RunGuidance>();
   private readonly agentLoops = new Map<string, AgentLoop>();
   private readonly agentLoopSteps = new Map<string, AgentLoopStep[]>();
   private readonly toolCalls = new Map<string, PersistedToolCall>();
@@ -351,9 +355,16 @@ export class InMemoryPipelineStore implements PipelineStore {
   listVerificationRuns(runId?: string): VerificationRun[] { return [...this.verificationRuns.values()].filter((verification) => !runId || verification.runId === runId).sort((a, b) => a.completedAt.localeCompare(b.completedAt)); }
   saveMergeRequest(request: MergeRequest): MergeRequest { if (!this.mergeRequests.has(request.id)) this.mergeRequests.set(request.id, request); return this.mergeRequests.get(request.id)!; }
   getMergeRequest(requestId: string): MergeRequest | undefined { return this.mergeRequests.get(requestId); }
-  findMergeRequestByRun(runId: string): MergeRequest | undefined { return this.listMergeRequests().find((request) => request.runId === runId); }
+  findMergeRequestByRun(runId: string): MergeRequest | undefined { return this.listMergeRequests().find((request) => request.runId === runId && request.status !== "SUPERSEDED"); }
   listMergeRequests(): MergeRequest[] { return [...this.mergeRequests.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt)); }
   updateMergeRequest(request: MergeRequest): MergeRequest { if (!this.mergeRequests.has(request.id)) throw new Error(`MergeRequest ${request.id} does not exist`); this.mergeRequests.set(request.id, request); return request; }
+  saveRunGuidance(guidance: RunGuidance): RunGuidance { if (!this.runGuidance.has(guidance.id)) this.runGuidance.set(guidance.id, guidance); return this.runGuidance.get(guidance.id)!; }
+  updateRunGuidance(guidance: RunGuidance): RunGuidance { if (!this.runGuidance.has(guidance.id)) throw new Error(`RunGuidance ${guidance.id} does not exist`); this.runGuidance.set(guidance.id, guidance); return guidance; }
+  listRunGuidance(runId: string, filter: { mode?: RunGuidanceMode; status?: RunGuidanceStatus } = {}): RunGuidance[] {
+    return [...this.runGuidance.values()]
+      .filter((item) => item.runId === runId && (filter.mode === undefined || item.mode === filter.mode) && (filter.status === undefined || item.status === filter.status))
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
+  }
 
   saveAgentLoop(loop: AgentLoop): AgentLoop { this.agentLoops.set(loop.id, loop); return loop; }
   getAgentLoop(loopId: string): AgentLoop | undefined { return this.agentLoops.get(loopId); }
@@ -441,6 +452,8 @@ export class InMemoryPipelineStore implements PipelineStore {
     for (const [key, execution] of this.hookExecutions) if (runIds.has(execution.runId)) this.hookExecutions.delete(key);
     for (const [key, verification] of this.verificationRuns) if (runIds.has(verification.runId)) this.verificationRuns.delete(key);
     for (const [key, request] of this.mergeRequests) if (runIds.has(request.runId) || planIds.has(request.planId)) this.mergeRequests.delete(key);
+    // 补充要求跟着它的 Run 一起走：Run 都没了，一条待投递的要求没有任何去处。
+    for (const [key, guidance] of this.runGuidance) if (runIds.has(guidance.runId)) this.runGuidance.delete(key);
     for (const runId of runIds) this.runs.delete(runId);
     for (const executionThreadId of executionThreadIds) this.executionThreads.delete(executionThreadId);
     for (const call of [...this.toolCalls.values()]) if (agentLoopIds.has(call.loopId)) this.toolCalls.delete(call.callId);

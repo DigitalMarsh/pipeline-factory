@@ -142,15 +142,22 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
     }
   });
 
+  /**
+   * 投递补充要求。`mode` 决定投递方式（见 `RunGuidanceMode`）：`auto` 省略即可——服务端按
+   * "有没有在跑的 Loop"自己选，客户端不必重复判一遍。返回里 `continued` 告诉界面这一条有没有
+   * 立刻推动新的一轮，`guidance.status` 则是它当前是待处理还是已投递。
+   */
   app.post("/api/v4/runs/:runId/guidance", async (request, reply) => {
     const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
     const body = guidanceBody.safeParse(request.body ?? {});
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid user guidance" });
     if (!scheduler) return reply.code(503).send({ error: "Scheduler is not configured for this API instance" });
     try {
-      const thread = scheduler.addGuidance(params.data.runId, body.data.content);
+      // HTTP 用大写风格与领域枚举不同（`steer` vs `STEER`）：这一层就是那条翻译边，别把它下推。
+      const mode = body.data.mode === "steer" ? "STEER" as const : body.data.mode === "queue" ? "QUEUE" as const : "auto" as const;
+      const { thread, guidance, continued } = await scheduler.addGuidance(params.data.runId, body.data.content, { mode });
       const run = store.getRun(params.data.runId);
-      return { thread: run ? projectRunThreadTelemetry(store, run, thread) : thread };
+      return { thread: run ? projectRunThreadTelemetry(store, run, thread) : thread, guidance, continued, run: run ?? null };
     }
     catch (error) { return reply.code(409).send({ error: error instanceof Error ? error.message : "Guidance cannot be added" }); }
   });

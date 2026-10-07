@@ -173,6 +173,17 @@ export type AgentLoopInput = {
    * 与 `capabilities.supportsStructuredUserInput`（Provider 支不支持提问）是两件事，两者都要过。
    */
   allowStructuredInput?: boolean;
+  /**
+   * 取走这个 Loop **待投递的"引导"**（人补充的要求），在**每个步骤边界**调用一次。
+   *
+   * 由调用方实现而不是引擎自己去查表：引擎对 `ownerType` 一视同仁，而"哪些补充要求属于
+   * 这个 Loop"是 Run 域的事实，只有 ExecutorAgent 知道。返回的每条按顺序作为一条 `user`
+   * 消息推进会话。
+   *
+   * **它只在下一个 Provider 回合生效**：provider-controlled 模式下 Provider 一个回合内部可以跑
+   * 很多工具调用，这里等的是**回合结束**，插不进正在跑的那一个回合中间。界面据此写「下一轮生效」。
+   */
+  takePendingGuidance?: (() => Promise<readonly string[]>) | undefined;
   maxRepeatedToolCalls?: number;
   maxNoProgressSteps?: number;
   modelRequest: Omit<ModelRequest, "role">;
@@ -510,6 +521,13 @@ export class AgentLoopEngine implements AgentLoopRunner {
         if (controller.signal.aborted) { await this.cancel(initial.id, "aborted"); return; }
         if (Date.now() - startedMs >= maxDurationMs) { this.block(initial.id, "MAX_DURATION_EXCEEDED"); return; }
         if (loop.stepCount >= loop.maxSteps) { this.block(initial.id, "MAX_STEPS_EXCEEDED"); return; }
+        // **步骤边界**：把此前投递进来的"引导"交给模型。位置很关键——放在这一步的模型调用
+        // **之前**，而不是流中间：插不进正在跑的 Provider 回合（见 AgentLoopInput.takePendingGuidance）。
+        // 引擎不自己查表，取哪几条由调用方决定（它才知道哪些属于这个 Run）。
+        if (input.takePendingGuidance) {
+          const steered = await input.takePendingGuidance();
+          for (const text of steered) messages.push({ role: "user", content: text });
+        }
         loop = { ...loop, stepCount: loop.stepCount + 1 };
         this.store.updateAgentLoop(loop);
         this.appendStep(loop, "MODEL_STARTED", "RUNNING", { step: loop.stepCount });
