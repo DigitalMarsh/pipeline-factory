@@ -196,6 +196,8 @@ sequence: turns.length + 1,   // explorer/thread-service.ts
     37 条「子列 → 父表」的对照逐条查"指着不存在的行"——不管删掉的是什么，只要没有哪一列还悬空，
     就说明删干净了。**顺带挖出 8 行悬空 loop**，时间戳全是 9 月 12 / 16 日（如
     `agent-loop-c9afc760-c68`）：那是本次改动**之前**就留在库里的，删前删后都是这 8 行，没有新增。
+    （这 8 行后来单独清掉了——连它们的 554 行 `agent_loop_steps`，**领域事件按产品自己的口径保留**；
+    清理脚本 `.runtime/cleanup-orphan-loops.mjs`，判据是"父行还在不在"而不是 id 名单。）
   - **级联是"有什么删什么"**：逐表对账时有两张表没按我预期掉——`merge_requests` 与
     `verification_runs` 在需求2、需求3 上**一行都没删**，因为那两条的 Run 停在 `BLOCKED`，
     从来没走到验证。查了一遍全库印证：`MERGE_READY` 的 Run 是 10 个对 10 个验证轮次 + 10 个合并请求，
