@@ -43,6 +43,11 @@ try {
   runStage("format", "pnpm", ["format:check"]);
   for (const pkg of PACKAGES) runTests(pkg);
   runStage("cycle check", process.execPath, [join(HERE, "check-cycles.mjs")]);
+  // 运行库的完整性：**删除路径漏收一张表，界面上一点看不出来**——先例是真发生过的：
+  // `agent_loop_steps` 按 loop_id 挂，按 id 名单删就漏了 288 行；9 月还留下 8 个父行早就没了的
+  // 孤儿 loop。这两件事都不是测试能发现的，只有"指向不存在的行"这一个症状。
+  // 没有运行库（新克隆、CI）时它自己跳过，不是失败。
+  runStage("store integrity", process.execPath, ["--disable-warning=ExperimentalWarning", join(HERE, "check-dangling-refs.mjs")]);
 } finally {
   rmSync(temporary, { recursive: true, force: true });
 }
@@ -57,6 +62,7 @@ if (problems.length) {
   console.error("否则说明该阶段引入了回归，不要继续往下做。");
   process.exitCode = 1;
 } else {
+  // 不提"悬空引用"这一项：没有运行库时那个阶段是自己跳过的，写进这句就成了"没跑也算过"。
   console.log("\n验证通过：无新增失败，无新增 value 级循环依赖。");
 }
 
