@@ -44,6 +44,7 @@ import ProjectExecutionThreadPanel from "../components/ProjectExecutionThreadPan
 import ProjectSettingsDialog from "../components/ProjectSettingsDialog.vue";
 import ProjectCreateDialog from "../components/ProjectCreateDialog.vue";
 import ExplorerRenameDialog from "../components/ExplorerRenameDialog.vue";
+import ExplorerRequirementDialog from "../components/ExplorerRequirementDialog.vue";
 import ExplorerHeaderStatus from "../components/ExplorerHeaderStatus.vue";
 import ProviderUsageFooter from "../components/ProviderUsageFooter.vue";
 import RunDetailView from "./RunDetailView.vue";
@@ -135,6 +136,10 @@ const policyOpen = ref(false);
 const renameDialogOpen = ref(false);
 const renameSaving = ref(false);
 const renameError = ref<string | null>(null);
+/** 「新增需求」对话框自己的三个状态；建需求成功时会把它关掉（见 createRequirement）。 */
+const requirementDialogOpen = ref(false);
+const requirementSubmitting = ref(false);
+const requirementError = ref<string | null>(null);
 const explorerPaused = ref(false);
 type LeftPanel = "projects" | "explorers";
 const leftPanel = ref<LeftPanel>("explorers");
@@ -916,19 +921,26 @@ async function selectExplorerPlan(explorerPlanId: string, shouldScroll = true): 
   }
 }
 
-async function openAddRequirementDialog(): Promise<void> {
+/**
+ * 打开「新增需求」。**只负责开对话框**——建需求、切线程、起探索回合都在 `createRequirement` 里，
+ * 失败时把话写回对话框（而不是弹个会自己消失的 toast：那条描述还在输入框里，用户要看着错误改它）。
+ */
+function openAddRequirementDialog(): void {
   const currentThread = thread.value;
   if (!currentThread || currentThread.state === "ARCHIVED" || project.value?.status === "ARCHIVED") return;
+  requirementError.value = null;
+  requirementDialogOpen.value = true;
+}
+
+/** 拿着对话框里那段描述走完"建需求 → 选中 → 打开探索对话 → 把它当成第一条消息发出去"。 */
+async function createRequirement(description: string): Promise<void> {
+  const currentThread = thread.value;
+  const requestProjectId = projectId.value;
+  if (!currentThread || !requestProjectId || requirementSubmitting.value) return;
+  requirementSubmitting.value = true;
+  requirementError.value = null;
   try {
-    const { value } = await ElMessageBox.prompt("描述这项需求要解决什么问题，或希望得到什么结果。", "新增需求", {
-      inputType: "textarea",
-      inputPlaceholder: "输入需求描述…",
-      confirmButtonText: "确认",
-      cancelButtonText: "取消",
-      inputValidator: (input) => Boolean(input.trim()) || "请输入需求描述",
-    });
-    const description = value.trim();
-    const response = await api.createExplorerPlan(projectId.value, currentThread.id);
+    const response = await api.createExplorerPlan(requestProjectId, currentThread.id);
     if (thread.value?.id !== currentThread.id) return;
     explorerPlans.value = [...explorerPlans.value, response.explorerPlan].sort((a, b) => a.ordinal - b.ordinal);
     thread.value = response.explorer;
@@ -944,9 +956,11 @@ async function openAddRequirementDialog(): Promise<void> {
     await nextTick();
     document.querySelector<HTMLTextAreaElement>(".drawer-conversation-column .composer textarea")?.focus();
     await sendTurn();
+    requirementDialogOpen.value = false;
   } catch (caught) {
-    if (caught === "cancel" || caught === "close") return;
-    ElMessage.error(caught instanceof Error ? `新建需求失败：${caught.message}` : "新建需求失败");
+    requirementError.value = caught instanceof Error ? `新建需求失败：${caught.message}` : "新建需求失败";
+  } finally {
+    requirementSubmitting.value = false;
   }
 }
 
@@ -2024,6 +2038,13 @@ onBeforeUnmount(() => {
       :saving="renameSaving"
       :error="renameError"
       @submit="renameThread"
+    />
+    <ExplorerRequirementDialog
+      v-model="requirementDialogOpen"
+      :thread-title="thread?.title ?? ''"
+      :saving="requirementSubmitting"
+      :error="requirementError"
+      @submit="createRequirement"
     />
     <ExplorerPolicyDrawer :model-value="policyOpen" @update:model-value="setPolicyOpen" />
   </div>

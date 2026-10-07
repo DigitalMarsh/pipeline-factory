@@ -221,8 +221,11 @@ describe("Explorer requirement list and shared drawer", () => {
   });
 
   it("creates a requirement once and keeps failed first messages available for retry", () => {
-    expect(flat(explorerViewSource)).toContain(flat("async function openAddRequirementDialog()"));
-    expect(flat(explorerViewSource)).toContain(flat("api.createExplorerPlan(projectId.value, currentThread.id)"));
+    // 「新增需求」现在走独立对话框：开框的是 openAddRequirementDialog，真正建需求的是 createRequirement
+    // （`requirementSubmitting` 那道门闩保证重复提交不会建出两条需求）。
+    expect(flat(explorerViewSource)).toContain(flat("function openAddRequirementDialog(): void"));
+    expect(flat(explorerViewSource)).toContain(flat("api.createExplorerPlan(requestProjectId, currentThread.id)"));
+    expect(flat(explorerViewSource)).toContain(flat("if (!currentThread || !requestProjectId || requirementSubmitting.value) return;"));
     expect(flat(explorerViewSource)).toContain(flat("await sendTurn()"));
     expect(flat(explorerViewSource)).toContain(flat("async function sendTurn(): Promise<boolean>"));
     expect(flat(explorerViewSource)).toContain(flat("failedExplorerSends"));
@@ -442,7 +445,7 @@ describe("Explorer inline message presentation", () => {
       ),
     );
     expect(flat(explorerViewSource)).toContain(flat("api.explorerPlanGroups(requestProjectId, selected.id)"));
-    expect(flat(explorerViewSource)).toContain(flat("api.createExplorerPlan(projectId.value, currentThread.id)"));
+    expect(flat(explorerViewSource)).toContain(flat("api.createExplorerPlan(requestProjectId, currentThread.id)"));
     expect(flat(planProjectionComposableSource)).toContain(flat("api.explorerPlanWorkspace(requestProjectId, explorerId, explorerPlanId)"));
     expect(flat(explorerViewSource)).toContain(
       flat(
