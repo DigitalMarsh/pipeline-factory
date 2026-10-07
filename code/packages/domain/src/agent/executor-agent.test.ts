@@ -369,6 +369,64 @@ describe("ExecutorAgent", () => {
     ]);
   });
 
+  /**
+   * **补充要求那一轮的产物不归给任何计划任务。**
+   *
+   * 它是运行过程中人补进来的一段工作，而计划的任务清单是冻结的、不会因为它多出一个。盖着 `taskId`
+   * 的后果是这一轮的记录被折进最后那个任务的过程组里——用户看到的是"又在做第二个步骤"，而那些记录
+   * 与那个步骤毫无关系（实测就是这个观感）。
+   *
+   * 对照同样重要：**普通那一轮照旧要归属**，否则这条修复会顺手把原来正确的行为也一起关掉。
+   */
+  it("**补充要求那一轮的产物不盖 taskId**，普通那一轮照旧盖", async () => {
+    const { store, plan, run } = await createQueuedRun();
+    let call = 0;
+    const report = (extra: Record<string, unknown>) =>
+      `<pipeline-factory-execution-report>${JSON.stringify({ completedTaskIds: ["task-1"], changedPaths: ["src/implemented.ts"], report: "done", ...extra })}</pipeline-factory-execution-report>`;
+    const model: ModelGateway = {
+      configFor: () => ({ model: "gpt-5.6-luna", loopMode: "provider-controlled" }),
+      capabilities: () => ({ supportsStructuredUserInput: false, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
+      async *stream(): AsyncIterable<ModelEvent> {
+        call += 1;
+        // 第一轮先抛一个 `started` 任务标记：**归属是靠标记建立的**（报告里的 activeTaskId 落在
+        // `agent.model.completed` 上，那一刻正文早就缓冲完了）。这一轮之后的产物因此盖着 task-1。
+        const marker = '<pipeline-factory-task-progress>{"taskId":"task-1","state":"started"}</pipeline-factory-task-progress>';
+        yield { type: "text.delta", text: call === 1 ? `${marker}working ${report({})}` : `extra work ${report({})}` };
+        yield { type: "turn.completed" };
+      },
+      async answerUserInput() {
+        return undefined;
+      },
+      async cancel() {
+        return undefined;
+      },
+    };
+    const agent = new ExecutorAgent(store, model);
+
+    await agent.run(run, plan);
+    const journalOf = () => store.getExecutionThread(run.executionThreadId)!.journal;
+    const attributed = (from: number) =>
+      journalOf()
+        .slice(from)
+        .filter((entry) => entry.type === "MODEL_OUTPUT" || entry.type === "PROVIDER_ACTIVITY");
+    expect(attributed(0).some((entry) => entry.payload.taskId === "task-1")).toBe(true);
+
+    // 同一个 agent 实例、同一个 Run：补充要求那一轮。上一轮停在 task-1 上。
+    store.saveRun({ ...store.getRun(run.id)!, status: "IN_PROGRESS" });
+    store.saveExecutionThread({ ...store.getExecutionThread(run.executionThreadId)!, state: "ACTIVE" });
+    const before = journalOf().length;
+    const loop = await agent.start(store.getRun(run.id)!, plan, {
+      guidance: "再补一节",
+      completedTaskIds: ["task-1"],
+      planTaskIds: ["task-1"],
+    });
+    await agent.wait(loop.id);
+
+    const secondRound = attributed(before);
+    expect(secondRound.length).toBeGreaterThan(0);
+    expect(secondRound.every((entry) => entry.payload.taskId === undefined)).toBe(true);
+  });
+
   it("rejects an included artifact directory that escapes through a symlink", async () => {
     const workspace = await mkdtemp(join(tmpdir(), "pipeline-executor-symlink-"));
     const outside = await mkdtemp(join(tmpdir(), "pipeline-executor-outside-"));

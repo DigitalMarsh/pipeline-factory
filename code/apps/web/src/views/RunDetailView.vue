@@ -75,7 +75,18 @@ const executionDraft = ref("");
 const sendingExecutionMessage = ref(false);
 const sourceCommit = ref("");
 const targetCommit = ref("");
-const executorLoop = computed(() => run.value?.agentLoops?.find((loop) => loop.role === "executor") ?? null);
+/**
+ * **取最新的一条执行 Loop，而不是第一条。** 一个 Run 现在可以有多条执行 Loop（补充要求会为同一个 Run
+ * 起新一轮），`.find(...)` 会永远返回第一轮那条——于是补充要求开始之后，页头的「Agent 循环」还停在
+ * 上一轮的"已完成 1/40 步"上，看起来什么都没发生。
+ */
+const executorLoop = computed(() => {
+  const loops = (run.value?.agentLoops ?? []).filter((loop) => loop.role === "executor");
+  return loops.reduce<(typeof loops)[number] | null>(
+    (latest, loop) => (!latest || (loop.startedAt ?? "") >= (latest.startedAt ?? "") ? loop : latest),
+    null,
+  );
+});
 const executorSteps = ref<AgentLoopStep[]>([]);
 const planTasks = ref<PlanTask[]>([]);
 const executionMessages = ref<ExecutionStreamItem[]>([]);
@@ -517,7 +528,11 @@ function appendRunJournalEvent(event: RunJournalEvent): void {
   runEventSequence = event.sequence;
   if (event.runStatus && run.value) run.value = { ...run.value, status: event.runStatus };
   rebuildExecutionMessages();
-  if (event.runStatus && ["BLOCKED", "CANCELLED", "MERGE_READY", "MERGED"].includes(event.runStatus)) closeRunEvents();
+  // `MERGE_READY` **不在这里**：它曾经是这个 Run 的终点，但补充要求可以让同一个 Run 从它回到
+  // `IN_PROGRESS` 再跑一轮。在这里把事件流关掉，页面就再也收不到那之后的任何事件——用户看到的是
+  // 「已完成 / 等待合并」一动不动，直到手动刷新（实测就是这个症状）。
+  // 真正终结的只有取消与合并；`BLOCKED` 保留，因为按设计它不接受补充要求（该走「创建更新版本」）。
+  if (event.runStatus && ["BLOCKED", "CANCELLED", "MERGED"].includes(event.runStatus)) closeRunEvents();
   if (shouldFollow) scrollExecutionToLatest();
   else showScrollToLatest.value = true;
 }
@@ -527,10 +542,16 @@ function applyStreamTelemetry(event: { threadTelemetry?: ExecutionThread["teleme
   thread.value = { ...thread.value, telemetry: event.threadTelemetry };
 }
 
-/** 仅为仍可能产生事实的 Run 建立 SSE；终态 Run 依赖已加载的持久化 journal。 */
+/**
+ * 为**仍可能产生事实**的 Run 建立 SSE；真正的终态 Run 依赖已加载的持久化 journal。
+ *
+ * `MERGE_READY` **不在"终态"之列**：补充要求可以让同一个 Run 从它回到 `IN_PROGRESS` 再跑一轮，
+ * 所以它仍然会产生新事实。把它当终态，页面就永远停在加载时那一份 journal 上——用户看到的是
+ * 「已完成 / 等待合并」一动不动，直到手动刷新（实测症状）。真正终结的只有取消与合并；
+ * `BLOCKED` 保留，因为按设计它不接受补充要求（该走「创建更新版本」）。
+ */
 function connectRunEvents(): void {
-  if (!run.value || typeof EventSource === "undefined" || ["BLOCKED", "CANCELLED", "MERGE_READY", "MERGED"].includes(run.value.status))
-    return;
+  if (!run.value || typeof EventSource === "undefined" || ["BLOCKED", "CANCELLED", "MERGED"].includes(run.value.status)) return;
   runEventSource?.close();
   runEventSource = new EventSource(api.runEventsUrl(run.value.id, runEventSequence));
   runEventSource.addEventListener("open", () => {

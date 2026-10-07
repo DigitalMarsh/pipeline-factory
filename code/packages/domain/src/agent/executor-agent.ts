@@ -85,7 +85,14 @@ export type WorkspaceScopeInspector = (input: {
  */
 export type ExecutorContinuation = {
   guidance: string;
+  /** 这个 Run 之前**已经完成**的步骤（来自 journal），进提示词是为了"别再做一遍"。 */
   completedTaskIds: readonly string[];
+  /**
+   * 计划里**全部**任务 id —— 冻结的那一份。进提示词是为了另一件更要紧的事：报告里的
+   * `completedTaskIds` 必须**恰好**是这几个。只给"已完成"的那部分时，模型会把补充要求带来的额外工作
+   * 自己编成一个新任务 id 一并报上来，完成判定于是永远为假（实测跑满 25 步）。
+   */
+  planTaskIds: readonly string[];
   /** 上一轮 Loop 的 Provider 会话标识；传下去才接得上同一段对话（Codex 用它 resumeThread）。 */
   previousProviderThreadId?: string | undefined;
 };
@@ -124,6 +131,22 @@ export class ExecutorAgent {
   private readonly modelOutputBuffers = new Map<string, { text: string; key: string; payload: Record<string, unknown> }>();
   private readonly activeTaskByRun = new Map<string, string>();
   private readonly currentTaskByRun = new Map<string, string>();
+  /**
+   * 这个 Run 的**当前这一轮是不是补充要求驱动的**。
+   *
+   * 它决定要不要给这一轮的产物盖 `taskId`。**补充要求不属于任何一个计划步骤**：它是运行过程中
+   * 人补进来的一段工作，计划的任务清单是冻结的、不会因为它多出一个。盖上去的后果是它被折进最后那个
+   * 任务的过程组里——用户看到的是"又在做第二个步骤"，而实际上这些记录与那个步骤无关。
+   *
+   * 注意它只影响**归属**：计划任务本身的事实（`TASK_PROGRESS` 的 `task-lifecycle` / `task-status`）
+   * 自带 taskId，不受这里影响，"哪些步骤完成了"照旧读得出来。
+   */
+  private readonly continuationRuns = new Set<string>();
+
+  /** 这一轮该把产物归给哪个计划任务；补充要求那一轮**不归给任何任务**。 */
+  private attributedTaskId(run: Run): string | undefined {
+    return this.continuationRuns.has(run.id) ? undefined : this.currentTaskByRun.get(run.id);
+  }
 
   constructor(
     private readonly store: PipelineStore,
@@ -144,6 +167,13 @@ export class ExecutorAgent {
   /** 异步启动 Executor Loop；RunDetail 可通过 AgentLoop/SSE 观察实时进度。 */
   async start(run: Run, revision: PlanRevision, input: ExecutorContinuation | undefined = undefined): Promise<AgentLoop> {
     this.assertRunnable(run, revision);
+    // 补充要求那一轮：先**清掉从上一轮继承下来的任务归属**，再把这一轮标记成"不属于任何步骤"。
+    // 不清的话，上一轮最后停在哪个任务上，这一轮的产物就会盖着那个任务的 id 出现。
+    if (input) {
+      this.continuationRuns.add(run.id);
+      this.activeTaskByRun.delete(run.id);
+      this.currentTaskByRun.delete(run.id);
+    }
     const workspaceRoot = run.workspacePath!;
     const commandWorkingDirectory = await resolveExecutorWorkingDirectory(
       workspaceRoot,
@@ -280,6 +310,9 @@ export class ExecutorAgent {
     Pick<
       GateContext,
       | "allTasksComplete"
+      | "planTaskIds"
+      | "missingTaskIds"
+      | "unknownTaskIds"
       | "changedPaths"
       | "pathsWithinScope"
       | "reportReady"
@@ -310,6 +343,10 @@ export class ExecutorAgent {
       }
     }
     const uniqueCompleted = new Set(completed);
+    // 把"差在哪"一并交给门禁（见 GateContext 的同名字段）：没有它，门禁只能回一句 `TASKS_INCOMPLETE`，
+    // 模型不知道该改什么，就会原样再报一遍——实测里那条循环跑满 25 步才被人工取消。
+    const unknownTaskIds = [...new Set(completed.filter((taskId) => !taskIds.has(taskId)))];
+    const missingTaskIds = [...taskIds].filter((taskId) => !uniqueCompleted.has(taskId));
     return {
       allTasksComplete: Boolean(
         report &&
@@ -317,6 +354,9 @@ export class ExecutorAgent {
         completed.length === taskIds.size &&
         completed.every((taskId) => taskIds.has(taskId)),
       ),
+      planTaskIds: [...taskIds],
+      missingTaskIds,
+      unknownTaskIds,
       changedPaths: scope.changedPaths,
       pathsWithinScope: scope.pathsWithinScope,
       ...(scope.error ? { scopeError: scope.error } : {}),
@@ -362,10 +402,13 @@ export class ExecutorAgent {
   /**
    * 补充要求那一条 user 消息。
    *
-   * 两句话不能省：**已完成的步骤要列出来**（否则模型会从头再做一遍），以及**报告要覆盖全部任务**
-   * （`allTasksComplete` 的判据是报告里的 `completedTaskIds` 覆盖全部 id，只报本轮做的那些会被判成
-   * 未完成，白跑步骤并可能撞上 MAX_STEPS_EXCEEDED）。最后一句是范围边界：冻结的 include scope
-   * 改不了，越界会被 gate 以 PATH_OUTSIDE_SCOPE 直接拦下——让它说出来，好过让它去撞。
+   * 三句话不能省：**已完成的步骤要列出来**（否则模型会从头再做一遍）；**报告里的 `completedTaskIds`
+   * 必须恰好是计划里的那几个 id**（多一个少一个都会让 `allTasksComplete` 永远为假）；以及范围边界
+   * （冻结的 include scope 改不了，越界会被 gate 以 PATH_OUTSIDE_SCOPE 拦下——让它说出来，好过让它去撞）。
+   *
+   * 中间那条是本轮实测补上的：原文只说"cover EVERY task of the plan"，而模型把补充要求带来的额外工作
+   * 自己编成了计划里没有的 `task-3` 一并报了上来——于是完成判定永远为假、循环空转到被人工取消。
+   * 计划的步骤清单是**冻结**的，一句话加不了任务；要加任务得走「创建更新版本」。
    */
   private continuationPrompt(continuation: ExecutorContinuation): string {
     const done =
@@ -376,7 +419,7 @@ export class ExecutorAgent {
       "The operator added a requirement to this Run after an earlier round had stopped. Continue the same Run and the same worktree.",
       done,
       `Additional requirement:\n${continuation.guidance}`,
-      "When you finish, give the full execution report as usual, and make completedTaskIds cover EVERY task of the plan — including the ones already completed in earlier rounds. A report that lists only what you did this round is treated as incomplete.",
+      `The plan's task list is FIXED and this requirement cannot extend it. The only task ids that exist are: ${continuation.planTaskIds.join(", ")}. In the execution report, completedTaskIds must be EXACTLY those ids — every one of them, and nothing else. Never invent a new task id for the extra work this requirement asks for; fold that work into the existing tasks instead.`,
       "Work only inside the approved include scope. If this requirement needs files outside it, say so instead of editing them.",
     ].join("\n\n");
   }
@@ -440,7 +483,7 @@ export class ExecutorAgent {
     const association = {
       loopId: event.loopId,
       ...(modelStep === undefined ? {} : { modelStep }),
-      ...(this.currentTaskByRun.get(run.id) ? { taskId: this.currentTaskByRun.get(run.id) } : {}),
+      ...(this.attributedTaskId(run) ? { taskId: this.attributedTaskId(run) } : {}),
       ...(providerThreadId ? { providerThreadId } : {}),
       ...(providerTurnId ? { providerTurnId } : {}),
     };
@@ -551,7 +594,7 @@ export class ExecutorAgent {
     if (event.type === "agent.model.text.delta") {
       const text = typeof payload.text === "string" ? payload.text : "";
       if (text && modelStep !== undefined) this.recordTaskProgressMarkers(run, event, revision, modelStep, text, association);
-      const outputTaskId = this.currentTaskByRun.get(run.id);
+      const outputTaskId = this.attributedTaskId(run);
       const providerItemId = typeof payload.providerItemId === "string" ? payload.providerItemId : undefined;
       // `phase`（过程叙述 / 最终回答）**也算分段依据**：两种重量不能进同一个缓冲段，
       // 否则界面上要么整段被折进过程记录，要么整段常驻——两条都不对。
@@ -823,6 +866,8 @@ export class ExecutorAgent {
     // 通知组合根"这个 Run 的执行停了"。**排队中的补充要求由它去消费**——那件事属于 Scheduler
     // （它才知道 Run/Plan/Thread 该怎么回退），本类反过来依赖 Scheduler 会把这条边绕成环。
     // 放在这个唯一的收尾出口上：三条终态映射都经过这里，没有第二条路要同步。
+    // 同时把"这一轮是补充要求"的标记清掉：下一轮要么是新的补充要求（会重新置上），要么回到普通执行。
+    this.continuationRuns.delete(run.id);
     this.options.onRunStopped?.(run.id);
   }
 

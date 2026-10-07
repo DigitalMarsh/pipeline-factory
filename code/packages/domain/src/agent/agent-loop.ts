@@ -226,6 +226,14 @@ export type GateContext = {
   reportError?: string;
   scopeError?: string;
   pathsWithinScope?: boolean;
+  /**
+   * 任务对不上时**差在哪**，由 `ExecutorAgent.progressContext` 从"计划的权威任务清单"与"本轮报告的
+   * `completedTaskIds`"算出来。门禁拿它写续跑提示——没有这三个字段时它只能说一句 `TASKS_INCOMPLETE`，
+   * 而模型不知道自己错在哪，于是照原样再报一遍（实测里这条循环跑满 25 步才被人工取消）。
+   */
+  planTaskIds?: string[];
+  missingTaskIds?: string[];
+  unknownTaskIds?: string[];
 };
 
 export interface TerminationGate {

@@ -24,16 +24,40 @@ export class PlanCompletenessGate implements TerminationGate {
   }
 }
 
+/**
+ * 「还差什么」必须说清楚，否则这一轮就是**原样重问**。
+ *
+ * 实测：补充要求那一轮里模型把额外工作编成了一个计划里没有的 `task-3`，于是
+ * `allTasksComplete` 永远为假；而门禁只说一句 `TASKS_INCOMPLETE`，模型无从知道自己错在哪，
+ * 照着同样的内容再报一遍——**循环跑满 25 步**（约 6k tokens/步）才被人工取消。
+ *
+ * 两个方向都要说：漏报的（计划的步骤没列全）与**多报的**（列了计划里没有的 id）。后者在续跑里尤其常见，
+ * 因为补充要求会带来计划外的额外工作，而计划的步骤清单是**冻结**的、不能靠一句话加一个任务
+ * （要加任务得走「创建更新版本」）。
+ */
+function incompleteTasksPrompt(context: GateContext): string {
+  const lines = [
+    "上一轮的执行报告没有通过完成判定。**只修正报告本身，不要重做已经完成的工作。**",
+    "`completedTaskIds` 必须恰好是已批准计划里的全部任务 id：一个不能少，也不能包含计划之外的 id。",
+  ];
+  if (context.planTaskIds?.length) lines.push(`计划的全部任务 id：${context.planTaskIds.join(", ")}。`);
+  if (context.missingTaskIds?.length) lines.push(`尚未报告完成：${context.missingTaskIds.join(", ")}。`);
+  if (context.unknownTaskIds?.length) lines.push(`报告里的这些 id 不在计划中，必须去掉：${context.unknownTaskIds.join(", ")}。`);
+  return lines.join("\n");
+}
+
 /** Executor 的完成门禁：任务、工具调用、范围、变更提案和执行报告必须同时满足。 */
 export class TaskProgressGate implements TerminationGate {
   evaluate(context: GateContext): GateDecision {
-    if (context.reportError) return { action: "continue", reason: context.reportError };
-    if (!context.allTasksComplete) return { action: "continue", reason: "TASKS_INCOMPLETE" };
+    if (context.reportError) return { action: "continue", reason: context.reportError, continuationPrompt: incompleteTasksPrompt(context) };
+    if (!context.allTasksComplete)
+      return { action: "continue", reason: "TASKS_INCOMPLETE", continuationPrompt: incompleteTasksPrompt(context) };
     if (context.hasOpenToolCalls) return { action: "continue", reason: "OPEN_TOOL_CALLS" };
     if (context.hasPendingChangeProposal) return { action: "continue", reason: "PENDING_CHANGE_PROPOSAL" };
     if (context.scopeError) return { action: "blocked", reason: context.scopeError };
     if (!context.pathsWithinScope) return { action: "blocked", reason: "PATH_OUTSIDE_SCOPE" };
-    if (!context.reportReady) return { action: "continue", reason: "EXECUTION_REPORT_MISSING" };
+    if (!context.reportReady)
+      return { action: "continue", reason: "EXECUTION_REPORT_MISSING", continuationPrompt: incompleteTasksPrompt(context) };
     return { action: "complete", reason: "READY_FOR_VERIFY" };
   }
 }

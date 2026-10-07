@@ -575,6 +575,7 @@ export class Scheduler {
       const loop = await this.options.executor.start(this.run(runId), revision, {
         guidance: guidance.map((item) => item.content).join("\n\n"),
         completedTaskIds,
+        planTaskIds: revision.resolvedContract.tasks.map((task) => task.id),
         ...(previousProviderThreadId ? { previousProviderThreadId } : {}),
       });
       this.append(thread.id, "TASK_PROGRESS", { action: "executor_loop_created", loopId: loop.id, continuation: true });

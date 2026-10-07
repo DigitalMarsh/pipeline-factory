@@ -108,7 +108,9 @@ describe("TaskProgressGate", () => {
   });
 
   it("keeps an invalid report in the continuation path and blocks scope inspection failures", () => {
-    expect(new TaskProgressGate().evaluate({ reportError: "EXECUTION_REPORT_INVALID_OR_MISSING" })).toEqual({
+    // 这条现在**带一份续跑提示**（见下面「续跑提示」那一组）：报告缺失时同样要说清计划里的任务 id，
+    // 否则模型只会原样再报一次。判据仍是"继续"，不是"阻塞"。
+    expect(new TaskProgressGate().evaluate({ reportError: "EXECUTION_REPORT_INVALID_OR_MISSING" })).toMatchObject({
       action: "continue",
       reason: "EXECUTION_REPORT_INVALID_OR_MISSING",
     });
@@ -122,5 +124,60 @@ describe("TaskProgressGate", () => {
         scopeError: "WORKSPACE_SCOPE_CHECK_FAILED",
       }),
     ).toEqual({ action: "blocked", reason: "WORKSPACE_SCOPE_CHECK_FAILED" });
+  });
+});
+
+/**
+ * 「还差什么」必须写进续跑提示——**这一段是照着实测补上的**。
+ *
+ * 补充要求那一轮里，模型把额外工作编成了一个计划里没有的 `task-3` 一并报了上来，`allTasksComplete`
+ * 于是永远为假。而当时门禁只回一句 `TASKS_INCOMPLETE`，模型不知道自己错在哪，照着同样的内容再报一遍
+ * ——**循环跑满 25 步**（约 6k tokens/步）才被人工取消。它必须点名：多报的是哪些、漏报的是哪些。
+ */
+describe("TaskProgressGate 的续跑提示", () => {
+  const promptOf = (context: Parameters<TaskProgressGate["evaluate"]>[0]): string => {
+    const decision = new TaskProgressGate().evaluate(context);
+    return "continuationPrompt" in decision ? (decision.continuationPrompt ?? "") : "";
+  };
+
+  it("**多报了计划外的任务 id 时点名说清**，而不是只回一句 TASKS_INCOMPLETE", () => {
+    const prompt = promptOf({ allTasksComplete: false, planTaskIds: ["task-1", "task-2"], missingTaskIds: [], unknownTaskIds: ["task-3"] });
+
+    expect(prompt).toContain("task-3");
+    // 计划的**权威清单**也要给出来，否则模型只知道"多了个 task-3"，不知道正确的是什么。
+    expect(prompt).toContain("task-1, task-2");
+    // 并明说不要重做已完成的工作——否则它会把整轮再跑一遍。
+    expect(prompt).toContain("不要重做");
+  });
+
+  it("漏报时同样点名", () => {
+    expect(
+      promptOf({ allTasksComplete: false, planTaskIds: ["task-1", "task-2"], missingTaskIds: ["task-2"], unknownTaskIds: [] }),
+    ).toContain("task-2");
+  });
+
+  it("整段报告缺失（reportError）时给的是同一份提示", () => {
+    expect(
+      promptOf({
+        reportError: "EXECUTION_REPORT_INVALID_OR_MISSING",
+        planTaskIds: ["task-1"],
+        missingTaskIds: ["task-1"],
+        unknownTaskIds: [],
+      }),
+    ).toContain("task-1");
+  });
+
+  it("全部满足时不带提示，直接完成", () => {
+    const decision = new TaskProgressGate().evaluate({
+      allTasksComplete: true,
+      hasOpenToolCalls: false,
+      hasPendingChangeProposal: false,
+      reportReady: true,
+      pathsWithinScope: true,
+      planTaskIds: ["task-1"],
+      missingTaskIds: [],
+      unknownTaskIds: [],
+    });
+    expect(decision).toEqual({ action: "complete", reason: "READY_FOR_VERIFY" });
   });
 });

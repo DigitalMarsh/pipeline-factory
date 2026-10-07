@@ -301,3 +301,23 @@ describe("Run detail execution conversation", () => {
     expect(flat(runDetailSource)).toContain(flat("个执行步骤尚未开始"));
   });
 });
+
+/**
+ * 补充要求让同一个 Run 有了**多条执行 Loop**、并且能从 `MERGE_READY` 回到 `IN_PROGRESS`。
+ * 页面有两处当初是按"一个 Run 只有一轮、跑完就结束"写的，两条都在实测里现了形。
+ */
+describe("Run 详情页对多轮执行的适配", () => {
+  it("**取最新的执行 Loop，而不是第一条** —— 否则补充要求开始后页头还停在上一轮的「已完成 1/40 步」", () => {
+    // `.find((loop) => loop.role === "executor")` 会永远返回第一轮；这里必须按 startedAt 取最新。
+    expect(flat(runDetailSource)).toContain(flat('const loops = (run.value?.agentLoops ?? []).filter((loop) => loop.role === "executor")'));
+    expect(flat(runDetailSource)).toContain(flat('(loop.startedAt ?? "") >= (latest.startedAt ?? "")'));
+    expect(flat(runDetailSource)).not.toContain(flat('agentLoops?.find((loop) => loop.role === "executor")'));
+  });
+
+  it("**`MERGE_READY` 不再关事件流** —— 它现在可以被补充要求推回 `IN_PROGRESS` 再跑一轮", () => {
+    // 在 MERGE_READY 关流，页面就再也收不到那之后的事件：用户看到的是「已完成 / 等待合并」一动不动，
+    // 直到手动刷新（实测症状）。真正终结的只有取消与合并。
+    expect(flat(runDetailSource)).toContain(flat('["BLOCKED", "CANCELLED", "MERGED"].includes(event.runStatus)'));
+    expect(flat(runDetailSource)).not.toContain(flat('["BLOCKED", "CANCELLED", "MERGE_READY", "MERGED"]'));
+  });
+});

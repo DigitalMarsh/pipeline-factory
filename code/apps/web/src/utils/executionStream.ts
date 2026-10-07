@@ -355,7 +355,15 @@ export function projectExecutionJournal(
       }
       const previous = previousIndex >= 0 ? items[previousIndex] : undefined;
       const onlyProgressBetween = previousIndex >= 0 && items.slice(previousIndex + 1).every(isMechanismOnly);
-      if (previous && onlyProgressBetween && sameReportProgress(previous.content, display.body)) {
+      /**
+       * **合并只在同一轮 Loop 内做。** 这段合并是为了把"模型反复重报同一份进度"折成一条，
+       * 那说的是**同一轮**里的重复。补充要求会为同一个 Run 起新的一轮，而新一轮的第一份报告
+       * 数字往往与上一轮完全相同（任务没变、文件也还没改）——于是它会被并进**上一轮**那一行：
+       * 内容被覆盖、`sequence`/`occurredAt` 被改写成新的，看起来就是"那一行又在执行了"。
+       * 两轮是两段不同的工作，必须各占一行。
+       */
+      const sameLoop = !pendingModel.loopId || !previous?.loopId || pendingModel.loopId === previous.loopId;
+      if (previous && sameLoop && onlyProgressBetween && sameReportProgress(previous.content, display.body)) {
         previous.content = display.body;
         previous.sequence = pendingModel.lastSequence;
         previous.occurredAt = pendingModel.occurredAt;

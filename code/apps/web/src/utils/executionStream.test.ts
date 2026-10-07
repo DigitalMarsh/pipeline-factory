@@ -185,6 +185,45 @@ describe("projectExecutionJournal", () => {
     expect(items.find((item) => item.title === "执行报告")?.repetitionCount).toBe(2);
   });
 
+  /**
+   * **合并不跨轮。** 那段合并是为了把"同一轮里反复重报同一份进度"折成一条；而补充要求会为同一个 Run
+   * 起**新的一轮**，新一轮的第一份报告数字往往与上一轮完全相同（任务没变、文件也还没改），于是它会被
+   * 并进**上一轮**那一行：内容被覆盖、序号与时间被改写成新的——看上去就是"那一行又在执行了"（实测观感）。
+   */
+  it("**不把补充要求那一轮的报告并进上一轮那一行**", () => {
+    const reportWithLoop = (text: string, sequence: number, loopId: string) => ({
+      sequence,
+      type: "MODEL_OUTPUT",
+      occurredAt: `2026-08-30T08:00:0${sequence}.000Z`,
+      payload: {
+        loopId,
+        text: `<pipeline-factory-execution-report>${JSON.stringify({ completedTaskIds: ["task-1"], changedPaths: [], report: text })}</pipeline-factory-execution-report>`,
+      },
+    });
+    // 报告是在 `agent.model.completed` 那一刻渲染出来的，所以每一轮都要给它一个边界。
+    const completed = (sequence: number) => ({
+      sequence,
+      type: "TASK_PROGRESS",
+      occurredAt: `2026-08-30T08:00:0${sequence}.000Z`,
+      payload: { event: "agent.model.completed", step: 1 },
+    });
+
+    const items = projectExecutionJournal(
+      [
+        reportWithLoop("第一轮完成", 1, "agent-loop-1"),
+        completed(1.5),
+        reportWithLoop("补充要求那一轮", 2, "agent-loop-2"),
+        completed(2.5),
+      ],
+      "IN_PROGRESS",
+    );
+
+    const reports = items.filter((item) => item.title === "执行报告");
+    expect(reports).toHaveLength(2);
+    expect(reports[0]?.content).toContain("第一轮完成");
+    expect(reports[1]?.content).toContain("补充要求那一轮");
+  });
+
   it("does not leak an incomplete report protocol into the conversation", () => {
     const items = projectExecutionJournal(
       [
