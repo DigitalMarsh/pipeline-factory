@@ -242,7 +242,7 @@ sequence: turns.length + 1,   // explorer/thread-service.ts
 - 看它前后几行：把这一轮的正文 push 进 `messages`、把续跑提示 push 进 `messages`、写一个
   checkpoint（步骤号 / Provider 会话 / 消息条数 / 末段正文）——**两次 push，零次删除**；
 - 全仓搜 `messages` 的删减（`slice` / `splice` / `shift` / 重新赋值）：**一处都没有**；
-- 连领域侧的投影英文文案都写的是 `"The loop saved a checkpoint before continuing."`——
+- 连领域侧那层推导的英文文案都写的是 `"The loop saved a checkpoint before continuing."`——
   **代码自己知道它是检查点，只有那个名字和界面上的中文标签说是"压缩"。**
 
 真的压缩只有一种：**Provider 自己压**（Codex 的 `thread/compacted`、Claude 的 `system/compact_boundary`），
@@ -257,7 +257,7 @@ sequence: turns.length + 1,   // explorer/thread-service.ts
 - 界面文案：⑤ `CONTEXT` 的标签从「Factory · 上下文压缩」改成 **「Factory · 续跑检查点」**（探索侧与执行侧
   同形，两处都改）；执行侧那句详情从「模型上下文已刷新」改成「已保存检查点，继续下一轮」。
   ④ 的「上下文已压缩」**保持不动**——那一条才是真的。
-- 老数据照读：库里还有 **52 条历史步骤 + 53 条事件**用旧名，所以投影、执行侧的事件判据与 SSE 白名单
+- 老数据照读：库里还有 **52 条历史步骤 + 53 条事件**用旧名，所以推导、执行侧的事件判据与 SSE 白名单
   **新旧两个名字都认**（`packages/domain/src/explorer/explorer-activity.ts` 里那处判据特意放宽到
   `string`：`AgentStepType` 里已经没有旧名，直接比会让 TS 判"没有交集"，也会让老数据静默地不再成行）。
 - `docs/消息类型及事件状态机流程图.md` **8 处**跟着订正（§0.1 的产者清单、§1.1 清单表、§1.3 的 23 号
@@ -289,7 +289,7 @@ sequence: turns.length + 1,   // explorer/thread-service.ts
 ### Added
 
 - **`ExplorerService.deletePlan(explorerId, explorerPlanId)`**：删掉这条需求，连同它名下的候选方案与
-  全部版本 / 修订 / 修订草稿、调度与查询投影、由它派生的 Run 及执行线程 / 执行日志 / 钩子执行 / 验证轮次 /
+  全部版本 / 修订 / 修订草稿、调度状态行与查询宽表、由它派生的 Run 及执行线程 / 执行日志 / 钩子执行 / 验证轮次 /
   合并请求 / 补充要求、它名下（含"owner 是回合"那条）的 loop 与 steps、以及结构化提问。
   **不碰线程行本身**，也不删 `domain_events`（审计事件保留——与「删除线程」一致）。
 - **`Store.deleteExplorerPlanCascade`**（内存 + SQLite 两套实现）：只按 id 删行，与线程级那段逐条对应，
@@ -321,7 +321,7 @@ sequence: turns.length + 1,   // explorer/thread-service.ts
 删掉一条需求后，线程行上有**六个指针**指着它：`active_explorer_plan_id`、`candidate_plan_id`、
 `last_assessed_turn_id`、`active_revision_draft_id`、`context_summary_json`（`openPlanIds` + `completedPlans`）、
 `message_count`。退回的办法不是置空，而是**镜像剩下的最后一条需求**（按 ordinal）——线程级的
-`candidate_plan_id` / `last_assessed_turn_id` / `exploration_*` 本来就是"最后评估过的那条需求"的投影
+`candidate_plan_id` / `last_assessed_turn_id` / `exploration_*` 本来就是"最后评估过的那条需求"的**镜像**
 （`thread-service` 每轮都这么写），置空会让界面显示成"这条线程还没评估过"，而它明明有。
 这套回落规则与上一轮手工清探针时逐列核出来的是同一条。
 
@@ -394,10 +394,10 @@ sequence: turns.length + 1,   // explorer/thread-service.ts
 
 ### Fixed
 
-- **丢弃清掉的调度投影会被立刻写回来。** `discard` 顺手删掉 `plan_dispatch_states` 之后，
+- **丢弃清掉的调度状态行会被立刻写回来。** `discard` 顺手删掉 `plan_dispatch_states` 之后，
   `PlanDispatchCoordinator.syncRun` 6 毫秒后就按 **Run 的状态**又写了一条 `BLOCKED`/`ATTENTION`
-  （实测：`plan.discarded` 之后紧跟着一条 `plan.dispatch.state.changed`）。投影的来源是 Run，而 Run
-  并不知道自己的方案已经被丢了——所以判据必须放在那一侧：**已丢弃的方案不再有调度投影**。
+  （实测：`plan.discarded` 之后紧跟着一条 `plan.dispatch.state.changed`）。它的来源是 Run，而 Run
+  并不知道自己的方案已经被丢了——所以判据必须放在那一侧：**已丢弃的方案不再有调度状态行**。
   不修的话，Plan 中心里会永远挂着一条指向已丢弃方案的"待处理"。
 - **刷新页面不再自动弹出右侧抽屉**（用户报）。`explorerPlanId` 是"当前选中哪个需求"的**常规路由状态**
   ——每选中一个需求都会写进 URL，而加载路径按它打开抽屉，等于"每次刷新都弹一次面板"。
@@ -407,7 +407,7 @@ sequence: turns.length + 1,   // explorer/thread-service.ts
 ### 验证
 
 - 领域 3 条新用例：可丢与不可丢的两侧逐个断言（`ALL_STATUSES` 全覆盖 + 六个执行态明确排除）；
-  丢弃清掉调度投影；**丢弃之后不再按 Run 的状态重建**（这条验过：把守卫注释掉它就会红）。
+  丢弃清掉调度状态行；**丢弃之后不再按 Run 的状态重建**（这条验过：把守卫注释掉它就会红）。
 - web 2 条：客户端判据在 `BLOCKED` 上真的发出请求、在 `IN_PROGRESS` 上仍然不发；刷新路径里那句
   "紧跟页签赋值的打开"没有了。
 - **真跑一次**：对探针方案 `plan-944bb076-899`（`BLOCKED`）调
