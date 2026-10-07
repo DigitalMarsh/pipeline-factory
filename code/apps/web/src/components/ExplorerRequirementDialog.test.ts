@@ -113,8 +113,11 @@ describe("新增需求对话框", () => {
     expect(visibility).toEqual([]);
   });
 
-  it("带上「加到哪条线程」的上下文，省得用户不确定自己在给谁加", () => {
+  it("标题旁写的是**所属线程**（容器），不是「加到某条需求」——它新建的是需求，不是并进去", () => {
     const { host } = mountDialog({ threadTitle: "20261001-10:40:52-添加甘特图展示进度" });
-    expect(host.querySelector(".requirement-dialog-thread")?.textContent).toContain("20261001-10:40:52-添加甘特图展示进度");
+    const chip = host.querySelector(".requirement-dialog-thread");
+    expect(chip?.textContent).toContain("所属线程");
+    expect(chip?.textContent).toContain("20261001-10:40:52-添加甘特图展示进度");
+    expect(host.querySelector(".requirement-dialog-footer-hint")?.textContent).toContain("新建");
   });
 });

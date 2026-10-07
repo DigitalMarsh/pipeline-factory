@@ -874,13 +874,24 @@ describe("Explorer 的右侧抽屉不在刷新时自动打开", () => {
 describe("需求清单的删除动作", () => {
   it("行内的删除按钮接上了处理函数，传的是那条需求的 id", () => {
     expect(flat(explorerViewSource)).toContain(flat('@remove="deleteExplorerPlan"'));
-    expect(flat(explorerViewSource)).toContain(flat("api.deleteExplorerPlan(requestProjectId, currentThread.id, explorerPlanId)"));
+    expect(flat(explorerViewSource)).toContain(flat("api.deleteExplorerPlan(requestProjectId, currentThread.id, target.id)"));
+  });
+
+  it("**对话框只负责问**：点删除只开确认框，真删在 confirmDeleteExplorerPlan 里", () => {
+    // 这条是这次改动的要点：以前 confirm + 删除写在同一个函数里，ElMessageBox 的
+    // "取消"/"关闭"两个 reject 值漏写一处就会把"关掉"当成"确认"。
+    const open = explorerViewSource.match(/function deleteExplorerPlan\(explorerPlanId: string\): void \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(open).not.toBe("");
+    expect(flat(open)).toContain(flat("deleteRequirementId.value = current.id;"));
+    expect(flat(open)).not.toContain(flat("api.deleteExplorerPlan"));
+    expect(flat(explorerViewSource)).toContain(flat("async function confirmDeleteExplorerPlan(): Promise<void>"));
+    expect(flat(explorerViewSource)).toContain(flat('@confirm="confirmDeleteExplorerPlan"'));
   });
 
   it("确认框写明代价：一起删、不可恢复、worktree 不自动清理", () => {
-    expect(flat(explorerViewSource)).toContain(flat("会一起删除，无法恢复"));
-    expect(flat(explorerViewSource)).toContain(flat("本地 worktree 不会自动清理"));
-    expect(flat(explorerViewSource)).toContain(flat('confirmButtonText: "永久删除"'));
+    expect(flat(explorerViewSource)).toContain(flat("它的结构化 Plan、执行记录与执行日志一起删除，无法恢复"));
+    expect(flat(explorerViewSource)).toContain(flat("已结束运行的本地 worktree 不会自动清理"));
+    expect(flat(explorerViewSource)).toContain(flat('confirm-label="永久删除"'));
   });
 
   it("两种 409 各给一句人话：「还有在跑的」去停掉，「最后一条」不必白费劲", () => {
@@ -888,12 +899,32 @@ describe("需求清单的删除动作", () => {
     expect(flat(explorerViewSource)).toContain(flat('code === "EXPLORER_PLAN_DELETE_FORBIDDEN"'));
     expect(flat(explorerViewSource)).toContain(flat("先把它停掉再删"));
     expect(flat(explorerViewSource)).toContain(flat("线程至少要留一条"));
+    // 失败写在框里（deleteRequirementError），不再只弹 toast。
+    expect(flat(explorerViewSource)).toContain(flat("deleteRequirementError.value ="));
   });
 
   it("删掉的正好是当前打开的那条时，才落到服务端给的接任者上", () => {
     expect(flat(explorerViewSource)).toContain(
-      flat("if (activeExplorerPlanId.value === explorerPlanId && response.explorer.activeExplorerPlanId)"),
+      flat("if (activeExplorerPlanId.value === target.id && response.explorer.activeExplorerPlanId)"),
     );
     expect(flat(explorerViewSource)).toContain(flat("await selectExplorerPlan(response.explorer.activeExplorerPlanId)"));
+  });
+});
+
+describe("需求清单的重命名", () => {
+  it("与线程改名**共用同一个骨架**，差别只在 copy 那几行字", () => {
+    expect(flat(explorerViewSource)).toContain(flat(':copy="RENAME_COPY.thread"'));
+    expect(flat(explorerViewSource)).toContain(flat(':copy="RENAME_COPY.requirement"'));
+    // 以前需求改名是一句 ElMessageBox.prompt——同一个动作两套样式，正是这次要收掉的。
+    expect(flat(explorerViewSource)).not.toContain(flat('ElMessageBox.prompt("输入需求名称"'));
+  });
+
+  it("点重命名只开框，改名在 submitRenameRequirement 里", () => {
+    const open = explorerViewSource.match(/function renameExplorerPlan\(explorerPlanId: string\): void \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(open).not.toBe("");
+    expect(flat(open)).toContain(flat("renameRequirementId.value = current.id;"));
+    expect(flat(open)).not.toContain(flat("api.renameExplorerPlan"));
+    expect(flat(explorerViewSource)).toContain(flat("async function submitRenameRequirement(title: string): Promise<void>"));
+    expect(flat(explorerViewSource)).toContain(flat("api.renameExplorerPlan(projectId.value, currentThread.id, target.id, title)"));
   });
 });

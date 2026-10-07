@@ -5,9 +5,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ArrowDown, ArrowLeft, ArrowUp, Document, Warning } from "@element-plus/icons-vue";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessage } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 import ExecutionHeaderStatus from "../components/ExecutionHeaderStatus.vue";
+import ConfirmDialog from "../components/ConfirmDialog.vue";
 import PlanDetailDrawer from "../components/PlanDetailDrawer.vue";
 import ProviderUsageFooter from "../components/ProviderUsageFooter.vue";
 import { api } from "../api";
@@ -71,6 +72,9 @@ const mergeRequest = ref<MergeRequest | null>(null);
 const loading = ref(true);
 const error = ref<string | null>(null);
 const actionBusy = ref(false);
+/** 「终止 Run」的确认框：开没开 + 它自己的错误（失败留在框里，见 confirmTerminateRun）。 */
+const terminateOpen = ref(false);
+const terminateError = ref<string | null>(null);
 const executionDraft = ref("");
 const sendingExecutionMessage = ref(false);
 const sourceCommit = ref("");
@@ -685,26 +689,32 @@ async function togglePause() {
     actionBusy.value = false;
   }
 }
-/** 终止前要求二次确认；服务端会同步取消关联 AgentLoop 并执行 cleanup。 */
-async function terminateRun() {
+/**
+ * 终止前要求二次确认。服务端会同步取消关联 AgentLoop 并执行 cleanup。
+ *
+ * 确认框的文案原来是英文（"Terminate this run? …"），而这个页面上别处都是中文——顺手统一了。
+ */
+function terminateRun(): void {
   if (!run.value || actionBusy.value || !canTerminateRun(run.value.status)) return;
-  try {
-    await ElMessageBox.confirm("Terminate this run? The confirmed Plan will remain in history.", "终止 Run", {
-      confirmButtonText: "Terminate",
-      cancelButtonText: "Keep running",
-      type: "warning",
-    });
-  } catch {
-    return;
-  }
+  terminateError.value = null;
+  terminateOpen.value = true;
+}
+
+/** 确认框里按下「终止」之后才走这里——**对话框只负责问，终止是这一步的事**。 */
+async function confirmTerminateRun(): Promise<void> {
+  const target = run.value;
+  if (!target || actionBusy.value) return;
   actionBusy.value = true;
+  terminateError.value = null;
   try {
-    await api.cancelRun(run.value.id, "user_requested");
+    await api.cancelRun(target.id, "user_requested");
+    terminateOpen.value = false;
     ElMessage.success("Run 已终止");
     if (embedded.value) await load();
     else await router.push(`/projects/${projectId.value}/plans`);
   } catch (caught) {
-    notifyError(caught);
+    // 失败留在框里而不是浮到页面上：用户正对着这个框，关掉它才看得到页面级提示。
+    terminateError.value = caught instanceof Error ? `终止失败：${caught.message}` : "终止失败";
   } finally {
     actionBusy.value = false;
   }
@@ -792,7 +802,8 @@ async function confirmMerged() {
 type RunControlAction = "terminate" | "pause" | "resume" | "verify";
 type LoopControlAction = "pause" | "resume" | "cancel";
 async function handleRunAction(action: RunControlAction): Promise<void> {
-  if (action === "terminate") await terminateRun();
+  // 终止现在只是"开确认框"，不再是"问完顺手做掉"——真正的终止在 confirmTerminateRun 里。
+  if (action === "terminate") terminateRun();
   if (action === "pause" || action === "resume") await togglePause();
   if (action === "verify") await verifyRun();
 }
@@ -1061,6 +1072,19 @@ onBeforeUnmount(() => {
       :revisions="planDetailRevisions"
       :read-only="true"
       @select-revision="selectPlanRevision"
+    />
+    <ConfirmDialog
+      v-model="terminateOpen"
+      eyebrow="运行控制"
+      heading="终止 Run"
+      message="终止后这次执行就停在这里，已经确认的 Plan 会留在历史里。"
+      :details="['正在跑的 Agent 循环会一起取消', 'cleanup 钩子会执行', '已结束运行的本地 worktree 不会自动清理']"
+      confirm-label="终止 Run"
+      cancel-label="继续运行"
+      tone="danger"
+      :busy="actionBusy"
+      :error="terminateError"
+      @confirm="confirmTerminateRun"
     />
   </div>
 </template>

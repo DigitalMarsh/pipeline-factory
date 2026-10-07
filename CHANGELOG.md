@@ -1,5 +1,55 @@
 # Changelog
 
+## 2026-10-07 — 需求清单与 Run 上的弹框，跟新增需求统一成一套
+
+上一轮把「新增需求」从一句 `ElMessageBox.prompt` 换成了独立组件。这一轮把**同一个界面上的另外三个**
+也换过来——它们此前是三种互不相干的形状：
+
+| 位置 | 原来 | 现在 |
+|---|---|---|
+| 需求清单 · 重命名需求 | `ElMessageBox.prompt`（光秃秃一个输入框） | 与**线程改名共用** `ExplorerRenameDialog`，差别只在 `copy` 那几行字 |
+| 需求清单 · 删除需求 | `ElMessageBox.confirm`（一句话塞满代价） | `ConfirmDialog`：一句说"对谁做什么" + 代价逐条列出来 |
+| Run · 终止 Run | `ElMessageBox.confirm`（**文案还是英文**） | 同一个 `ConfirmDialog`，文案译成中文 |
+
+### Added
+
+- `components/ConfirmDialog.vue`——危险动作（也可用于普通动作，`tone="primary"`）共用的一副骨架：
+  图标 + eyebrow + 标题、一句 message、一张"会发生什么"的清单、失败条、footer。
+- `ExplorerRenameDialog` 泛化：`initialTitle` → `initialValue`，并加 `copy`
+  （`eyebrow` / `heading` / `fieldLabel` / `hint` / `submitLabel`）。线程改名与需求改名现在是
+  **同一份骨架、同一份样式**，两处文案在 ExplorerView 顶部的 `RENAME_COPY` 里并排摆着。
+
+### 两处借这次顺手改掉的行为
+
+- **确认与执行分家**。此前 `confirm` 与"删/终止"写在同一个函数里，靠 `ElMessageBox` 的
+  `catch` 分辨"取消"与"关闭"——两个不同的 reject 值，**漏写一处就会把"点右上角 ×"当成"确认"**。
+  现在点按钮只开框，真动作在 `confirmDeleteExplorerPlan` / `confirmTerminateRun` 里；
+  ConfirmDialog 里取消与关闭同义，调用方不必再分辨。
+- **失败留在框里**。删需求被服务端拒绝（还有在跑的 / 最后一条）时，此前弹个会自己消失的 toast；
+  现在写在框内——那句话是给用户下一步动作的（去停掉、或改用删除线程），而他正对着这个框。
+
+### 顺带：一处措辞我写错了
+
+「新增需求」标题旁的 `加到 <线程标题>` **读起来像"要并进某条已有需求"**，而它实际是**新建一条需求**。
+线程是容器、需求是容器里的东西，而线程标题本身又长得像需求标题（线程按"创建时刻 + 第一条需求的标题"
+自动命名，那条需求早删了名字还留着）。改成 **`所属线程 <线程标题>`**，页脚也写明"会在这条线程下**新建**
+一条需求"。窄屏下标签会被挤成两行，一并钉了 `nowrap`。
+
+### 验证
+
+- 新增 6 条 `ConfirmDialog` 用例（代价清单、无清单时不摆空框、**取消与关闭同义**、只有确认才 emit、
+  失败留在框里、忙时关不掉）+ 4 条改名对话框用例（其中一条专证"字是 copy 说了算"）。
+- `ExplorerView.test.ts` 增两组源码断言（删除 / 重命名**只负责问**——用正则抠出那个函数，
+  断言它里面**没有** `api.deleteExplorerPlan` / `api.renameExplorerPlan`），
+  `RunDetailView.test.ts` 加一条（终止同样只开框、文案不含英文、且文件里再不出现 `ElMessageBox`）。
+- **浏览器里实看**：重命名（预填 + hint）、删除需求（红色代价清单）、新增需求（`所属线程` 标签一行不折）。
+  **终止 Run 没能实点**——手上没有处于可终止状态的 Run（STARTING / IN_PROGRESS / READY_FOR_VERIFY /
+  VERIFYING / RECOVERING 一个都没有），所以那条靠源码断言 + 组件用例兜住。
+- `pnpm verify` 全绿：domain 444 / api 121 / web 616，运行库无悬空引用。
+- `docs/消息类型及事件状态机流程图.md`：这轮**没有要改的**（它清点的是消息类型与状态机，而这次换的是
+  收文本/确认的容器，报文一个没变）。只补了一句说明，把那组"不是消息面"的对话框列出来，免得后人以为漏了。
+
+
 ## 2026-10-07 — 「新增需求」对话框重做：从一行 textarea 变成一个像样的输入面
 
 报障是审美与易用性上的：现有输入框"只能说满足功能"——它就是一句

@@ -320,4 +320,32 @@ describe("Run 详情页对多轮执行的适配", () => {
     expect(flat(runDetailSource)).toContain(flat('["BLOCKED", "CANCELLED", "MERGED"].includes(event.runStatus)'));
     expect(flat(runDetailSource)).not.toContain(flat('["BLOCKED", "CANCELLED", "MERGE_READY", "MERGED"]'));
   });
+
+  /**
+   * 终止 Run 的确认框换成了共用的 `ConfirmDialog`（与删除需求同一份骨架）。
+   *
+   * 与它一起改掉的还有两处：**确认与执行分家**（点终止只开框，真终止在 `confirmTerminateRun`），
+   * 以及那句一直是英文的文案（"Terminate this run? …"）——这个页面上别处都是中文。
+   * 没有活着的 Run 时点不到这颗按钮，所以这里用源码断言钉住接线（本文件一直是这个风格）。
+   */
+  it("终止走共用确认框：只负责问、文案是中文、失败留在框里", () => {
+    const open = runDetailSource.match(/function terminateRun\(\): void \{[\s\S]*?\n\}/)?.[0] ?? "";
+    expect(open).not.toBe("");
+    expect(flat(open)).toContain(flat("terminateOpen.value = true;"));
+    expect(flat(open)).not.toContain(flat("api.cancelRun"));
+
+    expect(flat(runDetailSource)).toContain(flat("async function confirmTerminateRun(): Promise<void>"));
+    expect(flat(runDetailSource)).toContain(flat("terminateError.value ="));
+    expect(flat(runDetailSource)).not.toContain(flat("ElMessageBox"));
+
+    // 只看那个组件块：文案是不是中文、接线对不对，都在这一段里。
+    // （不整文件搜"Terminate"——`canTerminateRun` / `confirmTerminateRun` 这两个**函数名**里就有它，
+    //   负向断言会被自己绊倒；正面断言中文文案才是这条用例想证的事。）
+    const confirmBlock = runDetailSource.slice(runDetailSource.indexOf("<ConfirmDialog"));
+    expect(flat(confirmBlock)).toContain(flat('heading="终止 Run"'));
+    expect(flat(confirmBlock)).toContain(flat("终止后这次执行就停在这里"));
+    expect(flat(confirmBlock)).toContain(flat('cancel-label="继续运行"'));
+    expect(flat(confirmBlock)).toContain(flat('@confirm="confirmTerminateRun"'));
+    expect(flat(confirmBlock)).toContain(flat(':error="terminateError"'));
+  });
 });

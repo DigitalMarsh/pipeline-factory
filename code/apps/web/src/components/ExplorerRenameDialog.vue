@@ -1,5 +1,6 @@
 <!--
-  模块职责：在当前 Explorer 工作区中编辑线程显示名称。
+  模块职责：改名对话框的**骨架与样式只有这一份**——线程改名与需求改名共用它，
+  差别全在 `copy` 那几行字上（"重命名线程" / "重命名需求"），省得两处样式各自漂。
   维护提示：组件只负责输入和对话框状态，API 请求由 ExplorerView 统一协调。
 -->
 <script setup lang="ts">
@@ -8,14 +9,22 @@ import { Check, CircleClose, EditPen, Warning } from "@element-plus/icons-vue";
 
 type Props = {
   modelValue: boolean;
-  initialTitle: string;
+  initialValue: string;
   saving: boolean;
   error: string | null;
+  /** 文案随用途走。字段名与"这是给谁改名"无关，所以四个字都在这里给。 */
+  copy: {
+    eyebrow: string;
+    heading: string;
+    fieldLabel: string;
+    hint: string;
+    submitLabel: string;
+  };
 };
 
 type Emits = {
   "update:modelValue": [value: boolean];
-  submit: [title: string];
+  submit: [value: string];
 };
 
 const props = defineProps<Props>();
@@ -31,7 +40,7 @@ watch(
   () => props.modelValue,
   async (open) => {
     if (!open) return;
-    draftTitle.value = props.initialTitle;
+    draftTitle.value = props.initialValue;
     localError.value = null;
     await nextTick();
     titleInput.value?.focus();
@@ -51,7 +60,7 @@ function close() {
 function submit() {
   const trimmedTitle = draftTitle.value.trim();
   if (!trimmedTitle) {
-    localError.value = "线程名称不能为空";
+    localError.value = `${props.copy.fieldLabel}不能为空`;
     return;
   }
   localError.value = null;
@@ -75,18 +84,26 @@ function submit() {
       <div class="explorer-rename-heading">
         <div class="explorer-rename-heading-icon"><EditPen :size="19" /></div>
         <div>
-          <div class="eyebrow">线程操作</div>
-          <h2>重命名线程</h2>
+          <div class="eyebrow">{{ props.copy.eyebrow }}</div>
+          <h2>{{ props.copy.heading }}</h2>
         </div>
       </div>
     </template>
 
     <form class="explorer-rename-form" @submit.prevent="submit">
       <label class="explorer-rename-field">
-        <span>线程名称</span>
-        <input ref="titleInput" v-model="draftTitle" autofocus maxlength="200" :disabled="saving" aria-label="线程名称" />
+        <span>{{ props.copy.fieldLabel }}</span>
+        <input
+          ref="titleInput"
+          v-model="draftTitle"
+          autofocus
+          maxlength="200"
+          :disabled="saving"
+          :aria-label="props.copy.fieldLabel"
+          @keydown.enter.prevent="submit"
+        />
       </label>
-      <p class="explorer-rename-hint">新名字会出现在探索视图的标题与线程列表里。</p>
+      <p class="explorer-rename-hint">{{ props.copy.hint }}</p>
       <div v-if="errorMessage" class="explorer-rename-error" role="alert"><Warning :size="14" /> {{ errorMessage }}</div>
     </form>
 
@@ -94,7 +111,7 @@ function submit() {
       <div class="explorer-rename-footer">
         <el-button :disabled="saving" @click="close"><CircleClose :size="14" /> 取消</el-button>
         <el-button type="primary" data-rename-action="submit" :loading="saving" :disabled="saving || !draftTitle.trim()" @click="submit"
-          ><Check :size="14" /> 保存名称</el-button
+          ><Check :size="14" /> {{ props.copy.submitLabel }}</el-button
         >
       </div>
     </template>

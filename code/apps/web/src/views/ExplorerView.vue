@@ -45,6 +45,7 @@ import ProjectSettingsDialog from "../components/ProjectSettingsDialog.vue";
 import ProjectCreateDialog from "../components/ProjectCreateDialog.vue";
 import ExplorerRenameDialog from "../components/ExplorerRenameDialog.vue";
 import ExplorerRequirementDialog from "../components/ExplorerRequirementDialog.vue";
+import ConfirmDialog from "../components/ConfirmDialog.vue";
 import ExplorerHeaderStatus from "../components/ExplorerHeaderStatus.vue";
 import ProviderUsageFooter from "../components/ProviderUsageFooter.vue";
 import RunDetailView from "./RunDetailView.vue";
@@ -140,6 +141,53 @@ const renameError = ref<string | null>(null);
 const requirementDialogOpen = ref(false);
 const requirementSubmitting = ref(false);
 const requirementError = ref<string | null>(null);
+
+/**
+ * 「重命名需求」与「删除需求」：**只存目标 id，目标本身从列表里现取**（`…Target` 是 computed）。
+ * 存整条 plan 的话，列表一刷新（另一处改了名、或删了别的需求）对话框里就还是那份过期快照。
+ * `…Open` 由 id 反推——两个 ref 说同一件事，迟早会不一致。
+ */
+const renameRequirementId = ref<string | null>(null);
+const renameRequirementSaving = ref(false);
+const renameRequirementError = ref<string | null>(null);
+const renameRequirementOpen = computed({
+  get: () => renameRequirementId.value !== null,
+  set: (open: boolean) => {
+    if (!open) renameRequirementId.value = null;
+  },
+});
+const renameRequirementTarget = computed(() => explorerPlans.value.find((plan) => plan.id === renameRequirementId.value) ?? null);
+const deleteRequirementId = ref<string | null>(null);
+const deleteRequirementSaving = ref(false);
+const deleteRequirementError = ref<string | null>(null);
+const deleteRequirementOpen = computed({
+  get: () => deleteRequirementId.value !== null,
+  set: (open: boolean) => {
+    if (!open) deleteRequirementId.value = null;
+  },
+});
+const deleteRequirementTarget = computed(() => explorerPlans.value.find((plan) => plan.id === deleteRequirementId.value) ?? null);
+
+/**
+ * 改名对话框的文案两份——骨架与样式共用 `ExplorerRenameDialog`，差别只在这几行字。
+ * 摆在调用点附近而不是写进组件里：读 `renameExplorerPlan` / `renameThread` 就知道它长什么样。
+ */
+const RENAME_COPY = {
+  thread: {
+    eyebrow: "线程操作",
+    heading: "重命名线程",
+    fieldLabel: "线程名称",
+    hint: "新名字会出现在探索视图的标题与线程列表里。",
+    submitLabel: "保存名称",
+  },
+  requirement: {
+    eyebrow: "需求操作",
+    heading: "重命名需求",
+    fieldLabel: "需求名称",
+    hint: "新名字只改这条需求的显示名，不动它的方案与执行记录。",
+    submitLabel: "保存名称",
+  },
+} as const;
 const explorerPaused = ref(false);
 type LeftPanel = "projects" | "explorers";
 const leftPanel = ref<LeftPanel>("explorers");
@@ -1062,24 +1110,30 @@ function switchDrawerTab(tab: SharedDrawerTab): void {
   void router.replace({ path: route.path, query });
 }
 
-async function renameExplorerPlan(explorerPlanId: string): Promise<void> {
-  const currentThread = thread.value;
+/** 打开「重命名需求」；真正改名在 `submitRenameRequirement` 里（对话框只管输入）。 */
+function renameExplorerPlan(explorerPlanId: string): void {
   const current = explorerPlans.value.find((plan) => plan.id === explorerPlanId);
-  if (!currentThread || !current) return;
+  if (!current) return;
+  renameRequirementId.value = current.id;
+  renameRequirementError.value = null;
+}
+
+async function submitRenameRequirement(title: string): Promise<void> {
+  const currentThread = thread.value;
+  const target = renameRequirementTarget.value;
+  if (!currentThread || !target || renameRequirementSaving.value) return;
+  renameRequirementSaving.value = true;
+  renameRequirementError.value = null;
   try {
-    const { value } = await ElMessageBox.prompt("输入需求名称", "重命名需求", {
-      inputValue: current.title,
-      confirmButtonText: "保存",
-      cancelButtonText: "取消",
-      inputValidator: (value) => Boolean(value.trim()) || "名称不能为空",
-    });
-    const response = await api.renameExplorerPlan(projectId.value, currentThread.id, explorerPlanId, value.trim());
+    const response = await api.renameExplorerPlan(projectId.value, currentThread.id, target.id, title);
     if (thread.value?.id !== currentThread.id) return;
-    explorerPlans.value = explorerPlans.value.map((plan) => (plan.id === explorerPlanId ? response.explorerPlan : plan));
+    explorerPlans.value = explorerPlans.value.map((plan) => (plan.id === target.id ? response.explorerPlan : plan));
+    renameRequirementOpen.value = false;
     ElMessage.success("需求已重命名");
   } catch (caught) {
-    if (caught === "cancel" || caught === "close") return;
-    ElMessage.error(caught instanceof Error ? `重命名需求失败：${caught.message}` : "重命名需求失败");
+    renameRequirementError.value = caught instanceof Error ? `重命名需求失败：${caught.message}` : "重命名需求失败";
+  } finally {
+    renameRequirementSaving.value = false;
   }
 }
 
@@ -1093,38 +1147,39 @@ async function renameExplorerPlan(explorerPlanId: string): Promise<void> {
  *   2) 删掉的**正好是当前打开的那条**时才动选中项，落到服务端指定的接任者上；否则什么都不动，
  *      用户看的是别的需求，不该被跳走。
  */
-async function deleteExplorerPlan(explorerPlanId: string): Promise<void> {
-  const currentThread = thread.value;
+function deleteExplorerPlan(explorerPlanId: string): void {
   const current = explorerPlans.value.find((plan) => plan.id === explorerPlanId);
+  if (!current || explorerActionId.value) return;
+  deleteRequirementId.value = current.id;
+  deleteRequirementError.value = null;
+}
+
+/** 确认框里按下「永久删除」之后才走这里——**对话框只负责问，删是这一步的事**。 */
+async function confirmDeleteExplorerPlan(): Promise<void> {
+  const currentThread = thread.value;
+  const target = deleteRequirementTarget.value;
   const requestProjectId = projectId.value;
-  if (!currentThread || !current || !requestProjectId || explorerActionId.value) return;
-  try {
-    await ElMessageBox.confirm(
-      `「${current.title}」的结构化 Plan、执行记录与执行日志会一起删除，无法恢复。已结束运行的本地 worktree 不会自动清理。`,
-      "永久删除需求",
-      { type: "warning", confirmButtonText: "永久删除", cancelButtonText: "取消", distinguishCancelAndClose: true },
-    );
-  } catch (caught) {
-    if (caught === "cancel" || caught === "close") return;
-    throw caught;
-  }
+  if (!currentThread || !target || !requestProjectId || deleteRequirementSaving.value) return;
   // 用 explorerActionId 当"有 explorer 动作在飞"的门闩（与删除线程、归档线程共用同一个），
   // 防止确认框刚关掉时的连点。
-  explorerActionId.value = explorerPlanId;
+  deleteRequirementSaving.value = true;
+  explorerActionId.value = target.id;
   error.value = null;
   try {
-    const response = await api.deleteExplorerPlan(requestProjectId, currentThread.id, explorerPlanId);
+    const response = await api.deleteExplorerPlan(requestProjectId, currentThread.id, target.id);
     if (thread.value?.id !== currentThread.id) return;
     explorerPlans.value = response.explorerPlans;
     thread.value = response.explorer;
     explorers.value = explorers.value.map((item) => (item.id === response.explorer.id ? response.explorer : item));
-    ElMessage.success(`已删除「${current.title}」`);
-    if (activeExplorerPlanId.value === explorerPlanId && response.explorer.activeExplorerPlanId)
+    deleteRequirementOpen.value = false;
+    ElMessage.success(`已删除「${target.title}」`);
+    if (activeExplorerPlanId.value === target.id && response.explorer.activeExplorerPlanId)
       await selectExplorerPlan(response.explorer.activeExplorerPlanId);
   } catch (caught) {
-    if (caught === "cancel" || caught === "close") return;
     const code = caught instanceof ApiRequestError ? caught.body?.code : undefined;
-    const message =
+    // 失败**留在框里**：这句话是给用户下一步动作的（去停掉、或改用删除线程），
+    // 弹成 toast 会自己消失，而他正对着这个框。
+    deleteRequirementError.value =
       code === "EXPLORER_DELETE_BLOCKED"
         ? "这条需求还有在跑的 Run 或探索回合，先把它停掉再删。"
         : code === "EXPLORER_PLAN_DELETE_FORBIDDEN"
@@ -1132,9 +1187,8 @@ async function deleteExplorerPlan(explorerPlanId: string): Promise<void> {
           : caught instanceof Error
             ? `删除需求失败：${caught.message}`
             : "删除需求失败";
-    error.value = message;
-    ElMessage.error(message);
   } finally {
+    deleteRequirementSaving.value = false;
     if (projectId.value === requestProjectId) explorerActionId.value = null;
   }
 }
@@ -2034,10 +2088,19 @@ onBeforeUnmount(() => {
     />
     <ExplorerRenameDialog
       v-model="renameDialogOpen"
-      :initial-title="thread?.title ?? ''"
+      :initial-value="thread?.title ?? ''"
+      :copy="RENAME_COPY.thread"
       :saving="renameSaving"
       :error="renameError"
       @submit="renameThread"
+    />
+    <ExplorerRenameDialog
+      v-model="renameRequirementOpen"
+      :initial-value="renameRequirementTarget?.title ?? ''"
+      :copy="RENAME_COPY.requirement"
+      :saving="renameRequirementSaving"
+      :error="renameRequirementError"
+      @submit="submitRenameRequirement"
     />
     <ExplorerRequirementDialog
       v-model="requirementDialogOpen"
@@ -2045,6 +2108,19 @@ onBeforeUnmount(() => {
       :saving="requirementSubmitting"
       :error="requirementError"
       @submit="createRequirement"
+    />
+    <ConfirmDialog
+      v-model="deleteRequirementOpen"
+      eyebrow="需求操作"
+      heading="永久删除需求"
+      :message="`「${deleteRequirementTarget?.title ?? ''}」会被永久删除。`"
+      :details="['它的结构化 Plan、执行记录与执行日志一起删除，无法恢复', '已结束运行的本地 worktree 不会自动清理']"
+      confirm-label="永久删除"
+      cancel-label="取消"
+      tone="danger"
+      :busy="deleteRequirementSaving"
+      :error="deleteRequirementError"
+      @confirm="confirmDeleteExplorerPlan"
     />
     <ExplorerPolicyDrawer :model-value="policyOpen" @update:model-value="setPolicyOpen" />
   </div>

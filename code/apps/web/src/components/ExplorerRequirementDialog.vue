@@ -95,7 +95,9 @@ function submitOnShortcut(event: KeyboardEvent) {
           <h2>新增需求</h2>
         </div>
         <div v-if="props.threadTitle" class="requirement-dialog-thread" :title="props.threadTitle">
-          <span>加到</span><strong>{{ props.threadTitle }}</strong>
+          <!-- 「所属线程」而不是「加到」：线程是容器、需求是容器里的东西，写"加到 <名字>"读起来像
+               要并进某条**已有需求**里——而这里的动作恰恰是**新建一条**。 -->
+          <span>所属线程</span><strong>{{ props.threadTitle }}</strong>
         </div>
       </div>
     </template>
@@ -135,7 +137,9 @@ function submitOnShortcut(event: KeyboardEvent) {
 
     <template #footer>
       <div class="requirement-dialog-footer">
-        <p class="requirement-dialog-footer-hint">提交后会为这条需求开一段独立的探索对话，探索出方案再确认执行。</p>
+        <p class="requirement-dialog-footer-hint">
+          提交后会在这条线程下<strong>新建</strong>一条需求，并为它开一段独立的探索对话——探索出方案再确认执行。
+        </p>
         <div class="requirement-dialog-footer-actions">
           <el-button :disabled="saving" @click="close"><CircleClose :size="14" /> 取消</el-button>
           <el-button type="primary" data-requirement-dialog-action="submit" :loading="saving" :disabled="!canSubmit" @click="submit"
@@ -199,6 +203,11 @@ function submitOnShortcut(event: KeyboardEvent) {
   background: #f5f7fb;
   color: #8492a8;
   font-size: 10px;
+}
+/* 标签本身不许折行——窄屏时它被挤成"所属线 / 程"两行过（实测 800px 视口）。 */
+.requirement-dialog-thread span {
+  flex: none;
+  white-space: nowrap;
 }
 .requirement-dialog-thread strong {
   overflow: hidden;
@@ -330,6 +339,10 @@ function submitOnShortcut(event: KeyboardEvent) {
   color: #929eae;
   font-size: 10px;
   line-height: 1.5;
+}
+.requirement-dialog-footer-hint strong {
+  color: #6b7a90;
+  font-weight: 700;
 }
 .requirement-dialog-footer-actions {
   display: flex;
