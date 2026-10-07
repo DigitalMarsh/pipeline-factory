@@ -262,3 +262,34 @@ describe("消息清单的权重", () => {
     expect(executionMessageWeight(items[0]!)).toBe("process");
   });
 });
+
+/**
+ * 结构化载荷的搬运。这一组的两条都是**跑真实 Run 时抓到的**，不是想出来的边界。
+ */
+describe("动作的结构化载荷", () => {
+  const at = "2026-10-07T09:20:00.000Z";
+
+  it("**载荷跟着后到的那一条走**：命令的 stdout 只有结束事件才有", () => {
+    // 实测：一次真实 Run 里两行命令**都没有**「显示结果」，而同一轮的 `fileChange` 有——
+    // 因为条目的形态是 `started` 先建出来的，而 `output` / `exitCode` 只在 `completed` 那条上。
+    // 合并不搬这几个字段，journal 里躺着完整 stdout，界面上却连按钮都不出现。
+    const items = projectExecutionJournal([
+      { sequence: 1, type: "PROVIDER_ACTIVITY", occurredAt: at, payload: { phase: "started", itemId: "exec-1", providerItemId: "exec-1", itemType: "commandExecution", activityKind: "command", outcome: "running" } },
+      { sequence: 2, type: "PROVIDER_ACTIVITY", occurredAt: at, payload: { phase: "completed", itemId: "exec-1", providerItemId: "exec-1", itemType: "commandExecution", activityKind: "command", outcome: "succeeded", output: "pwd\n/repo", exitCode: 0, durationMs: 12 } },
+    ]);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ output: "pwd\n/repo", exitCode: 0, durationMs: 12, status: "COMPLETED" });
+  });
+
+  it("先到的那一条已经有载荷时不会被后来的空值抹掉", () => {
+    // `fileChange` 的 `changes` 在 started 那条上就带着了；结束那条没有再给一遍。
+    const items = projectExecutionJournal([
+      { sequence: 1, type: "PROVIDER_ACTIVITY", occurredAt: at, payload: { phase: "started", itemId: "fc-1", providerItemId: "fc-1", itemType: "fileChange", activityKind: "file-change", outcome: "running", result: [{ path: "README.md" }] } },
+      { sequence: 2, type: "PROVIDER_ACTIVITY", occurredAt: at, payload: { phase: "completed", itemId: "fc-1", providerItemId: "fc-1", itemType: "fileChange", activityKind: "file-change", outcome: "succeeded" } },
+    ]);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.result).toEqual([{ path: "README.md" }]);
+  });
+});

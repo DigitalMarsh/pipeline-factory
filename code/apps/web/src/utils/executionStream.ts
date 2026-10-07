@@ -479,6 +479,15 @@ export function projectExecutionJournal(journal: ExecutionJournalEntry[], thread
         previous.callId = previous.callId ?? item.callId;
         previous.source = "provider";
         previous.unrecordedFields = previousWasTool ? previous.unrecordedFields : item.unrecordedFields;
+        // **结构化载荷跟着"后到的那一条"走**：命令的 `output` / `exitCode` / `durationMs` 只有
+        // **结束**事件才有，而条目是 `started` 先建出来的——不搬过来，命令行就永远没有「显示结果」，
+        // 明明 journal 里躺着完整的 stdout。（实测：一次真实 Run 里两行命令都没有那个按钮，
+        // 而同一轮的 `fileChange` 有——因为它的 `changes` 在 started 那条上就已经带了。）
+        previous.arguments = item.arguments ?? previous.arguments;
+        previous.result = item.result ?? previous.result;
+        previous.output = item.output ?? previous.output;
+        previous.exitCode = item.exitCode ?? previous.exitCode;
+        previous.durationMs = item.durationMs ?? previous.durationMs;
         providerItems.set(key, previous);
         if (callKey) toolItems.set(callKey, previous);
       } else {
