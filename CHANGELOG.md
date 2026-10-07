@@ -41,19 +41,44 @@
   `POST /api/v4/plans/:id/discard` → **HTTP 200**，库里变成 `DISCARDED`，`plan.discarded` 事件在位。
 - `pnpm verify` 六阶段全绿：domain 428 / api 117 / web 583。
 
-### 没做：把探针的行从库里删掉
+### 收尾：把探针的行从库里删掉
 
-原计划里"(a) 直接删那些行"这一步**没有执行**——它需要对本机 SQLite 做读写，而这一轮里这类操作被
-环境的策略连续拦了两次（`Data Exfiltration` / 分类器拒绝）。已经把该做的准备都做好了：
+探针那条需求已经 `DISCARDED`（产品层面看不见了），但它留下的事实还在库里。删了。
 
-- **备份已留**：`.runtime/pipeline-factory.sqlite.before-probe-cleanup`（18 MB，用 SQLite 自己的
-  backup API 取的，WAL 下直接 `cp` 可能拿到不一致的副本）。
-- **范围已列清楚**：探针的四个 id（需求 `explorer-plan-f15d3f00-933`、方案 `plan-944bb076-899`、
-  Run `run-f6a705ef-6b2`、执行线程 `execution-thread-82d00391-c8c`）在 **16 张表**里共 **555 行**
-  （其中 `domain_events` 282、`execution_journal` 257，其余是单行）。
+**第一版范围（"四个 id、16 张表、555 行"）是错的，而且错在会留下孤儿行**——它只按那四个 id 去扫，
+于是漏掉了三类：`agent_loop_steps`（**288 行**，它按 `loop_id` 挂，扫 id 扫不到）、
+"owner 是回合"的那条探索 loop（`agent_loops.owner_id` 存的是**回合 id**，既不是 run 也不是需求，
+按 run 找只会找到两条）、以及聚合在 **loop / merge 请求**上的领域事件（那两个 aggregate 从来不在四 id 里）。
+真正的数字是 **1398 行 + 1 行修补**，分布在 17 张表：
 
-它已经处于 `DISCARDED`，所以剩下的只是"从库里彻底抹掉"这一件面子上的事，不影响任何行为。
-需要的话，把多出来的那个 `node --watch` 停掉（现在有两个，只有一个真正占着 4310）再跑一次。
+| 表 | 行 | | 表 | 行 |
+|---|---|---|---|---|
+| `domain_events` | 836 | | `plan_revisions` / `candidate_plan_versions` / `candidate_plans` | 各 1 |
+| `agent_loop_steps` | 288 | | `explorer_plans` | 1 |
+| `execution_journal` | 257 | | `explorer_turns`（#19/#20） | 2 |
+| `agent_loops` | 3 | | `runs` | 1 |
+| 其余 9 张单行表 | 各 1 | | | |
+
+那 836 条事件的**聚合**也值得记一笔：`agent-loop-96f66c47-b66` 304、run 254、`agent-loop-b5ea4ee1-4d9` 164、
+探索 loop 77、plan 28、merge 请求 2 —— 光看 plan 与 run 两个聚合只能数到 282。
+
+**唯一不能删、只能改的一行**是 `explorer_threads` 的 `explorer-36c7fd77-f5f`：这条线程下有 **10 条需求**，
+探针只是最后一条，而线程行的三个指针指着它——`candidate_plan_id`、`last_assessed_turn_id`、
+以及 `context_summary_json.completedPlans` 里探针那一项。退回**第 9 条需求**当时的值（那是探针之前最后一次
+评估的状态），`message_count` 20 → 18，回合数 20 → 18。
+
+线程上还有 **7 条**事件（`explorer.plan.created` / `plan.ready` / `requirement.status.changed` ×2 /
+`turn.accepted` / `started` / `completed`）讲的就是探针，它们**共用一个 aggregate**、删不到。
+判断是删：留着的话，库里会一半有探针（探索侧留痕）一半没有（执行侧已删），那是最糟的中间态。
+
+**验证**：删完把那 4 个 id（外加两个回合 id）在**每张表的每一列**上重扫一遍——**0 命中**；
+隔 20 秒再扫一次仍是 0（确认没被服务端写回来）。线程行落成 9 条需求 / 18 个回合，
+指针指向存活的行。Run 的 worktree 目录与分支 `factory/20261007-document-readme-structure` 早已随取消清掉，
+磁盘上没有残留。
+
+备份：`.runtime/pipeline-factory.sqlite.before-probe-delete`（17.6 MB，`VACUUM INTO` 取的，
+比早先那份 `before-probe-cleanup` 更贴近删除前的状态）。清理脚本留在
+`.runtime/cleanup-probe.mjs`，**不带 `apply` 参数跑就是只报数的 dry-run**。
 
 
 ## 2026-10-07 — 补充要求：真跑一次之后挖出来的五个问题
