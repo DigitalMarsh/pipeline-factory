@@ -111,14 +111,24 @@ export class RoutingModelGateway implements ModelGateway {
     return gateway.capabilities?.(role) ?? unsupportedCapabilities();
   }
 
-  describeEndpoint(role?: ModelRole): ProviderEndpoint {
-    const explorer = this.backendIdFor("explorer");
-    const executor = this.backendIdFor("executor");
-    // 传了角色就按该角色生效的后端点回答（注意 role 是**角色名**，不是后端 id）。
-    // 不传角色：只有在两个角色确实指向同一个后端时才敢报一个具体端点，否则如实回答"混合"。
-    const id = role ? this.backendIdFor(role) : explorer === executor ? explorer : null;
-    if (!id) return { backend: "mixed", endpoint: null, source: "provider-settings", cliVersion: null, credentialSource: null, providerModel: null };
-    return this.instantiateFingerprint(id);
+  /**
+   * `config` 是**调用点这次真正会用的那份角色配置**（Project 快照可以覆盖后端），与
+   * `capabilities` 的第二个参数同源。曾经这里只吃角色名，于是按全局角色默认回答——而
+   * `agent.loop.started` 的 `provider` 拿它当"这次 Run 由哪个 agent 执行"的**指纹**写进
+   * telemetry，最终显示在用量栏的 Agent 那一格。项目覆盖了执行侧后端时，那个格子会指向
+   * 根本没跑过的后端（现场：frozen 与项目都写 claude-agent-sdk，用量栏却写 codex）。
+   */
+  describeEndpoint(role?: ModelRole, config?: ModelRoleConfig | undefined): ProviderEndpoint {
+    // 不传角色：只有当两个角色确实指向同一个后端时才敢报一个具体端点，否则如实回答"混合"。
+    // 这条路上**不看 `config`** —— 没有角色，那份覆盖配置就无从归属。
+    if (!role) {
+      const explorer = this.backendIdFor("explorer");
+      const executor = this.backendIdFor("executor");
+      return explorer === executor ? this.instantiateFingerprint(explorer) : { backend: "mixed", endpoint: null, source: "provider-settings", cliVersion: null, credentialSource: null, providerModel: null };
+    }
+    // 传了角色就按该角色生效的后端点回答（注意 role 是**角色名**，不是后端 id），
+    // 并尊重调用点这次真正会用的那份覆盖配置（见上面的说明）。
+    return this.instantiateFingerprint(this.backendIdFor(role, config));
   }
 
   async close(): Promise<void> {

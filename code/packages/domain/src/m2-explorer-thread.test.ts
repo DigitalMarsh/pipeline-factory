@@ -183,7 +183,7 @@ describe("ExplorerThread", () => {
         const providerThreadId = `provider-${request.conversationId}`;
         const inputAnswered = new Promise<void>((resolve) => { resumeByRequestId.set(inputId, resolve); });
         yield { type: "thread.started", threadId: providerThreadId };
-        yield { type: "turn.input_required", request: { requestId: inputId, threadId: providerThreadId, turnId: `provider-turn-${request.conversationId}`, itemId: `item-${inputId}`, questions: [{ id: "q1", header: "方向", question: "请选择", isOther: false, isSecret: false, options: [{ label: "继续", description: "继续当前需求" }] }], isBlocking: true, autoResolutionMs: null } };
+        yield { type: "turn.input_required", request: { requestId: inputId, threadId: providerThreadId, turnId: `provider-turn-${request.conversationId}`, itemId: `item-${inputId}`, questions: [{ id: "q1", header: "方向", question: "请选择", isOther: false, isSecret: false, options: [{ label: "继续", description: "继续当前需求" }] }], isBlocking: true } };
         await inputAnswered;
         yield { type: "text.delta", text: readyResponse };
         yield { type: "turn.completed" };
@@ -323,7 +323,7 @@ describe("ExplorerThread", () => {
   it("allows concurrent blocking input requests across requirements but only one per turn", () => {
     const store = new InMemoryPipelineStore();
     store.saveThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
-    const request = (id: string, localTurnId: string): ExplorerInputRequest => ({ id, threadId: "thread-1", localTurnId, providerRequestId: id, providerThreadId: `provider-${id}`, providerTurnId: `turn-${localTurnId}`, itemId: id, questions: [{ id: "q1", header: "选择", question: "请选择", isOther: false, isSecret: false, options: [{ label: "A", description: "A" }] }], isBlocking: true, autoResolutionMs: null, status: "OPEN", createdAt: store.now(), answeredAt: null, answeredBy: null, redactedAnswerSummary: null });
+    const request = (id: string, localTurnId: string): ExplorerInputRequest => ({ id, threadId: "thread-1", localTurnId, providerRequestId: id, providerThreadId: `provider-${id}`, providerTurnId: `turn-${localTurnId}`, itemId: id, questions: [{ id: "q1", header: "选择", question: "请选择", isOther: false, isSecret: false, options: [{ label: "A", description: "A" }] }], isBlocking: true, status: "OPEN", createdAt: store.now(), answeredAt: null, answeredBy: null, redactedAnswerSummary: null });
     store.saveInputRequest(request("input-1", "turn-1"));
     expect(store.saveInputRequest(request("input-2", "turn-2"))).toMatchObject({ id: "input-2" });
     expect(() => store.saveInputRequest(request("input-3", "turn-1"))).toThrow("open blocking input request");
@@ -428,7 +428,6 @@ describe("ExplorerThread", () => {
               { id: "secret", header: "密钥", question: "请输入密钥", isOther: true, isSecret: true, options: null },
             ],
             isBlocking: true,
-            autoResolutionMs: null,
           },
         };
         resumeOrder.push("stream-resumed");
@@ -436,7 +435,7 @@ describe("ExplorerThread", () => {
         yield { type: "turn.completed" };
       },
       async answerUserInput(input) {
-        answer = { type: "turn.input_required", request: { requestId: input.requestId, threadId: "provider-thread-1", turnId: "provider-turn-1", itemId: "item-1", questions: [], isBlocking: true, autoResolutionMs: null } };
+        answer = { type: "turn.input_required", request: { requestId: input.requestId, threadId: "provider-thread-1", turnId: "provider-turn-1", itemId: "item-1", questions: [], isBlocking: true } };
         resumeOrder.push("answer-called");
       },
       async cancel() { undefined; },
@@ -466,7 +465,7 @@ describe("ExplorerThread", () => {
     store.saveTurn({ id: "turn-1", threadId: "thread-1", role: "user", content: "请探索", status: "COMPLETED", createdAt: store.now(), sequence: 1 });
     store.saveTurn({ id: "turn-2", threadId: "thread-1", role: "assistant", content: "", status: "WAITING_FOR_INPUT", createdAt: store.now(), sequence: 2 });
     store.updateThread({ ...store.getThread("thread-1")!, state: "WAITING_FOR_INPUT" });
-    store.saveInputRequest({ id: "input-1", threadId: "thread-1", localTurnId: "turn-2", providerRequestId: "provider-1", providerThreadId: "provider-thread-1", providerTurnId: "provider-turn-1", itemId: "item-1", questions: [{ id: "q1", header: "方向", question: "选择方案", isOther: false, isSecret: false, options: [{ label: "方案 A", description: "保持兼容" }] }], isBlocking: true, autoResolutionMs: null, status: "OPEN", createdAt: store.now(), answeredAt: null, answeredBy: null, redactedAnswerSummary: null });
+    store.saveInputRequest({ id: "input-1", threadId: "thread-1", localTurnId: "turn-2", providerRequestId: "provider-1", providerThreadId: "provider-thread-1", providerTurnId: "provider-turn-1", itemId: "item-1", questions: [{ id: "q1", header: "方向", question: "选择方案", isOther: false, isSecret: false, options: [{ label: "方案 A", description: "保持兼容" }] }], isBlocking: true, status: "OPEN", createdAt: store.now(), answeredAt: null, answeredBy: null, redactedAnswerSummary: null });
 
     new ExplorerThreadService(store, new StubModelGateway({ explorer: { model: "explorer" }, executor: { model: "executor" } }));
 

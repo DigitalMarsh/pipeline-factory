@@ -193,7 +193,7 @@ describe("ExecutorAgent", () => {
       configFor: () => ({ model: "gpt-5.6-luna", loopMode: "provider-controlled" }),
       capabilities: () => ({ supportsStructuredUserInput: true, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
       async *stream(): AsyncIterable<ModelEvent> {
-        yield { type: "turn.input_required", request: { requestId: "request-1", threadId: "provider-thread", turnId: "provider-turn", itemId: "item-1", questions: [], isBlocking: true, autoResolutionMs: null } };
+        yield { type: "turn.input_required", request: { requestId: "request-1", threadId: "provider-thread", turnId: "provider-turn", itemId: "item-1", questions: [], isBlocking: true } };
         yield { type: "turn.completed" };
       },
       async answerUserInput() { throw new Error("不该被调用：Run 没有回答入口"); },

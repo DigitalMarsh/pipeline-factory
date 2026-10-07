@@ -17,7 +17,6 @@ const request: ExplorerInputRequest = {
     { id: "credential", header: "凭据", question: "输入凭据", isOther: true, isSecret: true, options: null },
   ],
   isBlocking: true,
-  autoResolutionMs: null,
   status: "OPEN",
   createdAt: "2026-09-27T00:00:00.000Z",
   answeredAt: null,

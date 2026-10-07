@@ -49,7 +49,16 @@ export function projectRunThreadTelemetry(store: PipelineStore, run: { id: strin
   const telemetry: ExecutionTelemetry = {
     model: existing?.model ?? executorConfig?.model ?? null,
     reasoningEffort: existing?.reasoningEffort ?? executorConfig?.reasoningEffort ?? null,
-    backend: existing?.backend ?? executorConfig?.backend ?? null,
+    // **冻结配置写了后端时以它为准**，虽然它与上面两行是反过来的优先级。理由是这一格的来源不同：
+    // `backend` 只由 `agent.loop.started` 的端点指纹写入，而那个指纹是**配置推导**的、不是 Provider
+    // 上报的（见 agent-loop.ts 的 emit 与 executor-agent.ts 的 updateTelemetry），所以"Plan 确认时
+    // 冻结的那份配置"才是路由真正用的那个后端。`existing.backend` 则是在指纹只吃角色名的那段
+    // 时间里按**全局角色默认**算出来的——项目覆盖了执行侧后端时它就是错的（现场：冻结与项目
+    // 都写 claude-agent-sdk，2026-10-07 那条 Run 的记录却写 codex-app-server，用量栏据此显示
+    // "Agent Codex App Server"而模型显示 claude-opus-5）。`model` 没有这个问题：它取自
+    // `effectiveModelConfig`，项目覆盖当时就已经生效了。
+    // 冻结配置没写后端（跟随全局）时，才轮到指纹回答"那时全局是哪个"。
+    backend: executorConfig?.backend ?? existing?.backend ?? null,
     startedAt,
     completedAt,
     durationMs,

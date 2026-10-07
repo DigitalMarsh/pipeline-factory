@@ -186,7 +186,6 @@ export type ModelInputRequest = {
   itemId: string;
   questions: ModelInputQuestion[];
   isBlocking: boolean;
-  autoResolutionMs: number | null;
 };
 
 /** 提交给 Provider 的按问题 id 分组答案。 */
@@ -198,6 +197,11 @@ export type ModelInputAnswers = Record<string, { answers: string[] }>;
  * 曾经还有一个 `AUTO_RESOLVED`：类型、界面文案、样式类都写好了，但**全仓没有任何写入点**，
  * 永远不可能出现。它在上一次清点里被删掉——要恢复自动应答，先有"谁在什么条件下自动作答"
  * 这一事实，再回来加状态。
+ *
+ * `autoResolutionMs` 是同一件事的另一半，2026-10-07 一起清掉：Codex 的 requestUserInput 载荷里
+ * 有这个名字，我们把它一路带着（模型类型 → 领域事实 → SQLite 列 → SSE 载荷 → web 类型），
+ * 却**没有任何消费方**；而且本机 40 条真实请求里它**一次都不是非空**（40/40 NULL）。
+ * 一个从来不到达、也没人读的字段，唯一的作用是让人以为"超时自动应答"已经实现了。
  */
 export type ExplorerInputRequestStatus = "OPEN" | "SUBMITTING" | "ANSWERED" | "CANCELLED" | "RECOVERY_REQUIRED";
 
@@ -213,7 +217,6 @@ export type ExplorerInputRequest = {
   itemId: string;
   questions: ModelInputQuestion[];
   isBlocking: boolean;
-  autoResolutionMs: number | null;
   status: ExplorerInputRequestStatus;
   createdAt: string;
   answeredAt: string | null;

@@ -49,6 +49,23 @@ describe("RepositoryContextCache", () => {
     expect(summary).not.toContain("docs.validate");
   });
 
+  /**
+   * 默认产物模式必须出现在这份上下文里——它是唯一按 Project 注入模型的通道，而探索提示词明确
+   * 写着"见仓库上下文里 `Plan artifact mode` 那一行，按它走、不要再问"。这一行丢了，模型就退回
+   * "每次问一遍"，而那是用户报的噪音来源。
+   */
+  it("injects the project's default plan artifact mode, defaulting to REPOSITORY_FILE", () => {
+    const cache = new RepositoryContextCache();
+
+    // 老配置行没有这一格：读路径按缺省补上，不给模型一个 undefined。
+    expect(cache.get(repositoryProject()).summary).toContain("Plan artifact mode: REPOSITORY_FILE");
+
+    // 改了设置就是另一个配置版本：缓存键含 configVersion/configHash，真实系统里这两样必然一起变
+    // （否则这个缓存就会把旧摘要发给模型）。这里照实写，不靠"换个临时目录碰巧换 key"。
+    const reviewOnly = { ...repositoryProject(), configVersion: 2, configHash: "config-b", settings: { defaultArtifactMode: "CONVERSATION" } } as unknown as Project;
+    expect(cache.get(reviewOnly).summary).toContain("Plan artifact mode: CONVERSATION");
+  });
+
   it("reuses the project index and invalidates on working-tree, Git baseline, or config changes", () => {
     const project = repositoryProject();
     const cache = new RepositoryContextCache();

@@ -6,14 +6,22 @@
  *   本文件对应的真实缺陷是：重建 telemetry 对象时漏搬 `backend`，于是库里记着
  *   `codex-app-server`、界面上"AGENT"一栏却永远是"未记录"——数据是对的，展示是丢的。
  *
- * 维护提示：新增遥测字段时在这里补一条"existing 里有值 → 投影后还在"的断言。
- *   回退顺序（existing → Revision 快照 → 空）是契约，不要为了让某个用例好写而调换。
+ * 维护提示：
+ *   1) 新增遥测字段时在这里补一条"existing 里有值 → 投影后还在"的断言。
+ *   2) 回退顺序是契约，不要为了让某个用例好写而调换。**`backend` 是唯一的例外，而且是被
+ *      证据逼出来的**：它只由 `agent.loop.started` 的端点指纹写入，那个指纹是配置推导的、
+ *      不是 Provider 上报的；指纹早先只吃角色名，于是一律按**全局**角色默认算，项目覆盖了
+ *      执行侧后端时它就指向一个没跑过的后端（现场：冻结配置与当前项目都写 claude-agent-sdk，
+ *      2026-10-07 那条 Run 的记录里却是 codex-app-server，用量栏据此显示 Agent=Codex 而
+ *      模型=claude-opus-5）。根因已在 agent-loop 修掉（现在会把 effectiveModelConfig 传下去），
+ *      所以**修好之后两个来源本就一致**，这条优先级的翻转只会纠正旧记录、不会覆盖新事实。
  */
 import { describe, expect, it } from "vitest";
 import { InMemoryPipelineStore, PlanService, ProjectService, type ExecutionTelemetry, type PlanRevision , planContractFixture } from "@pipeline-factory/domain";
 import { projectRunThreadTelemetry, resolveRunExecutorConfig } from "./run-telemetry.js";
 
-function seed(store: InMemoryPipelineStore, telemetry: ExecutionTelemetry | null) {
+/** `frozenBackend: null` 表示冻结配置里**没写**后端——那一格就跟随全局，只能由指纹回答。 */
+function seed(store: InMemoryPipelineStore, telemetry: ExecutionTelemetry | null, frozenBackend: string | null = "claude-agent-sdk") {
   const projects = new ProjectService(store);
   const project = projects.create({ id: "project-1", name: "Demo", repoRoot: "/repo/demo", defaultBranch: "main", worktreeRoot: "/tmp/demo-worktrees" });
   const plans = new PlanService(store, projects);
@@ -24,7 +32,7 @@ function seed(store: InMemoryPipelineStore, telemetry: ExecutionTelemetry | null
     planId: candidate.id, revision: 1, resolvedContract: candidate.resolvedContract, artifactHash: "sha256:test",
     confirmedBy: "tester", confirmedAt: store.now(), sourceExplorerThreadId: "explorer-1",
     projectConfigVersion: snapshot.configVersion, projectConfigHash: snapshot.configHash,
-    projectConfigSnapshot: { ...snapshot, settings: { ...snapshot.settings, models: { ...snapshot.settings.models, executor: { ...snapshot.settings.models.executor, model: "frozen-at-confirm", backend: "claude-agent-sdk" } } } },
+    projectConfigSnapshot: { ...snapshot, settings: { ...snapshot.settings, models: { ...snapshot.settings.models, executor: { ...snapshot.settings.models.executor, model: "frozen-at-confirm", ...(frozenBackend ? { backend: frozenBackend } : {}) } } } },
   } as unknown as PlanRevision;
   store.saveRevision(revision);
   const thread = store.saveExecutionThread({ id: "execution-thread-1", runId: "run-1", state: "ACTIVE", journal: [], telemetry });
@@ -41,15 +49,40 @@ const recorded: ExecutionTelemetry = {
 };
 
 describe("projectRunThreadTelemetry", () => {
-  it("carries every recorded fact through, including the backend", () => {
+  it("carries every recorded fact through", () => {
     const store = new InMemoryPipelineStore();
     const seeded = seed(store, recorded);
 
     const projected = projectRunThreadTelemetry(store, seeded.run, seeded.thread).telemetry;
 
     // 这条就是那个真实缺陷的回归断言：漏搬 backend 时它会变成 undefined。
-    expect(projected).toMatchObject({ model: "gpt-5.6-luna", backend: "codex-app-server", reasoningEffort: "high", durationMs: 187435, usageSource: "provider" });
+    // 注意 backend 的**取值**来自冻结配置而不是记录（见下面的用例与文件头维护提示 2）。
+    expect(projected).toMatchObject({ model: "gpt-5.6-luna", backend: "claude-agent-sdk", reasoningEffort: "high", durationMs: 187435, usageSource: "provider" });
     expect(projected?.usage?.inputTokens).toBe(191197);
+  });
+
+  /**
+   * 记录里写 codex、冻结配置写 claude-agent-sdk —— 这正是 2026-10-07 那条 Run 的形状：
+   * 指纹当时按**全局**角色默认算，而项目把执行侧覆盖成了 claude。冻结配置才是路由真正用的
+   * 那个后端，所以它赢。
+   */
+  it("**冻结配置写了后端时以它为准**，即使记录里是另一个", () => {
+    const store = new InMemoryPipelineStore();
+    const seeded = seed(store, recorded);
+
+    const projected = projectRunThreadTelemetry(store, seeded.run, seeded.thread).telemetry;
+
+    expect(recorded.backend).toBe("codex-app-server");
+    expect(projected?.backend).toBe("claude-agent-sdk");
+  });
+
+  it("冻结配置没写后端（跟随全局）时，才用记录的指纹回答那时全局是哪个", () => {
+    const store = new InMemoryPipelineStore();
+    const seeded = seed(store, recorded, null);
+
+    const projected = projectRunThreadTelemetry(store, seeded.run, seeded.thread).telemetry;
+
+    expect(projected?.backend).toBe("codex-app-server");
   });
 
   it("falls back to the Run's frozen config when nothing was recorded yet", () => {

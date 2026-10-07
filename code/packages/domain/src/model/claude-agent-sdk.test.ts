@@ -165,7 +165,6 @@ describe("ClaudeAgentSdkGateway", () => {
         requestId: "req-1",
         itemId: "tool-ask",
         isBlocking: true,
-        autoResolutionMs: null,
         questions: [{ id: "0", header: "Colour", question: "Which colour do you prefer?", isOther: true, isSecret: false, options: [{ label: "Red", description: "warm" }, { label: "Blue", description: "cool" }] }],
       },
     });

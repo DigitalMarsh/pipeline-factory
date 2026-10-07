@@ -1189,7 +1189,7 @@ describe("Pipeline Factory v4 API", () => {
         streamCount += 1;
         if (streamCount === 1) {
           yield { type: "thread.started", threadId: "provider-thread-1" };
-          yield { type: "turn.input_required", request: { requestId: "request-1", threadId: "provider-thread-1", turnId: "provider-turn-1", itemId: "item-1", questions: [{ id: "q1", header: "选择", question: "请选择", isOther: true, isSecret: false, options: [{ label: "方案 A", description: "A" }, { label: "方案 B", description: "B" }] }], isBlocking: true, autoResolutionMs: null } };
+          yield { type: "turn.input_required", request: { requestId: "request-1", threadId: "provider-thread-1", turnId: "provider-turn-1", itemId: "item-1", questions: [{ id: "q1", header: "选择", question: "请选择", isOther: true, isSecret: false, options: [{ label: "方案 A", description: "A" }, { label: "方案 B", description: "B" }] }], isBlocking: true } };
           resumeOrder.push("stream-resumed");
           yield { type: "text.delta", text: "已记录选择，继续完善。" };
         } else {

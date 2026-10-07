@@ -70,6 +70,23 @@ describe("ProjectService", () => {
     // blocking 只对 start 有意义（cleanup 恒为不阻塞）。**拒绝而不是忽略**：静默吞掉它等于让
     // "我明明配了阻塞"在 finish() 里无声失效。
     expect(() => projects.create({ ...base, id: "project-settings-cleanup-blocking", settings: { hooks: { cleanup: { commandId: "hook", blocking: false } } } })).toThrow(/only supported on the start hook/i);
+    expect(() => projects.create({ ...base, id: "project-settings-artifact", settings: { defaultArtifactMode: "NOPE" as never } })).toThrow(/defaultArtifactMode/i);
+  });
+
+  /**
+   * 默认产物模式决定产物模式下"要不要问用户"。默认必须是 REPOSITORY_FILE：只有它能被入队与执行，
+   * 而两个方向的代价不对称——该落盘却选了 CONVERSATION 是死路，反过来只是"用户不确认就不跑"。
+   */
+  it("**默认产物模式是 REPOSITORY_FILE**，且可被显式改成 CONVERSATION", () => {
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    // 一个 repoRoot 只能挂一个 Project，所以三条各自换一个根目录。
+    const base = (id: string) => ({ id, name: "Artifact", repoRoot: `/repo/${id}`, defaultBranch: "main", worktreeRoot: `/tmp/${id}-worktrees` });
+
+    expect(projects.create(base("project-artifact-default")).settings.defaultArtifactMode).toBe("REPOSITORY_FILE");
+    expect(projects.create({ ...base("project-artifact-review"), settings: { defaultArtifactMode: "CONVERSATION" } }).settings.defaultArtifactMode).toBe("CONVERSATION");
+    // 没写这一格的 Project（本字段之前落库的那批）读出来也要有值，而不是 undefined 漏到消费方。
+    expect(projects.create(base("project-artifact-legacy")).settings.defaultArtifactMode).toBe("REPOSITORY_FILE");
   });
 
   it("validates the role backend and its reasoning levels when a catalog is provided", () => {

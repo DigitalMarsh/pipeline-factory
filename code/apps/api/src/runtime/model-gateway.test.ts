@@ -40,7 +40,7 @@ function fakeGateway(label: string, options: { capabilities?: ModelCapabilities;
     describeEndpoint: () => ({ backend: label, endpoint: `${label}-endpoint`, source: "config", cliVersion: null, credentialSource: null, providerModel: null }),
     async *stream(_request: ModelRequest): AsyncIterable<ModelEvent> {
       calls.push("stream");
-      if (options.inputRequestId) yield { type: "turn.input_required", request: { requestId: options.inputRequestId, threadId: "t", turnId: "turn", itemId: "item", questions: [], isBlocking: true, autoResolutionMs: null } };
+      if (options.inputRequestId) yield { type: "turn.input_required", request: { requestId: options.inputRequestId, threadId: "t", turnId: "turn", itemId: "item", questions: [], isBlocking: true } };
       yield { type: "turn.completed" };
     },
     async answerUserInput(input) { answered.push(input.requestId); },
@@ -157,6 +157,28 @@ describe("RoutingModelGateway", () => {
     expect(gateway.describeEndpoint("executor")).toMatchObject({ backend: "claude-agent-sdk" });
     // 不传角色且两个角色指向不同后端：如实回答"混合"，而不是假装成某一个。
     expect(gateway.describeEndpoint()).toMatchObject({ backend: "mixed", endpoint: null });
+  });
+
+  /**
+   * 与下面 `capabilities` 那条同源，也是同一个坑的第二次出现（它一直在传 config，describeEndpoint
+   * 却只吃角色名）。Project 快照可以覆盖执行侧后端，而这份端点指纹会被写进 telemetry、最终显示在
+   * 用量栏的 Agent 那一格——只吃角色名的话，覆盖了后端的项目会被记成**全局**角色默认的那个后端。
+   * 现场：冻结配置与当前项目都写 claude-agent-sdk，Agent 那格却显示 Codex App Server，而模型那格
+   * 显示 claude-opus-5（模型取自 effectiveModelConfig，覆盖当时就已经生效，所以它是对的）。
+   */
+  it("takes the endpoint fingerprint from the backend the Project will actually use", () => {
+    const codex = fakeGateway("codex-app-server");
+    const claude = fakeGateway("claude-agent-sdk");
+    const gateway = router({ explorer: "codex-app-server", executor: "codex-app-server", gateways: [codex, claude], ids: ["codex-app-server", "claude-agent-sdk"] });
+
+    // 全局执行侧是 codex；这一份请求把它覆盖成 claude。
+    expect(gateway.describeEndpoint("executor")).toMatchObject({ backend: "codex-app-server" });
+    expect(gateway.describeEndpoint("executor", { model: "claude-opus-5", backend: "claude-agent-sdk" })).toMatchObject({ backend: "claude-agent-sdk" });
+    // 覆盖里没写 backend（"跟随全局"）时退回角色默认，不编一个。
+    expect(gateway.describeEndpoint("executor", { model: "claude-opus-5" })).toMatchObject({ backend: "codex-app-server" });
+    // 不传角色时那份覆盖配置**无从归属**（不知道它是给哪个角色的），一律按角色默认回答：
+    // 这里两个角色都是 codex，所以答案是 codex，而不是被传进来的 claude 覆盖带跑。
+    expect(gateway.describeEndpoint(undefined, { model: "claude-opus-5", backend: "claude-agent-sdk" })).toMatchObject({ backend: "codex-app-server" });
   });
 
   it("takes capabilities from the backend the Project will actually use", () => {

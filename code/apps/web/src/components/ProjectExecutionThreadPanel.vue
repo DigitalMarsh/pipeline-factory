@@ -35,7 +35,19 @@ const effectiveReasoningEffort = computed(() => reasoningSelection.value || snap
  * 已保存的覆盖值始终并入选项，否则用户看不到自己配了什么、也没法清掉它。
  */
 const { catalog: modelCatalog, load: loadModelBackends } = useModelBackends();
-const executorBackend = computed(() => snapshot.value?.backend ?? "");
+/**
+ * Agent 芯片读的是**当前**项目配置，不是快照里那一个字段。
+ *
+ * 快照只在载入时取一次，而用户完全可能正开着这一页去「项目设置」里把执行侧 Agent 换掉——
+ * 模型会在下面那条 watch 里跟着变，backend 却留在旧值上（`snapshot.backend` 只在 load()
+ * 里写过）。症状是"模型显示 Claude 是对的、Agent 却还写着 Codex"，两个字段各说各话，
+ * 而且没有任何报错。
+ *
+ * 回退顺序必须与服务端一致（见 domain 的 agent/project-execution-thread.ts 的 `get()`）：
+ * 项目没写 backend 时，生效的是这个角色在**全局配置**里的后端；目录还没加载完时
+ * 才退回快照里那个值，总比显示空字符串强。
+ */
+const executorBackend = computed(() => props.project?.settings.models.executor.backend || modelCatalog.value?.roles.executor || snapshot.value?.backend || "");
 const executorBackendLabel = computed(() => backendLabel(modelCatalog.value, executorBackend.value));
 const executorModelOptions = computed(() => modelOptionsFor(modelCatalog.value, executorBackend.value, ...(snapshot.value?.modelOptions ?? [])));
 const executorReasoningOptions = computed(() => reasoningOptionsWith(modelCatalog.value, executorBackend.value, reasoningSelection.value));
@@ -268,7 +280,7 @@ onBeforeUnmount(() => { requestGeneration += 1; closeEvents(); });
     <footer class="project-execution-composer">
       <textarea v-model="draft" :disabled="project?.status === 'ARCHIVED' || !snapshot || loading" aria-label="项目执行请求" placeholder="描述要在项目中执行的任务…" @keydown="handleComposerKeydown" />
       <div class="project-execution-composer-footer">
-        <label class="project-execution-select"><span>Agent</span><output class="project-execution-agent" :title="snapshot?.backend ?? ''">{{ executorBackendLabel }}</output></label>
+        <label class="project-execution-select"><span>Agent</span><output class="project-execution-agent" :title="executorBackend">{{ executorBackendLabel }}</output></label>
         <label class="project-execution-select"><span>模型</span><select v-model="modelSelection" :disabled="!snapshot || savingPreferences" aria-label="执行模型" @change="onModelChange"><option value="">跟随项目默认（{{ snapshot?.defaultModel ?? '加载中' }}）</option><option v-for="model in executorModelOptions" :key="model" :value="model">{{ model }}</option></select></label>
         <label class="project-execution-select"><span>推理强度</span><select v-model="reasoningSelection" :disabled="!snapshot || savingPreferences" aria-label="推理强度" @change="onReasoningChange"><option value="">跟随项目默认（{{ snapshot?.defaultReasoningEffort ?? '默认' }}）</option><option v-for="option in executorReasoningOptions" :key="option.value" :value="option.value">{{ option.label }}</option></select></label>
         <span v-if="queuedCount" class="project-execution-queue-status" role="status">{{ queuedCount }} 条请求等待按序执行</span>

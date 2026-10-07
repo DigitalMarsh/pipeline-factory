@@ -350,6 +350,44 @@ describe("启动钩子（Worktree 初始化入口）", () => {
 });
 
 /**
+ * 默认产物模式：探索产出 Plan 时按它走，模型不再为此逐次询问（工厂把它注入探索的仓库上下文）。
+ * 默认必须是 REPOSITORY_FILE —— 只有它能被入队与执行，反过来"该对话却给了仓库文件"你没有损失，
+ * 因为不确认、不入队就一个文件都不会被写。
+ */
+describe("默认产物模式", () => {
+  const artifactModeSelect = (host: HTMLElement): HTMLSelectElement | null =>
+    [...host.querySelectorAll<HTMLSelectElement>(".settings-form-grid select")].find((select) => select.closest("label")?.textContent?.trim().startsWith("默认产物模式")) ?? null;
+
+  it("**缺省是 REPOSITORY_FILE**，改成 CONVERSATION 时会进载荷", async () => {
+    const initial = project();
+    vi.mocked(api.project).mockResolvedValue({ project: initial, summary: {} as never });
+    vi.mocked(api.updateProject).mockResolvedValue({ project: initial });
+    const mounted = mountDialog();
+    await nextTick();
+    await nextTick();
+    [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("执行"))?.click();
+    await nextTick();
+
+    const select = artifactModeSelect(mounted.host)!;
+    expect(select).not.toBeNull();
+    // 老配置行没有这一格：页面按缺省显示，而不是空。
+    expect(select.value).toBe("REPOSITORY_FILE");
+
+    select.value = "CONVERSATION";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await nextTick();
+    [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("保存项目配置"))?.click();
+    await nextTick();
+    await nextTick();
+
+    expect(api.updateProject).toHaveBeenCalledWith("project-1", expect.objectContaining({ settings: expect.objectContaining({ defaultArtifactMode: "CONVERSATION" }) }));
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+});
+
+/**
  * `initialTab` 只为一条路存在：旧 `/projects/:id/settings?tab=` 地址重定向到 Explorer 时，
  * 把用户原本要看的页签带过来（见 router.ts 与 ExplorerView 的 consumeSettingsQuery）。
  * 它必须**只在这条路上**改变行为——从左侧项目列表打开设置是没带页签的，那时保持上次停留的

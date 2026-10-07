@@ -54,7 +54,6 @@ const request = (id: string, overrides: Partial<ExplorerInputRequest> = {}): Exp
   itemId: `item-${id}`,
   questions: [question(`q-${id}`)],
   isBlocking: true,
-  autoResolutionMs: null,
   status: "OPEN",
   createdAt: "2026-09-01T10:00:00.000Z",
   answeredAt: null,

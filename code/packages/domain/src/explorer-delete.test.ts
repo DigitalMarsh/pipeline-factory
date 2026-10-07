@@ -39,7 +39,7 @@ describe("ExplorerService.delete", () => {
     const candidate = plans.createCandidatePlan({ projectId: project.id, sourceExplorerThreadId: explorer.id, explorerPlanId, title: "Delete plan",
       resolvedContract: planContractFixture({ store, projectId: project.id, title: "Delete plan" }) });
     const turn = store.saveTurn({ id: "delete-turn", threadId: explorer.id, role: "user", content: "delete this", status: "COMPLETED", createdAt: store.now(), sequence: 1, explorerPlanId });
-    store.saveInputRequest({ id: "delete-input", threadId: explorer.id, explorerPlanId, localTurnId: turn.id, providerRequestId: "request-1", providerThreadId: "provider-thread-1", providerTurnId: "provider-turn-1", itemId: "item-1", questions: [], isBlocking: false, autoResolutionMs: null, status: "ANSWERED", createdAt: store.now(), answeredAt: store.now(), answeredBy: "test", redactedAnswerSummary: null });
+    store.saveInputRequest({ id: "delete-input", threadId: explorer.id, explorerPlanId, localTurnId: turn.id, providerRequestId: "request-1", providerThreadId: "provider-thread-1", providerTurnId: "provider-turn-1", itemId: "item-1", questions: [], isBlocking: false, status: "ANSWERED", createdAt: store.now(), answeredAt: store.now(), answeredBy: "test", redactedAnswerSummary: null });
     const executionThreadId = "delete-execution-thread";
     store.saveExecutionThread({ id: executionThreadId, runId: "delete-run", state: "COMPLETED", journal: [] });
     store.saveRun({ id: "delete-run", projectId: project.id, planId: candidate.id, planRevision: 1, status: "CANCELLED", branch: "factory/delete-run", workspacePath: "/tmp/left-behind-worktree", baseCommit: "HEAD", executionThreadId, createdAt: store.now(), startedAt: store.now() });

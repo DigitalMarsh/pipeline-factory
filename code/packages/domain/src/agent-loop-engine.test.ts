@@ -347,7 +347,7 @@ describe("AgentLoopEngine", () => {
       configFor: () => ({ model: "explorer" }),
       capabilities: () => ({ supportsStructuredUserInput: true, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
       async *stream() {
-        yield { type: "turn.input_required", request: { requestId: "request-1", threadId: "provider-thread", turnId: "provider-turn", itemId: "item-1", questions: [], isBlocking: true, autoResolutionMs: null } };
+        yield { type: "turn.input_required", request: { requestId: "request-1", threadId: "provider-thread", turnId: "provider-turn", itemId: "item-1", questions: [], isBlocking: true } };
         if (answered) yield { type: "text.delta", text: "done" };
         yield { type: "turn.completed" };
       },
@@ -374,7 +374,7 @@ describe("AgentLoopEngine", () => {
       configFor: () => ({ model: "executor" }),
       capabilities: () => ({ supportsStructuredUserInput: true, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
       async *stream() {
-        yield { type: "turn.input_required", request: { requestId: "request-1", threadId: "provider-thread", turnId: "provider-turn", itemId: "item-1", questions: [], isBlocking: true, autoResolutionMs: null } };
+        yield { type: "turn.input_required", request: { requestId: "request-1", threadId: "provider-thread", turnId: "provider-turn", itemId: "item-1", questions: [], isBlocking: true } };
         yield { type: "turn.completed" };
       },
       async answerUserInput() { throw new Error("不该被调用：这条线没有回答入口"); },
@@ -427,7 +427,7 @@ describe("AgentLoopEngine", () => {
       configFor: () => ({ model: "explorer" }),
       capabilities: () => ({ supportsStructuredUserInput: true, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
       async *stream() {
-        yield { type: "turn.input_required", request: { requestId: "request-fails", threadId: "provider-thread", turnId: "provider-turn", itemId: "item-1", questions: [], isBlocking: true, autoResolutionMs: null } };
+        yield { type: "turn.input_required", request: { requestId: "request-fails", threadId: "provider-thread", turnId: "provider-turn", itemId: "item-1", questions: [], isBlocking: true } };
         yield { type: "turn.completed" };
       },
       async answerUserInput() { throw new Error("provider response uncertain"); },
@@ -447,7 +447,7 @@ describe("AgentLoopEngine", () => {
       configFor: () => ({ model: "explorer" }),
       capabilities: () => ({ supportsStructuredUserInput: true, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
       async *stream() {
-        yield { type: "turn.input_required", request: { requestId: "request-cancel", threadId: "provider-thread", turnId: "provider-turn", itemId: "item-1", questions: [], isBlocking: true, autoResolutionMs: null } };
+        yield { type: "turn.input_required", request: { requestId: "request-cancel", threadId: "provider-thread", turnId: "provider-turn", itemId: "item-1", questions: [], isBlocking: true } };
         yield { type: "turn.completed" };
       },
       async answerUserInput() { return undefined; },

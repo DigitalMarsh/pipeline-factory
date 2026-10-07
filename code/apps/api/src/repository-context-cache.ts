@@ -44,12 +44,18 @@ export class RepositoryContextCache {
     const declaredTags = [...new Set((project.settings?.commands ?? [])
       .filter((command) => command.category === "verification" && command.enabled !== false)
       .flatMap((command) => command.tags ?? []))].sort();
+    // 默认产物模式：探索提示词按这一行决定"要不要问用户"。**必须在这份上下文里**，因为它是
+    // 唯一按 Project 注入模型的通道（与上面的 Verification tags 同一条路），而且提示词里
+    // 已经写明"见仓库上下文里 Plan artifact mode 那一行"。老配置行没有这一格，缺省即
+    // REPOSITORY_FILE，与 domain 的 DEFAULT_PROJECT_SETTINGS 一致。
+    const defaultArtifactMode = project.settings?.defaultArtifactMode ?? "REPOSITORY_FILE";
     const summary = [
       `Project: ${project.name} (${project.id})`,
       `Repository root: ${root}`,
       `Git branch and baseline: ${branch} @ ${head} (default ${project.defaultBranch})`,
       `Project configuration: version ${project.configVersion}, ${project.configHash}`,
       `Verification tags: ${declaredTags.join(", ") || "(none declared)"}`,
+      `Plan artifact mode: ${defaultArtifactMode} (${defaultArtifactMode === "REPOSITORY_FILE" ? "the default: plans produce repository files, and only they can be enqueued and run" : "review-only by project setting: such a plan can be confirmed but never enqueued or run"})`,
       `Tracked files: ${files.length}; changed paths: ${status.split("\n").filter(Boolean).length}; untracked paths: ${untracked.length}`,
       `Top-level areas: ${largest(topLevels, 12)}`,
       `Common file types: ${largest(extensions, 10)}`,

@@ -26,11 +26,11 @@ describe("explorer structured input", () => {
   it("keeps secret answers out of the redacted summary", () => {
     const secretQuestion = [{ id: "token", header: "Token", question: "Enter token", isOther: true, isSecret: true, options: null }];
     expect(buildInputAnswers(secretQuestion, { token: ["top-secret"] })).toEqual({ token: { answers: ["top-secret"] } });
-    expect(redactedAnswerSummary({ id: "input-1", threadId: "thread-1", localTurnId: "turn-1", providerRequestId: "request-1", providerThreadId: "provider-thread-1", providerTurnId: "provider-turn-1", itemId: "item-1", questions: secretQuestion, isBlocking: true, autoResolutionMs: null, status: "OPEN", createdAt: "2026-01-01T00:00:00.000Z", answeredAt: null, answeredBy: null, redactedAnswerSummary: null }, { token: ["top-secret"] })).toEqual({ token: { answerCount: 1, secret: true } });
+    expect(redactedAnswerSummary({ id: "input-1", threadId: "thread-1", localTurnId: "turn-1", providerRequestId: "request-1", providerThreadId: "provider-thread-1", providerTurnId: "provider-turn-1", itemId: "item-1", questions: secretQuestion, isBlocking: true, status: "OPEN", createdAt: "2026-01-01T00:00:00.000Z", answeredAt: null, answeredBy: null, redactedAnswerSummary: null }, { token: ["top-secret"] })).toEqual({ token: { answerCount: 1, secret: true } });
   });
 
   it("returns non-secret labels for the conversation stream and masks secret answers", () => {
-    const request = { id: "input-1", threadId: "thread-1", localTurnId: "turn-1", providerRequestId: "request-1", providerThreadId: "provider-thread-1", providerTurnId: "provider-turn-1", itemId: "item-1", questions: [...questions, { id: "token", header: "Token", question: "Enter token", isOther: true, isSecret: true, options: null }], isBlocking: true, autoResolutionMs: null, status: "ANSWERED" as const, createdAt: "2026-01-01T00:00:00.000Z", answeredAt: "2026-01-01T00:01:00.000Z", answeredBy: "local-user", redactedAnswerSummary: { choice: { answerCount: 1, secret: false, answers: ["A"] }, token: { answerCount: 1, secret: true } } };
+    const request = { id: "input-1", threadId: "thread-1", localTurnId: "turn-1", providerRequestId: "request-1", providerThreadId: "provider-thread-1", providerTurnId: "provider-turn-1", itemId: "item-1", questions: [...questions, { id: "token", header: "Token", question: "Enter token", isOther: true, isSecret: true, options: null }], isBlocking: true, status: "ANSWERED" as const, createdAt: "2026-01-01T00:00:00.000Z", answeredAt: "2026-01-01T00:01:00.000Z", answeredBy: "local-user", redactedAnswerSummary: { choice: { answerCount: 1, secret: false, answers: ["A"] }, token: { answerCount: 1, secret: true } } };
     expect(inputAnswerLabels(request.questions[0]!, request.redactedAnswerSummary)).toEqual(["A"]);
     expect(inputAnswerLabels(request.questions[2]!, request.redactedAnswerSummary)).toEqual(["已隐藏"]);
   });
@@ -69,7 +69,6 @@ const request = (overrides: Partial<ExplorerInputRequest> = {}): ExplorerInputRe
   itemId: "item-1",
   questions: [question()],
   isBlocking: true,
-  autoResolutionMs: null,
   status: "OPEN",
   createdAt: "2026-01-01T00:00:00.000Z",
   answeredAt: null,

@@ -180,5 +180,5 @@ export interface ModelGateway {
    * 返回本实现当前生效的端点指纹，供 Loop 记进 Run 事件；未知字段用 null 而不是猜。
    * `role` 用于多后端路由：同一进程内不同角色可能打向不同后端。
    */
-  describeEndpoint?(role?: ModelRole): ProviderEndpoint;
+  describeEndpoint?(role?: ModelRole, config?: ModelRoleConfig): ProviderEndpoint;
 }

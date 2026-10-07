@@ -581,7 +581,7 @@ function mapCodexEvent(event: CodexAppServerEvent, source: { providerThreadId?: 
       }) : null;
       return [{ id, header, question: text, isOther: value.isOther === true, isSecret: value.isSecret === true, options }];
     });
-    return { type: "turn.input_required", request: { requestId: event.id ?? "", threadId, turnId, itemId, questions, isBlocking: request.isBlocking === true, autoResolutionMs: typeof request.autoResolutionMs === "number" ? request.autoResolutionMs : null } };
+    return { type: "turn.input_required", request: { requestId: event.id ?? "", threadId, turnId, itemId, questions, isBlocking: request.isBlocking === true } };
   }
   // ── ④「Provider 说的」运行事实 ────────────────────────────────────────────
   // 这些不是模型做的，也不是你说的，而是会话设施在报告自己的状态。它们走**同一套**

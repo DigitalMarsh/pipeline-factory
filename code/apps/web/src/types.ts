@@ -53,6 +53,8 @@ export type ProjectSettings = {
   /** 命令定义。`tags` 只对 verification 命令有意义：Plan 的 `verification.suites` 用它选验证子集。 */
   commands: Array<{ commandId: string; category?: "verification" | "lifecycle" | "executor-tool" | "unclassified"; description?: string; enabled?: boolean; argv: string[]; environment?: Record<string, string>; timeoutMs?: number; tags?: string[] }>;
   defaultVerificationCommandIds?: string[];
+  /** 探索产出 Plan 时默认的产物模式；工厂把它注入探索提示词，模型据此不再逐次询问。缺省 REPOSITORY_FILE。 */
+  defaultArtifactMode?: "CONVERSATION" | "REPOSITORY_FILE";
   hooks: {
     /** `blocking: false` = 这条命令失败了也放 Run 往下走（建索引、预热这类锦上添花的初始化）。缺省阻塞。 */
     start?: { commandId: string; enabled?: boolean; timeoutMs?: number; maxAttempts?: number; blocking?: boolean };
@@ -320,7 +322,6 @@ export type ExplorerInputRequest = {
   itemId: string;
   questions: ModelInputQuestion[];
   isBlocking: boolean;
-  autoResolutionMs: number | null;
   status: "OPEN" | "SUBMITTING" | "ANSWERED" | "CANCELLED" | "RECOVERY_REQUIRED";
   createdAt: string;
   answeredAt: string | null;

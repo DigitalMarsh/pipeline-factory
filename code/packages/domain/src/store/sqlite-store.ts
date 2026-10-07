@@ -543,7 +543,6 @@ export class SqlitePipelineStore implements PipelineStore {
         item_id TEXT NOT NULL,
         questions_json TEXT NOT NULL,
         is_blocking INTEGER NOT NULL,
-        auto_resolution_ms INTEGER,
         status TEXT NOT NULL,
         created_at TEXT NOT NULL,
         answered_at TEXT,
@@ -646,6 +645,11 @@ export class SqlitePipelineStore implements PipelineStore {
     // 两条都吞异常：新库上它们本来就不存在。
     try { this.database.exec("DROP TABLE IF EXISTS revision_lifecycle_projection"); } catch { /* 新库没有这张表。 */ }
     try { this.database.exec("ALTER TABLE plan_revisions DROP COLUMN provenance"); } catch { /* 新库没有这一列。 */ }
+    // 同一类清理：`explorer_input_requests.auto_resolution_ms` 一路被带着（模型类型 → 领域事实 →
+    // 这一列 → SSE 载荷 → web 类型）却**没有任何消费方**，本机 40 条真实请求里也一次都不是非空。
+    // 读写点与类型都已经删掉，留着这一列只会让"超时自动应答"看起来像已经实现了。
+    // 同样吞异常：新库的建表语句里已经没有它，老 SQLite 不支持 DROP COLUMN 时也留得住。
+    try { this.database.exec("ALTER TABLE explorer_input_requests DROP COLUMN auto_resolution_ms"); } catch { /* 新库没有这一列，或这个 SQLite 不支持 DROP COLUMN。 */ }
     // V1 扁平合同（`contract` 镜像）的四列一并丢掉：类型、读写点与落盘都删了，留着只等于把
     // "历史遗留"继续存在库里。镜像本身完全可推导，删列不丢事实。
     // 同族的 `pruneLegacyV1Plans` 也一并删除：它靠 `json_extract(contract_json, ...)` 找 V1 计划，
@@ -877,7 +881,7 @@ export class SqlitePipelineStore implements PipelineStore {
     const existing = this.statement("SELECT * FROM explorer_input_requests WHERE provider_thread_id = ? AND provider_turn_id = ? AND provider_request_id = ?").get(request.providerThreadId, request.providerTurnId, String(request.providerRequestId)) as SqliteRow | undefined;
     if (existing) return this.inputRequestFromRow(existing);
     if (request.isBlocking && this.statement("SELECT 1 FROM explorer_input_requests WHERE local_turn_id = ? AND is_blocking = 1 AND status = 'OPEN' LIMIT 1").get(request.localTurnId)) throw new Error(`Explorer turn ${request.localTurnId} already has an open blocking input request`);
-    this.statement("INSERT INTO explorer_input_requests (id, thread_id, explorer_plan_id, local_turn_id, provider_request_id, provider_thread_id, provider_turn_id, item_id, questions_json, is_blocking, auto_resolution_ms, status, created_at, answered_at, answered_by, redacted_answer_summary_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(request.id, request.threadId, request.explorerPlanId ?? null, request.localTurnId, String(request.providerRequestId), request.providerThreadId, request.providerTurnId, request.itemId, JSON.stringify(request.questions), request.isBlocking ? 1 : 0, request.autoResolutionMs, request.status, request.createdAt, request.answeredAt, request.answeredBy, request.redactedAnswerSummary ? JSON.stringify(request.redactedAnswerSummary) : null);
+    this.statement("INSERT INTO explorer_input_requests (id, thread_id, explorer_plan_id, local_turn_id, provider_request_id, provider_thread_id, provider_turn_id, item_id, questions_json, is_blocking, status, created_at, answered_at, answered_by, redacted_answer_summary_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(request.id, request.threadId, request.explorerPlanId ?? null, request.localTurnId, String(request.providerRequestId), request.providerThreadId, request.providerTurnId, request.itemId, JSON.stringify(request.questions), request.isBlocking ? 1 : 0, request.status, request.createdAt, request.answeredAt, request.answeredBy, request.redactedAnswerSummary ? JSON.stringify(request.redactedAnswerSummary) : null);
     return this.getInputRequest(request.id) as ExplorerInputRequest;
   }
 
@@ -1457,7 +1461,7 @@ export class SqlitePipelineStore implements PipelineStore {
     return {
       id: String(row.id), threadId: String(row.thread_id), ...(row.explorer_plan_id ? { explorerPlanId: String(row.explorer_plan_id) } : {}), localTurnId: String(row.local_turn_id),
       providerRequestId: parseRequestId(String(row.provider_request_id)), providerThreadId: String(row.provider_thread_id), providerTurnId: String(row.provider_turn_id), itemId: String(row.item_id),
-      questions: JSON.parse(String(row.questions_json)) as ModelInputQuestion[], isBlocking: Number(row.is_blocking) === 1, autoResolutionMs: row.auto_resolution_ms === null ? null : Number(row.auto_resolution_ms), status: String(row.status) as ExplorerInputRequestStatus,
+      questions: JSON.parse(String(row.questions_json)) as ModelInputQuestion[], isBlocking: Number(row.is_blocking) === 1, status: String(row.status) as ExplorerInputRequestStatus,
       createdAt: String(row.created_at), answeredAt: row.answered_at === null ? null : String(row.answered_at), answeredBy: row.answered_by === null ? null : String(row.answered_by), redactedAnswerSummary: row.redacted_answer_summary_json === null ? null : JSON.parse(String(row.redacted_answer_summary_json)) as Record<string, unknown>,
     };
   }

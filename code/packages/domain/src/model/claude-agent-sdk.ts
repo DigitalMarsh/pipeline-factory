@@ -351,8 +351,8 @@ export class ClaudeAgentSdkGateway implements ModelGateway {
       itemId: options.toolUseID,
       questions: toDomainQuestions(questions),
       isBlocking: true,
-      // "用户离开后自动继续"由 CLI 自己处理，宿主拿不到这个时长。
-      autoResolutionMs: null,
+      // "用户离开后自动继续"由 CLI 自己处理，宿主拿不到这个时长——这也是它当初在 Claude 侧
+      // 只能硬编码 null 的原因（字段本身已在 2026-10-07 清掉，见 explorer/types.ts）。
     };
     events.push({ type: "turn.input_required", request: inputRequest });
     const signal = options.signal;

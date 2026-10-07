@@ -56,6 +56,21 @@ export type ProjectSettings = {
   commands: RegisteredCommandDefinition[];
   /** Ordered Factory-owned verification set. Models cannot select individual command ids. */
   defaultVerificationCommandIds: string[];
+  /**
+   * 探索产出 Plan 时**默认的产物模式**（即 Plan 的 `artifact.mode`）。
+   *
+   * 为什么需要它：这一格决定方案能不能被执行——`CONVERSATION` 只是可审阅的文档，确认后
+   * **既不能入队也不能起 Run**（见 plan/service.ts 的 `CONVERSATION_ARTIFACT_NOT_EXECUTABLE`）。
+   * 而探索侧此前每次都要先问一遍"要对话产物还是仓库文件"，对绝大多数需求是纯噪音。
+   *
+   * 默认 `REPOSITORY_FILE`，因为两个方向的代价不对称：**该落盘却选了 CONVERSATION 是死路**
+   * （只能重新探索一轮换一份），而该对话却给了 REPOSITORY_FILE 你没有损失——不确认、不入队，
+   * 一个文件都不会被写。这条默认值由工厂写进探索提示词（见 apps/api 的 RepositoryContextCache），
+   * 模型据此"不再问"，而不是自己猜。
+   *
+   * **可选**：本字段之前落库的 Project 没有它，读路径一律按缺省处理，不为一个新开关改写已有配置行。
+   */
+  defaultArtifactMode?: "CONVERSATION" | "REPOSITORY_FILE" | undefined;
   hooks: {
     start?: HookDefinition;
     cleanup?: HookDefinition;
@@ -93,6 +108,7 @@ export type ProjectSettingsInput = {
   concurrency?: Partial<ProjectSettings["concurrency"]>;
   commands?: RegisteredCommandDefinition[];
   defaultVerificationCommandIds?: string[];
+  defaultArtifactMode?: "CONVERSATION" | "REPOSITORY_FILE" | undefined;
   hooks?: ProjectSettings["hooks"];
   models?: {
     explorer?: ModelRoleConfigInput & { model: string };
@@ -195,6 +211,8 @@ export const DEFAULT_PROJECT_SETTINGS: ProjectSettings = {
   },
   commands: [],
   defaultVerificationCommandIds: [],
+  // 只有 REPOSITORY_FILE 能被入队与执行；理由见 ProjectSettings.defaultArtifactMode。
+  defaultArtifactMode: "REPOSITORY_FILE",
   hooks: {},
   models: {
     explorer: { model: "gpt-5.6-luna", mode: "plan", temperature: 0.1, loopMode: "provider-controlled" },
@@ -274,6 +292,7 @@ function validateProjectSettings(settings: ProjectSettings, catalog?: ModelBacke
     }
   }
   assertStringArray(settings.defaultVerificationCommandIds, "defaultVerificationCommandIds");
+  if (settings.defaultArtifactMode !== undefined && settings.defaultArtifactMode !== "CONVERSATION" && settings.defaultArtifactMode !== "REPOSITORY_FILE") throw new Error("defaultArtifactMode must be CONVERSATION or REPOSITORY_FILE");
   if (new Set(settings.defaultVerificationCommandIds).size !== settings.defaultVerificationCommandIds.length) throw new Error("defaultVerificationCommandIds must not contain duplicates");
   for (const commandId of settings.defaultVerificationCommandIds) {
     const command = settings.commands.find((item) => item.commandId === commandId);
@@ -324,6 +343,8 @@ export function normalizeProjectSettings(input?: ProjectSettingsInput, base: Pro
     concurrency: { ...base.concurrency, ...value.concurrency },
     commands: value.commands ? value.commands.map((command) => ({ ...command, category: command.category ?? "unclassified", enabled: command.enabled ?? false, argv: [...command.argv] as [string, ...string[]], ...(command.environment ? { environment: { ...command.environment } } : {}), ...(command.tags ? { tags: [...command.tags] } : {}) })) : clone(base.commands).map((command) => ({ ...command, category: command.category ?? "unclassified", enabled: command.enabled ?? false })),
     defaultVerificationCommandIds: value.defaultVerificationCommandIds ? [...value.defaultVerificationCommandIds] : [...base.defaultVerificationCommandIds],
+    // 老配置行没有这一格：缺省即 REPOSITORY_FILE，与全新 Project 一致（理由见 ProjectSettings 里的说明）。
+    defaultArtifactMode: value.defaultArtifactMode ?? base.defaultArtifactMode ?? "REPOSITORY_FILE",
     hooks: { ...base.hooks, ...value.hooks },
     models: {
       explorer: mergeRoleModels(base.models.explorer, value.models?.explorer),

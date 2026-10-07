@@ -199,7 +199,7 @@ describe("CodexAppServerGateway", () => {
     const calls: Array<{ method: string; params: unknown }> = [];
     const gateway = new CodexAppServerGateway({
       roles: { explorer: { model: "explorer-model" }, executor: { model: "executor-model" } },
-      sessionFactory: createSessionFactory([{ id: "server-request-1", method: "item/tool/requestUserInput", params: { threadId: "codex-thread-1", turnId: "turn-1", itemId: "item-1", questions: [{ id: "q1", header: "Choice", question: "Pick one", isOther: false, isSecret: false, options: [{ label: "A", description: "Option A" }] }], isBlocking: true, autoResolutionMs: null } }], calls),
+      sessionFactory: createSessionFactory([{ id: "server-request-1", method: "item/tool/requestUserInput", params: { threadId: "codex-thread-1", turnId: "turn-1", itemId: "item-1", questions: [{ id: "q1", header: "Choice", question: "Pick one", isOther: false, isSecret: false, options: [{ label: "A", description: "Option A" }] }], isBlocking: true } }], calls),
     });
 
     const events = [];

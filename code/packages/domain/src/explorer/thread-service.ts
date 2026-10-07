@@ -471,14 +471,14 @@ export class ExplorerThreadService {
       job.providerTurnId = request.turnId;
       const currentPlan = this.store.getExplorerPlan(job.explorerPlanId);
       if (currentPlan && currentPlan.providerThreadId !== request.threadId) this.store.updateExplorerPlan({ ...currentPlan, providerThreadId: request.threadId, lastActivityAt: this.store.now() });
-      const inputRequest: ExplorerInputRequest = { id: this.store.nextId("input"), threadId, explorerPlanId: job.explorerPlanId, localTurnId: assistantId, providerRequestId: request.requestId, providerThreadId: request.threadId, providerTurnId: request.turnId, itemId: request.itemId, questions: request.questions, isBlocking: request.isBlocking, autoResolutionMs: request.autoResolutionMs, status: "OPEN", createdAt: this.store.now(), answeredAt: null, answeredBy: null, redactedAnswerSummary: null };
+      const inputRequest: ExplorerInputRequest = { id: this.store.nextId("input"), threadId, explorerPlanId: job.explorerPlanId, localTurnId: assistantId, providerRequestId: request.requestId, providerThreadId: request.threadId, providerTurnId: request.turnId, itemId: request.itemId, questions: request.questions, isBlocking: request.isBlocking, status: "OPEN", createdAt: this.store.now(), answeredAt: null, answeredBy: null, redactedAnswerSummary: null };
       const saved = this.store.saveInputRequest(inputRequest);
       const currentThread = this.store.getThread(threadId);
       if (currentThread) this.store.updateThread({ ...currentThread, lastActivityAt: this.store.now() });
       const currentTurn = this.store.listTurns(threadId).find((turn) => turn.id === assistantId);
       if (currentTurn) this.store.updateTurn({ ...currentTurn, status: "WAITING_FOR_INPUT" });
       this.updatePlanRuntimeStatus(threadId, job.explorerPlanId, "WAITING_FOR_INPUT", assistantId);
-      this.publish(this.store.appendEvent({ type: "explorer.turn.input_required", aggregateId: threadId, payload: { requestId: saved.id, threadId, turnId: assistantId, explorerPlanId: job.explorerPlanId, loopId: job.loopId ?? null, localTurnId: assistantId, providerRequestId: saved.providerRequestId, providerThreadId: saved.providerThreadId, providerTurnId: saved.providerTurnId, itemId: saved.itemId, questions: saved.questions, isBlocking: saved.isBlocking, autoResolutionMs: saved.autoResolutionMs } }));
+      this.publish(this.store.appendEvent({ type: "explorer.turn.input_required", aggregateId: threadId, payload: { requestId: saved.id, threadId, turnId: assistantId, explorerPlanId: job.explorerPlanId, loopId: job.loopId ?? null, localTurnId: assistantId, providerRequestId: saved.providerRequestId, providerThreadId: saved.providerThreadId, providerTurnId: saved.providerTurnId, itemId: saved.itemId, questions: saved.questions, isBlocking: saved.isBlocking } }));
       return;
     }
     if (event.type === "agent.loop.completed") {

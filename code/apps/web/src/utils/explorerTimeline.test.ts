@@ -28,7 +28,6 @@ const inputRequest = (id: string, createdAt: string, status: ExplorerInputReques
   itemId: `item-${id}`,
   questions: [{ id: "goal", header: "Goal", question: "What should we build?", isOther: false, isSecret: false, options: [{ label: "A", description: "Option A" }] }],
   isBlocking: true,
-  autoResolutionMs: null,
   status,
   createdAt,
   answeredAt: status === "ANSWERED" ? "2026-09-01T10:04:00.000Z" : null,

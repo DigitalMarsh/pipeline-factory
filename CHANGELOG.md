@@ -1,5 +1,109 @@
 # Changelog
 
+## 2026-10-07 — 用量栏的 Agent 显示成 codex：端点指纹只吃了角色名
+
+报障：项目里把执行侧 Agent 设成 Claude Code，"执行页面看着也像 Claude，但左下方那个 Agent 显示
+的还是 codex；模型显示的 claude 是对的"。
+
+**"模型对、Agent 不对"这条线索就是答案**——两者读的不是同一处。查 project4 那条 Run 的三份数据：
+
+| 来源 | 值 |
+|---|---|
+| Plan 确认时冻结的 executor 配置 | `{ model: claude-opus-5, backend: claude-agent-sdk }` |
+| 项目**当前**设置 | 同上 |
+| 线程里**记录**的 telemetry | `{ model: "claude-opus-5", backend: "codex-app-server" }` ← 错的是这个 |
+
+模型来自 `effectiveModelConfig`（项目覆盖当时就生效），后端来自 `agent.loop.started` 的**端点指纹**，
+而那个指纹是 `this.model.describeEndpoint?.(input.role)`——**只传角色名**。路由网关的
+`backendIdFor(role, config?)` 本来就支持"请求覆盖优先于角色默认"（`capabilities` 一直在传第二个
+参数），`describeEndpoint` 却没有那个参数，于是永远按**全局**角色默认回答。全局执行侧是 codex，
+项目把执行侧覆盖成 claude，指纹就指向了一个这次根本没跑过的后端。
+
+这条错值还会一路走到底：指纹 → telemetry → 用量栏的 Agent 那一格，而且因为
+`executionModelSourceNote` 只比较**模型名**，模型名恰好相同，连"配置改过了"的提示都不会出现。
+
+### Changed
+
+- `ModelGateway.describeEndpoint?(role?, config?)` 补上第二个参数；路由网关按 `backendIdFor(role, config)`
+  回答，不传角色时那份覆盖配置**无从归属**，一律按角色默认（两个角色指向不同后端时仍如实回答
+  `mixed`）。
+- `agent-loop.ts` 把 `effectiveModelConfig` 传下去——与它上面那行 `capabilities` 同源，那一行一直在传。
+- `run-telemetry` 投影里 `backend` 的优先级翻成**冻结配置优先**。这不是"顺手调顺序"：`backend` 只由
+  那个**配置推导**的指纹写入（不是 Provider 上报），所以冻结配置写了后端时它才是路由真正用的那个；
+  冻结配置没写（跟随全局）时才轮到指纹回答"那时全局是哪个"。**修好之后两个来源本就一致**，
+  这条翻转只会纠正旧记录、不会覆盖新事实——也正因为如此，那条已经落库的错记录现在能正确显示。
+
+### 验证
+
+- `model-gateway.test.ts`：新增"端点指纹取自 Project 真正会用的后端"（覆盖成 claude → 指纹返回
+  claude；覆盖里没写 backend → 退回角色默认；不传角色 → 覆盖配置不生效）。
+- `run-telemetry.test.ts`：原来那条"记录的 backend 原样带过去"的用例，fixture 恰好就是
+  `记录=codex / 冻结=claude` 这个**错误组合**——它一直在断言错值。改成断言修正后的优先级，并补一条
+  "冻结没写后端时由指纹回答"。
+- 浏览器实测：project4 的用量栏现在显示 `Agent Claude Agent SDK`（此前是 `Codex App Server`）。
+
+## 2026-10-07 — 清掉 `autoResolutionMs`：一个从来不到达、也没人读的字段
+
+同一轮排查里发现的：Codex 的 `requestUserInput` 载荷里有 `autoResolutionMs`，我们把它一路带着
+（模型类型 → 领域事实 → SQLite 列 → SSE 载荷 → web 类型），**却没有任何消费方**。本机 40 条真实
+请求里它**一次都不是非空**（40/40 NULL），Claude 侧更是硬编码 `null`。
+
+一个不到达、也没人读的字段，唯一的作用是让人以为"超时自动应答"已经实现了——用户关于"输入框会不会
+自己解决"的疑问正来自这类模糊。它和之前删掉的 `AUTO_RESOLVED` 状态是同一件事的两半（见
+`explorer/types.ts` 里那段记录），所以按同样的方式清掉。
+
+### Changed
+
+- 从 `ModelInputRequest` / `ExplorerInputRequest` / SSE 载荷 / web 类型里删除该字段；两个适配器不再读它。
+- 建表语句去掉 `auto_resolution_ms`，并加一条 best-effort 的 `DROP COLUMN` 迁移（老库上删列，
+  不支持 DROP COLUMN 或有异常时静默保留——与同区那几条老库清理同一个写法）。
+- `explorer/types.ts` 与 `claude-agent-sdk.ts` 把"为什么它当初在 Claude 侧只能是 null"记进注释
+  （"用户离开后自动继续"由 CLI 自己处理，宿主拿不到这个时长）。
+
+### 验证
+
+- `grep autoResolutionMs` 只剩注释与迁移语句；14 个测试文件的 fixture 一并清掉。
+- `pnpm verify`：domain 406 / api 116 / web 576 全绿。
+
+## 2026-10-07 — 产物模式改成项目级默认值：探索不再每次都问
+
+Explore 每次都要先问一遍"要 CONVERSATION 还是 REPOSITORY_FILE"，而这两者的代价完全不对称：
+
+- 该落盘却选了 **CONVERSATION** → **死路**。方案能确认、能审阅，但 `PlanService.enqueue` 与
+  `dispatch` 都抛 `CONVERSATION_ARTIFACT_NOT_EXECUTABLE`，只能重新探索一轮换一份。
+- 该对话却给了 **REPOSITORY_FILE** → 没有损失。不确认、不入队，一个文件都不会被写。
+
+所以要的只是一个**默认值**，由项目定，而不是每次问。
+
+### Changed
+
+- `ProjectSettings.defaultArtifactMode`（缺省 `REPOSITORY_FILE`，老配置行读路径按缺省补上，不改写已有数据）。
+- 工厂把它注入探索的仓库上下文（`RepositoryContextCache`：「`Plan artifact mode: …`」那一行，
+  与 Verification tags 同一条通道——那是唯一按 Project 注入模型的出口）。
+- 探索提示词随之改写：**不再"必须询问、不得自行假设"**，改成"按仓库上下文里那一行为准，默认
+  REPOSITORY_FILE 时不要提问"；仍然禁止把 CONVERSATION 标成推荐/默认，也仍然要求在"项目默认是
+  CONVERSATION、而需求明显要改仓库文件"时把这一项提出来。安全论证（只有 REPOSITORY_FILE 能执行）
+  原样保留。
+- 设置对话框的「执行」页签加「默认产物模式」下拉，带一句说明；`docs/消息类型及事件状态机流程图.md`
+  的 `USER_GUIDANCE` 一节补上"它现在还是一条只进不出的消息"（见下面的已知缺口）。
+
+### 验证
+
+- domain：缺省值、显式改值、老配置行读回来都不是 `undefined`、非法取值被拒。
+- api：上下文里出现 `Plan artifact mode: …`，缺省补 `REPOSITORY_FILE`，显式 `CONVERSATION` 时如实反映。
+- web：对话框缺省选中 `REPOSITORY_FILE`，改成 `CONVERSATION` 后确实进载荷。
+- 浏览器实测：project4 的「执行」页签渲染出新下拉，缺省 `REPOSITORY_FILE`，说明文案在位，控制台无报错。
+
+### 已知缺口（本轮**没有**修）
+
+执行线程的**补充要求目前不影响 Agent**：`USER_GUIDANCE` 渲染成「你补充了要求」并进 journal，但
+**没有任何地方把它送进模型**——执行侧 Loop 只读 `MODEL_OUTPUT` 拼报告。本机实测：全库仅 2 条
+`USER_GUIDANCE`，两条**之后**的 `MODEL_OUTPUT` 都是 0 条。而且 Loop 跑完时线程被置为 `COMPLETED`，
+`Scheduler.addGuidance` 与输入框都拒绝 `COMPLETED` 线程——所以"执行完了但没合并、想再让 Agent
+补做一轮"这条**两头都不通**（报障的现场：Run 是 `MERGE_READY`、线程已是 `COMPLETED`，输入框不可点）。
+要真能用，先得回答两个问题：补充的要求怎么进模型上下文、Loop 结束后怎么起新一轮。
+
+
 ## 2026-10-07 — 退役整页「项目设置」，只留 Explorer 里的对话框
 
 上一轮给 project4 配启动钩子时撞到的一件事：整页设置（`/projects/:id/settings`）的**命令编辑器

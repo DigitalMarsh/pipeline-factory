@@ -20,7 +20,7 @@ describe("RecoveryCoordinator", () => {
     store.saveThread({ id: "explorer-1", projectId: "project-1", parentThreadId: null });
     const thread = { ...store.getThread("explorer-1")!, state: "WAITING_FOR_INPUT" as const, messageCount: 2 };
     const turn: ExplorerTurn = { id: "turn-1", threadId: thread.id, role: "assistant", content: "已开始分析", status: "WAITING_FOR_INPUT", createdAt: store.now(), sequence: 2 };
-    const request: ExplorerInputRequest = { id: "input-1", threadId: thread.id, localTurnId: turn.id, providerRequestId: "request-1", providerThreadId: "provider-thread", providerTurnId: "provider-turn", itemId: "item-1", questions: [], isBlocking: true, autoResolutionMs: null, status: "OPEN", createdAt: store.now(), answeredAt: null, answeredBy: null, redactedAnswerSummary: null };
+    const request: ExplorerInputRequest = { id: "input-1", threadId: thread.id, localTurnId: turn.id, providerRequestId: "request-1", providerThreadId: "provider-thread", providerTurnId: "provider-turn", itemId: "item-1", questions: [], isBlocking: true, status: "OPEN", createdAt: store.now(), answeredAt: null, answeredBy: null, redactedAnswerSummary: null };
     store.updateThread(thread);
     store.saveTurn({ id: "user-1", threadId: thread.id, role: "user", content: "请探索", status: "COMPLETED", createdAt: store.now(), sequence: 1 });
     store.saveTurn(turn);

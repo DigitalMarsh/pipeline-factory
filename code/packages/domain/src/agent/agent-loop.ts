@@ -432,7 +432,10 @@ export class AgentLoopEngine implements AgentLoopRunner {
     // 端点指纹随 Loop 起点一起落库：Run 事后能回答"这次请求实际打到了哪里、谁担保这个端点"。
     // 组合根没提供 describeEndpoint 时记 null，而不是编一个默认后端名。传角色是因为多后端下
     // 同一进程内 explorer 与 executor 可能打向不同端点，不传会把两个后端的事实混成一个。
-    this.emit(loop, "agent.loop.started", { role: input.role, mode: input.mode, model: effectiveModelConfig.model, reasoningEffort: effectiveModelConfig.reasoningEffort ?? null, provider: this.model.describeEndpoint?.(input.role) ?? null, startedAt: loop.startedAt });
+    // **还要传 `effectiveModelConfig`**：Project 快照可以覆盖执行侧后端，只传角色的话路由网关
+    // 只能按全局角色默认回答，指纹就会指向一个这次根本没跑过的后端（与上面 `capabilities`
+    // 那一行同源——它一直在传）。
+    this.emit(loop, "agent.loop.started", { role: input.role, mode: input.mode, model: effectiveModelConfig.model, reasoningEffort: effectiveModelConfig.reasoningEffort ?? null, provider: this.model.describeEndpoint?.(input.role, effectiveModelConfig) ?? null, startedAt: loop.startedAt });
     const messages: ModelMessage[] = [...input.modelRequest.messages];
     let fullText = "";
     let continuationPrompt: string | undefined;

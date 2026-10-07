@@ -104,7 +104,7 @@ describe("CodexAppServerClient", () => {
       if (message.method === "thread/start") stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { thread: { id: "thread-1" } } })}\n`);
       if (message.method === "turn/start") {
         stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: message.id, result: { turn: { id: "turn-1" } } })}\n`);
-        stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: "server-request-id", method: "item/tool/requestUserInput", params: { threadId: "thread-1", turnId: "turn-1", itemId: "item-1", questions: [], isBlocking: true, autoResolutionMs: null } })}\n`);
+        stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: "server-request-id", method: "item/tool/requestUserInput", params: { threadId: "thread-1", turnId: "turn-1", itemId: "item-1", questions: [], isBlocking: true } })}\n`);
       }
     });
     const client = new CodexAppServerClient({ command: "codex", args: ["app-server"], cwd: "/tmp", startupTimeoutMs: 5000, requestTimeoutMs: 5000, clientName: "test", clientVersion: "1.0.0", spawnProcess: () => child as unknown as ReturnType<CodexSpawnProcess> });
