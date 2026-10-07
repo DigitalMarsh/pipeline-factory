@@ -683,3 +683,26 @@ describe("Explorer markdown rendering", () => {
     expect(explorerViewSource).not.toContain(`: item.activity.summary }}<span v-if="item.activity.status === 'RUNNING'" class="processing-dots"`);
   });
 });
+
+/**
+ * 推理行的两条分支。这一组是**跑真实数据之后补的**：Codex 的推理只有加密内容，
+ * 于是所有推理行都没有正文——而它们没正文时看着像"本来就没话说"，不容易被发现。
+ */
+const explorerReasoningRowSource = readFileSync(fileURLToPath(new URL("../components/ExplorerReasoningRow.vue", import.meta.url)), "utf8");
+
+describe("推理行：有正文可折叠，没有正文就明说", () => {
+  it("有正文时是折叠卡，没有正文时不摆折叠", () => {
+    expect(explorerReasoningRowSource).toContain('<details v-if="hasBody"');
+    expect(explorerReasoningRowSource).toContain(":open=\"running\"");
+    // **没有正文时不摆 `<details>`**：一个点开只有空白的展开区比没有更糟。
+    expect(explorerReasoningRowSource).toContain('v-else class="timeline-reasoning-plain"');
+  });
+
+  it("**两种「没正文」要分得开**：Provider 没给 vs Factory 自己的标记", () => {
+    // 前者明说「未提供正文」——否则那一行就是一个光秃秃的「推理」，看着像这一轮根本没推理过。
+    // 后者（`MODEL_STARTED`，"这一轮跑起来了"）留空，不编句子。
+    expect(explorerReasoningRowSource).toContain("isProviderControlled");
+    expect(explorerReasoningRowSource).toContain("未提供正文");
+    expect(explorerStylesSource).toContain(".timeline-reasoning-unreadable");
+  });
+});
