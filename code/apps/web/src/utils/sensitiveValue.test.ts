@@ -40,6 +40,25 @@ describe("展示边界的脱敏", () => {
   });
 });
 
+describe("推理正文（与工具结果走同一个口）", () => {
+  it("模型复述出的凭据同样会被抹掉", () => {
+    // 模型可能把它读到的令牌、邮箱原样写进推理里——推理正文从 240 放到 2000 之后尤其值得挡一道。
+    const reasoning = "I read config.js and it contains api_key: sk-live-9f2a, so I will avoid printing it. Ops contact is ops@example.com.";
+    const shown = presentableText(reasoning);
+
+    expect(shown).not.toContain("sk-live-9f2a");
+    expect(shown).not.toContain("ops@example.com");
+    // 保住键名：读的人仍要知道"那里有个 api_key"。
+    expect(shown).toContain("api_key:");
+    expect(shown).toContain("I read config.js");
+  });
+
+  it("普通推理一个字都不动（脱敏不误伤内容）", () => {
+    const plain = "The README currently has a title and one line of description, so I will append a new section.";
+    expect(presentableText(plain)).toBe(plain);
+  });
+});
+
 describe("展示边界的截断", () => {
   it("够短就原样，超长才截，而且**如实说明截了多少**", () => {
     expect(truncateForDisplay("短", 10)).toBe("短");

@@ -703,6 +703,8 @@ describe("推理行：有正文可折叠，没有正文就明说", () => {
     // 后者（`MODEL_STARTED`，"这一轮跑起来了"）留空，不编句子。
     expect(explorerReasoningRowSource).toContain("isProviderControlled");
     expect(explorerReasoningRowSource).toContain("未提供正文");
+    // **正文过一遍展示边界的脱敏**：模型可能把它读到的令牌、邮箱原样复述出来。
+    expect(explorerReasoningRowSource).toContain("presentableText");
     expect(explorerStylesSource).toContain(".timeline-reasoning-unreadable");
   });
 });

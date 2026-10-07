@@ -16,12 +16,15 @@
  */
 import { computed } from "vue";
 import type { ExecutionStreamItem } from "../utils/executionStream";
+// 正文过一遍展示边界的脱敏（与工具结果同一个口）：模型可能把它读到的令牌、邮箱原样复述出来。
+import { presentableText } from "../utils/sensitiveValue";
 
 const props = defineProps<{ item: ExecutionStreamItem }>();
 
 /** 跑着的时候自动展开——那时候它正在说事；跑完就收起来，把视线还给正文。 */
 const streaming = computed(() => props.item.status === "RUNNING");
 const hasBody = computed(() => Boolean(props.item.content.trim()));
+const body = computed(() => presentableText(props.item.content));
 /** `activityKind` 是 Provider 活动的标志；Factory 自己的推理类条目没有它。 */
 const fromProvider = computed(() => props.item.activityKind === "reasoning");
 </script>
@@ -29,7 +32,7 @@ const fromProvider = computed(() => props.item.activityKind === "reasoning");
 <template>
   <details v-if="hasBody" class="execution-reasoning" :open="streaming">
     <summary>推理{{ item.modelStep === undefined ? "" : ` · 第 ${item.modelStep} 轮` }}</summary>
-    <p class="execution-reasoning-body">{{ item.content }}</p>
+    <p class="execution-reasoning-body">{{ body }}</p>
   </details>
   <p v-else-if="fromProvider" class="execution-reasoning-unreadable">Provider 未提供可读的推理正文。</p>
 </template>

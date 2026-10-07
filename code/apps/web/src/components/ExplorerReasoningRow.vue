@@ -16,11 +16,14 @@
 import { computed } from "vue";
 import type { ExplorerActivityItem } from "../types";
 import { explorerActivityLine, formatTurnTime, isProviderControlled } from "../utils/explorerPresentation";
+// 正文过一遍展示边界的脱敏（与工具结果同一个口）：模型可能把它读到的令牌、邮箱原样复述出来。
+import { presentableText } from "../utils/sensitiveValue";
 import { explorerTimelineTarget as activityTarget } from "../utils/explorerTimeline";
 
 const props = defineProps<{ activity: ExplorerActivityItem; index: number }>();
 const line = computed(() => explorerActivityLine(props.activity));
 const hasBody = computed(() => Boolean(line.value.body.trim()));
+const body = computed(() => presentableText(line.value.body));
 const running = computed(() => props.activity.status === "RUNNING");
 const unreadable = computed(() => !hasBody.value && isProviderControlled(props.activity));
 </script>
@@ -35,7 +38,7 @@ const unreadable = computed(() => !hasBody.value && isProviderControlled(props.a
     <span class="thread-mark" :class="{ 'thread-mark-live': running }" />
     <details v-if="hasBody" class="timeline-reasoning" :open="running">
       <summary>推理</summary>
-      <p>{{ line.body }}</p>
+      <p>{{ body }}</p>
     </details>
     <p v-else class="timeline-reasoning-plain">
       推理<span v-if="unreadable" class="timeline-reasoning-unreadable"> · 未提供正文</span>

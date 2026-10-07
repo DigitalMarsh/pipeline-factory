@@ -79,6 +79,8 @@ describe("Run detail execution conversation", () => {
     // 已经写着「推理」，正文留空就是"这一轮没有可说的"。
     expect(executionReasoningRowSource).toContain('<details v-if="hasBody"');
     expect(executionReasoningRowSource).toContain("props.item.content.trim()");
+    // 正文过一遍展示边界的脱敏（与工具结果同一个口）。
+    expect(executionReasoningRowSource).toContain("presentableText");
   });
 
   it("动作行的正文保持纯文本，不渲染成 markdown", () => {
