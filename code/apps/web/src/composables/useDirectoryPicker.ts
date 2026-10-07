@@ -1,6 +1,7 @@
 /**
  * 模块职责：把"点按钮 → 让本地 API 弹系统文件夹选择框 → 回填绝对路径"这段交互收成一处，
- *   供两个新建 Project 的入口（ProjectCreateDialog 与 ProjectManagementDialog 的创建态）共用。
+ *   供新建 Project 的入口共用——`components/ProjectCreateDialog.vue` 是唯一的调用方，
+ *   它被 Explorer 内联入口与目录页两个地方渲染。
  *
  * 为什么不是纯前端：浏览器拿不到绝对路径（`showDirectoryPicker()` 只给目录句柄且 Firefox 没有，
  *   `<input webkitdirectory>` 只给相对路径），而 `repoRoot` 要的是本机绝对路径——对话框必须由
