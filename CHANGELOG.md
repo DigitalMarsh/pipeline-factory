@@ -72,7 +72,8 @@
 - **浏览器**：project4 那条 9 条需求的线程里，9 行的删除按钮与 aria-label 都对，点第一行弹出的确认框
   标题「永久删除需求」与正文（一起删 / 无法恢复 / worktree 不自动清理）逐字正确。
   （按下"永久删除"那一下在这一轮里被判成不可逆的本地破坏，我停手没绕，改由用户点。）
-- **真实数据上真删了一条**（需求8 `explorer-plan-7451f3d6-59d`，待合并、非当前选中）：
+- **真实数据上真删了三条**（需求8 `explorer-plan-7451f3d6-59d` 待合并、需求2 `…-c0afc8bc-c43` 与
+  需求3 `…-f6742d18-5f3` 已阻塞），三条都干净：
   - 清单 9 → 8，留下的是**序号不重排**的 1/2/3/4/5/6/7/9；线程回合 18 → 16，
     缺口正好落在它名下那两个（#15–#16）——删的是回合，不是把后面的往前挪。
   - **17 张表逐张对账**：15 张精确命中期望值（`candidate_plans` 28→26、`runs` 26→24、
@@ -81,14 +82,18 @@
     `agent_loop_steps` 多 43 步。查下来是**我的期望算漏了**，不是删多了——`collectExecutionClosure`
     同时按**回合**和 **Run** 收 loop，而这条需求名下的 Run 自己还带一个 executor loop（43 步），
     除了那条 46 步的探索 loop。旁证：随便挑三个跑过的 Run，各自都带 1–2 个 executor loop（最多 84 步）。
-  - **全库悬空引用扫描：这次删除零残留。** 扫法不是按 id 找（那要先知道删了哪些 id），而是把
+  - **全库悬空引用扫描：三次删除零残留。** 扫法不是按 id 找（那要先知道删了哪些 id），而是把
     37 条「子列 → 父表」的对照逐条查"指着不存在的行"——不管删掉的是什么，只要没有哪一列还悬空，
     就说明删干净了。**顺带挖出 8 行悬空 loop**，时间戳全是 9 月 12 / 16 日（如
-    `agent-loop-c9afc760-c68`）：那是本次改动**之前**就留在库里的，今天这条路径一条都没留下。
-  - **指针按预期没动**（删的不是最后一条，就不该动）：`active_explorer_plan_id` 仍是原来那条、
-    `candidate_plan_id` / `last_assessed_turn_id` 仍指向需求9 的、
-    `message_count` 18 → 16、`contextSummary.completedPlans` 9 → 8；
-    事件 `explorer.plan.deleted` 落在 #236377。
+    `agent-loop-c9afc760-c68`）：那是本次改动**之前**就留在库里的，删前删后都是这 8 行，没有新增。
+  - **级联是"有什么删什么"**：逐表对账时有两张表没按我预期掉——`merge_requests` 与
+    `verification_runs` 在需求2、需求3 上**一行都没删**，因为那两条的 Run 停在 `BLOCKED`，
+    从来没走到验证。查了一遍全库印证：`MERGE_READY` 的 Run 是 10 个对 10 个验证轮次 + 10 个合并请求，
+    `BLOCKED` 的 Run 是 1 个对 0 / 0。又是我的期望算错了，不是删漏了。
+  - **指针按预期没动**（删的都不是最后一条，就不该动）：`active_explorer_plan_id` 仍是原来那条、
+    `candidate_plan_id` / `last_assessed_turn_id` 仍指向需求9 的；
+    `message_count` 18 → 12、`contextSummary.completedPlans` 9 → 6；
+    三条 `explorer.plan.deleted` 事件落在 #236377 / #236378 / #236379。
 - `pnpm verify` 六阶段全绿：domain 441 / api 121 / web 592。
 
 
