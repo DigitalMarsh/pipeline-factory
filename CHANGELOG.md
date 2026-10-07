@@ -1,5 +1,50 @@
 # Changelog
 
+## 2026-10-07 — pre-commit 钩子：提交前只排版这次暂存的文件
+
+`pnpm format` 是一次全量动作，日常提交更需要的是"只碰我这次改的东西"。钩子放在
+`code/scripts/git-hooks/pre-commit`，用 `core.hooksPath` 指过去。
+
+### 为什么不是 husky
+
+本仓的 **git 根在上一级**（`pipeline-factory/`），而工作区与 `package.json` 在 `code/`。husky 要求
+`.git` 就在它运行的那个目录里——`pnpm exec husky` 直接报 `.git can't be found`，**连 `--help` 都到不了**。
+要它可用就得把仓库结构改成"package.json 在 git 根"，那是另一个量级的改动。所以这里只做 husky 真正必要的
+那一件事：设 `core.hooksPath`（`scripts/install-git-hooks.mjs`，幂等，`prepare` 里调用；另加一个
+`pnpm hooks` 供已装过依赖的仓库手动重装——pnpm 在"依赖没变化"时会跳过 `prepare`）。
+
+### 为什么不是 lint-staged
+
+装了才发现它在这台机器上**用不了**：`/usr/local/bin/git` 是一个陈旧的 **2.15.0**，而 lint-staged 17 要求
+≥ 2.32——它解析到的正是那一个（同一台机器上 `git --version` 是 2.55.0），于是每次提交直接
+`✖ requires at least Git version 2.32.0` 退出。改用显式 PATH、把正确的 git 排在最前都没用。那段逻辑手写
+几十行就够，还少一个依赖。
+
+### 钩子做什么、不做什么
+
+- 只处理**这次暂存**的、`code/` 下、已知后缀的文件：`prettier --write` → `eslint --fix --max-warnings=0`
+  → 把结果重新暂存。
+- **部分暂存的文件会拦下提交，而不是偷偷替你决定**：一个文件同时有暂存与未暂存改动时，对工作区文件跑
+  `--write` 会把你还没打算提交的那部分一起格式化，紧接着的 `git add` 又会把它一并暂存——提交范围被
+  静默放大。钩子列出这些文件并给出三种处理方式。
+- 不碰 `docs/`、`CHANGELOG.md` 这些手写文档（它们的排版是作者的事）。
+- 跳过：`git commit --no-verify`。
+
+### 验证
+
+三条都用临时文件走完整提交实测过：（1）提交未格式化的内容后，仓库里存的是**格式化后**的版本，钩子打印
+「已排版并检查 1 个文件」；（2）部分暂存时提交被拦下并打印三种处理方式；（3）留一个未使用的变量 →
+ESLint 报错、提交中止、没有产生提交。
+
+调试这段脚本时**同一个坑踩了两次**，值得记下来：**git 按它自己的 cwd 解析 pathspec**。工具跑在 `code/`，
+而 `git diff --cached` 给的是**仓库根相对**的路径——拿后者配 `code/` 的 cwd，`git add` 会报"未匹配任何
+文件"，而 `git diff --quiet` 只是**静默地找不到差异**（于是"部分暂存"那道护栏根本不生效，提交范围被悄悄
+放大）。两种失败都不指向真正的原因，所以现在文件里所有 pathspec 都先换算成 `code/` 相对再传，并把这条写进了注释。
+
+顺带把 README 的「验证」一节补上 `pnpm --dir code verify`（原文还在列几条手敲的 `.bin` 命令），并新增
+「代码规范与提交钩子」一节。
+
+
 ## 2026-10-07 — 全量格式化（267 个文件）+ 把 `format:check` 接进门禁
 
 工具装好之后跑了 `pnpm --dir code format`，Prettier 重排了 **267 个文件**。这一步的真实代价不在

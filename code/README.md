@@ -284,3 +284,43 @@ ChangeProposal 的 API 为 `POST /api/v4/runs/:runId/change-proposals`、`GET /a
 ```
 
 测试中可注入内存适配器；运行时默认使用 SQLite WAL。当前还未接入自动 Merge 操作，合并仍必须由人工完成后通过 `confirm_merged` 语义确认。
+
+一条命令跑完全部门禁（domain build → typecheck → lint → format → 三个包的用例 → 循环依赖检查）：
+
+```bash
+pnpm --dir code verify
+```
+
+## 代码规范与提交钩子
+
+工具链是 ESLint（flat config）+ typescript-eslint + eslint-plugin-vue + Prettier，配置在
+`eslint.config.js` 与 `.prettierrc.json`，几个不显然的取舍都写在配置文件的注释里。
+
+```bash
+pnpm --dir code lint          # 只判断，不改文件
+pnpm --dir code lint:fix
+pnpm --dir code format        # Prettier 全量重排
+pnpm --dir code format:check
+```
+
+`pnpm verify` 里的 lint 与 format 两个阶段用的就是上面这条 `check` 形式——**门禁只判断合不合格，不替你改文件**。
+
+**提交钩子**（`scripts/git-hooks/pre-commit`）只处理这次**暂存**的文件：先 Prettier 排版、再 ESLint
+修可自动修的问题，然后把结果重新暂存。
+
+```bash
+pnpm --dir code hooks         # 装/重装钩子（写 core.hooksPath）
+```
+
+`pnpm install` 会通过 `prepare` 自动装，**新克隆的仓库不需要额外操作**；已经装过依赖的仓库如果发现钩子没生效
+（pnpm 在"依赖没变化"时会跳过 `prepare`），手动跑一次上面那条即可。
+
+两点需要知道：
+
+- **不用 husky**：本仓的 git 根在**上一级**（`pipeline-factory/`），而工作区与 `package.json` 在 `code/`。
+  husky 要求 `.git` 就在它运行的那个目录里，`pnpm exec husky` 直接报 `.git can't be found`。这里只做它真正
+  必要的那一件事：设 `core.hooksPath`。
+- **部分暂存的文件会拦下提交**，而不是偷偷替你决定：一个文件若同时有暂存与未暂存的改动，对工作区文件跑
+  `--write` 会把你还没打算提交的那部分一起格式化、随后的 `git add` 又会它一并暂存——提交范围被静默放大。
+  钩子会列出这些文件并说明三种处理方式。
+- 确实想跳过：`git commit --no-verify`。

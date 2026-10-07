@@ -14,6 +14,8 @@
     "stop": "node scripts/service.mjs stop",
     "status": "node scripts/service.mjs status",
     "check:cycles": "node scripts/check-cycles.mjs",
+    "prepare": "node scripts/install-git-hooks.mjs",
+    "hooks": "node scripts/install-git-hooks.mjs",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",

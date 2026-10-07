@@ -1,0 +1,111 @@
+#!/usr/bin/env node
+/**
+ * 模块职责：提交前只处理**这次暂存的文件**——先 Prettier 排版、再 ESLint 修可自动修的问题，
+ *   然后把结果重新暂存。安装方式见 `scripts/install-git-hooks.mjs`（`pnpm install` 会自动装）。
+ *
+ * 为什么不用 lint-staged：本机 `/usr/local/bin/git` 是一个陈旧的 2.15.0，而 lint-staged 17 要求
+ *   ≥ 2.32——它解析到的正是那一个，于是**每次提交都直接报错退出**（`✖ lint-staged requires at
+ *   least Git version 2.32.0`，而同一台机器上 `git --version` 是 2.55.0）。这段逻辑手写只有几十行，
+ *   还少一个依赖，也不再有"它到底解析到哪个 git"这种环境问题。
+ *
+ * 维护提示：
+ *   1) **部分暂存的文件会拦下这次提交，而不是偷偷替用户决定。** 一个文件若同时有暂存与未暂存的改动，
+ *      对工作区文件跑 `--write` 会把用户还没打算提交的那部分一起格式化，紧接着的 `git add` 又会把它
+ *      一并暂存进去——提交范围被静默放大。与其替用户做这个决定，不如停下来说清楚怎么办。
+ *   2) 工具在 `code/` 下跑（`eslint.config.js` / `.prettierrc.json` / `node_modules` 都在那儿），
+ *      而 git 给的是**仓库根相对**的路径，所以两侧都要换算一次。文件列表用 `-z`（NUL 分隔）读，
+ *      路径里有空格也不会被拆开。
+ *   3) 只处理已知的源码后缀。`docs/`、`CHANGELOG.md` 那些手写文档不在其中——它们的排版是作者的事，
+ *      而 `.prettierignore` 与 `format:check` 也都不管它们。
+ *   4) 跳过一次：`git commit --no-verify`。
+ */
+import { execFileSync } from "node:child_process";
+import { dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+/** 本文件在 `code/scripts/git-hooks/` 下，所以工作区根是它往上两层。**别数错层数**——
+ *  数错一层会落到 `code/scripts`，于是下面那个 `startsWith` 过滤把所有文件都筛掉、钩子静默放行。 */
+const CODE_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const HANDLED_EXTENSIONS = /\.(ts|vue|mjs|js|css|html|json)$/;
+/** ESLint 只认它配置里覆盖到的那些后缀；把 .json / .css 递给它只会报"没有配置"。 */
+const LINTABLE_EXTENSIONS = /\.(ts|vue|mjs|js)$/;
+
+function git(args) {
+  return execFileSync("git", args, { cwd: CODE_ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+}
+
+/** `git diff --quiet` 以 1 退出表示"有差异"，那是答案不是失败。 */
+function hasDiff(args) {
+  try {
+    execFileSync("git", args, { cwd: CODE_ROOT, stdio: "ignore" });
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+function tool(name) {
+  return join(CODE_ROOT, "node_modules", ".bin", name);
+}
+
+const gitRoot = git(["rev-parse", "--show-toplevel"]).trim();
+// 仓库根相对 → 绝对 → 只留 code/ 下、后缀在名单里的 → 换回 code/ 相对
+const staged = git(["diff", "--cached", "--name-only", "--diff-filter=ACM", "-z"])
+  .split("\0")
+  .filter(Boolean)
+  .map((path) => resolve(gitRoot, path))
+  .filter((absolute) => absolute.startsWith(CODE_ROOT + "/") && HANDLED_EXTENSIONS.test(absolute));
+
+if (staged.length === 0) process.exit(0);
+
+/**
+ * 工具与 git 子命令都跑在 `code/` 下，所以**所有 pathspec 都用 code/ 相对的路径**。
+ * 这一条踩过两次：`git` 是按**它自己的 cwd** 解析 pathspec 的，拿仓库根相对的路径配 `code/` 的 cwd
+ * 会得到 `code/code/...`——`git add` 报"未匹配任何文件"，而 `git diff --quiet` 只是**静默地找不到差异**
+ * （于是"部分暂存"这道护栏根本不生效，提交范围被悄悄放大）。两种失败都不指向真正的原因。
+ */
+const codeRelative = staged.map((absolute) => relative(CODE_ROOT, absolute));
+
+const partial = codeRelative.filter((path) => hasDiff(["diff", "--quiet", "--", path]));
+if (partial.length > 0) {
+  console.error("\npre-commit：下列文件同时有未暂存的改动，所以这次不自动排版：");
+  for (const path of partial) console.error(`  code/${path}`);
+  console.error(
+    [
+      "",
+      "为什么停下：对工作区文件跑 `prettier --write` 会把**你还没打算提交的那部分**一起格式化，",
+      "紧接着的 `git add` 又会把它一并暂存——提交范围会被静默放大。三种处理方式：",
+      "  1) 把剩余改动也一起暂存（`git add -p` 或 `git add <文件>`）后重新提交；",
+      "  2) 先把它们单独提交掉，再提交这一份；",
+      "  3) 确实只想原样提交：`git commit --no-verify`。",
+      "",
+    ].join("\n"),
+  );
+  process.exit(1);
+}
+
+const run = (name, args) => {
+  try {
+    execFileSync(tool(name), args, { cwd: CODE_ROOT, stdio: "inherit" });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+if (!run("prettier", ["--write", ...codeRelative])) {
+  console.error("\npre-commit：Prettier 排版失败，提交已中止。");
+  process.exit(1);
+}
+
+const lintable = codeRelative.filter((path) => LINTABLE_EXTENSIONS.test(path));
+if (lintable.length > 0 && !run("eslint", ["--fix", "--max-warnings=0", ...lintable])) {
+  console.error("\npre-commit：ESLint 报出无法自动修复的问题，提交已中止（先 `pnpm lint` 看详情）。");
+  process.exit(1);
+}
+
+// 排版与 --fix 可能改了内容，把结果重新放进这次提交。
+// 用 `code/` 相对的路径配 `code/` 的 cwd —— `git` 是按 **cwd** 解析 pathspec 的，两者配错会得到
+// `code/code/...` 这种路径并报"未匹配任何文件"（提交被中止，但原因跟排版毫无关系，很难查）。
+git(["add", "--", ...codeRelative]);
+console.log(`pre-commit：已排版并检查 ${staged.length} 个文件。`);
