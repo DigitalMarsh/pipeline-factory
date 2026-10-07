@@ -40,10 +40,24 @@ Codex 的 `reasoning` item 形状是 `{ content: string[], summary: string[] }`�
 - 新增 `joinStrings()`：取字符串数组字段并拼接，空数组与全是空串都算"没有内容"。
 - 两条用例：摘要被逐段读出来且用空行连成一段；只有 `content[]` 时不给内容。
 
-### 验证
+### 验证与一个更正
 
-`pnpm verify`：domain 401 / api 111 / web 561 全绿。修复本身只有注入式单测覆盖——
-那次 Run 的行是在修复之前落的。
+`pnpm verify`：domain 401 / api 111 / web 561 全绿。
+
+**更正（同日补）**：修复本身是对的，但它**不会让 Codex 的推理行长出正文**——当时的说法过头了。
+新一轮 Run（`run-f23263e6-12c`）把 API 重启后再跑一次，10 条推理全是 `summary: null`。
+翻 Codex 自己的 rollout 才看清：`reasoning` item 是
+
+```json
+{ "type": "reasoning", "id": "rs_…", "summary": [], "encrypted_content": "<2084 字符>" }
+```
+
+——`summary` 永远是空数组，正文在 `encrypted_content` 里（加密、不可读）。抽查最近 25 个会话、
+**140 条推理 item，140 条 `summary: []`**，连 `content` 字段都没有。
+
+所以：**Codex 侧的推理正文拿不到，不是本仓的 bug**。适配器读 `summary[]` 仍然是对的（哪个 build
+开始给就自动有了），读不到就不编。界面上推理行没有正文、也不摆一个空折叠，是**如实**的。
+Claude 侧的 `thinking` 块是真有文字的——那条路跑起来推理行会有正文。
 
 ## 2026-10-06 — 调研文档并入流程图文档；顺带按代码更正三处数字
 
