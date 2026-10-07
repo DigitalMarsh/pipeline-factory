@@ -182,3 +182,75 @@ describe("ProjectSettingsDialog", () => {
     mounted.host.remove();
   });
 });
+
+/**
+ * 页脚那颗按钮到底是「完成」还是「保存并关闭」。
+ *
+ * 这一段是**照着一个真实报障写的**：「项目设置里把执行侧 Agent 改成 Claude，确定后重开还是 codex，
+ * 改过几次了」。查下来不是保存失败——是那个对话框的页脚只有一颗「完成」，而保存按钮在**滚动区底部**。
+ * 改完直接点页脚那颗 = 关掉对话框，改动一个字都不落库，而且没有任何提示。
+ * 于是「改了没生效」可以无限重演，每次都一模一样。
+ */
+describe("ProjectSettingsDialog 的页脚按钮", () => {
+  const openModelsTab = async (initial = project()) => {
+    vi.mocked(api.project).mockResolvedValue({ project: initial, summary: {} as never });
+    const mounted = mountDialog();
+    await nextTick();
+    await nextTick();
+    [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("模型与工具"))?.click();
+    await nextTick();
+    return mounted;
+  };
+
+  const executorAgent = (host: HTMLElement): HTMLSelectElement =>
+    [...host.querySelectorAll("select")].find((select) => select.closest("label")?.textContent?.trim().startsWith("执行侧 Agent")) as HTMLSelectElement;
+
+  const footerText = (host: HTMLElement): string => host.querySelector(".settings-dialog-footer")?.textContent ?? "";
+
+  it("**没有改动时是「完成」，一有改动就变成「保存并关闭」**", async () => {
+    const mounted = await openModelsTab();
+
+    expect(footerText(mounted.host)).toContain("完成");
+    expect(footerText(mounted.host)).not.toContain("保存并关闭");
+
+    const select = executorAgent(mounted.host);
+    select.value = "codex-app-server";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await nextTick();
+    await nextTick();
+
+    expect(footerText(mounted.host)).toContain("保存并关闭");
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  it("**点它先保存、成功才关** —— 这条就是那个报障的回归", async () => {
+    const initial = project();
+    vi.mocked(api.updateProject).mockResolvedValue({ project: { ...initial, configVersion: 4 } });
+    const mounted = await openModelsTab(initial);
+
+    const select = executorAgent(mounted.host);
+    select.value = "codex-app-server";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await nextTick();
+    await nextTick();
+
+    [...mounted.host.querySelectorAll<HTMLButtonElement>(".settings-dialog-footer button")]
+      .find((button) => button.textContent?.includes("保存并关闭"))
+      ?.click();
+    await nextTick();
+    await nextTick();
+
+    // 保存真的发出去了，而且带上了新的 backend；然后才关。此前这里只有一次 `close()`。
+    expect(api.updateProject).toHaveBeenCalledWith("project-1", expect.objectContaining({
+      settings: expect.objectContaining({
+        models: expect.objectContaining({ executor: expect.objectContaining({ backend: "codex-app-server" }) }),
+      }),
+    }));
+    expect(mounted.updates).toEqual([false]);
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+});

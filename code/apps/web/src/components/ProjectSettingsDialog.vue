@@ -5,7 +5,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
 import { CircleCheck, Connection, Delete, FolderOpened, InfoFilled, Plus, Setting, Warning } from "@element-plus/icons-vue";
-import { ElMessage } from "element-plus";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { api } from "../api";
 import type { Project, ProjectSettings } from "../types";
 import { createProjectRequestScope } from "../utils/projectRoutes";
@@ -49,6 +49,45 @@ const executorBackendHint = computed(() => endpointHint(modelCatalog.value, effe
 const explorerBackendFallbackLabel = computed(() => `跟随全局（${backendLabel(modelCatalog.value, modelCatalog.value?.roles.explorer)}）`);
 const executorBackendFallbackLabel = computed(() => `跟随全局（${backendLabel(modelCatalog.value, modelCatalog.value?.roles.executor)}）`);
 
+/**
+ * 表单相对"上次载入 / 保存时的样子"有没有改动。
+ *
+ * **为什么必须有它**：这个对话框的页脚此前只有一颗「完成」，而保存按钮在**滚动区底部**
+ * （模型与工具那一节的「保存项目配置」）。用户改完执行侧 Agent 直接点页脚那颗——那是**关掉对话框**，
+ * 改动一个字都不会落库，而且**没有任何提示**。重开设置页看到还是旧值，现象就是
+ * "我明明改成 Claude 了，怎么还是 codex"，反复试几次都一样。
+ *
+ * 现在有改动时页脚那颗变成「保存并关闭」，改动不会再被静默丢掉；
+ * 没改动时它仍是「完成」（关掉一个没动过的表单不需要"保存"这个词）。
+ */
+const pristine = ref("");
+function formSnapshot(): string {
+  return JSON.stringify({ name: form.name, shortName: form.shortName, repoRoot: form.repoRoot, defaultBranch: form.defaultBranch, worktreeRoot: form.worktreeRoot, settings: settingsPayload() });
+}
+const dirty = computed(() => pristine.value !== "" && formSnapshot() !== pristine.value);
+
+/** 页脚那颗按钮：有改动就先保存、成功才关；没改动就是单纯关掉。 */
+async function finish(): Promise<void> {
+  if (!dirty.value) return close();
+  await save();
+  if (!error.value) close();
+}
+
+/** 点遮罩 / Esc / 右上角 × 关掉时，有未保存改动先问一声（默认是 `:close-on-click-modal="false"`，遮罩不会关）。 */
+async function handleBeforeClose(done: () => void): Promise<void> {
+  if (!dirty.value) return done();
+  try {
+    await ElMessageBox.confirm("这个对话框里还有未保存的改动，关掉就没了。", "未保存的改动", { confirmButtonText: "保存并关闭", cancelButtonText: "放弃改动", distinguishCancelAndClose: true, type: "warning" });
+  } catch (caught) {
+    // 「放弃改动」与右上角 × 都走 here：两者都不保存。前者是明确的放弃，后者只是关窗——
+    // 但对未保存的表单来说结果一样，不值得再分一档去烦用户。
+    void caught;
+    return done();
+  }
+  await save();
+  done();
+}
+
 function setForm(value: Project) {
   const settings = value.settings;
   Object.assign(form, {
@@ -62,6 +101,8 @@ function setForm(value: Project) {
     commands: settings.commands.filter((command) => command.category !== "unclassified").map((command) => ({ commandId: command.commandId, category: command.category ?? "verification", description: command.description ?? "", enabled: command.enabled !== false, timeoutMs: command.timeoutMs ?? settings.concurrency.defaultTimeoutMs, argv: command.argv.join(" "), environment: Object.entries(command.environment ?? {}).map(([key, value]) => `${key}=${value}`).join("\n"), tags: (command.tags ?? []).join(", ") })),
     defaultVerificationCommandIds: [...(settings.defaultVerificationCommandIds ?? [])],
   });
+  // 记下"载入时的样子"——页脚那颗按钮是否该变成「保存并关闭」全看它（见 `dirty`）。
+  pristine.value = formSnapshot();
 }
 
 async function load() {
@@ -167,7 +208,7 @@ onBeforeUnmount(() => requestScope.invalidate());
 </script>
 
 <template>
-  <el-dialog :model-value="props.modelValue" class="project-settings-dialog" width="min(980px, calc(100vw - 24px))" :close-on-click-modal="false" destroy-on-close @update:model-value="emit('update:modelValue', $event)">
+  <el-dialog :model-value="props.modelValue" class="project-settings-dialog" width="min(980px, calc(100vw - 24px))" :close-on-click-modal="false" :before-close="handleBeforeClose" destroy-on-close @update:model-value="emit('update:modelValue', $event)">
     <template #header><div class="settings-dialog-heading"><div><div class="eyebrow">项目设置</div><h1>{{ project?.name || '项目设置' }}</h1><p>{{ project?.repoRoot || '管理仓库、执行和模型配置' }}</p></div><div class="settings-heading-actions"><el-tag :type="project?.status === 'ACTIVE' ? 'success' : 'info'">{{ project?.status === 'ACTIVE' ? '启用中' : '已归档' }}</el-tag><span>{{ statusText }}</span></div></div></template>
     <div class="settings-dialog-body" v-loading="loading">
       <div v-if="error" class="settings-error"><Warning :size="15" /> {{ error }}</div>
@@ -183,7 +224,7 @@ onBeforeUnmount(() => requestScope.invalidate());
         </main>
       </div>
     </div>
-    <template #footer><div class="settings-dialog-footer"><el-button @click="close">完成</el-button></div></template>
+    <template #footer><div class="settings-dialog-footer"><el-button v-if="dirty" type="primary" :loading="saving" :disabled="project?.status === 'ARCHIVED'" @click="finish">保存并关闭</el-button><el-button v-else @click="close">完成</el-button></div></template>
   </el-dialog>
 </template>
 
