@@ -275,11 +275,12 @@ describe("ExecutionHeaderStatus", () => {
   });
 
   /**
-   * 这一格以前是"最后 4 条步骤"，而 `PROVIDER_ACTIVITY` **成对出现**（started / completed 各一条），
-   * 一次活动就吃掉两格——那条写着 `PROCESS_RESTARTED` 的 `LOOP_SUSPENDED` 就是这么被挤掉的。
-   * 现在只留有结论的，并把原因码顶到面上。判据的细节在 utils/agentLoopSteps.test.ts。
+   * 旧判据是"最后 4 条"，而 `PROVIDER_ACTIVITY` **成对出现**（started / completed 各一条），
+   * 4 格里通常 3 格是它——等于 4 格只讲了一件事，而**真正的原因从来没被显示过**：
+   * 只有 `#44 LOOP_SUSPENDED`，看不出是 `PROCESS_RESTARTED`。现在只留有结论的并顶出原因码。
+   * 判据的细节在 utils/agentLoopSteps.test.ts。
    */
-  it("Loop 面板列的是**结论**，不是「最后几条」：活动挤不掉死因，原因码看得见", async () => {
+  it("Loop 面板列的是**结论**，不是「最后几条」：只剩结论那一格，且原因码看得见", async () => {
     const activity = (sequence: number, phase: string): AgentLoopStep => ({
       loopId: "agent-loop-1",
       sequence,

@@ -2,13 +2,18 @@
 
 ## 2026-10-07 — Loop 面板改成列「结论」，不再列「最后 4 条」
 
-报障是问出来的：那几格（`#41 PROVIDER_ACTIVITY` / …）**对判断业务执行有帮助吗**。查下来答案是"几乎没有"，
-而且原因很具体——它是 `executorSteps.slice(-4)`：
+报障是问出来的：那几格（`#41 PROVIDER_ACTIVITY` / …）**对判断业务执行有帮助吗**。答案是"几乎没有"，
+毛病有三条，而**不是**"会漏看"：
 
-- **`PROVIDER_ACTIVITY` 成对出现**（started / completed 各一条），一次 Provider 活动就吃掉两格，
-  两次活动把四格占满，真正的死因（`LOOP_SUSPENDED #44`、`LOOP_FAILED #85`）**根本挤不进去**；
-- 显示的是**枚举原名**（连中文都没有），且**载荷里的原因被丢掉**——`#44 LOOP_SUSPENDED` 并不告诉你
-  是 `PROCESS_RESTARTED` 还是别的，而那才是这一格存在的理由。
+- **原因从来没被显示过** —— 那一格只写 `#44 LOOP_SUSPENDED`，而"发生了什么"全在载荷里
+  （`PROCESS_RESTARTED`）。用户问"为什么卡住了"，面板答不上来。这是主要毛病。
+- **4 格里通常 3 格是成对的活动** —— `PROVIDER_ACTIVITY` 是 started / completed 各一条，
+  等于 4 格只讲了一件事。
+- 显示的是**枚举原名**，且不分轻重（一律灰底）。
+
+> 订正一处我先前的论断：我一度说"真正的死因常常挤不进那 4 格"。**全库实测不成立**——
+> 76 条有结论的步骤**全部**落在最后 4 格之内（`LOOP_FAILED` / `LOOP_SUSPENDED` / `LOOP_COMPLETED`
+> 本身就是收尾的那一条）。这次改的不是"漏看"，是**让面板说人话**。
 
 ### Changed
 
@@ -26,10 +31,11 @@
 
 ### 验证
 
-- 新增 5 条 `agentLoopSteps` 用例（含"活动再多也挤不掉结论"、"取消不是正常结束"、"超过上限取最后几条"）
+- 新增 5 条 `agentLoopSteps` 用例（含"活动再多也不占格"、"取消不是正常结束"、"超过上限取最后几条"）
   与 1 条组件用例（断言渲染出来的是结论那一格、且页面上不出现 `PROVIDER_ACTIVITY`）。
 - **两个真实 Run 上实测**：
-  - `run-8d0b9489-06d`（已阻塞）：面板只有一格 `#85 循环失败 · PROVIDER_COMMAND_TIMEOUT`（红）；
+  - `run-8d0b9489-06d`（已阻塞）：面板只有一格 `#85 循环失败 · PROVIDER_COMMAND_TIMEOUT`（红）——
+    改之前那一格只有 `LOOP_FAILED`，看不到是命令超时；
   - `run-ff037bc2-26d`（已完成）：只有一格 `#1640 循环结束 · READY_FOR_VERIFY`——**1600 多条
     `PROVIDER_ACTIVITY` 一条都没露**。
 - `pnpm verify`：domain 443 / api 121 / web 599。

@@ -3,9 +3,9 @@
  * 测试职责：Loop 面板那几格**只留"有结论"的步骤**——判据是"这条步骤回答了为什么停吗"，
  * 不是"它新不新"。
  *
- * 为什么值得单独测：这条判据以前是 `slice(-4)`，而 `PROVIDER_ACTIVITY` **成对出现**
- * （started / completed 各一条），一次活动就吃掉两格，真正的死因常常挤不进去。
- * 实测那条 `LOOP_SUSPENDED · PROCESS_RESTARTED` 就是这么被挤掉的。
+ * 为什么值得单独测：旧判据是 `slice(-4)`，而 `PROVIDER_ACTIVITY` **成对出现**
+ * （started / completed 各一条），4 格里通常有 3 格是它，等于 4 格只讲了一件事；
+ * 更要紧的是**原因被丢掉了**——只显示 `#44 LOOP_SUSPENDED`，而"发生了什么"全在载荷里。
  */
 import { describe, expect, it } from "vitest";
 import { loopStepFindings } from "./agentLoopSteps";
@@ -44,7 +44,7 @@ describe("Loop 步骤摘要", () => {
     expect(findings).toEqual([]);
   });
 
-  it("**活动再多也挤不掉结论**：结论那一条一定在，且带着载荷里的原因码", () => {
+  it("**活动再多也不占格**：结论那一条一定在，且带着载荷里的原因码", () => {
     const findings = loopStepFindings([
       ...providerActivity(1),
       step(3, "MODEL_USAGE"),

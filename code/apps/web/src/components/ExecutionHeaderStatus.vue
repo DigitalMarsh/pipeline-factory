@@ -67,8 +67,9 @@ const verificationStatusSummary = computed(() => verificationSummary(props.verif
 const hasControls = computed(() => hasRunControlActions(props.run.status, props.threadState));
 /**
  * Loop 面板上那几格：**只留"有结论"的步骤**（失败 / 挂起 / 被拒 / 门禁拦截 / 结束），
- * 并把载荷里的原因码顶到面上。此前是"最后 4 条步骤"，而 `PROVIDER_ACTIVITY` 成对出现，
- * 一次活动就吃掉两格——真正的死因常常挤不进去。判据与理由见 utils/agentLoopSteps.ts。
+ * 并把载荷里的原因码顶到面上。旧判据是"最后 4 条"，而 `PROVIDER_ACTIVITY` 成对出现，
+ * 4 格里通常 3 格是它，等于 4 格只讲了一件事——而且**真正的原因从来没被显示过**。
+ * 判据与理由见 utils/agentLoopSteps.ts。
  */
 const loopFindings = computed(() => loopStepFindings(props.executorSteps));
 /**
