@@ -539,7 +539,11 @@ function mapCodexEvent(event: CodexAppServerEvent, source: { providerThreadId?: 
       return phase ? { type: "text.phase", providerItemId: itemId, phase } : null;
     }
     const title = getString(item, "name") ?? getString(item, "title") ?? null;
-    const summary = getString(item, "command") ?? getString(item, "text") ?? null;
+    // **推理的文字在数组里**：Codex 的 `reasoning` item 是 `{ content: string[], summary: string[] }`，
+    // 而下面这几个 `getString` 只认字符串——于是推理正文整段丢掉，界面上只剩一个「推理」标签。
+    // 只取 `summary[]`（Provider 自己给的推理摘要）：`content[]` 是原始思维链，按本仓的立场不展示。
+    const summary = (itemType === "reasoning" ? joinStrings(item, "summary") : null)
+      ?? getString(item, "command") ?? getString(item, "text") ?? null;
     const server = getObject(item, "server");
     const serverName = getString(item, "serverName") ?? getString(server, "name");
     const toolName = getString(item, "toolName") ?? (itemType.toLowerCase().includes("tool") ? getString(item, "name") : undefined);
@@ -714,6 +718,25 @@ function getString(value: unknown, key: string): string | undefined {
   if (!value || typeof value !== "object") return undefined;
   const candidate = (value as JsonObject)[key];
   return typeof candidate === "string" ? candidate : undefined;
+}
+
+/**
+ * 取一个**字符串数组**字段并拼成一段。Codex 的推理 item 用这种形状（`summary: string[]`），
+ * 而 `getString` 对它只会返回 `undefined`——**这就是推理正文一直被丢掉的原因**：
+ * 界面上只有一个「推理」标签，展开也没有东西，看起来像"这一轮没推理"。
+ *
+ * 空数组、全是空串都算"没有内容"，返回 `null` 而不是空串（两者的区别在呈现层是有意义的）。
+ */
+function joinStrings(value: unknown, key: string): string | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = (value as JsonObject)[key];
+  if (!Array.isArray(candidate)) return null;
+  const joined = candidate
+    .filter((part): part is string => typeof part === "string")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join("\n\n");
+  return joined || null;
 }
 
 function getEventTurnId(params: JsonObject): string | undefined {

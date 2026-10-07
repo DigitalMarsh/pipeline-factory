@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-10-07 — 推理正文一直没被读出来（Codex 的推理放在数组里）
+
+跑真实 Run 时抓到的：执行线程里的推理行**每一条都是空的**——不是"这一轮没推理"，是文字根本没被读出来。
+
+Codex 的 `reasoning` item 形状是 `{ content: string[], summary: string[] }`，而适配器那一行读的是
+`getString(item, "command") ?? getString(item, "text")`——两个都是**字符串**字段，取数组只会得到
+`undefined`。于是 `summary` 是 null，推理正文整段丢掉，界面上只剩一个「推理」标签。
+
+影响面比看上去大：本机 900 多条推理行全是这个形状（Claude 侧同类问题这一轮已经补上——读
+`thinking` 块——所以只有 Codex 这一半还漏着）。
+
+### Changed
+
+- `mapCodexEvent` 对 `reasoning` 走一条自己的分支：读 `summary[]` 拼成一段（**只取摘要**，
+  `content[]` 是原始思维链，按本仓立场不展示），拿不到就給 `null` 而不是空串。
+- 新增 `joinStrings()`：取字符串数组字段并拼接，空数组与全是空串都算"没有内容"。
+- 两条用例：摘要被逐段读出来且用空行连成一段；只有 `content[]` 时不给内容（不展示原始思维链）。
+
+### 验证
+
+真实 Run（`run-97e581c2-d2f`，SmokeRun 项目）：折叠组在上方（`15 条过程记录 · 用时 11 秒 ·
+2 条未识别`）、`fileChange` 行的「显示结果」展开了那次改动的 diff、Codex 的 `configWarning`
+进了 Run 头的「Provider 运行事实」。修复本身只有注入式单测覆盖——那次 Run 的行是在修复之前落的。
+
 ## 2026-10-06 — 调研文档并入流程图文档；顺带按代码更正三处数字
 
 `docs/Provider消息格式与消息大类调研.md` 的内容**并进** `docs/消息类型及事件状态机流程图.md`，

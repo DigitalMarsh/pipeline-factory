@@ -392,6 +392,32 @@ describe("Codex 侧的数据层：读什么、为什么读", () => {
     }));
   });
 
+  it("**推理的文字在数组里** —— `summary[]` 此前取不到，整段被丢掉", async () => {
+    // 实测抓到的：Codex 的 `reasoning` item 是 `{ content: string[], summary: string[] }`，
+    // 而适配器只读字符串字段（`command` / `text`），于是推理正文整段丢掉、界面上只剩一个「推理」标签，
+    // 展开也没有东西——看起来像"这一轮没推理"。Claude 侧同样的问题这一轮已经补上（读 `thinking` 块）。
+    const events = await run([
+      { method: "item/started", params: { threadId: "codex-thread-1", turnId: "turn-1", item: { id: "rs-1", type: "reasoning", summary: ["先看现有的活动投影。", "再决定每一类各摆什么。"], content: ["绝密的原始思维链"] } } },
+      { method: "item/completed", params: { threadId: "codex-thread-1", turnId: "turn-1", item: { id: "rs-1", type: "reasoning", summary: ["先看现有的活动投影。", "再决定每一类各摆什么。"], content: [] } } },
+      { method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } },
+    ]);
+
+    const reasoning = events.filter((event) => event.type === "provider.activity" && event.activityKind === "reasoning");
+    expect(reasoning).toHaveLength(2);
+    expect(reasoning[0]).toMatchObject({ summary: "先看现有的活动投影。\n\n再决定每一类各摆什么。" });
+    // `content[]` 是原始思维链，按本仓的立场**不展示**——只取 Provider 自己给的摘要。
+    expect(JSON.stringify(events)).not.toContain("绝密的原始思维链");
+  });
+
+  it("推理没有摘要时不编内容（空数组与空串都算没有）", async () => {
+    const events = await run([
+      { method: "item/completed", params: { threadId: "codex-thread-1", turnId: "turn-1", item: { id: "rs-2", type: "reasoning", summary: [], content: ["只有原文"] } } },
+      { method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } },
+    ]);
+
+    expect(events).toContainEqual(expect.objectContaining({ activityKind: "reasoning", summary: null }));
+  });
+
   it("MCP 与动态工具的**参数和返回**原样带上来", async () => {
     const events = await run([
       { method: "item/completed", params: { threadId: "codex-thread-1", turnId: "turn-1", item: { id: "mcp-1", type: "mcpToolCall", server: "github", tool: "create_issue", arguments: { title: "x" }, result: { number: 42 }, status: "completed" } } },
