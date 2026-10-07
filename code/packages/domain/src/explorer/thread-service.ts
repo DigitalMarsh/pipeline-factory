@@ -172,6 +172,15 @@ export class ExplorerThreadService {
     if (thread.state === "ARCHIVED") throw new Error(`ExplorerThread ${input.threadId} is archived`);
     const plan = this.resolveExplorerPlan(thread, input.explorerPlanId);
     const turns = this.store.listTurns(input.threadId);
+    /**
+     * 下一个序号**从现有的最大值接着数，不能数行数**。
+     *
+     * `turns.length + 1` 在"回合只会跟整条线程一起消失"的年代是对的——那时行数恒等于最大序号。
+     * 但删除一条**需求**之后，中间会留下空号（实测：删掉两条需求后剩下的序号是 1,2,7…14,17,18，
+     * 行数 12），再数行数就会**撞上已经存在的号**：新需求的 #13/#14 与旧需求的 #13/#14 并存，
+     * 同一线程里两对回合分不出先后。
+     */
+    const nextSequence = turns.reduce((max, turn) => Math.max(max, turn.sequence), 0) + 1;
     const firstRequirementMessage = turns.every((turn) => turn.explorerPlanId !== plan.id || turn.role !== "user");
     const hasActiveJob =
       this.activeTurnByPlan.has(plan.id) ||
@@ -189,7 +198,7 @@ export class ExplorerThreadService {
       content: input.content,
       status: "COMPLETED",
       createdAt: this.store.now(),
-      sequence: turns.length + 1,
+      sequence: nextSequence,
       explorerPlanId: plan.id,
     };
     const assistant: ExplorerTurn = {
@@ -199,7 +208,7 @@ export class ExplorerThreadService {
       content: "",
       status: hasActiveJob ? "QUEUED" : "RUNNING",
       createdAt: this.store.now(),
-      sequence: turns.length + 2,
+      sequence: nextSequence + 1,
       explorerPlanId: plan.id,
     };
     this.store.saveTurn(user);

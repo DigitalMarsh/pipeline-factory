@@ -5,10 +5,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   ExplorerDeleteBlockedError,
   ExplorerService,
+  ExplorerThreadService,
   InMemoryPipelineStore,
   PlanService,
   ProjectService,
   SqlitePipelineStore,
+  StubModelGateway,
   type PipelineStore,
   type Run,
 } from "./index.js";
@@ -426,5 +428,65 @@ describe("ExplorerService.deletePlan", () => {
 
     expect(() => explorers.deletePlan(explorer.id, foreign.id)).toThrow(/does not belong/i);
     expect(store.getExplorerPlan(foreign.id)).toBeDefined();
+  });
+});
+
+/**
+ * **删除需求会在序号里留下空号**，而新回合的序号以前是数行数算出来的（`turns.length + 1`）——
+ * 那在"回合只会跟整条线程一起消失"的年代是对的（行数恒等于最大序号），删除功能一上来就撞号了：
+ * 实测本机线程里，需求7 与需求10 的回合**都占着 #13/#14**，同一线程里两对回合分不出先后。
+ *
+ * 这条用例钉住"接着最大的那个数"。它是**先失败、后修好**的那一类：改回数行数就会红。
+ */
+describe("删过需求之后新建回合的序号", () => {
+  it.each(["memory", "sqlite"] as const)("**接着最大的走，不撞已有的号**（%s）", async (kind) => {
+    const store = createStore(kind);
+    const { project, explorer, explorers, first, second, third } = seedRequirementThread(store);
+    // 三条需求各两个回合，序号 1–6 连号（夹具直接给号，模拟删除前的正常状态）。
+    let sequence = 1;
+    for (const plan of [first, second, third]) {
+      for (const role of ["user", "assistant"] as const)
+        store.saveTurn({
+          id: `${plan.id}-${role}`,
+          threadId: explorer.id,
+          role,
+          content: role,
+          status: "COMPLETED",
+          createdAt: store.now(),
+          sequence: sequence++,
+          explorerPlanId: plan.id,
+        });
+    }
+    store.updateThread({ ...explorers.get(explorer.id), messageCount: 6 });
+
+    // 删掉中间那条 → 剩下 1,2,5,6（行数 4，最大序号 6）。数行数的话下一个号是 5——正好撞上已存在的 #5。
+    explorers.deletePlan(explorer.id, second.id);
+    const before = store.listTurns(explorer.id).map((turn) => turn.sequence);
+    expect(before).toEqual([1, 2, 5, 6]);
+
+    const threadService = new ExplorerThreadService(
+      store,
+      new StubModelGateway({ explorer: { model: "explorer" }, executor: { model: "executor" } }),
+    );
+    const started = await threadService.startTurn({
+      threadId: explorer.id,
+      explorerPlanId: third.id,
+      content: "接着问一句",
+      clientTurnId: "after-delete",
+    });
+    // **等这一轮收敛再结束**：StubModelGateway 立刻就能跑完，但 Loop 是异步起的——不等它，
+    // 后台协程会在 afterEach 关掉 SQLite 之后才去写库（实测报 ERR_INVALID_STATE）。
+    // 判据只看序号，所以这一轮成没成不影响断言。
+    const settled = new Set(["COMPLETED", "FAILED", "CANCELLED", "BLOCKED", "NEEDS_RECONCILIATION"]);
+    for (let attempt = 0; attempt < 200 && started.loopId; attempt += 1) {
+      const loop = store.getAgentLoop(started.loopId);
+      if (!loop || settled.has(loop.state)) break;
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+
+    const after = store.listTurns(explorer.id).map((turn) => turn.sequence);
+    expect(after).toEqual([1, 2, 5, 6, 7, 8]);
+    expect(new Set(after).size).toBe(after.length);
+    void project;
   });
 });
