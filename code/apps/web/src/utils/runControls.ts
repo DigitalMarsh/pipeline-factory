@@ -29,7 +29,9 @@ export function hasRunControlActions(runStatus: string, threadState: string): bo
  * 线程状态回答的是"上一轮 Loop 还在不在"，Run 状态才回答"这个 Run 还需不需要人说话"。
  *
  * - `MERGE_READY`：执行完了但没合并——报障现场，反过来最该能补；
- * - `RECOVERING`：进程重启后 Loop 被判死，同样是"只能取消、不能继续"的死胡同；
+ * - `RECOVERING`：进程重启后 Loop 被判死，而 `/resume` 对这条**根本走不通**（`scheduler.resume`
+ *   要求 Run 是 `IN_PROGRESS` 且线程 `PAUSED`，这里是 `RECOVERING` + `ACTIVE`，只会回 409）——
+ *   投一条补充要求是它**唯一还能往前走的路**，所以它非在集合里不可；
  * - `BLOCKED` / `NEEDS_PLAN_CHANGE` 不在里面：那两种该走「创建更新版本」，补一句话会把真问题盖住；
  * - `CANCELLED` / `STALE` / `QUEUED` / `STARTING` 也不在：Run 已经结束或还没开始。
  */
