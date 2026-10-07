@@ -145,18 +145,24 @@ export class Scheduler {
     this.options.store.saveRun(run);
     const startResult = await hookRunner.runStart(executionHooks.start, { projectId: plan.projectId, runId: run.id, workspacePath: workspace.path, branch: workspace.branch, baseCommit: workspace.baseCommit, exitReason: "running" });
     this.recordHookExecutions(run.id, startResult);
+    // 判 BLOCKED 要用 `blocked` 而不是 `status === "failed"`：配了 blocking: false 的启动钩子
+    // 失败后 Run 还要继续往下走（见 run/hooks.ts 维护提示 1）。载荷里的 `blocking` 是给
+    // 非阻塞失败留的现场——那种情况下 Run 不会停在 BLOCKED，这条 journal 是唯一的记录。
     if (startResult.status === "failed") {
+      this.append(thread.id, "HOOK_FAILED", { hook: "start", stderr: startResult.result?.stderr ?? "", blocking: startResult.blocked });
+    }
+    if (startResult.blocked) {
       run.status = "BLOCKED";
       thread.state = "BLOCKED";
       this.setThreadState(thread.id, "BLOCKED");
-      this.append(thread.id, "HOOK_FAILED", { hook: "start", stderr: startResult.result?.stderr ?? "" });
       updatePlanStatus(this.options.store, plan, { runId: run.id, status: "BLOCKED", attentionReason: "start hook failed", lastEventAt: this.options.store.now() }, "start hook failed");
       this.options.store.saveRun(run);
       return run;
     }
     run.status = "IN_PROGRESS";
     run.startedAt = this.options.store.now();
-    this.append(thread.id, startResult.status === "skipped" ? "HOOK_SKIPPED" : "HOOK_COMPLETED", { hook: "start" });
+    // 失败且非阻塞时上面已经写过 HOOK_FAILED，这里不能再写一条 HOOK_COMPLETED。
+    if (startResult.status !== "failed") this.append(thread.id, startResult.status === "skipped" ? "HOOK_SKIPPED" : "HOOK_COMPLETED", { hook: "start" });
     if (!revision.projectConfigSnapshot) this.append(thread.id, "TASK_PROGRESS", { action: "legacy_plan_revision", reason: "Project configuration snapshot unavailable; using legacy/global runtime settings" });
     updatePlanStatus(this.options.store, plan, { runId: run.id, status: "IN_PROGRESS", lastEventAt: run.startedAt });
     this.options.store.saveRun(run);

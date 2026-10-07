@@ -54,7 +54,8 @@ export type ProjectSettings = {
   commands: Array<{ commandId: string; category?: "verification" | "lifecycle" | "executor-tool" | "unclassified"; description?: string; enabled?: boolean; argv: string[]; environment?: Record<string, string>; timeoutMs?: number; tags?: string[] }>;
   defaultVerificationCommandIds?: string[];
   hooks: {
-    start?: { commandId: string; enabled?: boolean; timeoutMs?: number; maxAttempts?: number };
+    /** `blocking: false` = 这条命令失败了也放 Run 往下走（建索引、预热这类锦上添花的初始化）。缺省阻塞。 */
+    start?: { commandId: string; enabled?: boolean; timeoutMs?: number; maxAttempts?: number; blocking?: boolean };
     cleanup?: { commandId: string; enabled?: boolean; timeoutMs?: number; maxAttempts?: number };
   };
   models: {

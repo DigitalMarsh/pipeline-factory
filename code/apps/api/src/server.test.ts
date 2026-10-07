@@ -180,6 +180,33 @@ describe("Pipeline Factory v4 API", () => {
     expect(saved.json().project.configVersion).toBe(2);
   });
 
+  /**
+   * `blocking` 是「启动钩子」的失败策略，**API 这一跳是它最容易死掉的地方**：zod 默认丢弃未知
+   * 字段，漏掉它就表现为"设置页取消了勾、保存了、库里的值没变"——而且不报错（见 schemas/hooks.ts
+   * 维护提示）。顺带钉住它**只属于 start**：配在 cleanup 上应当在入口就被丢掉，而不是走到领域层
+   * 才 422（领域层拒它是另一条路，见 packages/domain 的 project.test.ts）。
+   */
+  it("carries the start hook's failure policy over HTTP, and only on start", async () => {
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    const project = projects.create({ id: "project-hooks-api", name: "Hooks API", repoRoot: "/repo/hooks-api", defaultBranch: "main", worktreeRoot: "/tmp/hooks-api-worktrees", settings: { commands: [{ commandId: "project.codegraph-init", category: "lifecycle", enabled: true, argv: ["codegraph", "init"] }] } });
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+
+    const soft = await app.inject({ method: "PUT", url: `/api/v4/projects/${project.id}/settings/hooks`, payload: { start: { commandId: "project.codegraph-init", enabled: true, blocking: false } } });
+    expect(soft.statusCode).toBe(200);
+    expect(store.getProject(project.id)?.settings.hooks.start).toMatchObject({ commandId: "project.codegraph-init", blocking: false });
+
+    // 不写这个键时库里不该多出它：不然"老项目行为与引入前一致"就只能靠读代码来保证。
+    const implicit = await app.inject({ method: "PUT", url: `/api/v4/projects/${project.id}/settings/hooks`, payload: { start: { commandId: "project.codegraph-init" } } });
+    expect(implicit.statusCode).toBe(200);
+    expect(store.getProject(project.id)?.settings.hooks.start).not.toHaveProperty("blocking");
+
+    const withCleanup = await app.inject({ method: "PUT", url: `/api/v4/projects/${project.id}/settings/hooks`, payload: { start: { commandId: "project.codegraph-init" }, cleanup: { commandId: "project.codegraph-init", blocking: true } } });
+    expect(withCleanup.statusCode).toBe(200);
+    expect(store.getProject(project.id)?.settings.hooks.cleanup).toEqual({ commandId: "project.codegraph-init" });
+  });
+
   it("sets Factory-owned prerequisite plans over HTTP and rejects unknown ids", async () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);

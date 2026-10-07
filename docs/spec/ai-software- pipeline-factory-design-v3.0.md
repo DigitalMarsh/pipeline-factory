@@ -215,8 +215,11 @@ Scheduler 按 `priority DESC、queued_at ASC、plan_id ASC` 选择任务：
 4. 检查 base Commit、项目根目录和 Worktree 根目录。
 5. 在一个短事务中创建 Run、Assignment、Lease 和资源锁。
 6. 创建 Worktree 和 Branch，并登记 base Commit。
-7. Worktree 创建成功后立即执行可选 start hook。
-8. start hook 成功或未配置后，创建 ExecutionThread 并启动 Executor。
+7. Worktree 创建成功后立即执行可选 start hook。这是**Worktree 初始化入口**：装依赖、建索引、
+   预热缓存都配在这里；命令 argv 在项目配置的命令表里登记，start hook 只按命令 ID 引用它。
+8. start hook 成功、未配置，或失败但该 hook 显式配了 `blocking: false` 时，创建 ExecutionThread
+   并启动 Executor；其余失败让 Run 进入 BLOCKED。判据是"这条命令失败了，Run 的产出还可不可信"——
+   装依赖不可以，建索引可以。
 
 依赖、冲突和容量不足属于等待，不属于失败；条件变化时重新唤醒 Scheduler。
 

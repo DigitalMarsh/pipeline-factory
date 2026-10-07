@@ -38,7 +38,7 @@ const ElButtonStub = defineComponent({
 
 const ElTagStub = defineComponent({ setup(_, { slots }) { return () => h("span", slots.default?.()); } });
 const ElSwitchStub = defineComponent({ props: { modelValue: Boolean, disabled: Boolean }, setup() { return () => h("input", { type: "checkbox" }); } });
-const ElCheckboxStub = defineComponent({ props: { modelValue: Boolean, label: String, disabled: Boolean }, setup(props) { return () => h("label", [h("input", { type: "checkbox", checked: props.modelValue, disabled: props.disabled }), props.label]); } });
+const ElCheckboxStub = defineComponent({ props: { modelValue: Boolean, label: String, disabled: Boolean }, emits: ["update:modelValue"], setup(props, { slots, emit }) { return () => h("label", [h("input", { type: "checkbox", checked: props.modelValue, disabled: props.disabled, onChange: (event: Event) => emit("update:modelValue", (event.target as HTMLInputElement).checked) }), slots.default?.() ?? props.label]); } });
 
 function project(): Project {
   return {
@@ -249,6 +249,99 @@ describe("ProjectSettingsDialog 的页脚按钮", () => {
       }),
     }));
     expect(mounted.updates).toEqual([false]);
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+});
+
+/**
+ * 启动钩子：**Run 的 Worktree 初始化入口**。
+ *
+ * 「命令」页签登记 argv（那是安全不变量要求的——钩子只按命令 ID 引用，永远不接受模型给的
+ * 字符串），「钩子」页签决定它在什么时刻以什么策略跑。建 CodeGraph 索引、装依赖、预热缓存
+ * 都是这一条路，所以这里钉的是它作为入口必须可用的两件事：命令 ID 配得上，失败策略可配。
+ *
+ * 失败策略为什么必须可配：这两类初始化命令失败的后果完全不同。装依赖失败 → Agent 改出来的
+ * 东西不可信，必须拦住 Run；建 CodeGraph 索引失败 → 只是少一张图，Run 照跑。一个开关才能
+ * 同时表达这两件事，缺省保持"阻塞"（这个开关存在之前的行为），要放行得显式取消勾选。
+ */
+describe("启动钩子（Worktree 初始化入口）", () => {
+  const openHooksTab = async (initial: Project) => {
+    vi.mocked(api.project).mockResolvedValue({ project: initial, summary: {} as never });
+    vi.mocked(api.updateProject).mockResolvedValue({ project: initial });
+    const mounted = mountDialog();
+    await nextTick();
+    await nextTick();
+    [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("钩子"))?.click();
+    await nextTick();
+    return mounted;
+  };
+
+  const blockingBox = (host: HTMLElement): HTMLInputElement => host.querySelector<HTMLInputElement>('.hook-blocking input[type="checkbox"]')!;
+  const saveButton = (host: HTMLElement): HTMLButtonElement | undefined =>
+    [...host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("保存项目配置"));
+  /** 最近一次保存提交出去的 start 钩子；载荷形状断言全部走它。 */
+  const savedStartHook = (): Record<string, unknown> | undefined => {
+    const payload = vi.mocked(api.updateProject).mock.calls.at(-1)?.[1] as { settings?: { hooks?: { start?: Record<string, unknown> } } } | undefined;
+    return payload?.settings?.hooks?.start;
+  };
+
+  it("命令 ID 是「命令」页签登记的那条，页面不提供第二个登记处", async () => {
+    const initial = project();
+    initial.settings.hooks = { start: { commandId: "project.codegraph-init" } };
+    const mounted = await openHooksTab(initial);
+
+    expect(mounted.host.textContent).toContain("Worktree 的初始化入口");
+    expect(mounted.host.querySelector<HTMLInputElement>('input[placeholder="project.start"]')?.value).toBe("project.codegraph-init");
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  it("**缺省勾着「失败时阻塞 Run」** —— 不碰这个开关的项目与它存在之前逐字一致", async () => {
+    const initial = project();
+    initial.settings.hooks = { start: { commandId: "project.start" } };
+    const mounted = await openHooksTab(initial);
+
+    expect(blockingBox(mounted.host).checked).toBe(true);
+
+    saveButton(mounted.host)?.click();
+    await nextTick();
+    await nextTick();
+
+    expect(savedStartHook()).toMatchObject({ commandId: "project.start", blocking: true });
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  it("取消勾选后保存，`blocking: false` 真的进了载荷 —— 建索引失败不该拦住 Run", async () => {
+    const initial = project();
+    initial.settings.hooks = { start: { commandId: "project.codegraph-init" } };
+    const mounted = await openHooksTab(initial);
+
+    const box = blockingBox(mounted.host);
+    box.checked = false;
+    box.dispatchEvent(new Event("change", { bubbles: true }));
+    await nextTick();
+
+    saveButton(mounted.host)?.click();
+    await nextTick();
+    await nextTick();
+
+    expect(savedStartHook()).toMatchObject({ commandId: "project.codegraph-init", blocking: false });
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  it("载入时读得回来：库里存着 `blocking: false`，重开这一页就是没勾上的", async () => {
+    const initial = project();
+    initial.settings.hooks = { start: { commandId: "project.codegraph-init", blocking: false } };
+    const mounted = await openHooksTab(initial);
+
+    expect(blockingBox(mounted.host).checked).toBe(false);
 
     mounted.app.unmount();
     mounted.host.remove();

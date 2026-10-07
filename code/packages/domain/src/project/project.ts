@@ -286,6 +286,10 @@ function validateProjectSettings(settings: ProjectSettings, catalog?: ModelBacke
     if (hook.enabled !== undefined && typeof hook.enabled !== "boolean") throw new Error(`${name}.enabled must be a boolean`);
     if (hook.timeoutMs !== undefined) assertFiniteInteger(hook.timeoutMs, `${name}.timeoutMs`, 1);
     if (hook.maxAttempts !== undefined) assertFiniteInteger(hook.maxAttempts, `${name}.maxAttempts`, 1);
+    if (hook.blocking !== undefined && typeof hook.blocking !== "boolean") throw new Error(`${name}.blocking must be a boolean`);
+    // blocking 只对 start 有意义（cleanup 恒为不阻塞，见 run/hooks.ts 维护提示 1）。
+    // **拒绝而不是忽略**：静默吞掉它等于让"我明明配了阻塞"在 finish() 里无声失效。
+    if (name !== "start" && hook.blocking !== undefined) throw new Error(`${name}.blocking is only supported on the start hook`);
     const command = settings.commands.find((item) => item.commandId === hook.commandId);
     if (!command || command.category !== "lifecycle" || command.enabled === false) throw new Error(`${name}.commandId must reference an enabled lifecycle command`);
   }

@@ -9,9 +9,12 @@
  *   Hook 的唯一调用点就在那里。它对本模块之外的依赖只有 platform/commands.ts 的四个类型。
  *
  * 维护提示：
- *   1) **start 与 cleanup 的阻塞语义不对称，这是设计而不是疏漏**：start 失败 == blocked
+ *   1) **start 与 cleanup 的阻塞语义不对称，这是设计而不是疏漏**：start 失败默认 == blocked
  *      （Run 不能带着坏环境往下走），cleanup 失败 == needsAttention（Run 已经结束，只提醒人）。
  *      见 run() 的 blocksRun 参数与最终返回的 `blocked: failed && blocksRun`。
+ *      start 的默认行为可以被 `HookDefinition.blocking: false` 覆盖，cleanup 没有这个开关
+ *      （Run 已经结束，没有"往下走"可言）。**判据是"这条命令失败了，Run 的产出还可不可信"**：
+ *      装依赖不可以，建索引/预热缓存可以。
  *   2) cwd 由 hook 类型决定，不由调用方传：start 跑在 context.workspacePath（Run 的 Worktree），
  *      cleanup 跑在构造时的 cleanupCwd（默认 process.cwd()）。这是因为 Run 结束、Worktree 可能
  *      已被回收，cleanup 必须在一个确定还存在的地方执行。
@@ -30,6 +33,15 @@ export type HookDefinition = {
   enabled?: boolean | undefined;
   timeoutMs?: number | undefined;
   maxAttempts?: number | undefined;
+  /**
+   * 失败时是否阻塞 Run。**只对 `start` 槽位有效**，配在 cleanup 上会被 project.ts 拒绝。
+   *
+   * 缺省 `true` —— 不写这个键的项目与本字段引入前逐字一致：启动钩子失败就是环境没准备好。
+   * 配成 `false` 用于**锦上添花的初始化**（建 CodeGraph 索引、预热构建缓存）：这类命令跑失败
+   * 不会让 Run 的产出变得不可信，只是慢一点，因此不该拦住 Run。失败照旧进 journal 与
+   * HookExecution 审计，只是不再把 Run 钉在 BLOCKED 上。
+   */
+  blocking?: boolean | undefined;
 };
 
 /** Start/Cleanup Hook 的归一化结果及其是否阻塞 Run 的判断。 */
@@ -79,10 +91,12 @@ export class LifecycleHookRunner {
   }
 
   async runStart(hook: HookDefinition | undefined, context: HookContext): Promise<HookRunResult> {
-    return this.run("start", hook, context, true);
+    // 判据是 `!== false` 而不是 `=== true`：没写这个键 = 老行为（阻塞），见 HookDefinition.blocking。
+    return this.run("start", hook, context, hook?.blocking !== false);
   }
 
   async runCleanup(hook: HookDefinition | undefined, context: HookContext): Promise<HookRunResult> {
+    // cleanup 恒为不阻塞，不看 definition.blocking（理由见维护提示 1）。
     return this.run("cleanup", hook, context, false);
   }
 

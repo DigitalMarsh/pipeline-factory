@@ -171,4 +171,20 @@ describe("LifecycleHookRunner", () => {
     expect(result).toMatchObject({ status: "completed", blocked: false, result: { stdout: "attempt-2" } });
     expect(result.attempts.map((attempt) => [attempt.attempt, attempt.status])).toEqual([[1, "failed"], [2, "completed"]]);
   });
+
+  /**
+   * `blocking: false` 是给**锦上添花的初始化**（建 CodeGraph 索引、预热构建缓存）留的口子：
+   * 这类命令跑失败只会让 Run 慢一点，不会让它的产出不可信，因此不该把 Run 钉在 BLOCKED 上。
+   * 判据见 run/hooks.ts 维护提示 1。
+   */
+  it("**`blocking: false` 的启动钩子失败只提醒，不阻塞；缺省仍是阻塞**", async () => {
+    const runner = new LifecycleHookRunner(async () => ({ exitCode: 1, stdout: "", stderr: "codegraph: command not found" }));
+    const context = { projectId: "project-1", runId: "run-1", workspacePath: "/tmp/worktree", branch: "factory/run-1", baseCommit: "abc123", exitReason: "running" } as const;
+
+    await expect(runner.runStart({ commandId: "project.codegraph-init", blocking: false }, context)).resolves.toMatchObject({ status: "failed", blocked: false, needsAttention: true });
+    // 不写这个键的项目行为与本字段引入前逐字一致。
+    await expect(runner.runStart({ commandId: "project.start" }, context)).resolves.toMatchObject({ status: "failed", blocked: true, needsAttention: false });
+    // cleanup 没有这个开关：Run 已经结束，没有"往下走"可言，配了也不看。
+    await expect(runner.runCleanup({ commandId: "project.cleanup", blocking: true }, context)).resolves.toMatchObject({ status: "failed", blocked: false, needsAttention: true });
+  });
 });

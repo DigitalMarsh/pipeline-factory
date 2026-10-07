@@ -44,7 +44,7 @@ export function registerHookRoutes(app: FastifyInstance, deps: HookRouteDeps): v
     const project = store.getProject(params.data.projectId);
     if (project) {
       const lifecycle = {
-        ...(body.data.start ? { start: { commandId: body.data.start.commandId, ...(body.data.start.enabled === undefined ? {} : { enabled: body.data.start.enabled }), ...(body.data.start.timeoutMs === undefined ? {} : { timeoutMs: body.data.start.timeoutMs }), ...(body.data.start.maxAttempts === undefined ? {} : { maxAttempts: body.data.start.maxAttempts }) } } : {}),
+        ...(body.data.start ? { start: { commandId: body.data.start.commandId, ...(body.data.start.enabled === undefined ? {} : { enabled: body.data.start.enabled }), ...(body.data.start.timeoutMs === undefined ? {} : { timeoutMs: body.data.start.timeoutMs }), ...(body.data.start.maxAttempts === undefined ? {} : { maxAttempts: body.data.start.maxAttempts }), ...(body.data.start.blocking === undefined ? {} : { blocking: body.data.start.blocking }) } } : {}),
         ...(body.data.cleanup ? { cleanup: { commandId: body.data.cleanup.commandId, ...(body.data.cleanup.enabled === undefined ? {} : { enabled: body.data.cleanup.enabled }), ...(body.data.cleanup.timeoutMs === undefined ? {} : { timeoutMs: body.data.cleanup.timeoutMs }), ...(body.data.cleanup.maxAttempts === undefined ? {} : { maxAttempts: body.data.cleanup.maxAttempts }) } } : {}),
       };
       try {

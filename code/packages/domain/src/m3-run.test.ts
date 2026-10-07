@@ -152,6 +152,39 @@ describe("Scheduler and ExecutionThread", () => {
     expect(scheduler.thread(run.executionThreadId).journal.at(-1)).toMatchObject({ type: "HOOK_FAILED" });
   });
 
+  /**
+   * 与上一条**互为对照**：同一次失败，只因为钩子配了 `blocking: false`，Run 就必须开下去。
+   *
+   * 这里钉三件事：Run 进 IN_PROGRESS、失败只有一条 HOOK_FAILED 且带 `blocking: false`
+   * （这条 journal 是唯一现场——没有 BLOCKED 状态供人事后回看）、以及失败之后**不能**再补一条
+   * HOOK_COMPLETED（那会让"失败"在会话里看起来像"成功"）。
+   */
+  it("**非阻塞的启动钩子失败后照常开 Executor，失败只留在 journal 里**", async () => {
+    const store = new InMemoryPipelineStore();
+    const planService = new PlanService(store);
+    const plan = planService.createCandidatePlan({ projectId: "project-1", sourceExplorerThreadId: "thread-1", title: "Soft hook",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Soft hook" }) });
+    planService.confirm(plan.id, "user-1");
+    planService.enqueue(plan.id);
+    planService.dispatch(plan.id);
+    const scheduler = new Scheduler({
+      store,
+      workspace: { create: async () => ({ path: "/tmp/run-2b", branch: "factory/run-2b", baseCommit: "abc" }), remove: async () => undefined },
+      hooks: new LifecycleHookRunner(async () => ({ exitCode: 1, stdout: "", stderr: "codegraph: command not found" })),
+    });
+
+    const run = await scheduler.start(plan.id, { start: { commandId: "project.codegraph-init", blocking: false } });
+    const journal = scheduler.thread(run.executionThreadId).journal;
+
+    expect(run.status).toBe("IN_PROGRESS");
+    expect(journal.filter((entry) => entry.type === "HOOK_FAILED")).toEqual([
+      expect.objectContaining({ payload: expect.objectContaining({ hook: "start", blocking: false, stderr: "codegraph: command not found" }) }),
+    ]);
+    expect(journal.some((entry) => entry.type === "HOOK_COMPLETED")).toBe(false);
+    // 审计照旧：失败的那次尝试一条不少地进了 HookExecution。
+    expect(store.listHookExecutions(run.id).map((item) => item.status)).toEqual(["failed"]);
+  });
+
   it("removes the workspace before running cleanup and keeps cleanup failure as attention", async () => {
     const store = new InMemoryPipelineStore();
     const planService = new PlanService(store);

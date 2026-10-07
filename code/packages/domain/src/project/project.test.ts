@@ -66,6 +66,10 @@ describe("ProjectService", () => {
     expect(() => projects.create({ ...base, settings: { concurrency: { maxParallelRuns: 0 } } })).toThrow(/maxParallelRuns/i);
     expect(() => projects.create({ ...base, id: "project-settings-command", settings: { commands: [{ commandId: "bad", argv: [] as never }] } })).toThrow(/argv/i);
     expect(() => projects.create({ ...base, id: "project-settings-hook", settings: { hooks: { start: { commandId: "hook", maxAttempts: 0 } } } })).toThrow(/maxAttempts/i);
+    expect(() => projects.create({ ...base, id: "project-settings-blocking", settings: { hooks: { start: { commandId: "hook", blocking: "yes" as never } } } })).toThrow(/blocking/i);
+    // blocking 只对 start 有意义（cleanup 恒为不阻塞）。**拒绝而不是忽略**：静默吞掉它等于让
+    // "我明明配了阻塞"在 finish() 里无声失效。
+    expect(() => projects.create({ ...base, id: "project-settings-cleanup-blocking", settings: { hooks: { cleanup: { commandId: "hook", blocking: false } } } })).toThrow(/only supported on the start hook/i);
   });
 
   it("validates the role backend and its reasoning levels when a catalog is provided", () => {

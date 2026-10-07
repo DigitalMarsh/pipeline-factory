@@ -1,5 +1,69 @@
 # Changelog
 
+## 2026-10-07 — 启动钩子：Worktree 初始化不必硬编码，且失败策略可配
+
+起因是执行线程里反复出现的一句话：
+
+> CodeGraph isn't available here — no .codegraph/ index exists in
+> /Users/Bill/Project/projecttest/.project4-pipeline-worktrees/20261007-fix-task-project-ownership.
+
+先纠正一个猜错的方向：**不是 `.gitignore` 把 codegraph 忽略了**。根 `.gitignore` 从头到尾没提过它。
+规则在 CodeGraph 自己写的、而且**被提交了**的 `.codegraph/.gitignore` 里（`*` + `!.gitignore`）。
+worktree 只检出被跟踪的文件，于是每个 worktree 都得到一个**只有 `.gitignore` 的空 `.codegraph/`**；
+而 CodeGraph 的 `isInitialized()` 要目录和 `codegraph.db` **两样都在**——所以每次都判"未索引"。
+换句话说，**删掉那条 ignore 规则没有用**：`codegraph.db` 会变成 untracked，一样不进 worktree。
+
+让 worktree 有索引只有两条路：把 `codegraph.db` 提交进版控（79 MB 二进制、每次 reindex 一个 commit、
+而且索引在提交那一刻就已经过期），或者**每个 worktree 建一次**。实测后者（`/tmp` 的一次性 worktree）：
+18 文件 121 ms、349 文件 295 ms，进程总计 0.35 / 1.07 s，**不留 daemon**；索引写进已被忽略的
+`.codegraph/`，worktree 的 `git status` 干净，并随 worktree 一起被删。取后者。
+
+**而这件事不需要新机制，也跟 codegraph 无关。** 「启动钩子」本来就是 Worktree 的初始化入口——
+它在 `worktree add` 之后、Executor 第一个回合之前执行，cwd 就是新 Worktree（见 `run/hooks.ts`
+维护提示 2）。建索引、装依赖、预热缓存都该配在这里：命令 argv 在「命令」页签登记，钩子只按
+**命令 ID** 引用它——那条"模型永远不能提供 argv"的不变量因此一个字都不用动。
+
+所以本次只补了一个缺口：**启动钩子失败会阻塞整个 Run**。对"建索引"这类命令这是错的——它失败只是
+慢一点，不该拦住 Run；而对"装依赖"这类命令阻塞又是对的。一个开关才能同时表达这两件事。
+
+（顺带记一句：CodeGraph 那句 `indexing is the user's decision, do not run it yourself` 反对的是
+**agent 自作主张**建索引——它源码里记着一次在 `$HOME` 上 init 把整机文件描述符耗尽的真实事故。
+由项目所有者在设置里配置一次、Scheduler 在每个 Run 上机械执行，不是它反对的那件事。）
+
+### Changed
+
+- **`HookDefinition.blocking`**（`packages/domain/src/run/hooks.ts`）。缺省 `true` = 现状，
+  不写这个键的项目行为与引入前逐字一致；配成 `false` 时失败仍写 journal 与 `HookExecution` 审计，
+  但 Run 继续。**只对 `start` 有效**：cleanup 恒为不阻塞（Run 已经结束，没有"往下走"可言）。
+- **Scheduler 的判定从 `status === "failed"` 改成 `blocked`**（`run/scheduler.ts`）。非阻塞失败
+  写一条带 `blocking: false` 的 `HOOK_FAILED` 后继续——没有 BLOCKED 状态供人事后回看，这条 journal
+  就是唯一现场；**并且不再补写 `HOOK_COMPLETED`**（那会让"失败"在会话里看起来像"成功"）。
+- **校验拒绝而不是忽略**（`project/project.ts`）：`blocking` 必须是布尔，且配在 cleanup 上直接报错。
+  静默吞掉它等于让"我明明配了阻塞"在 `finish()` 里无声失效。API schema 只给 `start` 声明这个字段，
+  让多余的键在入口就被丢弃而不是走到领域层才 422。
+- **设置页两处都加了「失败时阻塞 Run」**（对话框 `ProjectSettingsDialog.vue` 与整页
+  `ProjectSettingsView.vue`），并把钩子一节说明改成"命令在「命令」页签登记（类别选生命周期），
+  这里只按命令 ID 引用它"。原来的文案只说了执行时机，没说这是**初始化入口**——正是这一点让
+  "worktree 里少点什么"这类需求找不到落点。
+- 设计文档 `docs/spec/ai-software- pipeline-factory-design-v3.0.md` §4.3 派发步骤 7/8 补上
+  `blocking: false` 这条分支。
+
+### 验证
+
+- 领域侧 3 条：`runStart` 在 `blocking: false` / 缺省 / `true` 三种取值下的 `blocked` 与
+  `needsAttention`，以及 cleanup 配 `blocking: true` 也不阻塞；Scheduler 走非阻塞路径后
+  `IN_PROGRESS` + 唯一一条 `HOOK_FAILED` + 没有 `HOOK_COMPLETED` + 审计里那次尝试照旧。
+- 校验 2 条：`blocking` 非布尔、以及配在 cleanup 上。
+- Web 4 条：命令 ID 读得回来、缺省勾着、取消勾选后载荷里是 `false`、库里存 `false` 时重开就是没勾上。
+- API 1 条（HTTP 一跳，`server.test.ts`）：`blocking: false` 能存进库、不写这个键时库里**不出现**
+  这个键、配在 `cleanup` 上在入口就被丢掉——zod 默认丢弃未知字段，这一跳漏了的表现是
+  "取消了勾、保存了、值没变"且不报错，所以它值得一条用例。
+- 浏览器实测（project-demo 的设置页）：钩子一节渲染出「失败时阻塞 Run」、缺省为勾选、勾选状态可来回
+  切换、说明文案与「命令页签登记」那句都在位；控制台无报错。**只在页面上切了状态、没有保存**——
+  这次要证明的是控件接线，不是往项目的真配置里写一条假命令。
+- `pnpm verify`：domain 405 / api 112 / web 573 全绿，无新增值级循环依赖。
+
+
 ## 2026-10-07 — 设置对话框的页脚按钮根本不保存（"改成 Claude 了，重开还是 codex"）
 
 用户报的：在项目设置里把**执行侧 Agent** 改成 Claude，确定后重进设置页还是 codex；
