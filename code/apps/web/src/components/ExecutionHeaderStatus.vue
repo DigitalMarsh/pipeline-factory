@@ -3,6 +3,7 @@ import { computed, ref, watch } from "vue";
 import { Check, CircleCheck, InfoFilled, VideoPause, VideoPlay, Warning } from "@element-plus/icons-vue";
 import type { AgentLoop, AgentLoopStep, ExecutionTask, ExecutionTelemetry, MergeRequest, Run, VerificationRun } from "../types";
 import { isRuntimeAlertItem, type ExecutionStreamItem } from "../utils/executionStream";
+import { loopStepFindings } from "../utils/agentLoopSteps";
 import {
   formatExecutionDuration,
   formatTokenSummary,
@@ -64,6 +65,12 @@ const executionTelemetryReasoning = computed(() => telemetryReasoning(props.tele
 const executionUsageRows = computed(() => usageDetailRows(props.telemetry?.usage));
 const verificationStatusSummary = computed(() => verificationSummary(props.verification));
 const hasControls = computed(() => hasRunControlActions(props.run.status, props.threadState));
+/**
+ * Loop 面板上那几格：**只留"有结论"的步骤**（失败 / 挂起 / 被拒 / 门禁拦截 / 结束），
+ * 并把载荷里的原因码顶到面上。此前是"最后 4 条步骤"，而 `PROVIDER_ACTIVITY` 成对出现，
+ * 一次活动就吃掉两格——真正的死因常常挤不进去。判据与理由见 utils/agentLoopSteps.ts。
+ */
+const loopFindings = computed(() => loopStepFindings(props.executorSteps));
 /**
  * REVIEW 卡的状态。**这是第五套状态机**（Run 审阅阶段），取值与 Plan 生命周期、
  * Agent Loop、消息条目都对不上号，所以它自己一张表；`tone` 与文案在同一处算出来，
@@ -430,9 +437,14 @@ watch(
               <span class="eyebrow">Executor Agent 循环</span><strong>{{ executorLoop.mode }}</strong>
             </div>
             <span class="agent-loop-budget">{{ executorLoop.stepCount }} / {{ executorLoop.maxSteps }} 个循环步骤</span>
-            <div v-if="executorSteps.length" class="loop-step-list">
-              <span v-for="step in executorSteps.slice(-4)" :key="`${step.loopId}-${step.sequence}`" class="loop-step"
-                ><strong>#{{ step.sequence }}</strong> {{ step.stepType }}</span
+            <div v-if="loopFindings.length" class="loop-step-list">
+              <span
+                v-for="finding in loopFindings"
+                :key="finding.key"
+                class="loop-step"
+                :class="`tone-${finding.tone}`"
+                :title="finding.stepType"
+                ><strong>#{{ finding.sequence }}</strong> {{ finding.label }}<em v-if="finding.reason"> · {{ finding.reason }}</em></span
               >
             </div>
             <div class="loop-detail-actions">

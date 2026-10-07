@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-10-07 — Loop 面板改成列「结论」，不再列「最后 4 条」
+
+报障是问出来的：那几格（`#41 PROVIDER_ACTIVITY` / …）**对判断业务执行有帮助吗**。查下来答案是"几乎没有"，
+而且原因很具体——它是 `executorSteps.slice(-4)`：
+
+- **`PROVIDER_ACTIVITY` 成对出现**（started / completed 各一条），一次 Provider 活动就吃掉两格，
+  两次活动把四格占满，真正的死因（`LOOP_SUSPENDED #44`、`LOOP_FAILED #85`）**根本挤不进去**；
+- 显示的是**枚举原名**（连中文都没有），且**载荷里的原因被丢掉**——`#44 LOOP_SUSPENDED` 并不告诉你
+  是 `PROCESS_RESTARTED` 还是别的，而那才是这一格存在的理由。
+
+### Changed
+
+判据从"新不新"换成**"这条步骤有没有结论"**（`apps/web/src/utils/agentLoopSteps.ts`）：
+
+- **只留**：`LOOP_FAILED`、`LOOP_SUSPENDED`、`LOOP_COMPLETED`（取消时按 status 说"循环已取消"，
+  不读成正常结束）、`TOOL_FAILED`、`TOOL_DENIED`、`TOOL_NEEDS_RECONCILIATION`、`GATE_CHECKED`
+  **仅 blocked**（与探索侧 `explorer-activity` 那条判据逐字相同：没问题的不占行）。
+- **把原因码顶到面上**：`#85 循环失败 · PROVIDER_COMMAND_TIMEOUT`。原因码保持原样不翻译——
+  界面上别处（任务卡的阻塞原因）就是这么显示的，翻成中文反而没法拿去 grep 日志。
+- 中文标签 + **原始枚举名留在 `title` 里**，排障时仍可按 `LOOP_SUSPENDED` 去搜代码与日志。
+- 三档语调：失败红、需要你看一眼的橙（挂起 / 被拒 / 拦截 / 已取消）、正常结束灰。此前一律灰底，
+  `LOOP_SUSPENDED` 与 `PROVIDER_ACTIVITY` 长得一模一样。
+- **正常跑着的 Loop 一条都不给**，面板上只留那行进度。
+
+### 验证
+
+- 新增 5 条 `agentLoopSteps` 用例（含"活动再多也挤不掉结论"、"取消不是正常结束"、"超过上限取最后几条"）
+  与 1 条组件用例（断言渲染出来的是结论那一格、且页面上不出现 `PROVIDER_ACTIVITY`）。
+- **两个真实 Run 上实测**：
+  - `run-8d0b9489-06d`（已阻塞）：面板只有一格 `#85 循环失败 · PROVIDER_COMMAND_TIMEOUT`（红）；
+  - `run-ff037bc2-26d`（已完成）：只有一格 `#1640 循环结束 · READY_FOR_VERIFY`——**1600 多条
+    `PROVIDER_ACTIVITY` 一条都没露**。
+- `pnpm verify`：domain 443 / api 121 / web 599。
+
+
 ## 2026-10-07 — 删需求留下的空号会让新回合**撞号**
 
 删掉几条需求之后核对线程状态，发现**需求7 与需求10 的回合都占着 #13 / #14**——同一线程里两对回合

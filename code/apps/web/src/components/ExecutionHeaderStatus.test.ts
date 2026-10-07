@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { createApp, defineComponent, h, nextTick } from "vue";
 import { describe, expect, it } from "vitest";
-import type { AgentLoop, ExecutionTask, Run } from "../types";
+import type { AgentLoop, AgentLoopStep, ExecutionTask, Run } from "../types";
 import type { ExecutionStreamItem } from "../utils/executionStream";
 import ExecutionHeaderStatus from "./ExecutionHeaderStatus.vue";
 
@@ -76,7 +76,12 @@ const ElTagStub = defineComponent({
   },
 });
 
-function mountStatus(status = run.status, runActivity: ExecutionStreamItem[] = [], runtimeFacts: ExecutionStreamItem[] = []) {
+function mountStatus(
+  status = run.status,
+  runActivity: ExecutionStreamItem[] = [],
+  runtimeFacts: ExecutionStreamItem[] = [],
+  executorSteps: AgentLoopStep[] = [],
+) {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const emitted: Array<{ event: string; payload?: unknown }> = [];
@@ -95,7 +100,7 @@ function mountStatus(status = run.status, runActivity: ExecutionStreamItem[] = [
             runtimeFacts,
             selectedTaskId: null,
             executorLoop: loop,
-            executorSteps: [],
+            executorSteps,
             loopStatusLabel: "Completed",
             verification: null,
             mergeRequest: null,
@@ -264,6 +269,60 @@ describe("ExecutionHeaderStatus", () => {
     mounted.host.querySelector<HTMLButtonElement>(".execution-header-detail-footer button")!.click();
 
     expect(mounted.emitted).toContainEqual({ event: "open-plan" });
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  /**
+   * 这一格以前是"最后 4 条步骤"，而 `PROVIDER_ACTIVITY` **成对出现**（started / completed 各一条），
+   * 一次活动就吃掉两格——那条写着 `PROCESS_RESTARTED` 的 `LOOP_SUSPENDED` 就是这么被挤掉的。
+   * 现在只留有结论的，并把原因码顶到面上。判据的细节在 utils/agentLoopSteps.test.ts。
+   */
+  it("Loop 面板列的是**结论**，不是「最后几条」：活动挤不掉死因，原因码看得见", async () => {
+    const activity = (sequence: number, phase: string): AgentLoopStep => ({
+      loopId: "agent-loop-1",
+      sequence,
+      stepType: "PROVIDER_ACTIVITY",
+      status: "COMPLETED",
+      callId: null,
+      providerThreadId: null,
+      providerTurnId: null,
+      payload: { phase },
+      occurredAt: "2026-10-01T02:56:00.000Z",
+    });
+    const mounted = mountStatus(
+      "RECOVERING",
+      [],
+      [],
+      [
+        activity(41, "started"),
+        activity(42, "completed"),
+        activity(43, "started"),
+        activity(44, "completed"),
+        {
+          loopId: "agent-loop-1",
+          sequence: 45,
+          stepType: "LOOP_SUSPENDED",
+          status: "RUNNING",
+          callId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          payload: { reason: "PROCESS_RESTARTED" },
+          occurredAt: "2026-10-05T14:28:38.533Z",
+        },
+      ],
+    );
+
+    trigger(mounted.host, "loop").click();
+    await nextTick();
+
+    const chips = [...mounted.host.querySelectorAll(".loop-step")].map((chip) => chip.textContent?.replace(/\s+/g, " ").trim());
+    expect(chips).toEqual(["#45 循环挂起 · PROCESS_RESTARTED"]);
+    // 原始枚举名留着当 title：排障时要按它去 grep 代码与日志。
+    expect(mounted.host.querySelector(".loop-step")?.getAttribute("title")).toBe("LOOP_SUSPENDED");
+    expect(mounted.host.querySelector(".loop-step")?.className).toContain("tone-attention");
+    expect(mounted.host.textContent).not.toContain("PROVIDER_ACTIVITY");
 
     mounted.app.unmount();
     mounted.host.remove();

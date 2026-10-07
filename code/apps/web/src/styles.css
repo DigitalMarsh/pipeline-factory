@@ -3244,6 +3244,29 @@ a {
 .loop-step strong {
   color: #4f78d9;
 }
+/*
+ * 三档语调：失败红、需要你看一眼的橙（挂起 / 被拒 / 拦截 / 已取消）、正常结束灰。
+ * 这几格存在的理由就是"为什么停了"，所以出事的那两条得在视觉上先被看见——
+ * 此前一律灰底，`LOOP_SUSPENDED` 和 `PROVIDER_ACTIVITY` 长得一模一样。
+ */
+.loop-step.tone-danger {
+  background: #fdeced;
+  color: #b4555e;
+}
+.loop-step.tone-danger strong {
+  color: #c4565f;
+}
+.loop-step.tone-attention {
+  background: #fdf4e6;
+  color: #9a7433;
+}
+.loop-step.tone-attention strong {
+  color: #b5822f;
+}
+.loop-step em {
+  font-style: normal;
+  opacity: 0.75;
+}
 .global-drawer-shell {
   min-height: 100%;
   padding: 25px 27px;
