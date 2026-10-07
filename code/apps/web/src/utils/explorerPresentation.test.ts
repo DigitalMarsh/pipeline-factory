@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { activityStatusLabel, assistantActivityLabel, EXPLORER_DISPLAY_MODES, EXPLORER_INLINE_MODES, EXPLORER_ROW_MODES, explorerActivityLine, explorerDisplayMode, explorerDisplayTitle, explorerRuntimeFacts, formatTurnTime, inputStatusLabel, isRuntimeAlert, runtimeFactTitle } from "./explorerPresentation";
+import { activityStatusLabel, assistantActivityLabel, EXPLORER_DISPLAY_MODES, EXPLORER_INLINE_MODES, EXPLORER_ROW_MODES, explorerActivityLine, explorerDisplayMode, explorerDisplayTitle, explorerRuntimeFacts, formatTurnTime, inputStatusLabel, isProviderControlled, isRuntimeAlert, runtimeFactTitle } from "./explorerPresentation";
 import type { ExplorerMessageType } from "./explorerPresentation";
 import { SHARED_MESSAGE_TYPES } from "./conversationTypes";
 import type { ExplorerActivityItem, ExplorerActivityKind, ExplorerInputRequest } from "../types";
@@ -117,11 +117,19 @@ describe("各类过程活动各摆什么", () => {
     expect(line).toEqual({ label: "推理", name: null, reference: null, body: "对照 executionStream.ts 的呈现方式表" });
   });
 
-  it("Provider 没给摘要的推理行退回标签，不留一个只有点和时间的空行", () => {
-    // 投影层对"没摘要"交的是空串；推理行是纯文本行，空着就只剩一个点和时间。
-    const line = explorerActivityLine(activity("REASONING", { title: "reasoning", summary: "", details: { itemId: "item-reason-1", itemType: "reasoning", providerControlled: true } }));
+  it("推理行**不再拿标签当正文** —— 那是「点开只有一个词」的死折叠的成因", () => {
+    // 曾经这里 `body: item.summary || label`：行组件于是渲染出一个 `<details>`，点开只有
+    // 重复的「推理」两个字。一个点开是空白的展开区，比没有更糟。
+    const provider = activity("REASONING", { summary: "", details: { itemId: "r-1", itemType: "reasoning", providerControlled: true } });
+    const factory = activity("REASONING", { summary: "", details: { step: 1 } });
 
-    expect(line).toEqual({ label: "推理", name: null, reference: null, body: "推理" });
+    expect(explorerActivityLine(provider)).toEqual({ label: "推理", name: null, reference: null, body: "" });
+    expect(explorerActivityLine(factory).body).toBe("");
+    // **两种「没正文」要分得开**：前者该明说「未提供正文」——否则那一行看着像"这一轮根本没推理"，
+    // 用户没法知道是"没有"还是"读不到"（Codex 只回 encrypted_content，实测 140/140 条都这样）；
+    // 后者是 Factory 自己的 `MODEL_STARTED` 标记（"这一轮跑起来了"），本来就没话可说。
+    expect(isProviderControlled(provider)).toBe(true);
+    expect(isProviderControlled(factory)).toBe(false);
   });
 
   it("上下文压缩：摆的是消息条数，不是一句过程说明", () => {

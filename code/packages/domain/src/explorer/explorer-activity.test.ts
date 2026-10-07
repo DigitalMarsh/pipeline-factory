@@ -328,6 +328,21 @@ describe("Explorer activity projection", () => {
     expect(projectExplorerActivity({ turns: [assistantTurn()], loops: [explorerLoop()], steps: steps("blocked") })[0]).toMatchObject({ kind: "GATE", status: "FAILED", summary: "连续两步没有进展" });
   });
 
+  it("**推理正文的上限比别的大** —— 240 只够看个开头，而「它到底想了什么」正是这一行的用途", () => {
+    const items = projectExplorerActivity({
+      turns: [assistantTurn()],
+      loops: [explorerLoop()],
+      steps: [
+        providerStep(1, { phase: "completed", itemId: "r-1", itemType: "reasoning", summary: "推".repeat(3_000) }, "2026-08-29T10:00:01.000Z"),
+        providerStep(2, { phase: "completed", itemId: "c-1", itemType: "commandExecution", summary: "c".repeat(3_000) }, "2026-08-29T10:00:02.000Z"),
+      ],
+    });
+
+    // 推理放到 2000（与展示边界那一档同值）；命令原文、文件路径这类摘要本来就短，仍然是 240。
+    expect(items.find((item) => item.kind === "REASONING")?.summary.length).toBe(2_000);
+    expect(items.find((item) => item.kind === "COMMAND")?.summary.length).toBe(240);
+  });
+
   it("不把 Provider 的回声渲染成工具行，认不出来的仍然照实显示", () => {
     const items = projectExplorerActivity({
       turns: [assistantTurn()],

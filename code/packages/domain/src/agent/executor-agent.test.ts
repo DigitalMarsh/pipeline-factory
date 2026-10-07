@@ -351,6 +351,35 @@ describe("ExecutorAgent", () => {
     expect(recorded[1]?.payload).toMatchObject({ outcome: "succeeded", summary: "npm install --ignore-scripts" });
   });
 
+  it("**推理正文的写入上限比别的大** —— 600 会把一段推理切在中间", async () => {
+    // 实测：Claude 那侧的推理正文五条里有两条正好停在 600 字，是被写入侧切齐的。
+    // 卡在这里是**写库时就截**，光改显示层补不回来。命令原文、文件路径这类摘要本来就短，仍然是 600。
+    const { store, plan, run } = await createQueuedRun();
+    const longReasoning = "推".repeat(3_000);
+    const longCommand = "c".repeat(3_000);
+    const model: ModelGateway = {
+      configFor: () => ({ model: "gpt-5.6-luna", loopMode: "provider-controlled" }),
+      capabilities: () => ({ supportsStructuredUserInput: false, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] }),
+      async *stream() {
+        yield { type: "provider.activity", phase: "completed", itemId: "rs-1", itemType: "thinking", activityKind: "reasoning", outcome: "not-applicable", title: null, summary: longReasoning, providerItemId: "rs-1" };
+        yield { type: "provider.activity", phase: "completed", itemId: "exec-1", itemType: "commandExecution", activityKind: "command", outcome: "succeeded", title: null, summary: longCommand, providerItemId: "exec-1" };
+        yield { type: "text.delta", text: "done" };
+        yield { type: "turn.completed" };
+      },
+      async answerUserInput() { return undefined; },
+      async cancel() { return undefined; },
+    };
+
+    await new ExecutorAgent(store, model, undefined, { maxSteps: 1 }).run(run, plan);
+
+    const recorded = (store.getExecutionThread(run.executionThreadId)?.journal ?? []).filter((entry) => entry.type === "PROVIDER_ACTIVITY");
+    const reasoning = recorded.find((entry) => entry.payload.activityKind === "reasoning");
+    const command = recorded.find((entry) => entry.payload.activityKind === "command");
+
+    expect(String(reasoning?.payload.summary).length).toBe(2_000);
+    expect(String(command?.payload.summary).length).toBe(600);
+  });
+
   it("injects a durable built-in ToolRuntime for Factory-controlled execution", async () => {
     const { store, plan, run } = await createQueuedRun();
     const workspace = await mkdtemp(join(tmpdir(), "pipeline-executor-"));

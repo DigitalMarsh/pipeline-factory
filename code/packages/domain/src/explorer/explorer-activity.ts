@@ -441,7 +441,11 @@ function activityFromStep(turn: ExplorerTurn, step: AgentLoopStep): Omit<Explore
     const title = nonEmptyString(payload.title) ?? (toolName ? `${serverName ? `${serverName}/` : ""}${toolName}` : serverName ?? "");
     // Provider 没给摘要就**交空串**，不要补 "Provider activity started." 这类句子：那两句话把
     // 「有没有摘要」这个可判定的事实，变成了一句要靠字符串识别才能认出的文案，而它本身什么都没说。
-    const summary = nonEmptyString(payload.summary)?.slice(0, 240) ?? "";
+    //
+    // **推理正文的上限比别的大**：命令原文、文件路径这类摘要本来就短（240 够），而一段推理
+    // 动辄一两千字——240 只够看个开头，而"我要看它到底想了什么"恰恰是推理行的全部用途。
+    // 2000 与展示边界那一档同值（`apps/web/src/utils/sensitiveValue.ts`）。
+    const summary = (nonEmptyString(payload.summary) ?? "").slice(0, activityKind === "reasoning" ? 2_000 : 240);
     const itemId = nonEmptyString(payload.itemId) ?? nonEmptyString(payload.providerItemId);
     return { ...base, kind: KIND_BY_ACTIVITY[activityKind], status, title, summary, details: { itemId: itemId ?? null, itemType, providerControlled: true, ...structuredDetails(payload), ...(toolName ? { toolName } : {}), ...(serverName ? { serverName } : {}), ...(reason ? { reason } : {}) } };
   }

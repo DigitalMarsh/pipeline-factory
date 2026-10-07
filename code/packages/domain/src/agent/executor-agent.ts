@@ -384,7 +384,10 @@ export class ExecutorAgent {
       const toolName = toolLike ? safeProviderName(payload.toolName) ?? safeProviderName(payload.title) : undefined;
       const serverName = safeProviderName(payload.serverName);
       const providerStatus = normalizeProviderStatus(payload.status);
-      const summary = boundedText(payload.summary, 600);
+      // **推理正文的写入上限比别的大**：命令原文、文件路径这类摘要本来就短（600 够），
+      // 而一段推理动辄一两千字——卡在 600 是**写库时就截**，改显示层也补不回来。
+      // 实测：Claude 那侧的推理正文五条里有两条正好停在 600 字，是被这里切齐的。
+      const summary = boundedText(payload.summary, activityKind === "reasoning" ? 2_000 : 600);
       const reason = boundedText(payload.error, 600);
       const providerItemId = typeof payload.itemId === "string" ? payload.itemId : typeof payload.providerItemId === "string" ? payload.providerItemId : undefined;
       this.append(run.executionThreadId, "PROVIDER_ACTIVITY", {

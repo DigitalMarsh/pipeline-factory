@@ -154,12 +154,26 @@ export function explorerActivityLine(item: ExplorerActivityItem): ExplorerActivi
     case "UNCLASSIFIED":
       // 认不出来就说认不出来：标签直接摆 Provider 的原生 itemType，不要给它编一个像样的类别名。
       return { label: detailsText(item, "itemType") ?? label, name: null, reference: itemId, body: item.summary };
-    case "TURN_STATUS":
+    // 推理行是纯文本行：**有正文就摆正文，没有就什么也不编**——上面那行 meta 已经写着「推理」，
+    // 正文留空就是"这一轮没有可说的"。曾经这里会退回标签顶上，于是行组件渲染出一个
+    // `<details>`，点开只有重复的「推理」两个字——一个点开是空白的展开区比没有更糟。
     case "REASONING":
+    case "TURN_STATUS":
     default:
-      // 推理行是纯文本行，空着只剩一个点和时间，比补一句占位句更糟——退回标签顶上。
-      return { label, name: null, reference: null, body: item.summary || (item.kind === "REASONING" ? label : "") };
+      return { label, name: null, reference: null, body: item.summary };
   }
+}
+
+/**
+ * 这条是不是 **Provider 报的活动**（而不是 Factory 自己的步骤标记）。
+ *
+ * 用来区分推理行为空的两种原因——这个区别对读的人是全部意义所在：
+ *   - Provider 报了这次推理、但没给可读正文（Codex 的 `reasoning` item 只有 `encrypted_content`）
+ *     → 该明说，否则那一行看着像"这一轮根本没推理"；
+ *   - Factory 自己的 `MODEL_STARTED` 标记（"这一轮跑起来了"）→ 本来就没话可说，留空即可。
+ */
+export function isProviderControlled(item: ExplorerActivityItem): boolean {
+  return item.details?.providerControlled === true;
 }
 
 /** `details` 里取一段非空文本；取不到就是 null。 */
