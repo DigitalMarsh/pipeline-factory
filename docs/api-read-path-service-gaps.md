@@ -41,7 +41,7 @@ grep -h -v '^[[:space:]]*\(\*\|//\|/\*\)' apps/api/src/routes/*.ts | grep -o 'st
 
 ## 四种形态（先分清，再谈收敛）
 
-**1）投影入参（26 处，是上面 132 的一部分，但不是"绕过 Service 读实体"）**
+**1）推导入参（26 处，是上面 132 的一部分，但不是"绕过 Service 读实体"）**
 
 ```ts
 planProjection(store, plan)            // 8 处
@@ -52,7 +52,7 @@ createProjectEventScope(store, …)      // 2 处
 workbenchSnapshot(store, projects, …)  // 1 处
 ```
 
-这里的 `store` 是**纯投影函数的数据源**（投影在 `apps/api/src/projections/`，无 IO）。要收敛它们得先让投影接受更窄的入参（例如传入已取好的 `plan` + `revisions` + `loops`），那是 P5 投影下沉的后续，**不是把路由改成调 Service 能解决的**。列在这里是为了避免被误读成"上百处路由在裸读库"。
+这里的 `store` 是**纯推导函数的数据源**（推导在 `apps/api/src/projections/`，无 IO）。要收敛它们得先让推导接受更窄的入参（例如传入已取好的 `plan` + `revisions` + `loops`），那是 P5 推导下沉的后续，**不是把路由改成调 Service 能解决的**。列在这里是为了避免被误读成"上百处路由在裸读库"。
 
 **2）事件日志与游标（12 处）——有意保留**
 
@@ -129,7 +129,7 @@ ExplorerService.findInProject(projectId, explorerId): ExplorerThread | null
 
 1. **`ExplorerService.list(projectId)` 与 `store.listThreads()` 再过滤 `state !== "ARCHIVED"` 不等价。** `list()` 会**带上 ARCHIVED 线程**。`projects.ts:78` 需要的是"未归档的线程"，直接换过去会让重复导入同一个仓库时复用一个已归档线程。**判据：换之前先读被换方法的函数体，不要只看名字。**
 
-2. **`store.getDispatchState(planId)` 与 `dispatchCoordinator.state(planId)` 不是同一件事。** 后者是协调器的**内存投影**，前者是库里落盘的。`plans.ts:360` 的 `dispatchCoordinator?.state(plan.id) ?? store.getDispatchState(plan.id) ?? null` 是**三层回退**，顺序即优先级，**不是重复读**。
+2. **`store.getDispatchState(planId)` 与 `dispatchCoordinator.state(planId)` 不是同一件事。** 后者是协调器的**内存副本**，前者是库里落盘的。`plans.ts:360` 的 `dispatchCoordinator?.state(plan.id) ?? store.getDispatchState(plan.id) ?? null` 是**三层回退**，顺序即优先级，**不是重复读**。
 
 ## 已替换的部分（P6 实际改掉的）
 

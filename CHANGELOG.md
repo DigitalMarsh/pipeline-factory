@@ -768,7 +768,7 @@ p90 是 125、p99 是 283。
   回答，不传角色时那份覆盖配置**无从归属**，一律按角色默认（两个角色指向不同后端时仍如实回答
   `mixed`）。
 - `agent-loop.ts` 把 `effectiveModelConfig` 传下去——与它上面那行 `capabilities` 同源，那一行一直在传。
-- `run-telemetry` 投影里 `backend` 的优先级翻成**冻结配置优先**。这不是"顺手调顺序"：`backend` 只由
+- `run-telemetry` 推导里 `backend` 的优先级翻成**冻结配置优先**。这不是"顺手调顺序"：`backend` 只由
   那个**配置推导**的指纹写入（不是 Provider 上报），所以冻结配置写了后端时它才是路由真正用的那个；
   冻结配置没写（跟随全局）时才轮到指纹回答"那时全局是哪个"。**修好之后两个来源本就一致**，
   这条翻转只会纠正旧记录、不会覆盖新事实——也正因为如此，那条已经落库的错记录现在能正确显示。
@@ -1000,7 +1000,7 @@ Claude 执行侧 5/5 条有正文，Codex 执行侧 0/5。
 
 ### Changed
 
-- **推理正文上限分开处理**：探索侧投影 `240 → 2000`、执行侧写入 `boundedText(..., 600) → 2000`
+- **推理正文上限分开处理**：探索侧推导 `240 → 2000`、执行侧写入 `boundedText(..., 600) → 2000`
   （`activityKind === "reasoning"` 时）。命令原文、文件路径那类摘要本来就短，仍是 240 / 600。
   执行侧那 600 是**写库时就截**——实测 Claude 侧五条推理里有两条正好停在 600 字，光改显示层补不回来。
 - **没有正文时明说**，而且**分清两种情况**（判据 `isProviderControlled`）：
@@ -1018,7 +1018,7 @@ Claude 执行侧 5/5 条有正文，Codex 执行侧 0/5。
 
 ### 验证
 
-- 单测：探索侧投影（推理 2000 / 命令 240）、执行侧写入（推理 2000 / 命令 600）、
+- 单测：探索侧推导（推理 2000 / 命令 240）、执行侧写入（推理 2000 / 命令 600）、
   两种"没正文"的分支各一条。
 - 真实数据（Codex 探索线程）：5 条推理行 → 0 条有正文、**3 条判为"来自 Provider"**（会显示未提供正文）、
   2 条是 Factory 标记（留空）。这个 3:2 就是这次改动要分出来的东西。
@@ -1052,7 +1052,7 @@ stdout，界面上连那个按钮都不出现。
 
 ### 验证
 
-`run-97e581c2-d2f`（SmokeRun 项目）重投影后：结果按钮 **1 个 → 3 个**（两行命令各一个），
+`run-97e581c2-d2f`（SmokeRun 项目）重新推导后：结果按钮 **1 个 → 3 个**（两行命令各一个），
 命令行展开是这次运行的真实 stdout（worktree 路径、`git status`、回读的 README、
 `ls: package.json: No such file or directory`），meta 是「退出码 0 · 耗时 不足 1 秒」。
 
@@ -1388,7 +1388,7 @@ Provider 明明给了的东西；消息大类只分"用户 / 模型 / 运行时"
   表的形状不是一条链：主路径 + `VERIFYING/MERGE_READY → IN_PROGRESS` 等恢复边 +
   **三个"从任意非终态进入"的入口**（`BLOCKED` / `READY` / `NEEDS_PLAN_CHANGE`）+
   `DRAFT → DISCARDED`。`MERGED` 不是终态（启动修复会把它拉回 `BLOCKED`），**真正不可逆的只有 `DISCARDED`**。
-- **删掉三块归一化补丁**（web 的 `normalizedLifecycleStatus`、api 投影的同名函数）——它们的存在本身
+- **删掉三块归一化补丁**（web 的 `normalizedLifecycleStatus`、api 推导的同名函数）——它们的存在本身
   就是"表缺边"的证据：喂进来的值根本不该是 Plan 状态。补丁与表一收一放，两处同时消失。
 - 新增 `plan/status-transition.test.ts`（6 条）：主路径逐步走通、三个入口从任意非终态可进、
   `DISCARDED` 只能从 `DRAFT` 进且出不去、跨级边不合法、**非法转换抛错且 store 里的状态没被动过**。
@@ -1667,7 +1667,7 @@ Agent Loop 状态（`Running` / `Blocked` / `Completed` …）、Run 级活动�
 
 - **一次调用在 A 占两行**：`TOOL_REQUESTED → TOOL_COMPLETED` 是同一件事的两端，B 按 `callId` 合并成一条，
   A 没有。顺带发现 `TOOL_FAILED` / `TOOL_NEEDS_RECONCILIATION` 两个步骤类型在 A **连一行都没有**
-  （投影里没有分支，静默掉了）——"工具失败了"在探索时间线上看不见。
+  （推导里没有分支，静默掉了）——"工具失败了"在探索时间线上看不见。
 - **Provider 回声冒充工具行**：A 只按 `itemType` 里有没有 `mcp` / `reason` 三个子串判类，
   于是 `userMessage`（Provider 把你那句话回显一次）与 `plan`（整篇规划文档）都落进了
   "Tool started / Tool completed"——实测 112 个与 29 个。
@@ -1716,7 +1716,7 @@ Agent Loop 状态（`Running` / `Blocked` / `Completed` …）、Run 级活动�
 ### Changed
 
 - **正文按"连续段"落一条**（`executor-agent.ts`）：攒进内存，遇到下一条非正文条目或 Run 终止时写一条。
-  分段依据与前端投影**逐字相同**，所以条目顺序、分组、页面呈现都不变，只是条目数少一两个数量级。
+  分段依据与前端推导**逐字相同**，所以条目顺序、分组、页面呈现都不变，只是条目数少一两个数量级。
 - **`execution_threads.journal_json` 整体快照删除**：启动时先把"只有快照、表里没有行"的历史线程
   搬进 `execution_journal`，再 `DROP COLUMN`。`backfillLegacyVerificationRuns` 一并从快照改读表
   （拿一份已经过期的副本当修复依据，会漏掉最近的条目）。
@@ -1728,10 +1728,10 @@ Agent Loop 状态（`Running` / `Blocked` / `Completed` …）、Run 级活动�
 - **`agent_loop_steps` 同一处碎片也收掉了**：模式一样（段内照旧实时派发 `agent.model.text.delta`，
   只在段结束时落一条步骤），封段边界与读取方 `explorer-activity` 合并卡片的边界逐字相同。
   改这里的前提是 `routes/explorers.ts` 里那句"没有等价性测试不要改这里"——
-  已补上等价性用例（同一段正文按 3 条 / 1 条两种形态投影，结果逐字段相同）与引擎级用例。
+  已补上等价性用例（同一段正文按 3 条 / 1 条两种形态推导，结果逐字段相同）与引擎级用例。
 - **历史碎片合并成段**（经确认的一次性历史改写）：启动时把库里已有的连续碎片按同一规则并成段。
   实测本机：`agent_loop_steps` 60,161 → 2,963 行、`execution_journal` 4,547 → 739 行、`domain_events` 133,464 → 90,031 行，
-  而同一个 Run 的执行会话投影逐条完全一致（94 条消息、类型直方图、正文长度分布全部与合并前相同）。
+  而同一个 Run 的执行会话推导逐条完全一致（94 条消息、类型直方图、正文长度分布全部与合并前相同）。
 - **`domain_events` 里带序号的两簇也合并成段了**：`agent.step.model_text_delta` 40,245 → 221 行、
   `run.executor.event` 的 MODEL_OUTPUT（带 `payload.sequence` 的）3,529 → 120 行。
   这里踩到一个坑值得记下来：**事件流是交错的**——每 40ms 一次刷新会同时写步骤镜像与那条遗留重复
@@ -1742,7 +1742,7 @@ Agent Loop 状态（`Running` / `Blocked` / `Completed` …）、Run 级活动�
   前者比对该 loop 的步骤行正文总量（50 个 loop 全部满足），后者要求剥掉计划协议块后逐字等于
   `explorer_turns.content`（33 个回合里 **3 个不满足，全部保留**：两个被取消的回合——content 被替换成
   "本轮已取消"，模型原始输出只在这批事件里——与一个 content 被后续覆盖的回合）。
-  为此把 `stripPlanProtocol` 挪到 `plan/completion.ts` 共用：删除的唯一判据不能与展示投影各写一份。
+  为此把 `stripPlanProtocol` 挪到 `plan/completion.ts` 共用：删除的唯一判据不能与展示推导各写一份。
 - **实测总账**：`domain_events` 133,464 → 19,549 行、19.72 → 3.61 MB；库文件 81.58 MB → 12.20 MB。
 
 ## 2026-10-03 — 删掉 V1 扁平合同镜像（Plan 契约只剩一份）
@@ -1750,7 +1750,7 @@ Agent Loop 状态（`Running` / `Blocked` / `Completed` …）、Run 级活动�
 ### 为什么做
 
 `ResolvedPlanContract` 之外还并存着一份 V1 扁平合同（`CandidatePlan.contract`）。它不是"另一种契约"，
-而是已解析契约的**有损投影**：`dependsOnPlanIds` 恒填 `[]`、`priority` 恒为 0。字段名却更短，
+而是已解析契约的**有损副本**：`dependsOnPlanIds` 恒填 `[]`、`priority` 恒为 0。字段名却更短，
 于是界面与调度里到处是"优先读 `resolvedContract`、缺它才回退到 `contract`"的读点——
 两份形状迟早对不上，而 `planQueryProjectionFor` 曾是这份镜像最后一个**无条件**读者。
 
@@ -1762,7 +1762,7 @@ Agent Loop 状态（`Running` / `Blocked` / `Completed` …）、Run 级活动�
 
 **1. 契约只剩 `resolvedContract`（domain）**
 
-- 删 `PlanContract` / `PlanTask` 类型、`executionContractFromResolved`（投影函数）、
+- 删 `PlanContract` / `PlanTask` 类型、`executionContractFromResolved`（生成那份副本的函数）、
   `defaultPlanContract`（兜底合同）、`validatePlanContract`（V1 结构校验），以及三处
   `contract.schemaVersion === 1` 只读闸门——没有可表达的 V1 形状，闸门成了空转。
 - `CandidatePlan` / `PlanRevision` / `PlanRevisionDraft` / `ChangeProposal` 的 `contract` 改成
@@ -1791,7 +1791,7 @@ Agent Loop 状态（`Running` / `Blocked` / `Completed` …）、Run 级活动�
 - `change_proposals` 补上 `resolved_contract_json` 列。提案的契约此前存在 `contract_json` 里，
   改列时漏了建表——**内存实现不经过 SQL 列，所有用例照样绿**，只有真开一个 SQLite 库才暴露。
   已补一条 SQLite 往返用例。
-- API：workbench 投影与 change-proposal 请求体暴露 `resolvedContract`；`Plan.contract` 响应字段消失。
+- API：workbench 推导与 change-proposal 请求体暴露 `resolvedContract`；`Plan.contract` 响应字段消失。
   `PlanIndexRow.priority` 保留但恒为 0（响应形状与 `sort=priority` 还引用它），dispatch 的优先级排序删掉。
 
 **4. Web：从三层回落到两层**
@@ -1816,7 +1816,7 @@ Agent Loop 状态（`Running` / `Blocked` / `Completed` …）、Run 级活动�
 ### 为什么做
 
 对比 Claude Code 的 Plan 后发现，项目当前的 Plan **有目标、有任务标题，但没有"为什么这么做、具体动哪些文件"**。
-更严重的是：Executor 的 system prompt 嵌的是 `revision.contract` 的 V1 投影，V2 的 `design` 整节在
+更严重的是：Executor 的 system prompt 嵌的是 `revision.contract` 的 V1 副本，V2 的 `design` 整节在
 `executionContractFromResolvedV2`（`plan/service.ts`）里被丢掉了——`technicalConstraints`、
 `dataSecurity`、`failureHandling`，以及 `dependencies` 并入的技术约束，**从未到达执行者**。
 
@@ -2034,7 +2034,7 @@ project4 没登记任何验证命令，所以这条**现在触发不到**——�
 ### 验证
 
 - `pnpm verify` 全绿：domain **354** / api **111** / web **485**，无新增值级环。
-- **活动摘要是读时投影**，所以修复对历史线程同样生效。已用真实数据核对：
+- **活动摘要是读时推导**，所以修复对历史线程同样生效。已用真实数据核对：
   `GET /explorers/explorer-36c7fd77-f5f/activity?explorerPlanId=explorer-plan-ba2db4ca-5ac`
   里两条原本 `status: INVALID` 的助手活动，现在返回 `status: READY` 与
   「完整执行方案已生成：需求5：修复现有项目添加任务时所属项目不合法」；
@@ -2136,7 +2136,7 @@ Claude：`tool_use`/`tool_result`/`providerSession` + `started`/`succeeded`/`fai
   `executor-agent.ts` 的 TOOL_CALL 账本现在与 UI 共用同一个 outcome。
 - Claude 侧顺带修掉一个显示缺陷：`tool_result` 不带工具名，合并后标题会退化成 `toolUseId`——
   现在由 gateway 记住本轮的工具名，标题与类别都与它的 `tool_use` 一致。
-- **向后兼容**：旧 journal 事件没有这两个字段，web 投影保留回退路径（同样修掉 `completed → 成功`），
+- **向后兼容**：旧 journal 事件没有这两个字段，web 推导保留回退路径（同样修掉 `completed → 成功`），
   `executionStream.parity.test.ts` 用同一批样例断言"镜像与领域实现给出相同结论"。
 
 **2. 派发前的工作区干净闸门**（`git/working-tree.ts` 新增）
@@ -2222,7 +2222,7 @@ Claude：`tool_use`/`tool_result`/`providerSession` + `started`/`succeeded`/`fai
 - 即「没有归属于任何执行步骤的 Run 级事件」。原先按事件类型列举（RUN_CREATED / HOOK_* / VERIFICATION）
   的写法每加一种 Run 级事件都要回来补一次，且同样无归属的 `Executor started` / `Execution gate`
   会被漏在会话里名不副实。
-- 投影层（`utils/executionStream.ts`）**没有改动**——判据只用既有字段。
+- 推导层（`utils/executionStream.ts`）**没有改动**——判据只用既有字段。
 
 **2. 时间线不再有 Run 级活动组，改由顶部 RUN CONTEXT 卡片承载**
 
@@ -2248,7 +2248,7 @@ Claude：`tool_use`/`tool_result`/`providerSession` + `started`/`succeeded`/`fai
 ### 一处计划外的发现（纠正本轮计划里的假设）
 
 计划里写的是「你自己发的消息现在也被标成"未关联执行步骤"」。**实测不成立**：
-`run-8d0b9489-06d` 第 86 条的 guidance 带上了 `taskId`——投影用「当前模型轮次」给它归了因，
+`run-8d0b9489-06d` 第 86 条的 guidance 带上了 `taskId`——推导用「当前模型轮次」给它归了因，
 所以它一直显示在对应的执行步骤组内，时序也是对的。只有**早于任何步骤归因**的 guidance
 （`run-5fd6449b-c0d` 第 5 条，前面只有 RUN_CREATED / HOOK_SKIPPED）才会落进那个桶，
 第 4 条改的正是这一种。规则本身以数据为准，不是以假设为准。
@@ -2367,7 +2367,7 @@ Claude：`tool_use`/`tool_result`/`providerSession` + `started`/`succeeded`/`fai
 
 ### Changed
 
-**执行对话：左右分栏 + 降噪（只改渲染与样式，不动 journal 投影）**
+**执行对话：左右分栏 + 降噪（只改渲染与样式，不动 journal 推导）**
 
 - 我的消息（`role === 'user'`，即 guidance）靠右、执行者的靠左。原来 `flex-basis: 92%` 几乎占满整行，
   右对齐等于没做——现在收到 `min(620px, 78%)`。
@@ -2412,7 +2412,7 @@ Claude：`tool_use`/`tool_result`/`providerSession` + `started`/`succeeded`/`fai
 - 浏览器实测（用**数据库副本**在 4313 起独立实例，不动正在跑的 4310）：
   - 用户给的 Run `run-62e320ce-d60` 底部从"三格未记录"变成
     `AGENT Codex App Server · MODEL gpt-5.6-luna · CONTEXT 191,197 tokens · 本次执行记录`。
-  - `GET /api/v4/runs/run-62e320ce-d60` 的 telemetry 里 `backend` 回来了（修前被投影丢掉）。
+  - `GET /api/v4/runs/run-62e320ce-d60` 的 telemetry 里 `backend` 回来了（修前被推导丢掉）。
   - 另一条带 guidance 的 Run：我的消息在右侧、矮而窄（body 左 1803/右 2382，其余消息左 1731/右 2408），
     每条活动只剩"标题 · 状态 · 时间 · 详情"，点"详情"展开 `Turn #1` 且 `aria-expanded=true`，
     hover 有 `Turn #1` 提示。
@@ -2540,9 +2540,9 @@ dev 模式下 API 跑的是 `src/main.ts`（tsx），但 `@pipeline-factory/doma
 
 **1. 抽屉里的 "Confirm V2" 点了没反应**
 
-- 根因不在按钮，而在"确认哪一版"。工作区投影**只把 DRAFT 的 Plan 当候选**：已确认 Plan 上挂着修订草稿时
+- 根因不在按钮，而在"确认哪一版"。工作区推导**只把 DRAFT 的 Plan 当候选**：已确认 Plan 上挂着修订草稿时
   `candidate` 是 `null`，而 `confirmPlan` 第一行就固定读它——于是直接早退，没有请求、没有报错、没有提示。
-  抽屉却照常渲染出草稿投影的 "Confirm V2"（它走的是 `detailPlan`），**两边认的不是同一份 Plan**。
+  抽屉却照常渲染出草稿推导出来的 "Confirm V2"（它走的是 `detailPlan`），**两边认的不是同一份 Plan**。
 - 改法：`confirmPlan` / `discardPlan` 的**目标由调用方给**（抽屉传 `detailPlan`，时间线内联卡传卡片自己那份），
   缺省才回落到 `candidate`——与 `enqueuePlan(plan)` 一直以来的写法一致。
 - 顺带修掉一处同类缺陷：内联卡的 `@click="enqueuePlan"` 会把 MouseEvent 当 Plan 传进去，
@@ -2621,7 +2621,7 @@ dev 模式下 API 跑的是 `src/main.ts`（tsx），但 `@pipeline-factory/doma
 
 - `PlanService.setVerificationSuites()` + `PUT /api/v4/plans/:planId/verification-suites`：
   候选态可改，**只有 tag 可选**（词表来自项目登记的 tags），命令 ID 依旧由 Factory 用同一套规则解析。
-  空数组 = 回到项目默认全集（不是"什么都不跑"）。会**重新解析** resolvedContract 与 V1 投影
+  空数组 = 回到项目默认全集（不是"什么都不跑"）。会**重新解析** resolvedContract 与 V1 副本
   （用当前 Project 快照 + 原有 Git 基线），既让 commandIds 跟着 tag 变，也让候选与当前配置版本对齐。
 - 项目没有任何默认验证命令时明确拒绝，而不是把请求当成功。
 - 控制台：Plan 详情新增 `03D Verification subset`（勾选项来自项目 tag 词表；空词表时如实说明
@@ -2631,7 +2631,7 @@ dev 模式下 API 跑的是 `src/main.ts`（tsx），但 `@pipeline-factory/doma
 
 - domain **306** / api **96** / web **438** 全通过；三个 typecheck 无错误。
 - 新增用例：`dispatch-coordinator.test.ts`（overlap 生效、declared 不生效、范围不重叠不冲突）、
-  `plan-v2.test.ts`（人工改子集 → commandIds 跟着变、V1 投影同步、空数组回全集、未登记 tag 被拒、
+  `plan-v2.test.ts`（人工改子集 → commandIds 跟着变、V1 副本同步、空数组回全集、未登记 tag 被拒、
   Confirm 后锁定）、`server.test.ts`（HTTP 路由 200/409/404）、
   `PlanDetailContent.test.ts`（**挂真实组件**验证两个编辑器：勾选 → 保存 → 抛事件、脏值前禁用保存、
   只读态只展示、空词表的说明文案）。
@@ -2798,7 +2798,7 @@ dev 模式下 API 跑的是 `src/main.ts`（tsx），但 `@pipeline-factory/doma
 - `execution.executorModelRole` / `toolPolicy`：执行侧读的是 Project 快照里的 executor 配置
   （`ExecutorAgent.executorModelConfig`），从不读它们；界面却把它们当 "Execution policy" 展示。
 - `tasks[].status`：从来没有任何代码推进过它，Workbench 却按实时状态显示恒定的 `READY`。
-- `dependsOnPlanIds`（V1 契约字段）：V2 的投影**恒填 `[]`**，于是 `dispatch-coordinator` 里那两道
+- `dependsOnPlanIds`（V1 契约字段）：V2 的副本**恒填 `[]`**，于是 `dispatch-coordinator` 里那两道
   真实的闸门（`WAITING_DEPENDENCY` 要求前置 Plan 已 MERGED、`WAITING_CONFLICT` 取冲突键交集）
   **有一半从 Explorer 侧不可达**——模型不知道 plan id，V2 契约里也没有对应字段。
 
@@ -2806,7 +2806,7 @@ dev 模式下 API 跑的是 `src/main.ts`（tsx），但 `@pipeline-factory/doma
 
 - `GeneratedPlanSpecV2.execution` 只保留 `maxRepairAttempts`；执行角色与工具策略由
   `resolvePlanContractV2` 以常量 `EXECUTOR_ROLE` / `EXECUTOR_TOOL_POLICY` 固定填进
-  `ResolvedPlanContractV2`（下游 `PlanContract` 投影与审计视图不受影响）。
+  `ResolvedPlanContractV2`（下游 `PlanContract` 副本与审计视图不受影响）。
   校验器对这两个键**接受但忽略**（不报 FORBIDDEN）：库里已有的 CandidatePlan 带着它们，
   报错会让旧数据连 confirm 都过不去。prompt、`EXPLORER_PLAN_REQUIREMENTS.optionalFields`
   与 web 侧 fallback 副本三处同步更新。
@@ -2824,7 +2824,7 @@ dev 模式下 API 跑的是 `src/main.ts`（tsx），但 `@pipeline-factory/doma
   在 Plan 详情的依赖编辑器里清掉即可。
 - 新增 `utils/planContract.ts`（web）：界面读 Plan 契约的唯一入口，固定
   `resolvedContract → generatedSpec → contract` 的取值顺序。Workbench inspector 改用
-  `planContractView()`，不再优先读那份**有损投影** `contract`（它的 `dependsOnPlanIds` 恒为 []）。
+  `planContractView()`，不再优先读那份**有损副本** `contract`（它的 `dependsOnPlanIds` 恒为 []）。
 
 ### 未做（明确记账，不是遗漏）
 
@@ -2893,7 +2893,7 @@ dev 模式下 API 跑的是 `src/main.ts`（tsx），但 `@pipeline-factory/doma
   `describeEndpoint()` 不传角色且两角色指不同后端时返回 `backend: "mixed"`——**如实回答，不假装成某一个**。
 - **角色默认后端在启动期构造**（`warmUp`），注册表里没被引用的后端保持懒构造。这条是启动验证时
   现场发现的回归：懒构造单独用会把"缺 `codexAppServer` 块"从启动期失败推迟成第一次 `/health` 500。
-- `apps/api/src/runtime/model-catalog.ts` 新增：`GET /api/v4/model-backends` 的投影与
+- `apps/api/src/runtime/model-catalog.ts` 新增：`GET /api/v4/model-backends` 的推导与
   `ModelBackendCatalog` 的数据源。模型清单只驱动控制台下拉（Factory 不知道 provider 支持什么），
   推理强度**由后端决定、不是建议**（Claude 侧只透传 5 个取值）。`/health` 增加 `modelBackends`，`modelBackend`
   保留为 explorer 生效后端的兼容键。
@@ -3199,7 +3199,7 @@ ExplorerView 的发送路径挂到组件测试上），再动结构——那是�
 ### 结论：B1 作为"等价优化"不成立，改为记账 + 加守卫
 
 原计划是"正文改取 `explorer_turns.content`，只取每个 loop 最后一条增量步骤"，理由是
-`content` 已经是增量的逐字拼接、投影真正还需要的是 `providerItemId`/`occurredAt`/排序序号。
+`content` 已经是增量的逐字拼接、推导真正还需要的是 `providerItemId`/`occurredAt`/排序序号。
 **这个前提是错的。** `projectExplorerActivity` 的产出确实依赖逐条 `MODEL_TEXT_DELTA`，两处：
 
 - **卡片数量**取决于增量步与非增量步的先后。相邻增量合并进同一条 `ASSISTANT_MESSAGE`，但中间只要夹了任何其它步骤（工具、门禁、Provider 活动）就会另起一条。一个回合有几张助手卡片，拿拼好的 `content` 分不出来。
@@ -3265,7 +3265,7 @@ ExplorerView 的发送路径挂到组件测试上），再动结构——那是�
 
 ### Changed
 
-- Plan 生命周期投影改为"按请求建一次索引、沿调用链下传"（`buildPlanLifecycleIndex`）。`planEventAggregateIds` 原先**每个 Plan** 都读一遍 `listRuns()` 与 `listMergeRequests()`（各是全表 `SELECT *`），内层再对每个匹配 Run 调 `listChangeProposals`；而 `decoratePlanRows` 对查询返回的**每一行**调一次 `planProjection` —— Plan Center 的 limit 上限是 100，于是单次列表请求等于 200 次全表读。`planProjection` / `decoratePlanRows` 的 `index` 参数可省略（单 Plan 调用自建一次与原行为等价），列表路径由 `decoratePlanRows` 与 `workbenchSnapshot` 各建一次。
+- Plan 生命周期推导改为"按请求建一次索引、沿调用链下传"（`buildPlanLifecycleIndex`）。`planEventAggregateIds` 原先**每个 Plan** 都读一遍 `listRuns()` 与 `listMergeRequests()`（各是全表 `SELECT *`），内层再对每个匹配 Run 调 `listChangeProposals`；而 `decoratePlanRows` 对查询返回的**每一行**调一次 `planProjection` —— Plan Center 的 limit 上限是 100，于是单次列表请求等于 200 次全表读。`planProjection` / `decoratePlanRows` 的 `index` 参数可省略（单 Plan 调用自建一次与原行为等价），列表路径由 `decoratePlanRows` 与 `workbenchSnapshot` 各建一次。
 - `scripts/test-baseline.json` 的 `knownFailures` 清空 —— 仓库现在没有已知失败用例。文件里保留了 `_历史` 字段记录这条缺陷的原委，因为"空清单"与"漏填"从文件本身看不出来。
 
 ### Added
@@ -3286,23 +3286,23 @@ ExplorerView 的发送路径挂到组件测试上），再动结构——那是�
 - 复杂度守卫经构造验证：`decoratePlanRows` 处理 5 行时三张表各只被读 1 次；改回逐 Plan 读取会让这三个计数变成 5。
 - 未做浏览器验收：C3 改变了派发判定，属于后端行为；受影响的场景（V2 mode NONE 的 Plan 从"卡在 NEEDS_CONFIGURATION"变为"可派发并在验证阶段 SKIPPED"）应在下一轮端到端验收中确认。
 
-## 2026-09-28 — 事件读取加界与 Plan 投影漂移可见化
+## 2026-09-28 — 事件读取加界与 Plan 副本漂移可见化
 
 ### Added
 
 - `PipelineStore.listEvents` 新增 `limitFrom: "head" | "tail"`（缺省 `"tail"`，与引入前行为一致）。缺省的 tail 语义是"最新的 N 条"，而轮询式增量读取需要的是"游标之后最早的 N 条"——两者混用会在游标落后时反复读到最新那一批，而游标又推进到本批末尾，中间事件被**永久跳过且不报错**。新增 `EventQuery` 类型承载过滤与截断参数，两个实现同步。
-- `SqlitePipelineStore` 新增构造期修复 `repairOrphanedPlans`：把"已确认之后、来源 ExplorerThread 已不存在"的 Plan 标成 `BLOCKED` + `attentionReason`，复用既有前端"需要关注"展示链路。此前这类 Plan 会被投影守卫跳过而**无声消失**，状态却停留在 `READY`/`QUEUED` 之类看起来可执行的值上。
+- `SqlitePipelineStore` 新增构造期修复 `repairOrphanedPlans`：把"已确认之后、来源 ExplorerThread 已不存在"的 Plan 标成 `BLOCKED` + `attentionReason`，复用既有前端"需要关注"展示链路。此前这类 Plan 会被副本守卫跳过而**无声消失**，状态却停留在 `READY`/`QUEUED` 之类看起来可执行的值上。
 - 新增 `store-startup-repair.test.ts`：覆盖 `repairUnconfirmedProgressedPlans` 与 `repairOrphanedPlans` 的生效与**幂等**（重开库不重复处理、不重复写 `plan.status.changed`）。两条修复的输入都只能用独立连接直接改库来构造——走领域 API 产生不出这些行，那正是它们只对历史数据生效的原因。
 
 ### Fixed
 
-- `PlanService.query` 遇到"投影行没有源 Plan"时不再抛错，改为跳过该行。此前一行坏数据会让整个 Plan Center 变成 500。该分支在正常流程不可达（写侧有守卫、`deleteExplorerCascade` 会级联删投影），属防御性修复。
+- `PlanService.query` 遇到"副本行没有源 Plan"时不再抛错，改为跳过该行。此前一行坏数据会让整个 Plan Center 变成 500。该分支在正常流程不可达（写侧有守卫、`deleteExplorerCascade` 会级联删副本），属防御性修复。
 
 ### Changed
 
 - Workbench 事件路由的每一次 `listEvents` 都带 limit：首次连接取尾部窗口（与 `workbenchSnapshot` 的 `WORKBENCH_EVENT_TAIL_LIMIT` 同一常量），之后从游标向前读、单轮上限 500。此前该路由缺 limit，`afterSequence=0` 会把整张事件表读进内存并逐条 `JSON.parse`，而生产库已有十几万条事件、绝大多数与本 Project 无关。
 - Agent Loop 事件路由同上：首次回放窗口 2000、单轮上限 500。此前 web 端 `agentLoopEventsUrl` 不传游标，建连即 from 0 全量回放。
-- 在 `savePlan` / `backfillPlanQueryProjection` / 内存实现三处注明：投影守卫是**外键驱动**的，不是业务规则——`plan_query_projection` 对 `project_id` 与 `source_explorer_thread_id` 建了外键，而它所索引的 `candidate_plans` 自己没有。**不要把它改成无条件写入**：那会把 `savePlan` 从不抛错的 UPSERT 变成 project/thread 缺失时抛错的方法，而内存实现没有外键会静默成功，等于制造新的双实现分歧。
+- 在 `savePlan` / `backfillPlanQueryProjection` / 内存实现三处注明：副本守卫是**外键驱动**的，不是业务规则——`plan_query_projection` 对 `project_id` 与 `source_explorer_thread_id` 建了外键，而它所索引的 `candidate_plans` 自己没有。**不要把它改成无条件写入**：那会把 `savePlan` 从不抛错的 UPSERT 变成 project/thread 缺失时抛错的方法，而内存实现没有外键会静默成功，等于制造新的双实现分歧。
 - `repairOrphanedPlans` **只查来源线程，不查 Project**：领域层允许"有 Plan 却没有 Project 行"（`PlanService.registerThread` + `createCandidatePlan` 不需要先建 Project，多个领域测试正是这么用），把"项目不存在"当孤儿会把正常数据误判成 BLOCKED。这条是在 `pnpm verify` 抓到 `m0-m1.test.ts` 的真实回归后收窄的。
 
 ### Changed files
@@ -3322,7 +3322,7 @@ ExplorerView 的发送路径挂到组件测试上），再动结构——那是�
 
 ### Added
 
-- 新增 `store-contract.test.ts`：PipelineStore 的跨实现契约套件，同一批断言在 `InMemoryPipelineStore` 与 `SqlitePipelineStore` 上各跑一遍。端口方法清单由 tsc 保证完整（漏一个方法编译不过），覆盖生产写路径：事件追加与查询、脱敏、步骤序号、Plan 查询投影、Run/合并/工具调用、幂等与事务回滚。
+- 新增 `store-contract.test.ts`：PipelineStore 的跨实现契约套件，同一批断言在 `InMemoryPipelineStore` 与 `SqlitePipelineStore` 上各跑一遍。端口方法清单由 tsc 保证完整（漏一个方法编译不过），覆盖生产写路径：事件追加与查询、脱敏、步骤序号、Plan 查询副本、Run/合并/工具调用、幂等与事务回滚。
 
 ### Fixed
 
@@ -3350,10 +3350,10 @@ ExplorerView 的发送路径挂到组件测试上），再动结构——那是�
 ### Changed
 
 - Agent Loop 将高频模型文本增量合并后再写入步骤和事件：达到 160 字符、最长 40ms、Provider 输出项切换、遇到其他事件或步骤结束时刷新，减少逐 token 持久化和 SSE 事件数量，同时保留流式更新。
-- Agent Loop 事件序号改为由追加步骤维护，并在首次使用时从 Store 查询最大序号；诊断投影只读取 `PROVIDER_ACTIVITY`、`GATE_CHECKED` 和 `LOOP_FAILED` 步骤。
+- Agent Loop 事件序号改为由追加步骤维护，并在首次使用时从 Store 查询最大序号；诊断推导只读取 `PROVIDER_ACTIVITY`、`GATE_CHECKED` 和 `LOOP_FAILED` 步骤。
 - Store 的 `listEvents` 增加多聚合、事件类型和最新条数过滤，SQLite 为聚合 ID 与序号增加索引；Plan 生命周期事件在存储查询层过滤。
 - Workbench 初始事件快照最多检查全局最近 4,000 条，再保留当前 Project 最近 400 条；实时新事件仍通过 SSE 推送。Project 事件归属改为先建立聚合到 Project 的索引，避免逐事件重复查找。
-- Explorer 将流式期间的 activity、Plan 和 Agent Loop 投影刷新合并到 400ms 间隔；门禁、输入和终态事件仍立即刷新，并在线程切换或卸载时清理定时任务。
+- Explorer 将流式期间的 activity、Plan 和 Agent Loop 推导刷新合并到 400ms 间隔；门禁、输入和终态事件仍立即刷新，并在线程切换或卸载时清理定时任务。
 
 ### Added
 
@@ -3375,7 +3375,7 @@ ExplorerView 的发送路径挂到组件测试上），再动结构——那是�
 
 ### Added
 
-- 新增当前 ExplorerThread 的需求清单投影：按需求序号稳定排序，将需求、有效 Plan 修订和关联 Run 汇总到同一行；点击 Plan 状态、结构化 Plan 或任务状态分别进入探索对话、Plan 详情或 Run。
+- 新增当前 ExplorerThread 的需求清单推导：按需求序号稳定排序，将需求、有效 Plan 修订和关联 Run 汇总到同一行；点击 Plan 状态、结构化 Plan 或任务状态分别进入探索对话、Plan 详情或 Run。
 - 新增需求行组件与共享右侧抽屉页签，支持当前需求的探索对话、Plan 详情、待入队操作和 Run 对话；线程切换会清除旧线程抽屉内容，并保持需求选择与路由状态一致。
 - 新增 Explorer 输入回答草稿恢复：在当前浏览器标签页保存需求范围内的非敏感回答和题目位置，刷新后恢复；敏感题答案不写入 sessionStorage，已结束请求会清理草稿。
 - 将完整 Plan 正文抽为可复用组件，并读取 `generatedSpec` 的 V2 结构化字段，使完整解析契约尚未生成时也能查看目标、范围、任务、产物和执行策略。
@@ -3454,7 +3454,7 @@ ExplorerView 的发送路径挂到组件测试上），再动结构——那是�
 - Agent Loop 从共享 Provider Thread 继承 provider thread ID，并将排队/运行/等待输入/完成/失败状态同步到对应 Task。
 - 修复本地开发服务的过期 PID 文件判断；status/start 脚本优先以健康端点和监听端口判断 API/Web 是否可用。
 - 修正本地配置中的项目仓库根目录和 Codex App Server cwd，避免从 `code/config` 解析到非 Git 的上级目录。
-- Candidate 查询支持显式 `explorerPlanId` 并默认使用活动 Task；Plan、Revision 和执行详情响应统一补充生命周期投影与执行线程摘要。
+- Candidate 查询支持显式 `explorerPlanId` 并默认使用活动 Task；Plan、Revision 和执行详情响应统一补充生命周期推导与执行线程摘要。
 - Plan 状态变化统一写入 `plan.status.changed` 事件；旧数据中缺少确认记录却已进入后续状态的 Plan 会被修复为 `BLOCKED`，避免无确认执行。
 - 执行时间线保留不可变 Plan 快照；Explorer 线程切换时仅刷新当前 Task 的 Candidate、Revision Draft、消息、输入请求和 Plan 绑定。
 
