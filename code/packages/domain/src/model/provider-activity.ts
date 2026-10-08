@@ -12,7 +12,7 @@
  *   - ③ 动作（`command` / `file-change` / `tool` / `mcp` / `search` / `media` / `subagent`）：
  *     模型对外做的。**有成败**，会开始也会结束，可能要你批准。
  *   - ④ 运行事实（`session` / `compaction` / `hook` / `task` / `rate-limit` / `retry` /
- *     `permission` / `warning` / `review`）：会话设施在说话，不是模型做的。
+ *     `permission` / `warning` / `review`）：**跑模型的那个程序在报自己的状态**，不是模型做的。
  *     **这一类不进会话正文**，判据是 `isRuntimeKind()`。
  *   - 兜底 `other`。
  *
@@ -50,7 +50,7 @@ export type ProviderActivityKind =
   | "search"
   | "media"
   | "subagent"
-  // ④ 运行事实：会话设施在说话。**不进会话正文**，交 Run 头诊断区。
+  // ④ 运行事实：跑模型的那个程序在报自己的状态。**不进会话正文**，交 Run 头诊断区。
   | "session"
   | "compaction"
   | "hook"
@@ -86,7 +86,7 @@ const OUTCOME_FREE_KINDS: readonly ProviderActivityKind[] = [
   "review",
 ];
 
-/** ④「Provider 说的」的运行事实。**这一类不进会话正文**——它是"机器在说话"，不是模型或你的发言。 */
+/** ④「跑模型的程序报的」的运行事实。**这一类不进会话正文**——它是跑模型的那个程序在报自己的状态，不是模型或你的发言。 */
 const RUNTIME_KINDS: readonly ProviderActivityKind[] = [
   "session",
   "compaction",
@@ -151,7 +151,7 @@ export function isOutcomeFreeKind(kind: ProviderActivityKind): boolean {
 }
 
 /**
- * 该类别是不是 ④「Provider 说的」运行事实。
+ * 该类别是不是 ④「跑模型的程序报的」运行事实。
  *
  * **两个消费方都问它，不各自列举**：执行会话投影据此把它挡在会话正文之外（见
  * `apps/web/src/utils/executionStream.ts` 的 `EXECUTION_DISPLAY_MODES`），Run 头诊断区据此

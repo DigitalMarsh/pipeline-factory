@@ -147,7 +147,7 @@ const KIND_BY_ACTIVITY: Record<ProviderActivityKind, ExplorerActivityKind> = {
 };
 
 /**
- * ④「Provider 说的」运行事实在探索侧的条目类型。头部状态卡按这一组挑数据，
+ * ④「跑模型的程序报的」运行事实在探索侧的条目类型。头部状态卡按这一组挑数据，
  * **不各自列白名单**——中立词表里 `isRuntimeKind()` 是那条判据的唯一定义处。
  */
 export const EXPLORER_RUNTIME_KINDS: ReadonlySet<ExplorerActivityKind> = new Set([

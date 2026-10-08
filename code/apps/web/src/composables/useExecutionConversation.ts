@@ -44,7 +44,7 @@ export function useExecutionConversation(deps: ExecutionConversationDeps) {
   const groups = computed<ExecutionConversationGroup[]>(() => buildExecutionConversation(deps.messages.value, deps.tasks.value));
   const runActivityItems = computed<ExecutionStreamItem[]>(() => deps.messages.value.filter(isRunActivity));
   /**
-   * ④「Provider 说的」运行事实：压缩边界、重试、配额、钩子、后台子任务、权限被拒、告警。
+   * ④「跑模型的程序报的」运行事实：压缩边界、重试、配额、钩子、后台子任务、权限被拒、告警。
    * 它们**不进会话正文**（权重表里一律 `hidden`），由顶部「运行上下文」卡承载——
    * 常态收在展开区里，需要你动手的那几条浮到卡片上（见 `ExecutionHeaderStatus` 的 `runtimeAlert`）。
    */

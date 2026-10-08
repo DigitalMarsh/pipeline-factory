@@ -159,7 +159,7 @@ describe("四组类别与它们各自该有的归宿", () => {
     expect(classifyClaudeActivity({ itemType: "tool_use", phase: "started", toolName: "Read" }).activityKind).toBe("tool");
   });
 
-  it("**④「Provider 说的」是一条可判定的判据**，不是各处白名单", () => {
+  it("**④「跑模型的程序报的」是一条可判定的判据**，不是各处白名单", () => {
     // 消费方（执行会话投影、Run 头诊断区）都问 isRuntimeKind，加一类不会漏一处。
     const runtime = ["session", "compaction", "hook", "task", "rate-limit", "retry", "permission", "warning", "review"] as const;
     for (const kind of runtime) expect(isRuntimeKind(kind)).toBe(true);

@@ -28,7 +28,7 @@ const props = defineProps<{
    *  （Run created 永远最早发生、却永远排在最后）。改由 RUN CONTEXT 卡片承载。 */
   runActivity: ExecutionStreamItem[];
   /**
-   * ④「Provider 说的」运行事实（压缩边界、重试、配额、钩子、后台子任务、权限被拒、告警）。
+   * ④「跑模型的程序报的」运行事实（压缩边界、重试、配额、钩子、后台子任务、权限被拒、告警）。
    * **它们不进会话正文**——判据与投影同源（`EXECUTION_MESSAGE_WEIGHTS` 里一律 `hidden`），
    * 归宿是下面那一节。常态收在这里，异常时才浮到卡片上（见 `runtimeAlert`）。
    */

@@ -23,7 +23,7 @@
  *
  * 顺序按**五类**排（见 `docs/Provider消息格式与消息大类调研.md`）：① 你说的 → ② 模型说的 →
  * ③ 模型做的 → ④ Provider 说的 → ⑤ Factory 说的。四 那一组两边都不进会话正文——
- * 它是"机器在说话"，归宿是各自头部状态卡的一节。
+ * 它是跑模型的那个程序在报自己的状态，归宿是各自头部状态卡的一节。
  *
  * `PROVIDER_MESSAGE` / `SESSION` 在探索侧恒为 `hidden`：那两类是"Provider 把你那句话回显一次"
  * 与"Provider 会话重建"，探索时间线里已经有对应的东西（用户消息本身、回合状态），
@@ -53,7 +53,8 @@ export const SHARED_MESSAGE_TYPES = [
   "WEB_SEARCH",
   /** 生成图片 */
   "IMAGE_GENERATION",
-  // ④ Provider 说的：会话设施在报告自己的状态。**不进会话正文**。
+  // ④ 跑模型的程序报的：那层程序在报**它自己**的状态（压缩、重试、额度、钩子…），不是模型说的话。
+  // ④ 不进会话正文。
   /**
    * Provider 侧的上下文压缩边界。**这才是真的压缩了上下文**——与 ⑤ 的 `CONTEXT` 是两件事：
    * 那个只是 Factory 打的续跑检查点（`LOOP_CHECKPOINTED`），一个字节都没压。
@@ -96,7 +97,11 @@ export type SharedMessageType = (typeof SHARED_MESSAGE_TYPES)[number];
  * （而它们的**归属层不同**：前者只有适配器能翻译，丢了永久丢；后者与后端无关）。
  *
  * 判据一句话：**`user` 是"我说的"，`model` 是"模型对我说的"，`action` 是"模型对世界做的"，
- * `provider` 是"机器在说话"，`factory` 是"工厂在记账"。**
+ * `provider` 是"跑模型的那个程序在报自己的状态"，`factory` 是"工厂在记账"。**
+ *
+ * **`provider` 不是模型**：模型在 Provider **里面**——Provider（Codex App Server / Claude Agent SDK）
+ * 是承载并驱动它的那层程序，上下文压缩、API 重试、权限沙箱、账号额度、它自己的钩子与后台子任务
+ * 都是它的状态，模型既不知道也管不着。所以 ④ 与 ②③ 不冲突：②③ 是模型，④ 是那层程序。
  *
  * 它有两个直接用途，都不是装饰：
  *   1) `provider` 这一类**不进会话正文**——归宿是头部状态卡的「Provider 运行事实」一节。
@@ -109,7 +114,7 @@ export const MESSAGE_CLASS_LABELS: Record<MessageClass, string> = {
   user: "① 你说的",
   model: "② 模型说的",
   action: "③ 模型做的",
-  provider: "④ Provider 说的",
+  provider: "④ 跑模型的程序报的",
   factory: "⑤ Factory 说的",
 };
 

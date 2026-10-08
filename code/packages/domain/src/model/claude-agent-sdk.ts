@@ -444,7 +444,7 @@ type MapContext = {
  *   - `assistant` 里的 `thinking` 块**读**（见下）。
  *   - `stream_event` 的 `thinking_delta` 不单独读：与正文同理，accumulate 在整块上更省事，
  *     而且 Codex 那边推理也只有"整条 item"一种形态，两边行为因此一致。
- *   - `type: "system"` 下面二十几个 `subtype` 大多落进 ④「Provider 说的」，见 `systemRuntimeFact()`。
+ *   - `type: "system"` 下面二十几个 `subtype` 大多落进 ④「跑模型的程序报的」，见 `systemRuntimeFact()`。
  */
 function* mapMessage(message: SDKMessage, context: MapContext): Generator<ModelEvent> {
   if (message.type === "system") {
@@ -620,7 +620,7 @@ function reasoningActivity(itemId: string, text: string, sessionId: string): Mod
   };
 }
 
-/** 一条 ④「Provider 说的」运行事实（不是模型做的，也不是你说的）。形态与 item 那条一致。 */
+/** 一条 ④「跑模型的程序报的」运行事实（不是模型做的，也不是你说的）。形态与 item 那条一致。 */
 function runtimeActivity(
   input: {
     id: string;

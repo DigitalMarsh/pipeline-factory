@@ -22,7 +22,7 @@ const props = defineProps<{
   threadId: string;
   paused: boolean;
   /**
-   * ④「Provider 说的」运行事实：压缩边界、自动重试、配额、钩子、后台任务、权限被拒、告警。
+   * ④「跑模型的程序报的」运行事实：压缩边界、自动重试、配额、钩子、后台任务、权限被拒、告警。
    * **它们不进探索时间线**（`EXPLORER_DISPLAY_MODES` 里一律 `hidden`），归宿是这张卡里的一节。
    */
   runtimeFacts: ExplorerActivityItem[];

@@ -245,7 +245,7 @@ export type ExplorerDisplayMode = "card" | "text" | "prose" | "line" | "reasonin
  * 七类调用按**语义**同归 `line`（标签与状态标签区分命令 / 文件 / 工具 / MCP / 子代理 / 搜索 / 生图），
  * 门禁是判定，回合状态是占位，推理是背景音，续跑检查点是分隔。
  *
- * **④「Provider 说的」一律 `hidden`**：那是"机器在说话"，不是模型或你的发言。它们的归宿是
+ * **④「跑模型的程序报的」一律 `hidden`**：那是跑模型的那个程序在报自己的状态，不是模型或你的发言。它们的归宿是
  * 头部状态卡的「Provider 运行事实」一节（`explorerRuntimeFacts()`），与"不进会话正文"是同一条判据。
  * 唯一的例外是 `UNCLASSIFIED`——"Provider 给了我不认识的东西"这件事**必须当场可见**，
  * 否则新活动类型会静默消失（它是 ④ 里唯一露面的那个）。
@@ -353,7 +353,7 @@ export function explorerActivityResult(activity: ExplorerActivityItem): {
 }
 
 /**
- * ④「Provider 说的」里**没在时间线上露过面**的那些条目 —— 头部状态卡的「Provider 运行事实」一节读它。
+ * ④「跑模型的程序报的」里**没在时间线上露过面**的那些条目 —— 头部状态卡的「Provider 运行事实」一节读它。
  *
  * 判据是三条一起看：大类是 `provider`，呈现方式为 `hidden`，**且不是 `PROVIDER_MESSAGE`**。
  * 前两条自动排除 `UNCLASSIFIED`（它虽然是 ④，但已经作为一行「未识别」出现在时间线上，收进诊断区

@@ -704,8 +704,8 @@ function mapCodexEvent(
       request: { requestId: event.id ?? "", threadId, turnId, itemId, questions, isBlocking: request.isBlocking === true },
     };
   }
-  // ── ④「Provider 说的」运行事实 ────────────────────────────────────────────
-  // 这些不是模型做的，也不是你说的，而是会话设施在报告自己的状态。它们走**同一套**
+  // ── ④「跑模型的程序报的」运行事实 ────────────────────────────────────────────
+  // 这些不是模型做的，也不是你说的，而是跑模型的那个程序在报告自己的状态。它们走**同一套**
   // `provider.activity` 通道（消费方只需要一个地方回答"这是什么、成没成"，多一条事件类型就多
   // 一处要同步的地方），靠 `activityKind` 落进 ④ 组——消费方用 `isRuntimeKind()` 把它们挡在
   // 会话正文之外，收进 Run 头诊断区。

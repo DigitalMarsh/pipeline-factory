@@ -381,7 +381,7 @@ const { visibleTurns, visibleActivity, visibleInputRequests, planBindings, timel
 });
 
 /**
- * ④「Provider 说的」运行事实：压缩边界、自动重试、配额、钩子、后台任务、权限被拒、告警。
+ * ④「跑模型的程序报的」运行事实：压缩边界、自动重试、配额、钩子、后台任务、权限被拒、告警。
  * 它们**不进时间线**（`EXPLORER_DISPLAY_MODES` 里一律 `hidden`），由头部状态卡承载。
  * 判据来自两张表本身（大类 + 呈现方式），所以新增一类 ④ 不需要回来改这里。
  */

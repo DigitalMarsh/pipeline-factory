@@ -126,14 +126,14 @@ export type ExecutionSharedMessageType = Extract<ExecutionMessageType, SharedMes
  * - `process`：**模型对外做的过程**（动作、推理、判定、轮次、机制记录）。
  *   所属执行步骤**跑完之后**折进它上方那一行；跑的过程中照常逐条显示——
  *   照 OpenClaw：*live response text and the working indicator stay outside the log*。
- * - `hidden`：不渲染，也不进任何计数。Provider 的回显与会话机制、以及全部 ④「Provider 说的」。
+ * - `hidden`：不渲染，也不进任何计数。Provider 的回显与会话机制、以及全部 ④「跑模型的程序报的」。
  *
  * 判据是"它对看懂这次执行有没有独立贡献"。同一次事实的第二行、每一轮的机制记录、
  * 以及内容在别处已经有的回声，都不该各占一行。
  */
 export type ExecutionMessageWeight = "answer" | "process" | "hidden";
 
-/** ④「Provider 说的」运行事实的权重一律是 `hidden`：归宿是 Run 头诊断区，不是会话正文。 */
+/** ④「跑模型的程序报的」运行事实的权重一律是 `hidden`：归宿是 Run 头诊断区，不是会话正文。 */
 export const EXECUTION_MESSAGE_WEIGHTS: Record<ExecutionMessageType, ExecutionMessageWeight> = {
   PLAN: "answer",
   ASSISTANT_MESSAGE: "answer",
@@ -180,7 +180,7 @@ export const EXECUTION_MESSAGE_CLASSES: Record<ExecutionMessageType, MessageClas
 };
 
 /**
- * 这条条目是不是 ④「Provider 说的」运行事实 —— Run 头那节读它。
+ * 这条条目是不是 ④「跑模型的程序报的」运行事实 —— Run 头那节读它。
  *
  * 判据来自两张表：大类是 `provider`，且权重是 `hidden`（即它**没在会话里露过面**）。
  * `PROVIDER_MESSAGE` 排除在外：那是"Provider 把你那句话回显一次"，诊断价值为零。
@@ -1045,7 +1045,7 @@ const ACTIVITY_MESSAGE_TYPES: Record<ProviderActivityKind, ExecutionMessageType>
 };
 
 /**
- * ④「Provider 说的」的中立类别。与领域侧 `isRuntimeKind()` 同义——**两边各自成表是因为
+ * ④「跑模型的程序报的」的中立类别。与领域侧 `isRuntimeKind()` 同义——**两边各自成表是因为
  * web 不能运行时依赖领域层**（见本段开头的说明），不是可以随便分叉的两份。parity 测试会拦。
  */
 export const RUNTIME_ACTIVITY_KINDS: ReadonlySet<ProviderActivityKind> = new Set([

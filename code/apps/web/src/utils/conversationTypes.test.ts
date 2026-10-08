@@ -50,7 +50,7 @@ describe("消息的五类划分", () => {
     expect(new Set(Object.values(MESSAGE_CLASS_LABELS)).size).toBe(5);
   });
 
-  it("**④「Provider 说的」不进会话正文**：探索侧一律 `hidden`（`UNCLASSIFIED` 例外）", () => {
+  it("**④「跑模型的程序报的」不进会话正文**：探索侧一律 `hidden`（`UNCLASSIFIED` 例外）", () => {
     for (const [type, klass] of Object.entries(SHARED_MESSAGE_CLASSES)) {
       if (klass !== "provider") continue;
       // `UNCLASSIFIED` 是 ④ 里唯一露面的那个："Provider 给了我不认识的东西"必须当场可见，

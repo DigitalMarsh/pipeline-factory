@@ -277,7 +277,7 @@ describe("探索会话的消息清单", () => {
     expect(explorerDisplayMode("CANDIDATE_PLAN")).toBe("card");
   });
 
-  it("**④「Provider 说的」在探索时间线上一条都不露面**", () => {
+  it("**④「跑模型的程序报的」在探索时间线上一条都不露面**", () => {
     // 它们的归宿是头部状态卡的「Provider 运行事实」一节（`explorerRuntimeFacts()`）。
     // `UNCLASSIFIED` 是 ④ 里唯一露面的那个——"Provider 给了我不认识的东西"必须当场可见，
     // 否则新活动类型会静默消失，那正是这一轮在修的那类毛病。
