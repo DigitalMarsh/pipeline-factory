@@ -1,5 +1,34 @@
 # Changelog
 
+## 2026-10-08 — 逐条核对 §1.2 的「渲染处」：一处事实错 + 三处过期文件位置
+
+被问了一句"这里写的组件信息对吗"，于是把 §1.2 那九条的组件说法逐条对着模板核了一遍。
+
+**唯一的事实错**：动作行那条写的是 `<article class="loop-activity-card activity-line">`——
+`activity-line` **不是**组件的固定类。模板是 `:class="['loop-activity-card', 'activity-' + mode, …]"`，
+`line` 只是三种行型之一（另两个 `gate` / `turn-status` 走的是**同一个组件**）。改成
+`<article class="loop-activity-card activity-{行型}">`，并把行型取值与"三种共用"写在类名旁边。
+
+**顺带统一了字段**：那九条原本混着两个列名——「**组件**：」给叶子、「**渲染处**：」给壳里的一段。
+同一个问题两种列名，扫的时候要重新对一次口径。现在统一成 **渲染处**，值里标明是
+**独立行组件**（`components/X.vue`）还是**壳里的一段**（`components/ExplorerMessageRow.vue` 的哪一段）。
+那三段原本还带着"抽出去就是又一份壳 + 一段的同构"这类**论证代码该怎么拆**的话——那是 §0 的事，
+逐条消息的条目里不该再辩一遍，删掉。
+
+**另外三处过期**（不是这轮改出来的，是一直错着）：
+
+- §4.2 两处写 `views/RunDetailView.vue` 的 `executionMessageStatusLabel`——这个函数**从来不在视图里**，
+  一直在 `utils/executionStream.ts`（`git log -S` 查过：视图侧没有它的定义）。
+- §2.1 写"这些条目被 `RunDetailView` 从会话里滤掉"——判据 `isRunActivity()` 这轮搬进了
+  `utils/executionConversation.ts`（视图经 `useExecutionConversation` 取结果）。
+
+**顺带做了一次机械核对**：把文档里点名的 **105 个文件**逐个对文件系统核了一遍，只有两个"找不到"、
+且都对——`TaskLifecycleCard.vue` 是 §7 里记录已删除的组件，`sdk.d.ts` 在 `node_modules` 里。
+另外把 §2.1 的 `model` 行那句"（只差标题）"改成说清标题在哪儿：它在**外壳那行 meta** 里
+（按 `item.title` 渲染），不在行组件里——两类的差别正是那句话。
+
+**纯文档，没有代码改动。**
+
 ## 2026-10-08 — 「④ Provider 说的」这个标签有歧义，改了；顺带把四个角色摆开
 
 读文档的人问：**「Provider 不就是模型吗，为什么把这两个分开？」**——**问得对**。Provider 推过来的东西
