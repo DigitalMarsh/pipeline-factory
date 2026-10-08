@@ -26,6 +26,15 @@ const flat = (text: string) =>
 
 const runDetailSource = readFileSync(fileURLToPath(new URL("./RunDetailView.vue", import.meta.url)), "utf8");
 const runDetailStyles = readFileSync(fileURLToPath(new URL("../styles.css", import.meta.url)), "utf8");
+/**
+ * 这四簇已经各自成文件（视图从 1133 行降到 700 出头），所以**它们的断言要跟着搬**——
+ * 断言的是"这条判据还在、且只有一处"，不是"它写在哪个文件里"。
+ */
+const executionConversationSource = readFileSync(fileURLToPath(new URL("../utils/executionConversation.ts", import.meta.url)), "utf8");
+const useRunStreamSource = readFileSync(fileURLToPath(new URL("../composables/useRunStream.ts", import.meta.url)), "utf8");
+const useRunControlSource = readFileSync(fileURLToPath(new URL("../composables/useRunControl.ts", import.meta.url)), "utf8");
+const useRunComposerSource = readFileSync(fileURLToPath(new URL("../composables/useRunComposer.ts", import.meta.url)), "utf8");
+const runControlsSource = readFileSync(fileURLToPath(new URL("../utils/runControls.ts", import.meta.url)), "utf8");
 // 执行会话的行组件：**按形态分文件**，所以"这一行长什么样"要去各自的组件里看。
 const executionPlanCardSource = readFileSync(fileURLToPath(new URL("../components/ExecutionPlanCard.vue", import.meta.url)), "utf8");
 const executionModelRowSource = readFileSync(fileURLToPath(new URL("../components/ExecutionModelRow.vue", import.meta.url)), "utf8");
@@ -66,8 +75,8 @@ describe("Run detail execution conversation", () => {
   it("**权重**的判据不是白名单：新增一种就不会有消息从会话里消失", () => {
     // `text`（你自己说的话）就是这么漏过一次的——`visibleItems` 当时写死"属于 card 或 line"，
     // 于是那类消息在页面上直接不见了，而类型、模板、样式都对着。
-    expect(flat(runDetailSource)).toContain(flat('executionMessageWeight(item) !== "hidden"'));
-    expect(runDetailSource).not.toContain('mode === "card" || mode === "line"');
+    expect(flat(executionConversationSource)).toContain(flat('executionMessageWeight(item) !== "hidden"'));
+    expect(executionConversationSource).not.toContain('mode === "card" || mode === "line"');
   });
 
   it("**过程记录折在结论上方**，展开后是真实的行（照 OpenClaw 的 `Worked for …`）", () => {
@@ -82,8 +91,8 @@ describe("Run detail execution conversation", () => {
     // 标题上要有时长与失败数——失败**永远可见**，即使这一组是收起的。
     expect(flat(runDetailSource)).toContain(flat("stepDuration(group)"));
     expect(flat(runDetailSource)).toContain(flat("failedCount(group)"));
-    // 进行中的一步**不折**：live 内容留在日志外面。
-    expect(flat(runDetailSource)).toContain(flat("foldsIntoProcess(item, { stepRunning:"));
+    // 进行中的一步**不折**：live 内容留在日志外面。（判据本身在 util 里，见下一条用例。）
+    expect(flat(executionConversationSource)).toContain(flat("foldsIntoProcess(item, { stepRunning:"));
   });
 
   it("续跑检查点在执行侧也是**分隔线**，与探索侧同形", () => {
@@ -226,8 +235,8 @@ describe("Run detail execution conversation", () => {
   });
 
   it("uses a persistent Explorer-style composer for execution messages", () => {
-    expect(flat(runDetailSource)).toContain(flat('import { shouldSubmitComposer } from "../utils/composerKeyboard"'));
-    expect(flat(runDetailSource)).toContain(flat('const executionDraft = ref("")'));
+    expect(flat(useRunComposerSource)).toContain(flat('import { shouldSubmitComposer } from "../utils/composerKeyboard"'));
+    expect(flat(useRunComposerSource)).toContain(flat('const executionDraft = ref("")'));
     /**
      * **输入框的可用性判的是 Run 的状态，不是线程的状态。**
      *
@@ -236,13 +245,11 @@ describe("Run detail execution conversation", () => {
      * 还没合并、想再让 Agent 补一轮（那次报障就是这个）。线程状态回答的是"上一轮 Loop 还在不在"，
      * Run 状态才回答"这个 Run 还需不需要人说话"。
      */
-    expect(flat(runDetailSource)).toContain(
-      flat('const canSendExecutionMessage = computed(() => canContinueRun(run.value?.status ?? ""))'),
-    );
-    expect(runDetailSource).not.toContain('!["CANCELLED", "COMPLETED"].includes(thread.value.state)');
+    expect(flat(useRunComposerSource)).toContain(flat('computed(() => canContinueRun(deps.run.value?.status ?? ""))'));
+    expect(useRunComposerSource).not.toContain('!["CANCELLED", "COMPLETED"].includes(thread.value.state)');
     // 一轮还在跑时给「排队 / 引导」两种投递方式；没在跑时两种等价，不由用户选。
     expect(flat(runDetailSource)).toContain(flat("composer-guidance-mode"));
-    expect(flat(runDetailSource)).toContain(flat('const executionGuidanceMode = ref<"steer" | "queue">("queue")'));
+    expect(flat(useRunComposerSource)).toContain(flat('const executionGuidanceMode = ref<"steer" | "queue">("queue")'));
     expect(flat(runDetailSource)).toContain(flat('class="execution-conversation-stage"'));
     expect(flat(runDetailSource)).toContain(flat('class="composer execution-composer"'));
     expect(flat(runDetailSource)).toContain(flat('aria-label="执行会话消息"'));
@@ -250,7 +257,7 @@ describe("Run detail execution conversation", () => {
     expect(flat(runDetailSource)).toContain(flat("executionComposerDisabledReason"));
     expect(flat(runDetailSource)).toContain(flat('class="composer-mode">Run 模式</span>'));
     expect(flat(runDetailSource)).toContain(flat('@keydown="handleExecutionComposerKeydown"'));
-    expect(flat(runDetailSource)).toContain(flat("function handleExecutionComposerKeydown(event: KeyboardEvent): void"));
+    expect(flat(useRunComposerSource)).toContain(flat("function handleExecutionComposerKeydown(event: KeyboardEvent): void"));
     expect(flat(runDetailSource)).toContain(flat('class="composer-send"'));
     expect(flat(runDetailSource)).toContain(flat('aria-label="发送消息"'));
     expect(flat(runDetailSource)).toContain(flat('context-note="仅结束时由 provider 上报"'));
@@ -263,8 +270,8 @@ describe("Run detail execution conversation", () => {
   it("把 Run 级活动移出执行会话：时间线只留执行步骤与你说的话", () => {
     // 判据是 "activity 且无 taskId"——不再按事件类型列举，否则每加一种 Run 级事件都要回来补。
     // **但补充轮要排掉**：它的条目同样没有 taskId，却属于「你补的那一轮」那一组，不该被吸进这张卡。
-    expect(flat(runDetailSource)).toContain(flat("function isRunActivity(item: ExecutionStreamItem): boolean {"));
-    expect(flat(runDetailSource)).toContain(flat('return item.kind === "activity" && !item.taskId && !item.continuation;'));
+    expect(flat(executionConversationSource)).toContain(flat("export function isRunActivity(item: ExecutionStreamItem): boolean {"));
+    expect(flat(executionConversationSource)).toContain(flat('return item.kind === "activity" && !item.taskId && !item.continuation;'));
     // 它们改由顶部 RUN CONTEXT 卡片承载。
     expect(flat(runDetailSource)).toContain(flat(':run-activity="runActivityItems"'));
     // 旧标题与旧说明不再出现：它们把一个常态（Run 的创建 / 钩子 / 验证）写成了异常。
@@ -280,8 +287,8 @@ describe("Run detail execution conversation", () => {
     // 等于把用户自己说的话标成了"没有归属的执行步骤"；再往后又被算进了某个已完成任务的分组里
     // （那正是用户报的"补充内容被放进了最后那个 task"）。现在这一组自己一壳，并在标题上写明它
     // 不属于任何计划任务。
-    expect(flat(runDetailSource)).toContain(flat("const rounds = new Map<number, ExecutionStreamItem[]>();"));
-    expect(flat(runDetailSource)).toContain(
+    expect(flat(executionConversationSource)).toContain(flat("const rounds = new Map<number, ExecutionStreamItem[]>();"));
+    expect(flat(executionConversationSource)).toContain(
       flat('for (const [index, items] of rounds) groups.push({ id: `continuation-${index}`, kind: "continuation", items });'),
     );
     expect(flat(runDetailSource)).toContain(flat("group.kind === 'continuation'"));
@@ -290,7 +297,7 @@ describe("Run detail execution conversation", () => {
     // 旧的 user 组随这次改动退役（那批条目现在都带 continuation），别留下死样式。
     expect(runDetailStyles).not.toContain(".execution-conversation-group-user");
     // 补充轮的条目已经在它自己那一组里，**不能又被算进「未归属」**——不排就是同一条渲染两次。
-    expect(flat(runDetailSource)).toContain(flat("!item.continuation && !isRunActivity(item)"));
+    expect(flat(executionConversationSource)).toContain(flat("!item.continuation && !isRunActivity(item)"));
   });
 
   it("执行过程有阶段感，且呈现方式由一张表统一决定", () => {
@@ -299,17 +306,22 @@ describe("Run detail execution conversation", () => {
     expect(flat(runDetailSource)).toContain(flat("executionPhaseSteps"));
     expect(runDetailStyles).toContain(flat(".execution-phase.current"));
     // **权重不再散在视图里**：视图只问权重表，那张表是那个"消息清单"的唯一落点。
-    expect(flat(runDetailSource)).toContain(flat("function visibleItems(group: ExecutionConversationGroup)"));
-    expect(flat(runDetailSource)).toContain(flat("function foldedItems(group: ExecutionConversationGroup)"));
-    expect(flat(runDetailSource)).toContain(flat("executionMessageWeight(item)"));
+    // 判据本身这一轮搬进了 utils/executionConversation.ts（纯函数 + 可单测），视图只取它算好的结果。
+    expect(flat(executionConversationSource)).toContain(
+      flat("export function visibleItems(group: ExecutionConversationGroup, threadState: string)"),
+    );
+    expect(flat(executionConversationSource)).toContain(
+      flat("export function foldedItems(group: ExecutionConversationGroup, threadState: string)"),
+    );
+    expect(flat(executionConversationSource)).toContain(flat("executionMessageWeight(item)"));
     expect(runDetailSource).not.toContain("isActivityNoise");
     expect(runDetailStyles).toContain(flat(".execution-folded-log"));
     expect(runDetailStyles).not.toContain(".execution-activity-noise");
     // 折叠区是"过程记录"，不是"活动噪音"——措辞跟着语义走。
     expect(flat(runDetailSource)).toContain(flat("条过程记录"));
     // 连续的空执行步骤折成一行，只在**连续**时合并（中间夹着有内容的步骤要分开）。
-    expect(flat(runDetailSource)).toContain(flat("function collapsePendingTaskGroups"));
-    expect(flat(runDetailSource)).toContain(flat('group.kind === "task" && group.task && group.items.length === 0'));
+    expect(flat(executionConversationSource)).toContain(flat("function collapsePendingTaskGroups"));
+    expect(flat(executionConversationSource)).toContain(flat('group.kind === "task" && group.task && group.items.length === 0'));
     expect(flat(runDetailSource)).toContain(flat("个执行步骤尚未开始"));
   });
 });
@@ -329,8 +341,13 @@ describe("Run 详情页对多轮执行的适配", () => {
   it("**`MERGE_READY` 不再关事件流** —— 它现在可以被补充要求推回 `IN_PROGRESS` 再跑一轮", () => {
     // 在 MERGE_READY 关流，页面就再也收不到那之后的事件：用户看到的是「已完成 / 等待合并」一动不动，
     // 直到手动刷新（实测症状）。真正终结的只有取消与合并。
-    expect(flat(runDetailSource)).toContain(flat('["BLOCKED", "CANCELLED", "MERGED"].includes(event.runStatus)'));
-    expect(flat(runDetailSource)).not.toContain(flat('["BLOCKED", "CANCELLED", "MERGE_READY", "MERGED"]'));
+    // 判据这一轮收成了**一处常量**（建连与收流两处共用），值仍然只有这三个。
+    expect(flat(runControlsSource)).toContain(
+      flat('export const RUN_STREAM_TERMINAL_STATUSES: readonly string[] = ["BLOCKED", "CANCELLED", "MERGED"];'),
+    );
+    expect(runControlsSource).not.toContain('"MERGE_READY", "MERGED"');
+    expect(flat(useRunStreamSource)).toContain(flat("RUN_STREAM_TERMINAL_STATUSES.includes(event.runStatus)"));
+    expect(flat(useRunStreamSource)).toContain(flat("RUN_STREAM_TERMINAL_STATUSES.includes(run.status)"));
   });
 
   /**
@@ -341,13 +358,16 @@ describe("Run 详情页对多轮执行的适配", () => {
    * 没有活着的 Run 时点不到这颗按钮，所以这里用源码断言钉住接线（本文件一直是这个风格）。
    */
   it("终止走共用确认框：只负责问、文案是中文、失败留在框里", () => {
-    const open = runDetailSource.match(/function terminateRun\(\): void \{[\s\S]*?\n\}/)?.[0] ?? "";
+    // 「开框」与「真终止」分家这件事现在在 useRunControl 里，所以那一段从那边读。
+    // 收尾的 `}` 允许有缩进——它现在住在 `useRunControl` 里面，不再是文件顶层函数。
+    const open = useRunControlSource.match(/function terminateRun\(\): void \{[\s\S]*?\n\s*\}/)?.[0] ?? "";
     expect(open).not.toBe("");
     expect(flat(open)).toContain(flat("terminateOpen.value = true;"));
     expect(flat(open)).not.toContain(flat("api.cancelRun"));
 
-    expect(flat(runDetailSource)).toContain(flat("async function confirmTerminateRun(): Promise<void>"));
-    expect(flat(runDetailSource)).toContain(flat("terminateError.value ="));
+    expect(flat(useRunControlSource)).toContain(flat("async function confirmTerminateRun(): Promise<void>"));
+    expect(flat(useRunControlSource)).toContain(flat("terminateError.value ="));
+    expect(flat(useRunControlSource)).not.toContain(flat("ElMessageBox"));
     expect(flat(runDetailSource)).not.toContain(flat("ElMessageBox"));
 
     // 只看那个组件块：文案是不是中文、接线对不对，都在这一段里。

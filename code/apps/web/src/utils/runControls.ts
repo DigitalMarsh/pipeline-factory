@@ -38,3 +38,24 @@ export function hasRunControlActions(runStatus: string, threadState: string): bo
 export function canContinueRun(runStatus: string): boolean {
   return ["IN_PROGRESS", "READY_FOR_VERIFY", "VERIFYING", "MERGE_READY", "RECOVERING"].includes(runStatus);
 }
+
+/**
+ * **这个 Run 还会不会再产生新事实。** 真正终结的只有取消与合并，外加设计上不接受补充要求的 `BLOCKED`
+ * （那一种该走「创建更新版本」）。
+ *
+ * `MERGE_READY` **不在里面**：补充要求可以让同一个 Run 从它回到 `IN_PROGRESS` 再跑一轮。把它当终态，
+ * 页面就再也收不到那之后的任何事件——用户看到的是「已完成 / 等待合并」一动不动，直到手动刷新
+ * （实测就是这个症状）。
+ *
+ * 判据同时管两处，所以必须只有一份：**建连**（终态就别开流）与**收流**（跑到终态就关掉），
+ * 两者都在 `composables/useRunStream.ts`。
+ */
+export const RUN_STREAM_TERMINAL_STATUSES: readonly string[] = ["BLOCKED", "CANCELLED", "MERGED"];
+
+/**
+ * Run Control 上的动作。定义在这里而不是各自声明：状态卡（`ExecutionHeaderStatus` 的
+ * `run-action` / `loop-action`）与处理它们的 `composables/useRunControl.ts` 必须是**同一套取值**——
+ * 此前两处各写一份字面量联合，加一种动作时漏改一处是静默的（TS 会把两边都当合法）。
+ */
+export type RunControlAction = "terminate" | "pause" | "resume" | "verify";
+export type LoopControlAction = "pause" | "resume" | "cancel";

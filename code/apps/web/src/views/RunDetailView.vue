@@ -1,6 +1,10 @@
 <!--
   模块职责：展示 Execution Run、Executor 消息流、控制操作和执行日志。
   维护提示：交互状态和数据流变化时，应同步更新组件边界说明。
+  这个视图现在只留四件事——**加载一个 Run、把状态摆到页头、把会话渲染出来、内嵌与独立页的形态差异**。
+  其余四簇各自成文件（它们各有完整生命周期或踩过坑的判据，混在这里正是"改一次要读一千行"的成因）：
+  `useExecutionConversation`（分组与折叠）、`useRunStream`（SSE 与续传游标）、
+  `useRunControl`（暂停 / 终止 / 验证 / 合并）、`useRunComposer`（补充要求输入框）。
 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
@@ -11,30 +15,11 @@ import ExecutionHeaderStatus from "../components/ExecutionHeaderStatus.vue";
 import ConfirmDialog from "../components/ConfirmDialog.vue";
 import PlanDetailDrawer from "../components/PlanDetailDrawer.vue";
 import ProviderUsageFooter from "../components/ProviderUsageFooter.vue";
-import { api } from "../api";
-import type {
-  AgentLoopStep,
-  ExecutionTask,
-  ExecutionThread,
-  MergeRequest,
-  Plan,
-  PlanTask,
-  Run,
-  RunJournalEvent,
-  VerificationRun,
-} from "../types";
-import { streamStatusTagType } from "../utils/statusTag";
 import ExecutionMessageRow from "../components/ExecutionMessageRow.vue";
-import {
-  executionMessageWeight,
-  foldsIntoProcess,
-  isRuntimeFactItem,
-  projectExecutionJournal,
-  type ExecutionJournalEntry,
-  type ExecutionPlanSnapshot,
-  type ExecutionStreamItem,
-} from "../utils/executionStream";
-import { durationBetween, formatDuration } from "../utils/duration";
+import { api } from "../api";
+import type { AgentLoopStep, ExecutionTask, ExecutionThread, MergeRequest, Plan, PlanTask, Run, VerificationRun } from "../types";
+import { streamStatusTagType } from "../utils/statusTag";
+import { projectExecutionJournal, type ExecutionPlanSnapshot, type ExecutionStreamItem } from "../utils/executionStream";
 import {
   executionModelSourceNote as executionModelSourceNoteFor,
   formatProviderContextUsage,
@@ -42,24 +27,18 @@ import {
 } from "../utils/executionTelemetry";
 import { useModelBackends } from "../composables/useModelBackends";
 import { executionTaskStatusLabel, executionTaskStatusType, executionTaskSummary, projectExecutionTasks } from "../utils/executionTasks";
-import { canContinueRun, canTerminateRun } from "../utils/runControls";
 import { describeRunLoadError } from "../utils/runLoadError";
 import { createProjectRequestScope } from "../utils/projectRoutes";
 import { formatAgentLoopState } from "../utils/agentLoopPresentation";
-import { shouldSubmitComposer } from "../utils/composerKeyboard";
+import { useExecutionConversation } from "../composables/useExecutionConversation";
+import { useRunStream } from "../composables/useRunStream";
+import { useRunControl } from "../composables/useRunControl";
+import { useRunComposer } from "../composables/useRunComposer";
 
 const route = useRoute();
 const router = useRouter();
 const props = withDefaults(defineProps<{ embedded?: boolean; projectId?: string; runId?: string }>(), { embedded: false });
 const emit = defineEmits<{ (event: "close"): void; (event: "open-plan", plan: Plan): void }>();
-type ExecutionConversationGroup = {
-  id: string;
-  /** `continuation` = 补充要求起的那一轮；它不属于任何计划任务，所以单独成组。 */
-  kind: "plan" | "task" | "continuation" | "unattributed" | "pending";
-  task?: ExecutionTask;
-  tasks?: ExecutionTask[];
-  items: ExecutionStreamItem[];
-};
 const embedded = computed(() => props.embedded);
 const projectId = computed(() => props.projectId ?? String(route.params.projectId ?? ""));
 const runId = computed(() => props.runId ?? String(route.params.runId ?? ""));
@@ -72,14 +51,21 @@ const verification = ref<VerificationRun | null>(null);
 const mergeRequest = ref<MergeRequest | null>(null);
 const loading = ref(true);
 const error = ref<string | null>(null);
-const actionBusy = ref(false);
-/** 「终止 Run」的确认框：开没开 + 它自己的错误（失败留在框里，见 confirmTerminateRun）。 */
-const terminateOpen = ref(false);
-const terminateError = ref<string | null>(null);
-const executionDraft = ref("");
-const sendingExecutionMessage = ref(false);
-const sourceCommit = ref("");
-const targetCommit = ref("");
+const executorSteps = ref<AgentLoopStep[]>([]);
+const planTasks = ref<PlanTask[]>([]);
+const executionMessages = ref<ExecutionStreamItem[]>([]);
+const executionTimeline = ref<HTMLElement | null>(null);
+const showScrollToLatest = ref(false);
+const planDetailOpen = ref(false);
+const planDetail = ref<Plan | null>(null);
+const planDetailRevisions = ref<number[]>([]);
+const planDetailError = ref<string | null>(null);
+const executionPlan = ref<ExecutionPlanSnapshot | null>(null);
+const selectedTaskId = ref<string | null>(null);
+const telemetryNow = ref(Date.now());
+let telemetryTimer: ReturnType<typeof setInterval> | null = null;
+let planDetailRequestToken = 0;
+
 /**
  * **取最新的一条执行 Loop，而不是第一条。** 一个 Run 现在可以有多条执行 Loop（补充要求会为同一个 Run
  * 起新一轮），`.find(...)` 会永远返回第一轮那条——于是补充要求开始之后，页头的「Agent 循环」还停在
@@ -92,30 +78,14 @@ const executorLoop = computed(() => {
     null,
   );
 });
-const executorSteps = ref<AgentLoopStep[]>([]);
-const planTasks = ref<PlanTask[]>([]);
-const executionMessages = ref<ExecutionStreamItem[]>([]);
-const executionTimeline = ref<HTMLElement | null>(null);
-const showScrollToLatest = ref(false);
-const runStreamConnected = ref(false);
-const planDetailOpen = ref(false);
-const planDetail = ref<Plan | null>(null);
-const planDetailRevisions = ref<number[]>([]);
-const planDetailError = ref<string | null>(null);
-const executionPlan = ref<ExecutionPlanSnapshot | null>(null);
-const selectedTaskId = ref<string | null>(null);
-const telemetryNow = ref(Date.now());
-let runEventSource: EventSource | null = null;
-let runEventSequence = 0;
-let telemetryTimer: ReturnType<typeof setInterval> | null = null;
-let planDetailRequestToken = 0;
-// ExecutionThread journal 是持久化事实，conversation projection 只负责把事实转换为可读消息。
-// sequence 同时作为 SSE 游标，重连时从最后一条已接受的事件继续回放。
-const loopStatusLabel = computed(() => formatAgentLoopState(executorLoop.value?.state, "无活动 Loop"));
-const streamState = computed<"live" | "reconnecting" | "saved">(() =>
-  runStreamConnected.value ? "live" : ["IN_PROGRESS", "STARTING"].includes(run.value?.status ?? "") ? "reconnecting" : "saved",
+const executionTasks = computed<ExecutionTask[]>(() =>
+  projectExecutionTasks(planTasks.value, thread.value?.journal ?? [], run.value?.status ?? ""),
 );
-const executionStatusLabel = computed(() => ({ live: "实时", reconnecting: "重连中", saved: "已保存" })[streamState.value]);
+const executionTaskCounts = computed(() => executionTaskSummary(executionTasks.value));
+/**
+ * 为什么停下：取执行日志里**最后一条**带原因的事件。它只服务于 `BLOCKED` 那一条提示条，
+ * 但"为什么停下"这句得由事实说话，不能靠 Run 状态猜。
+ */
 const executionBlockReason = computed(() => {
   for (const entry of [...(thread.value?.journal ?? [])].reverse()) {
     const reason = entry.payload.reason ?? entry.payload.error;
@@ -123,165 +93,137 @@ const executionBlockReason = computed(() => {
   }
   return null;
 });
-const executionTasks = computed<ExecutionTask[]>(() =>
-  projectExecutionTasks(planTasks.value, thread.value?.journal ?? [], run.value?.status ?? ""),
-);
-const executionTaskCounts = computed(() => executionTaskSummary(executionTasks.value));
-/**
- * Run 级活动：没有归属于任何执行步骤的 activity 条目——Run 的创建、生命周期钩子、验证、
- * 门禁、续跑检查点、暂停 / 恢复。它们讲的是整个 Run，不属于任何一步，所以**不留在执行会话里**，
- * 改由顶部 RUN CONTEXT 卡片承载（见 ExecutionHeaderStatus 的「Run 级活动」一节）。
- *
- * 判据只用 kind + taskId：`activity` 且无 taskId。曾经这里按"事件类型是否为 RUN_CREATED /
- * HOOK_* / VERIFICATION"列举，但那样每加一种 Run 级事件都要回来补一次，且同样无归属的
- * `Executor started` / `Execution gate` 会被漏在会话里名不副实。
- */
-function isRunActivity(item: ExecutionStreamItem): boolean {
-  // **补充轮不是 Run 级活动**：它的条目同样没有 taskId，但它们属于"你补的那一轮"那一组，
-  // 不该被吸到顶部的 RUN CONTEXT 卡片里（那样会话里就少了几行，而卡片上多了一堆过程）。
-  return item.kind === "activity" && !item.taskId && !item.continuation;
+
+// ExecutionThread journal 是持久化事实，conversation projection 只负责把事实转换为可读消息。
+// sequence 同时作为 SSE 游标，重连时从最后一条已接受的事件继续回放（游标归 useRunStream）。
+function rebuildExecutionMessages(): void {
+  const currentThread = thread.value;
+  executionMessages.value = projectExecutionJournal(
+    currentThread?.journal ?? [],
+    currentThread?.state ?? run.value?.status ?? "ACTIVE",
+    executionPlan.value ?? undefined,
+  );
 }
 
-const runActivityItems = computed<ExecutionStreamItem[]>(() => executionMessages.value.filter(isRunActivity));
-/**
- * ④「Provider 说的」运行事实：压缩边界、重试、配额、钩子、后台子任务、权限被拒、告警。
- * 它们**不进会话正文**（权重表里一律 `hidden`），由顶部「运行上下文」卡承载——
- * 常态收在展开区里，需要你动手的那几条浮到卡片上（见 `ExecutionHeaderStatus` 的 `runtimeAlert`）。
- */
-const runtimeFactItems = computed<ExecutionStreamItem[]>(() => executionMessages.value.filter(isRuntimeFactItem));
+function executionPlanSnapshot(runValue: Run, revision: { resolvedContract?: Plan["resolvedContract"] }): ExecutionPlanSnapshot {
+  const resolved = revision.resolvedContract;
+  return {
+    planId: runValue.planId,
+    revision: runValue.planRevision,
+    occurredAt: runValue.createdAt,
+    goal: resolved?.objective.goal ?? "Execution plan received.",
+    acceptanceCriteria: resolved?.objective.acceptanceCriteria ?? [],
+    includePaths: resolved?.scope.includePaths ?? [],
+    excludePaths: resolved?.scope.excludePaths ?? [],
+    tasks: resolved?.tasks ?? [],
+    verificationCommandIds: resolved?.verification.commandIds ?? [],
+  };
+}
 
-const executionConversationGroups = computed<ExecutionConversationGroup[]>(() => {
-  const groups: ExecutionConversationGroup[] = [];
-  const planMessages = executionMessages.value.filter((item) => item.kind === "plan");
-  if (planMessages.length) groups.push({ id: "plan", kind: "plan", items: planMessages });
-  const taskIds = new Set(executionTasks.value.map((task) => task.id));
-  for (const task of executionTasks.value) {
-    groups.push({ id: `task-${task.id}`, kind: "task", task, items: executionMessages.value.filter((item) => item.taskId === task.id) });
-  }
-  // **补充要求自己一组**：它不属于任何计划任务，也不该折进某个步骤的过程记录里
-  // （用户报的正是"补充内容被放进了最后那个 task"）。这一批条目在投影里就统一摘掉了
-  // `taskId`、打上了 `continuation`（见 projectExecutionJournal 收尾那一段）——
-  // 所以这里不用再判 loop，判据只有一处。
-  // **一轮补充一组**。两轮合成一组的话，组头只能写其中一句话，另一轮的正文就没了标题
-  // （实测：第二轮那句只能当组里的一行看）。轮次编号在投影里就排好了，见 projectExecutionJournal 收尾。
-  const rounds = new Map<number, ExecutionStreamItem[]>();
-  for (const item of executionMessages.value) {
-    if (!item.continuation) continue;
-    const key = item.continuationRound ?? 0;
-    const bucket = rounds.get(key);
-    if (bucket) bucket.push(item);
-    else rounds.set(key, [item]);
-  }
-  for (const [index, items] of rounds) groups.push({ id: `continuation-${index}`, kind: "continuation", items });
-  // 剩下的才是真正的归因缺口：本该落进某个执行步骤、却没有归属的模型 / 工具条目。
-  // 现代 Run 不产生这类条目，它们集中在 2026-09-25 之前的数据里。
-  // **`continuation` 要排掉**：那些条目同样没有 taskId，但它们已经在上面的组里了——
-  // 不排就是同一条消息渲染两次（实测：补充那 16 条会同时出现在「补充要求」和「未归属」两组）。
-  const unattributed = executionMessages.value.filter(
-    (item) =>
-      item.kind !== "plan" &&
-      item.kind !== "user" &&
-      !item.continuation &&
-      !isRunActivity(item) &&
-      (!item.taskId || !taskIds.has(item.taskId)),
-  );
-  if (unattributed.length) groups.push({ id: "unattributed", kind: "unattributed", items: unattributed });
-  return collapsePendingTaskGroups(groups);
+function isAtExecutionLatest(): boolean {
+  const element = executionTimeline.value;
+  return !element || element.scrollHeight - element.scrollTop - element.clientHeight < 48;
+}
+
+function updateExecutionScrollState(): void {
+  showScrollToLatest.value = !isAtExecutionLatest();
+}
+
+function scrollExecutionToLatest(): void {
+  void nextTick(() => {
+    const element = executionTimeline.value;
+    if (!element) return;
+    element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+    showScrollToLatest.value = false;
+  });
+}
+
+function notifyError(caught: unknown) {
+  error.value = caught instanceof Error ? caught.message : "操作失败，请稍后重试";
+}
+
+/* ── 四个抽出去的簇 ──────────────────────────────────────────────────────────
+   声明的先后就是依赖方向：会话分组与事件流都要读 `executionTasks` / `thread`，
+   输入框要用控制簇的 `actionBusy`（同一个 Run 上的操作互斥）。
+   它们各自的判据与踩过的坑写在各文件头部。 */
+const {
+  groups,
+  runActivityItems,
+  runtimeFactItems,
+  foldedItems,
+  visibleItems,
+  failedCount,
+  unclassifiedCount,
+  stepDuration,
+  continuationHeading,
+  taskGroupEmptyNote,
+} = useExecutionConversation({ thread, messages: executionMessages, tasks: executionTasks });
+
+const stream = useRunStream({
+  run,
+  thread,
+  isAtLatest: isAtExecutionLatest,
+  onJournalApplied: (_event, { follow }) => {
+    rebuildExecutionMessages();
+    // 用户原本贴着底部 → 跟着走；否则亮出「跳到最新」，而不是把人拽下去。
+    if (follow) scrollExecutionToLatest();
+    else showScrollToLatest.value = true;
+  },
 });
 
-/**
- * 把**连续的**空执行步骤折成一行。
- * 5 张各占一张卡、每张只写"尚无结构化进度事件表明此任务已开始"是纯噪音；但"哪几步还没轮到"
- * 这个信息要保留，所以折成一行、把标题列出来，而不是整段丢掉。只在**连续**时合并：
- * 中间夹着有内容的步骤时分开显示，"跳过第 2 步先做第 3 步"这种事实才看得出来。
- */
-function collapsePendingTaskGroups(groups: ExecutionConversationGroup[]): ExecutionConversationGroup[] {
-  const collapsed: ExecutionConversationGroup[] = [];
-  let pending: ExecutionTask[] = [];
-  const flush = () => {
-    const first = pending[0];
-    if (first) collapsed.push({ id: `pending-${first.id}`, kind: "pending", items: [], tasks: pending });
-    pending = [];
-  };
-  for (const group of groups) {
-    if (group.kind === "task" && group.task && group.items.length === 0) {
-      pending.push(group.task);
-      continue;
-    }
-    flush();
-    collapsed.push(group);
-  }
-  flush();
-  return collapsed;
+const {
+  actionBusy,
+  terminateOpen,
+  terminateError,
+  sourceCommit,
+  targetCommit,
+  handleRunAction,
+  handleLoopAction,
+  createReview,
+  confirmMerged,
+  confirmTerminateRun,
+  updateSourceCommit,
+  updateTargetCommit,
+} = useRunControl({
+  run,
+  thread,
+  executorLoop,
+  verification,
+  mergeRequest,
+  setThread: setExecutionThread,
+  reload: load,
+  onError: notifyError,
+  onTerminated: async () => {
+    if (embedded.value) await load();
+    else await router.push(`/projects/${projectId.value}/plans`);
+  },
+});
+
+const {
+  executionDraft,
+  sendingExecutionMessage,
+  executionGuidanceMode,
+  canSendExecutionMessage,
+  executorLoopRunning,
+  executionComposerDisabledReason,
+  sendExecutionMessage,
+  handleExecutionComposerKeydown,
+} = useRunComposer({ run, actionBusy, setThread: setExecutionThread, onError: notifyError });
+/* ── 抽出去的簇到此为止 ─────────────────────────────────────────────────── */
+
+/** 用服务端 journal 重建执行对话，并把 SSE 游标推到已加载的那一批之后（重连从这里继续）。 */
+function setExecutionThread(next: ExecutionThread | null): void {
+  thread.value = next;
+  const journal = next?.journal ?? [];
+  stream.resumeFrom(Math.max(...journal.map((entry) => entry.sequence), 0));
+  rebuildExecutionMessages();
 }
 
-/**
- * **这一步现在还在跑吗。** 它在跑的时候一切照常显示——照 OpenClaw：
- * *live response text and the working indicator stay outside the log*。跑完之后过程才折起来，
- * 把视线还给这一步的结论。
- *
- * 判据取任务自己的状态（`IN_PROGRESS`），不是"有没有最近的消息"——后者会把刚起步的一步
- * 当成跑完，把它唯一那两条线索折掉。
- */
-function stepRunning(group: ExecutionConversationGroup): boolean {
-  if (group.task) return group.task.status === "IN_PROGRESS";
-  // 没有任务归属的组（未归属事件）：Run 还活着就当"进行中"，宁可多显示一行也不藏。
-  return thread.value?.state === "ACTIVE";
-}
-
-/**
- * **折进上方过程记录的那一批**。判据全在 `foldsIntoProcess` 里——视图只负责回答"这一步跑完没有"。
- */
-function foldedItems(group: ExecutionConversationGroup): ExecutionStreamItem[] {
-  const stepRunningHere = stepRunning(group);
-  return group.items.filter((item) => foldsIntoProcess(item, { stepRunning: stepRunningHere }));
-}
-
-/**
- * 按**权重**渲染（表在 utils/executionStream.ts 的 `EXECUTION_MESSAGE_WEIGHTS`）。
- * 视图不自己判断"这条该不该显示"：权重是产品决定，集中在一张表里，改那里即可。
- * `hidden` 的条目连计数都不进——它们不是内容，只是 Provider 的机制回显与运行事实。
- */
-function visibleItems(group: ExecutionConversationGroup): ExecutionStreamItem[] {
-  // 判据是"除折叠与不渲染之外"，不是"属于某几种权重"——写成白名单时，
-  // 新增一种权重（比如你自己说的话那条 `answer`）会让那一类消息**从会话里静默消失**。
-  const folded = new Set(foldedItems(group).map((item) => item.id));
-  return group.items.filter((item) => executionMessageWeight(item) !== "hidden" && !folded.has(item.id));
-}
-
-/**
- * 这一步的用时。**来自任务自己的生命周期事实**（见 `ExecutionTask.startedAt`），
- * 不是从消息时间戳估的——拿不到就返回 null，由模板让那一格**不出现**，
- * 而不是编一个数（OpenClaw 的原话：拿不到时长就写 `Worked`，不估）。
- */
-function stepDuration(group: ExecutionConversationGroup): string | null {
-  const task = group.task;
-  if (!task?.startedAt || !task.completedAt) return null;
-  const ms = durationBetween(task.startedAt, task.completedAt);
-  return ms === null ? null : formatDuration(ms);
-}
-
-/** 补充要求那一组的标题：直接写你补的那句话（这一组的第一条用户消息）。 */
-function continuationHeading(group: ExecutionConversationGroup): string {
-  const prompt = group.items.find((item) => item.kind === "user");
-  const text = (prompt?.content ?? "").replace(/\s+/g, " ").trim();
-  if (!text) return "这一轮";
-  return text.length > 44 ? `${text.slice(0, 44)}…` : text;
-}
-
-/** 折起来的那批里，有几条是**认不出来的活动**——这件事本身要说得出口，不能悄悄折掉。 */
-function unclassifiedCount(group: ExecutionConversationGroup): number {
-  return foldedItems(group).filter((item) => item.messageType === "UNCLASSIFIED").length;
-}
-
-/**
- * 这一步里**没被折进去的失败**有多少。它要写在折叠标题上——
- * OpenClaw 的原话是 `Worked for 2 minutes, 3 seconds · 2 failed`：
- * 失败**永远可见**，即使这一组是收起的。折起来等于把这轮唯一要你处理的事藏了。
- */
-function failedCount(group: ExecutionConversationGroup): number {
-  return visibleItems(group).filter((item) => item.status === "FAILED").length;
-}
+const loopStatusLabel = computed(() => formatAgentLoopState(executorLoop.value?.state, "无活动 Loop"));
+const streamState = computed<"live" | "reconnecting" | "saved">(() =>
+  stream.connected.value ? "live" : ["IN_PROGRESS", "STARTING"].includes(run.value?.status ?? "") ? "reconnecting" : "saved",
+);
+const executionStatusLabel = computed(() => ({ live: "实时", reconnecting: "重连中", saved: "已保存" })[streamState.value]);
 
 /**
  * 这个 Run 现在走到哪一步了。四阶段是**执行过程的骨架**：准备（另见顶部 RUN CONTEXT）、
@@ -389,80 +331,6 @@ function expandTaskGroup(groupId: string): void {
   next.delete(groupId);
   collapsedTaskGroups.value = next;
 }
-/**
- * 还能不能补充要求：判据是 **Run 的状态**，不是线程的状态。
- *
- * 原来判的是 `thread.state !== COMPLETED`，而执行一收尾线程就被置成 `COMPLETED`——于是恰好在
- * "执行完了、还没合并、想再让它补一轮"这一刻输入框是禁用的（报障现场）。线程状态回答的是
- * "上一轮 Loop 还在不在"，Run 状态才回答"这个 Run 还需不需要人说话"。
- */
-const canSendExecutionMessage = computed(() => canContinueRun(run.value?.status ?? ""));
-/** 还有一轮在跑吗——决定补充要求是"交给这一轮"还是"起新的一轮"。 */
-const executorLoopRunning = computed(() =>
-  (run.value?.agentLoops ?? []).some(
-    (loop) => loop.role === "executor" && ["CREATED", "RUNNING", "WAITING_FOR_INPUT", "PAUSED"].includes(loop.state),
-  ),
-);
-/** 一轮还在跑时的投递方式；没在跑时它不参与，服务端按 `auto` 自己定。 */
-const executionGuidanceMode = ref<"steer" | "queue">("queue");
-/** 输入框为什么不可用——空串表示可用。 */
-const executionComposerDisabledReason = computed(() => {
-  if (canSendExecutionMessage.value) return "";
-  const status = run.value?.status ?? "";
-  if (status === "BLOCKED" || status === "NEEDS_PLAN_CHANGE") return "这个 Run 卡在计划上，请改计划（创建更新版本）而不是补充要求";
-  if (status === "CANCELLED" || status === "STALE") return "这个 Run 已经结束";
-  return status ? `Run 处于 ${status}，不接受补充要求` : "";
-});
-
-function rebuildExecutionMessages(): void {
-  const currentThread = thread.value;
-  executionMessages.value = projectExecutionJournal(
-    currentThread?.journal ?? [],
-    currentThread?.state ?? run.value?.status ?? "ACTIVE",
-    executionPlan.value ?? undefined,
-  );
-}
-
-function executionPlanSnapshot(runValue: Run, revision: { resolvedContract?: Plan["resolvedContract"] }): ExecutionPlanSnapshot {
-  const resolved = revision.resolvedContract;
-  return {
-    planId: runValue.planId,
-    revision: runValue.planRevision,
-    occurredAt: runValue.createdAt,
-    goal: resolved?.objective.goal ?? "Execution plan received.",
-    acceptanceCriteria: resolved?.objective.acceptanceCriteria ?? [],
-    includePaths: resolved?.scope.includePaths ?? [],
-    excludePaths: resolved?.scope.excludePaths ?? [],
-    tasks: resolved?.tasks ?? [],
-    verificationCommandIds: resolved?.verification.commandIds ?? [],
-  };
-}
-
-/** 用服务端 journal 重建执行对话，并更新 SSE 回放游标。 */
-function setExecutionThread(next: ExecutionThread | null): void {
-  thread.value = next;
-  const journal = next?.journal ?? [];
-  runEventSequence = Math.max(runEventSequence, ...journal.map((entry) => entry.sequence), 0);
-  rebuildExecutionMessages();
-}
-
-function isAtExecutionLatest(): boolean {
-  const element = executionTimeline.value;
-  return !element || element.scrollHeight - element.scrollTop - element.clientHeight < 48;
-}
-
-function updateExecutionScrollState(): void {
-  showScrollToLatest.value = !isAtExecutionLatest();
-}
-
-function scrollExecutionToLatest(): void {
-  void nextTick(() => {
-    const element = executionTimeline.value;
-    if (!element) return;
-    element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
-    showScrollToLatest.value = false;
-  });
-}
 
 function focusExecutionTask(task: ExecutionTask): void {
   selectedTaskId.value = task.id;
@@ -476,13 +344,6 @@ function focusExecutionTask(task: ExecutionTask): void {
       );
     target?.scrollIntoView({ behavior: "smooth", block: "center" });
   });
-}
-
-function taskGroupEmptyNote(task: ExecutionTask): string {
-  if (task.status === "UNKNOWN") return "此任务的执行状态和关联会话未记录。";
-  if (task.status === "PENDING") return "尚无结构化进度事件表明此任务已开始。";
-  if (task.status === "BLOCKED") return task.blockedReason ?? "阻塞原因未记录。";
-  return "此任务暂未关联到已记录的执行消息。";
 }
 
 function resetPlanDetail(): void {
@@ -545,84 +406,6 @@ async function selectPlanRevision(revisionNumber: number): Promise<void> {
   }
 }
 
-/** 接收单条 Run SSE；重复 sequence 直接忽略，避免重连导致消息重复。 */
-function appendRunJournalEvent(event: RunJournalEvent): void {
-  const currentThread = thread.value;
-  if (!currentThread || event.sequence <= runEventSequence) return;
-  const shouldFollow = isAtExecutionLatest();
-  const entry: ExecutionJournalEntry = { sequence: event.sequence, type: event.type, occurredAt: event.occurredAt, payload: event.payload };
-  const nextThread: ExecutionThread = {
-    ...currentThread,
-    state: event.threadState ?? currentThread.state,
-    journal: [...currentThread.journal, entry],
-    ...(event.threadTelemetry === undefined ? {} : { telemetry: event.threadTelemetry }),
-  };
-  thread.value = nextThread;
-  runEventSequence = event.sequence;
-  if (event.runStatus && run.value) run.value = { ...run.value, status: event.runStatus };
-  rebuildExecutionMessages();
-  // `MERGE_READY` **不在这里**：它曾经是这个 Run 的终点，但补充要求可以让同一个 Run 从它回到
-  // `IN_PROGRESS` 再跑一轮。在这里把事件流关掉，页面就再也收不到那之后的任何事件——用户看到的是
-  // 「已完成 / 等待合并」一动不动，直到手动刷新（实测就是这个症状）。
-  // 真正终结的只有取消与合并；`BLOCKED` 保留，因为按设计它不接受补充要求（该走「创建更新版本」）。
-  if (event.runStatus && ["BLOCKED", "CANCELLED", "MERGED"].includes(event.runStatus)) closeRunEvents();
-  if (shouldFollow) scrollExecutionToLatest();
-  else showScrollToLatest.value = true;
-}
-
-function applyStreamTelemetry(event: { threadTelemetry?: ExecutionThread["telemetry"] }): void {
-  if (!thread.value || event.threadTelemetry === undefined) return;
-  thread.value = { ...thread.value, telemetry: event.threadTelemetry };
-}
-
-/**
- * 为**仍可能产生事实**的 Run 建立 SSE；真正的终态 Run 依赖已加载的持久化 journal。
- *
- * `MERGE_READY` **不在"终态"之列**：补充要求可以让同一个 Run 从它回到 `IN_PROGRESS` 再跑一轮，
- * 所以它仍然会产生新事实。把它当终态，页面就永远停在加载时那一份 journal 上——用户看到的是
- * 「已完成 / 等待合并」一动不动，直到手动刷新（实测症状）。真正终结的只有取消与合并；
- * `BLOCKED` 保留，因为按设计它不接受补充要求（该走「创建更新版本」）。
- */
-function connectRunEvents(): void {
-  if (!run.value || typeof EventSource === "undefined" || ["BLOCKED", "CANCELLED", "MERGED"].includes(run.value.status)) return;
-  runEventSource?.close();
-  runEventSource = new EventSource(api.runEventsUrl(run.value.id, runEventSequence));
-  runEventSource.addEventListener("open", () => {
-    runStreamConnected.value = true;
-  });
-  runEventSource.addEventListener("stream.ready", (raw) => {
-    runStreamConnected.value = true;
-    try {
-      applyStreamTelemetry(JSON.parse((raw as MessageEvent).data) as { threadTelemetry?: ExecutionThread["telemetry"] });
-    } catch {
-      /* Initial GET remains the source of truth. */
-    }
-  });
-  runEventSource.addEventListener("telemetry.updated", (raw) => {
-    try {
-      applyStreamTelemetry(JSON.parse((raw as MessageEvent).data) as { threadTelemetry?: ExecutionThread["telemetry"] });
-    } catch {
-      /* The next poll or reconnect will recover the latest snapshot. */
-    }
-  });
-  runEventSource.addEventListener("journal.entry", (raw) => {
-    try {
-      appendRunJournalEvent(JSON.parse((raw as MessageEvent).data) as RunJournalEvent);
-    } catch {
-      /* The next reconnect will replay from the last accepted sequence. */
-    }
-  });
-  runEventSource.addEventListener("error", () => {
-    runStreamConnected.value = false;
-  });
-}
-
-/** 清理 EventSource 和连接状态，避免离开页面后继续轮询服务端。 */
-function closeRunEvents(): void {
-  runEventSource?.close();
-  runEventSource = null;
-  runStreamConnected.value = false;
-}
 async function load() {
   const requestRunId = runId.value;
   const requestProjectId = projectId.value;
@@ -688,66 +471,7 @@ async function load() {
     if (requestScope.isCurrent(requestToken, `${requestProjectId}:${requestRunId}`)) loading.value = false;
   }
 }
-function notifyError(caught: unknown) {
-  error.value = caught instanceof Error ? caught.message : "操作失败，请稍后重试";
-}
-async function controlExecutorLoop(action: "pause" | "resume" | "cancel") {
-  if (!executorLoop.value || actionBusy.value) return;
-  actionBusy.value = true;
-  try {
-    if (action === "pause") await api.pauseAgentLoop(executorLoop.value.id, "user_requested");
-    if (action === "resume") await api.resumeAgentLoop(executorLoop.value.id);
-    if (action === "cancel") await api.cancelAgentLoop(executorLoop.value.id, "user_requested");
-    await load();
-  } catch (caught) {
-    notifyError(caught);
-  } finally {
-    actionBusy.value = false;
-  }
-}
-async function togglePause() {
-  if (!run.value || actionBusy.value) return;
-  actionBusy.value = true;
-  try {
-    const response = thread.value?.state === "PAUSED" ? await api.resumeRun(run.value.id) : await api.pauseRun(run.value.id);
-    run.value = response.run;
-    setExecutionThread(response.thread);
-  } catch (caught) {
-    notifyError(caught);
-  } finally {
-    actionBusy.value = false;
-  }
-}
-/**
- * 终止前要求二次确认。服务端会同步取消关联 AgentLoop 并执行 cleanup。
- *
- * 确认框的文案原来是英文（"Terminate this run? …"），而这个页面上别处都是中文——顺手统一了。
- */
-function terminateRun(): void {
-  if (!run.value || actionBusy.value || !canTerminateRun(run.value.status)) return;
-  terminateError.value = null;
-  terminateOpen.value = true;
-}
 
-/** 确认框里按下「终止」之后才走这里——**对话框只负责问，终止是这一步的事**。 */
-async function confirmTerminateRun(): Promise<void> {
-  const target = run.value;
-  if (!target || actionBusy.value) return;
-  actionBusy.value = true;
-  terminateError.value = null;
-  try {
-    await api.cancelRun(target.id, "user_requested");
-    terminateOpen.value = false;
-    ElMessage.success("Run 已终止");
-    if (embedded.value) await load();
-    else await router.push(`/projects/${projectId.value}/plans`);
-  } catch (caught) {
-    // 失败留在框里而不是浮到页面上：用户正对着这个框，关掉它才看得到页面级提示。
-    terminateError.value = caught instanceof Error ? `终止失败：${caught.message}` : "终止失败";
-  } finally {
-    actionBusy.value = false;
-  }
-}
 function closeView(): void {
   if (embedded.value) {
     emit("close");
@@ -758,98 +482,12 @@ function closeView(): void {
     query: { explorerId: route.query.explorerId, explorerPlanId: route.query.explorerPlanId, contextPanel: "plan-center" },
   });
 }
-async function sendExecutionMessage() {
-  const content = executionDraft.value.trim();
-  if (!run.value || !canSendExecutionMessage.value || !content || actionBusy.value) return;
-  actionBusy.value = true;
-  sendingExecutionMessage.value = true;
-  try {
-    // 一轮还在跑时由用户选"引导 / 排队"；没在跑时两种等价，交给服务端按实际状态自己定（`auto`）。
-    const result = await api.addRunGuidance(run.value.id, content, executorLoopRunning.value ? executionGuidanceMode.value : "auto");
-    setExecutionThread(result.thread);
-    if (result.run) run.value = { ...run.value, ...result.run };
-    executionDraft.value = "";
-    // 说清它到底发生了什么：排队的要求还没到模型手里，和"已发送"不是一回事。
-    ElMessage.success(
-      result.continued
-        ? "已发送，执行线程重新开工"
-        : result.guidance.status === "CONSUMED"
-          ? "已发送到执行线程"
-          : "已排队，等这一轮结束后自动开工",
-    );
-  } catch (caught) {
-    notifyError(caught);
-  } finally {
-    actionBusy.value = false;
-    sendingExecutionMessage.value = false;
-  }
-}
-function handleExecutionComposerKeydown(event: KeyboardEvent): void {
-  if (!shouldSubmitComposer(event)) return;
-  event.preventDefault();
-  void sendExecutionMessage();
-}
-/** 触发脱离模型会话的确定性验证，结果落入 VerificationRun 后再更新页面。 */
-async function verifyRun() {
-  if (!run.value || actionBusy.value) return;
-  actionBusy.value = true;
-  try {
-    verification.value = (await api.verifyRun(run.value.id)).verification;
-    await load();
-    ElMessage.success("验证完成");
-  } catch (caught) {
-    notifyError(caught);
-  } finally {
-    actionBusy.value = false;
-  }
-}
-async function createReview() {
-  if (!run.value || !sourceCommit.value.trim() || actionBusy.value) return;
-  actionBusy.value = true;
-  try {
-    mergeRequest.value = (await api.createMergeRequest(run.value.id, sourceCommit.value.trim())).mergeRequest;
-    await load();
-  } catch (caught) {
-    notifyError(caught);
-  } finally {
-    actionBusy.value = false;
-  }
-}
-async function confirmMerged() {
-  if (!mergeRequest.value || !targetCommit.value.trim() || actionBusy.value) return;
-  actionBusy.value = true;
-  try {
-    mergeRequest.value = (await api.confirmMerged(mergeRequest.value.id, targetCommit.value.trim())).mergeRequest;
-    await load();
-    ElMessage.success("已确认合并到目标 Commit");
-  } catch (caught) {
-    notifyError(caught);
-  } finally {
-    actionBusy.value = false;
-  }
-}
-type RunControlAction = "terminate" | "pause" | "resume" | "verify";
-type LoopControlAction = "pause" | "resume" | "cancel";
-async function handleRunAction(action: RunControlAction): Promise<void> {
-  // 终止现在只是"开确认框"，不再是"问完顺手做掉"——真正的终止在 confirmTerminateRun 里。
-  if (action === "terminate") terminateRun();
-  if (action === "pause" || action === "resume") await togglePause();
-  if (action === "verify") await verifyRun();
-}
-async function handleLoopAction(action: LoopControlAction): Promise<void> {
-  await controlExecutorLoop(action);
-}
-function updateSourceCommit(value: string): void {
-  sourceCommit.value = value;
-}
-function updateTargetCommit(value: string): void {
-  targetCommit.value = value;
-}
+
 watch([projectId, runId], () => {
   resetPlanDetail();
-  closeRunEvents();
+  stream.close();
   void load().then(() => {
-    if (run.value) connectRunEvents();
+    if (run.value) stream.connect();
   });
 });
 onMounted(async () => {
@@ -858,12 +496,12 @@ onMounted(async () => {
   }, 1000);
   void loadModelBackends();
   await load();
-  connectRunEvents();
+  stream.connect();
   scrollExecutionToLatest();
 });
 onBeforeUnmount(() => {
   requestScope.invalidate();
-  closeRunEvents();
+  stream.close();
   if (telemetryTimer) clearInterval(telemetryTimer);
 });
 </script>
@@ -954,7 +592,7 @@ onBeforeUnmount(() => {
               <p>Run 启动后，执行会话会出现在这里。</p>
             </div>
             <section
-              v-for="group in executionConversationGroups"
+              v-for="group in groups"
               :key="group.id"
               :class="[
                 'execution-conversation-group',

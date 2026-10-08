@@ -12,11 +12,9 @@ import {
   usageDetailRows,
 } from "../utils/executionTelemetry";
 import { executionTaskStatusLabel, executionTaskStatusType, verificationSummary } from "../utils/executionTasks";
-import { canPauseRun, canTerminateRun, hasRunControlActions } from "../utils/runControls";
+import { canPauseRun, canTerminateRun, hasRunControlActions, type LoopControlAction, type RunControlAction } from "../utils/runControls";
 
 type StatusCard = "context" | "telemetry" | "progress" | "loop" | "controls" | "review";
-type RunAction = "terminate" | "pause" | "resume" | "verify";
-type LoopAction = "pause" | "resume" | "cancel";
 
 const props = defineProps<{
   run: Run;
@@ -48,8 +46,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (event: "focus-task", task: ExecutionTask): void;
-  (event: "run-action", action: RunAction): void;
-  (event: "loop-action", action: LoopAction): void;
+  (event: "run-action", action: RunControlAction): void;
+  (event: "loop-action", action: LoopControlAction): void;
   (event: "create-review"): void;
   (event: "confirm-merged"): void;
   (event: "open-plan"): void;
