@@ -17,7 +17,12 @@
  *      重跑会覆盖已有的验证结论，这是不可逆的。
  *   4) `scheduler` / `verificationExecutor` 都可缺省，缺省时对应路由返回 **503**（不是 500）：
  *      这是"本实例没配这个能力"，属于服务不可用语义。
- *   5) 遥测投影 `projectRunThreadTelemetry` 已搬进 `projections/` 并改为普通 import；
+ *   5) **这条文件里的 6 条 409 一律带 `code`**（`RUN_FINISH_FAILED` / `RUN_CANCEL_FAILED` /
+ *      `RUN_PAUSE_FAILED` / `RUN_RESUME_FAILED` / `RUN_GUIDANCE_FAILED` / `RUN_VERIFY_FAILED`）。
+ *      同一个 409 下可能有好几种原因，web 侧的 `ApiRequestError` 特意把响应体带出来就是为了让调用方
+ *      按 `code` 给不同说法（与 explorer 那两条删除路由同一个道理）——只给一句 message，
+ *      客户端就只能笼统报错。新增 409 时照着带。
+ *   6) 遥测投影 `projectRunThreadTelemetry` 已搬进 `projections/` 并改为普通 import；
  *      它此前是回调 dep（理由同 `routes/agent-loops.ts` 的第 4 条），现在不需要了。
  *      同文件的 `resolveRunExecutorConfig` 是"这次 Run 该用哪个 executor"的唯一答案：`GET /runs/:runId`
  *      把它单独返回（`executorConfig`），因为**遥测要这一轮跑完才有值**，运行中的界面只能靠它
@@ -115,7 +120,7 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
         run: await scheduler.finish(params.data.runId, body.data.exitReason, store.getProject(run.projectId)?.settings.hooks ?? {}),
       };
     } catch (error) {
-      return reply.code(409).send({ error: error instanceof Error ? error.message : "Run cannot be finished" });
+      return reply.code(409).send({ code: "RUN_FINISH_FAILED", error: error instanceof Error ? error.message : "Run cannot be finished" });
     }
   });
 
@@ -146,7 +151,7 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
       const thread = scheduler.thread(run.executionThreadId);
       return { run, thread: projectRunThreadTelemetry(store, run, thread) };
     } catch (error) {
-      return reply.code(409).send({ error: error instanceof Error ? error.message : "Run cannot be paused" });
+      return reply.code(409).send({ code: "RUN_PAUSE_FAILED", error: error instanceof Error ? error.message : "Run cannot be paused" });
     }
   });
 
@@ -159,7 +164,7 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
       const thread = scheduler.thread(run.executionThreadId);
       return { run, thread: projectRunThreadTelemetry(store, run, thread) };
     } catch (error) {
-      return reply.code(409).send({ error: error instanceof Error ? error.message : "Run cannot be resumed" });
+      return reply.code(409).send({ code: "RUN_RESUME_FAILED", error: error instanceof Error ? error.message : "Run cannot be resumed" });
     }
   });
 
@@ -180,7 +185,9 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
       const run = store.getRun(params.data.runId);
       return { thread: run ? projectRunThreadTelemetry(store, run, thread) : thread, guidance, continued, run: run ?? null };
     } catch (error) {
-      return reply.code(409).send({ error: error instanceof Error ? error.message : "Guidance cannot be added" });
+      return reply
+        .code(409)
+        .send({ code: "RUN_GUIDANCE_FAILED", error: error instanceof Error ? error.message : "Guidance cannot be added" });
     }
   });
 
@@ -198,7 +205,7 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
       const verification = await verifier.verify(run, revision, verificationExecutor);
       return { verification };
     } catch (error) {
-      return reply.code(409).send({ error: error instanceof Error ? error.message : "Run cannot be verified" });
+      return reply.code(409).send({ code: "RUN_VERIFY_FAILED", error: error instanceof Error ? error.message : "Run cannot be verified" });
     }
   });
 

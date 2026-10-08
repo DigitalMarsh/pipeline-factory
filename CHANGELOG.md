@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-10-08 — Run 控制的 6 条 409 一律带 `code`
+
+`routes/runs.ts` 里 6 条 409 只有 `/cancel` 带 `code`，其余五条（finish / pause / resume / guidance /
+verify）只有一句 message。而 web 的 `ApiRequestError` **特意把响应体带出来**就是为了让调用方按 `code`
+给不同说法（与 explorer 那两条删除路由同一个道理）——只给 message，客户端就只剩一句笼统的报错。
+
+六条现在都是 `RUN_*_FAILED`：`RUN_FINISH_FAILED` / `RUN_CANCEL_FAILED` / `RUN_PAUSE_FAILED` /
+`RUN_RESUME_FAILED` / `RUN_GUIDANCE_FAILED` / `RUN_VERIFY_FAILED`，并把这条约定写进文件的维护提示
+（新增 409 时照着带）。
+
+验证：新增一条用例把五条路由推进各自的 409 分支并断言 `code`（`/verify` 不在里面——它先查 Run，
+不存在的 id 在那一步就 404 了）；`pnpm verify` 全绿（域 446 / api **123** / web 643）。
+
 ## 2026-10-08 — 中文文件名被误判越界，运行被无故阻塞；顺带给 500 留痕
 
 报障是一张截图：需求15 的 Run 卡在 `已阻塞`，红框里写着「为什么停下 · `PATH_OUTSIDE_SCOPE`」，

@@ -2297,6 +2297,41 @@ describe("Pipeline Factory v4 API", () => {
     expect(store.getPlan(plan.id)).toMatchObject({ status: "BLOCKED", attentionReason: "Run cancelled: stale_run" });
   });
 
+  /**
+   * Run 控制那几条 409 **一律带 `code`**。
+   *
+   * 同一个 409 下可能有好几种原因，web 侧的 `ApiRequestError` 特意把响应体带出来就是为了让调用方
+   * 按 `code` 给不同说法（与 explorer 那两条删除路由同一个道理）——只给一句 message，客户端就只剩
+   * 一句笼统的报错。`/verify` 不在这条用例里：它先查 Run，不存在的 id 在那一步就 404 了。
+   */
+  it("gives every run-control 409 a code, not just a message", async () => {
+    const store = new InMemoryPipelineStore();
+    const scheduler = new Scheduler({
+      store,
+      workspace: { create: async () => ({ path: "/tmp/run", branch: "factory/run", baseCommit: "abc" }), remove: async () => undefined },
+      hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
+    });
+    const app = createApp({ store, scheduler, seed: false });
+    apps.push(app);
+
+    // 用一个不存在的 Run 把这几条路由推进各自的 409 分支（`scheduler.run` 抛 → catch 回 409）。
+    for (const [action, code] of [
+      ["finish", "RUN_FINISH_FAILED"],
+      ["cancel", "RUN_CANCEL_FAILED"],
+      ["pause", "RUN_PAUSE_FAILED"],
+      ["resume", "RUN_RESUME_FAILED"],
+      ["guidance", "RUN_GUIDANCE_FAILED"],
+    ] as const) {
+      const response = await app.inject({
+        method: "POST",
+        url: `/api/v4/runs/run-missing/${action}`,
+        payload: { reason: "probe", content: "probe", mode: "auto" },
+      });
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toMatchObject({ code });
+    }
+  });
+
   it("supports asynchronous v4 turns and structured answers", async () => {
     const store = new InMemoryPipelineStore();
     createGitBackedTestProject(store);
