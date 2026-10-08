@@ -655,11 +655,18 @@ async function keepEditingPlan(plan: Plan): Promise<void> {
         clientRequestId: `keep-editing-${planId}-${plan.revision}`,
       });
     } catch (caught) {
-      if (!(caught instanceof Error) || !caught.message.includes("UNMERGED_RUN_CONFIRMATION_REQUIRED")) throw caught;
+      /**
+       * **按 `code` 判，不按 message 判。** `ApiRequestError.message` 装的是服务端那句人话
+       * （`body.error`），码在 `body.code` 里——此前这里比的是人话，于是"弹确认框 → 带
+       * `discardUnmergedRun` 重试"这一段**从来没执行过**：用户点「继续编辑 V2」只会看到一条
+       * 英文红条，而那条路本来应该先问一句再清理（实测报障就是这个）。
+       */
+      if (!(caught instanceof ApiRequestError) || caught.body?.code !== "UNMERGED_RUN_CONFIRMATION_REQUIRED") throw caught;
+      const unmerged = Array.isArray(caught.body?.runs) ? caught.body.runs.filter((id): id is string => typeof id === "string") : [];
       await ElMessageBox.confirm(
-        "This revision has an unmerged Run. Continuing will terminate its Executor, remove its worktree, and run cleanup hooks. The Run, ExecutionThread, and audit journal are retained permanently.",
-        "Discard unmerged execution",
-        { type: "warning", confirmButtonText: "Clean up and edit V" + String(plan.revision + 1), cancelButtonText: "Cancel" },
+        `这条 V${plan.revision} 上还有一个没合并的运行${unmerged.length ? `（${unmerged.join("、")}）` : ""}：继续会终止它的 Executor、清理它的 worktree、并执行 cleanup 钩子。Run、执行线程与审计日志都会留着。`,
+        `清理未合并的运行，编辑 V${plan.revision + 1}`,
+        { type: "warning", confirmButtonText: `清理并编辑 V${plan.revision + 1}`, cancelButtonText: "取消" },
       );
       result = await api.createRevisionDraft(planId, plan.revision, {
         explorerThreadId: plan.sourceExplorerThreadId,
@@ -672,9 +679,9 @@ async function keepEditingPlan(plan: Plan): Promise<void> {
     await nextTick();
     if (timeline.value) scrollTimelineToLatest(timeline.value);
     (document.querySelector(".composer textarea") as HTMLTextAreaElement | null)?.focus();
-    ElMessage.success(`Editing ${planId} · V${plan.revision} → V${result.draft.targetRevision}`);
+    ElMessage.success(`正在编辑 ${planId} · V${plan.revision} → V${result.draft.targetRevision}`);
   } catch (caught) {
-    if (caught !== "cancel") ElMessage.error(caught instanceof Error ? caught.message : "Keep editing failed");
+    if (caught !== "cancel") ElMessage.error(caught instanceof Error ? caught.message : "继续编辑失败");
   } finally {
     busy.value = false;
   }

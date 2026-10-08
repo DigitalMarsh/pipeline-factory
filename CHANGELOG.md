@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-10-08 — 「继续编辑 V2」点不动：客户端拿人话去比错误码
+
+报障：在需求15 的 Plan 详情里点「继续编辑 V2」，只弹一条英文红条
+「Revision has an unmerged Run/worktree; explicit discardUnmergedRun is required」。
+
+- 客户端**本来**有那条路：先不带 `discardUnmergedRun` 试一次，撞到 409 就弹确认框（说明会终止
+  Executor、清理 worktree、跑 cleanup 钩子），确认后带 `discardUnmergedRun: true` 重试。
+- 判据却写着 `caught.message.includes("UNMERGED_RUN_CONFIRMATION_REQUIRED")`——而
+  `ApiRequestError.message` 装的是服务端那句**人话**（`body.error`），码在 `body.code` 里。
+  条件**永远为假**，那条路从来没执行过：用户只看到外层 catch 弹的红条。
+  （同一个文件里删除需求那条路写的是 `caught.body?.code`，本来就是对的写法。）
+- 修法：改成 `caught instanceof ApiRequestError && caught.body?.code === "…"`；确认框把代价说具体
+  ——**点名那几个未合并的 run id**（409 的体里带 `runs`）；顺带把这一段残留的英文文案中文化
+  （确认框标题 / 正文 / 按钮、「正在编辑 …」、「继续编辑失败」），它的邻居都是中文。
+
+验证：新增 2 条用例（按 `code` 判、三个英文串不许回来）；预览里点「继续编辑 V2」实测弹出中文确认框
+（带 run id），不再是红条。
+
+> 顺带看到一处判断偏虚：`/plans/:id/revisions/:rev/drafts` 的"未合并"判据只看 `workspacePath`
+> 有没有值、不查目录在不在，所以对早就清理过 worktree 的老 Run 也会警告一遍"会删掉它的 worktree"。
+> 这次没动它。
+
 ## 2026-10-08 — Run 控制的 6 条 409 一律带 `code`
 
 `routes/runs.ts` 里 6 条 409 只有 `/cancel` 带 `code`，其余五条（finish / pause / resume / guidance /

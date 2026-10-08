@@ -970,3 +970,30 @@ describe("需求清单的重命名", () => {
     expect(flat(explorerViewSource)).toContain(flat("api.renameExplorerPlan(projectId.value, currentThread.id, target.id, title)"));
   });
 });
+
+/**
+ * 「继续编辑 V2」那条路要**先问一句再清理**：它会在旧 Revision 上取消未合并的 Run、删掉 worktree、
+ * 跑 cleanup 钩子。而这条路此前是死的——判据拿服务端那句**人话**去比错误码，永远不成立，
+ * 于是用户点下去只看到一条英文红条（报障现场）。
+ */
+describe("Explorer 修订草稿入口", () => {
+  it("按 body.code 判断未合并的运行，而不是拿人话去比对", () => {
+    // `ApiRequestError.message` 是服务端那句人话（`body.error`），码在 `body.code` 里。
+    expect(flat(explorerViewSource)).toContain(flat('caught.body?.code !== "UNMERGED_RUN_CONFIRMATION_REQUIRED"'));
+    expect(explorerViewSource).not.toContain('message.includes("UNMERGED_RUN_CONFIRMATION_REQUIRED")');
+    // 确认之后才带 discardUnmergedRun 重试；两个 clientRequestId 分开，重试不会被幂等缓存挡回去。
+    expect(flat(explorerViewSource)).toContain(flat("discardUnmergedRun: false"));
+    expect(flat(explorerViewSource)).toContain(flat("discardUnmergedRun: true"));
+    expect(flat(explorerViewSource)).toContain(flat("clientRequestId: `keep-editing-cleanup-${planId}-${plan.revision}`"));
+  });
+
+  it("确认框把代价说清楚，文案是中文（这一段此前是英文）", () => {
+    expect(flat(explorerViewSource)).toContain(flat("继续会终止它的 Executor、清理它的 worktree、并执行 cleanup 钩子"));
+    expect(flat(explorerViewSource)).toContain(flat("Run、执行线程与审计日志都会留着"));
+    expect(flat(explorerViewSource)).toContain(flat("confirmButtonText: `清理并编辑 V${plan.revision + 1}`"));
+    expect(flat(explorerViewSource)).toContain(flat('cancelButtonText: "取消"'));
+    expect(explorerViewSource).not.toContain("Discard unmerged execution");
+    expect(explorerViewSource).not.toContain("Clean up and edit V");
+    expect(explorerViewSource).not.toContain("Keep editing failed");
+  });
+});
