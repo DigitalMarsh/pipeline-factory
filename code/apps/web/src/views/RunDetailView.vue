@@ -54,7 +54,8 @@ const props = withDefaults(defineProps<{ embedded?: boolean; projectId?: string;
 const emit = defineEmits<{ (event: "close"): void; (event: "open-plan", plan: Plan): void }>();
 type ExecutionConversationGroup = {
   id: string;
-  kind: "plan" | "task" | "user" | "unattributed" | "pending";
+  /** `continuation` = 补充要求起的那一轮；它不属于任何计划任务，所以单独成组。 */
+  kind: "plan" | "task" | "continuation" | "unattributed" | "pending";
   task?: ExecutionTask;
   tasks?: ExecutionTask[];
   items: ExecutionStreamItem[];
@@ -136,7 +137,9 @@ const executionTaskCounts = computed(() => executionTaskSummary(executionTasks.v
  * `Executor started` / `Execution gate` 会被漏在会话里名不副实。
  */
 function isRunActivity(item: ExecutionStreamItem): boolean {
-  return item.kind === "activity" && !item.taskId;
+  // **补充轮不是 Run 级活动**：它的条目同样没有 taskId，但它们属于"你补的那一轮"那一组，
+  // 不该被吸到顶部的 RUN CONTEXT 卡片里（那样会话里就少了几行，而卡片上多了一堆过程）。
+  return item.kind === "activity" && !item.taskId && !item.continuation;
 }
 
 const runActivityItems = computed<ExecutionStreamItem[]>(() => executionMessages.value.filter(isRunActivity));
@@ -155,14 +158,23 @@ const executionConversationGroups = computed<ExecutionConversationGroup[]>(() =>
   for (const task of executionTasks.value) {
     groups.push({ id: `task-${task.id}`, kind: "task", task, items: executionMessages.value.filter((item) => item.taskId === task.id) });
   }
-  // 你在执行线程里发的消息。它不属于任何执行步骤，但也不该和 Run 级活动混在一组——
-  // 它此前就挂在「未关联执行步骤」标题下，等于把用户自己说的话标成了"没有归属的执行步骤"。
-  const userMessages = executionMessages.value.filter((item) => item.kind === "user" && !item.taskId);
-  if (userMessages.length) groups.push({ id: "user", kind: "user", items: userMessages });
+  // **补充要求自己一组**：它不属于任何计划任务，也不该折进某个步骤的过程记录里
+  // （用户报的正是"补充内容被放进了最后那个 task"）。这一批条目在投影里就统一摘掉了
+  // `taskId`、打上了 `continuation`（见 projectExecutionJournal 收尾那一段）——
+  // 所以这里不用再判 loop，判据只有一处。
+  const continuationItems = executionMessages.value.filter((item) => item.continuation);
+  if (continuationItems.length) groups.push({ id: "continuation", kind: "continuation", items: continuationItems });
   // 剩下的才是真正的归因缺口：本该落进某个执行步骤、却没有归属的模型 / 工具条目。
   // 现代 Run 不产生这类条目，它们集中在 2026-09-25 之前的数据里。
+  // **`continuation` 要排掉**：那些条目同样没有 taskId，但它们已经在上面的组里了——
+  // 不排就是同一条消息渲染两次（实测：补充那 16 条会同时出现在「补充要求」和「未归属」两组）。
   const unattributed = executionMessages.value.filter(
-    (item) => item.kind !== "plan" && item.kind !== "user" && !isRunActivity(item) && (!item.taskId || !taskIds.has(item.taskId)),
+    (item) =>
+      item.kind !== "plan" &&
+      item.kind !== "user" &&
+      !item.continuation &&
+      !isRunActivity(item) &&
+      (!item.taskId || !taskIds.has(item.taskId)),
   );
   if (unattributed.length) groups.push({ id: "unattributed", kind: "unattributed", items: unattributed });
   return collapsePendingTaskGroups(groups);
@@ -238,6 +250,14 @@ function stepDuration(group: ExecutionConversationGroup): string | null {
   if (!task?.startedAt || !task.completedAt) return null;
   const ms = durationBetween(task.startedAt, task.completedAt);
   return ms === null ? null : formatDuration(ms);
+}
+
+/** 补充要求那一组的标题：直接写你补的那句话（这一组的第一条用户消息）。 */
+function continuationHeading(group: ExecutionConversationGroup): string {
+  const prompt = group.items.find((item) => item.kind === "user");
+  const text = (prompt?.content ?? "").replace(/\s+/g, " ").trim();
+  if (!text) return "这一轮";
+  return text.length > 44 ? `${text.slice(0, 44)}…` : text;
 }
 
 /** 折起来的那批里，有几条是**认不出来的活动**——这件事本身要说得出口，不能悄悄折掉。 */
@@ -964,6 +984,20 @@ onBeforeUnmount(() => {
                 ><span class="execution-task-stream-count">{{ visibleItems(group).length }} 条</span
                 ><ArrowUp v-if="!isTaskGroupCollapsed(group.id)" :size="14" /><ArrowDown v-else :size="14" /><small
                   >这些事件没有记录所属的执行步骤，只出现在早期 Run 的数据里。</small
+                >
+              </button>
+              <button
+                v-else-if="group.kind === 'continuation'"
+                type="button"
+                class="execution-task-stream-heading execution-continuation-heading"
+                :aria-expanded="!isTaskGroupCollapsed(group.id)"
+                :aria-controls="`execution-task-stream-${group.id}`"
+                @click="toggleTaskGroup(group.id)"
+              >
+                <span class="execution-task-stream-step">补充要求</span><strong>{{ continuationHeading(group) }}</strong
+                ><span class="execution-task-stream-count">{{ visibleItems(group).length }} 条</span
+                ><ArrowUp v-if="!isTaskGroupCollapsed(group.id)" :size="14" /><ArrowDown v-else :size="14" /><small
+                  >这一轮由你补充的要求起，<strong>不属于任何计划任务</strong>。</small
                 >
               </button>
               <div v-else-if="group.kind === 'pending'" class="execution-pending-steps">

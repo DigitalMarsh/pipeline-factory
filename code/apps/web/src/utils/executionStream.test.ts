@@ -649,3 +649,115 @@ describe("动作的结构化载荷", () => {
     expect(items[0]?.result).toEqual([{ path: "README.md" }]);
   });
 });
+
+/**
+ * **补充要求那一轮不属于任何计划任务。**
+ *
+ * 这一组用例盯着一个实测出来的错法：**`modelStep` 是每个 Loop 各自从 1 数的**，而"哪一步属于哪个
+ * 任务"那张映射表此前只按 `modelStep` 存（整条日志一起建）。于是补充轮的第 1 步撞上第一轮的第 1 步，
+ * 整轮 23 条——连你那句「你补充了要求」——都被算进了某个已完成任务的分组里，看起来像"这个步骤又在跑"。
+ */
+describe("补充要求那一轮的归属", () => {
+  const plan: ExecutionPlanSnapshot = {
+    planId: "plan-1",
+    revision: 1,
+    occurredAt: "2026-10-07T14:48:00.000Z",
+    goal: "注入 project_id",
+    acceptanceCriteria: ["任务归属于当前项目"],
+    includePaths: ["code/src"],
+    excludePaths: [],
+    tasks: [
+      { id: "task-1", title: "改组件", status: "READY", dependencies: [] },
+      { id: "task-2", title: "验证行为", status: "READY", dependencies: [] },
+    ],
+    verificationCommandIds: [],
+  };
+
+  /** 与真实那次一样：第一轮 loop-1 用 modelStep 1 做 task-1，补充轮 loop-2 **又从 1 开始数**。 */
+  function journal() {
+    return [
+      {
+        sequence: 1,
+        type: "TASK_PROGRESS",
+        occurredAt: "2026-10-07T14:49:35.000Z",
+        payload: { action: "task-lifecycle", taskId: "task-1", state: "IN_PROGRESS", loopId: "loop-1", modelStep: 1 },
+      },
+      {
+        sequence: 2,
+        type: "MODEL_OUTPUT",
+        occurredAt: "2026-10-07T14:49:40.000Z",
+        payload: { text: "第一轮的正文", loopId: "loop-1", modelStep: 1 },
+      },
+      {
+        sequence: 3,
+        type: "USER_GUIDANCE",
+        occurredAt: "2026-10-07T15:18:06.000Z",
+        payload: { content: "生成修改摘要，并 commit", runId: "run-1", guidanceId: "guidance-1", delivery: "QUEUE", status: "PENDING" },
+      },
+      {
+        sequence: 4,
+        type: "TASK_PROGRESS",
+        occurredAt: "2026-10-07T15:18:06.100Z",
+        payload: {
+          action: "continuation",
+          guidanceIds: ["guidance-1"],
+          consumedAt: "2026-10-07T15:18:06.100Z",
+          completedTaskIds: ["task-1", "task-2"],
+          tasksUnchanged: true,
+        },
+      },
+      {
+        sequence: 5,
+        type: "TASK_PROGRESS",
+        occurredAt: "2026-10-07T15:18:06.200Z",
+        payload: { action: "executor_loop_created", loopId: "loop-2" },
+      },
+      {
+        sequence: 6,
+        type: "MODEL_OUTPUT",
+        occurredAt: "2026-10-07T15:18:53.000Z",
+        payload: { text: "补充那一轮的正文", loopId: "loop-2", modelStep: 1 },
+      },
+      {
+        sequence: 7,
+        type: "TASK_PROGRESS",
+        occurredAt: "2026-10-07T15:19:50.000Z",
+        payload: { action: "task-status", completedTaskIds: ["task-1", "task-2"], loopId: "loop-2", modelStep: 1, taskId: "task-2" },
+      },
+    ];
+  }
+
+  it("第一轮的条目照旧归到它的任务；**补充轮的条目一条都不归**", () => {
+    const items = projectExecutionJournal(journal(), "COMPLETED", plan);
+    const firstRound = items.find((item) => item.content.includes("第一轮的正文"));
+    const continuationRound = items.find((item) => item.content.includes("补充那一轮的正文"));
+
+    expect(firstRound).toMatchObject({ taskId: "task-1" });
+    expect(continuationRound).toMatchObject({ continuation: true });
+    expect(continuationRound?.taskId).toBeUndefined();
+  });
+
+  it("**补充轮自己带了 taskId 也不认**：那是写侧按「当时活跃的任务」盖的戳", () => {
+    // 上面第 7 条就带着 `taskId: "task-2"`（真实日志里也是）——它说的是"写这条时正在做哪个任务"，
+    // 不是"这条属于那个任务"。补偿：**任何标了 continuation 的条目都不带 taskId**（这一条足以
+    // 覆盖全部条目类型，不必逐个 messageType 列）。
+    const items = projectExecutionJournal(journal(), "COMPLETED", plan);
+    const continuationItems = items.filter((item) => item.continuation);
+    expect(continuationItems.length).toBeGreaterThan(0);
+    expect(continuationItems.filter((item) => item.taskId !== undefined)).toEqual([]);
+  });
+
+  it("「你补充了要求」那句本身也属于这一轮、不属于任何任务", () => {
+    const items = projectExecutionJournal(journal(), "COMPLETED", plan);
+    const guidance = items.find((item) => item.messageType === "USER_MESSAGE");
+    expect(guidance).toMatchObject({ continuation: true, content: "生成修改摘要，并 commit" });
+    expect(guidance?.taskId).toBeUndefined();
+  });
+
+  it("`continuation` 标记本身不占一行（此前它掉进兜底，显示成「未识别」）", () => {
+    const items = projectExecutionJournal(journal(), "COMPLETED", plan);
+    // 标记只是个写侧的账：内容里不该有任何一条把它的载荷漏出来。
+    expect(items.filter((item) => JSON.stringify(item).includes("tasksUnchanged"))).toEqual([]);
+    expect(items.filter((item) => item.messageType === "UNCLASSIFIED")).toEqual([]);
+  });
+});

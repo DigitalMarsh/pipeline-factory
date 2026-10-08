@@ -70,6 +70,13 @@ export type ExecutionStreamItem = {
   durationMs?: number | undefined;
   /** 这条消息属于哪一类（见 EXECUTION_MESSAGE_WEIGHTS）。权重只由它决定。 */
   messageType: ExecutionMessageType;
+  /**
+   * 这一条属于**补充要求起的那一轮**（`USER_GUIDANCE` → 新起的一轮 Loop）。
+   *
+   * 它**不属于任何计划任务**：分组时单独成组、折进自己的壳里，而不是挂在某个步骤下面。
+   * `taskId` 对这一类条目一律为空——那是它与普通条目的唯一区别。
+   */
+  continuation?: boolean | undefined;
   plan?: ExecutionPlanSnapshot;
 };
 
@@ -322,7 +329,7 @@ export function projectExecutionJournal(
   plan?: ExecutionPlanSnapshot,
 ): ExecutionStreamItem[] {
   const orderedJournal = [...journal].sort((a, b) => a.sequence - b.sequence);
-  const taskByModelStep = projectTaskAssociations(orderedJournal);
+  const { taskByLoopStep, continuationLoops } = projectTaskAssociations(orderedJournal);
   const items: ExecutionStreamItem[] = plan ? [planMessage(plan)] : [];
   const toolItems = new Map<string, ExecutionStreamItem>();
   const providerItems = new Map<string, ExecutionStreamItem>();
@@ -402,7 +409,15 @@ export function projectExecutionJournal(
     const payload = entry.payload;
     const step = numberValue(payload.modelStep) ?? numberValue(payload.step) ?? currentModelStep;
     const loopId = stringValue(payload.loopId) ?? currentLoopId;
-    const taskId = stringValue(payload.taskId) ?? (step === undefined ? undefined : taskByModelStep.get(step));
+    /**
+     * **补充轮不归任何任务**：它既不是某个步骤做的工作，也不该被折进某个步骤的分组里。
+     * 连它自己带了 `taskId` 也不认——那是写侧按"当时活跃的任务"盖的戳（用户报的正是
+     * 「补充内容被放进了最后那个 task 里」）。
+     */
+    const continuation = loopId !== undefined && continuationLoops.has(loopId);
+    const taskId = continuation
+      ? undefined
+      : (stringValue(payload.taskId) ?? (step === undefined ? undefined : taskByLoopStep.get(loopId ? `${loopId}#${step}` : `#${step}`)));
 
     if (entry.type === "MODEL_OUTPUT") {
       const text = stringValue(payload.text) ?? "";
@@ -524,6 +539,9 @@ export function projectExecutionJournal(
 
     if (entry.type === "TASK_PROGRESS") {
       const event = stringValue(payload.event) ?? "";
+      // `continuation` 是"这一轮由补充要求起"的标记：写侧的账，不该在会话里占一行
+      // （此前它掉进兜底，显示成「未识别 · 执行活动」）。这一轮的条目由 `continuationLoops` 认。
+      if (payload.action === "continuation") continue;
       if (event === "agent.step.started" || event === "agent.model.completed") {
         const modelStep = numberValue(payload.modelStep) ?? numberValue(payload.step);
         if (modelStep !== undefined) currentModelStep = modelStep;
@@ -625,11 +643,39 @@ export function projectExecutionJournal(
       if (item.kind === "model" && item.modelStep === activeStep) item.status = "RUNNING";
     }
   }
+  /**
+   * **补充轮次的条目一律不带任务归属**，并打上 `continuation` 供界面单独成组。
+   *
+   * 放在收尾统一做，而不是把标志传给十几个构造点：漏一处就会有一条挂在任务下面，而那种
+   * "少一条"的表现是某个已完成的分组里悄悄多了一行——没人会发现。
+   * `USER_MESSAGE` 在执行线里只有一种来源（`USER_GUIDANCE`，见 §2.1 第 4 条），所以它不靠
+   * loopId 判——那条日志不带 loopId。
+   */
+  for (const item of items) {
+    const isContinuation = (item.loopId ? continuationLoops.has(item.loopId) : false) || item.messageType === "USER_MESSAGE";
+    if (!isContinuation) continue;
+    item.continuation = true;
+    delete item.taskId;
+  }
   return items;
 }
 
-function projectTaskAssociations(journal: ExecutionJournalEntry[]): Map<number, string> {
-  const byStep = new Map<number, string>();
+/**
+ * 一条 journal 事实该归到哪个计划任务，以及**哪些 Loop 是补充要求起的那一轮**。
+ *
+ * 键必须是 **`loopId#modelStep` 两段**，不能只用 `modelStep`：modelStep 是**每个 Loop 各自从 1 数**
+ * 的，而这张表是整条 journal 一起建的——补充那一轮的第 1 步会撞上第一轮的第 1 步，于是整轮 23 条
+ * （连你那句「你补充了要求」）被算进某个已完成任务的组里。实测就是这么错的。
+ *
+ * 补充轮次从日志本身认：`action: "continuation"` 那条**不带 loopId**，它写在下一轮开始之前，
+ * 所以"标记之后第一个新出现的 loopId"就是它。
+ */
+function projectTaskAssociations(journal: ExecutionJournalEntry[]): {
+  taskByLoopStep: Map<string, string>;
+  continuationLoops: Set<string>;
+} {
+  const byStep = new Map<string, string>();
+  const continuationLoops = new Set<string>();
   const completed = new Set<string>();
   const structuredSteps = new Set<number>();
   for (const entry of journal) {
@@ -639,16 +685,34 @@ function projectTaskAssociations(journal: ExecutionJournalEntry[]): Map<number, 
     }
   }
   let currentModelStep: number | undefined;
+  let currentLoopId: string | undefined;
   let modelText = "";
+  let pendingContinuation = false;
+  const seenLoops = new Set<string>();
   for (const entry of journal) {
+    const entryLoopId = stringValue(entry.payload.loopId);
+    if (entryLoopId && !seenLoops.has(entryLoopId)) {
+      seenLoops.add(entryLoopId);
+      if (pendingContinuation) {
+        continuationLoops.add(entryLoopId);
+        pendingContinuation = false;
+      }
+    }
     if (entry.type === "MODEL_OUTPUT") {
       modelText += stringValue(entry.payload.text) ?? "";
       const outputStep = numberValue(entry.payload.modelStep);
       if (outputStep !== undefined) currentModelStep = outputStep;
+      if (entryLoopId) currentLoopId = entryLoopId;
       continue;
     }
     if (entry.type !== "TASK_PROGRESS") continue;
     const payload = entry.payload;
+    if (payload.action === "continuation") {
+      pendingContinuation = true;
+      continue;
+    }
+    const loopId = entryLoopId ?? currentLoopId;
+    const key = (step: number) => (loopId ? `${loopId}#${step}` : `#${step}`);
     if (payload.event === "agent.step.started")
       currentModelStep = numberValue(payload.modelStep) ?? numberValue(payload.step) ?? currentModelStep;
     if (payload.action === "task-status") {
@@ -659,14 +723,14 @@ function projectTaskAssociations(journal: ExecutionJournalEntry[]): Map<number, 
         stringValue(payload.activeTaskId) ??
         (newlyCompleted.length === 1 ? newlyCompleted[0] : undefined);
       const modelStep = numberValue(payload.modelStep);
-      if (taskId && modelStep !== undefined) byStep.set(modelStep, taskId);
+      if (taskId && modelStep !== undefined) byStep.set(key(modelStep), taskId);
       for (const id of completedIds) completed.add(id);
       continue;
     }
     if (payload.action === "task-lifecycle") {
       const taskId = stringValue(payload.taskId);
       const modelStep = numberValue(payload.modelStep);
-      if (taskId && modelStep !== undefined) byStep.set(modelStep, taskId);
+      if (taskId && modelStep !== undefined) byStep.set(key(modelStep), taskId);
       if (taskId && payload.state === "DONE") completed.add(taskId);
       continue;
     }
@@ -677,14 +741,14 @@ function projectTaskAssociations(journal: ExecutionJournalEntry[]): Map<number, 
         if (report) {
           const newlyCompleted = report.completedTaskIds.filter((id) => !completed.has(id));
           const taskId = report.blockedTaskId ?? report.activeTaskId ?? (newlyCompleted.length === 1 ? newlyCompleted[0] : undefined);
-          if (taskId) byStep.set(modelStep, taskId);
+          if (taskId) byStep.set(key(modelStep), taskId);
           for (const id of report.completedTaskIds) completed.add(id);
         }
       }
       modelText = "";
     }
   }
-  return byStep;
+  return { taskByLoopStep: byStep, continuationLoops };
 }
 
 function parseStructuredTaskReport(content: string): { completedTaskIds: string[]; activeTaskId?: string; blockedTaskId?: string } | null {

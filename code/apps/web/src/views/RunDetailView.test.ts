@@ -262,8 +262,9 @@ describe("Run detail execution conversation", () => {
 
   it("把 Run 级活动移出执行会话：时间线只留执行步骤与你说的话", () => {
     // 判据是 "activity 且无 taskId"——不再按事件类型列举，否则每加一种 Run 级事件都要回来补。
+    // **但补充轮要排掉**：它的条目同样没有 taskId，却属于「你补的那一轮」那一组，不该被吸进这张卡。
     expect(flat(runDetailSource)).toContain(flat("function isRunActivity(item: ExecutionStreamItem): boolean {"));
-    expect(flat(runDetailSource)).toContain(flat('return item.kind === "activity" && !item.taskId;'));
+    expect(flat(runDetailSource)).toContain(flat('return item.kind === "activity" && !item.taskId && !item.continuation;'));
     // 它们改由顶部 RUN CONTEXT 卡片承载。
     expect(flat(runDetailSource)).toContain(flat(':run-activity="runActivityItems"'));
     // 旧标题与旧说明不再出现：它们把一个常态（Run 的创建 / 钩子 / 验证）写成了异常。
@@ -275,10 +276,18 @@ describe("Run detail execution conversation", () => {
     expect(flat(runDetailSource)).toContain(flat("未归属事件"));
     expect(runDetailStyles).toContain(flat(".execution-unattributed-heading"));
     expect(runDetailStyles).not.toContain(".execution-unassigned-heading");
-    // 你在执行线程里发的消息独立成组：此前它挂在「未关联执行步骤」下面，
-    // 等于把用户自己说的话标成了"没有归属的执行步骤"。
-    expect(flat(runDetailSource)).toContain(flat('groups.push({ id: "user", kind: "user", items: userMessages })'));
-    expect(runDetailStyles).toContain(flat(".execution-conversation-group-user"));
+    // 你在执行线程里发的消息，**和它起的那一轮一起独立成组**：此前它挂在「未关联执行步骤」下面，
+    // 等于把用户自己说的话标成了"没有归属的执行步骤"；再往后又被算进了某个已完成任务的分组里
+    // （那正是用户报的"补充内容被放进了最后那个 task"）。现在这一组自己一壳，并在标题上写明它
+    // 不属于任何计划任务。
+    expect(flat(runDetailSource)).toContain(flat('groups.push({ id: "continuation", kind: "continuation", items: continuationItems })'));
+    expect(flat(runDetailSource)).toContain(flat("group.kind === 'continuation'"));
+    expect(flat(runDetailSource)).toContain(flat("不属于任何计划任务"));
+    expect(runDetailStyles).toContain(flat(".execution-conversation-group-continuation"));
+    // 旧的 user 组随这次改动退役（那批条目现在都带 continuation），别留下死样式。
+    expect(runDetailStyles).not.toContain(".execution-conversation-group-user");
+    // 补充轮的条目已经在它自己那一组里，**不能又被算进「未归属」**——不排就是同一条渲染两次。
+    expect(flat(runDetailSource)).toContain(flat("!item.continuation && !isRunActivity(item)"));
   });
 
   it("执行过程有阶段感，且呈现方式由一张表统一决定", () => {

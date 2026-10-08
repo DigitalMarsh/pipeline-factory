@@ -502,14 +502,17 @@ export class Scheduler {
       createdAt: this.options.store.now(),
       consumedAt: null,
     });
-    const taskId = this.recordedActiveTaskId(thread.journal);
+    /**
+     * **不盖 `taskId`**：补充要求不属于任何计划任务——它既不是某个步骤做的工作，也不该被折进
+     * 某个步骤的分组里。此前这里按"当前活跃任务"盖了一个，界面上那句「你补充了要求」于是挂在了
+     * 最后一个任务下面（用户报的正是这个）。
+     */
     this.append(thread.id, "USER_GUIDANCE", {
       content,
       runId,
       guidanceId: guidance.id,
       delivery: mode,
       status: "PENDING",
-      ...(taskId ? { taskId } : {}),
     });
     this.options.store.appendEvent({
       type: "run.guidance.added",
@@ -716,21 +719,6 @@ export class Scheduler {
     const thread = this.options.store.getExecutionThread(threadId) ?? this.threads.get(threadId);
     if (!thread) return;
     this.options.store.appendExecutionJournal({ executionThreadId: thread.id, runId: thread.runId, type, payload });
-  }
-
-  private recordedActiveTaskId(journal: ExecutionJournalEntry[]): string | undefined {
-    let activeTaskId: string | undefined;
-    for (const entry of journal) {
-      if (entry.type !== "TASK_PROGRESS") continue;
-      if (entry.payload.action === "task-lifecycle") {
-        const taskId = typeof entry.payload.taskId === "string" ? entry.payload.taskId : undefined;
-        if (entry.payload.state === "IN_PROGRESS") activeTaskId = taskId;
-        else if (taskId && activeTaskId === taskId) activeTaskId = undefined;
-      }
-      if (entry.payload.action === "task-status")
-        activeTaskId = typeof entry.payload.activeTaskId === "string" ? entry.payload.activeTaskId : undefined;
-    }
-    return activeTaskId;
   }
 
   private recordHookExecutions(runId: string, result: HookRunResult): void {

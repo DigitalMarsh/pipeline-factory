@@ -1749,7 +1749,7 @@ a {
 /* 步骤分组：**不用左侧竖线**（它把整组内容再往右推 53px，而且说的和"这是一组"是同一件事），
    改成组与组之间一条横线分段——省下横向空间，任务边界反而更醒目。 */
 .execution-conversation-group-task,
-.execution-conversation-group-user,
+.execution-conversation-group-continuation,
 .execution-conversation-group-unattributed {
   margin-top: 22px;
   border-top: 2px solid #d7e0ec;
