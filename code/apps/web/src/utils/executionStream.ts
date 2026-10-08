@@ -77,6 +77,13 @@ export type ExecutionStreamItem = {
    * `taskId` 对这一类条目一律为空——那是它与普通条目的唯一区别。
    */
   continuation?: boolean | undefined;
+  /**
+   * 那一轮是第几轮补充（从 1 数）。**一轮一组**：两轮补充合成一组的话，组头只能写其中一句话，
+   * 另一轮的正文就没了标题（实测：第二轮那句只能当组里的一行看）。
+   */
+  continuationRound?: number | undefined;
+  /** 这句补充要求是怎么投的。只有 `QUEUE` 算"起了一轮"，`STEER` 是插进正在跑的那一轮里的。 */
+  guidanceDelivery?: "STEER" | "QUEUE" | undefined;
   plan?: ExecutionPlanSnapshot;
 };
 
@@ -644,18 +651,40 @@ export function projectExecutionJournal(
     }
   }
   /**
-   * **补充轮次的条目一律不带任务归属**，并打上 `continuation` 供界面单独成组。
+   * **补充轮次的条目一律不带任务归属**，并按轮次编号——界面据此一轮一组。
    *
    * 放在收尾统一做，而不是把标志传给十几个构造点：漏一处就会有一条挂在任务下面，而那种
    * "少一条"的表现是某个已完成的分组里悄悄多了一行——没人会发现。
-   * `USER_MESSAGE` 在执行线里只有一种来源（`USER_GUIDANCE`，见 §2.1 第 4 条），所以它不靠
-   * loopId 判——那条日志不带 loopId。
+   *
+   * 编号必须**按顺序**数：那句「你补充了要求」的日志**不带 loopId**（它写在那一轮开始之前），
+   * 所以它取"下一个轮次号"，轮内的条目取自己那一轮的号。只有 `delivery: "QUEUE"` 那句算
+   * "起了一轮"——`STEER` 是插进**正在跑的那一轮**里的，它属于那个步骤的现场，不该被搬出来。
    */
+  let round = 0;
+  const roundByLoop = new Map<string, number>();
   for (const item of items) {
-    const isContinuation = (item.loopId ? continuationLoops.has(item.loopId) : false) || item.messageType === "USER_MESSAGE";
-    if (!isContinuation) continue;
-    item.continuation = true;
-    delete item.taskId;
+    /**
+     * **这句先于 loopId 规则处理。** 它的日志不带 `loopId`，而投影会顺手把它归给"上一个 Loop"
+     * ——那正是它要离开的那一轮。于是就出现了"第二句补充要求落进第一轮"（实测）。这里既给它
+     * 按顺序编轮次，也把那个继承来的 loopId 摘掉：它不属于上一轮。
+     */
+    if (item.messageType === "USER_MESSAGE" && item.guidanceDelivery === "QUEUE") {
+      item.continuation = true;
+      item.continuationRound = round + 1;
+      delete item.taskId;
+      delete item.loopId;
+      continue;
+    }
+    if (item.loopId && continuationLoops.has(item.loopId)) {
+      let index = roundByLoop.get(item.loopId);
+      if (index === undefined) {
+        index = round += 1;
+        roundByLoop.set(item.loopId, index);
+      }
+      item.continuation = true;
+      item.continuationRound = index;
+      delete item.taskId;
+    }
   }
   return items;
 }
@@ -1287,7 +1316,8 @@ function projectExecutionActivity(
     ...(modelStep === undefined ? {} : { modelStep }),
     ...(loopId ? { loopId } : {}),
   };
-  if (entry.type === "USER_GUIDANCE")
+  if (entry.type === "USER_GUIDANCE") {
+    const delivery = payload.delivery === "STEER" || payload.delivery === "QUEUE" ? payload.delivery : undefined;
     return {
       id: `execution-guidance-${entry.sequence}`,
       kind: "user",
@@ -1299,8 +1329,10 @@ function projectExecutionActivity(
       occurredAt: entry.occurredAt,
       sequence: entry.sequence,
       messageType: "USER_MESSAGE",
+      ...(delivery ? { guidanceDelivery: delivery } : {}),
       ...association,
     };
+  }
   if (entry.type === "RUN_CREATED")
     return activity(
       entry,

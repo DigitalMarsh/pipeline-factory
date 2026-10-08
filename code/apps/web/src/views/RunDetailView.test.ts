@@ -280,7 +280,10 @@ describe("Run detail execution conversation", () => {
     // 等于把用户自己说的话标成了"没有归属的执行步骤"；再往后又被算进了某个已完成任务的分组里
     // （那正是用户报的"补充内容被放进了最后那个 task"）。现在这一组自己一壳，并在标题上写明它
     // 不属于任何计划任务。
-    expect(flat(runDetailSource)).toContain(flat('groups.push({ id: "continuation", kind: "continuation", items: continuationItems })'));
+    expect(flat(runDetailSource)).toContain(flat("const rounds = new Map<number, ExecutionStreamItem[]>();"));
+    expect(flat(runDetailSource)).toContain(
+      flat('for (const [index, items] of rounds) groups.push({ id: `continuation-${index}`, kind: "continuation", items });'),
+    );
     expect(flat(runDetailSource)).toContain(flat("group.kind === 'continuation'"));
     expect(flat(runDetailSource)).toContain(flat("不属于任何计划任务"));
     expect(runDetailStyles).toContain(flat(".execution-conversation-group-continuation"));

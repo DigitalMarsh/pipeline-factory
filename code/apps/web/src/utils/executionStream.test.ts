@@ -761,3 +761,125 @@ describe("补充要求那一轮的归属", () => {
     expect(items.filter((item) => item.messageType === "UNCLASSIFIED")).toEqual([]);
   });
 });
+
+/**
+ * **两轮补充各自成组。** 这个错法很隐蔽：那句「你补充了要求」的日志**不带 loopId**，投影会顺手把它
+ * 归给"上一个 Loop"——正好是它要离开的那一轮。实测第二句补充因此落进了第一组（组头还是第一句话）。
+ */
+describe("补充要求有两轮时", () => {
+  const plan: ExecutionPlanSnapshot = {
+    planId: "plan-1",
+    revision: 1,
+    occurredAt: "2026-10-07T14:48:00.000Z",
+    goal: "",
+    acceptanceCriteria: [],
+    includePaths: [],
+    excludePaths: [],
+    tasks: [{ id: "task-1", title: "改组件", status: "READY", dependencies: [] }],
+    verificationCommandIds: [],
+  };
+
+  it("**第二句落在第二轮**，而且它不带那个继承来的 loopId", () => {
+    const items = projectExecutionJournal(
+      [
+        {
+          sequence: 1,
+          type: "TASK_PROGRESS",
+          occurredAt: "2026-10-07T14:49:35.000Z",
+          payload: { action: "task-lifecycle", taskId: "task-1", state: "IN_PROGRESS", loopId: "loop-1", modelStep: 1 },
+        },
+        {
+          sequence: 2,
+          type: "USER_GUIDANCE",
+          occurredAt: "2026-10-07T15:18:06.000Z",
+          payload: { content: "第一句补充", delivery: "QUEUE", status: "PENDING" },
+        },
+        {
+          sequence: 3,
+          type: "TASK_PROGRESS",
+          occurredAt: "2026-10-07T15:18:06.100Z",
+          payload: { action: "continuation", guidanceIds: ["g-1"] },
+        },
+        {
+          sequence: 4,
+          type: "TASK_PROGRESS",
+          occurredAt: "2026-10-07T15:18:06.200Z",
+          payload: { action: "executor_loop_created", loopId: "loop-2" },
+        },
+        {
+          sequence: 5,
+          type: "TASK_PROGRESS",
+          occurredAt: "2026-10-07T15:18:06.300Z",
+          payload: { event: "agent.step.started", loopId: "loop-2", modelStep: 1 },
+        },
+        {
+          sequence: 6,
+          type: "USER_GUIDANCE",
+          occurredAt: "2026-10-07T16:00:00.000Z",
+          payload: { content: "第二句补充", delivery: "QUEUE", status: "PENDING" },
+        },
+        {
+          sequence: 7,
+          type: "TASK_PROGRESS",
+          occurredAt: "2026-10-07T16:00:00.100Z",
+          payload: { action: "continuation", guidanceIds: ["g-2"] },
+        },
+        {
+          sequence: 8,
+          type: "TASK_PROGRESS",
+          occurredAt: "2026-10-07T16:00:00.200Z",
+          payload: { action: "executor_loop_created", loopId: "loop-3" },
+        },
+        {
+          sequence: 9,
+          type: "TASK_PROGRESS",
+          occurredAt: "2026-10-07T16:00:00.300Z",
+          payload: { event: "agent.step.started", loopId: "loop-3", modelStep: 1 },
+        },
+      ],
+      "COMPLETED",
+      plan,
+    );
+
+    const guidance = items.filter((item) => item.messageType === "USER_MESSAGE");
+    expect(guidance.map((item) => [item.content, item.continuationRound, item.loopId])).toEqual([
+      ["第一句补充", 1, undefined],
+      ["第二句补充", 2, undefined],
+    ]);
+    // 每一轮的 loop 各自一号，不互相串。
+    expect(items.find((item) => item.loopId === "loop-2")?.continuationRound).toBe(1);
+    expect(items.find((item) => item.loopId === "loop-3")?.continuationRound).toBe(2);
+  });
+
+  it("`STEER` 那句**不搬出来**：它插进的是正在跑的那一轮，属于那个步骤的现场", () => {
+    const items = projectExecutionJournal(
+      [
+        {
+          sequence: 1,
+          type: "TASK_PROGRESS",
+          occurredAt: "2026-10-07T14:49:35.000Z",
+          payload: { action: "task-lifecycle", taskId: "task-1", state: "IN_PROGRESS", loopId: "loop-1", modelStep: 1 },
+        },
+        // 那一轮正在跑（有 modelStep）时插进来的——它继承的 loopId/modelStep 就是**那个步骤**的。
+        {
+          sequence: 2,
+          type: "TASK_PROGRESS",
+          occurredAt: "2026-10-07T14:49:36.000Z",
+          payload: { event: "agent.step.started", loopId: "loop-1", modelStep: 1 },
+        },
+        {
+          sequence: 3,
+          type: "USER_GUIDANCE",
+          occurredAt: "2026-10-07T14:50:00.000Z",
+          payload: { content: "插一句", delivery: "STEER", status: "PENDING" },
+        },
+      ],
+      "COMPLETED",
+      plan,
+    );
+
+    const guidance = items.find((item) => item.messageType === "USER_MESSAGE");
+    expect(guidance?.continuation).toBeUndefined();
+    expect(guidance?.taskId).toBe("task-1");
+  });
+});

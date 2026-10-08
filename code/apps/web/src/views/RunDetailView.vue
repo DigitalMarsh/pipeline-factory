@@ -162,8 +162,17 @@ const executionConversationGroups = computed<ExecutionConversationGroup[]>(() =>
   // （用户报的正是"补充内容被放进了最后那个 task"）。这一批条目在投影里就统一摘掉了
   // `taskId`、打上了 `continuation`（见 projectExecutionJournal 收尾那一段）——
   // 所以这里不用再判 loop，判据只有一处。
-  const continuationItems = executionMessages.value.filter((item) => item.continuation);
-  if (continuationItems.length) groups.push({ id: "continuation", kind: "continuation", items: continuationItems });
+  // **一轮补充一组**。两轮合成一组的话，组头只能写其中一句话，另一轮的正文就没了标题
+  // （实测：第二轮那句只能当组里的一行看）。轮次编号在投影里就排好了，见 projectExecutionJournal 收尾。
+  const rounds = new Map<number, ExecutionStreamItem[]>();
+  for (const item of executionMessages.value) {
+    if (!item.continuation) continue;
+    const key = item.continuationRound ?? 0;
+    const bucket = rounds.get(key);
+    if (bucket) bucket.push(item);
+    else rounds.set(key, [item]);
+  }
+  for (const [index, items] of rounds) groups.push({ id: `continuation-${index}`, kind: "continuation", items });
   // 剩下的才是真正的归因缺口：本该落进某个执行步骤、却没有归属的模型 / 工具条目。
   // 现代 Run 不产生这类条目，它们集中在 2026-09-25 之前的数据里。
   // **`continuation` 要排掉**：那些条目同样没有 taskId，但它们已经在上面的组里了——
