@@ -482,21 +482,4 @@ describe("resetInputState 与三个 label wrapper", () => {
     expect(s.inputDialogOpen.value).toBe(false);
     expect(s.inputAnswerInFlight.value).toBeNull();
   });
-
-  it("三个 wrapper 把本地草稿与在途标记喂给纯函数", () => {
-    const s = setup();
-    const open = request("r-1");
-    s.setInputRequests([open]);
-    const draft = { requestId: "r-1", currentIndex: 0, values: { "q-r-1": ["A"] }, otherValues: {} };
-    s.inputProgress.value = draft;
-
-    expect(s.inputAnswerLabelsFor(open, open.questions[0]!)).toEqual(["A"]);
-    expect(s.inputAnswerText(open, open.questions[0]!)).toBe("A");
-
-    s.inputProgress.value = null;
-    s.inputAnswerInFlight.value = "r-1";
-    // 在途标记优先于状态文案：没有答案可显示时才按状态给过程提示。
-    expect(s.inputStatusLabel(open)).toBe("提交中");
-    expect(s.inputAnswerText(open, open.questions[0]!)).toBe("提交结果确认中");
-  });
 });

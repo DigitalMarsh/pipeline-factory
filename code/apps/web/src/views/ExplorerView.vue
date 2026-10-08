@@ -4,19 +4,7 @@
 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import {
-  ArrowDown,
-  ArrowUp,
-  Check,
-  Close,
-  Connection,
-  Document,
-  InfoFilled,
-  Refresh,
-  Right,
-  VideoPause,
-  Warning,
-} from "@element-plus/icons-vue";
+import { ArrowDown, ArrowUp, Close, Connection, Document, Refresh, Right, VideoPause } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 import { ApiRequestError, api } from "../api";
@@ -32,14 +20,9 @@ import { optional } from "../utils/optional";
 import { closePolicyPanel, openPolicyPanel } from "../utils/policyPanel";
 import { createOptimisticUserTurn, settleOptimisticTurn } from "../utils/optimisticTurn";
 import { shouldSubmitComposer } from "../utils/composerKeyboard";
-import { inputStatusTagType, statusTagType } from "../utils/statusTag";
 import { formatContextUsage } from "../utils/explorerStatus";
 import ExplorerInputDialog from "../components/ExplorerInputDialog.vue";
-import MarkdownMessage from "../components/MarkdownMessage.vue";
-import ExplorerActivityRow from "../components/ExplorerActivityRow.vue";
-import ExplorerCandidatePlanCard from "../components/ExplorerCandidatePlanCard.vue";
-import ExplorerDividerRow from "../components/ExplorerDividerRow.vue";
-import ExplorerReasoningRow from "../components/ExplorerReasoningRow.vue";
+import ExplorerMessageRow from "../components/ExplorerMessageRow.vue";
 import ProjectExecutionThreadPanel from "../components/ProjectExecutionThreadPanel.vue";
 import ProjectSettingsDialog from "../components/ProjectSettingsDialog.vue";
 import ProjectCreateDialog from "../components/ProjectCreateDialog.vue";
@@ -54,26 +37,11 @@ import { normalizePlanProjection } from "../utils/planProjection";
 import { backendLabel } from "../utils/modelCatalog";
 import { useModelBackends } from "../composables/useModelBackends";
 import { isCandidatePlan as isCandidatePlanFor } from "../utils/planControls";
-import { readableAssistantText } from "../utils/planProtocolDisplay";
 import { planForActivity as planForActivityIn } from "../utils/planTimeline";
 import { taskDisplayTitle } from "../utils/taskTree";
 import { projectPathForModule } from "../utils/projectRoutes";
-import {
-  explorerTimelineTarget as activityTarget,
-  explorerPlanAnchorId,
-  explorerTimelineMessageType,
-  inputRequestTarget,
-} from "../utils/explorerTimeline";
-import {
-  assistantActivityLabel,
-  explorerDisplayMode,
-  explorerDisplayTitle,
-  explorerRuntimeFacts,
-  formatTurnTime,
-  EXPLORER_ROW_MODES,
-  type ExplorerRowMode,
-} from "../utils/explorerPresentation";
-import type { ExplorerDisplayMode } from "../utils/explorerPresentation";
+import { explorerPlanAnchorId, explorerTimelineMessageType, type ExplorerTimelineItem } from "../utils/explorerTimeline";
+import { explorerDisplayMode, explorerDisplayTitle, explorerRuntimeFacts } from "../utils/explorerPresentation";
 import {
   formatAgentLoopCompletion,
   formatAgentLoopGate,
@@ -242,9 +210,6 @@ const {
   setInputRequests,
   adoptInputRequest,
   resetInputState,
-  inputAnswerLabelsFor,
-  inputAnswerText,
-  inputStatusLabel,
   openInputRequest,
   updateInputProgress,
   submitInput,
@@ -423,28 +388,25 @@ const { visibleTurns, visibleActivity, visibleInputRequests, planBindings, timel
 const runtimeFacts = computed(() => explorerRuntimeFacts(visibleActivity.value));
 
 /**
- * 时间线上真正渲染哪些条目、助手消息里内嵌的方案卡显不显示，都问同一张清单表
- * （`EXPLORER_DISPLAY_MODES`，见 utils/explorerPresentation.ts）。视图不再自己判断
- * "这一类要不要出现"——呈现方式是产品决定，集中在一张表里，改那里即可。
+ * 时间线上真正渲染哪些条目，问同一张清单表（`EXPLORER_DISPLAY_MODES`，见 utils/explorerPresentation.ts）。
+ * 视图不再自己判断"这一类要不要出现"——呈现方式是产品决定，集中在一张表里，改那里即可。
+ *
+ * **"这一行长什么样"不在这里**：那是 `ExplorerMessageRow.vue` 的事（它按行型选分支）。
+ * 视图只负责过一遍隐显、算好每条该配哪张方案卡，然后把条目交给它。
  */
 const renderedTimelineItems = computed(() =>
   timelineItems.value.filter((item) => explorerDisplayMode(explorerTimelineMessageType(item)) !== "hidden"),
 );
-const showCandidatePlanCard = explorerDisplayMode("CANDIDATE_PLAN") !== "hidden";
 
 /**
- * 行型只在这里算一次，模板拿它选分支。
- * **"这一类摆哪些字段"不在这里**——`explorerActivityLine()`（utils/explorerPresentation.ts）把它算成
- * `{label, name, reference, body}`，由各自的**行组件**负责摆位置（见 components/Explorer*Row.vue）。
+ * 这条时间线条目该配哪张方案卡——**只有助手消息可能绑到方案**（绑定表由
+ * `planTimeline.planActivityBindings` 算，见 utils/planTimeline.ts），其余条目一律 null。
+ *
+ * 为什么由视图算而不是行组件自己找：绑定要的是"当前需求"的上下文（`planBindings`），
+ * 那是视图与 `useExplorerTimeline` 的事；行组件只负责把它摆出来。
  */
-function activityMode(activity: ExplorerActivityItem): ExplorerDisplayMode {
-  return explorerDisplayMode(activity.kind);
-}
-
-/** 这一条属于"共用行组件的那三种行型"时交出它的行型，否则交出 null（由别的分支负责）。 */
-function rowMode(activity: ExplorerActivityItem): ExplorerRowMode | null {
-  const mode = activityMode(activity);
-  return (EXPLORER_ROW_MODES as readonly string[]).includes(mode) ? (mode as ExplorerRowMode) : null;
+function planForTimelineItem(item: ExplorerTimelineItem): Plan | null {
+  return item.kind === "activity" ? planForActivity(item.activity) : null;
 }
 
 /**
@@ -1876,133 +1838,22 @@ onBeforeUnmount(() => {
                       }}</strong
                       ><span>当前需求还没有消息；切换需求不会删除其他对话内容。</span>
                     </div>
-                    <template v-for="(item, index) in renderedTimelineItems" :key="item.key">
-                      <article
-                        v-if="item.kind === 'input'"
-                        :id="inputRequestTarget(item.request)"
-                        :data-nav-key="`input:${item.request.id}`"
-                        :class="[
-                          'input-request-card',
-                          'timeline-input-request',
-                          {
-                            recovery: item.request.status === 'RECOVERY_REQUIRED',
-                            answered: item.request.status === 'ANSWERED',
-                            cancelled: item.request.status === 'CANCELLED',
-                          },
-                        ]"
-                      >
-                        <div class="input-request-card-icon">
-                          <Check v-if="item.request.status === 'ANSWERED'" :size="16" /><Warning
-                            v-else-if="item.request.status === 'RECOVERY_REQUIRED' || item.request.status === 'CANCELLED'"
-                            :size="16"
-                          /><InfoFilled v-else :size="16" />
-                        </div>
-                        <div class="input-request-card-body">
-                          <div class="message-meta">
-                            <strong>Plan Explorer 输入</strong
-                            ><el-tag size="small" effect="light" :type="inputStatusTagType(item.request.status)">{{
-                              inputStatusLabel(item.request)
-                            }}</el-tag>
-                          </div>
-                          <div class="input-request-event-times">
-                            <span
-                              ><strong>问题生成</strong><time>{{ formatTurnTime(item.request.createdAt) }}</time></span
-                            ><span v-if="item.request.answeredAt"
-                              ><strong>回答提交</strong><time>{{ formatTurnTime(item.request.answeredAt) }}</time></span
-                            >
-                          </div>
-                          <p v-if="item.request.status === 'SUBMITTING' || inputAnswerInFlight === item.request.id">
-                            已提交的答案正在等待 Provider 确认。刷新后会保留非敏感答案草稿，请勿重复提交。
-                          </p>
-                          <p v-else-if="item.request.status === 'RECOVERY_REQUIRED'">
-                            App Server 在回答确认前中断。本次回答不会自动重试，请恢复 Provider 会话后从此线程继续。
-                          </p>
-                          <p v-else-if="item.request.status === 'CANCELLED'">
-                            本次结构化输入已取消，问题和当时的时间点仍保留在对话记录中。
-                          </p>
-                          <p v-else-if="item.request.status === 'ANSWERED'">本轮结构化问题与回答已按原始时间线保留。</p>
-                          <p v-else>{{ item.request.questions.length }} 个结构化问题正在等待回答，回答后本轮才能继续。</p>
-                          <div class="input-request-section-label">问题与回答</div>
-                          <div class="input-stream-questions">
-                            <div
-                              v-for="(question, questionIndex) in item.request.questions"
-                              :key="question.id"
-                              class="input-stream-question"
-                            >
-                              <span class="question-index">{{ questionIndex + 1 }}</span>
-                              <div>
-                                <strong>{{ question.header }}</strong>
-                                <p>{{ question.question }}</p>
-                                <small :class="{ answered: inputAnswerLabelsFor(item.request, question).length }"
-                                  >回答：{{ inputAnswerText(item.request, question) }}</small
-                                >
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                        <el-button
-                          v-if="pendingInput?.id === item.request.id && inputAnswerInFlight !== item.request.id"
-                          type="primary"
-                          plain
-                          @click="openInputRequest"
-                          >回答</el-button
-                        >
-                      </article>
-                      <article
-                        v-else-if="activityMode(item.activity) === 'text'"
-                        :id="activityTarget(item.activity, index)"
-                        :data-nav-key="activityTarget(item.activity, index)"
-                        :class="['timeline-user-text', { 'failed-message': item.activity.status === 'FAILED' }]"
-                      >
-                        <span class="timeline-user-mark" aria-hidden="true">›</span>
-                        <div class="timeline-user-body">
-                          <MarkdownMessage :source="item.activity.summary" />
-                          <time>{{ formatTurnTime(item.activity.occurredAt) }}</time>
-                        </div>
-                      </article>
-                      <article
-                        v-else-if="activityMode(item.activity) === 'prose'"
-                        :id="activityTarget(item.activity, index)"
-                        :data-nav-key="activityTarget(item.activity, index)"
-                        :class="['timeline-assistant-prose', { 'failed-message': item.activity.status === 'FAILED' }]"
-                      >
-                        <div class="timeline-assistant-body">
-                          <div class="timeline-assistant-meta">
-                            <span class="thread-mark" :class="{ 'thread-mark-live': item.activity.status === 'RUNNING' }" /><strong>{{
-                              item.activity.title
-                            }}</strong
-                            ><el-tag size="small" effect="light" :type="statusTagType(item.activity.status)">{{
-                              assistantActivityLabel(item.activity)
-                            }}</el-tag
-                            ><span>{{ formatTurnTime(item.activity.occurredAt) }}</span>
-                          </div>
-                          <MarkdownMessage
-                            :source="readableAssistantText(item.activity.summary)"
-                            :streaming="item.activity.status === 'RUNNING'"
-                          /><ExplorerCandidatePlanCard
-                            v-if="showCandidatePlanCard && planForActivity(item.activity)"
-                            :plan="planForActivity(item.activity)!"
-                            :is-candidate="isCandidatePlan(planForActivity(item.activity))"
-                            :busy="busy"
-                            @view="openPlanDetail"
-                            @confirm="confirmPlan"
-                            @enqueue="enqueuePlan"
-                          />
-                        </div>
-                      </article>
-                      <template v-else-if="activityMode(item.activity) === 'reasoning'"
-                        ><ExplorerReasoningRow :activity="item.activity" :index="index"
-                      /></template>
-                      <template v-else-if="activityMode(item.activity) === 'divider'"
-                        ><ExplorerDividerRow :activity="item.activity" :index="index"
-                      /></template>
-                      <template v-else-if="rowMode(item.activity)"
-                        ><ExplorerActivityRow :activity="item.activity" :index="index" :mode="rowMode(item.activity)!"
-                      /></template>
-                      <article v-else class="timeline-unknown-row">
-                        未识别的行型：{{ activityMode(item.activity) }}（{{ item.activity.kind }}）
-                      </article>
-                    </template>
+                    <ExplorerMessageRow
+                      v-for="(item, index) in renderedTimelineItems"
+                      :key="item.key"
+                      :item="item"
+                      :index="index"
+                      :plan="planForTimelineItem(item)"
+                      :is-candidate-plan="isCandidatePlan(planForTimelineItem(item))"
+                      :busy="busy"
+                      :pending-input-id="pendingInput?.id ?? null"
+                      :input-progress="inputProgress"
+                      :input-answer-in-flight="inputAnswerInFlight"
+                      @answer="openInputRequest"
+                      @view-plan="openPlanDetail"
+                      @confirm-plan="confirmPlan"
+                      @enqueue-plan="enqueuePlan"
+                    />
                   </div>
                   <button
                     v-if="showScrollToLatest"

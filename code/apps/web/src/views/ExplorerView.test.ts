@@ -19,6 +19,12 @@ const flat = (text: string) =>
     .replace(/,([)}\]])/g, "$1")
     .trim();
 const explorerViewSource = readFileSync(fileURLToPath(new URL("./ExplorerView.vue", import.meta.url)), "utf8");
+/**
+ * **时间线上的"一条"现在住在行组件里**（`components/ExplorerMessageRow.vue`）：视图只过一遍隐显、
+ * 算好这一条该配哪张方案卡，然后把它交给这个壳——执行侧早就是这个形状（`ExecutionMessageRow.vue`）。
+ * 所以行型的断言从视图搬到了这里。
+ */
+const explorerMessageRowSource = readFileSync(fileURLToPath(new URL("../components/ExplorerMessageRow.vue", import.meta.url)), "utf8");
 const explorerStylesSource = readFileSync(fileURLToPath(new URL("../styles.css", import.meta.url)), "utf8");
 /**
  * **CSS 的换行与缩进不是这些断言的判据**：Prettier 会把一条规则从"一行写完"重排成"一行一声明"，
@@ -346,8 +352,9 @@ describe("Explorer inline message presentation", () => {
     expect(threadRailSource).not.toContain("<el-tree");
     expect(threadRailSource).not.toContain("explorer-thread-tree");
     expect(threadRailSource).not.toContain('command="new-requirement"');
-    expect(flat(explorerViewSource)).toContain(flat("activityMode(item.activity) === 'text'"));
-    expect(flat(explorerViewSource)).toContain(flat('class="timeline-user-mark"'));
+    // "这一行怎么摆"在行组件里；视图只把条目递进去。
+    expect(flat(explorerMessageRowSource)).toContain(flat("mode === 'text'"));
+    expect(flat(explorerMessageRowSource)).toContain(flat('class="timeline-user-mark"'));
     // 卡片那一套（头像 + 首行摘要 + 展开按钮）已经删掉：用户输入是一行原文，不是一份要点提要。
     expect(explorerViewSource).not.toContain("user-message-summary");
     expect(explorerViewSource).not.toContain("isUserMessageExpanded");
@@ -355,6 +362,24 @@ describe("Explorer inline message presentation", () => {
     // 我的消息靠右（与执行线程的 `.execution-message.mine` 同一套读法）：那个 `auto` 左外边距掉了
     // 就会悄悄退回左对齐——那不是"没样式"，是读起来像两个人在同一侧说话。
     expect(explorerStylesSource).toMatch(/\.timeline-user-text \{[^}]*margin: 0 0 18px auto;/);
+  });
+
+  it("视图把每条条目交给行组件，并把它读不到的本地状态一起递进去", () => {
+    // 行组件拿不到"正在编辑的草稿"与"这条请求在途"——它们归 `useExplorerInputRequests`，
+    // 而卡上的答案文案（草稿优先、密钥显示已隐藏、提交中…）恰恰由它们决定。**少传一个 prop，
+    // 界面就会静默退回"显示服务端答案"**（连报错都没有），所以这几条接线钉在这里。
+    expect(flat(explorerViewSource)).toContain(flat(':input-progress="inputProgress"'));
+    expect(flat(explorerViewSource)).toContain(flat(':input-answer-in-flight="inputAnswerInFlight"'));
+    expect(flat(explorerViewSource)).toContain(flat(':pending-input-id="pendingInput?.id ?? null"'));
+    expect(flat(explorerViewSource)).toContain(flat('@answer="openInputRequest"'));
+    // 条目本身、锚点序号、方案卡都由视图算好递进去（它拿得到当前需求与 planBindings）。
+    expect(flat(explorerViewSource)).toContain(flat(':item="item"'));
+    expect(flat(explorerViewSource)).toContain(flat(':index="index"'));
+    expect(flat(explorerViewSource)).toContain(flat('@view-plan="openPlanDetail"'));
+    expect(flat(explorerViewSource)).toContain(flat('@confirm-plan="confirmPlan"'));
+    expect(flat(explorerViewSource)).toContain(flat('@enqueue-plan="enqueuePlan"'));
+    // 行组件不自己去读视图的状态：它是一个纯粹的"按行型渲染"的壳。
+    expect(explorerMessageRowSource).not.toContain('from "../composables/');
   });
 
   it("centers the latest-message prompt within the chat timeline", () => {
@@ -381,7 +406,9 @@ describe("Explorer inline message presentation", () => {
     expect(explorerTimelineComposableSource).not.toContain("detachedPlans");
     expect(explorerViewSource).not.toContain("item.kind === 'plan'");
     expect(explorerViewSource).not.toContain("plan-created-event");
-    expect(flat(explorerViewSource)).toContain(flat('v-if="showCandidatePlanCard && planForActivity(item.activity)"'));
+    // 绑定由视图算好（它拿着当前需求与 `planBindings`），**从外面递进去**；行组件只管摆。
+    expect(flat(explorerViewSource)).toContain(flat(':plan="planForTimelineItem(item)"'));
+    expect(flat(explorerMessageRowSource)).toContain(flat('v-if="showCandidatePlanCard && plan"'));
     expect(explorerViewSource).not.toContain("syntheticPlanItems");
     expect(explorerViewSource).not.toContain('v-for="item in syntheticPlanItems"');
   });
@@ -391,23 +418,27 @@ describe("Explorer inline message presentation", () => {
     // "哪些 kind 要显示"，就等于把表绕过去了——改表不再生效，而且没人会发现。
     expect(flat(explorerViewSource)).toContain(flat('v-for="(item, index) in renderedTimelineItems"'));
     expect(flat(explorerViewSource)).toContain(flat("explorerDisplayMode(explorerTimelineMessageType(item))"));
-    expect(flat(explorerViewSource)).toContain(flat('explorerDisplayMode("CANDIDATE_PLAN")'));
+    // 两次查表分别在两处：条目要不要出现（视图）与内嵌卡要不要出现（行组件）。
+    expect(flat(explorerMessageRowSource)).toContain(flat('explorerDisplayMode("CANDIDATE_PLAN")'));
     expect(explorerViewSource).not.toContain('v-for="(item, index) in timelineItems"');
-    // 被输入卡取代的那两类生命周期行只写在表里（和投影层），视图不该认得它们的名字。
-    expect(explorerViewSource).not.toContain("INPUT_REQUIRED");
-    expect(explorerViewSource).not.toContain("INPUT_RESOLVED");
+    // 被输入卡取代的那两类生命周期行只写在表里（和投影层），两处都不该认得它们的名字。
+    for (const source of [explorerViewSource, explorerMessageRowSource]) {
+      expect(source).not.toContain("INPUT_REQUIRED");
+      expect(source).not.toContain("INPUT_RESOLVED");
+    }
   });
 
   it("过程活动各走各的行组件，兜底会当场显示出来", () => {
-    // 视图这一层只做一件事：按行型选分支。**摆哪些字段**在 `explorerActivityLine()`，
-    // **长什么样**在各自的组件里（`components/Explorer*Row.vue`）——视图不再自己翻 kind 决定显示什么。
-    expect(flat(explorerViewSource)).toContain(flat("activityMode(item.activity) === 'reasoning'"));
-    expect(flat(explorerViewSource)).toContain(flat("activityMode(item.activity) === 'divider'"));
-    expect(flat(explorerViewSource)).toContain(flat("<ExplorerReasoningRow"));
-    expect(flat(explorerViewSource)).toContain(flat("<ExplorerDividerRow"));
-    expect(flat(explorerViewSource)).toContain(flat("<ExplorerActivityRow"));
+    // 行组件这一层只做一件事：按行型选分支。**摆哪些字段**在 `explorerActivityLine()`，
+    // **长什么样**在各自的组件里（`components/Explorer*Row.vue`）——不再自己翻 kind 决定显示什么。
+    expect(flat(explorerMessageRowSource)).toContain(flat("mode === 'reasoning'"));
+    expect(flat(explorerMessageRowSource)).toContain(flat("mode === 'divider'"));
+    expect(flat(explorerMessageRowSource)).toContain(flat("<ExplorerReasoningRow"));
+    expect(flat(explorerMessageRowSource)).toContain(flat("<ExplorerDividerRow"));
+    expect(flat(explorerMessageRowSource)).toContain(flat("<ExplorerActivityRow"));
     // 兜底：行型掉到这里说明映射与模板没跟上，**当场显示**，不要静默渲染成一张裸卡。
-    expect(flat(explorerViewSource)).toContain(flat("timeline-unknown-row"));
+    expect(flat(explorerMessageRowSource)).toContain(flat("timeline-unknown-row"));
+    expect(flat(explorerMessageRowSource)).not.toContain("activityMode");
     expect(flat(explorerStylesSource)).toContain(flat(".timeline-unknown-row"));
     expect(explorerViewSource).not.toContain("activityKindLabel");
     expect(flat(explorerStylesSource)).toContain(flat(".timeline-note"));
@@ -527,8 +558,10 @@ describe("Explorer thread switching", () => {
   it("keeps message navigation keys unique when a turn has multiple assistant activities", () => {
     // 锚点用**活动 id** 而不是 turnId：同一个回合里的多条助手活动因此各有各的锚点。
     expect(flat(explorerTimelineSource)).toContain(flat("return `message-${item.id}`;"));
-    expect(flat(explorerViewSource)).toContain(flat(':id="activityTarget(item.activity, index)"'));
-    expect(flat(explorerViewSource)).toContain(flat(':data-nav-key="activityTarget(item.activity, index)"'));
+    // 锚点算在行组件里（它拿得到这条的序号），视图只把序号递进去。
+    expect(flat(explorerMessageRowSource)).toContain(flat(':id="explorerTimelineTarget(activity, index)"'));
+    expect(flat(explorerMessageRowSource)).toContain(flat(':data-nav-key="explorerTimelineTarget(activity, index)"'));
+    expect(flat(explorerViewSource)).toContain(flat(':index="index"'));
   });
 
   it("resets archived-thread visibility when switching projects", () => {
@@ -790,8 +823,16 @@ describe("Explorer composer availability", () => {
     expect(explorerViewSource).not.toContain("saveExplorerInputProgressDraft");
     expect(flat(explorerViewSource)).toContain(
       flat(
-        "inputCardRequest, setInputRequests, adoptInputRequest, resetInputState, inputAnswerLabelsFor, inputAnswerText, inputStatusLabel, openInputRequest, updateInputProgress, submitInput, cancelInput } = useExplorerInputRequests(",
+        "inputCardRequest, setInputRequests, adoptInputRequest, resetInputState, openInputRequest, updateInputProgress, submitInput, cancelInput } = useExplorerInputRequests(",
       ),
+    );
+    // 卡上那三处答案文案（草稿优先 / 密钥显示已隐藏 / 提交中…）现在由**行组件**直接调纯函数算——
+    // 它把草稿与在途标记当 props 收下（见"视图把每条条目交给行组件"那一条），视图不再中转这三层。
+    expect(flat(explorerMessageRowSource)).toContain(
+      flat("inputAnswerDisplayLabels(request, request.questions[questionIndex]!, props.inputProgress)"),
+    );
+    expect(flat(explorerMessageRowSource)).toContain(
+      flat("inputAnswerDisplayText(request, request.questions[questionIndex]!, props.inputProgress, props.inputAnswerInFlight)"),
     );
     // 这两条测的是**模板**里的用户可见文案，留在视图。
     expect(flat(explorerViewSource)).toContain(flat("正在提交结构化答案，确认后本轮会继续"));
@@ -801,13 +842,14 @@ describe("Explorer composer availability", () => {
 
 describe("Explorer markdown rendering", () => {
   it("renders message bodies through the shared Markdown component", () => {
-    expect(flat(explorerViewSource)).toContain(flat('import MarkdownMessage from "../components/MarkdownMessage.vue"'));
-    expect(flat(explorerViewSource)).toContain(flat('<MarkdownMessage :source="item.activity.summary" />'));
-    expect(flat(explorerViewSource)).toContain(
-      flat('<MarkdownMessage :source="readableAssistantText(item.activity.summary)" :streaming="item.activity.status === \'RUNNING\'" />'),
+    // 正文怎么渲染在**行组件**里（视图只管把条目递进去），所以这一组断言跟着搬过去。
+    expect(flat(explorerMessageRowSource)).toContain(flat('import MarkdownMessage from "./MarkdownMessage.vue"'));
+    expect(flat(explorerMessageRowSource)).toContain(flat('<MarkdownMessage :source="activity.summary" />'));
+    expect(flat(explorerMessageRowSource)).toContain(
+      flat('<MarkdownMessage :source="readableAssistantText(activity.summary)" :streaming="activity.status === \'RUNNING\'" />'),
     );
-    expect(explorerViewSource).not.toContain(
-      `: item.activity.summary }}<span v-if="item.activity.status === 'RUNNING'" class="processing-dots"`,
+    expect(explorerMessageRowSource).not.toContain(
+      `: activity.summary }}<span v-if="activity.status === 'RUNNING'" class="processing-dots"`,
     );
   });
 });

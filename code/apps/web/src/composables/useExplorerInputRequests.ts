@@ -27,8 +27,6 @@ import { ElMessage } from "element-plus";
 import { api } from "../api";
 import type { ExplorerInputRequest, ExplorerThread } from "../types";
 import { belongsToExplorerPlan } from "../utils/explorerScope";
-import { inputStatusLabel as inputStatusText } from "../utils/explorerPresentation";
-import { inputAnswerDisplayLabels, inputAnswerDisplayText } from "../utils/explorerInput";
 import {
   clearExplorerInputProgressDraft,
   loadExplorerInputProgressDraft,
@@ -119,19 +117,6 @@ export function useExplorerInputRequests(deps: ExplorerInputRequestDeps) {
     inputAnswerInFlight.value = null;
   }
 
-  /** 下面三个 wrapper 只负责把本地状态（草稿进度、在途标记）喂给 utils 里的纯函数。 */
-  function inputAnswerLabelsFor(request: ExplorerInputRequest, question: ExplorerInputRequest["questions"][number]): string[] {
-    return inputAnswerDisplayLabels(request, question, inputProgress.value);
-  }
-
-  function inputAnswerText(request: ExplorerInputRequest, question: ExplorerInputRequest["questions"][number]): string {
-    return inputAnswerDisplayText(request, question, inputProgress.value, inputAnswerInFlight.value);
-  }
-
-  function inputStatusLabel(request: ExplorerInputRequest): string {
-    return inputStatusText(request, inputAnswerInFlight.value);
-  }
-
   async function openInputRequest() {
     if (!pendingInput.value) return;
     inputDialogOpen.value = true;
@@ -209,9 +194,6 @@ export function useExplorerInputRequests(deps: ExplorerInputRequestDeps) {
     setInputRequests,
     adoptInputRequest,
     resetInputState,
-    inputAnswerLabelsFor,
-    inputAnswerText,
-    inputStatusLabel,
     openInputRequest,
     updateInputProgress,
     submitInput,

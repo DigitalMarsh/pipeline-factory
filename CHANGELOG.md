@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-10-08 — 探索侧的分派也抽出来了（`ExplorerView.vue` 2127 → 1978 行）
+
+上一轮拆完执行侧，剩的那半刀就是**这个**：`ExplorerView.vue` 里那串 `v-if` 分派与三段就地模板
+（用户消息 / 助手正文 / 结构化输入卡）埋在两千行的模板中间，改一次行型要把整个文件读一遍。
+现在它们是 `components/ExplorerMessageRow.vue`（约 200 行）——与执行侧的 `ExecutionMessageRow.vue`
+同一种壳：**按行型选分支**，叶子交给 `Explorer*Row.vue`，最后一条是 `.timeline-unknown-row` 兜底。
+
+- 视图只剩三件事：过一遍隐显（`renderedTimelineItems`）、算好这一条该配哪张方案卡
+  （`planForTimelineItem`，绑定表在 `planTimeline.planActivityBindings`）、把它递进去。
+- **行组件不读视图的状态**：输入卡上那三处答案文案（草稿优先 / 密钥显示已隐藏 / 提交中…）它直接调
+  `utils/explorerInput.ts` 与 `explorerPresentation.ts` 的纯函数算，`inputProgress` 与
+  `inputAnswerInFlight` 以 props 递进来——那两个状态归 `useExplorerInputRequests` 所有，不复制一份。
+- **顺手删掉三个 wrapper**：`useExplorerInputRequests` 的 `inputAnswerLabelsFor` / `inputAnswerText` /
+  `inputStatusLabel` 只服务视图那条转手链，行组件直接调纯函数之后它们就没有生产调用方了（只剩自己的
+  测试）。判据本身在两侧纯函数的单测里都覆盖着。
+
+### 验证
+
+- `pnpm verify` 全绿：域 444 / api 121 / web 643（用例数不变：删掉 wrapper 那条、补上接线那条）。
+- **真机**（`explorer-plan-9a2cce9f-cc1`，一条有 6 张输入卡的需求）：时间线 12 条你说的 / 50 条模型正文
+  （含 1 张内嵌方案卡）/ **6 张输入卡**（5 已回答 + 1 需要恢复，答案行与恢复说明都在）/ 84 条动作行 /
+  123 条推理 / 12 条续跑检查点，**未识别行 0 条**；「查看方案」点开详情抽屉正常；无 console 报错、
+  无失败请求。
+- `docs/消息类型及事件状态机流程图.md` 同步：§0 的对照表与那段"两次动手"的记录、§0.2 的分派壳、
+  §0.3 的兜底落点、§1 的渲染两步、§1.2 三条 `渲染处`、§7 的两条（删 wrapper / 抽壳）。
+
 ## 2026-10-08 — 执行侧的视图拆成四个 composable（1133 → 771 行）
 
 给 §0 那张对照表找错时顺出来的一件事：执行侧的视图 **1133 行**，装着四簇互不相关的逻辑；
