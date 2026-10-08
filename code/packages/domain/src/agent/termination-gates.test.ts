@@ -125,6 +125,27 @@ describe("TaskProgressGate", () => {
       }),
     ).toEqual({ action: "blocked", reason: "WORKSPACE_SCOPE_CHECK_FAILED" });
   });
+
+  /**
+   * 越界时**要说是哪几个文件**。只回一个 `PATH_OUTSIDE_SCOPE`，界面上那行「为什么停下」就只有
+   * 一个码——用户看不出是模型越了界，还是判定器自己错了（实测那次就是后者：中文名被 git 转义）。
+   */
+  it("把越界的路径一起交给调用方，而不是只回一个码", () => {
+    expect(
+      new TaskProgressGate().evaluate({
+        allTasksComplete: true,
+        hasOpenToolCalls: false,
+        hasPendingChangeProposal: false,
+        reportReady: true,
+        pathsWithinScope: false,
+        outsidePaths: ["src/other.ts", "doc/需求.md"],
+      }),
+    ).toEqual({
+      action: "blocked",
+      reason: "PATH_OUTSIDE_SCOPE",
+      diagnostics: ["src/other.ts", "doc/需求.md"],
+    });
+  });
 });
 
 /**

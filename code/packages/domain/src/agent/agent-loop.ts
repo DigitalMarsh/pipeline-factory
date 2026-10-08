@@ -232,6 +232,12 @@ export type GateContext = {
   hasOpenToolCalls?: boolean;
   hasPendingChangeProposal?: boolean;
   changedPaths?: string[];
+  /**
+   * **越界的那几个路径**，由 `inspectWorkspaceScope` 算出。门禁用它写 `diagnostics`——
+   * 只回一个 `PATH_OUTSIDE_SCOPE` 码时，界面上那行「为什么停下」看不出是哪个文件越了界
+   * （实测：中文名被 git 转义的那次因此被当成"模型不听话"）。
+   */
+  outsidePaths?: string[];
   reportError?: string;
   scopeError?: string;
   pathsWithinScope?: boolean;
@@ -941,7 +947,9 @@ export class AgentLoopEngine implements AgentLoopRunner {
           return;
         }
         if (decision.action === "blocked") {
-          this.block(initial.id, decision.reason);
+          // `block` 的 details 会进 LOOP_FAILED 步骤与 `agent.loop.failed` 载荷——
+          // 门禁看到的那几个越界路径因此能一路走到执行日志与界面（见 blockedReasonText）。
+          this.block(initial.id, decision.reason, decision.diagnostics?.length ? { diagnostics: decision.diagnostics } : {});
           return;
         }
         if (progress) noProgressSteps = 0;

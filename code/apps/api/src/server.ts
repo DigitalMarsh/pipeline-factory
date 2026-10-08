@@ -359,6 +359,25 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     if (request.headers.accept?.includes("text/event-stream")) return;
     console.warn(`[slow] ${request.method} ${request.url} ${Math.round(elapsed)}ms ${reply.statusCode}`);
   });
+
+  /**
+   * 失败请求留痕。
+   *
+   * 起因很具体：界面上出现「请求失败：500」，而 `.runtime/api.log` 里**一行都没有**——旁边那条
+   * 慢请求钩子只记耗时超过阈值的，而失败的请求几毫秒就返回了，正好落在它下面。于是"用户看得见的错"
+   * 在日志里查不到，只能靠猜（实测就是这么发生的）。
+   *
+   * 所以单独立一条：**抛出去的异常一律记一行，带栈**。4xx 不记——那是正常的业务分支（409 冲突、
+   * 404 找不到），记了会把有价值的行淹掉，与 `[slow]` 的取舍是同一条。
+   * 本仓没有一处显式 `reply.code(500)`（已 grep 复核），5xx 全部来自抛出的异常，这条钩子盖得住。
+   */
+  app.addHook("onError", async (request, reply, error) => {
+    // **取 `error.statusCode`，不是 `reply.statusCode`**：onError 在响应发出去之前触发，
+    // 那时 reply 还停在默认的 200（实测：日志里打出 `[error] GET /x 200 Error: …`，越看越糊涂）。
+    const status = typeof error.statusCode === "number" && error.statusCode >= 400 ? error.statusCode : 500;
+    if (status < 500) return; // 4xx 是正常业务分支（409 冲突、404 找不到），不记
+    console.error(`[error] ${request.method} ${request.url} ${status} ${error.stack ?? error.message}`);
+  });
   app.addHook("onClose", async () => {
     dispatchCoordinator?.dispose();
     if (ownsStore && "close" in store && typeof store.close === "function") store.close();

@@ -55,7 +55,14 @@ export class TaskProgressGate implements TerminationGate {
     if (context.hasOpenToolCalls) return { action: "continue", reason: "OPEN_TOOL_CALLS" };
     if (context.hasPendingChangeProposal) return { action: "continue", reason: "PENDING_CHANGE_PROPOSAL" };
     if (context.scopeError) return { action: "blocked", reason: context.scopeError };
-    if (!context.pathsWithinScope) return { action: "blocked", reason: "PATH_OUTSIDE_SCOPE" };
+    // **把越界的路径一起交出去**：只回一个码，界面上那行「为什么停下」就只是一个码——
+    // 用户看不出是哪个文件越了界，也没法判断是模型越界还是判定器自己错了（实测踩过后者）。
+    if (!context.pathsWithinScope)
+      return {
+        action: "blocked",
+        reason: "PATH_OUTSIDE_SCOPE",
+        ...(context.outsidePaths?.length ? { diagnostics: context.outsidePaths } : {}),
+      };
     if (!context.reportReady)
       return { action: "continue", reason: "EXECUTION_REPORT_MISSING", continuationPrompt: incompleteTasksPrompt(context) };
     return { action: "complete", reason: "READY_FOR_VERIFY" };

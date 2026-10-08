@@ -314,6 +314,7 @@ export class ExecutorAgent {
       | "missingTaskIds"
       | "unknownTaskIds"
       | "changedPaths"
+      | "outsidePaths"
       | "pathsWithinScope"
       | "reportReady"
       | "hasOpenToolCalls"
@@ -358,6 +359,7 @@ export class ExecutorAgent {
       missingTaskIds,
       unknownTaskIds,
       changedPaths: scope.changedPaths,
+      outsidePaths: scope.outsidePaths,
       pathsWithinScope: scope.pathsWithinScope,
       ...(scope.error ? { scopeError: scope.error } : {}),
       reportReady: Boolean(report?.report.trim()),
@@ -716,7 +718,12 @@ export class ExecutorAgent {
     if (event.type === "agent.gate.checked")
       this.append(run.executionThreadId, "TASK_PROGRESS", {
         action: payload.action,
-        reason: boundedText(payload.reason, 600),
+        reason: boundedText(
+          payload.action === "blocked"
+            ? blockedReasonText(typeof payload.reason === "string" ? payload.reason : undefined, payload.diagnostics)
+            : payload.reason,
+          600,
+        ),
         ...association,
       });
     if (event.type === "agent.loop.completed") {
@@ -724,7 +731,10 @@ export class ExecutorAgent {
       this.setRunStatus(run, "READY_FOR_VERIFY");
     }
     if (event.type === "agent.loop.failed") {
-      const reason = boundedText(payload.reason ?? payload.error, 600) ?? "Executor loop blocked";
+      const rawReason = payload.reason ?? payload.error;
+      const reason =
+        boundedText(blockedReasonText(typeof rawReason === "string" ? rawReason : undefined, payload.diagnostics), 600) ??
+        "Executor loop blocked";
       const activeTaskId = this.activeTaskByRun.get(run.id);
       if (activeTaskId)
         this.append(run.executionThreadId, "TASK_PROGRESS", {
@@ -1027,7 +1037,31 @@ function parseExecutorReportDetailed(content: string): { report: ExecutorReport 
   }
 }
 
-/** 通过 Git 实际 diff 校验 Executor 的变更范围；模型报告只提供候选路径，不提供安全结论。 */
+/**
+ * 门禁拦下时，把**它看到的证据**跟着码一起写进原因。
+ *
+ * 只写错因码（如 `PATH_OUTSIDE_SCOPE`）时，界面上那行「为什么停下」就只有一个码：用户看不出是
+ * 哪个文件越了界，也没法判断"到底是模型不听话，还是判定器自己错了"——实测那次就是后者
+ * （中文文件名被 git 转义），而界面上完全看不出来。
+ *
+ * **码留在最前面**：它仍然可以当身份用（grep、测试、按前缀分派），人话跟在冒号后面。
+ */
+function blockedReasonText(reason: string | undefined, diagnostics: unknown): string | undefined {
+  if (!reason) return undefined;
+  const items = Array.isArray(diagnostics) ? diagnostics.filter((item): item is string => typeof item === "string" && item !== "") : [];
+  return items.length ? `${reason}：${items.join("；")}` : reason;
+}
+
+/**
+ * 通过 Git 实际 diff 校验 Executor 的变更范围；模型报告只提供候选路径，不提供安全结论。
+ *
+ * **路径必须按 `-z` 取，不能按行取。** 按行取时 Git 会按 `core.quotePath`（默认开）把非 ASCII
+ * 路径输出成 C 风格转义：`doc/项目进度管理需求.md` 变成 `"doc/\351\241\271..."`。转义后的那串
+ * 拿去比 include 规则**永远比不中**，于是"改了中文名文件"被记成越界、门禁以 `PATH_OUTSIDE_SCOPE`
+ * 阻塞——而模型其实老老实实待在范围内（实测就是这样阻塞了一次，见 CHANGELOG）。
+ * `-z` 是不加引号的原始路径 + NUL 分隔，既躲开转义，也不怕文件名里有空格或换行
+ * （所以下面**不能再 `trim()`**：那会改掉合法的首尾空格，也是同一个 bug 的温床）。
+ */
 export async function inspectWorkspaceScope(input: {
   workspacePath: string;
   baseCommit: string;
@@ -1036,17 +1070,10 @@ export async function inspectWorkspaceScope(input: {
 }): Promise<WorkspaceScopeInspection> {
   try {
     const [diff, untracked] = await Promise.all([
-      execFileAsync("git", ["diff", "--name-only", input.baseCommit, "--"], { cwd: input.workspacePath }),
-      execFileAsync("git", ["ls-files", "--others", "--exclude-standard"], { cwd: input.workspacePath }),
+      execFileAsync("git", ["diff", "--name-only", "-z", input.baseCommit, "--"], { cwd: input.workspacePath }),
+      execFileAsync("git", ["ls-files", "--others", "--exclude-standard", "-z"], { cwd: input.workspacePath }),
     ]);
-    const changedPaths = [
-      ...new Set(
-        `${diff.stdout}\n${untracked.stdout}`
-          .split(/\r?\n/)
-          .map((path) => path.trim())
-          .filter(Boolean),
-      ),
-    ];
+    const changedPaths = [...new Set(`${diff.stdout}\0${untracked.stdout}`.split("\0").filter(Boolean))];
     const outsidePaths = changedPaths.filter((path) => !matchesAnyPath(path, input.include) || matchesAnyPath(path, input.exclude ?? []));
     return { changedPaths, outsidePaths, pathsWithinScope: outsidePaths.length === 0 };
   } catch (error) {

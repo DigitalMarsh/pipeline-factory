@@ -1,5 +1,59 @@
 # Changelog
 
+## 2026-10-08 — 中文文件名被误判越界，运行被无故阻塞；顺带给 500 留痕
+
+报障是一张截图：需求15 的 Run 卡在 `已阻塞`，红框里写着「为什么停下 · `PATH_OUTSIDE_SCOPE`」，
+而模型看起来什么坏事都没干。查下来是**判定器自己错了**。
+
+### 一、`PATH_OUTSIDE_SCOPE` 是误判：git 把非 ASCII 路径转了义
+
+用那次真的被阻塞的 worktree（`run-ad39a581-3f9`，分支 `factory/20261008-210238-add-task-handoff-status`）
+复现，走判定器自己那两条命令 + 同一段匹配逻辑：
+
+```
+in? true  <- code/server/validate.js
+in? true  <- code/src/constants.js
+in? false <- "doc/\351\241\271\347\233\256...md"   ← 中文名，被 git 转义了
+in? true  <- docs/pipeline/plans/plan-f0be9420-6f5-v1.md
+```
+
+四个改动**全在 include 范围内**。`inspectWorkspaceScope` 按行读 `git diff --name-only`，而 git 默认
+`core.quotePath=true`，非 ASCII 路径会输出成 C 风格转义（带引号 + 八进制）。转义后的那串比不中任何
+include 规则 → 记成越界 → 门禁 `TaskProgressGate` 以 `PATH_OUTSIDE_SCOPE` 阻塞。
+
+**影响面**：改了**任何非 ASCII 文件名**的运行都会被判越界并阻塞。project4 的 include 列表里正好有
+`doc/项目进度管理需求.md`，所以这条必踩。
+
+**修法**：两条命令都改成 `-z`（原始路径 + NUL 分隔，也不怕文件名里有空格/换行），并去掉 `.trim()`。
+同一个 worktree 重新判定：`outsidePaths: []`、`pathsWithinScope: true`。
+
+### 二、顺带：只说一个码，用户没法判断是谁的错
+
+门禁**算出了** `outsidePaths`，却在 `progressContext` 那一步被丢掉，判定只剩
+`{action:"blocked", reason:"PATH_OUTSIDE_SCOPE"}`。于是红框里只有一个码——看不出是哪个文件越了界，
+也分不清"模型不听话"还是"判定器自己错了"（这次就是后者）。
+
+- `GateContext` 新增 `outsidePaths`，`TaskProgressGate` 把它写进 `diagnostics`；
+- `agent-loop` 的 `block()` 本来就收 `details`，把 `diagnostics` 透传进 `LOOP_FAILED` 与
+  `agent.loop.failed`；
+- 执行器新增 `blockedReasonText()`：把路径拼在码后面落进执行日志（**码仍在最前面**，还能当身份用），
+  界面上那行「为什么停下」于是直接念得出文件名。
+
+### 三、500 留痕：`[slow]` 那条钩子盖不住失败的请求
+
+界面上那句「请求失败：500」在 `.runtime/api.log` 里**一行都没有**——旁边那条慢请求钩子只记耗时
+超过 1 秒的，而失败的请求几毫秒就返回。加了 `onError` 钩子：**抛出的异常一律记一行，带栈**；
+4xx 不记（409/404 是正常业务分支，记了会把有价值的行淹掉）。取的是 `error.statusCode` 而不是
+`reply.statusCode`——onError 在响应发出前触发，那里 reply 还停在 200（实测打出了
+`[error] GET /x 200 Error: …`，越看越糊涂）。
+
+### 验证
+
+- 单测 +3：中文名的两种到达方式（`git diff` / `git ls-files --others`）都不再判越界；
+  门禁把越界路径交出去；抛出的异常一定留下带栈的一行日志。
+- 真实 worktree 复跑判定器：`pathsWithinScope: true`（修复前是 `false`）。
+- `pnpm verify` 全绿：域 446 / api 122 / web 643。
+
 ## 2026-10-08 — §1.3 A 的状态机画错了：`QUEUED` 不是每个回合的入口
 
 被问"第一个回合状态是 QUEUED 合理吗"——**不合理**，查了一下代码：

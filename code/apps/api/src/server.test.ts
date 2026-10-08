@@ -3,7 +3,7 @@
  * 设计说明：fixture 只构造本测试需要的持久化事实，边界行为优先于实现细节。
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -91,6 +91,34 @@ afterEach(async () => {
 });
 
 describe("Pipeline Factory v4 API", () => {
+  /**
+   * 5xx 要留痕。
+   *
+   * 报障现场是：界面上出现「请求失败：500」，而 `.runtime/api.log` 里一行都没有——只有那条
+   * `[slow]` 钩子（失败的请求几毫秒就返回，落不到它下面）。这一条钉住"抛出的异常一定有日志"。
+   */
+  it("logs thrown errors with a stack so a user-visible 500 leaves a trace", async () => {
+    const app = await createApp({ store: new InMemoryPipelineStore(), seed: false });
+    apps.push(app);
+    // 本仓没有显式 `reply.code(500)`，5xx 全部来自抛出的异常——这条临时路由就是那种形状。
+    app.get("/__throw-for-test", async () => {
+      throw new Error("boom-from-test");
+    });
+    const lines: string[] = [];
+    const spy = vi.spyOn(console, "error").mockImplementation((...args: unknown[]) => {
+      lines.push(args.map((arg) => String(arg)).join(" "));
+    });
+    try {
+      const response = await app.inject({ method: "GET", url: "/__throw-for-test" });
+      expect(response.statusCode).toBe(500);
+    } finally {
+      spy.mockRestore();
+    }
+    const logged = lines.join("\n");
+    expect(logged).toContain("[error] GET /__throw-for-test 500");
+    expect(logged).toContain("boom-from-test");
+  });
+
   it("routes explorer and executor to different agents and reports both over HTTP", async () => {
     const directory = mkdtempSync(join(tmpdir(), "pipeline-factory-routing-"));
     const configPath = join(directory, "config.json");

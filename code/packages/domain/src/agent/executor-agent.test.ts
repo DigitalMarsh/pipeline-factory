@@ -170,6 +170,49 @@ describe("ExecutorAgent", () => {
     }
   });
 
+  /**
+   * 回归：**非 ASCII 文件名**（中文）。
+   *
+   * 判定器此前按行读 `git diff --name-only`，而 git 默认 `core.quotePath=true`，会把中文路径输出成
+   * C 风格转义（`"doc/\351\241\271..."`）。转义后的那串拿去比 include 规则永远比不中，于是
+   * "改了中文名文件"被记成越界、门禁以 `PATH_OUTSIDE_SCOPE` 把运行阻塞——而模型其实待在范围内
+   * （实测踩过：project4 的 include 里就有 `doc/项目进度管理需求.md`）。
+   */
+  it("treats a non-ASCII (Chinese) filename as inside scope", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "pipeline-scope-cjk-"));
+    try {
+      execFileSync("git", ["init", "-q"], { cwd: workspace });
+      execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: workspace });
+      execFileSync("git", ["config", "user.name", "Pipeline Test"], { cwd: workspace });
+      await writeFile(join(workspace, "README.md"), "base\n");
+      execFileSync("git", ["add", "README.md"], { cwd: workspace });
+      execFileSync("git", ["commit", "-qm", "base"], { cwd: workspace });
+      // 两种到达方式都要覆盖：**改过的**走 `git diff`，**新建的**走 `git ls-files --others`，
+      // 两条命令的转义行为各自独立（实测不带 `-z` 时各自都出错）。
+      mkdirSync(join(workspace, "doc"));
+      await writeFile(join(workspace, "doc", "项目进度管理需求.md"), "base\n");
+      execFileSync("git", ["add", "doc/项目进度管理需求.md"], { cwd: workspace });
+      execFileSync("git", ["commit", "-qm", "docs"], { cwd: workspace });
+      await writeFile(join(workspace, "doc", "项目进度管理需求.md"), "改了一行\n");
+      await writeFile(join(workspace, "doc", "新需求.md"), "新建\n");
+
+      await expect(
+        inspectWorkspaceScope({
+          workspacePath: workspace,
+          baseCommit: "HEAD",
+          include: ["doc/项目进度管理需求.md", "doc/新需求.md"],
+          exclude: [],
+        }),
+      ).resolves.toEqual({
+        changedPaths: ["doc/项目进度管理需求.md", "doc/新需求.md"],
+        outsidePaths: [],
+        pathsWithinScope: true,
+      });
+    } finally {
+      await rm(workspace, { recursive: true, force: true });
+    }
+  });
+
   it("sends the complete approved Plan contract to the executor model", async () => {
     const { store, plan, run } = await createQueuedRun();
     const detailedRevision = {
