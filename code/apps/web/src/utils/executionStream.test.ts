@@ -90,6 +90,31 @@ describe("projectExecutionJournal", () => {
     expect(items).toEqual([expect.objectContaining({ kind: "model", content: "仍在处理", status: "RUNNING" })]);
   });
 
+  /**
+   * 回归：**补充轮不会把上一轮的条目重新标成「进行中」**。
+   *
+   * `modelStep` 是每个 Loop 各自从 1 数的，补充要求起的那一轮又从第 1 步开始；而"乐观标 RUNNING"
+   * 那段只比步号，于是第一轮 `modelStep === 1` 的条目被现标成进行中——用户报的正是这个
+   * （投一条补充要求之后，上一轮做完的执行说明与执行报告都变成了「进行中」）。
+   */
+  it("does not re-mark the previous round as running when a continuation round starts", () => {
+    const at = "2026-08-30T07:00:00.000Z";
+    const items = projectExecutionJournal(
+      [
+        { sequence: 1, type: "TASK_PROGRESS", occurredAt: at, payload: { event: "agent.step.started", modelStep: 1, loopId: "loop-1" } },
+        { sequence: 2, type: "MODEL_OUTPUT", occurredAt: at, payload: { text: "第一轮做完了", modelStep: 1, loopId: "loop-1" } },
+        { sequence: 3, type: "TASK_PROGRESS", occurredAt: at, payload: { event: "agent.model.completed", modelStep: 1, loopId: "loop-1" } },
+        { sequence: 4, type: "TASK_PROGRESS", occurredAt: at, payload: { action: "continuation" } },
+        { sequence: 5, type: "TASK_PROGRESS", occurredAt: at, payload: { event: "agent.step.started", modelStep: 1, loopId: "loop-2" } },
+      ],
+      "ACTIVE",
+    );
+
+    // 第一轮那条正文仍然是「已完成」——它属于 loop-1，而此刻在跑的是 loop-2 的第 1 步。
+    const firstRound = items.find((item) => item.kind === "model");
+    expect(firstRound).toMatchObject({ content: "第一轮做完了", status: "COMPLETED", loopId: "loop-1" });
+  });
+
   it("turns the execution report protocol into a readable assistant message", () => {
     const items = projectExecutionJournal(
       [

@@ -1735,6 +1735,7 @@ onBeforeUnmount(() => {
               :run-id="activeRunId"
               @close="closeRunView"
               @open-plan="openPlanDetail"
+              @open-explorer="switchDrawerTab('explorer')"
             />
             <template v-else-if="taskPanelPlan">
               <header class="task-detail-heading">

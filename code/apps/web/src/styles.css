@@ -2873,6 +2873,36 @@ a {
 .composer {
   position: static;
 }
+/* Run 不接受补充要求时，输入框的位置换成一条**带入口**的提示（见 RunDetailView.vue）。
+   灰框留给"暂时不能发、但还能用"的情形；这里是不能发了，所以必须给下一步去哪。 */
+.composer-closed {
+  padding: 12px 14px;
+  border: 1px solid #f0dfb7;
+  border-radius: 6px;
+  background: #fffaf0;
+  color: #8d6d2f;
+}
+.composer-closed-note,
+.composer-closed-hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.62;
+}
+.composer-closed-note {
+  color: #9b711f;
+  font-weight: 600;
+}
+.composer-closed-hint {
+  margin-top: 5px;
+}
+.composer-closed-hint strong {
+  color: #7d5c1c;
+}
+.composer-closed-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
 .composer-input {
   position: relative;
   align-items: flex-start;

@@ -121,7 +121,10 @@ describe("Run detail execution conversation", () => {
 
   it("supports embedding the complete Run surface and opening Plan in the shared drawer", () => {
     expect(flat(runDetailSource)).toContain(flat("defineProps<{ embedded?: boolean; projectId?: string; runId?: string }>"));
-    expect(flat(runDetailSource)).toContain(flat('defineEmits<{ (event: "close"): void; (event: "open-plan", plan: Plan): void }>()'));
+    // 逐个事件断言，不整块比 `defineEmits<{…}>()`：块里现在夹着解释用的注释，整块比就等于在测排版。
+    expect(flat(runDetailSource)).toContain(flat('defineEmits<{ (event: "close"): void;'));
+    expect(flat(runDetailSource)).toContain(flat('(event: "open-plan", plan: Plan): void;'));
+    expect(flat(runDetailSource)).toContain(flat('(event: "open-explorer"): void;'));
     expect(flat(runDetailSource)).toContain(flat("detail-page-embedded"));
     expect(flat(runDetailSource)).toContain(flat('emit("open-plan", planDetail.value)'));
     expect(flat(runDetailSource)).toContain(flat('@click="closeView"'));
@@ -265,6 +268,50 @@ describe("Run detail execution conversation", () => {
     expect(runDetailSource).not.toContain('class="execution-guidance-shell"');
     expect(runDetailSource).not.toContain("Add guidance");
     expect(runDetailSource).not.toContain("Guidance is read-only");
+  });
+
+  describe("Run 不再接受补充要求时，composer 位置上给的是**带入口的提示**", () => {
+    /**
+     * 实测报障：需求15 的 Run 被取消之后，用户在这个框里点了半天打不出字——框还在，只是发不出去。
+     * 一个**按下去没反应**的输入框，比直接把框收走更糟：它默认了"这里还能说话"。
+     * 换成提示之后，提示必须自己给出下一步（去探索对话 / 查看方案），否则只是把困惑从
+     * "为什么打不出字"挪到"那我该去哪"。
+     */
+    it("把输入框换成提示，而不是留一个灰掉的框", () => {
+      expect(flat(runDetailSource)).toContain(flat('<div v-if="!canSendExecutionMessage" class="composer-closed">'));
+      expect(flat(runDetailSource)).toContain(flat('<div v-else class="composer-input">'));
+      // 发送键跟着输入框一起收走：提示里那个圆圈按钮点不动，就又是一次"按下去没反应"。
+      expect(flat(runDetailSource)).toContain(flat('<div v-if="canSendExecutionMessage" class="composer-footer">'));
+      // 原因那句话仍然来自同一个判据（不要在这里另写一套文案对不上号的理由）。
+      expect(flat(runDetailSource)).toContain(flat('class="composer-closed-note">{{ executionComposerDisabledReason }}'));
+      expect(runDetailStyles).toContain(flat(".composer-closed"));
+      expect(runDetailStyles).toContain(flat(".composer-closed-actions"));
+    });
+
+    it("提示带两个入口：去探索对话、查看方案", () => {
+      // 改计划的两条现成路径，不为此新开接口：探索对话说一句让模型改版，或者进方案点「继续编辑」。
+      expect(flat(runDetailSource)).toContain(flat('@click="openExplorerConversation">去探索对话</el-button>'));
+      expect(flat(runDetailSource)).toContain(flat('@click="openPlanDetail">查看方案</el-button>'));
+      /**
+       * **嵌在需求抽屉里时不能自己 `router.push`** —— 那会把抽屉连同右侧面板一起换掉。
+       * 所以发事件出去，由 ExplorerView 把左下的页签切到「探索对话」（它本来就管着那排页签）。
+       */
+      expect(flat(runDetailSource)).toContain(flat('(event: "open-explorer"): void;'));
+      expect(flat(runDetailSource)).toContain(flat('if (embedded.value) { emit("open-explorer"); return; }'));
+      /**
+       * 独立页要落在**这条需求**上，而不是探索首页或别人的需求上。
+       *
+       * 两个 id 都得带：探索视图先按 `explorerId` 挑线程，没有就退回「项目当前线程」，再在那个线程里
+       * 找 `explorerPlanId`。只带后者 → 线程不对 → 找不到 → 静默落到另一条线程的当前需求上（实测）。
+       * `planDetail` 没载入过就补一次只为拿 id 的请求，请求失败不能把跳转卡住。
+       */
+      expect(flat(runDetailSource)).toContain(flat("target = (await api.getPlan(planId)).plan;"));
+      expect(flat(runDetailSource)).toContain(flat("query.explorerId = target.sourceExplorerThreadId;"));
+      expect(flat(runDetailSource)).toContain(flat("query.explorerPlanId = target.explorerPlanId;"));
+      expect(flat(runDetailSource)).toContain(flat("catch {"));
+      // 版本号按当前 Plan 的修订号 +1 说，别写死成 V2。
+      expect(flat(runDetailSource)).toContain(flat("run?.planRevision ?? 1"));
+    });
   });
 
   it("把 Run 级活动移出执行会话：时间线只留执行步骤与你说的话", () => {

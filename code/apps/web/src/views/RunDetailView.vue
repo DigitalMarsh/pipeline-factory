@@ -38,7 +38,12 @@ import { useRunComposer } from "../composables/useRunComposer";
 const route = useRoute();
 const router = useRouter();
 const props = withDefaults(defineProps<{ embedded?: boolean; projectId?: string; runId?: string }>(), { embedded: false });
-const emit = defineEmits<{ (event: "close"): void; (event: "open-plan", plan: Plan): void }>();
+const emit = defineEmits<{
+  (event: "close"): void;
+  (event: "open-plan", plan: Plan): void;
+  /** 让外面的抽屉切到「探索对话」那一页——内嵌时才有听众，独立页自己跳路由。 */
+  (event: "open-explorer"): void;
+}>();
 const embedded = computed(() => props.embedded);
 const projectId = computed(() => props.projectId ?? String(route.params.projectId ?? ""));
 const runId = computed(() => props.runId ?? String(route.params.runId ?? ""));
@@ -472,6 +477,43 @@ async function load() {
   }
 }
 
+/**
+ * 「去探索对话」。
+ *
+ * 内嵌时**不能自己跳路由**——它就在抽屉里，切页签是父组件的事（`ExplorerView.switchDrawerTab`），
+ * 所以只喊一声。独立页（`/projects/:id/runs/:runId`）没有听众，自己跳到探索视图。
+ *
+ * **要落在这个 Run 的方案对应的那条需求上**，否则用户带着"我要改这份计划"的意图点进来，却要在一列
+ * 需求里自己找是哪一条——找路这一步是白费的。两个参数都得带：
+ *
+ * - `explorerPlanId` 是那条需求本身；
+ * - `explorerId` 是它所在的线程。**只带前一个是不够的**：探索视图先按 `explorerId` 挑线程，没有就退回
+ *   「项目当前线程」，然后在那个线程的需求里找 `explorerPlanId`——线程不对，这条需求当然找不到，
+ *   于是静默落到别人家的需求上（实测就是这个：点进来落在另一条线程上了）。
+ *
+ * `planDetail` 只在打开过方案抽屉之后才有值，所以这里补一次 `getPlan`（**只为拿这两个 id，不打开抽屉**）；
+ * 取不到就退回探索首页，别把跳转本身卡在这一次请求上。
+ */
+async function openExplorerConversation(): Promise<void> {
+  if (embedded.value) {
+    emit("open-explorer");
+    return;
+  }
+  const planId = run.value?.planId;
+  let target = planDetail.value;
+  if (!target?.explorerPlanId && planId) {
+    try {
+      target = (await api.getPlan(planId)).plan;
+    } catch {
+      // 拿不到就算了：探索首页仍然是可用入口。
+    }
+  }
+  const query: Record<string, string> = {};
+  if (target?.sourceExplorerThreadId) query.explorerId = target.sourceExplorerThreadId;
+  if (target?.explorerPlanId) query.explorerPlanId = target.explorerPlanId;
+  void router.push({ path: `/projects/${projectId.value}/explorer`, query });
+}
+
 function closeView(): void {
   if (embedded.value) {
     emit("close");
@@ -697,23 +739,36 @@ onBeforeUnmount(() => {
           >
         </div>
         <div class="composer execution-composer">
-          <div class="composer-input">
+          <!-- **这个 Run 不接受补充要求时，这里不再摆一个打不出字的灰框。**
+               判据与 `canSendExecutionMessage` 同源（`canContinueRun`，见 utils/runControls.ts）：
+               Run 已经结束（CANCELLED / STALE）或者卡在计划上（BLOCKED / NEEDS_PLAN_CHANGE）时，
+               补一句话都救不回来——那句话既不属于任何一轮，也没有 Loop 去消费它。而一个**按下去
+               没反应**的输入框只会让人以为界面坏了（实测报障：需求15 的 Run 被取消之后，
+               用户在这个框里点了半天打不出字，然后卡在那里不知道下一步该去哪）。
+               换成一条**带入口**的提示：改计划去「探索对话」，或者进方案点「继续编辑 V{n+1}」——
+               两条路都是现成的，不需要新接口。 -->
+          <div v-if="!canSendExecutionMessage" class="composer-closed">
+            <p class="composer-closed-note">{{ executionComposerDisabledReason }}</p>
+            <p class="composer-closed-hint">
+              要改这份计划：去<strong>探索对话</strong>说一句，让模型改出一版（V{{ (run?.planRevision ?? 1) + 1 }}）；
+              或者在<strong>方案</strong>里点「继续编辑 V{{ (run?.planRevision ?? 1) + 1 }}」。改完确认、入队，会起一条新的 Run。
+            </p>
+            <div class="composer-closed-actions">
+              <el-button size="small" @click="openExplorerConversation">去探索对话</el-button>
+              <el-button size="small" type="primary" plain @click="openPlanDetail">查看方案</el-button>
+            </div>
+          </div>
+          <div v-else class="composer-input">
             <textarea
               v-model="executionDraft"
               aria-label="执行会话消息"
-              :placeholder="
-                canSendExecutionMessage
-                  ? executorLoopRunning
-                    ? '补充要求，交给正在跑的这一轮…'
-                    : '补充要求，执行线程会重新开工…'
-                  : executionComposerDisabledReason
-              "
-              :disabled="actionBusy || !canSendExecutionMessage"
+              :placeholder="executorLoopRunning ? '补充要求，交给正在跑的这一轮…' : '补充要求，执行线程会重新开工…'"
+              :disabled="actionBusy"
               @keydown="handleExecutionComposerKeydown"
             />
             <!-- 一轮还在跑时才有得选：排队 = 等它结束再起一轮；引导 = 下一个步骤边界插进这一轮。
                  没在跑时两种等价，不由用户选。 -->
-            <label v-if="canSendExecutionMessage && executorLoopRunning" class="composer-guidance-mode"
+            <label v-if="executorLoopRunning" class="composer-guidance-mode"
               ><span>投递</span
               ><select v-model="executionGuidanceMode" :disabled="actionBusy" aria-label="补充要求的投递方式">
                 <option value="queue">排队 · 这一轮结束后再开工</option>
@@ -722,7 +777,7 @@ onBeforeUnmount(() => {
             >
             <span v-else class="composer-mode">Run 模式</span>
           </div>
-          <div class="composer-footer">
+          <div v-if="canSendExecutionMessage" class="composer-footer">
             <ProviderUsageFooter
               :model="executionModelIdentity.model"
               :backend="executionModelIdentity.backend"

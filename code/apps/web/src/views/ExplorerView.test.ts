@@ -211,6 +211,12 @@ describe("Explorer requirement list and shared drawer", () => {
     expect(flat(explorerViewSource)).toContain(flat("Run"));
     expect(flat(explorerViewSource)).toContain(flat("delete query.runId"));
     expect(flat(explorerViewSource)).toContain(flat('@open-plan="openPlanDetail"'));
+    /**
+     * Run 面板里那条"这个 Run 不接受补充要求"的提示带了个「去探索对话」入口（见 RunDetailView.vue）。
+     * **嵌在抽屉里的 RunDetailView 不能自己 `router.push`** —— 那会把抽屉一起换掉；它发事件，
+     * 由这里把左下的页签切过去，于是仍然只有一处知道抽屉页签怎么切。
+     */
+    expect(flat(explorerViewSource)).toContain(flat("@open-explorer=\"switchDrawerTab('explorer')\""));
   });
 
   it("shows the selected Plan immediately while full details load and ignores stale detail responses", () => {

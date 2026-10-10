@@ -653,8 +653,18 @@ export function projectExecutionJournal(
   }
   if (threadState === "ACTIVE") {
     const activeStep = currentModelStep;
+    const activeLoopId = currentLoopId;
     for (const item of items) {
-      if (item.kind === "model" && item.modelStep === activeStep) item.status = "RUNNING";
+      /**
+       * **`loopId` 也要比。** `modelStep` 是**每个 Loop 各自从 1 数**的，而补充要求会为同一个 Run
+       * 起新的一轮——那一轮又从第 1 步开始。只比步号，第一轮那些 `modelStep === 1` 的条目会在
+       * 补充要求发出后被**重新标成「进行中」**：实测报障就是它（投一条补充要求之后，上一轮已经
+       * 做完的执行说明与执行报告全变成了进行中）。
+       *
+       * `currentLoopId` 为 undefined 时这条判据退化成原来的行为（老数据没有 loopId），
+       * 所以历史记录不受影响。
+       */
+      if (item.kind === "model" && item.modelStep === activeStep && item.loopId === activeLoopId) item.status = "RUNNING";
     }
   }
   /**
