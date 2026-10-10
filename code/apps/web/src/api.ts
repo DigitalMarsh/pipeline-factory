@@ -6,7 +6,6 @@
 import type {
   AgentLoop,
   AgentLoopStep,
-  DailyActivity,
   ExecutionThread,
   ExplorerActivityItem,
   ExplorerInputRequest,
@@ -28,8 +27,6 @@ import type {
   RunGuidance,
   ToolCall,
   VerificationRun,
-  WorkbenchSnapshot,
-  WorkbenchEvent,
 } from "./types";
 
 export class ApiRequestError extends Error {
@@ -130,16 +127,6 @@ export const api = {
     ),
   projectExecutionEventsUrl: (projectId: string, afterSequence?: number) =>
     `/api/v4/projects/${encodeURIComponent(projectId)}/execution-thread/events${afterSequence === undefined ? "" : `?afterSequence=${afterSequence}`}`,
-  workbench: (projectId: string) => request<WorkbenchSnapshot>(`/api/v4/workbench?projectId=${encodeURIComponent(projectId)}`),
-  /** 项目「今日活动」：执行完成 / 已合并 / 失败或阻塞 / 跨日仍在跑。date 缺省是服务器本地今天。 */
-  projectActivity: (projectId: string, date?: string) =>
-    request<DailyActivity>(`/api/v4/projects/${encodeURIComponent(projectId)}/activity${date ? `?date=${encodeURIComponent(date)}` : ""}`),
-  workbenchEventsUrl: (projectId: string, afterSequence?: number) =>
-    `/api/v4/workbench/events?format=sse&projectId=${encodeURIComponent(projectId)}${afterSequence === undefined ? "" : `&afterSequence=${afterSequence}`}`,
-  workbenchEvents: (projectId: string, afterSequence?: number) =>
-    request<{ items: WorkbenchEvent[]; cursor: number }>(
-      `/api/v4/workbench/events?projectId=${encodeURIComponent(projectId)}&afterSequence=${afterSequence ?? 0}`,
-    ),
   agentLoopTools: (loopId: string) => request<{ items: ToolCall[] }>("/api/v4/agent-loops/" + encodeURIComponent(loopId) + "/tools"),
   explorerPlanRequirements: () =>
     request<{

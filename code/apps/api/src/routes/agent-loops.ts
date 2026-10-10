@@ -41,7 +41,7 @@ const AGENT_LOOP_POLL_LIMIT = 500;
 export function registerAgentLoopRoutes(app: FastifyInstance, deps: AgentLoopRouteDeps): void {
   const { store, loopController } = deps;
 
-  /** 游标为 0 = 首次连接取尾部窗口；其余情况从游标向前读（详见 routes/workbench.ts 的同类说明）。 */
+  /** 游标为 0 = 首次连接取尾部窗口；其余情况从游标向前读。 */
   const batchOptions = (loopId: string, afterSequence: number) =>
     afterSequence === 0
       ? { aggregateId: loopId, limit: AGENT_LOOP_INITIAL_REPLAY_LIMIT, limitFrom: "tail" as const }

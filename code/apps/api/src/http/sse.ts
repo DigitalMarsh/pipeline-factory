@@ -1,11 +1,11 @@
 /**
  * 模块职责：SSE 的**传输层** —— 打开一条 text/event-stream 通道，负责帧格式、心跳、可选轮询
- *   与关闭清理。此前这套样板在 server.ts 里复制了 6 份（workbench / agent-loop / run /
+ *   与关闭清理。此前这套样板在 server.ts 里复制过多份（agent-loop / run /
  *   explorer-thread / requirement-status / project-execution），差异只在业务侧。
  *
  * 只拥有传输层，**不拥有业务**：推什么内容、游标怎么推进、什么时候发 stream.ready、
  *   以及 Run SSE 的 telemetry.updated 节流，都由路由自己决定并留在路由里。把这些塞进本文件
- *   会让它从"帧格式的唯一出处"变成"6 个路由的业务汇合点"，那时候它就不可测了。
+ *   会让它从"帧格式的唯一出处"变成"5 处调用的业务汇合点"，那时候它就不可测了。
  *
  * 维护提示：
  *   1) **`reply.hijack()` 之后这条响应不再受 Fastify 管**：不写 content-length、不做

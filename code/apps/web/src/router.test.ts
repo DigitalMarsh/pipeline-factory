@@ -6,9 +6,24 @@ const routerSource = readFileSync(new URL("./router.ts", import.meta.url), "utf8
 const routerDefaultsSource = readFileSync(new URL("./routerDefaults.ts", import.meta.url), "utf8");
 
 describe("project workspace routes", () => {
-  it("removes the global Workbench route but keeps project Execute", () => {
+  it("removes the global Workbench route", () => {
     expect(routerSource).not.toContain('path: "/workbench"');
+  });
+
+  /**
+   * 整页「执行台」退役（`WorkbenchView.vue`，1335 行的三栏 Plan/Run 工作台）——与「Run 详情」「新建项目」
+   * 同一种收法。那条路**全仓没有任何入口**（`projectPathForModule("execute", id)` 生成的是 `/plans`，
+   * 而那条也重定向回探索视图），内容是另一套 Plan/Run 工作台，与探索抽屉里的方案面板重叠。
+   *
+   * 留重定向而不是删掉，理由同上（旧地址可能还在书签里）；**终点与 `/plans` 那条一致**
+   * （`contextPanel=plan-center`），所以旧链接的目的地其实没变。
+   */
+  it("retires the standalone Execute workbench into the Explorer plan center", () => {
+    // 断言的是**代码里**没有它了（注释会引用旧名说明改了什么，那不算）。
+    expect(routerSource).not.toContain("views/WorkbenchView.vue");
+    expect(routerSource).not.toContain("component: ProjectExecuteView");
     expect(routerSource).toContain('path: "/projects/:projectId/execute"');
+    expect(routerSource).toContain('contextPanel: "plan-center"');
   });
 
   it("redirects the legacy Plan Center address into the Explorer context panel", () => {

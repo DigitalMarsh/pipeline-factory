@@ -492,44 +492,6 @@ describe("Pipeline Factory v4 API", () => {
     }
   });
 
-  it("serves only project-scoped Execute snapshots with replayable events", async () => {
-    const store = new InMemoryPipelineStore();
-    const projects = new ProjectService(store);
-    const project = projects.create({
-      id: "project-workbench",
-      name: "Workbench",
-      repoRoot: "/repo/workbench",
-      defaultBranch: "main",
-      worktreeRoot: "/tmp/workbench-worktrees",
-    });
-    const plans = new PlanService(store, projects);
-    plans.registerThread({ id: "workbench-thread", projectId: project.id, parentThreadId: null });
-    const plan = plans.createCandidatePlan({
-      projectId: project.id,
-      sourceExplorerThreadId: "workbench-thread",
-      title: "Workbench plan",
-      resolvedContract: planContractFixture({ store, projectId: project.id, title: "Workbench plan" }),
-    });
-    plans.confirm(plan.id, "user-1");
-    const app = createApp({ store, seed: false });
-    apps.push(app);
-
-    const global = await app.inject({ method: "GET", url: "/api/v4/workbench" });
-    const scoped = await app.inject({ method: "GET", url: `/api/v4/workbench?projectId=${project.id}` });
-    const cursor = scoped.json().cursor as number;
-    const replay = await app.inject({ method: "GET", url: `/api/v4/workbench/events?projectId=${project.id}&afterSequence=${cursor - 1}` });
-
-    expect(global.statusCode).toBe(400);
-    expect(scoped.statusCode).toBe(200);
-    expect(scoped.json()).toMatchObject({
-      activeProjectId: project.id,
-      projects: [{ id: project.id }],
-      plans: [{ planId: plan.id, title: "Workbench plan", status: "READY", dispatch: null }],
-    });
-    expect(replay.statusCode).toBe(200);
-    expect(replay.json().items.at(-1)).toMatchObject({ type: "plan.confirmed", aggregateId: plan.id });
-  });
-
   it("rejects project-scoped requests for an unknown Project", async () => {
     const store = new InMemoryPipelineStore();
     const app = createApp({ store, seed: false });
@@ -608,14 +570,13 @@ describe("Pipeline Factory v4 API", () => {
     );
 
     const snapshot = await app.inject({ method: "GET", url: "/api/v4/projects/project-execution-api/execution-thread" });
-    const scopedEvents = await app.inject({ method: "GET", url: "/api/v4/workbench/events?projectId=project-execution-api" });
     expect(snapshot.json().messages).toContainEqual(
       expect.objectContaining({ id: submitted.json().assistant.id, model: "gpt-5.6-sol", reasoningEffort: "high", content: "finished" }),
     );
-    expect(scopedEvents.json().items).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ type: "project.execution.turn.completed", aggregateId: initial.json().thread.id }),
-      ]),
+    // 这条断言此前借 `/api/v4/workbench/events` 看事件有没有落库——那个端点随「执行台」一起退役了，
+    // 所以改成直接读 store。**断言的性质不变**：这一轮确实写了一条 `domain_events`。
+    expect(store.listEvents({ aggregateId: initial.json().thread.id })).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: "project.execution.turn.completed" })]),
     );
     expect(requests[0]).toMatchObject({
       cwd: "/repo/project-execution-api",

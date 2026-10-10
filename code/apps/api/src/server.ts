@@ -4,7 +4,7 @@
  *
  * 本文件之外的分工（`createApp` 读起来就是这份清单）：
  *   - `routes/index.ts` —— 100 条路由的唯一注册入口；每个域的 HTTP 处理器在 `routes/<域>.ts`。
- *   - `projections/` —— 无 IO 的投影函数（计划生命周期、workbench、运行遥测、agent loop、explorer）。
+ *   - `projections/` —— 无 IO 的投影函数（计划生命周期、运行遥测、agent loop、explorer）。
  *   - `runtime/` —— 默认组件的构造与需要 IO 的适配：`git.ts`（子进程）、`scheduler.ts`、
  *     `verification.ts`、`model-gateway.ts`、`commands.ts`、`loop-control.ts`。
  *   - `http/sse.ts` —— SSE 传输层；`web-hosting.ts` —— 静态托管与 SPA fallback。

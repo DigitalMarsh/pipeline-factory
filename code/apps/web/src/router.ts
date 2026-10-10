@@ -6,7 +6,6 @@
 import { createRouter, createWebHistory, type LocationQueryRaw } from "vue-router";
 import ExplorerView from "./views/ExplorerView.vue";
 import ProjectCatalogView from "./views/ProjectCatalogView.vue";
-import ProjectExecuteView from "./views/WorkbenchView.vue";
 import { api } from "./api";
 import { readLastProjectId, rememberProjectId, selectDefaultProjectId } from "./routerDefaults";
 export { LAST_PROJECT_STORAGE_KEY, selectDefaultProjectId } from "./routerDefaults";
@@ -83,7 +82,21 @@ export const router = createRouter({
      * 目录页、不打开表单，他会以为这个地址坏了。
      */
     { path: "/projects/new", redirect: { path: "/projects", query: { create: "1" } } },
-    { path: "/projects/:projectId/execute", component: ProjectExecuteView },
+    /**
+     * 退役的「项目执行台」整页（`WorkbenchView.vue`，1335 行的三栏 Plan/Run 工作台）→ 探索视图的方案中心。
+     *
+     * 与退役的「Run 详情」「新建项目」是同一种收法：这条路**全仓没有任何入口**
+     * （`projectPathForModule("execute", id)` 生成的是 `/plans`，而那条也重定向回探索视图），
+     * 内容是另一套 Plan/Run 工作台，与探索抽屉里的方案面板重叠。留重定向是因为这个地址可能还在
+     * 书签里；`contextPanel=plan-center` 与 `/plans` 那条重定向落到同一处，所以旧链接的**终点没变**。
+     */
+    {
+      path: "/projects/:projectId/execute",
+      redirect: (to) => ({
+        path: `/projects/${encodeURIComponent(String(to.params.projectId))}/explorer`,
+        query: { ...to.query, contextPanel: "plan-center" },
+      }),
+    },
     { path: "/projects/:projectId/explorer", component: ExplorerView },
     {
       path: "/projects/:projectId/plans",

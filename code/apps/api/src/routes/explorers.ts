@@ -78,8 +78,7 @@ export type ExplorerRouteDeps = {
 };
 
 /**
- * 取一个 ExplorerPlan 的对话活动投影。workbench 快照与 activity 时间线两条路由共用这一套取数，
- * 合并排序的规则由 domain 的 projectExplorerActivity 定义。
+ * 取一个 ExplorerPlan 的对话活动投影；合并排序的规则由 domain 的 projectExplorerActivity 定义。
  *
  * 维护提示（下次想"优化掉"这里的步骤读取时先读这段）：
  *   这里的读法看起来是"每个回合的每一步都读出来，只为拼一段正文"，很像是可以用

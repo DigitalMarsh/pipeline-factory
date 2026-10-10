@@ -6,7 +6,7 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { Bell, Help, Search } from "@element-plus/icons-vue";
 import { api } from "./api";
-import { projectModuleForPath } from "./utils/projectRoutes";
+import { isExplorerWorkspacePath } from "./utils/projectRoutes";
 import { apiHealthVisual, classifyApiHealth, type ApiHealthState } from "./utils/apiHealth";
 
 const helpOpen = ref(false);
@@ -30,10 +30,15 @@ async function checkApiHealth(): Promise<void> {
   }
 }
 
-function workspaceViewKey(viewRoute: { path: string; params: Record<string, unknown> }): string {
-  const projectId = typeof viewRoute.params.projectId === "string" ? viewRoute.params.projectId : "catalog";
-  const module = projectModuleForPath(viewRoute.path);
-  return module === "explore" ? module : module ? `${module}:${projectId}` : viewRoute.path;
+/**
+ * `RouterView` 的 key。**探索工作区不带 projectId**：在那个工作区里切项目时不重挂视图，就地换数据
+ * （左侧线程清单、时间线各自有自己的加载与代际号）。其他地址按原样当 key。
+ *
+ * 此前这里还分一档 `execute`（key 里带 projectId，切项目要整页重挂）——「执行台」那条整页退役之后
+ * 只剩这一档，那个分支也就跟着没了。
+ */
+function workspaceViewKey(viewRoute: { path: string }): string {
+  return isExplorerWorkspacePath(viewRoute.path) ? "explore" : viewRoute.path;
 }
 
 onMounted(() => {

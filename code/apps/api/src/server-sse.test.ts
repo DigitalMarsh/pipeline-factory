@@ -193,22 +193,6 @@ describe("SSE 路由的事件读取必须是有界的", () => {
    * 无界读取的症状不是多发帧——Workbench 会把不属于本项目的帧全过滤掉，帧数完全正常，
    * 代价全在服务端（整张事件表读进内存 + 逐条 JSON.parse）。所以只有查入参才抓得住它。
    */
-  it("workbench/events 每一次 listEvents 都带 limit，且首次连接取尾部窗口", async () => {
-    const store = new RecordingStore();
-    await seedProject(store);
-    const app = createApp({ store, seed: false });
-    apps.push(app);
-    const port = await listen(app);
-
-    const response = await readSse(port, "/api/v4/workbench/events?projectId=project-1&format=sse");
-
-    expect(response.status).toBe(200);
-    expect(response.frames.at(-1)).toMatch(/^id: \d+\nevent: stream\.ready\ndata: /);
-    expect(store.listEventCalls.length).toBeGreaterThan(0);
-    for (const call of store.listEventCalls) expect(call?.limit).toEqual(expect.any(Number));
-    expect(store.listEventCalls[0]).toMatchObject({ limitFrom: "tail" });
-  });
-
   it("agent-loops/:loopId/events 每一次 listEvents 都带 limit，且首次连接取尾部窗口", async () => {
     const store = new RecordingStore();
     store.saveAgentLoop({

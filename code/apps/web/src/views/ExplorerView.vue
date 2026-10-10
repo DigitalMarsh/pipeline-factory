@@ -39,7 +39,7 @@ import { useModelBackends } from "../composables/useModelBackends";
 import { isCandidatePlan as isCandidatePlanFor } from "../utils/planControls";
 import { planForActivity as planForActivityIn } from "../utils/planTimeline";
 import { taskDisplayTitle } from "../utils/taskTree";
-import { projectPathForModule } from "../utils/projectRoutes";
+import { explorerPathFor } from "../utils/projectRoutes";
 import { explorerPlanAnchorId, explorerTimelineMessageType, type ExplorerTimelineItem } from "../utils/explorerTimeline";
 import { explorerDisplayMode, explorerDisplayTitle, explorerRuntimeFacts } from "../utils/explorerPresentation";
 import {
@@ -763,7 +763,7 @@ async function createExplorer() {
 
 function switchProject(selectedProjectId: string) {
   void router.push({
-    path: projectPathForModule("explore", selectedProjectId),
+    path: explorerPathFor(selectedProjectId),
     query: { contextPanel: contextPanel.value, ...(projectExecutionMode.value ? { workspace: "project-execution" } : {}) },
   });
 }
@@ -787,7 +787,7 @@ function openProjectCreateDialog() {
 async function handleProjectCreated(createdProject: Project) {
   projectCreateOpen.value = false;
   projects.value = [createdProject, ...projects.value.filter((item) => item.id !== createdProject.id)];
-  await router.push({ path: projectPathForModule("explore", createdProject.id), query: { contextPanel: contextPanel.value }, hash: "" });
+  await router.push({ path: explorerPathFor(createdProject.id), query: { contextPanel: contextPanel.value }, hash: "" });
 }
 
 function openProjectSettingsDialog(selectedProjectId: string, tab: string | null = null) {

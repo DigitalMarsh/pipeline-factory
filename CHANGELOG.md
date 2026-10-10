@@ -1,5 +1,40 @@
 # Changelog
 
+## 2026-10-11 — 退役「执行台」整页（`WorkbenchView`），连同它那一整条链
+
+`/projects/:projectId/execute` → `views/WorkbenchView.vue`（1335 行的三栏 Plan/Run 工作台）**同样没有
+任何入口**：`projectPathForModule("execute", id)` 生成的是 `/projects/:id/plans`，而那条本身也重定向回
+探索视图。与探索抽屉里的方案面板功能重叠，但**重叠不等于多余**——所以上一轮我只查不删，这一轮按你说的收掉。
+
+留了一条重定向到探索视图的方案中心（`contextPanel=plan-center`）。**旧链接的终点其实没变**：`/plans`
+那条重定向落的就是同一个地方，`/execute` 只是绕了一步。
+
+一起收掉的整条链：
+
+| 位置 | 是什么 |
+|---|---|
+| `apps/web/src/views/WorkbenchView.vue` | 页面本身 |
+| `utils/taskBuckets.ts` | 注释里就写着"只剩 Workbench 一个消费者" |
+| `utils/planContract.ts` | 除测试外只有它用 |
+| `types.ts` 六个类型 | `WorkbenchEvent` / `WorkbenchPlan` / `WorkbenchRun` / `WorkbenchSnapshot` / `DailyActivityEntry` / `DailyActivity` |
+| `api.ts` 四个包装 | `workbench` / `workbenchEvents` / `workbenchEventsUrl` / `projectActivity`——**后一个本来就没有调用方** |
+| API：`routes/workbench.ts` | `/api/v4/workbench`(+`/events`) 与 `/api/v4/projects/:id/activity` |
+| API：`projections/workbench.ts`、`projections/activity.ts`、`schemas/workbench.ts` | 它们唯一的消费者就是上面那些路由 |
+| `utils/projectRoutes.ts` 的"模块"抽象 | `"explore" \| "execute"` 只剩一档，于是 `projectModuleForPath` / `projectPathForModule` 收成 `isExplorerWorkspacePath` / `explorerPathFor` |
+| `App.vue` 里 `router-view` 的 key | 随之少一档（`${module}:${projectId}` 那条"切项目整页重挂"的分支） |
+
+一条测试的断言因此改了写法：`server.test.ts` 里项目执行线程那条**借 `/api/v4/workbench/events` 看事件
+有没有落库**，端点没了就改成直接读 `store.listEvents({ aggregateId })`——**断言的性质不变**（这一轮确实写了
+一条 `domain_events`）。另外两条专测那个端点的测试随它一起删。
+
+> **`apps/api/dist` 也重建了。** `scripts/service.mjs` 的 service 模式跑的是 `dist/main.js` 而不是 `src`，
+> 所以删掉源码之后不重建的话，service 模式会去 import 已经不存在的 `dist/projections/workbench.js`。
+
+浏览器实测：`/projects/project-7b0a4105-71a/execute` → `/explorer?contextPanel=plan-center&explorerId=…&explorerPlanId=…`，
+探索视图正常渲染、控制台无报错；`GET /api/v4/workbench` → 404。
+
+`pnpm verify` 全绿：domain 448 / api 117（少掉的 6 个是 workbench 与 activity 的测试）/ web 647。
+
 ## 2026-10-11 — 把那句提示词跑了一轮；顺带查清 plan 模式到底管什么
 
 纯文档，代码一行没动（那条提示词上一轮已经提交）。

@@ -21,7 +21,7 @@
  *   （曾经还有一条 `QUEUED → ENQUEUED` 的历史值归一化。`QUEUED` 已从 `PlanStatus` 删掉——
  *   全仓无写入点、8 个库零行，所谓"老数据里两种写法并存"在本机从未成立。）
  *
- * 依赖方向：本文件不依赖同目录其他投影。`workbench.ts` 单向依赖本文件的 `planProjection`。
+ * 依赖方向：本文件不依赖同目录其他投影。
  */
 import type {
   CandidatePlan,
