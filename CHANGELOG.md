@@ -20,6 +20,12 @@
   探索视图先按 `explorerId` 挑线程，没有就退回「项目当前线程」，再在那个线程里找 `explorerPlanId`；
   线程不对就**静默落到另一条线程的当前需求上**（浏览器实测踩到，已修）。两个 id 都从 Run 的方案上取
   （`sourceExplorerThreadId` / `explorerPlanId`），没载入过就补一次只为拿 id 的请求，取不到退回探索首页。
+- **页头的「返回」是一模一样的错，一起收了。** 它此前照着 `route.query.explorerId` / `explorerPlanId`
+  写回去——可那两个 query 只有"从探索视图点进来"时才有，独立页的 URL 上本来就没有，读出来是 undefined，
+  返回照样落错地方。现在两个入口共用一份 `explorerEntryQuery()`（「返回」多带一个
+  `contextPanel=plan-center`），**落点只此一处算**，测试钉住两个入口都不许再读 `route.query` 取 id。
+  顺带把两个概念写进文档：B 这一块**两条入口、同一个组件**——内嵌是需求抽屉的「Run」页签，
+  独立页是它自己的整页路由 `/projects/:projectId/runs/:runId`。
 
 ### 二、投一条补充要求，上一轮已完成的步骤全变回「进行中」
 
@@ -36,7 +42,8 @@
 ### 文档同步
 
 `docs/消息类型及事件状态机流程图.md`：§2.3 A 的规则 3 与它那条 mermaid 边改成 `(loopId, modelStep)`；
-§2.3 C 后面补一段"这个状态机决定执行会话底部那个框长什么样"，连同上面的报障与两个 id 的坑。
+§2.3 C 后面补一段"这个状态机决定执行会话底部那个框长什么样"，连同上面的报障、两个 id 的坑，以及
+「内嵌 / 独立页」的分辨（§0 那处也补了它是哪两条入口）。两个视图的行数一并订正（831 / 1986）。
 
 `pnpm verify` 全绿：domain 447 / api 123 / web 648（含新增的 composer 提示与乐观标注回归用例）。
 

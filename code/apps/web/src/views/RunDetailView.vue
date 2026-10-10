@@ -478,12 +478,9 @@ async function load() {
 }
 
 /**
- * 「去探索对话」。
+ * 「回到探索视图」要落在哪——**返回**与**去探索对话**共用这一份。
  *
- * 内嵌时**不能自己跳路由**——它就在抽屉里，切页签是父组件的事（`ExplorerView.switchDrawerTab`），
- * 所以只喊一声。独立页（`/projects/:id/runs/:runId`）没有听众，自己跳到探索视图。
- *
- * **要落在这个 Run 的方案对应的那条需求上**，否则用户带着"我要改这份计划"的意图点进来，却要在一列
+ * 落点是**这个 Run 的方案对应的那条需求**，否则用户带着"我要改这份计划"的意图点进来，却要在一列
  * 需求里自己找是哪一条——找路这一步是白费的。两个参数都得带：
  *
  * - `explorerPlanId` 是那条需求本身；
@@ -491,14 +488,14 @@ async function load() {
  *   「项目当前线程」，然后在那个线程的需求里找 `explorerPlanId`——线程不对，这条需求当然找不到，
  *   于是静默落到别人家的需求上（实测就是这个：点进来落在另一条线程上了）。
  *
+ * **两个都不能读 `route.query`**：这里问的是"从这个 Run 回哪去"，而独立页（`/projects/:id/runs/:runId`）
+ * 的 URL 上本来就没有这两个 query——照着读只会读出 undefined，然后同样落错地方（「返回」此前就是
+ * 这么写的，跟上面那个入口错在一处）。id 只能从 Run 的方案上取。
+ *
  * `planDetail` 只在打开过方案抽屉之后才有值，所以这里补一次 `getPlan`（**只为拿这两个 id，不打开抽屉**）；
  * 取不到就退回探索首页，别把跳转本身卡在这一次请求上。
  */
-async function openExplorerConversation(): Promise<void> {
-  if (embedded.value) {
-    emit("open-explorer");
-    return;
-  }
+async function explorerEntryQuery(contextPanel?: string): Promise<Record<string, string>> {
   const planId = run.value?.planId;
   let target = planDetail.value;
   if (!target?.explorerPlanId && planId) {
@@ -511,18 +508,26 @@ async function openExplorerConversation(): Promise<void> {
   const query: Record<string, string> = {};
   if (target?.sourceExplorerThreadId) query.explorerId = target.sourceExplorerThreadId;
   if (target?.explorerPlanId) query.explorerPlanId = target.explorerPlanId;
-  void router.push({ path: `/projects/${projectId.value}/explorer`, query });
+  if (contextPanel) query.contextPanel = contextPanel;
+  return query;
 }
 
-function closeView(): void {
+/** 「去探索对话」：内嵌时**不能自己跳路由**——它就在抽屉里，切页签是父组件的事。 */
+async function openExplorerConversation(): Promise<void> {
+  if (embedded.value) {
+    emit("open-explorer");
+    return;
+  }
+  void router.push({ path: `/projects/${projectId.value}/explorer`, query: await explorerEntryQuery() });
+}
+
+/** 「返回」：同样是回探索视图，只是顺带把右侧面板落在方案中心。 */
+async function closeView(): Promise<void> {
   if (embedded.value) {
     emit("close");
     return;
   }
-  void router.push({
-    path: `/projects/${projectId.value}/explorer`,
-    query: { explorerId: route.query.explorerId, explorerPlanId: route.query.explorerPlanId, contextPanel: "plan-center" },
-  });
+  void router.push({ path: `/projects/${projectId.value}/explorer`, query: await explorerEntryQuery("plan-center") });
 }
 
 watch([projectId, runId], () => {

@@ -312,6 +312,22 @@ describe("Run detail execution conversation", () => {
       // 版本号按当前 Plan 的修订号 +1 说，别写死成 V2。
       expect(flat(runDetailSource)).toContain(flat("run?.planRevision ?? 1"));
     });
+
+    it("「返回」与「去探索对话」走同一份落点判据，而且都不读 route.query", () => {
+      /**
+       * 「返回」（`closeView`）此前是照着 `route.query.explorerId / explorerPlanId` 写回去的——
+       * 而这两个 query 只有**从探索视图点进来**时才有；独立页的 URL 上本来就没有，于是读出来是
+       * undefined，返回同样落错地方。它跟上面那个入口错的其实是同一处，所以现在共用一份判据。
+       */
+      expect(flat(runDetailSource)).toContain(
+        flat("async function explorerEntryQuery(contextPanel?: string): Promise<Record<string, string>>"),
+      );
+      expect(flat(runDetailSource)).toContain(flat("query: await explorerEntryQuery()"));
+      expect(flat(runDetailSource)).toContain(flat('query: await explorerEntryQuery("plan-center")'));
+      // 落点只此一处算：两个入口都不许再从 route.query 里捡这两个 id。
+      expect(runDetailSource).not.toContain("query: { explorerId: route.query.explorerId");
+      expect(runDetailSource).not.toContain("explorerPlanId: route.query.explorerPlanId");
+    });
   });
 
   it("把 Run 级活动移出执行会话：时间线只留执行步骤与你说的话", () => {
