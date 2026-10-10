@@ -3023,7 +3023,16 @@ export class SqlitePipelineStore implements PipelineStore {
     }
   }
 
-  /** journal：同 run 内连续、且 modelStep 与 providerItemId 都不变的 MODEL_OUTPUT 合成一条。 */
+  /**
+   * journal：同 run 内连续、且 modelStep / providerItemId / **phase** 三者都不变的 MODEL_OUTPUT
+   * 合成一条。
+   *
+   * **`phase` 必须参与分组键**：写侧 `bufferModelOutput` 的段键是
+   * `modelStep:providerItemId:phase`，读侧（`executionStream`）也逐字比这三样——过程叙述
+   * （`commentary`）与最终回答（`final_answer`）是两种重量，粘成一条会让整段都变成其中一种。
+   * 这一格此前**漏了**：收缩只比 modelStep 与 providerItemId，于是重启一次就把写侧/读侧都分开的
+   * 那两段并成一段，段上留下后一段的 phase——"页面上一条都不变"这条不变量当场被破坏。
+   */
   private compactJournalTextSegments(): void {
     const rows = this.statement(
       `
@@ -3031,13 +3040,15 @@ export class SqlitePipelineStore implements PipelineStore {
         SELECT run_id, sequence, payload_json,
                LAG(sequence) OVER (PARTITION BY run_id ORDER BY sequence) AS prev_sequence,
                LAG(json_extract(payload_json, '$.modelStep')) OVER (PARTITION BY run_id ORDER BY sequence) AS prev_step,
-               LAG(json_extract(payload_json, '$.providerItemId')) OVER (PARTITION BY run_id ORDER BY sequence) AS prev_item
+               LAG(json_extract(payload_json, '$.providerItemId')) OVER (PARTITION BY run_id ORDER BY sequence) AS prev_item,
+               LAG(json_extract(payload_json, '$.phase')) OVER (PARTITION BY run_id ORDER BY sequence) AS prev_phase
         FROM execution_journal WHERE type = 'MODEL_OUTPUT'
       ), grouped AS (
         SELECT run_id, sequence, payload_json,
                SUM(CASE WHEN prev_sequence = sequence - 1
                          AND json_extract(payload_json, '$.modelStep') IS prev_step
                          AND json_extract(payload_json, '$.providerItemId') IS prev_item
+                         AND json_extract(payload_json, '$.phase') IS prev_phase
                    THEN 0 ELSE 1 END)
                  OVER (PARTITION BY run_id ORDER BY sequence) AS segment
         FROM text_rows

@@ -295,6 +295,52 @@ describe("SqlitePipelineStore 构造期回填", () => {
     expect(again.getExecutionThread("thread-1")!.journal.map((entry) => entry.sequence)).toEqual([1]);
   });
 
+  it("**phase 不同就不并段**：收缩的分组键与写侧、读侧逐字一致", () => {
+    // 写侧 `bufferModelOutput` 的段键是 `modelStep:providerItemId:phase`，读侧（`executionStream`）
+    // 也逐字比这三样——过程叙述（`commentary`）与最终回答（`final_answer`）是**两种重量**。
+    // 收缩此前只比前两样，于是重启一次就把这两段并成一段、段上只留下后一段的 phase：
+    // "页面上一条都不变"这条不变量当场被破坏（实测三处判据里唯一漏掉的那一处）。
+    const directory = mkdtempSync(join(tmpdir(), "pipeline-compact-phase-"));
+    temporaryDirectories.push(directory);
+    const databasePath = join(directory, "factory.sqlite");
+    const seeded = new SqlitePipelineStore(databasePath);
+    seeded.saveRun({
+      id: "run-phase",
+      projectId: "project-1",
+      planId: "plan-1",
+      planRevision: 1,
+      status: "IN_PROGRESS",
+      branch: "factory/run-phase",
+      workspacePath: "/tmp/run-phase",
+      baseCommit: "abc",
+      executionThreadId: "thread-phase",
+      createdAt: seeded.now(),
+      startedAt: null,
+    });
+    seeded.saveExecutionThread({ id: "thread-phase", runId: "run-phase", state: "ACTIVE", journal: [] });
+    // 序号由 store 自己排（三条相邻），与真实写入路径一致。
+    const write = (text: string, phase: string) =>
+      seeded.appendExecutionJournal({
+        executionThreadId: "thread-phase",
+        runId: "run-phase",
+        type: "MODEL_OUTPUT",
+        payload: { text, modelStep: 1, providerItemId: "item-1", phase },
+      });
+    write("中途叙述", "commentary");
+    write("最终回答", "final_answer");
+    write("（续）", "final_answer"); // 这一段与前一段同 phase，才是真该并的
+    seeded.close();
+
+    const reopened = new SqlitePipelineStore(databasePath);
+    openStores.push(reopened);
+    expect(reopened.getExecutionThread("thread-phase")!.journal.map((entry) => [entry.payload.text, entry.payload.phase])).toEqual([
+      ["中途叙述", "commentary"],
+      ["最终回答（续）", "final_answer"],
+    ]);
+    reopened.close();
+    openStores.splice(openStores.indexOf(reopened), 1);
+  });
+
   it("把只存在整体快照里的历史 journal 搬进执行日志表", () => {
     // backfillJournalRowsFromSnapshot 的场景：`execution_threads.journal_json` 是这份 journal 的
     // 第二份副本，读路径早已改读 execution_journal 表，所以那条列被丢掉了。
