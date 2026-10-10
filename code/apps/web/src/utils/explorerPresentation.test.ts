@@ -77,11 +77,13 @@ describe("活动条目文案", () => {
     expect(activityStatusLabel({ status: "UNKNOWN" })).toBe("状态未知");
   });
 
-  it("助手消息卡片把回合状态归成三档", () => {
+  it("助手消息卡片把回合状态归成四档（`WAITING` 自己一档，不并进「已完成」）", () => {
     expect(assistantActivityLabel({ status: "RUNNING" })).toBe("进行中");
+    expect(assistantActivityLabel({ status: "WAITING" })).toBe("等待中");
     expect(assistantActivityLabel({ status: "FAILED" })).toBe("失败");
     expect(assistantActivityLabel({ status: "COMPLETED" })).toBe("已完成");
-    expect(assistantActivityLabel({ status: "WAITING" })).toBe("已完成");
+    // 与活动行同一套词：同一种状态在探索侧只有一种说法。
+    expect(assistantActivityLabel({ status: "WAITING" })).toBe(activityStatusLabel({ status: "WAITING" }));
   });
 });
 

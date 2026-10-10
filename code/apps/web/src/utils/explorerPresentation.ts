@@ -60,11 +60,16 @@ export function activityStatusLabel(item: Pick<ExplorerActivityItem, "status">):
 }
 
 /**
- * 助手消息卡片上的状态标签。回合的 7 个状态在这里归成 3 种观感
+ * 助手消息卡片上的状态标签。回合的 7 个状态在这里归成 **4 种观感**
  * （完整映射见 `docs/消息类型及事件状态机流程图.md` §1.3 A）。
+ *
+ * **`WAITING` 必须自己一档**：它对应"这条需求上已有回合在跑，这一条在排队"与"模型正等你回答"
+ * 两种情形（见 `assistantActivityStatus`），把它们并进 `COMPLETED` 会让卡片在**还没开始跑**的
+ * 时候就写「已完成」——而活动行（`activityStatusLabel`）一直有独立的「等待中」，两条线就此说两套话。
  */
 export function assistantActivityLabel(item: Pick<ExplorerActivityItem, "status">): string {
   if (item.status === "RUNNING") return "进行中";
+  if (item.status === "WAITING") return "等待中";
   if (item.status === "FAILED") return "失败";
   return "已完成";
 }
