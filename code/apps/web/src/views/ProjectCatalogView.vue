@@ -3,7 +3,7 @@
   维护提示：交互状态和数据流变化时，应同步更新组件边界说明。
 -->
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { onMounted, ref, watch } from "vue";
 import {
   ArrowRight,
   ChatDotRound,
@@ -17,12 +17,13 @@ import {
   Warning,
 } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { api } from "../api";
 import ProjectCreateDialog from "../components/ProjectCreateDialog.vue";
 import type { Project, ProjectCatalogItem } from "../types";
 import { projectStatusLabel } from "../utils/entityStatus";
 
+const route = useRoute();
 const router = useRouter();
 const projects = ref<ProjectCatalogItem[]>([]);
 const loading = ref(true);
@@ -86,9 +87,26 @@ function activityLabel(value: string | null) {
   if (!value) return "暂无活动";
   return new Intl.DateTimeFormat("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
 }
+/**
+ * 退役的「新建项目」整页地址重定向到这里时带的 `create=1`（见 router.ts）。
+ *
+ * **一次性消费**：打开对话框后立刻把参数摘掉。不摘的话有两个后果——在同一个页面里再导航到
+ * 这个地址不会触发（query 没变，组件不重挂），以及用户关掉对话框后一刷新它又自己弹开。
+ */
+function consumeCreateQuery() {
+  if (route.query.create !== "1") return;
+  openCreate();
+  const query = { ...route.query };
+  delete query.create;
+  void router.replace({ path: route.path, query, hash: route.hash });
+}
+
 onMounted(() => {
   void load();
+  consumeCreateQuery();
 });
+// 已经在目录页时再跳到这个地址：query 变了但组件不重挂，靠这个 watch 兜住（与设置对话框同一处理）。
+watch(() => route.query.create, consumeCreateQuery);
 </script>
 
 <template>

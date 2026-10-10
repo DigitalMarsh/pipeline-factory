@@ -1,6 +1,8 @@
 <!--
-  模块职责：在当前工作区弹出 Project 创建表单，复用既有创建页的字段和 API 契约。
+  模块职责：在当前工作区弹出 Project 创建表单——**这是创建 Project 的唯一入口**。
   维护提示：创建成功后由父级决定 Project/Explorer 切换；本组件不自行改变路由。
+    它此前复用的那个整页（`views/ProjectCreateView.vue`，`/projects/new`）已退役成一条重定向，
+    字段与 API 契约现在只此一处；旧地址由 router 带上 `create=1` 转到目录页并打开这里。
 -->
 <script setup lang="ts">
 import { reactive, ref, watch } from "vue";

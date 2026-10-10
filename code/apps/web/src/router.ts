@@ -7,7 +7,6 @@ import { createRouter, createWebHistory, type LocationQueryRaw } from "vue-route
 import ExplorerView from "./views/ExplorerView.vue";
 import ProjectCatalogView from "./views/ProjectCatalogView.vue";
 import ProjectExecuteView from "./views/WorkbenchView.vue";
-import ProjectCreateView from "./views/ProjectCreateView.vue";
 import { api } from "./api";
 import { readLastProjectId, rememberProjectId, selectDefaultProjectId } from "./routerDefaults";
 export { LAST_PROJECT_STORAGE_KEY, selectDefaultProjectId } from "./routerDefaults";
@@ -75,7 +74,15 @@ export const router = createRouter({
   routes: [
     { path: "/", component: ProjectCatalogView },
     { path: "/projects", component: ProjectCatalogView },
-    { path: "/projects/new", component: ProjectCreateView },
+    /**
+     * 退役的「新建项目」整页 → 目录页上的新建对话框（见 `ProjectCatalogView` 的 `create=1`）。
+     *
+     * 与退役的「项目设置」整页是同一种收法：创建项目现在到处都是**对话框**（目录页的「新建项目」
+     * 按钮、探索左栏的「新建项目」），整页那条 `/projects/new` 已经**没有任何入口**。留重定向而不是
+     * 删掉，是因为这个地址可能还在书签、聊天记录、终端历史里；`create=1` 是语义那一半——只把用户丢到
+     * 目录页、不打开表单，他会以为这个地址坏了。
+     */
+    { path: "/projects/new", redirect: { path: "/projects", query: { create: "1" } } },
     { path: "/projects/:projectId/execute", component: ProjectExecuteView },
     { path: "/projects/:projectId/explorer", component: ExplorerView },
     {

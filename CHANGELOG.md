@@ -1,5 +1,38 @@
 # Changelog
 
+## 2026-10-10 — 探索侧指令补上「你是只读的」；新建项目的整页退役
+
+### 一、探索侧那句提示词
+
+需求16 的探索线程跑 `… && git diff --check && (cd code && npm run build)`：前两步（纯读）成功，
+最后那句让 vite 往 `node_modules/.vite-temp/` 写临时配置文件，被沙箱拒绝
+（`EPERM: operation not permitted`）。**这是设计**——Codex 的探索角色跑在
+`sandbox: "read-only"` + `approvalPolicy: "never"` 里（`model/codex-app-server.ts`）。失败没影响结果
+（那轮照样产出了判定为 READY 的方案，模型也是从报错里自己读懂的），但**每次探索都要交一遍这趟学费**。
+
+现在 `EXPLORER_PLAN_INSTRUCTIONS` 第一段就写明：运行环境是只读的，不要运行会产生写盘或构建产物的
+命令（安装依赖、`npm run build`、`vite`、`vitest`、格式化与代码生成）；需要靠构建或测试才能确认的
+事写进方案的验证步骤，交给 Executor（它有可写的沙箱）。
+
+> **措辞必须两边都对。** Claude 侧的探索角色**根本没有 `Bash`**（`ROLE_TOOLS.explorer` 只有
+> Read/Grep/Glob/WebSearch/WebFetch/Task/AskUserQuestion），所以不能写"要查现状就跑只读的 git 命令"
+> ——指一条不存在的路比不说更糟。写的是中性的"查证现状用只读手段"。测试里把这一条也钉住了。
+
+### 二、`/projects/new` 退役
+
+创建项目现在到处都是**对话框**（目录页的「新建项目」按钮、探索左栏的「新建项目」），
+`ProjectCreateView.vue`（281 行）那条整页**全仓没有任何入口**。留了一条重定向
+`/projects/new → /projects?create=1`，与退役的「项目设置」同一种收法（`settings=1` 那一套）：
+只把用户丢到目录页、不打开表单，他会以为这个地址坏了。目录页那侧**一次性消费** `create=1`
+（打开后立刻摘掉参数，否则关掉对话框一刷新又自己弹开；冷跳转与"已经在目录页再跳一次"两条路都要接住）。
+
+> **`/projects/:projectId/execute`（`WorkbenchView.vue`，1335 行）同样没有入口，这一轮没动。**
+> 它牵连一整条链——`utils/taskBuckets.ts`、`utils/planContract.ts`、三个 Workbench 类型，以及 API 侧的
+> `/api/v4/workbench`(+`/events`)、`projections/workbench.ts`、`schemas/workbench.ts`、
+> `projections/activity.ts`。它与探索抽屉里的方案面板功能有重叠，但**重叠不等于多余**，去留是产品判断。
+
+`pnpm verify` 全绿：domain 448（新增一条指令判据）/ api 123 / web 648。
+
 ## 2026-10-10 — Run 详情的「整页形态」退役
 
 追上一轮那条「返回」的线往下查，发现**这个页面全仓没有任何入口**：把 `apps/web/src` 里所有拼过

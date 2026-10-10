@@ -739,6 +739,19 @@ describe("Project catalog project creation wiring", () => {
     expect(projectCatalogSource).not.toContain('void router.push("/projects/new")');
     expect(flat(projectCatalogSource)).toContain(flat('@project-created="handleProjectCreated"'));
   });
+
+  /**
+   * 旧 `/projects/new` 重定向过来时带的 `create=1`（见 router.ts）。三处缺一不可，缺了都只表现为
+   * "某个入口打不开表单"，不会报错——与设置对话框那条同形：
+   *   - onMounted 里那次调用：整页 → 目录页的**冷**跳转（书签、外链）；
+   *   - `watch(route.query.create)`：已经在目录页时再跳到这个地址，组件不重挂；
+   *   - `delete query.create`：一次性消费，否则关掉对话框后一刷新它又自己弹开。
+   */
+  it("consumes the retired create-project address exactly once, and on both entry paths", () => {
+    expect(flat(projectCatalogSource)).toContain(flat("watch(() => route.query.create, consumeCreateQuery)"));
+    expect(flat(projectCatalogSource)).toContain(flat("void load(); consumeCreateQuery();"));
+    expect(flat(projectCatalogSource)).toContain(flat("delete query.create"));
+  });
 });
 
 describe("Explorer provider loop layout", () => {

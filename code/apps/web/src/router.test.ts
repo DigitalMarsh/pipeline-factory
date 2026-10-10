@@ -58,6 +58,19 @@ describe("project workspace routes", () => {
     expect(routerSource).toContain("explorerPlanId");
   });
 
+  /**
+   * 整页「新建项目」退役（与上面两条同一种收法）。创建项目现在到处都是**对话框**——目录页的
+   * 「新建项目」按钮、探索左栏的「新建项目」——整页那条 `/projects/new` 已经没有任何入口。
+   * `create=1` 是语义那一半：只把用户丢到目录页、不打开表单，他会以为这个地址坏了。
+   */
+  it("retires the standalone create-project page into the catalog dialog", () => {
+    // 断言的是**代码里**没有它了（注释会引用旧名说明改了什么，那不算）。
+    expect(routerSource).not.toContain("views/ProjectCreateView.vue");
+    expect(routerSource).not.toContain("component: ProjectCreateView");
+    expect(routerSource).toContain('path: "/projects/new"');
+    expect(routerSource).toContain('create: "1"');
+  });
+
   it("resolves the root entry from the remembered project before active-project fallback", () => {
     expect(routerDefaultsSource).toContain("pipeline-factory:last-project-id");
     expect(routerDefaultsSource).toContain("localStorage.getItem(LAST_PROJECT_STORAGE_KEY)");

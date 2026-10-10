@@ -19,4 +19,24 @@ describe("EXPLORER_PLAN_INSTRUCTIONS", () => {
     for (const mode of EXPLORER_PLAN_REQUIREMENTS.artifactModes) expect(EXPLORER_PLAN_INSTRUCTIONS).toContain(mode.mode);
     expect(EXPLORER_PLAN_REQUIREMENTS.artifactModes.find((mode) => mode.mode === "CONVERSATION")?.executable).toBe(false);
   });
+
+  /**
+   * 探索侧跑在**只读沙箱**里，而模型不会自动知道这件事——它是撞出来的。
+   *
+   * 实测（需求16）：Codex 探索线程跑
+   * `... && git diff --check && (cd code && npm run build)`，前两步（纯读）成功，
+   * 最后那句让 vite 往 `node_modules/.vite-temp/` 写临时配置文件，被沙箱拒绝：
+   * `EPERM: operation not permitted`。**这是设计**（`sandbox: "read-only"` +
+   * `approvalPolicy: "never"`，见 `model/codex-app-server.ts`），失败也不影响最终结果
+   * （那轮照样产出了判定为 READY 的方案）——但每次探索都要交一遍这趟学费，不该如此。
+   *
+   * 所以这句必须留在指令里：它把"必然失败"从**撞出来的经验**变成**读得到的规则**。
+   */
+  it("说明探索环境是只读的，不要跑会写盘的命令", () => {
+    expect(EXPLORER_PLAN_INSTRUCTIONS).toContain("运行环境是只读的");
+    expect(EXPLORER_PLAN_INSTRUCTIONS).toContain("不要运行会产生写盘或构建产物的命令");
+    // 只读手段那句不能写成"跑 git 命令"：Claude 侧的探索角色**根本没有 Bash**
+    // （见 claude-agent-sdk.ts 的 ROLE_TOOLS.explorer），指一条不存在的路比不说更糟。
+    expect(EXPLORER_PLAN_INSTRUCTIONS).toContain("查证现状用只读手段");
+  });
 });
