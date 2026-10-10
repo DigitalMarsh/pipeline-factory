@@ -1,5 +1,43 @@
 # Changelog
 
+## 2026-10-10 — 复核清单第二份（16 项）：又是纯文档，一处代码都没动
+
+[《复核清单-2026-10-10》](docs/消息类型及事件状态机流程图-复核清单-2026-10-10.md) 列了 16 项，
+逐条对着代码验过（清单同样准确），**全部是文档问题**——上一轮那三处代码问题（`phase` 分组、
+`WAITING` 卡片文案、续跑检查点折叠）都已修完，这一轮没再动代码。
+
+改的主要是四类：
+
+- **数量口径**：C 模式的「2 类消息 ×6 状态 + 3 种活动行」（只有助手消息有那 6 个状态、活动附注是
+  4 条返回路径）；§7 那个「④ 扩到 12 个」（中立类别是 **9**、呈现类型是 **10**、`ProviderActivityKind`
+  共 **19** 类——12 两个口径都对不上）；§5.4 的「4 条 `claude-agent-sdk` 线程」（记着这个 backend 的是
+  **3 条**，第 4 条是 backend 写 codex、model 配 `claude-opus-5` 的历史行，**模型名与后端标识不是一个口径**）；
+  §8.2 的「分三类看」（下文是 A/B/C/D 四类）。
+- **把绝对化的表述收窄**：`conversationId` **不是恒为 `run.id`**（探索是 `ExplorerPlan.id`、项目执行
+  线程是线程 id）；Factory **不是"不直接调模型的 API"**（`openai-responses` 那条就在进程里 `fetch`）；
+  消费方**不是"永远看不到 Provider 原生词"**（读历史数据那条按 `itemType` 兜底、认不出的直接显示原生名）；
+  页面上一条消息**不是"在库里从来不是一行"**（C 模式直接渲染记录，一条就是一行）。
+- **流程边**：Plan 图补上 `VERIFYING → BLOCKED` 这条明确的业务边；恢复边的来源标错——变更提案**不直接
+  回 `IN_PROGRESS`**（先进 `NEEDS_PLAN_CHANGE`，批准后进 `ENQUEUED`），`MERGE_READY → IN_PROGRESS`
+  的真实写入点是**恢复对账与追加要求续跑**；启动恢复是**两个分支**（有未确定副作用的工具调用时先转
+  `NEEDS_RECONCILIATION`，不是一律 `RECOVERING`）。
+- **历史说明与当前实现分开**：§8 开头改成"曾经"并新增 **§8.3 现在的状态**；§9 开头那句收窄；
+  §9.2 里"合并载荷保留的是**首段**的 `phase`"（此前写成后一段）；事件副本那一簇的分组条件与 journal
+  **并不逐字相同**（它多比 `modelStep`/`providerItemId`、少比 `phase`），"一一对应"这句保证收窄了。
+
+顺带订正一处路径笔误（`run/status-transition.ts` → `plan/status-transition.ts`）。
+
+### 顺带回答文档 §8 的两个问题
+
+- **现在还有 V1 形状的接口吗？没有。** 源码零命中（`PlanContract` / `validatePlanContract` /
+  `schemaVersion: 1` / `contract_json`）、API schema 与 projections 里没有 `contract` 字段、
+  四个表只剩 `resolved_contract_json` 一列。已写进 §8.3。
+- **「V1 副本的读取（无条件）」还在吗？不在了。** 那个读点是 `plan/query.ts` 的
+  `planQueryProjectionFor`，现在读 `plan.resolvedContract.objective.goal`；副本本身
+  （`Plan.contract`）连同类型、生成函数与四列一起删掉了。
+
+**纯文档，`pnpm verify` 未跑**（没有代码改动）。
+
 ## 2026-10-10 — 续跑检查点不再被折进过程记录（形态与折叠两半都到位了）
 
 上一轮记在 §7.1 的另一件事定了：**分隔行永远不折**。
