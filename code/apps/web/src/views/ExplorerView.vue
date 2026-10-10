@@ -729,13 +729,6 @@ async function openRunView(runId: string, explorerId?: string | null, explorerPl
   await router.push({ path: route.path, query });
 }
 
-async function closeRunView(): Promise<void> {
-  if (!activeRunId.value) return;
-  const query = { ...route.query };
-  delete query.runId;
-  await router.push({ path: route.path, query, hash: route.hash });
-}
-
 async function createExplorer() {
   if (creatingExplorer.value) return;
   const requestProjectId = projectId.value;
@@ -1730,10 +1723,8 @@ onBeforeUnmount(() => {
             <RunDetailView
               v-if="activeRunId"
               :key="activeRunId"
-              embedded
               :project-id="projectId"
               :run-id="activeRunId"
-              @close="closeRunView"
               @open-plan="openPlanDetail"
               @open-explorer="switchDrawerTab('explorer')"
             />

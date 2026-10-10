@@ -204,11 +204,25 @@ describe("Explorer requirement list and shared drawer", () => {
     );
     expect(flat(explorerViewSource)).toContain(flat("<PlanDetailContent"));
     expect(flat(explorerViewSource)).toContain(flat('<RunDetailView v-if="activeRunId"'));
-    expect(flat(explorerViewSource)).toContain(flat('@close="closeRunView"'));
+    /**
+     * **Run 面板自己不再有"关掉自己"这条路**：它此前有一个 `embedded` 开关和一个只在整页形态下
+     * 渲染的「返回」按钮（`@close` → `closeRunView`），而那个按钮在抽屉里从来不出现——`closeRunView`
+     * 是死的。整页形态退役后这条链整个拆掉：关抽屉是抽屉自己的 ✕（`closeSharedDrawer`，它同样会
+     * 清掉 `runId`），离开 Run 页签是切页签。
+     */
+    expect(explorerViewSource).not.toContain("closeRunView");
+    // 整块比 `@close` 的反面：Run 面板的绑定现在只有两件事——传 id，以及两个「交回宿主办」的事件。
+    expect(flat(explorerViewSource)).toContain(
+      flat(
+        '<RunDetailView v-if="activeRunId" :key="activeRunId" :project-id="projectId" :run-id="activeRunId" @open-plan="openPlanDetail" @open-explorer="switchDrawerTab(\'explorer\')" />',
+      ),
+    );
+    expect(flat(explorerViewSource)).not.toContain(flat(" embedded"));
     expect(flat(explorerViewSource)).toContain(flat('role="tablist" aria-label="需求详情类型"'));
     expect(flat(explorerViewSource)).toContain(flat("探索对话"));
     expect(flat(explorerViewSource)).toContain(flat("Plan 详情"));
     expect(flat(explorerViewSource)).toContain(flat("Run"));
+    // 关抽屉时清掉 runId（Run 面板随之卸载），这是现在唯一一条退出 Run 的路。
     expect(flat(explorerViewSource)).toContain(flat("delete query.runId"));
     expect(flat(explorerViewSource)).toContain(flat('@open-plan="openPlanDetail"'));
     /**

@@ -445,7 +445,7 @@ export type AgentLoopStep = {
   occurredAt: string;
 };
 
-/** Plan Center 和 PlanDetailDrawer 使用的候选/执行计划投影。 */
+/** Plan Center（共享抽屉）使用的候选/执行计划投影。 */
 export type PlanTaskChange = { path: string; action: "create" | "modify" | "delete"; detail: string };
 
 export type PlanTask = {

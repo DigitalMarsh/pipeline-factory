@@ -119,19 +119,35 @@ describe("Run detail execution conversation", () => {
     expect(executionActivityRowSource).not.toContain("MarkdownMessage");
   });
 
-  it("supports embedding the complete Run surface and opening Plan in the shared drawer", () => {
-    expect(flat(runDetailSource)).toContain(flat("defineProps<{ embedded?: boolean; projectId?: string; runId?: string }>"));
+  it("把 Run 面板接上共享抽屉：方案交给宿主，改计划交给「探索对话」页签", () => {
+    // 宿主（ExplorerView 的「Run」页签）永远把这两个 id 传进来——组件不再有"从路由参数兜底"那一条。
+    expect(flat(runDetailSource)).toContain(flat("defineProps<{ projectId: string; runId: string }>()"));
     // 逐个事件断言，不整块比 `defineEmits<{…}>()`：块里现在夹着解释用的注释，整块比就等于在测排版。
-    expect(flat(runDetailSource)).toContain(flat('defineEmits<{ (event: "close"): void;'));
     expect(flat(runDetailSource)).toContain(flat('(event: "open-plan", plan: Plan): void;'));
     expect(flat(runDetailSource)).toContain(flat('(event: "open-explorer"): void;'));
-    expect(flat(runDetailSource)).toContain(flat("detail-page-embedded"));
+    /** 它**自己不渲染**方案面板：取全 Plan 之后交给宿主（共享抽屉里已经有一份方案面板）。 */
     expect(flat(runDetailSource)).toContain(flat('emit("open-plan", planDetail.value)'));
-    expect(flat(runDetailSource)).toContain(flat('@click="closeView"'));
+    expect(runDetailSource).not.toContain("PlanDetailDrawer");
   });
 
-  it("hides the standalone navigation header in embedded Run mode", () => {
-    expect(flat(runDetailSource)).toContain(flat('<div v-if="!embedded" class="detail-top">'));
+  it("**没有「整页形态」了**：不渲染页头那条「返回」，也不再有 embedded 开关", () => {
+    /**
+     * 此前这个组件有一个 `embedded` 开关分「内嵌 / 独立整页」两种形态。整页那条
+     * （`/projects/:projectId/runs/:runId`）**全仓没有任何入口**、内容又是同一份代码，已经退役成
+     * 一条重定向（`router.ts` 的 `runDetailRedirect`）。于是这里留下一堆"只有一种取值"的分支：
+     * 页头、「查看方案」开不开抽屉、终止之后往哪跳、根元素那个 class 开关——全部收掉。
+     */
+    // 断言的是**代码里**没有它了（注释里会引用旧名说明改了什么，那不算）。
+    expect(flat(runDetailSource)).not.toContain(flat("props.embedded"));
+    expect(flat(runDetailSource)).not.toContain(flat("detail-page-embedded"));
+    expect(runDetailSource).not.toContain("detail-top");
+    expect(runDetailSource).not.toContain("closeView");
+    // 不再从路由参数兜底取 id，也就不再需要 route / router——跳转全归宿主。
+    expect(runDetailSource).not.toContain("useRoute");
+    expect(runDetailSource).not.toContain("useRouter");
+    expect(flat(runDetailSource)).toContain(flat('class="detail-page run-detail-page"'));
+    // 终止之后就地重载：整页那条"跳 /plans"的支路跟着整页一起没了。
+    expect(flat(runDetailSource)).toContain(flat("onTerminated: async () => { await load(); }"));
   });
 
   it("uses the compact execution header as the details entry point", () => {
@@ -183,13 +199,13 @@ describe("Run detail execution conversation", () => {
     expect(runDetailSource).not.toContain("Provider item {{ item.providerItemId }}");
   });
 
-  it("keeps the execution title focused and opens the current Plan revision read only", () => {
-    expect(flat(runDetailSource)).toContain(flat('import PlanDetailDrawer from "../components/PlanDetailDrawer.vue"'));
+  it("keeps the execution title focused and hands the current Plan revision to the shared drawer", () => {
     expect(flat(runDetailSource)).toContain(flat('class="execution-plan-link"'));
     expect(flat(runDetailSource)).toContain(flat("api.getPlan(currentRun.planId)"));
-    expect(flat(runDetailSource)).toContain(flat("api.planRevisions(currentRun.planId)"));
     expect(flat(runDetailSource)).toContain(flat("api.getPlanRevision(currentRun.planId, currentRun.planRevision)"));
-    expect(flat(runDetailSource)).toContain(flat(':read-only="true"'));
+    // 只读这件事现在由**宿主**那份方案面板决定（共享抽屉里那份本来就是只读的），
+    // 组件这边不再自带一个 read-only 的抽屉壳。
+    expect(flat(runDetailSource)).not.toContain(flat(':read-only="true"'));
     expect(runDetailSource).not.toContain("RUN · {{ run.id }}");
     expect(runDetailSource).not.toContain("EXECUTION THREAD");
     expect(runDetailSource).not.toContain("· <code>{{ run.branch }}</code>");
@@ -289,44 +305,26 @@ describe("Run detail execution conversation", () => {
     });
 
     it("提示带两个入口：去探索对话、查看方案", () => {
-      // 改计划的两条现成路径，不为此新开接口：探索对话说一句让模型改版，或者进方案点「继续编辑」。
+      // 改计划的两条现成路径，不为此新开接口：探索对话说一句让模型改版，或者进「方案」点「继续编辑」。
       expect(flat(runDetailSource)).toContain(flat('@click="openExplorerConversation">去探索对话</el-button>'));
       expect(flat(runDetailSource)).toContain(flat('@click="openPlanDetail">查看方案</el-button>'));
-      /**
-       * **嵌在需求抽屉里时不能自己 `router.push`** —— 那会把抽屉连同右侧面板一起换掉。
-       * 所以发事件出去，由 ExplorerView 把左下的页签切到「探索对话」（它本来就管着那排页签）。
-       */
-      expect(flat(runDetailSource)).toContain(flat('(event: "open-explorer"): void;'));
-      expect(flat(runDetailSource)).toContain(flat('if (embedded.value) { emit("open-explorer"); return; }'));
-      /**
-       * 独立页要落在**这条需求**上，而不是探索首页或别人的需求上。
-       *
-       * 两个 id 都得带：探索视图先按 `explorerId` 挑线程，没有就退回「项目当前线程」，再在那个线程里
-       * 找 `explorerPlanId`。只带后者 → 线程不对 → 找不到 → 静默落到另一条线程的当前需求上（实测）。
-       * `planDetail` 没载入过就补一次只为拿 id 的请求，请求失败不能把跳转卡住。
-       */
-      expect(flat(runDetailSource)).toContain(flat("target = (await api.getPlan(planId)).plan;"));
-      expect(flat(runDetailSource)).toContain(flat("query.explorerId = target.sourceExplorerThreadId;"));
-      expect(flat(runDetailSource)).toContain(flat("query.explorerPlanId = target.explorerPlanId;"));
-      expect(flat(runDetailSource)).toContain(flat("catch {"));
       // 版本号按当前 Plan 的修订号 +1 说，别写死成 V2。
       expect(flat(runDetailSource)).toContain(flat("run?.planRevision ?? 1"));
     });
 
-    it("「返回」与「去探索对话」走同一份落点判据，而且都不读 route.query", () => {
+    it("「去探索对话」只发事件，不自己跳路由", () => {
       /**
-       * 「返回」（`closeView`）此前是照着 `route.query.explorerId / explorerPlanId` 写回去的——
-       * 而这两个 query 只有**从探索视图点进来**时才有；独立页的 URL 上本来就没有，于是读出来是
-       * undefined，返回同样落错地方。它跟上面那个入口错的其实是同一处，所以现在共用一份判据。
+       * 它就在需求抽屉里。自己 `router.push` 会把抽屉连同右侧面板一起换掉，所以只喊一声，
+       * 由 `ExplorerView` 把左下的页签切到「探索对话」——那排页签怎么切只有一处知道。
+       *
+       * **这条判据此前要复杂得多**：整页形态还在的时候，这个组件得自己拼一条带
+       * `explorerId` + `explorerPlanId` 的跳转（只带一个会静默落到别人家的需求上），
+       * 还得分「内嵌 / 整页」两种。整页退役之后那整套都不需要了——落点归宿主，这里只剩发事件。
        */
-      expect(flat(runDetailSource)).toContain(
-        flat("async function explorerEntryQuery(contextPanel?: string): Promise<Record<string, string>>"),
-      );
-      expect(flat(runDetailSource)).toContain(flat("query: await explorerEntryQuery()"));
-      expect(flat(runDetailSource)).toContain(flat('query: await explorerEntryQuery("plan-center")'));
-      // 落点只此一处算：两个入口都不许再从 route.query 里捡这两个 id。
-      expect(runDetailSource).not.toContain("query: { explorerId: route.query.explorerId");
-      expect(runDetailSource).not.toContain("explorerPlanId: route.query.explorerPlanId");
+      expect(flat(runDetailSource)).toContain(flat("function openExplorerConversation(): void {"));
+      expect(flat(runDetailSource)).toContain(flat('emit("open-explorer");'));
+      expect(flat(runDetailSource)).not.toContain("explorerEntryQuery");
+      expect(runDetailSource).not.toContain("router.push");
     });
   });
 

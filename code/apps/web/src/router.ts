@@ -5,7 +5,6 @@
  */
 import { createRouter, createWebHistory } from "vue-router";
 import ExplorerView from "./views/ExplorerView.vue";
-import RunDetailView from "./views/RunDetailView.vue";
 import ProjectCatalogView from "./views/ProjectCatalogView.vue";
 import ProjectExecuteView from "./views/WorkbenchView.vue";
 import ProjectCreateView from "./views/ProjectCreateView.vue";
@@ -37,6 +36,29 @@ function settingsRedirect(to: { params: Record<string, unknown>; query: Record<s
   return { path: `/projects/${projectId}/explorer`, query: { ...to.query, settings: "1", ...(tab ? { tab } : {}) } };
 }
 
+/**
+ * 「Run 详情」的旧整页地址 `/projects/:projectId/runs/:runId` → 抽屉里的「Run」页签。
+ *
+ * **这个页面已经退役了**：`RunDetailView` 现在只有内嵌那一种形态，唯一的宿主是需求抽屉；整页那条
+ * 路由此前也**没有任何入口**（全仓没有一处 `router.push` / `RouterLink` 拼过它），内容与内嵌形态
+ * 完全同一份代码，只是多一个页头。留着它就是留一套"没人走、但每次改都得跟着改"的分支。
+ *
+ * 为什么留重定向而不是直接删掉——与上面「项目设置」同理：这个地址可能还留在书签、聊天记录、
+ * 终端历史里。删掉之后旧链接会静默落到项目目录页，看起来像"这个项目坏了"。
+ *
+ * **为什么只带 `runId`、不带需求与线程**：`redirect` 必须是同步的（vue-router 不接受返回 Promise
+ * 的 redirect），而那两个 id 得从 Run → Plan 查出来。代价可接受——抽屉**按 `runId` 就能把这条 Run
+ * 本身渲染对**，受影响的只是左栏需求清单选中哪一条。要连它也对，就得把查 id 挪进 `beforeEach`
+ * （那里可以异步），为一条没人走的旧地址不值得。
+ */
+function runDetailRedirect(to: { params: Record<string, unknown>; query: Record<string, unknown> }) {
+  const projectId = encodeURIComponent(String(to.params.projectId));
+  return {
+    path: `/projects/${projectId}/explorer`,
+    query: { ...to.query, runId: String(to.params.runId), requirementTab: "task" },
+  };
+}
+
 /** 页面路由以 Project 为隔离边界，未知 Project 由页面加载错误引导回 Catalog。 */
 export const router = createRouter({
   history: createWebHistory(),
@@ -53,7 +75,7 @@ export const router = createRouter({
         query: { ...to.query, contextPanel: "plan-center" },
       }),
     },
-    { path: "/projects/:projectId/runs/:runId", component: RunDetailView },
+    { path: "/projects/:projectId/runs/:runId", redirect: (to) => runDetailRedirect(to) },
     { path: "/projects/:projectId/settings", redirect: (to) => settingsRedirect(to) },
     { path: "/projects/:projectId/settings/hooks", redirect: (to) => settingsRedirect(to, "hooks") },
   ],

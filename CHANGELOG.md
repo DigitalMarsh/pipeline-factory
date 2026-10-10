@@ -1,5 +1,46 @@
 # Changelog
 
+## 2026-10-10 — Run 详情的「整页形态」退役
+
+追上一轮那条「返回」的线往下查，发现**这个页面全仓没有任何入口**：把 `apps/web/src` 里所有拼过
+项目路径的地方（`router.push` / `RouterLink` / `:to`）过一遍，能拼出 `/projects/:id/runs/:runId`
+的**一处都没有**。唯一通往 Run 的链接（`PlanDetailContent.vue` 的「打开 Run 确认」）去的是内嵌
+那一条。所以它不是"少一个入口"，是**只能靠手敲 URL 或旧书签进去**。
+
+而内容是同一份代码——`RunDetailView.vue` 的 `embedded` 开关只分四处：页头那条「返回」、点「查看
+方案」开不开自己那份抽屉、终止之后就地重载还是跳 `/plans`、根元素那个 class 开关。留着一个没人走
+的形态，代价是**每次改这个组件都得同时想两遍**（上一轮那个「返回」的坑就是这么来的）。
+
+**没直接删，留了一条重定向**（`router.ts` 的 `runDetailRedirect` → `/explorer?runId=…&requirementTab=task`），
+理由与退役的「项目设置」整页一致：旧地址可能还在书签、聊天记录、终端历史里，直接删掉会让旧链接
+静默落到项目目录页，看起来像"这个项目坏了"。
+
+### 一起收掉的
+
+| 位置 | 是什么 |
+|---|---|
+| `RunDetailView.vue` 的 `closeView` + `close` 事件 | 那个「返回」按钮写的是 `v-if="!embedded"`，而抽屉里 `embedded` 恒为真——**`ExplorerView` 挂的 `@close="closeRunView"` 从来没被触发过**。整条链是死的，`closeRunView` 一并删 |
+| 组件里那份 `PlanDetailDrawer`（+ 组件文件 + 它的测试，59 行） | 它自己渲染方案抽屉的那条路只有整页形态走。现在取全 Plan 只做一件事：`emit("open-plan")` 交给宿主——共享抽屉里本来就有一份方案面板。这个壳随之没有调用方 |
+| `explorerEntryQuery()` | **上一轮刚加的**，为的是"两条入口的返回 / 跳转都得落在同一条需求上"。它服务的正是那个整页形态（内嵌这边只发事件），整页没了它也就没了。连带 `route` / `router` 一起从这个组件退场 |
+| 样式 `.detail-top` / `.detail-page-embedded` 那一族 | 整页页头、抽屉里的"紧凑形态"覆盖。后者现在就是基础值，直接并进 `.run-detail-page` |
+| `.conversation-column > .detail-page-embedded` | **这一条从来没有匹配过**——Run 面板的宿主是 `.shared-drawer-shell` 下的 `.shared-drawer-pane`，不是 `.conversation-column`（那是探索页签那一栏）。旧布局的残留 |
+| `.detail-page-embedded .run-facts` | `run-facts` 这个类**全仓模板里一处都没有**，连基础规则一起是死样式；这条覆盖规则跟着它删 |
+
+> **重定向只带 `runId`，不保证左栏落在同一条需求上。** `redirect` 必须是同步的（vue-router 不接受
+> 返回 Promise 的 redirect），而"这条 Run 属于哪条需求、哪个线程"要从 Run → Plan 查出来。代价可接受：
+> 抽屉**按 `runId` 就能把这条 Run 本身渲染对**，受影响的只是左栏需求清单选中哪一条。要连它也对就得
+> 把查 id 挪进 `beforeEach`（那里可以异步），为一条没人走的旧地址不值得。
+
+### 验证
+
+浏览器实测两件事：① 需求抽屉里的 Run 面板**布局没变**——改前改后逐值比过 root 的 `padding`
+（`30px 52px 0px`）与 `overflow-y`、标题 `h1` 字号（20px）、标题下边距（20px）、会话区
+`max-height`（none）；内边距 35px 与面板负边距 -35px 也仍是 35px（那个变量的"抽屉值"现在就是
+基础值）；② 手敲旧地址 `/projects/project-961d0dd5-f52/runs/run-6f252032-cd4` → 落到
+`/explorer?runId=…&requirementTab=task`，「Run」页签已选中、Run 正渲染（`plan-dac6c5b2-9aa · 第 5 版`）。
+
+`pnpm verify` 全绿：domain 447 / api 123 / web 645（少掉的 4 个是 `PlanDetailDrawer.test.ts` 随组件删除）。
+
 ## 2026-10-10 — 两处「界面在骗人」：打不出字的框，和变回进行中的旧步骤
 
 两条都是**用的时候撞出来的**，不是设计时想到的。

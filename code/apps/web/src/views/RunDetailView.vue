@@ -1,19 +1,22 @@
 <!--
   模块职责：展示 Execution Run、Executor 消息流、控制操作和执行日志。
   维护提示：交互状态和数据流变化时，应同步更新组件边界说明。
-  这个视图现在只留四件事——**加载一个 Run、把状态摆到页头、把会话渲染出来、内嵌与独立页的形态差异**。
+  这个视图现在只留三件事——**加载一个 Run、把状态摆到页头、把会话渲染出来**。
   其余四簇各自成文件（它们各有完整生命周期或踩过坑的判据，混在这里正是"改一次要读一千行"的成因）：
   `useExecutionConversation`（分组与折叠）、`useRunStream`（SSE 与续传游标）、
   `useRunControl`（暂停 / 终止 / 验证 / 合并）、`useRunComposer`（补充要求输入框）。
+
+  **它只有一种形态：需求抽屉里的一块面板**（`ExplorerView` 的「Run」页签）。此前它有一个
+  `embedded` 开关分「内嵌 / 独立整页」两种，整页那条（`/projects/:projectId/runs/:runId`）
+  **全仓没有任何入口**、内容又是同一份代码，已退役成一条重定向（见 `router.ts` 的
+  `runDetailRedirect`）。所以"往哪跳"不再由这个组件决定——它发事件，由宿主处理。
 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { ArrowDown, ArrowLeft, ArrowUp, Document, Warning } from "@element-plus/icons-vue";
+import { ArrowDown, ArrowUp, Document, Warning } from "@element-plus/icons-vue";
 import { ElMessage } from "element-plus";
-import { useRoute, useRouter } from "vue-router";
 import ExecutionHeaderStatus from "../components/ExecutionHeaderStatus.vue";
 import ConfirmDialog from "../components/ConfirmDialog.vue";
-import PlanDetailDrawer from "../components/PlanDetailDrawer.vue";
 import ProviderUsageFooter from "../components/ProviderUsageFooter.vue";
 import ExecutionMessageRow from "../components/ExecutionMessageRow.vue";
 import { api } from "../api";
@@ -35,18 +38,14 @@ import { useRunStream } from "../composables/useRunStream";
 import { useRunControl } from "../composables/useRunControl";
 import { useRunComposer } from "../composables/useRunComposer";
 
-const route = useRoute();
-const router = useRouter();
-const props = withDefaults(defineProps<{ embedded?: boolean; projectId?: string; runId?: string }>(), { embedded: false });
+const props = defineProps<{ projectId: string; runId: string }>();
 const emit = defineEmits<{
-  (event: "close"): void;
   (event: "open-plan", plan: Plan): void;
-  /** 让外面的抽屉切到「探索对话」那一页——内嵌时才有听众，独立页自己跳路由。 */
+  /** 让宿主把抽屉切到「探索对话」那一页——它管着那排页签，这个组件不该自己跳路由。 */
   (event: "open-explorer"): void;
 }>();
-const embedded = computed(() => props.embedded);
-const projectId = computed(() => props.projectId ?? String(route.params.projectId ?? ""));
-const runId = computed(() => props.runId ?? String(route.params.runId ?? ""));
+const projectId = computed(() => props.projectId);
+const runId = computed(() => props.runId);
 const requestScope = createProjectRequestScope();
 const run = ref<Run | null>(null);
 const thread = ref<ExecutionThread | null>(null);
@@ -61,10 +60,7 @@ const planTasks = ref<PlanTask[]>([]);
 const executionMessages = ref<ExecutionStreamItem[]>([]);
 const executionTimeline = ref<HTMLElement | null>(null);
 const showScrollToLatest = ref(false);
-const planDetailOpen = ref(false);
 const planDetail = ref<Plan | null>(null);
-const planDetailRevisions = ref<number[]>([]);
-const planDetailError = ref<string | null>(null);
 const executionPlan = ref<ExecutionPlanSnapshot | null>(null);
 const selectedTaskId = ref<string | null>(null);
 const telemetryNow = ref(Date.now());
@@ -199,8 +195,7 @@ const {
   reload: load,
   onError: notifyError,
   onTerminated: async () => {
-    if (embedded.value) await load();
-    else await router.push(`/projects/${projectId.value}/plans`);
+    await load();
   },
 });
 
@@ -353,31 +348,26 @@ function focusExecutionTask(task: ExecutionTask): void {
 
 function resetPlanDetail(): void {
   planDetailRequestToken += 1;
-  planDetailOpen.value = false;
   planDetail.value = null;
-  planDetailRevisions.value = [];
-  planDetailError.value = null;
 }
 
+/**
+ * 点「方案」。这个组件自己**不渲染**方案详情——它把取全的 Plan 交给宿主（`ExplorerView` 的
+ * 共享抽屉里已经有一份方案面板），宿主负责把它摆出来。所以这里只负责把数据取全。
+ */
 async function openPlanDetail(): Promise<void> {
   const currentRun = run.value;
   if (!currentRun) return;
   const requestToken = ++planDetailRequestToken;
-  planDetailOpen.value = !embedded.value;
   planDetail.value = null;
-  planDetailRevisions.value = [];
-  planDetailError.value = null;
   try {
-    const [detailResponse, historyResponse, revisionResponse] = await Promise.all([
+    const [detailResponse, revisionResponse] = await Promise.all([
       api.getPlan(currentRun.planId),
-      api.planRevisions(currentRun.planId),
       api.getPlanRevision(currentRun.planId, currentRun.planRevision),
     ]);
     if (requestToken !== planDetailRequestToken) return;
     const resolvedContract =
       revisionResponse.revision.resolvedContract ?? detailResponse.revision?.resolvedContract ?? detailResponse.plan.resolvedContract;
-    const revisions = historyResponse.items.map((item) => item.revision);
-    planDetailRevisions.value = Array.from(new Set([...revisions, currentRun.planRevision])).sort((left, right) => left - right);
     planDetail.value = {
       ...detailResponse.plan,
       revision: revisionResponse.revision.revision,
@@ -386,28 +376,12 @@ async function openPlanDetail(): Promise<void> {
       mergeRequest: detailResponse.mergeRequest ?? mergeRequest.value,
       runId: currentRun.id,
     };
-    if (embedded.value && planDetail.value) emit("open-plan", planDetail.value);
+    if (planDetail.value) emit("open-plan", planDetail.value);
   } catch (caught) {
     if (requestToken !== planDetailRequestToken) return;
-    planDetailError.value = caught instanceof Error ? `无法加载完整 Plan：${caught.message}` : "无法加载完整 Plan";
-  }
-}
-
-async function selectPlanRevision(revisionNumber: number): Promise<void> {
-  const currentPlan = planDetail.value;
-  const planId = currentPlan?.id ?? currentPlan?.planId;
-  if (!currentPlan || !planId || currentPlan.revision === revisionNumber) return;
-  try {
-    const response = await api.getPlanRevision(planId, revisionNumber);
-    if (!planDetailOpen.value || planDetail.value !== currentPlan) return;
-    planDetail.value = {
-      ...currentPlan,
-      revision: response.revision.revision,
-      ...(response.revision.resolvedContract ? { resolvedContract: response.revision.resolvedContract } : {}),
-    };
-    planDetailError.value = null;
-  } catch (caught) {
-    planDetailError.value = caught instanceof Error ? `无法加载 V${revisionNumber}：${caught.message}` : `无法加载 V${revisionNumber}`;
+    // 抽屉里现在没有"方案面板自己的错误格"了，所以这条失败得说在页头那条提示里——
+    // 点了没反应比一句报错更难看。
+    error.value = caught instanceof Error ? `无法加载完整 Plan：${caught.message}` : "无法加载完整 Plan";
   }
 }
 
@@ -478,56 +452,13 @@ async function load() {
 }
 
 /**
- * 「回到探索视图」要落在哪——**返回**与**去探索对话**共用这一份。
+ * 「去探索对话」。点它 = "我要改这份计划"，而改计划的地方在探索线程里。
  *
- * 落点是**这个 Run 的方案对应的那条需求**，否则用户带着"我要改这份计划"的意图点进来，却要在一列
- * 需求里自己找是哪一条——找路这一步是白费的。两个参数都得带：
- *
- * - `explorerPlanId` 是那条需求本身；
- * - `explorerId` 是它所在的线程。**只带前一个是不够的**：探索视图先按 `explorerId` 挑线程，没有就退回
- *   「项目当前线程」，然后在那个线程的需求里找 `explorerPlanId`——线程不对，这条需求当然找不到，
- *   于是静默落到别人家的需求上（实测就是这个：点进来落在另一条线程上了）。
- *
- * **两个都不能读 `route.query`**：这里问的是"从这个 Run 回哪去"，而独立页（`/projects/:id/runs/:runId`）
- * 的 URL 上本来就没有这两个 query——照着读只会读出 undefined，然后同样落错地方（「返回」此前就是
- * 这么写的，跟上面那个入口错在一处）。id 只能从 Run 的方案上取。
- *
- * `planDetail` 只在打开过方案抽屉之后才有值，所以这里补一次 `getPlan`（**只为拿这两个 id，不打开抽屉**）；
- * 取不到就退回探索首页，别把跳转本身卡在这一次请求上。
+ * 这个组件**只有内嵌那一种形态**（见文件头），所以它不跳路由——发个事件，由宿主
+ * （`ExplorerView`）把左下的页签切到「探索对话」。抽屉页签怎么切只有一处知道。
  */
-async function explorerEntryQuery(contextPanel?: string): Promise<Record<string, string>> {
-  const planId = run.value?.planId;
-  let target = planDetail.value;
-  if (!target?.explorerPlanId && planId) {
-    try {
-      target = (await api.getPlan(planId)).plan;
-    } catch {
-      // 拿不到就算了：探索首页仍然是可用入口。
-    }
-  }
-  const query: Record<string, string> = {};
-  if (target?.sourceExplorerThreadId) query.explorerId = target.sourceExplorerThreadId;
-  if (target?.explorerPlanId) query.explorerPlanId = target.explorerPlanId;
-  if (contextPanel) query.contextPanel = contextPanel;
-  return query;
-}
-
-/** 「去探索对话」：内嵌时**不能自己跳路由**——它就在抽屉里，切页签是父组件的事。 */
-async function openExplorerConversation(): Promise<void> {
-  if (embedded.value) {
-    emit("open-explorer");
-    return;
-  }
-  void router.push({ path: `/projects/${projectId.value}/explorer`, query: await explorerEntryQuery() });
-}
-
-/** 「返回」：同样是回探索视图，只是顺带把右侧面板落在方案中心。 */
-async function closeView(): Promise<void> {
-  if (embedded.value) {
-    emit("close");
-    return;
-  }
-  void router.push({ path: `/projects/${projectId.value}/explorer`, query: await explorerEntryQuery("plan-center") });
+function openExplorerConversation(): void {
+  emit("open-explorer");
 }
 
 watch([projectId, runId], () => {
@@ -554,10 +485,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div v-loading="loading" :class="['detail-page', 'run-detail-page', { 'detail-page-embedded': embedded }]">
-    <div v-if="!embedded" class="detail-top">
-      <el-button text @click="closeView"><ArrowLeft :size="15" /> 返回</el-button>
-    </div>
+  <div v-loading="loading" class="detail-page run-detail-page">
     <div v-if="error" class="demo-notice"><Warning :size="14" /> {{ error }}</div>
     <template v-if="run">
       <div class="detail-heading">
@@ -806,14 +734,6 @@ onBeforeUnmount(() => {
         </div>
       </section>
     </template>
-    <PlanDetailDrawer
-      v-model="planDetailOpen"
-      :plan="planDetail"
-      :error="planDetailError"
-      :revisions="planDetailRevisions"
-      :read-only="true"
-      @select-revision="selectPlanRevision"
-    />
     <ConfirmDialog
       v-model="terminateOpen"
       eyebrow="运行控制"

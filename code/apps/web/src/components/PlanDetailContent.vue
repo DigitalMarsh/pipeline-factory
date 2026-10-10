@@ -1,4 +1,4 @@
-<!-- PlanDetailDrawer 的结构化 Plan 正文，可放入共享抽屉。 -->
+<!-- Plan Center 共享抽屉里的结构化 Plan 正文。 -->
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import { Close, DocumentChecked, Lock, Right, Warning } from "@element-plus/icons-vue";
