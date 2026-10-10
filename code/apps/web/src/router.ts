@@ -3,7 +3,7 @@
  *
  * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
  */
-import { createRouter, createWebHistory } from "vue-router";
+import { createRouter, createWebHistory, type LocationQueryRaw } from "vue-router";
 import ExplorerView from "./views/ExplorerView.vue";
 import ProjectCatalogView from "./views/ProjectCatalogView.vue";
 import ProjectExecuteView from "./views/WorkbenchView.vue";
@@ -46,17 +46,27 @@ function settingsRedirect(to: { params: Record<string, unknown>; query: Record<s
  * 为什么留重定向而不是直接删掉——与上面「项目设置」同理：这个地址可能还留在书签、聊天记录、
  * 终端历史里。删掉之后旧链接会静默落到项目目录页，看起来像"这个项目坏了"。
  *
- * **为什么只带 `runId`、不带需求与线程**：`redirect` 必须是同步的（vue-router 不接受返回 Promise
- * 的 redirect），而那两个 id 得从 Run → Plan 查出来。代价可接受——抽屉**按 `runId` 就能把这条 Run
- * 本身渲染对**，受影响的只是左栏需求清单选中哪一条。要连它也对，就得把查 id 挪进 `beforeEach`
- * （那里可以异步），为一条没人走的旧地址不值得。
+ * **为什么带 `explorerId` / `explorerPlanId` 而不只是 `runId`**：探索视图挑线程只看 `explorerId`，没有就
+ * 退回「项目当前线程」，再在那个线程的需求里找 `explorerPlanId`。只带 `runId` 的话线程多半不是这条 Run
+ * 所属的那一条——抽屉**按 `runId` 能把这条 Run 本身渲染对**，但左栏落在别人的需求上；更糟的是，
+ * 之后点一下「Run」页签，`switchDrawerTab` 会按**当前选中的需求行**重新推导 runId，于是把人带到
+ * 另一条 Run 去（实测）。所以这两个 id 要一起带上。
+ *
+ * 这也决定了它**不能写成路由记录上的 `redirect`**——那个必须同步返回，拿不到要查两个接口才知道的 id。
+ * 写在记录的 `beforeEnter` 里则可以异步（`beforeEach` 也行，但那样得自己拿正则去认路径；
+ * `beforeEnter` 拿到的已经是解析好的 `params`）。
  */
-function runDetailRedirect(to: { params: Record<string, unknown>; query: Record<string, unknown> }) {
-  const projectId = encodeURIComponent(String(to.params.projectId));
-  return {
-    path: `/projects/${projectId}/explorer`,
-    query: { ...to.query, runId: String(to.params.runId), requirementTab: "task" },
-  };
+async function runDetailRedirect(projectId: string, runId: string, query: LocationQueryRaw) {
+  const target: LocationQueryRaw = { ...query, runId, requirementTab: "task" };
+  try {
+    const run = (await api.getRun(runId)).run;
+    const plan = (await api.getPlan(run.planId)).plan;
+    target.explorerId = plan.sourceExplorerThreadId;
+    if (plan.explorerPlanId) target.explorerPlanId = plan.explorerPlanId;
+  } catch {
+    /* 查不到就退回只带 runId 的地址——Run 本身仍能按 id 渲染出来 */
+  }
+  return { path: `/projects/${encodeURIComponent(projectId)}/explorer`, query: target };
 }
 
 /** 页面路由以 Project 为隔离边界，未知 Project 由页面加载错误引导回 Catalog。 */
@@ -75,7 +85,17 @@ export const router = createRouter({
         query: { ...to.query, contextPanel: "plan-center" },
       }),
     },
-    { path: "/projects/:projectId/runs/:runId", redirect: (to) => runDetailRedirect(to) },
+    /**
+     * 退役的「Run 详情」整页地址（见 `runDetailRedirect`）。**它没有自己的页面了**，所以这里的
+     * `component` 永远不会被渲染——留一个什么都不画的占位，只是为了让 vue-router 认得这条路径
+     * （不登记的话每次命中都会在控制台报一句 `No match found for location`，而重定向本身照常发生，
+     * 更容易让人以为坏了）。真正的去向由 `beforeEnter` 决定。
+     */
+    {
+      path: "/projects/:projectId/runs/:runId",
+      component: { render: () => null },
+      beforeEnter: (to) => runDetailRedirect(String(to.params.projectId), String(to.params.runId), to.query),
+    },
     { path: "/projects/:projectId/settings", redirect: (to) => settingsRedirect(to) },
     { path: "/projects/:projectId/settings/hooks", redirect: (to) => settingsRedirect(to, "hooks") },
   ],

@@ -33,6 +33,31 @@ describe("project workspace routes", () => {
     expect(routerSource).toContain('settingsRedirect(to, "hooks")');
   });
 
+  /**
+   * 整页「Run 详情」退役（与上面两条同一种收法）。它此前**没有任何入口**——全仓没有一处
+   * `router.push` / `RouterLink` 拼过这条路径，内容是内嵌形态的同一份代码。留重定向的理由同上，
+   * 但这一条的落点要比 `/settings` 复杂：
+   *
+   * - 只带 `runId` 的话，探索视图会退回「项目当前线程」，左栏落在别人家的需求上；点一下「Run」
+   *   页签还会按选中的需求行重新推导 runId，把人带到另一条 Run 去。所以线程与需求两个 id 都要带上；
+   * - 那两个 id 要查两个接口才知道，所以**不能写成路由记录的 `redirect`**（必须同步返回），
+   *   得写在 `beforeEnter` 里；
+   * - 记录本身仍然登记（`component` 是个永不渲染的占位），否则命中时 vue-router 会报
+   *   `No match found for location`。
+   */
+  it("retires the standalone Run detail page into the shared drawer", () => {
+    // 断言的是**代码里**没有它了（注释会引用旧名说明改了什么，那不算）。
+    expect(routerSource).not.toContain("views/RunDetailView.vue");
+    expect(routerSource).not.toContain("component: RunDetailView");
+    expect(routerSource).toContain('path: "/projects/:projectId/runs/:runId"');
+    expect(routerSource).toContain("beforeEnter");
+    expect(routerSource).toContain("runDetailRedirect");
+    expect(routerSource).toContain('requirementTab: "task"');
+    // 两个 id 一起查出来带上——只带 runId 会落到别人家的需求/另一条 Run 上（浏览器实测）。
+    expect(routerSource).toContain("sourceExplorerThreadId");
+    expect(routerSource).toContain("explorerPlanId");
+  });
+
   it("resolves the root entry from the remembered project before active-project fallback", () => {
     expect(routerDefaultsSource).toContain("pipeline-factory:last-project-id");
     expect(routerDefaultsSource).toContain("localStorage.getItem(LAST_PROJECT_STORAGE_KEY)");

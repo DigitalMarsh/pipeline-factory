@@ -15,6 +15,17 @@
 理由与退役的「项目设置」整页一致：旧地址可能还在书签、聊天记录、终端历史里，直接删掉会让旧链接
 静默落到项目目录页，看起来像"这个项目坏了"。
 
+> **重定向要带上 `explorerId` 与 `explorerPlanId`，不能只带 `runId`。** 只带 `runId` 时（第一版就是
+> 这么写的）抽屉**按 `runId` 能把这条 Run 本身渲染对**，但左栏落在「项目当前线程」上；更糟的是，
+> 之后点一下「Run」页签，`switchDrawerTab` 会按**当前选中的需求行**重新推导 runId——于是把人带到
+> **另一条 Run** 去（浏览器实测撞到）。所以那两个 id 要一起查出来带上：`getRun` → `getPlan` →
+> `sourceExplorerThreadId` / `explorerPlanId`。
+>
+> 这也决定了它**不能写成路由记录上的 `redirect`**（那个必须同步返回），而是写在记录的 `beforeEnter`
+> 里——那里可以异步。记录本身保留一个 `component: { render: () => null }` 的占位，**永远不会被渲染**，
+> 只是为了让 vue-router 认得这条路径：不登记的话每次命中都会在控制台报一句
+> `No match found for location`，而重定向照常发生，更容易让人以为坏了。
+
 ### 一起收掉的
 
 | 位置 | 是什么 |
@@ -26,20 +37,25 @@
 | `.conversation-column > .detail-page-embedded` | **这一条从来没有匹配过**——Run 面板的宿主是 `.shared-drawer-shell` 下的 `.shared-drawer-pane`，不是 `.conversation-column`（那是探索页签那一栏）。旧布局的残留 |
 | `.detail-page-embedded .run-facts` | `run-facts` 这个类**全仓模板里一处都没有**，连基础规则一起是死样式；这条覆盖规则跟着它删 |
 
-> **重定向只带 `runId`，不保证左栏落在同一条需求上。** `redirect` 必须是同步的（vue-router 不接受
-> 返回 Promise 的 redirect），而"这条 Run 属于哪条需求、哪个线程"要从 Run → Plan 查出来。代价可接受：
-> 抽屉**按 `runId` 就能把这条 Run 本身渲染对**，受影响的只是左栏需求清单选中哪一条。要连它也对就得
-> 把查 id 挪进 `beforeEach`（那里可以异步），为一条没人走的旧地址不值得。
+> **重定向只查两个接口、不查线程列表**：`getRun` → `getPlan` 就够（Plan 上带着
+> `sourceExplorerThreadId` 与 `explorerPlanId`）。**任一步失败就退回只带 `runId` 的地址**——
+> Run 本身仍能按 id 渲染出来，别把跳转整个卡死在这次查询上。
 
 ### 验证
 
-浏览器实测两件事：① 需求抽屉里的 Run 面板**布局没变**——改前改后逐值比过 root 的 `padding`
-（`30px 52px 0px`）与 `overflow-y`、标题 `h1` 字号（20px）、标题下边距（20px）、会话区
-`max-height`（none）；内边距 35px 与面板负边距 -35px 也仍是 35px（那个变量的"抽屉值"现在就是
-基础值）；② 手敲旧地址 `/projects/project-961d0dd5-f52/runs/run-6f252032-cd4` → 落到
-`/explorer?runId=…&requirementTab=task`，「Run」页签已选中、Run 正渲染（`plan-dac6c5b2-9aa · 第 5 版`）。
+浏览器实测三件事：
 
-`pnpm verify` 全绿：domain 447 / api 123 / web 645（少掉的 4 个是 `PlanDetailDrawer.test.ts` 随组件删除）。
+1. **抽屉里 Run 面板的布局没变**——改前改后逐值比过 root 的 `padding`（`30px 52px 0px`）与
+   `overflow-y`、标题 `h1` 字号（20px）、标题下边距（20px）、会话区 `max-height`（none）；
+   内边距 35px 与面板负边距 -35px 也仍是 35px（那个变量的"抽屉值"现在就是基础值）。
+2. **旧地址落得准**：`/projects/project-961d0dd5-f52/runs/run-6f252032-cd4` →
+   `/explorer?runId=…&requirementTab=task&explorerId=explorer-88c7c7e1-336&explorerPlanId=explorer-plan-9a2cce9f-cc1`，
+   「Run」页签选中、左栏选中的正是这条 Run 所属的那条需求、Run 正渲染（`plan-dac6c5b2-9aa · 第 5 版`）。
+   换一条（`run-e24331c0-7c9`）同样落对，且那条是 `MERGE_READY`，composer 是正常输入框。
+3. **面板内容完整**：91 行、6 个分组、四阶段条、composer 页脚、方案链接都在。
+
+`pnpm verify` 全绿：domain 447 / api 123 / web 646（`router.test.ts` 补了一条退役判据；少掉的 4 个是
+`PlanDetailDrawer.test.ts` 随组件删除）。
 
 ## 2026-10-10 — 两处「界面在骗人」：打不出字的框，和变回进行中的旧步骤
 
