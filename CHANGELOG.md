@@ -1,5 +1,31 @@
 # Changelog
 
+## 2026-10-11 — 把那句提示词跑了一轮；顺带查清 plan 模式到底管什么
+
+纯文档，代码一行没动（那条提示词上一轮已经提交）。
+
+**跑了一轮真实探索回合**（project4，新建一条需求，内容刻意写成"改完请确认 `npm run build` 仍然能通过"）：
+这一轮**命令全是读**（`pwd`/`git status`/`codegraph explore`/`rg`/`sed`/`nl`），exitCode 全 0，
+**零构建、零 `EPERM`**；模型自己说"本轮只做只读勘察……构建会列入 Executor 的验证步骤"，方案里
+`verification` 写「在 `code` 目录执行 `npm run build`」、`assumptions` 写「构建验证由 Executor 在可写
+环境中执行」。对照组是同一项目、旧提示词、一小时多以前的需求16——它第二条命令就是
+`… && git diff --check && (cd code && npm run build)`。验证用的那条需求跑完已删。
+
+> **这不是干净的因果证明，写进文档了**：Codex 自己有跨会话记忆 `/Users/Bill/.codex/memories/MEMORY.md`，
+> 里面早记着"`npm run build` hit `EPERM` … treat writable dependency/cache setup as a validation blocker"，
+> 而这一轮它第一条命令就 `rg` 了这个文件、检索词里正好有 `npm run build`。要隔离得换项目或移开那份记忆。
+
+**顺带查清一个被问到的现象**：探索线程在 plan 模式里跑 `rg`/`sed`/`git status`，**不是"plan 模式没生效"**
+——plan 模式管的是"改没改仓库里被跟踪的东西"，不是"跑没跑命令"。Codex 二进制里的 Plan Mode 正文写着
+Allowed 包括「Reading or searching files…」「Static analysis, inspection, and repo exploration」，**以及
+「Tests, builds, or checks that may write to caches or build artifacts … so long as they do not edit
+repo-tracked files」**。
+
+**而这正是需求16 那次 EPERM 的真正来路**：Codex 的 plan 模式**明文允许**"写缓存的构建"，`npm run build`
+写 `node_modules/.vite-temp/` 正好落在那一类；我们的沙箱是另一个轴而且更严（`sandbox: "read-only"`
+一律不许写）。**模型遵守了第一层，撞上第二层**——那句提示词补的就是这两层之间的缝。文档 §5.5 据此重写，
+并把「plan 模式是提示词级、不是执行闸门」这点写清楚。
+
 ## 2026-10-10 — 探索侧指令补上「你是只读的」；新建项目的整页退役
 
 ### 一、探索侧那句提示词
