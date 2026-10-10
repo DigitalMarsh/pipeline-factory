@@ -299,16 +299,23 @@ function isMechanismOnly(item: ExecutionStreamItem): boolean {
 /**
  * **这一条要不要折进上方的过程记录。**
  *
- * 三条判据，缺一不可：
- *   1) 权重是 `process`（结论、隐藏项不折）；
- *   2) 它**不在**当前正在跑的那一步里——OpenClaw 的原话是 live 内容留在日志外面；
- *   3) 它**不是失败**——`Worked for 2 分 3 秒 · 2 个失败` 这一行的意思是"失败数在标题上，
+ * 四条判据，缺一不可：
+ *   1) **不是分隔行**（见下）；
+ *   2) 权重是 `process`（结论、隐藏项不折）；
+ *   3) 它**不在**当前正在跑的那一步里——OpenClaw 的原话是 live 内容留在日志外面；
+ *   4) 它**不是失败**——`Worked for 2 分 3 秒 · 2 个失败` 这一行的意思是"失败数在标题上，
  *      失败的条目本身也还在外面"。把失败折起来，等于把这轮唯一要你处理的事藏了。
  *
- * 第 2 条由调用方（`RunDetailView` 的分组）传进来：视图知道"这一步跑完没有"，
+ * 第 3 条由调用方（`useExecutionConversation` 的分组）传进来：视图知道"这一步跑完没有"，
  * 投影层不知道，也不该知道。
+ *
+ * **第 1 条（`divider` 永远不折）是这里唯一的"形态"判据**，因为折叠这件事只有形态说了不算：
+ * 续跑检查点在权重表里是 `process`（它确实是过程的一部分，不是结论），可它同时是**边界**——
+ * 折进「N 条过程记录」里，"这一轮从这儿换了一轮"就再也看不见了。此前只在形态（`kind`）上把它
+ * 改成了分隔线，于是**看上去是边界、行为上仍被折**（见 docs/消息类型及事件状态机流程图.md §7）。
  */
 export function foldsIntoProcess(item: ExecutionStreamItem, options: { stepRunning: boolean }): boolean {
+  if (item.kind === "divider") return false;
   if (executionMessageWeight(item) !== "process") return false;
   if (options.stepRunning) return false;
   return item.status !== "FAILED";

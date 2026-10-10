@@ -400,7 +400,7 @@ describe("消息清单的权重", () => {
     expect(executionMessageWeight({ ...base, messageType: "MODEL_REPORT", phase: "commentary" })).toBe("answer");
   });
 
-  it("折起来的三条判据：过程、已跑完、不是失败", () => {
+  it("折起来的四条判据：过程、已跑完、不是失败、**不是分隔行**", () => {
     const item = {
       id: "x",
       kind: "tool",
@@ -422,6 +422,10 @@ describe("消息清单的权重", () => {
     // 结论与隐藏项从不折。
     expect(foldsIntoProcess({ ...item, messageType: "ASSISTANT_MESSAGE" }, { stepRunning: false })).toBe(false);
     expect(foldsIntoProcess({ ...item, messageType: "PROVIDER_MESSAGE" }, { stepRunning: false })).toBe(false);
+    // **分隔行永远不折**：它的权重是 `process`（过程的一部分），可它同时是边界——
+    // 折进「N 条过程记录」里，"这一轮从这儿换了一轮"就看不见了。形态与权重是两个轴，
+    // 只在形态上改（改成 divider）是改不动的。
+    expect(foldsIntoProcess({ ...item, kind: "divider", messageType: "CONTEXT" }, { stepRunning: false })).toBe(false);
   });
 
   it("**跨事件被切断的任务标记不会漏进正文**（回归：正文第一行曾是 `-progress>{...}`）", () => {
