@@ -418,6 +418,73 @@ describe("Verifier and MergeService", () => {
     expect(afterConfirmation.items[0]).toMatchObject({ outcome: "ALREADY_MERGED", mergeRequest: { status: "MERGED" } });
   });
 
+  /**
+   * **一个提交都没有的 Run 不能报"已检测到"。**
+   *
+   * 它的工作区 / 分支 HEAD 还停在基线本身（`resolveRunSource` 取的就是 HEAD），于是"源提交"就是
+   * 基线——`isAncestor(source, target)` 恒真，对账会给出一个空洞的"主干里已经有这份提交了"。
+   * 实测（2026-10-11，project4 的 `run-b7cd26ff-c11`）：它的修复一直躺在工作区里没提交，界面却
+   * 显示「已检测到」；人照着提示去点「确认合并」，会连带把那份没提交的修复删掉。
+   */
+  it("does not claim a merge for a run that never committed anything", () => {
+    const store = new InMemoryPipelineStore();
+    const projects = new ProjectService(store);
+    projects.create({
+      id: "project-1",
+      name: "Project",
+      repoRoot: "/repo/project",
+      defaultBranch: "main",
+      worktreeRoot: "/tmp/project-worktrees",
+    });
+    const plans = new PlanService(store, projects);
+    const plan = plans.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "thread-1",
+      title: "Run without commits",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Run without commits" }),
+    });
+    store.updatePlan({
+      ...plan,
+      resolvedContract: {
+        ...plan.resolvedContract,
+        repository: { ...plan.resolvedContract.repository, baseBranch: "main", baseCommit: "abc" },
+      },
+    });
+    plans.confirm(plan.id, "user-1");
+    const run = makeRun(plan.id); // baseCommit 就是 "abc"
+    run.status = "MERGE_READY";
+    store.saveRun(run);
+    store.updatePlan({ ...store.getPlan(plan.id)!, status: "MERGE_READY", runId: run.id });
+    store.saveVerificationRun({
+      id: "verification-1",
+      runId: run.id,
+      status: "PASSED",
+      repairAttempts: 0,
+      commandResults: [],
+      completedAt: new Date().toISOString(),
+    });
+    const merge = new MergeService(store, {
+      git: {
+        commitExists: () => true,
+        // 关键：HEAD 解析出来就是它自己的基线（"abc"）——这个 Run 没提交过任何东西。
+        resolveCommit: (_repoRoot, ref) => (ref === "HEAD" ? "abc" : ref === "main" ? "target" : null),
+        isAncestor: () => true, // 恒真的包含关系，正是要挡住的那种"检测到"
+        branchContains: () => true,
+      },
+    });
+
+    const report = merge.reconcileProject("project-1");
+
+    expect(report.items[0]).toMatchObject({
+      outcome: "UNAVAILABLE",
+      sourceCommit: "abc",
+      reason: "Run 在分支上没有任何自己的提交（工作区里的改动还没提交），没有可判定的提交",
+    });
+    // 也不该顺手建一条合并请求出来。
+    expect(store.listMergeRequests()).toHaveLength(0);
+    expect(store.getPlan(plan.id)?.status).toBe("MERGE_READY");
+  });
+
   it("persists detected target commits across SQLite reopen", () => {
     const directory = mkdtempSync(join(tmpdir(), "pipeline-factory-merge-reconcile-"));
     const databasePath = join(directory, "factory.sqlite");

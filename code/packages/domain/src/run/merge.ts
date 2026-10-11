@@ -22,6 +22,9 @@
  *      新增失败分支时务必写清原因，不要复用泛化文案。
  *   6) createOpenRequest 的 targetBranch 缺失时回落 "main"，这是给老数据（Revision 无
  *      baseBranch）的兜底，不是默认值设计。
+ *   7) **一个提交都没有的 Run 不报"已检测到"**：那种情况下取到的"源提交"就是它自己的基线，
+ *      `isAncestor(source, target)` 恒真。`reconcileRun` 里判 `sourceCommit === run.baseCommit`
+ *      并降级成 `UNAVAILABLE`——理由写在那一处。
  */
 import { randomUUID } from "node:crypto";
 import { updatePlanStatus } from "../plan/status-transition.js";
@@ -178,6 +181,28 @@ export class MergeService {
           targetBranch,
           targetCommit: null,
           reason: "Run worktree and branch HEAD could not be resolved",
+        };
+      /**
+       * **这个 Run 一个提交都没有**：工作区 / 分支 HEAD 还停在他自己的基线上（`resolveRunSource`
+       * 取的就是 HEAD）。此时"源提交"**就是基线本身**，于是 `isAncestor(source, target)` 恒真——
+       * 对账会给出一个空洞的"主干里已经有这份提交了"，而这份 Run 其实什么都没进主干。
+       *
+       * 实测（2026-10-11，project4 的 `run-b7cd26ff-c11`）：它的修复一直躺在工作区里没提交，
+       * 分支 tip 等于 main tip，界面却显示「已检测到」——人按那个提示去点「确认合并」，
+       * 会连带把工作区里那份没提交的修复删掉。
+       *
+       * 没有自己的提交就没有可判定的东西，如实说"判定不了"比给一个恒真的"已合并"强。
+       */
+      if (sourceCommit === run.baseCommit)
+        return {
+          runId: run.id,
+          planId: run.planId,
+          outcome: "UNAVAILABLE",
+          mergeRequest: existing ?? null,
+          sourceCommit,
+          targetBranch,
+          targetCommit: null,
+          reason: "Run 在分支上没有任何自己的提交（工作区里的改动还没提交），没有可判定的提交",
         };
       if (!git.commitExists(project.repoRoot, sourceCommit))
         return {
