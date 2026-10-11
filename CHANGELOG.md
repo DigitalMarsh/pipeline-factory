@@ -1,5 +1,39 @@
 # Changelog
 
+## 2026-10-11 — 卡住的 Run 补上「终止 Run」入口（客户端名单漏了一个状态）
+
+上一轮查「待合并的 Run 没有操作」时顺手发现的另一半：**`BLOCKED` 的 Run 在界面上同样一个操作都没有**。
+
+服务端的 `cancellableStatuses`（`routes/runs.ts`）**一直含 `BLOCKED`**，只有客户端的
+`canTerminateRun` 漏了它——两处名单不同步，加一种状态时最容易漏的就是这条。后果很具体：卡住的 Run
+的 worktree 只能一直留在磁盘上（本机实测就有一条 `BLOCKED` 的残留目录）。
+
+改动就是把它加回去，外加把"为什么漏"写进注释。文案沿用「终止 Run」——对一条已经停下的 Run，
+"终止"是准的；「放弃这次运行」那句是给"跑完了在等合并"用的，两句话不能混。
+
+### 顺手订正一句**说错了的**确认文案
+
+「终止 Run」的确认框里有一条：「**已结束运行的本地 worktree 不会自动清理**」。**这句不准确**：
+终止走的是 `scheduler.finish`，它会 `git worktree remove --force` 掉这个 Run 的 worktree
+（本机实测 7 条已取消的 Run 里 5 条目录确实已被清掉）。上一轮写的「放弃」确认框里说的是相反的
+话，同一个文件里两句对不上。改成：「它的 worktree 会从磁盘上回收；尚未提交的改动会丢（已提交到
+分支的保留）」。
+
+> 同一句话在**删除需求**的确认框里也在（`ExplorerView.vue`）——那一处是对的，删需求不走
+> `scheduler.finish`，确实不回收 worktree。所以只改了这一处。
+
+### 验证
+
+- **API**（真调接口）：新增用例把 Run 摆成 `BLOCKED` 再取消 → 200、Run `CANCELLED`、**worktree 真被
+  回收**、Plan `BLOCKED` 带原因；
+- **web**：`canTerminateRun` 的用例把 `BLOCKED` 从"不允许"挪到"允许"；状态卡渲染用例新增一段，
+  断言 `BLOCKED` 弹层里是「终止 Run」而不是「放弃这次运行」；
+- **浏览器**：在一个真实 `BLOCKED` Run（`run-8d0b9489-06d`，就是那条有残留 worktree 的）上确认，
+  运行控制的弹层里现在有且只有一颗「终止 Run」；
+- `hasRunControlActions("BLOCKED", …)` 由 `false` 变 `true`（原有测试先红了）。
+
+`pnpm verify` 全绿：domain 443 / api 117 / web 633。
+
 ## 2026-10-11 — 待合并的 Run 补上「放弃这次运行」入口
 
 查那三条运维口子时查出来的：`MERGE_READY`（跑完了、在等合并）的 Run **在界面上一个操作都没有**——

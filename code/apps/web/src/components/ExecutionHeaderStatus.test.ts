@@ -195,6 +195,14 @@ describe("ExecutionHeaderStatus", () => {
     expect(running.host.textContent).not.toContain("放弃这次运行");
     running.app.unmount();
     running.host.remove();
+
+    // **`BLOCKED` 也得有出口**：服务端的可取消名单一直含它，只有客户端的 `canTerminateRun` 漏了，
+    // 于是卡住的 Run 在界面上一个操作都没有、worktree 只能留在磁盘上。
+    const blocked = await openControls("BLOCKED");
+    expect(blocked.host.textContent).toContain("终止 Run");
+    expect(blocked.host.textContent).not.toContain("放弃这次运行");
+    blocked.app.unmount();
+    blocked.host.remove();
   });
 
   it("列出 Run 级活动：只在 RUN CONTEXT 弹层里，且没有时不渲染这一节", async () => {

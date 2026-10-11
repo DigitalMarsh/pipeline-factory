@@ -7,8 +7,19 @@ export function canPauseRun(runStatus: string, threadState: string): boolean {
   return runStatus === "IN_PROGRESS" && (threadState === "ACTIVE" || threadState === "PAUSED");
 }
 
+/**
+ * 能不能终止这个 Run。
+ *
+ * `BLOCKED` **在列**——它是后补的：服务端的 `cancellableStatuses` 一直含它（`routes/runs.ts`），
+ * 只有这份客户端名单漏了。后果很具体：卡住的 Run 在界面上**一个操作都没有**，而它的 worktree
+ * 会一直留在磁盘上（实测本机就有一条 `BLOCKED` 的残留目录、约几 MB）。两处名单不同步这种事，
+ * 加一种状态时最容易漏的就是这条。
+ *
+ * **`MERGE_READY` 不在列**，但它有另一个入口「放弃这次运行」（`canAbandonRun`）：那是两句不同的话
+ * ——终止是"这次执行停在这里"，放弃是"这份跑完的成果不要了"。
+ */
 export function canTerminateRun(runStatus: string): boolean {
-  return ["STARTING", "IN_PROGRESS", "READY_FOR_VERIFY", "VERIFYING", "RECOVERING"].includes(runStatus);
+  return ["STARTING", "IN_PROGRESS", "READY_FOR_VERIFY", "VERIFYING", "RECOVERING", "BLOCKED"].includes(runStatus);
 }
 
 /**

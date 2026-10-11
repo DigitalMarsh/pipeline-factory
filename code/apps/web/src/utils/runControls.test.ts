@@ -42,11 +42,16 @@ describe("run controls", () => {
     expect(canPauseRun(runStatus, threadState)).toBe(expected);
   });
 
-  it.each(["STARTING", "IN_PROGRESS", "READY_FOR_VERIFY", "VERIFYING", "RECOVERING"])("allows termination for %s", (runStatus) => {
-    expect(canTerminateRun(runStatus)).toBe(true);
-  });
+  // `BLOCKED` 是后补的：服务端一直允许取消它，只有这份客户端名单漏了——于是卡住的 Run
+  // 在界面上一个操作都没有，worktree 只能一直留在磁盘上。
+  it.each(["STARTING", "IN_PROGRESS", "READY_FOR_VERIFY", "VERIFYING", "RECOVERING", "BLOCKED"])(
+    "allows termination for %s",
+    (runStatus) => {
+      expect(canTerminateRun(runStatus)).toBe(true);
+    },
+  );
 
-  it.each(["MERGE_READY", "BLOCKED", "CANCELLED"])("does not allow termination for %s", (runStatus) => {
+  it.each(["MERGE_READY", "CANCELLED", "STALE"])("does not allow termination for %s", (runStatus) => {
     expect(canTerminateRun(runStatus)).toBe(false);
   });
 
@@ -69,7 +74,8 @@ describe("run controls", () => {
     // `MERGE_READY` 现在是 true：它有「放弃这次运行」这一个动作（见 canAbandonRun）。
     ["MERGE_READY", "ACTIVE", true],
     ["MERGED", "ACTIVE", false],
-    ["BLOCKED", "BLOCKED", false],
+    // `BLOCKED` 现在有可执行动作了（终止），见 canTerminateRun。
+    ["BLOCKED", "BLOCKED", true],
   ])("reports whether Run Control has an executable action (%s/%s)", (runStatus, threadState, expected) => {
     expect(hasRunControlActions(runStatus, threadState)).toBe(expected);
   });

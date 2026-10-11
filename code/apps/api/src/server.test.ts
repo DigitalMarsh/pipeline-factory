@@ -2244,6 +2244,52 @@ describe("Pipeline Factory v4 API", () => {
   });
 
   /**
+   * **卡住的 Run 也能取消，worktree 照样回收。**
+   *
+   * 服务端的可取消名单一直含 `BLOCKED`，但客户端的 `canTerminateRun` 漏了它——于是卡住的 Run
+   * **在界面上一个操作都没有**，worktree 只能一直留在磁盘上（本机实测就有一条这样的残留）。
+   * 这条用例钉住服务端这一半：界面补上入口之后，它依赖的契约是真的。
+   */
+  it("allows cancelling a BLOCKED run and reclaims its worktree", async () => {
+    const store = new InMemoryPipelineStore();
+    createTestProject(store);
+    const plans = new PlanService(store);
+    plans.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
+    const plan = plans.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "thread-1",
+      title: "Cancel a blocked run",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Cancel a blocked run" }),
+    });
+    plans.confirm(plan.id, "user-1");
+    plans.enqueue(plan.id);
+    const removed: string[] = [];
+    const scheduler = new Scheduler({
+      store,
+      workspace: {
+        create: async () => ({ path: "/tmp/run-blocked", branch: "factory/run-blocked", baseCommit: "abc" }),
+        remove: async (workspace) => {
+          removed.push(workspace.path);
+        },
+      },
+      hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
+    });
+    const app = createApp({ store, scheduler, seed: false });
+    apps.push(app);
+
+    const started = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/run` });
+    const runId = started.json().run.id as string;
+    store.saveRun({ ...store.getRun(runId)!, status: "BLOCKED" });
+
+    const cancelled = await app.inject({ method: "POST", url: `/api/v4/runs/${runId}/cancel`, payload: { reason: "blocked_give_up" } });
+
+    expect(cancelled.statusCode).toBe(200);
+    expect(cancelled.json().run).toMatchObject({ id: runId, status: "CANCELLED" });
+    expect(removed).toEqual(["/tmp/run-blocked"]);
+    expect(store.getPlan(plan.id)).toMatchObject({ status: "BLOCKED", attentionReason: "Run cancelled: blocked_give_up" });
+  });
+
+  /**
    * Run 控制那几条 409 **一律带 `code`**。
    *
    * 同一个 409 下可能有好几种原因，web 侧的 `ApiRequestError` 特意把响应体带出来就是为了让调用方

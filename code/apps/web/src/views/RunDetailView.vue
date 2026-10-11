@@ -737,12 +737,19 @@ onBeforeUnmount(() => {
         </div>
       </section>
     </template>
+    <!-- 那句话此前写的是「已结束运行的本地 worktree 不会自动清理」——**不准确**：终止走的是
+         `scheduler.finish`，它会 `git worktree remove --force` 掉这个 Run 的 worktree（本机实测
+         7 条已取消的 Run 里 5 条目录确实已被清掉）。留着旧说法，会让以为「不清理也没事」的人白占磁盘。 -->
     <ConfirmDialog
       v-model="terminateOpen"
       eyebrow="运行控制"
       heading="终止 Run"
       message="终止后这次执行就停在这里，已经确认的 Plan 会留在历史里。"
-      :details="['正在跑的 Agent 循环会一起取消', 'cleanup 钩子会执行', '已结束运行的本地 worktree 不会自动清理']"
+      :details="[
+        '正在跑的 Agent 循环会一起取消',
+        'cleanup 钩子会执行',
+        '它的 worktree 会从磁盘上回收；尚未提交的改动会丢（已提交到分支的保留）',
+      ]"
       confirm-label="终止 Run"
       cancel-label="继续运行"
       tone="danger"
