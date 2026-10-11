@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-10-11 — 按这一轮（和上一轮）的改动把文档对齐
+
+纯文档。逐条拿代码核过，改掉五处**与现状对不上**的地方；顺手把文档里引用的实测数字**重跑了一遍**。
+
+| 位置 | 原来写的 | 现状 |
+|---|---|---|
+| §0.1（视图行数） | `RunDetailView` 751 行 | **806**——这一轮加了「放弃」「回收」两个确认框与两颗按钮，还有 `BLOCKED` 那个入口 |
+| §2.3 C 的入口说明 | "「结束一个 Run」有**两个**入口……两者走的是同一套服务端机制" | **三个**入口，而且第三个走的是**另一条路由**（`/finish` 而不是 `/cancel`）。补了「走哪条路由」一列，并把重复的措辞并成一段 |
+| §2.3 C（同段） | —— | 补上「回收工作区」顺带修的两处：`finish` 删完**不再清空 `workspacePath`**、删不掉**不再让整条 finish 失败** |
+| §2.3 C 的"Run 没有 `MERGED`" | `RunStatus` 是 **11** 个取值 | **10**——上一轮把 §4.2 那张计数表改对了，**漏了这一处** |
+| §7 的「执行台」行 | 引 `projectPathForModule("execute", id)` | 那个函数已随"模块"抽象一起删掉，标明了 |
+
+**重跑过、确认仍对得上的数字**：13 条 `MERGE_READY` 的 Run 仍挂着 `workspacePath`（约 166 MB）；
+7 条已取消的 Run **全带着**那一列、其中 **5 条**的目录早就不在了（正是"删完不清那一列"的现场）；
+`canContinueRun` 的集合与领域侧 `ACCEPTS_GUIDANCE_RUN_STATUSES` 仍然逐字一致。
+
+> 顺手做的另一件事：把整份文档里对**已删符号**的引用过了一遍（`NEEDS_PLAN_CHANGE`、`ChangeProposal`、
+> `isRuntimeKind`、`planTimelineItems`、`explorerEntryQuery`、`normalizeProjectId`、`taskBuckets`、
+> `WorkbenchView`…）。剩下的都是**故意保留的历史说明**——每一处都在讲"它为什么被删"，不是当成现役
+> 事实在引用。
+
+`pnpm verify` 全绿：domain 445 / api 118 / web 636。
+
 ## 2026-10-11 — 补上「回收工作区」：`/finish` 终于有了入口
 
 上一轮查那三条运维口子时留下的结论是：`/finish` 是唯一能用**非 `cancelled`** 的理由调
