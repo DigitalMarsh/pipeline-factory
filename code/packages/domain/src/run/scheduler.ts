@@ -278,7 +278,10 @@ export class Scheduler {
   }
 
   private async runBranchLeaf(plan: CandidatePlan, revision: PlanRevision, createdAt: string): Promise<string> {
-    let summary = normalizeRunBranchSlug(plan.title) ?? "change";
+    // 标题派生的 slug 是**兜底值**，不是"模型来之前的中间值"：模型在预算内给出结果就用它，
+    // 超时或失败就留在这里。原来失败一律写 "change"，把标题里本来就有的 ASCII 也一起丢了。
+    const titleSlug = normalizeRunBranchSlug(plan.title);
+    let summary = titleSlug ?? "change";
     if (this.options.branchNameGenerator) {
       try {
         summary = await this.options.branchNameGenerator.generate({
@@ -287,7 +290,7 @@ export class Scheduler {
           goal: revision.resolvedContract.objective.goal,
         });
       } catch {
-        summary = "change";
+        summary = titleSlug ?? "change";
       }
     }
     return composeRunBranchLeaf(createdAt, summary);

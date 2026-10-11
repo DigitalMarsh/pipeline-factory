@@ -242,3 +242,23 @@ describe("PlanDetailContent conversation artifact warning", () => {
     expect(confirmButton(host)).toBeDefined();
   });
 });
+
+describe("PlanDetailContent confirm progress", () => {
+  it("replaces the action row with what the wait is for while a confirm is in flight", () => {
+    const { host } = mount({ busy: true });
+
+    // 确认要等服务端把 Run 建出来，而建 Run 前先起分支名（一次模型调用，实测要好几秒）。
+    // 等待期不给任何反馈的话，用户看到的就是"点了跟没点一样"。
+    expect(host.textContent).toContain("正在确认并准备执行环境");
+    expect(host.textContent).toContain("生成分支名");
+    // 等待期里动作行整体不渲染，重复点击自然落空（不只是把按钮灰掉）。
+    expect([...host.querySelectorAll("button")].some((button) => button.textContent?.includes("确认 V"))).toBe(false);
+  });
+
+  it("shows the plain action row when nothing is in flight", () => {
+    const { host } = mount({});
+
+    expect(host.textContent).not.toContain("正在确认并准备执行环境");
+    expect([...host.querySelectorAll("button")].some((button) => button.textContent?.includes("确认 V"))).toBe(true);
+  });
+});

@@ -167,6 +167,41 @@ describe("Scheduler and ExecutionThread", () => {
     expect(run.branch).toMatch(/^factory\/\d{8}-\d{6}-change$/);
   });
 
+  /**
+   * 模型超时/失败时**不要丢掉标题里本来就有的 ASCII**：标题派生的 slug 是兜底值，
+   * 只有标题也派不出 slug（纯中文）时才回落到 `change`。
+   */
+  it("falls back to the title-derived slug when branch summary generation fails", async () => {
+    const store = new InMemoryPipelineStore();
+    const planService = new PlanService(store);
+    const plan = planService.createCandidatePlan({
+      projectId: "project-branch-fallback-title",
+      sourceExplorerThreadId: "thread-branch-fallback-title",
+      title: "Vue introduction",
+      resolvedContract: planContractFixture({ store, projectId: "project-branch-fallback-title", title: "Vue introduction" }),
+    });
+    planService.confirm(plan.id, "user-1");
+    planService.enqueue(plan.id);
+    planService.dispatch(plan.id);
+    const scheduler = new Scheduler({
+      store,
+      branchNameGenerator: {
+        generate: async () => {
+          throw new Error("model timed out");
+        },
+      },
+      workspace: {
+        create: async (input) => ({ path: `/tmp/${input.runId}`, branch: input.branch, baseCommit: input.baseCommit }),
+        remove: async () => undefined,
+      },
+      hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
+    });
+
+    const run = await scheduler.start(plan.id);
+
+    expect(run.branch).toMatch(/^factory\/\d{8}-\d{6}-vue-introduction$/);
+  });
+
   it("persists every bounded lifecycle hook attempt", async () => {
     const store = new InMemoryPipelineStore();
     const planService = new PlanService(store);

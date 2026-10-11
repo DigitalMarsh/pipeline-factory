@@ -346,6 +346,14 @@ a {
   color: var(--green);
   font-size: 11px;
 }
+/* 确认等待期的说明（挂在 DRAFT 那张卡的"确认方案"旁边）。按钮转圈只说明点到了，说不清在等什么。 */
+.candidate-actions .candidate-busy-note {
+  flex: 1;
+  min-width: 0;
+  color: #5b7093;
+  font-size: 10px;
+  line-height: 1.5;
+}
 /* 对话产物（CONVERSATION）的内联提醒：卡片上就说明"确认了也不能执行"，不能只靠按钮文案。 */
 .candidate-notice {
   display: flex;

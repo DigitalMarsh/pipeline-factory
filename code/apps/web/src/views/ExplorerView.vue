@@ -1710,6 +1710,7 @@ onBeforeUnmount(() => {
               :verification-suite-options="detailVerificationSuiteOptions"
               :can-edit-verification-suites="canEditVerificationSuites"
               :verification-suites-saving="verificationSuitesSaving"
+              :busy="busy"
               @close="closeSharedDrawer"
               @confirm="confirmPlan(detailPlan)"
               @discard="discardPlan(detailPlan)"
