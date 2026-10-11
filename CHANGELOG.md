@@ -1,5 +1,55 @@
 # Changelog
 
+## 2026-10-11 — 清掉 `styles.css` 里 94 条没人用的规则（11.7 KB）
+
+上一轮报的是"约 12 个确认死的选择器"，同时说剩下 93 个"连测试都没提"的**不能当死的**——里面混着
+Element Plus 覆盖与组合出来的类名，得逐条认。这一轮把那半做完了。
+
+### 判据（三条都满足才算死）
+
+1. 规则里**每一个** class 在生产 `.vue`/`.ts` 与测试里都以**独立类名**出现过 0 次；
+2. 它不是**拼出来的**——生产代码里存在能生成它的模板字面量（`` `tone-${status}` ``、
+   `` `execution-conversation-group-${kind}` `` 这类，扫描器认字面量，认不出组合）；
+3. 选择器里不含 `el-`——那是 Element Plus 自己的类，库在用。
+
+三条缺一条就会误删：只做第 1 条的话，`tone-attention`、`notification-dot-*`、
+`execution-conversation-group-*` 这些都会被当成死的。
+
+> **独立类名 ≠ 子串**。`form-grid` 与 `settings-form-grid` 是两个类，`settings-heading` 与
+> `settings-heading-actions` 也是。我一开始用 `grep -w form-grid` 复核，跑出 21 处"命中"——
+> 全是 `settings-form-grid`。**`grep -w` 的单词边界不含 `-`**，这类复核必须按类名整体比对。
+
+### 删掉的（56 个类 / 94 条规则 / 1158 → 1064 条规则）
+
+几块退役界面的残留：
+
+- `context-panel*` —— C 模式的前身那套右侧上下文面板；`context-entry-*` / `left-entry-*` 是它的左栏入口
+- `journal-*` —— 执行日志面板，已被执行会话取代
+- `mini-plan*` / `context-plan-*` —— 旧 Plan 卡片
+- `explorer-tree-*` —— `el-tree` 版的线程树（`el-tree-node` 那些 Element Plus 类不在删除范围里）
+- `settings-heading` / `form-grid` —— 设置整页
+- `run-actions` / `evidence-card` / `agent-loop-detail` / `execution-steps-panel` /
+  `execution-telemetry-panel` / `diagnostics-teaser` / `rail-nav` / `left-panel-manage` / `project-icon` 等单条
+
+**其中前七个 `RunDetailView.test.ts` 早就在断言"模板里已经没有这个 class 了"**——模板删干净了、
+样式留着没删。测试一直在这儿举着牌子。
+
+### 怎么验的
+
+- **静态**：删完重算选择器集合，1158 → 1064（正好 -94），逐条比对**没有任何活跃选择器被误删**；
+- **DOM**：把这 56 个类名做成一张表，在七个界面（探索视图、抽屉三个页签、项目目录、新建项目对话框、
+  设置对话框并逐个切页签）里遍历真实 DOM 的 `classList` 求交集——**全部为空**；
+- **视觉 + 控制台**：Run 面板的状态卡、左栏、需求清单照常渲染，控制台零报错；
+- `pnpm verify` 全绿。
+
+### 脚本坑（这一轮踩的）
+
+写规则扫描器时把注释清成等长空白**是必须的**——第一版用一个更短的字符串替换注释，后面所有 offset
+都偏了，跑出一条 `[0, 56]` 的幽灵规则；另外递归进 `@media` 时要把偏移带下去，否则媒体查询里的规则
+拿到的是相对偏移，删的时候会删错地方。
+
+`pnpm verify` 全绿：domain 447 / api 117 / web 629。
+
 ## 2026-10-11 — 扫第二遍：换三个面，删掉 `api.ts` 上九个没人调的客户端包装
 
 上一轮扫的是"导出的符号"。这轮换了三个它**结构上看不见**的面：
