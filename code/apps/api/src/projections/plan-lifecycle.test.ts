@@ -17,6 +17,7 @@ import {
   PlanService,
   ProjectService,
   type CandidatePlan,
+  type MergeRequest,
   type PipelineStore,
   planContractFixture,
 } from "@pipeline-factory/domain";
@@ -88,5 +89,51 @@ describe("decoratePlanRows 的读取复杂度", () => {
     const perPlan = plans.map((plan) => planProjection(store, plan).lifecycle);
 
     expect(fromRows).toEqual(perPlan);
+  });
+});
+
+/**
+ * 需求清单的任务格要显示「待合并 · 已检测到」——**那依赖于投影把合并请求带出来**。
+ * 对账只读观察主干、把结果写在 `detectedTargetCommit` 上（`run/merge.ts` 维护提示 4），
+ * 不带上它，界面上"等主干"和"等你确认合并"就长得一模一样。
+ */
+describe("planProjection 带回这条 Plan 当前的合并请求", () => {
+  const request = (planId: string, overrides: Partial<MergeRequest> = {}): MergeRequest => ({
+    id: "merge-1",
+    runId: "run-1",
+    planId,
+    sourceCommit: "abc123",
+    targetBranch: "main",
+    status: "OPEN",
+    humanConfirmationRequired: true,
+    createdAt: "2026-09-01T00:00:00.000Z",
+    mergedAt: null,
+    ...overrides,
+  });
+
+  it("同一批请求里挑 OPEN，不挑被替换掉的 SUPERSEDED", () => {
+    const store = new InMemoryPipelineStore();
+    const planId = seedPlans(store, 1)[0]!.planId;
+    store.saveMergeRequest(request(planId, { id: "merge-old", status: "SUPERSEDED", detectedTargetCommit: "aaa" }));
+    store.saveMergeRequest(request(planId, { id: "merge-open", detectedTargetCommit: "bbb" }));
+
+    const projection = planProjection(store, store.getPlan(planId)!);
+
+    expect(projection.mergeRequest).toMatchObject({ id: "merge-open", detectedTargetCommit: "bbb" });
+  });
+
+  it("只被替换过（全是 SUPERSEDED）等于没有当前请求", () => {
+    const store = new InMemoryPipelineStore();
+    const planId = seedPlans(store, 1)[0]!.planId;
+    store.saveMergeRequest(request(planId, { status: "SUPERSEDED", detectedTargetCommit: "aaa" }));
+
+    expect(planProjection(store, store.getPlan(planId)!).mergeRequest).toBeNull();
+  });
+
+  it("没有合并请求时是 null，不会编一个出来", () => {
+    const store = new InMemoryPipelineStore();
+    const planId = seedPlans(store, 1)[0]!.planId;
+
+    expect(planProjection(store, store.getPlan(planId)!).mergeRequest).toBeNull();
   });
 });

@@ -91,7 +91,16 @@ function taskStatusFor(plan: Plan | null, run: Run | null): RequirementStatus {
     if (run.status === "READY_FOR_VERIFY") return { label: "待验证", tone: "progress" };
     if (["COMPLETED", "MERGED"].includes(run.status)) return { label: "运行完", tone: "success" };
     if (run.status === "RECOVERING") return { label: "需要恢复", tone: "attention" };
-    if (run.status === "MERGE_READY") return { label: "待处理", tone: "attention" };
+    if (run.status === "MERGE_READY") {
+      /**
+       * 「待处理」把"等着合并"和"卡住了"混成了一个词（`BLOCKED` / `CANCELLED` / `STALE` 也都叫它）。
+       * 这里说清是**待合并**；**对账已经看到主干里有这份提交**时再补一句——那正是要人去点
+       * 「确认合并」的时刻，而这件事实只写在合并请求上（`detectedTargetCommit`，对账只读观察的
+       * 结果，见领域侧 `run/merge.ts` 的维护提示 4），不看它就看不出来。
+       */
+      const detected = plan?.mergeRequest?.status === "OPEN" && Boolean(plan.mergeRequest.detectedTargetCommit);
+      return { label: detected ? "待合并 · 已检测到" : "待合并", tone: "attention" };
+    }
     if (["FAILED", "CANCELLED", "BLOCKED", "STALE"].includes(run.status)) return { label: "待处理", tone: "attention" };
     return { label: `未知状态：${run.status}`, tone: "neutral" };
   }

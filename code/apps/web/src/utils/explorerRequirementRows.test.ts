@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ExplorerPlan, Plan, Run } from "../types";
+import type { ExplorerPlan, MergeRequest, Plan, Run } from "../types";
 import { projectExplorerRequirementRows } from "./explorerRequirementRows";
 
 function requirement(id: string, ordinal: number, overrides: Partial<ExplorerPlan> = {}): ExplorerPlan {
@@ -37,6 +37,22 @@ function plan(explorerPlanId: string, status: Plan["status"], overrides: Partial
     runId: null,
     lastEventAt: "2026-09-01T00:00:00.000Z",
     attentionReason: null,
+    ...overrides,
+  };
+}
+
+/** 一条 Run 上的合并请求；`detectedTargetCommit` 就是对账只读观察到的主干提交。 */
+function mergeRequest(overrides: Partial<MergeRequest> = {}): MergeRequest {
+  return {
+    id: "merge-review",
+    runId: "run-plan-review",
+    planId: "plan-review",
+    sourceCommit: "abc123",
+    targetBranch: "main",
+    status: "OPEN",
+    humanConfirmationRequired: true,
+    createdAt: "2026-09-01T00:00:00.000Z",
+    mergedAt: null,
     ...overrides,
   };
 }
@@ -99,7 +115,42 @@ describe("projectExplorerRequirementRows", () => {
     );
 
     expect(rows.map((row) => row.planStatus.label)).toEqual(["已确认", "已确认", "已确认", "已确认", "已确认"]);
-    expect(rows.map((row) => row.taskStatus.label)).toEqual(["已入队/已派发", "运行中", "待处理", "待处理", "运行完"]);
+    expect(rows.map((row) => row.taskStatus.label)).toEqual(["已入队/已派发", "运行中", "待处理", "待合并", "运行完"]);
+  });
+
+  /**
+   * 「待合并」和「待合并 · 已检测到」的差别就是**要不要人去点确认合并**：对账只读观察主干，看到
+   * 里面已经有这份提交时把它记在合并请求上（`detectedTargetCommit`）。界面必须把这件事说出来
+   * ——只写"待合并"的话，"等主干"和"等你确认"看起来一模一样。
+   */
+  it("对账已经看到主干里有那份提交时，那一格要写出来", () => {
+    const detected = projectExplorerRequirementRows(
+      [requirement("review", 1)],
+      [plan("review", "MERGE_READY", { runId: "run-plan-review", mergeRequest: mergeRequest({ detectedTargetCommit: "75a153f8" }) })],
+      [run("plan-review", "MERGE_READY")],
+    );
+    expect(detected[0]?.taskStatus.label).toBe("待合并 · 已检测到");
+
+    // 对账还没看到（请求上没有 detectedTargetCommit）：只说待合并。
+    const pending = projectExplorerRequirementRows(
+      [requirement("review", 1)],
+      [plan("review", "MERGE_READY", { runId: "run-plan-review", mergeRequest: mergeRequest() })],
+      [run("plan-review", "MERGE_READY")],
+    );
+    expect(pending[0]?.taskStatus.label).toBe("待合并");
+
+    // 已经作废（SUPERSEDED）的那条不算数——它指向的 commit 已经不是最新的了。
+    const superseded = projectExplorerRequirementRows(
+      [requirement("review", 1)],
+      [
+        plan("review", "MERGE_READY", {
+          runId: "run-plan-review",
+          mergeRequest: mergeRequest({ status: "SUPERSEDED", detectedTargetCommit: "75a153f8" }),
+        }),
+      ],
+      [run("plan-review", "MERGE_READY")],
+    );
+    expect(superseded[0]?.taskStatus.label).toBe("待合并");
   });
 
   it("marks confirmed conversation-only Plans as requiring attention instead of queueing", () => {
@@ -150,7 +201,7 @@ describe("projectExplorerRequirementRows", () => {
       ["IN_PROGRESS", "运行中"],
       ["VERIFYING", "运行中"],
       ["READY_FOR_VERIFY", "待验证"],
-      ["MERGE_READY", "待处理"],
+      ["MERGE_READY", "待合并"],
       ["BLOCKED", "待处理"],
       ["STALE", "待处理"],
       ["RECOVERING", "需要恢复"],

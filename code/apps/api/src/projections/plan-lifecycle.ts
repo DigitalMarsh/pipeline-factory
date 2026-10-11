@@ -91,6 +91,8 @@ const PLAN_LIFECYCLE_EVENT_TYPES = [
 export type PlanLifecycleIndex = {
   runsByPlan: Map<string, Run[]>;
   mergeRequestsByRun: Map<string, MergeRequest[]>;
+  /** 同一批合并请求按 **Plan** 再归一次：需求清单那一格要用，见 `currentMergeRequest`。 */
+  mergeRequestsByPlan: Map<string, MergeRequest[]>;
 };
 
 export function buildPlanLifecycleIndex(store: PipelineStore): PlanLifecycleIndex {
@@ -101,12 +103,31 @@ export function buildPlanLifecycleIndex(store: PipelineStore): PlanLifecycleInde
     else runsByPlan.set(run.planId, [run]);
   }
   const mergeRequestsByRun = new Map<string, MergeRequest[]>();
+  const mergeRequestsByPlan = new Map<string, MergeRequest[]>();
   for (const request of store.listMergeRequests()) {
     const existing = mergeRequestsByRun.get(request.runId);
     if (existing) existing.push(request);
     else mergeRequestsByRun.set(request.runId, [request]);
+    const forPlan = mergeRequestsByPlan.get(request.planId);
+    if (forPlan) forPlan.push(request);
+    else mergeRequestsByPlan.set(request.planId, [request]);
   }
-  return { runsByPlan, mergeRequestsByRun };
+  return { runsByPlan, mergeRequestsByRun, mergeRequestsByPlan };
+}
+
+/**
+ * 这条 Plan **当前**那条合并请求。
+ *
+ * `SUPERSEDED` 不算：那是被替换掉的旧请求（补要求之后旧的那条会作废），拿它会显示一个已经不
+ * 在场的状态。`OPEN` 优先于 `MERGED`——同一条 Run 上新旧两份并存时，眼前的事实是新的那份。
+ *
+ * **需求清单那一格要它**：只看 `plan.status === "MERGE_READY"` 分不出"主干里其实已经有这份提交
+ * 了、只等人确认"——那是 `detectedTargetCommit` 的事（对账只读观察到的目标提交，
+ * 见 `run/merge.ts` 维护提示 4：对账不改 Plan 状态，只由 `confirmMerged` 推进）。
+ */
+function currentMergeRequest(plan: CandidatePlan, index: PlanLifecycleIndex): MergeRequest | null {
+  const requests = index.mergeRequestsByPlan.get(plan.id) ?? [];
+  return requests.find((request) => request.status === "OPEN") ?? requests.find((request) => request.status === "MERGED") ?? null;
 }
 
 /**
@@ -256,6 +277,9 @@ export function planProjection(store: PipelineStore, plan: CandidatePlan, index:
     confirmedAt: plan.confirmedAt ?? null,
     lifecycle: buildPlanLifecycle(store, plan, plan.revision, index),
     executionThread: planExecutionThread(store, plan),
+    // 需求清单那一格要它：光看 `status === "MERGE_READY"` 只能说"待合并"，分不出
+    // "主干里其实已经有了、只等人确认"（`detectedTargetCommit`）。
+    mergeRequest: currentMergeRequest(plan, index),
   };
 }
 

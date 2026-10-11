@@ -6158,6 +6158,8 @@ a {
 .requirement-status-button {
   display: inline-flex;
   max-width: 100%;
+  /* 窄栏里要能被压缩：flex 项默认 `min-width: auto`，压在内容宽度上，光给 max-width 收不住。 */
+  min-width: 0;
   align-items: center;
   justify-content: center;
   padding: 0;
@@ -6170,6 +6172,18 @@ a {
 .requirement-status-button:focus-visible {
   outline: 0;
   box-shadow: 0 0 0 2px #e7effd;
+}
+/**
+ * 状态标签在窄栏里要能收。`.requirement-status-button` 的 `max-width: 100%` 管不住它——
+ * 里面那颗 el-tag 是 nowrap 的，格子不够就直接溢出去压到旁边的格标签上（实测 295px 视口下，
+ * 95px 的格子里塞了 134px 的内容）。长标签（「待合并 · 已检测到」）在窄栏里宁可走省略号。
+ */
+.requirement-status-button .el-tag {
+  max-width: 100%;
+}
+.requirement-status-button .el-tag .el-tag__content {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 /* 待补齐的圆点（完成/问题用图标组件，见 ExplorerPlanRequirements）。 */
 .plan-requirement-dot {
