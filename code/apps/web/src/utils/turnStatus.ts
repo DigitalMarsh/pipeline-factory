@@ -5,11 +5,6 @@
  */
 import type { ExplorerTurn } from "../types";
 
-/** 只把 assistant RUNNING 视为正在处理，用户消息和等待输入状态由页面分别呈现。 */
-export function isExplorerTurnProcessing(turn: Pick<ExplorerTurn, "role" | "status">): boolean {
-  return turn.role === "assistant" && turn.status === "RUNNING";
-}
-
 /**
  * 一个 Turn 在界面上要显示的内容文本（P7-4 从 `ExplorerView.vue` 下沉）。
  * 有正文就用正文，没有正文时按状态给一句人话：进行中 / 等待输入 / 失败原因 / 未返回。

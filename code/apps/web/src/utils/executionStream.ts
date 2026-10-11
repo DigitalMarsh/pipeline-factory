@@ -1062,8 +1062,12 @@ const ACTIVITY_MESSAGE_TYPES: Record<ProviderActivityKind, ExecutionMessageType>
 };
 
 /**
- * ④「跑模型的程序报的」的中立类别。与领域侧 `isRuntimeKind()` 同义——**两边各自成表是因为
- * web 不能运行时依赖领域层**（见本段开头的说明），不是可以随便分叉的两份。parity 测试会拦。
+ * ④「跑模型的程序报的」的中立类别。**这是那条判据现在唯一的定义处。**
+ *
+ * 它此前在领域侧也有一份（`model/provider-activity.ts` 的 `isRuntimeKind` / `RUNTIME_KINDS`），
+ * 说法是"领域定义、web 镜像"。但那一份**没有任何生产代码在调**——两个消费方（执行会话投影、
+ * Run 头诊断区）用的都是本文件这份，而所谓"parity 测试会拦"其实并没有那样一条测试。空的对照物
+ * 只会让人以为有东西在管，所以那一份已删；要加类别，改这里。
  */
 export const RUNTIME_ACTIVITY_KINDS: ReadonlySet<ProviderActivityKind> = new Set([
   "session",
@@ -1084,7 +1088,8 @@ export function isRuntimeActivityKind(kind: ProviderActivityKind): boolean {
 
 /**
  * ④ 里**需要浮到用户眼前**的那几类（配额、重试、权限被拒、告警、评审）。
- * 与 `packages/domain/src/model/provider-activity.ts` 的 `isRuntimeAlertKind` 同义。
+ * 领域侧那份同义的 `isRuntimeAlertKind` 已随 `isRuntimeKind` 一起删除（见上面 `RUNTIME_ACTIVITY_KINDS`），
+ * 所以这条也是唯一一份。
  */
 const RUNTIME_ALERT_KINDS: ReadonlySet<ProviderActivityKind> = new Set(["rate-limit", "retry", "permission", "warning", "review"]);
 

@@ -328,11 +328,6 @@ export function explorerDisplayMode(type: ExplorerMessageType): ExplorerDisplayM
   return EXPLORER_DISPLAY_MODES[type];
 }
 
-/** 这类消息属于哪一大类。见 `conversationTypes.ts` 的 `MessageClass`。 */
-export function explorerMessageClass(type: ExplorerMessageType): MessageClass {
-  return EXPLORER_MESSAGE_CLASSES[type];
-}
-
 /**
  * 这条调用的**结构化载荷**（参数、返回、输出、退出码、耗时）。
  *
@@ -392,7 +387,11 @@ const RUNTIME_ALERT_KINDS: ReadonlySet<ExplorerActivityKind> = new Set([
   "PROVIDER_WARNING",
 ]);
 
-/** 这条运行事实要不要浮到用户眼前。与 `packages/domain/src/model/provider-activity.ts` 的 `isRuntimeAlertKind` 同义。 */
+/**
+ * 这条运行事实要不要浮到用户眼前。**这条判据只有这一份**——领域侧那个同义的
+ * `isRuntimeAlertKind` 没有任何生产调用方，已删；执行侧另有一份同形的
+ * （`utils/executionStream.ts` 的 `RUNTIME_ALERT_KINDS`，它吃的是中立类别不是探索侧的条目类型）。
+ */
 export function isRuntimeAlert(activity: ExplorerActivityItem): boolean {
   return RUNTIME_ALERT_KINDS.has(activity.kind) || activity.status === "FAILED";
 }

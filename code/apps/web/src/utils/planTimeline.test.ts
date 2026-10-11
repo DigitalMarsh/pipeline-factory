@@ -5,17 +5,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { ExplorerActivityItem, Plan } from "../types";
-import {
-  findPlanForActivity,
-  getPlanTimelineTarget,
-  planActivityBindings,
-  planAnchorId,
-  planAnchorKey,
-  planForActivity,
-  planIdentity,
-  planIdentityOrNull,
-  planTimelineItems,
-} from "./planTimeline";
+import { planActivityBindings, planAnchorId, planAnchorKey, planForActivity, planIdentity, planIdentityOrNull } from "./planTimeline";
 
 const activity = (
   turnId: string,
@@ -51,20 +41,23 @@ const plan = (id: string, sourceTurnId: string | null, createdAt = "2026-08-29T1
 });
 
 describe("plan timeline bindings", () => {
+  // 判据是 `planActivityBindings` 本身——`findPlanForActivity` / `getPlanTimelineTarget` 那两个
+  // 只有测试在用的读取器已删，这里直接查绑定表，少绕一层。
+  const boundTo = (planToBind: Plan, activities: ExplorerActivityItem[]) =>
+    planActivityBindings([planToBind], activities).get(activities.at(-1)!.id) ?? null;
+
   it("binds a generated plan to its source assistant turn", () => {
     const generated = activity("turn-2", "Personal information manager", undefined, "item-plan-1");
     const candidate = { ...plan("plan-1", "turn-2"), providerItemId: "item-plan-1" };
 
-    expect(findPlanForActivity(generated, [candidate])).toBe(candidate);
-    expect(getPlanTimelineTarget(candidate, [generated])).toBe("plan-generated-plan-1");
+    expect(boundTo(candidate, [generated])).toBe(candidate);
   });
 
   it("keeps plans without a source turn detached from assistant messages", () => {
     const generated = activity("turn-2", "Personal information manager");
     const legacy = plan("plan-1", null);
 
-    expect(findPlanForActivity(generated, [legacy])).toBeNull();
-    expect(getPlanTimelineTarget(legacy, [generated])).toBe("plan-created-plan-1");
+    expect(boundTo(legacy, [generated])).toBeNull();
   });
 
   it("binds one plan to the final matching provider item within a shared source turn", () => {
@@ -74,40 +67,18 @@ describe("plan timeline bindings", () => {
     const bindings = planActivityBindings([candidate], [first, final]);
 
     expect(bindings.size).toBe(1);
-    expect(findPlanForActivity(first, [candidate], [first, final])).toBeNull();
-    expect(findPlanForActivity(final, [candidate], [first, final])).toBe(candidate);
-    expect(getPlanTimelineTarget(candidate, [first, final])).toBe("plan-generated-plan-1");
+    expect(bindings.get(first.id)).toBeUndefined();
+    expect(bindings.get(final.id)).toBe(candidate);
   });
 
   it("falls back to the final matching READY message when older plans lack provider item IDs", () => {
     const first = activity("turn-2", "Personal information manager", "2026-08-29T10:00:00.000Z");
     const final = activity("turn-2", "Personal information manager", "2026-08-29T10:01:00.000Z");
     const candidate = plan("plan-1", "turn-2");
+    const bindings = planActivityBindings([candidate], [first, final]);
 
-    expect(findPlanForActivity(first, [candidate], [first, final])).toBeNull();
-    expect(findPlanForActivity(final, [candidate], [first, final])).toBe(candidate);
-  });
-
-  it("sorts Plans rail items by stable generation time while retaining status", () => {
-    const first = plan("plan-1", "turn-1", "2026-08-29T10:01:00.000Z");
-    const second = { ...plan("plan-2", "turn-2", "2026-08-29T10:02:00.000Z"), status: "ENQUEUED" as const };
-
-    expect(planTimelineItems([second, first], []).map((item) => item.plan.id)).toEqual(["plan-1", "plan-2"]);
-    const time = (value: string) => new Date(value).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
-    expect(planTimelineItems([second, first], [activity("turn-1", first.title)]).map((item) => item.detail)).toEqual([
-      `${time(first.createdAt!)} · 草稿 · Rev 1`,
-      `${time(second.createdAt!)} · 已入队 · Rev 1`,
-    ]);
-  });
-});
-
-describe("rail 条目的状态文案", () => {
-  /** 行为锁定：DISCARDED 必须在 rail 上与计划卡片显示同一句话，不能裸露枚举名。 */
-  it("已丢弃的 Plan 显示中文文案，而不是 DISCARDED", () => {
-    const discarded = { ...plan("plan-3", "turn-3", "2026-08-29T10:03:00.000Z"), status: "DISCARDED" as const };
-    const time = (value: string) => new Date(value).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
-
-    expect(planTimelineItems([discarded], []).map((item) => item.detail)).toEqual([`${time(discarded.createdAt!)} · 已丢弃 · Rev 1`]);
+    expect(bindings.get(first.id)).toBeUndefined();
+    expect(bindings.get(final.id)).toBe(candidate);
   });
 });
 
@@ -130,12 +101,11 @@ describe("plan DOM 锚点", () => {
     expect(planAnchorKey(null)).toBe("");
   });
 
-  it("导航 key 与 rail 条目的 key 同规则（点击后能对齐激活态）", () => {
-    const bound = plan("plan-1", "turn-2");
-    const entries = planTimelineItems([bound], []);
-
-    expect(entries[0]?.key).toBe(planAnchorKey(bound));
-    expect(planAnchorKey(bound)).toBe("plan-plan-1");
+  it("rail 条目的 key 与导航 key 同规则（点击后能对齐激活态）", () => {
+    // 两边都从 `planAnchorKey` 生成；`planTimelineItems` 已删，这条规则现在只剩一个来源，
+    // 断言直接锁住它，免得将来又出现第二处自己拼 key 的地方。
+    expect(planAnchorKey(plan("plan-1", "turn-2"))).toBe("plan-plan-1");
+    expect(planAnchorId(plan("plan-1", "turn-2"))).toBe("plan-generated-plan-1");
   });
 });
 

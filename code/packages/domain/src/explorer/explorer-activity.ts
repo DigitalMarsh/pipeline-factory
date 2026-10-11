@@ -146,21 +146,6 @@ const KIND_BY_ACTIVITY: Record<ProviderActivityKind, ExplorerActivityKind> = {
   other: "UNCLASSIFIED",
 };
 
-/**
- * ④「跑模型的程序报的」运行事实在探索侧的条目类型。头部状态卡按这一组挑数据，
- * **不各自列白名单**——中立词表里 `isRuntimeKind()` 是那条判据的唯一定义处。
- */
-export const EXPLORER_RUNTIME_KINDS: ReadonlySet<ExplorerActivityKind> = new Set([
-  "PROVIDER_COMPACTION",
-  "PERMISSION_DENIED",
-  "RATE_LIMIT",
-  "PROVIDER_RETRY",
-  "BACKGROUND_TASK",
-  "HOOK",
-  "PROVIDER_WARNING",
-  "SESSION",
-]);
-
 /** 工具类条目：它们按身份键合成一条，且正文/名字的摆法相同。 */
 const TOOL_KINDS: ReadonlySet<ExplorerActivityKind> = new Set([
   "COMMAND",

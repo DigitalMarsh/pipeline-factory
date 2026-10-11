@@ -13,7 +13,8 @@
  *     模型对外做的。**有成败**，会开始也会结束，可能要你批准。
  *   - ④ 运行事实（`session` / `compaction` / `hook` / `task` / `rate-limit` / `retry` /
  *     `permission` / `warning` / `review`）：**跑模型的那个程序在报自己的状态**，不是模型做的。
- *     **这一类不进会话正文**，判据是 `isRuntimeKind()`。
+ *     **这一类不进会话正文**——那条判据（哪几个类别算 ④）现在只写在消费方：执行侧是
+ *     `apps/web/src/utils/executionStream.ts` 的 `RUNTIME_ACTIVITY_KINDS`（见那里的说明）。
  *   - 兜底 `other`。
  *
  * 维护提示：
@@ -36,7 +37,7 @@
  * 中立的活动类别。与 Provider 无关，UI 的展示词表按它取。
  *
  * **不要按字母序排列**——注释里的分组就是"这一类属于哪个消息大类"的答案，消费方据此决定
- * 它进不进会话正文（`isRuntimeKind`）、要不要画状态标签（`isOutcomeFreeKind`）。
+ * 它进不进会话正文（见上面 ④ 那条）、要不要画状态标签（`isOutcomeFreeKind`）。
  */
 export type ProviderActivityKind =
   // ② 内容流：模型说的话。没有成败概念。
@@ -86,19 +87,6 @@ const OUTCOME_FREE_KINDS: readonly ProviderActivityKind[] = [
   "review",
 ];
 
-/** ④「跑模型的程序报的」的运行事实。**这一类不进会话正文**——它是跑模型的那个程序在报自己的状态，不是模型或你的发言。 */
-const RUNTIME_KINDS: readonly ProviderActivityKind[] = [
-  "session",
-  "compaction",
-  "hook",
-  "task",
-  "rate-limit",
-  "retry",
-  "permission",
-  "warning",
-  "review",
-];
-
 /**
  * ④ 里**需要浮到用户眼前**的那几类：常态收进诊断区，这几类要在 Run 头上冒出来
  * （额度、重试、权限被拒、命令级告警、评审）。**"常态"与"异常"必须是一条判据**，
@@ -107,8 +95,6 @@ const RUNTIME_KINDS: readonly ProviderActivityKind[] = [
  * 注意它只是**其中一半**的判据：钩子与子任务本身不在这一组里，但它们**失败**时同样是异常——
  * 调用方要连 `outcome === "failed"` 一起看（见 `ExecutionHeaderStatus.vue` 的 `runtimeAlert`）。
  */
-const RUNTIME_ALERT_KINDS: readonly ProviderActivityKind[] = ["rate-limit", "retry", "permission", "warning", "review"];
-
 const ACTIVITY_KINDS: readonly ProviderActivityKind[] = [
   "reasoning",
   "message",
@@ -148,23 +134,6 @@ export function isProviderActivityOutcome(value: unknown): value is ProviderActi
 /** 该类别是否根本没有成败概念（UI 据此决定不渲染状态标签）。 */
 export function isOutcomeFreeKind(kind: ProviderActivityKind): boolean {
   return OUTCOME_FREE_KINDS.includes(kind);
-}
-
-/**
- * 该类别是不是 ④「跑模型的程序报的」运行事实。
- *
- * **两个消费方都问它，不各自列举**：执行会话投影据此把它挡在会话正文之外（见
- * `apps/web/src/utils/executionStream.ts` 的 `EXECUTION_DISPLAY_MODES`），Run 头诊断区据此
- * 把它收进「Provider 运行事实」一节、并在异常时浮现。
- * 分散成两处白名单，加一类就会漏一处——那正是这份调研要修的那类毛病。
- */
-export function isRuntimeKind(kind: ProviderActivityKind): boolean {
-  return RUNTIME_KINDS.includes(kind);
-}
-
-/** 该类别是不是"需要浮到用户眼前"的运行事实。语义与理由见 `RUNTIME_ALERT_KINDS`。 */
-export function isRuntimeAlertKind(kind: ProviderActivityKind): boolean {
-  return RUNTIME_ALERT_KINDS.includes(kind);
 }
 
 /** 一次 Provider 活动的原生事实；两个 Provider 各自把自己那份填进来。 */

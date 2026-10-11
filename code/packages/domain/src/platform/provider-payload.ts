@@ -16,7 +16,6 @@
  *   3) 超过上限**换成截断后的字符串**，而不是丢弃——宁可显示一段被截断的正文，
  *      也不要一个塞不下的对象把整个活动载荷撑爆。
  */
-import { isRecord } from "./guards.js";
 
 /**
  * 结构化载荷的**宽松传输上限**（字符）。展示层还有更紧的一档（2000 字 + 脱敏）——
@@ -48,16 +47,4 @@ export function structuredProviderPayload(payload: Record<string, unknown>): Rec
   if (typeof payload.exitCode === "number") fields.exitCode = payload.exitCode;
   if (typeof payload.durationMs === "number") fields.durationMs = payload.durationMs;
   return fields;
-}
-
-/** 这一份结构化载荷里有没有东西可展开。空对象与"没有"是一回事——别为它渲染一个空的展开按钮。 */
-export function hasStructuredPayload(fields: Record<string, unknown>): boolean {
-  return Object.values(fields).some(
-    (value) =>
-      value !== undefined &&
-      value !== null &&
-      value !== "" &&
-      !(isRecord(value) && Object.keys(value).length === 0) &&
-      !(Array.isArray(value) && value.length === 0),
-  );
 }

@@ -4,16 +4,7 @@
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  */
 import { describe, expect, it } from "vitest";
-import { isExplorerTurnProcessing, turnContent } from "./turnStatus";
-
-describe("explorer turn processing state", () => {
-  it("marks only a running assistant turn as processing", () => {
-    expect(isExplorerTurnProcessing({ role: "assistant", status: "RUNNING" })).toBe(true);
-    expect(isExplorerTurnProcessing({ role: "user", status: "RUNNING" })).toBe(false);
-    expect(isExplorerTurnProcessing({ role: "assistant", status: "COMPLETED" })).toBe(false);
-    expect(isExplorerTurnProcessing({ role: "assistant", status: "WAITING_FOR_INPUT" })).toBe(false);
-  });
-});
+import { turnContent } from "./turnStatus";
 
 describe("Turn 的展示文本", () => {
   it("有正文就用正文，不看状态", () => {

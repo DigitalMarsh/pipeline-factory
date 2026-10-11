@@ -6,7 +6,8 @@
  *        - `views/ExplorerView.vue` 的一份（已删）：同一个 `DISCARDED` 在左侧时间线显示 `DISCARDED`、
  *          在计划卡片上显示 `Discarded`。
  *        - `planTimeline.ts` 的私有 `statusLabel`（已收敛到本文件）。
- *        - `planLifecycle.ts` 的 `PLAN_LIFECYCLE_STEPS` / `_EXCEPTIONS`（已改成引用本文件）。
+ *        - `utils/planLifecycle.ts` 的 `PLAN_LIFECYCLE_STEPS` / `_EXCEPTIONS`——那个模块整个已删
+ *          （它 132 行里没有一个导出被生产代码引用，只剩自己的测试）。
  *      但同一件事还有**第二张表**在漂：`utils/statusVisual.ts` 里那行 `DRAFT: "Draft"` /
  *      `READY: "Ready"` / `MERGE_READY: "Needs review"`——于是同一个 Plan 状态在 Plan 抽屉里叫
  *      `Candidate`、在工作台上叫 `Draft`。那张表现在只保留**派发/等待**那几个 PlanStatus 之外的状态，

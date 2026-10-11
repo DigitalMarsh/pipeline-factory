@@ -398,12 +398,6 @@ export type ExplorerInputRequest = {
   explorerPlanId?: string | undefined;
 };
 
-export type ExplorerRealtimeEvent = {
-  sequence: number;
-  type: string;
-  payload: Record<string, unknown>;
-};
-
 export type AgentLoopState =
   | "CREATED"
   | "RUNNING"

@@ -44,11 +44,6 @@ export function telemetryModel(telemetry: ExecutionTelemetry | null | undefined)
   return telemetry?.model || "未记录";
 }
 
-/** 执行这次 Run 的 agent。**旧 Run 没有这个字段**（遥测是 JSON 列，历史行缺键），所以读 undefined。 */
-export function telemetryBackend(telemetry: ExecutionTelemetry | null | undefined, catalog: ModelBackendsResponse | null = null): string {
-  return telemetry?.backend ? backendLabel(catalog, telemetry.backend) : "未记录";
-}
-
 export function telemetryReasoning(telemetry: ExecutionTelemetry | null | undefined): string {
   return telemetry?.reasoningEffort || "默认";
 }

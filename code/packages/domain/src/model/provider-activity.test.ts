@@ -7,14 +7,7 @@
  *   `completed` 不在成功白名单里——全库 343 条"状态未知"、0 条成功。这里逐对断言，防止两边再次分叉。
  */
 import { describe, expect, it } from "vitest";
-import {
-  activityOutcome,
-  classifyClaudeActivity,
-  classifyCodexActivity,
-  isOutcomeFreeKind,
-  isRuntimeAlertKind,
-  isRuntimeKind,
-} from "./provider-activity.js";
+import { activityOutcome, classifyClaudeActivity, classifyCodexActivity, isOutcomeFreeKind } from "./provider-activity.js";
 
 describe("provider 活动的中立词表", () => {
   it("同一条命令：两个 Provider 给出同一个类别与同一个成败", () => {
@@ -157,17 +150,6 @@ describe("四组类别与它们各自该有的归宿", () => {
     expect(classifyClaudeActivity({ itemType: "tool_use", phase: "started", toolName: "Task" }).activityKind).toBe("subagent");
     expect(classifyClaudeActivity({ itemType: "tool_use", phase: "started", toolName: "WebSearch" }).activityKind).toBe("search");
     expect(classifyClaudeActivity({ itemType: "tool_use", phase: "started", toolName: "Read" }).activityKind).toBe("tool");
-  });
-
-  it("**④「跑模型的程序报的」是一条可判定的判据**，不是各处白名单", () => {
-    // 消费方（执行会话投影、Run 头诊断区）都问 isRuntimeKind，加一类不会漏一处。
-    const runtime = ["session", "compaction", "hook", "task", "rate-limit", "retry", "permission", "warning", "review"] as const;
-    for (const kind of runtime) expect(isRuntimeKind(kind)).toBe(true);
-    const notRuntime = ["command", "file-change", "tool", "mcp", "search", "media", "subagent", "reasoning", "message", "other"] as const;
-    for (const kind of notRuntime) expect(isRuntimeKind(kind)).toBe(false);
-
-    // 需要浮到眼前的只是其中一部分：额度、重试、权限、告警、评审。
-    expect(runtime.filter(isRuntimeAlertKind)).toEqual(["rate-limit", "retry", "permission", "warning", "review"]);
   });
 
   it("④ 里没有成败概念的那几类不画状态标签，钩子 / 子任务 / 权限被拒照常判成败", () => {

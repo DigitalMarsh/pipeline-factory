@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MESSAGE_CLASS_LABELS, SHARED_MESSAGE_CLASSES, SHARED_MESSAGE_TYPES, type MessageClass } from "./conversationTypes";
+import { SHARED_MESSAGE_CLASSES, SHARED_MESSAGE_TYPES } from "./conversationTypes";
 import { EXECUTION_MESSAGE_WEIGHTS } from "./executionStream";
 import { EXPLORER_MESSAGE_CLASSES, EXPLORER_DISPLAY_MODES } from "./explorerPresentation";
 
@@ -44,12 +44,6 @@ describe("两条对话线共用的消息词表", () => {
  *   2) `model` 与 `action` 必须是两种排版（前者铺开读、后者折成一行）。
  */
 describe("消息的五类划分", () => {
-  it("每一类都有展示名（文档里清单表的「分类」列照它写）", () => {
-    const classes: MessageClass[] = ["user", "model", "action", "provider", "factory"];
-    for (const key of classes) expect(MESSAGE_CLASS_LABELS[key]).toBeTruthy();
-    expect(new Set(Object.values(MESSAGE_CLASS_LABELS)).size).toBe(5);
-  });
-
   it("**④「跑模型的程序报的」不进会话正文**：探索侧一律 `hidden`（`UNCLASSIFIED` 例外）", () => {
     for (const [type, klass] of Object.entries(SHARED_MESSAGE_CLASSES)) {
       if (klass !== "provider") continue;

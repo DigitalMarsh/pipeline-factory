@@ -109,15 +109,6 @@ export type SharedMessageType = (typeof SHARED_MESSAGE_TYPES)[number];
  */
 export type MessageClass = "user" | "model" | "action" | "provider" | "factory";
 
-/** 大类的展示名。文档里清单表的「分类」列用的就是这几个词。 */
-export const MESSAGE_CLASS_LABELS: Record<MessageClass, string> = {
-  user: "① 你说的",
-  model: "② 模型说的",
-  action: "③ 模型做的",
-  provider: "④ 跑模型的程序报的",
-  factory: "⑤ Factory 说的",
-};
-
 /**
  * 共用词表里每一项属于哪一类。**这是分类的唯一定义处**：两张呈现表都不再各自记一遍，
  * 文档的「分类」列也照它写。

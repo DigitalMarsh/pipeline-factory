@@ -10,6 +10,8 @@ import {
   executionMessageWeight,
   executionRowKind,
   foldsIntoProcess,
+  isRuntimeActivityKind,
+  isRuntimeAlertItem,
   projectExecutionJournal,
   type ExecutionPlanSnapshot,
 } from "./executionStream";
@@ -910,5 +912,34 @@ describe("补充要求有两轮时", () => {
     const guidance = items.find((item) => item.messageType === "USER_MESSAGE");
     expect(guidance?.continuation).toBeUndefined();
     expect(guidance?.taskId).toBe("task-1");
+  });
+});
+
+/**
+ * 这条测试**从领域侧搬过来的**：④ 的判据（`isRuntimeKind` / `isRuntimeAlertKind`）原本定义在
+ * `packages/domain/src/model/provider-activity.ts`，但那边没有任何生产代码在调它——两个消费方
+ * （执行会话投影、Run 头诊断区）用的都是本文件这份。空定义已删，判据只剩这一处，断言跟着过来。
+ *
+ * 它守的是**性质**不是取值：④ 是"跑模型的程序在报自己的状态"，这条线画在哪要可判定，
+ * 不能一处一个白名单——那正是当初把它们收成一张表的原因。
+ */
+describe("④「跑模型的程序报的」是一条可判定的判据", () => {
+  const runtime = ["session", "compaction", "hook", "task", "rate-limit", "retry", "permission", "warning", "review"] as const;
+  const notRuntime = ["command", "file-change", "tool", "mcp", "search", "media", "subagent", "reasoning", "message", "other"] as const;
+
+  it("这一组算 ④，其余不算", () => {
+    for (const kind of runtime) expect(isRuntimeActivityKind(kind)).toBe(true);
+    for (const kind of notRuntime) expect(isRuntimeActivityKind(kind)).toBe(false);
+  });
+
+  it("需要浮到眼前的只是其中一部分：配额、重试、权限、告警、评审", () => {
+    const alertKinds = runtime.filter((kind) => isRuntimeAlertItem({ kind: "activity", activityKind: kind, status: "COMPLETED" } as never));
+    expect(alertKinds).toEqual(["rate-limit", "retry", "permission", "warning", "review"]);
+    // 不是 ④ 的条目一律不浮——免得"某条命令成功了"也跑到头部去。
+    expect(isRuntimeAlertItem({ kind: "activity", activityKind: "command", status: "COMPLETED" } as never)).toBe(false);
+  });
+
+  it("失败永远浮出来，哪怕类别本身不在那五类里", () => {
+    expect(isRuntimeAlertItem({ kind: "activity", activityKind: "hook", status: "FAILED" } as never)).toBe(true);
   });
 });

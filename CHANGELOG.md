@@ -1,5 +1,65 @@
 # Changelog
 
+## 2026-10-11 — 清掉「只有测试引用」的那批导出
+
+承接上一轮的问法（"还有别的地方只有测试引用的吗"），写了个脚本把所有包的导出名枚举出来（343 个源文件 /
+733 个导出名），对每个名字在**非测试、非声明文件**里找引用，再逐个手工复核。
+
+> **脚本第一版有三个误判，复核救回来了**，方法本身值得记下来：
+>   1) **模板字符串**——`strip_noise` 会把整段 `` `…` `` 抹掉，于是 `${WORKING_TREE_DIRTY}`、
+>      `` `--title=${DIRECTORY_DIALOG_PROMPT}` `` 这类用法看不见，两个**活着的**常量被误报成"只有测试引用"；
+>   2) **barrel 再导出**——`export { X } from "./y"` 一度被算成"声明"，于是 barrel 进了 own，
+>      真正从 barrel 导入的引用被排除掉（`InMemoryPipelineStore` 等 7 个差点被误删）；
+>   3) **类型只用在自己文件的签名里**是正常的，不是死代码（`*Deps` / `*Options` 那一批）。
+
+### 三个整个模块没人 `import`（连同测试一起删）
+
+| 文件 | 行数 | 导出 |
+|---|---|---|
+| `apps/web/src/utils/planLifecycle.ts` | 132 | 9 个——九个里**一个都没被生产代码碰过** |
+| `apps/web/src/utils/planFilters.ts` | 19 | `planStatusForStat` |
+| `apps/web/src/utils/dismissibleNotice.ts` | 17 | `useDismissibleNotice` |
+
+### 模块还活着、单个导出空转的（删）
+
+`buildTaskTree` / `taskRuntimeLabel`（`utils/taskTree.ts`）、`findPlanForActivity` /
+`planTimelineItems` / `getPlanTimelineTarget`（`utils/planTimeline.ts`，连同只服务它们的
+`PlanTimelineItem` 类型与 `generationTime` / `timeLabel`）、`isExplorerTurnProcessing`
+（`utils/turnStatus.ts`）、`MESSAGE_CLASS_LABELS`（`utils/conversationTypes.ts`）、
+`explorerMessageClass`（`utils/explorerPresentation.ts`）、`telemetryBackend`
+（`utils/executionTelemetry.ts`）、`ExplorerRealtimeEvent`（`types.ts`）、
+`EXPLORER_RUNTIME_KINDS`（领域 `explorer/explorer-activity.ts`）、`hasStructuredPayload`
+（领域 `platform/provider-payload.ts`）、`isNonEmptyStringArray`（领域 `platform/guards.ts`）、
+`isRuntimeKind` / `isRuntimeAlertKind`（领域 `model/provider-activity.ts`）。
+
+**删的时候有连带**（这是这类清理真正花时间的地方）：`buildTaskTree` 一走，只被它用的 `TaskTreeItem`
+就空了；`planTimelineItems` 一走，`getPlanTimelineTarget`、`generationTime`、`timeLabel`、
+`PlanTimelineItem` 依次空掉；`hasStructuredPayload` 一走，`provider-payload.ts` 的 `isRecord` 导入
+也跟着空。所以是**删一轮、重扫一轮**，不是一次列全。
+
+### 两处**看着像死、其实不是**的（留着）
+
+- `ExecutionSharedMessageType` / `ExplorerSharedMessageType` —— 被 `type-parity.test.ts` 的**编译期断言**用
+  （`Expect<Equal<…>>`），证明两条线都把共用词表列全了。删了等于删掉那个类型级检查。
+- 领域侧 `WORKING_TREE_DIRTY`、api 侧 `DIRECTORY_DIALOG_PROMPT` —— 都在自己文件里用着（模板字符串里），
+  是脚本的误判。
+
+### `isRuntimeKind` / `isRuntimeAlertKind` 的处置
+
+它们只有自己的测试在调，而 web 侧两份镜像的注释都写着"与它同义"。**那个"同义"其实没有任何测试在管**
+（`executionStream.parity.test.ts` 比的是 `classifyCodexActivity` / `activityOutcome`，不含这两条）——
+空的对照物只会让人以为有东西在管。按你的选择删掉，并把三处 web 注释改成如实说明：
+
+- ④ 的判据（哪几个类别算 ④）现在**只有 web 侧一份**：`utils/executionStream.ts` 的 `RUNTIME_ACTIVITY_KINDS`；
+- 那条"④ 是可判定的判据、不是各处白名单"的断言**从领域侧搬到了 web 侧**（`executionStream.test.ts`），
+  顺带补了两条它原来没有的：只有那五类会浮到眼前、失败永远浮出来。
+
+另外那个 132 行的 `planLifecycle.ts` 里有一条历史记录值得留：它曾是"三块归一化补丁"（`QUEUED→ENQUEUED`
+等）的落点，后来收进 `plan/status-transition.ts` 的转换表——补丁与表一收一放。文档里那两处历史引用
+已注明该文件此后整体删除，免得有人再去翻。
+
+`pnpm verify` 全绿：domain 447 / api 117 / web 628。
+
 ## 2026-10-11 — 收掉 `normalizeProjectId`
 
 `utils/projectRoutes.ts` 里那个 `normalizeProjectId` **全仓零调用方**——只剩自己那两条测试。

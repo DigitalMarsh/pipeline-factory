@@ -39,7 +39,7 @@
  *   3) **不是公共契约的符号一律不转发**（它们此前就不在 index.ts 的导出里）：
  *      defaultProcessRunner（platform/commands.ts）、defaultGitCommand / gitCommand /
  *      gitResolveCommit（git/）、extractResponseText（model/gateway-openai.ts）、
- *      isRecord / isStringArray / isNonEmptyStringArray（platform/guards.ts）、
+ *      isRecord / isStringArray（platform/guards.ts）、
  *      store/records.ts 的 11 个辅助、selectCurrentExplorer / projectPlaceholderExplorerTitle
  *      （explorer/thread-selection.ts）、freezeDeep / freezeRevision（platform/freeze.ts）、
  *      isInsideRoot（platform/paths.ts）、inspectWorkingTree / workingTreeDirtyError /
