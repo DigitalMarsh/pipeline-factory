@@ -1,14 +1,4 @@
 /**
- * Returns a usable Project identifier for project-scoped routes.
- * During the first render the Project is not loaded yet; returning null keeps
- * RouterLink from creating an invalid `/projects//...` destination.
- */
-export function normalizeProjectId(projectId: string | null | undefined): string | null {
-  const normalized = projectId?.trim();
-  return normalized || null;
-}
-
-/**
  * 这个地址是不是「某个项目的探索工作区」。
  *
  * 它此前叫 `projectModuleForPath`，返回 `"explore" | "execute"` 两档——**「执行台」那条整页退役之后

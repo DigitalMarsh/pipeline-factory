@@ -1,5 +1,20 @@
 # Changelog
 
+## 2026-10-11 — 收掉 `normalizeProjectId`
+
+`utils/projectRoutes.ts` 里那个 `normalizeProjectId` **全仓零调用方**——只剩自己那两条测试。
+它是上一轮清理时顺手发现的，不属于 Workbench 那条链，所以当时留着没动。
+
+追了一下它是怎么变成孤儿的：它唯一的消费者是 `ThreadRail.vue` 里一个喂 `RouterLink` 的
+`projectPath` computed，而那个链接在 `8163d6b`（退役探索侧的项目设置入口）那次被删掉了——
+**引用没了，这个 helper 留下了**。
+
+它守的那条判据（项目还没加载时不要拼出 `/projects//…`）并没有消失：现在的地址都由
+`explorerPathFor(projectId)` 拼，而调用方拿到的一律是已加载的项目 id。所以删的是一个空转的
+兜底函数，不是那条约束。
+
+`pnpm verify` 全绿：domain 448 / api 117 / web 645（少掉的 2 个是它自己的测试）。
+
 ## 2026-10-11 — 退役「执行台」整页（`WorkbenchView`），连同它那一整条链
 
 `/projects/:projectId/execute` → `views/WorkbenchView.vue`（1335 行的三栏 Plan/Run 工作台）**同样没有

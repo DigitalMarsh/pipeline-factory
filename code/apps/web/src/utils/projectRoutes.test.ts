@@ -1,17 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createProjectRequestScope, explorerPathFor, isExplorerWorkspacePath, normalizeProjectId } from "./projectRoutes";
-
-describe("normalizeProjectId", () => {
-  it("returns null while the Project is not loaded instead of an empty route segment", () => {
-    expect(normalizeProjectId(undefined)).toBeNull();
-    expect(normalizeProjectId("")).toBeNull();
-    expect(normalizeProjectId("   ")).toBeNull();
-  });
-
-  it("preserves a valid Project identifier", () => {
-    expect(normalizeProjectId("project-demo")).toBe("project-demo");
-  });
-});
+import { createProjectRequestScope, explorerPathFor, isExplorerWorkspacePath } from "./projectRoutes";
 
 describe("project workspace routing", () => {
   it("认得出「某个项目的探索工作区」这个地址，也只认它", () => {
