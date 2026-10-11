@@ -34,6 +34,10 @@
  *   5) `/explorer-thread/turns` 与 `/input-requests/:requestId/answer` 里 503 与 409 的分界是
  *      `message.includes("recovery is required")`——同 `routes/projects.ts` 那样按文案分状态码，
  *      改领域侧措辞要连这里一起改。
+ *   6) `workspace` 返回的 `revisionDraft` **按需求找，不按线程的 `activeRevisionDraftId` 找**
+ *      （见 `currentRevisionDraft`）：线程指针只有一个，用它会把别的需求上改到一半的草稿当成
+ *      "这条需求没有草稿"，于是这条需求自己那份等着确认的草稿在界面上点不到。改这条之前先读那个
+ *      函数的注释。
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
@@ -50,6 +54,7 @@ import {
   type ExplorerThreadService,
   type ExplorerTurn,
   type PipelineStore,
+  type PlanRevisionDraft,
 } from "@pipeline-factory/domain";
 import {
   projectExplorerParams,
@@ -103,6 +108,32 @@ function planActivityInput(
   const loopIds = new Set(loops.map((loop) => loop.id));
   const steps = loops.flatMap((loop) => store.listAgentLoopSteps(loop.id)).filter((step) => loopIds.has(step.loopId));
   return { turns, loops, activity: projectExplorerActivity({ turns, loops, steps }) };
+}
+
+/** 一份草稿能被确认 / 继续编辑的三个状态。`CONFIRMED` / `DISCARDED` 是终态，不再是"当前草稿"。 */
+const ACTIONABLE_DRAFT_STATUSES: ReadonlyArray<PlanRevisionDraft["status"]> = ["EDITING", "READY_TO_CONFIRM", "BASE_CHANGED"];
+
+/**
+ * 这条需求**自己的**当前草稿。
+ *
+ * 为什么不看线程行上的 `activeRevisionDraftId`：那个指针全线程只有一个，指的是"这条线程最近在
+ * 改的那份草稿"；而抽屉是按**需求**打开的。只认那个指针的话，**别的需求**上改到一半的草稿会把
+ * 这条需求自己那份已经 `READY_TO_CONFIRM`、就等着确认的草稿挡在外面——界面上「确认 V2」根本不
+ * 渲染（实测 2026-10-11：Project3 两个就绪草稿都点不到，因为线程指针停在第三条需求的 EDITING 上）。
+ *
+ * 取这条需求**当前那份 Plan**（`candidatePlanId`）上的草稿：需求被重开（`newPlanRequested`）之后，
+ * 旧 Plan 上留着的草稿不该再冒出来。同一份 Plan 上有多个可操作草稿时取目标修订号最高的那一版
+ * （v3 的 EDITING 本来就该盖住 v2 的 READY_TO_CONFIRM）。
+ */
+function currentRevisionDraft(store: PipelineStore, explorerPlan: ExplorerPlan): PlanRevisionDraft | null {
+  const planId = explorerPlan.candidatePlanId;
+  if (!planId) return null;
+  return (
+    store
+      .listRevisionDrafts(planId)
+      .filter((draft) => draft.explorerPlanId === explorerPlan.id && ACTIONABLE_DRAFT_STATUSES.includes(draft.status))
+      .sort((left, right) => right.targetRevision - left.targetRevision || right.createdAt.localeCompare(left.createdAt))[0] ?? null
+  );
 }
 
 export function registerExplorerRoutes(app: FastifyInstance, deps: ExplorerRouteDeps): void {
@@ -189,11 +220,12 @@ export function registerExplorerRoutes(app: FastifyInstance, deps: ExplorerRoute
             .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0]
         : undefined;
     const candidate = selectedCandidate?.status === "DRAFT" ? selectedCandidate : (legacyCandidate ?? null);
-    const draft = explorer.activeRevisionDraftId ? store.getRevisionDraft(explorer.activeRevisionDraftId) : undefined;
+    // 线程指针属于这条需求时优先（那是用户当下在改的那一份），否则退回这条需求自己的最新草稿。
+    const activeDraft = explorer.activeRevisionDraftId ? store.getRevisionDraft(explorer.activeRevisionDraftId) : undefined;
     const revisionDraft =
-      draft && draft.explorerPlanId === explorerPlan.id && ["EDITING", "READY_TO_CONFIRM", "BASE_CHANGED"].includes(draft.status)
-        ? draft
-        : null;
+      (activeDraft && activeDraft.explorerPlanId === explorerPlan.id && ACTIONABLE_DRAFT_STATUSES.includes(activeDraft.status)
+        ? activeDraft
+        : null) ?? currentRevisionDraft(store, explorerPlan);
     return {
       explorerPlan,
       turns,

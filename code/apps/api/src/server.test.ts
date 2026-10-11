@@ -1899,6 +1899,68 @@ describe("Pipeline Factory v4 API", () => {
     expect(store.getPlan(plan.id)).toMatchObject({ status: "IN_PROGRESS", revision: 1 });
   });
 
+  /**
+   * **草稿按需求找，不按线程的"当前草稿"指针找。**
+   *
+   * 线程行上的 `activeRevisionDraftId` 全线程只有一个。原来 workspace 直接拿那个指针、再判断
+   * "它属不属于这条需求"，于是**别的需求**上改到一半的草稿会把这条需求自己那份已经
+   * `READY_TO_CONFIRM`、就等着确认的草稿挡在外面——界面上「确认 V2」根本不渲染（实测
+   * Project3 上两个就绪草稿都点不到，因为线程指针停在第三条需求的 EDITING 上）。
+   */
+  it("returns a requirement's own ready draft even when the thread's active draft belongs to another requirement", async () => {
+    const store = new InMemoryPipelineStore();
+    // 草稿落库时要 `git rev-parse` 一条可验证基线，所以这个用例需要真仓库。
+    createGitBackedTestProject(store);
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+    const explorers = new ExplorerService(store);
+    const plans = new PlanService(store);
+    const thread = plans.registerThread({ id: "draft-wiring-thread", projectId: "project-1", parentThreadId: null });
+    const firstRequirement = explorers.createPlan(thread.id);
+    const secondRequirement = explorers.createPlan(thread.id);
+
+    const draftFor = (requirementId: string, title: string) => {
+      const plan = plans.createCandidatePlan({
+        projectId: "project-1",
+        sourceExplorerThreadId: thread.id,
+        explorerPlanId: requirementId,
+        title,
+        resolvedContract: planContractFixture({ store, projectId: "project-1", title }),
+      });
+      // 需求 → "当前 Plan" 的指针线上由探索回合作者写；夹具里手动补上（草稿就是按它找的）。
+      store.updateExplorerPlan({ ...store.getExplorerPlan(requirementId)!, candidatePlanId: plan.id });
+      plans.confirm(plan.id, "user-1");
+      return plans.createRevisionDraft({
+        planId: plan.id,
+        fromRevision: 1,
+        explorerThreadId: thread.id,
+        discardUnmergedRun: false,
+        clientRequestId: `draft-${requirementId}`,
+      });
+    };
+
+    // 第一条需求上那份还**改到一半**，第二条需求上那份**已经就绪、等着确认**。
+    const editing = draftFor(firstRequirement.id, "First requirement plan");
+    const ready = store.updateRevisionDraft({ ...draftFor(secondRequirement.id, "Second requirement plan"), status: "READY_TO_CONFIRM" });
+    // 起草稿会把线程指针拨到最新那一份上（领域侧就是这么写的），所以最后手动拨回第一条需求，
+    // 制造出"指针停在别的需求上"这个现场——这就是 Project3 里两个就绪草稿点不到的原因。
+    store.updateThread({ ...store.getThread(thread.id)!, activeRevisionDraftId: editing.draftId });
+
+    const second = await app.inject({
+      method: "GET",
+      url: `/api/v4/projects/project-1/explorers/${thread.id}/explorer-plans/${secondRequirement.id}/workspace`,
+    });
+    expect(second.statusCode).toBe(200);
+    expect(second.json().revisionDraft).toMatchObject({ draftId: ready.draftId, status: "READY_TO_CONFIRM" });
+
+    // 反过来也要成立：指针指着的那条需求拿到的仍然是它自己那一份。
+    const first = await app.inject({
+      method: "GET",
+      url: `/api/v4/projects/project-1/explorers/${thread.id}/explorer-plans/${firstRequirement.id}/workspace`,
+    });
+    expect(first.json().revisionDraft).toMatchObject({ draftId: editing.draftId, status: "EDITING" });
+  });
+
   it("keeps an enqueued plan out of scheduler state until Start run", async () => {
     const store = new InMemoryPipelineStore();
     createTestProject(store);
