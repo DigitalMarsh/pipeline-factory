@@ -176,6 +176,8 @@ const {
   actionBusy,
   terminateOpen,
   terminateError,
+  abandonOpen,
+  abandonError,
   sourceCommit,
   targetCommit,
   handleRunAction,
@@ -183,6 +185,7 @@ const {
   createReview,
   confirmMerged,
   confirmTerminateRun,
+  confirmAbandonRun,
   updateSourceCommit,
   updateTargetCommit,
 } = useRunControl({
@@ -746,6 +749,27 @@ onBeforeUnmount(() => {
       :busy="actionBusy"
       :error="terminateError"
       @confirm="confirmTerminateRun"
+    />
+    <!-- 「放弃这次运行」是**另一个入口**，只在 MERGE_READY 出现：终止的代价是"这次执行停在这里"，
+         而放弃的代价是"这份已经跑完、等着合并的成果不要了"。两句话不一样，所以不合并成一个按钮。 -->
+    <ConfirmDialog
+      v-model="abandonOpen"
+      eyebrow="运行控制"
+      heading="放弃这次运行"
+      message="这次运行已经跑完、在等合并。放弃之后它不会再被合并，Plan 会标成已阻塞留在历史里。"
+      :details="[
+        '它的 worktree 会从磁盘上回收（本机这类残留实测过 13 条、约 166 MB）',
+        '已提交到分支的改动保留——这是「不再合并它」，不是「删掉它」',
+        'worktree 里尚未提交的改动会丢（回收走的是 git worktree remove --force）',
+        '它那条还没合并的请求会作废，不会再出现在待合并里',
+        'cleanup 钩子会执行',
+      ]"
+      confirm-label="放弃这次运行"
+      cancel-label="继续等合并"
+      tone="danger"
+      :busy="actionBusy"
+      :error="abandonError"
+      @confirm="confirmAbandonRun"
     />
   </div>
 </template>

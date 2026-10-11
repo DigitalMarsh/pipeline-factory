@@ -441,4 +441,36 @@ describe("Run 详情页对多轮执行的适配", () => {
     expect(flat(confirmBlock)).toContain(flat('@confirm="confirmTerminateRun"'));
     expect(flat(confirmBlock)).toContain(flat(':error="terminateError"'));
   });
+
+  /**
+   * **「放弃这次运行」：待合并的运行此前没有任何操作可用。**
+   *
+   * `canTerminateRun` 不含 `MERGE_READY`，`/cancel` 也拒它——于是那条 Run 的 worktree 只能一直留在
+   * 磁盘上（实测本机 13 条、约 166 MB），没有任何出口。它跟「终止」是同一套服务端机制，但**是两个
+   * 入口**：用户要理解的后果不一样（终止＝这次执行停在这里；放弃＝这份跑完的成果不要了），
+   * 所以按钮、标题、取消文案都各写各的，确认框里还列出代价。
+   */
+  it("放弃这次运行是独立入口：只在待合并时出现，代价写在确认框里", () => {
+    expect(flat(runControlsSource)).toContain(flat("export function canAbandonRun(runStatus: string): boolean {"));
+    expect(flat(runControlsSource)).toContain(flat('runStatus === "MERGE_READY"'));
+    // 不能并进「终止」：那会让待合并的运行也长出「终止 Run」，那句话在它身上不准。
+    expect(flat(runControlsSource)).toContain(flat('"terminate" | "abandon" | "pause" | "resume" | "verify"'));
+
+    const open = useRunControlSource.match(/function abandonRun\(\): void \{[\s\S]*?\n\s*\}/)?.[0] ?? "";
+    expect(flat(open)).toContain(flat("abandonOpen.value = true;"));
+    expect(flat(open)).not.toContain(flat("api.cancelRun"));
+    expect(flat(useRunControlSource)).toContain(flat("async function confirmAbandonRun(): Promise<void>"));
+    expect(flat(useRunControlSource)).toContain(flat('api.cancelRun(target.id, "abandoned_unmerged")'));
+    // 失败与终止一样留在框里，不浮到页面级提示。
+    expect(flat(useRunControlSource)).toContain(flat("abandonError.value ="));
+
+    const abandonBlock = runDetailSource.slice(runDetailSource.indexOf('heading="放弃这次运行"'));
+    expect(flat(abandonBlock)).toContain(flat('@confirm="confirmAbandonRun"'));
+    expect(flat(abandonBlock)).toContain(flat(':error="abandonError"'));
+    expect(flat(abandonBlock)).toContain(flat('cancel-label="继续等合并"'));
+    // 代价得说清：worktree 会回收、未提交的改动会丢、那条待合并的请求会作废。
+    expect(flat(abandonBlock)).toContain(flat("worktree 会从磁盘上回收"));
+    expect(flat(abandonBlock)).toContain(flat("尚未提交的改动会丢"));
+    expect(flat(abandonBlock)).toContain(flat("还没合并的请求会作废"));
+  });
 });

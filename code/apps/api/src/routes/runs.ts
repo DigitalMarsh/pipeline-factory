@@ -131,7 +131,21 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
     if (!scheduler) return reply.code(503).send({ error: "Scheduler is not configured for this API instance" });
     try {
       const run = scheduler.run(params.data.runId);
-      const cancellableStatuses = new Set(["STARTING", "IN_PROGRESS", "READY_FOR_VERIFY", "VERIFYING", "RECOVERING", "BLOCKED"]);
+      /**
+       * `MERGE_READY` 在列。它此前**刻意不在**：那意味着"活干完了、在等人合并"，取消等于把一份
+       * 待合并的成果丢掉。但"不打算合并了"是个真实且需要出口的状态——它的 worktree 会一直留在
+       * 磁盘上（实测本机 13 条这样的 Run 占着约 166 MB），而在此之前**没有任何 HTTP 把手**能回收
+       * 它（`/finish` 能，但没有客户端）。界面上那个入口叫「放弃这次运行」，代价写在确认框里。
+       */
+      const cancellableStatuses = new Set([
+        "STARTING",
+        "IN_PROGRESS",
+        "READY_FOR_VERIFY",
+        "VERIFYING",
+        "RECOVERING",
+        "BLOCKED",
+        "MERGE_READY",
+      ]);
       if (!cancellableStatuses.has(run.status)) throw new Error(`Run ${run.id} cannot be cancelled from ${run.status}`);
       const cancellableLoopStates = new Set(["CREATED", "RUNNING", "WAITING_FOR_INPUT", "PAUSED", "RECOVERING"]);
       for (const loop of store.listAgentLoops(run.id).filter((item) => cancellableLoopStates.has(item.state)))

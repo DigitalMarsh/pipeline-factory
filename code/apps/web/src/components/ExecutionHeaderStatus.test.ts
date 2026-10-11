@@ -168,6 +168,35 @@ describe("ExecutionHeaderStatus", () => {
     mounted.host.remove();
   });
 
+  /**
+   * **「放弃这次运行」只在 `MERGE_READY` 出现，且它不替代「终止」的位置。**
+   *
+   * 待合并的运行此前没有任何操作可用（`canTerminateRun` 不含 `MERGE_READY`，`/cancel` 也拒它），
+   * 于是它的 worktree 只能一直留在磁盘上。这个入口专门补那一格：文案说清"这份成果不要了"，
+   * 而不是复用「终止 Run」——那句话在待合并的运行上是不准的。
+   */
+  it("只在待合并的运行上给出「放弃这次运行」，别的状态给「终止 Run」", async () => {
+    // 动作按钮在「运行控制」那个弹层里，弹层不开不渲染（stub 与真组件一致）。
+    const openControls = async (status: string) => {
+      const mounted = mountStatus(status);
+      trigger(mounted.host, "controls").click();
+      await nextTick();
+      return mounted;
+    };
+
+    const mergeReady = await openControls("MERGE_READY");
+    expect(mergeReady.host.textContent).toContain("放弃这次运行");
+    expect(mergeReady.host.textContent).not.toContain("终止 Run");
+    mergeReady.app.unmount();
+    mergeReady.host.remove();
+
+    const running = await openControls("IN_PROGRESS");
+    expect(running.host.textContent).toContain("终止 Run");
+    expect(running.host.textContent).not.toContain("放弃这次运行");
+    running.app.unmount();
+    running.host.remove();
+  });
+
   it("列出 Run 级活动：只在 RUN CONTEXT 弹层里，且没有时不渲染这一节", async () => {
     const mounted = mountStatus("MERGED", [
       runActivityItem(),

@@ -1,5 +1,60 @@
 # Changelog
 
+## 2026-10-11 — 待合并的 Run 补上「放弃这次运行」入口
+
+查那三条运维口子时查出来的：`MERGE_READY`（跑完了、在等合并）的 Run **在界面上一个操作都没有**——
+`canTerminateRun` 不含它，`/cancel` 也拒它。于是它的 worktree 只能一直留在磁盘上：**实测本机 13 条
+这样的 Run、合计约 166 MB**。`POST /runs/:id/finish` 本来是唯一能回收它的 HTTP 把手，但那个把手
+从来没有客户端、也从来没有被调用过（`hook_executions` 里 6 条 cleanup 记录，`exitReason` 全是
+`cancelled`）。
+
+### 做法：不在「终止」上加状态，而是单开一个入口
+
+「终止这次执行」和「放弃这份跑完的成果」是**两句不同的话**，用户要理解的后果也不一样。所以：
+
+| | 出现在 | 文案 |
+|---|---|---|
+| 终止 Run（原有） | `STARTING` / `IN_PROGRESS` / `READY_FOR_VERIFY` / `VERIFYING` / `RECOVERING` | 这次执行停在这里 |
+| **放弃这次运行**（新） | 只在 **`MERGE_READY`** | 这份已经跑完、在等合并的成果不要了 |
+
+两者走**同一套服务端机制**（`POST /runs/:id/cancel` → `scheduler.finish(…, "cancelled", …)`：取消
+Agent Loop、回收 worktree、跑 cleanup 钩子、Run → `CANCELLED`、Plan → `BLOCKED`），改动只有：
+
+- API：`cancellableStatuses` 加上 `MERGE_READY`（此前刻意挡着，因为"取消待合并的运行"像在丢成果）；
+- web：`RunControlAction` 加 `"abandon"`、`canAbandonRun()`、状态卡上一颗「放弃这次运行」、
+  独立的确认框（`abandonOpen` / `abandonError` / `confirmAbandonRun`），reason 传
+  `"abandoned_unmerged"` → 落进 Plan 的 `attentionReason` 与 journal。
+
+确认框把代价列全了：worktree 会从磁盘上回收 / **已提交到分支的改动保留**（这是"不再合并它"，
+不是"删掉它"）/ 尚未提交的改动会丢（回收走 `git worktree remove --force`）/ 那条待合并的请求会作废 /
+cleanup 钩子会执行。
+
+### 顺带补上一个必答题
+
+**取消一个 Run，它那条还没合并的请求跟着作废（`SUPERSEDED`）。** 不作废就会留下一个指向"已取消的
+运行"的 `OPEN` 请求：Run 页那张「验证与人工合并确认」卡还摆着「确认合并」，而它指向的 worktree
+刚被删掉。这条以前碰不到（`/cancel` 拒绝 `MERGE_READY`），有了「放弃」之后就成了必答题——那条入口
+的全部意义就是放弃一个待合并的运行。改动落在 `scheduler.finish` 的 cancelled 分支里，复用已有的
+`supersedeOpenMergeRequest`（**注释里写了为什么**：`MergeService.createRequest` 按 run 幂等）。
+
+### 验证
+
+- **API**（真调接口）：新增用例摆一条 `MERGE_READY` + `OPEN` 合并请求的 Run，`POST /cancel` →
+  200、Run `CANCELLED`、**worktree 真被回收**（fake adapter 记到路径）、Plan `BLOCKED` 带原因、
+  MergeRequest `SUPERSEDED`；
+- **web**：`canAbandonRun` 只对 `MERGE_READY` 为真；挂载状态卡、点开「运行控制」弹层后断言
+  **`MERGE_READY` 只有「放弃这次运行」、`IN_PROGRESS` 只有「终止 Run」**；视图侧源码断言确认
+  确认框接线与那句"代价"没被改掉；
+- `hasRunControlActions("MERGE_READY", …)` 由 `false` 变 `true`（原有测试**先红了**，说明那条判据
+  在管着），已按新语义更新。
+
+> **没有在浏览器里点那个确认框**：点下去会真的回收一条 Run 的 worktree，自动模式的分类器把那次
+> 尝试判成"不可逆的本地破坏"并拦下了——判断是对的。所以那颗按钮的渲染我验了（DOM 里确实只有
+> 「放弃这次运行」），**确认框本身只由测试钉住，没有目视确认**。
+
+`pnpm verify` 全绿：domain 443 / api 116 / web 632。文档：§2.3 C 补了「结束一个 Run 的两个入口」与
+那条 supersede 规则，§7.1 记下 `/finish` 仍然空着（这一轮没动它，要解决的那个问题有了出口）。
+
 ## 2026-10-11 — 收掉四条被取代的重复读路由
 
 上一轮查那 11 条零调用路由时归的类，这一轮把"被别的路径取代"那四条收掉（`settings/hooks` 是一对

@@ -345,6 +345,13 @@ export class Scheduler {
     this.setThreadState(thread.id, exitReason === "cancelled" ? "CANCELLED" : "COMPLETED");
     this.options.store.saveRun(run);
     if (exitReason === "cancelled") {
+      /**
+       * **取消一个 Run，它那条还没合并的请求跟着作废。** 不作废就会留下一个指向"已取消的运行"的
+       * OPEN 请求：Run 页那张「验证与人工合并确认」卡还摆着「确认合并」，而它指向的 worktree 刚被
+       * 删掉。这条以前碰不到（`/cancel` 拒绝 `MERGE_READY`），补上「放弃这次运行」之后就是必答题
+       * ——那条入口的全部意义就是放弃一个待合并的运行。
+       */
+      this.supersedeOpenMergeRequest(run.id);
       const plan = this.options.store.getPlan(run.planId);
       if (plan)
         updatePlanStatus(

@@ -2173,6 +2173,77 @@ describe("Pipeline Factory v4 API", () => {
   });
 
   /**
+   * **「放弃这次运行」：`MERGE_READY` 现在可以取消了。**
+   *
+   * 它此前刻意挡在 `/cancel` 外面——"活干完了、在等人合并"，取消等于把一份待合并的成果丢掉。
+   * 但"不打算合并了"是个需要出口的状态：它的 worktree 会一直占着磁盘（本机实测 13 条这样的 Run、
+   * 约 166 MB），而在此之前**没有任何 HTTP 把手**能回收它。
+   *
+   * 这条用例钉三件事：Run → `CANCELLED`、worktree 真被回收、Plan → `BLOCKED` 带原因，
+   * 外加**那条还没合并的请求跟着作废**——不作废的话 Run 页还会摆着「确认合并」，而它指向的
+   * worktree 刚被删掉。
+   *
+   * fixture 走真实的开工路径（`POST /plans/:id/run`）再把它摆到"跑完、在等合并"，而不是手搓一条
+   * Run：执行线程、分支这些都得对得上，手搓容易漏。
+   */
+  it("allows abandoning an unmerged MERGE_READY run and supersedes its merge request", async () => {
+    const store = new InMemoryPipelineStore();
+    createTestProject(store);
+    const plans = new PlanService(store);
+    plans.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
+    const plan = plans.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "thread-1",
+      title: "Abandon a merge-ready run",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Abandon a merge-ready run" }),
+    });
+    plans.confirm(plan.id, "user-1");
+    plans.enqueue(plan.id);
+    const removed: string[] = [];
+    const scheduler = new Scheduler({
+      store,
+      workspace: {
+        create: async () => ({ path: "/tmp/run-merge-ready", branch: "factory/run-merge-ready", baseCommit: "abc" }),
+        remove: async (workspace) => {
+          removed.push(workspace.path);
+        },
+      },
+      hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
+    });
+    const app = createApp({ store, scheduler, seed: false });
+    apps.push(app);
+
+    const started = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/run` });
+    const runId = started.json().run.id as string;
+    // 摆到"跑完、在等合并"：这条用例测的是放弃，不是怎么跑到那一步。
+    store.saveRun({ ...store.getRun(runId)!, status: "MERGE_READY" });
+    store.updatePlan({ ...store.getPlan(plan.id)!, status: "MERGE_READY" });
+    store.saveMergeRequest({
+      id: "merge-1",
+      runId,
+      planId: plan.id,
+      sourceCommit: "abc",
+      targetBranch: "main",
+      status: "OPEN",
+      humanConfirmationRequired: true,
+      createdAt: store.now(),
+      mergedAt: null,
+    });
+
+    const abandoned = await app.inject({
+      method: "POST",
+      url: `/api/v4/runs/${runId}/cancel`,
+      payload: { reason: "abandoned_unmerged" },
+    });
+
+    expect(abandoned.statusCode).toBe(200);
+    expect(abandoned.json().run).toMatchObject({ id: runId, status: "CANCELLED" });
+    expect(removed).toEqual(["/tmp/run-merge-ready"]);
+    expect(store.getPlan(plan.id)).toMatchObject({ status: "BLOCKED", attentionReason: "Run cancelled: abandoned_unmerged" });
+    expect(store.getMergeRequest("merge-1")).toMatchObject({ status: "SUPERSEDED" });
+  });
+
+  /**
    * Run 控制那几条 409 **一律带 `code`**。
    *
    * 同一个 409 下可能有好几种原因，web 侧的 `ApiRequestError` 特意把响应体带出来就是为了让调用方

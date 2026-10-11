@@ -12,7 +12,14 @@ import {
   usageDetailRows,
 } from "../utils/executionTelemetry";
 import { executionTaskStatusLabel, executionTaskStatusType, verificationSummary } from "../utils/executionTasks";
-import { canPauseRun, canTerminateRun, hasRunControlActions, type LoopControlAction, type RunControlAction } from "../utils/runControls";
+import {
+  canAbandonRun,
+  canPauseRun,
+  canTerminateRun,
+  hasRunControlActions,
+  type LoopControlAction,
+  type RunControlAction,
+} from "../utils/runControls";
 
 type StatusCard = "context" | "telemetry" | "progress" | "loop" | "controls" | "review";
 
@@ -503,6 +510,8 @@ watch(
           <div v-if="hasControls" class="action-buttons execution-header-action-buttons">
             <el-button v-if="canTerminateRun(run.status)" type="danger" plain :loading="actionBusy" @click="emit('run-action', 'terminate')"
               >终止 Run</el-button
+            ><el-button v-if="canAbandonRun(run.status)" type="danger" plain :loading="actionBusy" @click="emit('run-action', 'abandon')"
+              >放弃这次运行</el-button
             ><el-button
               v-if="canPauseRun(run.status, threadState)"
               :loading="actionBusy"

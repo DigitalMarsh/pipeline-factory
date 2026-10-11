@@ -11,10 +11,27 @@ export function canTerminateRun(runStatus: string): boolean {
   return ["STARTING", "IN_PROGRESS", "READY_FOR_VERIFY", "VERIFYING", "RECOVERING"].includes(runStatus);
 }
 
+/**
+ * **「放弃这次运行」：这个 Run 跑完了、在等合并，而你不打算合并它了。**
+ *
+ * 它与「终止」是同一套机制（取消 Agent Loop、收 worktree、跑 cleanup 钩子、Run → `CANCELLED`、
+ * Plan → `BLOCKED`），差别只在**什么时候给**：`MERGE_READY` 被 `/cancel` 刻意挡在外面，因为
+ * "取消一个待合并的运行"听起来像在丢成果。但"不打算合并了"是个真实状态，而它的 worktree 会一直
+ * 占着磁盘（实测本机 13 条这样的 Run 占约 166 MB）。所以单开一个入口，把代价写在确认框里，
+ * 而不是把 `MERGE_READY` 混进「终止」——那两种情况下用户要理解的后果不一样。
+ */
+export function canAbandonRun(runStatus: string): boolean {
+  return runStatus === "MERGE_READY";
+}
+
 /** Returns whether the Run Control surface has at least one executable action. */
 export function hasRunControlActions(runStatus: string, threadState: string): boolean {
   return (
-    canTerminateRun(runStatus) || canPauseRun(runStatus, threadState) || runStatus === "IN_PROGRESS" || runStatus === "READY_FOR_VERIFY"
+    canTerminateRun(runStatus) ||
+    canAbandonRun(runStatus) ||
+    canPauseRun(runStatus, threadState) ||
+    runStatus === "IN_PROGRESS" ||
+    runStatus === "READY_FOR_VERIFY"
   );
 }
 
@@ -57,5 +74,5 @@ export const RUN_STREAM_TERMINAL_STATUSES: readonly string[] = ["BLOCKED", "CANC
  * `run-action` / `loop-action`）与处理它们的 `composables/useRunControl.ts` 必须是**同一套取值**——
  * 此前两处各写一份字面量联合，加一种动作时漏改一处是静默的（TS 会把两边都当合法）。
  */
-export type RunControlAction = "terminate" | "pause" | "resume" | "verify";
+export type RunControlAction = "terminate" | "abandon" | "pause" | "resume" | "verify";
 export type LoopControlAction = "pause" | "resume" | "cancel";

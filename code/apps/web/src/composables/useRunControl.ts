@@ -7,8 +7,8 @@
  * 同一个文件里再抄一遍。视图现在只负责**摆按钮与接线**（`@run-action` / `@create-review` / …）。
  *
  * 维护提示：
- * 1. **确认与执行分家**：`terminateRun` 只开确认框，真正的终止在 `confirmTerminateRun`。
- *    终止失败留在**框里**（`terminateError`），不浮到页面级提示——用户正对着这个框，
+ * 1. **确认与执行分家**：`terminateRun` / `abandonRun` 只开确认框，真正执行在 `confirm*` 里。
+ *    失败留在**框里**（`terminateError` / `abandonError`），不浮到页面级提示——用户正对着这个框，
  *    关掉它才看得到页面。
  * 2. **动作的取值只有一处**（`RunControlAction` / `LoopControlAction`，utils/runControls.ts）：
  *    状态卡发什么、这里就处理什么，两处各写一份字面量联合时漏改一处是静默的。
@@ -21,7 +21,7 @@ import { ref, type Ref } from "vue";
 import { ElMessage } from "element-plus";
 import { api } from "../api";
 import type { AgentLoop, ExecutionThread, MergeRequest, Run, VerificationRun } from "../types";
-import { canTerminateRun, type LoopControlAction, type RunControlAction } from "../utils/runControls";
+import { canAbandonRun, canTerminateRun, type LoopControlAction, type RunControlAction } from "../utils/runControls";
 
 export type RunControlDeps = {
   run: Ref<Run | null>;
@@ -45,6 +45,12 @@ export function useRunControl(deps: RunControlDeps) {
   /** 「终止 Run」的确认框：开没开 + 它自己的错误（见维护提示 1）。 */
   const terminateOpen = ref(false);
   const terminateError = ref<string | null>(null);
+  /**
+   * 「放弃这次运行」的确认框。与终止共用一套机制，但**是另一个入口**：它只在 `MERGE_READY`
+   * 出现（见 `canAbandonRun`），文案说的是另一件事——"这份跑完的结果不要了，worktree 收回"。
+   */
+  const abandonOpen = ref(false);
+  const abandonError = ref<string | null>(null);
   const sourceCommit = ref("");
   const targetCommit = ref("");
 
@@ -87,6 +93,35 @@ export function useRunControl(deps: RunControlDeps) {
     if (!deps.run.value || actionBusy.value || !canTerminateRun(deps.run.value.status)) return;
     terminateError.value = null;
     terminateOpen.value = true;
+  }
+
+  /**
+   * 「放弃这次运行」：跑完了在等合并且不打算合并了。**与终止同一套机制**（`/cancel`），
+   * 服务端那边 `MERGE_READY` 因此被放进了可取消状态。
+   */
+  function abandonRun(): void {
+    if (!deps.run.value || actionBusy.value || !canAbandonRun(deps.run.value.status)) return;
+    abandonError.value = null;
+    abandonOpen.value = true;
+  }
+
+  /** 确认框里按下「放弃这次运行」之后才走这里。 */
+  async function confirmAbandonRun(): Promise<void> {
+    const target = deps.run.value;
+    if (!target || actionBusy.value) return;
+    actionBusy.value = true;
+    abandonError.value = null;
+    try {
+      // reason 会落进 Plan 的 attentionReason 与 journal，用来回答"它为什么停了"。
+      await api.cancelRun(target.id, "abandoned_unmerged");
+      abandonOpen.value = false;
+      ElMessage.success("已放弃这次运行");
+      await deps.onTerminated();
+    } catch (caught) {
+      abandonError.value = caught instanceof Error ? `放弃失败：${caught.message}` : "放弃失败";
+    } finally {
+      actionBusy.value = false;
+    }
   }
 
   /** 确认框里按下「终止」之后才走这里——**对话框只负责问，终止是这一步的事**。 */
@@ -153,6 +188,7 @@ export function useRunControl(deps: RunControlDeps) {
   async function handleRunAction(action: RunControlAction): Promise<void> {
     // 终止现在只是"开确认框"，不再是"问完顺手做掉"——真正的终止在 confirmTerminateRun 里。
     if (action === "terminate") terminateRun();
+    if (action === "abandon") abandonRun();
     if (action === "pause" || action === "resume") await togglePause();
     if (action === "verify") await verifyRun();
   }
@@ -173,6 +209,9 @@ export function useRunControl(deps: RunControlDeps) {
     actionBusy,
     terminateOpen,
     terminateError,
+    abandonOpen,
+    abandonError,
+    confirmAbandonRun,
     sourceCommit,
     targetCommit,
     // 只导出视图真正用到的（`run-action` / `loop-action` 两个入口 + 确认框 + 两个 commit 输入）：

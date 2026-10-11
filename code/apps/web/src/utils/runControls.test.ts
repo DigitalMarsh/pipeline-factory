@@ -4,7 +4,7 @@
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  */
 import { describe, expect, it } from "vitest";
-import { canContinueRun, canPauseRun, canTerminateRun, hasRunControlActions } from "./runControls";
+import { canAbandonRun, canContinueRun, canPauseRun, canTerminateRun, hasRunControlActions } from "./runControls";
 
 describe("补充要求的可用性（canContinueRun）", () => {
   /**
@@ -50,11 +50,24 @@ describe("run controls", () => {
     expect(canTerminateRun(runStatus)).toBe(false);
   });
 
+  /**
+   * 「放弃这次运行」**只在 `MERGE_READY`**：那是"跑完了在等合并、而我不打算合并了"。它跟「终止」
+   * 是同一套服务端机制，但用户要理解的后果不同（终止：这次执行停在这里；放弃：这份成果不要了），
+   * 所以是两个入口、两句文案。放进 `canTerminateRun` 会让 `MERGE_READY` 也长出「终止 Run」，
+   * 那句话在待合并的运行上是不准的。
+   */
+  it("只对 MERGE_READY 提供「放弃这次运行」", () => {
+    expect(canAbandonRun("MERGE_READY")).toBe(true);
+    for (const status of ["STARTING", "IN_PROGRESS", "READY_FOR_VERIFY", "VERIFYING", "RECOVERING", "BLOCKED", "CANCELLED", "STALE"])
+      expect(canAbandonRun(status)).toBe(false);
+  });
+
   it.each([
     ["IN_PROGRESS", "ACTIVE", true],
     ["IN_PROGRESS", "PAUSED", true],
     ["READY_FOR_VERIFY", "ACTIVE", true],
-    ["MERGE_READY", "ACTIVE", false],
+    // `MERGE_READY` 现在是 true：它有「放弃这次运行」这一个动作（见 canAbandonRun）。
+    ["MERGE_READY", "ACTIVE", true],
     ["MERGED", "ACTIVE", false],
     ["BLOCKED", "BLOCKED", false],
   ])("reports whether Run Control has an executable action (%s/%s)", (runStatus, threadState, expected) => {
