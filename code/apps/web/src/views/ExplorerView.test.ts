@@ -306,6 +306,9 @@ describe("Explorer requirement list and shared drawer", () => {
     expect(flat(explorerViewSource)).toContain(flat("refreshProjectRuns: async () =>"));
     expect(flat(planLifecycleActionsComposableSource)).toContain(flat("function awaitRun(planId: string, run: Run | null): void"));
     expect(flat(planLifecycleActionsComposableSource)).toContain(flat("function confirmAllowed(planId: string): boolean"));
+    // 抽屉里那份 Plan 详情是快照：投影一变就得换成新的，否则 Run 起来了卡片还写着"已派发"。
+    expect(flat(explorerViewSource)).toContain(flat("const detailPlanProjectionKey = computed("));
+    expect(flat(explorerViewSource)).toContain(flat("void refreshDetailPlan()"));
   });
 
   it("routes drawer tabs to the selected requirement's existing Plan and Run", () => {

@@ -18,6 +18,11 @@
  *   4) 本文件是 P7 第三级从 ExplorerView.vue 抽出的，逻辑逐字未改。唯一的修正：
  *      `resetThreadState` 里本来把同一组抽屉重置**写了两遍**（第二遍还漏了 `detailLoadError`），
  *      现在只有 `resetDetailState` 一处——这正是"两处要保持同步"该被消掉的理由。
+ *   5) **`detailPlan` 是一份快照，不是投影。** 打开时抓一次，之后只有抽屉自己的动作
+ *      （编辑依赖、切版本）和 usePlanLifecycleActions 会写它。抽屉**外面**的变化——Run 起来了、
+ *      验证过了、合并了——它一概不知道，卡片会停在打开那一刻的状态（实测：Run 已经
+ *      `IN_PROGRESS`，卡片还写着"已派发"）。视图为此在投影变化时调 `refreshDetailPlan()`，
+ *      别把那个调用删掉；也别指望在本文件里"自动"保持最新——它不订阅任何东西。
  */
 import { computed, ref, type Ref } from "vue";
 import { ElMessage } from "element-plus";
@@ -168,6 +173,42 @@ export function usePlanDetailDrawer(deps: PlanDetailDrawerDeps) {
     }
   }
 
+  /**
+   * 把抽屉里那份**快照**换成当前事实。
+   *
+   * `detailPlan` 打开时抓一次就不再自己更新（维护提示 5），于是抽屉**外面**发生的变化全看不见
+   * ——最典型的是刚确认完那十几秒：Run 已经在跑了，卡片上还写着「已派发」。视图在投影里这条
+   * Plan 的状态/runId/调度状态一变时就调它一次。
+   *
+   * **只并回会变的那几个字段**，不重跑版本历史（那是打开时的活），也**不碰 revision / 契约 /
+   * 任务**：用户可能正停在历史版本上，那会儿卡片该显示历史版本的事实。所以调用前后都要确认
+   * "现在展示的仍然是那一个最新版本"——用的是 await 之后重新读到的 `detailPlan`，
+   * 而不是进来时抓到的那份。
+   */
+  async function refreshDetailPlan(): Promise<void> {
+    const opening = detailPlan.value;
+    const planId = opening?.id ?? opening?.planId;
+    if (!opening || !planId) return;
+    const requestVersion = detailRequestVersion;
+    try {
+      const response = await api.getPlan(planId);
+      if (requestVersion !== detailRequestVersion) return;
+      const shown = detailPlan.value;
+      if (!shown || shown.revision !== response.plan.revision) return;
+      detailPlan.value = {
+        ...shown,
+        status: response.plan.status,
+        runId: response.plan.runId,
+        dispatchedAt: response.plan.dispatchedAt ?? null,
+        attentionReason: response.plan.attentionReason,
+        dispatch: response.dispatch,
+        mergeRequest: response.mergeRequest,
+      };
+    } catch {
+      // 快照没刷上不值得打断界面：投影再变一次（或用户重开抽屉）会补上。
+    }
+  }
+
   async function selectPlanRevision(revisionNumber: number): Promise<void> {
     const current = detailPlan.value;
     const planId = current?.id ?? current?.planId;
@@ -301,6 +342,7 @@ export function usePlanDetailDrawer(deps: PlanDetailDrawerDeps) {
     verificationSuitesSaving,
     canEditVerificationSuites,
     openPlanDetail,
+    refreshDetailPlan,
     selectPlanRevision,
     saveDependencies,
     saveVerificationSuites,

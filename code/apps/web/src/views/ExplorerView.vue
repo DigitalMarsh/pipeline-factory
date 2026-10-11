@@ -321,6 +321,7 @@ const {
   verificationSuitesSaving,
   canEditVerificationSuites,
   openPlanDetail,
+  refreshDetailPlan,
   selectPlanRevision,
   saveDependencies,
   saveVerificationSuites,
@@ -338,6 +339,25 @@ const {
       query: { ...route.query, ...(plan.explorerPlanId ? { explorerPlanId: plan.explorerPlanId } : {}), requirementTab: "plan" },
     });
   },
+});
+
+/**
+ * 抽屉里那份 Plan 详情是**快照**（见 `usePlanDetailDrawer` 维护提示 5）：Run 起来了、验证过了、
+ * 合并了，它都不会自己变——实测 Run 已经 `IN_PROGRESS`，卡片上还写着「已派发」。所以在投影里
+ * 这条 Plan 的状态 / Run / 调度状态一变时，就把它换成新的：这样"确认之后十几秒 Run 自己出现"
+ * 那一段，抽屉里的标签也跟着走，不用重开抽屉。
+ */
+const detailPlanProjectionKey = computed(() => {
+  const shown = detailPlan.value;
+  if (!drawerOpen.value || !shown) return "";
+  const shownId = shown.id ?? shown.planId;
+  const plan = requirementRows.value.find((row) => (row.plan?.id ?? row.plan?.planId) === shownId)?.plan;
+  return plan ? `${plan.status}|${plan.runId ?? ""}|${plan.dispatch?.status ?? ""}` : "";
+});
+watch(detailPlanProjectionKey, (next, previous) => {
+  // 第一次拿到 key（也就是刚打开抽屉）不刷新：openPlanDetail 刚取过当前事实，再取一发是白跑。
+  // 只对**已经打开着的那份**发生的变化做刷新。
+  if (next && previous) void refreshDetailPlan();
 });
 
 /**
