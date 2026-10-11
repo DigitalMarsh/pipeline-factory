@@ -43,12 +43,20 @@ function planBelongsToRequirement(plan: Plan, requirement: ExplorerPlan): boolea
   return Boolean(identity && (identity === requirement.candidatePlanId || identity === requirement.exploration.candidatePlanId));
 }
 
+/**
+ * 这条需求当前该显示哪一份 Plan。
+ *
+ * **先认需求自己的 `candidatePlanId`，再按修订号兜底。** 需求被重新规划时，探索者会建一份
+ * **全新的候选方案**（修订号从 1 开始），而旧的那份可能已经走到 V2/V3——只按修订号取最高，行与
+ * 抽屉就会一直显示**旧的**那一份，新候选在清单上根本点不到（实测 2026-10-11：需求10 重新规划后
+ * 行与抽屉都停在旧的 BLOCKED V2 上，新候选只能从聊天里那张方案卡确认）。
+ */
 function currentPlanFor(requirement: ExplorerPlan, plans: Plan[]): Plan | null {
-  return (
-    plans
-      .filter((plan) => planBelongsToRequirement(plan, requirement))
-      .sort((left, right) => right.revision - left.revision || right.lastEventAt.localeCompare(left.lastEventAt))[0] ?? null
-  );
+  const owned = plans.filter((plan) => planBelongsToRequirement(plan, requirement));
+  const candidatePlanId = requirement.candidatePlanId ?? requirement.exploration.candidatePlanId;
+  const candidate = candidatePlanId ? owned.find((plan) => planIdentity(plan) === candidatePlanId) : undefined;
+  if (candidate) return candidate;
+  return owned.sort((left, right) => right.revision - left.revision || right.lastEventAt.localeCompare(left.lastEventAt))[0] ?? null;
 }
 
 function runFor(plan: Plan | null, runs: Run[]): Run | null {
@@ -83,6 +91,12 @@ function planStatusFor(requirement: ExplorerPlan, plan: Plan | null): Requiremen
 
 function taskStatusFor(plan: Plan | null, run: Run | null): RequirementStatus {
   if (!plan || plan.status === "DRAFT" || plan.status === "DISCARDED") return { label: "—", tone: "neutral" };
+  /**
+   * **Plan 已经合并就到此为止。** 确认合并改的是 Plan 与 MergeRequest——`RunStatus` 里**没有**
+   * `MERGED`，所以 Run 会一直停在 `MERGE_READY`。只看 Run 的话，一条已经并进主干的 Run 会永远
+   * 显示成「待合并」（实测：确认完那几条之后，需求行全挂在"待合并"上）。
+   */
+  if (plan.status === "MERGED") return { label: "已合并", tone: "success" };
   if (run) {
     // **`RunStatus` 有 11 个取值，这里必须逐个接住**：漏掉的那些会掉进最后那条兜底，
     // 在需求清单里显示成"未知状态：RECOVERING"这种半截枚举值。`RECOVERING` 尤其不能漏——
@@ -106,7 +120,8 @@ function taskStatusFor(plan: Plan | null, run: Run | null): RequirementStatus {
   }
   if (isConversationArtifactPlan(plan)) return { label: "待处理", tone: "attention" };
   const dispatch = plan.dispatch;
-  if (plan.status === "MERGED" || dispatch?.status === "COMPLETED") return { label: "运行完", tone: "success" };
+  // `MERGED` 那支已经在上面提前返回（见 taskStatusFor 开头），这里只剩下"调度说这活儿完了"。
+  if (dispatch?.status === "COMPLETED") return { label: "运行完", tone: "success" };
   if (
     ["MERGE_READY", "BLOCKED"].includes(plan.status) ||
     dispatch?.status === "NEEDS_REVIEW" ||

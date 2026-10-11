@@ -115,7 +115,41 @@ describe("projectExplorerRequirementRows", () => {
     );
 
     expect(rows.map((row) => row.planStatus.label)).toEqual(["已确认", "已确认", "已确认", "已确认", "已确认"]);
-    expect(rows.map((row) => row.taskStatus.label)).toEqual(["已入队/已派发", "运行中", "待处理", "待合并", "运行完"]);
+    expect(rows.map((row) => row.taskStatus.label)).toEqual(["已入队/已派发", "运行中", "待处理", "待合并", "已合并"]);
+  });
+
+  /**
+   * **重新规划之后，行要跟着新的候选方案走。** 探索者新建的候选修订号从 1 开始，而旧的那份可能已经
+   * V2——只按修订号取最高，行与抽屉会一直显示旧的（实测：需求10 重新规划后停在旧的 BLOCKED V2 上，
+   * 新候选只能从聊天里那张方案卡确认）。
+   */
+  it("prefers the requirement's own candidate plan over a higher-revision older plan", () => {
+    const rows = projectExplorerRequirementRows(
+      [requirement("r", 10, { candidatePlanId: "plan-fresh" })],
+      [
+        plan("r", "MERGE_READY", { id: "plan-old", planId: "plan-old", revision: 2, runId: "run-old" }),
+        plan("r", "DRAFT", { id: "plan-fresh", planId: "plan-fresh", revision: 1 }),
+      ],
+      [run("plan-old", "MERGE_READY")],
+    );
+
+    expect(rows[0]?.plan?.id).toBe("plan-fresh");
+    expect(rows[0]?.planStatus.label).toBe("待确认");
+    expect(rows[0]?.taskStatus.label).toBe("—");
+  });
+
+  /**
+   * 确认合并之后 Run 会**停在 `MERGE_READY`**（`RunStatus` 里没有 `MERGED`），所以那一格必须
+   * 先看 Plan：否则一条已经并进主干的 Run 会永远显示「待合并」。
+   */
+  it("says 已合并 once the Plan is merged, even though the Run stays MERGE_READY", () => {
+    const rows = projectExplorerRequirementRows(
+      [requirement("r", 1)],
+      [plan("r", "MERGED", { runId: "run-r" })],
+      [run("r", "MERGE_READY")],
+    );
+
+    expect(rows[0]?.taskStatus.label).toBe("已合并");
   });
 
   /**
