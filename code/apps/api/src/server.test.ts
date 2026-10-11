@@ -322,11 +322,14 @@ describe("Pipeline Factory v4 API", () => {
 
   /**
    * `blocking` 是「启动钩子」的失败策略，**API 这一跳是它最容易死掉的地方**：zod 默认丢弃未知
-   * 字段，漏掉它就表现为"设置页取消了勾、保存了、库里的值没变"——而且不报错（见 schemas/hooks.ts
-   * 维护提示）。顺带钉住它**只属于 start**：配在 cleanup 上应当在入口就被丢掉，而不是走到领域层
-   * 才 422（领域层拒它是另一条路，见 packages/domain 的 project.test.ts）。
+   * 字段，漏掉它就表现为"设置页取消了勾、保存了、库里的值没变"——而且不报错。
+   *
+   * **这条用例此前打的是 `PUT /projects/:id/settings/hooks`**，那个专用端点已退役（它没有客户端；
+   * 设置对话框一直走 `PATCH /projects/:id` 整体保存 `settings`）。所以断言搬到 PATCH 上——
+   * 判据本身没变：`blocking` 必须活着穿过这一跳，而且**只属于 start**（配在 cleanup 上由领域层拒，
+   * 见 `packages/domain` 的 `project.test.ts`）。
    */
-  it("carries the start hook's failure policy over HTTP, and only on start", async () => {
+  it("carries the start hook's failure policy through the project update", async () => {
     const store = new InMemoryPipelineStore();
     const projects = new ProjectService(store);
     const project = projects.create({
@@ -341,29 +344,29 @@ describe("Pipeline Factory v4 API", () => {
     apps.push(app);
 
     const soft = await app.inject({
-      method: "PUT",
-      url: `/api/v4/projects/${project.id}/settings/hooks`,
-      payload: { start: { commandId: "project.codegraph-init", enabled: true, blocking: false } },
+      method: "PATCH",
+      url: `/api/v4/projects/${project.id}`,
+      payload: { settings: { hooks: { start: { commandId: "project.codegraph-init", enabled: true, blocking: false } } } },
     });
     expect(soft.statusCode).toBe(200);
     expect(store.getProject(project.id)?.settings.hooks.start).toMatchObject({ commandId: "project.codegraph-init", blocking: false });
 
     // 不写这个键时库里不该多出它：不然"老项目行为与引入前一致"就只能靠读代码来保证。
     const implicit = await app.inject({
-      method: "PUT",
-      url: `/api/v4/projects/${project.id}/settings/hooks`,
-      payload: { start: { commandId: "project.codegraph-init" } },
+      method: "PATCH",
+      url: `/api/v4/projects/${project.id}`,
+      payload: { settings: { hooks: { start: { commandId: "project.codegraph-init" } } } },
     });
     expect(implicit.statusCode).toBe(200);
     expect(store.getProject(project.id)?.settings.hooks.start).not.toHaveProperty("blocking");
 
-    const withCleanup = await app.inject({
-      method: "PUT",
-      url: `/api/v4/projects/${project.id}/settings/hooks`,
-      payload: { start: { commandId: "project.codegraph-init" }, cleanup: { commandId: "project.codegraph-init", blocking: true } },
+    // 配在 cleanup 上的 `blocking` 要到得了领域层、并被它明确拒掉（不是静默丢掉）。
+    const onCleanup = await app.inject({
+      method: "PATCH",
+      url: `/api/v4/projects/${project.id}`,
+      payload: { settings: { hooks: { cleanup: { commandId: "project.codegraph-init", blocking: true } } } },
     });
-    expect(withCleanup.statusCode).toBe(200);
-    expect(store.getProject(project.id)?.settings.hooks.cleanup).toEqual({ commandId: "project.codegraph-init" });
+    expect(onCleanup.statusCode).toBe(422);
   });
 
   it("sets Factory-owned prerequisite plans over HTTP and rejects unknown ids", async () => {
@@ -1130,44 +1133,6 @@ describe("Pipeline Factory v4 API", () => {
     });
     expect(response.json().loop.checkpointJson).toBeNull();
     expect(JSON.stringify(response.json().loop.diagnostics)).not.toContain("secret local detail");
-  });
-
-  it("exposes durable tool-call status for an Agent Loop", async () => {
-    const store = new InMemoryPipelineStore();
-    const loop: AgentLoop = {
-      id: "loop-tools",
-      ownerType: "run",
-      ownerId: "run-1",
-      role: "executor",
-      mode: "factory-controlled",
-      state: "RUNNING",
-      stepCount: 1,
-      maxSteps: 4,
-      startedAt: store.now(),
-      completedAt: null,
-      providerThreadId: null,
-      providerTurnId: null,
-      checkpointJson: null,
-    };
-    store.saveAgentLoop(loop);
-    store.saveToolCall({
-      callId: "tool-1",
-      loopId: loop.id,
-      role: "executor",
-      tool: "mcp:docs:search",
-      status: "RUNNING",
-      inputHash: "hash",
-      result: null,
-      startedAt: store.now(),
-      completedAt: null,
-    });
-    const app = createApp({ store, seed: false });
-    apps.push(app);
-
-    const response = await app.inject({ method: "GET", url: "/api/v4/agent-loops/" + loop.id + "/tools" });
-
-    expect(response.statusCode).toBe(200);
-    expect(response.json().items).toMatchObject([{ callId: "tool-1", tool: "mcp:docs:search", status: "RUNNING" }]);
   });
 
   it("makes Agent Loop pause, resume, and cancel controls observable", async () => {

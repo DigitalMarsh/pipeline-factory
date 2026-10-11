@@ -1,5 +1,41 @@
 # Changelog
 
+## 2026-10-11 — 收掉四条被取代的重复读路由
+
+上一轮查那 11 条零调用路由时归的类，这一轮把"被别的路径取代"那四条收掉（`settings/hooks` 是一对
+GET/PUT，所以四条能力、五个注册）：
+
+| 路由 | 为什么能删 |
+|---|---|
+| `GET /projects/:id/summary` | 与 `GET /projects/:id` 返回的 `summary` **是同一个东西**（后者返回 `{ project, summary }`） |
+| `GET /runs/:id/verification` | Run 详情页的验证信息来自 `api.getRun`（响应里就带 `verification`），不单拉一条 |
+| `GET /agent-loops/:loopId/tools` | 对应的客户端包装 `api.agentLoopTools` 正是上一轮删掉的那九个之一；Run 页的工具调用是从 journal 推导的 |
+| `GET`+`PUT /projects/:id/settings/hooks` | 设置对话框走 `PATCH /projects/:id` 整体保存 `settings`；这对是**旧整页设置**的后端（设计书 §7.4 里的 `/settings/hooks` 是那条**页面路由**，不是这两个端点） |
+
+`routes/hooks.ts` 与 `schemas/hooks.ts` 整个删掉——文件里就这两条路由，`hookBody` 也只被它用。
+
+### 一件差点被顺手丢掉的东西
+
+那个文件里做过 **409/422 的分流**：`projects.update` 失败时，"含 active runs" 给 **409**（状态冲突，
+等 Run 结束可重试），其余给 **422**（配置本身不合法，改了也没用）。**其余路由一律落成 409。**
+
+端点退役之后，改 hooks 的唯一入口变成 `PATCH /projects/:id`——不搬的话，领域层的校验错误（hooks
+形状、模型/后端取值…）在界面上会被说成"稍后重试"。所以把分流搬进了 PATCH 的错误映射：**409 只留给
+`PROJECT_HAS_ACTIVE_RUNS` 与 `CONFIG_VERSION_CONFLICT`**（那两类重试确实有用），其余 422。
+
+### 测试
+
+- 那条 hooks 用例**没有删、是改了对象**：它此前打 `PUT /settings/hooks`，现在打 `PATCH /projects/:id`，
+  断言不变（`blocking` 必须活着穿过这一跳、且只属于 start，配在 cleanup 上由领域层明确拒掉而不是
+  静默丢掉）。顺带补了一条 `PUT /settings/hooks` 时代做不到的断言：cleanup 上配 `blocking` 现在回 **422**；
+- 「Agent Loop 的工具调用状态」那条整条删掉（它测的就是那条路由；那个能力的活路是 journal 推导）。
+
+### 验证
+
+API 重启后五条注册全 404，`PATCH /projects/:id` 仍 200；浏览器里打开设置对话框、切到「钩子」页签、
+点保存 → **「Project 配置已保存」**（这条链是这次改动真正的活路）。
+`pnpm verify` 全绿：domain 443 / api 115 / web 629。
+
 ## 2026-10-11 — 退役变更提案整条链（`ChangeProposal` + `NEEDS_PLAN_CHANGE`）
 
 查那 11 条零调用路由时翻出来的：这条链不是"web 没接 UI"，是**运行时到不了**。

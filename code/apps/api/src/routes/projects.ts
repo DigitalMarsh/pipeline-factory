@@ -113,14 +113,6 @@ export function registerProjectRoutes(app: FastifyInstance, deps: ProjectRouteDe
     return { project, summary: projects.summary(project.id) };
   });
 
-  app.get("/api/v4/projects/:projectId/summary", async (request, reply) => {
-    const params = projectThreadParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    if (!store.getProject(params.data.projectId))
-      return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
-    return { summary: projects.summary(params.data.projectId) };
-  });
-
   app.patch("/api/v4/projects/:projectId", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
     const body = projectUpdateBody.safeParse(request.body ?? {});
@@ -155,7 +147,17 @@ export function registerProjectRoutes(app: FastifyInstance, deps: ProjectRouteDe
             : /Git repository|branch|does not exist|absolute path/i.test(message)
               ? "INVALID_GIT_REPOSITORY"
               : "PROJECT_UPDATE_FAILED";
-      return reply.code(code === "INVALID_GIT_REPOSITORY" ? 422 : code === "PROJECT_NOT_FOUND" ? 404 : 409).send({ code, error: message });
+      /**
+       * **409 只留给"状态冲突、稍后重试有用"的那两类**：等 Run 结束、或别人先改了配置。
+       * 其余一律 422——它们是"这个配置本身不合法，原样重试还是失败"。
+       *
+       * 这条分流此前只在退役的 `PUT /projects/:id/settings/hooks` 里做过（那个文件的维护提示写着
+       * 理由），其余都落成 409。那个端点退役之后，项目的整体更新是改 hooks 的唯一入口，分流跟着
+       * 搬到这儿——否则领域层的校验错误（hooks 形状、模型/后端取值…）在界面上会被说成"稍后重试"。
+       */
+      const status =
+        code === "PROJECT_NOT_FOUND" ? 404 : code === "PROJECT_HAS_ACTIVE_RUNS" || code === "CONFIG_VERSION_CONFLICT" ? 409 : 422;
+      return reply.code(status).send({ code, error: message });
     }
   });
 

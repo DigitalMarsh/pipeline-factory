@@ -1,5 +1,5 @@
 /**
- * 模块职责：路由注册的**唯一入口** —— 把 9 个按域切分的 `routes/*.ts` 汇总成一次调用，
+ * 模块职责：路由注册的**唯一入口** —— 把 8 个按域切分的 `routes/*.ts` 汇总成一次调用，
  *   组合根只需构造依赖对象、调这一个函数。
  *
  * 设计要点（三点，都是为了让这个文件保持"没有逻辑"）：
@@ -26,7 +26,7 @@
  *
  * 注册顺序不影响匹配：100 条路由里没有通配符，Fastify 基数树对静态段与参数段按优先级匹配。
  * 顺序按"读起来顺"排：平台级 → 项目 / Explorer / Plan（主干）→ Run 及其下游（合并、变更提案）
- * → 观测类（hooks、agent loop、执行线程）。
+ * → 观测类（agent loop、执行线程）。
  */
 import type { FastifyInstance } from "fastify";
 import { registerPlatformRoutes, type PlatformRouteDeps } from "./platform.js";
@@ -35,7 +35,6 @@ import { registerExplorerRoutes, type ExplorerRouteDeps } from "./explorers.js";
 import { registerPlanRoutes, type PlanRouteDeps } from "./plans.js";
 import { registerRunRoutes, type RunRouteDeps } from "./runs.js";
 import { registerMergeRequestRoutes, type MergeRequestRouteDeps } from "./merge-requests.js";
-import { registerHookRoutes, type HookRouteDeps } from "./hooks.js";
 import { registerAgentLoopRoutes, type AgentLoopRouteDeps } from "./agent-loops.js";
 import { registerExecutionThreadRoutes, type ExecutionThreadRouteDeps } from "./execution-threads.js";
 
@@ -46,7 +45,6 @@ export type ApiRouteDeps = PlatformRouteDeps &
   PlanRouteDeps &
   RunRouteDeps &
   MergeRequestRouteDeps &
-  HookRouteDeps &
   AgentLoopRouteDeps &
   ExecutionThreadRouteDeps;
 
@@ -57,7 +55,6 @@ export function registerApiRoutes(app: FastifyInstance, deps: ApiRouteDeps): voi
   registerPlanRoutes(app, deps);
   registerRunRoutes(app, deps);
   registerMergeRequestRoutes(app, deps);
-  registerHookRoutes(app, deps);
   registerAgentLoopRoutes(app, deps);
   registerExecutionThreadRoutes(app, deps);
 }

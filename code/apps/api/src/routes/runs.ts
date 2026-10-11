@@ -209,16 +209,6 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
     }
   });
 
-  app.get("/api/v4/runs/:runId/verification", async (request, reply) => {
-    const params = z.object({ runId: z.string().min(1) }).safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    const run = store.getRun(params.data.runId);
-    if (!run) return reply.code(404).send({ error: "Run not found" });
-    const verification = store.getVerificationRun(run.id);
-    if (!verification) return reply.code(404).send({ error: "VerificationRun not found" });
-    return { verification };
-  });
-
   app.get("/api/v4/projects/:projectId/runs", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });

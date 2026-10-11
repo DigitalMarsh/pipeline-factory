@@ -62,13 +62,6 @@ export function registerAgentLoopRoutes(app: FastifyInstance, deps: AgentLoopRou
     return { items: store.listAgentLoopSteps(params.data.loopId) };
   });
 
-  app.get("/api/v4/agent-loops/:loopId/tools", async (request, reply) => {
-    const params = agentLoopParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: "Invalid Agent Loop id" });
-    if (!store.getAgentLoop(params.data.loopId)) return reply.code(404).send({ error: "AgentLoop not found" });
-    return { items: store.listToolCalls(params.data.loopId) };
-  });
-
   // Agent Loop SSE 面向诊断和控制页；非 SSE 请求仍返回 JSON，方便测试和故障排查。
   app.get("/api/v4/agent-loops/:loopId/events", async (request, reply) => {
     const params = agentLoopParams.safeParse(request.params);
