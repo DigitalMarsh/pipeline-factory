@@ -27,7 +27,9 @@ const coordinatorModule = domain as unknown as {
       planId: string,
       revision: number,
       confirmedBy: string,
+      wakeAfter?: boolean,
     ): Promise<{ plan: domain.CandidatePlan; run: domain.Run | null; state: domain.PlanDispatchState }>;
+    dispatchInBackground(planId: string, onError: (error: unknown) => void): void;
     reviseConfiguration(planId: string, actorId: string): domain.CandidatePlan;
     wake(): Promise<domain.PlanDispatchState[]>;
     state(planId: string): domain.PlanDispatchState | undefined;
@@ -104,6 +106,20 @@ async function waitForStatus(
   throw new Error(`dispatch state for ${planId} did not settle to ${status}（当前 ${coordinator.state(planId)?.status ?? "unknown"}）`);
 }
 
+/** `waitForStatus` 的 phase 版（`STARTING_RUN` 这类中间态只在 status 之外出现）。 */
+async function waitForPhase(
+  coordinator: InstanceType<typeof coordinatorModule.PlanDispatchCoordinator>,
+  planId: string,
+  phase: string,
+  attempts = 50,
+): Promise<void> {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (coordinator.state(planId)?.phase === phase) return;
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  throw new Error(`dispatch state for ${planId} did not reach phase ${phase}（当前 ${coordinator.state(planId)?.phase ?? "unknown"}）`);
+}
+
 describe("PlanDispatchCoordinator", () => {
   it("does not schedule an Enqueued plan until an explicit dispatch request", async () => {
     const store = new InMemoryPipelineStore();
@@ -119,6 +135,58 @@ describe("PlanDispatchCoordinator", () => {
     const dispatched = await coordinator.dispatch(plan.id);
     expect(dispatched.plan.status).toBe("IN_PROGRESS");
     expect(dispatched.state).toMatchObject({ planId: plan.id, status: "RUNNING", waitReason: null });
+  });
+
+  /**
+   * **确认返回时 Run 可能还不存在**：HTTP 路由用 `wakeAfter = false` + `dispatchInBackground`
+   * 把派发甩到后台（`scheduler.start` 里要先调一次模型给分支起名，本机实测 6~27 秒，不能挡在
+   * 确认按钮后面）。这条钉住后台这一跳的两件事：
+   *
+   * 1. 后台跑着的时候，**第二次确认不能把调度状态重写回 `QUEUED`/`VALIDATING`**——`confirmAndDispatch`
+   *    自己的 `finally` 早就把 `confirmingPlans` 标记摘了，而那时 Run 还没建出来，`existingRun`
+   *    那条早返回也拦不住（它找的是 Run，不是调度状态）。用户连点两下就会踩到。
+   * 2. 后台的异常由调用方通过 `onError` 记账（没有别的地方接了）。
+   */
+  it("后台派发期间，第二次确认不会把正在启动的调度状态抹回排队中", async () => {
+    const store = new InMemoryPipelineStore();
+    const plans = new PlanService(store);
+    const plan = createPlan(store, plans, "Background dispatch");
+    const scheduler = schedulerFor(store);
+    let releaseStart: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    const start = scheduler.start.bind(scheduler);
+    vi.spyOn(scheduler, "start").mockImplementation(async (planId, hooks) => {
+      await gate;
+      return start(planId, hooks);
+    });
+    const coordinator = new coordinatorModule.PlanDispatchCoordinator({ store, plans, scheduler });
+
+    try {
+      const confirmed = await coordinator.confirmAndDispatch(plan.id, plan.revision, "user-1", false);
+      // 响应里没有 Run —— 这正是前端要显示"正在准备执行环境"并轮询的原因。
+      expect(confirmed.plan.status).toBe("DISPATCHED");
+      expect(confirmed.run).toBeNull();
+      expect(confirmed.state.phase).toBe("DISPATCHED");
+
+      const errors: unknown[] = [];
+      coordinator.dispatchInBackground(plan.id, (error) => errors.push(error));
+      await waitForPhase(coordinator, plan.id, "STARTING_RUN");
+
+      // 用户连点第二下：状态必须停在"正在启动"，不能被当成一次全新的派发。
+      const repeated = await coordinator.confirmAndDispatch(plan.id, plan.revision, "user-1", false);
+      expect(repeated.run).toBeNull();
+      expect(coordinator.state(plan.id)).toMatchObject({ phase: "STARTING_RUN", attempt: 1 });
+
+      releaseStart?.();
+      await waitForStatus(coordinator, plan.id, "RUNNING");
+      expect(errors).toEqual([]);
+      expect(store.listRuns()).toHaveLength(1);
+    } finally {
+      releaseStart?.();
+      coordinator.dispose();
+    }
   });
 
   /**

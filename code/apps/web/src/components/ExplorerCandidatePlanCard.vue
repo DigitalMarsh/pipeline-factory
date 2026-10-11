@@ -72,14 +72,6 @@ const conversationArtifact = computed(() => isConversationArtifactPlan(props.pla
         >入队方案 <ArrowDown :size="15"
       /></el-button>
       <span v-else class="confirmed-note"><CircleCheck :size="15" /> {{ statusText }}</span>
-      <!--
-        按钮上那颗转圈只说明"点到了"，说不清"在等什么"。确认是要等服务端把 Run 建出来的，
-        而建 Run 前先起分支名（一次模型调用，见 `run-branch.ts` 的预算注释）——不写出来的话，
-        那几秒在用户眼里就是"点了没反应"。只挂在 DRAFT 那张（确认）上，入队是纯写库、很快。
-      -->
-      <span v-if="busy && isCandidate && plan.status === 'DRAFT'" class="candidate-busy-note" role="status"
-        >正在确认并准备执行环境（生成分支名、创建本地目录），通常要几秒…</span
-      >
     </div>
   </div>
 </template>

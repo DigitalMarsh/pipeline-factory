@@ -4,17 +4,17 @@ const RUN_BRANCH_PREFIX = "factory";
 const FALLBACK_RUN_BRANCH_SLUG = "change";
 const MAX_SUMMARY_WORDS = 4;
 /**
- * 起分支名的模型调用预算。**这个调用是装饰性的，不能拖着派发一起等。**
+ * 起分支名的模型调用预算。
  *
- * 它挡在 `confirm → confirmAndDispatch.wake → scheduler.start → git worktree add` 的正中间：
- * 分支名要先进 `git worktree add -b`，所以这一步没结果，Run 就建不出来。实测（2026-10-11，
- * 本机后端）这条"给 2~4 个英文词"的调用要 **6~27 秒**——用户点完「确认」对着一个没反应的
- * 按钮干等十几秒，而真正的工作（worktree + start hook）只要 0.6 秒。
+ * **它不在确认请求的返回路径上了**（见 `routes/plans.ts` 的 `confirmPlanFlow`）：确认只落库，
+ * 派发在后台跑，所以这个预算现在决定的是"Run 多久之后出现"，而不是"按钮卡多久"。
  *
- * 30 秒的预算在这里没有意义：补全几个词不该花这么久。压到 8 秒——仍远超正常耗时，但把最坏
- * 情况从 27 秒砍到 8 秒；超出预算就退回标题派生的 slug（见 `Scheduler.runBranchLeaf`）。
+ * 为什么给到 30 秒：分支名是这个 Run 在 git 里唯一的可读标识，中文标题派生不出英文 slug
+ * （`normalizeRunBranchSlug` 会把非 ASCII 整个抹掉），所以这一跳只能靠模型；本机后端实测一次
+ * 要 6~27 秒（中位数约 15 秒）。预算压到 8 秒的话，实测样本里十次有八次会退回
+ * `factory/<时间戳>-change`——一个认不出来的名字，正是当初加这个调用要避免的结果。
  */
-const RUN_BRANCH_GENERATION_TIMEOUT_MS = 8_000;
+const RUN_BRANCH_GENERATION_TIMEOUT_MS = 30_000;
 const RUN_BRANCH_SUMMARY_PROMPT = `
 Generate a short English Git branch summary for the requested software change.
 Return only 2 to 4 lowercase ASCII words separated by spaces.

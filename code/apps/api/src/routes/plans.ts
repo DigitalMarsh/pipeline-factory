@@ -87,10 +87,23 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
     }
     return project;
   };
-  /** 确认并（有协调器时）立即派发：走 `confirmAndDispatch` 才能在同一事务里推进调度状态。 */
+  /**
+   * 确认并（有协调器时）派发：走 `confirmAndDispatch` 才能在同一事务里推进调度状态。
+   *
+   * **派发不等在响应里**（`wakeAfter = false` + `dispatchInBackground`）。`wake()` 一路走到
+   * `scheduler.start`，而那里要先调一次模型给分支起名（中文标题派不出英文 slug）——本机实测
+   * 6~27 秒，确认按钮就冻在那儿十几秒。确认本身是毫秒级的事务（Plan → `DISPATCHED`、调度
+   * 状态落库），先把它返回给用户；起名、建 worktree、拉起执行都在后台接着做。
+   *
+   * 响应里的 `confirmation.stage` 因此是 `DISPATCHED`（而不是以前那个"派发完"的阶段），
+   * `run` 也还是 `null`——前端按这个显示"正在准备执行环境"并轮询到 Run 出现为止。
+   */
   const confirmPlanFlow = async (planId: string, revision: number, actorId: string) => {
     if (dispatchCoordinator) {
-      const result = await dispatchCoordinator.confirmAndDispatch(planId, revision, actorId);
+      const result = await dispatchCoordinator.confirmAndDispatch(planId, revision, actorId, false);
+      dispatchCoordinator.dispatchInBackground(planId, (error: unknown) => {
+        app.log.error({ err: error, planId }, "plan dispatch wake failed");
+      });
       return {
         plan: result.plan,
         run: result.run,

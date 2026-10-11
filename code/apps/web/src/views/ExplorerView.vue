@@ -361,6 +361,17 @@ const { confirmPlan, enqueuePlan, startPlanRun, revisePlanConfiguration, discard
   drawerTab,
   contextPanel,
   refreshPlanProjection,
+  /**
+   * 确认之后要在等 Run 出现时反复刷新 Run 列表——需求行上的「打开 Run」和任务面板都从它读。
+   * 只管拉数据：轮询里的失败不值得打断界面，下一次（或用户手动刷新）会补上。
+   */
+  refreshProjectRuns: async () => {
+    try {
+      projectRuns.value = (await api.projectRuns(projectId.value)).items;
+    } catch {
+      // 见上。
+    }
+  },
   openRunView,
 });
 
@@ -1764,6 +1775,16 @@ onBeforeUnmount(() => {
                   @click="revisePlanConfiguration(taskPanelPlan)"
                   >创建更新版本</el-button
                 >
+              </div>
+              <!--
+                确认只落库，派发在后台（起分支名要一次模型调用，见 `confirmPlanFlow`），所以
+                会有一段"已派发但还没有 Run"的时间。不写出来的话，这段时间在界面上是空白。
+                放在 NEEDS_CONFIGURATION 那条**之后**：那种派发也是 DISPATCHED 且没有 Run，
+                但它有更具体的原因要说。
+              -->
+              <div v-else-if="taskPanelPlan.status === 'DISPATCHED' && !selectedRequirementRow?.run" class="task-action-panel">
+                <strong>正在准备执行环境</strong>
+                <p>确认已经落库。工厂正在生成分支名、创建本地工作目录，Run 出现后这里会换成执行对话。</p>
               </div>
               <div v-else class="task-action-panel">
                 <strong>{{ selectedRequirementRow?.taskStatus.label ?? "任务状态未知" }}</strong>

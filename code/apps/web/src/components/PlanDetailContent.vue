@@ -20,7 +20,11 @@ const props = defineProps<{
   verificationSuiteOptions?: string[] | undefined;
   canEditVerificationSuites?: boolean | undefined;
   verificationSuitesSaving?: boolean | undefined;
-  /** 视图级写操作进行中（确认 Plan / 确认修订草稿）。只用来给按钮和进度提示上锁。 */
+  /**
+   * 视图级写操作进行中（确认 Plan / 确认修订草稿）。**只用来给按钮上转圈**——确认这一步
+   * 现在只落库就返回（派发在后台，见 `confirmPlanFlow`），所以等不到什么，别在这儿加进度文案：
+   * 真正要等的是 Run 出现，那件事在任务面板里说（`ExplorerView` 的「正在准备执行环境」）。
+   */
   busy?: boolean | undefined;
 }>();
 const emit = defineEmits<{
@@ -420,14 +424,6 @@ const mergeRequest = computed(() => props.plan?.mergeRequest ?? null);
       <div v-if="readOnly" class="drawer-readonly-note" role="status">
         <Lock :size="14" /><span>执行线程使用此冻结 Revision；Plan 生命周期操作已在此处隐藏。</span>
       </div>
-      <!--
-        确认不是一次"改个状态"的写操作：服务端要在响应里把 Run 建出来，而建 Run 前要先起分支名
-        （一次模型调用，见 `run-branch.ts` 的预算注释）。整条链路没有中间反馈，按钮不转圈的话
-        用户看到的就是"点了跟没点一样"。所以这里必须既上锁、又说清在等什么。
-      -->
-      <div v-else-if="busy && canConfirm" class="drawer-busy-note" role="status">
-        <strong>正在确认并准备执行环境。</strong><span>生成分支名、创建本地工作目录通常要几秒，先别重复点击。</span>
-      </div>
       <div v-else class="drawer-actions">
         <el-button v-if="canDiscard" type="danger" plain @click="emit('discard')">丢弃方案</el-button
         ><el-button v-if="!readOnly && !revisionDraftStatus && plan.status !== 'DISCARDED'" @click="emit('keep-editing', plan)">{{
@@ -459,27 +455,6 @@ const mergeRequest = computed(() => props.plan?.mergeRequest ?? null);
 </template>
 
 <style scoped>
-/**
- * 确认等待期的进度条带。它**取代** `.drawer-actions` 那一行（见模板里的 `v-if` / `v-else`），
- * 所以不需要再给按钮上 disabled 样式——等待期里按钮根本不渲染。
- */
-.drawer-busy-note {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  margin-top: 15px;
-  padding: 11px 12px;
-  border: 1px solid #cfe0f7;
-  border-radius: 7px;
-  background: #f2f7ff;
-  color: #5b7093;
-  font-size: 10px;
-  line-height: 1.6;
-}
-.drawer-busy-note strong {
-  flex: 0 0 auto;
-  color: #3478d4;
-}
 .drawer-readonly-note {
   display: flex;
   align-items: flex-start;

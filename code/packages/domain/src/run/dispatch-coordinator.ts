@@ -148,7 +148,36 @@ export class PlanDispatchCoordinator {
     return { plan: this.options.store.getPlan(plan.id) ?? plan, state: this.state(plan.id) as PlanDispatchState };
   }
 
-  /** Confirm、冻结、入队、派发和 Run 启动共用一个持久化、可重试的服务端入口。 */
+  /**
+   * 把「确认之后的那一跳」甩到后台：确认事务照常同步跑完（Plan → `DISPATCHED`，调度状态落库），
+   * 但 `wake()`（→ `dispatchOne` → `scheduler.start` → **先调一次模型给分支起名** → 建 worktree
+   * → 拉起执行，本机实测 6~27 秒）不等进调用方的响应里。
+   *
+   * 为什么这样对：确认本身是毫秒级的事务，用户在等的其实是"Run 什么时候出现"，而这件事没有
+   * 中间反馈就没法等——所以把它交给后台，让前端按 `plan.dispatch` 显示"正在准备执行环境"。
+   *
+   * **`confirmingPlans` 一直占到后台那一跳结束**：`confirmAndDispatch` 自己的 `finally` 在这儿
+   * 之前就已经把标记摘了，而那时 Run 还没建出来——第二次确认会一路走到 `phase: "VALIDATING"` /
+   * `status: "QUEUED"`，把后台刚写进去的 `STARTING_RUN` 抹回"排队中"。（`existingRun` 那条早返回
+   * 拦不住它，它找的是 Run，不是调度状态。客户端虽然也做了防抖，服务端不能靠它。）
+   *
+   * `onError` 不是可选的客气话：这一跳再没有调用方接它的 rejection 了。`dispatchOne` 自己会把
+   * 启动失败写进调度状态（前端在 `plan.dispatch.lastError` 里看得到），但 `wake()` 更早的几步
+   * ——恢复自动意图、对账已存 Plan、逐 Run 同步——不会，那些只能靠调用方记日志。
+   */
+  dispatchInBackground(planId: string, onError: (error: unknown) => void): void {
+    this.confirmingPlans.add(planId);
+    void this.wake()
+      .catch(onError)
+      .finally(() => this.confirmingPlans.delete(planId));
+  }
+
+  /**
+   * Confirm、冻结、入队、派发和 Run 启动共用一个持久化、可重试的服务端入口。
+   * `wakeAfter = false` 表示"只把状态推进到 `DISPATCHED`、不在这儿等派发"——HTTP 路由用它
+   * 把派发甩进后台（见 `dispatchInBackground`）；合并确认那条路必须 `true`（它要求响应返回时
+   * 依赖方已经可以派发）。
+   */
   async confirmAndDispatch(
     planId: string,
     revision: number,

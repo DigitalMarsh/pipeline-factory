@@ -298,6 +298,16 @@ describe("Explorer requirement list and shared drawer", () => {
     expect(flat(explorerViewSource)).toContain(flat("入队和开始运行是两个独立步骤。"));
   });
 
+  it("确认之后把「派发在后台」这件事说出来，并等 Run 自己出现", () => {
+    // 确认只落库（Plan → DISPATCHED），Run 由后台那一跳拉起：任务面板要说清这段时间在等什么……
+    expect(flat(explorerViewSource)).toContain(flat("taskPanelPlan.status === 'DISPATCHED' && !selectedRequirementRow?.run"));
+    expect(flat(explorerViewSource)).toContain(flat("正在准备执行环境"));
+    // ……而视图得把 Run 列表的刷新入口递进 composable：轮询就是靠它发现 Run 出现的。
+    expect(flat(explorerViewSource)).toContain(flat("refreshProjectRuns: async () =>"));
+    expect(flat(planLifecycleActionsComposableSource)).toContain(flat("function awaitRun(planId: string, run: Run | null): void"));
+    expect(flat(planLifecycleActionsComposableSource)).toContain(flat("function confirmAllowed(planId: string): boolean"));
+  });
+
   it("routes drawer tabs to the selected requirement's existing Plan and Run", () => {
     const switchTabSource = explorerViewSource.match(/function switchDrawerTab\(tab: SharedDrawerTab\): void \{[\s\S]*?\n\}/)?.[0] ?? "";
     expect(flat(switchTabSource)).toContain(flat("void openPlanDetail(selectedRequirementRow.value.plan)"));

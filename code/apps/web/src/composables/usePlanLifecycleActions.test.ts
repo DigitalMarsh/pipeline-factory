@@ -103,6 +103,7 @@ function setup(options: { candidate?: Plan | null; revisionDraft?: PlanRevisionD
   const drawerTab = ref<"explorer" | "plan" | "task">("explorer");
   const contextPanel = ref("candidate");
   const refreshPlanProjection = vi.fn(async () => undefined);
+  const refreshProjectRuns = vi.fn(async () => undefined);
   const openRunView = vi.fn(async () => undefined);
   const actions = usePlanLifecycleActions({
     projectId,
@@ -121,6 +122,7 @@ function setup(options: { candidate?: Plan | null; revisionDraft?: PlanRevisionD
     drawerTab,
     contextPanel,
     refreshPlanProjection,
+    refreshProjectRuns,
     openRunView,
   });
   return {
@@ -141,6 +143,7 @@ function setup(options: { candidate?: Plan | null; revisionDraft?: PlanRevisionD
     drawerTab,
     contextPanel,
     refreshPlanProjection,
+    refreshProjectRuns,
     openRunView,
   };
 }
@@ -248,6 +251,95 @@ describe("confirmPlan", () => {
     expect(s.error.value).toBe("确认停在 VALIDATION_FAILED：missing verify");
     expect(ElMessage.error).toHaveBeenCalledWith(s.error.value);
     expect(s.busy.value).toBe(false);
+  });
+});
+
+/**
+ * 确认返回得快了（派发被甩到后台），所以防抖与"等 Run"这两件事都成了确认这个动作的一部分——
+ * 它们一起锁在这里，别被当成视图层的细节挪走。
+ */
+describe("confirmPlan 的防抖与等 Run", () => {
+  const confirmedWithRun = () => ({
+    plan: plan("plan-1", { status: "READY", runId: "run-1" }),
+    run: run("run-1"),
+    dispatch: null,
+    confirmation: { stage: "RUNNING", attempt: 1, retryable: false },
+  });
+
+  it("第一次确认已经返回、busy 都落了，紧接着第二下仍然被防抖挡掉", async () => {
+    const s = setup();
+    vi.mocked(api.confirmPlan).mockResolvedValue(confirmedWithRun());
+
+    await s.confirmPlan();
+    await s.confirmPlan();
+
+    expect(api.confirmPlan).toHaveBeenCalledOnce();
+    expect(s.busy.value).toBe(false);
+  });
+
+  it("防抖窗口过去之后能再确认一次（不是永久锁死）", async () => {
+    vi.useFakeTimers();
+    try {
+      const s = setup();
+      vi.mocked(api.confirmPlan).mockResolvedValue(confirmedWithRun());
+
+      await s.confirmPlan();
+      await vi.advanceTimersByTimeAsync(2_100);
+      await s.confirmPlan();
+
+      expect(api.confirmPlan).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("没准备好的草稿只提示、不占用防抖窗口", async () => {
+    const s = setup({ candidate: plan("plan-1"), revisionDraft: draft({ status: "BASE_CHANGED" }) });
+
+    await s.confirmPlan();
+    expect(api.confirmRevisionDraft).not.toHaveBeenCalled();
+
+    // 同一秒内用户按提示做完 rebase 再来一次：不能因为上一次"点过"就把他挡在门外。
+    s.revisionDraft.value = draft();
+    vi.mocked(api.confirmRevisionDraft).mockResolvedValue({
+      plan: plan("plan-1", { revision: 2, status: "READY", runId: "run-1" }),
+      run: run("run-1"),
+      confirmation: { stage: "RUNNING", attempt: 1, retryable: false },
+    });
+    await s.confirmPlan();
+
+    expect(api.confirmRevisionDraft).toHaveBeenCalledWith("plan-1", "draft-1");
+  });
+
+  it("派发在后台时说明在准备什么，并轮询到 Run 真的出现", async () => {
+    vi.useFakeTimers();
+    try {
+      const s = setup();
+      vi.mocked(api.confirmPlan).mockResolvedValue({
+        plan: plan("plan-1", { status: "DISPATCHED" }),
+        run: null,
+        dispatch: null,
+        confirmation: { stage: "DISPATCHED", attempt: 1, retryable: true },
+      });
+
+      await s.confirmPlan();
+      expect(ElMessage.info).toHaveBeenCalledWith(expect.stringContaining("正在准备执行环境"));
+
+      // Run 还没建出来：轮询继续。
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(s.refreshProjectRuns).toHaveBeenCalledTimes(1);
+      expect(s.projectRuns.value).toEqual([]);
+
+      // 后台那一跳把 Run 建出来了：一次刷新就能看到，之后停止轮询。
+      s.projectRuns.value = [run("run-1")];
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(s.refreshProjectRuns).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(s.refreshProjectRuns).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

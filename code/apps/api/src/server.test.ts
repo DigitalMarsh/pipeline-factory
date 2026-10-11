@@ -1846,7 +1846,12 @@ describe("Pipeline Factory v4 API", () => {
     expect(workspace.json()).toMatchObject({ explorerPlan: { candidatePlanId: null, newPlanRequested: true }, candidate: null });
   });
 
-  it("confirms and starts a candidate in one idempotent server flow", async () => {
+  /**
+   * **确认只落库，Run 由后台拉起**（`confirmPlanFlow` 不等 `wake()`：`scheduler.start` 里要先
+   * 调一次模型给分支起名，实测 6~27 秒）。所以响应回来时是 `DISPATCHED` + `run: null`，
+   * 前端据此显示"正在准备执行环境"。这条钉住这个契约，也钉住"连点两下仍然只有一个 Run"。
+   */
+  it("confirms a candidate into DISPATCHED and starts the Run in the background", async () => {
     const store = new InMemoryPipelineStore();
     createTestProject(store);
     const plans = new PlanService(store);
@@ -1881,12 +1886,17 @@ describe("Pipeline Factory v4 API", () => {
 
     expect(confirmed.statusCode).toBe(200);
     expect(confirmed.json()).toMatchObject({
-      plan: { status: "IN_PROGRESS", revision: 1 },
-      run: { planId: plan.id, planRevision: 1 },
-      confirmation: { stage: "RUN_STARTED" },
+      plan: { status: "DISPATCHED", revision: 1 },
+      run: null,
+      confirmation: { stage: "DISPATCHED" },
     });
-    expect(duplicate.json().run.id).toBe(confirmed.json().run.id);
-    expect(store.listRuns().filter((run) => run.planId === plan.id && run.planRevision === 1)).toHaveLength(1);
+    expect(duplicate.statusCode).toBe(200);
+
+    // 后台那一跳：等它把 Run 建出来，而不是假设它已经建好了。
+    const runsForPlan = () => store.listRuns().filter((run) => run.planId === plan.id && run.planRevision === 1);
+    for (let attempt = 0; attempt < 50 && runsForPlan().length === 0; attempt += 1) await new Promise((resolve) => setImmediate(resolve));
+    expect(runsForPlan()).toHaveLength(1);
+    expect(store.getPlan(plan.id)).toMatchObject({ status: "IN_PROGRESS", revision: 1 });
   });
 
   it("keeps an enqueued plan out of scheduler state until Start run", async () => {
@@ -2685,16 +2695,19 @@ describe("Pipeline Factory v4 API", () => {
     const legacyPlan = await app.inject({ method: "GET", url: "/api/" + "v" + "3" + `/plans/${plan.id}` });
     const v4Plan = await app.inject({ method: "GET", url: `/api/v4/plans/${plan.id}` });
     const confirmed = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/confirm`, payload: { actorId: "user-1" } });
-    const runId = confirmed.json().run.id as string;
+    // Run 由后台拉起（确认只落库，见上一条用例），所以这里等它出现，而不是从响应里取。
+    for (let attempt = 0; attempt < 50 && store.listRuns().length === 0; attempt += 1)
+      await new Promise((resolve) => setImmediate(resolve));
+    const runId = store.listRuns()[0]?.id as string;
     const run = await app.inject({ method: "GET", url: `/api/v4/runs/${runId}` });
 
     expect(legacyPlan.statusCode).toBe(404);
     expect(v4Plan.statusCode).toBe(200);
     expect(confirmed.statusCode).toBe(200);
     expect(confirmed.json()).toMatchObject({
-      plan: { id: plan.id, status: "IN_PROGRESS", dispatchedAt: expect.any(String) },
-      run: { id: runId, planId: plan.id },
-      confirmation: { stage: "RUN_STARTED" },
+      plan: { id: plan.id, status: "DISPATCHED", dispatchedAt: expect.any(String) },
+      run: null,
+      confirmation: { stage: "DISPATCHED" },
     });
     expect(store.listRuns()).toHaveLength(1);
     expect(run.statusCode).toBe(200);

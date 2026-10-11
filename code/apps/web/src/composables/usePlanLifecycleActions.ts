@@ -17,6 +17,9 @@
  *    后者覆盖服务端在状态竞争窗口内才发现产物不可执行的情况，两条都要留。
  * 5. `openRunView` / `selectedRequirementPlan` 以回调与 getter 注入，避免把路由、需求清单
  *    和 drawer 的组合根依赖带进 composable；动作本身只关心"打开哪个 Run"。
+ * 6. **确认成功 ≠ Run 已经在**：`confirmPlanFlow` 只落库（Plan → `DISPATCHED`），派发在后台
+ *    跑。所以确认之后要 `awaitRun` 轮询到 Run 出现，并且要有防抖（`confirmAllowed`）——
+ *    这两件事都属于"确认"这一个动作的语义，别拆到视图里去。
  */
 import { ElMessage, ElMessageBox } from "element-plus";
 import { api } from "../api";
@@ -43,10 +46,61 @@ export type PlanLifecycleActionsDeps = {
   drawerTab: Ref<"explorer" | "plan" | "task">;
   contextPanel: Ref<string>;
   refreshPlanProjection: () => Promise<void>;
+  /** Run 列表的刷新入口。确认之后要等 Run 出现，而 Run 是从这份列表（`/project-runs`）来的。 */
+  refreshProjectRuns: () => Promise<void>;
   openRunView: (runId: string, explorerId?: string | null, explorerPlanId?: string | null) => Promise<void>;
 };
 
+/**
+ * 同一个 Plan 上两次确认之间的最短间隔。
+ *
+ * 确认请求现在返回得很快（派发被甩到后台，见 `confirmPlanFlow`），所以视图的 `busy` 挡不住
+ * "手快连点两下"——第二下可能正好落在"响应已回、投影还没换成已派发"的空隙里。服务端对重复
+ * 确认是幂等的，但那是白跑一趟请求，还会多弹一次成功提示。
+ */
+const CONFIRM_DEBOUNCE_MS = 2_000;
+/** 等 Run 出现的节奏与上限（约一分钟，够起分支名那 30 秒预算跑完）。 */
+const RUN_ARRIVAL_POLL_MS = 2_000;
+const RUN_ARRIVAL_POLL_LIMIT = 30;
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export function usePlanLifecycleActions(deps: PlanLifecycleActionsDeps) {
+  /** 每条 Plan 上一次被确认的时间（防抖用）与正在等 Run 的那些 Plan。 */
+  const lastConfirmedAt = new Map<string, number>();
+  const awaitingRun = new Set<string>();
+
+  /** 防抖判据：窗口内同一个 Plan 只放行一次。记的是"这次点击被接受"的时刻。 */
+  function confirmAllowed(planId: string): boolean {
+    const now = Date.now();
+    if (now - (lastConfirmedAt.get(planId) ?? 0) < CONFIRM_DEBOUNCE_MS) return false;
+    lastConfirmedAt.set(planId, now);
+    return true;
+  }
+
+  /**
+   * 确认之后 **Run 不是立刻就在的**：`confirmPlanFlow` 只把状态推进到 `DISPATCHED` 就返回，
+   * 派发（起分支名 → 建 worktree → 拉起执行）在后台跑。没有这块的话，用户看到的就是
+   * "确认完了，然后什么都没有"——这正是这次要修的那个观感。
+   *
+   * 有限度地轮询，让它自己出现；上限一到就停（那一跳真失败了的话，
+   * `plan.dispatch.lastError` 会在界面上说出来，轮询再久也没用）。
+   */
+  async function pollForRun(planId: string): Promise<void> {
+    for (let attempt = 0; attempt < RUN_ARRIVAL_POLL_LIMIT; attempt += 1) {
+      await delay(RUN_ARRIVAL_POLL_MS);
+      await Promise.all([deps.refreshPlanProjection(), deps.refreshProjectRuns()]);
+      if (deps.projectRuns.value.some((run) => run.planId === planId)) return;
+    }
+  }
+
+  /** `run` 已经有了就没什么可等的；同一条 Plan 也只需要一个轮询在跑。 */
+  function awaitRun(planId: string, run: Run | null): void {
+    if (run || awaitingRun.has(planId)) return;
+    awaitingRun.add(planId);
+    void pollForRun(planId).finally(() => awaitingRun.delete(planId));
+  }
+
   /**
    * 确认哪一版：抽屉传它当前显示的那份 Plan（V1 候选，或已确认 Plan 上的 V2 修订草稿），
    * 时间线内联卡片传卡片自己那份；都不传才回落到 `candidate`（见文件头维护提示 2）。
@@ -64,6 +118,7 @@ export function usePlanLifecycleActions(deps: PlanLifecycleActionsDeps) {
         );
         return;
       }
+      if (!confirmAllowed(id)) return;
       deps.busy.value = true;
       try {
         const response = await api.confirmRevisionDraft(id, activeDraft.draftId);
@@ -72,6 +127,10 @@ export function usePlanLifecycleActions(deps: PlanLifecycleActionsDeps) {
         await deps.refreshPlanProjection();
         deps.detailPlan.value = response.plan;
         ElMessage.success(`修订 V${activeDraft.targetRevision} 已确认 · ${response.confirmation?.stage ?? "FROZEN"}`);
+        if (!response.run) {
+          ElMessage.info("正在准备执行环境：生成分支名、创建本地工作目录，完成后 Run 会自己出现。");
+          awaitRun(id, null);
+        }
       } catch (caught) {
         deps.error.value = caught instanceof Error ? `确认修订失败：${caught.message}` : "确认修订失败";
       } finally {
@@ -79,6 +138,7 @@ export function usePlanLifecycleActions(deps: PlanLifecycleActionsDeps) {
       }
       return;
     }
+    if (!confirmAllowed(id)) return;
     deps.busy.value = true;
     try {
       const response = await api.confirmPlan(id, plan.revision);
@@ -95,6 +155,10 @@ export function usePlanLifecycleActions(deps: PlanLifecycleActionsDeps) {
       const runText = response.run ? ` · Run ${response.run.id}` : "";
       const issueText = response.dispatch?.lastError ? ` · ${response.dispatch.lastError}` : "";
       ElMessage.success(`Plan 已确认 · ${response.confirmation.stage}${runText}${issueText}`);
+      if (!response.run) {
+        ElMessage.info("正在准备执行环境：生成分支名、创建本地工作目录，完成后 Run 会自己出现。");
+        awaitRun(id, null);
+      }
     } catch (caught) {
       deps.error.value = caught instanceof Error ? `确认方案失败：${caught.message}` : "确认方案失败";
     } finally {
