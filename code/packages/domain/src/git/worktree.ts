@@ -37,6 +37,13 @@ export type Workspace = { path: string; branch: string; baseCommit: string };
 export type WorkspaceAdapter = {
   create(input: { projectId: string; runId: string; branch: string; baseCommit: string }): Promise<Workspace>;
   remove(workspace: Workspace): Promise<void>;
+  /**
+   * 可缺省：把工作区里的改动提交到**它自己的分支**上，返回提交号（没有改动可提交时 `null`）。
+   *
+   * 缺省时就没有"Run 跑完自动提交"这一步——测试桩与无 Git 环境走这条，**不要改成必填**
+   * （加必填成员会让十几处 worktree 桩跟着改，收益只有一行）。
+   */
+  commit?(workspace: Workspace, message: string): Promise<string | null>;
 };
 
 /** 可注入的 Git 命令执行端口。 */
@@ -83,6 +90,30 @@ export class LocalGitWorktreeAdapter implements WorkspaceAdapter {
   async remove(workspace: Workspace): Promise<void> {
     const removed = await this.runGit(["worktree", "remove", "--force", workspace.path], this.options.projectRoot);
     if (removed.exitCode !== 0) throw new Error(`Git worktree could not be removed: ${removed.stderr}`);
+  }
+
+  /**
+   * 把工作区里的改动提交到它自己的分支上，返回提交号；没有改动可提交时返回 `null`。
+   *
+   * 为什么归这一层：Worktree 的生命周期（建 / 收）本来就在这儿，提交是同一件事的第三步。
+   *
+   * **它不碰任何别的分支**——合并仍然由人在 Git 侧做，与 `MergeService` 那条链同一口径。
+   * 提交发生在这里的理由是具体的：改动不落成提交，"确认合并"就只是一句空话（实测踩过：
+   * 一个 Run 的修复一直躺在工作区里，分支 tip 等于 main tip，合并过去什么都没有）。
+   *
+   * `add -A` 尊重 `.gitignore`；忽略规则之外留下的临时文件会被一起提交，所以 Run 不该往
+   * 工作区里丢垃圾。没有改动时**不**调 `commit`（那会以非 0 退出，且不是错误）。
+   */
+  async commit(workspace: Workspace, message: string): Promise<string | null> {
+    const status = await this.runGit(["status", "--porcelain"], workspace.path);
+    if (status.exitCode !== 0) throw new Error(`Git status failed in ${workspace.path}: ${status.stderr}`);
+    if (!status.stdout.trim()) return null;
+    const added = await this.runGit(["add", "-A"], workspace.path);
+    if (added.exitCode !== 0) throw new Error(`Git add failed in ${workspace.path}: ${added.stderr}`);
+    const committed = await this.runGit(["commit", "-m", message], workspace.path);
+    if (committed.exitCode !== 0) throw new Error(`Git commit failed in ${workspace.path}: ${committed.stderr}`);
+    const head = await this.runGit(["rev-parse", "HEAD"], workspace.path);
+    return head.exitCode === 0 ? head.stdout.trim() : null;
   }
 }
 

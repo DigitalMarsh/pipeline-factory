@@ -68,6 +68,99 @@ describe("Verifier and MergeService", () => {
     expect(store.getRun(run.id)).toBeUndefined();
   });
 
+  /**
+   * **成功收尾之前先把工作区提交到分支上。** 不提交的话 `MERGE_READY` 就是一句空话：分支上一个
+   * 提交都没有，人照界面的提示点「确认合并」，合并过去什么都没有——实测踩过（`run-b7cd26ff-c11`
+   * 的修复一直躺在工作区里，分支 tip 等于 main tip）。
+   */
+  describe("成功收尾前提交工作区", () => {
+    const arrange = () => {
+      const store = new InMemoryPipelineStore();
+      const plans = new PlanService(store);
+      const plan = plans.createCandidatePlan({
+        projectId: "project-1",
+        sourceExplorerThreadId: "thread-1",
+        title: "Commit before merge",
+        resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Commit before merge" }),
+      });
+      plans.confirm(plan.id, "user-1");
+      const run = makeRun(plan.id);
+      // Plan 只在 `plan.runId === run.id` 时才跟着走（见 verification.ts 维护提示 3），夹具里补上。
+      store.updatePlan({ ...store.getPlan(plan.id)!, status: "VERIFYING", runId: run.id });
+      return { store, plans, plan, run };
+    };
+
+    it("提交发生在 MERGE_READY **之前**（提交那一刻 Run 还在 VERIFYING）", async () => {
+      const { store, plans, plan, run } = arrange();
+      const seen: Array<{ runId: string; revision: number; statusAtCommit: string }> = [];
+      const verifier = new VerificationService(store, {
+        commitWorkspace: async (committingRun, revision) => {
+          seen.push({ runId: committingRun.id, revision: revision.revision, statusAtCommit: committingRun.status });
+        },
+      });
+
+      const verification = await verifier.verify(run, plans.getRevision(plan.id, 1), async () => ({ exitCode: 0, stdout: "", stderr: "" }));
+
+      expect(verification.status).toBe("PASSED");
+      expect(seen).toEqual([{ runId: run.id, revision: 1, statusAtCommit: "VERIFYING" }]);
+      expect(store.getRun(run.id)?.status).toBe("MERGE_READY");
+    });
+
+    it("没有验证命令（SKIPPED）也要提交——那也是成功收尾", async () => {
+      const store = new InMemoryPipelineStore();
+      const plans = new PlanService(store);
+      const plan = plans.createCandidatePlan({
+        projectId: "project-1",
+        sourceExplorerThreadId: "thread-1",
+        title: "No commands",
+        resolvedContract: planContractFixture({ store, projectId: "project-1", title: "No commands" }),
+      });
+      store.updatePlan({
+        ...plan,
+        resolvedContract: { ...plan.resolvedContract, verification: { mode: "NONE", commandIds: [] } },
+      });
+      plans.confirm(plan.id, "user-1");
+      const run = makeRun(plan.id);
+      let commits = 0;
+      const verifier = new VerificationService(store, { commitWorkspace: async () => void (commits += 1) });
+
+      const verification = await verifier.verify(run, plans.getRevision(plan.id, 1), async () => ({ exitCode: 0, stdout: "", stderr: "" }));
+
+      expect(verification).toMatchObject({ status: "SKIPPED", reason: "NO_PROJECT_VERIFICATION_COMMANDS" });
+      expect(commits).toBe(1);
+      expect(store.getRun(run.id)?.status).toBe("MERGE_READY");
+    });
+
+    it("提交失败就把 Run 打成 BLOCKED，理由原样说出来（最常见的：仓库没配 git 身份）", async () => {
+      const { store, plans, plan, run } = arrange();
+      const verifier = new VerificationService(store, {
+        commitWorkspace: async () => {
+          throw new Error("Git commit failed in /tmp/run-1: fatal: unable to auto-detect email address");
+        },
+      });
+
+      const verification = await verifier.verify(run, plans.getRevision(plan.id, 1), async () => ({ exitCode: 0, stdout: "", stderr: "" }));
+
+      expect(verification.status).toBe("BLOCKED");
+      expect(store.getRun(run.id)?.status).toBe("BLOCKED");
+      expect(store.getPlan(plan.id)?.attentionReason).toContain("工作区提交失败");
+      expect(store.getPlan(plan.id)?.attentionReason).toContain("auto-detect email address");
+    });
+
+    it("没配这个端口就整步跳过（测试与无 Git 环境走这条）", async () => {
+      const { store, plans, plan, run } = arrange();
+
+      const verification = await new VerificationService(store).verify(run, plans.getRevision(plan.id, 1), async () => ({
+        exitCode: 0,
+        stdout: "",
+        stderr: "",
+      }));
+
+      expect(verification.status).toBe("PASSED");
+      expect(store.getRun(run.id)?.status).toBe("MERGE_READY");
+    });
+  });
+
   it("requires verification evidence to belong to the same run before review", () => {
     const store = new InMemoryPipelineStore();
     const plans = new PlanService(store);

@@ -128,7 +128,6 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       )
     : new PlanService(store, projects);
   const explorers = new ExplorerService(store);
-  const verifier = new VerificationService(store);
   const merger = options.mergeService ?? new MergeService(store, { git: localGitMergeInspector });
   const verificationExecutor =
     options.verificationExecutor ?? (options.config ? createDefaultVerificationExecutor(store, options.config) : undefined);
@@ -227,6 +226,14 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
   const scheduler =
     options.scheduler ??
     (options.config ? createDefaultScheduler(store, options.config, model, mcpRegistry, pluginRegistry, options.computerUse) : undefined);
+  /**
+   * 验证成功收尾（PASSED / SKIPPED）之前，先把工作区提交到它自己的分支上——不提交的话
+   * `MERGE_READY` 就是一句空话：分支上一个提交都没有，人照界面点「确认合并」合并过去什么都没有。
+   *
+   * 挂在这里而不是别处：只有 Scheduler 拿得到那条 Worktree adapter；而 `options.scheduler` 缺省时
+   * （无配置构造的测试实例）这整步就不存在——那正是这些测试要的。
+   */
+  const verifier = new VerificationService(store, scheduler ? { commitWorkspace: (run) => scheduler.commitWorkspace(run) } : {});
   const dispatchCoordinator = scheduler
     ? new PlanDispatchCoordinator({
         store,

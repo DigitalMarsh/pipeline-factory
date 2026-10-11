@@ -476,6 +476,63 @@ describe("Scheduler and ExecutionThread", () => {
     ]);
   });
 
+  /**
+   * Run 成功收尾前 `VerificationService` 会调它一次（见那边的维护提示 6）。三条判据：
+   * 命令顺序、干净就不提交、失败要抛——最后一条决定了调用方能不能把 Run 打成 BLOCKED。
+   */
+  it("commits the workspace changes onto its own branch", async () => {
+    const commands: string[][] = [];
+    const adapter = new LocalGitWorktreeAdapter({
+      projectRoot: "/repo",
+      worktreeRoot: "/worktrees",
+      runGit: async (args) => {
+        commands.push(args);
+        if (args[0] === "status") return { exitCode: 0, stdout: " M code/src/App.vue\n", stderr: "" };
+        if (args[0] === "rev-parse") return { exitCode: 0, stdout: "newsha\n", stderr: "" };
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
+
+    await expect(adapter.commit({ path: "/worktrees/run-1", branch: "factory/run-1", baseCommit: "abc" }, "title")).resolves.toBe("newsha");
+    expect(commands).toEqual([
+      ["status", "--porcelain"],
+      ["add", "-A"],
+      ["commit", "-m", "title"],
+      ["rev-parse", "HEAD"],
+    ]);
+  });
+
+  it("skips the commit when the workspace is clean", async () => {
+    const commands: string[][] = [];
+    const adapter = new LocalGitWorktreeAdapter({
+      projectRoot: "/repo",
+      worktreeRoot: "/worktrees",
+      runGit: async (args) => {
+        commands.push(args);
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    });
+
+    // 干净时**不**调 `commit`：那会以非 0 退出（"nothing to commit"），但那不是错误。
+    await expect(adapter.commit({ path: "/worktrees/run-1", branch: "factory/run-1", baseCommit: "abc" }, "title")).resolves.toBeNull();
+    expect(commands).toEqual([["status", "--porcelain"]]);
+  });
+
+  it("throws when the commit fails, so the caller can block the run", async () => {
+    const adapter = new LocalGitWorktreeAdapter({
+      projectRoot: "/repo",
+      worktreeRoot: "/worktrees",
+      runGit: async (args) => {
+        if (args[0] === "status") return { exitCode: 0, stdout: " M code/src/App.vue\n", stderr: "" };
+        return { exitCode: 128, stdout: "", stderr: "fatal: unable to auto-detect email address" };
+      },
+    });
+
+    await expect(adapter.commit({ path: "/worktrees/run-1", branch: "factory/run-1", baseCommit: "abc" }, "title")).rejects.toThrow(
+      /auto-detect email address/,
+    );
+  });
+
   it("uses the persisted run status after verification changes it", async () => {
     const store = new InMemoryPipelineStore();
     const planService = new PlanService(store);

@@ -18,15 +18,68 @@
  *      这一轮没能改动代码）。
  *   5) 四个 return 分支各自构造 VerificationRun，status 的取值决定了 Plan 后续状态
  *      （PASSED/SKIPPED → MERGE_READY，其余 → BLOCKED）。新增状态时必须同步 record() 里的映射。
+ *   6) **成功收尾（PASSED / SKIPPED）之前先把工作区提交到分支上**（`options.commitWorkspace`）。
+ *      这一步不落成，`MERGE_READY` 就是一句空话：分支上一个提交都没有，人照界面的提示点
+ *      「确认合并」，合并过去什么都没有（实测踩过）。所以提交**失败要 BLOCK**，理由原样带进
+ *      Plan 的 `attentionReason`——最常见的原因是仓库没配 git 身份。
+ *      `commitWorkspace` 缺省时整步跳过（测试与无 Git 环境）。
  */
 import { randomUUID } from "node:crypto";
 import { updatePlanStatus } from "../plan/status-transition.js";
 import type { PipelineStore } from "../store/pipeline-store.js";
 import type { CommandResult, PlanRevision, RepairExecutor, Run, VerificationCommandExecutor, VerificationRun } from "../index.js";
 
+/**
+ * 成功收尾前的"把工作区提交到分支"端口。返回值不关心（Scheduler 给的是提交号）；
+ * 抛错即视为提交失败，调用方会据此把 Run 打成 `BLOCKED`。
+ */
+export type WorkspaceCommitHook = (run: Run, revision: PlanRevision) => Promise<unknown>;
+
+export type VerificationServiceOptions = {
+  /** 缺省就没有"Run 跑完自动提交"这一步，见模块头维护提示 6。 */
+  commitWorkspace?: WorkspaceCommitHook | undefined;
+};
+
 /** 脱离模型会话执行确定性验证，并按 Revision 的 repair limit 控制修复重试。 */
 export class VerificationService {
-  constructor(private readonly store?: PipelineStore) {}
+  constructor(
+    private readonly store?: PipelineStore,
+    private readonly options: VerificationServiceOptions = {},
+  ) {}
+
+  /**
+   * 成功收尾前把工作区提交到分支上；**失败返回原因**（调用方据此 BLOCK）。
+   * 没有配这个端口就整步跳过。
+   */
+  private async commitWorkspace(run: Run, revision: PlanRevision): Promise<string | null> {
+    if (!this.options.commitWorkspace) return null;
+    try {
+      await this.options.commitWorkspace(run, revision);
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  /** 提交失败时统一走这条：Run 打成 BLOCKED，理由是那句原话。 */
+  private blockOnCommitFailure(
+    run: Run,
+    reason: string,
+    repairAttempts: number,
+    commandResults: Array<{ commandId: string; result: CommandResult }>,
+  ): VerificationRun {
+    run.status = "BLOCKED";
+    const verification: VerificationRun = {
+      id: `verification-${randomUUID().slice(0, 12)}`,
+      runId: run.id,
+      status: "BLOCKED",
+      repairAttempts,
+      commandResults: [...commandResults],
+      completedAt: this.store?.now() ?? new Date().toISOString(),
+    };
+    this.record(run, verification, `工作区提交失败：${reason}`);
+    return verification;
+  }
 
   /** 执行验证命令，失败时最多按 Plan contract 重试 repair。 */
   async verify(run: Run, revision: PlanRevision, execute: VerificationCommandExecutor, repair?: RepairExecutor): Promise<VerificationRun> {
@@ -40,6 +93,9 @@ export class VerificationService {
     }
     const commandIds = revision.resolvedContract.verification.commandIds;
     if (revision.resolvedContract.verification.mode === "NONE" || commandIds.length === 0) {
+      // 「没有验证命令」也是成功收尾：照样要先把工作区提交上去（见维护提示 6）。
+      const commitFailure = await this.commitWorkspace(run, revision);
+      if (commitFailure) return this.blockOnCommitFailure(run, commitFailure, 0, []);
       run.status = "MERGE_READY";
       const verification: VerificationRun = {
         id: `verification-${randomUUID().slice(0, 12)}`,
@@ -67,6 +123,8 @@ export class VerificationService {
         }
       }
       if (!failed) {
+        const commitFailure = await this.commitWorkspace(run, revision);
+        if (commitFailure) return this.blockOnCommitFailure(run, commitFailure, repairAttempts, commandResults);
         run.status = "MERGE_READY";
         const verification = {
           id: `verification-${randomUUID().slice(0, 12)}`,
@@ -110,21 +168,22 @@ export class VerificationService {
     }
   }
 
-  private record(run: Run, verification: VerificationRun): void {
+  private record(run: Run, verification: VerificationRun, attentionReason = "Verification failed"): void {
     if (!this.store) return;
     this.store.saveVerificationRun(verification);
     this.store.saveRun(run);
     const plan = this.store.getPlan(run.planId);
     if (plan && plan.runId === run.id) {
+      const succeeded = verification.status === "PASSED" || verification.status === "SKIPPED";
       updatePlanStatus(
         this.store,
         plan,
         {
-          status: verification.status === "PASSED" || verification.status === "SKIPPED" ? "MERGE_READY" : "BLOCKED",
-          attentionReason: verification.status === "PASSED" || verification.status === "SKIPPED" ? null : "Verification failed",
+          status: succeeded ? "MERGE_READY" : "BLOCKED",
+          attentionReason: succeeded ? null : attentionReason,
           lastEventAt: verification.completedAt,
         },
-        verification.status === "PASSED" || verification.status === "SKIPPED" ? null : "Verification failed",
+        succeeded ? null : attentionReason,
       );
     }
     const thread = this.store.getExecutionThread(run.executionThreadId);

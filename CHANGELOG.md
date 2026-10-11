@@ -1,5 +1,45 @@
 # Changelog
 
+## 2026-10-11 — Run 成功收尾时自动把工作区提交到它自己的分支
+
+起因是一次实测：需求16 那个 Run 的修复**一直躺在工作区里没提交**，分支 tip 等于 main tip，界面却
+写着「已检测到主干里有这份提交」——照提示点「确认合并」，合并过去**什么都没有**。根子是
+`MERGE_READY` 之前没有任何一步把改动落成提交：人得自己先 `git commit`，才谈得上合并。
+
+现在 **验证成功收尾（`PASSED` / `SKIPPED`）之前，先把工作区提交到那条 Run 自己的分支上**。
+
+| | |
+|---|---|
+| 挂在哪 | `VerificationService`（维护提示 6）——它是"Run 进入 `MERGE_READY` 之前唯一能改变其状态的环节"，两个成功分支各调一次 |
+| 谁去做 | `Scheduler.commitWorkspace(run)` → `WorkspaceAdapter.commit?(workspace, message)`。归这两层是因为 Worktree 的生命周期（建/收）本来就在那儿；`commit` 在端口上**是可选的**，不实现就没有这一步（十几处测试桩不用改） |
+| 提交什么 | `status --porcelain` 先看一眼，干净就直接返回（**不**调 `commit`——那会以非 0 退出，但那不是错误）；否则 `add -A` + `commit`（尊重 `.gitignore`） |
+| 提交信息 | 首行是 Plan 标题，正文一行 `Pipeline Factory · Run <id> · 分支 <branch>`；作者用仓库自己的 git 身份 |
+| 失败怎么办 | **把 Run 打成 `BLOCKED`**，原话写进 Plan 的 `attentionReason`（`工作区提交失败：…`）。`MERGE_READY` 的语义是"有东西可以合"，提交没落成就不该进那个状态；最常见的原因是仓库没配 git 身份（本机四个工程都配了，实测过） |
+| 不做的 | 只提交、**不碰别的分支**——合并仍然由人在 Git 侧做，与 `MergeService` 那条链同一口径 |
+
+配套：对账那条假阳性也修了（见下一条）——现在"这个 Run 一个提交都没有"会被如实报成
+`UNAVAILABLE`，而不是给一个恒真的"已检测到"。
+
+测试：`m4-verify-merge.test.ts` 四条（**提交发生在 `MERGE_READY` 之前**——断言提交那一刻 Run 还在
+`VERIFYING`；`SKIPPED` 也提交；失败 → `BLOCKED` + 理由；没配端口就整步跳过）＋
+`m3-run.test.ts` 三条（命令顺序 / 干净就不提交 / 失败要抛）。
+`pnpm verify` 全绿：domain 455 / api 122 / web 645。
+
+## 2026-10-11 — 「已检测到主干里有这份提交」的假阳性：一个提交都没有的 Run
+
+对账取的"源提交"是**工作区 / 分支 HEAD**（`resolveRunSource`）。一个从未提交过的 Run，它的 HEAD
+就停在基线上——于是 `sourceCommit` 等于基线本身，`isAncestor(source, target)` **恒真**，对账给出
+一个空洞的"主干里已经有这份提交了"。
+
+实测（project4 的 `run-b7cd26ff-c11`）：分支 tip 等于 main tip，修复躺在工作区里，界面却显示
+「已检测到」；照着那个提示点「确认合并」会连带 `worktree remove --force` 把那份没提交的修复删掉。
+
+现在 `sourceCommit === run.baseCommit` 时降级成 `UNAVAILABLE`，理由写清楚："Run 在分支上没有任何
+自己的提交（工作区里的改动还没提交），没有可判定的提交"。没有自己的提交就没有可判定的东西，
+如实说"判定不了"比给一个恒真的"已合并"强。文件头维护提示补第 7 条。
+
+回归用例：stub git 让 HEAD 解析回基线本身、`isAncestor` 恒真——**去掉那道守卫它会红**。
+
 ## 2026-10-11 — 草稿、抽屉、需求行：三处「界面拿的不是当前事实」
 
 同一条链路上的三个位置各自读不同的数据源，于是各有各的过期方式。这一轮把它们都收进"当前事实"，

@@ -296,6 +296,29 @@ export class Scheduler {
     return composeRunBranchLeaf(createdAt, summary);
   }
 
+  /**
+   * 把这条 Run 的**工作区改动提交到它自己的分支上**（Run 成功收尾时调用一次），返回提交号。
+   *
+   * 为什么归 Scheduler：Worktree 的生命周期（`start` 建、`finish` 收）本来就在这儿，提交是同一件
+   * 事的第三步；也只有它拿得到那条 `WorkspaceAdapter`。它**只提交，不碰别的分支**——合并仍然由人
+   * 在 Git 侧做，与 `MergeService` 那条链同一口径。
+   *
+   * 返回 `null` 表示"没有改动可提交"或"这个 adapter 不支持提交"（测试桩与无 Git 环境），两种都不是
+   * 失败。**提交失败会抛**：调用方（`VerificationService`）据此把 Run 打成 `BLOCKED`——`MERGE_READY`
+   * 的语义是"有东西可以合"，提交没落成就不该进那个状态。
+   */
+  async commitWorkspace(run: Run): Promise<string | null> {
+    const revision = this.options.store.getRevision(run.planId, run.planRevision);
+    if (!revision || !run.workspacePath) return null;
+    const adapter = this.workspaceAdapterFor(revision);
+    if (!adapter.commit) return null;
+    const title = this.options.store.getPlan(run.planId)?.title?.trim() || `Run ${run.id}`;
+    return adapter.commit(
+      { path: run.workspacePath, branch: run.branch, baseCommit: run.baseCommit },
+      `${title}\n\nPipeline Factory · Run ${run.id} · 分支 ${run.branch}\n`,
+    );
+  }
+
   /** 完成或取消 Run，按同一 Revision 执行 Worktree 清理和 Cleanup Hook。 */
   async finish(
     runId: string,
