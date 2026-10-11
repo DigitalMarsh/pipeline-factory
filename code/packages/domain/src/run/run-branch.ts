@@ -95,15 +95,14 @@ export function runBranchName(leaf: string): string {
 }
 
 /**
- * Reserve a readable leaf against **persisted Run branches** without changing history.
+ * Reserve a readable leaf against **已经占着的分支名** without changing history.
  *
  * 二级防线，不是主防线：主防线是叶子里的秒级时间戳（见 `runBranchStamp`）。这里对付的是
  * "同一秒、同一个 slug"那种真正的同时撞。
  *
- * **它的输入是"库里还记着的 Run 分支"，不是仓库里真实存在的分支。** 两者会分家——删掉 Run 行之后，
- * 它建过的分支还在仓库里，而这里已经不知道了（实测撞过一次：仓库里有同名分支 + 同名 worktree 目录，
- * 库里那条 Run 早被删了）。真要堵这条路得去问 git（`git branch --list`），但那要给 WorkspaceAdapter
- * 加一个方法、十二处测试桩跟着改——秒级时间戳之后这条路的收益已经很小，先不做。
+ * **输入由调用方给全**：`Scheduler.start` 交进来的是"库里记着的 Run 分支 ∪ 仓库里真实存在的本地
+ * 分支"。少了后一半就会漏——删掉 Run 行不会删掉仓库里那条分支。实测撞过：仓库里有同名分支、
+ * 库里那条 Run 早被删了，新 Run 拿到同一个叶子，`git worktree add -b` 当场失败、Run 打成 BLOCKED。
  */
 export function allocateRunBranchLeaf(baseLeaf: string, existingBranches: readonly string[]): string {
   const occupied = new Set(existingBranches);

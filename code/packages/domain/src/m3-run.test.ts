@@ -14,6 +14,8 @@ import {
   PlanService,
   ProjectService,
   Scheduler,
+  composeRunBranchLeaf,
+  runBranchName,
   type RunBranchNameGenerator,
 } from "./index.js";
 import { planContractFixture } from "./plan/plan-fixture.js";
@@ -134,6 +136,44 @@ describe("Scheduler and ExecutionThread", () => {
     expect(run.branch).toMatch(/^factory\/\d{8}-\d{6}-vue-intro$/);
     expect(workspaceInput).toMatchObject({ runId: run.id, branch: run.branch });
     expect(run.workspacePath).toBe(`/tmp/${run.branch.split("/").at(-1)}`);
+  });
+
+  /**
+   * 分支名分配器原先只问**库里记着的 Run 分支**，而删掉 Run 行**不会**删掉仓库里那条分支。
+   * 实测撞过（`factory/20261007-fix-task-project-validation`：分支还在仓库里、库里那条 Run 早被删），
+   * 新 Run 拿到同一个叶子 → `git worktree add -b` 当场失败 → Run 打成 `BLOCKED`，界面上的
+   * 「为什么停下」写着"分支已经存在"。现在它一并去问 git。
+   */
+  it("avoids a branch that exists in the repository but has no Run row", async () => {
+    const store = new InMemoryPipelineStore();
+    const planService = new PlanService(store);
+    const plan = planService.createCandidatePlan({
+      projectId: "project-branch-orphan",
+      sourceExplorerThreadId: "thread-branch-orphan",
+      title: "Vue introduction",
+      resolvedContract: planContractFixture({ store, projectId: "project-branch-orphan", title: "Vue introduction" }),
+    });
+    planService.confirm(plan.id, "user-1");
+    planService.enqueue(plan.id);
+    planService.dispatch(plan.id);
+    const scheduler = new Scheduler({
+      store,
+      branchNameGenerator: { generate: async () => "vue-intro" },
+      workspace: {
+        create: async (input) => ({ path: `/tmp/${input.runId}`, branch: input.branch, baseCommit: input.baseCommit }),
+        remove: async () => undefined,
+        // 叶子里的时间戳由调度器内部取 `store.now()`，测试猜不到是哪一秒——把相邻三秒都占上。
+        listBranches: async () => {
+          const now = Date.now();
+          return [-1000, 0, 1000].map((offset) => runBranchName(composeRunBranchLeaf(new Date(now + offset).toISOString(), "vue-intro")));
+        },
+      },
+      hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
+    });
+
+    const run = await scheduler.start(plan.id);
+
+    expect(run.branch).toMatch(/^factory\/\d{8}-\d{6}-vue-intro-2$/);
   });
 
   it("falls back to change when branch summary generation fails", async () => {

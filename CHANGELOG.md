@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-10-11 — 分支名分配去问 git：仓库里还在、库里已经忘了的分支不再撞车
+
+需求11 那条 Run 卡在「为什么停下」那一行：`Git worktree could not be created: … 一个名为
+'factory/20261007-fix-task-project-validation' 的分支已经存在`。
+
+根子在分配器的**输入不全**：它只问"库里记着的 Run 分支"（`store.listRuns().map(r => r.branch)`），
+而**删掉 Run 行不会删掉仓库里那条分支**——那条 2026-10-07 的分支就是这么留下来的（当年建的 Run 随
+需求一起删了，分支还在），新 Run 拿到同一个叶子，`git worktree add -b` 当场失败、Run 打成 `BLOCKED`。
+
+`run-branch.ts` 的注释早就写明正确做法是"去问 git"，当时因为"要给 `WorkspaceAdapter` 加方法、
+十二处测试桩跟着改"搁下了。这一轮补上——**方法做成可选**，所以那些桩一处都没动：
+
+- `WorkspaceAdapter.listBranches?()` ＋ `LocalGitWorktreeAdapter.listBranches()`（读 `refs/heads` 短名）；
+- `Scheduler.start` 的"已占名单" = 库里的 Run 分支 ∪ **仓库里真存在的分支**；端口没实现、或问不到
+  git，都退回只看库（与加这个方法之前完全一致——**问不到不拦派发**，撞上了照旧报出来）；
+- 顺带：那个适配器现在**只解析一次**（原先 `workspaceFactory` 在一次 start 里被解析两次、白建一个实例）
+  ——`project.test.ts` 那条"快照工厂只按快照建一次"的用例把它抓了出来。
+
+测试：`m3-run.test.ts` 新增一条（仓库里有同名分支、库里没有任何 Run 记着它 → 新 Run 拿到
+`…-vue-intro-2`；**去掉那句并集它就红**）。`pnpm verify` 全绿：domain 456 / api 122 / web 647。
+
 ## 2026-10-11 — 需求行两处：合并后说「已合并」、重新规划后跟着新候选
 
 都是跑那轮自动提交验证时撞见的，两处都出在需求行那一格的判据上。

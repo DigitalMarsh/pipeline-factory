@@ -44,6 +44,14 @@ export type WorkspaceAdapter = {
    * （加必填成员会让十几处 worktree 桩跟着改，收益只有一行）。
    */
   commit?(workspace: Workspace, message: string): Promise<string | null>;
+  /**
+   * 可缺省：仓库里**真实存在的本地分支**（短名，含 `factory/` 前缀）。
+   *
+   * 它服务的是分支名分配：删掉 Run 行**不会**删掉仓库里那条分支，只问库就会拿到一个已经被占的
+   * 叶子，`git worktree add -b` 当场失败、Run 被打成 `BLOCKED`（实测撞过）。
+   * 缺省时分配器退回只看库里的 Run 分支——与加这个方法之前的行为一致。
+   */
+  listBranches?(): Promise<string[]>;
 };
 
 /** 可注入的 Git 命令执行端口。 */
@@ -114,6 +122,23 @@ export class LocalGitWorktreeAdapter implements WorkspaceAdapter {
     if (committed.exitCode !== 0) throw new Error(`Git commit failed in ${workspace.path}: ${committed.stderr}`);
     const head = await this.runGit(["rev-parse", "HEAD"], workspace.path);
     return head.exitCode === 0 ? head.stdout.trim() : null;
+  }
+
+  /**
+   * 仓库里真实存在的本地分支（短名）。
+   *
+   * 这是"去问 git"的唯一一把把手：分支名分配器原先只问**库里记着的 Run 分支**，而删掉 Run 行不会
+   * 删掉仓库里那条分支——实测撞过（`factory/20261007-fix-task-project-validation` 还在仓库里、
+   * 库里那条 Run 早没了，新 Run 拿到同一个叶子，`git worktree add -b` 直接失败、Run 被打成
+   * `BLOCKED`，界面上的「为什么停下」写着"分支已经存在"）。
+   */
+  async listBranches(): Promise<string[]> {
+    const listed = await this.runGit(["for-each-ref", "--format=%(refname:short)", "refs/heads"], this.options.projectRoot);
+    if (listed.exitCode !== 0) throw new Error(`Git branch listing failed: ${listed.stderr}`);
+    return listed.stdout
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
   }
 }
 

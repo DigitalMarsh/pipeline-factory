@@ -135,6 +135,23 @@ export class Scheduler {
     this.assertVerificationCommands(revision);
     const createdAt = this.options.store.now();
     const baseBranchLeaf = await this.runBranchLeaf(plan, revision, createdAt);
+    // 适配器**只解析一次**，下面 create 复用它：`workspaceFactory` 是按快照建实例的，解析两次就是白建一个。
+    const workspaceAdapter = this.workspaceAdapterFor(revision);
+    /**
+     * 已经占着的分支名 = **库里记着的 Run 分支 ∪ 仓库里真实存在的本地分支**。
+     *
+     * 只问库里会漏：删掉 Run 行之后，它建过的分支还留在仓库里，而库里已经不知道了。实测撞过一次
+     * ——`factory/20261007-fix-task-project-validation` 的分支还在、库里那条 Run 早被删，
+     * 新 Run 拿到同一个叶子，`git worktree add -b` 直接失败、Run 被打成 `BLOCKED`（界面上的
+     * 「为什么停下」就写着"分支已经存在"）。
+     *
+     * 端口上没有 `listBranches` 就退回只看库（测试桩与无 Git 环境走这条）；**问不到 git 也不拦派发**
+     * ——那时行为和以前一样，撞上了照样按今天的路子报出来。
+     */
+    const occupiedBranches = [
+      ...this.options.store.listRuns().map((run) => run.branch),
+      ...(await this.existingBranches(workspaceAdapter)),
+    ];
     const createOrReuse = (): { run: Run; thread: ExecutionThread; created: boolean } => {
       const raced = this.options.store.listRuns().find((run) => run.planId === planId && run.planRevision === revision.revision);
       if (raced)
@@ -148,10 +165,7 @@ export class Scheduler {
           },
           created: false,
         };
-      const branchLeaf = allocateRunBranchLeaf(
-        baseBranchLeaf,
-        this.options.store.listRuns().map((run) => run.branch),
-      );
+      const branchLeaf = allocateRunBranchLeaf(baseBranchLeaf, occupiedBranches);
       const runId = this.options.store.nextId("run");
       const thread: ExecutionThread = { id: this.options.store.nextId("execution-thread"), runId, state: "ACTIVE", journal: [] };
       const run: Run = {
@@ -177,7 +191,6 @@ export class Scheduler {
     this.runs.set(run.id, run);
     this.threads.set(thread.id, thread);
     if (!record.created) return run;
-    const workspaceAdapter = this.workspaceAdapterFor(revision);
     const hookRunner = this.hookRunnerFor(revision);
     const executionHooks = revision.projectConfigSnapshot?.settings.hooks ?? hooks;
     // Worktree、Start Hook 和 Executor 按顺序执行：任何前置阶段失败都阻止模型写入，
@@ -294,6 +307,16 @@ export class Scheduler {
       }
     }
     return composeRunBranchLeaf(createdAt, summary);
+  }
+
+  /** 仓库里真实存在的本地分支。端口没实现、或问不到 git，都返回空数组（见 `start()` 里那段注释）。 */
+  private async existingBranches(adapter: WorkspaceAdapter): Promise<string[]> {
+    if (!adapter.listBranches) return [];
+    try {
+      return await adapter.listBranches();
+    } catch {
+      return [];
+    }
   }
 
   /**
