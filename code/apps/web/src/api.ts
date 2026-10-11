@@ -25,7 +25,6 @@ import type {
   ProjectSummary,
   Run,
   RunGuidance,
-  ToolCall,
   VerificationRun,
 } from "./types";
 
@@ -99,10 +98,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ explorerId }),
     }),
-  projectConfigHistory: (projectId: string) =>
-    request<{ items: Array<{ projectId: string; version: number; hash: string; snapshot: Record<string, unknown>; createdAt: string }> }>(
-      `/api/v4/projects/${encodeURIComponent(projectId)}/config-history`,
-    ),
   projectRuns: (projectId: string) => request<{ items: Run[] }>(`/api/v4/projects/${encodeURIComponent(projectId)}/runs`),
   projectExecutionThread: (projectId: string) =>
     request<ProjectExecutionThreadSnapshot>(`/api/v4/projects/${encodeURIComponent(projectId)}/execution-thread`),
@@ -127,7 +122,6 @@ export const api = {
     ),
   projectExecutionEventsUrl: (projectId: string, afterSequence?: number) =>
     `/api/v4/projects/${encodeURIComponent(projectId)}/execution-thread/events${afterSequence === undefined ? "" : `?afterSequence=${afterSequence}`}`,
-  agentLoopTools: (loopId: string) => request<{ items: ToolCall[] }>("/api/v4/agent-loops/" + encodeURIComponent(loopId) + "/tools"),
   explorerPlanRequirements: () =>
     request<{
       requirements: {
@@ -235,12 +229,6 @@ export const api = {
       `/api/v4/projects/${encodeURIComponent(projectId)}/explorers/${encodeURIComponent(explorerId)}/explorer-plans/${encodeURIComponent(explorerPlanId)}/selected-plan`,
       { method: "POST", body: JSON.stringify({ planId }) },
     ),
-  explorerCandidate: (projectId: string, explorerId: string, explorerPlanId?: string) =>
-    request<{ plan: Plan }>(
-      `/api/v4/projects/${projectId}/explorers/${encodeURIComponent(explorerId)}/candidate${explorerPlanId ? `?explorerPlanId=${encodeURIComponent(explorerPlanId)}` : ""}`,
-    ),
-  explorerRevisionDraft: (projectId: string, explorerId: string) =>
-    request<{ draft: PlanRevisionDraft }>(`/api/v4/projects/${projectId}/explorers/${encodeURIComponent(explorerId)}/revision-draft`),
   startExplorerTurn: (projectId: string, threadId: string, content: string, clientTurnId: string, explorerPlanId: string) =>
     request<{ turn: { user: ExplorerTurn; assistant: ExplorerTurn }; eventsUrl: string; loopId: string | null; state: string }>(
       `/api/v4/projects/${projectId}/explorer-thread/turns`,
@@ -249,10 +237,6 @@ export const api = {
   getExplorerTurns: (projectId: string, threadId: string, explorerPlanId: string) =>
     request<{ items: ExplorerTurn[]; lastEventSequence: number }>(
       `/api/v4/projects/${projectId}/explorer-thread/turns?threadId=${encodeURIComponent(threadId)}&explorerPlanId=${encodeURIComponent(explorerPlanId)}`,
-    ),
-  explorerAgentLoops: (projectId: string, threadId: string, explorerPlanId: string) =>
-    request<{ items: AgentLoop[] }>(
-      `/api/v4/projects/${projectId}/explorer-thread/agent-loops?threadId=${encodeURIComponent(threadId)}&explorerPlanId=${encodeURIComponent(explorerPlanId)}`,
     ),
   inputRequests: (projectId: string, threadId: string, explorerPlanId: string, status?: string) =>
     request<{ items: ExplorerInputRequest[] }>(
@@ -295,10 +279,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ reason }),
     }),
-  plans: (projectId: string, query = "") =>
-    request<{ items: Plan[]; nextCursor: string | null }>(`/api/v4/projects/${projectId}/plans${query}`),
   candidatePlans: (projectId: string) => request<{ items: Plan[] }>(`/api/v4/projects/${encodeURIComponent(projectId)}/candidate-plans`),
-  projectTasks: (projectId: string) => request<{ items: Plan[] }>(`/api/v4/projects/${encodeURIComponent(projectId)}/tasks`),
   reconcileProjectMerges: (projectId: string) =>
     request<{
       projectId: string;
@@ -410,7 +391,6 @@ export const api = {
       verification: VerificationRun | null;
       mergeRequest: MergeRequest | null;
     }>(`/api/v4/runs/${encodeURIComponent(runId)}`),
-  getExecutionThread: (threadId: string) => request<{ thread: ExecutionThread }>(`/api/v4/execution-threads/${threadId}`),
   cancelRun: (runId: string, reason = "user_requested") =>
     request<{ run: Run }>(`/api/v4/runs/${runId}/cancel`, { method: "POST", body: JSON.stringify({ reason }) }),
   pauseRun: (runId: string) => request<{ run: Run; thread: ExecutionThread }>(`/api/v4/runs/${runId}/pause`, { method: "POST" }),
@@ -430,7 +410,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ sourceCommit }),
     }),
-  getMergeRequest: (mergeRequestId: string) => request<{ mergeRequest: MergeRequest }>(`/api/v4/merge-requests/${mergeRequestId}`),
   confirmMerged: (mergeRequestId: string, targetCommit: string) =>
     request<{ mergeRequest: MergeRequest }>(`/api/v4/merge-requests/${mergeRequestId}/confirm-merged`, {
       method: "POST",

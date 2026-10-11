@@ -1,10 +1,52 @@
 /**
- * 测试职责：验证 Web API facade 保留 HTTP 错误状态，供页面展示可诊断提示。
+ * 测试职责：验证 Web API facade 保留 HTTP 错误状态（供页面展示可诊断提示），
+ *   并锁住那批**没有任何调用方**的包装没有被重新加回来。
  * 设计说明：通过真实 facade 发起请求，只有网络边界使用 fetch stub。
  * 维护提示：统一请求错误契约变化时，应同步调整页面错误映射。
  */
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { api } from "./api";
+
+const apiSource = readFileSync(fileURLToPath(new URL("./api.ts", import.meta.url)), "utf8");
+
+/**
+ * 这九个包装曾长期躺在 facade 上，**生产代码一处都没调**（其中两个还被别的测试断言过
+ * "不该出现在视图里"）。它们对应的 HTTP 端点仍留着——端点是对外契约，删不删是另一回事；
+ * 但客户端这一侧空着只会让后来的人以为有人在用。
+ *
+ * 要加回来，先有调用方：加一个只被测试用的包装，等于又把这条线长回去了。
+ */
+describe("API facade 上删掉的那批空转包装", () => {
+  it("不再暴露这些没人调的方法", () => {
+    for (const name of [
+      "projectConfigHistory",
+      "agentLoopTools",
+      "explorerAgentLoops",
+      "projectTasks",
+      "getExecutionThread",
+      "getMergeRequest",
+      "plans",
+      "explorerCandidate",
+      "explorerRevisionDraft",
+    ]) {
+      expect(api).not.toHaveProperty(name);
+    }
+  });
+
+  it("源码里也没有留下它们的定义", () => {
+    for (const name of ["projectConfigHistory:", "agentLoopTools:", "explorerAgentLoops:", "projectTasks:"]) {
+      expect(apiSource).not.toContain(name);
+    }
+    // `plans` / `getMergeRequest` 这类名字在别处也会出现，只认"作为 api 方法定义"那个形状。
+    expect(apiSource).not.toContain("  plans: (projectId: string");
+    expect(apiSource).not.toContain("  getExecutionThread: ");
+    expect(apiSource).not.toContain("  getMergeRequest: ");
+    expect(apiSource).not.toContain("  explorerCandidate: ");
+    expect(apiSource).not.toContain("  explorerRevisionDraft: ");
+  });
+});
 
 describe("api request errors", () => {
   it("loads the API health endpoint and preserves health request failures", async () => {
@@ -29,21 +71,6 @@ describe("api request errors", () => {
       items: [{ planId: "plan-1", status: "READY" }],
     });
     expect(fetchSpy).toHaveBeenCalledWith("/api/v4/projects/project-1/explorers/explorer-1/confirmed-plans", { headers: {} });
-
-    fetchSpy.mockRestore();
-  });
-
-  it("loads a Candidate plan scoped to the active Explorer Task", async () => {
-    const fetchSpy = vi
-      .spyOn(globalThis, "fetch")
-      .mockResolvedValue(
-        new Response(JSON.stringify({ plan: { id: "plan-1", explorerPlanId: "task-1", status: "DRAFT" } }), { status: 200 }),
-      );
-
-    await expect(api.explorerCandidate("project-1", "explorer-1", "task-1")).resolves.toMatchObject({ plan: { explorerPlanId: "task-1" } });
-    expect(fetchSpy).toHaveBeenCalledWith("/api/v4/projects/project-1/explorers/explorer-1/candidate?explorerPlanId=task-1", {
-      headers: {},
-    });
 
     fetchSpy.mockRestore();
   });

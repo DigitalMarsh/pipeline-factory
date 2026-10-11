@@ -1,5 +1,54 @@
 # Changelog
 
+## 2026-10-11 — 扫第二遍：换三个面，删掉 `api.ts` 上九个没人调的客户端包装
+
+上一轮扫的是"导出的符号"。这轮换了三个它**结构上看不见**的面：
+
+| 面 | 结果 |
+|---|---|
+| **文件级可达性**（从三个真实入口建 import 图） | **干净**——337 个源文件里所有非测试文件都能从入口走到，没有"只有测试 import 的文件" |
+| **`api.ts` 的客户端方法** | **9 个生产侧零调用**（`api` 对象的**属性**，逐符号扫描看不见） |
+| **API 路由** | 11 条在生产侧零调用（6 条只有 `server.test.ts` 命中，5 条谁都没命中） |
+| **`styles.css` 的类选择器** | 约 12 个确认死（另外 93 个"没人提"里混着 Element Plus 覆盖与组合类名，不能当死的） |
+
+### 删掉的：九个客户端包装
+
+`projectConfigHistory` / `agentLoopTools` / `explorerAgentLoops` / `plans` / `projectTasks` /
+`getExecutionThread` / `getMergeRequest` / `explorerCandidate` / `explorerRevisionDraft`。
+
+其中 `explorerCandidate` / `explorerRevisionDraft` **早就被别的测试断言过"不该出现在视图里"**
+（`expect(...).not.toContain("api.explorerCandidate")`），也就是说模板那边早删干净了，只剩 facade
+上这两个包装空着。
+
+> **对应的 HTTP 端点一个都没动。** 端点是**对外契约**，`server.test.ts` 就是它的"记录在案的消费者"；
+> 而且变更提案那三条背后是一个文档里写着的功能（§1.3 D 的 `NEEDS_PLAN_CHANGE` 那条链）。
+> 删客户端包装只是承认"这个仓里没人用它"，不等于砍接口。
+
+`api.test.ts` 补了两条判据：facade 上不再有这九个方法、源码里也没有留下定义——免得将来有人
+"顺手补一个包装"，那条线又长回去。
+
+### 这一轮没动的（留给你判断）
+
+- **11 条生产侧零调用的路由**：`/mcp/tools`、`/runs/:id/change-proposals`(GET/POST)、
+  `/change-proposals/:id/approve`、`/projects/:id/settings/hooks`(GET/PUT)、`/runs/:id/finish`、
+  `/runs/:id/verification`、`/projects/:id/summary`、`/agent-loops/:id/tools`、`/plugins/tools`。
+  删端点等于砍接口，是产品判断不是清理。
+- **死 CSS**：`run-actions` / `evidence-card` / `agent-loop-detail` / `execution-steps-panel` /
+  `execution-telemetry-panel` / `context-entry-rail` / `diagnostics-teaser` / `rail-nav` /
+  `left-panel-manage` / `explorer-thread-tree` / `explorer-tree-task-row` —— 前七个
+  `RunDetailView.test.ts` 早就在断言"模板里已经没有这个 class 了"，样式留着没删。剩下那 93 个
+  "没人提"的里混着组合类名（`` `tone-${…}` ``、`` `execution-conversation-group-${…}` ``）和
+  Element Plus 覆盖，得逐条认组合模式才能动，是单独一轮的活。
+
+### 顺带记两个脚本坑
+
+写可达性分析时踩的，都会给出**看起来很正常**的假结果：
+1. `os.path.join(dirpath, 绝对路径)` 会把绝对路径原样返回——第一次跑出"337 个文件全部不可达"；
+2. **本仓用 ESM 风格：源码是 `.ts`、import 里写 `.js`**，解析时先剥掉后缀，否则 `main.ts` 自己
+   都走不到，跑出"95 个可达但入口不可达"。
+
+`pnpm verify` 全绿：domain 447 / api 117 / web 629。
+
 ## 2026-10-11 — 清掉「只有测试引用」的那批导出
 
 承接上一轮的问法（"还有别的地方只有测试引用的吗"），写了个脚本把所有包的导出名枚举出来（343 个源文件 /
