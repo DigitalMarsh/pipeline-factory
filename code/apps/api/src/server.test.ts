@@ -2290,6 +2290,64 @@ describe("Pipeline Factory v4 API", () => {
   });
 
   /**
+   * **「回收工作区」：`/finish` 的语义是"只收目录、不改状态"。**
+   *
+   * 它是三个结束类动作里唯一**不碰 Run 状态**的那个——终止与放弃都把 Run 变成 `CANCELLED`，而它
+   * 收完 worktree 之后 `MERGE_READY` 仍然 `MERGE_READY`（合并走的是分支，不看目录）。这正是界面
+   * 上那颗按钮存在的理由：为了收磁盘，不该被迫先决定"要不要合并"。
+   *
+   * 另外钉住这次顺带修的两条：删完把 `workspacePath` 清掉（不清的话，界面判断"还有没有 worktree"
+   * 就只能靠猜），以及删不掉时不再让整条 finish 失败。
+   */
+  it("reclaims the workspace of a stopped run without changing its status", async () => {
+    const store = new InMemoryPipelineStore();
+    createTestProject(store);
+    const plans = new PlanService(store);
+    plans.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
+    const plan = plans.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "thread-1",
+      title: "Reclaim a merge-ready workspace",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Reclaim a merge-ready workspace" }),
+    });
+    plans.confirm(plan.id, "user-1");
+    plans.enqueue(plan.id);
+    const removed: string[] = [];
+    const scheduler = new Scheduler({
+      store,
+      workspace: {
+        create: async () => ({ path: "/tmp/run-reclaim", branch: "factory/run-reclaim", baseCommit: "abc" }),
+        remove: async (workspace) => {
+          removed.push(workspace.path);
+        },
+      },
+      hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
+    });
+    const app = createApp({ store, scheduler, seed: false });
+    apps.push(app);
+
+    const started = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/run` });
+    const runId = started.json().run.id as string;
+    store.saveRun({ ...store.getRun(runId)!, status: "MERGE_READY" });
+    store.updatePlan({ ...store.getPlan(plan.id)!, status: "MERGE_READY" });
+
+    const finished = await app.inject({
+      method: "POST",
+      url: `/api/v4/runs/${runId}/finish`,
+      payload: { exitReason: "workspace_reclaimed" },
+    });
+
+    expect(finished.statusCode).toBe(200);
+    // **两处状态一个字都不动** —— 与 /cancel（Run → CANCELLED、Plan → BLOCKED）的关键区别。
+    expect(finished.json().run).toMatchObject({ id: runId, status: "MERGE_READY" });
+    expect(store.getPlan(plan.id)).toMatchObject({ status: "MERGE_READY" });
+    expect(store.getPlan(plan.id)?.attentionReason ?? null).toBeNull();
+    expect(removed).toEqual(["/tmp/run-reclaim"]);
+    // 收完就清列：不清的话"这条 Run 还有没有 worktree"在库里看不出来。
+    expect(store.getRun(runId)?.workspacePath).toBeNull();
+  });
+
+  /**
    * Run 控制那几条 409 **一律带 `code`**。
    *
    * 同一个 409 下可能有好几种原因，web 侧的 `ApiRequestError` 特意把响应体带出来就是为了让调用方

@@ -393,6 +393,12 @@ export const api = {
     }>(`/api/v4/runs/${encodeURIComponent(runId)}`),
   cancelRun: (runId: string, reason = "user_requested") =>
     request<{ run: Run }>(`/api/v4/runs/${runId}/cancel`, { method: "POST", body: JSON.stringify({ reason }) }),
+  /**
+   * 结束一个 Run 并回收它的本地工作区，**不改 Run 状态**（`scheduler.finish` 的真实语义）。
+   * `exitReason` 会以 `PIPELINE_EXIT_REASON` 交给 cleanup 钩子，所以调用方给的理由要能读。
+   */
+  finishRun: (runId: string, exitReason: string) =>
+    request<{ run: Run }>(`/api/v4/runs/${runId}/finish`, { method: "POST", body: JSON.stringify({ exitReason }) }),
   pauseRun: (runId: string) => request<{ run: Run; thread: ExecutionThread }>(`/api/v4/runs/${runId}/pause`, { method: "POST" }),
   resumeRun: (runId: string) => request<{ run: Run; thread: ExecutionThread }>(`/api/v4/runs/${runId}/resume`, { method: "POST" }),
   /**

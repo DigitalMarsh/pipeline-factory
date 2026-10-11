@@ -15,6 +15,7 @@ import { executionTaskStatusLabel, executionTaskStatusType, verificationSummary 
 import {
   canAbandonRun,
   canPauseRun,
+  canReclaimWorkspace,
   canTerminateRun,
   hasRunControlActions,
   type LoopControlAction,
@@ -512,6 +513,11 @@ watch(
               >终止 Run</el-button
             ><el-button v-if="canAbandonRun(run.status)" type="danger" plain :loading="actionBusy" @click="emit('run-action', 'abandon')"
               >放弃这次运行</el-button
+            ><el-button
+              v-if="canReclaimWorkspace(run.status) && run.workspacePath"
+              :loading="actionBusy"
+              @click="emit('run-action', 'reclaim')"
+              >回收工作区</el-button
             ><el-button
               v-if="canPauseRun(run.status, threadState)"
               :loading="actionBusy"

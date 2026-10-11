@@ -81,6 +81,7 @@ function mountStatus(
   runActivity: ExecutionStreamItem[] = [],
   runtimeFacts: ExecutionStreamItem[] = [],
   executorSteps: AgentLoopStep[] = [],
+  workspacePath: string | null = run.workspacePath,
 ) {
   const host = document.createElement("div");
   document.body.appendChild(host);
@@ -90,7 +91,7 @@ function mountStatus(
       setup() {
         return () =>
           h(ExecutionHeaderStatus, {
-            run: { ...run, status },
+            run: { ...run, status, workspacePath },
             threadState: "ACTIVE",
             telemetry: null,
             telemetryNow: Date.now(),
@@ -203,6 +204,41 @@ describe("ExecutionHeaderStatus", () => {
     expect(blocked.host.textContent).not.toContain("放弃这次运行");
     blocked.app.unmount();
     blocked.host.remove();
+  });
+
+  /**
+   * **「回收工作区」只在"已经停下、而且还有工作区"时出现。**
+   *
+   * 它是三个结束类动作里唯一**不改 Run 状态**的：终止与放弃都把 Run 变成 `CANCELLED`，而它只把
+   * 本地目录收回来——待合并的仍然待合并（合并走分支）。所以判断它该不该出现的第二半是
+   * `run.workspacePath`：那列是 null 就没有东西可收。
+   */
+  it("有工作区时才给「回收工作区」，收完（那一列为 null）就撤掉", async () => {
+    const openControls = async (status: string, workspacePath: string | null) => {
+      const mounted = mountStatus(status, [], [], [], workspacePath);
+      trigger(mounted.host, "controls").click();
+      await nextTick();
+      return mounted;
+    };
+
+    const withWorkspace = await openControls("MERGE_READY", "/tmp/worktree");
+    expect(withWorkspace.host.textContent).toContain("回收工作区");
+    // 与「放弃这次运行」并存：一个是"不合并了"，一个是"只是把磁盘收回来"。
+    expect(withWorkspace.host.textContent).toContain("放弃这次运行");
+    withWorkspace.app.unmount();
+    withWorkspace.host.remove();
+
+    const withoutWorkspace = await openControls("MERGE_READY", null);
+    expect(withoutWorkspace.host.textContent).not.toContain("回收工作区");
+    expect(withoutWorkspace.host.textContent).toContain("放弃这次运行");
+    withoutWorkspace.app.unmount();
+    withoutWorkspace.host.remove();
+
+    // 跑着的 Run 不给——它的工作区正在用。
+    const running = await openControls("IN_PROGRESS", "/tmp/worktree");
+    expect(running.host.textContent).not.toContain("回收工作区");
+    running.app.unmount();
+    running.host.remove();
   });
 
   it("列出 Run 级活动：只在 RUN CONTEXT 弹层里，且没有时不渲染这一节", async () => {

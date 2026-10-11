@@ -178,6 +178,8 @@ const {
   terminateError,
   abandonOpen,
   abandonError,
+  reclaimOpen,
+  reclaimError,
   sourceCommit,
   targetCommit,
   handleRunAction,
@@ -186,6 +188,7 @@ const {
   confirmMerged,
   confirmTerminateRun,
   confirmAbandonRun,
+  confirmReclaimWorkspace,
   updateSourceCommit,
   updateTargetCommit,
 } = useRunControl({
@@ -777,6 +780,27 @@ onBeforeUnmount(() => {
       :busy="actionBusy"
       :error="abandonError"
       @confirm="confirmAbandonRun"
+    />
+    <!-- 「回收工作区」是第三个动作，与前两个**不一样的地方在于它不改 Run 状态**：终止与放弃都让
+         Run 变成 CANCELLED，而这一条只把本地目录收回来——待合并的仍然待合并（合并走的是分支，
+         不看目录）。这也是它存在的理由：为了收磁盘，不该被迫先决定"要不要合并"。
+         代价写在 details 里，最要紧的是它会**关掉"补充要求续跑"那条路**（`continueRun` 要在原目录里跑）。 -->
+    <ConfirmDialog
+      v-model="reclaimOpen"
+      eyebrow="运行控制"
+      heading="回收工作区"
+      message="把这条 Run 占的本地目录从磁盘上收回来。Run 与 Plan 的状态都不变，要合并的话照旧可以合并。"
+      :details="[
+        '已提交到分支的改动保留；尚未提交的会丢（回收走的是 git worktree remove --force）',
+        '这条 Run 之后不能再补充要求续跑——续跑就是在原目录里接着跑',
+        'cleanup 钩子会执行',
+      ]"
+      confirm-label="回收工作区"
+      cancel-label="先留着"
+      tone="danger"
+      :busy="actionBusy"
+      :error="reclaimError"
+      @confirm="confirmReclaimWorkspace"
     />
   </div>
 </template>

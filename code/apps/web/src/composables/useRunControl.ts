@@ -21,7 +21,7 @@ import { ref, type Ref } from "vue";
 import { ElMessage } from "element-plus";
 import { api } from "../api";
 import type { AgentLoop, ExecutionThread, MergeRequest, Run, VerificationRun } from "../types";
-import { canAbandonRun, canTerminateRun, type LoopControlAction, type RunControlAction } from "../utils/runControls";
+import { canAbandonRun, canReclaimWorkspace, canTerminateRun, type LoopControlAction, type RunControlAction } from "../utils/runControls";
 
 export type RunControlDeps = {
   run: Ref<Run | null>;
@@ -51,6 +51,12 @@ export function useRunControl(deps: RunControlDeps) {
    */
   const abandonOpen = ref(false);
   const abandonError = ref<string | null>(null);
+  /**
+   * 「回收工作区」的确认框。**它不改 Run 状态**（与上面两个不同）：只把本地目录收回来，
+   * 待合并的仍然待合并。代价是这条 Run 之后不能再补充要求续跑——写在确认框里。
+   */
+  const reclaimOpen = ref(false);
+  const reclaimError = ref<string | null>(null);
   const sourceCommit = ref("");
   const targetCommit = ref("");
 
@@ -124,6 +130,33 @@ export function useRunControl(deps: RunControlDeps) {
     }
   }
 
+  /** 「回收工作区」：只收本地目录，不动状态。 */
+  function reclaimWorkspace(): void {
+    if (!deps.run.value || actionBusy.value || !canReclaimWorkspace(deps.run.value.status)) return;
+    reclaimError.value = null;
+    reclaimOpen.value = true;
+  }
+
+  /** 确认框里按下「回收工作区」之后才走这里。走的是 `/finish`，**不是** `/cancel**。 */
+  async function confirmReclaimWorkspace(): Promise<void> {
+    const target = deps.run.value;
+    if (!target || actionBusy.value) return;
+    actionBusy.value = true;
+    reclaimError.value = null;
+    try {
+      // `exitReason` 会以 `PIPELINE_EXIT_REASON` 交给 cleanup 钩子——给它一个读得懂的词。
+      await api.finishRun(target.id, "workspace_reclaimed");
+      reclaimOpen.value = false;
+      ElMessage.success("本地工作区已回收");
+      // **不走 `onTerminated`**：这条 Run 没有结束，抽屉不该关。
+      await deps.reload();
+    } catch (caught) {
+      reclaimError.value = caught instanceof Error ? `回收失败：${caught.message}` : "回收失败";
+    } finally {
+      actionBusy.value = false;
+    }
+  }
+
   /** 确认框里按下「终止」之后才走这里——**对话框只负责问，终止是这一步的事**。 */
   async function confirmTerminateRun(): Promise<void> {
     const target = deps.run.value;
@@ -189,6 +222,7 @@ export function useRunControl(deps: RunControlDeps) {
     // 终止现在只是"开确认框"，不再是"问完顺手做掉"——真正的终止在 confirmTerminateRun 里。
     if (action === "terminate") terminateRun();
     if (action === "abandon") abandonRun();
+    if (action === "reclaim") reclaimWorkspace();
     if (action === "pause" || action === "resume") await togglePause();
     if (action === "verify") await verifyRun();
   }
@@ -212,6 +246,9 @@ export function useRunControl(deps: RunControlDeps) {
     abandonOpen,
     abandonError,
     confirmAbandonRun,
+    reclaimOpen,
+    reclaimError,
+    confirmReclaimWorkspace,
     sourceCommit,
     targetCommit,
     // 只导出视图真正用到的（`run-action` / `loop-action` 两个入口 + 确认框 + 两个 commit 输入）：

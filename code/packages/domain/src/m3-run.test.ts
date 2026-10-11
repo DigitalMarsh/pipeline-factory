@@ -297,6 +297,76 @@ describe("Scheduler and ExecutionThread", () => {
     expect(order).toEqual(["worktree.remove", "project.cleanup"]);
     expect(scheduler.thread(run.executionThreadId).journal.at(-1)).toMatchObject({ type: "HOOK_FAILED" });
     expect(store.getPlan(plan.id)?.attentionReason).toMatch(/cleanup/i);
+    // **删完把 `workspacePath` 清掉**：这一列此前删完留着，于是"这条 Run 还有没有 worktree"
+    // 在库里看不出来（7 条已取消的 Run 全带着路径，其中 5 条目录早没了）。界面要靠它判断
+    // 该不该给「回收工作区」那个入口。
+    expect(store.getRun(run.id)?.workspacePath).toBeNull();
+  });
+
+  it("目录早就不在了：按「已回收」算，`finish` 不抛、并把那一列清掉", async () => {
+    const store = new InMemoryPipelineStore();
+    const planService = new PlanService(store);
+    const plan = planService.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "thread-1",
+      title: "Already gone",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Already gone" }),
+    });
+    planService.confirm(plan.id, "user-1");
+    planService.enqueue(plan.id);
+    planService.dispatch(plan.id);
+    const scheduler = new Scheduler({
+      store,
+      workspace: {
+        // 返回一个**不存在**的目录：这正是老库里 `workspacePath` 与磁盘对不上的样子。
+        create: async () => ({ path: "/tmp/run-already-gone", branch: "factory/run-already-gone", baseCommit: "abc" }),
+        remove: async () => {
+          throw new Error("Git worktree could not be removed: not a working tree");
+        },
+      },
+      hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
+    });
+    const run = await scheduler.start(plan.id);
+
+    await expect(scheduler.finish(run.id, "completed", {})).resolves.toBeTruthy();
+    expect(store.getRun(run.id)?.workspacePath).toBeNull();
+  });
+
+  it("真删不掉时：`finish` 仍然不抛，但把失败记进 attention 与 journal", async () => {
+    const store = new InMemoryPipelineStore();
+    const planService = new PlanService(store);
+    const plan = planService.createCandidatePlan({
+      projectId: "project-1",
+      sourceExplorerThreadId: "thread-1",
+      title: "Stuck workspace",
+      resolvedContract: planContractFixture({ store, projectId: "project-1", title: "Stuck workspace" }),
+    });
+    planService.confirm(plan.id, "user-1");
+    planService.enqueue(plan.id);
+    planService.dispatch(plan.id);
+    // 目录**真的存在**，remove 又抛 → 这才是"删不掉"，不能当已回收。
+    const stuck = mkdtempSync(join(tmpdir(), "pf-stuck-workspace-"));
+    const scheduler = new Scheduler({
+      store,
+      workspace: {
+        create: async () => ({ path: stuck, branch: "factory/run-stuck", baseCommit: "abc" }),
+        remove: async () => {
+          throw new Error("Git worktree could not be removed: device busy");
+        },
+      },
+      hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
+    });
+    const run = await scheduler.start(plan.id);
+
+    await expect(scheduler.finish(run.id, "completed", {})).resolves.toBeTruthy();
+    // 删不掉就**别清那一列**——目录还在，清了界面就会以为已经收干净了。
+    expect(store.getRun(run.id)?.workspacePath).toBe(stuck);
+    expect(store.getPlan(plan.id)?.attentionReason).toMatch(/worktree not released/i);
+    expect(scheduler.thread(run.executionThreadId).journal.at(-1)).toMatchObject({
+      type: "HOOK_FAILED",
+      payload: expect.objectContaining({ hook: "worktree-release" }),
+    });
+    rmSync(stuck, { recursive: true, force: true });
   });
 
   it("releases a merged Run's worktree once and keeps the branch", async () => {

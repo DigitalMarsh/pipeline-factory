@@ -4,7 +4,7 @@
  * 维护提示：业务状态、错误条件或公共契约变化时，应同步调整对应场景。
  */
 import { describe, expect, it } from "vitest";
-import { canAbandonRun, canContinueRun, canPauseRun, canTerminateRun, hasRunControlActions } from "./runControls";
+import { canAbandonRun, canContinueRun, canPauseRun, canReclaimWorkspace, canTerminateRun, hasRunControlActions } from "./runControls";
 
 describe("补充要求的可用性（canContinueRun）", () => {
   /**
@@ -32,6 +32,17 @@ describe("补充要求的可用性（canContinueRun）", () => {
 });
 
 describe("run controls", () => {
+  /**
+   * 「回收工作区」只在**已经停下**的两种状态上给：`MERGE_READY`（跑完了在等合并）与 `BLOCKED`
+   * （卡住了）。跑着的状态不给——它的工作区正在用。`CANCELLED` 也不给：`finish` 对它直接早返回，
+   * 按下去是个空动作。
+   */
+  it("只对已停下的状态提供「回收工作区」", () => {
+    for (const status of ["MERGE_READY", "BLOCKED"]) expect(canReclaimWorkspace(status)).toBe(true);
+    for (const status of ["STARTING", "IN_PROGRESS", "READY_FOR_VERIFY", "VERIFYING", "RECOVERING", "CANCELLED", "STALE"])
+      expect(canReclaimWorkspace(status)).toBe(false);
+  });
+
   it.each([
     ["IN_PROGRESS", "ACTIVE", true],
     ["IN_PROGRESS", "PAUSED", true],

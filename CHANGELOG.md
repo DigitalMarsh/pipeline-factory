@@ -1,5 +1,55 @@
 # Changelog
 
+## 2026-10-11 — 补上「回收工作区」：`/finish` 终于有了入口
+
+上一轮查那三条运维口子时留下的结论是：`/finish` 是唯一能用**非 `cancelled`** 的理由调
+`scheduler.finish` 的把手，而且它**不改 Run 状态**——但它从来没有客户端、也从来没有被调用过
+（`hook_executions` 里 6 条 cleanup 记录，`exitReason` 全是 `cancelled`）。这一轮给它补上入口。
+
+### 三个结束类动作，各司其职
+
+| 入口 | 出现在 | 改 Run 状态吗 |
+|---|---|---|
+| 终止 Run | `STARTING` / `IN_PROGRESS` / `READY_FOR_VERIFY` / `VERIFYING` / `RECOVERING` / `BLOCKED` | 改（→ `CANCELLED`） |
+| 放弃这次运行 | 只在 `MERGE_READY` | 改（→ `CANCELLED`） |
+| **回收工作区**（新） | `MERGE_READY` / `BLOCKED`，且还有工作区 | **不改** |
+
+「回收工作区」收 worktree、跑 cleanup 钩子（`exitReason` 传 `workspace_reclaimed`，会以
+`PIPELINE_EXIT_REASON` 交给钩子）、把线程置成 `COMPLETED`，**待合并的仍然待合并**（合并走分支）。
+这就是它存在的理由：本机实测 13 条 `MERGE_READY` 的 Run 占着约 166 MB，而"不打算合并了"是另一个
+决定，不该为了收磁盘被迫做。
+
+> **代价写在确认框里**，最要紧的一条：**收掉之后这条 Run 不能再补充要求续跑**——
+> `continueRun` 要求 `workspacePath` 还在，它是在原目录里接着跑的。所以 `MERGE_READY` 上
+> "继续补要求"与"回收"是互斥的；合并不受影响（`merge` 用的是分支）。
+
+### 为了让这个入口落地，顺带修了 `finish` 里两处一直不对的地方
+
+1. **删完不清空 `workspacePath`**。于是"这条 Run 还有没有 worktree"在库里根本看不出来——
+   本机实测 **7 条已取消的 Run 全都带着路径，其中 5 条的目录其实早就没了**。新入口只能在
+   "还有工作区"时出现，判据就是这一列；留着它就是在撒谎。（`releaseWorkspace` 一直清，`finish` 漏了。）
+2. **删不掉会让整条 `finish` 失败**，而失败发生在"改状态"之前——一条收不干净工作区的 Run
+   **连取消都取消不了**。改成"记下来、接着走"（`attentionReason` + journal），与 cleanup 钩子、
+   与 `releaseWorkspace` 是同一条立场：**失败是提醒，不是阻塞**。顺带区分开两件事：
+   目录本来就不在（早就收过了，算成功）与真删不掉（记 attention）。
+
+### 验证
+
+- **领域**：`finish` 删完那一列变 null；目录早就不在时按"已回收"算、不抛；目录真的在且 `remove`
+  抛错时也不抛，但把失败记进 `attentionReason` 与 journal（用真实临时目录做的，不是假路径）；
+- **API**：`/finish` 打一条 `MERGE_READY` 的 Run → 200、**Run 与 Plan 的状态都不动**、worktree 真被
+  回收、那一列清空；
+- **web**：`canReclaimWorkspace` 只对 `MERGE_READY` / `BLOCKED` 为真；挂载状态卡断言"有工作区才有
+  那颗按钮、收完（列为 null）就撤掉、跑着的不给"；视图侧源码断言钉住它走 `api.finishRun` 而**不是**
+  `api.cancelRun`、且**不关抽屉**（`onTerminated` 是终止/放弃才走的）；
+- **浏览器**：真实 `MERGE_READY` 的 Run 上，「运行控制」弹层里现在并排两颗：放弃这次运行、回收工作区。
+
+> 中途踩了一个坑值得记：**API 测试当时打的是 `domain/dist`**——`pnpm --filter web typecheck` 会顺带
+> 重建 domain，而我先改了 src 又改了别的文件，跑 API 测试时 dist 还是**中间那一版**，于是三个用例
+> 一起红、而且红得毫无道理。`pnpm verify` 先 build 再测，所以只在手工分步跑时才会遇到。
+
+`pnpm verify` 全绿：domain 445 / api 118 / web 636。
+
 ## 2026-10-11 — 卡住的 Run 补上「终止 Run」入口（客户端名单漏了一个状态）
 
 上一轮查「待合并的 Run 没有操作」时顺手发现的另一半：**`BLOCKED` 的 Run 在界面上同样一个操作都没有**。

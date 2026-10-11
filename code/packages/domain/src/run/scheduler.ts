@@ -320,8 +320,26 @@ export class Scheduler {
     const workspaceAdapter = this.workspaceAdapterFor(revision);
     const hookRunner = this.hookRunnerFor(revision);
     const executionHooks = revision?.projectConfigSnapshot?.settings.hooks ?? hooks;
-    if (run.workspacePath) {
-      await workspaceAdapter.remove({ path: run.workspacePath, branch: run.branch, baseCommit: run.baseCommit });
+    const workspacePathAtEntry = run.workspacePath;
+    /**
+     * **删不掉不再让整条 `finish` 失败。** 这里此前是裸的 `await remove(...)`，于是回收失败会
+     * 抛在"改状态"之前——一条收不干净工作区的 Run **连取消都取消不了**，人被困在死胡同里。
+     * 换成"记下来、接着走"，与 cleanup 钩子、与 `releaseWorkspace` 是同一条立场：
+     * **失败是提醒，不是阻塞**（见 run/hooks.ts 维护提示 1）。
+     *
+     * 删的时候要区分两件事：**目录本来就不在**（早就收过了，算成功——`workspacePath` 这一列
+     * 此前删完不清，老库里它未必与磁盘对得上）与**真删不掉**（记 attention）。
+     */
+    let worktreeRemoved = !workspacePathAtEntry;
+    let worktreeError: string | undefined;
+    if (workspacePathAtEntry) {
+      try {
+        await workspaceAdapter.remove({ path: workspacePathAtEntry, branch: run.branch, baseCommit: run.baseCommit });
+        worktreeRemoved = true;
+      } catch (caught) {
+        if (!existsSync(workspacePathAtEntry)) worktreeRemoved = true;
+        else worktreeError = caught instanceof Error ? caught.message : String(caught);
+      }
     }
     const cleanupResult = await hookRunner.runCleanup(executionHooks.cleanup, {
       projectId: run.projectId,
@@ -340,6 +358,23 @@ export class Scheduler {
     if (cleanupResult.needsAttention) {
       const plan = this.options.store.getPlan(run.planId);
       if (plan) this.options.store.updatePlan({ ...plan, attentionReason: "cleanup hook failed", lastEventAt: this.options.store.now() });
+    }
+    /**
+     * **删完就把 `workspacePath` 清掉。** 留着它，"这条 Run 还有没有 worktree"在库里根本看不出来：
+     * 本机实测 7 条已取消的 Run 全都带着路径，其中 5 条的目录其实早就没了。界面上「回收工作区」
+     * 那个入口只能在"有 worktree"时出现，判据就是这一列——留着它就是在撒谎。
+     * （`releaseWorkspace` 一直这么做，这里此前漏了。）
+     */
+    if (worktreeRemoved && workspacePathAtEntry) run.workspacePath = null;
+    if (worktreeError) {
+      this.append(thread.id, "HOOK_FAILED", { hook: "worktree-release", exitReason, worktreeRemoved: false, error: worktreeError });
+      const plan = this.options.store.getPlan(run.planId);
+      if (plan)
+        this.options.store.updatePlan({
+          ...plan,
+          attentionReason: `worktree not released: ${worktreeError}`,
+          lastEventAt: this.options.store.now(),
+        });
     }
     if (exitReason === "cancelled") run.status = "CANCELLED";
     this.setThreadState(thread.id, exitReason === "cancelled" ? "CANCELLED" : "COMPLETED");

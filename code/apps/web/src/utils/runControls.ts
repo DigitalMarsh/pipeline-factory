@@ -35,11 +35,30 @@ export function canAbandonRun(runStatus: string): boolean {
   return runStatus === "MERGE_READY";
 }
 
+/**
+ * **「回收工作区」：把这条 Run 占的本地目录从磁盘上收回来，别的什么都不动。**
+ *
+ * 它与上面两个入口是**三个不同的动作**：终止/放弃都会**改 Run 的状态**（→ `CANCELLED`），
+ * 而这一条只收目录——`scheduler.finish` 在非 `cancelled` 的理由下不碰 Run 状态，所以**待合并的
+ * 仍然待合并**（合并走的是分支，不看目录）。这正是它存在的理由：本机实测 13 条 `MERGE_READY`
+ * 的 Run 占着约 166 MB，而"不打算合并了"是另一个决定，不该为了收磁盘被迫做。
+ *
+ * 代价写在确认框里：**收掉之后这条 Run 不能再补充要求续跑**——`continueRun` 要求 `workspacePath`
+ * 还在，它是在原目录里接着跑的。
+ *
+ * 只在**已经停下、而且还有工作区**的状态上给（工作区那半由调用方看 `run.workspacePath`）：
+ * `CANCELLED` 不在——`finish` 对它直接早返回，按下去是个空动作。
+ */
+export function canReclaimWorkspace(runStatus: string): boolean {
+  return runStatus === "MERGE_READY" || runStatus === "BLOCKED";
+}
+
 /** Returns whether the Run Control surface has at least one executable action. */
 export function hasRunControlActions(runStatus: string, threadState: string): boolean {
   return (
     canTerminateRun(runStatus) ||
     canAbandonRun(runStatus) ||
+    canReclaimWorkspace(runStatus) ||
     canPauseRun(runStatus, threadState) ||
     runStatus === "IN_PROGRESS" ||
     runStatus === "READY_FOR_VERIFY"
@@ -85,5 +104,5 @@ export const RUN_STREAM_TERMINAL_STATUSES: readonly string[] = ["BLOCKED", "CANC
  * `run-action` / `loop-action`）与处理它们的 `composables/useRunControl.ts` 必须是**同一套取值**——
  * 此前两处各写一份字面量联合，加一种动作时漏改一处是静默的（TS 会把两边都当合法）。
  */
-export type RunControlAction = "terminate" | "abandon" | "pause" | "resume" | "verify";
+export type RunControlAction = "terminate" | "abandon" | "reclaim" | "pause" | "resume" | "verify";
 export type LoopControlAction = "pause" | "resume" | "cancel";

@@ -454,7 +454,7 @@ describe("Run 详情页对多轮执行的适配", () => {
     expect(flat(runControlsSource)).toContain(flat("export function canAbandonRun(runStatus: string): boolean {"));
     expect(flat(runControlsSource)).toContain(flat('runStatus === "MERGE_READY"'));
     // 不能并进「终止」：那会让待合并的运行也长出「终止 Run」，那句话在它身上不准。
-    expect(flat(runControlsSource)).toContain(flat('"terminate" | "abandon" | "pause" | "resume" | "verify"'));
+    expect(flat(runControlsSource)).toContain(flat('"terminate" | "abandon" | "reclaim" | "pause" | "resume" | "verify"'));
 
     const open = useRunControlSource.match(/function abandonRun\(\): void \{[\s\S]*?\n\s*\}/)?.[0] ?? "";
     expect(flat(open)).toContain(flat("abandonOpen.value = true;"));
@@ -472,5 +472,36 @@ describe("Run 详情页对多轮执行的适配", () => {
     expect(flat(abandonBlock)).toContain(flat("worktree 会从磁盘上回收"));
     expect(flat(abandonBlock)).toContain(flat("尚未提交的改动会丢"));
     expect(flat(abandonBlock)).toContain(flat("还没合并的请求会作废"));
+  });
+
+  /**
+   * **「回收工作区」是第三个动作，与前两个的区别在于它不改 Run 状态。**
+   *
+   * 终止与放弃都把 Run 变成 `CANCELLED`；这一条只把本地目录收回来（走 `/finish` 而不是 `/cancel`），
+   * 待合并的仍然待合并。它存在的理由就是"为了收磁盘不该被迫先决定要不要合并"。
+   */
+  it("回收工作区走 /finish：不动状态，且把代价（续跑用不了）写进确认框", () => {
+    expect(flat(runControlsSource)).toContain(flat("export function canReclaimWorkspace(runStatus: string): boolean {"));
+    expect(flat(runControlsSource)).toContain(flat('runStatus === "MERGE_READY" || runStatus === "BLOCKED"'));
+
+    const open = useRunControlSource.match(/function reclaimWorkspace\(\): void \{[\s\S]*?\n\s*\}/)?.[0] ?? "";
+    expect(flat(open)).toContain(flat("reclaimOpen.value = true;"));
+    expect(flat(open)).not.toContain(flat("api.finishRun"));
+
+    const confirm = useRunControlSource.match(/async function confirmReclaimWorkspace\(\): Promise<void> \{[\s\S]*?\n\s*\}/)?.[0] ?? "";
+    // **走 `/finish` 而不是 `/cancel`**——这是"不动状态"的全部实现。
+    expect(flat(confirm)).toContain(flat('api.finishRun(target.id, "workspace_reclaimed")'));
+    expect(flat(confirm)).not.toContain(flat("api.cancelRun"));
+    // 这条 Run 没有结束，所以**不关抽屉**（`onTerminated` 是终止/放弃才走的）。
+    expect(flat(confirm)).not.toContain(flat("deps.onTerminated"));
+
+    const reclaimBlock = runDetailSource.slice(runDetailSource.indexOf('heading="回收工作区"'));
+    expect(flat(reclaimBlock)).toContain(flat('@confirm="confirmReclaimWorkspace"'));
+    expect(flat(reclaimBlock)).toContain(flat(':error="reclaimError"'));
+    expect(flat(reclaimBlock)).toContain(flat('cancel-label="先留着"'));
+    // 代价必须写出来：收掉之后续跑就没地方跑了（`continueRun` 要求工作区还在）。
+    expect(flat(reclaimBlock)).toContain(flat("不能再补充要求续跑"));
+    // 也得说清"状态不变、仍然可合并"，否则用户会以为这是放弃。
+    expect(flat(reclaimBlock)).toContain(flat("状态都不变"));
   });
 });
