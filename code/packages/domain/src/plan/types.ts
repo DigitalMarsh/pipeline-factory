@@ -28,14 +28,9 @@
  *      别为了"让老 Plan 也能跑"去掉这个判断。
  *   6) **PlanRevisionDraft 是唯一可写的工作副本，永远不能直接成为 Executor 的合同**：
  *      必须先 confirm 成 PlanRevision。BASE_CHANGED 表示基线已漂移，需要重建而不是继续编辑。
- *   7) ChangeProposal.resolvedContract 保持原值不可变（Readonly）：提案是"请求改"，不是"已经改"；
- *      批准后产生的是新 Revision，而不是就地改这个字段。
- *   8) CreateChangeProposalInput 只承载"请求"，因此没有 status / decidedAt 等决策字段 ——
- *      决策状态由 ChangeProposal 自己在批准/驳回时写入，不要提前塞进输入类型。
  */
 import type { GeneratedPlanSpec, ResolvedPlanContract } from "./plan-spec.js";
 import type { ProjectExecutionSnapshot } from "../project/project.js";
-import type { Run } from "../run/types.js";
 
 /**
  * Plan 从草稿到执行、验证和合并的持久化状态。
@@ -46,17 +41,7 @@ import type { Run } from "../run/types.js";
  * 三个值一行数据都没有。删掉之后，"状态空间 = 有人写的状态"，转换表才谈得上完整。
  */
 export type PlanStatus =
-  | "DRAFT"
-  | "DISCARDED"
-  | "READY"
-  | "ENQUEUED"
-  | "DISPATCHED"
-  | "IN_PROGRESS"
-  | "VERIFYING"
-  | "MERGE_READY"
-  | "MERGED"
-  | "BLOCKED"
-  | "NEEDS_PLAN_CHANGE";
+  "DRAFT" | "DISCARDED" | "READY" | "ENQUEUED" | "DISPATCHED" | "IN_PROGRESS" | "VERIFYING" | "MERGE_READY" | "MERGED" | "BLOCKED";
 
 export type PlanLifecycleStatus = PlanStatus | "NEEDS_CONFIGURATION";
 
@@ -97,34 +82,6 @@ export type CandidatePlan = {
   resolvedContract: ResolvedPlanContract;
   /** 模型产出的原始 spec；由它解析出 `resolvedContract`。程序化创建（测试夹具）可以只给契约。 */
   generatedSpec?: GeneratedPlanSpec;
-};
-
-/** 执行中发现范围变化时，ChangeProposal 的人工决策状态。 */
-export type ChangeProposalStatus = "OPEN" | "APPROVED" | "REJECTED" | "SUPERSEDED";
-
-/** 从 Run 返回 Plan 的变更提案；合同原值保持不可变。 */
-export type ChangeProposal = Readonly<{
-  id: string;
-  runId: string;
-  planId: string;
-  reason: string;
-  requestedChanges: string[];
-  /** 提案当时的那份已解析契约，原值保持不可变。 */
-  resolvedContract: ResolvedPlanContract;
-  status: ChangeProposalStatus;
-  createdAt: string;
-  createdBy: string;
-  decidedAt: string | null;
-  decidedBy: string | null;
-  revision: number | null;
-}>;
-
-/** 已批准变更及其新 Revision/Run 的聚合返回值。 */
-export type ApprovedChangeProposal = {
-  proposal: ChangeProposal;
-  plan: CandidatePlan;
-  revision: PlanRevision;
-  run: Run | null;
 };
 
 /** Confirm 时冻结的 Plan 合同和 ProjectExecutionSnapshot，不随当前配置变化。 */
@@ -200,12 +157,4 @@ export type CreateRevisionDraftInput = {
   explorerThreadId: string;
   discardUnmergedRun: boolean;
   clientRequestId: string;
-};
-
-export type CreateChangeProposalInput = {
-  runId: string;
-  reason: string;
-  requestedChanges: string[];
-  resolvedContract: ResolvedPlanContract;
-  createdBy?: string;
 };

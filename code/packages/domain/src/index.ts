@@ -88,12 +88,8 @@ export { SqlitePipelineStore } from "./store/sqlite-store.js";
 
 // ─────────────────────────── plan/：Plan 类型、合同校验与状态机 ───────────────────────────
 export type {
-  ApprovedChangeProposal,
   CandidatePlan,
-  ChangeProposal,
-  ChangeProposalStatus,
   CreateCandidatePlanInput,
-  CreateChangeProposalInput,
   CreateRevisionDraftInput,
   PlanLifecycleEntry,
   PlanLifecycleStatus,
@@ -207,7 +203,6 @@ export { Scheduler } from "./run/scheduler.js";
 export type { SchedulerOptions } from "./run/scheduler.js";
 // 四个业务 Service 全部是纯 re-export：index.ts 内部不再实例化任何一个（组合根在 apps/api）。
 // PlanService 与 Scheduler 曾经需要 import + export 两条，批 C8 之后已降级。
-export { ChangeProposalService } from "./run/change-proposal.js";
 export { VerificationService } from "./run/verification.js";
 export { MergeService } from "./run/merge.js";
 export { PlanDispatchCoordinator } from "./run/dispatch-coordinator.js";

@@ -1,5 +1,42 @@
 # Changelog
 
+## 2026-10-11 — 退役变更提案整条链（`ChangeProposal` + `NEEDS_PLAN_CHANGE`）
+
+查那 11 条零调用路由时翻出来的：这条链不是"web 没接 UI"，是**运行时到不了**。
+`ChangeProposalService` 只在 `server.ts` 里被构造并交给**路由**——Executor 的 agent loop 拿不到它，
+工具层也不碰它。于是 `changeProposals.create(...)` 唯一的调用点就是那条没人调的 HTTP 路由，而
+`NEEDS_PLAN_CHANGE`（只在 `create` 里写）永远进不去。
+
+**实测佐证**：本机运行库 `change_proposals` **0 行**，`runs` / `candidate_plans` 里状态是
+`NEEDS_PLAN_CHANGE` 的**也各是 0 行**——而那个库里有 8 个项目、几十条真实 Run。
+
+它是**写完整、测齐全**的：§1.3 D 的转换边、`plan/status-transition.ts` 的表、`planStatus.ts` 的
+「需要改计划」、`statusVisual` 的语气色、`usePlanLifecycleActions` 的放行、`runControls` 里那段
+"为什么它不接受补充要求"的解释，一样不少。**这个"看起来能用、实际到不了"比死代码更容易误导人**，
+所以按你选的把它整体退役。
+
+### 删掉的
+
+| 层 | 什么 |
+|---|---|
+| 领域 | `run/change-proposal.ts`（服务）+ 它的测试；`ChangeProposal` / `ChangeProposalStatus` / `ApprovedChangeProposal` / `CreateChangeProposalInput` 四个类型 |
+| 状态 | `PlanStatus` 与 `RunStatus` 联合里的 `NEEDS_PLAN_CHANGE`；`plan/status-transition.ts` 的转换边 + `PLAN_STATUS_RESET_TARGETS` + `DISCARDABLE_PLAN_STATUSES`；`dispatch-coordinator` 的 case；`project.ts` 的 attention 判据 |
+| Executor | `termination-gates.ts` 的 `PENDING_CHANGE_PROPOSAL` 门禁（一个永远为假的分支）+ `GateContext.hasPendingChangeProposal` + `executor-agent` 里那次 `listChangeProposals` |
+| 存储 | 三个 store 方法（接口 + 内存 + SQLite）、`change_proposals` 表的建表与两条 ALTER、两处级联 DELETE、行映射；**老库由一条 `DROP TABLE IF EXISTS` 迁移清掉**（与 `revision_lifecycle_projection` 同一收法） |
+| API | `routes/change-proposals.ts` 三条路由、`schemas/change-proposals.ts`、路由注册、`server.ts` 的构造与依赖；投影里的 `change.proposal.created` 事件分支与 `PlanLifecycleIndex.proposalsByRun` |
+| web | `planStatus` 的文案、`statusVisual` 的语气色、`explorerRequirementRows` 的三处、`useRunComposer` 的禁用原因、`usePlanLifecycleActions` 的放行、`runControls` 的说明 |
+| 脚本 | `check-dangling-refs.mjs` 里那两条对照——不删的话它会永远报「表不在库里」（对照数 38 → 36） |
+
+### 验证
+
+- **类型级**：`type-parity.test.ts` 的 web↔领域联合类型断言在删 web 侧之前**先红了**（说明那个守卫是活的），补齐后转绿；
+- **运行级**：API 重启后三条路由全 404；**运行库里 `change_proposals` 表已不存在**（那条迁移跑过了）；Run 面板照常渲染（91 行会话、25 张状态卡、四阶段条、composer），控制台无新报错；
+- 期间 vite 代理报过几次 500，查明是**改到一半时 API 正在重启**（`ECONNREFUSED 127.0.0.1:4310`，vite 对代理失败回 500），不是回归——api.log 里 `onError` 钩子记的 5xx 一条都没有。
+
+文档：§1.3 D 的三条转换边与分类表、§4.2 的 Run 状态计数（11 → 10）、`PlanStatus` 完整取值（11 → 10）、
+§7.1（那条「还没做的」改成已退役）、§7 清点表补一行，另外三处历史记录标了"此后退役"。
+`pnpm verify` 全绿：domain 443 / api 116 / web 629。
+
 ## 2026-10-11 — 清掉 `styles.css` 里 94 条没人用的规则（11.7 KB）
 
 上一轮报的是"约 12 个确认死的选择器"，同时说剩下 93 个"连测试都没提"的**不能当死的**——里面混着

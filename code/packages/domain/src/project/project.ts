@@ -764,9 +764,7 @@ export class ProjectService {
       planCount: plans.length,
       runCount: runs.length,
       activeRunCount: runs.filter((run) => EXECUTION_SLOT_RUN_STATUSES.has(run.status)).length,
-      needsAttentionCount: plans.filter(
-        (plan) => Boolean(plan.attentionReason) || plan.status === "BLOCKED" || plan.status === "NEEDS_PLAN_CHANGE",
-      ).length,
+      needsAttentionCount: plans.filter((plan) => Boolean(plan.attentionReason) || plan.status === "BLOCKED").length,
       lastActivityAt,
     };
   }

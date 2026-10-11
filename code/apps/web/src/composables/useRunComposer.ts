@@ -46,7 +46,7 @@ export function useRunComposer(deps: RunComposerDeps) {
   const executionComposerDisabledReason = computed(() => {
     if (canSendExecutionMessage.value) return "";
     const status = deps.run.value?.status ?? "";
-    if (status === "BLOCKED" || status === "NEEDS_PLAN_CHANGE") return "这个 Run 卡在计划上，请改计划（创建更新版本）而不是补充要求";
+    if (status === "BLOCKED") return "这个 Run 卡在计划上，请改计划（创建更新版本）而不是补充要求";
     if (status === "CANCELLED" || status === "STALE") return "这个 Run 已经结束";
     return status ? `Run 处于 ${status}，不接受补充要求` : "";
   });

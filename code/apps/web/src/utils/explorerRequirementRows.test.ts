@@ -141,7 +141,7 @@ describe("projectExplorerRequirementRows", () => {
   });
 
   it("**RunStatus 的每个取值都接住了**，不漏成「未知状态：RECOVERING」", () => {
-    // 曾经漏了四个：`READY_FOR_VERIFY` / `NEEDS_PLAN_CHANGE` / `STALE` / **`RECOVERING`**。
+    // 曾经漏了四个（其中 `NEEDS_PLAN_CHANGE` 此后退役）：`READY_FOR_VERIFY` / `STALE` / **`RECOVERING`**。
     // 最后一个尤其要紧——启动恢复把被中断的 Run 交回给人决定时，它就是需求清单上唯一的现场证据，
     // 而它此前显示成"未知状态：RECOVERING"这种半截枚举值。
     const cases: Array<[Run["status"], string]> = [
@@ -152,7 +152,6 @@ describe("projectExplorerRequirementRows", () => {
       ["READY_FOR_VERIFY", "待验证"],
       ["MERGE_READY", "待处理"],
       ["BLOCKED", "待处理"],
-      ["NEEDS_PLAN_CHANGE", "待处理"],
       ["STALE", "待处理"],
       ["RECOVERING", "需要恢复"],
       ["CANCELLED", "待处理"],

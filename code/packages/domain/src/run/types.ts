@@ -9,7 +9,7 @@
  *
  * 维护提示：
  *   1) **RunStatus 是控制状态，ExecutionThreadState 是展示状态，两者不能互相推导。**
- *      Run 的 BLOCKED / NEEDS_PLAN_CHANGE / STALE / RECOVERING 各有进入条件
+ *      Run 的 BLOCKED / STALE / RECOVERING 各有进入条件
  *      （见 run/dispatch-coordinator.ts 与 run/recovery-coordinator.ts），
  *      **不要用"线程还活着"推断 Run 在跑**，也不要反过来用 Run 状态推线程状态。
  *   2) **ExecutionTelemetry 的 usageSource 是两条互斥的事实，不是"可信度"**：
@@ -48,7 +48,6 @@ export type RunStatus =
   | "VERIFYING"
   | "MERGE_READY"
   | "BLOCKED"
-  | "NEEDS_PLAN_CHANGE"
   | "STALE"
   | "RECOVERING"
   | "CANCELLED";

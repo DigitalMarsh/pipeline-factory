@@ -68,8 +68,6 @@ const REFERENCES = [
   ["run_guidance", "run_id", "runs", "id"],
   ["agent_loop_steps", "loop_id", "agent_loops", "id"],
   ["tool_calls", "loop_id", "agent_loops", "id"],
-  ["change_proposals", "run_id", "runs", "id"],
-  ["change_proposals", "plan_id", "candidate_plans", "id"],
   ["factory_projects", "current_explorer_thread_id", "explorer_threads", "id"],
 ];
 

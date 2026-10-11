@@ -318,7 +318,6 @@ export class ExecutorAgent {
       | "pathsWithinScope"
       | "reportReady"
       | "hasOpenToolCalls"
-      | "hasPendingChangeProposal"
       | "reportError"
       | "scopeError"
     >
@@ -364,7 +363,6 @@ export class ExecutorAgent {
       ...(scope.error ? { scopeError: scope.error } : {}),
       reportReady: Boolean(report?.report.trim()),
       hasOpenToolCalls: openToolCalls.size > 0,
-      hasPendingChangeProposal: this.store.listChangeProposals(run.id).some((proposal) => proposal.status === "OPEN"),
       ...(report ? {} : { reportError: parsedReport.error ?? "EXECUTION_REPORT_INVALID_OR_MISSING" }),
     };
   }

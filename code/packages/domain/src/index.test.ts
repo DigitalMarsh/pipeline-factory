@@ -187,7 +187,7 @@ describe("PlanService", () => {
       return plan;
     };
 
-    for (const status of ["BLOCKED", "NEEDS_PLAN_CHANGE", "READY"] as const) {
+    for (const status of ["BLOCKED", "READY"] as const) {
       expect(service.discard(at(`${status} plan`, status).id, "user-1")).toMatchObject({ status: "DISCARDED" });
     }
     for (const status of ["IN_PROGRESS", "VERIFYING", "MERGE_READY", "MERGED"] as const) {

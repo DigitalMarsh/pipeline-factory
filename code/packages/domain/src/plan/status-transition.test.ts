@@ -23,14 +23,13 @@ const ALL_STATUSES: PlanStatus[] = [
   "MERGE_READY",
   "MERGED",
   "BLOCKED",
-  "NEEDS_PLAN_CHANGE",
 ];
 
 /** 主路径，逐步可走。 */
 const MAIN_PATH: PlanStatus[] = ["READY", "ENQUEUED", "DISPATCHED", "IN_PROGRESS", "VERIFYING", "MERGE_READY", "MERGED"];
 
-/** 「从任意非终态进入」的三个入口。 */
-const RESET_TARGETS: PlanStatus[] = ["BLOCKED", "READY", "NEEDS_PLAN_CHANGE"];
+/** 「从任意非终态进入」的两个入口。 */
+const RESET_TARGETS: PlanStatus[] = ["BLOCKED", "READY"];
 
 function fixture() {
   const store = new InMemoryPipelineStore();

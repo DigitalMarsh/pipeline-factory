@@ -1956,57 +1956,6 @@ describe("Pipeline Factory v4 API", () => {
     expect(store.listRuns()).toEqual([]);
   });
 
-  it("creates and approves a ChangeProposal through the v4 API without switching the old Run revision", async () => {
-    const store = new InMemoryPipelineStore();
-    createTestProject(store, "project-change");
-    const plans = new PlanService(store);
-    plans.registerThread({ id: "thread-change", projectId: "project-change", parentThreadId: null });
-    const plan = plans.createCandidatePlan({
-      projectId: "project-change",
-      sourceExplorerThreadId: "thread-change",
-      title: "Change API plan",
-      resolvedContract: planContractFixture({ store, projectId: "project-change", title: "Change API plan" }),
-    });
-    plans.confirm(plan.id, "user-1");
-    plans.enqueue(plan.id);
-    const scheduler = new Scheduler({
-      store,
-      workspace: {
-        create: async () => ({ path: "/tmp/change-api", branch: "factory/change-api", baseCommit: "abc" }),
-        remove: async () => undefined,
-      },
-      hooks: new LifecycleHookRunner(async () => ({ exitCode: 0, stdout: "", stderr: "" })),
-    });
-    const app = createApp({ store, scheduler, seed: false });
-    apps.push(app);
-    const started = await app.inject({ method: "POST", url: `/api/v4/plans/${plan.id}/run` });
-    const run = started.json().run as { id: string };
-    const resolvedContract = {
-      ...plan.resolvedContract,
-      scope: { ...plan.resolvedContract.scope, includePaths: [...plan.resolvedContract.scope.includePaths, "docs/*"] },
-    };
-    const created = await app.inject({
-      method: "POST",
-      url: `/api/v4/runs/${run.id}/change-proposals`,
-      payload: { reason: "Documentation is in scope", requestedChanges: ["Include docs"], resolvedContract },
-    });
-    const approved = await app.inject({
-      method: "POST",
-      url: `/api/v4/change-proposals/${created.json().proposal.id}/approve`,
-      payload: { actorId: "reviewer" },
-    });
-
-    expect(created.statusCode).toBe(201);
-    expect(approved.statusCode).toBe(200);
-    expect(approved.json()).toMatchObject({
-      revision: { revision: 2 },
-      plan: { status: "ENQUEUED", dispatchedAt: null, runId: null },
-      run: null,
-    });
-    expect(store.getRun(run.id)?.planRevision).toBe(1);
-    expect(store.getRun(run.id)?.status).toBe("NEEDS_PLAN_CHANGE");
-  });
-
   it("verifies a run, opens a merge request, and confirms the reviewed commit", async () => {
     const store = new InMemoryPipelineStore();
     createTestProject(store);

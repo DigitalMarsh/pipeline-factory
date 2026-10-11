@@ -674,7 +674,7 @@ onBeforeUnmount(() => {
         <div class="composer execution-composer">
           <!-- **这个 Run 不接受补充要求时，这里不再摆一个打不出字的灰框。**
                判据与 `canSendExecutionMessage` 同源（`canContinueRun`，见 utils/runControls.ts）：
-               Run 已经结束（CANCELLED / STALE）或者卡在计划上（BLOCKED / NEEDS_PLAN_CHANGE）时，
+               Run 已经结束（CANCELLED / STALE）或者卡在计划上（BLOCKED）时，
                补一句话都救不回来——那句话既不属于任何一轮，也没有 Loop 去消费它。而一个**按下去
                没反应**的输入框只会让人以为界面坏了（实测报障：需求15 的 Run 被取消之后，
                用户在这个框里点了半天打不出字，然后卡在那里不知道下一步该去哪）。

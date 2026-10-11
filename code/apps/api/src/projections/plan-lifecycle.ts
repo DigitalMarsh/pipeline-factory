@@ -23,15 +23,7 @@
  *
  * 依赖方向：本文件不依赖同目录其他投影。
  */
-import type {
-  CandidatePlan,
-  ChangeProposal,
-  MergeRequest,
-  PipelineStore,
-  PlanLifecycleEntry,
-  PlanLifecycleStatus,
-  Run,
-} from "@pipeline-factory/domain";
+import type { CandidatePlan, MergeRequest, PipelineStore, PlanLifecycleEntry, PlanLifecycleStatus, Run } from "@pipeline-factory/domain";
 
 const PLAN_LIFECYCLE_ORDER: Array<PlanLifecycleStatus> = [
   "DRAFT",
@@ -54,7 +46,6 @@ const PLAN_LIFECYCLE_PROGRESS_STATUSES = new Set<PlanLifecycleStatus>([
   "MERGE_READY",
   "MERGED",
   "BLOCKED",
-  "NEEDS_PLAN_CHANGE",
   "NEEDS_CONFIGURATION",
 ]);
 const UNCONFIRMED_LIFECYCLE_REASON = "Plan lifecycle is invalid: it reached a later state without a confirmation record.";
@@ -62,7 +53,7 @@ const UNCONFIRMED_LIFECYCLE_REASON = "Plan lifecycle is invalid: it reached a la
 function normalizedLifecycleStatus(value: unknown): PlanLifecycleStatus | null {
   if (typeof value !== "string") return null;
   if (PLAN_LIFECYCLE_NORMALIZED.has(value as PlanLifecycleStatus)) return value as PlanLifecycleStatus;
-  if (["BLOCKED", "NEEDS_PLAN_CHANGE", "NEEDS_CONFIGURATION"].includes(value)) return value as PlanLifecycleStatus;
+  if (["BLOCKED", "NEEDS_CONFIGURATION"].includes(value)) return value as PlanLifecycleStatus;
   return null;
 }
 
@@ -80,17 +71,16 @@ const PLAN_LIFECYCLE_EVENT_TYPES = [
   "plan.enqueued",
   "plan.dispatched",
   "verification.completed",
-  "change.proposal.created",
   "merge.confirmed",
   "plan.dispatch.state.changed",
 ] as const;
 
 /**
- * 一次请求内共享的 Plan → Run → MergeRequest/ChangeProposal 索引。
+ * 一次请求内共享的 Plan → Run → MergeRequest 索引。
  *
  * 为什么需要它：`planEventAggregateIds` 需要知道"这个 Plan 有哪些 Run、每个 Run 有哪些
- *   MergeRequest 与 ChangeProposal"，而它原先**每个 Plan 都调一次** `listMergeRequests()` 与
- *   `listRuns()`（两个都是全表 `SELECT *`），内层再对每个匹配 Run 调 `listChangeProposals`。
+ *   MergeRequest"，而它原先**每个 Plan 都调一次** `listMergeRequests()` 与
+ *   `listRuns()`（两个都是全表 `SELECT *`）。
  *   而 `decoratePlanRows` 会对查询返回的**每一行**调一次 `planProjection` ——
  *   Plan Center 的 limit 上限是 100，于是单次列表请求等于 200 次全表读 + 上百次点查。
  *   改成"按请求建一次、沿调用链下传"后，这几张表每次都只读一遍。
@@ -101,7 +91,6 @@ const PLAN_LIFECYCLE_EVENT_TYPES = [
 export type PlanLifecycleIndex = {
   runsByPlan: Map<string, Run[]>;
   mergeRequestsByRun: Map<string, MergeRequest[]>;
-  proposalsByRun: Map<string, ChangeProposal[]>;
 };
 
 export function buildPlanLifecycleIndex(store: PipelineStore): PlanLifecycleIndex {
@@ -117,18 +106,12 @@ export function buildPlanLifecycleIndex(store: PipelineStore): PlanLifecycleInde
     if (existing) existing.push(request);
     else mergeRequestsByRun.set(request.runId, [request]);
   }
-  const proposalsByRun = new Map<string, ChangeProposal[]>();
-  for (const proposal of store.listChangeProposals()) {
-    const existing = proposalsByRun.get(proposal.runId);
-    if (existing) existing.push(proposal);
-    else proposalsByRun.set(proposal.runId, [proposal]);
-  }
-  return { runsByPlan, mergeRequestsByRun, proposalsByRun };
+  return { runsByPlan, mergeRequestsByRun };
 }
 
 /**
- * 与某个 Plan 相关的事件可能落在多个聚合上：Plan 自身、它的 Run、Run 的 MergeRequest
- * 与 ChangeProposal，以及产生它的 ExplorerThread。这里把聚合 ID 收集齐，
+ * 与某个 Plan 相关的事件可能落在多个聚合上：Plan 自身、它的 Run、Run 的 MergeRequest，
+ * 以及产生它的 ExplorerThread。这里把聚合 ID 收集齐，
  * 交给 Store 走 aggregate_id 索引，避免为了筛出几十条事件而把整张事件表读进内存。
  *
  * 维护提示：新增"在别的聚合上写 payload.planId"的事件类型时，必须同步扩展这里，
@@ -139,7 +122,6 @@ function planEventAggregateIds(plan: CandidatePlan, index: PlanLifecycleIndex): 
   if (plan.sourceExplorerThreadId) ids.add(plan.sourceExplorerThreadId);
   for (const run of index.runsByPlan.get(plan.id) ?? []) {
     ids.add(run.id);
-    for (const proposal of index.proposalsByRun.get(run.id) ?? []) ids.add(proposal.id);
     for (const request of index.mergeRequestsByRun.get(run.id) ?? []) ids.add(request.id);
   }
   return [...ids];
@@ -214,12 +196,6 @@ function buildPlanLifecycle(store: PipelineStore, plan: CandidatePlan, revision:
         },
       );
     }
-    if (event.type === "change.proposal.created")
-      add("NEEDS_PLAN_CHANGE", event.occurredAt, {
-        reason: typeof payload.reason === "string" ? payload.reason : null,
-        runId: typeof payload.runId === "string" ? payload.runId : null,
-        eventRevision: matchingEventRevision,
-      });
     if (event.type === "merge.confirmed") add("MERGED", event.occurredAt, { runId: run?.id ?? null, eventRevision: matchingEventRevision });
     if (event.type === "plan.dispatch.state.changed" && payload.waitReason === "NEEDS_CONFIGURATION")
       add("NEEDS_CONFIGURATION", typeof payload.updatedAt === "string" ? payload.updatedAt : event.occurredAt, {

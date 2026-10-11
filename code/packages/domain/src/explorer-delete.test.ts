@@ -387,7 +387,7 @@ describe("ExplorerService.deletePlan", () => {
    * Run 停在 `MERGE_READY`）——所以"已合并的需求"在这里就是 `MERGE_READY` + 已合并的 Plan，
    * 允许删，代价由确认框写明。
    */
-  it.each(["MERGE_READY", "CANCELLED", "BLOCKED", "STALE", "NEEDS_PLAN_CHANGE"] as const)(
+  it.each(["MERGE_READY", "CANCELLED", "BLOCKED", "STALE"] as const)(
     "**跑过但已经停了的都放行**（与「删除线程」同一把尺）：%s",
     (status) => {
       const store = createStore("memory");

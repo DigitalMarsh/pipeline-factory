@@ -530,7 +530,6 @@ export class PlanDispatchCoordinator {
         });
         return;
       case "BLOCKED":
-      case "NEEDS_PLAN_CHANGE":
       case "STALE":
       case "CANCELLED":
         this.saveState({

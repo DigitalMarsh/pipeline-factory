@@ -90,7 +90,6 @@ describe("TaskProgressGate", () => {
       reportReady: true,
       allTasksComplete: true,
       hasOpenToolCalls: true,
-      hasPendingChangeProposal: false,
       pathsWithinScope: true,
     });
     expect(decision).toEqual({ action: "continue", reason: "OPEN_TOOL_CALLS" });
@@ -101,7 +100,6 @@ describe("TaskProgressGate", () => {
       reportReady: true,
       allTasksComplete: true,
       hasOpenToolCalls: false,
-      hasPendingChangeProposal: false,
       pathsWithinScope: true,
     });
     expect(decision).toEqual({ action: "complete", reason: "READY_FOR_VERIFY" });
@@ -118,7 +116,6 @@ describe("TaskProgressGate", () => {
       new TaskProgressGate().evaluate({
         allTasksComplete: true,
         hasOpenToolCalls: false,
-        hasPendingChangeProposal: false,
         reportReady: true,
         pathsWithinScope: false,
         scopeError: "WORKSPACE_SCOPE_CHECK_FAILED",
@@ -135,7 +132,6 @@ describe("TaskProgressGate", () => {
       new TaskProgressGate().evaluate({
         allTasksComplete: true,
         hasOpenToolCalls: false,
-        hasPendingChangeProposal: false,
         reportReady: true,
         pathsWithinScope: false,
         outsidePaths: ["src/other.ts", "doc/需求.md"],
@@ -192,7 +188,6 @@ describe("TaskProgressGate 的续跑提示", () => {
     const decision = new TaskProgressGate().evaluate({
       allTasksComplete: true,
       hasOpenToolCalls: false,
-      hasPendingChangeProposal: false,
       reportReady: true,
       pathsWithinScope: true,
       planTaskIds: ["task-1"],

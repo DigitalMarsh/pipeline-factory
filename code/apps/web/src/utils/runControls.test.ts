@@ -22,7 +22,6 @@ describe("补充要求的可用性（canContinueRun）", () => {
 
   it("**卡在计划上的 Run 不给补** —— 那两种该走「创建更新版本」，补一句话会把真问题盖住", () => {
     expect(canContinueRun("BLOCKED")).toBe(false);
-    expect(canContinueRun("NEEDS_PLAN_CHANGE")).toBe(false);
     expect(canContinueRun("CANCELLED")).toBe(false);
     expect(canContinueRun("STALE")).toBe(false);
     // Run 还没跑起来时该补的是 Plan，不是执行。

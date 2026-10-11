@@ -33,7 +33,6 @@ import type { PlanDispatchState } from "../run/dispatch-coordinator.js";
 import type { Project, ProjectConfigRevision } from "../project/project.js";
 import type {
   CandidatePlan,
-  ChangeProposal,
   DomainEvent,
   ExecutionJournalEntry,
   ExecutionJournalPayload,
@@ -74,7 +73,6 @@ export class InMemoryPipelineStore implements PipelineStore {
   private readonly dispatchStates = new Map<string, PlanDispatchState>();
   private readonly revisions = new Map<string, PlanRevision>();
   private readonly revisionDrafts = new Map<string, PlanRevisionDraft>();
-  private readonly changeProposals = new Map<string, ChangeProposal>();
   private readonly runs = new Map<string, Run>();
   private readonly executionThreads = new Map<string, ExecutionThread>();
   private readonly hookExecutions = new Map<string, HookExecution>();
@@ -363,23 +361,6 @@ export class InMemoryPipelineStore implements PipelineStore {
     return draft;
   }
 
-  saveChangeProposal(proposal: ChangeProposal): ChangeProposal {
-    if (this.changeProposals.has(proposal.id)) return this.changeProposals.get(proposal.id)!;
-    this.changeProposals.set(proposal.id, proposal);
-    return proposal;
-  }
-  getChangeProposal(id: string): ChangeProposal | undefined {
-    return this.changeProposals.get(id);
-  }
-  listChangeProposals(runId?: string): ChangeProposal[] {
-    return [...this.changeProposals.values()].filter((proposal) => !runId || proposal.runId === runId);
-  }
-  updateChangeProposal(proposal: ChangeProposal): ChangeProposal {
-    if (!this.changeProposals.has(proposal.id)) throw new Error(`ChangeProposal ${proposal.id} does not exist`);
-    this.changeProposals.set(proposal.id, proposal);
-    return proposal;
-  }
-
   saveRun(run: Run): Run {
     this.runs.set(run.id, run);
     return run;
@@ -620,8 +601,6 @@ export class InMemoryPipelineStore implements PipelineStore {
       ...input.inputRequestIds,
     ]);
 
-    for (const [key, proposal] of this.changeProposals)
-      if (runIds.has(proposal.runId) || planIds.has(proposal.planId)) this.changeProposals.delete(key);
     for (const key of [...this.dispatchStates.keys()]) if (planIds.has(key)) this.dispatchStates.delete(key);
     for (const key of [...this.revisions.keys()]) if (planIds.has(key.split(":")[0] ?? "")) this.revisions.delete(key);
     for (const [key, draft] of this.revisionDrafts)
@@ -674,8 +653,6 @@ export class InMemoryPipelineStore implements PipelineStore {
       ...inputRequestIds,
     ]);
 
-    for (const [key, proposal] of this.changeProposals)
-      if (runIds.has(proposal.runId) || planIds.has(proposal.planId)) this.changeProposals.delete(key);
     for (const key of [...this.dispatchStates.keys()]) if (planIds.has(key)) this.dispatchStates.delete(key);
     for (const key of [...this.revisions.keys()]) if (planIds.has(key.split(":")[0] ?? "")) this.revisions.delete(key);
     for (const [key, draft] of this.revisionDrafts)

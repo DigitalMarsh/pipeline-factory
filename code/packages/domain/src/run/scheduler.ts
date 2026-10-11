@@ -76,8 +76,8 @@ export type SchedulerOptions = {
 /**
  * 接受补充要求的 Run 状态。
  *
- * `BLOCKED` 与 `NEEDS_PLAN_CHANGE` 刻意不在里面：它们常常意味着"计划本身有问题"，用一句话把它们
- * 顶开会把真问题盖住——那两种该走「创建更新版本」。`QUEUED` / `STARTING` 也不在：Run 还没跑起来，
+ * `BLOCKED` 刻意不在里面：它常常意味着"计划本身有问题"，用一句话把它顶开会把真问题盖住——
+ * 那一种该走「创建更新版本」。`QUEUED` / `STARTING` 也不在：Run 还没跑起来，
  * 此时该补的是 Plan 而不是执行。
  */
 const ACCEPTS_GUIDANCE_RUN_STATUSES: ReadonlySet<RunStatus> = new Set<RunStatus>([
@@ -625,8 +625,7 @@ export class Scheduler {
   /** 一个 Run 允许接受补充要求的那些状态；其余一律拒绝并说明该走哪条路。 */
   private assertAcceptsGuidance(run: Run): void {
     if (ACCEPTS_GUIDANCE_RUN_STATUSES.has(run.status)) return;
-    const hint =
-      run.status === "BLOCKED" || run.status === "NEEDS_PLAN_CHANGE" ? " revise the plan (创建更新版本) instead of steering this Run" : "";
+    const hint = run.status === "BLOCKED" ? " revise the plan (创建更新版本) instead of steering this Run" : "";
     throw new Error(`Run ${run.id} is ${run.status} and no longer accepts guidance;${hint}`);
   }
 

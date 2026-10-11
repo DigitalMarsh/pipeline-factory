@@ -43,7 +43,6 @@ const PLAN_STATUS_TONES: Record<string, StatusVisual["tone"]> = {
   MERGE_READY: "warning",
   MERGED: "success",
   BLOCKED: "danger",
-  NEEDS_PLAN_CHANGE: "danger",
 };
 
 export function statusVisualFor(status: string): StatusVisual {

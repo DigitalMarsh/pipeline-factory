@@ -36,7 +36,6 @@ import type {
   AgentLoopStep,
   AgentLoopStepInput,
   CandidatePlan,
-  ChangeProposal,
   DomainEvent,
   ExecutionJournalEntry,
   ExecutionThread,
@@ -139,10 +138,6 @@ export type PipelineStore = {
   getRevisionDraft(draftId: string): PlanRevisionDraft | undefined;
   listRevisionDrafts(planId?: string): PlanRevisionDraft[];
   updateRevisionDraft(draft: PlanRevisionDraft): PlanRevisionDraft;
-  saveChangeProposal(proposal: ChangeProposal): ChangeProposal;
-  getChangeProposal(id: string): ChangeProposal | undefined;
-  listChangeProposals(runId?: string): ChangeProposal[];
-  updateChangeProposal(proposal: ChangeProposal): ChangeProposal;
   saveRun(run: Run): Run;
   getRun(runId: string): Run | undefined;
   listRuns(): Run[];

@@ -27,7 +27,6 @@ const CONFIRMED_PLAN_STATUSES = new Set([
   "MERGE_READY",
   "MERGED",
   "BLOCKED",
-  "NEEDS_PLAN_CHANGE",
 ]);
 
 function planIdentity(plan: Plan): string {
@@ -93,15 +92,14 @@ function taskStatusFor(plan: Plan | null, run: Run | null): RequirementStatus {
     if (["COMPLETED", "MERGED"].includes(run.status)) return { label: "运行完", tone: "success" };
     if (run.status === "RECOVERING") return { label: "需要恢复", tone: "attention" };
     if (run.status === "MERGE_READY") return { label: "待处理", tone: "attention" };
-    if (["FAILED", "CANCELLED", "BLOCKED", "NEEDS_PLAN_CHANGE", "STALE"].includes(run.status))
-      return { label: "待处理", tone: "attention" };
+    if (["FAILED", "CANCELLED", "BLOCKED", "STALE"].includes(run.status)) return { label: "待处理", tone: "attention" };
     return { label: `未知状态：${run.status}`, tone: "neutral" };
   }
   if (isConversationArtifactPlan(plan)) return { label: "待处理", tone: "attention" };
   const dispatch = plan.dispatch;
   if (plan.status === "MERGED" || dispatch?.status === "COMPLETED") return { label: "运行完", tone: "success" };
   if (
-    ["MERGE_READY", "BLOCKED", "NEEDS_PLAN_CHANGE"].includes(plan.status) ||
+    ["MERGE_READY", "BLOCKED"].includes(plan.status) ||
     dispatch?.status === "NEEDS_REVIEW" ||
     dispatch?.status === "BLOCKED" ||
     dispatch?.waitReason === "NEEDS_CONFIGURATION"

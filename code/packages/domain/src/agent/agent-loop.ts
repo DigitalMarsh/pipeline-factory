@@ -230,7 +230,6 @@ export type GateContext = {
   reportReady?: boolean;
   allTasksComplete?: boolean;
   hasOpenToolCalls?: boolean;
-  hasPendingChangeProposal?: boolean;
   changedPaths?: string[];
   /**
    * **越界的那几个路径**，由 `inspectWorkspaceScope` 算出。门禁用它写 `diagnostics`——

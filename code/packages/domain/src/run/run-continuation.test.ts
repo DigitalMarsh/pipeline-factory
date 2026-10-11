@@ -197,7 +197,7 @@ describe("补充要求：投递之后真的驱动 Agent", () => {
   });
 
   it("**BLOCKED 与已取消的 Run 拒绝补充要求，且不产生任何状态写入**", async () => {
-    for (const status of ["BLOCKED", "NEEDS_PLAN_CHANGE", "CANCELLED", "STALE"] as const) {
+    for (const status of ["BLOCKED", "CANCELLED", "STALE"] as const) {
       const { store, scheduler, run } = await seedRun({ runStatus: status, threadState: "COMPLETED" });
       const before = {
         run: store.getRun(run.id)!.status,

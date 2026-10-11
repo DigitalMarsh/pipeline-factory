@@ -4,17 +4,7 @@
  * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
  */
 export type PlanStatus =
-  | "DRAFT"
-  | "DISCARDED"
-  | "READY"
-  | "ENQUEUED"
-  | "DISPATCHED"
-  | "IN_PROGRESS"
-  | "VERIFYING"
-  | "MERGE_READY"
-  | "MERGED"
-  | "BLOCKED"
-  | "NEEDS_PLAN_CHANGE";
+  "DRAFT" | "DISCARDED" | "READY" | "ENQUEUED" | "DISPATCHED" | "IN_PROGRESS" | "VERIFYING" | "MERGE_READY" | "MERGED" | "BLOCKED";
 export type PlanLifecycleStatus = PlanStatus | "NEEDS_CONFIGURATION";
 export type PlanLifecycleEntry = {
   status: PlanLifecycleStatus;

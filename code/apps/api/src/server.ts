@@ -45,7 +45,6 @@ import {
   ProjectService,
   StubModelGateway,
   RecoveryCoordinator,
-  ChangeProposalService,
   VerificationService,
   PlanDispatchCoordinator,
   type PipelineStore,
@@ -129,7 +128,6 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       )
     : new PlanService(store, projects);
   const explorers = new ExplorerService(store);
-  const changeProposals = new ChangeProposalService(store);
   const verifier = new VerificationService(store);
   const merger = options.mergeService ?? new MergeService(store, { git: localGitMergeInspector });
   const verificationExecutor =
@@ -402,7 +400,6 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     explorers,
     explorerThread: explorer,
     merger,
-    changeProposals,
     verifier,
     scheduler,
     dispatchCoordinator,

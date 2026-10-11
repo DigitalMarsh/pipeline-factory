@@ -57,8 +57,6 @@ import type { Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectS
 import type { GeneratedPlanSpec, ResolvedPlanContract } from "../plan/plan-spec.js";
 import type {
   CandidatePlan,
-  ChangeProposal,
-  ChangeProposalStatus,
   DomainEvent,
   DurableToolCallStatus,
   ExecutionJournalEntry,
@@ -119,8 +117,8 @@ function normalizeSqliteError(error: unknown): Error {
 }
 
 /**
- * 读已解析契约列。它现在是**必填事实**（`CandidatePlan` / `PlanRevision` / `PlanRevisionDraft` /
- * `ChangeProposal` 都把 `resolvedContract` 定为必填），所以读不到就是库里的行坏了。
+ * 读已解析契约列。它现在是**必填事实**（`CandidatePlan` / `PlanRevision` / `PlanRevisionDraft`
+ * 都把 `resolvedContract` 定为必填），所以读不到就是库里的行坏了。
  *
  * **抛错而不是回落到一个空形状**：一份"看着像契约、其实什么都没有"的对象会被下游当成真的事实
  * （执行者拿着空任务清单开工、验证按空命令集判 SKIPPED）。`owner` 是唯一能指出是哪一行的线索，
@@ -393,20 +391,6 @@ export class SqlitePipelineStore implements PipelineStore {
       CREATE UNIQUE INDEX IF NOT EXISTS plan_revision_drafts_active_uq
         ON plan_revision_drafts(plan_id)
         WHERE status IN ('EDITING', 'READY_TO_CONFIRM', 'BASE_CHANGED');
-      CREATE TABLE IF NOT EXISTS change_proposals (
-        id TEXT PRIMARY KEY,
-        run_id TEXT NOT NULL,
-        plan_id TEXT NOT NULL,
-        reason TEXT NOT NULL,
-        requested_changes_json TEXT NOT NULL,
-        resolved_contract_json TEXT,
-        status TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        created_by TEXT NOT NULL,
-        decided_at TEXT,
-        decided_by TEXT,
-        revision INTEGER
-      );
       CREATE TABLE IF NOT EXISTS runs (
         id TEXT PRIMARY KEY,
         project_id TEXT NOT NULL,
@@ -830,7 +814,7 @@ export class SqlitePipelineStore implements PipelineStore {
       SET dispatched_at = COALESCE(dispatched_at, queued_at)
       WHERE dispatched_at IS NULL
         AND queued_at IS NOT NULL
-        AND status IN ('QUEUED', 'DISPATCHED', 'IN_PROGRESS', 'VERIFYING', 'MERGE_READY', 'MERGED', 'BLOCKED', 'NEEDS_PLAN_CHANGE');
+        AND status IN ('QUEUED', 'DISPATCHED', 'IN_PROGRESS', 'VERIFYING', 'MERGE_READY', 'MERGED', 'BLOCKED');
       UPDATE candidate_plans
       SET status = 'DISPATCHED'
       WHERE status = 'QUEUED';
@@ -851,18 +835,14 @@ export class SqlitePipelineStore implements PipelineStore {
     } catch {
       /* Existing databases already have the index. */
     }
+    // 老库的清理：`change_proposals` 整张表代码里已经不读不写了，留着只会让"历史遗留"继续存在。
+    // 它此前是"执行中发现范围变化 → 送回 Plan"那条链的落盘，但那条链**运行时到不了**：
+    // 服务的唯一调用点是三条没人调的 HTTP 路由，Executor 拿不到它（见 docs 的 §7.1）。
+    // 本机运行库实测 0 行，老库里那一列也一直是空的。吞异常：新库本来就没有这张表。
     try {
-      this.database.exec("ALTER TABLE change_proposals ADD COLUMN revision INTEGER");
+      this.database.exec("DROP TABLE IF EXISTS change_proposals");
     } catch {
-      /* Existing databases already have the column. */
-    }
-    // ChangeProposal 的契约此前存在 `contract_json`（V1 镜像）里。镜像是那份**有损投影**，
-    // 而提案要的是"提案人交上来的那份契约"——形状不同，没有迁移路径，只能另开一列。
-    // 老库里这一列是空的（本机 0 行提案），真读到时会由 `resolvedContractFromRow` 点名报错。
-    try {
-      this.database.exec("ALTER TABLE change_proposals ADD COLUMN resolved_contract_json TEXT");
-    } catch {
-      /* Existing databases already have the column. */
+      /* 新库没有这张表。 */
     }
     try {
       this.database.exec("ALTER TABLE plan_revisions ADD COLUMN project_config_version INTEGER");
@@ -933,7 +913,7 @@ export class SqlitePipelineStore implements PipelineStore {
     // "历史遗留"继续存在库里。镜像本身完全可推导，删列不丢事实。
     // 同族的 `pruneLegacyV1Plans` 也一并删除：它靠 `json_extract(contract_json, ...)` 找 V1 计划，
     // 列一没就没有识别依据，而盘点结果本来就是 0 份（见 docs 的 §6 附）。
-    for (const table of ["candidate_plans", "plan_revisions", "plan_revision_drafts", "change_proposals"]) {
+    for (const table of ["candidate_plans", "plan_revisions", "plan_revision_drafts"]) {
       try {
         this.database.exec(`ALTER TABLE ${table} DROP COLUMN contract_json`);
       } catch {
@@ -1653,49 +1633,6 @@ export class SqlitePipelineStore implements PipelineStore {
     return this.getRevisionDraft(draft.draftId)!;
   }
 
-  saveChangeProposal(proposal: ChangeProposal): ChangeProposal {
-    this.statement(
-      "INSERT OR IGNORE INTO change_proposals (id, run_id, plan_id, reason, requested_changes_json, resolved_contract_json, status, created_at, created_by, decided_at, decided_by, revision) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    ).run(
-      proposal.id,
-      proposal.runId,
-      proposal.planId,
-      proposal.reason,
-      JSON.stringify(proposal.requestedChanges),
-      JSON.stringify(proposal.resolvedContract),
-      proposal.status,
-      proposal.createdAt,
-      proposal.createdBy,
-      proposal.decidedAt,
-      proposal.decidedBy,
-      proposal.revision,
-    );
-    return this.getChangeProposal(proposal.id) as ChangeProposal;
-  }
-
-  getChangeProposal(id: string): ChangeProposal | undefined {
-    const row = this.statement("SELECT * FROM change_proposals WHERE id = ?").get(id) as SqliteRow | undefined;
-    return row ? this.changeProposalFromRow(row) : undefined;
-  }
-
-  listChangeProposals(runId?: string): ChangeProposal[] {
-    const rows = this.statement(`SELECT * FROM change_proposals ${runId ? "WHERE run_id = ?" : ""} ORDER BY created_at ASC`).all(
-      ...(runId ? [runId] : []),
-    ) as unknown as SqliteRow[];
-    return rows.map((row) => this.changeProposalFromRow(row));
-  }
-
-  updateChangeProposal(proposal: ChangeProposal): ChangeProposal {
-    this.statement("UPDATE change_proposals SET status = ?, decided_at = ?, decided_by = ?, revision = ? WHERE id = ?").run(
-      proposal.status,
-      proposal.decidedAt,
-      proposal.decidedBy,
-      proposal.revision,
-      proposal.id,
-    );
-    return this.getChangeProposal(proposal.id) as ChangeProposal;
-  }
-
   saveRun(run: Run): Run {
     this.statement(
       "INSERT INTO runs (id, project_id, plan_id, plan_revision, status, branch, workspace_path, base_commit, execution_thread_id, created_at, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET status=excluded.status, workspace_path=excluded.workspace_path, started_at=excluded.started_at",
@@ -2324,7 +2261,6 @@ export class SqlitePipelineStore implements PipelineStore {
       this.statement(`DELETE FROM execution_threads WHERE ${executionThreadEntityIds.clause}`).run(...executionThreadEntityIds.values);
     if (runEntityIds) this.statement(`DELETE FROM runs WHERE ${runEntityIds.clause}`).run(...runEntityIds.values);
     if (planIds) {
-      this.statement(`DELETE FROM change_proposals WHERE ${planIds.clause}`).run(...planIds.values);
       this.statement(`DELETE FROM plan_dispatch_states WHERE ${planIds.clause}`).run(...planIds.values);
       this.statement(`DELETE FROM plan_revisions WHERE ${planIds.clause}`).run(...planIds.values);
       this.statement(`DELETE FROM plan_revision_drafts WHERE ${planIds.clause}`).run(...planIds.values);
@@ -2400,7 +2336,6 @@ export class SqlitePipelineStore implements PipelineStore {
       this.statement(`DELETE FROM execution_threads WHERE ${executionThreadEntityIds.clause}`).run(...executionThreadEntityIds.values);
     if (runEntityIds) this.statement(`DELETE FROM runs WHERE ${runEntityIds.clause}`).run(...runEntityIds.values);
     if (planIds) {
-      this.statement(`DELETE FROM change_proposals WHERE ${planIds.clause}`).run(...planIds.values);
       this.statement(`DELETE FROM plan_dispatch_states WHERE ${planIds.clause}`).run(...planIds.values);
       this.statement(`DELETE FROM plan_revisions WHERE ${planIds.clause}`).run(...planIds.values);
       this.statement(`DELETE FROM plan_revision_drafts WHERE ${planIds.clause}`).run(...planIds.values);
@@ -3087,7 +3022,7 @@ export class SqlitePipelineStore implements PipelineStore {
    * 只补缺这个键的行：已有值的不动——**包括非空的依赖**，那是人设置的调度事实。
    */
   private backfillPlanDependencyIds(): void {
-    for (const table of ["candidate_plans", "plan_revisions", "plan_revision_drafts", "change_proposals"]) {
+    for (const table of ["candidate_plans", "plan_revisions", "plan_revision_drafts"]) {
       this.database.exec(`UPDATE ${table} SET resolved_contract_json = json_set(resolved_contract_json, '$.dependsOnPlanIds', json('[]'))
         WHERE resolved_contract_json IS NOT NULL AND json_extract(resolved_contract_json, '$.dependsOnPlanIds') IS NULL`);
     }
@@ -3205,23 +3140,6 @@ export class SqlitePipelineStore implements PipelineStore {
       ...(row.phase ? { phase: String(row.phase) as NonNullable<PlanDispatchState["phase"]> } : {}),
       automatic: Number(row.automatic ?? 0) === 1,
       confirmedBy: row.confirmed_by === null || row.confirmed_by === undefined ? null : String(row.confirmed_by),
-    };
-  }
-
-  private changeProposalFromRow(row: SqliteRow): ChangeProposal {
-    return {
-      id: String(row.id),
-      runId: String(row.run_id),
-      planId: String(row.plan_id),
-      reason: String(row.reason),
-      requestedChanges: JSON.parse(String(row.requested_changes_json)) as string[],
-      resolvedContract: resolvedContractFromRow(row, `ChangeProposal ${String(row.id)}`),
-      status: String(row.status) as ChangeProposalStatus,
-      createdAt: String(row.created_at),
-      createdBy: String(row.created_by),
-      decidedAt: row.decided_at === null ? null : String(row.decided_at),
-      decidedBy: row.decided_by === null ? null : String(row.decided_by),
-      revision: row.revision === null || row.revision === undefined ? null : Number(row.revision),
     };
   }
 

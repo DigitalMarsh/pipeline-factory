@@ -22,11 +22,10 @@ import {
 } from "@pipeline-factory/domain";
 import { decoratePlanRows, planProjection } from "./plan-lifecycle.js";
 
-/** 记录三张"按 Plan 反复读就会爆"的表被读了几次。 */
+/** 记录两张"按 Plan 反复读就会爆"的表被读了几次。 */
 class CountingStore extends InMemoryPipelineStore {
   listRunsCalls = 0;
   listMergeRequestsCalls = 0;
-  listChangeProposalsCalls = 0;
   override listRuns() {
     this.listRunsCalls += 1;
     return super.listRuns();
@@ -35,14 +34,9 @@ class CountingStore extends InMemoryPipelineStore {
     this.listMergeRequestsCalls += 1;
     return super.listMergeRequests();
   }
-  override listChangeProposals(runId?: string) {
-    this.listChangeProposalsCalls += 1;
-    return super.listChangeProposals(runId);
-  }
   resetCounts() {
     this.listRunsCalls = 0;
     this.listMergeRequestsCalls = 0;
-    this.listChangeProposalsCalls = 0;
   }
 }
 
@@ -79,10 +73,9 @@ describe("decoratePlanRows 的读取复杂度", () => {
     const decorated = decoratePlanRows(store, rows);
 
     expect(decorated).toHaveLength(5);
-    // 每张表恰好一次：与行数无关。改回"每个 Plan 各读一遍"会让这三个数变成 5。
+    // 每张表恰好一次：与行数无关。改回"每个 Plan 各读一遍"会让这两个数变成 5。
     expect(store.listRunsCalls).toBe(1);
     expect(store.listMergeRequestsCalls).toBe(1);
-    expect(store.listChangeProposalsCalls).toBe(1);
   });
 
   it("produces the same lifecycle entries whether the index is shared or built per call", () => {

@@ -3,7 +3,7 @@
  *   冻结把"不可变"从类型上的 Readonly<> 变成运行时保证。
  *
  * 为什么从 index.ts 抽出来：freezeRevision 被 SqlitePipelineStore 的行映射与 index.ts 里的
- *   PlanService / ChangeProposalService 同时使用。若让 store 反向从 index.js 导入，就会形成
+ *   PlanService 同时使用。若让 store 反向从 index.js 导入，就会形成
  *   新的值级回流边；放到零依赖的叶子模块后两侧都能引用，边被消掉。
  *   这也是计划 P8.3 里"freezeDeep ×2（index.ts 与 project.ts 逐字符相同）"的收敛目标位置——
  *   本轮只搬 index.ts 这一份，project.ts 那份留给 P8.3，避免同时改动两个模块的 diff。

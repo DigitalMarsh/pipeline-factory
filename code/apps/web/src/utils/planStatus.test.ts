@@ -13,7 +13,6 @@ describe("Plan 状态文案", () => {
     expect(planStatusLabel("MERGE_READY")).toBe("待合并");
     expect(planStatusLabel("MERGED")).toBe("已合并");
     expect(planStatusLabel("BLOCKED")).toBe("已阻塞");
-    expect(planStatusLabel("NEEDS_PLAN_CHANGE")).toBe("需要改计划");
   });
 
   it("未知状态回落成原字符串，不回落成空串", () => {

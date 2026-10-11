@@ -27,7 +27,6 @@ describe("statusVisualFor", () => {
       "MERGE_READY",
       "MERGED",
       "BLOCKED",
-      "NEEDS_PLAN_CHANGE",
       "DISCARDED",
     ];
     for (const status of statuses) expect(statusVisualFor(status).label).toBe(planStatusLabel(status));

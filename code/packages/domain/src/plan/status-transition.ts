@@ -42,8 +42,7 @@ import type { PlanStatus } from "./types.js";
  * | `VERIFYING → MERGE_READY / BLOCKED` | `run/verification.ts` 的 `record` |
  * | `MERGE_READY → MERGED` | `run/merge.ts` |
  * | `VERIFYING / MERGE_READY → IN_PROGRESS` | `run/recovery-coordinator.ts` 的对账 |
- * | `BLOCKED → ENQUEUED / IN_PROGRESS / VERIFYING / MERGE_READY` | `run/change-proposal.ts`、对账 |
- * | `NEEDS_PLAN_CHANGE → ENQUEUED` | `run/change-proposal.ts`（改完计划重新入队） |
+ * | `BLOCKED → ENQUEUED / IN_PROGRESS / VERIFYING / MERGE_READY` | 对账、确认修订草稿 |
  */
 
 /** 主路径与恢复边：`DRAFT → READY → ENQUEUED → DISPATCHED → IN_PROGRESS → VERIFYING → MERGE_READY → MERGED`。 */
@@ -56,7 +55,6 @@ const PLAN_STATUS_MAIN_TRANSITIONS: Record<PlanStatus, readonly PlanStatus[]> = 
   VERIFYING: ["MERGE_READY", "IN_PROGRESS"],
   MERGE_READY: ["MERGED", "IN_PROGRESS"],
   BLOCKED: ["ENQUEUED", "IN_PROGRESS", "VERIFYING", "MERGE_READY"],
-  NEEDS_PLAN_CHANGE: ["ENQUEUED"],
   MERGED: [],
   DISCARDED: [],
 };
@@ -65,26 +63,24 @@ const PLAN_STATUS_MAIN_TRANSITIONS: Record<PlanStatus, readonly PlanStatus[]> = 
  * 从**任意非终态**都能进入的三个状态：它们不是主路径上的一步，而是"外部把这件事推翻了"——
  * 写它们的地方（调度阻塞、启动修复、确认修订草稿）本来就不知道、也不该知道当前状态。
  * - `BLOCKED`：调度阻塞、执行器阻塞、恢复对账、启动修复；
- * - `READY`：确认修订草稿——改一版再确认，回到"已确认"重来；
- * - `NEEDS_PLAN_CHANGE`：变更提案要求改计划。
+ * - `READY`：确认修订草稿——改一版再确认，回到"已确认"重来。
  *
  * `MERGED` 也在其中（启动修复会把"没有确认记录却到了后面"的行拉回 `BLOCKED`），
  * 所以**真正不可逆的终态只有 `DISCARDED`**。
  */
-const PLAN_STATUS_RESET_TARGETS: readonly PlanStatus[] = ["BLOCKED", "READY", "NEEDS_PLAN_CHANGE"];
+const PLAN_STATUS_RESET_TARGETS: readonly PlanStatus[] = ["BLOCKED", "READY"];
 
 /**
  * 能被**丢弃**的状态：还没有真正开始执行、也没有活着的 Run 的那些。
  *
- * `DRAFT`（没确认）、`READY`（确认了但没入队）、`BLOCKED` / `NEEDS_PLAN_CHANGE`（卡住了，人已经
- * 决定不要它）。**排除**的是：`ENQUEUED` / `DISPATCHED`（正排在调度队列里）、`IN_PROGRESS` /
+ * `DRAFT`（没确认）、`READY`（确认了但没入队）、`BLOCKED`（卡住了，人已经决定不要它）。**排除**的是：`ENQUEUED` / `DISPATCHED`（正排在调度队列里）、`IN_PROGRESS` /
  * `VERIFYING`（有 Run 在跑）、`MERGE_READY`（活干完了、在等人合并——丢它会让一份待合并的成果失去
  * 归属）、`MERGED`（已经合进去了，无可丢弃）。
  *
  * 为什么此前只允许 `DRAFT`：丢弃当初是为"确认之前反悔"设计的。但**一个建错的需求否则是永久的**
  * ——它只能改名，不能收掉，而 `BLOCKED` 恰恰是最需要收掉的那一类（卡住了、又不打算改计划）。
  */
-const DISCARDABLE_PLAN_STATUSES: readonly PlanStatus[] = ["DRAFT", "READY", "BLOCKED", "NEEDS_PLAN_CHANGE"];
+const DISCARDABLE_PLAN_STATUSES: readonly PlanStatus[] = ["DRAFT", "READY", "BLOCKED"];
 
 /** 这个状态能不能被丢弃；`PlanService.discard` 与 `canTransitionPlanStatus` 共用它。 */
 export function canDiscardPlanStatus(from: PlanStatus): boolean {

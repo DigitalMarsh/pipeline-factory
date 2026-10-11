@@ -32,7 +32,7 @@ export function hasRunControlActions(runStatus: string, threadState: string): bo
  * - `RECOVERING`：进程重启后 Loop 被判死，而 `/resume` 对这条**根本走不通**（`scheduler.resume`
  *   要求 Run 是 `IN_PROGRESS` 且线程 `PAUSED`，这里是 `RECOVERING` + `ACTIVE`，只会回 409）——
  *   投一条补充要求是它**唯一还能往前走的路**，所以它非在集合里不可；
- * - `BLOCKED` / `NEEDS_PLAN_CHANGE` 不在里面：那两种该走「创建更新版本」，补一句话会把真问题盖住；
+ * - `BLOCKED` 不在里面：那一种该走「创建更新版本」，补一句话会把真问题盖住；
  * - `CANCELLED` / `STALE` / `QUEUED` / `STARTING` 也不在：Run 已经结束或还没开始。
  */
 export function canContinueRun(runStatus: string): boolean {
