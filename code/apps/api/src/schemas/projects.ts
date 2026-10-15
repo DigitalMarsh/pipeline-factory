@@ -29,4 +29,14 @@ export const projectUpdateBody = z.object({
 
 export const projectValidateBody = z.object({ repoRoot: z.string().trim().min(1).optional() });
 
+/**
+ * `POST /projects/:projectId/verification-script`：把一份预设落到项目上
+ * （写 `verify.sh` + 注册两条命令）。`force` 缺省即"已存在就拒绝"，见 domain 的
+ * `VerificationScriptExistsError`。
+ */
+export const verificationScriptBody = z.object({
+  preset: z.enum(["vue-vite", "maven"]),
+  subdirectory: z.string().trim().max(200).optional(),
+  force: z.boolean().optional(),
+});
 export const projectSelectExplorerBody = z.object({ explorerId: z.string().trim().min(1) });

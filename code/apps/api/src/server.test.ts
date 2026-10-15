@@ -5,7 +5,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -493,6 +493,53 @@ describe("Pipeline Factory v4 API", () => {
     } finally {
       rmSync(repoRoot, { recursive: true, force: true });
     }
+  });
+
+  /**
+   * 验证脚本预设：写 `verify.sh` + 注册两条命令 + 并进默认验证集。
+   * **已存在不覆盖**（除非 force）——那是人维护的文件，覆盖等于删掉他写的检查。
+   */
+  it("installs a verification script preset: writes verify.sh, registers its commands, refuses to overwrite", async () => {
+    const store = new InMemoryPipelineStore();
+    const project = createGitBackedTestProject(store);
+    const app = createApp({ store, seed: false });
+    apps.push(app);
+
+    const install = (payload: Record<string, unknown>) =>
+      app.inject({ method: "POST", url: `/api/v4/projects/${project.id}/verification-script`, payload });
+
+    const installed = await install({ preset: "vue-vite", subdirectory: "code" });
+    expect(installed.statusCode).toBe(200);
+    const body = installed.json();
+    expect(body.scriptPath).toBe(join(project.repoRoot, "verify.sh"));
+    // 预设的两条前置在默认集最前面（便宜的卫生检查先跑、也先失败）。
+    expect(body.defaultVerificationCommandIds.slice(0, 2)).toEqual(["project.hygiene", "project.verify"]);
+    expect(body.commitHint).toContain("提交");
+
+    // 脚本真的落到项目里了，而且是可执行位 + 子目录写进了 DIR。
+    const script = readFileSync(body.scriptPath, "utf8");
+    expect(script.startsWith("#!/usr/bin/env bash")).toBe(true);
+    expect(script).toContain('DIR="code"');
+    expect(statSync(body.scriptPath).mode & 0o111).toBeGreaterThan(0);
+
+    // 命令进了项目设置（夹具那两条自带命令原样留着），两条新命令都是启用的 verification 命令。
+    const commands = store.getProject(project.id)?.settings.commands ?? [];
+    expect(commands.map((command) => command.commandId)).toEqual(
+      expect.arrayContaining(["project.hygiene", "project.verify", "project.test", "project.typecheck"]),
+    );
+    for (const commandId of ["project.hygiene", "project.verify"]) {
+      const command = commands.find((item) => item.commandId === commandId);
+      expect(command).toMatchObject({ category: "verification", enabled: true });
+    }
+
+    // 第二次：已存在 → 409 + code；force 才覆盖。
+    const again = await install({ preset: "vue-vite", subdirectory: "code" });
+    expect(again.statusCode).toBe(409);
+    expect(again.json()).toMatchObject({ code: "VERIFICATION_SCRIPT_EXISTS" });
+
+    const forced = await install({ preset: "maven", force: true });
+    expect(forced.statusCode).toBe(200);
+    expect(readFileSync(body.scriptPath, "utf8")).toContain('MVN="./mvnw"');
   });
 
   it("rejects project-scoped requests for an unknown Project", async () => {

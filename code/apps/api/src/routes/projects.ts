@@ -21,10 +21,23 @@
 import { basename, dirname, resolve as resolvePath } from "node:path";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import type { PipelineStore, PlanService, ProjectService, ProjectSettingsInput } from "@pipeline-factory/domain";
-import { projectCreateBody, projectSelectExplorerBody, projectUpdateBody, projectValidateBody } from "../schemas/projects.js";
+import {
+  VerificationScriptExistsError,
+  type PipelineStore,
+  type PlanService,
+  type ProjectService,
+  type ProjectSettingsInput,
+} from "@pipeline-factory/domain";
+import {
+  projectCreateBody,
+  projectSelectExplorerBody,
+  projectUpdateBody,
+  projectValidateBody,
+  verificationScriptBody,
+} from "../schemas/projects.js";
 import { projectThreadParams } from "../schemas/common.js";
 import { assertGitBranch, inspectGitRepository } from "../runtime/git.js";
+import { installVerificationScript } from "../runtime/verification-script.js";
 
 export type ProjectRouteDeps = {
   store: PipelineStore;
@@ -158,6 +171,52 @@ export function registerProjectRoutes(app: FastifyInstance, deps: ProjectRouteDe
       const status =
         code === "PROJECT_NOT_FOUND" ? 404 : code === "PROJECT_HAS_ACTIVE_RUNS" || code === "CONFIG_VERSION_CONFLICT" ? 409 : 422;
       return reply.code(status).send({ code, error: message });
+    }
+  });
+
+  /**
+   * 把一份验证脚本预设落到项目上：写 `<repoRoot>/verify.sh` + 注册 `project.hygiene` /
+   * `project.verify` 两条命令，并把它们并进默认验证集。
+   *
+   * 为什么要有这条路：命令的 `argv` 在界面里是"一行文本"编辑的，带引号/管道的命令很难维护，
+   * 而**每个项目的验证本来就不一样**。收成一个脚本之后，项目侧只需要维护 `verify.sh` 一个文件。
+   * 脚本内容由服务端模板按 `preset` 生成（枚举只认两种），所以这条路由**写不出任意文件**。
+   *
+   * **不替用户提交**：脚本要先提交才会出现在 Run 的 worktree 里，而且未提交的它会被
+   * "工作区必须干净"那道闸门挡下来——所以响应里带 `commitHint`，界面必须把它说出来。
+   */
+  app.post("/api/v4/projects/:projectId/verification-script", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    const body = verificationScriptBody.safeParse(request.body ?? {});
+    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid verification script request" });
+    try {
+      const project = projects.get(params.data.projectId);
+      const installed = await installVerificationScript({
+        project,
+        preset: body.data.preset,
+        subdirectory: body.data.subdirectory,
+        force: body.data.force,
+      });
+      const updated = projects.update(project.id, {
+        settings: {
+          ...project.settings,
+          commands: installed.commands,
+          defaultVerificationCommandIds: installed.defaultVerificationCommandIds,
+        },
+      });
+      return {
+        project: updated,
+        scriptPath: installed.scriptPath,
+        commands: installed.commands,
+        defaultVerificationCommandIds: installed.defaultVerificationCommandIds,
+        commitHint: installed.commitHint,
+      };
+    } catch (error) {
+      if (error instanceof VerificationScriptExistsError)
+        return reply.code(409).send({ code: "VERIFICATION_SCRIPT_EXISTS", error: error.message, scriptPath: error.scriptPath });
+      const message = error instanceof Error ? error.message : String(error);
+      const missing = /not found/i.test(message);
+      return reply.code(missing ? 404 : 422).send({ code: missing ? "PROJECT_NOT_FOUND" : "VERIFICATION_SCRIPT_FAILED", error: message });
     }
   });
 

@@ -345,6 +345,13 @@ export type { GitMergeInspector } from "./git/merge-inspector.js";
 
 // ─────────────────────────── project/：项目聚合与配置快照 ───────────────────────────
 export { EXECUTION_SLOT_RUN_STATUSES, knownModelFamily, ProjectService } from "./project/project.js";
+export {
+  VERIFICATION_SCRIPT_PRESETS,
+  VerificationScriptExistsError,
+  applyVerificationScriptPlan,
+  planVerificationScript,
+} from "./project/verification-script.js";
+export type { VerificationScriptOptions, VerificationScriptPlan, VerificationScriptPreset } from "./project/verification-script.js";
 export type {
   CreateProjectInput,
   ModelBackendCatalog,

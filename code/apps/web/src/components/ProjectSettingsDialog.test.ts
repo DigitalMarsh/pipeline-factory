@@ -38,6 +38,31 @@ vi.mock("../api", () => ({
   },
 }));
 
+const ElDropdownStub = defineComponent({
+  props: { disabled: Boolean, trigger: String },
+  emits: ["command"],
+  setup(_props, { slots }) {
+    return () => h("div", { class: "el-dropdown" }, [slots.default?.(), slots.dropdown?.()]);
+  },
+});
+const ElDropdownMenuStub = defineComponent({
+  setup(_props, { slots }) {
+    return () => h("div", { class: "el-dropdown-menu" }, slots.default?.());
+  },
+});
+const ElDropdownItemStub = defineComponent({
+  props: { command: [String, Number, Object] },
+  emits: ["click"],
+  setup(props, { slots, emit }) {
+    return () =>
+      h(
+        "button",
+        { type: "button", "data-command": String(props.command), onClick: (event: Event) => emit("click", event) },
+        slots.default?.(),
+      );
+  },
+});
+
 const ElDialogStub = defineComponent({
   props: { modelValue: { type: Boolean, default: false } },
   setup(props, { slots }) {
@@ -129,6 +154,10 @@ function mountDialog(options: { initialTab?: string } = {}) {
   app.component("ElTag", ElTagStub);
   app.component("ElSwitch", ElSwitchStub);
   app.component("ElCheckbox", ElCheckboxStub);
+  // 下拉只渲染插槽：测试断言的是"入口在不在"，不是 popper 的位置（真行为由 API 测试钉住）。
+  app.component("ElDropdown", ElDropdownStub);
+  app.component("ElDropdownMenu", ElDropdownMenuStub);
+  app.component("ElDropdownItem", ElDropdownItemStub);
   app.directive("loading", {});
   app.mount(host);
   return { app, host, updates, saved };
@@ -492,6 +521,27 @@ describe("项目设置对话框的页签入口", () => {
 
     expect(activeTab(mounted.host)).toContain("常规");
     expect(sectionTitle(mounted.host)).toBe("项目标识");
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  /**
+   * 预设入口只在命令页出现。**真行为**（写文件 + 注册命令 + 已存在 409）由 API 测试钉住
+   * （`server.test.ts` 的 "installs a verification script preset"）——这里只锁"入口在、且指对了地方"。
+   */
+  it("命令页有「启用验证脚本」的预设入口", async () => {
+    const mounted = await mountAt("commands");
+
+    expect(sectionTitle(mounted.host)).toBe("已登记命令");
+    const trigger = [...mounted.host.querySelectorAll("button")].find((button) => button.textContent?.includes("启用验证脚本"));
+    expect(trigger, "命令页少了「启用验证脚本」入口").toBeDefined();
+    expect(trigger?.disabled).toBe(false);
+    // 下拉里就这两种预设；值由接口的枚举校验，写错会 400 而不是静默写错模板。
+    expect([...mounted.host.querySelectorAll("button[data-command]")].map((button) => button.getAttribute("data-command"))).toEqual([
+      "vue-vite",
+      "maven",
+    ]);
 
     mounted.app.unmount();
     mounted.host.remove();

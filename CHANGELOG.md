@@ -1,5 +1,43 @@
 # Changelog
 
+## 2026-10-15 — 验证收进一个 `verify.sh`：预设写脚本 + 注册两条命令（Vue / Maven）
+
+起因是上一轮对 26 份真实计划的清点：`verification.mode` **全是 `NONE`**、`verification.suites`
+**26/26 从没被填过**——因为每个项目都只登记了一条 `lifecycle` 命令，`defaultVerificationCommandIds`
+是空的。于是**每次 Run 都直接 SKIPPED → MERGE_READY，验证那条链一直是空转的**。
+
+而"给每个项目手工配验证命令"这条路走不通，原因也实测过：设置页里 `argv` 是"一行文本 ↔ 数组"编辑的，
+**带引号的命令存一次坏一次**（`split(/\s+/)`），带 `&&`、管道、glob 的命令根本没法维护；而每个项目的
+验证本来就不一样（前端要装依赖，Java 不用）。
+
+于是把**怎么验证**收进脚本，把**注册什么**留给命令：
+
+| 改了什么 | 在哪 |
+|---|---|
+| 参数编辑改成**引号感知**：`parseCommandArgs` / `formatCommandArgs` 成对，`parse(format(x)) === x` 有单测钉住 | `web/src/utils/commandArgs.ts` |
+| 两套预设模板 + 命令定义（Vue+Vite / Java+Maven），含 `--fast` 分档 | `domain/src/project/verification-script.ts` |
+| `POST /projects/:id/verification-script`：写 `<repoRoot>/verify.sh`（0755）+ 注册 `project.hygiene` / `project.verify` + 并进默认验证集；**已存在就 409**，`force` 才覆盖 | `routes/projects.ts`、`runtime/verification-script.ts` |
+| 设置页「命令」加「启用验证脚本」下拉（只两种预设；值走接口枚举校验，写错当场 400） | `ProjectSettingsDialog.vue` |
+
+三条约束写进了模板注释（改模板前先读）：**argv 里每个元素都不含空格**（设置页按行编辑，含空格会被切开）、
+**脚本要能自己说清哪一步失败**（工厂只看到一条命令的结果）、**脚本不许往仓库里写东西**
+（用 `npm ci` 而不是 `npm install`——install 可能改 `package-lock.json`，而紧接着的自动提交会把它带走）。
+
+**一条必须记住的操作约束：脚本要先提交。** 未提交的 `verify.sh` 不在 Run 的 worktree 里，而且它会让
+"工作区必须干净"那道闸门**挡住新的 Run**（干净检查用 `git status --porcelain -uall`，未跟踪算脏）。
+所以界面装完把那句话**留在页面上**，不是一闪而过的 toast。
+
+实测（project4，走的就是界面）：命令页点「启用验证脚本 → Vue + Vite 前端」，子目录填 `code` →
+写入 `/Users/Bill/Project/projecttest/project4/verify.sh`（1299 B、`-rwxr-xr-x`）→ 注册
+`hygiene` / `verify`（原有的 `build`、`codegraph-init` 原样留着）→ 默认集
+`[hygiene, verify, build]`。脚本与模板**逐字节一致**，两套模板 `bash -n` 均通过；project4 那份
+已提交（`049383b`）。
+
+> 遗留一条：project4 的 `project.build` 现在与 `verify.sh` 里的构建**重复**了（默认集会两条都跑，
+> 等于装两次依赖 + 构建两次）。要么把它从默认验证集里去掉，要么删掉这条命令——纯配置，没动。
+
+`pnpm verify` 全绿：domain 465 / api 123 / web 652。
+
 ## 2026-10-11 — 分支名分配去问 git：仓库里还在、库里已经忘了的分支不再撞车
 
 需求11 那条 Run 卡在「为什么停下」那一行：`Git worktree could not be created: … 一个名为

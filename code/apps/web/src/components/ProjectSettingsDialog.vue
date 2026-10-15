@@ -4,11 +4,12 @@
 -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
-import { CircleCheck, Connection, Delete, FolderOpened, InfoFilled, Plus, Setting, Warning } from "@element-plus/icons-vue";
+import { ArrowDown, CircleCheck, Connection, Delete, FolderOpened, InfoFilled, Plus, Setting, Warning } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { api } from "../api";
 import type { Project, ProjectSettings } from "../types";
 import { createProjectRequestScope } from "../utils/projectRoutes";
+import { formatCommandArgs, parseCommandArgs } from "../utils/commandArgs";
 import {
   backendOptions,
   backendLabel,
@@ -221,7 +222,7 @@ function setForm(value: Project) {
         description: command.description ?? "",
         enabled: command.enabled !== false,
         timeoutMs: command.timeoutMs ?? settings.concurrency.defaultTimeoutMs,
-        argv: command.argv.join(" "),
+        argv: formatCommandArgs(command.argv),
         environment: Object.entries(command.environment ?? {})
           .map(([key, value]) => `${key}=${value}`)
           .join("\n"),
@@ -335,7 +336,8 @@ function settingsPayload(): ProjectSettingsPatch {
         ...(command.description.trim() ? { description: command.description.trim() } : {}),
         enabled: command.enabled,
         timeoutMs: command.timeoutMs,
-        argv: command.argv.trim().split(/\s+/),
+        // 引号感知的切分（`utils/commandArgs.ts`）：此前是 `split(/\s+/)`，带引号的命令存一次坏一次。
+        argv: parseCommandArgs(command.argv),
         environment: environmentValue(command.environment),
         tags: listValue(command.tags),
       })),
@@ -364,6 +366,47 @@ function settingsPayload(): ProjectSettingsPatch {
       computerUseEnabled: form.computerUseEnabled,
     },
   };
+}
+
+const installingScript = ref(false);
+/** 装完脚本后留在页面上的一句话（比一闪而过的 toast 可靠：提交那件事不能漏）。 */
+const scriptNotice = ref<string | null>(null);
+
+/**
+ * 启用验证脚本：服务端按预设写 `<repoRoot>/verify.sh`（已存在则 409）+ 注册
+ * `project.hygiene` / `project.verify` 两条命令 + 并进默认验证集。
+ *
+ * 先问一句子目录：工程不一定在仓库根（这台机器上前端常在 `code/`），而脚本里的 `DIR` 就是它。
+ */
+async function installVerificationPreset(preset: string) {
+  if (!project.value || installingScript.value) return;
+  installingScript.value = true;
+  try {
+    const { value } = await ElMessageBox.prompt("工程所在目录（相对仓库根。前端工程常见是 code；根就是工程根时填 .）", "启用验证脚本", {
+      inputValue: ".",
+      confirmButtonText: "写入 verify.sh",
+      cancelButtonText: "取消",
+      inputPattern: /\S/u,
+      inputErrorMessage: "目录不能为空",
+    });
+    const response = await api.installVerificationScript(project.value.id, {
+      preset: preset as "vue-vite" | "maven",
+      subdirectory: value.trim(),
+    });
+    project.value = response.project;
+    setForm(response.project);
+    emit("saved", response.project);
+    scriptNotice.value = `已写入 ${response.scriptPath}，并注册了 ${response.defaultVerificationCommandIds.join("、")}。${response.commitHint}`;
+    ElMessage({ type: "warning", message: scriptNotice.value, duration: 12000, showClose: true });
+  } catch (caught) {
+    // ElMessageBox 的取消/关闭会以字符串 'cancel' / 'close' 走到这里——那不是错误。
+    if (caught === "cancel" || caught === "close") return;
+    const message = caught instanceof Error ? caught.message : "验证脚本写入失败";
+    error.value = message;
+    ElMessage.error(message);
+  } finally {
+    installingScript.value = false;
+  }
 }
 
 async function save() {
@@ -576,8 +619,26 @@ onBeforeUnmount(() => requestScope.invalidate());
                 <h2>已登记命令</h2>
                 <p>命令使用固定 argv；仅启用的 verification 命令可加入自动验证默认集合。</p>
               </div>
-              <el-button plain :disabled="project.status === 'ARCHIVED'" @click="addCommand"><Plus :size="14" /> 添加命令</el-button>
+              <div class="section-title-actions">
+                <!--
+                  预设清单与 domain 的 `VERIFICATION_SCRIPT_PRESETS` **同源**：值走接口的枚举校验，
+                  写错会当场 400 而不是静默写错模板。加第三种预设时两边一起改。
+                -->
+                <el-dropdown trigger="click" :disabled="project.status === 'ARCHIVED'" @command="installVerificationPreset">
+                  <el-button plain :loading="installingScript" :disabled="project.status === 'ARCHIVED'"
+                    >启用验证脚本 <ArrowDown :size="14"
+                  /></el-button>
+                  <template #dropdown>
+                    <el-dropdown-menu>
+                      <el-dropdown-item command="vue-vite">Vue + Vite 前端</el-dropdown-item>
+                      <el-dropdown-item command="maven">Java + Maven 后端</el-dropdown-item>
+                    </el-dropdown-menu>
+                  </template>
+                </el-dropdown>
+                <el-button plain :disabled="project.status === 'ARCHIVED'" @click="addCommand"><Plus :size="14" /> 添加命令</el-button>
+              </div>
             </div>
+            <p v-if="scriptNotice" class="settings-script-notice" role="status">{{ scriptNotice }}</p>
             <div v-for="(command, index) in form.commands" :key="index" class="command-editor">
               <div class="command-editor-row">
                 <label
@@ -911,6 +972,27 @@ onBeforeUnmount(() => requestScope.invalidate());
   color: #929eae;
   font-size: 10px;
   line-height: 1.5;
+}
+/* 右上角那组动作（启用验证脚本 / 添加命令）——包一层，免得被 space-between 摊开。 */
+.project-settings-dialog .section-title-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+/**
+ * 装完 verify.sh 后留在页面上的那句话。**必须留得住**：它说的"要提交，否则新 Run 会被
+ * 工作区干净闸门挡下"漏掉一次，用户就要自己去猜为什么跑不起来。
+ */
+.project-settings-dialog .settings-script-notice {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border: 1px solid #f0dfb7;
+  border-radius: 7px;
+  background: #fffaf0;
+  color: #7c6a4b;
+  font-size: 11px;
+  line-height: 1.6;
 }
 .project-settings-dialog .settings-form-grid {
   display: grid;

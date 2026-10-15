@@ -84,6 +84,17 @@ export const api = {
   }) => request<{ project: Project; explorer: ExplorerThread }>("/api/v4/projects", { method: "POST", body: JSON.stringify(input) }),
   updateProject: (projectId: string, input: Record<string, unknown>) =>
     request<{ project: Project }>(`/api/v4/projects/${encodeURIComponent(projectId)}`, { method: "PATCH", body: JSON.stringify(input) }),
+  /**
+   * 启用验证脚本：服务端按预设写 `<repoRoot>/verify.sh` 并注册 `project.hygiene` /
+   * `project.verify`。**已存在就 409**（`code: VERIFICATION_SCRIPT_EXISTS`），除非 `force`。
+   */
+  installVerificationScript: (projectId: string, input: { preset: "vue-vite" | "maven"; subdirectory?: string; force?: boolean }) =>
+    request<{
+      project: Project;
+      scriptPath: string;
+      defaultVerificationCommandIds: string[];
+      commitHint: string;
+    }>(`/api/v4/projects/${encodeURIComponent(projectId)}/verification-script`, { method: "POST", body: JSON.stringify(input) }),
   validateRepository: (projectId: string, repoRoot?: string) =>
     request<{ valid: boolean; repoRoot: string; defaultBranch: string }>(
       `/api/v4/projects/${encodeURIComponent(projectId)}/validate-repository`,
