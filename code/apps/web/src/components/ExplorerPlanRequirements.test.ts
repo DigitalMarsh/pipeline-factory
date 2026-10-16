@@ -7,13 +7,20 @@ import { ElTag } from "element-plus";
 import { describe, expect, it } from "vitest";
 import ExplorerPlanRequirements from "./ExplorerPlanRequirements.vue";
 
-type Requirement = { key: string; label: string; requiredFields: string[]; optionalFields: string[] };
+type Requirement = { key: string; label: string; requiredFields: string[]; optionalFields: string[]; factoryOwnedFields?: string[] };
 type Issue = { path: string; code: string; area: string; message: string };
 
 const requirements: Requirement[] = [
   { key: "objective", label: "目标与用户范围", requiredFields: ["title", "objective.goal"], optionalFields: [] },
   { key: "scope", label: "功能范围与排除项", requiredFields: ["scope.includePaths"], optionalFields: [] },
-  { key: "execution", label: "执行与人工合并", requiredFields: ["merge.strategy"], optionalFields: ["execution.toolPolicy"] },
+  // 这一条的 `requiredFields` 是**空**——现实里合并那一区就是这样（模型没有可填字段，全由 Factory 固定）。
+  {
+    key: "execution",
+    label: "执行与人工合并",
+    requiredFields: [],
+    optionalFields: ["execution.toolPolicy"],
+    factoryOwnedFields: ["merge.strategy"],
+  },
 ];
 
 const completed = requirements.map((requirement) => requirement.label);
@@ -70,10 +77,31 @@ describe("ExplorerPlanRequirements", () => {
     expect(mounted.host.textContent).toContain("必填：title、objective.goal");
     expect(mounted.host.textContent).toContain("可由 Factory 补全：execution.toolPolicy");
     expect(mounted.host.textContent).toContain("REPOSITORY_FILE 必须指定仓库相对路径");
-
     button.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     await nextTick();
     expect(button.getAttribute("aria-expanded")).toBe("false");
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  /**
+   * 「合并策略与人工确认」是**第一个模型没有可填字段的区域**（策略与"必须人工确认"都由 Factory 固定）。
+   * 它此前会渲染出一个悬空的「必填：」——一个后面什么都不跟的标签，看着像渲染坏了。
+   * 这类区域要改说"由 Factory 固定：…"，把"这里没有你的字段"讲清楚。
+   */
+  it("没有必填字段的区域不渲染悬空的「必填：」，改说由 Factory 固定", async () => {
+    const mounted = mountRequirements();
+    toggle(mounted.host).click();
+    await nextTick();
+
+    const row = [...details(mounted.host).querySelectorAll<HTMLElement>(".plan-requirement-row")].find((item) =>
+      item.textContent?.includes("执行与人工合并"),
+    )!;
+    expect(row.textContent).not.toContain("必填：");
+    expect(row.textContent).toContain("由 Factory 固定：merge.strategy");
+    // 同一行上的"可由 Factory 补全"照旧显示——两者是不同的话。
+    expect(row.textContent).toContain("可由 Factory 补全：execution.toolPolicy");
 
     mounted.app.unmount();
     mounted.host.remove();

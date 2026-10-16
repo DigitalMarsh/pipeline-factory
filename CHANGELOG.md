@@ -60,7 +60,7 @@
 web 的 `types.ts` / `PlanDetailContent.vue` / `ExplorerPlanRequirements.vue`（新增"由 Factory 固定"一行）
 与 requirements 的离线副本。docs §7 / §7.1 一并记了清点与取舍。
 
-`pnpm verify` 全绿：domain 469 / api 127 / web 656（另有格式化检查、环检查、store 完整性）。
+`pnpm verify` 全绿：domain 469 / api 127 / web 657（另有格式化检查、环检查、store 完整性）。
 
 ## 2026-10-16 — 需求清单两格下面各显示一行 agent：探索线程 / 执行线程
 

@@ -99,7 +99,9 @@ watch(
           /></span>
           <div>
             <strong>{{ requirement.label }}</strong>
-            <small>必填：{{ requirement.requiredFields.join("、") }}</small>
+            <!-- 「必填」这一行在**没有模型可填字段**的区域（合并策略：由 Factory 固定）不渲染， -->
+            <!-- 否则会留下一个悬空的「必填：」。 -->
+            <small v-if="requirement.requiredFields.length">必填：{{ requirement.requiredFields.join("、") }}</small>
             <small v-if="requirement.optionalFields.length">可由 Factory 补全：{{ requirement.optionalFields.join("、") }}</small>
             <small v-if="requirement.factoryOwnedFields?.length">由 Factory 固定：{{ requirement.factoryOwnedFields.join("、") }}</small>
             <ul v-if="issuesFor(requirement.label).length" class="plan-requirement-issues">
