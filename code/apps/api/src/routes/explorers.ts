@@ -72,7 +72,7 @@ import { projectThreadParams } from "../schemas/common.js";
 import { openSseChannel } from "../http/sse.js";
 import { planProjection } from "../projections/plan-lifecycle.js";
 import { projectAgentLoopResponse } from "../projections/agent-loop.js";
-import { findProjectThread, sanitizeExplorerRequirementStatusEvent } from "../projections/explorer.js";
+import { explorerThreadAgent, findProjectThread, sanitizeExplorerRequirementStatusEvent } from "../projections/explorer.js";
 
 export type ExplorerRouteDeps = {
   store: PipelineStore;
@@ -158,7 +158,10 @@ export function registerExplorerRoutes(app: FastifyInstance, deps: ExplorerRoute
   app.get("/api/v4/projects/:projectId/explorers", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    return { items: explorers.list(params.data.projectId) };
+    // 需求清单要在"方案状态"下面显示这条探索线程实际用的 agent（见 explorerThreadAgent）。
+    return {
+      items: explorers.list(params.data.projectId).map((explorer) => ({ ...explorer, agent: explorerThreadAgent(store, explorer) })),
+    };
   });
 
   app.get("/api/v4/projects/:projectId/explorers/:explorerId", async (request, reply) => {
@@ -166,7 +169,7 @@ export function registerExplorerRoutes(app: FastifyInstance, deps: ExplorerRoute
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     const explorer = store.getThread(params.data.explorerId);
     if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
-    return { explorer };
+    return { explorer: { ...explorer, agent: explorerThreadAgent(store, explorer) } };
   });
 
   app.get("/api/v4/projects/:projectId/explorers/:explorerId/explorer-plans", async (request, reply) => {

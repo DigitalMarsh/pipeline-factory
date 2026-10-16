@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026-10-16 — 需求清单两格下面各显示一行 agent：探索线程 / 执行线程
+
+**两个值的来源刻意不同**，这是这次改动的全部要点：
+
+| 位置 | 显示谁 | 来源 |
+|---|---|---|
+| 「方案状态」下面 | **探索线程**实际用的 agent | `model` 是**记录**（最近一次探索回合的 loop 启动事件 `agent.loop.started` 的 payload 带着它）；`backend` 取项目探索配置，没配就回退到该角色的全局后端 |
+| 「任务状态」下面 | **执行线程**实际用的 agent | 两样都是**记录**：执行线程 telemetry 里的 `model` + `backend`（由 `planExecutionThread` 带出来） |
+
+**为什么不两处都用当前配置**：配置改过之后历史行会集体说谎——实测同一张表里，需求4 的 Run 跑在
+Codex 上、需求10 之后的几个跑在 Claude 上，而项目配置只有一个。所以**记过的就用记录，没记过就留空**，
+不回填一个猜出来的值。
+
+- **domain**：`ExecutionThreadSummary` 补 `model` / `backend`（维护提示 7 跟着改写——它不再是"没有
+  使用者的类型"）；
+- **api**：`planExecutionThread` 从线程 telemetry 带出两者；新增 `explorerThreadAgent()`
+  （`projections/explorer.ts`），挂到"列线程"与"打开线程"两条路由上；
+- **web**：行模型加 `planAgent` / `taskAgent`；`ExplorerRequirementList` 那两格各加一行小字
+  （窄栏走省略号、整串放 `title` 里）；`formatAgentIdentity()` 负责 `backend · model` 的短写法。
+
+实测（project4，界面读回来的）：
+
+```
+需求4   任务: 已合并 / Codex App Server · gpt-5.6-luna
+需求10  任务: 待合并 / Claude Agent SDK · claude-opus-5
+需求11…16 同上（Claude）
+所有行  方案: 已确认 / Codex App Server · gpt-5.6-luna
+```
+
+**同一张表里两行不同**，就是"记录"与"配置"的分界证据。`pnpm verify` 全绿：domain 465 / api 127 / web 655。
+
 ## 2026-10-15 — 验证收进一个 `verify.sh`：预设写脚本 + 注册两条命令（Vue / Maven）
 
 起因是上一轮对 26 份真实计划的清点：`verification.mode` **全是 `NONE`**、`verification.suites`

@@ -56,6 +56,16 @@ export function backendLabel(catalog: ModelBackendsResponse | null, backendId: s
   return backend.id === backend.kind ? KIND_LABELS[backend.kind] : backend.id;
 }
 
+/**
+ * 后端 id → 人看的短标签，**不依赖目录**。需求清单那种"每个行都要显示"的地方用它：
+ * 那里拿不到目录（也不该为此多拉一次），而默认后端 id 就等于 kind 名（`codex-app-server`），
+ * 所以按 kind 兜底足够；自定义 id（如 `deepseek`）在目录里才有别名，这里原样返回。
+ */
+export function backendKindLabel(backendId: string | null | undefined): string {
+  if (!backendId) return "";
+  return KIND_LABELS[backendId as ModelBackendDescriptor["kind"]] ?? backendId;
+}
+
 /** 该后端端点由谁担保；cc-switch 这类由 CLI 设置解析的情形要如实说出来，不能让页面显得像配置里写死了。 */
 export function endpointHint(catalog: ModelBackendsResponse | null, backendId: string | null | undefined): string | null {
   const backend = findBackend(catalog, backendId);

@@ -13,7 +13,7 @@ import PlanDetailContent from "../components/PlanDetailContent.vue";
 import ExplorerPolicyDrawer from "../components/ExplorerPolicyDrawer.vue";
 import ThreadRail from "../components/ThreadRail.vue";
 import ExplorerRequirementList from "../components/ExplorerRequirementList.vue";
-import { isConversationArtifactPlan, projectExplorerRequirementRows } from "../utils/explorerRequirementRows";
+import { isConversationArtifactPlan, projectExplorerRequirementRows, formatAgentIdentity } from "../utils/explorerRequirementRows";
 import { DEFAULT_EXPLORER_PLAN_REQUIREMENTS, type ExplorerPlanRequirement } from "../utils/explorerPlanRequirements";
 import { scrollTimelineToLatest } from "../utils/scrollTimeline";
 import { optional } from "../utils/optional";
@@ -268,11 +268,26 @@ const {
   routeExplorerPlanId: () => (typeof route.query.explorerPlanId === "string" ? route.query.explorerPlanId : null),
 });
 
+/**
+ * 「方案状态」下面那行：**探索线程**实际用的 agent。
+ *
+ * `model` 是记录（最近一次探索回合的 loop 事件）；`backend` 优先取项目配置，**没配就回退到该角色的
+ * 全局后端**——项目没覆盖 backend 时它本来就是 null，不回退那一半就会空着（执行页对 executor 也是
+ * 这么处理的，见 RunDetailView 的 executionExecutorConfig）。
+ */
+const explorerAgent = computed(() => {
+  const agent = thread.value?.agent;
+  return formatAgentIdentity(agent?.backend ?? modelCatalog.value?.roles.explorer ?? null, agent?.model);
+});
+
 const requirementRows = computed(() =>
   projectExplorerRequirementRows(
     explorerPlans.value,
     [...threadPlans.value, ...(candidate.value ? [candidate.value] : [])],
     projectRuns.value,
+    // 「方案状态」下面那行：这条**探索线程**实际用的 agent（见下面那个 computed）。
+    // 执行侧那行不用传——它是每行自己的记录（执行线程的 telemetry）。
+    explorerAgent.value,
   ),
 );
 const selectedRequirementRow = computed(

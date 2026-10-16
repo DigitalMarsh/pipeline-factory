@@ -265,7 +265,18 @@ function planExecutionThread(store: PipelineStore, plan: CandidatePlan) {
   const run = plan.runId ? store.getRun(plan.runId) : undefined;
   if (!run) return null;
   const thread = store.getExecutionThread(run.executionThreadId);
-  return { id: run.executionThreadId, runId: run.id, state: thread?.state ?? run.status };
+  /**
+   * `model` / `backend` 来自执行线程的 telemetry —— **这是记录下来的事实**，不是当前配置推出来的：
+   * 需求清单要在任务状态下面显示"这一轮是哪个 agent 跑的"，而配置随时可能被改（本项目就改过），
+   * 拿配置回填会让已经跑过的历史行说谎。没有记录就是 null，界面自己决定显示不显示。
+   */
+  return {
+    id: run.executionThreadId,
+    runId: run.id,
+    state: thread?.state ?? run.status,
+    model: thread?.telemetry?.model ?? null,
+    backend: thread?.telemetry?.backend ?? null,
+  };
 }
 
 /**

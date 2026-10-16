@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ExplorerPlan, MergeRequest, Plan, Run } from "../types";
-import { projectExplorerRequirementRows } from "./explorerRequirementRows";
+import { formatAgentIdentity, projectExplorerRequirementRows } from "./explorerRequirementRows";
 
 function requirement(id: string, ordinal: number, overrides: Partial<ExplorerPlan> = {}): ExplorerPlan {
   return {
@@ -185,6 +185,45 @@ describe("projectExplorerRequirementRows", () => {
       [run("plan-review", "MERGE_READY")],
     );
     expect(superseded[0]?.taskStatus.label).toBe("待合并");
+  });
+
+  /**
+   * 「任务状态」下面那行来自**执行线程的记录**（telemetry 里的 model + backend）。
+   * 它必须是记录而不是当前配置——配置改过之后，历史行不该跟着变。
+   */
+  it("任务那格读执行线程记下来的 model/backend，没有记录就留空", () => {
+    const withTelemetry = projectExplorerRequirementRows(
+      [requirement("r", 1)],
+      [
+        plan("r", "MERGE_READY", {
+          runId: "run-r",
+          executionThread: { id: "thread-1", runId: "run-r", state: "ACTIVE", model: "gpt-5.6-luna", backend: "codex-app-server" },
+        }),
+      ],
+      [run("plan-r", "MERGE_READY")],
+    );
+    expect(withTelemetry[0]?.taskAgent).toBe("Codex App Server · gpt-5.6-luna");
+
+    const withoutTelemetry = projectExplorerRequirementRows(
+      [requirement("r", 1)],
+      [plan("r", "MERGE_READY", { runId: "run-r", executionThread: { id: "thread-1", runId: "run-r", state: "ACTIVE" } })],
+      [run("plan-r", "MERGE_READY")],
+    );
+    expect(withoutTelemetry[0]?.taskAgent).toBeNull();
+  });
+
+  /** 「方案状态」下面那行是**线程级**的（调用方给），所以同一个线程里每一行都一样。 */
+  it("方案那格用调用方给的探索线程 agent，没给就留空", () => {
+    const rows = projectExplorerRequirementRows([requirement("r", 1)], [plan("r", "DRAFT")], [], "Codex App Server · gpt-5.6-luna");
+    expect(rows[0]?.planAgent).toBe("Codex App Server · gpt-5.6-luna");
+    expect(projectExplorerRequirementRows([requirement("r", 1)], [plan("r", "DRAFT")], [])[0]?.planAgent).toBeNull();
+  });
+
+  it("formatAgentIdentity：缺哪半就只写哪半，两半都缺是 null", () => {
+    expect(formatAgentIdentity("codex-app-server", "gpt-5.6-luna")).toBe("Codex App Server · gpt-5.6-luna");
+    expect(formatAgentIdentity(null, "gpt-5.6-luna")).toBe("gpt-5.6-luna");
+    expect(formatAgentIdentity("claude-agent-sdk", null)).toBe("Claude Agent SDK");
+    expect(formatAgentIdentity(undefined, "  ")).toBeNull();
   });
 
   it("marks confirmed conversation-only Plans as requiring attention instead of queueing", () => {

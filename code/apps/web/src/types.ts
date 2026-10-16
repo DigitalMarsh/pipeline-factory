@@ -15,7 +15,17 @@ export type PlanLifecycleEntry = {
   runId?: string | null;
   executionThreadId?: string | null;
 };
-export type ExecutionThreadSummary = { id: string; runId: string; state: string } | null;
+/**
+ * 执行线程摘要。`model` / `backend` 来自线程的 telemetry —— **记录下来的事实**，
+ * 需求清单用它显示"这一轮是哪个 agent 跑的"（配置可能事后被改，不能回填历史）。
+ */
+export type ExecutionThreadSummary = {
+  id: string;
+  runId: string;
+  state: string;
+  model?: string | null;
+  backend?: string | null;
+} | null;
 export type PlanDispatchStatus = "QUEUED" | "WAITING" | "DISPATCHING" | "RUNNING" | "VERIFYING" | "NEEDS_REVIEW" | "BLOCKED" | "COMPLETED";
 export type PlanDispatchWaitReason =
   "WAITING_DEPENDENCY" | "WAITING_CONFLICT" | "WAITING_PROJECT_CAPACITY" | "WAITING_GLOBAL_CAPACITY" | "NEEDS_CONFIGURATION";
@@ -164,6 +174,11 @@ export type ExplorerThread = {
   lastActivityAt: string;
   activeRevisionDraftId?: string | null;
   activeExplorerPlanId?: string | null;
+  /**
+   * 这条**探索线程**实际用的 agent。`model` 来自最近一次探索回合的 loop 记录（事实），
+   * `backend` 取项目当前的探索配置；都没有就是 null——界面留空，不回填一个猜的值。
+   */
+  agent?: { model: string | null; backend: string | null } | null;
   contextSummary?: ExplorerThreadContextSummary | null;
   exploration: {
     status: "INCOMPLETE" | "READY";

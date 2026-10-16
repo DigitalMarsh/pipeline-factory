@@ -3,6 +3,7 @@
  * 维护提示：状态映射只读取现有服务端状态，不推断或推进后端生命周期。
  */
 import type { ExplorerPlan, Plan, Run } from "../types";
+import { backendKindLabel } from "./modelCatalog";
 import { planIdentityOrNull } from "./planTimeline";
 import { taskDisplayTitle } from "./taskTree";
 
@@ -16,7 +17,27 @@ export type ExplorerRequirementRow = {
   run: Run | null;
   planStatus: RequirementStatus;
   taskStatus: RequirementStatus;
+  /**
+   * 方案状态下面那行小字：这条需求是哪个 agent 探索出来的。
+   *
+   * 这是**项目当前的探索配置**（探索侧没有逐条记录的 agent），所以只应被当作"这条需求归谁管"，
+   * 不是历史事实——同一个项目下所有行都是同一个值。
+   */
+  planAgent: string | null;
+  /**
+   * 任务状态下面那行小字：这一轮是哪个 agent 执行的。
+   *
+   * 与上一条相反，这个**是记录下来的事实**（执行线程的 telemetry），改配置不会改写历史行。
+   * 那条 Run 早于 telemetry 就没有值，界面留空。
+   */
+  taskAgent: string | null;
 };
+
+/** `backend · model` 的短写法；两半都可能缺，都缺就是 null（界面留空而不是显示破折号）。 */
+export function formatAgentIdentity(backend: string | null | undefined, model: string | null | undefined): string | null {
+  const parts = [backendKindLabel(backend), model?.trim()].filter((part): part is string => Boolean(part));
+  return parts.length > 0 ? parts.join(" · ") : null;
+}
 
 const CONFIRMED_PLAN_STATUSES = new Set([
   "READY",
@@ -138,8 +159,18 @@ function taskStatusFor(plan: Plan | null, run: Run | null): RequirementStatus {
   return { label: `未知状态：${plan.status}`, tone: "neutral" };
 }
 
-/** 每个 ExplorerPlan 保留一行，需求序号是稳定排序依据。 */
-export function projectExplorerRequirementRows(explorerPlans: ExplorerPlan[], plans: Plan[], runs: Run[]): ExplorerRequirementRow[] {
+/**
+ * 每个 ExplorerPlan 保留一行，需求序号是稳定排序依据。
+ *
+ * `explorerAgent` 由调用方给（它读项目当前的探索配置），因为探索侧没有逐条记录的 agent；
+ * 执行侧不用传——那个是每行自己的记录（见 `taskAgent`）。
+ */
+export function projectExplorerRequirementRows(
+  explorerPlans: ExplorerPlan[],
+  plans: Plan[],
+  runs: Run[],
+  explorerAgent: string | null = null,
+): ExplorerRequirementRow[] {
   return [...explorerPlans]
     .sort((left, right) => left.ordinal - right.ordinal || left.id.localeCompare(right.id))
     .map((explorerPlan) => {
@@ -152,6 +183,9 @@ export function projectExplorerRequirementRows(explorerPlans: ExplorerPlan[], pl
         run,
         planStatus: planStatusFor(explorerPlan, plan),
         taskStatus: taskStatusFor(plan, run),
+        planAgent: explorerAgent,
+        // 记录下来的事实：那条 Run 的执行线程 telemetry 里带着 model 与 backend。
+        taskAgent: formatAgentIdentity(plan?.executionThread?.backend, plan?.executionThread?.model),
       };
     });
 }

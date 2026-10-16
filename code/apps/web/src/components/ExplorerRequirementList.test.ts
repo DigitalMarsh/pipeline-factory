@@ -50,6 +50,8 @@ function row(plan: ExplorerPlan): ExplorerRequirementRow {
     run: null,
     planStatus: { label: "草稿", tone: "neutral" },
     taskStatus: { label: "—", tone: "neutral" },
+    planAgent: null,
+    taskAgent: null,
   };
 }
 

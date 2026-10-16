@@ -14,6 +14,34 @@
  */
 import type { DomainEvent, ExplorerThread, PipelineStore } from "@pipeline-factory/domain";
 
+/**
+ * 这条**探索线程**实际用的 agent：`{ model, backend }`；两样都没有就是 null（界面留空，不要编）。
+ *
+ * 两个字段的来源**刻意不一样**：
+ *   - `model` 是**记录下来的事实**——最近一次探索回合的 loop 启动事件（`agent.loop.started` 的
+ *     payload 带着 `{role, mode, model}`）。之后再改配置也不会改写它，所以历史线程显示的是当时
+ *     真跑的那个模型。
+ *   - `backend` 只能取项目当前的探索配置：探索侧没有逐线程记 backend 的地方，而它本来就是**项目级**
+ *     的。（执行侧不同——执行线程的 telemetry 把 model 与 backend 都记了，见 `planExecutionThread`。）
+ *
+ * 性能：`listAgentLoops()` 是全表读。这条只在"列出线程"与"打开线程"两处调用，线程数是十位数量级，
+ * 所以没建索引；**不要**把它塞进逐需求的循环里。
+ */
+export function explorerThreadAgent(
+  store: Pick<PipelineStore, "listTurns" | "listAgentLoops" | "listEvents" | "getProject">,
+  explorer: Pick<ExplorerThread, "id" | "projectId">,
+): { model: string | null; backend: string | null } | null {
+  const turnIds = new Set(store.listTurns(explorer.id).map((turn) => turn.id));
+  const loop = store
+    .listAgentLoops()
+    .filter((item) => item.ownerType === "explorer-turn" && turnIds.has(item.ownerId))
+    .sort((left, right) => (right.startedAt ?? "").localeCompare(left.startedAt ?? ""))[0];
+  const started = loop ? store.listEvents({ aggregateId: loop.id, types: ["agent.loop.started"] })[0] : undefined;
+  const model = typeof started?.payload?.model === "string" ? started.payload.model : null;
+  const backend = store.getProject(explorer.projectId)?.settings.models.explorer.backend ?? null;
+  return model || backend ? { model, backend } : null;
+}
+
 export function sanitizeExplorerRequirementStatusEvent(
   store: Pick<PipelineStore, "getExplorerPlan">,
   thread: Pick<ExplorerThread, "id" | "projectId">,

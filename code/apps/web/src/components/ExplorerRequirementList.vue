@@ -89,14 +89,24 @@ const emit = defineEmits<{
             </button>
           </div>
           <div class="requirement-cell" role="cell">
-            <button
-              type="button"
-              class="requirement-status-button"
-              :aria-label="`${row.title}，Plan 状态：${row.planStatus.label}，打开探索对话`"
-              @click="emit('explore', row.explorerPlan.id)"
-            >
-              <el-tag size="small" effect="light" :type="requirementStatusTagType(row.planStatus.tone)">{{ row.planStatus.label }}</el-tag>
-            </button>
+            <!--
+              状态标签下面那行是**这条探索线程实际用的 agent**（后端取项目配置、模型取最近一次 loop
+              的记录）。它和"任务状态"下面那行（那条 Run 执行线程的 telemetry）是两个不同的来源，
+              所以分别在各自那一格里显示，而不是合成一行。
+            -->
+            <div class="requirement-status-stack">
+              <button
+                type="button"
+                class="requirement-status-button"
+                :aria-label="`${row.title}，Plan 状态：${row.planStatus.label}${row.planAgent ? `，探索 Agent：${row.planAgent}` : ''}，打开探索对话`"
+                @click="emit('explore', row.explorerPlan.id)"
+              >
+                <el-tag size="small" effect="light" :type="requirementStatusTagType(row.planStatus.tone)">{{
+                  row.planStatus.label
+                }}</el-tag>
+              </button>
+              <span v-if="row.planAgent" class="requirement-agent" :title="row.planAgent">{{ row.planAgent }}</span>
+            </div>
           </div>
           <div class="requirement-cell" role="cell">
             <button
@@ -111,16 +121,21 @@ const emit = defineEmits<{
             <span v-else class="requirement-unavailable" aria-label="尚无结构化 Plan">—</span>
           </div>
           <div class="requirement-cell" role="cell">
-            <button
-              v-if="row.taskStatus.label !== '—'"
-              type="button"
-              class="requirement-status-button"
-              :aria-label="`${row.title}，任务状态：${row.taskStatus.label}，打开 Run`"
-              @click="emit('openTask', row.explorerPlan.id)"
-            >
-              <el-tag size="small" effect="light" :type="requirementStatusTagType(row.taskStatus.tone)">{{ row.taskStatus.label }}</el-tag>
-            </button>
-            <span v-else class="requirement-unavailable">—</span>
+            <div class="requirement-status-stack">
+              <button
+                v-if="row.taskStatus.label !== '—'"
+                type="button"
+                class="requirement-status-button"
+                :aria-label="`${row.title}，任务状态：${row.taskStatus.label}${row.taskAgent ? `，执行 Agent：${row.taskAgent}` : ''}，打开 Run`"
+                @click="emit('openTask', row.explorerPlan.id)"
+              >
+                <el-tag size="small" effect="light" :type="requirementStatusTagType(row.taskStatus.tone)">{{
+                  row.taskStatus.label
+                }}</el-tag>
+              </button>
+              <span v-else class="requirement-unavailable">—</span>
+              <span v-if="row.taskAgent" class="requirement-agent" :title="row.taskAgent">{{ row.taskAgent }}</span>
+            </div>
           </div>
         </article>
       </div>

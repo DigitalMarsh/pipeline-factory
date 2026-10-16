@@ -5634,6 +5634,28 @@ a {
   align-items: center;
   padding: 11px 8px;
 }
+/**
+ * 「方案状态 / 任务状态」那两格：状态标签在上，agent 一行小字在下。
+ * 两行都要能收（`min-width: 0` + `max-width: 100%`）——窄栏里长标签溢出去压隔壁格，
+ * 这个坑在这张表上踩过一次了。
+ */
+.requirement-status-stack {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+}
+.requirement-agent {
+  max-width: 100%;
+  overflow: hidden;
+  color: #98a3b1;
+  font-size: 9px;
+  line-height: 1.4;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 .requirement-name-cell {
   gap: 5px;
   padding-left: 0;

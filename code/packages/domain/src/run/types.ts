@@ -32,9 +32,10 @@
  *      该文件四个方法的"仓库缺失"返回值刻意不一致（见该文件头）。
  *   6) **MergeRequest.humanConfirmationRequired 是字面量 true**：自动合并这条路
  *      在类型上就不存在，不要把它放宽成 boolean。
- *   7) ExecutionThreadSummary 目前**没有真正的使用者**：全仓唯一引用是 plan/service.ts
- *      顶部的一条 import（导入了但从未使用）。它仍是 barrel 的公共契约，故保留；
- *      若将来要清理，先确认 web 侧确实不再需要从 domain 取。
+ *   7) ExecutionThreadSummary 是**页面投影摘要**，跟着 `planProjection` 的 `executionThread`
+ *      一起发给 web（需求清单要在"任务状态"下面显示那条线程实际用的 agent）。它的 `model` /
+ *      `backend` 只能来自线程的 telemetry——**不要**用当前项目配置回填：那会让历史行说谎。
+ *      web 侧的类型走 `type-parity.test.ts` 与这里逐字对齐。
  */
 import type { ModelUsage, ModelUsageScope } from "../model/usage.js";
 import type { CommandResult } from "../platform/commands.js";
@@ -135,10 +136,17 @@ export type Run = {
   startedAt: string | null;
 };
 
+/**
+ * `ExecutionThread` 的**页面投影摘要**（不是执行事实本身）：需求清单用它显示"这一轮是哪个 agent
+ * 跑的那条线程"。`model` / `backend` 来自线程的 telemetry —— **记录下来的事实**，所以之后再改项目
+ * 配置也不会改写历史行；早于 telemetry 的 Run 没有这两样，就是 null（界面留空，不回填猜测值）。
+ */
 export type ExecutionThreadSummary = {
   id: string;
   runId: string;
   state: string;
+  model?: string | null;
+  backend?: string | null;
 } | null;
 
 export type VerificationStatus = "PASSED" | "SKIPPED" | "FAILED" | "BLOCKED";
