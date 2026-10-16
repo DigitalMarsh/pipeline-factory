@@ -101,6 +101,7 @@ watch(
             <strong>{{ requirement.label }}</strong>
             <small>必填：{{ requirement.requiredFields.join("、") }}</small>
             <small v-if="requirement.optionalFields.length">可由 Factory 补全：{{ requirement.optionalFields.join("、") }}</small>
+            <small v-if="requirement.factoryOwnedFields?.length">由 Factory 固定：{{ requirement.factoryOwnedFields.join("、") }}</small>
             <ul v-if="issuesFor(requirement.label).length" class="plan-requirement-issues">
               <li v-for="item in issuesFor(requirement.label)" :key="`${item.path}:${item.message}`">
                 <code>{{ item.path }}</code

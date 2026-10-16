@@ -40,5 +40,12 @@ export const DEFAULT_EXPLORER_PLAN_REQUIREMENTS: ExplorerPlanRequirement[] = [
     requiredFields: ["tasks", "tasks[].changes", "tasks[].acceptanceRefs", "dependencies", "conflicts", "execution"],
     optionalFields: ["execution.maxRepairAttempts"],
   },
-  { key: "merge", label: "合并策略与人工确认", requiredFields: ["merge.strategy", "merge.requireHumanMerge"], optionalFields: [] },
+  // 模型在这一区**没有可填字段**：合并是人在 Git 侧做完再回 Factory 确认的，两个值都由 Factory 固定。
+  {
+    key: "merge",
+    label: "合并策略与人工确认",
+    requiredFields: [],
+    optionalFields: [],
+    factoryOwnedFields: ["merge.strategy", "merge.requireHumanMerge"],
+  },
 ];

@@ -85,7 +85,14 @@ export type GeneratedPlanSpec = {
      */
     suites?: string[] | undefined;
   };
-  merge: { strategy: "manual" | "fast-forward" | "squash"; requireHumanMerge: true };
+  /**
+   * 这里曾经有 `merge: { strategy, requireHumanMerge }`。**真正的合并不经过 Factory**——人在 Git 侧
+   * 合并完再调 `confirmMerged`（见 `run/merge.ts` 的开头），所以那个 `strategy` 从来没有任何消费方：
+   * 27 份真实计划里它 27/27 都是 `manual`、`requireHumanMerge` 27/27 都是 `true`。界面上却写着
+   * "策略：manual，需人工审阅"，让人以为 Factory 会照着策略合并。与 `execution.executorModelRole`
+   * 是同一个病，用同一个处方：**从模型侧删掉，由 Factory 填常量**（`MERGE_STRATEGY` /
+   * `REQUIRE_HUMAN_MERGE`），落盘文档与界面照常显示。
+   */
 };
 
 export type ResolvedPlanContract = {
@@ -129,7 +136,12 @@ export type ResolvedPlanContract = {
   dependsOnPlanIds: string[];
   execution: { executorModelRole: string; toolPolicy: string; maxRepairAttempts: number };
   verification: { mode: "PROJECT_DEFAULT" | "NONE"; commandIds: string[] };
-  merge: { strategy: "manual" | "fast-forward" | "squash"; requireHumanMerge: true };
+  /**
+   * Factory 填的常量（见 `GeneratedPlanSpec` 末尾的说明）。类型收窄成字面量，是为了让"按它决定
+   * 怎么合并"这种写法当场通不过编译——Factory 从不合并，合并由人在 Git 侧做完再调 `confirmMerged`。
+   * 库里 2026-10 之前冻结的契约可能还留着模型当年写的别的策略，读的时候一律不当作数。
+   */
+  merge: { strategy: "manual"; requireHumanMerge: true };
 };
 
 export type GitBaseline = { baseBranch: string; baseCommit: string };
@@ -140,6 +152,10 @@ export type GitBaseline = { baseBranch: string; baseCommit: string };
  */
 export const EXECUTOR_ROLE = "executor";
 export const EXECUTOR_TOOL_POLICY = "executor-scoped-write";
+
+/** 合并策略与"必须人工确认"由 Factory 固定，**不是模型可填的字段**（见 GeneratedPlanSpec 末尾的说明）。 */
+export const MERGE_STRATEGY = "manual";
+export const REQUIRE_HUMAN_MERGE = true;
 
 export class GeneratedPlanSpecValidationError extends Error {
   constructor(readonly issues: PlanValidationIssue[]) {
@@ -417,23 +433,9 @@ export function validateGeneratedPlanSpec(value: unknown): PlanValidationIssue[]
   if (mode === "CONVERSATION" && verification.mode !== "NONE")
     issue(issues, "verification.mode", "MODE_CONFLICT", "验收标准与验证命令", "CONVERSATION 模式必须为 NONE。");
 
-  const merge = objectAt(source, "merge", "合并策略与人工确认", issues);
-  if (merge.strategy !== "manual" && merge.strategy !== "fast-forward" && merge.strategy !== "squash")
-    issue(
-      issues,
-      "merge.strategy",
-      merge.strategy === undefined ? "REQUIRED" : "INVALID",
-      "合并策略与人工确认",
-      "必须为 manual、fast-forward 或 squash。",
-    );
-  if (merge.requireHumanMerge !== true)
-    issue(
-      issues,
-      "merge.requireHumanMerge",
-      merge.requireHumanMerge === undefined ? "REQUIRED" : "INVALID",
-      "合并策略与人工确认",
-      "必须为 true。",
-    );
+  // `merge`（strategy / requireHumanMerge）**故意不读也不校验**：真正的合并不经过 Factory，这两个值
+  // 由 Factory 固定填进冻结契约（见 GeneratedPlanSpec 末尾的说明）。老 CandidatePlan 带着这个键，
+  // 报 FORBIDDEN 会让它们连重新解析都过不去——忽略才是正确语义（与 executorModelRole 同一条处理）。
 
   for (const field of ["repository", "baseBranch", "baseCommit", "configVersion", "configHash", "verificationCommandIds"])
     if (field in source) issue(issues, field, "FORBIDDEN", "Factory 自动补全", "只能由 Factory 基于当前 Project 与 Git 基线补全。");
@@ -451,7 +453,6 @@ export function parseGeneratedPlanSpec(value: unknown): GeneratedPlanSpec {
   const scope = source.scope as Record<string, unknown>;
   const execution = source.execution as Record<string, unknown>;
   const verification = source.verification as Record<string, unknown>;
-  const merge = source.merge as Record<string, unknown>;
   const normalize = (values: unknown) => (values as string[]).map((item) => item.trim());
   return {
     schemaVersion: 2,
@@ -501,7 +502,6 @@ export function parseGeneratedPlanSpec(value: unknown): GeneratedPlanSpec {
       mode: verification.mode as "PROJECT_DEFAULT" | "NONE",
       ...(verification.suites === undefined ? {} : { suites: normalize(verification.suites) }),
     },
-    merge: { strategy: merge.strategy as GeneratedPlanSpec["merge"]["strategy"], requireHumanMerge: true },
   };
 }
 
@@ -583,6 +583,6 @@ export function resolvePlanContract(specValue: unknown, project: ProjectExecutio
           : project.settings.concurrency.maxRepairAttempts,
     },
     verification: { mode, commandIds },
-    merge: { strategy: spec.merge.strategy, requireHumanMerge: true },
+    merge: { strategy: MERGE_STRATEGY, requireHumanMerge: REQUIRE_HUMAN_MERGE },
   };
 }

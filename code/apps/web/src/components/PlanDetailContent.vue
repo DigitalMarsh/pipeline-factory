@@ -403,11 +403,12 @@ const mergeRequest = computed(() => props.plan?.mergeRequest ?? null);
             ><strong>{{ resolved?.execution.maxRepairAttempts ?? generated?.execution.maxRepairAttempts ?? "—" }} 次</strong>
           </div>
           <div>
-            <label>合并</label
-            ><strong
-              >{{ resolved?.merge.strategy ?? generated?.merge.strategy ?? "—" }} ·
-              {{ (resolved?.merge.requireHumanMerge ?? generated?.merge.requireHumanMerge) ? "需人工审阅" : "—" }}</strong
-            >
+            <!--
+              合并策略不是模型填的、也不是 Factory 执行的：真正的合并在 Git 侧由人做完再回 Factory 确认
+              （见 domain 的 `MERGE_STRATEGY`）。所以这一行照 Executor / 工具策略的写法标"Factory 固定"，
+              没有 `generated?.merge` 这一路回退——模型侧已经没有这个字段了。
+            -->
+            <label>合并</label><strong>{{ resolved?.merge.strategy ?? "manual" }} · 需人工审阅 · Factory 固定</strong>
           </div>
         </div>
       </section>

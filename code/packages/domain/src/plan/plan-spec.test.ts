@@ -48,7 +48,6 @@ const spec = {
   conflicts: [],
   execution: {},
   verification: { mode: "PROJECT_DEFAULT" as const },
-  merge: { strategy: "manual" as const, requireHumanMerge: true as const },
 };
 
 function snapshot(defaultVerificationCommandIds: string[] = []): ProjectExecutionSnapshot {
@@ -173,6 +172,22 @@ describe("Plan spec resolution", () => {
     expect(
       validateGeneratedPlanSpec({ ...withChanges, tasks: [{ ...withChanges.tasks[0]!, acceptanceRefs: [] }] }).map((item) => item.path),
     ).toContain("tasks[0].acceptanceRefs");
+  });
+
+  /**
+   * `merge`（strategy / requireHumanMerge）现在也由 Factory 固定，理由与 `execution.executorModelRole`
+   * 一模一样：**真正的合并不经过 Factory**——人在 Git 侧合并完再调 `confirmMerged`——所以那个 strategy
+   * 从来没有任何消费方，27 份真实计划里 27/27 都是 `manual`，界面却写着"策略：manual，需人工审阅"。
+   *
+   * 老 spec 带着这个键（甚至写着别的策略、`requireHumanMerge: false`）：**照旧接受**，
+   * 但冻结契约里写的是 Factory 的常量——模型再也改不动"要不要人审"。
+   */
+  it("忽略模型填的 merge：老 spec 照收，冻结契约写 Factory 的常量", () => {
+    const historical = { ...spec, merge: { strategy: "squash", requireHumanMerge: false } };
+    expect(validateGeneratedPlanSpec(historical)).toEqual([]);
+    expect(parseGeneratedPlanSpec(historical)).not.toHaveProperty("merge");
+    const contract = resolvePlanContract(historical, snapshot(["project.test"]), { baseBranch: "main", baseCommit: "a".repeat(40) });
+    expect(contract.merge).toEqual({ strategy: "manual", requireHumanMerge: true });
   });
 
   it("validates task change records when they are present", () => {

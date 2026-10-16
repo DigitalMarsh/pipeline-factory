@@ -476,7 +476,6 @@ export type GeneratedPlanSpec = {
   execution: { maxRepairAttempts?: number };
   /** `suites` 是模型请求的验证 tag 词表（可选）；Factory 解析成 resolvedContract 里的 commandIds。 */
   verification: { mode: "PROJECT_DEFAULT" | "NONE"; suites?: string[] };
-  merge: { strategy: "manual" | "fast-forward" | "squash"; requireHumanMerge: true };
 };
 
 export type ExecutionTaskStatus = "PENDING" | "IN_PROGRESS" | "DONE" | "BLOCKED" | "UNKNOWN";
@@ -583,6 +582,11 @@ export type ResolvedPlanContract = {
   dependsOnPlanIds: string[];
   execution: { executorModelRole: string; toolPolicy: string; maxRepairAttempts: number };
   verification: { mode: "PROJECT_DEFAULT" | "NONE"; commandIds: string[] };
+  /**
+   * 合并策略与"必须人工确认"是 **Factory 填的常量**（模型侧已无此字段）。这里 `strategy` 收成宽松的
+   * `string` 是因为页面读的是库里存下来的历史契约——2026-10 之前冻结的那些可能带着模型当年写的值。
+   * 界面只**展示**它，不按它做判断。
+   */
   merge: { strategy: string; requireHumanMerge: true };
 };
 

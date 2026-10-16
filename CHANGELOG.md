@@ -1,5 +1,67 @@
 # Changelog
 
+## 2026-10-16 — Plan 契约去肥：删掉两个恒定字段，补上「这一步对哪条验收负责」
+
+起因是一次字段清点：把库里 **27 份真实计划 + 34 份执行报告**过了一遍。判据只有一条——
+**这个字段承载的，是不是执行者自己推不出来的事实**。（Codex / Claude 的 plan 模式读者是**人**，
+所以省字数是美德；这里的读者是一个**没有对话记忆的执行者**，省掉的事实它只能重新探索一遍，
+历史上就是这么跑偏的。）
+
+### 删掉的（都是"会撒谎"的恒定字段，处方跟当年删 `execution.executorModelRole` 一样）
+
+| 字段 | 数据 | 为什么删 |
+|---|---|---|
+| `tasks[].status` | 74/74 个任务还在写它——提示词说完"**不要填写 status**"之后**还是照写**；而全仓**零个消费方** | 进度的事实来源是 Run 的 journal（`TASK_PROGRESS`），`resolvePlanContract` 只是把它原样抄进冻结契约，计划详情又把它当标签显示出来，看的人会以为"这一步已经可以开工"。现在**写了也不读**，契约里恒为 Factory 填的 `"READY"`，类型收窄成字面量（拿它判断进度当场通不过编译） |
+| `merge.strategy` / `merge.requireHumanMerge` | 27/27 分别是 `manual` / `true` | **真正的合并不经过 Factory**：人在 Git 侧合并完再调 `confirmMerged`（`run/merge.ts` 开头就写着）。可计划详情显示"策略：manual · 需人工审阅"、落盘文档也照抄一遍，让人以为 Factory 会照着策略合并 |
+
+两个都**只忽略、不报 FORBIDDEN**：老 CandidatePlan 带着这些键，报错会让它们连重新解析都过不去。
+`ResolvedPlanContract` 里照旧保留、由 Factory 填常量（`MERGE_STRATEGY` / `REQUIRE_HUMAN_MERGE`），
+落盘文档与界面显示不变；执行者提示词里那份 `merge` 一并去掉——常量对执行者没有信息量。
+
+### 补上的：`tasks[].acceptanceRefs`
+
+验收标准的**序号**（从 1 开始）。此前验收标准是**计划级**的一串话（平均 6.7 条，最多 29 条），
+`tasks[].changes` 说"这一步动哪些文件"，而**"这一步做完，哪条验收算数"没有位置**。代价在执行侧很具体：
+一个 7 步计划里第 3 步做歪了，要等计划级的 `verify.sh` 一并发现，再靠 `maxRepairAttempts` 从头修。
+（`docs/探索的流程/PLAN.md` 里自己定的 Plan 契约早就有这一项：`acceptance_refs`。）
+
+门禁**两个方向都查**：每一步至少认领一条（报在「实施任务、依赖与冲突」区），每条验收也都得有任务
+认领（报在「验收标准与验证命令」区）。取值用序号而不是 id——验收标准本来就是给人看的一串话，
+加一层 id 只会让模型在"编号 ↔ 文本"两处之间对不上；序号只有一个来源（数组顺序），越界还能被校验器
+当场挡住。落盘文档里验收标准改成**带序号**的清单、每一步后面写"（验收：1、3）"；计划详情同形
+（绿字编号取代原来的 ✓）。
+
+### 顺手修的一句提示词
+
+`EXPLORER_PLAN_INSTRUCTIONS` 里那段示范 JSON **缺 `objective.context`、`design.risks`、`tasks[].changes`**，
+而同一段的散文与 `assessPlanCompletion` 都要求它们——示范块在教模型产出**会被自家门禁打回**的方案
+（模型是靠"读要求"而不是"抄例子"才补齐的，每轮白绕一次）。补齐之后新增一条测试：**把示范块直接喂给
+完成门禁**，要求判 READY。以后门禁加必填项（比如这次的 `acceptanceRefs`），忘了同步示范块这里就红。
+
+### 看出来但**决定不动**的（数据摆着，免得下一轮重开）
+
+- **`tasks[].changes` 一个字都不动**：15 份执行报告里 **14 份**与执行者报告的 `changedPaths` 逐字吻合
+  （唯一"偏差"是 Factory 自己在确认时写进 `docs/pipeline/plans/**` 的落盘文档，那正是计划里声明的范围）。
+  它是全套字段里被数据证明最有效的一个。
+- **`objective.context` / `design.risks` 留着**：新格式 11/11 计划全写了；2026-09-26 那两条 Run 反复卡在
+  「预期目录里没有 `package.json`」与「工作树里没有 `index.html`」，此后 **0 条 BLOCKED**。
+- **`objective.audience` 留着**：27/27 都写（均 2.4 条）。它看着像装饰，但 Codex 的 Plan Mode 把 audience
+  与 goal/scope/constraints 并列成第 2 阶段必须定下的一项，而且整个 `objective` 都会交给执行者。
+- **`verification.suites` 留着观察**：27/27 从没被填过，但它有完整通路（计划详情的勾选框、
+  `setVerificationSuites`）且**刚刚才变得可用**——project4 登记了 `hygiene` / `full` 两个 tag，
+  "文档类改动只跑 `hygiene`、跳过 `verify.sh`"这条路此前根本不存在。
+- **`conflicts` 要牙齿是功能不是字段**：现在 22/27 是空数组，只当执行者的提示词上下文。照 codex 契约的
+  `conflicts.keys` 做"同模块/同接口串行"的调度锁是一条真缺口，但先单独立项。
+- **`priority` 不补**：本仓"排序"就是人点确认的先后，确认本身就是人工动作，没有消费方。
+
+落点：`plan/plan-spec.ts`（类型 / 校验器 / 解析 / 解析契约）、`plan/completion.ts`（门禁两个方向）、
+`plan/plan-archive.ts`（带序号的验收 + 每步引用）、`platform/plan-requirements.ts`（要求区与提示词，
+含示范块）、`agent/executor-agent.ts`（执行者视图去掉 `merge`、说明 `acceptanceRefs` 的含义）、
+web 的 `types.ts` / `PlanDetailContent.vue` / `ExplorerPlanRequirements.vue`（新增"由 Factory 固定"一行）
+与 requirements 的离线副本。docs §7 / §7.1 一并记了清点与取舍。
+
+`pnpm verify` 全绿：domain 469 / api 127 / web 656（另有格式化检查、环检查、store 完整性）。
+
 ## 2026-10-16 — 需求清单两格下面各显示一行 agent：探索线程 / 执行线程
 
 **两个值的来源刻意不同**，这是这次改动的全部要点：

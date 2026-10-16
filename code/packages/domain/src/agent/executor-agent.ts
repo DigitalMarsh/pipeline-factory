@@ -952,8 +952,9 @@ export class ExecutorAgent {
 /**
  * 交给执行者的计划视图。
  *
- * 是**精选视图**，不是整份 `resolvedContract`：`repository`（路径、哈希）与 `execution`
- * （Factory 固定的角色与工具策略）对执行者没用，塞进提示词只是费 token。
+ * 是**精选视图**，不是整份 `resolvedContract`：`repository`（路径、哈希）、`execution`（Factory 固定的
+ * 角色与工具策略）与 `merge`（Factory 固定的策略；真正的合并在 Git 侧由人做）对执行者没用，
+ * 塞进提示词只是费 token。
  *
  * 为什么必须带上 `design`：技术约束、数据安全、失败处理，以及被 `resolvePlanContract` 并进
  * `technicalConstraints` 的 `dependencies`，都只能从这里到达执行者。代价是具体的：库里反复出现
@@ -973,7 +974,6 @@ function executorPlanView(revision: PlanRevision): unknown {
     conflicts: resolved.conflicts,
     artifact: resolved.artifact,
     verification: { commandIds: resolved.verification.commandIds },
-    merge: resolved.merge,
   };
 }
 

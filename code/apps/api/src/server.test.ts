@@ -462,7 +462,6 @@ describe("Pipeline Factory v4 API", () => {
           conflicts: [],
           execution: {},
           verification: { mode: "PROJECT_DEFAULT" },
-          merge: { strategy: "manual", requireHumanMerge: true },
         },
       });
       const app = createApp({ store, seed: false });
