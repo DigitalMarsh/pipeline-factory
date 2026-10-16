@@ -43,7 +43,7 @@ const spec = {
     failureHandling: ["Keep existing docs when validation fails"],
   },
   scope: { includePaths: ["docs/vue-usage.md"], excludePaths: ["dist/**"] },
-  tasks: [{ id: "docs", title: "Update guide", dependencies: [], status: "READY" as const }],
+  tasks: [{ id: "docs", title: "Update guide", dependencies: [] }],
   dependencies: [],
   conflicts: [],
   execution: {},
@@ -109,6 +109,23 @@ describe("Plan spec resolution", () => {
     };
     const complete = assessPlanCompletion(protocol(detailed));
     expect(complete.status).toBe("READY");
+  });
+
+  /**
+   * `tasks[].status` 现在是**写了也被忽略**的键。
+   *
+   * 它从来没有任何代码推进过（进度的事实来源是 Run 的 journal），可提示词说完"不要填写"之后，
+   * 实测 74/74 个任务还是照写。所以不再靠劝：模型写 `DONE` 既不算错、也不能让某一步"看起来做完了"，
+   * 冻结契约里那个 `status` 是 Factory 填的常量。
+   *
+   * 只忽略、不报 FORBIDDEN：老 CandidatePlan 带着这个键，报错会让它们连重新解析都过不去。
+   */
+  it("忽略 tasks[].status：既不当错误，也不抄进冻结契约", () => {
+    const claiming = { ...spec, tasks: [{ ...spec.tasks[0], status: "DONE" }] };
+    expect(validateGeneratedPlanSpec(claiming)).toEqual([]);
+    expect(parseGeneratedPlanSpec(claiming).tasks[0]).not.toHaveProperty("status");
+    const contract = resolvePlanContract(claiming, snapshot(["project.test"]), { baseBranch: "main", baseCommit: "a".repeat(40) });
+    expect(contract.tasks[0]!.status).toBe("READY");
   });
 
   it("validates task change records when they are present", () => {

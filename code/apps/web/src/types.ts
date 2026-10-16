@@ -450,7 +450,12 @@ export type PlanTaskChange = { path: string; action: "create" | "modify" | "dele
 export type PlanTask = {
   id?: string;
   title: string;
-  status: string;
+  /**
+   * `status` 在**结构化 Plan** 里已经不作数（模型侧没有这个字段了，冻结契约里那个是 Factory 填的
+   * 常量）——每一步真正的进度来自 Run 的 journal，投影成 `ExecutionTask.status`（见 `executionTasks.ts`）。
+   * 之所以留成可选：`ExecutionTask` 由它派生，那一边的 `status` 是有意义的实时状态。
+   */
+  status?: string;
   dependencies: string[];
   changes?: PlanTaskChange[];
 };
@@ -462,7 +467,7 @@ export type GeneratedPlanSpec = {
   objective: { goal: string; context?: string[]; audience: string[]; acceptanceCriteria: string[]; outOfScope: string[] };
   design: { technicalConstraints: string[]; dataSecurity: string[]; failureHandling: string[]; risks?: string[] };
   scope: { includePaths: string[]; excludePaths: string[] };
-  tasks: Array<{ id: string; title: string; dependencies: string[]; status?: "PENDING" | "READY" | "DONE"; changes?: PlanTaskChange[] }>;
+  tasks: Array<{ id: string; title: string; dependencies: string[]; changes?: PlanTaskChange[] }>;
   dependencies: string[];
   conflicts: string[];
   /** 只含 Factory 允许模型决定的项；执行角色与工具策略由 Factory 固定（见 domain 的 plan-spec.ts）。 */

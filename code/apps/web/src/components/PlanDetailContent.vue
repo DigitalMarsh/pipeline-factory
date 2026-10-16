@@ -50,12 +50,12 @@ const conversationArtifact = computed(() => isConversationArtifactPlan(props.pla
 const canDiscard = computed(() => !props.readOnly && canDiscardPlan(props.plan?.status));
 const resolved = computed(() => props.plan?.resolvedContract);
 const generated = computed(() => props.plan?.generatedSpec);
-const tasks = computed<PlanTask[]>(() =>
-  (resolved.value?.tasks ?? generated.value?.tasks ?? props.plan?.tasks ?? []).map((task) => ({
-    ...task,
-    status: task.status ?? "PENDING",
-  })),
-);
+/**
+ * 结构化 Plan 的步骤清单。**不再补 `status`**：模型侧已经没有这个字段，冻结契约里那个 `"READY"`
+ * 是 Factory 填的常量——把它当标签显示出来只会让人以为"这一步已经可以开工"。
+ * 实时进度在 Run 页（`executionTasks.ts` 从 journal 推出来的那份）。
+ */
+const tasks = computed<PlanTask[]>(() => resolved.value?.tasks ?? generated.value?.tasks ?? props.plan?.tasks ?? []);
 const artifact = computed(() => resolved.value?.artifact ?? generated.value?.artifact ?? null);
 const designConstraints = computed(() => resolved.value?.design ?? generated.value?.design ?? null);
 const contextFindings = computed(() => resolved.value?.objective.context ?? generated.value?.objective.context ?? []);
@@ -244,7 +244,6 @@ const mergeRequest = computed(() => props.plan?.mergeRequest ?? null);
                 </div>
               </div>
             </div>
-            <el-tag size="small" effect="plain">{{ task.status ?? "PENDING" }}</el-tag>
           </div>
         </div>
         <div v-if="(resolved?.dependencies ?? generated?.dependencies ?? []).length" class="source-row">

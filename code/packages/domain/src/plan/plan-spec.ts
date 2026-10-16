@@ -12,12 +12,6 @@ export type PlanValidationIssueCode = "REQUIRED" | "INVALID" | "FORBIDDEN" | "MO
 export type PlanValidationIssue = { path: string; code: PlanValidationIssueCode; area: string; message: string };
 
 /**
- * 计划里的一个执行步骤。`status` 是**计划态**（"这一步在计划里是否可开工"），不是运行时状态：
- * 每一步真正的进度来自 Run 的 journal（`TASK_PROGRESS` 条目），由执行侧推进。
- * 它曾是模型可填字段，但从来没有任何代码推进过它，界面却按"实时状态"显示恒定的 READY —— 所以
- * prompt 不再示范、界面不再当实时状态用；为了兼容库里已有的 CandidatePlan，校验器仍接受这个键。
- */
-/**
  * 一步实施要动的**具体文件**。
  * 这是"任务标题"与"真正动手"之间的那层：只有标题时，Executor 得对着标题重新探索一遍
  * （反复读文件、偶尔跑偏）；写清动哪个文件、怎么动，它才有靶子。
@@ -30,11 +24,18 @@ export type PlanTaskChange = {
   detail: string;
 };
 
+/**
+ * 计划里的一个执行步骤（**模型产出的形状**）。
+ *
+ * `status` 曾经在这里。它从来没有任何代码推进过它，`resolvePlanContract` 只是把它原样抄进冻结契约，
+ * 界面却把它当"实时状态"显示——而每一步真正的进度来自 Run 的 journal（`TASK_PROGRESS` 条目），由
+ * 执行侧推进。会撒谎的字段不如没有：**模型侧已经没有它了**（写了也不读，见校验器的说明），
+ * 冻结契约里那个 `status: "READY"` 是 Factory 填的常量，只为既有读法保留。
+ */
 export type PlanTaskShape = {
   id: string;
   title: string;
   dependencies: string[];
-  status?: "PENDING" | "READY" | "DONE";
   changes?: PlanTaskChange[] | undefined;
 };
 
@@ -94,7 +95,7 @@ export type ResolvedPlanContract = {
     configHash: string;
   };
   scope: GeneratedPlanSpec["scope"];
-  /** 冻结后的步骤清单；`status` 恒为计划态（见 PlanTaskShape 的说明）。 */
+  /** 冻结后的步骤清单；`status` 恒为 `"READY"`——Factory 填的常量，模型侧已经没有这个字段。 */
   tasks: Array<{
     id: string;
     title: string;
@@ -321,8 +322,9 @@ export function validateGeneratedPlanSpec(value: unknown): PlanValidationIssue[]
       stringAt(rawTask, "title", `${path}.title`, "实施任务、依赖与冲突", issues);
       const dependencies = stringsAt(rawTask, "dependencies", `${path}.dependencies`, "实施任务、依赖与冲突", issues);
       optionalTaskChanges(rawTask, path, issues);
-      if (rawTask.status !== undefined && rawTask.status !== "PENDING" && rawTask.status !== "READY" && rawTask.status !== "DONE")
-        issue(issues, `${path}.status`, "INVALID", "实施任务、依赖与冲突", "只能为 PENDING、READY 或 DONE。");
+      // `tasks[].status` **故意不读也不校验**：进度的事实来源是 Run 的 journal，这个键谁都不推进。
+      // 提示词已经说过"不要填写"，实测 74/74 个任务还是照写（压不住），所以它现在是"写了也被忽略"。
+      // 老 CandidatePlan 带着这个键，报 FORBIDDEN 会让它们连重新解析都过不去——忽略才是正确语义。
       if (id) {
         taskIds.push(id);
         taskDependencies.push({ id, dependencies });
@@ -428,7 +430,6 @@ export function parseGeneratedPlanSpec(value: unknown): GeneratedPlanSpec {
       id: String(task.id).trim(),
       title: String(task.title).trim(),
       dependencies: normalize(task.dependencies),
-      status: (task.status as "PENDING" | "READY" | "DONE" | undefined) ?? "READY",
       ...(task.changes === undefined
         ? {}
         : {
@@ -516,7 +517,7 @@ export function resolvePlanContract(specValue: unknown, project: ProjectExecutio
       configHash: project.configHash,
     },
     scope: spec.scope,
-    tasks: spec.tasks.map((task) => ({ ...task, status: task.status ?? "READY" })),
+    tasks: spec.tasks.map((task) => ({ ...task, status: "READY" as const })),
     dependencies: spec.dependencies,
     dependsOnPlanIds: [],
     execution: {
