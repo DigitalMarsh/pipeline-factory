@@ -65,6 +65,7 @@ function candidatePlan(overrides: Partial<Plan> = {}): Plan {
           id: "docs",
           title: "Update guide",
           dependencies: [],
+          acceptanceRefs: [1],
           changes: [{ path: "docs/guide.md", action: "modify", detail: "更新使用说明示例。" }],
         },
       ],
@@ -107,6 +108,7 @@ function candidatePlan(overrides: Partial<Plan> = {}): Plan {
           title: "Update guide",
           dependencies: [],
           status: "READY",
+          acceptanceRefs: [1],
           changes: [{ path: "docs/guide.md", action: "modify", detail: "更新使用说明示例。" }],
         },
       ],
@@ -218,6 +220,28 @@ describe("PlanDetailContent plan design details", () => {
     expect(host.textContent).toContain("修改");
     expect(host.textContent).toContain("docs/guide.md");
     expect(host.textContent).toContain("更新使用说明示例");
+  });
+
+  /**
+   * 验收标准**按序号显示**、每一步写出它认领的序号——这两处必须同时存在，否则 `acceptanceRefs`
+   * 就只是一串没有指向的数字。这里锁的是"两边对得上"这件事，不是某一种排版。
+   */
+  it("验收标准带序号，每一步写出它认领的验收", () => {
+    const plan = candidatePlan();
+    const { host } = mount({
+      plan: {
+        ...plan,
+        resolvedContract: {
+          ...plan.resolvedContract!,
+          objective: { ...plan.resolvedContract!.objective, acceptanceCriteria: ["第一条", "第二条"] },
+        },
+      },
+    });
+
+    // 第一节（01 目标与验收）里的那份清单；后面的技术约束 / 风险清单也用 .check-list。
+    const acceptance = host.querySelector(".check-list");
+    expect([...acceptance!.querySelectorAll("li")].map((item) => item.textContent?.trim())).toEqual(["1第一条", "2第二条"]);
+    expect(host.textContent).toContain("验收 1");
   });
 });
 describe("PlanDetailContent conversation artifact warning", () => {

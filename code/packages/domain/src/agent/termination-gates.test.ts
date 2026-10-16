@@ -69,7 +69,7 @@ describe("PlanCompletenessGate", () => {
             id: "task-1",
             title: "Implement",
             dependencies: [],
-            status: "READY",
+            acceptanceRefs: [1],
             changes: [{ path: "src/feature.ts", action: "create", detail: "新增入口" }],
           },
         ],

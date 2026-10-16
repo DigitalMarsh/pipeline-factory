@@ -37,7 +37,7 @@ export const DEFAULT_EXPLORER_PLAN_REQUIREMENTS: ExplorerPlanRequirement[] = [
   {
     key: "delivery",
     label: "实施任务、依赖与冲突",
-    requiredFields: ["tasks", "tasks[].changes", "dependencies", "conflicts", "execution"],
+    requiredFields: ["tasks", "tasks[].changes", "tasks[].acceptanceRefs", "dependencies", "conflicts", "execution"],
     optionalFields: ["execution.maxRepairAttempts"],
   },
   { key: "merge", label: "合并策略与人工确认", requiredFields: ["merge.strategy", "merge.requireHumanMerge"], optionalFields: [] },

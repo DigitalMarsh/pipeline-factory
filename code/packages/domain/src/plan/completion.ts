@@ -44,15 +44,18 @@ export type PlanCompletionAssessment = {
 
 /** 解析模型协议块并检查 Plan 是否具备可执行的完整契约。 */
 /**
- * 新方案必须具备的"细节"：现状与发现、每一步动哪些文件、风险。
+ * 新方案必须具备的"细节"：现状与发现、每一步动哪些文件、**每一步对哪条验收负责**、风险。
  *
  * 为什么单独列在这里而不是塞进校验器：**校验器必须继续接受历史 spec**（它们会被
- * reviseConfiguration / setVerificationSuites 重新解析），把这三个字段设成必填会让老 Plan 直接不可用。
+ * reviseConfiguration / setVerificationSuites 重新解析），把这几个字段设成必填会让老 Plan 直接不可用。
  * 门禁只跑新产物，所以"必须写清楚"这条要求放在这里是安全的。
  *
  * 直接动机：任务此前只有一个标题，Executor 拿到后得对着标题重新探索一遍；而计划里的
  * `design.technicalConstraints`（含 dependencies）**根本没有进到执行者的提示词**——
  * 库里反复出现的 `package.json remains missing` 就是这么来的。
+ *
+ * `acceptanceRefs` 是最后补上的那条边，两个方向都查：**每一步都得认领验收**（否则不问"做完没"），
+ * **每条验收都得有人认领**（否则会出现一条谁都不负责的验收标准，等到计划级验证才发现）。
  */
 function missingExplorerDetail(spec: GeneratedPlanSpec): PlanValidationIssue[] {
   const issues: PlanValidationIssue[] = [];
@@ -73,7 +76,23 @@ function missingExplorerDetail(spec: GeneratedPlanSpec): PlanValidationIssue[] {
         area: "实施任务、依赖与冲突",
         message: `任务 ${task.id} 必须写明要动哪些文件、怎么动。`,
       });
+    if (!task.acceptanceRefs?.length)
+      issues.push({
+        path: `tasks[${index}].acceptanceRefs`,
+        code: "REQUIRED",
+        area: "实施任务、依赖与冲突",
+        message: `任务 ${task.id} 必须写明它认领哪几条验收标准（objective.acceptanceCriteria 的序号，从 1 开始）。`,
+      });
   });
+  const claimed = new Set(spec.tasks.flatMap((task) => task.acceptanceRefs ?? []));
+  const unclaimed = spec.objective.acceptanceCriteria.map((_, index) => index + 1).filter((ref) => !claimed.has(ref));
+  if (unclaimed.length > 0)
+    issues.push({
+      path: "objective.acceptanceCriteria",
+      code: "REQUIRED",
+      area: "验收标准与验证命令",
+      message: `第 ${unclaimed.join("、")} 条验收标准没有任何任务认领——每条验收都要落在某一步上。`,
+    });
   return issues;
 }
 

@@ -82,14 +82,17 @@ export function renderPlanDocument(input: PlanDocumentInput): string {
   const context = resolved?.objective.context ?? [];
   if (context.length > 0) lines.push("## 现状与发现", "", ...bullets(context), "");
 
-  lines.push("## 验收标准", "", ...bullets(acceptance), "");
+  // 验收标准**带序号**：`tasks[].acceptanceRefs` 引用的是这个序号，编号不写出来就对不上。
+  lines.push("## 验收标准", "", ...numbered(acceptance), "");
   lines.push("## 功能范围", "", "**包含**", "", ...bullets(include), "", "**排除**", "", ...bullets(exclude), "");
   if (outOfScope.length > 0) lines.push("## 明确不做", "", ...bullets(outOfScope), "");
 
   lines.push("## 实施步骤", "");
   for (const [index, task] of tasks.entries()) {
     const dependencies = task.dependencies.length > 0 ? `（依赖：${task.dependencies.join("、")}）` : "";
-    lines.push(`${index + 1}. **${task.title}** ${dependencies}`.trimEnd());
+    // 认领了哪几条验收：步骤与验收标准之间唯一的连线，写出来才知道第 4 条验收归谁。
+    const acceptanceRefs = task.acceptanceRefs?.length ? `（验收：${task.acceptanceRefs.join("、")}）` : "";
+    lines.push(`${index + 1}. **${task.title}** ${dependencies}${acceptanceRefs}`.trimEnd());
     // 每一步动哪些文件、怎么动——这是"任务标题"与"真正动手"之间的那层，
     // 也是 Executor 的靶子（见 executor-agent.ts 的 executorPlanView）。
     for (const change of task.changes ?? []) {
@@ -132,4 +135,9 @@ export function writePlanDocument(input: PlanDocumentInput & { directory: string
 
 function bullets(items: readonly string[]): string[] {
   return items.length > 0 ? items.map((item) => `- ${item}`) : ["- （未声明）"];
+}
+
+/** 带序号的清单（从 1 开始）——验收标准用它，因为 `acceptanceRefs` 引用的就是这几个序号。 */
+function numbered(items: readonly string[]): string[] {
+  return items.length > 0 ? items.map((item, index) => `${index + 1}. ${item}`) : ["- （未声明）"];
 }

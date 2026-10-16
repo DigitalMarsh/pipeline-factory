@@ -36,6 +36,15 @@ export type PlanTaskShape = {
   id: string;
   title: string;
   dependencies: string[];
+  /**
+   * **这一步做完了，哪几条验收算数**——`objective.acceptanceCriteria` 的序号（从 1 开始）。
+   *
+   * 这一条边此前是缺的：验收标准是计划级的一串话，`changes` 说"动哪些文件"，却没有"这一步对哪条
+   * 验收负责"。后果在执行侧是具体的：一个多步计划里第 3 步做歪了，要等到计划级的验证一并发现，
+   * 然后靠 `maxRepairAttempts` 重新修。有它之后，"哪条验收没人认领"还能被门禁当场拦下。
+   */
+  acceptanceRefs?: number[] | undefined;
+  /** 要动哪些文件、怎么动（见 `PlanTaskChange`）。 */
   changes?: PlanTaskChange[] | undefined;
 };
 
@@ -95,12 +104,18 @@ export type ResolvedPlanContract = {
     configHash: string;
   };
   scope: GeneratedPlanSpec["scope"];
-  /** 冻结后的步骤清单；`status` 恒为 `"READY"`——Factory 填的常量，模型侧已经没有这个字段。 */
+  /**
+   * 冻结后的步骤清单。`status` 恒为 `"READY"`——**Factory 填的常量**，模型侧已经没有这个字段
+   * （类型收窄成一个字面量，就是为了让"拿它判断进度"这种写法当场通不过编译）。
+   * 库里 2026-10 之前冻结的契约里可能还留着模型当年写的 `PENDING`/`DONE`，读的时候一律不当作数。
+   */
   tasks: Array<{
     id: string;
     title: string;
     dependencies: string[];
-    status: "PENDING" | "READY" | "DONE";
+    status: "READY";
+    /** 认领的验收标准序号（从 1 开始），见 `PlanTaskShape.acceptanceRefs`。 */
+    acceptanceRefs?: number[] | undefined;
     changes?: PlanTaskChange[] | undefined;
   }>;
   /** Human-readable execution prerequisites; these are not CandidatePlan IDs. */
@@ -257,6 +272,41 @@ function optionalTaskChanges(rawTask: Record<string, unknown>, path: string, iss
   return changes;
 }
 
+/**
+ * 这一步认领哪几条验收标准（`objective.acceptanceCriteria` 的**序号，从 1 开始**）。
+ *
+ * 为什么用序号而不是让验收项自带 id：验收标准本来就是给人看的一串话，加一层 id 会让模型在
+ * "编号 - 文本"两处之间维护映射。序号只有一个来源（数组顺序），校验器能把越界当场挡住，
+ * 门禁还能反过来查出"哪条验收没人认领"。
+ *
+ * 空数组一律拒绝：与 `changes` / `risks` / `suites` 同一条约定——"这部分不用验收"是个决定，
+ * 而不是可以留白。
+ */
+function optionalTaskAcceptanceRefs(
+  rawTask: Record<string, unknown>,
+  path: string,
+  issues: PlanValidationIssue[],
+  acceptanceCount: number,
+): number[] | undefined {
+  const value = rawTask.acceptanceRefs;
+  if (value === undefined) return undefined;
+  const problem = (code: PlanValidationIssueCode, message: string) =>
+    issue(issues, `${path}.acceptanceRefs`, code, "实施任务、依赖与冲突", message);
+  if (!Array.isArray(value) || value.length === 0) {
+    problem("INVALID", "如填写，必须是至少一项的数组，元素是 objective.acceptanceCriteria 的序号（从 1 开始）。");
+    return undefined;
+  }
+  const refs: number[] = [];
+  for (const raw of value) {
+    if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 1 || (acceptanceCount > 0 && raw > acceptanceCount)) {
+      problem("INVALID", `每个元素必须是 1 到 ${acceptanceCount || "验收条数"} 之间的整数序号；收到了 ${JSON.stringify(raw)}。`);
+      return undefined;
+    }
+    refs.push(raw);
+  }
+  return [...new Set(refs)];
+}
+
 /** Returns every structural violation so continuation can repair the full artifact at once. */
 export function validateGeneratedPlanSpec(value: unknown): PlanValidationIssue[] {
   const issues: PlanValidationIssue[] = [];
@@ -279,7 +329,7 @@ export function validateGeneratedPlanSpec(value: unknown): PlanValidationIssue[]
   // 可选：历史 spec 没有这两个键（见文件头关于"不报 FORBIDDEN"的说明），存在时才校验。
   optionalStringsAt(objective, "context", "objective.context", "目标与用户范围", issues);
   stringsAt(objective, "audience", "objective.audience", "目标与用户范围", issues, true);
-  stringsAt(objective, "acceptanceCriteria", "objective.acceptanceCriteria", "验收标准与验证命令", issues, true);
+  const acceptanceCriteria = stringsAt(objective, "acceptanceCriteria", "objective.acceptanceCriteria", "验收标准与验证命令", issues, true);
   stringsAt(objective, "outOfScope", "objective.outOfScope", "功能范围与排除项", issues);
 
   const design = objectAt(source, "design", "技术方案与关键约束", issues);
@@ -322,6 +372,7 @@ export function validateGeneratedPlanSpec(value: unknown): PlanValidationIssue[]
       stringAt(rawTask, "title", `${path}.title`, "实施任务、依赖与冲突", issues);
       const dependencies = stringsAt(rawTask, "dependencies", `${path}.dependencies`, "实施任务、依赖与冲突", issues);
       optionalTaskChanges(rawTask, path, issues);
+      optionalTaskAcceptanceRefs(rawTask, path, issues, acceptanceCriteria.length);
       // `tasks[].status` **故意不读也不校验**：进度的事实来源是 Run 的 journal，这个键谁都不推进。
       // 提示词已经说过"不要填写"，实测 74/74 个任务还是照写（压不住），所以它现在是"写了也被忽略"。
       // 老 CandidatePlan 带着这个键，报 FORBIDDEN 会让它们连重新解析都过不去——忽略才是正确语义。
@@ -430,6 +481,9 @@ export function parseGeneratedPlanSpec(value: unknown): GeneratedPlanSpec {
       id: String(task.id).trim(),
       title: String(task.title).trim(),
       dependencies: normalize(task.dependencies),
+      ...(task.acceptanceRefs === undefined
+        ? {}
+        : { acceptanceRefs: [...new Set(task.acceptanceRefs as number[])].sort((left, right) => left - right) }),
       ...(task.changes === undefined
         ? {}
         : {

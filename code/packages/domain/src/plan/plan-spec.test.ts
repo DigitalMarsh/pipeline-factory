@@ -91,7 +91,7 @@ describe("Plan spec resolution", () => {
     const incomplete = assessPlanCompletion(protocol(spec));
     expect(incomplete.status).toBe("INCOMPLETE");
     expect(incomplete.diagnostics.map((item) => item.path)).toEqual(
-      expect.arrayContaining(["objective.context", "design.risks", "tasks[0].changes"]),
+      expect.arrayContaining(["objective.context", "design.risks", "tasks[0].changes", "tasks[0].acceptanceRefs"]),
     );
 
     const detailed = {
@@ -101,6 +101,7 @@ describe("Plan spec resolution", () => {
       tasks: [
         {
           ...spec.tasks[0]!,
+          acceptanceRefs: [1],
           changes: [
             { path: "docs/vue-usage.md", action: "modify" as const, detail: "Update the usage example without changing the runtime API." },
           ],
@@ -126,6 +127,52 @@ describe("Plan spec resolution", () => {
     expect(parseGeneratedPlanSpec(claiming).tasks[0]).not.toHaveProperty("status");
     const contract = resolvePlanContract(claiming, snapshot(["project.test"]), { baseBranch: "main", baseCommit: "a".repeat(40) });
     expect(contract.tasks[0]!.status).toBe("READY");
+  });
+
+  /**
+   * `acceptanceRefs` 是计划里**最后补上的那条边**：任务 ↔ 验收标准。两个方向都要挡：
+   * 每一步得认领验收；每条验收也得有人认领。序号是 `objective.acceptanceCriteria` 的下标（从 1 开始），
+   * 越界当场判非法——等到执行侧才发现引用落空就没意义了。
+   */
+  it("验收引用：越界判非法，没人认领的验收标准在门禁被拦下", () => {
+    const withChanges = {
+      ...spec,
+      objective: { ...spec.objective, context: ["现状"], acceptanceCriteria: ["验收一", "验收二"] },
+      design: { ...spec.design, risks: ["风险"] },
+      tasks: [
+        {
+          ...spec.tasks[0]!,
+          changes: [{ path: "docs/vue-usage.md", action: "modify" as const, detail: "改文档" }],
+          acceptanceRefs: [1],
+        },
+      ],
+    };
+    const protocol = (artifact: unknown) =>
+      `<pipeline-factory-plan-status>READY</pipeline-factory-plan-status><pipeline-factory-plan>${JSON.stringify(artifact)}</pipeline-factory-plan>`;
+
+    // 第 2 条验收没人认领。
+    const unclaimed = assessPlanCompletion(protocol(withChanges));
+    expect(unclaimed.status).toBe("INCOMPLETE");
+    expect(unclaimed.diagnostics.map((item) => item.message).join()).toContain("第 2 条验收标准没有任何任务认领");
+
+    // 补上认领后 READY。
+    const claimed = {
+      ...withChanges,
+      tasks: [{ ...withChanges.tasks[0]!, acceptanceRefs: [1, 2] }],
+    };
+    expect(assessPlanCompletion(protocol(claimed)).status).toBe("READY");
+
+    // 越界与非整数序号由校验器挡住。
+    expect(
+      validateGeneratedPlanSpec({ ...withChanges, tasks: [{ ...withChanges.tasks[0]!, acceptanceRefs: [3] }] }).map((item) => item.path),
+    ).toContain("tasks[0].acceptanceRefs");
+    expect(
+      validateGeneratedPlanSpec({ ...withChanges, tasks: [{ ...withChanges.tasks[0]!, acceptanceRefs: ["1"] }] }).map((item) => item.path),
+    ).toContain("tasks[0].acceptanceRefs");
+    // 空数组是自相矛盾的声明，与 changes / risks / suites 同一条约定。
+    expect(
+      validateGeneratedPlanSpec({ ...withChanges, tasks: [{ ...withChanges.tasks[0]!, acceptanceRefs: [] }] }).map((item) => item.path),
+    ).toContain("tasks[0].acceptanceRefs");
   });
 
   it("validates task change records when they are present", () => {

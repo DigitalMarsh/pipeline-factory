@@ -458,6 +458,8 @@ export type PlanTask = {
   status?: string;
   dependencies: string[];
   changes?: PlanTaskChange[];
+  /** 认领的验收标准序号（从 1 开始，见 domain 的 `PlanTaskShape.acceptanceRefs`）。 */
+  acceptanceRefs?: number[];
 };
 
 export type GeneratedPlanSpec = {
@@ -467,7 +469,7 @@ export type GeneratedPlanSpec = {
   objective: { goal: string; context?: string[]; audience: string[]; acceptanceCriteria: string[]; outOfScope: string[] };
   design: { technicalConstraints: string[]; dataSecurity: string[]; failureHandling: string[]; risks?: string[] };
   scope: { includePaths: string[]; excludePaths: string[] };
-  tasks: Array<{ id: string; title: string; dependencies: string[]; changes?: PlanTaskChange[] }>;
+  tasks: Array<{ id: string; title: string; dependencies: string[]; changes?: PlanTaskChange[]; acceptanceRefs?: number[] }>;
   dependencies: string[];
   conflicts: string[];
   /** 只含 Factory 允许模型决定的项；执行角色与工具策略由 Factory 固定（见 domain 的 plan-spec.ts）。 */

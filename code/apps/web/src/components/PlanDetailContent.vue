@@ -57,6 +57,14 @@ const generated = computed(() => props.plan?.generatedSpec);
  */
 const tasks = computed<PlanTask[]>(() => resolved.value?.tasks ?? generated.value?.tasks ?? props.plan?.tasks ?? []);
 const artifact = computed(() => resolved.value?.artifact ?? generated.value?.artifact ?? null);
+/**
+ * 验收标准。**编号就是 `tasks[].acceptanceRefs` 引用的序号**——所以下面按 1 开始编号显示，
+ * 而每一步那行会写"验收 1、3"，两边对得上才看得出"这条验收归谁"。
+ */
+const acceptanceCriteria = computed<string[]>(
+  () =>
+    resolved.value?.objective.acceptanceCriteria ?? generated.value?.objective.acceptanceCriteria ?? props.plan?.acceptanceCriteria ?? [],
+);
 const designConstraints = computed(() => resolved.value?.design ?? generated.value?.design ?? null);
 const contextFindings = computed(() => resolved.value?.objective.context ?? generated.value?.objective.context ?? []);
 const risks = computed(() => resolved.value?.design?.risks ?? generated.value?.design?.risks ?? []);
@@ -178,14 +186,9 @@ const mergeRequest = computed(() => props.plan?.mergeRequest ?? null);
         <div class="section-heading"><span>01</span><strong>目标与验收</strong></div>
         <p class="contract-goal">{{ resolved?.objective.goal ?? generated?.objective.goal ?? plan.goal }}</p>
         <ul class="check-list">
-          <li
-            v-for="item in resolved?.objective.acceptanceCriteria ??
-            generated?.objective.acceptanceCriteria ??
-            plan.acceptanceCriteria ??
-            []"
-            :key="item"
-          >
-            <span>✓</span>{{ item }}
+          <li v-for="(item, index) in acceptanceCriteria" :key="item">
+            <span>{{ index + 1 }}</span
+            >{{ item }}
           </li>
         </ul>
       </section>
@@ -235,7 +238,10 @@ const mergeRequest = computed(() => props.plan?.mergeRequest ?? null);
             <span class="task-number">{{ index + 1 }}</span>
             <div class="task-copy">
               <strong>{{ task.title }}</strong
-              ><small>{{ task.dependencies.length ? `依赖 ${task.dependencies.join("、")}` : "无依赖" }}</small>
+              ><small
+                >{{ task.dependencies.length ? `依赖 ${task.dependencies.join("、")}` : "无依赖"
+                }}<template v-if="task.acceptanceRefs?.length"> · 验收 {{ task.acceptanceRefs.join("、") }}</template></small
+              >
               <div v-if="task.changes?.length" class="task-changes">
                 <div v-for="change in task.changes" :key="`${change.action}-${change.path}`" class="task-change">
                   <el-tag size="small" effect="light" :type="changeActionType(change.action)">{{ changeActionLabel(change.action) }}</el-tag
