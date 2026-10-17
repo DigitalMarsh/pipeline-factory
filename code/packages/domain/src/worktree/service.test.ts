@@ -1,0 +1,419 @@
+/**
+ * 测试职责：Project 视角的 Worktree 服务 —— 清单分类、合并预览的阻断判据、真实合并、
+ *   冲突后的继续/中止、以及清理的 `merged_clean` 约束。
+ *
+ * 设计说明：全部用**真 Git 仓库 + 真 worktree**（`git init` / `worktree add`）。这套判据的价值
+ *   恰恰在于它与 git 语义对齐（`--is-ancestor`、`merge-tree`、`worktree remove` 的行为都不是
+ *   我们能自己模拟的），用桩替换掉就等于没测。fixture 只造"某个状态下必须成立的最小提交图"。
+ *
+ * 维护提示：新增判据时，先在这里造出"它必须拒绝"的那种仓库形状，再实现；
+ *   只断言 happy path 的用例挡不住"顺手放宽了一条阻断项"这类回归。
+ */
+import { afterAll, describe, expect, it } from "vitest";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { InMemoryPipelineStore } from "../store/in-memory-store.js";
+import { ProjectService } from "../project/project.js";
+import type { Project } from "../project/project.js";
+import { WorktreeError, WorktreeService, classifyDetached, classifyNamedBranch } from "./service.js";
+import { createLocalWorktreeGit } from "./local-git.js";
+
+const temporaryPaths: string[] = [];
+afterAll(() => {
+  for (const path of temporaryPaths) rmSync(path, { recursive: true, force: true });
+});
+
+function git(cwd: string, args: string[]): string {
+  return execFileSync("git", args, { cwd, encoding: "utf8" });
+}
+
+function commit(cwd: string, message: string): void {
+  execFileSync("git", ["-c", "user.name=Pipeline Test", "-c", "user.email=pipeline@test", "commit", "-q", "-m", message], {
+    cwd,
+  });
+}
+
+function makeTemporary(prefix: string): string {
+  const path = mkdtempSync(join(tmpdir(), prefix));
+  temporaryPaths.push(path);
+  return path;
+}
+
+type Fixture = { store: InMemoryPipelineStore; project: Project; repoRoot: string; worktreeRoot: string };
+
+/** 一个干净的真仓库：main 上一次 init 提交，worktree 根目录在仓库之外。 */
+function setup(): Fixture {
+  const repoRoot = makeTemporary("pipeline-worktree-repo-");
+  const worktreeRoot = makeTemporary("pipeline-worktree-wt-");
+  git(repoRoot, ["init", "-b", "main"]);
+  writeFileSync(join(repoRoot, "README.md"), "base\n");
+  git(repoRoot, ["add", "-A"]);
+  commit(repoRoot, "init");
+  const store = new InMemoryPipelineStore();
+  const project = new ProjectService(store).create({
+    id: "project-1",
+    name: "project-1",
+    repoRoot,
+    defaultBranch: "main",
+    worktreeRoot,
+  });
+  return { store, project, repoRoot, worktreeRoot };
+}
+
+function serviceFor(fixture: Fixture, overrides: { activeRun?: boolean } = {}): WorktreeService {
+  if (overrides.activeRun) {
+    fixture.store.saveRun({
+      id: "run-active",
+      projectId: fixture.project.id,
+      planId: "plan-1",
+      planRevision: 1,
+      status: "IN_PROGRESS",
+      branch: "feature/ahead",
+      workspacePath: join(fixture.worktreeRoot, "ahead"),
+      baseCommit: "0000000000000000000000000000000000000000",
+      executionThreadId: "thread-1",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      startedAt: "2026-01-01T00:00:00.000Z",
+    });
+  }
+  return new WorktreeService(fixture.store, { git: createLocalWorktreeGit() });
+}
+
+/** 建一条带提交的分支并切回 main（工作区干净，供后续 `worktree add`）。 */
+function createBranch(repoRoot: string, branch: string, file: string, content: string): void {
+  git(repoRoot, ["switch", "-c", branch, "main"]);
+  writeFileSync(join(repoRoot, file), content);
+  git(repoRoot, ["add", "-A"]);
+  commit(repoRoot, `${branch} change`);
+  git(repoRoot, ["switch", "main"]);
+}
+
+function addWorktree(fixture: Fixture, branch: string, name: string): string {
+  const path = join(fixture.worktreeRoot, name);
+  git(fixture.repoRoot, ["worktree", "add", path, branch]);
+  return path;
+}
+
+function itemFor(inventory: Awaited<ReturnType<WorktreeService["list"]>>, branch: string) {
+  return inventory.items.find((item) => item.branch === branch);
+}
+
+describe("状态分类", () => {
+  it("named branch：按 clean/提交/合并三个维度分类", () => {
+    expect(classifyNamedBranch("clean", 0, false, true)).toBe("no_updates");
+    expect(classifyNamedBranch("clean", 2, false, false)).toBe("committed_unmerged");
+    expect(classifyNamedBranch("dirty", 2, false, false)).toBe("dirty_with_commits");
+    expect(classifyNamedBranch("dirty", 0, false, false)).toBe("dirty_uncommitted");
+    expect(classifyNamedBranch("conflict", 1, false, false)).toBe("merge_conflict");
+    expect(classifyNamedBranch("clean", 0, true, false)).toBe("merged_clean");
+    expect(classifyNamedBranch("dirty", 0, true, false)).toBe("merged_dirty");
+  });
+
+  it("detached：没有 merged 这一档", () => {
+    expect(classifyDetached("clean", 0)).toBe("detached_clean");
+    expect(classifyDetached("clean", 2)).toBe("detached_unmerged");
+    expect(classifyDetached("dirty", 2)).toBe("detached_dirty_with_commits");
+    expect(classifyDetached("dirty", 0)).toBe("detached_dirty");
+    expect(classifyDetached("conflict", 0)).toBe("merge_conflict");
+  });
+});
+
+describe("清单", () => {
+  it("列出主分支、已提交未合并、已合并、脏 worktree 与 detached", async () => {
+    const fixture = setup();
+    createBranch(fixture.repoRoot, "feature/ahead", "ahead.txt", "ahead\n");
+    createBranch(fixture.repoRoot, "feature/dirty", "dirty.txt", "dirty\n");
+    createBranch(fixture.repoRoot, "feature/merged", "merged.txt", "merged\n");
+    addWorktree(fixture, "feature/ahead", "ahead");
+    addWorktree(fixture, "feature/dirty", "dirty");
+    const mergedWorktree = addWorktree(fixture, "feature/merged", "merged");
+    git(fixture.repoRoot, ["merge", "--no-ff", "--no-edit", "feature/merged"]);
+    writeFileSync(join(fixture.worktreeRoot, "dirty", "scratch.txt"), "uncommitted\n");
+    const detachedPath = join(fixture.worktreeRoot, "detached");
+    git(fixture.repoRoot, ["worktree", "add", "--detach", detachedPath, "main"]);
+
+    const inventory = await serviceFor(fixture).list(fixture.project);
+
+    expect(itemFor(inventory, "main")?.status).toBe("no_updates");
+    expect(itemFor(inventory, "main")?.kind).toBe("base_branch");
+    expect(itemFor(inventory, "feature/ahead")?.status).toBe("committed_unmerged");
+    expect(itemFor(inventory, "feature/ahead")?.kind).toBe("branch_worktree");
+    expect(itemFor(inventory, "feature/ahead")?.aheadCount).toBe(1);
+    expect(itemFor(inventory, "feature/ahead")?.mergeable).toBe(true);
+    expect(itemFor(inventory, "feature/dirty")?.status).toBe("dirty_with_commits");
+    expect(itemFor(inventory, "feature/dirty")?.mergeable).toBe(false);
+    expect(itemFor(inventory, "feature/merged")?.status).toBe("merged_clean");
+    expect(itemFor(inventory, "feature/merged")?.cleanupable).toBe(true);
+    expect(itemFor(inventory, "feature/merged")?.worktreePath).toBe(realpathSync(mergedWorktree));
+
+    const detached = inventory.items.find((item) => item.kind === "detached_worktree");
+    expect(detached?.status).toBe("detached_clean");
+    expect(detached?.mergeable).toBe(false);
+    expect(detached?.cleanupable).toBe(false);
+    expect(inventory.mergeInProgress).toBeNull();
+    expect(inventory.currentBranch).toBe("main");
+  });
+
+  it("repoRoot 不干净时挡住合并（白名单为空）", async () => {
+    const fixture = setup();
+    createBranch(fixture.repoRoot, "feature/ahead", "ahead.txt", "ahead\n");
+    writeFileSync(join(fixture.repoRoot, "untracked.txt"), "x\n");
+
+    const inventory = await serviceFor(fixture).list(fixture.project);
+
+    expect(itemFor(inventory, "feature/ahead")?.mergeable).toBe(false);
+    expect(itemFor(inventory, "feature/ahead")?.blockers.join("\n")).toContain("仓库工作目录有未提交改动");
+  });
+
+  it("有活动 Run 时挡住合并与清理", async () => {
+    const fixture = setup();
+    createBranch(fixture.repoRoot, "feature/ahead", "ahead.txt", "ahead\n");
+    addWorktree(fixture, "feature/ahead", "ahead");
+
+    const inventory = await serviceFor(fixture, { activeRun: true }).list(fixture.project);
+
+    expect(inventory.activeRunIds).toEqual(["run-active"]);
+    expect(itemFor(inventory, "feature/ahead")?.mergeable).toBe(false);
+    expect(itemFor(inventory, "feature/ahead")?.blockers.join("\n")).toContain("活动 Run");
+  });
+
+  it("分支属于 Run 时带上 Factory 标注", async () => {
+    const fixture = setup();
+    createBranch(fixture.repoRoot, "feature/ahead", "ahead.txt", "ahead\n");
+    fixture.store.saveRun({
+      id: "run-2",
+      projectId: fixture.project.id,
+      planId: "plan-2",
+      planRevision: 1,
+      status: "MERGE_READY",
+      branch: "feature/ahead",
+      workspacePath: join(fixture.worktreeRoot, "ahead"),
+      baseCommit: "0000000000000000000000000000000000000000",
+      executionThreadId: "thread-2",
+      createdAt: "2026-01-02T00:00:00.000Z",
+      startedAt: "2026-01-02T00:00:00.000Z",
+    });
+
+    const inventory = await serviceFor(fixture).list(fixture.project);
+
+    expect(itemFor(inventory, "feature/ahead")?.factory?.runId).toBe("run-2");
+    expect(itemFor(inventory, "feature/ahead")?.factory?.mergeRequestStatus).toBeNull();
+  });
+});
+
+describe("合并预览", () => {
+  it("可合并的分支给出结论与命令", async () => {
+    const fixture = setup();
+    createBranch(fixture.repoRoot, "feature/ahead", "ahead.txt", "ahead\n");
+    addWorktree(fixture, "feature/ahead", "ahead");
+    const service = serviceFor(fixture);
+
+    const preview = await service.preview(fixture.project, "branch:feature/ahead");
+
+    expect(preview.conclusion).toBe("ready");
+    expect(preview.canConfirm).toBe(true);
+    expect(preview.aheadCount).toBe(1);
+    expect(preview.fileChanges.map((change) => change.path)).toContain("ahead.txt");
+    expect(preview.recentCommits[0]?.subject).toContain("feature/ahead");
+    expect(preview.conflictPrediction.status).toBe("clean");
+    expect(preview.commands).toEqual([`git -C ${fixture.repoRoot} switch main`, `git -C ${fixture.repoRoot} merge --no-ff feature/ahead`]);
+    expect(preview.expectedBranchHead).toBeTruthy();
+    expect(preview.expectedBaseHead).toBeTruthy();
+  });
+
+  it("冲突分支给出 conflict_risk（仍可确认）", async () => {
+    const fixture = setup();
+    createBranch(fixture.repoRoot, "feature/conflict", "README.md", "feature side\n");
+    writeFileSync(join(fixture.repoRoot, "README.md"), "main side\n");
+    git(fixture.repoRoot, ["add", "-A"]);
+    commit(fixture.repoRoot, "main changes README");
+    const service = serviceFor(fixture);
+
+    const preview = await service.preview(fixture.project, "branch:feature/conflict");
+
+    expect(preview.conclusion).toBe("conflict_risk");
+    expect(preview.canConfirm).toBe(true);
+    expect(preview.conflictPrediction.hasConflicts).toBe(true);
+    expect(preview.conflictPrediction.conflictFiles).toContain("README.md");
+  });
+
+  it("主分支与 detached 都不能合并", async () => {
+    const fixture = setup();
+    const detachedPath = join(fixture.worktreeRoot, "detached");
+    git(fixture.repoRoot, ["worktree", "add", "--detach", detachedPath, "main"]);
+    const service = serviceFor(fixture);
+
+    const base = await service.preview(fixture.project, "branch:main");
+    expect(base.canConfirm).toBe(false);
+    expect(base.blockers.join("\n")).toContain("主分支");
+
+    const detachedItem = (await service.list(fixture.project)).items.find((item) => item.kind === "detached_worktree");
+    const detached = await service.preview(fixture.project, detachedItem?.itemId ?? "");
+    expect(detached.canConfirm).toBe(false);
+    expect(detached.blockers.join("\n")).toContain("detached");
+  });
+
+  it("未知 itemId 抛 WORKTREE_NOT_FOUND", async () => {
+    const fixture = setup();
+    await expect(serviceFor(fixture).preview(fixture.project, "branch:nope")).rejects.toMatchObject({
+      code: "WORKTREE_NOT_FOUND",
+    });
+  });
+});
+
+describe("执行合并", () => {
+  it("合并成功并生成 merge commit", async () => {
+    const fixture = setup();
+    createBranch(fixture.repoRoot, "feature/ahead", "ahead.txt", "ahead\n");
+    addWorktree(fixture, "feature/ahead", "ahead");
+    const service = serviceFor(fixture);
+    const preview = await service.preview(fixture.project, "branch:feature/ahead");
+
+    const result = await service.merge(fixture.project, {
+      itemId: "branch:feature/ahead",
+      expectedBranchHead: preview.expectedBranchHead,
+      expectedBaseHead: preview.expectedBaseHead,
+    });
+
+    expect(result.status).toBe("merged");
+    expect(result.baseHeadAfter).not.toBe(result.baseHeadBefore);
+    expect(git(fixture.repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"]).trim()).toBe("main");
+    const parents = git(fixture.repoRoot, ["rev-list", "--parents", "-n", "1", "main"]).trim().split(" ");
+    expect(parents).toHaveLength(3);
+    expect(git(fixture.repoRoot, ["status", "--short"]).trim()).toBe("");
+  });
+
+  it("预览之后 base 前进时拒绝执行（乐观并发）", async () => {
+    const fixture = setup();
+    createBranch(fixture.repoRoot, "feature/ahead", "ahead.txt", "ahead\n");
+    const service = serviceFor(fixture);
+    const preview = await service.preview(fixture.project, "branch:feature/ahead");
+    writeFileSync(join(fixture.repoRoot, "other.txt"), "other\n");
+    git(fixture.repoRoot, ["add", "-A"]);
+    commit(fixture.repoRoot, "move base");
+
+    await expect(
+      service.merge(fixture.project, {
+        itemId: "branch:feature/ahead",
+        expectedBranchHead: preview.expectedBranchHead,
+        expectedBaseHead: preview.expectedBaseHead,
+      }),
+    ).rejects.toMatchObject({ code: "WORKTREE_STATE_CHANGED" });
+  });
+
+  it("有活动 Run 时拒绝合并", async () => {
+    const fixture = setup();
+    createBranch(fixture.repoRoot, "feature/ahead", "ahead.txt", "ahead\n");
+    const service = serviceFor(fixture, { activeRun: true });
+
+    await expect(
+      service.merge(fixture.project, { itemId: "branch:feature/ahead", expectedBranchHead: null, expectedBaseHead: null }),
+    ).rejects.toMatchObject({ code: "WORKTREE_MERGE_BLOCKED" });
+  });
+
+  it("冲突后停在合并中，可以中止并恢复干净工作区", async () => {
+    const fixture = setup();
+    createBranch(fixture.repoRoot, "feature/conflict", "README.md", "feature side\n");
+    writeFileSync(join(fixture.repoRoot, "README.md"), "main side\n");
+    git(fixture.repoRoot, ["add", "-A"]);
+    commit(fixture.repoRoot, "main changes README");
+    const service = serviceFor(fixture);
+    const preview = await service.preview(fixture.project, "branch:feature/conflict");
+
+    const result = await service.merge(fixture.project, {
+      itemId: "branch:feature/conflict",
+      expectedBranchHead: preview.expectedBranchHead,
+      expectedBaseHead: preview.expectedBaseHead,
+    });
+    expect(result.status).toBe("merge_conflict");
+    expect(result.conflictFiles).toContain("README.md");
+
+    const inventory = await service.list(fixture.project);
+    expect(inventory.mergeInProgress?.conflictFiles).toContain("README.md");
+
+    const aborted = await service.abortMerge(fixture.project);
+    expect(aborted.status).toBe("aborted");
+    expect(git(fixture.repoRoot, ["status", "--short"]).trim()).toBe("");
+    expect((await service.list(fixture.project)).mergeInProgress).toBeNull();
+  });
+
+  it("解决冲突后继续合并", async () => {
+    const fixture = setup();
+    createBranch(fixture.repoRoot, "feature/conflict", "README.md", "feature side\n");
+    writeFileSync(join(fixture.repoRoot, "README.md"), "main side\n");
+    git(fixture.repoRoot, ["add", "-A"]);
+    commit(fixture.repoRoot, "main changes README");
+    const service = serviceFor(fixture);
+    const preview = await service.preview(fixture.project, "branch:feature/conflict");
+    await service.merge(fixture.project, {
+      itemId: "branch:feature/conflict",
+      expectedBranchHead: preview.expectedBranchHead,
+      expectedBaseHead: preview.expectedBaseHead,
+    });
+
+    writeFileSync(join(fixture.repoRoot, "README.md"), "resolved\n");
+    git(fixture.repoRoot, ["add", "README.md"]);
+    const continued = await service.continueMerge(fixture.project);
+
+    expect(continued.status).toBe("merged");
+    expect(git(fixture.repoRoot, ["status", "--short"]).trim()).toBe("");
+  });
+
+  it("没有进行中的合并时 continue/abort 报 WORKTREE_NO_MERGE_IN_PROGRESS", async () => {
+    const fixture = setup();
+    const service = serviceFor(fixture);
+    await expect(service.continueMerge(fixture.project)).rejects.toBeInstanceOf(WorktreeError);
+    await expect(service.abortMerge(fixture.project)).rejects.toMatchObject({ code: "WORKTREE_NO_MERGE_IN_PROGRESS" });
+  });
+});
+
+describe("清理", () => {
+  it("已合并且干净的 worktree 可以清理（worktree + 分支）", async () => {
+    const fixture = setup();
+    createBranch(fixture.repoRoot, "feature/merged", "merged.txt", "merged\n");
+    const worktreePath = addWorktree(fixture, "feature/merged", "merged");
+    git(fixture.repoRoot, ["merge", "--no-ff", "--no-edit", "feature/merged"]);
+    const service = serviceFor(fixture);
+    const inventory = await service.list(fixture.project);
+    const item = itemFor(inventory, "feature/merged");
+    const expectedPath = realpathSync(worktreePath);
+
+    const result = await service.cleanup(fixture.project, {
+      itemId: "branch:feature/merged",
+      expectedBranchHead: item?.lastCommit ?? null,
+    });
+
+    expect(result.worktreeRemoved).toBe(true);
+    expect(result.branchDeleted).toBe(true);
+    expect(() => git(fixture.repoRoot, ["rev-parse", "--verify", "refs/heads/feature/merged"])).toThrow();
+    const after = await service.list(fixture.project);
+    expect(itemFor(after, "feature/merged")).toBeUndefined();
+    expect(after.items.some((entry) => entry.worktreePath === expectedPath)).toBe(false);
+  });
+
+  it("未合并的分支不能清理", async () => {
+    const fixture = setup();
+    createBranch(fixture.repoRoot, "feature/ahead", "ahead.txt", "ahead\n");
+    addWorktree(fixture, "feature/ahead", "ahead");
+    const service = serviceFor(fixture);
+    const item = itemFor(await service.list(fixture.project), "feature/ahead");
+
+    await expect(
+      service.cleanup(fixture.project, { itemId: "branch:feature/ahead", expectedBranchHead: item?.lastCommit ?? null }),
+    ).rejects.toMatchObject({ code: "WORKTREE_CLEANUP_BLOCKED" });
+  });
+
+  it("detached worktree 不能清理", async () => {
+    const fixture = setup();
+    const detachedPath = join(fixture.worktreeRoot, "detached");
+    git(fixture.repoRoot, ["worktree", "add", "--detach", detachedPath, "main"]);
+    const service = serviceFor(fixture);
+    const item = (await service.list(fixture.project)).items.find((entry) => entry.kind === "detached_worktree");
+
+    await expect(
+      service.cleanup(fixture.project, { itemId: item?.itemId ?? "", expectedBranchHead: item?.lastCommit ?? null }),
+    ).rejects.toMatchObject({ code: "WORKTREE_CLEANUP_BLOCKED" });
+  });
+});

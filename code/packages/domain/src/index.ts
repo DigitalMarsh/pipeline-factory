@@ -365,3 +365,38 @@ export type {
   ProjectSummary,
   UpdateProjectInput,
 } from "./project/project.js";
+
+// ─────────────────────────── worktree/：项目视角的 Worktree 盘点与合并 ───────────────────────────
+// 与 git/worktree.ts 的 WorkspaceAdapter 不是一回事：那个为一条 Run 建/收 worktree，
+// 这里盘点仓库里已有的全部分支与 worktree，并执行人按下的那一次真实合并。
+export { WorktreeError, WorktreeService, classifyDetached, classifyNamedBranch } from "./worktree/service.js";
+export type { WorktreeCleanupInput, WorktreeErrorCode, WorktreeMergeInput, WorktreeServiceOptions } from "./worktree/service.js";
+export { assertSafeRef, createLocalWorktreeGit } from "./worktree/local-git.js";
+export type {
+  GitBranchEntry,
+  GitLogEntry,
+  GitNameStatus,
+  GitWorktreeEntry,
+  WorktreeGitPort,
+  WorktreeGitResult,
+  WorktreeGitRunner,
+} from "./worktree/local-git.js";
+export type {
+  WorktreeCleanupResult,
+  WorktreeConflictPrediction,
+  WorktreeFactoryLink,
+  WorktreeFactorySync,
+  WorktreeFileChange,
+  WorktreeFileSummary,
+  WorktreeGitDirtyState,
+  WorktreeInventory,
+  WorktreeItem,
+  WorktreeItemKind,
+  WorktreeItemStatus,
+  WorktreeMergeConclusion,
+  WorktreeMergeInProgress,
+  WorktreeMergePreview,
+  WorktreeMergeRelation,
+  WorktreeMergeResult,
+  WorktreePreviewCommit,
+} from "./worktree/types.js";

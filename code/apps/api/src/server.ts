@@ -47,6 +47,8 @@ import {
   RecoveryCoordinator,
   VerificationService,
   PlanDispatchCoordinator,
+  WorktreeService,
+  createLocalWorktreeGit,
   type PipelineStore,
   type VerificationCommandExecutor,
   type ModelGateway,
@@ -249,6 +251,22 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       })
     : undefined;
   if (dispatchCoordinator) void dispatchCoordinator.wake();
+  /**
+   * 项目视角的 Worktree 管理（盘点 / 合并 / 清理）。**它与 `merger` 是配套的两件事**：
+   * `merger` 只记录"待人工确认的合并请求"，这里才真的执行 `git merge`；合并成功后由
+   * `WorktreeService` 回过头调用 `merger.confirmMerged`，把 Plan 推进到 MERGED 并回收 worktree。
+   *
+   * `ignoreDirtyPathsFor` 必须是**按 repoRoot 解析**的函数：白名单是 Plan 留档目录，
+   * 而留档目录相对的是各个受管工程自己的根目录（见 plan/plan-directory.ts）。
+   * 没有配置时给空数组——宁可要求工作区干净，也不要放行一个猜出来的目录。
+   */
+  const worktrees = new WorktreeService(store, {
+    git: createLocalWorktreeGit(),
+    ignoreDirtyPathsFor: (repoRoot) => (factoryConfig ? planStorageFor(factoryConfig, repoRoot).ignoreDirtyPaths : []),
+    merger,
+    ...(scheduler ? { scheduler } : {}),
+    ...(dispatchCoordinator ? { onStateChanged: () => dispatchCoordinator.wake().then(() => undefined) } : {}),
+  });
   const schedulerLoopController = scheduler?.agentLoopController();
   const loopController: Pick<AgentLoopRunner, "pause" | "resume" | "cancel"> = options.agentLoopController ?? {
     pause: async (loopId, reason) => {
@@ -411,6 +429,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     explorers,
     explorerThread: explorer,
     merger,
+    worktrees,
     verifier,
     scheduler,
     dispatchCoordinator,

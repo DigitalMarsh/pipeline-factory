@@ -152,3 +152,61 @@ describe("api request errors", () => {
     fetchSpy.mockRestore();
   });
 });
+
+/**
+ * Worktree 管理这一组是**唯一会改写受管仓库 Git 状态**的客户端调用，所以路径与凭据要逐字锁住：
+ * `expected*` 少传一个，服务端就会把"没带凭据"当成"状态已变"，用户看到的是莫名 409。
+ */
+describe("Worktree 管理接口", () => {
+  it("预览把 itemId 放 body（分支名里的 / 不进路径）", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ preview: { itemId: "branch:feature/a" } }), { status: 200 }));
+
+    await expect(api.previewWorktreeMerge("project-1", "branch:feature/a")).resolves.toMatchObject({
+      preview: { itemId: "branch:feature/a" },
+    });
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/v4/projects/project-1/worktrees/preview",
+      expect.objectContaining({ method: "POST", body: JSON.stringify({ itemId: "branch:feature/a" }) }),
+    );
+
+    fetchSpy.mockRestore();
+  });
+
+  it("合并与清理原样带回乐观并发凭据", async () => {
+    // 每次调用都要一个**新的** Response：同一个对象被读第二次会抛 "Body is unusable"。
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => new Response(JSON.stringify({ result: { status: "merged" } }), { status: 200 }));
+
+    await api.mergeWorktree("project-1", { itemId: "branch:feature/a", expectedBranchHead: "task", expectedBaseHead: "base" });
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/v4/projects/project-1/worktrees/merge",
+      expect.objectContaining({
+        body: JSON.stringify({ itemId: "branch:feature/a", expectedBranchHead: "task", expectedBaseHead: "base" }),
+      }),
+    );
+
+    await api.cleanupWorktree("project-1", { itemId: "branch:feature/a", expectedBranchHead: "task" });
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/v4/projects/project-1/worktrees/cleanup",
+      expect.objectContaining({ body: JSON.stringify({ itemId: "branch:feature/a", expectedBranchHead: "task" }) }),
+    );
+
+    fetchSpy.mockRestore();
+  });
+
+  it("继续/中止走 POST，不需要请求体", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => new Response(JSON.stringify({ result: { status: "aborted" } }), { status: 200 }));
+
+    await api.continueWorktreeMerge("project-1");
+    expect(fetchSpy).toHaveBeenCalledWith("/api/v4/projects/project-1/worktrees/merge/continue", { method: "POST", headers: {} });
+    await api.abortWorktreeMerge("project-1");
+    expect(fetchSpy).toHaveBeenCalledWith("/api/v4/projects/project-1/worktrees/merge/abort", { method: "POST", headers: {} });
+
+    fetchSpy.mockRestore();
+  });
+});

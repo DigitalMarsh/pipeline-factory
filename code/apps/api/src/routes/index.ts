@@ -1,5 +1,5 @@
 /**
- * 模块职责：路由注册的**唯一入口** —— 把 8 个按域切分的 `routes/*.ts` 汇总成一次调用，
+ * 模块职责：路由注册的**唯一入口** —— 把 9 个按域切分的 `routes/*.ts` 汇总成一次调用，
  *   组合根只需构造依赖对象、调这一个函数。
  *
  * 设计要点（三点，都是为了让这个文件保持"没有逻辑"）：
@@ -37,6 +37,7 @@ import { registerRunRoutes, type RunRouteDeps } from "./runs.js";
 import { registerMergeRequestRoutes, type MergeRequestRouteDeps } from "./merge-requests.js";
 import { registerAgentLoopRoutes, type AgentLoopRouteDeps } from "./agent-loops.js";
 import { registerExecutionThreadRoutes, type ExecutionThreadRouteDeps } from "./execution-threads.js";
+import { registerWorktreeRoutes, type WorktreeRouteDeps } from "./worktrees.js";
 
 /** 全部域所需依赖的并集（由各域 deps 类型交集推出，见模块头 1）。 */
 export type ApiRouteDeps = PlatformRouteDeps &
@@ -46,7 +47,8 @@ export type ApiRouteDeps = PlatformRouteDeps &
   RunRouteDeps &
   MergeRequestRouteDeps &
   AgentLoopRouteDeps &
-  ExecutionThreadRouteDeps;
+  ExecutionThreadRouteDeps &
+  WorktreeRouteDeps;
 
 export function registerApiRoutes(app: FastifyInstance, deps: ApiRouteDeps): void {
   registerPlatformRoutes(app, deps);
@@ -57,4 +59,5 @@ export function registerApiRoutes(app: FastifyInstance, deps: ApiRouteDeps): voi
   registerMergeRequestRoutes(app, deps);
   registerAgentLoopRoutes(app, deps);
   registerExecutionThreadRoutes(app, deps);
+  registerWorktreeRoutes(app, deps);
 }

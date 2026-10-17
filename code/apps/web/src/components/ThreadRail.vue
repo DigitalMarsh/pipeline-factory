@@ -9,6 +9,7 @@ import {
   Connection,
   Delete,
   EditPen,
+  Files,
   FolderOpened,
   MoreFilled,
   Plus,
@@ -42,6 +43,7 @@ const props = withDefaults(
     explorerError?: string | null;
     explorerPaused?: boolean;
     projectExecutionActive?: boolean;
+    projectWorktreesActive?: boolean;
   }>(),
   {
     showArchived: false,
@@ -50,6 +52,7 @@ const props = withDefaults(
     explorerError: null,
     explorerPaused: false,
     projectExecutionActive: false,
+    projectWorktreesActive: false,
   },
 );
 const emit = defineEmits<{
@@ -60,6 +63,7 @@ const emit = defineEmits<{
   "archive-project": [projectId: string];
   "select-explorer": [explorerId: string];
   "select-project-execution": [];
+  "select-project-worktrees": [];
   "toggle-show-archived": [value: boolean];
   "archive-explorer": [explorerId: string];
   "create-explorer": [];
@@ -293,6 +297,18 @@ function emitThreadAction(command: string | number): void {
           <span><strong>项目执行线程</strong><small>在项目目录中直接执行</small></span>
         </button>
         <button
+          v-if="props.project"
+          :class="['left-panel-create', 'project-worktrees-entry', { active: props.projectWorktreesActive }]"
+          type="button"
+          aria-label="Worktree 管理"
+          :aria-current="props.projectWorktreesActive ? 'page' : undefined"
+          data-worktrees-entry
+          @click="emit('select-project-worktrees')"
+        >
+          <span class="left-panel-create-icon"><Files :size="16" /></span>
+          <span><strong>Worktree 管理</strong><small>分支状态与合并</small></span>
+        </button>
+        <button
           class="left-panel-create"
           type="button"
           aria-label="新建 Explorer"
@@ -428,6 +444,16 @@ function emitThreadAction(command: string | number): void {
     0 0 0 1px #62b5ee33;
 }
 .project-execution-entry.active .left-panel-create-icon {
+  background: #3978b4;
+}
+.project-worktrees-entry.active {
+  border-color: #62b5ee;
+  background: #28517f;
+  box-shadow:
+    inset 3px 0 #62b5ee,
+    0 0 0 1px #62b5ee33;
+}
+.project-worktrees-entry.active .left-panel-create-icon {
   background: #3978b4;
 }
 </style>

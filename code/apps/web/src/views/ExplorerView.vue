@@ -24,6 +24,7 @@ import { formatContextUsage } from "../utils/explorerStatus";
 import ExplorerInputDialog from "../components/ExplorerInputDialog.vue";
 import ExplorerMessageRow from "../components/ExplorerMessageRow.vue";
 import ProjectExecutionThreadPanel from "../components/ProjectExecutionThreadPanel.vue";
+import ProjectWorktreesPanel from "../components/ProjectWorktreesPanel.vue";
 import ProjectSettingsDialog from "../components/ProjectSettingsDialog.vue";
 import ProjectCreateDialog from "../components/ProjectCreateDialog.vue";
 import ExplorerRenameDialog from "../components/ExplorerRenameDialog.vue";
@@ -63,6 +64,12 @@ const route = useRoute();
 const router = useRouter();
 const projectId = computed(() => String(route.params.projectId ?? ""));
 const projectExecutionMode = computed(() => route.query.workspace === "project-execution");
+/**
+ * 项目视角的 Worktree 管理。与「项目执行线程」同构：共用这个外壳，中间列整列放面板，
+ * 右栏上下文面板隐藏。**它不是 Explorer 的一种状态**——进入时不要为它创建/切换线程。
+ */
+const worktreesMode = computed(() => route.query.workspace === "worktrees");
+const projectWorkspaceMode = computed(() => projectExecutionMode.value || worktreesMode.value);
 
 /**
  * 会话状态（Project 目录 / 当前线程 / 消息流）与项目切换的请求令牌守卫交给 composable。
@@ -810,20 +817,32 @@ async function createExplorer() {
 function switchProject(selectedProjectId: string) {
   void router.push({
     path: explorerPathFor(selectedProjectId),
-    query: { contextPanel: contextPanel.value, ...(projectExecutionMode.value ? { workspace: "project-execution" } : {}) },
+    query: {
+      contextPanel: contextPanel.value,
+      ...(projectExecutionMode.value ? { workspace: "project-execution" } : {}),
+      ...(worktreesMode.value ? { workspace: "worktrees" } : {}),
+    },
   });
 }
 
-function selectProjectExecution() {
+function enterProjectWorkspace(mode: "project-execution" | "worktrees") {
   closeEvents();
   closeRequirementStatusEvents();
   invalidateProjectScope();
   resetThreadState();
   thread.value = null;
-  const query: import("vue-router").LocationQueryRaw = { ...route.query, workspace: "project-execution" };
+  const query: import("vue-router").LocationQueryRaw = { ...route.query, workspace: mode };
   delete query.runId;
   delete query.explorerPlanId;
   void router.push({ path: route.path, query, hash: "" });
+}
+
+function selectProjectExecution() {
+  enterProjectWorkspace("project-execution");
+}
+
+function selectProjectWorktrees() {
+  enterProjectWorkspace("worktrees");
 }
 
 function openProjectCreateDialog() {
@@ -1313,9 +1332,9 @@ async function loadExplorerDirectory(requestProjectId: string, requestToken: num
   planRequirements.value = requirementsResponse?.requirements.areas ?? DEFAULT_EXPLORER_PLAN_REQUIREMENTS;
   explorerError.value = null;
 
-  // 固定执行线程只加载项目目录；没有 Explorer 时不能为进入执行模式而
-  // 隐式创建 Explorer/ExplorerPlan。
-  if (projectExecutionMode.value) {
+  // 项目级工作区（执行线程 / Worktree 管理）只加载项目目录；没有 Explorer 时不能为进入这些模式
+  // 而隐式创建 Explorer/ExplorerPlan。
+  if (projectWorkspaceMode.value) {
     thread.value = null;
     return true;
   }
@@ -1568,7 +1587,7 @@ watch(projectId, (next, previous) => {
     if (loaded && mounted.value) connectEvents();
   });
 });
-watch(projectExecutionMode, (active, previous) => {
+watch(projectWorkspaceMode, (active, previous) => {
   if (!mounted.value || active === previous) return;
   closeEvents();
   closeRequirementStatusEvents();
@@ -1640,7 +1659,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div :class="['console-layout', { 'project-execution-mode': projectExecutionMode }]">
+  <div :class="['console-layout', { 'project-execution-mode': projectExecutionMode, 'project-worktrees-mode': worktreesMode }]">
     <ThreadRail
       :panel="leftPanel"
       :thread="thread"
@@ -1655,6 +1674,7 @@ onBeforeUnmount(() => {
       :project-action-id="projectActionId"
       :explorer-paused="explorerPaused"
       :project-execution-active="projectExecutionMode"
+      :project-worktrees-active="worktreesMode"
       @select-panel="leftPanel = $event"
       @create-explorer="createExplorer"
       @create-project="openProjectCreateDialog"
@@ -1664,12 +1684,14 @@ onBeforeUnmount(() => {
       @archive-project="toggleProjectArchive"
       @select-explorer="selectExplorer"
       @select-project-execution="selectProjectExecution"
+      @select-project-worktrees="selectProjectWorktrees"
       @toggle-show-archived="showArchivedExplorers = $event"
       @archive-explorer="toggleExplorerArchive"
       @thread-action="handleThreadAction"
     />
     <section class="conversation-column requirement-workspace-column">
       <ProjectExecutionThreadPanel v-if="projectExecutionMode" :project-id="projectId" :project="project" />
+      <ProjectWorktreesPanel v-else-if="worktreesMode" :project-id="projectId" :project="project" />
       <template v-else>
         <header class="requirement-workspace-header">
           <div>
@@ -1694,7 +1716,7 @@ onBeforeUnmount(() => {
       </template>
     </section>
     <el-drawer
-      v-if="!projectExecutionMode"
+      v-if="!projectWorkspaceMode"
       :model-value="drawerOpen"
       class="shared-requirement-drawer"
       direction="rtl"

@@ -7,7 +7,7 @@
  * 所以这里消费的是 `packages/domain/dist/index.d.ts`，不是把 domain 源码拖进 Web。
  *
  * 维护提示：Plan / Run 的页面投影类型（例如 Web 独有的 `Plan`）不在这里硬凑 parity；
- * 只加入 domain 与 Web 都公开、且语义上应保持同一份契约的 23 个类型。新增共享 DTO 时
+ * 只加入 domain 与 Web 都公开、且语义上应保持同一份契约的 28 个类型。新增共享 DTO 时
  * 先在 domain 建权威类型，再把它加入这张清单。
  */
 import { describe, expect, it } from "vitest";
@@ -37,6 +37,11 @@ import type {
   ProjectExecutionThread as DomainProjectExecutionThread,
   ProjectExecutionTurnStatus as DomainProjectExecutionTurnStatus,
   VerificationRun as DomainVerificationRun,
+  WorktreeCleanupResult as DomainWorktreeCleanupResult,
+  WorktreeInventory as DomainWorktreeInventory,
+  WorktreeItem as DomainWorktreeItem,
+  WorktreeMergePreview as DomainWorktreeMergePreview,
+  WorktreeMergeResult as DomainWorktreeMergeResult,
 } from "@pipeline-factory/domain";
 import type { SharedMessageType } from "./utils/conversationTypes";
 import type { ExecutionSharedMessageType } from "./utils/executionStream";
@@ -67,6 +72,11 @@ import type {
   ProjectExecutionThread,
   ProjectExecutionTurnStatus,
   VerificationRun,
+  WorktreeCleanupResult,
+  WorktreeInventory,
+  WorktreeItem,
+  WorktreeMergePreview,
+  WorktreeMergeResult,
 } from "./types";
 
 type Equal<Left, Right> =
@@ -112,6 +122,11 @@ type SharedTypeParity = [
   Expect<Equal<DomainPlanDispatchStatus, PlanDispatchStatus>>,
   Expect<Equal<DomainPlanDispatchWaitReason, PlanDispatchWaitReason>>,
   Expect<Equal<DomainPlanDispatchState, PlanDispatchState>>,
+  Expect<Equal<DomainWorktreeItem, WorktreeItem>>,
+  Expect<Equal<DomainWorktreeInventory, WorktreeInventory>>,
+  Expect<Equal<DomainWorktreeMergePreview, WorktreeMergePreview>>,
+  Expect<Equal<DomainWorktreeMergeResult, WorktreeMergeResult>>,
+  Expect<Equal<DomainWorktreeCleanupResult, WorktreeCleanupResult>>,
 ];
 
 // Keep the alias referenced so future compiler configurations cannot elide the checks as unused.

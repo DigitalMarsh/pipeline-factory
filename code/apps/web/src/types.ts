@@ -707,3 +707,157 @@ export type ToolCall = {
   startedAt: string;
   completedAt: string | null;
 };
+
+// ─────────────────────── 项目视角的 Worktree 管理（与 domain 的 worktree/types.ts 逐字对齐） ───────────────────────
+// 这一组 DTO 由 `type-parity.test.ts` 锁住：改这里就必须同步改 domain 的权威类型。
+export type WorktreeGitDirtyState = "clean" | "dirty" | "conflict";
+export type WorktreeItemKind = "base_branch" | "local_branch" | "branch_worktree" | "detached_worktree";
+export type WorktreeItemStatus =
+  | "no_updates"
+  | "dirty_uncommitted"
+  | "dirty_with_commits"
+  | "committed_unmerged"
+  | "merge_conflict"
+  | "merged_dirty"
+  | "merged_clean"
+  | "detached_unmerged"
+  | "detached_dirty_with_commits"
+  | "detached_dirty"
+  | "detached_clean";
+export type WorktreeMergeRelation = "current_merged" | "current_unmerged" | "detached";
+
+export type WorktreeFactoryLink = {
+  runId: string;
+  planId: string;
+  planTitle: string | null;
+  runStatus:
+    | "QUEUED"
+    | "STARTING"
+    | "IN_PROGRESS"
+    | "READY_FOR_VERIFY"
+    | "VERIFYING"
+    | "MERGE_READY"
+    | "BLOCKED"
+    | "STALE"
+    | "RECOVERING"
+    | "CANCELLED";
+  verificationStatus: VerificationRun["status"] | null;
+  mergeRequestStatus: "OPEN" | "MERGED" | "SUPERSEDED" | null;
+};
+
+export type WorktreeItem = {
+  itemId: string;
+  kind: WorktreeItemKind;
+  branch: string | null;
+  displayName: string;
+  isBaseBranch: boolean;
+  hasWorktree: boolean;
+  isDetached: boolean;
+  worktreePath: string | null;
+  effectivePath: string;
+  missing: boolean;
+  status: WorktreeItemStatus;
+  mergeRelation: WorktreeMergeRelation;
+  gitDirtyState: WorktreeGitDirtyState;
+  conflictFiles: string[];
+  aheadCount: number;
+  behindCount: number;
+  merged: boolean;
+  lastCommit: string | null;
+  lastCommitAt: number | null;
+  mergeable: boolean;
+  blockers: string[];
+  cleanupable: boolean;
+  cleanupBlockers: string[];
+  isLiveRunWorkspace: boolean;
+  factory: WorktreeFactoryLink | null;
+};
+
+export type WorktreeMergeInProgress = { mergeHead: string; currentBranch: string | null; conflictFiles: string[] };
+
+export type WorktreeInventory = {
+  projectId: string;
+  repoRoot: string;
+  baseBranch: string;
+  baseHead: string | null;
+  currentBranch: string | null;
+  mergeInProgress: WorktreeMergeInProgress | null;
+  activeRunIds: string[];
+  items: WorktreeItem[];
+  truncated: boolean;
+  warnings: string[];
+};
+
+export type WorktreePreviewCommit = { hash: string; subject: string; author: string; relativeTime: string };
+export type WorktreeFileSummary = {
+  total: number;
+  added: number;
+  modified: number;
+  deleted: number;
+  renamed: number;
+  copied: number;
+  typeChanged: number;
+  unknown: number;
+};
+export type WorktreeFileChange = { status: string; path: string; previousPath: string | null };
+export type WorktreeConflictPrediction = {
+  status: "clean" | "conflicts" | "unavailable";
+  hasConflicts: boolean;
+  conflictFiles: string[];
+  message: string | null;
+};
+export type WorktreeMergeConclusion = "ready" | "conflict_risk" | "blocked";
+
+export type WorktreeMergePreview = {
+  projectId: string;
+  repoRoot: string;
+  itemId: string;
+  branch: string | null;
+  baseBranch: string;
+  baseHead: string | null;
+  taskHead: string | null;
+  mergeBase: string | null;
+  aheadCount: number;
+  behindCount: number;
+  dirtyState: WorktreeGitDirtyState;
+  merged: boolean;
+  conclusion: WorktreeMergeConclusion;
+  conclusionLabel: string;
+  canConfirm: boolean;
+  blockers: string[];
+  warnings: string[];
+  recentCommits: WorktreePreviewCommit[];
+  fileSummary: WorktreeFileSummary;
+  fileChanges: WorktreeFileChange[];
+  conflictPrediction: WorktreeConflictPrediction;
+  commands: string[];
+  expectedBranchHead: string | null;
+  expectedBaseHead: string | null;
+  factory: WorktreeFactoryLink | null;
+};
+
+export type WorktreeFactorySync = {
+  mergeRequest: "confirmed" | "not_found" | "failed";
+  runId: string | null;
+  workspace: { released: boolean; worktreeRemoved: boolean } | null;
+  message: string | null;
+};
+
+export type WorktreeMergeResult = {
+  status: "merged" | "merge_conflict" | "aborted" | "error";
+  message: string;
+  branch: string | null;
+  baseBranch: string;
+  conflictFiles: string[];
+  baseHeadBefore: string | null;
+  baseHeadAfter: string | null;
+  commands: string[];
+  factory: WorktreeFactorySync | null;
+};
+
+export type WorktreeCleanupResult = {
+  message: string;
+  worktreeRemoved: boolean;
+  branchDeleted: boolean;
+  runWorkspaceCleared: boolean;
+};

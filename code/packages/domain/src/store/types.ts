@@ -101,6 +101,13 @@ export type DomainEvent = {
     | "merge.request.created"
     | "merge.detected"
     | "merge.confirmed"
+    // 项目视角的 Worktree 管理（真正执行合并的那条路，见 worktree/service.ts）。
+    // 与上面三条 merge.* 的区别：那三条是"Run 的合并请求状态"，这几条是"人对分支做的 Git 操作"。
+    | "worktree.merge.completed"
+    | "worktree.merge.conflict"
+    | "worktree.merge.continued"
+    | "worktree.merge.aborted"
+    | "worktree.cleaned"
     | "agent.loop.started"
     | "agent.loop.resumed"
     | "agent.loop.paused"

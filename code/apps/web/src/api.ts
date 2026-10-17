@@ -26,6 +26,10 @@ import type {
   Run,
   RunGuidance,
   VerificationRun,
+  WorktreeCleanupResult,
+  WorktreeInventory,
+  WorktreeMergePreview,
+  WorktreeMergeResult,
 } from "./types";
 
 export class ApiRequestError extends Error {
@@ -306,6 +310,35 @@ export const api = {
         reason: string | null;
       }>;
     }>(`/api/v4/projects/${encodeURIComponent(projectId)}/merge-reconciliation`, { method: "POST" }),
+  /**
+   * 项目视角的 Worktree 管理。**这组是唯一会真的改写受管仓库 Git 状态的接口**
+   * （`merge-reconciliation` 只观察、不回填）。`expected*` 是预览给出的乐观并发凭据，
+   * 合并与清理都必须原样带回；服务端发现状态已变会返回 409 `WORKTREE_STATE_CHANGED`。
+   */
+  worktrees: (projectId: string) => request<WorktreeInventory>(`/api/v4/projects/${encodeURIComponent(projectId)}/worktrees`),
+  previewWorktreeMerge: (projectId: string, itemId: string) =>
+    request<{ preview: WorktreeMergePreview }>(`/api/v4/projects/${encodeURIComponent(projectId)}/worktrees/preview`, {
+      method: "POST",
+      body: JSON.stringify({ itemId }),
+    }),
+  mergeWorktree: (projectId: string, input: { itemId: string; expectedBranchHead: string | null; expectedBaseHead: string | null }) =>
+    request<{ result: WorktreeMergeResult }>(`/api/v4/projects/${encodeURIComponent(projectId)}/worktrees/merge`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  continueWorktreeMerge: (projectId: string) =>
+    request<{ result: WorktreeMergeResult }>(`/api/v4/projects/${encodeURIComponent(projectId)}/worktrees/merge/continue`, {
+      method: "POST",
+    }),
+  abortWorktreeMerge: (projectId: string) =>
+    request<{ result: WorktreeMergeResult }>(`/api/v4/projects/${encodeURIComponent(projectId)}/worktrees/merge/abort`, {
+      method: "POST",
+    }),
+  cleanupWorktree: (projectId: string, input: { itemId: string; expectedBranchHead: string | null }) =>
+    request<{ result: WorktreeCleanupResult }>(`/api/v4/projects/${encodeURIComponent(projectId)}/worktrees/cleanup`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
   getPlan: (planId: string) => request<PlanDetail>(`/api/v4/plans/${planId}`),
   candidatePlanVersions: (planId: string) =>
     request<{ planId: string; latestRevision: number; items: Array<Plan & { isLatest: boolean; readOnly: boolean }> }>(

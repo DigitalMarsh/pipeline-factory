@@ -1,5 +1,55 @@
 # Changelog
 
+## 2026-10-17 — 把 worktree-manage 的业务能力迁进项目视角（能真的合并了）
+
+Factory 此前对"合并"只有观察这一半：`MergeService` 建 `MergeRequest`、按 Git 事实回填
+`detectedTargetCommit`，**从不执行合并**；仓库里有哪些 worktree、哪条分支能合、合了会不会冲突，
+界面上看不见。worktree-manage 这个独立桌面工程恰好把这一套做全了（清单分类、合并预览、
+`merge-tree` 冲突预测、确认合并、冲突续做、显式清理），本条目把它的**业务能力**搬进来，
+入口放在每个项目的项目视角下。
+
+**不搬的东西**：Rust/Tauri 客户端、菜单栏/托盘、开机启动、打开 Terminal / SourceTree。
+本工程是浏览器 + Fastify，这些没有对应语义。
+
+- **新域 `domain/worktree/`**：`WorktreeService`（盘点 / 预览 / 合并 / continue / abort / cleanup）、
+  `createLocalWorktreeGit`（`WorktreeGitPort` 的本地实现）与一组纯解析函数。状态分类逐条照搬
+  worktree-manage（`no_updates` / `dirty_uncommitted` / `committed_unmerged` / `merged_clean` /
+  `merged_dirty` / `detached_*`）。
+- **6 条项目级路由**：`GET /projects/:id/worktrees` 与 `preview` / `merge` / `merge/continue` /
+  `merge/abort` / `cleanup`。`itemId` 走 body 而不是路径段——分支名几乎一定含 `/`。
+  错误码到状态码按 `WorktreeError.code` 映射，**不靠错误文案正则匹配**。
+- **合并是真执行**：`git switch <base>` + `git merge --no-ff <branch>`，在仓库根目录做。
+  预览返回两个 SHA，确认时原样带回并比对，不一致返回 `409 WORKTREE_STATE_CHANGED`。
+- **阻断项**：分支不存在 / 主分支 / detached / 无领先提交 / 已合并 / worktree 脏 / 仓库根目录脏
+  （Plan 留档目录放行）/ 有活动 Run / 已有进行中的合并 / 主分支被别的 worktree 占用。
+  第 6、7 条是搬进来时**新增**的：worktree-manage 是独立工具，不必操心"另一个进程正在这块地上跑 agent"。
+- **合并成功后追回 Factory**：属于某条 Run 且有 `OPEN` MergeRequest 时，用新 HEAD 调
+  `confirmMerged`（Plan → `MERGED`）并按 `merge-requests` 路由同样的方式回收 worktree、
+  唤醒调度协调器。失败降级成响应里的提醒，**不回滚合并事实**；`SUPERSEDED` 不承认。
+- **清理严格按 `merged_clean`**：`worktree remove`（无 `--force`）+ `branch -d`（不是 `-D`），
+  并且拒绝清理活动 Run 的 workspace。detached 一律不清理。
+- **界面**：左栏项目级入口「Worktree 管理」（`?workspace=worktrees`，与「项目执行线程」同构）+
+  满宽面板（筛选、表格、详情抽屉）+ 合并预览对话框（概览/提交/文件变更/冲突预测/命令）+
+  结果对话框（Git 结果与 Factory 联动分开显示）。合并进行中时面板顶部常驻横幅。
+- 新增审计事件 `worktree.merge.completed` / `.conflict` / `.continued` / `.aborted` / `worktree.cleaned`。
+
+**已知取舍**（有意不做）：不做每项目的 `ignoredBranches` 持久化（状态/类型筛选已覆盖噪音）；
+不做完整 Git Log 页签（预览已含最近 5 条提交与全部文件变更）；合并后仓库停在主分支、不自动切回。
+
+### Verification
+
+- `pnpm verify` 全绿：domain 509 / api 137 / web 681 用例通过，lint、format、循环依赖与悬空引用检查全部通过。
+  其中新增：domain 29 条（19 条真仓库的清单/预览/合并/冲突/清理 + 10 条 Git 输出解析）、
+  api 9 条（路由与错误码映射）、web 24 条（状态文案与筛选 11、面板行为 6、入口 1、视图接线 3、API 门面 3）。
+- 浏览器端到端（临时仓库 + 临时数据库 + 独立端口 4320，与用户数据完全隔离）：
+  左栏「Worktree 管理」→ 清单（1 项可合并 / 1 项可清理）→ 预览（可以合并，Ahead 1 / Behind 2 / 1 文件）
+  → 确认合并 → 结果对话框显示 git 输出与「该分支不属于任何 Factory Run」→ 刷新后 0 项可合并；
+  再对已合并分支点「清理」→ 确认框 → worktree 目录与本地分支都被删除（`git worktree list` /
+  `git branch` 均已核对）。`git rev-list --parents` 确认生成的是真正的两父合并提交。
+- 另在真实项目 project4 上核对了清单、筛选（1/10）、冲突预览（`merge-tree` 实测预测到 1 个冲突文件、
+  确认按钮改为「仍然尝试合并」）与阻断文案（未合并 / 已合并 / 无 worktree 三类的"为什么不能…"），
+  **未对其执行任何写操作**。
+
 ## 2026-10-17 — 合并 12 条之后的结构复核：结论不变，`changes` 与留档边界都被钉实
 
 把 12 条待合并的合完之后，用那批数据重做了一次结构化表达的复核（27 份计划 / 12 条新合并）。

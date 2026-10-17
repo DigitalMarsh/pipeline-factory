@@ -227,8 +227,44 @@ GET      /api/v4/execution-threads/:threadId
   等待原因里会写明是哪一片范围重叠（`overlapping scope code/apps/web/src`），排障不用猜。
 
 Run 终态会触发协调器重新评估，排队的 Plan 因此自动让位。**合并不会自动发生**：`MERGE_READY` 之后
-由人 review 并在 Git 侧合并，再调 `confirm-merged`；那一步会顺带回收该 Run 的 Worktree（**分支保留**）
-并跑一次 cleanup hook。
+由人 review，然后二选一 —— 在 Git 侧合并后调 `confirm-merged`，或在项目的「Worktree 管理」面板里
+预览并执行合并（那条路成功后会自动调 `confirm-merged`）。两条路都会顺带回收该 Run 的 Worktree
+（**分支保留**）并跑一次 cleanup hook。
+
+## Worktree 管理（项目视角）
+
+每个项目的左栏都有「Worktree 管理」（地址 `?workspace=worktrees`，与「项目执行线程」同一套外壳）。
+它盘点该仓库的**全部本地分支与 worktree**（含 detached），按 `no_updates` / `dirty_uncommitted` /
+`committed_unmerged` / `merged_clean` / `merged_dirty` / `detached_*` 分类，并在合并前给出预览。
+这一能力迁自独立的 worktree-manage 工程：**只搬业务能力**，不包含它的 Rust/Tauri 客户端、菜单栏、
+托盘与"打开终端 / SourceTree"这类桌面动作。
+
+```text
+GET  /api/v4/projects/:projectId/worktrees
+POST /api/v4/projects/:projectId/worktrees/preview          { itemId }
+POST /api/v4/projects/:projectId/worktrees/merge            { itemId, expectedBranchHead, expectedBaseHead }
+POST /api/v4/projects/:projectId/worktrees/merge/continue
+POST /api/v4/projects/:projectId/worktrees/merge/abort
+POST /api/v4/projects/:projectId/worktrees/cleanup          { itemId, expectedBranchHead }
+```
+
+- **这是唯一真的执行合并的入口**。它做 `git switch <defaultBranch>` + `git merge --no-ff <branch>`，
+  工作目录是受管仓库根目录。只有预览通过、且带回的两个 SHA 与当前状态一致时才执行；不一致返回
+  `409 WORKTREE_STATE_CHANGED`（"我审核的那一版"与"实际合并的那一版"必须是同一版）。
+- **阻断项**（任何一条成立都不能合并）：分支不存在 / 是主分支 / detached / 没有领先提交 / 已经合并 /
+  worktree 有未提交改动 / 仓库根目录有未提交改动（Plan 留档目录放行）/ 项目有活动 Run /
+  仓库里已有进行中的合并 / 主分支被另一个 worktree 占用。
+- **冲突后停在合并中**：不自动 `merge --abort`（那是用户的工作），也不自动 `--continue`。
+  面板顶部常驻「合并进行中」横幅并列出冲突文件。这个状态会挡住 Plan 确认与 Run 派发
+  （工作区干净检查），所以它必须显式处理。
+- **合并成功后追回 Factory**：若该分支属于某条 Run 且有 `OPEN` 的 MergeRequest，就用合并后的 HEAD
+  调 `MergeService.confirmMerged`（Plan → `MERGED`），并按 `merge-requests` 路由同样的方式回收 Worktree、
+  唤醒调度协调器。这一步失败只作为提醒返回，**不回滚已经发生的合并**；`SUPERSEDED` 的请求不会因为
+  这次合并被承认。
+- **清理**：只有「已提交已合并 + 工作区干净 + 无活动 Run 且不是活动 Run 的 workspace」才允许；
+  先 `git worktree remove`（不带 `--force`）再 `git branch -d`（不是 `-D`）。detached worktree 一律不清理。
+- **git 版本**：冲突预测依赖 `git merge-tree --write-tree`（≥ 2.38），`git switch` 需要 ≥ 2.23。
+  版本更旧时冲突预测显示"不可用"，但**不影响合并本身**。
 
 ## Plan V2 与项目验证
 

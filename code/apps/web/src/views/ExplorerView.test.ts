@@ -1043,3 +1043,26 @@ describe("Explorer 修订草稿入口", () => {
     expect(explorerViewSource).not.toContain("Keep editing failed");
   });
 });
+
+/**
+ * 「Worktree 管理」是**项目级工作区**，不是 Explorer 的一种状态：它与「项目执行线程」共用同一个外壳
+ * （同一个路由查询参数家族 `workspace=...`），进入时不能为它创建/切换 Explorer，也不能落进需求列表。
+ * 这三条任何一条破了，用户看到的就是"点了 Worktree 管理，结果冒出一条新的探索线程"。
+ */
+describe("项目视角的 Worktree 管理入口", () => {
+  it("用 workspace=worktrees 进入，并渲染满宽面板", () => {
+    expect(flat(explorerViewSource)).toContain(flat('route.query.workspace === "worktrees"'));
+    expect(flat(explorerViewSource)).toContain(flat('<ProjectWorktreesPanel v-else-if="worktreesMode"'));
+    expect(flat(explorerViewSource)).toContain(flat("'project-worktrees-mode': worktreesMode"));
+    expect(flat(explorerViewSource)).toContain(flat('@select-project-worktrees="selectProjectWorktrees"'));
+  });
+
+  it("进入该模式时早退，不为它隐式创建 Explorer", () => {
+    expect(flat(explorerViewSource)).toContain(flat("if (projectWorkspaceMode.value) { thread.value = null; return true; }"));
+    expect(flat(explorerViewSource)).toContain(flat('enterProjectWorkspace("worktrees")'));
+  });
+
+  it("切项目时保留当前项目级工作区", () => {
+    expect(flat(explorerViewSource)).toContain(flat('...(worktreesMode.value ? { workspace: "worktrees" } : {})'));
+  });
+});

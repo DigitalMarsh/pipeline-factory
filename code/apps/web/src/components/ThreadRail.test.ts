@@ -23,6 +23,7 @@ function mountRail(
   planCenterActive = false,
   planCenterCount = 2,
   projectExecutionActive = false,
+  projectWorktreesActive = false,
 ) {
   const host = document.createElement("div");
   document.body.appendChild(host);
@@ -34,6 +35,7 @@ function mountRail(
   let selectedExplorerId: string | null = null;
   let selectedExplorerPlanId: string | null = null;
   let selectedProjectExecution = false;
+  let selectedProjectWorktrees = false;
   let renamedExplorerPlanId: string | null = null;
   let threadAction: string | null = null;
   let archivedExplorerId: string | null = null;
@@ -142,6 +144,7 @@ function mountRail(
             activeExplorerPlanId: "requirement-1",
             explorerPaused: false,
             projectExecutionActive,
+            projectWorktreesActive,
             onCreateExplorer: () => {
               createExplorerCount += 1;
             },
@@ -163,6 +166,9 @@ function mountRail(
             },
             onSelectProjectExecution: () => {
               selectedProjectExecution = true;
+            },
+            onSelectProjectWorktrees: () => {
+              selectedProjectWorktrees = true;
             },
             onSelectExplorerPlan: (explorerPlanId: string) => {
               selectedExplorerPlanId = explorerPlanId;
@@ -211,6 +217,7 @@ function mountRail(
     getSelectedExplorerId: () => selectedExplorerId,
     getSelectedExplorerPlanId: () => selectedExplorerPlanId,
     getSelectedProjectExecution: () => selectedProjectExecution,
+    getSelectedProjectWorktrees: () => selectedProjectWorktrees,
     getRenamedExplorerPlanId: () => renamedExplorerPlanId,
     getThreadAction: () => threadAction,
     getArchivedExplorerId: () => archivedExplorerId,
@@ -637,6 +644,20 @@ describe("ThreadRail left workspace navigation", () => {
 
     expect(archive?.disabled).toBe(true);
     expect(archive?.getAttribute("aria-busy")).toBe("true");
+
+    mounted.app.unmount();
+    mounted.host.remove();
+  });
+
+  it("offers a project-level Worktree entry and marks it active", async () => {
+    const mounted = mountRail("explorers", false, null, false, false, false, null, undefined, false, 2, false, true);
+    const entry = mounted.host.querySelector<HTMLButtonElement>("[data-worktrees-entry]");
+
+    expect(entry).not.toBeNull();
+    expect(entry?.textContent).toContain("Worktree 管理");
+    expect(entry?.getAttribute("aria-current")).toBe("page");
+    entry?.click();
+    expect(mounted.getSelectedProjectWorktrees()).toBe(true);
 
     mounted.app.unmount();
     mounted.host.remove();
