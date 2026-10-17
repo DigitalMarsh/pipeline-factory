@@ -24,6 +24,7 @@ import { createHash } from "node:crypto";
 import { parseGeneratedPlanSpec, resolvePlanContract } from "./plan-spec.js";
 import { missingVerificationCommands } from "./contract.js";
 import { writePlanDocument } from "./plan-archive.js";
+import { pathTargetsPlanDirectory, planDirectoryRepoPath } from "./plan-directory.js";
 import { emptyPlanPreflight } from "./preflight.js";
 import type { PlanPreflightInspector } from "./preflight.js";
 import { canDiscardPlanStatus, updatePlanStatus } from "./status-transition.js";
@@ -107,6 +108,54 @@ export class PlanService {
       ...(resolved.artifact.path ? { artifactPath: resolved.artifact.path } : {}),
     });
     if (result.blocking.length > 0) throw new Error(`PLAN_PREFLIGHT_FAILED: ${result.blocking.map((issue) => issue.message).join(" ")}`);
+  }
+
+  /**
+   * Factory 自己的计划留档目录是**执行者的禁区**。
+   *
+   * 事故（2026-10-11，project4）：Explorer 把 `docs/pipeline/plans/**` 写成了 `artifact.path` 与
+   * 改动目标，Executor 于是在留档目录里创建了一个与 Factory **同名同路径**的文件
+   * （`plan-<id>-v<rev>.md`），提交后随合并进了主干——Factory 自己的留档被一份执行报告顶掉。
+   *
+   * 两道闸门都在**冻结之前**（`confirm` 与 `confirmRevisionDraft` 是仅有的两条冻结路径，
+   * 后者本来就是"改一版再确认"的后门，不能漏）：
+   *   1) **拒绝**：`artifact.path` 或任何 `tasks[].changes[].path` 指向留档目录 → 让方案回去重写；
+   *   2) **兜底**：不论 include 多宽（`docs/**` 这种放行），留档目录永远并进 `scope.excludePaths`——
+   *      执行者的系统提示与工作区范围检查都读它，写进去会被判成越界。
+   *
+   * 没有注入落盘目录（测试与不落盘的部署）时整步跳过；留档目录落在仓库外时也没有禁区可谈。
+   */
+  private protectedContract(projectId: string, contract: ResolvedPlanContract): ResolvedPlanContract {
+    if (!this.planDirectory) return contract;
+    // 与 assertPreflightPasses 同一条容忍：夹具里的 Plan 可能没有注册过 Project。
+    if (!this.store.getProject(projectId)) return contract;
+    const repoRoot = this.projects.snapshot(projectId).repoRoot;
+    const repoRelative = planDirectoryRepoPath({ projectRoot: repoRoot, planDirectory: this.planDirectory(repoRoot) });
+    if (!repoRelative) return contract;
+    const offending = [
+      ...(contract.artifact.path && pathTargetsPlanDirectory({ path: contract.artifact.path, repoRelativePlanDirectory: repoRelative })
+        ? [`artifact.path = ${contract.artifact.path}`]
+        : []),
+      ...contract.tasks
+        .flatMap((task) => task.changes ?? [])
+        .filter((change) => pathTargetsPlanDirectory({ path: change.path, repoRelativePlanDirectory: repoRelative }))
+        .map((change) => `tasks[].changes = ${change.path}`),
+    ];
+    if (offending.length > 0)
+      throw new Error(
+        `PLAN_ARCHIVE_PATH_FORBIDDEN: ${repoRelative} 是 Factory 的计划留档目录，不能作为方案的产物或改动目标（${[
+          ...new Set(offending),
+        ].join("、")}）；请改到其它路径后重新生成方案。`,
+      );
+    const excludePattern = `${repoRelative}/**`;
+    if (contract.scope.excludePaths.includes(excludePattern)) return contract;
+    return { ...contract, scope: { ...contract.scope, excludePaths: [...contract.scope.excludePaths, excludePattern] } };
+  }
+
+  /** 把受保护的契约写回 CandidatePlan（只在真的追加了排除路径时才写库）。 */
+  private protectPlanArchive(plan: CandidatePlan): CandidatePlan {
+    const contract = this.protectedContract(plan.projectId, plan.resolvedContract);
+    return contract === plan.resolvedContract ? plan : this.store.updatePlan({ ...plan, resolvedContract: contract });
   }
 
   /** 注册与 Project 绑定的本地线程，并追加创建事件。 */
@@ -392,18 +441,20 @@ export class PlanService {
       throw new Error("BASE_CHANGED");
     }
     // 与 confirm 同一道闸门：修订版冻结前也要过预检——否则"改一版再确认"就是绕过它的后门。
-    this.assertPreflightPasses(draft.projectId, draft.resolvedContract);
+    // 留档目录的保护同样要在这里，两条是仅有的冻结路径（见 protectedContract 的说明）。
+    const contract = this.protectedContract(draft.projectId, draft.resolvedContract);
+    this.assertPreflightPasses(draft.projectId, contract);
     const snapshot = this.projects.snapshot(project.id);
     const confirmedAt = this.store.now();
     const artifactHash = `sha256:${createHash("sha256")
-      .update(JSON.stringify({ resolvedContract: draft.resolvedContract, projectConfigSnapshot: snapshot }))
+      .update(JSON.stringify({ resolvedContract: contract, projectConfigSnapshot: snapshot }))
       .digest("hex")}`;
     const planDocumentPath = this.archiveRevision({
       projectId: plan.projectId,
       planId: plan.id,
       revision: draft.targetRevision,
       title: draft.title,
-      resolvedContract: draft.resolvedContract,
+      resolvedContract: contract,
       artifactHash,
       confirmedBy,
       confirmedAt,
@@ -411,7 +462,7 @@ export class PlanService {
     const revision = freezeRevision({
       planId: plan.id,
       revision: draft.targetRevision,
-      resolvedContract: draft.resolvedContract,
+      resolvedContract: contract,
       artifactHash,
       ...(planDocumentPath ? { planDocumentPath } : {}),
       confirmedBy,
@@ -431,7 +482,7 @@ export class PlanService {
       title: draft.title,
       revision: draft.targetRevision,
       status: "READY",
-      resolvedContract: draft.resolvedContract,
+      resolvedContract: contract,
       ...(draft.generatedSpec ? { generatedSpec: draft.generatedSpec } : {}),
       sourceExplorerThreadId: draft.sourceExplorerThreadId,
       sourceTurnId: draft.sourceTurnId,
@@ -446,7 +497,9 @@ export class PlanService {
       attentionReason: null,
       lastEventAt: confirmedAt,
     });
-    this.store.updateRevisionDraft(Object.freeze({ ...draft, status: "CONFIRMED", confirmedAt, updatedAt: confirmedAt }));
+    this.store.updateRevisionDraft(
+      Object.freeze({ ...draft, resolvedContract: contract, status: "CONFIRMED", confirmedAt, updatedAt: confirmedAt }),
+    );
     const thread = this.store.getThread(draft.sourceExplorerThreadId);
     if (thread?.activeRevisionDraftId === draftId)
       this.store.updateThread({ ...thread, activeRevisionDraftId: null, lastActivityAt: confirmedAt });
@@ -594,6 +647,9 @@ export class PlanService {
         });
       }
     }
+    // 留档目录的保护排在冻结之前：拒绝把 Factory 自己的留档目录当产物/改动目标，并把该目录
+    // 永远并进执行侧的排除路径（见 protectPlanArchive 的说明）。
+    plan = this.protectPlanArchive(plan);
     // 预检排在冻结之前：先把"计划假设的文件根本不存在"挡在门外，再写不可变的 Revision。
     this.assertPreflightPasses(plan.projectId, plan.resolvedContract);
     this.validatePlanDependencies(plan);

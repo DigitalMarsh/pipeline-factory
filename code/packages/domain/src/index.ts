@@ -120,7 +120,7 @@ export { planContractFixture } from "./plan/plan-fixture.js";
 export type { PlanFixtureOptions, PlanFixtureProject } from "./plan/plan-fixture.js";
 // Plan 落盘目录的唯一定义（缺省 docs/pipeline/plans）：组合根拿它同时喂给"写盘"与"工作区干净检查的
 // 白名单"——两处必须对同一个目录得出同一个结论，见 plan/plan-directory.ts 的模块注释。
-export { DEFAULT_PLAN_DIRECTORY, planDirectoryRepoPath, resolvePlanDirectory } from "./plan/plan-directory.js";
+export { DEFAULT_PLAN_DIRECTORY, pathTargetsPlanDirectory, planDirectoryRepoPath, resolvePlanDirectory } from "./plan/plan-directory.js";
 // 派发前预检：确认 Plan 之前先问"计划要处理的文件在基线里存在吗"。判定规则与边界见
 // plan/preflight.ts 的模块注释（为什么只查具体文件、为什么产物路径只警告）。
 export { createLocalPlanPreflightInspector, emptyPlanPreflight } from "./plan/preflight.js";

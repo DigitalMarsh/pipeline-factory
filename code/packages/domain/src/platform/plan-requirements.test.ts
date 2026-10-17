@@ -21,6 +21,12 @@ describe("EXPLORER_PLAN_INSTRUCTIONS", () => {
     expect(EXPLORER_PLAN_REQUIREMENTS.artifactModes.find((mode) => mode.mode === "CONVERSATION")?.executable).toBe(false);
   });
 
+  it("说明计划留档目录是 Factory 的地盘，不要写进去", () => {
+    // 这一句与仓库上下文里 `Plan archive directory` 那一行是一对：只写其中一处，模型就不知道那条线是什么。
+    expect(EXPLORER_PLAN_INSTRUCTIONS).toContain("计划留档目录不要碰");
+    expect(EXPLORER_PLAN_INSTRUCTIONS).toContain("Plan archive directory");
+  });
+
   /**
    * 探索侧跑在**只读沙箱**里，而模型不会自动知道这件事——它是撞出来的。
    *

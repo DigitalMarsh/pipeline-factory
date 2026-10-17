@@ -32,3 +32,27 @@ export function planDirectoryRepoPath(input: { projectRoot: string; planDirector
   const relativePath = relative(resolve(input.projectRoot), resolve(input.planDirectory)).replaceAll("\\", "/");
   return relativePath ? relativePath : null;
 }
+
+/**
+ * 这个项目相对路径（或 glob）是否**指向 Factory 的留档目录**：它就是那个目录，或者落在它里面。
+ *
+ * 为什么需要这个判据：2026-10-11 的真实事故——Explorer 把 `docs/pipeline/plans/**` 写成了方案的
+ * `artifact.path` 与改动目标，Executor 于是在留档目录里创建了一个与 Factory **同名同路径**的文件
+ * （`plan-<id>-v<rev>.md`），提交后随合并进了主干，Factory 自己的留档被一份执行报告顶掉。
+ *
+ * **更宽的范围不算"指向"**：`docs/**` 把留档目录包含在内，但把它一并拒掉会让所有写 docs 的计划都
+ * 过不了确认。那种情况由执行侧的排除路径兜底——`PlanService.confirm` 会把留档目录永远并进
+ * `scope.excludePaths`，执行者的提示词与工作区范围检查都读它。
+ */
+export function pathTargetsPlanDirectory(input: { path: string; repoRelativePlanDirectory: string }): boolean {
+  const normalize = (value: string) =>
+    value
+      .trim()
+      .replaceAll("\\", "/")
+      .replace(/\/\*\*?$/, "")
+      .replace(/\/+$/, "");
+  const target = normalize(input.path);
+  const directory = normalize(input.repoRelativePlanDirectory);
+  if (!target || !directory) return false;
+  return target === directory || target.startsWith(`${directory}/`);
+}

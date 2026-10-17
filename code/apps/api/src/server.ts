@@ -140,7 +140,11 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
           explorer: { model: "stub-explorer", temperature: 0.1 },
           executor: { model: "stub-executor", temperature: 0 },
         }));
-  const repositoryContextCache = new RepositoryContextCache();
+  // 留档目录也进仓库上下文（提示词里那行 "Plan archive directory"）：它是 Factory 自己的地盘，
+  // Explorer 不该把它当产物。没有配置时不给这个解析器，那一行就不出现。
+  const repositoryContextCache = new RepositoryContextCache(
+    factoryConfig ? (repoRoot: string) => planStorageFor(factoryConfig, repoRoot).directory : undefined,
+  );
   const mcpRegistry = options.mcpRegistry ?? (options.config ? new McpToolRegistry(options.config.mcp.servers) : undefined);
   const pluginRegistry =
     options.pluginRegistry ??

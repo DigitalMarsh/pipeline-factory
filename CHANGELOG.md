@@ -1,5 +1,32 @@
 # Changelog
 
+## 2026-10-17 — 执行者不能再覆盖 Factory 的计划留档
+
+真实事故（2026-10-11，project4「需求11 V2」）：Explorer 把 `docs/pipeline/plans/**` 写成了方案的
+`artifact.path` 与改动目标，Executor 于是在留档目录里创建了一个与 Factory **同名同路径**的文件
+（`plan-0c924e6d-f52-v2.md`，10 KB 的执行复核报告），提交后**随合并进了主干**——Factory 自己那份
+6.4 KB 的方案留档被顶掉。这是 10-17 合并那 12 条待合并时才暴露出来的。
+
+三道闸门，前两道都在**冻结之前**（`confirm` 与 `confirmRevisionDraft` 是仅有的两条冻结路径——
+后者本来就是"改一版再确认"的后门，`assertPreflightPasses` 的注释里写过同一条教训）：
+
+| 层 | 做什么 | 判据 |
+|---|---|---|
+| 确认时**拒绝** | `PLAN_ARCHIVE_PATH_FORBIDDEN`，不留 Revision | `artifact.path` 或任一 `tasks[].changes[].path` **指向**留档目录（就是它 / 在它里面）。`docs/**` 这类**更宽的**范围不算"指向"——否则所有写 docs 的计划都过不了确认 |
+| 确认时**兜底** | 留档目录永远并进 `scope.excludePaths`（`docs/pipeline/plans/**`） | 不论 include 多宽。执行者的系统提示说"Never modify excluded or protected paths"，工作区范围检查把那里的写入判成越界 |
+| 探索侧**告知** | 仓库上下文新增一行 `Plan archive directory: docs/pipeline/plans/** — Factory-owned…`，提示词加一句"计划留档目录不要碰" | 目录在仓库外、或没配落盘目录时**不出现**——不编一个默认值出来 |
+
+没有注入落盘目录时（测试与不落盘的部署）整步跳过，行为与改动前逐字相同。兜底只在确认时追加一次
+（已在排除列表里就不重复），所以冻结契约里的那一份就是执行者看到的全部。
+
+落点：`plan/plan-directory.ts` 新增 `pathTargetsPlanDirectory`、`plan/service.ts` 新增
+`protectedContract`（两条冻结路径共用）+ `protectPlanArchive`、`apps/api/repository-context-cache.ts`
+（构造时可选的目录解析器；目录进缓存 key）与 `server.ts` 的装配、`platform/plan-requirements.ts`
+的提示词。新增 5 条领域测试（含"修订草稿走同一道闸门"与"没配目录时行为不变"）+ 1 条上下文测试
++ 1 条提示词断言；docs §10.2 加为第四条判据。
+
+`pnpm verify` 全绿：domain 480 / api 128 / web 657。
+
 ## 2026-10-17 — 结构化表达落地后的复核：不增、不删，文档补上字段全表
 
 四条改动（示范块、删 `tasks[].status`、补 `acceptanceRefs`、`merge` 收归 Factory）落地并跑过真实一轮

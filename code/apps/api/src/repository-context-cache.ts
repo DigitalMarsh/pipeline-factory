@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { lstatSync, readFileSync, readlinkSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { planDirectoryRepoPath } from "@pipeline-factory/domain";
 import type { Project } from "@pipeline-factory/domain";
 
 export type RepositoryContext = { key: string; summary: string };
@@ -14,8 +15,18 @@ export class RepositoryContextCache {
   private readonly entries = new Map<string, RepositoryContext>();
   private readonly buildCounts = new Map<string, number>();
 
+  /**
+   * `planDirectory` 是**可选**的：给了就把"Factory 自己的留档目录"写进上下文，告诉 Explorer
+   * 那是禁区（提示词里引用的就是这一行）。不给就不写——测试与只读投影没有这份配置。
+   */
+  constructor(private readonly planDirectory?: ((repoRoot: string) => string) | undefined) {}
+
   get(project: Project): RepositoryContext {
     const root = project.repoRoot;
+    // 留档目录相对仓库的路径；目录在仓库外时为 null（那种情况下 git 里的执行者够不着它）。
+    const repoRelativePlanDirectory = this.planDirectory
+      ? planDirectoryRepoPath({ projectRoot: root, planDirectory: this.planDirectory(root) })
+      : null;
     const branch = git(root, ["symbolic-ref", "--short", "-q", "HEAD"]).trim() || "detached";
     const head = git(root, ["rev-parse", "--verify", "HEAD"]).trim() || "no-head";
     const files = git(root, ["ls-files", "-z"]).split("\0").filter(Boolean).sort();
@@ -29,6 +40,8 @@ export class RepositoryContextCache {
         configVersion: project.configVersion,
         configHash: project.configHash,
         defaultBranch: project.defaultBranch,
+        // 留档目录来自 Factory 配置（不在 Project 设置里），所以必须自己进 key。
+        planDirectory: repoRelativePlanDirectory,
         branch,
         head,
         status,
@@ -76,6 +89,13 @@ export class RepositoryContextCache {
       `Project configuration: version ${project.configVersion}, ${project.configHash}`,
       `Verification tags: ${declaredTags.join(", ") || "(none declared)"}`,
       `Plan artifact mode: ${defaultArtifactMode} (${defaultArtifactMode === "REPOSITORY_FILE" ? "the default: plans produce repository files, and only they can be enqueued and run" : "review-only by project setting: such a plan can be confirmed but never enqueued or run"})`,
+      // 留档目录是 Factory 的，不是执行范围：写进去会覆盖 Factory 自己的计划文件（2026-10-11 的事故）。
+      // 只有目录落在仓库内时才出现这一行。
+      ...(repoRelativePlanDirectory
+        ? [
+            `Plan archive directory: ${repoRelativePlanDirectory}/** — Factory-owned. Never use it as artifact.path and never write into it; the Factory writes one file per confirmed revision there and confirmation rejects plans that target it.`,
+          ]
+        : []),
       `Tracked files: ${files.length}; changed paths: ${status.split("\n").filter(Boolean).length}; untracked paths: ${untracked.length}`,
       `Top-level areas: ${largest(topLevels, 12)}`,
       `Common file types: ${largest(extensions, 10)}`,

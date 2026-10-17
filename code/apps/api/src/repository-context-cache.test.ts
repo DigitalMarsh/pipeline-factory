@@ -97,4 +97,23 @@ describe("RepositoryContextCache", () => {
     expect(changedConfig.key).not.toBe(newBaseline.key);
     expect(cache.getBuildCount(project.id)).toBe(5);
   });
+
+  /**
+   * 留档目录必须出现在这份上下文里：它是 Factory 自己的地盘，而 Explorer 看不到这句话时就会
+   * 把它当成写方案的地方——2026-10-11 的事故正是"计划把 `docs/pipeline/plans/**` 写成产物，
+   * Executor 在留档目录里创建了与 Factory 同名同路径的文件"。
+   *
+   * 三个边界：配了目录才出现；目录在仓库外时不出现（git 里的执行者够不着它，吓唬模型没有意义）；
+   * 没配解析器（测试与只读投影）时不出现——不编一个默认值出来。
+   */
+  it("injects the Factory-owned plan archive directory only when it lives inside the repository", () => {
+    const project = repositoryProject();
+
+    const configured = new RepositoryContextCache((repoRoot) => join(repoRoot, "docs/pipeline/plans")).get(project).summary;
+    expect(configured).toContain("Plan archive directory: docs/pipeline/plans/**");
+    expect(configured).toContain("never write into it");
+
+    expect(new RepositoryContextCache(() => "/elsewhere/plans").get(project).summary).not.toContain("Plan archive directory");
+    expect(new RepositoryContextCache().get(project).summary).not.toContain("Plan archive directory");
+  });
 });
