@@ -33,7 +33,15 @@ import { verifiedProjectBaseline } from "../git/baseline.js";
 import { ProjectService } from "../project/project.js";
 import { selectCurrentExplorer } from "../explorer/thread-selection.js";
 import { decodePlanCursor, encodePlanCursor } from "./query.js";
-import type { PipelineStore } from "../store/pipeline-store.js";
+import type {
+  ClockStore,
+  EventStore,
+  ExplorerStore,
+  IdempotencyStore,
+  PlanStore,
+  ProjectStore,
+  RunStore,
+} from "../store/pipeline-store.js";
 import type { GeneratedPlanSpec, ResolvedPlanContract } from "./plan-spec.js";
 import type { PlanArtifact } from "./completion.js";
 import type {
@@ -59,7 +67,7 @@ export class PlanService {
   private readonly projects: ProjectService;
 
   constructor(
-    private readonly store: PipelineStore,
+    private readonly store: PlanStore & ExplorerStore & ProjectStore & RunStore & EventStore & ClockStore & IdempotencyStore,
     projects?: ProjectService,
     private readonly preflight: PlanPreflightInspector = emptyPlanPreflight,
     /** 解析某个受管工程的计划落盘目录（绝对路径）；由组合根按配置注入，**缺省不落盘**。 */

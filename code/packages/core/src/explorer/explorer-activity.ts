@@ -36,6 +36,10 @@ import {
   type ProviderActivityOutcome,
 } from "../model/provider-activity.js";
 
+import type { ExplorerActivityItem, ExplorerActivityKind } from "@pipeline-factory/contracts";
+
+export type { ExplorerActivityItem, ExplorerActivityKind };
+
 /**
  * Explorer 时间线中的消息、工具、Plan 和状态事件类型。与执行侧共用其中大部分（见模块头 1）。
  *
@@ -44,51 +48,7 @@ import {
  * ④ 那一组**不进会话正文**（呈现表里是 `hidden`），它们的归宿是头部状态卡的
  * 「Provider 运行事实」一节——`explorerRuntimeFacts()` 挑的就是这几个。
  */
-export type ExplorerActivityKind =
-  // ①
-  | "USER_MESSAGE"
-  // ②
-  | "ASSISTANT_MESSAGE"
-  | "REASONING"
-  // ③
-  | "COMMAND"
-  | "FILE_CHANGE"
-  | "TOOL_CALL"
-  | "MCP_CALL"
-  | "SUBAGENT"
-  | "WEB_SEARCH"
-  | "IMAGE_GENERATION"
-  // ④
-  | "PROVIDER_COMPACTION"
-  | "PERMISSION_DENIED"
-  | "RATE_LIMIT"
-  | "PROVIDER_RETRY"
-  | "BACKGROUND_TASK"
-  | "HOOK"
-  | "PROVIDER_WARNING"
-  | "UNCLASSIFIED"
-  | "PROVIDER_MESSAGE"
-  | "SESSION"
-  // ⑤
-  | "CONTEXT"
-  | "GATE"
-  | "TURN_STATUS";
-
 /** 前端可直接渲染的 Explorer 活动项，保留来源事实以支持定位。 */
-export type ExplorerActivityItem = {
-  id: string;
-  explorerId: string;
-  explorerPlanId?: string;
-  turnId: string;
-  sequence: number;
-  kind: ExplorerActivityKind;
-  status: "RUNNING" | "COMPLETED" | "FAILED" | "WAITING" | "UNKNOWN";
-  title: string;
-  summary: string;
-  details: Record<string, unknown> | null;
-  occurredAt: string;
-};
-
 /** 将数据库 Turn、Loop Step 和 Provider activity 投影为时间线的输入。 */
 export type ExplorerActivityInput = {
   turns: readonly ExplorerTurn[];

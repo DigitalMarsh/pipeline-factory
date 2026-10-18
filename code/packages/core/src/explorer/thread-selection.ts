@@ -20,10 +20,10 @@
  */
 import { placeholderExplorerTitle } from "./explorer-title.js";
 import type { ExplorerThread } from "../index.js";
-import type { PipelineStore } from "../store/pipeline-store.js";
+import type { ClockStore, EventStore, ProjectStore } from "../store/pipeline-store.js";
 
 /** 把 project 的当前 Explorer 指针指向给定线程；指针未变化时不写库、不追加事件。 */
-export function selectCurrentExplorer(store: PipelineStore, thread: ExplorerThread): void {
+export function selectCurrentExplorer(store: ProjectStore & EventStore & ClockStore, thread: ExplorerThread): void {
   const project = store.getProject(thread.projectId);
   if (project && project.currentExplorerThreadId !== thread.id) {
     store.updateProject({ ...project, currentExplorerThreadId: thread.id, updatedAt: store.now() });
@@ -36,6 +36,6 @@ export function selectCurrentExplorer(store: PipelineStore, thread: ExplorerThre
 }
 
 /** 线程的占位标题：由创建时间与项目简称合成，供标题生成器异步替换。 */
-export function projectPlaceholderExplorerTitle(store: PipelineStore, thread: ExplorerThread): string {
+export function projectPlaceholderExplorerTitle(store: ProjectStore & EventStore & ClockStore, thread: ExplorerThread): string {
   return placeholderExplorerTitle(thread.createdAt, store.getProject(thread.projectId)?.shortName);
 }

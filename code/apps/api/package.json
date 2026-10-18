@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "predev": "pnpm --filter @pipeline-factory/core build",
+    "predev": "pnpm --filter @pipeline-factory/contracts build && pnpm --filter @pipeline-factory/core build",
     "dev": "node --watch --conditions=pipeline-dev --import tsx/esm src/main.ts",
     "start": "node dist/main.js --config ../../config/pipeline-factory.config.json",
     "test": "vitest run",

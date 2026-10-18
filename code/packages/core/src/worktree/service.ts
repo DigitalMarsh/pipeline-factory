@@ -34,7 +34,7 @@ import { existsSync, lstatSync, mkdirSync, readlinkSync, realpathSync, renameSyn
 import { resolve as resolvePath } from "node:path";
 import { DEFAULT_WORKTREE_FILTER, EXECUTION_SLOT_RUN_STATUSES } from "../project/project.js";
 import type { Project, ProjectWorktreeFilter } from "../project/project.js";
-import type { PipelineStore } from "../store/pipeline-store.js";
+import type { ClockStore, EventStore, PlanStore, ProjectStore, RunStore } from "../store/pipeline-store.js";
 import type { MergeService } from "../run/merge.js";
 import type { Scheduler } from "../run/scheduler.js";
 import type { Run } from "../run/types.js";
@@ -209,7 +209,7 @@ export class WorktreeService {
   private readonly locks = new Map<string, Promise<void>>();
 
   constructor(
-    private readonly store: PipelineStore,
+    private readonly store: ProjectStore & RunStore & PlanStore & EventStore & ClockStore,
     private readonly options: WorktreeServiceOptions,
   ) {
     this.git = options.git;
@@ -1353,11 +1353,7 @@ export class WorktreeService {
     return { blockers, cleanupBlockers };
   }
 
-  private appendEvent(
-    type: Parameters<PipelineStore["appendEvent"]>[0]["type"],
-    aggregateId: string,
-    payload: Record<string, unknown>,
-  ): void {
+  private appendEvent(type: Parameters<EventStore["appendEvent"]>[0]["type"], aggregateId: string, payload: Record<string, unknown>): void {
     this.store.appendEvent({ type, aggregateId, payload });
   }
 

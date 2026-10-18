@@ -16,7 +16,6 @@
     "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
-    "@pipeline-factory/core": "workspace:*",
     "zod": "^3.24.1"
   },
   "engines": {

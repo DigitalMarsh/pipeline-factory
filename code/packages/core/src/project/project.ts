@@ -8,7 +8,18 @@ import { basename, isAbsolute, resolve } from "node:path";
 import { freezeDeep } from "../platform/freeze.js";
 import { assertLinkableFolder } from "../git/linked-folders.js";
 import { isRecord } from "../platform/guards.js";
-import type { HookDefinition, ModelRoleConfig, PipelineStore, RegisteredCommandDefinition, RunStatus } from "../index.js";
+import type {
+  ClockStore,
+  EventStore,
+  ExplorerStore,
+  HookDefinition,
+  ModelRoleConfig,
+  PlanStore,
+  ProjectStore,
+  RegisteredCommandDefinition,
+  RunStatus,
+  RunStore,
+} from "../index.js";
 
 /** Project 生命周期状态；ARCHIVED 保留历史但关闭新的写入和执行入口。 */
 export type ProjectStatus = "ACTIVE" | "ARCHIVED";
@@ -37,12 +48,9 @@ export type ModelBackendCatalog = {
  * - `ignoredBranches` 是**显式隐藏**，优先于模式；主分支永远不隐藏。
  * - `includeDetachedWorktrees` 控制 detached worktree 是否进清单。
  */
-export type ProjectWorktreeFilter = {
-  filterMode: "all" | "patterns";
-  branchPatterns: string[];
-  ignoredBranches: string[];
-  includeDetachedWorktrees: boolean;
-};
+import type { ProjectWorktreeFilter } from "@pipeline-factory/contracts";
+
+export type { ProjectWorktreeFilter };
 
 export const DEFAULT_WORKTREE_FILTER: ProjectWorktreeFilter = {
   filterMode: "all",
@@ -624,7 +632,7 @@ function assertProjectPaths(repoRoot: string, worktreeRoot: string): void {
   if (repoRoot === worktreeRoot) throw new Error("repoRoot and worktreeRoot must be different");
 }
 
-function hasActiveRun(store: PipelineStore, projectId: string): boolean {
+function hasActiveRun(store: RunStore, projectId: string): boolean {
   return store.listRuns().some((run) => run.projectId === projectId && EXECUTION_SLOT_RUN_STATUSES.has(run.status));
 }
 
@@ -650,7 +658,7 @@ export function knownModelFamily(slug: string): ModelFamily | null {
  */
 export class ProjectService {
   constructor(
-    private readonly store: PipelineStore,
+    private readonly store: ProjectStore & ExplorerStore & PlanStore & RunStore & EventStore & ClockStore,
     private readonly modelCatalog?: ModelBackendCatalog | undefined,
   ) {}
 

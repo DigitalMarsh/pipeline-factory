@@ -16,7 +16,8 @@
  *   3) updates 是 Partial<CandidatePlan> 的浅合并，调用方必须显式把要重置的字段写成 null
  *      （如 queuedAt: null、runId: null），否则旧值会被保留下来。
  */
-import type { CandidatePlan, PipelineStore } from "../index.js";
+import type { CandidatePlan } from "../index.js";
+import type { EventStore, PlanStore } from "../store/pipeline-store.js";
 import type { PlanStatus } from "./types.js";
 
 /**
@@ -97,7 +98,7 @@ export function canTransitionPlanStatus(from: PlanStatus, to: PlanStatus): boole
 
 /** 统一记录 Plan 状态变更；领域语义事件仍由各业务服务分别保留。 */
 export function updatePlanStatus(
-  store: PipelineStore,
+  store: PlanStore & EventStore,
   plan: CandidatePlan,
   updates: Partial<CandidatePlan>,
   reason?: string | null,

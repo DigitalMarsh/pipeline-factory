@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "pretest": "pnpm --filter @pipeline-factory/core build && pnpm --filter @pipeline-factory/contracts build",
+    "pretest": "pnpm --filter @pipeline-factory/contracts build && pnpm --filter @pipeline-factory/core build",
     "test": "vitest run",
-    "pretypecheck": "pnpm --filter @pipeline-factory/core build && pnpm --filter @pipeline-factory/contracts build",
+    "pretypecheck": "pnpm --filter @pipeline-factory/contracts build && pnpm --filter @pipeline-factory/core build",
     "typecheck": "vue-tsc --noEmit",
     "build": "vite build"
   },

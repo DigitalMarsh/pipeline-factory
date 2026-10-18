@@ -8,12 +8,12 @@ import type {
   ModelGateway,
   ModelMessage,
   ModelRoleConfig,
-  PipelineStore,
   Project,
   ProjectExecutionMessage,
   ProjectExecutionThread,
   ProjectExecutionTurnStatus,
 } from "../index.js";
+import type { AgentLoopStore, ClockStore, EventStore, MessageAttachmentStore, ProjectStore } from "../store/pipeline-store.js";
 import type { ToolRuntime } from "../tools/tool-runtime.js";
 
 export const PROJECT_EXECUTION_MODELS = [
@@ -70,7 +70,7 @@ export class ProjectExecutionThreadService {
   private readonly activeLoops = new Map<string, { turnId: string; loopId: string }>();
 
   constructor(
-    private readonly store: PipelineStore,
+    private readonly store: ProjectStore & AgentLoopStore & EventStore & MessageAttachmentStore & ClockStore,
     private readonly model: ModelGateway,
     private readonly options: ProjectExecutionThreadServiceOptions = {},
   ) {

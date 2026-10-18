@@ -16,12 +16,15 @@ import type { ModelImagePart } from "../model/types.js";
 import type { PipelineStore } from "./pipeline-store.js";
 import type { AttachmentOwnerType, MessageAttachment } from "./types.js";
 
+/** 只需要附件读取能力的窄端口；图片映射不应该要求整个 PipelineStore。 */
+type AttachmentReader = Pick<PipelineStore, "listAttachments">;
+
 /** 把一条附件记录解析成本机绝对路径；由组合根按存储目录注入。 */
 export type AttachmentPathResolver = (attachment: MessageAttachment) => string;
 
 /** 某个 owner 的附件 → 模型图片项，顺序保持落库顺序（即用户选择顺序）。 */
 export function imagesByOwner(
-  store: PipelineStore,
+  store: AttachmentReader,
   ownerType: AttachmentOwnerType,
   ownerIds: readonly string[],
   resolvePath: AttachmentPathResolver | undefined,

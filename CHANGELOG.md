@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-10-18 — 架构补完：contracts 成为真正底座；服务改用窄端口
+
+1. **依赖方向反转**：跨端实体/状态类型（Explorer、Run、Plan、Worktree、Agent Loop、项目执行、
+   ModelUsage、CommandResult 等）的**权威定义搬进 `packages/contracts/src/entities.ts`**；
+   core 反向 `import type` 并在原模块 re-export，既有 `from "@pipeline-factory/core"` 的调用点
+   保持不变。contracts 不再依赖 core（只依赖 zod）。
+   - 构建顺序改为 contracts → core；core 的 package.json 增加 contracts 依赖。
+2. **服务收窄存储端口**：ProjectService、ExplorerService、PlanService、ExplorerThreadService、
+   ExecutorAgent、ProjectExecutionThreadService、WorktreeService 的构造参数改为各自用到的
+   端口交集；`updatePlanStatus` / `imagesByOwner` / `selectCurrentExplorer` /
+   `AgentLoopEngine` 等叶子函数也改用窄端口。`PipelineStore` 只在组合根与 Scheduler 这类
+   真正需要全端口的协调器里出现。
+3. ExplorerView 的输入区已在上一提交抽成 `ExplorerComposer.vue`；本轮补齐测试与文档。
+
+验证：`pnpm verify` 全绿：core 573 / api 183 / web 719；零值级环、全库悬空引用 0。
+
 ## 2026-10-18 — 安全加固、可靠性与安装包瘦身（P0–P2）
 
 ### P0 安全

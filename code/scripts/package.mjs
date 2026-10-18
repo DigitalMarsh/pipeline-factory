@@ -45,8 +45,8 @@ function main() {
   rmSync(stage, { recursive: true, force: true });
   mkdirSync(stage, { recursive: true });
 
-  run("build core", "pnpm", ["--filter", "@pipeline-factory/core", "build"]);
   run("build contracts", "pnpm", ["--filter", "@pipeline-factory/contracts", "build"]);
+  run("build core", "pnpm", ["--filter", "@pipeline-factory/core", "build"]);
   run("build api", "pnpm", ["--filter", "@pipeline-factory/api", "build"]);
   run("build web", "pnpm", ["--filter", "@pipeline-factory/web", "build"]);
 

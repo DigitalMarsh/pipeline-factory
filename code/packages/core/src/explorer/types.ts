@@ -34,14 +34,29 @@
  */
 import type { ExplorerTitleSource, ExplorerTitleStatus } from "./explorer-title.js";
 import type { PlanValidationIssue } from "../plan/plan-spec.js";
-import type { MessageAttachmentView } from "../store/types.js";
+
+import type {
+  ExplorerInputRequest,
+  ExplorerInputRequestStatus,
+  ExplorerThreadContextSummary,
+  ExplorerTurn,
+  ModelInputQuestion,
+  PlanExplorationStatus,
+} from "@pipeline-factory/contracts";
+
+export type {
+  ExplorerInputRequest,
+  ExplorerInputRequestStatus,
+  ExplorerThreadContextSummary,
+  ExplorerTurn,
+  ModelInputQuestion,
+  PlanExplorationStatus,
+};
 
 /** ExplorerThread 的工作状态；ARCHIVED 只禁止新写入，不删除历史。 */
 export type ExplorerThreadState = "ACTIVE" | "WAITING_FOR_INPUT" | "COMPRESSED" | "ARCHIVED";
 
 /** 当前 Explorer 方案是否仍缺少关键决策。 */
-export type PlanExplorationStatus = "INCOMPLETE" | "READY";
-
 /** Explorer 对 Plan 完整性检查的投影，供线程页和候选页显示进度。 */
 export type PlanExploration = {
   status: PlanExplorationStatus;
@@ -101,36 +116,7 @@ export type ExplorerPlan = {
 };
 
 /** Factory 生成的线程级跨 Plan 上下文摘要；不包含敏感答案或仓库基线。 */
-export type ExplorerThreadContextSummary = {
-  version: 1;
-  updatedAt: string;
-  completedPlans: Array<{
-    explorerPlanId: string;
-    title: string;
-    status: PlanExplorationStatus;
-    goal: string | null;
-    keyConstraints: string[];
-    latestUserMessageSummary: string | null;
-  }>;
-  openPlanIds: string[];
-};
-
 /** Explorer 的用户/模型消息事实；sequence 用于稳定回放和定位 Plan 卡片。 */
-export type ExplorerTurn = {
-  id: string;
-  threadId: string;
-  role: "user" | "assistant";
-  content: string;
-  status?: "QUEUED" | "RUNNING" | "WAITING_FOR_INPUT" | "PAUSED" | "COMPLETED" | "FAILED" | "CANCELLED";
-  error?: string;
-  createdAt: string;
-  sequence: number;
-  /** 新数据必填；缺失表示需要按旧线程回填到 Plan 1。 */
-  explorerPlanId?: string;
-  /** 仅用户回合：随消息提交的图片；由 API 出站时补齐。 */
-  attachments?: MessageAttachmentView[];
-};
-
 /** ExplorerThread 删除所需的完整业务关联集合；物理删除由 Store 统一执行。 */
 export type ExplorerDeletionInput = {
   projectId: string;
@@ -193,15 +179,6 @@ export type CreateExplorerInput = {
 };
 
 /** Provider 结构化询问中的单个问题；secret 答案只能保存脱敏摘要。 */
-export type ModelInputQuestion = {
-  id: string;
-  header: string;
-  question: string;
-  isOther: boolean;
-  isSecret: boolean;
-  options: Array<{ label: string; description: string }> | null;
-};
-
 /** Provider 等待用户回答的结构化请求及其生命周期标识。 */
 export type ModelInputRequest = {
   requestId: string | number;
@@ -227,23 +204,4 @@ export type ModelInputAnswers = Record<string, { answers: string[] }>;
  * 却**没有任何消费方**；而且本机 40 条真实请求里它**一次都不是非空**（40/40 NULL）。
  * 一个从来不到达、也没人读的字段，唯一的作用是让人以为"超时自动应答"已经实现了。
  */
-export type ExplorerInputRequestStatus = "OPEN" | "SUBMITTING" | "ANSWERED" | "CANCELLED" | "RECOVERY_REQUIRED";
-
 /** Explorer 输入请求事实；保存可回放的脱敏摘要而非 secret 原文。 */
-export type ExplorerInputRequest = {
-  id: string;
-  threadId: string;
-  explorerPlanId?: string;
-  localTurnId: string;
-  providerRequestId: string | number;
-  providerThreadId: string;
-  providerTurnId: string;
-  itemId: string;
-  questions: ModelInputQuestion[];
-  isBlocking: boolean;
-  status: ExplorerInputRequestStatus;
-  createdAt: string;
-  answeredAt: string | null;
-  answeredBy: string | null;
-  redactedAnswerSummary: Record<string, unknown> | null;
-};

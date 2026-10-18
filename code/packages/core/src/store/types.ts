@@ -178,11 +178,6 @@ export type MessageAttachment = {
  * 它出现在 `ExplorerTurn` / `ProjectExecutionMessage` / `RunGuidance` 的可选字段上：那些实体
  * 由各域服务落库，附件在 API 出站时批量补齐；类型上允许缺省，是为了让领域层不必知道 HTTP 路由。
  */
-export type MessageAttachmentView = {
-  id: string;
-  fileName: string;
-  mimeType: string;
-  byteSize: number;
-  url: string;
-  createdAt: string;
-};
+import type { MessageAttachmentView } from "@pipeline-factory/contracts";
+
+export type { MessageAttachmentView };

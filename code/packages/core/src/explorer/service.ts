@@ -32,7 +32,16 @@
  */
 import { projectPlaceholderExplorerTitle, selectCurrentExplorer } from "./thread-selection.js";
 import { defaultExplorerPlan, defaultThreadContextSummary } from "../store/records.js";
-import type { PipelineStore } from "../store/pipeline-store.js";
+import type {
+  AgentLoopStore,
+  ClockStore,
+  EventStore,
+  ExplorerStore,
+  PlanStore,
+  ProjectStore,
+  RunStore,
+  TransactionalStore,
+} from "../store/pipeline-store.js";
 import type { Project } from "../project/project.js";
 import type {
   AgentLoop,
@@ -82,7 +91,16 @@ export class ExplorerPlanDeleteForbiddenError extends Error {
 
 /** 管理 ExplorerThread 的创建、继承、归档、激活和标题修改。 */
 export class ExplorerService {
-  constructor(private readonly store: PipelineStore) {}
+  constructor(
+    private readonly store: ExplorerStore &
+      PlanStore &
+      RunStore &
+      ProjectStore &
+      AgentLoopStore &
+      EventStore &
+      ClockStore &
+      TransactionalStore,
+  ) {}
 
   /** 创建 Project 内的新 ExplorerThread，可显式继承来源线程。 */
   create(input: CreateExplorerInput): ExplorerThread {

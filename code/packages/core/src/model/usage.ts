@@ -13,13 +13,9 @@
  *      改成相加会让长会话的用量统计单调膨胀。
  */
 /** Provider 返回的精确 token 用量；null 表示 Provider 没有返回对应字段。 */
-export type ModelUsage = {
-  inputTokens: number | null;
-  outputTokens: number | null;
-  reasoningTokens: number | null;
-  totalTokens: number | null;
-};
-export type ModelUsageScope = "turn" | "total";
+import type { ModelUsage, ModelUsageScope } from "@pipeline-factory/contracts";
+
+export type { ModelUsage, ModelUsageScope };
 
 const usageField = (value: unknown): number | null => (typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null);
 

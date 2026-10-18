@@ -15,7 +15,8 @@ import { updatePlanStatus } from "../plan/status-transition.js";
 import { imagesByOwner, type AttachmentPathResolver } from "../store/message-attachments.js";
 // 用 import type 而不是"具名绑定带 type 前缀"：这样"本模块对 index.js 只剩类型依赖"是显式的，
 // check-cycles.mjs 也据此判定这条回流边已被切断。
-import type { ExecutionTelemetry, ModelGateway, ModelRoleConfig, PipelineStore, PlanRevision, Run } from "../index.js";
+import type { ExecutionTelemetry, ModelGateway, ModelRoleConfig, PlanRevision, Run } from "../index.js";
+import type { AgentLoopStore, ClockStore, EventStore, MessageAttachmentStore, PlanStore, RunStore } from "../store/pipeline-store.js";
 import type { ModelImagePart, ModelMessage } from "../model/types.js";
 import type { ToolRuntime } from "../tools/tool-runtime.js";
 
@@ -155,7 +156,7 @@ export class ExecutorAgent {
   }
 
   constructor(
-    private readonly store: PipelineStore,
+    private readonly store: RunStore & PlanStore & AgentLoopStore & EventStore & ClockStore & MessageAttachmentStore,
     private readonly model: ModelGateway,
     toolRuntime?: ToolRuntime,
     options: ExecutorAgentOptions = {},

@@ -40,21 +40,9 @@ import type { ProjectExecutionSnapshot } from "../project/project.js";
  * 后者那两处 `status: "QUEUED"` 写的是 `PlanDispatchState`（另一个类型）。8 个库全查过，
  * 三个值一行数据都没有。删掉之后，"状态空间 = 有人写的状态"，转换表才谈得上完整。
  */
-export type PlanStatus =
-  "DRAFT" | "DISCARDED" | "READY" | "ENQUEUED" | "DISPATCHED" | "IN_PROGRESS" | "VERIFYING" | "MERGE_READY" | "MERGED" | "BLOCKED";
+import type { PlanLifecycleEntry, PlanLifecycleStatus, PlanStatus } from "@pipeline-factory/contracts";
 
-export type PlanLifecycleStatus = PlanStatus | "NEEDS_CONFIGURATION";
-
-/** 当前 Plan Revision 的统一生命周期时间线投影。时间未知时保持 null，不用 lastEventAt 猜测。 */
-export type PlanLifecycleEntry = {
-  status: PlanLifecycleStatus;
-  occurredAt: string | null;
-  revision: number;
-  current: boolean;
-  reason?: string | null;
-  runId?: string | null;
-  executionThreadId?: string | null;
-};
+export type { PlanLifecycleEntry, PlanLifecycleStatus, PlanStatus };
 
 /** Plan 中可独立追踪的任务及其依赖状态。 */
 /** 从 Explorer 对话投影出的候选 Plan；Confirm 前仍允许编辑或丢弃。 */

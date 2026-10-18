@@ -37,23 +37,42 @@
  *      `backend` 只能来自线程的 telemetry——**不要**用当前项目配置回填：那会让历史行说谎。
  *      web 侧的类型走 `type-parity.test.ts` 与这里逐字对齐。
  */
-import type { ModelUsage, ModelUsageScope } from "../model/usage.js";
 import type { CommandResult } from "../platform/commands.js";
 
+import type {
+  ExecutionJournalCorrelation,
+  ExecutionJournalPayload,
+  ExecutionTelemetry,
+  ExecutionThreadState,
+  ExecutionThreadSummary,
+  JournalEntryType,
+  MergeRequest,
+  RunGuidance,
+  RunGuidanceMode,
+  RunGuidanceStatus,
+  RunStatus,
+  VerificationRun,
+  VerificationStatus,
+} from "@pipeline-factory/contracts";
+
+export type {
+  ExecutionJournalCorrelation,
+  ExecutionJournalPayload,
+  ExecutionTelemetry,
+  ExecutionThreadState,
+  ExecutionThreadSummary,
+  JournalEntryType,
+  MergeRequest,
+  RunGuidance,
+  RunGuidanceMode,
+  RunGuidanceStatus,
+  RunStatus,
+  VerificationRun,
+  VerificationStatus,
+};
+
 /** Run 的执行、验证、合并和恢复状态；BLOCKED 需要人工关注。 */
-export type RunStatus =
-  | "QUEUED"
-  | "STARTING"
-  | "IN_PROGRESS"
-  | "READY_FOR_VERIFY"
-  | "VERIFYING"
-  | "MERGE_READY"
-  | "BLOCKED"
-  | "STALE"
-  | "RECOVERING"
-  | "CANCELLED";
 /** ExecutionThread 的展示状态，承载 Run 的实时模型输出和控制事实。 */
-export type ExecutionThreadState = "ACTIVE" | "PAUSED" | "BLOCKED" | "CANCELLED" | "COMPLETED";
 /**
  * Run journal 中可回放的事件类别。
  *
@@ -61,31 +80,7 @@ export type ExecutionThreadState = "ACTIVE" | "PAUSED" | "BLOCKED" | "CANCELLED"
  * 曾经的 `REPAIR` / `COMMIT` 两个成员没有任何写入点，真出现也只会掉进执行会话的
  * `unclassified` 显示成"未识别"；它们在最近一次清点里被删掉。
  */
-export type JournalEntryType =
-  | "RUN_CREATED"
-  | "HOOK_COMPLETED"
-  | "HOOK_FAILED"
-  | "HOOK_SKIPPED"
-  | "MODEL_OUTPUT"
-  | "PROVIDER_ACTIVITY"
-  | "TOOL_CALL"
-  | "TASK_PROGRESS"
-  | "USER_GUIDANCE"
-  | "VERIFICATION"
-  | "RECOVERY";
-
 /** 跨模型轮次、Plan 任务和 Provider 调用的稳定关联字段。 */
-export type ExecutionJournalCorrelation = {
-  taskId?: string;
-  modelStep?: number;
-  loopId?: string;
-  providerThreadId?: string;
-  providerTurnId?: string;
-  providerItemId?: string;
-  callId?: string;
-};
-export type ExecutionJournalPayload = Record<string, unknown> & ExecutionJournalCorrelation;
-
 /** 一条可回放的 Execution journal 事实；payload 用于会话呈现与断线恢复，不单独决定 Run 控制状态。 */
 export type ExecutionJournalEntry = {
   sequence: number;
@@ -95,23 +90,6 @@ export type ExecutionJournalEntry = {
 };
 
 /** 执行线程的持久化遥测；不对缺失的 Provider usage 做本地估算。 */
-export type ExecutionTelemetry = {
-  model: string | null;
-  reasoningEffort: string | null;
-  /**
-   * 这次 Run 由哪个 agent（后端 id）执行 —— 取自 `agent.loop.started` 的端点指纹。
-   * 与 model 是两件事：同一个模型名可能来自不同后端，而"这一轮到底是谁跑的"是排障第一问。
-   * **可选**：遥测是以 JSON 落库的，本字段引入之前的历史行没有这个键。
-   */
-  backend?: string | null;
-  startedAt: string | null;
-  completedAt: string | null;
-  durationMs: number | null;
-  usage: ModelUsage | null;
-  usageSource: "provider" | "not-recorded";
-  usageScope: ModelUsageScope | null;
-};
-
 /** Run 专属的执行消息流聚合。 */
 export type ExecutionThread = {
   id: string;
@@ -141,60 +119,19 @@ export type Run = {
  * 跑的那条线程"。`model` / `backend` 来自线程的 telemetry —— **记录下来的事实**，所以之后再改项目
  * 配置也不会改写历史行；早于 telemetry 的 Run 没有这两样，就是 null（界面留空，不回填猜测值）。
  */
-export type ExecutionThreadSummary = {
-  id: string;
-  runId: string;
-  state: string;
-  model?: string | null;
-  backend?: string | null;
-} | null;
-
-export type VerificationStatus = "PASSED" | "SKIPPED" | "FAILED" | "BLOCKED";
 /** 单次验证及其修复尝试结果。 */
-export type VerificationRun = {
-  id: string;
-  runId: string;
-  status: VerificationStatus;
-  repairAttempts: number;
-  commandResults: Array<{ commandId: string; result: CommandResult }>;
-  reason?: "NO_PROJECT_VERIFICATION_COMMANDS";
-  completedAt: string;
-};
 /** 按 Project/Plan 注册命令执行验证的端口。 */
 export type VerificationCommandExecutor = (commandId: string, run: Run) => Promise<CommandResult>;
 /** 验证失败后的受控修复端口。 */
 export type RepairExecutor = (run: Run, attempt: number) => Promise<boolean>;
 
 /** 等待人工确认的源提交与目标分支关系。 */
-export type MergeRequest = {
-  id: string;
-  runId: string;
-  planId: string;
-  sourceCommit: string;
-  targetBranch: string;
-  /**
-   * `SUPERSEDED` = 这个 Run 后来又被补充要求推回去重做了一轮，**这个请求指向的 commit 已经不是
-   * 最新的那份工作了**。它必须存在：`createRequest` 按 run 幂等，而 `confirmMerged` 只校验
-   * "旧 sourceCommit 是新 targetCommit 的祖先"——没有这个状态，重新开工之后旧的 OPEN 请求会被
-   * 原样返回，**没验过的新改动会跟着旧请求一起被合进去**。
-   */
-  status: "OPEN" | "MERGED" | "SUPERSEDED";
-  humanConfirmationRequired: true;
-  createdAt: string;
-  mergedAt: string | null;
-  /** 最近一次只读 Git reconciliation 观察到的目标提交；人工创建的请求为空。 */
-  detectedTargetCommit?: string | null;
-};
-
 /**
  * 补充要求的**投递方式**。两种都落在这张表里，区别只是"什么时候取出来"：
  *   `STEER` —— 在正在跑的那个 Loop 的**下一个步骤边界**投递给模型（下一轮生效，不是打断当前回合）；
  *   `QUEUE` —— 留在表里，等这一轮进终态后由 Scheduler 取走，拼成一条要求**起新的一轮**。
  */
-export type RunGuidanceMode = "STEER" | "QUEUE";
 /** `PENDING` = 还没投递出去（界面必须显示成「待处理」，不能显示成已生效）。 */
-export type RunGuidanceStatus = "PENDING" | "CONSUMED" | "CANCELLED";
-
 /**
  * 一条提交给执行线程的补充要求。
  *
@@ -202,19 +139,6 @@ export type RunGuidanceStatus = "PENDING" | "CONSUMED" | "CANCELLED";
  * `STEER` 也可能还没等到下一个步骤边界进程就被重启了。丢了它 = 用户以为说了、Agent 没听见，
  * 而这正是这次要修的病。
  */
-export type RunGuidance = {
-  id: string;
-  runId: string;
-  content: string;
-  mode: RunGuidanceMode;
-  status: RunGuidanceStatus;
-  authorId: string;
-  createdAt: string;
-  consumedAt: string | null;
-  /** 随这条补充要求提交的图片；由 API 出站时补齐。 */
-  attachments?: import("../store/types.js").MessageAttachmentView[];
-};
-
 export type MergeReconciliationOutcome = "DETECTED" | "ALREADY_OPEN" | "NOT_MERGED" | "UNAVAILABLE" | "ALREADY_MERGED";
 
 export type MergeReconciliationItem = {

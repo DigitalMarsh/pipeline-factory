@@ -122,7 +122,9 @@ export type ModelRequest = {
   signal?: AbortSignal | undefined;
 };
 /** 一条正文是"过程叙述"还是"最终回答"。**两个 Provider 只有 Codex 给**（`MessagePhase`）。 */
-export type ModelMessagePhase = "commentary" | "final_answer";
+import type { ModelMessagePhase } from "@pipeline-factory/contracts";
+
+export type { ModelMessagePhase };
 
 /** ModelGateway 输出的统一流事件，供 Agent Loop 和消息流共同消费。 */
 export type ModelEvent =

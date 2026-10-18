@@ -18,45 +18,9 @@ import { EXECUTION_SLOT_RUN_STATUSES } from "../project/project.js";
 import { missingVerificationCommands } from "../plan/contract.js";
 import type { CandidatePlan, DomainEvent, PlanRevision, PlanService, PipelineStore, Run, Scheduler, VerificationRun } from "../index.js";
 
-export type PlanDispatchStatus = "QUEUED" | "WAITING" | "DISPATCHING" | "RUNNING" | "VERIFYING" | "NEEDS_REVIEW" | "BLOCKED" | "COMPLETED";
+import type { PlanDispatchPhase, PlanDispatchState, PlanDispatchStatus, PlanDispatchWaitReason } from "@pipeline-factory/contracts";
 
-export type PlanDispatchWaitReason =
-  "WAITING_DEPENDENCY" | "WAITING_CONFLICT" | "WAITING_PROJECT_CAPACITY" | "WAITING_GLOBAL_CAPACITY" | "NEEDS_CONFIGURATION";
-
-export type PlanDispatchPhase =
-  | "VALIDATING"
-  | "VALIDATION_FAILED"
-  | "FROZEN"
-  | "ENQUEUING"
-  | "ENQUEUE_FAILED"
-  | "ENQUEUED"
-  | "DISPATCHING"
-  | "DISPATCH_FAILED"
-  | "DISPATCHED"
-  | "STARTING_RUN"
-  | "RUN_STARTED"
-  | "WAITING"
-  | "RUN_START_FAILED"
-  | "NEEDS_REVIEW"
-  | "ATTENTION"
-  | "COMPLETED";
-
-export type PlanDispatchState = Readonly<{
-  planId: string;
-  revision?: number;
-  projectId: string;
-  status: PlanDispatchStatus;
-  waitReason: PlanDispatchWaitReason | null;
-  queuedAt: string;
-  runId: string | null;
-  attempt: number;
-  updatedAt: string;
-  lastError: string | null;
-  /** 持久化的自动确认/派发阶段；旧的人工入队记录可能没有此字段。 */
-  phase?: PlanDispatchPhase;
-  automatic?: boolean;
-  confirmedBy?: string | null;
-}>;
+export type { PlanDispatchPhase, PlanDispatchState, PlanDispatchStatus, PlanDispatchWaitReason };
 
 export type PlanDispatchCoordinatorOptions = {
   store: PipelineStore;

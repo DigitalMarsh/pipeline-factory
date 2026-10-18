@@ -32,7 +32,17 @@ import { projectPlaceholderExplorerTitle } from "./thread-selection.js";
 import { REQUIRED_PLAN_AREAS } from "../platform/plan-requirements.js";
 import { defaultExplorerPlan, defaultThreadContextSummary, stripPlanProtocol, summarizeExplorerMessage } from "../store/records.js";
 import { imagesByOwner, type AttachmentPathResolver } from "../store/message-attachments.js";
-import type { PipelineStore } from "../store/pipeline-store.js";
+import type {
+  AgentLoopStore,
+  ClockStore,
+  EventStore,
+  ExplorerStore,
+  IdempotencyStore,
+  MessageAttachmentStore,
+  PlanStore,
+  ProjectStore,
+  RunStore,
+} from "../store/pipeline-store.js";
 import type { AgentLoop, AgentLoopEvent, AgentLoopRunner } from "../agent/agent-loop.js";
 import type { ExplorerTitleGenerator } from "./explorer-title.js";
 import type {
@@ -81,7 +91,15 @@ export class ExplorerThreadService {
   private readonly attachmentPathFor: AttachmentPathResolver | undefined;
 
   constructor(
-    private readonly store: PipelineStore,
+    private readonly store: ExplorerStore &
+      PlanStore &
+      RunStore &
+      ProjectStore &
+      AgentLoopStore &
+      EventStore &
+      IdempotencyStore &
+      MessageAttachmentStore &
+      ClockStore,
     private readonly model: ModelGateway,
     options: {
       /** @deprecated retained for compatibility; Explorer uses the global model.loop.maxSteps. */ maxAutoContinuationTurns?:

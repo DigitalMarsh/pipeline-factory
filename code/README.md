@@ -47,12 +47,13 @@ node scripts/service.mjs status
 
 ## 架构分层与发布
 
-依赖方向固定为 `apps/web → packages/contracts ← apps/api → packages/core`：
+依赖方向固定为 `apps/web → contracts ← apps/api → core → contracts`（contracts 是最底层）：
 
-- **contracts 是最低层**：只依赖 zod 与 core 的**类型**（`export type` 编译后不产生 import）。
-  不要在这里转发运行时的类或函数，否则 Web 构建会把 core 拖进浏览器。
+- **contracts 是最低层**：定义跨端实体/DTO 与 HTTP 输入 schema，只依赖 zod；
+  **core 反向 import 它的类型**（type-only，编译后无运行时代码）。不要把运行时类/函数放进来。
 - **core 不认识 HTTP 与 Vue**：它提供业务服务、存储端口（按域拆成 ProjectStore / ExplorerStore /
-  PlanStore / RunStore / EventStore …）与 Provider 适配器；组合根在 `apps/api/src/server.ts`。
+  PlanStore / RunStore / EventStore …）与 Provider 适配器；服务构造参数只声明自己用到的端口组合，
+  `PipelineStore` 只在组合根与确实需要全端口的协调器里出现。组合根在 `apps/api/src/server.ts`。
 - **模型后端扩展点**：`apps/api/src/runtime/model-backends.ts` 的注册表按 `kind` 注册工厂；
   新增后端 = 注册一个 kind，不改 `createModelGateway` 的分派。MCP / Plugin 已有各自注册表，
   项目命令是数据驱动，不要重复造。

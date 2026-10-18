@@ -7,17 +7,9 @@
 export type AgentLoopMode = "provider-controlled" | "factory-controlled";
 
 /** Agent Loop 的持久化状态；终态不会再创建新的模型步骤。 */
-export type AgentLoopState =
-  | "CREATED"
-  | "RUNNING"
-  | "WAITING_FOR_INPUT"
-  | "PAUSED"
-  | "RECOVERING"
-  | "BLOCKED"
-  | "COMPLETED"
-  | "FAILED"
-  | "CANCELLED"
-  | "NEEDS_RECONCILIATION";
+import type { AgentLoopDiagnostics, AgentLoopState } from "@pipeline-factory/contracts";
+
+export type { AgentLoopDiagnostics, AgentLoopState };
 
 /** Agent Loop 可审计的步骤类型；每种类型都可通过 journal/SSE 回放。 */
 export type AgentStepType =
@@ -86,11 +78,7 @@ export type AgentLoopStep = {
 export type AgentLoopStepInput = Omit<AgentLoopStep, "sequence" | "occurredAt" | "callId" | "providerThreadId" | "providerTurnId"> &
   Partial<Pick<AgentLoopStep, "callId" | "providerThreadId" | "providerTurnId" | "occurredAt">>;
 
-export type AgentLoopDiagnostics = {
-  providerActivityCount: number;
-  lastGate: { action: string; reason: string } | null;
-  terminal: { code: string; message: string } | null;
-};
+// AgentLoopDiagnostics 由 contracts 定义并在上方 re-export；本地函数继续按名字使用。
 
 const TERMINAL_DIAGNOSTIC_MESSAGES: Record<string, string> = {
   DATABASE_BUSY: "数据库写入暂时繁忙",
@@ -164,7 +152,7 @@ export function projectAgentLoopDiagnostics(loop: AgentLoop, steps: AgentLoopSte
 }
 
 import type { ModelEvent, ModelGateway, ModelMessage, ModelMessagePhase, ModelRequest } from "../index.js";
-import type { PipelineStore } from "../index.js";
+import type { AgentLoopStore, ClockStore, EventStore } from "../store/pipeline-store.js";
 import type { ToolRuntime } from "../tools/tool-runtime.js";
 
 /** 启动 Loop 所需的角色、循环限制、模型请求和可选工具/门禁。 */
@@ -346,7 +334,7 @@ export class AgentLoopEngine implements AgentLoopRunner {
   private readonly options: Required<AgentLoopEngineOptions>;
 
   constructor(
-    private readonly store: PipelineStore,
+    private readonly store: AgentLoopStore & EventStore & ClockStore,
     private readonly model: ModelGateway,
     private readonly defaultToolRuntime?: ToolRuntime,
     options: AgentLoopEngineOptions = {},

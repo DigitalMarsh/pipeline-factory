@@ -51,11 +51,9 @@ export type CommandInvocation = {
 };
 
 /** 进程执行结果；exitCode 为 null 表示进程被信号或运行时中断。 */
-export type CommandResult = {
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-};
+import type { CommandResult } from "@pipeline-factory/contracts";
+
+export type { CommandResult };
 
 /** Hook/验证共用的命令执行端口。 */
 export type CommandExecutor = (command: CommandInvocation) => Promise<CommandResult>;

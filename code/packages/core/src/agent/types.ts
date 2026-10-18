@@ -23,42 +23,6 @@
  *      它们不是所有历史行都有（老数据可能为 null），读路径要容忍 null，不要当必填用。
  */
 
-/** 每个项目唯一的长期执行会话；空偏好字段表示跟随项目 Executor 默认值。 */
-export type ProjectExecutionThread = {
-  id: string;
-  projectId: string;
-  providerThreadId: string | null;
-  modelOverride: string | null;
-  reasoningEffortOverride: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
+import type { ProjectExecutionMessage, ProjectExecutionThread, ProjectExecutionTurnStatus } from "@pipeline-factory/contracts";
 
-/**
- * 一条执行回合的状态。
- *
- * **没有 `WAITING_FOR_INPUT`**：这个线程没有回答入口（API 只有提交 / 取消 / 偏好三条路由），
- * 挂进"等待输入"等于把一个回合停在永远等不到答案的状态上。模型真要结构化提问时，
- * Loop 会带着 `STRUCTURED_INPUT_UNSUPPORTED` 直接阻塞，回合以 FAILED 收尾——那样至少
- * 界面上看得见、取消得掉。
- */
-export type ProjectExecutionTurnStatus = "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED" | "RECOVERY_REQUIRED";
-
-/** 执行会话中的一条有序消息；用户和助手消息共享 turnId。 */
-export type ProjectExecutionMessage = {
-  id: string;
-  threadId: string;
-  turnId: string;
-  clientTurnId: string | null;
-  role: "user" | "assistant";
-  content: string;
-  status: ProjectExecutionTurnStatus;
-  error: string | null;
-  createdAt: string;
-  sequence: number;
-  loopId: string | null;
-  model: string | null;
-  reasoningEffort: string | null;
-  /** 仅用户消息：随消息提交的图片；由 API 出站时补齐。 */
-  attachments?: import("../store/types.js").MessageAttachmentView[];
-};
+export type { ProjectExecutionMessage, ProjectExecutionThread, ProjectExecutionTurnStatus };
