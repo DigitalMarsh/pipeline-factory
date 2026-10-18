@@ -145,6 +145,9 @@ const cleanupDetails = computed(() => {
   ];
 });
 
+/** 兜底服务配置的指纹：变化时强制重挂服务区块，让它重新读配置。 */
+const servicesConfigKey = computed(() => JSON.stringify(props.project?.settings?.worktreeServices ?? null));
+
 /** 范围摘要：让"为什么少了几条"在面板上直接可见，而不用去设置页翻。 */
 const scopeSummary = computed(() => {
   const filter = inventory.value?.filter;
@@ -682,7 +685,16 @@ onBeforeUnmount(() => {
           </ul>
         </div>
 
-        <WorktreeServicesPanel v-if="selectedItem.hasWorktree" :project-id="props.projectId" :item="selectedItem" />
+        <!--
+          `:key` 绑兜底配置：在「项目设置 → Worktree」里改完兜底服务后，这个区块要重新读配置。
+          服务面板自己只监听 itemId（选择别的条目才刷新），改配置不会触发它。
+        -->
+        <WorktreeServicesPanel
+          v-if="selectedItem.hasWorktree"
+          :key="servicesConfigKey"
+          :project-id="props.projectId"
+          :item="selectedItem"
+        />
       </aside>
     </div>
 

@@ -80,6 +80,35 @@ describe("Worktree 范围与执行配置的分界", () => {
     expect(() => projects.update(project.id, { settings: { worktreeServices: [{ ...service, argv: [] }] } })).toThrow(/argv/);
   });
 
+  it("把列表字段传成字符串会被拒绝，而不是拆成单字符", () => {
+    const { projects, project } = setup();
+
+    // `[... "factory/*"]` = 9 个单字符：校验看到"合法的字符串数组"就放行了，范围随之失效。
+    expect(() => projects.update(project.id, { settings: { worktree: { branchPatterns: "factory/*" as never } } })).toThrow(
+      /branchPatterns/,
+    );
+    expect(() => projects.update(project.id, { settings: { worktree: { ignoredBranches: "a,b" as never } } })).toThrow(/ignoredBranches/);
+    expect(() =>
+      projects.update(project.id, {
+        settings: {
+          worktreeServices: [
+            {
+              serviceId: "s",
+              name: "s",
+              role: "w",
+              workdir: ".",
+              // 单字符串同样不能 spread 成字符数组（没有空格时 `assertStringArray` 不会报错）。
+              argv: "npm" as never,
+              shellCommand: null,
+              healthUrl: null,
+              enabled: true,
+            },
+          ],
+        },
+      }),
+    ).toThrow(/argv/);
+  });
+
   it("范围模式与列表一起保存时，后续读取仍是同一份值", () => {
     const { projects, project } = setup();
     projects.update(project.id, { settings: { worktree: { includeDetachedWorktrees: false } } });

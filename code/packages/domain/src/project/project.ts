@@ -468,6 +468,28 @@ export function validateWorktreeServices(services: ProjectWorktreeService[]): vo
   }
 }
 
+/**
+ * 复制一个字符串数组用于落库；**非数组原样返回**，让 `validateProjectSettings` 去拒绝。
+ *
+ * 为什么不能一律 spread：`[... "factory/*"]` 得到 9 个单字符，校验看到的是"合法的字符串数组"，
+ * 于是 `branchPatterns` 被静默改写成 `["f","a","c",…]`——清单几乎被过滤空，而整个过程没有任何报错
+ * （实测复现）。校验是唯一该说"这不是数组"的地方，归一化不该替它把输入改造成合法形状。
+ */
+function copyListForStorage(value: unknown, fallback: readonly string[] | undefined): string[] {
+  if (Array.isArray(value)) return [...(value as string[])];
+  if (value !== undefined) return value as string[];
+  return [...(fallback ?? [])];
+}
+
+/** 同上：服务数组非数组时原样交给校验；`argv` 也只在确实是数组时复制。 */
+function copyServicesForStorage(value: unknown): ProjectWorktreeService[] {
+  if (!Array.isArray(value)) return value as ProjectWorktreeService[];
+  return (value as ProjectWorktreeService[]).map((service) => ({
+    ...service,
+    argv: Array.isArray(service.argv) ? [...service.argv] : (service.argv ?? null),
+  }));
+}
+
 /** 合并并校验局部 Settings，返回可安全保存和快照的完整配置。 */
 export function normalizeProjectSettings(
   input?: ProjectSettingsInput,
@@ -507,19 +529,18 @@ export function normalizeProjectSettings(
     // 老配置行没有这一格：缺省即 REPOSITORY_FILE，与全新 Project 一致（理由见 ProjectSettings 里的说明）。
     defaultArtifactMode: value.defaultArtifactMode ?? base.defaultArtifactMode ?? "REPOSITORY_FILE",
     hooks: { ...base.hooks, ...value.hooks },
-    worktreeServices: (value.worktreeServices ?? base.worktreeServices ?? DEFAULT_WORKTREE_SERVICES).map((service) => ({
-      ...service,
-      argv: service.argv ? [...service.argv] : null,
-    })),
+    /**
+     * **只在确实是数组时复制**：`[...someString]` 会把 `"factory/*"` 静默拆成
+     * `["f","a","c","t","o","r","y","/","*"]`，校验看到的是"字符串数组"于是放行——
+     * 结果是范围里 9 个单字符模式，清单几乎被过滤空。非数组一律原样留给校验去拒绝。
+     */
+    worktreeServices: copyServicesForStorage(value.worktreeServices ?? base.worktreeServices ?? DEFAULT_WORKTREE_SERVICES),
     worktree: {
       ...(base.worktree ?? DEFAULT_WORKTREE_FILTER),
       ...(value.worktree ?? {}),
-      branchPatterns: value.worktree?.branchPatterns
-        ? [...value.worktree.branchPatterns]
-        : [...(base.worktree ?? DEFAULT_WORKTREE_FILTER).branchPatterns],
-      ignoredBranches: value.worktree?.ignoredBranches
-        ? [...value.worktree.ignoredBranches]
-        : [...(base.worktree ?? DEFAULT_WORKTREE_FILTER).ignoredBranches],
+      // 同 `worktreeServices`：非数组不要 spread（字符串会被拆成单字符），留给校验拒绝。
+      branchPatterns: copyListForStorage(value.worktree?.branchPatterns, base.worktree?.branchPatterns),
+      ignoredBranches: copyListForStorage(value.worktree?.ignoredBranches, base.worktree?.ignoredBranches),
     },
     models: {
       explorer: mergeRoleModels(base.models.explorer, value.models?.explorer),
