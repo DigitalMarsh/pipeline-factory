@@ -260,7 +260,7 @@ export function registerWorktreeRoutes(app: FastifyInstance, deps: WorktreeRoute
     const target = await resolveServiceTarget(worktrees, project, query.data.itemId, reply);
     if ("error" in target) return target.error;
     if (!worktreeServices) return reply.code(503).send({ code: "WORKTREE_SERVICES_UNAVAILABLE", error: "本实例没有装配服务进程管理。" });
-    return worktreeServices.inspect(project.id, target.item.itemId, target.item.worktreePath);
+    return worktreeServices.inspect(project.id, target.item.itemId, target.item.worktreePath, project.settings.worktreeServices ?? []);
   });
 
   app.post("/api/v4/projects/:projectId/worktrees/services/start", async (request, reply) => {
@@ -272,7 +272,12 @@ export function registerWorktreeRoutes(app: FastifyInstance, deps: WorktreeRoute
     if (!worktreeServices) return reply.code(503).send({ code: "WORKTREE_SERVICES_UNAVAILABLE", error: "本实例没有装配服务进程管理。" });
     const target = await resolveServiceTarget(worktrees, project, body.data.itemId, reply);
     if ("error" in target) return target.error;
-    const services = worktreeServices.inspect(project.id, target.item.itemId, target.item.worktreePath);
+    const services = worktreeServices.inspect(
+      project.id,
+      target.item.itemId,
+      target.item.worktreePath,
+      project.settings.worktreeServices ?? [],
+    );
     const config = services.services.find((service) => service.serviceId === body.data.serviceId);
     if (!config) return reply.code(404).send({ code: "WORKTREE_SERVICE_NOT_FOUND", error: `服务不存在：${body.data.serviceId}` });
     try {

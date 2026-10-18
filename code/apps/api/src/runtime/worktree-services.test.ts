@@ -102,6 +102,50 @@ describe("配置解析", () => {
   });
 });
 
+describe("项目级兜底配置", () => {
+  const fallback = [
+    {
+      serviceId: "fallback",
+      name: "兜底服务",
+      role: "worker",
+      workdir: ".",
+      argv: ["true"],
+      shellCommand: null,
+      healthUrl: null,
+      enabled: true,
+    },
+  ];
+
+  it("worktree 里没有配置文件时使用兜底", () => {
+    const root = makeTemporary("pipeline-services-fallback-");
+    const snapshot = runnerWith().inspect("project-1", "branch:x", root, fallback);
+
+    expect(snapshot.configSource).toBe("project-fallback");
+    expect(snapshot.configPath).toBeNull();
+    expect(snapshot.services).toHaveLength(1);
+    expect(snapshot.services[0]).toMatchObject({ serviceId: "fallback", source: "project-settings" });
+  });
+
+  it("worktree 文件整份优先，且坏文件不回落", () => {
+    const root = makeTemporary("pipeline-services-precedence-");
+    mkdirSync(join(root, ".pipeline-factory"), { recursive: true });
+    writeFileSync(
+      join(root, ".pipeline-factory", "services.json"),
+      JSON.stringify({ services: [{ serviceId: "from-file", name: "文件", argv: ["true"] }] }),
+    );
+    const fromFile = runnerWith().inspect("project-1", "branch:x", root, fallback);
+    expect(fromFile.configSource).toBe("worktree-file");
+    expect(fromFile.services.map((service) => service.serviceId)).toEqual(["from-file"]);
+
+    writeFileSync(join(root, ".pipeline-factory", "services.json"), "{ 坏掉的 json");
+    const broken = runnerWith().inspect("project-1", "branch:x", root, fallback);
+    expect(broken.configSource).toBe("worktree-file");
+    expect(broken.configError).toBeTruthy();
+    // **不回落**：回落会把"文件写坏了"伪装成"用了另一份配置"。
+    expect(broken.services).toHaveLength(0);
+  });
+});
+
 describe("进程启停", () => {
   it("启动后能读到日志，停止后进程消失", async () => {
     const root = makeTemporary("pipeline-services-run-");

@@ -127,6 +127,8 @@ export type ProjectSettings = {
     ignoredBranches: string[];
     includeDetachedWorktrees: boolean;
   };
+  /** 项目级兜底服务配置（worktree 内没有 services.json 时使用）。 */
+  worktreeServices?: ProjectWorktreeService[];
 };
 
 /** Project Catalog 和设置页使用的后端 Project 投影。 */
@@ -808,6 +810,18 @@ export type WorktreeInventory = {
   warnings: string[];
 };
 
+/** 项目级兜底服务配置的一条（与 domain 的 ProjectWorktreeService 逐字对齐）。 */
+export type ProjectWorktreeService = {
+  serviceId: string;
+  name: string;
+  role: string;
+  workdir: string;
+  argv: string[] | null;
+  shellCommand: string | null;
+  healthUrl: string | null;
+  enabled: boolean;
+};
+
 export type ProjectWorktreeFilter = {
   filterMode: "all" | "patterns";
   branchPatterns: string[];
@@ -910,7 +924,7 @@ export type WorktreeServiceConfig = {
   shellCommand: string | null;
   healthUrl: string | null;
   enabled: boolean;
-  source: "pipeline-factory" | "worktree-manage";
+  source: "pipeline-factory" | "worktree-manage" | "project-settings";
 };
 
 export type WorktreeServiceStatus = "stopped" | "running" | "failed";
@@ -929,6 +943,7 @@ export type WorktreeServiceLogEntry = { sequence: number; stream: "stdout" | "st
 export type WorktreeServices = {
   itemId: string;
   worktreePath: string;
+  configSource: "worktree-file" | "project-fallback" | null;
   configPath: string | null;
   configError: string | null;
   services: WorktreeServiceConfig[];

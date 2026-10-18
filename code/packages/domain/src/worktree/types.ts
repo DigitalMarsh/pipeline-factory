@@ -286,8 +286,11 @@ export type WorktreeServiceConfig = {
   shellCommand: string | null;
   healthUrl: string | null;
   enabled: boolean;
-  /** 配置来源：原生 `.pipeline-factory/services.json` 或兼容的 `.worktree-manage/services.json`。 */
-  source: "pipeline-factory" | "worktree-manage";
+  /**
+   * 配置来源：原生 `.pipeline-factory/services.json`、兼容的 `.worktree-manage/services.json`，
+   * 或项目的兜底配置（`settings.worktreeServices`）。
+   */
+  source: "pipeline-factory" | "worktree-manage" | "project-settings";
 };
 
 export type WorktreeServiceStatus = "stopped" | "running" | "failed";
@@ -308,6 +311,8 @@ export type WorktreeServiceLogEntry = { sequence: number; stream: "stdout" | "st
 export type WorktreeServices = {
   itemId: string;
   worktreePath: string;
+  /** 这次用的是哪一份配置：worktree 内的文件、项目兜底，或都没有。 */
+  configSource: "worktree-file" | "project-fallback" | null;
   configPath: string | null;
   /** 配置文件存在但解析失败时的原因；`services` 此时为空。 */
   configError: string | null;

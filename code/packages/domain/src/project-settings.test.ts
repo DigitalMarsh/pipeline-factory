@@ -50,6 +50,36 @@ describe("Worktree 范围与执行配置的分界", () => {
     expect(updated.configHash).not.toBe(project.configHash);
   });
 
+  it("项目级兜底服务配置：不推进版本，形状错误被拒", () => {
+    const { projects, project } = setup();
+    const service = {
+      serviceId: "backend",
+      name: "后端",
+      role: "backend",
+      workdir: ".",
+      argv: ["./scripts/dev-backend.sh"],
+      shellCommand: null,
+      healthUrl: null,
+      enabled: true,
+    };
+
+    const updated = projects.update(project.id, { settings: { worktreeServices: [service] } });
+    expect(updated.configVersion).toBe(project.configVersion);
+    expect(updated.configHash).toBe(project.configHash);
+    expect(updated.settings.worktreeServices).toHaveLength(1);
+
+    // 重复 serviceId
+    expect(() => projects.update(project.id, { settings: { worktreeServices: [service, { ...service, name: "另一个" }] } })).toThrow(
+      /duplicate worktree service/,
+    );
+    // argv 与 shellCommand 必须二选一
+    expect(() => projects.update(project.id, { settings: { worktreeServices: [{ ...service, argv: null, shellCommand: null }] } })).toThrow(
+      /exactly one of argv or shellCommand/,
+    );
+    // 空 argv 也不行
+    expect(() => projects.update(project.id, { settings: { worktreeServices: [{ ...service, argv: [] }] } })).toThrow(/argv/);
+  });
+
   it("范围模式与列表一起保存时，后续读取仍是同一份值", () => {
     const { projects, project } = setup();
     projects.update(project.id, { settings: { worktree: { includeDetachedWorktrees: false } } });

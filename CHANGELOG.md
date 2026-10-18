@@ -1,5 +1,29 @@
 # Changelog
 
+## 2026-10-18 — 项目级兜底服务配置（worktree-manage 的"服务配置"补齐）
+
+最后一项与 worktree-manage 项目配置页的差异：它可以在项目里贴一份服务 JSON 作为兜底，我们之前只认
+worktree 内的 `services.json`。现在补上：
+
+- `settings.worktreeServices`：与 worktree 文件里 `services` 数组同形（`serviceId` / `name` / `role` /
+  `workdir` / `argv` 或 `shellCommand` / `healthUrl` / `enabled`）。**不参与 configHash / configVersion**
+  ——同"范围"一样，它不是执行策略，改它不该让正在走的 Plan 判过期。
+- **优先级：worktree 文件整份覆盖兜底，两份不合并**；文件存在但解析失败时也**不回落**（回落会把
+  "文件写坏了"伪装成"用了另一份配置"）。服务清单响应新增 `configSource`（`worktree-file` /
+  `project-fallback` / `null`）说明这次用的是哪一份。
+- 「项目设置 → Worktree」新增"项目级兜底服务配置"文本框（JSON），保存时解析；坏 JSON 不提交、
+  错误显示在对话框里。面板的服务区块会标出"使用项目兜底配置"。
+
+另外修了一个自引发的渲染期缺陷：设置对话框的"是否有未保存改动"快照会调用 `settingsPayload()`，
+而它在解析兜底 JSON 时会抛错——用户刚敲了半个 JSON，整个对话框就会在渲染期崩掉。现在解析挪进
+`save()`，快照只比对文本原文。
+
+### Verification
+
+- `pnpm verify` 全绿：domain **534** / api **157** / web **701**。新增：兜底形状校验与"不推进版本"、
+  文件优先 / 坏文件不回落（runner 级）、API 返回 `configSource: project-fallback`、
+  设置对话框的合法 / 非法 JSON 两条路径（含"坏 JSON 不提交"）。
+
 ## 2026-10-18 — Worktree 范围配置搬进「项目设置 → Worktree」
 
 复盘时发现一处**功能缺口**：worktree-manage 的"编辑项目"里有整整一页 Worktree 属性（默认显示范围、

@@ -144,8 +144,12 @@ onBeforeUnmount(stopLogTimer);
       <p v-if="snapshot.configError" class="services-state services-error" data-services-config-error>
         配置解析失败：{{ snapshot.configError }}
       </p>
+      <p v-else-if="snapshot.configSource === 'project-fallback'" class="services-source" data-services-source>
+        使用项目兜底配置（这个 worktree 里没有 services.json）
+      </p>
       <p v-else-if="!snapshot.configPath" class="services-state">
-        没有服务配置。在 worktree 根目录放 `.pipeline-factory/services.json`（兼容 `.worktree-manage/services.json`）。
+        没有服务配置。在 worktree 根目录放 `.pipeline-factory/services.json`（兼容 `.worktree-manage/services.json`）， 或在「项目设置 →
+        Worktree」里配一份兜底。
       </p>
       <p v-else class="services-path" :title="snapshot.configPath">{{ snapshot.configPath }}</p>
 
@@ -236,6 +240,11 @@ onBeforeUnmount(stopLogTimer);
 }
 .services-error {
   color: #a94851;
+}
+.services-source {
+  margin: 6px 0 0;
+  color: #7c8ba3;
+  font-size: 10px;
 }
 .services-path {
   margin: 6px 0 0;

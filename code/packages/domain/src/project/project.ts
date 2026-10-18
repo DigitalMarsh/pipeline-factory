@@ -50,6 +50,30 @@ export const DEFAULT_WORKTREE_FILTER: ProjectWorktreeFilter = {
   includeDetachedWorktrees: true,
 };
 
+/**
+ * 项目级**兜底服务配置**（worktree-manage 的"编辑项目 → 服务配置"）。
+ *
+ * 优先级：worktree 内的配置文件（`.pipeline-factory/services.json` 或兼容的
+ * `.worktree-manage/services.json`）**整份优先**；文件不存在时才用这里。**不做合并**——
+ * 两份来源混在一起时，"这条命令到底从哪来"没有唯一答案。
+ *
+ * `argv` 与 `shellCommand` 二选一：前者直接 `execFile`（不经 shell），后者给兼容格式的
+ * `start_command` 用（走 `sh -lc`）。字段语义与 `worktree/types.ts` 的 `WorktreeServiceConfig`
+ * 一致；那一份多一个 `source`，因为要说明它来自哪个配置源。
+ */
+export type ProjectWorktreeService = {
+  serviceId: string;
+  name: string;
+  role: string;
+  workdir: string;
+  argv: string[] | null;
+  shellCommand: string | null;
+  healthUrl: string | null;
+  enabled: boolean;
+};
+
+export const DEFAULT_WORKTREE_SERVICES: ProjectWorktreeService[] = [];
+
 export type ProjectSettings = {
   concurrency: {
     /** 同一 Project 同时可跑的 Run 上限（占执行槽位的状态见 EXECUTION_SLOT_RUN_STATUSES）；由 dispatcher 在派发前判定。 */
@@ -100,6 +124,11 @@ export type ProjectSettings = {
    * `DEFAULT_WORKTREE_FILTER` 处理——不为一个新开关改写用户已有的配置行。
    */
   worktree?: ProjectWorktreeFilter | undefined;
+  /**
+   * 项目级兜底服务配置。**可选**：老 Project 没有这一格，读路径按空列表处理。
+   * 与 `worktree` 一样**不参与执行配置指纹**（见 `projectHash`）。
+   */
+  worktreeServices?: ProjectWorktreeService[] | undefined;
   models: {
     explorer: ModelRoleConfig;
     executor: ModelRoleConfig;
@@ -136,6 +165,7 @@ export type ProjectSettingsInput = {
   defaultArtifactMode?: "CONVERSATION" | "REPOSITORY_FILE" | undefined;
   hooks?: ProjectSettings["hooks"];
   worktree?: Partial<ProjectWorktreeFilter> | undefined;
+  worktreeServices?: ProjectWorktreeService[] | undefined;
   models?: {
     explorer?: ModelRoleConfigInput & { model: string };
     executor?: ModelRoleConfigInput & { model: string };
@@ -237,6 +267,7 @@ export const DEFAULT_PROJECT_SETTINGS: ProjectSettings = {
   defaultArtifactMode: "REPOSITORY_FILE",
   hooks: {},
   worktree: DEFAULT_WORKTREE_FILTER,
+  worktreeServices: DEFAULT_WORKTREE_SERVICES,
   models: {
     explorer: { model: "gpt-5.6-luna", mode: "plan", temperature: 0.1, loopMode: "provider-controlled" },
     executor: { model: "gpt-5.6-luna", mode: "default", temperature: 0, loopMode: "provider-controlled" },
@@ -351,6 +382,7 @@ function validateProjectSettings(settings: ProjectSettings, catalog?: ModelBacke
   }
 
   validateWorktreeFilter(settings.worktree ?? DEFAULT_WORKTREE_FILTER);
+  validateWorktreeServices(settings.worktreeServices ?? DEFAULT_WORKTREE_SERVICES);
   if (!isRecord(settings.hooks)) throw new Error("hooks must be an object");
   for (const [name, hook] of Object.entries(settings.hooks)) {
     if (!isRecord(hook) || typeof hook.commandId !== "string" || hook.commandId.trim() === "")
@@ -407,6 +439,35 @@ export function validateWorktreeFilter(filter: ProjectWorktreeFilter): void {
   if (typeof filter.includeDetachedWorktrees !== "boolean") throw new Error("worktree.includeDetachedWorktrees must be a boolean");
 }
 
+/**
+ * 校验项目级兜底服务配置。规则与运行时解析文件的那一套对齐（见 apps/api 的
+ * `parseServiceConfig`）：`serviceId` 唯一、名字非空、`argv` / `shellCommand` 恰好一个。
+ * **只做形状校验**：命令能不能跑起来是启动时的事，不是保存配置时的事。
+ */
+export function validateWorktreeServices(services: ProjectWorktreeService[]): void {
+  if (!Array.isArray(services)) throw new Error("worktreeServices must be an array");
+  const seen = new Set<string>();
+  for (const [index, service] of services.entries()) {
+    if (!isRecord(service)) throw new Error(`worktreeServices[${index}] must be an object`);
+    const label = `worktreeServices[${index}]`;
+    if (typeof service.serviceId !== "string" || !service.serviceId.trim()) throw new Error(`${label}.serviceId is required`);
+    if (seen.has(service.serviceId)) throw new Error(`duplicate worktree service serviceId ${service.serviceId}`);
+    seen.add(service.serviceId);
+    if (typeof service.name !== "string" || !service.name.trim()) throw new Error(`${label}.name is required`);
+    if (typeof service.role !== "string" || !service.role.trim()) throw new Error(`${label}.role is required`);
+    if (typeof service.workdir !== "string" || !service.workdir.trim()) throw new Error(`${label}.workdir is required`);
+    const hasArgv = service.argv !== null && service.argv !== undefined;
+    const hasShell = service.shellCommand !== null && service.shellCommand !== undefined;
+    if (hasArgv === hasShell) throw new Error(`${label} needs exactly one of argv or shellCommand`);
+    if (hasArgv) assertStringArray(service.argv, `${label}.argv`, false);
+    if (hasShell && (typeof service.shellCommand !== "string" || !service.shellCommand.trim()))
+      throw new Error(`${label}.shellCommand must be a non-empty string`);
+    if (service.healthUrl !== null && service.healthUrl !== undefined && typeof service.healthUrl !== "string")
+      throw new Error(`${label}.healthUrl must be a string or null`);
+    if (typeof service.enabled !== "boolean") throw new Error(`${label}.enabled must be a boolean`);
+  }
+}
+
 /** 合并并校验局部 Settings，返回可安全保存和快照的完整配置。 */
 export function normalizeProjectSettings(
   input?: ProjectSettingsInput,
@@ -421,6 +482,7 @@ export function normalizeProjectSettings(
     throw new Error("defaultVerificationCommandIds must be an array");
   if (value.hooks !== undefined && !isRecord(value.hooks)) throw new Error("hooks must be an object");
   if (value.worktree !== undefined && !isRecord(value.worktree)) throw new Error("worktree must be an object");
+  if (value.worktreeServices !== undefined && !Array.isArray(value.worktreeServices)) throw new Error("worktreeServices must be an array");
   if (value.models !== undefined && !isRecord(value.models)) throw new Error("models must be an object");
   if (value.toolPolicy !== undefined && !isRecord(value.toolPolicy)) throw new Error("toolPolicy must be an object");
   const settings: ProjectSettings = {
@@ -445,6 +507,10 @@ export function normalizeProjectSettings(
     // 老配置行没有这一格：缺省即 REPOSITORY_FILE，与全新 Project 一致（理由见 ProjectSettings 里的说明）。
     defaultArtifactMode: value.defaultArtifactMode ?? base.defaultArtifactMode ?? "REPOSITORY_FILE",
     hooks: { ...base.hooks, ...value.hooks },
+    worktreeServices: (value.worktreeServices ?? base.worktreeServices ?? DEFAULT_WORKTREE_SERVICES).map((service) => ({
+      ...service,
+      argv: service.argv ? [...service.argv] : null,
+    })),
     worktree: {
       ...(base.worktree ?? DEFAULT_WORKTREE_FILTER),
       ...(value.worktree ?? {}),
@@ -479,7 +545,7 @@ export function normalizeProjectSettings(
  * ——一次纯界面的降噪操作把正在走的方案打成过期。
  */
 function projectHash(input: Pick<Project, "name" | "shortName" | "repoRoot" | "defaultBranch" | "worktreeRoot" | "settings">): string {
-  const { worktree: _ignoredWorktreeFilter, ...executionSettings } = input.settings;
+  const { worktree: _ignoredWorktreeFilter, worktreeServices: _ignoredWorktreeServices, ...executionSettings } = input.settings;
   return `sha256:${createHash("sha256")
     .update(
       JSON.stringify({
@@ -496,7 +562,7 @@ function projectHash(input: Pick<Project, "name" | "shortName" | "repoRoot" | "d
 
 /** 去掉 Worktree 范围后的设置，用于判断"这次改动是否影响执行"。 */
 function executionSettingsOf(settings: ProjectSettings): Record<string, unknown> {
-  const { worktree: _ignoredWorktreeFilter, ...rest } = settings;
+  const { worktree: _ignoredWorktreeFilter, worktreeServices: _ignoredWorktreeServices, ...rest } = settings;
   return rest;
 }
 

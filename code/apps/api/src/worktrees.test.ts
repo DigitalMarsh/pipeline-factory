@@ -432,6 +432,46 @@ describe("Worktree 路由：服务启停", () => {
     await waitFor(() => !isProcessAlive(pid));
   });
 
+  it("worktree 里没有配置文件时用项目级兜底", async () => {
+    const { app, project, repoRoot } = setup();
+    const patched = await app.inject({
+      method: "PATCH",
+      url: `/api/v4/projects/${project.id}`,
+      payload: {
+        settings: {
+          worktreeServices: [
+            {
+              serviceId: "fallback",
+              name: "兜底服务",
+              role: "worker",
+              workdir: ".",
+              argv: ["true"],
+              shellCommand: null,
+              healthUrl: null,
+              enabled: true,
+            },
+          ],
+        },
+      },
+    });
+    expect(patched.statusCode).toBe(200);
+
+    const worktreePath = mkdtempSync(join(tmpdir(), "pipeline-worktree-api-fallback-"));
+    temporaryPaths.push(worktreePath);
+    git(repoRoot, ["worktree", "add", worktreePath, "feature/ahead"]);
+
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/v4/projects/${project.id}/worktrees/services?itemId=${encodeURIComponent("branch:feature/ahead")}`,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      configSource: "project-fallback",
+      configPath: null,
+      services: [{ serviceId: "fallback", source: "project-settings" }],
+    });
+  });
+
   it("没有 worktree 的条目返回 409 WORKTREE_SERVICES_UNSUPPORTED", async () => {
     const { app, project } = setup();
     const response = await app.inject({

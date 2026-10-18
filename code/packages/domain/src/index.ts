@@ -346,10 +346,12 @@ export type { GitMergeInspector } from "./git/merge-inspector.js";
 // ─────────────────────────── project/：项目聚合与配置快照 ───────────────────────────
 export {
   DEFAULT_WORKTREE_FILTER,
+  DEFAULT_WORKTREE_SERVICES,
   EXECUTION_SLOT_RUN_STATUSES,
   knownModelFamily,
   ProjectService,
   validateWorktreeFilter,
+  validateWorktreeServices,
 } from "./project/project.js";
 export {
   VERIFICATION_SCRIPT_PRESETS,
@@ -370,6 +372,7 @@ export type {
   ProjectStatus,
   ProjectSummary,
   ProjectWorktreeFilter,
+  ProjectWorktreeService,
   UpdateProjectInput,
 } from "./project/project.js";
 

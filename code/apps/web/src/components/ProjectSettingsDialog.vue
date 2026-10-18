@@ -18,7 +18,7 @@ import {
 } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { api } from "../api";
-import type { Project, ProjectSettings } from "../types";
+import type { Project, ProjectSettings, ProjectWorktreeService } from "../types";
 import { createProjectRequestScope } from "../utils/projectRoutes";
 import { formatCommandArgs, parseCommandArgs } from "../utils/commandArgs";
 import { formatBranchPatterns, parseBranchPatterns } from "../utils/worktreeStatus";
@@ -105,6 +105,8 @@ const form = reactive({
   branchPatternsText: "",
   includeDetachedWorktrees: true,
   ignoredBranches: [] as string[],
+  /** 项目级兜底服务配置，按 JSON 文本编辑（形状与 services.json 的 services 数组一致）。 */
+  worktreeServicesText: "",
   configVersion: 0,
   defaultTimeoutMs: 120000,
   executionTimeoutMs: 1800000,
@@ -169,6 +171,12 @@ function formSnapshot(): string {
     repoRoot: form.repoRoot,
     defaultBranch: form.defaultBranch,
     worktreeRoot: form.worktreeRoot,
+    /**
+     * 兜底服务配置的**原文**进快照：`settingsPayload` 会解析 JSON（坏文本会抛错），
+     * 而快照是在渲染期算的——让它在用户敲半个 JSON 时抛错会把整个对话框打挂。
+     * 原文已经足以判断"改没改"。
+     */
+    worktreeServicesText: form.worktreeServicesText,
     settings: settingsPayload(),
   });
 }
@@ -214,6 +222,7 @@ function setForm(value: Project) {
     branchPatternsText: formatBranchPatterns(settings.worktree?.branchPatterns ?? []),
     includeDetachedWorktrees: settings.worktree?.includeDetachedWorktrees ?? true,
     ignoredBranches: [...(settings.worktree?.ignoredBranches ?? [])],
+    worktreeServicesText: settings.worktreeServices?.length ? JSON.stringify(settings.worktreeServices, null, 2) : "",
     configVersion: value.configVersion,
     defaultTimeoutMs: settings.concurrency.defaultTimeoutMs,
     executionTimeoutMs: settings.concurrency.executionTimeoutMs ?? 1800000,
@@ -330,6 +339,22 @@ watch(
   },
 );
 
+/**
+ * 解析项目级兜底服务配置的 JSON 文本。**空文本 = 没有兜底配置**（不是"解析失败"）。
+ * 形状校验交给 domain（保存时 422 会带着具体字段路径回来）；这里只负责"是不是合法 JSON、是不是数组"。
+ */
+function parseWorktreeServicesText(text: string): ProjectWorktreeService[] {
+  if (!text.trim()) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    throw new Error(`项目级服务配置不是合法 JSON：${error instanceof Error ? error.message : String(error)}`, { cause: error });
+  }
+  if (!Array.isArray(parsed)) throw new Error('项目级服务配置必须是 services 数组（形如 [{ "serviceId": … }]）');
+  return parsed as ProjectWorktreeService[];
+}
+
 function listValue(value: string) {
   return value
     .split(",")
@@ -371,7 +396,11 @@ function environmentValue(value: string) {
   );
 }
 
-function settingsPayload(): ProjectSettingsPatch {
+/**
+ * 组装提交用的 settings。`worktreeServices` 由调用方传入**已解析**的数组：
+ * 解析放在 `save()` 里做，这样坏 JSON 只会让那一次保存失败，不会在渲染期炸掉。
+ */
+function settingsPayload(worktreeServices: ProjectWorktreeService[] = []): ProjectSettingsPatch {
   const lifecycle = {
     ...(form.startCommandId
       ? {
@@ -428,6 +457,8 @@ function settingsPayload(): ProjectSettingsPatch {
       ignoredBranches: [...form.ignoredBranches],
       includeDetachedWorktrees: form.includeDetachedWorktrees,
     },
+    // 兜底服务配置与范围同属"不影响执行"的那一类，不进 configHash。
+    worktreeServices,
     models: {
       explorer: {
         model: form.explorerModel,
@@ -499,6 +530,8 @@ async function save() {
   saved.value = false;
   error.value = null;
   try {
+    // 先解析兜底服务配置：坏 JSON 抛出后落到下面的 catch，对话框显示原因、不提交。
+    const worktreeServices = parseWorktreeServicesText(form.worktreeServicesText);
     const response = await api.updateProject(project.value.id, {
       name: form.name,
       shortName: form.shortName,
@@ -506,7 +539,7 @@ async function save() {
       defaultBranch: form.defaultBranch,
       worktreeRoot: form.worktreeRoot,
       expectedConfigVersion: form.configVersion,
-      settings: settingsPayload(),
+      settings: settingsPayload(worktreeServices),
     });
     project.value = response.project;
     setForm(response.project);
@@ -727,6 +760,30 @@ onBeforeUnmount(() => requestScope.invalidate());
                 <p v-if="!visibleBranchOptions.length" class="field-hint">没有匹配的分支。</p>
               </div>
             </template>
+
+            <div class="section-title worktree-ignored-heading">
+              <div>
+                <h2>项目级兜底服务配置</h2>
+                <p>
+                  这个项目的 worktree 在「Worktree 管理」里能启停哪些服务。**worktree 内的 `services.json`
+                  整份优先**，只有那里没有配置时才用这份；两份不合并。留空表示没有兜底。
+                </p>
+              </div>
+            </div>
+            <label class="worktree-services-field"
+              >服务配置（JSON 数组）<textarea
+                v-model="form.worktreeServicesText"
+                rows="8"
+                :disabled="project.status === 'ARCHIVED'"
+                spellcheck="false"
+                data-worktree-services-text
+                placeholder='[{"serviceId":"backend","name":"后端","role":"backend","workdir":".","argv":["./scripts/dev-backend.sh"],"enabled":true}]'
+              /><small class="field-hint"
+                >字段：<code>serviceId</code>（唯一）、<code>name</code>、<code>role</code>、<code>workdir</code>（相对 worktree 根目录）、
+                <code>argv</code> 或 <code>shellCommand</code>（二选一；后者走
+                <code>sh -lc</code>）、<code>healthUrl</code>、<code>enabled</code>。</small
+              ></label
+            >
 
             <div class="settings-notice">
               <InfoFilled :size="16" />
@@ -1440,6 +1497,25 @@ onBeforeUnmount(() => requestScope.invalidate());
   color: #33425a;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.project-settings-dialog .worktree-services-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+  color: #52637e;
+  font-size: 11px;
+}
+.project-settings-dialog .worktree-services-field textarea {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid #dce4ee;
+  border-radius: 8px;
+  color: #27364d;
+  font-family: var(--el-font-family-mono, monospace);
+  font-size: 11px;
+  line-height: 1.6;
+  resize: vertical;
 }
 .project-settings-dialog .worktree-ignored-heading {
   margin-top: 22px;

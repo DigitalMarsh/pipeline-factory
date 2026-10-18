@@ -626,3 +626,66 @@ describe("ProjectSettingsDialog · Worktree 页签", () => {
     );
   });
 });
+
+/** 项目级兜底服务配置：JSON 文本编辑，保存时解析成数组；坏 JSON 不提交。 */
+describe("ProjectSettingsDialog · 项目级兜底服务配置", () => {
+  const service = {
+    serviceId: "backend",
+    name: "后端",
+    role: "backend",
+    workdir: ".",
+    argv: ["./scripts/dev-backend.sh"],
+    shellCommand: null,
+    healthUrl: null,
+    enabled: true,
+  };
+
+  async function openWorktreeTab() {
+    const initial = project();
+    // 这个文件里前面的用例也会调 updateProject；不清掉的话"没有提交"的断言会被历史调用骗过。
+    vi.mocked(api.updateProject).mockClear();
+    vi.mocked(api.project).mockResolvedValue({ project: initial, summary: {} as never });
+    vi.mocked(api.worktrees).mockResolvedValue({ items: [{ itemId: "branch:main", branch: "main", isBaseBranch: true }] } as never);
+    vi.mocked(api.updateProject).mockResolvedValue({ project: initial });
+    const mounted = mountDialog();
+    await nextTick();
+    await nextTick();
+    [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Worktree"))?.click();
+    await nextTick();
+    await nextTick();
+    return mounted;
+  }
+
+  it("合法的 JSON 数组随 settings 提交", async () => {
+    const mounted = await openWorktreeTab();
+    const textarea = mounted.host.querySelector<HTMLTextAreaElement>("[data-worktree-services-text]");
+    expect(textarea).not.toBeNull();
+    if (textarea) {
+      textarea.value = JSON.stringify([service]);
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("保存项目配置"))?.click();
+    await nextTick();
+    await nextTick();
+
+    expect(api.updateProject).toHaveBeenCalledWith(
+      "project-1",
+      expect.objectContaining({ settings: expect.objectContaining({ worktreeServices: [service] }) }),
+    );
+  });
+
+  it("坏 JSON 不提交，错误显示在对话框里", async () => {
+    const mounted = await openWorktreeTab();
+    const textarea = mounted.host.querySelector<HTMLTextAreaElement>("[data-worktree-services-text]");
+    if (textarea) {
+      textarea.value = "{ 不是 json";
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("保存项目配置"))?.click();
+    await nextTick();
+    await nextTick();
+
+    expect(api.updateProject).not.toHaveBeenCalled();
+    expect(mounted.host.textContent).toContain("不是合法 JSON");
+  });
+});

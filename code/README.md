@@ -308,6 +308,10 @@ GET  /api/v4/projects/:projectId/worktrees/events             ?afterSequence=   
   worktree 内；**只停止本进程启动的子进程**（先 SIGTERM 进程组、3 秒后 SIGKILL），不按端口杀。
   这两个目录被排除在"工作区脏"判据之外，也排除在 Run 的自动提交之外（`git add -A` 不提交它们）
   ——本机运行配置不该让 worktree 变成不可合并，更不该随合并进主干。
+- **项目级兜底服务配置**：worktree 里没有配置文件时，用「项目设置 → Worktree」里的
+  `settings.worktreeServices`（JSON 数组，字段与 `services.json` 的 `services` 相同）。
+  **文件整份优先，两份不合并**；文件存在但解析失败时也不回落——那会把"文件写坏了"伪装成
+  "用了另一份配置"。响应里的 `configSource` 会说明这次用的是 `worktree-file` 还是 `project-fallback`。
 - **提交历史**：`log` / `commits` / `diff` 三条只读接口，界面上的「提交历史」对话框用它们；
   只读，不 checkout、不 reset。
 - **git 版本**：冲突预测依赖 `git merge-tree --write-tree`（≥ 2.38），`git switch` 需要 ≥ 2.23。

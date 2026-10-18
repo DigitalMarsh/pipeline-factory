@@ -22,7 +22,13 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve as resolvePath, sep } from "node:path";
-import type { WorktreeServiceConfig, WorktreeServiceLogEntry, WorktreeServiceState, WorktreeServices } from "@pipeline-factory/domain";
+import type {
+  ProjectWorktreeService,
+  WorktreeServiceConfig,
+  WorktreeServiceLogEntry,
+  WorktreeServiceState,
+  WorktreeServices,
+} from "@pipeline-factory/domain";
 
 /** 单个服务保留的日志行数上限。 */
 const DEFAULT_MAX_LOG_LINES = 500;
@@ -118,11 +124,25 @@ export class WorktreeServiceRunner {
     this.maxLogLines = Math.max(50, options.maxLogLines ?? DEFAULT_MAX_LOG_LINES);
   }
 
-  /** 读取一个 worktree 的服务配置并拼上当前运行状态。配置错误进 `configError`，不抛。 */
-  inspect(projectId: string, itemId: string, worktreePath: string): WorktreeServices {
+  /**
+   * 读取一个 worktree 的服务配置并拼上当前运行状态。配置错误进 `configError`，不抛。
+   *
+   * **来源优先级：worktree 文件整份覆盖项目兜底，二者不合并。** 文件存在但解析失败时也**不回落**到
+   * 兜底——回落会把"文件写坏了"伪装成"用了另一份配置"，用户更难发现。只有文件不存在时才用兜底。
+   */
+  inspect(projectId: string, itemId: string, worktreePath: string, fallback: readonly ProjectWorktreeService[] = []): WorktreeServices {
     const source = locateServiceConfig(worktreePath);
     if (!source) {
-      return { itemId, worktreePath, configPath: null, configError: null, services: [], states: this.states(projectId, itemId) };
+      const services: WorktreeServiceConfig[] = fallback.map((service) => ({ ...service, source: "project-settings" }));
+      return {
+        itemId,
+        worktreePath,
+        configSource: services.length > 0 ? "project-fallback" : null,
+        configPath: null,
+        configError: null,
+        services,
+        states: this.states(projectId, itemId),
+      };
     }
     try {
       const parsed = JSON.parse(readFileSync(source.path, "utf8")) as unknown;
@@ -130,6 +150,7 @@ export class WorktreeServiceRunner {
       return {
         itemId,
         worktreePath,
+        configSource: "worktree-file",
         configPath: source.path,
         configError: null,
         services,
@@ -139,6 +160,7 @@ export class WorktreeServiceRunner {
       return {
         itemId,
         worktreePath,
+        configSource: "worktree-file",
         configPath: source.path,
         configError: error instanceof Error ? error.message : String(error),
         services: [],
