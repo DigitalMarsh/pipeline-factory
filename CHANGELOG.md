@@ -1,5 +1,23 @@
 # Changelog
 
+## 2026-10-18 — 修复：探索需求里的截图没有传给模型
+
+实测"新建需求 + 截图"时模型完全没看图（把截图理解成"要做的功能"）。根因在两处 Provider 的同一个条件：
+
+- Codex / Claude 适配器此前只在 **没有 `continuationPrompt`** 时发送最新用户消息的图片；
+- 而 Explorer 每一轮都带 `planBoundary` 作为 `continuationPrompt`（它把用户正文包含在内），
+  于是**所有**探索回合的图片都被丢掉。项目执行线程没有这个字段，所以没暴露。
+
+修复：非重建路径一律发送 `latestUserImages()`。Loop 自动续写时 continuationPrompt 会被追加为
+最新用户消息、本身没有图片，取到的自然是空数组，不会重复发图。
+
+验证：
+
+- 新增 Provider 用例（带 continuationPrompt 时 Codex 仍发 `localImage`、Claude 仍走带图消息流）
+  与 Service 用例（`startTurn` → `ModelRequest.messages` 带 images）；
+- 浏览器实测：新建需求粘贴红色截图 → 模型首条回答 **"红色"**，随后按 plan 模式补方案；
+- `pnpm verify` 全绿：core 567 / api 175 / web 719。
+
 ## 2026-10-18 — 新增需求支持粘贴截图；移除容器支持
 
 - **新增需求对话框**接入与探索对话相同的图片输入：截图直接粘贴（或拖入），缩略图在描述框上方，

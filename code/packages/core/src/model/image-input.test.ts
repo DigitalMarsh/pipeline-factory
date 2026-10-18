@@ -81,6 +81,44 @@ describe("provider image input", () => {
     ]);
   });
 
+  it("keeps images when a continuation prompt is attached (Explorer plan boundary)", async () => {
+    const calls: Array<{ method: string; params: unknown }> = [];
+    const session: CodexAppServerSession = {
+      startThread: async () => "codex-thread-1",
+      resumeThread: async () => undefined,
+      streamTurn: async function* (params) {
+        calls.push({ method: "turn/start", params });
+        yield* [] as Array<{ id?: string | number; method: string; params: Record<string, unknown> }>;
+      },
+      interrupt: async () => undefined,
+      respond: async () => undefined,
+      answerUserInput: async () => undefined,
+      close: async () => undefined,
+    };
+    const factory: CodexAppServerSessionFactory = async () => session;
+    const gateway = new CodexAppServerGateway({
+      roles: { explorer: { model: "explorer-model" }, executor: { model: "executor-model" } },
+      command: "codex",
+      args: ["app-server", "--stdio"],
+      sessionFactory: factory,
+    });
+
+    // Explorer 每轮都带 planBoundary 作为 continuationPrompt；它是附加指令而不是"没有新消息"，
+    // 最新用户消息上的图片必须一起发出去——这正是实测里"模型看不见图"的根因。
+    await collect(
+      gateway.stream({
+        ...userRequest("这张图哪里不对", [{ path: "/tmp/shot.png", mimeType: "image/png" }]),
+        continuationPrompt: "[需求 18: 截图验证]\nUser message:\n这张图哪里不对",
+      }),
+    );
+
+    const turn = calls.find((call) => call.method === "turn/start")?.params as { input: unknown[] };
+    expect(turn.input).toEqual([
+      { type: "text", text: "[需求 18: 截图验证]\nUser message:\n这张图哪里不对" },
+      { type: "localImage", path: "/tmp/shot.png" },
+    ]);
+  });
+
   it("switches the Claude prompt to a single user-message stream only when images are present", async () => {
     const path = imageFile();
     const prompts: unknown[] = [];
@@ -117,6 +155,12 @@ describe("provider image input", () => {
 
     await collect(gateway.stream(userRequest("看这张图", [{ path, mimeType: "image/png" }])));
     await collect(gateway.stream(userRequest("没有图")));
+    await collect(
+      gateway.stream({
+        ...userRequest("看这张图", [{ path, mimeType: "image/png" }]),
+        continuationPrompt: "本轮附加指令",
+      }),
+    );
 
     const withImage = prompts[0] as AsyncIterable<{ message: { content: unknown[] } }>;
     const messages: Array<{ message: { content: unknown[] } }> = [];
@@ -127,6 +171,15 @@ describe("provider image input", () => {
       { type: "image", source: { type: "base64", media_type: "image/png", data: PNG_BASE64 } },
     ]);
     expect(prompts[1]).toBe("没有图");
+
+    // 有 continuationPrompt 时仍然走带图的消息流，正文是这条附加指令。
+    const withBoundary = prompts[2] as AsyncIterable<{ message: { content: unknown[] } }>;
+    const boundaryMessages: Array<{ message: { content: unknown[] } }> = [];
+    for await (const message of withBoundary) boundaryMessages.push(message);
+    expect(boundaryMessages[0]!.message.content).toEqual([
+      { type: "text", text: "本轮附加指令" },
+      { type: "image", source: { type: "base64", media_type: "image/png", data: PNG_BASE64 } },
+    ]);
   });
 
   it("maps OpenAI user messages with images to input_image parts", async () => {

@@ -515,9 +515,11 @@ export class CodexAppServerGateway implements ModelGateway {
       // 常规续接只发最新一条用户消息（历史在 Provider 侧）；重建出来的线程没有那份历史，
       // 必须回放本地对话，否则模型只看到最后一句。
       const text = rebuilt ? replayConversation(request.messages) : latestUserMessage(request.messages);
-      // 重建/续写的路径不回传图：重建已把路径写进回放文本，continuationPrompt 是"接着干"的
-      // 短指令，图在上一轮已经发过。常规续接才把最新一条用户消息的图挂上。
-      const images = !rebuilt && !request.continuationPrompt ? latestUserImages(request.messages) : [];
+      // 重建路径不回传图：回放文本里已经写了图片路径，Provider 自己打开看。
+      // **有 continuationPrompt 时也要发图**：它是"本次调用附加的指令"（Explorer 的 planBoundary
+      // 每轮都有），并不替换最新一条用户消息——图片属于那条消息。Loop 自动续写时 continuationPrompt
+      // 会被追加成最新用户消息、本身没有图片，`latestUserImages` 自然为空，不会重复发送。
+      const images = !rebuilt ? latestUserImages(request.messages) : [];
       for await (const event of session.streamTurn({
         threadId: providerThreadId,
         input: [

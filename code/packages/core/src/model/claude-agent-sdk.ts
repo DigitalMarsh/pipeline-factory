@@ -265,9 +265,11 @@ export class ClaudeAgentSdkGateway implements ModelGateway {
       const promptText = resume.rebuilt
         ? replayConversation(request.messages)
         : (request.continuationPrompt ?? latestUserMessage(request.messages));
-      // 只有"常规续接 + 最新用户消息带图"才走消息流；其余路径逐字保持原来的字符串形态，
-      // 回归面最小（重建路径的图片已以路径形式写进回放文本）。
-      const images = !resume.rebuilt && !request.continuationPrompt ? latestUserImages(request.messages) : [];
+      // 只有重建路径不回传图（回放文本里已有路径）；**有 continuationPrompt 时也要发图**：
+      // 它是本次调用附加的指令（Explorer 的 planBoundary 已经把用户正文包含在内），
+      // 图片属于最新一条用户消息。Loop 自动续写时 continuationPrompt 会作为最新用户消息追加、
+      // 本身没有图片，`latestUserImages` 自然为空。
+      const images = !resume.rebuilt ? latestUserImages(request.messages) : [];
       const prompt = images.length > 0 ? imagePromptStream(promptText, images) : promptText;
       const handle = await this.queryFactory({
         prompt,
