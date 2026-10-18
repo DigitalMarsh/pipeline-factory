@@ -1018,8 +1018,8 @@ function openAddRequirementDialog(): void {
   requirementDialogOpen.value = true;
 }
 
-/** 拿着对话框里那段描述走完"建需求 → 选中 → 打开探索对话 → 把它当成第一条消息发出去"。 */
-async function createRequirement(description: string): Promise<void> {
+/** 拿着对话框里那段描述（与随附图片）走完"建需求 → 选中 → 打开探索对话 → 把它当成第一条消息发出去"。 */
+async function createRequirement(description: string, files: File[] = []): Promise<void> {
   const currentThread = thread.value;
   const requestProjectId = projectId.value;
   if (!currentThread || !requestProjectId || requirementSubmitting.value) return;
@@ -1035,6 +1035,8 @@ async function createRequirement(description: string): Promise<void> {
     drawerTab.value = "explorer";
     drawerOpen.value = true;
     draft.value = description;
+    // 图片从对话框交接到探索输入框的同一套待发送状态；随后 sendTurn 会统一上传并挂到首条回合上。
+    if (files.length > 0) addAttachmentFiles(files);
     await router.replace({
       path: route.path,
       query: { ...route.query, explorerId: currentThread.id, explorerPlanId: response.explorerPlan.id, requirementTab: "explorer" },

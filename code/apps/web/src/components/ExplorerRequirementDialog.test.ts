@@ -7,8 +7,12 @@
  * 收集一段纯文本并用 `submit` 交出去。
  */
 import { createApp, defineComponent, h, nextTick } from "vue";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import ExplorerRequirementDialog from "./ExplorerRequirementDialog.vue";
+
+// jsdom 没有 object URL；对话框只是用它做本地预览，替换成常量即可。
+Object.defineProperty(URL, "createObjectURL", { value: vi.fn(() => "blob:requirement-preview"), configurable: true, writable: true });
+Object.defineProperty(URL, "revokeObjectURL", { value: vi.fn(), configurable: true, writable: true });
 
 const ElDialogStub = defineComponent({
   props: { modelValue: { type: Boolean, default: false } },
@@ -35,19 +39,23 @@ function mountDialog(props: { modelValue?: boolean; threadTitle?: string; saving
   document.body.appendChild(host);
   hosts.push(host);
   const submitted: string[] = [];
+  const submittedFiles: File[][] = [];
   const visibility: boolean[] = [];
   createApp(ExplorerRequirementDialog, {
     modelValue: props.modelValue ?? true,
     threadTitle: props.threadTitle ?? "20261001-10:40:52-添加甘特图展示进度",
     saving: props.saving ?? false,
     error: props.error ?? null,
-    onSubmit: (description: string) => submitted.push(description),
+    onSubmit: (description: string, files: File[]) => {
+      submitted.push(description);
+      submittedFiles.push(files);
+    },
     "onUpdate:modelValue": (value: boolean) => visibility.push(value),
   })
     .component("el-dialog", ElDialogStub)
     .component("el-button", ElButtonStub)
     .mount(host);
-  return { host, submitted, visibility };
+  return { host, submitted, submittedFiles, visibility };
 }
 
 function textarea(host: HTMLElement): HTMLTextAreaElement {
@@ -62,6 +70,15 @@ async function type(host: HTMLElement, value: string): Promise<void> {
   const input = textarea(host);
   input.value = value;
   input.dispatchEvent(new Event("input"));
+  await nextTick();
+}
+
+/** 模拟在描述框里粘贴一张图：粘贴事件从 textarea 冒泡到 AttachmentComposer。 */
+async function pasteImage(host: HTMLElement, file: File): Promise<void> {
+  const event = new Event("paste", { bubbles: true, cancelable: true }) as Event & { clipboardData: { files: File[] } };
+  event.clipboardData = { files: [file] };
+  textarea(host).dispatchEvent(event);
+  await nextTick();
   await nextTick();
 }
 
@@ -102,6 +119,23 @@ describe("新增需求对话框", () => {
     const { host } = mountDialog({ error: "新建需求失败：500" });
     const alert = host.querySelector('[role="alert"]');
     expect(alert?.textContent).toContain("新建需求失败：500");
+  });
+
+  it("粘贴的截图随 submit 一起交出去，并在提交后清空本地预览", async () => {
+    const { host, submitted, submittedFiles } = mountDialog();
+    const file = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], "shot.png", { type: "image/png" });
+    await pasteImage(host, file);
+    await type(host, "按这张截图修一下");
+
+    expect(host.querySelectorAll("[data-attachment-key]")).toHaveLength(1);
+    submitButton(host).click();
+    await nextTick();
+
+    expect(submitted).toEqual(["按这张截图修一下"]);
+    expect(submittedFiles).toHaveLength(1);
+    expect(submittedFiles[0]!.map((item) => item.name)).toEqual(["shot.png"]);
+    // File 引用已经交出去，预览应清空——否则发送失败后重试会重复带图。
+    expect(host.querySelectorAll("[data-attachment-key]")).toHaveLength(0);
   });
 
   it("提交中：按钮禁用、**关不掉**（否则请求还在飞、对话框已经没了）", async () => {

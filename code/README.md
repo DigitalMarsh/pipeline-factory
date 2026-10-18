@@ -60,8 +60,6 @@ node scripts/service.mjs status
   （`app/` 生产依赖 + `web/` 静态产物 + 示例配置 + `bin/pipeline-factory` 启动器）。
   启动后 `GET /health` 返回 `appVersion`（package.json 版本）与 `schemaVersion`
   （SQLite `PRAGMA user_version`），排障时先看这两项。
-- **容器**：仓库根有 `Dockerfile` 与 `.dockerignore`；镜像不内置真实配置与数据，
-  配置和 `var/` 通过挂载提供。
 
 生产/单进程模式先构建，再由 API 在同一端口托管 Web 构建产物：
 

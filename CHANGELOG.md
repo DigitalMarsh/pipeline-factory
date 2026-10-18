@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-10-18 — 新增需求支持粘贴截图；移除容器支持
+
+- **新增需求对话框**接入与探索对话相同的图片输入：截图直接粘贴（或拖入），缩略图在描述框上方，
+  可点击看原图、可逐张删除；提交后图片随第一条探索消息一起上传并挂到该回合。
+  上限与校验完全复用 `useImageAttachments`（5MB × 5 张、png/jpeg/webp/gif）。
+- 删除 `Dockerfile` / `.dockerignore` 及文档中的容器说明；发布仍以
+  `pnpm pack:release` 的目录 / tar.gz 为准。
+
 ## 2026-10-18 — 架构收敛：contracts / core / 适配器注册表 / 发布物
 
 按目标架构四步落地（模块化单体，未改运行时形态）：
@@ -15,11 +23,10 @@
    - `pnpm pack:release` 生成 `release/pipeline-factory-<version>/`（app 生产依赖 + web 静态产物 +
      示例配置 + `bin/pipeline-factory` 启动器）与同名 tar.gz。
    - `GET /health` 新增 `appVersion`、`schemaVersion`；SQLite 用 `PRAGMA user_version` 持久化结构版本。
-   - 新增 `Dockerfile` / `.dockerignore`（真实配置与数据通过挂载提供）。
 
 ### Verification
 
-- `pnpm verify` 全绿：core 564 / api 175 / web 718；零值级环、全库悬空引用 0。
+- `pnpm verify` 全绿：core 565 / api 175 / web 718；零值级环、全库悬空引用 0。
 - 发布物冒烟：解包目录用生成的启动器在 4399 端口起服务，`/health` 返回
   `appVersion=0.1.0, schemaVersion=1`，`/` 返回 200。
 

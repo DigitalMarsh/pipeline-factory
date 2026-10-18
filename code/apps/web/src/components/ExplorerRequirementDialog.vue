@@ -3,17 +3,22 @@
   真正建需求、切线程、起探索回合由 ExplorerView 统一协调（与 ExplorerRenameDialog 同一条分工）。
 
   维护提示：
-    1) 提交的是**纯文本**（`submit` 事件），不做任何改写。那段文本会原样落成探索线程里的第一条
-       用户消息，也是后续 `draft` 的初值——在这里"顺手美化"会让用户看到的与他写的不一致。
+    1) 提交的是**纯文本 + 随附图片文件**（`submit` 事件）。文本原样落成探索线程里的第一条用户消息；
+       图片沿用对话输入框的同一套规则（粘贴 / 拖拽、5MB×5 张），在本对话框只做收集与预览，
+       真正上传与挂到回合由 ExplorerView 的统一发送路径完成。
     2) 空描述与纯空白都不算填了：按钮的可用性、`⌘/Ctrl+Enter`、提交前的校验**共用 `canSubmit`**
        一处判据，不要各写一份。
     3) 关闭时若正在提交，忽略这次关闭（`updateDialogVisibility`）——否则会出现"请求还在飞、
        对话框已经没了"的半状态。
     4) `maxlength` 与那个计数器是同一个数（`DESCRIPTION_LIMIT`）；改一处要两处一起改。
+    5) 提交后清空本地图片预览（object URL 会被 revoke）：File 引用已经交给调用方，
+       对话框若因发送失败而留着，再次提交会出现重复附件。
 -->
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from "vue";
 import { Check, CircleClose, MagicStick, Plus, Warning } from "@element-plus/icons-vue";
+import AttachmentComposer from "./AttachmentComposer.vue";
+import { useImageAttachments } from "../composables/useImageAttachments";
 
 const DESCRIPTION_LIMIT = 2000;
 
@@ -27,12 +32,20 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   "update:modelValue": [value: boolean];
-  submit: [description: string];
+  submit: [description: string, files: File[]];
 }>();
 
 const description = ref("");
 const localError = ref<string | null>(null);
 const descriptionInput = ref<HTMLTextAreaElement | null>(null);
+// 与探索对话共用同一套准入（类型 / 5MB / 5 张 / 粘贴与拖拽）与预览逻辑。
+const {
+  items: attachmentItems,
+  error: attachmentError,
+  addFiles: addAttachmentFiles,
+  remove: removeAttachment,
+  clear: clearAttachments,
+} = useImageAttachments();
 const errorMessage = computed(() => props.error ?? localError.value);
 const canSubmit = computed(() => Boolean(description.value.trim()) && !props.saving);
 
@@ -42,6 +55,7 @@ watch(
     if (!open) return;
     description.value = "";
     localError.value = null;
+    clearAttachments();
     await nextTick();
     descriptionInput.value?.focus();
   },
@@ -64,7 +78,10 @@ function submit() {
     return;
   }
   localError.value = null;
-  emit("submit", trimmed);
+  const files = attachmentItems.value.map((item) => item.file);
+  emit("submit", trimmed, files);
+  // File 引用已交给调用方；这里只清掉本地预览，避免重试时重复带上同一批图。
+  clearAttachments();
 }
 
 /** `⌘/Ctrl + Enter` 提交；单独 Enter 留给换行——需求描述天然是多行的。 */
@@ -103,18 +120,26 @@ function submitOnShortcut(event: KeyboardEvent) {
     </template>
 
     <form class="requirement-dialog-form" @submit.prevent="submit">
-      <label class="requirement-dialog-field">
-        <span class="requirement-dialog-label">需求描述</span>
-        <textarea
-          ref="descriptionInput"
-          v-model="description"
-          :maxlength="DESCRIPTION_LIMIT"
-          :disabled="saving"
-          aria-label="需求描述"
-          placeholder="例如：在项目详情页添加任务时总是提示「所属项目不合法」，希望添加的任务能正确归属到当前选中的项目；只改前端请求组装这一处。"
-          @keydown="submitOnShortcut"
-        />
-      </label>
+      <AttachmentComposer
+        :items="attachmentItems"
+        :error="attachmentError"
+        :disabled="saving"
+        @add="addAttachmentFiles"
+        @remove="removeAttachment"
+      >
+        <label class="requirement-dialog-field">
+          <span class="requirement-dialog-label">需求描述</span>
+          <textarea
+            ref="descriptionInput"
+            v-model="description"
+            :maxlength="DESCRIPTION_LIMIT"
+            :disabled="saving"
+            aria-label="需求描述"
+            placeholder="例如：在项目详情页添加任务时总是提示「所属项目不合法」，希望添加的任务能正确归属到当前选中的项目；只改前端请求组装这一处。"
+            @keydown="submitOnShortcut"
+          />
+        </label>
+      </AttachmentComposer>
 
       <div class="requirement-dialog-meta">
         <span class="requirement-dialog-counter" :class="{ near: description.length > DESCRIPTION_LIMIT * 0.9 }"
