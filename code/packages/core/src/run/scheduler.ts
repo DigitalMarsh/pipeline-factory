@@ -108,8 +108,6 @@ const LIVE_RUN_LOOP_STATES: ReadonlySet<AgentLoop["state"]> = new Set<AgentLoop[
  */
 export class Scheduler {
   private readonly planService: PlanService;
-  private readonly runs = new Map<string, Run>();
-  private readonly threads = new Map<string, ExecutionThread>();
 
   constructor(private readonly options: SchedulerOptions) {
     this.planService = new PlanService(options.store);
@@ -126,12 +124,7 @@ export class Scheduler {
   async start(planId: string, hooks: { start?: HookDefinition | undefined; cleanup?: HookDefinition | undefined } = {}): Promise<Run> {
     const plan = this.planService.get(planId);
     const existing = this.options.store.listRuns().find((run) => run.planId === planId && run.planRevision === plan.revision);
-    if (existing) {
-      this.runs.set(existing.id, existing);
-      const savedThread = this.options.store.getExecutionThread(existing.executionThreadId);
-      if (savedThread) this.threads.set(savedThread.id, savedThread);
-      return existing;
-    }
+    if (existing) return existing;
     if (plan.status !== "DISPATCHED") throw new Error(`Plan ${planId} must be dispatched before a run starts`);
     const revision = this.options.store.getRevision(plan.id, plan.revision);
     if (!revision) throw new Error(`Plan revision ${plan.id}@${plan.revision} is missing`);
@@ -191,8 +184,6 @@ export class Scheduler {
     };
     const record = this.options.store.runInTransaction ? this.options.store.runInTransaction(createOrReuse) : createOrReuse();
     const { run, thread } = record;
-    this.runs.set(run.id, run);
-    this.threads.set(thread.id, thread);
     if (!record.created) return run;
     const hookRunner = this.hookRunnerFor(revision);
     const executionHooks = revision.projectConfigSnapshot?.settings.hooks ?? hooks;
@@ -822,24 +813,22 @@ export class Scheduler {
     return [...done];
   }
 
-  /** 读取 Run 的 ExecutionThread。 */
+  /** 读取 Run 的 ExecutionThread（store 是权威；不要在这里维护第二份缓存）。 */
   thread(threadId: string): ExecutionThread {
-    const thread = this.options.store.getExecutionThread(threadId) ?? this.threads.get(threadId);
+    const thread = this.options.store.getExecutionThread(threadId);
     if (!thread) throw new Error(`ExecutionThread ${threadId} not found`);
-    this.threads.set(threadId, thread);
     return thread;
   }
 
-  /** 读取 Run 并同步到 Scheduler 的短期缓存。 */
+  /** 读取 Run。 */
   run(runId: string): Run {
-    const run = this.options.store.getRun(runId) ?? this.runs.get(runId);
+    const run = this.options.store.getRun(runId);
     if (!run) throw new Error(`Run ${runId} not found`);
-    this.runs.set(runId, run);
     return run;
   }
 
   private append(threadId: string, type: JournalEntryType, payload: Record<string, unknown>): void {
-    const thread = this.options.store.getExecutionThread(threadId) ?? this.threads.get(threadId);
+    const thread = this.options.store.getExecutionThread(threadId);
     if (!thread) return;
     this.options.store.appendExecutionJournal({ executionThreadId: thread.id, runId: thread.runId, type, payload });
   }
@@ -866,7 +855,7 @@ export class Scheduler {
   }
 
   private setThreadState(threadId: string, state: ExecutionThreadState): void {
-    const thread = this.options.store.getExecutionThread(threadId) ?? this.threads.get(threadId);
+    const thread = this.options.store.getExecutionThread(threadId);
     if (thread) this.options.store.saveExecutionThread({ ...thread, state });
   }
 

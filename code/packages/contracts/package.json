@@ -18,5 +18,8 @@
   "dependencies": {
     "@pipeline-factory/core": "workspace:*",
     "zod": "^3.24.1"
+  },
+  "engines": {
+    "node": ">=22.5.0"
   }
 }

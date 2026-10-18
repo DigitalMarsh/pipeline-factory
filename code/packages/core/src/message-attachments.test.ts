@@ -114,4 +114,20 @@ describe("message attachments contract", () => {
       expect(store.listAttachments("explorer-turn", [])).toEqual([]);
     });
   });
+
+  it("finds only unattached attachments older than the cutoff, and deletes them by id", () => {
+    assertBothStores((store) => {
+      store.saveAttachment(attachment("attachment-1")); // createdAt 01
+      store.saveAttachment(attachment("attachment-2")); // createdAt 02
+      store.attachAttachments("explorer-turn", "turn-1", ["attachment-2"]);
+
+      expect(store.listUnattachedAttachments("2026-10-18T00:00:05.000Z").map((item) => item.id)).toEqual(["attachment-1"]);
+      // 已挂载的即使更旧也不该出现在清理清单里。
+      expect(store.listUnattachedAttachments("2026-10-19T00:00:00.000Z").map((item) => item.id)).toEqual(["attachment-1"]);
+
+      expect(store.deleteAttachment("attachment-1")?.id).toBe("attachment-1");
+      expect(store.getAttachment("attachment-1")).toBeUndefined();
+      expect(store.deleteAttachment("attachment-1")).toBeUndefined();
+    });
+  });
 });

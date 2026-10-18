@@ -149,8 +149,8 @@ export class ProjectExecutionThreadService {
     const clientTurnId = input.clientTurnId.trim();
     if (!content) throw new Error("PROJECT_EXECUTION_MESSAGE_EMPTY");
     if (!clientTurnId || clientTurnId.length > 160) throw new Error("PROJECT_EXECUTION_CLIENT_TURN_ID_INVALID");
-    // 与 Explorer 同一套准入：去重、限 5 张、必须属于本项目；失败发生在任何行落库之前。
-    const attachmentIds = this.validAttachmentIds(projectId, input.attachmentIds);
+    // 与 Explorer 同一套准入；**放在幂等检查之后**：重试携带的附件已经挂在该回合上，
+    // 先按"已被占用"拒绝会把正常重试打成失败。
     const thread = this.getOrCreate(project);
     const existing = this.store.getProjectExecutionMessageByClientTurnId(thread.id, clientTurnId);
     if (existing) {
@@ -159,6 +159,7 @@ export class ProjectExecutionThreadService {
         .find((message) => message.turnId === existing.turnId && message.role === "assistant");
       if (assistant) return { thread, user: existing, assistant };
     }
+    const attachmentIds = this.validAttachmentIds(projectId, input.attachmentIds);
     const messages = this.store.listProjectExecutionMessages(thread.id);
     const hasInFlight = messages.some(
       (message) => message.role === "assistant" && (message.status === "QUEUED" || message.status === "RUNNING"),
@@ -318,6 +319,7 @@ export class ProjectExecutionThreadService {
     for (const id of unique) {
       const attachment = this.store.getAttachment(id);
       if (!attachment || attachment.projectId !== projectId) throw new Error(`ATTACHMENT_NOT_FOUND: ${id}`);
+      if (attachment.ownerId !== null) throw new Error(`ATTACHMENT_ALREADY_ATTACHED: ${id}`);
     }
     return unique;
   }

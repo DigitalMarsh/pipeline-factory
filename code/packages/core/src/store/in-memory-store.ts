@@ -497,6 +497,16 @@ export class InMemoryPipelineStore implements PipelineStore {
     }
     return removed;
   }
+  listUnattachedAttachments(createdBefore: string): MessageAttachment[] {
+    return [...this.attachments.values()]
+      .filter((attachment) => attachment.ownerId === null && attachment.createdAt < createdBefore)
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
+  }
+  deleteAttachment(id: string): MessageAttachment | undefined {
+    const attachment = this.attachments.get(id);
+    if (attachment) this.attachments.delete(id);
+    return attachment;
+  }
 
   saveRunGuidance(guidance: RunGuidance): RunGuidance {
     if (!this.runGuidance.has(guidance.id)) this.runGuidance.set(guidance.id, guidance);

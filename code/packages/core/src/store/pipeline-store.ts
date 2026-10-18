@@ -211,6 +211,13 @@ export type MessageAttachmentStore = {
   listAttachments(ownerType: AttachmentOwnerType, ownerIds: readonly string[]): MessageAttachment[];
   /** 删除给定 owner 的附件并返回被删的行（调用方据此删文件）。 */
   deleteAttachmentsForOwners(ownerType: AttachmentOwnerType, ownerIds: readonly string[]): MessageAttachment[];
+  /**
+   * 从未挂载到任何消息、且创建时间早于 `createdBefore` 的附件。
+   * 启动期清理用：上传成功但回合创建失败/对话框取消时，这些行与文件会永远留下。
+   */
+  listUnattachedAttachments(createdBefore: string): MessageAttachment[];
+  /** 删除单条附件并返回被删的行；不存在返回 undefined。 */
+  deleteAttachment(id: string): MessageAttachment | undefined;
 };
 
 export type AgentLoopStore = {

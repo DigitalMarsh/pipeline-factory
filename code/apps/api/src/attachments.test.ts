@@ -144,4 +144,44 @@ describe("attachment routes", () => {
     });
     expect(response.statusCode).toBe(400);
   });
+
+  it("maps attachment failures on an explorer turn to 404/400 instead of a generic 409", async () => {
+    const { app } = setup();
+    const explorer = await app.inject({ method: "POST", url: "/api/v4/projects/project-1/explorers", payload: {} });
+    const explorerId = (explorer.json() as { explorer: { id: string } }).explorer.id;
+    const plan = await app.inject({
+      method: "POST",
+      url: `/api/v4/projects/project-1/explorers/${explorerId}/explorer-plans`,
+      payload: {},
+    });
+    const planId = (plan.json() as { explorerPlan: { id: string } }).explorerPlan.id;
+    const url = "/api/v4/projects/project-1/explorer-thread/turns";
+    const missing = await app.inject({
+      method: "POST",
+      url,
+      payload: {
+        threadId: explorerId,
+        explorerPlanId: planId,
+        content: "看图",
+        clientTurnId: "explorer-missing",
+        attachmentIds: ["attachment-missing"],
+      },
+    });
+    expect(missing.statusCode).toBe(404);
+    expect((missing.json() as { code: string }).code).toBe("ATTACHMENT_NOT_FOUND");
+
+    const tooMany = await app.inject({
+      method: "POST",
+      url,
+      payload: {
+        threadId: explorerId,
+        explorerPlanId: planId,
+        content: "太多图",
+        clientTurnId: "explorer-many",
+        attachmentIds: ["1", "2", "3", "4", "5", "6"],
+      },
+    });
+    // schema 层就会拦下第 6 个（max 5），同样是 400——断言重点是**不是 409**。
+    expect(tooMany.statusCode).toBe(400);
+  });
 });

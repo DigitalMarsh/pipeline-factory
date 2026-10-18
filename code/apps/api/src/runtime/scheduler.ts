@@ -65,7 +65,7 @@ export function createDefaultScheduler(
   const scheduler = new Scheduler({
     store,
     ...(attachmentPathFor ? { attachmentPathFor } : {}),
-    branchNameGenerator: new ModelRunBranchNameGenerator(model),
+    ...(config.model.branchNameFromModel ? { branchNameGenerator: new ModelRunBranchNameGenerator(model) } : {}),
     workspace: new LocalGitWorktreeAdapter({
       projectRoot: config.project.root,
       worktreeRoot: config.storage.worktreeRoot,

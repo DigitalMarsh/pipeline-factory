@@ -113,6 +113,8 @@ export class PlanDispatchCoordinator {
   private readonly verifyingRuns = new Set<string>();
   private readonly confirmingPlans = new Set<string>();
   private wakeTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 扫描进行中又有唤醒请求：本轮结束后必须**再扫一遍**，否则那次状态变化会被丢掉。 */
+  private wakeRequested = false;
 
   constructor(private readonly options: PlanDispatchCoordinatorOptions) {
     this.unsubscribe = options.store.subscribeEvents?.((event) => {
@@ -287,11 +289,33 @@ export class PlanDispatchCoordinator {
     return revised;
   }
 
-  /** 对所有 Project 的排队项执行一次稳定顺序的调度扫描。 */
+  /**
+   * 对所有 Project 的排队项执行一次稳定顺序的调度扫描。
+   *
+   * **扫描期间的再次唤醒不能丢**：`performWake` 先对排队 Plan 取快照再逐个派发，而派发本身
+   * 可能 await 几秒（建模分支名、建 worktree）。这期间到达的"Run 结束 / 新 Plan 入队"事件
+   * 如果只是复用同一个 promise，扫描看不到它们，排队项就会一直等到下一个无关事件。
+   * 所以用 `wakeRequested` 做脏标记：本轮结束后若有人请求过，就再扫一轮。
+   */
   wake(): Promise<PlanDispatchState[]> {
-    if (this.wakePromise) return this.wakePromise;
-    this.wakePromise = this.performWake().finally(() => {
+    if (this.wakePromise) {
+      this.wakeRequested = true;
+      return this.wakePromise;
+    }
+    this.wakePromise = (async () => {
+      let states: PlanDispatchState[];
+      do {
+        this.wakeRequested = false;
+        states = await this.performWake();
+      } while (this.wakeRequested);
+      return states;
+    })().finally(() => {
       this.wakePromise = null;
+      // 关闭窗口：如果请求恰好落在"循环判断退出"和"清空 promise"之间，补一次。
+      if (this.wakeRequested) {
+        this.wakeRequested = false;
+        void this.wake();
+      }
     });
     return this.wakePromise;
   }

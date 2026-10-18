@@ -69,7 +69,7 @@ describe("explorer turn images", () => {
       attachmentPathFor: (attachment) => `/abs/${attachment.id}.png`,
     });
 
-    await service.startTurn({
+    const first = await service.startTurn({
       threadId: thread.id,
       explorerPlanId: plan.id,
       content: "这张截图是什么颜色？",
@@ -83,5 +83,56 @@ describe("explorer turn images", () => {
     expect(userMessage?.images).toEqual([{ path: "/abs/attachment-1.png", mimeType: "image/png" }]);
     // 这一轮确实带着 planBoundary——图片不能因为它的存在而被丢掉。
     expect(request.continuationPrompt).toContain("这张截图是什么颜色？");
+
+    // 同一 clientTurnId 的重试：附件已经挂在该回合上，幂等返回必须先于"已被占用"校验。
+    const turnsBeforeRetry = store.listTurns(thread.id).length;
+    const retried = await service.startTurn({
+      threadId: thread.id,
+      explorerPlanId: plan.id,
+      content: "这张截图是什么颜色？",
+      clientTurnId: "turn-1",
+      attachmentIds: ["attachment-1"],
+    });
+    expect(retried.user.id).toBe(first.user.id);
+    expect(store.listTurns(thread.id)).toHaveLength(turnsBeforeRetry);
+  });
+
+  it("rejects an attachment that already belongs to another message", async () => {
+    const store = new InMemoryPipelineStore();
+    new ProjectService(store).create({
+      id: "project-1",
+      name: "project-1",
+      repoRoot: "/repo/project-1",
+      defaultBranch: "main",
+      worktreeRoot: "/tmp/project-1-worktrees",
+    });
+    const explorer = new ExplorerService(store);
+    const thread = explorer.create({ projectId: "project-1" });
+    const plan = store.listExplorerPlans(thread.id)[0]!;
+    store.saveAttachment({
+      id: "attachment-owned",
+      projectId: "project-1",
+      ownerType: "explorer-turn",
+      ownerId: "some-other-turn",
+      fileName: "used.png",
+      mimeType: "image/png",
+      byteSize: 70,
+      relativePath: "attachments/project-1/used.png",
+      createdAt: store.now(),
+    });
+    const { model } = createModelRecorder();
+    const service = new ExplorerThreadService(store, model, { attachmentPathFor: (attachment) => attachment.relativePath });
+
+    await expect(
+      service.startTurn({
+        threadId: thread.id,
+        explorerPlanId: plan.id,
+        content: "复用一张已占用的图",
+        clientTurnId: "turn-owned",
+        attachmentIds: ["attachment-owned"],
+      }),
+    ).rejects.toThrow(/ATTACHMENT_ALREADY_ATTACHED/);
+    // 失败发生在落库之前：没有产生任何回合。
+    expect(store.listTurns(thread.id)).toEqual([]);
   });
 });

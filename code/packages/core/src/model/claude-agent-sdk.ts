@@ -35,16 +35,7 @@
  */
 
 import { readFileSync } from "node:fs";
-import {
-  getSessionInfo,
-  query,
-  type CanUseTool,
-  type Options,
-  type PermissionMode,
-  type PermissionResult,
-  type SDKMessage,
-  type SDKUserMessage,
-} from "@anthropic-ai/claude-agent-sdk";
+import type { CanUseTool, Options, PermissionMode, PermissionResult, SDKMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { EXPLORER_PLAN_INSTRUCTIONS } from "../platform/plan-requirements.js";
 import { latestUserImages, latestUserMessage, replayConversation, resolveModelMode } from "./provider-session.js";
 import { classifyClaudeActivity, type ProviderActivityKind } from "./provider-activity.js";
@@ -89,11 +80,45 @@ export type ClaudeAgentSdkGatewayOptions = {
   env?: Record<string, string> | undefined;
   /** 每次 query 的最大回合数；作为 loop 步数上限之外的二级保护。 */
   maxTurns?: number | undefined;
+  /**
+   * `@anthropic-ai/claude-agent-sdk` 的模块名或**绝对路径**。
+   *
+   * 发布物**不携带**这个 SDK（体积主要来自平台二进制）；目标机器需要自行提供：
+   * 让 Node 能解析到该包（例如全局安装并在 NODE_PATH 中），或把这里指向 SDK 的入口文件。
+   * 缺省是包名，解析失败时只在真正使用 Claude 后端时抛出可诊断错误。
+   */
+  sdkPath?: string | undefined;
   /** 测试注入；缺省用 SDK 的 query()。 */
   queryFactory?: ClaudeQueryFactory | undefined;
   /** 测试注入；缺省用 SDK 的 getSessionInfo()。返回 false 表示会话记录已不在磁盘上。 */
   sessionExists?: ((sessionId: string, cwd: string) => Promise<boolean>) | undefined;
 };
+
+/** SDK 的模块形状；只在真正用到 Claude 后端时才加载（见 loadClaudeSdk）。 */
+type ClaudeSdkModule = typeof import("@anthropic-ai/claude-agent-sdk");
+
+const sdkModules = new Map<string, Promise<ClaudeSdkModule>>();
+
+/**
+ * 懒加载 Claude Agent SDK。**发布物不包含它**（安装包只带 Factory 自身；Claude 运行时由目标机器提供），
+ * 因此这里不能有顶层 value import，否则 Node 在启动阶段就会因缺包失败，连 Codex 后端也用不了。
+ */
+function loadClaudeSdk(sdkPath?: string): Promise<ClaudeSdkModule> {
+  const specifier = sdkPath?.trim() || "@anthropic-ai/claude-agent-sdk";
+  const cached = sdkModules.get(specifier);
+  if (cached) return cached;
+  const loading = import(specifier).catch((error: unknown) => {
+    sdkModules.delete(specifier);
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `CLAUDE_AGENT_SDK_UNAVAILABLE: cannot load "${specifier}". 安装包不包含 Claude Agent SDK；` +
+        `请让目标机器上的 Node 能解析该包（全局安装并配置 NODE_PATH），或在 model.claudeAgent.sdkPath 指向其入口文件。` +
+        ` 原因：${reason}`,
+    );
+  });
+  sdkModules.set(specifier, loading);
+  return loading;
+}
 
 const CLIENT_APP = "pipeline-factory/4.0.0";
 
@@ -189,10 +214,13 @@ export class ClaudeAgentSdkGateway implements ModelGateway {
     this.queryFactory =
       options.queryFactory ??
       (async ({ prompt, options: queryOptions }) => {
-        const handle = query({ prompt, options: queryOptions });
+        const sdk = await loadClaudeSdk(options.sdkPath);
+        const handle = sdk.query({ prompt, options: queryOptions });
         return { stream: () => handle, interrupt: () => handle.interrupt() };
       });
-    this.sessionExists = options.sessionExists ?? (async (sessionId, cwd) => (await getSessionInfo(sessionId, { dir: cwd })) !== undefined);
+    this.sessionExists =
+      options.sessionExists ??
+      (async (sessionId, cwd) => (await (await loadClaudeSdk(options.sdkPath)).getSessionInfo(sessionId, { dir: cwd })) !== undefined);
   }
 
   configFor(role: ModelRole): ModelRoleConfig {

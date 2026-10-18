@@ -735,4 +735,54 @@ describe("Plan dependency validation", () => {
     });
     expect(() => plans.confirm(first.id, "user-1")).toThrow(/cycle/i);
   });
+
+  /**
+   * **扫描期间的唤醒不能丢**：`performWake` 先取排队快照再逐个派发，而派发可能 await 几秒
+   * （建模分支名 / 建 worktree）。这期间入队的 Plan 不在快照里；如果 `wake()` 只是复用同一个
+   * promise，它会一直等到下一个无关事件。用脏标记确保本轮结束后再扫一遍。
+   */
+  it("扫描进行中入队的 Plan 会在本轮结束后被接着派发", async () => {
+    const store = new InMemoryPipelineStore();
+    const plans = new PlanService(store);
+    const first = createPlan(store, plans, "In-flight scan A");
+    const second = createPlan(store, plans, "In-flight scan B");
+    const scheduler = schedulerFor(store);
+    const realStart = scheduler.start.bind(scheduler);
+    let releaseFirst: (() => void) | undefined;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let started = 0;
+    vi.spyOn(scheduler, "start").mockImplementation(async (planId, hooks) => {
+      started += 1;
+      if (started === 1) await firstGate;
+      return realStart(planId, hooks);
+    });
+    const coordinator = new coordinatorModule.PlanDispatchCoordinator({ store, plans, scheduler });
+
+    try {
+      // `dispatch` 要求先入队；不要 await 第一次，它要等 gate 才返回。
+      plans.enqueue(first.id);
+      const inFlight = coordinator.dispatch(first.id);
+      await waitForPhase(coordinator, first.id, "STARTING_RUN");
+
+      // 第一次扫描已取过快照（当时只有 first），此时派发 second 并请求唤醒。
+      plans.enqueue(second.id);
+      const secondDispatch = coordinator.dispatch(second.id);
+
+      releaseFirst?.();
+      await inFlight;
+      await secondDispatch;
+      await waitForStatus(coordinator, second.id, "RUNNING");
+      expect(
+        store
+          .listRuns()
+          .map((run) => run.planId)
+          .sort(),
+      ).toEqual([first.id, second.id].sort());
+    } finally {
+      releaseFirst?.();
+      coordinator.dispose();
+    }
+  });
 });

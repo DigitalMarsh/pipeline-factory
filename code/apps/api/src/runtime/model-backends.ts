@@ -71,14 +71,15 @@ export class ModelBackendRegistry {
  */
 export function createDefaultModelBackendRegistry(): ModelBackendRegistry {
   return new ModelBackendRegistry()
-    .register("stub", (_backend, { roles }) => new StubModelGateway(roles as never))
+    .register("stub", (_backend, { roles }) => new StubModelGateway(roles))
     .register("claude-agent-sdk", (backend, { roles, maxSteps }) => {
       const claude = backend.claudeAgent;
       return new ClaudeAgentSdkGateway({
-        roles: roles as never,
+        roles,
         ...(claude?.baseUrl ? { baseUrl: claude.baseUrl } : {}),
         ...(claude?.authToken ? { authToken: claude.authToken } : {}),
         ...(claude?.settingsPath ? { settingsPath: claude.settingsPath } : {}),
+        ...(claude?.sdkPath ? { sdkPath: claude.sdkPath } : {}),
         ...(claude?.env && Object.keys(claude.env).length > 0 ? { env: claude.env } : {}),
         // 单次 query 的回合上限与 loop 的步数上限同源：Provider 内部回合不该比 loop 允许的步骤还多。
         maxTurns: claude?.maxTurns ?? maxSteps,
@@ -92,7 +93,7 @@ export function createDefaultModelBackendRegistry(): ModelBackendRegistry {
         );
       return new OpenAIModelGateway({
         apiKey: openai.apiKey,
-        roles: roles as never,
+        roles,
         ...(openai.baseUrl ? { baseUrl: openai.baseUrl } : {}),
       });
     })
@@ -101,7 +102,7 @@ export function createDefaultModelBackendRegistry(): ModelBackendRegistry {
       if (!appServer)
         throw new Error(`Factory configuration requires model.codexAppServer (or a model.backends entry) for the codex-app-server backend`);
       return new CodexAppServerGateway({
-        roles: roles as never,
+        roles,
         command: appServer.command,
         args: appServer.args,
         cwd: appServer.cwd,

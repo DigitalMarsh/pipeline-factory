@@ -977,7 +977,13 @@ export class SqlitePipelineStore implements PipelineStore {
     this.backfillLegacyVerificationRuns();
     this.backfillPlanQueryProjection();
     // 结构版本：新库从 0 标到当前；旧库只要低于当前就对齐（当前只有 v1 基线，没有步骤迁移）。
-    if (this.schemaVersion() < CURRENT_SCHEMA_VERSION) this.database.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}`);
+    // **高于当前 = 这个二进制比库旧**：继续跑会在缺列的库上静默失败，必须拒绝打开。
+    const storedSchemaVersion = this.schemaVersion();
+    if (storedSchemaVersion > CURRENT_SCHEMA_VERSION)
+      throw new Error(
+        `SCHEMA_TOO_NEW: database schema version ${storedSchemaVersion} is newer than this build supports (${CURRENT_SCHEMA_VERSION}); upgrade the application`,
+      );
+    if (storedSchemaVersion < CURRENT_SCHEMA_VERSION) this.database.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}`);
     // 回收放在**所有修复与回填之后**：那几步要读历史事件（或至少要和历史状态对齐），
     // 先删再修会让它们看到一份被削过的历史。
     if (this.retention && this.retention.retentionDays > 0) this.pruneOnStartup(this.retention);
@@ -1981,6 +1987,20 @@ export class SqlitePipelineStore implements PipelineStore {
     const placeholders = ownerIds.map(() => "?").join(",");
     this.statement(`DELETE FROM message_attachments WHERE owner_type = ? AND owner_id IN (${placeholders})`).run(ownerType, ...ownerIds);
     return removed;
+  }
+
+  listUnattachedAttachments(createdBefore: string): MessageAttachment[] {
+    const rows = this.statement("SELECT * FROM message_attachments WHERE owner_id IS NULL AND created_at < ? ORDER BY created_at, id").all(
+      createdBefore,
+    ) as unknown as SqliteRow[];
+    return rows.map(attachmentFromRow);
+  }
+
+  deleteAttachment(id: string): MessageAttachment | undefined {
+    const row = this.statement("SELECT * FROM message_attachments WHERE id = ?").get(id) as SqliteRow | undefined;
+    if (!row) return undefined;
+    this.statement("DELETE FROM message_attachments WHERE id = ?").run(id);
+    return attachmentFromRow(row);
   }
 
   saveRunGuidance(guidance: RunGuidance): RunGuidance {

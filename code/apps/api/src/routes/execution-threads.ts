@@ -110,7 +110,8 @@ export function registerExecutionThreadRoutes(app: FastifyInstance, deps: Execut
     }
     const headerSequence = Number(request.headers["last-event-id"] ?? "0") || 0;
     let cursor = Math.max(query.data.afterSequence ?? 0, headerSequence);
-    const sse = openSseChannel(request, reply, { poll: () => send() });
+    // 订阅式推送，空闲时零轮询；没有 appendEvent 订阅能力的 store 替身回退到轮询。
+    const sse = openSseChannel(request, reply, store.subscribeEvents ? {} : { poll: () => send() });
     const send = () => {
       const events = store.listEvents({ aggregateId: threadId, afterSequence: cursor });
       for (const event of events) {
@@ -120,5 +121,10 @@ export function registerExecutionThreadRoutes(app: FastifyInstance, deps: Execut
     };
     send();
     sse.ready(cursor, { afterSequence: cursor });
+    const unsubscribe = store.subscribeEvents?.((event) => {
+      if (event.aggregateId !== threadId || event.sequence <= cursor) return;
+      send();
+    });
+    if (unsubscribe) sse.onClose(unsubscribe);
   });
 }

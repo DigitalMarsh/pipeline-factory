@@ -25,6 +25,7 @@
 import { basename } from "node:path";
 import cors from "@fastify/cors";
 import Fastify, { type FastifyInstance } from "fastify";
+import { allowedBrowserOrigins, isAllowedLoopbackHostHeader, isAllowedOrigin, isLoopbackHost } from "./security.js";
 import {
   PlanService,
   createLocalPlanPreflightInspector,
@@ -66,6 +67,7 @@ import { persistLoopControl } from "./runtime/loop-control.js";
 import { planStorageFor } from "./runtime/plan-directory.js";
 import { createDefaultScheduler } from "./runtime/scheduler.js";
 import { AttachmentStore } from "./runtime/attachment-store.js";
+import { purgeUnattachedAttachmentsSafe } from "./runtime/attachment-cleanup.js";
 import { createDefaultVerificationExecutor } from "./runtime/verification.js";
 import { createModelGateway } from "./runtime/model-gateway.js";
 import { WorktreeServiceRunner } from "./runtime/worktree-services.js";
@@ -120,6 +122,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
   // 附件文件跟着数据库目录走（`<dirname(databasePath)>/attachments/`）：不新增配置项，
   // 也不进任何仓库。领域服务只拿 `pathFor`，不知道数据库在哪。
   const attachments = new AttachmentStore(options.databasePath ?? options.config?.storage.databasePath ?? "pipeline-factory.sqlite");
+  purgeUnattachedAttachmentsSafe(store, attachments);
   const modelCatalog = options.config ? createModelCatalog(options.config) : undefined;
   const projects = new ProjectService(store, modelCatalog);
   // 预检与 Plan 落盘都要知道"计划目录"（预检拿它做工区干净检查的白名单，落盘拿它写文件），
@@ -371,7 +374,43 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
    * 代价是关闭时正在飞的请求会被打断：这是停机语义，可以接受；启动/运行期不受影响。
    */
   const app = Fastify({ logger: false, forceCloseConnections: true });
-  void app.register(cors, { origin: true });
+  /**
+   * 来源边界（见 security.ts）：
+   *   - 浏览器 Origin 只允许回环与配置的额外来源；
+   *   - 本机监听时 Host 必须是回环（防 DNS rebinding）；
+   *   - 非回环监听必须带 Bearer token（config 的 superRefine 已拦一次，这里再兜底）。
+   */
+  const serverHost = options.config?.server.host ?? "127.0.0.1";
+  const serverPort = options.config?.server.port ?? 4310;
+  const webPort = options.config?.web.port ?? 5173;
+  const authToken = options.config?.server.authToken;
+  const loopbackOnly = isLoopbackHost(serverHost);
+  if (!loopbackOnly && !authToken) throw new Error("server.authToken is required when server.host is not a loopback address");
+  const browserOrigins = allowedBrowserOrigins({
+    serverPort,
+    webPort,
+    extra: options.config?.server.allowedOrigins ?? [],
+  });
+  void app.register(cors, {
+    origin: (origin, callback) => callback(null, isAllowedOrigin(origin ?? undefined, browserOrigins)),
+    methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  });
+  app.addHook("onRequest", async (request, reply) => {
+    const path = request.url.split("?", 1)[0] ?? request.url;
+    const origin = typeof request.headers.origin === "string" ? request.headers.origin : undefined;
+    if (!isAllowedOrigin(origin, browserOrigins))
+      return reply.code(403).send({ code: "ORIGIN_FORBIDDEN", error: "This origin is not allowed to call the local API" });
+    if (loopbackOnly && !isAllowedLoopbackHostHeader(typeof request.headers.host === "string" ? request.headers.host : undefined))
+      return reply.code(403).send({ code: "HOST_FORBIDDEN", error: "The Host header is not a loopback hostname" });
+    if (!loopbackOnly && path !== "/health") {
+      const authorization = typeof request.headers.authorization === "string" ? request.headers.authorization : "";
+      const headerToken = authorization.startsWith("Bearer ") ? authorization.slice(7) : undefined;
+      const provided =
+        headerToken ??
+        (typeof request.headers["x-pipeline-factory-token"] === "string" ? request.headers["x-pipeline-factory-token"] : undefined);
+      if (provided !== authToken) return reply.code(401).send({ code: "UNAUTHORIZED", error: "Missing or invalid auth token" });
+    }
+  });
   // 先做 Project 存在性和归档状态校验，再进入具体 handler；前端禁用按钮不能替代这一层保护。
   app.addHook("preHandler", async (request, reply) => {
     const path = request.url.split("?", 1)[0] ?? request.url;

@@ -118,6 +118,8 @@ const REQUIRED_PORT_METHOD_NAMES = [
   "attachAttachments",
   "listAttachments",
   "deleteAttachmentsForOwners",
+  "listUnattachedAttachments",
+  "deleteAttachment",
   "saveAgentLoop",
   "getAgentLoop",
   "listAgentLoops",

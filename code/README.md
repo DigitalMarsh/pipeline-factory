@@ -59,7 +59,14 @@ node scripts/service.mjs status
 - **发布物**：`pnpm pack:release` 生成 `release/pipeline-factory-<version>/` 与同名 tar.gz
   （`app/` 生产依赖 + `web/` 静态产物 + 示例配置 + `bin/pipeline-factory` 启动器）。
   启动后 `GET /health` 返回 `appVersion`（package.json 版本）与 `schemaVersion`
-  （SQLite `PRAGMA user_version`），排障时先看这两项。
+  （SQLite `PRAGMA user_version`），排障时先看这两项。安装、升级与安全说明见
+  [`docs/INSTALL.md`](../docs/INSTALL.md)。
+- **安装包不包含 Claude Agent SDK**：它按需懒加载（`CLAUDE_AGENT_SDK_UNAVAILABLE` 只在真正用
+  Claude 后端时出现），由目标机器提供，或用 `model.claudeAgent.sdkPath` 指向入口文件。
+- **来源边界**：CORS 只允许回环与 `server.allowedOrigins`，Host 必须是回环主机名；
+  `server.host` 改成非回环地址时**必须**配置 `server.authToken`，否则拒绝启动。
+- **分支命名**：`model.branchNameFromModel` 默认 `false`（确定性 slug）。打开后派发前会多一次
+  模型调用，实测延迟 6–27 秒，按需开启。
 
 生产/单进程模式先构建，再由 API 在同一端口托管 Web 构建产物：
 

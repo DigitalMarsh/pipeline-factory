@@ -442,7 +442,10 @@ export function registerExplorerRoutes(app: FastifyInstance, deps: ExplorerRoute
         state: accepted.assistant.status,
       });
     } catch (error) {
-      return reply.code(409).send({ error: error instanceof Error ? error.message : "ExplorerThread turn cannot be started" });
+      const message = error instanceof Error ? error.message : "ExplorerThread turn cannot be started";
+      // 附件错误不是"状态冲突"：缺附件/跨项目是 404，超过张数是 400。其余仍按 409（线程状态）。
+      const status = message.includes("ATTACHMENT_NOT_FOUND") ? 404 : message.includes("ATTACHMENT_LIMIT_EXCEEDED") ? 400 : 409;
+      return reply.code(status).send({ code: message.split(":")[0] ?? message, error: message });
     }
   });
 

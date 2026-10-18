@@ -4,7 +4,7 @@
 -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { ArrowDown, ArrowUp, Close, Connection, Document, Refresh, Right, VideoPause } from "@element-plus/icons-vue";
+import { ArrowDown, Close, Connection, Document, Refresh, Right, VideoPause } from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { useRoute, useRouter } from "vue-router";
 import { ApiRequestError, api } from "../api";
@@ -19,7 +19,6 @@ import { scrollTimelineToLatest } from "../utils/scrollTimeline";
 import { optional } from "../utils/optional";
 import { closePolicyPanel, openPolicyPanel } from "../utils/policyPanel";
 import { createOptimisticUserTurn, settleOptimisticTurn } from "../utils/optimisticTurn";
-import { shouldSubmitComposer } from "../utils/composerKeyboard";
 import { formatContextUsage } from "../utils/explorerStatus";
 import ExplorerInputDialog from "../components/ExplorerInputDialog.vue";
 import ExplorerMessageRow from "../components/ExplorerMessageRow.vue";
@@ -31,8 +30,7 @@ import ExplorerRenameDialog from "../components/ExplorerRenameDialog.vue";
 import ExplorerRequirementDialog from "../components/ExplorerRequirementDialog.vue";
 import ConfirmDialog from "../components/ConfirmDialog.vue";
 import ExplorerHeaderStatus from "../components/ExplorerHeaderStatus.vue";
-import ProviderUsageFooter from "../components/ProviderUsageFooter.vue";
-import AttachmentComposer from "../components/AttachmentComposer.vue";
+import ExplorerComposer from "../components/ExplorerComposer.vue";
 import { useImageAttachments } from "../composables/useImageAttachments";
 import RunDetailView from "./RunDetailView.vue";
 import scrollToLatestIcon from "../assets/scroll-to-latest.png";
@@ -1582,12 +1580,6 @@ async function sendTurn(): Promise<boolean> {
   }
 }
 
-function handleComposerKeydown(event: KeyboardEvent) {
-  if (!shouldSubmitComposer(event)) return;
-  event.preventDefault();
-  void sendTurn();
-}
-
 function reloadExplorer() {
   closeEvents();
   invalidateProjectScope();
@@ -1990,62 +1982,27 @@ onBeforeUnmount(() => {
                   </button>
                 </div>
               </div>
-              <div v-if="!activeRunId" class="composer">
-                <AttachmentComposer
-                  :items="attachmentItems"
-                  :error="attachmentError"
-                  :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || explorerPaused || busy"
-                  @add="addAttachmentFiles"
-                  @remove="removeAttachment"
-                >
-                  <div class="composer-input">
-                    <textarea
-                      v-model="draft"
-                      :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || explorerPaused"
-                      aria-label="探索消息"
-                      placeholder="继续探索，或提出修改…"
-                      @keydown="handleComposerKeydown"
-                    /><span class="composer-mode">Plan 模式</span>
-                  </div>
-                </AttachmentComposer>
-                <div class="composer-footer">
-                  <ProviderUsageFooter
-                    :model="explorerModel"
-                    :backend="explorerBackendLabel"
-                    :context="contextUsage"
-                    context-note="estimated"
-                  /><span
-                    v-if="inputAnswerInFlight || inputCardRequest?.status === 'SUBMITTING'"
-                    class="composer-status"
-                    role="status"
-                    aria-live="polite"
-                    >正在提交结构化答案，确认后本轮会继续…</span
-                  ><span v-else-if="pendingInput" class="composer-status" role="status" aria-live="polite"
-                    >请先回答上方结构化问题，再继续探索。</span
-                  ><span v-else-if="sendingCurrentPlan" class="composer-status" role="status" aria-live="polite"
-                    >消息已发送 · 等待 Plan Explorer…</span
-                  ><el-button
-                    class="composer-send"
-                    type="primary"
-                    circle
-                    :loading="(activePlanBusy && !activePlanWaitingForInput) || sendingCurrentPlan"
-                    :disabled="
-                      !thread ||
-                      thread?.state === 'ARCHIVED' ||
-                      project?.status === 'ARCHIVED' ||
-                      !draft.trim() ||
-                      explorerPaused ||
-                      activePlanBusy ||
-                      sendingCurrentPlan ||
-                      busy
-                    "
-                    aria-label="发送消息"
-                    :title="pendingInput ? '请先回答上方结构化问题' : activePlanBusy ? '当前需求回合执行中，完成后可继续' : '发送消息'"
-                    @click="sendTurn"
-                    ><ArrowUp :size="18"
-                  /></el-button>
-                </div>
-              </div>
+              <ExplorerComposer
+                v-if="!activeRunId"
+                v-model="draft"
+                :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED'"
+                :paused="explorerPaused"
+                :busy="busy"
+                :active-plan-busy="activePlanBusy"
+                :active-plan-waiting-for-input="activePlanWaitingForInput"
+                :sending="sendingCurrentPlan"
+                :pending-input="Boolean(pendingInput)"
+                :input-answer-in-flight="inputAnswerInFlight"
+                :input-submitting="inputCardRequest?.status === 'SUBMITTING'"
+                :attachment-items="attachmentItems"
+                :attachment-error="attachmentError"
+                :model="explorerModel"
+                :backend="explorerBackendLabel"
+                :context="contextUsage"
+                @send="sendTurn"
+                @add="addAttachmentFiles"
+                @remove="removeAttachment"
+              />
             </template>
           </section>
         </div>

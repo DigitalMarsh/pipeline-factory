@@ -1,5 +1,45 @@
 # Changelog
 
+## 2026-10-18 — 安全加固、可靠性与安装包瘦身（P0–P2）
+
+### P0 安全
+
+- **CORS 不再反射任意 Origin**：只允许回环来源（任意本地端口）与 `server.allowedOrigins`；
+  非回环 Origin 直接 403，预检不再返回 allow 头（此前 `https://evil.example` 可读写本机 API）。
+- **Host 头必须是回环主机名**（防 DNS rebinding）。
+- **非回环监听必须配置 `server.authToken`**（启动期拒绝），其余接口校验
+  `Authorization: Bearer …` 或 `x-pipeline-factory-token`；`/health` 豁免。
+
+### P1 可靠性
+
+- **派发器丢唤醒修复**：扫描进行中的再次唤醒用脏标记重扫，排队 Plan 不会等到下一个无关事件。
+- **未挂载附件启动清理**：`owner_id IS NULL` 且超过 24h 的附件行与文件在启动时删除。
+- **结构版本前进保护**：库版本高于当前程序时抛 `SCHEMA_TOO_NEW`，不再静默运行。
+- **移除 Scheduler 的 runs/threads 内存缓存**（store 是权威，缓存只增不减）。
+- **分支命名默认不再调用模型**（`model.branchNameFromModel=false`），派发少 6–27 秒等待。
+- Agent Loop / 项目执行线程 SSE 改为**订阅推送**，空闲时零轮询。
+
+### P2 其它
+
+- 回合接口的附件错误按语义映射 404/400，不再一律 409。
+- 附件必须未被其它消息占用，否则 `ATTACHMENT_ALREADY_ATTACHED`（幂等重试仍先返回原结果）。
+- 清理 Provider 注册表里的 `as never`；探索输入区抽成 `ExplorerComposer.vue`。
+
+### 安装包
+
+- **不再打包 Claude Agent SDK**（体积从 106MB → 7.3MB）：改为懒加载，目标机器自带 Claude Code /
+  SDK，或用 `model.claudeAgent.sdkPath` 指向入口；缺失时只在 Claude 后端报可诊断错误。
+- 打包在临时 workspace 副本中执行，不再重装主工作区依赖；发布配置默认事件保留 14 天；
+  各包声明 `engines.node >= 22.5.0`。
+- 新增 [`docs/INSTALL.md`](docs/INSTALL.md)：安装、配置、Codex/Claude 前置、升级、安全与排障。
+
+### 验证
+
+- `pnpm verify` 全绿：core 573 / api 183 / web 719；零值级环、全库悬空引用 0。
+- 新发布物冒烟：`/health` 返回 `appVersion=0.1.0, schemaVersion=1`，`/` 200；
+  `app/node_modules` 中无 `@anthropic-ai`。
+- CORS 实测：`https://evil.example` → 403；`http://localhost:5199` → 204 + 正确 allow-origin。
+
 ## 2026-10-18 — 需求清单去掉底部空白
 
 此前把清单限高到 `min(58vh, 640px)`，窗口较高时卡片下方留下一条很长的空白。现在：

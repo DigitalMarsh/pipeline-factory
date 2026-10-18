@@ -173,12 +173,14 @@ export class ExplorerThreadService {
   }): Promise<{ user: ExplorerTurn; assistant: ExplorerTurn; eventsUrl: string; loopId: string | null }> {
     const thread = this.store.getThread(input.threadId);
     if (!thread) throw new Error(`ExplorerThread ${input.threadId} not found`);
-    // 先校验再建任何行：跨项目的附件 id 必须在落库前被拒绝，不能等回合建好再抛。
-    const attachmentIds = this.validAttachmentIds(thread.projectId, input.attachmentIds);
     if (!input.explorerPlanId) throw new Error("explorerPlanId is required for every Explorer turn");
+    // **幂等检查先于附件校验**：同一 clientTurnId 的重试带着第一次上传的 attachmentIds 回来时，
+    // 那些附件已经挂在该回合上；此时按"已被占用"拒绝会把一次正常的重试打成失败。
     const prior = this.store.getIdempotency("explorer-turn", input.clientTurnId);
     if (prior) return prior as unknown as { user: ExplorerTurn; assistant: ExplorerTurn; eventsUrl: string; loopId: string | null };
     if (thread.state === "ARCHIVED") throw new Error(`ExplorerThread ${input.threadId} is archived`);
+    // 先校验再建任何行：跨项目或已被别处占用的附件必须在落库前被拒绝。
+    const attachmentIds = this.validAttachmentIds(thread.projectId, input.attachmentIds);
     const plan = this.resolveExplorerPlan(thread, input.explorerPlanId);
     const turns = this.store.listTurns(input.threadId);
     /**
@@ -288,6 +290,8 @@ export class ExplorerThreadService {
     for (const id of unique) {
       const attachment = this.store.getAttachment(id);
       if (!attachment || attachment.projectId !== projectId) throw new Error(`ATTACHMENT_NOT_FOUND: ${id}`);
+      // 已被别的消息占用：静默跳过会让用户以为图发出去了，实际模型只看到正文。
+      if (attachment.ownerId !== null) throw new Error(`ATTACHMENT_ALREADY_ATTACHED: ${id}`);
     }
     return unique;
   }

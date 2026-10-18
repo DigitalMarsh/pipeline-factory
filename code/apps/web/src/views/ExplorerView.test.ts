@@ -77,6 +77,7 @@ const explorerScopeSource = readFileSync(fileURLToPath(new URL("../utils/explore
 const threadRailSource = readFileSync(fileURLToPath(new URL("../components/ThreadRail.vue", import.meta.url)), "utf8");
 const explorerHeaderStatusSource = readFileSync(fileURLToPath(new URL("../components/ExplorerHeaderStatus.vue", import.meta.url)), "utf8");
 const providerUsageFooterSource = readFileSync(fileURLToPath(new URL("../components/ProviderUsageFooter.vue", import.meta.url)), "utf8");
+const explorerComposerSource = readFileSync(fileURLToPath(new URL("../components/ExplorerComposer.vue", import.meta.url)), "utf8");
 const projectCatalogSource = readFileSync(fileURLToPath(new URL("./ProjectCatalogView.vue", import.meta.url)), "utf8");
 
 describe("Explorer thread actions", () => {
@@ -125,12 +126,12 @@ describe("Explorer thread actions", () => {
 
 describe("Provider usage footer wiring", () => {
   it("uses the shared footer and shows only model/context facts", () => {
-    expect(flat(explorerViewSource)).toContain(flat('import ProviderUsageFooter from "../components/ProviderUsageFooter.vue"'));
-    expect(flat(explorerViewSource)).toContain(
-      flat(
-        '<ProviderUsageFooter :model="explorerModel" :backend="explorerBackendLabel" :context="contextUsage" context-note="estimated" />',
-      ),
+    // 输入区已抽成 ExplorerComposer；footer 的 import 与用法跟着它走。
+    expect(flat(explorerComposerSource)).toContain(flat('import ProviderUsageFooter from "./ProviderUsageFooter.vue"'));
+    expect(flat(explorerComposerSource)).toContain(
+      flat('<ProviderUsageFooter :model="model" :backend="backend" :context="context" context-note="estimated" />'),
     );
+    expect(flat(explorerViewSource)).toContain(flat("<ExplorerComposer"));
     expect(explorerViewSource).not.toContain('class="codex-status-popover"');
     expect(explorerViewSource).not.toContain("formatConversationId");
     // 5 小时 / 7 天额度已从页面与后端两侧移除，页面上不该再有它的任何痕迹（防回归）。
@@ -836,20 +837,17 @@ describe("Explorer header actions", () => {
 
 describe("Explorer composer availability", () => {
   it("keeps the composer editable and locks sending only for the active requirement", () => {
-    expect(flat(explorerViewSource)).toContain(
-      flat(
-        `<textarea v-model="draft" :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || explorerPaused"`,
-      ),
+    expect(flat(explorerComposerSource)).toContain(flat('<textarea :value="modelValue" :disabled="disabled || paused"'));
+    // busy 只影响发送，不该让输入框变成灰的——否则用户没法先把话写完。
+    expect(flat(explorerComposerSource)).not.toContain(flat('<textarea :value="modelValue" :disabled="disabled || paused || busy"'));
+    expect(flat(explorerComposerSource)).toContain(flat(':loading="(activePlanBusy && !activePlanWaitingForInput) || sending"'));
+    expect(flat(explorerComposerSource)).toContain(
+      flat("props.disabled || !props.modelValue.trim() || props.paused || props.activePlanBusy || props.sending || props.busy"),
     );
-    expect(explorerViewSource).not.toContain(
-      `<textarea v-model="draft" :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || explorerPaused || busy"`,
-    );
-    expect(flat(explorerViewSource)).toContain(flat(`:loading="(activePlanBusy && !activePlanWaitingForInput) || sendingCurrentPlan"`));
-    expect(flat(explorerViewSource)).toContain(flat(`|| explorerPaused || activePlanBusy || sendingCurrentPlan || busy"`));
   });
 
   it("explains why the send button is unavailable while the selected requirement is running", () => {
-    expect(flat(explorerViewSource)).toContain(
+    expect(flat(explorerComposerSource)).toContain(
       flat(`:title="pendingInput ? '请先回答上方结构化问题' : activePlanBusy ? '当前需求回合执行中，完成后可继续' : '发送消息'"`),
     );
     expect(flat(explorerViewSource)).toContain(
@@ -880,9 +878,11 @@ describe("Explorer composer availability", () => {
     expect(flat(explorerMessageRowSource)).toContain(
       flat("inputAnswerDisplayText(request, request.questions[questionIndex]!, props.inputProgress, props.inputAnswerInFlight)"),
     );
-    // 这两条测的是**模板**里的用户可见文案，留在视图。
-    expect(flat(explorerViewSource)).toContain(flat("正在提交结构化答案，确认后本轮会继续"));
-    expect(flat(explorerViewSource)).toContain(flat("inputCardRequest?.status === 'SUBMITTING'"));
+    // 这两条测的是**模板**里的用户可见文案：状态文案在 ExplorerComposer，视图只负责把
+    // "结构化输入是否在提交"这一事实作为 prop 传进去。
+    expect(flat(explorerComposerSource)).toContain(flat("正在提交结构化答案，确认后本轮会继续"));
+    expect(flat(explorerComposerSource)).toContain(flat("inputAnswerInFlight || inputSubmitting"));
+    expect(flat(explorerViewSource)).toContain(flat(`:input-submitting="inputCardRequest?.status === 'SUBMITTING'"`));
   });
 });
 

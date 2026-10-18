@@ -76,10 +76,11 @@ export function registerAgentLoopRoutes(app: FastifyInstance, deps: AgentLoopRou
       return { items: store.listEvents(batchOptions(params.data.loopId, afterSequence)), diagnostics: loopDiagnostics(store, current) };
     }
     let cursor = afterSequence;
-    const sse = openSseChannel(request, reply, { poll: () => send() });
+    // 订阅式推送：有 appendEvent 订阅能力时不再每 250ms 轮询；没有（自定义 store 替身）则回退轮询。
+    const sse = openSseChannel(request, reply, store.subscribeEvents ? {} : { poll: () => send() });
     const send = () => {
       const events = store.listEvents(batchOptions(params.data.loopId, cursor));
-      // 无新事件时不计算诊断：轮询在 Loop 静默期不应产生任何读取。
+      // 无新事件时不计算诊断：Loop 静默期不应产生任何读取。
       if (events.length === 0) return;
       const current = store.getAgentLoop(params.data.loopId);
       const currentDiagnostics = current ? loopDiagnostics(store, current) : null;
@@ -96,6 +97,11 @@ export function registerAgentLoopRoutes(app: FastifyInstance, deps: AgentLoopRou
     send();
     const readyLoop = store.getAgentLoop(params.data.loopId);
     sse.ready(cursor, { afterSequence: cursor, diagnostics: readyLoop ? loopDiagnostics(store, readyLoop) : null });
+    const unsubscribe = store.subscribeEvents?.((event) => {
+      if (event.aggregateId !== params.data.loopId || event.sequence <= cursor) return;
+      send();
+    });
+    if (unsubscribe) sse.onClose(unsubscribe);
   });
 
   app.post("/api/v4/agent-loops/:loopId/pause", async (request, reply) => {

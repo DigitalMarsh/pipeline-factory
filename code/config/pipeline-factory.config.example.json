@@ -3,7 +3,8 @@
     "host": "127.0.0.1",
     "port": 4310,
     "serveWeb": false,
-    "webDistPath": "../apps/web/dist"
+    "webDistPath": "../apps/web/dist",
+    "allowedOrigins": []
   },
   "web": {
     "host": "127.0.0.1",
@@ -12,7 +13,7 @@
   "storage": {
     "databasePath": "../var/pipeline-factory.sqlite",
     "worktreeRoot": "../var/worktrees",
-    "eventRetentionDays": 0,
+    "eventRetentionDays": 14,
     "eventRetentionMinPerAggregate": 200
   },
   "project": {
@@ -22,12 +23,16 @@
       {
         "commandId": "project.start",
         "argv": ["node", "scripts/start.mjs"],
-        "environment": { "PATH": "/usr/local/bin:/usr/bin:/bin" }
+        "environment": {
+          "PATH": "/usr/local/bin:/usr/bin:/bin"
+        }
       },
       {
         "commandId": "project.cleanup",
         "argv": ["node", "scripts/cleanup.mjs"],
-        "environment": { "PATH": "/usr/local/bin:/usr/bin:/bin" }
+        "environment": {
+          "PATH": "/usr/local/bin:/usr/bin:/bin"
+        }
       }
     ]
   },
@@ -63,7 +68,8 @@
       "maxRepeatedToolCalls": 2,
       "maxNoProgressSteps": 3,
       "requireFactoryToolGatewayForExecutor": false
-    }
+    },
+    "branchNameFromModel": false
   },
   "runtime": {
     "globalConcurrency": 4,
