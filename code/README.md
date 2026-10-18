@@ -287,9 +287,11 @@ GET  /api/v4/projects/:projectId/worktrees/events             ?afterSequence=   
 
 ### 项目范围
 
-项目设置里可以配置默认范围（`settings.worktree`）：`filterMode`（`all` / `patterns`）、
-`branchPatterns`（`*`、`prefix*`、精确名）、`ignoredBranches`（显式隐藏）、
-`includeDetachedWorktrees`。主分支永远显示；被过滤的项可以通过 `?includeFiltered=1`（界面上是
+配置入口在**「项目设置 → Worktree」页签**（面板上的「在项目设置中配置」直接跳到那一页）：
+`filterMode`（`all` / `patterns`）、`branchPatterns`（`*`、`prefix*`、精确名）、
+`ignoredBranches`（按分支勾选，显式隐藏）、`includeDetachedWorktrees`。
+面板本身只留两个**动作**：「显示被过滤的 N 项」与每条分支的「忽略 / 取消忽略」——范围是项目属性，
+编辑器只有设置页这一处。主分支永远显示；被过滤的项可以通过 `?includeFiltered=1`（界面上是
 「显示被过滤的 N 项」）看回来，**写操作始终按全量清单解析目标**，隐藏不会让合并变成"不存在"。
 「曾经合并过」（`was_merged_before`）来自 Factory 自己记的合并事件，只覆盖从这个面板执行过的合并。
 

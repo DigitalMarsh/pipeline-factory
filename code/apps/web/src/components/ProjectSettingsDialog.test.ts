@@ -10,6 +10,7 @@ vi.mock("../api", () => ({
     project: vi.fn(),
     updateProject: vi.fn(),
     validateRepository: vi.fn(),
+    worktrees: vi.fn(),
     // 后端目录：两个后端、各自一组模型与推理强度。控制台的 agent/模型/推理强度三个下拉全部由它驱动。
     modelBackends: vi.fn(async () => ({
       backends: [
@@ -554,5 +555,74 @@ describe("项目设置对话框的页签入口", () => {
 
     mounted.app.unmount();
     mounted.host.remove();
+  });
+});
+
+/**
+ * Worktree 页签：范围配置的家在这里（面板只留入口）。这条用例钉住三件事——
+ * 分支清单用全量拉取、主分支不出现在可忽略列表里、保存时范围随 settings 一起提交。
+ */
+describe("ProjectSettingsDialog · Worktree 页签", () => {
+  it("列出分支、记住忽略项，并在保存时写进 settings.worktree", async () => {
+    const initial = project();
+    vi.mocked(api.project).mockResolvedValue({ project: initial, summary: {} as never });
+    vi.mocked(api.worktrees).mockResolvedValue({
+      items: [
+        { itemId: "branch:main", branch: "main", isBaseBranch: true },
+        { itemId: "branch:feature/a", branch: "feature/a", isBaseBranch: false },
+        { itemId: "branch:feature/b", branch: "feature/b", isBaseBranch: false },
+      ],
+    } as never);
+    vi.mocked(api.updateProject).mockResolvedValue({ project: initial });
+    const mounted = mountDialog();
+    // 页签与内容都在 project 加载完之后才渲染。
+    await nextTick();
+    await nextTick();
+
+    const tab = [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Worktree"));
+    expect(tab).toBeDefined();
+    tab?.click();
+    await nextTick();
+    await nextTick();
+    await nextTick();
+
+    expect(api.worktrees).toHaveBeenCalledWith("project-1", { includeFiltered: true });
+    const list = mounted.host.querySelector("[data-worktree-branch-list]");
+    expect(list?.textContent).toContain("feature/a");
+    // 主分支永远显示，不参与忽略。
+    expect(list?.textContent).not.toContain("main");
+
+    // 按标签找，别按序号：选项是按名称排序的，序号会随分支名变化而漂移。
+    const targetLabel = [...mounted.host.querySelectorAll<HTMLElement>("[data-worktree-branch-list] label")].find((label) =>
+      label.textContent?.includes("feature/a"),
+    );
+    const target = targetLabel?.querySelector<HTMLInputElement>("input[type=checkbox]");
+    if (target) {
+      target.checked = true;
+      target.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+
+    const mode = mounted.host.querySelector<HTMLSelectElement>("[data-worktree-filter-mode]");
+    expect(mode).not.toBeNull();
+
+    const save = [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) =>
+      button.textContent?.includes("保存项目配置"),
+    );
+    save?.click();
+    await nextTick();
+    await nextTick();
+
+    expect(api.updateProject).toHaveBeenCalledWith(
+      "project-1",
+      expect.objectContaining({
+        settings: expect.objectContaining({
+          worktree: expect.objectContaining({
+            filterMode: "all",
+            includeDetachedWorktrees: true,
+            ignoredBranches: expect.arrayContaining(["feature/a"]),
+          }),
+        }),
+      }),
+    );
   });
 });

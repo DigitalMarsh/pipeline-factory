@@ -73,6 +73,7 @@ afterEach(() => {
     host.remove();
   });
   FakeEventSource.instances = [];
+  openedSettingsTabs.length = 0;
   vi.clearAllMocks();
 });
 
@@ -190,6 +191,8 @@ function preview(overrides: Partial<WorktreeMergePreview> = {}): WorktreeMergePr
   };
 }
 
+const openedSettingsTabs: string[] = [];
+
 async function mountPanel(next: WorktreeInventory) {
   apiMocks.worktrees.mockResolvedValue(next);
   apiMocks.updateProject.mockResolvedValue({ project: { id: "project-1" } });
@@ -204,7 +207,11 @@ async function mountPanel(next: WorktreeInventory) {
   (globalThis as unknown as { EventSource: typeof FakeEventSource }).EventSource = FakeEventSource;
   const host = document.createElement("div");
   document.body.appendChild(host);
-  const app = createApp(ProjectWorktreesPanel, { projectId: "project-1", project: { name: "Project 1" } as Project });
+  const app = createApp(ProjectWorktreesPanel, {
+    projectId: "project-1",
+    project: { id: "project-1", name: "Project 1", settings: {} } as unknown as Project,
+    onOpenSettings: (tab: string) => openedSettingsTabs.push(tab),
+  });
   app.component("el-dialog", ElDialogStub);
   app.component("el-button", ElButtonStub);
   app.component("el-tag", ElTagStub);
@@ -361,34 +368,17 @@ describe("Worktree 面板：复盘后新增的交互", () => {
     expect(rows.slice(1)).toEqual(["branch:alpha", "branch:zeta"]);
   });
 
-  it("保存范围把模式与 detached 开关写进项目设置", async () => {
+  it("范围编辑在项目设置里：面板只给入口", async () => {
     const host = await mountPanel(inventory());
-    host.querySelector<HTMLButtonElement>("[data-worktree-scope-toggle]")?.click();
-    await flush();
-    const select = host.querySelector<HTMLSelectElement>("[data-scope-mode]");
-    if (select) {
-      select.value = "patterns";
-      select.dispatchEvent(new Event("change"));
-    }
-    await flush();
-    const textarea = host.querySelector<HTMLTextAreaElement>("[data-scope-patterns]");
-    if (textarea) {
-      textarea.value = "factory/*\nfeature/*";
-      textarea.dispatchEvent(new Event("input"));
-    }
-    await flush();
-    host.querySelector<HTMLButtonElement>("[data-scope-save]")?.click();
+    const button = host.querySelector<HTMLButtonElement>("[data-worktree-open-settings]");
+
+    expect(button?.textContent).toContain("在项目设置中配置");
+    button?.click();
     await flush();
 
-    expect(apiMocks.updateProject).toHaveBeenCalledWith("project-1", {
-      settings: {
-        worktree: {
-          filterMode: "patterns",
-          branchPatterns: ["factory/*", "feature/*"],
-          includeDetachedWorktrees: true,
-        },
-      },
-    });
+    // 面板不再自己改范围；它把用户带到项目设置的 Worktree 页签。
+    expect(apiMocks.updateProject).not.toHaveBeenCalled();
+    expect(openedSettingsTabs).toEqual(["worktree"]);
   });
 
   it("详情里的忽略按钮把分支写进 ignoredBranches", async () => {

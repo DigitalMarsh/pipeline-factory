@@ -1691,7 +1691,12 @@ onBeforeUnmount(() => {
     />
     <section class="conversation-column requirement-workspace-column">
       <ProjectExecutionThreadPanel v-if="projectExecutionMode" :project-id="projectId" :project="project" />
-      <ProjectWorktreesPanel v-else-if="worktreesMode" :project-id="projectId" :project="project" />
+      <ProjectWorktreesPanel
+        v-else-if="worktreesMode"
+        :project-id="projectId"
+        :project="project"
+        @open-settings="openProjectSettingsDialog(projectId, $event)"
+      />
       <template v-else>
         <header class="requirement-workspace-header">
           <div>

@@ -29,8 +29,6 @@ import {
   worktreeRunStatusLabel,
   worktreeSourceLabel,
   formatWorktreeTime,
-  formatBranchPatterns,
-  parseBranchPatterns,
   sortWorktreeItems,
   toggleIgnoredBranch,
   worktreeStatusLabel,
@@ -47,6 +45,11 @@ import WorktreeLogDialog from "./WorktreeLogDialog.vue";
 import WorktreeServicesPanel from "./WorktreeServicesPanel.vue";
 
 const props = defineProps<{ projectId: string; project: Project | null }>();
+/**
+ * 「在项目设置中配置」：范围（模式 / 忽略 / detached）是**项目属性**，编排放项目设置页的
+ * Worktree 页签里。面板只保留"这一次怎么看"的开关，不在两处各放一套编辑器。
+ */
+const emit = defineEmits<{ "open-settings": [tab: string] }>();
 
 const inventory = ref<WorktreeInventory | null>(null);
 const loading = ref(false);
@@ -74,10 +77,6 @@ const cleanupError = ref("");
 const includeFiltered = ref(false);
 const sortKey = ref<WorktreeSortKey>("time");
 const sortDirection = ref<WorktreeSortDirection>("desc");
-const scopeOpen = ref(false);
-const scopeMode = ref<"all" | "patterns">("all");
-const scopePatterns = ref("");
-const scopeDetached = ref(true);
 const scopeBusy = ref(false);
 const scopeError = ref("");
 const logOpen = ref(false);
@@ -146,6 +145,17 @@ const cleanupDetails = computed(() => {
   ];
 });
 
+/** 范围摘要：让"为什么少了几条"在面板上直接可见，而不用去设置页翻。 */
+const scopeSummary = computed(() => {
+  const filter = inventory.value?.filter;
+  if (!filter) return "";
+  const parts: string[] = [];
+  parts.push(filter.filterMode === "patterns" ? `模式 ${filter.branchPatterns.join("、") || "（空）"}` : "全部分支");
+  if (filter.ignoredBranches.length > 0) parts.push(`忽略 ${filter.ignoredBranches.length} 条`);
+  if (!filter.includeDetachedWorktrees) parts.push("不含 detached");
+  return `范围：${parts.join(" · ")}`;
+});
+
 const mergeableCount = computed(() => items.value.filter((item) => item.mergeable).length);
 const cleanupableCount = computed(() => items.value.filter((item) => item.cleanupable).length);
 const mergeInProgress = computed(() => inventory.value?.mergeInProgress ?? null);
@@ -159,12 +169,6 @@ async function load() {
     const next = await api.worktrees(projectId, { includeFiltered: includeFiltered.value });
     if (generation !== requestGeneration || projectId !== props.projectId) return;
     inventory.value = next;
-    // 只在没有未保存改动时把服务端的范围回填到表单，避免轮询把用户正在编辑的值冲掉。
-    if (!scopeBusy.value) {
-      scopeMode.value = next.filter.filterMode;
-      scopePatterns.value = formatBranchPatterns(next.filter.branchPatterns);
-      scopeDetached.value = next.filter.includeDetachedWorktrees;
-    }
     if (selectedItemId.value && !next.items.some((item) => item.itemId === selectedItemId.value)) {
       selectedItemId.value = null;
     }
@@ -337,30 +341,6 @@ function connectEvents() {
   eventSource = source;
 }
 
-/** 保存项目范围（模式 / 模式列表 / detached 开关）。忽略列表由条目上的"忽略"按钮维护。 */
-async function saveScope() {
-  if (scopeBusy.value) return;
-  scopeBusy.value = true;
-  scopeError.value = "";
-  try {
-    await api.updateProject(props.projectId, {
-      settings: {
-        worktree: {
-          filterMode: scopeMode.value,
-          branchPatterns: parseBranchPatterns(scopePatterns.value),
-          includeDetachedWorktrees: scopeDetached.value,
-        },
-      },
-    });
-    ElMessage.success("范围已保存");
-    await load();
-  } catch (caught) {
-    scopeError.value = caught instanceof Error ? caught.message : "范围保存失败";
-  } finally {
-    scopeBusy.value = false;
-  }
-}
-
 /** 忽略 / 取消忽略一条分支（写进项目设置，跨浏览器一致）。 */
 async function toggleIgnore(item: WorktreeItem) {
   if (!item.branch) {
@@ -393,6 +373,17 @@ function openLog(item: WorktreeItem) {
   logRef.value = ref;
   logOpen.value = true;
 }
+
+/**
+ * 范围改在项目设置页保存之后，面板要重新拉一次：`project` 是父组件传下来的，设置保存成功会更新它，
+ * 但清单不会自己变。只对 worktree 这一段做比较，别的设置变化不触发重新扫仓库。
+ */
+watch(
+  () => JSON.stringify(props.project?.settings?.worktree ?? null),
+  () => {
+    void load();
+  },
+);
 
 watch(
   () => props.projectId,
@@ -515,8 +506,9 @@ onBeforeUnmount(() => {
           {{ sortDirection === "desc" ? "倒序" : "正序" }}
         </button>
       </div>
-      <button type="button" class="scope-toggle" :class="{ active: scopeOpen }" data-worktree-scope-toggle @click="scopeOpen = !scopeOpen">
-        范围
+      <span class="scope-summary" data-worktree-scope-summary>{{ scopeSummary }}</span>
+      <button type="button" class="scope-toggle" data-worktree-open-settings @click="emit('open-settings', 'worktree')">
+        在项目设置中配置
       </button>
       <!--
         条件必须包含 `includeFiltered`：勾上"显示被过滤的项"之后若过滤数归零（比如刚把忽略清空），
@@ -537,36 +529,6 @@ onBeforeUnmount(() => {
       </button>
       <span class="toolbar-count" data-worktrees-visible-count>{{ filteredItems.length }} / {{ items.length }} 项</span>
     </div>
-
-    <section v-if="scopeOpen" class="scope-panel" data-worktree-scope-panel>
-      <div class="scope-row">
-        <label>
-          默认范围
-          <select v-model="scopeMode" data-scope-mode>
-            <option value="all">全部分支</option>
-            <option value="patterns">只显示匹配的分支</option>
-          </select>
-        </label>
-        <label class="scope-checkbox">
-          <input v-model="scopeDetached" type="checkbox" data-scope-detached />
-          包含 detached worktree
-        </label>
-      </div>
-      <label v-if="scopeMode === 'patterns'" class="scope-patterns">
-        分支模式（一行一条，支持 <code>factory/*</code> 与 <code>*</code>）
-        <textarea v-model="scopePatterns" rows="3" data-scope-patterns></textarea>
-      </label>
-      <p class="scope-hint">
-        忽略列表：{{ inventory?.filter.ignoredBranches.length ?? 0 }} 条。在条目详情里点「忽略这条分支」。
-        <template v-if="!includeFiltered && (inventory?.filter.ignoredBranches.length ?? 0) > 0"
-          >取消忽略前先点上面的「显示被过滤的项」。</template
-        >
-      </p>
-      <p v-if="scopeError" class="scope-error" role="alert">{{ scopeError }}</p>
-      <div class="scope-actions">
-        <el-button size="small" type="primary" :loading="scopeBusy" data-scope-save @click="saveScope">保存范围</el-button>
-      </div>
-    </section>
 
     <div class="worktrees-body">
       <div class="worktrees-table-wrap">
@@ -897,6 +859,11 @@ onBeforeUnmount(() => {
   font-size: 11px;
   line-height: 1.6;
 }
+.scope-summary {
+  color: #93a1b5;
+  font-size: 10px;
+  white-space: nowrap;
+}
 .scope-toggle {
   padding: 5px 10px;
   border: 1px solid #e3e9f1;
@@ -912,66 +879,6 @@ onBeforeUnmount(() => {
   background: #eef5fd;
   color: #2c6cad;
   font-weight: 700;
-}
-.scope-panel {
-  display: grid;
-  gap: 8px;
-  margin: 0 clamp(20px, 4vw, 48px) 4px;
-  padding: 12px 14px;
-  border: 1px solid #e3e9f1;
-  border-radius: 10px;
-  background: #fbfcfe;
-}
-.scope-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 14px;
-  color: #52637e;
-  font-size: 11px;
-}
-.scope-row select,
-.scope-patterns textarea {
-  margin-left: 6px;
-  padding: 4px 6px;
-  border: 1px solid #dce4ee;
-  border-radius: 6px;
-  background: #fff;
-  color: #33425a;
-  font: inherit;
-  font-size: 11px;
-}
-.scope-checkbox {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-.scope-patterns {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  color: #52637e;
-  font-size: 11px;
-}
-.scope-patterns textarea {
-  width: 100%;
-  margin-left: 0;
-  resize: vertical;
-}
-.scope-hint {
-  margin: 0;
-  color: #93a1b5;
-  font-size: 10px;
-  line-height: 1.6;
-}
-.scope-error {
-  margin: 0;
-  color: #a94851;
-  font-size: 11px;
-}
-.scope-actions {
-  display: flex;
-  justify-content: flex-end;
 }
 .worktrees-toolbar {
   display: flex;
@@ -1265,6 +1172,11 @@ onBeforeUnmount(() => {
   }
   .worktrees-header h1 {
     font-size: 21px;
+  }
+  .scope-summary {
+    color: #93a1b5;
+    font-size: 10px;
+    white-space: nowrap;
   }
   .scope-toggle {
     padding: 5px 10px;

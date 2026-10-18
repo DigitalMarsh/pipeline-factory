@@ -4,12 +4,24 @@
 -->
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref, watch } from "vue";
-import { ArrowDown, CircleCheck, Connection, Delete, FolderOpened, InfoFilled, Plus, Setting, Warning } from "@element-plus/icons-vue";
+import {
+  ArrowDown,
+  CircleCheck,
+  Connection,
+  Delete,
+  Files,
+  FolderOpened,
+  InfoFilled,
+  Plus,
+  Setting,
+  Warning,
+} from "@element-plus/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { api } from "../api";
 import type { Project, ProjectSettings } from "../types";
 import { createProjectRequestScope } from "../utils/projectRoutes";
 import { formatCommandArgs, parseCommandArgs } from "../utils/commandArgs";
+import { formatBranchPatterns, parseBranchPatterns } from "../utils/worktreeStatus";
 import {
   backendOptions,
   backendLabel,
@@ -45,6 +57,7 @@ type ProjectSettingsPatch = Omit<ProjectSettings, "concurrency" | "models"> & {
  */
 const SETTINGS_TABS = [
   { key: "general", label: "常规" },
+  { key: "worktree", label: "Worktree" },
   { key: "execution", label: "执行" },
   { key: "commands", label: "命令" },
   { key: "hooks", label: "钩子" },
@@ -87,6 +100,11 @@ const form = reactive({
   repoRoot: "",
   defaultBranch: "",
   worktreeRoot: "",
+  /** Worktree 清单的默认范围（与 settings.worktree 一一对应）。 */
+  worktreeFilterMode: "all" as "all" | "patterns",
+  branchPatternsText: "",
+  includeDetachedWorktrees: true,
+  ignoredBranches: [] as string[],
   configVersion: 0,
   defaultTimeoutMs: 120000,
   executionTimeoutMs: 1800000,
@@ -191,6 +209,11 @@ function setForm(value: Project) {
     repoRoot: value.repoRoot,
     defaultBranch: value.defaultBranch,
     worktreeRoot: value.worktreeRoot,
+    // 老 Project 没有这一格：按缺省处理，与 domain 的 DEFAULT_WORKTREE_FILTER 一致。
+    worktreeFilterMode: settings.worktree?.filterMode ?? "all",
+    branchPatternsText: formatBranchPatterns(settings.worktree?.branchPatterns ?? []),
+    includeDetachedWorktrees: settings.worktree?.includeDetachedWorktrees ?? true,
+    ignoredBranches: [...(settings.worktree?.ignoredBranches ?? [])],
     configVersion: value.configVersion,
     defaultTimeoutMs: settings.concurrency.defaultTimeoutMs,
     executionTimeoutMs: settings.concurrency.executionTimeoutMs ?? 1800000,
@@ -255,6 +278,57 @@ async function load() {
     if (requestScope.isCurrent(requestToken, requestProjectId)) loading.value = false;
   }
 }
+
+// ───────────── Worktree 页签的分支清单 ─────────────
+const worktreeBranches = ref<string[]>([]);
+const worktreeBranchesLoading = ref(false);
+const worktreeBranchesError = ref("");
+const branchSearch = ref("");
+
+/**
+ * 可选分支 = 仓库里的本地分支 ∪ 已忽略列表。**并上已忽略的那部分是有意的**：一条被删掉的分支
+ * 仍留在忽略列表里，不并进来的话用户在这个页面上看不到它、也就没法把它摘掉。
+ * 主分支永远不参与忽略（服务端也永远显示它）。
+ */
+const branchOptions = computed(() => {
+  const names = new Set([...worktreeBranches.value, ...form.ignoredBranches]);
+  names.delete(form.defaultBranch);
+  return [...names].sort((left, right) => left.localeCompare(right));
+});
+const visibleBranchOptions = computed(() => {
+  const query = branchSearch.value.trim().toLowerCase();
+  return query ? branchOptions.value.filter((branch) => branch.toLowerCase().includes(query)) : branchOptions.value;
+});
+
+async function loadWorktreeBranches() {
+  if (!project.value || worktreeBranchesLoading.value) return;
+  worktreeBranchesLoading.value = true;
+  worktreeBranchesError.value = "";
+  try {
+    // 用全量清单：被忽略的分支也要列出来，否则取消忽略无从下手。
+    const inventory = await api.worktrees(project.value.id, { includeFiltered: true });
+    worktreeBranches.value = inventory.items.flatMap((item) => (item.branch ? [item.branch] : []));
+  } catch (caught) {
+    worktreeBranchesError.value = caught instanceof Error ? caught.message : "分支清单读取失败";
+  } finally {
+    worktreeBranchesLoading.value = false;
+  }
+}
+
+function toggleIgnoredBranchInForm(branch: string, ignored: boolean) {
+  const next = new Set(form.ignoredBranches);
+  if (ignored) next.add(branch);
+  else next.delete(branch);
+  form.ignoredBranches = [...next].sort((left, right) => left.localeCompare(right));
+}
+
+// 打开对话框时若正停在 Worktree 页签，项目加载完就把分支拉出来。
+watch(
+  () => [project.value?.id, activeTab.value, props.modelValue] as const,
+  ([projectId, tab, open]) => {
+    if (open && projectId && tab === "worktree") void loadWorktreeBranches();
+  },
+);
 
 function listValue(value: string) {
   return value
@@ -344,6 +418,16 @@ function settingsPayload(): ProjectSettingsPatch {
     defaultVerificationCommandIds: form.defaultVerificationCommandIds,
     defaultArtifactMode: form.defaultArtifactMode,
     hooks: lifecycle,
+    /**
+     * Worktree 清单的默认范围。**它不参与 configHash / configVersion**（见 domain 的 projectHash）：
+     * 这是"看清单时默认显示什么"，不是执行策略，改它不该让正在走的 Plan 判过期。
+     */
+    worktree: {
+      filterMode: form.worktreeFilterMode,
+      branchPatterns: parseBranchPatterns(form.branchPatternsText),
+      ignoredBranches: [...form.ignoredBranches],
+      includeDetachedWorktrees: form.includeDetachedWorktrees,
+    },
     models: {
       explorer: {
         model: form.explorerModel,
@@ -521,10 +605,10 @@ onBeforeUnmount(() => requestScope.invalidate());
             :class="{ active: activeTab === item.key }"
             @click="activeTab = item.key"
           >
-            <Setting v-if="item.key === 'general'" :size="14" /><Connection v-else-if="item.key === 'execution'" :size="14" /><FolderOpened
-              v-else-if="item.key === 'commands'"
+            <Setting v-if="item.key === 'general'" :size="14" /><Files v-else-if="item.key === 'worktree'" :size="14" /><Connection
+              v-else-if="item.key === 'execution'"
               :size="14"
-            /><CircleCheck v-else :size="14" />{{ item.label }}
+            /><FolderOpened v-else-if="item.key === 'commands'" :size="14" /><CircleCheck v-else :size="14" />{{ item.label }}
           </button>
         </nav>
         <main class="settings-content">
@@ -558,6 +642,97 @@ onBeforeUnmount(() => requestScope.invalidate());
               <div>
                 <strong>目录边界</strong>
                 <p>Explorer 使用仓库根目录只读分析；Run 始终使用 Worktree 写入。仓库目录、Worktree 和分支修改需要没有运行中的 Run。</p>
+              </div>
+            </div>
+          </section>
+          <section v-else-if="activeTab === 'worktree'" class="settings-section" data-settings-worktree>
+            <div class="section-title">
+              <div>
+                <h2>Worktree 清单与合并</h2>
+                <p>决定「Worktree 管理」默认显示哪些分支、哪些被忽略。仓库根目录、默认分支与 Worktree 根目录在「常规」页。</p>
+              </div>
+            </div>
+            <!--
+              仓库/主分支/Worktree 根目录在「常规」页编辑（它们牵动运行中的 Run，属于高风险路径）。
+              这里以只读摘要出现，是为了让"worktree 属性"在这一页能一眼看全，而不是让人去猜它在哪。
+            -->
+            <dl class="worktree-context" data-worktree-context>
+              <div>
+                <dt>仓库根目录</dt>
+                <dd :title="form.repoRoot">{{ form.repoRoot || "—" }}</dd>
+              </div>
+              <div>
+                <dt>默认分支</dt>
+                <dd>{{ form.defaultBranch || "—" }}</dd>
+              </div>
+              <div>
+                <dt>Worktree 根目录</dt>
+                <dd>{{ form.worktreeRoot || "—" }}</dd>
+              </div>
+            </dl>
+            <div class="settings-form-grid">
+              <label class="wide"
+                >默认显示范围<select v-model="form.worktreeFilterMode" :disabled="project.status === 'ARCHIVED'" data-worktree-filter-mode>
+                  <option value="all">显示全部分支</option>
+                  <option value="patterns">按分支模式过滤</option></select
+                ><small class="field-hint"
+                  >只影响清单的默认显示；服务端仍按完整 Git 事实扫描，被隐藏的分支依然可以预览与合并。</small
+                ></label
+              >
+              <label v-if="form.worktreeFilterMode === 'patterns'" class="wide"
+                >分支模式（逗号或换行分隔）<input
+                  v-model="form.branchPatternsText"
+                  :disabled="project.status === 'ARCHIVED'"
+                  placeholder="factory/*, feature/* 或 *"
+                  data-worktree-patterns
+                /><small class="field-hint">`*` = 全部；`prefix*` = 前缀匹配；其余按精确名匹配。</small></label
+              >
+              <label class="wide"
+                >Detached worktree
+                <el-checkbox v-model="form.includeDetachedWorktrees" :disabled="project.status === 'ARCHIVED'" data-worktree-detached
+                  >默认显示 detached worktree</el-checkbox
+                ><small class="field-hint">关掉之后，只有临时切换分支时才会用到的那种 worktree 不再出现在清单里。</small></label
+              >
+            </div>
+
+            <div class="section-title worktree-ignored-heading">
+              <div>
+                <h2>忽略分支</h2>
+                <p>被忽略的分支默认不进入清单；不会删除分支、不会删除 worktree、不改动 Git。主分支不能忽略。</p>
+              </div>
+            </div>
+            <p v-if="worktreeBranchesLoading" class="field-hint">正在读取分支…</p>
+            <!--
+              分支清单读取失败时**仍然渲染列表**：此时 `branchOptions` 只剩"已忽略的那些"，
+              足够把一条被忽略的分支摘掉。整块藏起来会让用户在这个页面上完全无从下手。
+            -->
+            <p v-else-if="worktreeBranchesError" class="settings-error">{{ worktreeBranchesError }}（只能看到已忽略的分支）</p>
+            <template v-if="!worktreeBranchesLoading">
+              <input
+                v-model="branchSearch"
+                class="worktree-branch-search"
+                placeholder="搜索分支…"
+                :disabled="project.status === 'ARCHIVED'"
+                data-worktree-branch-search
+              />
+              <div class="worktree-branch-list" data-worktree-branch-list>
+                <label v-for="branch in visibleBranchOptions" :key="branch" class="worktree-branch-option">
+                  <el-checkbox
+                    :model-value="form.ignoredBranches.includes(branch)"
+                    :disabled="project.status === 'ARCHIVED'"
+                    @update:model-value="toggleIgnoredBranchInForm(branch, $event)"
+                    >{{ branch }}</el-checkbox
+                  >
+                </label>
+                <p v-if="!visibleBranchOptions.length" class="field-hint">没有匹配的分支。</p>
+              </div>
+            </template>
+
+            <div class="settings-notice">
+              <InfoFilled :size="16" />
+              <div>
+                <strong>不影响执行配置</strong>
+                <p>这一页只改清单的默认范围：不推进 Project 的 configVersion，也不会让正在走的 Plan 判成过期。</p>
               </div>
             </div>
           </section>
@@ -1237,6 +1412,62 @@ onBeforeUnmount(() => requestScope.invalidate());
 .project-settings-dialog .settings-form-grid select:disabled {
   color: #a4afbc;
   background: #f5f7fa;
+}
+.project-settings-dialog .worktree-context {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px 18px;
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid #e8edf3;
+  border-radius: 10px;
+  background: #fbfcfe;
+}
+.project-settings-dialog .worktree-context div {
+  display: flex;
+  gap: 10px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.project-settings-dialog .worktree-context dt {
+  flex: 0 0 92px;
+  color: #8b99ae;
+}
+.project-settings-dialog .worktree-context dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: #33425a;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-settings-dialog .worktree-ignored-heading {
+  margin-top: 22px;
+}
+.project-settings-dialog .worktree-branch-search {
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border: 1px solid #dce4ee;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 12px;
+}
+.project-settings-dialog .worktree-branch-list {
+  display: grid;
+  max-height: 240px;
+  overflow: auto;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 4px 12px;
+  padding: 8px 10px;
+  border: 1px solid #e8edf3;
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+.project-settings-dialog .worktree-branch-option {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .project-settings-dialog .field-hint {
   display: block;
