@@ -39,6 +39,8 @@
   "Waiting for graceful termination..."、API 再也不起来。改为 `Fastify({ forceCloseConnections: true })`
   + 3 秒兜底退出。
 - 组件 prop 叫 `ref` 会被 Vue 当成模板引用（`:ref="x"` 轮不到 props），改名 `target`。
+- **Run 的自动提交会把服务配置一起提交**：`git add -A` 不区分"本机运行配置"与"这次 Run 的产物"，
+  `.pipeline-factory/services.json` 会跟着分支进主干。`commit()` 的 add 现在排除这两个元数据目录。
 
 ### Verification
 

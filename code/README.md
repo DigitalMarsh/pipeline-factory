@@ -298,7 +298,8 @@ GET  /api/v4/projects/:projectId/worktrees/events             ?afterSequence=   
 - **服务启停**：读取 worktree 根目录下的 `.pipeline-factory/services.json`（原生，`argv` 直接执行），
   兼容 `.worktree-manage/services.json`（`start_command` 走 `sh -lc`）。`workdir` 解析后必须仍在
   worktree 内；**只停止本进程启动的子进程**（先 SIGTERM 进程组、3 秒后 SIGKILL），不按端口杀。
-  这两个目录被排除在"工作区脏"判据之外——配置文件不该让 worktree 变成不可合并。
+  这两个目录被排除在"工作区脏"判据之外，也排除在 Run 的自动提交之外（`git add -A` 不提交它们）
+  ——本机运行配置不该让 worktree 变成不可合并，更不该随合并进主干。
 - **提交历史**：`log` / `commits` / `diff` 三条只读接口，界面上的「提交历史」对话框用它们；
   只读，不 checkout、不 reset。
 - **git 版本**：冲突预测依赖 `git merge-tree --write-tree`（≥ 2.38），`git switch` 需要 ≥ 2.23。

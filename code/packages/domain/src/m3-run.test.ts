@@ -536,7 +536,8 @@ describe("Scheduler and ExecutionThread", () => {
     await expect(adapter.commit({ path: "/worktrees/run-1", branch: "factory/run-1", baseCommit: "abc" }, "title")).resolves.toBe("newsha");
     expect(commands).toEqual([
       ["status", "--porcelain"],
-      ["add", "-A"],
+      // 工具元数据目录（服务配置）不参与提交，见 git/worktree.ts 的说明。
+      ["add", "-A", "--", ".", ":(exclude).pipeline-factory", ":(exclude).worktree-manage"],
       ["commit", "-m", "title"],
       ["rev-parse", "HEAD"],
     ]);

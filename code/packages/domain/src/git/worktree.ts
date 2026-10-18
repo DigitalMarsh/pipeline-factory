@@ -116,7 +116,12 @@ export class LocalGitWorktreeAdapter implements WorkspaceAdapter {
     const status = await this.runGit(["status", "--porcelain"], workspace.path);
     if (status.exitCode !== 0) throw new Error(`Git status failed in ${workspace.path}: ${status.stderr}`);
     if (!status.stdout.trim()) return null;
-    const added = await this.runGit(["add", "-A"], workspace.path);
+    /**
+     * **排除工具自己的元数据目录**（服务配置）：它们属于本机的运行配置，不是这次 Run 的产物。
+     * 不排除的话，`git add -A` 会把 `.pipeline-factory/services.json` 一起提交进分支，
+     * 再随合并进主干——那是把本机配置当成代码发布。
+     */
+    const added = await this.runGit(["add", "-A", "--", ".", ":(exclude).pipeline-factory", ":(exclude).worktree-manage"], workspace.path);
     if (added.exitCode !== 0) throw new Error(`Git add failed in ${workspace.path}: ${added.stderr}`);
     const committed = await this.runGit(["commit", "-m", message], workspace.path);
     if (committed.exitCode !== 0) throw new Error(`Git commit failed in ${workspace.path}: ${committed.stderr}`);
