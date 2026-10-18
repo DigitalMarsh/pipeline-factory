@@ -61,3 +61,8 @@ export const worktreeServiceActionBody = z.object({
   itemId: z.string().trim().min(1).max(4096),
   serviceId: z.string().trim().min(1).max(200),
 });
+
+/** 执行目录：切换目标、单个服务的启停与日志。 */
+export const worktreeRuntimeSwitchBody = z.object({ itemId: z.string().trim().min(1).max(4096) });
+export const worktreeRuntimeServiceBody = z.object({ serviceId: z.string().trim().min(1).max(200) });
+export const worktreeRuntimeLogsQuery = z.object({ serviceId: z.string().trim().min(1).max(200) });

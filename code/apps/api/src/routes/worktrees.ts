@@ -1,6 +1,7 @@
 /**
- * 模块职责：Worktree 域的 13 条路由 —— 盘点（含项目范围过滤）、合并预览、执行合并、继续 / 中止合并、
- *   清理、提交历史、提交文件、单文件 diff、服务启停与日志，以及项目级 Worktree 事件流。
+ * 模块职责：Worktree 域的 19 条路由 —— 盘点（含项目范围过滤）、合并预览、执行合并、继续 / 中止合并、
+ *   清理、提交历史、提交文件、单文件 diff、服务启停与日志、执行目录（切换/清空/runtime 服务），
+ *   以及项目级 Worktree 事件流。
  *
  * 为什么这一组单独成文件：它们是**唯一会真的改动受管仓库 Git 状态**的 HTTP 入口
  *   （`run/merge.ts` 那条 MergeRequest 链路只观察、不回写）。把"会写仓库"的入口集中在一处，
@@ -20,6 +21,7 @@
  *   6) `includeFiltered=1` 只影响**读**：写路径（preview / merge / cleanup）在领域层一律按全量清单
  *      解析目标，所以"被项目范围隐藏的分支"不会变成"不存在"。
  */
+import { resolve as resolvePath } from "node:path";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 import { WorktreeError, type PipelineStore, type Project, type WorktreeService } from "@pipeline-factory/domain";
@@ -31,6 +33,9 @@ import {
   worktreeListQuery,
   worktreeLogQuery,
   worktreeMergeBody,
+  worktreeRuntimeLogsQuery,
+  worktreeRuntimeServiceBody,
+  worktreeRuntimeSwitchBody,
   worktreeServiceActionBody,
   worktreeServiceLogsQuery,
   worktreeServicesQuery,
@@ -58,6 +63,7 @@ function statusFor(error: unknown): number {
     case "WORKTREE_CLEANUP_BLOCKED":
     case "WORKTREE_STATE_CHANGED":
     case "WORKTREE_NO_MERGE_IN_PROGRESS":
+    case "WORKTREE_RUNTIME_BLOCKED":
     case "WORKTREE_GIT_FAILED":
       return 409;
     default:
@@ -75,12 +81,16 @@ function failure(error: unknown) {
  * 事件流转发的类型白名单：Worktree 自身的写操作 + 会影响清单状态的 Run/Plan 变化。
  * **不是"所有项目事件"**——把模型输出、探索回调也推过来既浪费又扩大暴露面。
  */
+/** runtime 服务在进程管理器里的键段；与单个 worktree 的 `itemId` 区分开。 */
+const RUNTIME_SERVICE_KEY = "runtime";
+
 const WORKTREE_EVENT_TYPES = new Set<string>([
   "worktree.merge.completed",
   "worktree.merge.conflict",
   "worktree.merge.continued",
   "worktree.merge.aborted",
   "worktree.cleaned",
+  "worktree.runtime.switched",
   "merge.request.created",
   "merge.detected",
   "merge.confirmed",
@@ -249,7 +259,160 @@ export function registerWorktreeRoutes(app: FastifyInstance, deps: WorktreeRoute
     }
   });
 
-  // ───────────── 服务启停（第三个参数是 worktree 根目录，进程管理在 runtime） ─────────────
+  /**
+   * 执行目录的 7 条路由。**进程管理与工作树面板共用同一套 runner**：runtime 的服务统一以
+   * `itemId = "runtime"` 作为键段，于是"切换前全停"只需一条 `stopItem(projectId, "runtime")`。
+   */
+  const runtimeRepoRoot = (runtimePath: string) => resolvePath(runtimePath, "repo");
+
+  /** 组装执行目录的现状 + 从 runtime 配置链解析出的服务清单。 */
+  async function runtimeSnapshot(project: NonNullable<ReturnType<PipelineStore["getProject"]>>) {
+    const runtime = await worktrees.runtime(project);
+    const usable = Boolean(runtime.current && runtime.link?.exists);
+    const services =
+      usable && worktreeServices
+        ? worktreeServices.inspect(
+            project.id,
+            RUNTIME_SERVICE_KEY,
+            runtimeRepoRoot(runtime.path),
+            project.settings.worktreeServices ?? [],
+            runtime.path,
+          )
+        : null;
+    return { runtime, services };
+  }
+
+  app.get("/api/v4/projects/:projectId/runtime", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: "Invalid runtime request" });
+    const project = projectOf(params.data.projectId);
+    if (!project) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
+    try {
+      return await runtimeSnapshot(project);
+    } catch (error) {
+      return reply.code(statusFor(error)).send(failure(error));
+    }
+  });
+
+  app.post("/api/v4/projects/:projectId/runtime/switch", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    const body = worktreeRuntimeSwitchBody.safeParse(request.body ?? {});
+    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid runtime switch request" });
+    const project = projectOf(params.data.projectId);
+    if (!project) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
+    try {
+      // 先停服务再换链接：进程还开着旧路径时换链接，日志与写入都会指错分支。
+      const stoppedServices = worktreeServices ? await worktreeServices.stopItem(project.id, RUNTIME_SERVICE_KEY) : 0;
+      const result = await worktrees.switchRuntime(project, body.data.itemId);
+      const { services } = await runtimeSnapshot(project);
+      return { ...result, stoppedServices, services };
+    } catch (error) {
+      return reply.code(statusFor(error)).send(failure(error));
+    }
+  });
+
+  app.post("/api/v4/projects/:projectId/runtime/clear", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: "Invalid runtime clear request" });
+    const project = projectOf(params.data.projectId);
+    if (!project) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
+    try {
+      const stoppedServices = worktreeServices ? await worktreeServices.stopItem(project.id, RUNTIME_SERVICE_KEY) : 0;
+      const result = await worktrees.clearRuntime(project);
+      return { ...result, stoppedServices };
+    } catch (error) {
+      return reply.code(statusFor(error)).send(failure(error));
+    }
+  });
+
+  /** runtime 服务相关路由共同的守卫：执行目录必须已经指向一个可用的 worktree。 */
+  async function requireRuntime(project: NonNullable<ReturnType<PipelineStore["getProject"]>>, reply: FastifyReply) {
+    const runtime = await worktrees.runtime(project);
+    if (!runtime.current || !runtime.link?.exists) {
+      return {
+        error: reply
+          .code(409)
+          .send({ code: "WORKTREE_RUNTIME_BLOCKED", error: "执行目录还没有指向可用的 worktree，请先在 Worktree 面板里切换。" }),
+      };
+    }
+    if (!worktreeServices) {
+      return {
+        error: reply.code(503).send({ code: "WORKTREE_SERVICES_UNAVAILABLE", error: "本实例没有装配服务进程管理。" }),
+      };
+    }
+    return { runtime };
+  }
+
+  app.get("/api/v4/projects/:projectId/runtime/services", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: "Invalid runtime services request" });
+    const project = projectOf(params.data.projectId);
+    if (!project) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
+    try {
+      const target = await requireRuntime(project, reply);
+      if ("error" in target) return target.error;
+      return worktreeServices!.inspect(
+        project.id,
+        RUNTIME_SERVICE_KEY,
+        runtimeRepoRoot(target.runtime.path),
+        project.settings.worktreeServices ?? [],
+        target.runtime.path,
+      );
+    } catch (error) {
+      return reply.code(statusFor(error)).send(failure(error));
+    }
+  });
+
+  app.post("/api/v4/projects/:projectId/runtime/services/start", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    const body = worktreeRuntimeServiceBody.safeParse(request.body ?? {});
+    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid runtime service start request" });
+    const project = projectOf(params.data.projectId);
+    if (!project) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
+    const target = await requireRuntime(project, reply);
+    if ("error" in target) return target.error;
+    const root = runtimeRepoRoot(target.runtime.path);
+    const services = worktreeServices!.inspect(
+      project.id,
+      RUNTIME_SERVICE_KEY,
+      root,
+      project.settings.worktreeServices ?? [],
+      target.runtime.path,
+    );
+    const config = services.services.find((service) => service.serviceId === body.data.serviceId);
+    if (!config) return reply.code(404).send({ code: "WORKTREE_SERVICE_NOT_FOUND", error: `服务不存在：${body.data.serviceId}` });
+    try {
+      return { state: worktreeServices!.start(project.id, RUNTIME_SERVICE_KEY, root, config) };
+    } catch (error) {
+      return reply
+        .code(409)
+        .send({ code: "WORKTREE_SERVICE_START_FAILED", error: error instanceof Error ? error.message : "服务启动失败" });
+    }
+  });
+
+  app.post("/api/v4/projects/:projectId/runtime/services/stop", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    const body = worktreeRuntimeServiceBody.safeParse(request.body ?? {});
+    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid runtime service stop request" });
+    const project = projectOf(params.data.projectId);
+    if (!project) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
+    const target = await requireRuntime(project, reply);
+    if ("error" in target) return target.error;
+    return { state: await worktreeServices!.stop(project.id, RUNTIME_SERVICE_KEY, body.data.serviceId) };
+  });
+
+  app.get("/api/v4/projects/:projectId/runtime/services/logs", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    const query = worktreeRuntimeLogsQuery.safeParse(request.query ?? {});
+    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid runtime service logs request" });
+    const project = projectOf(params.data.projectId);
+    if (!project) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
+    const target = await requireRuntime(project, reply);
+    if ("error" in target) return target.error;
+    return { items: worktreeServices!.logs(project.id, RUNTIME_SERVICE_KEY, query.data.serviceId) };
+  });
+
+  // ───────────── 单个 worktree 的服务启停（第三个参数是 worktree 根目录，进程管理在 runtime） ─────────────
 
   app.get("/api/v4/projects/:projectId/worktrees/services", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);

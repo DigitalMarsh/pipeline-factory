@@ -319,6 +319,46 @@ GET  /api/v4/projects/:projectId/worktrees/events             ?afterSequence=   
 - **性能**：清单按项目范围先过滤再跑 git；每条分支的 ahead/behind 用有界并发（8）执行；
   worktree 的脏/冲突判定合并为一次 `status --porcelain -z`；分支数超过 300 条时截断并标记。
 
+## 执行目录（合并前验证）
+
+合并前想亲手点一遍"这个改动到底对不对"，但每个 worktree 的路径都不一样——端口与配置文件往往按路径写，
+验证一次就要来回对照。执行目录给每个项目一个**固定路径**：
+
+```text
+<project.worktreeRoot>/.runtime/
+  ├── repo -> /abs/path/worktrees/<branch>   ← 切换只改这一条（原子替换）
+  └── services.json                          ← 可选：跨分支固定的服务/端口配置
+```
+
+- **位置由 `worktreeRoot` 派生**，没有新设置项；以 `.` 开头，不会与 Run 的 worktree 目录撞名
+  （分支叶子名正则不允许以点开头），也不在 `git worktree list` 里。
+- **当前目标只由 `readlink(repo)` 决定**，不另存状态：重启进程、手动改链接都自洽。
+  `repo` 若是真实目录/文件，切换与清空一律拒绝——那是用户自己的东西，我们不删。
+- **切换语义**：先停掉通过执行目录启动的服务 → 建临时链接再 `rename` 覆盖（不 `unlink`+`symlink`，
+  否则中间那一刻服务会拿到 ENOENT）。可选「切换并启动」：依次启动所有 `enabled` 服务，任一失败即停。
+- **服务配置优先级**：`<runtime>/services.json` → 目标 worktree 的
+  `.pipeline-factory/services.json` / `.worktree-manage/services.json` → 项目设置里的兜底。
+  文件存在但解析失败**不向下回落**（坏配置要被看见）。响应里的 `configSource` 会说明用的是
+  `runtime` / `worktree-file` / `project-fallback`。
+- **与清理的关系**：当前执行目录目标不能被清理（链接会悬空），先切走或清空；合并不受影响。
+- **能力边界**：符号链接改变的是"路径"，不是"进程的物理 cwd"——`getcwd()` 仍会解析成 worktree 的
+  真实路径。面向"配置与端口按路径写"的验证场景成立；两个分支同时占用同一组端口不可能靠它解决
+  （单执行目录本就是串行验证）。Windows 上创建符号链接需要开发者模式。
+
+```text
+GET  /api/v4/projects/:projectId/runtime
+POST /api/v4/projects/:projectId/runtime/switch   { itemId }
+POST /api/v4/projects/:projectId/runtime/clear
+GET  /api/v4/projects/:projectId/runtime/services
+POST /api/v4/projects/:projectId/runtime/services/start|stop  { serviceId }
+GET  /api/v4/projects/:projectId/runtime/services/logs        ?serviceId=
+```
+
+> 为什么**不引入 workspace 聚合**（把多个仓库当成一个单元一次建 worktree）：
+> 本工程的 `Plan` 契约绑定单一仓库、Run 只认一个 `worktreeRoot`，引入它要同时改契约、预检、派发、
+> 合并与权限；而"路径/端口固定"这件事单仓库内部就能解决。需要"前后端一键一起切"时，
+> 后续可以加一个轻量「执行组」而不动模型。
+
 ## Plan V2 与项目验证
 
 新 Explorer 只能产出 `GeneratedPlanSpec`（`schemaVersion: 2`）。模型可以声明目标、范围、任务、验证模式和合并意图，但不能提供项目 ID、仓库路径、Git branch/commit、配置版本/哈希或任何命令 ID。Factory 在候选生成时用已绑定 Project、真实 Git 基线和冻结的 Project 配置解析为 `ResolvedPlanContract`；绝对路径、`..` 路径穿越和概念性 scope 会被拒绝。Project 配置在 Confirm 前变化会使 Candidate 过期，已 Confirm 的 Revision 始终使用冻结快照。

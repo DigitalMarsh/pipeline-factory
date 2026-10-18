@@ -32,9 +32,12 @@ import type {
   WorktreeLogCommit,
   WorktreeMergePreview,
   WorktreeMergeResult,
+  WorktreeRuntimeResponse,
   WorktreeServiceLogEntry,
   WorktreeServiceState,
   WorktreeServices,
+  RuntimeSwitchResponse,
+  RuntimeClearResponse,
 } from "./types";
 
 export class ApiRequestError extends Error {
@@ -340,6 +343,29 @@ export const api = {
       `/api/v4/projects/${encodeURIComponent(projectId)}/worktrees/commits/${encodeURIComponent(commit)}/diff?path=${encodeURIComponent(path)}${
         previousPath ? `&previousPath=${encodeURIComponent(previousPath)}` : ""
       }`,
+    ),
+  /** 执行目录：现状 + runtime 配置链解析出的服务清单。 */
+  worktreeRuntime: (projectId: string) => request<WorktreeRuntimeResponse>(`/api/v4/projects/${encodeURIComponent(projectId)}/runtime`),
+  switchWorktreeRuntime: (projectId: string, itemId: string) =>
+    request<RuntimeSwitchResponse>(`/api/v4/projects/${encodeURIComponent(projectId)}/runtime/switch`, {
+      method: "POST",
+      body: JSON.stringify({ itemId }),
+    }),
+  clearWorktreeRuntime: (projectId: string) =>
+    request<RuntimeClearResponse>(`/api/v4/projects/${encodeURIComponent(projectId)}/runtime/clear`, { method: "POST" }),
+  startRuntimeService: (projectId: string, serviceId: string) =>
+    request<{ state: WorktreeServiceState }>(`/api/v4/projects/${encodeURIComponent(projectId)}/runtime/services/start`, {
+      method: "POST",
+      body: JSON.stringify({ serviceId }),
+    }),
+  stopRuntimeService: (projectId: string, serviceId: string) =>
+    request<{ state: WorktreeServiceState }>(`/api/v4/projects/${encodeURIComponent(projectId)}/runtime/services/stop`, {
+      method: "POST",
+      body: JSON.stringify({ serviceId }),
+    }),
+  runtimeServiceLogs: (projectId: string, serviceId: string) =>
+    request<{ items: WorktreeServiceLogEntry[] }>(
+      `/api/v4/projects/${encodeURIComponent(projectId)}/runtime/services/logs?serviceId=${encodeURIComponent(serviceId)}`,
     ),
   worktreeServices: (projectId: string, itemId: string) =>
     request<WorktreeServices>(`/api/v4/projects/${encodeURIComponent(projectId)}/worktrees/services?itemId=${encodeURIComponent(itemId)}`),

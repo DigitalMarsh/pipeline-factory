@@ -130,7 +130,48 @@ export class WorktreeServiceRunner {
    * **来源优先级：worktree 文件整份覆盖项目兜底，二者不合并。** 文件存在但解析失败时也**不回落**到
    * 兜底——回落会把"文件写坏了"伪装成"用了另一份配置"，用户更难发现。只有文件不存在时才用兜底。
    */
-  inspect(projectId: string, itemId: string, worktreePath: string, fallback: readonly ProjectWorktreeService[] = []): WorktreeServices {
+  inspect(
+    projectId: string,
+    itemId: string,
+    worktreePath: string,
+    fallback: readonly ProjectWorktreeService[] = [],
+    runtimePath?: string,
+  ): WorktreeServices {
+    /**
+     * **执行目录的配置最优先**：`<runtime>/services.json` 不随分支变化，是"端口固定"的关键。
+     * 它存在但解析失败时同样**不向下回落**（回落会把"文件写坏了"伪装成"用了另一份配置"）。
+     */
+    if (runtimePath) {
+      const runtimeConfig = resolvePath(runtimePath, "services.json");
+      if (existsSync(runtimeConfig)) {
+        try {
+          const parsed = JSON.parse(readFileSync(runtimeConfig, "utf8")) as unknown;
+          const services = parseServiceConfig(parsed, "pipeline-factory").map((service) => ({
+            ...service,
+            source: "runtime" as const,
+          }));
+          return {
+            itemId,
+            worktreePath,
+            configSource: "runtime",
+            configPath: runtimeConfig,
+            configError: null,
+            services,
+            states: this.states(projectId, itemId),
+          };
+        } catch (error) {
+          return {
+            itemId,
+            worktreePath,
+            configSource: "runtime",
+            configPath: runtimeConfig,
+            configError: error instanceof Error ? error.message : String(error),
+            services: [],
+            states: this.states(projectId, itemId),
+          };
+        }
+      }
+    }
     const source = locateServiceConfig(worktreePath);
     if (!source) {
       const services: WorktreeServiceConfig[] = fallback.map((service) => ({ ...service, source: "project-settings" }));

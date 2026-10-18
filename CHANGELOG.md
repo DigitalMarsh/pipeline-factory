@@ -1,5 +1,37 @@
 # Changelog
 
+## 2026-10-18 — 执行目录：合并前的稳定运行与验证
+
+痛点：合并前想亲手验证改动，但每个 worktree 路径不同，端口/配置按路径写，验证一次就要来回对照。
+现在每个项目有一个**固定执行目录**，服务从它启动，端口与配置不随分支变化。
+
+- `<project.worktreeRoot>/.runtime/`，其中 `repo` 是指向"当前选中 worktree"的符号链接；
+  切换是**原子替换**（临时链接 + `rename`），切换前先停掉 runtime 服务。
+- **当前目标只由 `readlink(repo)` 决定**，不另存状态；`repo` 是真实目录时拒绝一切写操作。
+- 服务配置优先级：`<runtime>/services.json` → 目标 worktree 的配置 → 项目兜底；
+  坏文件不回落。响应里的 `configSource` 说明来源。
+- 清理守卫：当前执行目录目标不能清理（先切走/清空）。
+- UI：Worktree 面板新增执行目录条（路径 + 当前分支 + 清空）、详情里的「设为执行目录」/
+  「切换并启动」；服务区块在该条目是当前目标时走 runtime 接口，并渲染健康检查链接。
+- 新增 7 条 `/runtime*` 路由与审计事件 `worktree.runtime.switched`。
+
+### 调研结论（为什么这样设计）
+
+读了 [worktree-manager](https://github.com/guoyongchang/worktree-manager) 的源码：
+它**没有执行目录、也没有端口管理**——每个 worktree 一个内置终端（cwd=该 worktree）；它的软链接
+是依赖共享（`linked_folders` 从主项目链到新 worktree 并 `git rm --cached`）与共享配置
+（`linked_workspace_items`）。它的"导入项目"是 `copy_dir_recursive` **复制**进 `projects/`，
+即 workspace 拥有一份仓库副本——与本工程"Project = 你自己的仓库"的假设不同，因此**不引入 workspace
+聚合**、也不迁移现有的 `repoRoot` / `worktreeRoot` 配置。
+
+### Verification
+
+- `pnpm verify` 全绿：domain **542** / api **163** / web **704**。新增：执行目录的创建/原子切换/清空/
+  真实目录拒绝/清理守卫（真软链接）、runtime 配置三级优先级与坏文件不回落、runtime 路由
+  （切换停服务、清理拒绝）、面板的执行目录条与切换按钮。
+- `docs/消息类型及事件状态机流程图.md` 重新清点：A 25 / B 28 / C 6 状态**均不变**，
+  并按你的要求加了一节带日期的复核说明（执行目录面板不是会话消息界面）。
+
 ## 2026-10-18（兜底配置复盘）— 字符串被拆成单字符、兜底改完不刷新
 
 补完兜底服务配置后再过一遍，抓到两处：

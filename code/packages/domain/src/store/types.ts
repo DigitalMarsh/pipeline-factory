@@ -108,6 +108,7 @@ export type DomainEvent = {
     | "worktree.merge.continued"
     | "worktree.merge.aborted"
     | "worktree.cleaned"
+    | "worktree.runtime.switched"
     | "agent.loop.started"
     | "agent.loop.resumed"
     | "agent.loop.paused"

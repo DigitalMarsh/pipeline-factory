@@ -17,7 +17,19 @@ import { api } from "../api";
 import type { WorktreeItem, WorktreeServiceLogEntry, WorktreeServices } from "../types";
 import { worktreeServiceStatusLabel, worktreeServiceStatusTagType } from "../utils/worktreeStatus";
 
-const props = defineProps<{ projectId: string; item: WorktreeItem }>();
+const props = withDefaults(
+  defineProps<{
+    projectId: string;
+    item: WorktreeItem;
+    /**
+     * `runtime`：这个条目是当前执行目录目标，服务通过固定路径 `<runtime>/repo` 启动（端口/路径稳定），
+     * 配置走 runtime 链；`worktree`：直接在这个 worktree 里起。
+     */
+    mode?: "worktree" | "runtime";
+  }>(),
+  { mode: "worktree" },
+);
+const isRuntime = () => props.mode === "runtime";
 
 const snapshot = ref<WorktreeServices | null>(null);
 const loading = ref(false);
@@ -47,7 +59,9 @@ async function load() {
   loading.value = true;
   error.value = "";
   try {
-    const response = await api.worktreeServices(props.projectId, props.item.itemId);
+    const response = isRuntime()
+      ? (await api.worktreeRuntime(props.projectId)).services
+      : await api.worktreeServices(props.projectId, props.item.itemId);
     if (token === generation) snapshot.value = response;
   } catch (caught) {
     if (token === generation) error.value = caught instanceof Error ? caught.message : "服务配置读取失败";
@@ -59,7 +73,8 @@ async function load() {
 async function start(serviceId: string) {
   actionId.value = serviceId;
   try {
-    await api.startWorktreeService(props.projectId, props.item.itemId, serviceId);
+    if (isRuntime()) await api.startRuntimeService(props.projectId, serviceId);
+    else await api.startWorktreeService(props.projectId, props.item.itemId, serviceId);
     ElMessage.success("服务已启动");
     await load();
     if (openLogsFor.value === serviceId) await loadLogs(serviceId);
@@ -73,7 +88,8 @@ async function start(serviceId: string) {
 async function stop(serviceId: string) {
   actionId.value = serviceId;
   try {
-    await api.stopWorktreeService(props.projectId, props.item.itemId, serviceId);
+    if (isRuntime()) await api.stopRuntimeService(props.projectId, serviceId);
+    else await api.stopWorktreeService(props.projectId, props.item.itemId, serviceId);
     ElMessage.success("服务已停止");
     await load();
   } catch (caught) {
@@ -87,7 +103,9 @@ async function loadLogs(serviceId: string) {
   logsLoading.value = true;
   logsError.value = "";
   try {
-    const response = await api.worktreeServiceLogs(props.projectId, props.item.itemId, serviceId);
+    const response = isRuntime()
+      ? await api.runtimeServiceLogs(props.projectId, serviceId)
+      : await api.worktreeServiceLogs(props.projectId, props.item.itemId, serviceId);
     if (openLogsFor.value === serviceId) logs.value = response.items;
   } catch (caught) {
     if (openLogsFor.value === serviceId) logsError.value = caught instanceof Error ? caught.message : "日志读取失败";
@@ -116,7 +134,7 @@ async function toggleLogs(serviceId: string) {
 }
 
 watch(
-  () => props.item.itemId,
+  () => [props.item.itemId, props.mode] as const,
   () => {
     stopLogTimer();
     openLogsFor.value = null;
@@ -144,6 +162,9 @@ onBeforeUnmount(stopLogTimer);
       <p v-if="snapshot.configError" class="services-state services-error" data-services-config-error>
         配置解析失败：{{ snapshot.configError }}
       </p>
+      <p v-else-if="snapshot.configSource === 'runtime'" class="services-source" data-services-source>
+        通过执行目录运行（配置来自 {{ snapshot.configPath }}；路径与端口跨分支固定）
+      </p>
       <p v-else-if="snapshot.configSource === 'project-fallback'" class="services-source" data-services-source>
         使用项目兜底配置（这个 worktree 里没有 services.json）
       </p>
@@ -160,6 +181,9 @@ onBeforeUnmount(stopLogTimer);
               <strong>{{ service.name }}</strong>
               <small>{{ service.role }} · {{ service.workdir }}</small>
               <code :title="commandOf(service)">{{ commandOf(service) }}</code>
+              <a v-if="service.healthUrl" :href="service.healthUrl" target="_blank" rel="noreferrer" class="service-health"
+                >打开 {{ service.healthUrl }}</a
+              >
             </div>
             <el-tag
               size="small"
@@ -290,6 +314,13 @@ onBeforeUnmount(stopLogTimer);
 .service-copy code {
   overflow: hidden;
   color: #647794;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.service-health {
+  overflow: hidden;
+  color: #2c6cad;
   font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;

@@ -17,7 +17,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { CopyDocument, Refresh, Warning } from "@element-plus/icons-vue";
 import { api } from "../api";
-import type { Project, WorktreeInventory, WorktreeItem, WorktreeMergePreview, WorktreeMergeResult } from "../types";
+import type { Project, WorktreeInventory, WorktreeItem, WorktreeMergePreview, WorktreeMergeResult, WorktreeRuntimeInfo } from "../types";
 import {
   cleanupDisabledReason,
   matchesWorktreeFilters,
@@ -81,6 +81,16 @@ const scopeBusy = ref(false);
 const scopeError = ref("");
 const logOpen = ref(false);
 const logRef = ref("");
+
+/** 执行目录（合并前验证的固定路径）。`null` 表示还没读到（或本实例不支持）。 */
+const runtime = ref<WorktreeRuntimeInfo | null>(null);
+const runtimeBusy = ref(false);
+const runtimeError = ref("");
+const runtimeClearOpen = ref(false);
+
+/** 当前选中的条目是不是执行目录目标：是的话服务走 runtime 接口（路径/端口固定）。 */
+const isRuntimeTarget = computed(() => Boolean(selectedItem.value && runtime.value?.current?.itemId === selectedItem.value.itemId));
+const runtimeServicesMode = computed<"worktree" | "runtime">(() => (isRuntimeTarget.value ? "runtime" : "worktree"));
 
 let requestGeneration = 0;
 let eventSource: EventSource | null = null;
@@ -169,9 +179,14 @@ async function load() {
   loading.value = true;
   error.value = "";
   try {
-    const next = await api.worktrees(projectId, { includeFiltered: includeFiltered.value });
+    const [next, runtimeResponse] = await Promise.all([
+      api.worktrees(projectId, { includeFiltered: includeFiltered.value }),
+      // 执行目录读失败不该让整张清单挂掉：它是附加信息，降级成"未读到"。
+      api.worktreeRuntime(projectId).catch(() => null),
+    ]);
     if (generation !== requestGeneration || projectId !== props.projectId) return;
     inventory.value = next;
+    runtime.value = runtimeResponse?.runtime ?? null;
     if (selectedItemId.value && !next.items.some((item) => item.itemId === selectedItemId.value)) {
       selectedItemId.value = null;
     }
@@ -181,6 +196,53 @@ async function load() {
     inventory.value = null;
   } finally {
     if (generation === requestGeneration) loading.value = false;
+  }
+}
+
+/**
+ * 把某个 worktree 设为执行目录。`startServices` 为真时（「切换并启动」）依次启动所有启用的服务，
+ * 任一失败即停在那一条并报错——不要"部分启动成功却当成功"。
+ */
+async function switchRuntime(item: WorktreeItem, startServices = false) {
+  if (runtimeBusy.value) return;
+  runtimeBusy.value = true;
+  runtimeError.value = "";
+  try {
+    const response = await api.switchWorktreeRuntime(props.projectId, item.itemId);
+    runtime.value = response.runtime;
+    if (startServices) {
+      for (const service of (response.services?.services ?? []).filter((entry) => entry.enabled)) {
+        try {
+          await api.startRuntimeService(props.projectId, service.serviceId);
+        } catch (caught) {
+          runtimeError.value = `服务 ${service.name} 启动失败：${caught instanceof Error ? caught.message : String(caught)}`;
+          break;
+        }
+      }
+    }
+    ElMessage.success(response.stoppedServices > 0 ? `已切换执行目录（先停掉 ${response.stoppedServices} 个服务）` : "已切换执行目录");
+    await load();
+  } catch (caught) {
+    runtimeError.value = caught instanceof Error ? caught.message : "执行目录切换失败";
+  } finally {
+    runtimeBusy.value = false;
+  }
+}
+
+async function clearRuntime() {
+  if (runtimeBusy.value) return;
+  runtimeBusy.value = true;
+  runtimeError.value = "";
+  try {
+    const response = await api.clearWorktreeRuntime(props.projectId);
+    runtimeClearOpen.value = false;
+    ElMessage.success(response.cleared ? "执行目录已清空" : "执行目录本来就是空的");
+    await load();
+  } catch (caught) {
+    runtimeError.value = caught instanceof Error ? caught.message : "执行目录清空失败";
+    runtimeClearOpen.value = false;
+  } finally {
+    runtimeBusy.value = false;
   }
 }
 
@@ -465,6 +527,24 @@ onBeforeUnmount(() => {
       </div>
     </section>
 
+    <section v-if="runtime" class="runtime-bar" data-worktree-runtime>
+      <div class="runtime-copy">
+        <strong>执行目录</strong>
+        <code class="runtime-path" :title="runtime.path">{{ runtime.path }}</code>
+        <span v-if="runtime.current" class="runtime-current" data-runtime-current>
+          当前 → <strong>{{ runtime.current.displayName }}</strong>
+        </span>
+        <span v-else-if="runtime.link?.isSymlink && !runtime.link.exists" class="runtime-warn">目标已失效</span>
+        <span v-else class="runtime-empty">尚未切换</span>
+      </div>
+      <div class="runtime-actions">
+        <el-button v-if="runtime.link?.isSymlink" size="small" :loading="runtimeBusy" data-runtime-clear @click="runtimeClearOpen = true">
+          清空
+        </el-button>
+      </div>
+    </section>
+    <p v-if="runtimeError" class="runtime-error" data-runtime-error role="alert">{{ runtimeError }}</p>
+
     <ul v-if="inventory?.warnings.length" class="worktrees-warnings" data-worktrees-warnings>
       <li v-for="warning in inventory.warnings" :key="warning">{{ warning }}</li>
     </ul>
@@ -626,6 +706,27 @@ onBeforeUnmount(() => {
             <el-button size="small" :icon="CopyDocument" @click="copy(selectedItem.effectivePath)">复制路径</el-button>
             <el-button size="small" data-worktree-log-open @click="openLog(selectedItem)">提交历史</el-button>
           </div>
+          <div v-if="selectedItem.hasWorktree" class="detail-runtime-actions">
+            <el-button
+              size="small"
+              type="primary"
+              :disabled="isRuntimeTarget || selectedItem.missing"
+              :loading="runtimeBusy"
+              data-runtime-switch
+              @click="switchRuntime(selectedItem)"
+            >
+              {{ isRuntimeTarget ? "当前执行目录" : "设为执行目录" }}
+            </el-button>
+            <el-button
+              v-if="!isRuntimeTarget"
+              size="small"
+              :disabled="selectedItem.missing"
+              :loading="runtimeBusy"
+              data-runtime-switch-start
+              @click="switchRuntime(selectedItem, true)"
+              >切换并启动</el-button
+            >
+          </div>
           <div v-if="selectedItem.branch && !selectedItem.isBaseBranch" class="detail-tag-actions">
             <el-button size="small" :loading="scopeBusy" data-worktree-toggle-ignore @click="toggleIgnore(selectedItem)">
               {{ selectedItem.isIgnored ? "取消忽略" : "忽略这条分支" }}
@@ -691,9 +792,10 @@ onBeforeUnmount(() => {
         -->
         <WorktreeServicesPanel
           v-if="selectedItem.hasWorktree"
-          :key="servicesConfigKey"
+          :key="`${servicesConfigKey}:${runtimeServicesMode}`"
           :project-id="props.projectId"
           :item="selectedItem"
+          :mode="runtimeServicesMode"
         />
       </aside>
     </div>
@@ -709,6 +811,20 @@ onBeforeUnmount(() => {
 
     <WorktreeMergeResultDialog v-model="resultVisible" :result="mergeResult" />
     <WorktreeLogDialog v-model="logOpen" :project-id="props.projectId" :target="logRef" :title="logRef" />
+
+    <ConfirmDialog
+      :model-value="runtimeClearOpen"
+      eyebrow="执行目录"
+      heading="清空执行目录"
+      message="将停止通过执行目录启动的服务，并删除 repo 链接。"
+      :details="['只删除符号链接，不会删除任何 worktree 或分支', '由本应用启动的 runtime 服务会被停掉']"
+      confirm-label="清空"
+      cancel-label="取消"
+      tone="primary"
+      :busy="runtimeBusy"
+      @update:model-value="runtimeClearOpen = $event"
+      @confirm="clearRuntime"
+    />
 
     <ConfirmDialog
       :model-value="Boolean(cleanupTarget)"
@@ -860,6 +976,51 @@ onBeforeUnmount(() => {
   display: flex;
   flex: none;
   gap: 8px;
+}
+.runtime-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 12px clamp(20px, 4vw, 48px) 0;
+  padding: 10px 14px;
+  border: 1px solid #e3e9f1;
+  border-radius: 10px;
+  background: #fbfcfe;
+}
+.runtime-copy {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 12px;
+  color: #52637e;
+  font-size: 11px;
+}
+.runtime-path {
+  overflow: hidden;
+  max-width: 42vw;
+  color: #7c8ba3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.runtime-current strong {
+  color: #2c6cad;
+}
+.runtime-empty,
+.runtime-warn {
+  color: #93a1b5;
+}
+.runtime-warn {
+  color: #8a6a22;
+}
+.runtime-actions {
+  flex: none;
+}
+.runtime-error {
+  margin: 8px clamp(20px, 4vw, 48px) 0;
+  color: #a94851;
+  font-size: 11px;
 }
 .worktrees-warnings {
   display: grid;
@@ -1094,6 +1255,12 @@ onBeforeUnmount(() => {
 }
 .detail-tag-actions {
   margin-top: 6px;
+}
+.detail-runtime-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
 }
 .detail-facts {
   display: grid;

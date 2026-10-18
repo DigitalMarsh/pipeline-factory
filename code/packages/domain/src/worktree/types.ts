@@ -287,10 +287,10 @@ export type WorktreeServiceConfig = {
   healthUrl: string | null;
   enabled: boolean;
   /**
-   * 配置来源：原生 `.pipeline-factory/services.json`、兼容的 `.worktree-manage/services.json`，
-   * 或项目的兜底配置（`settings.worktreeServices`）。
+   * 配置来源：执行目录的 `services.json`、原生 `.pipeline-factory/services.json`、兼容的
+   * `.worktree-manage/services.json`，或项目的兜底配置（`settings.worktreeServices`）。
    */
-  source: "pipeline-factory" | "worktree-manage" | "project-settings";
+  source: "runtime" | "pipeline-factory" | "worktree-manage" | "project-settings";
 };
 
 export type WorktreeServiceStatus = "stopped" | "running" | "failed";
@@ -311,11 +311,47 @@ export type WorktreeServiceLogEntry = { sequence: number; stream: "stdout" | "st
 export type WorktreeServices = {
   itemId: string;
   worktreePath: string;
-  /** 这次用的是哪一份配置：worktree 内的文件、项目兜底，或都没有。 */
-  configSource: "worktree-file" | "project-fallback" | null;
+  /** 这次用的是哪一份配置：执行目录、worktree 内的文件、项目兜底，或都没有。 */
+  configSource: "runtime" | "worktree-file" | "project-fallback" | null;
   configPath: string | null;
   /** 配置文件存在但解析失败时的原因；`services` 此时为空。 */
   configError: string | null;
   services: WorktreeServiceConfig[];
   states: WorktreeServiceState[];
+};
+
+// ─────────────────────── 执行目录（合并前验证） ───────────────────────
+
+/**
+ * 一个项目的**执行目录**（合并前验证用的固定路径）。
+ *
+ * 结构：`<worktreeRoot>/.runtime/`，里面 `repo` 是一个指向"当前选中的 worktree"的符号链接，
+ * 服务从这个固定路径启动——端口与配置文件因此不随分支变化。`services.json`（可选）是跨分支
+ * 固定的服务配置，切换不会动它。
+ *
+ * **当前目标只由 `readlink(repo)` 决定**，不另存状态：重启进程、手动改链接都能自洽。
+ */
+export type WorktreeRuntimeInfo = {
+  /** 执行目录本身（固定路径）。 */
+  path: string;
+  /** 执行目录是否存在（第一次切换之前为 false）。 */
+  exists: boolean;
+  /** `repo` 这一条链接的情况；不存在时为 null。 */
+  link: { path: string; target: string | null; isSymlink: boolean; exists: boolean } | null;
+  /** 链接目标反查出来的清单项；目标不在 `git worktree list` 里时为 null。 */
+  current: { itemId: string; branch: string | null; displayName: string; worktreePath: string } | null;
+  /** `<runtime>/services.json` 是否存在（存在即是 runtime 服务配置的来源）。 */
+  servicesConfigPath: string | null;
+};
+
+/** 一次切换的结果。`stoppedServices` 由路由层（进程管理器）填，domain 不认识进程。 */
+export type RuntimeSwitchResult = {
+  runtime: WorktreeRuntimeInfo;
+  previousTarget: string | null;
+};
+
+/** 一次清空的结果。 */
+export type RuntimeClearResult = {
+  cleared: boolean;
+  previousTarget: string | null;
 };

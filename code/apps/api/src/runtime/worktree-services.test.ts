@@ -8,7 +8,7 @@
  * 维护提示：用例结束必须把进程停掉（`afterEach` 里 `stopAll`），否则 vitest 会挂在未退出的句柄上。
  */
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WorktreeServiceRunner, isProcessAlive, locateServiceConfig, parseServiceConfig } from "./worktree-services.js";
@@ -143,6 +143,79 @@ describe("项目级兜底配置", () => {
     expect(broken.configError).toBeTruthy();
     // **不回落**：回落会把"文件写坏了"伪装成"用了另一份配置"。
     expect(broken.services).toHaveLength(0);
+  });
+});
+
+describe("执行目录的配置层级", () => {
+  it("runtime/services.json 优先于 worktree 文件与项目兜底", () => {
+    const root = makeTemporary("pipeline-services-runtime-worktree-");
+    mkdirSync(join(root, ".pipeline-factory"), { recursive: true });
+    writeFileSync(
+      join(root, ".pipeline-factory", "services.json"),
+      JSON.stringify({ services: [{ serviceId: "from-worktree", name: "文件", argv: ["true"] }] }),
+    );
+    const runtimePath = makeTemporary("pipeline-services-runtime-dir-");
+    writeFileSync(
+      join(runtimePath, "services.json"),
+      JSON.stringify({ services: [{ serviceId: "from-runtime", name: "执行目录", argv: ["true"] }] }),
+    );
+
+    const snapshot = runnerWith().inspect(
+      "project-1",
+      "runtime",
+      join(runtimePath, "repo"),
+      [
+        {
+          serviceId: "fallback",
+          name: "兜底",
+          role: "worker",
+          workdir: ".",
+          argv: ["true"],
+          shellCommand: null,
+          healthUrl: null,
+          enabled: true,
+        },
+      ],
+      runtimePath,
+    );
+
+    expect(snapshot.configSource).toBe("runtime");
+    expect(snapshot.services.map((service) => service.serviceId)).toEqual(["from-runtime"]);
+    expect(snapshot.services[0]?.source).toBe("runtime");
+  });
+
+  it("runtime 配置文件坏掉时不回落到 worktree 文件", () => {
+    const root = makeTemporary("pipeline-services-runtime-broken-wt-");
+    mkdirSync(join(root, ".pipeline-factory"), { recursive: true });
+    writeFileSync(
+      join(root, ".pipeline-factory", "services.json"),
+      JSON.stringify({ services: [{ serviceId: "from-worktree", name: "文件", argv: ["true"] }] }),
+    );
+    const runtimePath = makeTemporary("pipeline-services-runtime-broken-dir-");
+    writeFileSync(join(runtimePath, "services.json"), "{ 坏掉的 json");
+
+    const snapshot = runnerWith().inspect("project-1", "runtime", join(runtimePath, "repo"), [], runtimePath);
+
+    expect(snapshot.configSource).toBe("runtime");
+    expect(snapshot.configError).toBeTruthy();
+    expect(snapshot.services).toHaveLength(0);
+  });
+
+  it("没有 runtime 文件时回落到 worktree 文件", () => {
+    const root = makeTemporary("pipeline-services-runtime-fallback-wt-");
+    mkdirSync(join(root, ".pipeline-factory"), { recursive: true });
+    writeFileSync(
+      join(root, ".pipeline-factory", "services.json"),
+      JSON.stringify({ services: [{ serviceId: "from-worktree", name: "文件", argv: ["true"] }] }),
+    );
+    const runtimePath = makeTemporary("pipeline-services-runtime-fallback-dir-");
+    // 真实布局里 <runtime>/repo 是指向 worktree 的符号链接：配置就是透过它读到的。
+    symlinkSync(root, join(runtimePath, "repo"), "dir");
+
+    const snapshot = runnerWith().inspect("project-1", "runtime", join(runtimePath, "repo"), [], runtimePath);
+
+    expect(snapshot.configSource).toBe("worktree-file");
+    expect(snapshot.services.map((service) => service.serviceId)).toEqual(["from-worktree"]);
   });
 });
 

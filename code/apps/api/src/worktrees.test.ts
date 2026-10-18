@@ -45,7 +45,12 @@ function commit(cwd: string, message: string): void {
 }
 
 /** 一个真仓库 + 一个已落库的 Project；`withAheadBranch` 控制是否额外造一条有提交的分支。 */
-function setup(options: { withAheadBranch?: boolean } = {}): { app: ReturnType<typeof createApp>; project: Project; repoRoot: string } {
+function setup(options: { withAheadBranch?: boolean } = {}): {
+  app: ReturnType<typeof createApp>;
+  project: Project;
+  repoRoot: string;
+  worktreeRoot: string;
+} {
   const repoRoot = makeTemporary("pipeline-worktree-api-");
   const worktreeRoot = makeTemporary("pipeline-worktree-api-wt-");
   git(repoRoot, ["init", "-b", "main"]);
@@ -69,7 +74,7 @@ function setup(options: { withAheadBranch?: boolean } = {}): { app: ReturnType<t
   });
   const app = createApp({ store, seed: false });
   apps.push(app);
-  return { app, project, repoRoot };
+  return { app, project, repoRoot, worktreeRoot };
 }
 
 describe("Worktree 路由", () => {
@@ -518,3 +523,106 @@ async function waitFor(check: () => Promise<boolean> | boolean, timeoutMs = 8_00
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
 }
+
+/** 执行目录：合并前验证用的固定路径。 */
+describe("Worktree 路由：执行目录", () => {
+  it("初始为空；切换后能反查出当前分支", async () => {
+    const { app, project, repoRoot, worktreeRoot } = setup();
+    const initial = await app.inject({ method: "GET", url: `/api/v4/projects/${project.id}/runtime` });
+    expect(initial.statusCode).toBe(200);
+    expect(initial.json()).toMatchObject({ runtime: { path: join(worktreeRoot, ".runtime"), exists: false, current: null } });
+
+    const worktreePath = mkdtempSync(join(tmpdir(), "pipeline-runtime-api-"));
+    temporaryPaths.push(worktreePath);
+    git(repoRoot, ["worktree", "add", worktreePath, "feature/ahead"]);
+
+    const switched = await app.inject({
+      method: "POST",
+      url: `/api/v4/projects/${project.id}/runtime/switch`,
+      payload: { itemId: "branch:feature/ahead" },
+    });
+    expect(switched.statusCode).toBe(200);
+    expect(switched.json()).toMatchObject({
+      runtime: { current: { itemId: "branch:feature/ahead", branch: "feature/ahead" } },
+      previousTarget: null,
+      stoppedServices: 0,
+    });
+  });
+
+  it("无 worktree 的分支返回 409；清理当前目标也被拒", async () => {
+    const { app, project, repoRoot } = setup();
+    const blocked = await app.inject({
+      method: "POST",
+      url: `/api/v4/projects/${project.id}/runtime/switch`,
+      payload: { itemId: "branch:feature/ahead" },
+    });
+    expect(blocked.statusCode).toBe(409);
+    expect(blocked.json()).toMatchObject({ code: "WORKTREE_RUNTIME_BLOCKED" });
+
+    // 建一个 worktree、合并、切为执行目录，再尝试清理它。
+    const worktreePath = mkdtempSync(join(tmpdir(), "pipeline-runtime-api-clean-"));
+    temporaryPaths.push(worktreePath);
+    git(repoRoot, ["worktree", "add", worktreePath, "feature/ahead"]);
+    git(repoRoot, ["merge", "--no-ff", "--no-edit", "feature/ahead"]);
+    await app.inject({
+      method: "POST",
+      url: `/api/v4/projects/${project.id}/runtime/switch`,
+      payload: { itemId: "branch:feature/ahead" },
+    });
+    const list = await app.inject({ method: "GET", url: `/api/v4/projects/${project.id}/worktrees` });
+    const item = (list.json() as { items: Array<{ branch: string | null; lastCommit: string }> }).items.find(
+      (entry) => entry.branch === "feature/ahead",
+    );
+    const cleanup = await app.inject({
+      method: "POST",
+      url: `/api/v4/projects/${project.id}/worktrees/cleanup`,
+      payload: { itemId: "branch:feature/ahead", expectedBranchHead: item?.lastCommit ?? null },
+    });
+    expect(cleanup.statusCode).toBe(409);
+    expect((cleanup.json() as { error: string }).error).toContain("执行目录");
+  });
+
+  it("runtime 服务走执行目录配置，切换时被停掉", async () => {
+    const { app, project, repoRoot, worktreeRoot } = setup();
+    const worktreePath = mkdtempSync(join(tmpdir(), "pipeline-runtime-api-svc-"));
+    temporaryPaths.push(worktreePath);
+    git(repoRoot, ["worktree", "add", worktreePath, "feature/ahead"]);
+    const runtimePath = join(worktreeRoot, ".runtime");
+    mkdirSync(runtimePath, { recursive: true });
+    writeFileSync(
+      join(runtimePath, "services.json"),
+      JSON.stringify({
+        services: [{ serviceId: "ticker", name: "Ticker", argv: [process.execPath, "-e", "setInterval(() => {}, 1000);"] }],
+      }),
+    );
+
+    await app.inject({
+      method: "POST",
+      url: `/api/v4/projects/${project.id}/runtime/switch`,
+      payload: { itemId: "branch:feature/ahead" },
+    });
+
+    const services = await app.inject({ method: "GET", url: `/api/v4/projects/${project.id}/runtime/services` });
+    expect(services.statusCode).toBe(200);
+    expect(services.json()).toMatchObject({ configSource: "runtime", services: [{ serviceId: "ticker", source: "runtime" }] });
+
+    const started = await app.inject({
+      method: "POST",
+      url: `/api/v4/projects/${project.id}/runtime/services/start`,
+      payload: { serviceId: "ticker" },
+    });
+    expect(started.statusCode).toBe(200);
+    const pid = (started.json() as { state: { pid: number | null } }).state.pid;
+    expect(pid).toBeTruthy();
+
+    // 切到主分支：runtime 服务应被停掉，进程消失。
+    const switched = await app.inject({
+      method: "POST",
+      url: `/api/v4/projects/${project.id}/runtime/switch`,
+      payload: { itemId: "branch:main" },
+    });
+    expect(switched.statusCode).toBe(200);
+    expect(switched.json()).toMatchObject({ stoppedServices: 1, runtime: { current: { itemId: "branch:main" } } });
+    await waitFor(() => !isProcessAlive(pid));
+  });
+});

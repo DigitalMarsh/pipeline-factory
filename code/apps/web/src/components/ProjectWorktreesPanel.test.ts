@@ -28,6 +28,12 @@ const { apiMocks } = vi.hoisted(() => ({
     stopWorktreeService: vi.fn(),
     worktreeServiceLogs: vi.fn(),
     worktreeEventsUrl: vi.fn((projectId: string) => `/api/v4/projects/${projectId}/worktrees/events`),
+    worktreeRuntime: vi.fn(),
+    switchWorktreeRuntime: vi.fn(),
+    clearWorktreeRuntime: vi.fn(),
+    startRuntimeService: vi.fn(),
+    stopRuntimeService: vi.fn(),
+    runtimeServiceLogs: vi.fn(),
   },
 }));
 vi.mock("../api", () => ({ api: apiMocks }));
@@ -193,9 +199,21 @@ function preview(overrides: Partial<WorktreeMergePreview> = {}): WorktreeMergePr
 
 const openedSettingsTabs: string[] = [];
 
-async function mountPanel(next: WorktreeInventory) {
+async function mountPanel(next: WorktreeInventory, options: { runtime?: unknown } = {}) {
   apiMocks.worktrees.mockResolvedValue(next);
   apiMocks.updateProject.mockResolvedValue({ project: { id: "project-1" } });
+  apiMocks.worktreeRuntime.mockResolvedValue(
+    options.runtime ?? {
+      runtime: {
+        path: "/worktrees/.runtime",
+        exists: false,
+        link: null,
+        current: null,
+        servicesConfigPath: null,
+      },
+      services: null,
+    },
+  );
   apiMocks.worktreeServices.mockResolvedValue({
     itemId: "branch:feature/a",
     worktreePath: "/repo-wt/a",
@@ -479,5 +497,69 @@ describe("Worktree 面板：复盘后新增的交互", () => {
 
     expect(apiMocks.worktreeLog).toHaveBeenCalledWith("project-1", "feature/a");
     expect(host.querySelector("[data-worktree-log]")?.textContent).toContain("feature change");
+  });
+});
+
+/** 执行目录：合并前验证用的固定路径。 */
+describe("Worktree 面板 · 执行目录", () => {
+  function runtimeInfo(overrides: Partial<{ itemId: string; branch: string; displayName: string }> = {}) {
+    return {
+      runtime: {
+        path: "/worktrees/.runtime",
+        exists: true,
+        link: { path: "/worktrees/.runtime/repo", target: "/worktrees/a", isSymlink: true, exists: true },
+        current: {
+          itemId: overrides.itemId ?? "branch:feature/a",
+          branch: overrides.branch ?? "feature/a",
+          displayName: overrides.displayName ?? "feature/a",
+          worktreePath: "/worktrees/a",
+        },
+        servicesConfigPath: null,
+      },
+      services: null,
+    };
+  }
+
+  it("未切换时显示「尚未切换」，详情里可以设为执行目录", async () => {
+    const host = await mountPanel(inventory());
+    expect(host.querySelector("[data-worktree-runtime]")?.textContent).toContain("尚未切换");
+
+    host.querySelector<HTMLElement>('[data-worktree-item="branch:feature/a"]')?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flush();
+    const button = host.querySelector<HTMLButtonElement>("[data-runtime-switch]");
+    expect(button).not.toBeNull();
+    expect(button?.disabled).toBe(false);
+    button?.click();
+    await flush();
+
+    expect(apiMocks.switchWorktreeRuntime).toHaveBeenCalledWith("project-1", "branch:feature/a");
+  });
+
+  it("已是当前目标时按钮禁用，服务区块走 runtime 接口", async () => {
+    apiMocks.runtimeServiceLogs.mockResolvedValue({ items: [] });
+    const host = await mountPanel(inventory(), { runtime: runtimeInfo() });
+    expect(host.querySelector("[data-worktree-runtime]")?.textContent).toContain("当前");
+
+    host.querySelector<HTMLElement>('[data-worktree-item="branch:feature/a"]')?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flush();
+    await flush();
+
+    expect(host.querySelector<HTMLButtonElement>("[data-runtime-switch]")?.disabled).toBe(true);
+    // 服务区块在 runtime 模式下先读项目执行目录（load 一次 + 服务区块一次），而不是 worktree 接口。
+    expect(apiMocks.worktreeServices).not.toHaveBeenCalled();
+    expect(apiMocks.worktreeRuntime.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("清空执行目录要先确认，确认后调用 clear", async () => {
+    const host = await mountPanel(inventory(), { runtime: runtimeInfo() });
+    host.querySelector<HTMLButtonElement>("[data-runtime-clear]")?.click();
+    await flush();
+
+    const confirm = [...document.querySelectorAll(".confirm-dialog button")].find((button) => button.textContent?.includes("清空")) as
+      HTMLButtonElement | undefined;
+    confirm?.click();
+    await flush();
+
+    expect(apiMocks.clearWorktreeRuntime).toHaveBeenCalledWith("project-1");
   });
 });

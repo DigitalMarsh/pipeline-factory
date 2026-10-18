@@ -924,7 +924,7 @@ export type WorktreeServiceConfig = {
   shellCommand: string | null;
   healthUrl: string | null;
   enabled: boolean;
-  source: "pipeline-factory" | "worktree-manage" | "project-settings";
+  source: "runtime" | "pipeline-factory" | "worktree-manage" | "project-settings";
 };
 
 export type WorktreeServiceStatus = "stopped" | "running" | "failed";
@@ -943,9 +943,33 @@ export type WorktreeServiceLogEntry = { sequence: number; stream: "stdout" | "st
 export type WorktreeServices = {
   itemId: string;
   worktreePath: string;
-  configSource: "worktree-file" | "project-fallback" | null;
+  configSource: "runtime" | "worktree-file" | "project-fallback" | null;
   configPath: string | null;
   configError: string | null;
   services: WorktreeServiceConfig[];
   states: WorktreeServiceState[];
 };
+
+// ─────────────────────── 执行目录（合并前验证） ───────────────────────
+export type WorktreeRuntimeInfo = {
+  path: string;
+  exists: boolean;
+  link: { path: string; target: string | null; isSymlink: boolean; exists: boolean } | null;
+  current: { itemId: string; branch: string | null; displayName: string; worktreePath: string } | null;
+  servicesConfigPath: string | null;
+};
+
+/** 路由层的组装形状：执行目录现状 + 从 runtime 配置链解析出的服务清单。 */
+export type WorktreeRuntimeResponse = {
+  runtime: WorktreeRuntimeInfo;
+  services: WorktreeServices | null;
+};
+
+export type RuntimeSwitchResponse = {
+  runtime: WorktreeRuntimeInfo;
+  previousTarget: string | null;
+  stoppedServices: number;
+  services: WorktreeServices | null;
+};
+
+export type RuntimeClearResponse = { cleared: boolean; previousTarget: string | null; stoppedServices: number };

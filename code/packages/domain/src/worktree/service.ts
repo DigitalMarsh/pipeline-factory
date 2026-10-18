@@ -30,7 +30,8 @@
  *      然后因为 base HEAD 已变而拿到 `WORKTREE_STATE_CHANGED` —— 这是正确结果，不是竞态失败。
  *   7) `list()` **不跑冲突预测**：`merge-tree` 对每条分支跑一次会把刷新拖成秒级。预览才预测。
  */
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 import { DEFAULT_WORKTREE_FILTER, EXECUTION_SLOT_RUN_STATUSES } from "../project/project.js";
 import type { Project, ProjectWorktreeFilter } from "../project/project.js";
 import type { PipelineStore } from "../store/pipeline-store.js";
@@ -51,6 +52,9 @@ import type {
   WorktreeInProgressOperation,
   WorktreeItemStatus,
   WorktreeLogCommit,
+  WorktreeRuntimeInfo,
+  RuntimeSwitchResult,
+  RuntimeClearResult,
 } from "./types.js";
 import { WORKTREE_METADATA_DIRS } from "./local-git.js";
 import type { WorktreeGitPort } from "./local-git.js";
@@ -62,6 +66,7 @@ export type WorktreeErrorCode =
   | "WORKTREE_CLEANUP_BLOCKED"
   | "WORKTREE_STATE_CHANGED"
   | "WORKTREE_NO_MERGE_IN_PROGRESS"
+  | "WORKTREE_RUNTIME_BLOCKED"
   | "WORKTREE_GIT_FAILED";
 
 /** 带错误码的领域错误。`code` 是给调用方分支用的，`message` 是给人看的。 */
@@ -713,6 +718,139 @@ export class WorktreeService {
     });
   }
 
+  // ───────────────────────── 执行目录（合并前验证） ─────────────────────────
+
+  /**
+   * 执行目录的固定路径：`<worktreeRoot>/.runtime`。
+   *
+   * 为什么由 `worktreeRoot` 派生而不是新增设置项：`worktreeRoot` 已经是项目级配置，
+   * 执行目录跟着它走最不容易漂移；以 `.` 开头则保证**永远不会**与 Run 的 worktree 目录撞名
+   * （分支叶子名正则不允许以点开头，见 `git/worktree.ts`）。
+   */
+  runtimePath(project: Project): string {
+    return resolvePath(project.worktreeRoot, ".runtime");
+  }
+
+  /** 读取执行目录的现状（只读）。当前目标**只由 `readlink(repo)` 决定**。 */
+  async runtime(project: Project): Promise<WorktreeRuntimeInfo> {
+    const path = this.runtimePath(project);
+    const repoLink = resolvePath(path, "repo");
+    const servicesConfigPath = existsSync(resolvePath(path, "services.json")) ? resolvePath(path, "services.json") : null;
+    let link: WorktreeRuntimeInfo["link"] = null;
+    if (existsSync(path)) {
+      try {
+        const stat = lstatSync(repoLink);
+        if (stat.isSymbolicLink()) {
+          const target = readlinkSync(repoLink);
+          link = { path: repoLink, target, isSymlink: true, exists: existsSync(target) };
+        } else {
+          link = { path: repoLink, target: null, isSymlink: false, exists: true };
+        }
+      } catch {
+        // 没有 repo 条目：还没切换过。
+      }
+    }
+
+    let current: WorktreeRuntimeInfo["current"] = null;
+    if (link?.isSymlink && link.target) {
+      // **只读 `git worktree list`**：这个方法被面板频繁调用，没必要跑完整清单（每条分支一次 rev-list）。
+      const worktrees = await this.git.listWorktrees(project.repoRoot).catch(() => []);
+      const match = worktrees.find((worktree) => samePath(worktree.path, link?.target));
+      if (match) {
+        current = {
+          itemId: match.branch ? `branch:${match.branch}` : `detached:${match.path}`,
+          branch: match.branch,
+          displayName: match.branch ?? (match.head ? `detached @ ${match.head.slice(0, 7)}` : "detached"),
+          worktreePath: match.path,
+        };
+      }
+    }
+    return { path, exists: existsSync(path), link, current, servicesConfigPath };
+  }
+
+  /**
+   * 把一个 worktree 设为执行目录目标。
+   *
+   * **原子替换**：先建临时链接再 `rename` 覆盖过去。不要 `unlink` + `symlink`——中间那一刻
+   * `repo` 不存在，正在启动的服务会拿到 ENOENT。`repo` 若是**真实目录/文件**一律拒绝：
+   * 那可能是用户自己放的东西，我们不删。
+   */
+  async switchRuntime(project: Project, itemId: string): Promise<RuntimeSwitchResult> {
+    return this.withProjectLock(project.id, async () => {
+      // 完整清单解析目标：被项目范围隐藏的分支同样可以设为执行目录。
+      const inventory = await this.list(project, { includeFiltered: true });
+      const item = inventory.items.find((candidate) => candidate.itemId === itemId);
+      if (!item) throw new WorktreeError("WORKTREE_NOT_FOUND", `分支或 worktree 不存在：${itemId}`);
+      if (!item.hasWorktree || !item.worktreePath) {
+        throw new WorktreeError(
+          "WORKTREE_RUNTIME_BLOCKED",
+          `只有 worktree 能设为执行目录；${item.displayName} 没有 worktree（先为它建一个，或选一条有 worktree 的分支）。`,
+        );
+      }
+      if (item.missing || !existsSync(item.worktreePath)) {
+        throw new WorktreeError("WORKTREE_RUNTIME_BLOCKED", `目标 worktree 目录不存在：${item.worktreePath}`);
+      }
+
+      const path = this.runtimePath(project);
+      const repoLink = resolvePath(path, "repo");
+      this.assertLinkReplaceable(repoLink);
+      const previousTarget = this.readRuntimeTarget(project);
+
+      mkdirSync(path, { recursive: true });
+      const temporary = resolvePath(path, `.repo.tmp-${process.pid}-${Date.now()}`);
+      try {
+        symlinkSync(item.worktreePath, temporary, "dir");
+        renameSync(temporary, repoLink);
+      } catch (error) {
+        rmSync(temporary, { force: true });
+        throw new WorktreeError("WORKTREE_RUNTIME_BLOCKED", `执行目录切换失败：${error instanceof Error ? error.message : String(error)}`);
+      }
+
+      this.appendEvent("worktree.runtime.switched", project.id, {
+        projectId: project.id,
+        itemId: item.itemId,
+        branch: item.branch,
+        target: item.worktreePath,
+        previousTarget,
+      });
+      return { runtime: await this.runtime(project), previousTarget };
+    });
+  }
+
+  /** 清空执行目录链接（只删符号链接；真实目录拒绝）。 */
+  async clearRuntime(project: Project): Promise<RuntimeClearResult> {
+    return this.withProjectLock(project.id, async () => {
+      const repoLink = resolvePath(this.runtimePath(project), "repo");
+      this.assertLinkReplaceable(repoLink);
+      const previousTarget = this.readRuntimeTarget(project);
+      if (!previousTarget) return { cleared: false, previousTarget: null };
+      unlinkSync(repoLink);
+      return { cleared: true, previousTarget };
+    });
+  }
+
+  /** `repo` 存在且不是符号链接时拒绝一切写操作——那可能是用户自己的东西。 */
+  private assertLinkReplaceable(repoLink: string): void {
+    if (!existsSync(repoLink)) return;
+    const stat = lstatSync(repoLink);
+    if (!stat.isSymbolicLink()) {
+      throw new WorktreeError(
+        "WORKTREE_RUNTIME_BLOCKED",
+        `${repoLink} 不是符号链接。为了不删除你的文件，Factory 不会替换它；请先手动移走。`,
+      );
+    }
+  }
+
+  /** 当前执行目录目标（没有链接或不是链接时返回 null）。 */
+  private readRuntimeTarget(project: Project): string | null {
+    const repoLink = resolvePath(this.runtimePath(project), "repo");
+    try {
+      return lstatSync(repoLink).isSymbolicLink() ? readlinkSync(repoLink) : null;
+    } catch {
+      return null;
+    }
+  }
+
   /**
    * 清理一个"已合并 / 可安全删除"的项。三种 kind 走不同路径（判据见 `mergeAndCleanupVerdict`）：
    * branch worktree（删目录 + 删分支）、无 worktree 的本地分支（只删分支）、
@@ -725,6 +863,17 @@ export class WorktreeService {
       if (!item) throw new WorktreeError("WORKTREE_NOT_FOUND", `分支或 worktree 不存在：${input.itemId}`);
       if (item.cleanupBlockers.length > 0) {
         throw new WorktreeError("WORKTREE_CLEANUP_BLOCKED", item.cleanupBlockers.join("\n"));
+      }
+      /**
+       * 不能清理"当前执行目录目标"：链接会悬空，正在跑的服务也会读写一个已被删掉的目录。
+       * 一并校验真实路径（链接两边可能一边是 `/var`、一边是 `/private/var`）。
+       */
+      const runtimeTarget = this.readRuntimeTarget(project);
+      if (item.worktreePath && runtimeTarget && samePath(item.worktreePath, runtimeTarget)) {
+        throw new WorktreeError(
+          "WORKTREE_CLEANUP_BLOCKED",
+          "这个 worktree 是当前执行目录的目标；请先把执行目录切到别的分支（或清空）再清理。",
+        );
       }
       if (input.expectedBranchHead !== item.lastCommit) {
         throw new WorktreeError("WORKTREE_STATE_CHANGED", "分支或 worktree 在预览之后发生了变化，请刷新后再清理。");
