@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-18 — 需求清单：双击打开探索对话；列表不再撑满整屏
+
+- **双击需求行**打开右侧抽屉，默认落在「探索对话」页签（沿用 `openRequirementChat`：
+  选中该需求 → 打开抽屉 → `requirementTab=explorer`）。行内的删除 / 重命名 / 方案状态 /
+  查看 Vn / 任务状态按钮上的双击不算——那是在连点按钮。
+- **需求清单高度**改为 `min(58vh, 640px)` 并保持内部滚动；窄屏（≤720px）仍按卡片流铺开。
+
 ## 2026-10-18 — 对话里粘贴截图；执行目录一键起停服务
 
 三处对话输入框（探索、Run 的补充要求、项目执行线程）现在支持**截图后直接粘贴**（⌘⇧4 → ⌘V）：
@@ -199,7 +206,7 @@ worktree 内的 `services.json`。现在补上：
   就再也切不回范围视图。条件补上 `includeFiltered`。
 - **优雅关闭被 SSE 长连接挂住**：`app.close()` 默认等连接自己结束，`node --watch` 每次重启都卡在
   "Waiting for graceful termination..."、API 再也不起来。改为 `Fastify({ forceCloseConnections: true })`
-  + 3 秒兜底退出。
+  - 3 秒兜底退出。
 - 组件 prop 叫 `ref` 会被 Vue 当成模板引用（`:ref="x"` 轮不到 props），改名 `target`。
 - **Run 的自动提交会把服务配置一起提交**：`git add -A` 不区分"本机运行配置"与"这次 Run 的产物"，
   `.pipeline-factory/services.json` 会跟着分支进主干。`commit()` 的 add 现在排除这两个元数据目录。
@@ -318,11 +325,11 @@ Factory 此前对"合并"只有观察这一半：`MergeService` 建 `MergeReques
 三道闸门，前两道都在**冻结之前**（`confirm` 与 `confirmRevisionDraft` 是仅有的两条冻结路径——
 后者本来就是"改一版再确认"的后门，`assertPreflightPasses` 的注释里写过同一条教训）：
 
-| 层 | 做什么 | 判据 |
-|---|---|---|
-| 确认时**拒绝** | `PLAN_ARCHIVE_PATH_FORBIDDEN`，不留 Revision | `artifact.path` 或任一 `tasks[].changes[].path` **指向**留档目录（就是它 / 在它里面）。`docs/**` 这类**更宽的**范围不算"指向"——否则所有写 docs 的计划都过不了确认 |
-| 确认时**兜底** | 留档目录永远并进 `scope.excludePaths`（`docs/pipeline/plans/**`） | 不论 include 多宽。执行者的系统提示说"Never modify excluded or protected paths"，工作区范围检查把那里的写入判成越界 |
-| 探索侧**告知** | 仓库上下文新增一行 `Plan archive directory: docs/pipeline/plans/** — Factory-owned…`，提示词加一句"计划留档目录不要碰" | 目录在仓库外、或没配落盘目录时**不出现**——不编一个默认值出来 |
+| 层             | 做什么                                                                                                                 | 判据                                                                                                                                                              |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 确认时**拒绝** | `PLAN_ARCHIVE_PATH_FORBIDDEN`，不留 Revision                                                                           | `artifact.path` 或任一 `tasks[].changes[].path` **指向**留档目录（就是它 / 在它里面）。`docs/**` 这类**更宽的**范围不算"指向"——否则所有写 docs 的计划都过不了确认 |
+| 确认时**兜底** | 留档目录永远并进 `scope.excludePaths`（`docs/pipeline/plans/**`）                                                      | 不论 include 多宽。执行者的系统提示说"Never modify excluded or protected paths"，工作区范围检查把那里的写入判成越界                                               |
+| 探索侧**告知** | 仓库上下文新增一行 `Plan archive directory: docs/pipeline/plans/** — Factory-owned…`，提示词加一句"计划留档目录不要碰" | 目录在仓库外、或没配落盘目录时**不出现**——不编一个默认值出来                                                                                                      |
 
 没有注入落盘目录时（测试与不落盘的部署）整步跳过，行为与改动前逐字相同。兜底只在确认时追加一次
 （已在排除列表里就不重复），所以冻结契约里的那一份就是执行者看到的全部。
@@ -331,7 +338,8 @@ Factory 此前对"合并"只有观察这一半：`MergeService` 建 `MergeReques
 `protectedContract`（两条冻结路径共用）+ `protectPlanArchive`、`apps/api/repository-context-cache.ts`
 （构造时可选的目录解析器；目录进缓存 key）与 `server.ts` 的装配、`platform/plan-requirements.ts`
 的提示词。新增 5 条领域测试（含"修订草稿走同一道闸门"与"没配目录时行为不变"）+ 1 条上下文测试
-+ 1 条提示词断言；docs §10.2 加为第四条判据。
+
+- 1 条提示词断言；docs §10.2 加为第四条判据。
 
 `pnpm verify` 全绿：domain 480 / api 128 / web 657。
 
@@ -342,12 +350,12 @@ Factory 此前对"合并"只有观察这一半：`MergeService` 建 `MergeReques
 
 结论是**这轮不增也不删字段**——剩下的候选全都没有数据支撑：
 
-| 候选 | 数据 | 为什么现在不做 |
-|---|---|---|
-| 加 `assumptions`（Codex 有这一节：用户不答就按推荐走并记为假设） | 34 条提问里 **30 条已答**（1 取消、3 待恢复）。这里的提问是**阻塞**的，答案落在回合里 | 没有"决策被悄悄丢掉"的现场 |
-| 加"验证失败怎么办"类的字段 | 24 次验证轮次：**PASSED 1 / SKIPPED 23 / FAILED 0**——修复路径一次都没触发过 | 凭空设计 |
-| 删 `verification.suites` / `conflicts` / `dependsOnPlanIds` | 0/27、空 22/27、非空 0/27 | 三者的消费方都在（`suites` 的通路刚变得可用；`dependsOnPlanIds` 是人设的调度项），空是"还没用到"，不是"没有用" |
-| 加 `priority` | 本仓排序就是人点确认的先后 | 没有消费方 |
+| 候选                                                             | 数据                                                                                  | 为什么现在不做                                                                                                 |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| 加 `assumptions`（Codex 有这一节：用户不答就按推荐走并记为假设） | 34 条提问里 **30 条已答**（1 取消、3 待恢复）。这里的提问是**阻塞**的，答案落在回合里 | 没有"决策被悄悄丢掉"的现场                                                                                     |
+| 加"验证失败怎么办"类的字段                                       | 24 次验证轮次：**PASSED 1 / SKIPPED 23 / FAILED 0**——修复路径一次都没触发过           | 凭空设计                                                                                                       |
+| 删 `verification.suites` / `conflicts` / `dependsOnPlanIds`      | 0/27、空 22/27、非空 0/27                                                             | 三者的消费方都在（`suites` 的通路刚变得可用；`dependsOnPlanIds` 是人设的调度项），空是"还没用到"，不是"没有用" |
+| 加 `priority`                                                    | 本仓排序就是人点确认的先后                                                            | 没有消费方                                                                                                     |
 
 **一条新观察项**：**27/27 个计划的任务数少于验收条数**（任务 1–7、验收 2–29，均 6.7）——于是
 `acceptanceRefs` 里"每条验收都得有人认领"那一半几乎没有牙齿（一个任务把它们全勾上就算过）。
@@ -367,10 +375,10 @@ Factory 此前对"合并"只有观察这一半：`MergeService` 建 `MergeReques
 
 ### 删掉的（都是"会撒谎"的恒定字段，处方跟当年删 `execution.executorModelRole` 一样）
 
-| 字段 | 数据 | 为什么删 |
-|---|---|---|
-| `tasks[].status` | 74/74 个任务还在写它——提示词说完"**不要填写 status**"之后**还是照写**；而全仓**零个消费方** | 进度的事实来源是 Run 的 journal（`TASK_PROGRESS`），`resolvePlanContract` 只是把它原样抄进冻结契约，计划详情又把它当标签显示出来，看的人会以为"这一步已经可以开工"。现在**写了也不读**，契约里恒为 Factory 填的 `"READY"`，类型收窄成字面量（拿它判断进度当场通不过编译） |
-| `merge.strategy` / `merge.requireHumanMerge` | 27/27 分别是 `manual` / `true` | **真正的合并不经过 Factory**：人在 Git 侧合并完再调 `confirmMerged`（`run/merge.ts` 开头就写着）。可计划详情显示"策略：manual · 需人工审阅"、落盘文档也照抄一遍，让人以为 Factory 会照着策略合并 |
+| 字段                                         | 数据                                                                                        | 为什么删                                                                                                                                                                                                                                                                  |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tasks[].status`                             | 74/74 个任务还在写它——提示词说完"**不要填写 status**"之后**还是照写**；而全仓**零个消费方** | 进度的事实来源是 Run 的 journal（`TASK_PROGRESS`），`resolvePlanContract` 只是把它原样抄进冻结契约，计划详情又把它当标签显示出来，看的人会以为"这一步已经可以开工"。现在**写了也不读**，契约里恒为 Factory 填的 `"READY"`，类型收窄成字面量（拿它判断进度当场通不过编译） |
+| `merge.strategy` / `merge.requireHumanMerge` | 27/27 分别是 `manual` / `true`                                                              | **真正的合并不经过 Factory**：人在 Git 侧合并完再调 `confirmMerged`（`run/merge.ts` 开头就写着）。可计划详情显示"策略：manual · 需人工审阅"、落盘文档也照抄一遍，让人以为 Factory 会照着策略合并                                                                          |
 
 两个都**只忽略、不报 FORBIDDEN**：老 CandidatePlan 带着这些键，报错会让它们连重新解析都过不去。
 `ResolvedPlanContract` 里照旧保留、由 Factory 填常量（`MERGE_STRATEGY` / `REQUIRE_HUMAN_MERGE`），
@@ -424,10 +432,10 @@ web 的 `types.ts` / `PlanDetailContent.vue` / `ExplorerPlanRequirements.vue`（
 
 **两个值的来源刻意不同**，这是这次改动的全部要点：
 
-| 位置 | 显示谁 | 来源 |
-|---|---|---|
+| 位置             | 显示谁                     | 来源                                                                                                                                                  |
+| ---------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 「方案状态」下面 | **探索线程**实际用的 agent | `model` 是**记录**（最近一次探索回合的 loop 启动事件 `agent.loop.started` 的 payload 带着它）；`backend` 取项目探索配置，没配就回退到该角色的全局后端 |
-| 「任务状态」下面 | **执行线程**实际用的 agent | 两样都是**记录**：执行线程 telemetry 里的 `model` + `backend`（由 `planExecutionThread` 带出来） |
+| 「任务状态」下面 | **执行线程**实际用的 agent | 两样都是**记录**：执行线程 telemetry 里的 `model` + `backend`（由 `planExecutionThread` 带出来）                                                      |
 
 **为什么不两处都用当前配置**：配置改过之后历史行会集体说谎——实测同一张表里，需求4 的 Run 跑在
 Codex 上、需求10 之后的几个跑在 Claude 上，而项目配置只有一个。所以**记过的就用记录，没记过就留空**，
@@ -463,12 +471,12 @@ Codex 上、需求10 之后的几个跑在 Claude 上，而项目配置只有一
 
 于是把**怎么验证**收进脚本，把**注册什么**留给命令：
 
-| 改了什么 | 在哪 |
-|---|---|
-| 参数编辑改成**引号感知**：`parseCommandArgs` / `formatCommandArgs` 成对，`parse(format(x)) === x` 有单测钉住 | `web/src/utils/commandArgs.ts` |
-| 两套预设模板 + 命令定义（Vue+Vite / Java+Maven），含 `--fast` 分档 | `domain/src/project/verification-script.ts` |
+| 改了什么                                                                                                                                                                  | 在哪                                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| 参数编辑改成**引号感知**：`parseCommandArgs` / `formatCommandArgs` 成对，`parse(format(x)) === x` 有单测钉住                                                              | `web/src/utils/commandArgs.ts`                         |
+| 两套预设模板 + 命令定义（Vue+Vite / Java+Maven），含 `--fast` 分档                                                                                                        | `domain/src/project/verification-script.ts`            |
 | `POST /projects/:id/verification-script`：写 `<repoRoot>/verify.sh`（0755）+ 注册 `project.hygiene` / `project.verify` + 并进默认验证集；**已存在就 409**，`force` 才覆盖 | `routes/projects.ts`、`runtime/verification-script.ts` |
-| 设置页「命令」加「启用验证脚本」下拉（只两种预设；值走接口枚举校验，写错当场 400） | `ProjectSettingsDialog.vue` |
+| 设置页「命令」加「启用验证脚本」下拉（只两种预设；值走接口枚举校验，写错当场 400）                                                                                        | `ProjectSettingsDialog.vue`                            |
 
 三条约束写进了模板注释（改模板前先读）：**argv 里每个元素都不含空格**（设置页按行编辑，含空格会被切开）、
 **脚本要能自己说清哪一步失败**（工厂只看到一条命令的结果）、**脚本不许往仓库里写东西**
@@ -536,14 +544,14 @@ MergeRequest——`RunStatus` 里**没有** `MERGED`，所以 Run 会一直停�
 
 现在 **验证成功收尾（`PASSED` / `SKIPPED`）之前，先把工作区提交到那条 Run 自己的分支上**。
 
-| | |
-|---|---|
-| 挂在哪 | `VerificationService`（维护提示 6）——它是"Run 进入 `MERGE_READY` 之前唯一能改变其状态的环节"，两个成功分支各调一次 |
-| 谁去做 | `Scheduler.commitWorkspace(run)` → `WorkspaceAdapter.commit?(workspace, message)`。归这两层是因为 Worktree 的生命周期（建/收）本来就在那儿；`commit` 在端口上**是可选的**，不实现就没有这一步（十几处测试桩不用改） |
-| 提交什么 | `status --porcelain` 先看一眼，干净就直接返回（**不**调 `commit`——那会以非 0 退出，但那不是错误）；否则 `add -A` + `commit`（尊重 `.gitignore`） |
-| 提交信息 | 首行是 Plan 标题，正文一行 `Pipeline Factory · Run <id> · 分支 <branch>`；作者用仓库自己的 git 身份 |
+|            |                                                                                                                                                                                                                       |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 挂在哪     | `VerificationService`（维护提示 6）——它是"Run 进入 `MERGE_READY` 之前唯一能改变其状态的环节"，两个成功分支各调一次                                                                                                    |
+| 谁去做     | `Scheduler.commitWorkspace(run)` → `WorkspaceAdapter.commit?(workspace, message)`。归这两层是因为 Worktree 的生命周期（建/收）本来就在那儿；`commit` 在端口上**是可选的**，不实现就没有这一步（十几处测试桩不用改）   |
+| 提交什么   | `status --porcelain` 先看一眼，干净就直接返回（**不**调 `commit`——那会以非 0 退出，但那不是错误）；否则 `add -A` + `commit`（尊重 `.gitignore`）                                                                      |
+| 提交信息   | 首行是 Plan 标题，正文一行 `Pipeline Factory · Run <id> · 分支 <branch>`；作者用仓库自己的 git 身份                                                                                                                   |
 | 失败怎么办 | **把 Run 打成 `BLOCKED`**，原话写进 Plan 的 `attentionReason`（`工作区提交失败：…`）。`MERGE_READY` 的语义是"有东西可以合"，提交没落成就不该进那个状态；最常见的原因是仓库没配 git 身份（本机四个工程都配了，实测过） |
-| 不做的 | 只提交、**不碰别的分支**——合并仍然由人在 Git 侧做，与 `MergeService` 那条链同一口径 |
+| 不做的     | 只提交、**不碰别的分支**——合并仍然由人在 Git 侧做，与 `MergeService` 那条链同一口径                                                                                                                                   |
 
 配套：对账那条假阳性也修了（见下一条）——现在"这个 Run 一个提交都没有"会被如实报成
 `UNAVAILABLE`，而不是给一个恒真的"已检测到"。
@@ -628,10 +636,10 @@ Plan **当前**那条合并请求（`OPEN` 优先、`SUPERSEDED` 不算），索
 
 ### 现在的分工
 
-| 谁 | 做什么 | 花多久 |
-|---|---|---|
-| `POST …/confirm` | 确认事务：Plan → `DISPATCHED`、调度状态落库，**响应在这里返回** | 毫秒 |
-| 后台 `wake()` | `dispatchOne` → `scheduler.start` → 起分支名（模型）→ 建 worktree → 拉起执行 | 6~27 秒（实测） |
+| 谁               | 做什么                                                                       | 花多久          |
+| ---------------- | ---------------------------------------------------------------------------- | --------------- |
+| `POST …/confirm` | 确认事务：Plan → `DISPATCHED`、调度状态落库，**响应在这里返回**              | 毫秒            |
+| 后台 `wake()`    | `dispatchOne` → `scheduler.start` → 起分支名（模型）→ 建 worktree → 拉起执行 | 6~27 秒（实测） |
 
 - **`PlanDispatchCoordinator.dispatchInBackground(planId, onError)`**（新）：路由 `confirmPlanFlow`
   用 `wakeAfter = false` 跑完确认事务，再把 `wake()` 甩到后台。它把 `confirmingPlans` **一直占到
@@ -679,12 +687,12 @@ Plan **当前**那条合并请求（`OPEN` 优先、`SUPERSEDED` 不算），索
 **0.6 秒**（worktree 0.02+0.03+0.06 秒 + start 钩子 0.5 秒）；仓库只有 41 个 tracked file，
 git 侧不是瓶颈。
 
-| 改了什么 | 在哪 |
-|---|---|
-| 起分支名的预算 **30 秒 → 8 秒**。补全几个词不该花这么久；30 秒的预算是把"装饰性步骤"当成了关键路径 | `run/run-branch.ts` |
-| 超时/失败时**退回标题派生的 slug**，不再一律写 `change`——标题里本来就有 ASCII 时不该白丢（新增回归用例） | `run/scheduler.ts` `runBranchLeaf` |
+| 改了什么                                                                                                                                                       | 在哪                                                        |
+| -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| 起分支名的预算 **30 秒 → 8 秒**。补全几个词不该花这么久；30 秒的预算是把"装饰性步骤"当成了关键路径                                                             | `run/run-branch.ts`                                         |
+| 超时/失败时**退回标题派生的 slug**，不再一律写 `change`——标题里本来就有 ASCII 时不该白丢（新增回归用例）                                                       | `run/scheduler.ts` `runBranchLeaf`                          |
 | 确认按钮在等待期**整行换成一句「正在确认并准备执行环境。生成分支名、创建本地工作目录通常要几秒，先别重复点击。」**——等待期里动作行根本不渲染，重复点击自然落空 | `components/PlanDetailContent.vue`（抽屉里的「确认 V{n}」） |
-| 消息流里那张候选方案卡在按钮旁边补同一句话（它本来只有一颗转圈，说不清在等什么） | `components/ExplorerCandidatePlanCard.vue`、`styles.css` |
+| 消息流里那张候选方案卡在按钮旁边补同一句话（它本来只有一颗转圈，说不清在等什么）                                                                               | `components/ExplorerCandidatePlanCard.vue`、`styles.css`    |
 
 > 抽屉那颗「确认 V{n}」**此前连 `loading` 都没有**：它既不转圈也不禁用，点下去十几秒里
 > 唯一的视觉变化发生在别处——这就是"点击后和没点击一个样子"的直接来源。视图现在把 `busy`
@@ -699,13 +707,13 @@ git 侧不是瓶颈。
 
 纯文档。逐条拿代码核过，改掉五处**与现状对不上**的地方；顺手把文档里引用的实测数字**重跑了一遍**。
 
-| 位置 | 原来写的 | 现状 |
-|---|---|---|
-| §0.1（视图行数） | `RunDetailView` 751 行 | **806**——这一轮加了「放弃」「回收」两个确认框与两颗按钮，还有 `BLOCKED` 那个入口 |
-| §2.3 C 的入口说明 | "「结束一个 Run」有**两个**入口……两者走的是同一套服务端机制" | **三个**入口，而且第三个走的是**另一条路由**（`/finish` 而不是 `/cancel`）。补了「走哪条路由」一列，并把重复的措辞并成一段 |
-| §2.3 C（同段） | —— | 补上「回收工作区」顺带修的两处：`finish` 删完**不再清空 `workspacePath`**、删不掉**不再让整条 finish 失败** |
-| §2.3 C 的"Run 没有 `MERGED`" | `RunStatus` 是 **11** 个取值 | **10**——上一轮把 §4.2 那张计数表改对了，**漏了这一处** |
-| §7 的「执行台」行 | 引 `projectPathForModule("execute", id)` | 那个函数已随"模块"抽象一起删掉，标明了 |
+| 位置                         | 原来写的                                                     | 现状                                                                                                                       |
+| ---------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| §0.1（视图行数）             | `RunDetailView` 751 行                                       | **806**——这一轮加了「放弃」「回收」两个确认框与两颗按钮，还有 `BLOCKED` 那个入口                                           |
+| §2.3 C 的入口说明            | "「结束一个 Run」有**两个**入口……两者走的是同一套服务端机制" | **三个**入口，而且第三个走的是**另一条路由**（`/finish` 而不是 `/cancel`）。补了「走哪条路由」一列，并把重复的措辞并成一段 |
+| §2.3 C（同段）               | ——                                                           | 补上「回收工作区」顺带修的两处：`finish` 删完**不再清空 `workspacePath`**、删不掉**不再让整条 finish 失败**                |
+| §2.3 C 的"Run 没有 `MERGED`" | `RunStatus` 是 **11** 个取值                                 | **10**——上一轮把 §4.2 那张计数表改对了，**漏了这一处**                                                                     |
+| §7 的「执行台」行            | 引 `projectPathForModule("execute", id)`                     | 那个函数已随"模块"抽象一起删掉，标明了                                                                                     |
 
 **重跑过、确认仍对得上的数字**：13 条 `MERGE_READY` 的 Run 仍挂着 `workspacePath`（约 166 MB）；
 7 条已取消的 Run **全带着**那一列、其中 **5 条**的目录早就不在了（正是"删完不清那一列"的现场）；
@@ -726,11 +734,11 @@ git 侧不是瓶颈。
 
 ### 三个结束类动作，各司其职
 
-| 入口 | 出现在 | 改 Run 状态吗 |
-|---|---|---|
-| 终止 Run | `STARTING` / `IN_PROGRESS` / `READY_FOR_VERIFY` / `VERIFYING` / `RECOVERING` / `BLOCKED` | 改（→ `CANCELLED`） |
-| 放弃这次运行 | 只在 `MERGE_READY` | 改（→ `CANCELLED`） |
-| **回收工作区**（新） | `MERGE_READY` / `BLOCKED`，且还有工作区 | **不改** |
+| 入口                 | 出现在                                                                                   | 改 Run 状态吗       |
+| -------------------- | ---------------------------------------------------------------------------------------- | ------------------- |
+| 终止 Run             | `STARTING` / `IN_PROGRESS` / `READY_FOR_VERIFY` / `VERIFYING` / `RECOVERING` / `BLOCKED` | 改（→ `CANCELLED`） |
+| 放弃这次运行         | 只在 `MERGE_READY`                                                                       | 改（→ `CANCELLED`） |
+| **回收工作区**（新） | `MERGE_READY` / `BLOCKED`，且还有工作区                                                  | **不改**            |
 
 「回收工作区」收 worktree、跑 cleanup 钩子（`exitReason` 传 `workspace_reclaimed`，会以
 `PIPELINE_EXIT_REASON` 交给钩子）、把线程置成 `COMPLETED`，**待合并的仍然待合并**（合并走分支）。
@@ -814,10 +822,10 @@ git 侧不是瓶颈。
 
 「终止这次执行」和「放弃这份跑完的成果」是**两句不同的话**，用户要理解的后果也不一样。所以：
 
-| | 出现在 | 文案 |
-|---|---|---|
-| 终止 Run（原有） | `STARTING` / `IN_PROGRESS` / `READY_FOR_VERIFY` / `VERIFYING` / `RECOVERING` | 这次执行停在这里 |
-| **放弃这次运行**（新） | 只在 **`MERGE_READY`** | 这份已经跑完、在等合并的成果不要了 |
+|                        | 出现在                                                                       | 文案                               |
+| ---------------------- | ---------------------------------------------------------------------------- | ---------------------------------- |
+| 终止 Run（原有）       | `STARTING` / `IN_PROGRESS` / `READY_FOR_VERIFY` / `VERIFYING` / `RECOVERING` | 这次执行停在这里                   |
+| **放弃这次运行**（新） | 只在 **`MERGE_READY`**                                                       | 这份已经跑完、在等合并的成果不要了 |
 
 两者走**同一套服务端机制**（`POST /runs/:id/cancel` → `scheduler.finish(…, "cancelled", …)`：取消
 Agent Loop、回收 worktree、跑 cleanup 钩子、Run → `CANCELLED`、Plan → `BLOCKED`），改动只有：
@@ -862,11 +870,11 @@ cleanup 钩子会执行。
 上一轮查那 11 条零调用路由时归的类，这一轮把"被别的路径取代"那四条收掉（`settings/hooks` 是一对
 GET/PUT，所以四条能力、五个注册）：
 
-| 路由 | 为什么能删 |
-|---|---|
-| `GET /projects/:id/summary` | 与 `GET /projects/:id` 返回的 `summary` **是同一个东西**（后者返回 `{ project, summary }`） |
-| `GET /runs/:id/verification` | Run 详情页的验证信息来自 `api.getRun`（响应里就带 `verification`），不单拉一条 |
-| `GET /agent-loops/:loopId/tools` | 对应的客户端包装 `api.agentLoopTools` 正是上一轮删掉的那九个之一；Run 页的工具调用是从 journal 推导的 |
+| 路由                                     | 为什么能删                                                                                                                                                  |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /projects/:id/summary`              | 与 `GET /projects/:id` 返回的 `summary` **是同一个东西**（后者返回 `{ project, summary }`）                                                                 |
+| `GET /runs/:id/verification`             | Run 详情页的验证信息来自 `api.getRun`（响应里就带 `verification`），不单拉一条                                                                              |
+| `GET /agent-loops/:loopId/tools`         | 对应的客户端包装 `api.agentLoopTools` 正是上一轮删掉的那九个之一；Run 页的工具调用是从 journal 推导的                                                       |
 | `GET`+`PUT /projects/:id/settings/hooks` | 设置对话框走 `PATCH /projects/:id` 整体保存 `settings`；这对是**旧整页设置**的后端（设计书 §7.4 里的 `/settings/hooks` 是那条**页面路由**，不是这两个端点） |
 
 `routes/hooks.ts` 与 `schemas/hooks.ts` 整个删掉——文件里就这两条路由，`hookBody` 也只被它用。
@@ -910,15 +918,15 @@ API 重启后五条注册全 404，`PATCH /projects/:id` 仍 200；浏览器里�
 
 ### 删掉的
 
-| 层 | 什么 |
-|---|---|
-| 领域 | `run/change-proposal.ts`（服务）+ 它的测试；`ChangeProposal` / `ChangeProposalStatus` / `ApprovedChangeProposal` / `CreateChangeProposalInput` 四个类型 |
-| 状态 | `PlanStatus` 与 `RunStatus` 联合里的 `NEEDS_PLAN_CHANGE`；`plan/status-transition.ts` 的转换边 + `PLAN_STATUS_RESET_TARGETS` + `DISCARDABLE_PLAN_STATUSES`；`dispatch-coordinator` 的 case；`project.ts` 的 attention 判据 |
-| Executor | `termination-gates.ts` 的 `PENDING_CHANGE_PROPOSAL` 门禁（一个永远为假的分支）+ `GateContext.hasPendingChangeProposal` + `executor-agent` 里那次 `listChangeProposals` |
-| 存储 | 三个 store 方法（接口 + 内存 + SQLite）、`change_proposals` 表的建表与两条 ALTER、两处级联 DELETE、行映射；**老库由一条 `DROP TABLE IF EXISTS` 迁移清掉**（与 `revision_lifecycle_projection` 同一收法） |
-| API | `routes/change-proposals.ts` 三条路由、`schemas/change-proposals.ts`、路由注册、`server.ts` 的构造与依赖；投影里的 `change.proposal.created` 事件分支与 `PlanLifecycleIndex.proposalsByRun` |
-| web | `planStatus` 的文案、`statusVisual` 的语气色、`explorerRequirementRows` 的三处、`useRunComposer` 的禁用原因、`usePlanLifecycleActions` 的放行、`runControls` 的说明 |
-| 脚本 | `check-dangling-refs.mjs` 里那两条对照——不删的话它会永远报「表不在库里」（对照数 38 → 36） |
+| 层       | 什么                                                                                                                                                                                                                       |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 领域     | `run/change-proposal.ts`（服务）+ 它的测试；`ChangeProposal` / `ChangeProposalStatus` / `ApprovedChangeProposal` / `CreateChangeProposalInput` 四个类型                                                                    |
+| 状态     | `PlanStatus` 与 `RunStatus` 联合里的 `NEEDS_PLAN_CHANGE`；`plan/status-transition.ts` 的转换边 + `PLAN_STATUS_RESET_TARGETS` + `DISCARDABLE_PLAN_STATUSES`；`dispatch-coordinator` 的 case；`project.ts` 的 attention 判据 |
+| Executor | `termination-gates.ts` 的 `PENDING_CHANGE_PROPOSAL` 门禁（一个永远为假的分支）+ `GateContext.hasPendingChangeProposal` + `executor-agent` 里那次 `listChangeProposals`                                                     |
+| 存储     | 三个 store 方法（接口 + 内存 + SQLite）、`change_proposals` 表的建表与两条 ALTER、两处级联 DELETE、行映射；**老库由一条 `DROP TABLE IF EXISTS` 迁移清掉**（与 `revision_lifecycle_projection` 同一收法）                   |
+| API      | `routes/change-proposals.ts` 三条路由、`schemas/change-proposals.ts`、路由注册、`server.ts` 的构造与依赖；投影里的 `change.proposal.created` 事件分支与 `PlanLifecycleIndex.proposalsByRun`                                |
+| web      | `planStatus` 的文案、`statusVisual` 的语气色、`explorerRequirementRows` 的三处、`useRunComposer` 的禁用原因、`usePlanLifecycleActions` 的放行、`runControls` 的说明                                                        |
+| 脚本     | `check-dangling-refs.mjs` 里那两条对照——不删的话它会永远报「表不在库里」（对照数 38 → 36）                                                                                                                                 |
 
 ### 验证
 
@@ -984,12 +992,12 @@ Element Plus 覆盖与组合出来的类名，得逐条认。这一轮把那半�
 
 上一轮扫的是"导出的符号"。这轮换了三个它**结构上看不见**的面：
 
-| 面 | 结果 |
-|---|---|
+| 面                                             | 结果                                                                               |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------- |
 | **文件级可达性**（从三个真实入口建 import 图） | **干净**——337 个源文件里所有非测试文件都能从入口走到，没有"只有测试 import 的文件" |
-| **`api.ts` 的客户端方法** | **9 个生产侧零调用**（`api` 对象的**属性**，逐符号扫描看不见） |
-| **API 路由** | 11 条在生产侧零调用（6 条只有 `server.test.ts` 命中，5 条谁都没命中） |
-| **`styles.css` 的类选择器** | 约 12 个确认死（另外 93 个"没人提"里混着 Element Plus 覆盖与组合类名，不能当死的） |
+| **`api.ts` 的客户端方法**                      | **9 个生产侧零调用**（`api` 对象的**属性**，逐符号扫描看不见）                     |
+| **API 路由**                                   | 11 条在生产侧零调用（6 条只有 `server.test.ts` 命中，5 条谁都没命中）              |
+| **`styles.css` 的类选择器**                    | 约 12 个确认死（另外 93 个"没人提"里混着 Element Plus 覆盖与组合类名，不能当死的） |
 
 ### 删掉的：九个客户端包装
 
@@ -1023,6 +1031,7 @@ Element Plus 覆盖与组合出来的类名，得逐条认。这一轮把那半�
 ### 顺带记两个脚本坑
 
 写可达性分析时踩的，都会给出**看起来很正常**的假结果：
+
 1. `os.path.join(dirpath, 绝对路径)` 会把绝对路径原样返回——第一次跑出"337 个文件全部不可达"；
 2. **本仓用 ESM 风格：源码是 `.ts`、import 里写 `.js`**，解析时先剥掉后缀，否则 `main.ts` 自己
    都走不到，跑出"95 个可达但入口不可达"。
@@ -1035,19 +1044,20 @@ Element Plus 覆盖与组合出来的类名，得逐条认。这一轮把那半�
 733 个导出名），对每个名字在**非测试、非声明文件**里找引用，再逐个手工复核。
 
 > **脚本第一版有三个误判，复核救回来了**，方法本身值得记下来：
->   1) **模板字符串**——`strip_noise` 会把整段 `` `…` `` 抹掉，于是 `${WORKING_TREE_DIRTY}`、
->      `` `--title=${DIRECTORY_DIALOG_PROMPT}` `` 这类用法看不见，两个**活着的**常量被误报成"只有测试引用"；
->   2) **barrel 再导出**——`export { X } from "./y"` 一度被算成"声明"，于是 barrel 进了 own，
->      真正从 barrel 导入的引用被排除掉（`InMemoryPipelineStore` 等 7 个差点被误删）；
->   3) **类型只用在自己文件的签名里**是正常的，不是死代码（`*Deps` / `*Options` 那一批）。
+>
+> 1. **模板字符串**——`strip_noise` 会把整段 `` `…` `` 抹掉，于是 `${WORKING_TREE_DIRTY}`、
+>    `` `--title=${DIRECTORY_DIALOG_PROMPT}` `` 这类用法看不见，两个**活着的**常量被误报成"只有测试引用"；
+> 2. **barrel 再导出**——`export { X } from "./y"` 一度被算成"声明"，于是 barrel 进了 own，
+>    真正从 barrel 导入的引用被排除掉（`InMemoryPipelineStore` 等 7 个差点被误删）；
+> 3. **类型只用在自己文件的签名里**是正常的，不是死代码（`*Deps` / `*Options` 那一批）。
 
 ### 三个整个模块没人 `import`（连同测试一起删）
 
-| 文件 | 行数 | 导出 |
-|---|---|---|
-| `apps/web/src/utils/planLifecycle.ts` | 132 | 9 个——九个里**一个都没被生产代码碰过** |
-| `apps/web/src/utils/planFilters.ts` | 19 | `planStatusForStat` |
-| `apps/web/src/utils/dismissibleNotice.ts` | 17 | `useDismissibleNotice` |
+| 文件                                      | 行数 | 导出                                   |
+| ----------------------------------------- | ---- | -------------------------------------- |
+| `apps/web/src/utils/planLifecycle.ts`     | 132  | 9 个——九个里**一个都没被生产代码碰过** |
+| `apps/web/src/utils/planFilters.ts`       | 19   | `planStatusForStat`                    |
+| `apps/web/src/utils/dismissibleNotice.ts` | 17   | `useDismissibleNotice`                 |
 
 ### 模块还活着、单个导出空转的（删）
 
@@ -1115,17 +1125,17 @@ Element Plus 覆盖与组合出来的类名，得逐条认。这一轮把那半�
 
 一起收掉的整条链：
 
-| 位置 | 是什么 |
-|---|---|
-| `apps/web/src/views/WorkbenchView.vue` | 页面本身 |
-| `utils/taskBuckets.ts` | 注释里就写着"只剩 Workbench 一个消费者" |
-| `utils/planContract.ts` | 除测试外只有它用 |
-| `types.ts` 六个类型 | `WorkbenchEvent` / `WorkbenchPlan` / `WorkbenchRun` / `WorkbenchSnapshot` / `DailyActivityEntry` / `DailyActivity` |
-| `api.ts` 四个包装 | `workbench` / `workbenchEvents` / `workbenchEventsUrl` / `projectActivity`——**后一个本来就没有调用方** |
-| API：`routes/workbench.ts` | `/api/v4/workbench`(+`/events`) 与 `/api/v4/projects/:id/activity` |
-| API：`projections/workbench.ts`、`projections/activity.ts`、`schemas/workbench.ts` | 它们唯一的消费者就是上面那些路由 |
-| `utils/projectRoutes.ts` 的"模块"抽象 | `"explore" \| "execute"` 只剩一档，于是 `projectModuleForPath` / `projectPathForModule` 收成 `isExplorerWorkspacePath` / `explorerPathFor` |
-| `App.vue` 里 `router-view` 的 key | 随之少一档（`${module}:${projectId}` 那条"切项目整页重挂"的分支） |
+| 位置                                                                               | 是什么                                                                                                                                     |
+| ---------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `apps/web/src/views/WorkbenchView.vue`                                             | 页面本身                                                                                                                                   |
+| `utils/taskBuckets.ts`                                                             | 注释里就写着"只剩 Workbench 一个消费者"                                                                                                    |
+| `utils/planContract.ts`                                                            | 除测试外只有它用                                                                                                                           |
+| `types.ts` 六个类型                                                                | `WorkbenchEvent` / `WorkbenchPlan` / `WorkbenchRun` / `WorkbenchSnapshot` / `DailyActivityEntry` / `DailyActivity`                         |
+| `api.ts` 四个包装                                                                  | `workbench` / `workbenchEvents` / `workbenchEventsUrl` / `projectActivity`——**后一个本来就没有调用方**                                     |
+| API：`routes/workbench.ts`                                                         | `/api/v4/workbench`(+`/events`) 与 `/api/v4/projects/:id/activity`                                                                         |
+| API：`projections/workbench.ts`、`projections/activity.ts`、`schemas/workbench.ts` | 它们唯一的消费者就是上面那些路由                                                                                                           |
+| `utils/projectRoutes.ts` 的"模块"抽象                                              | `"explore" \| "execute"` 只剩一档，于是 `projectModuleForPath` / `projectPathForModule` 收成 `isExplorerWorkspacePath` / `explorerPathFor` |
+| `App.vue` 里 `router-view` 的 key                                                  | 随之少一档（`${module}:${projectId}` 那条"切项目整页重挂"的分支）                                                                          |
 
 一条测试的断言因此改了写法：`server.test.ts` 里项目执行线程那条**借 `/api/v4/workbench/events` 看事件
 有没有落库**，端点没了就改成直接读 `store.listEvents({ aggregateId })`——**断言的性质不变**（这一轮确实写了
@@ -1226,14 +1236,14 @@ repo-tracked files」**。
 
 ### 一起收掉的
 
-| 位置 | 是什么 |
-|---|---|
-| `RunDetailView.vue` 的 `closeView` + `close` 事件 | 那个「返回」按钮写的是 `v-if="!embedded"`，而抽屉里 `embedded` 恒为真——**`ExplorerView` 挂的 `@close="closeRunView"` 从来没被触发过**。整条链是死的，`closeRunView` 一并删 |
-| 组件里那份 `PlanDetailDrawer`（+ 组件文件 + 它的测试，59 行） | 它自己渲染方案抽屉的那条路只有整页形态走。现在取全 Plan 只做一件事：`emit("open-plan")` 交给宿主——共享抽屉里本来就有一份方案面板。这个壳随之没有调用方 |
-| `explorerEntryQuery()` | **上一轮刚加的**，为的是"两条入口的返回 / 跳转都得落在同一条需求上"。它服务的正是那个整页形态（内嵌这边只发事件），整页没了它也就没了。连带 `route` / `router` 一起从这个组件退场 |
-| 样式 `.detail-top` / `.detail-page-embedded` 那一族 | 整页页头、抽屉里的"紧凑形态"覆盖。后者现在就是基础值，直接并进 `.run-detail-page` |
-| `.conversation-column > .detail-page-embedded` | **这一条从来没有匹配过**——Run 面板的宿主是 `.shared-drawer-shell` 下的 `.shared-drawer-pane`，不是 `.conversation-column`（那是探索页签那一栏）。旧布局的残留 |
-| `.detail-page-embedded .run-facts` | `run-facts` 这个类**全仓模板里一处都没有**，连基础规则一起是死样式；这条覆盖规则跟着它删 |
+| 位置                                                          | 是什么                                                                                                                                                                            |
+| ------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RunDetailView.vue` 的 `closeView` + `close` 事件             | 那个「返回」按钮写的是 `v-if="!embedded"`，而抽屉里 `embedded` 恒为真——**`ExplorerView` 挂的 `@close="closeRunView"` 从来没被触发过**。整条链是死的，`closeRunView` 一并删        |
+| 组件里那份 `PlanDetailDrawer`（+ 组件文件 + 它的测试，59 行） | 它自己渲染方案抽屉的那条路只有整页形态走。现在取全 Plan 只做一件事：`emit("open-plan")` 交给宿主——共享抽屉里本来就有一份方案面板。这个壳随之没有调用方                            |
+| `explorerEntryQuery()`                                        | **上一轮刚加的**，为的是"两条入口的返回 / 跳转都得落在同一条需求上"。它服务的正是那个整页形态（内嵌这边只发事件），整页没了它也就没了。连带 `route` / `router` 一起从这个组件退场 |
+| 样式 `.detail-top` / `.detail-page-embedded` 那一族           | 整页页头、抽屉里的"紧凑形态"覆盖。后者现在就是基础值，直接并进 `.run-detail-page`                                                                                                 |
+| `.conversation-column > .detail-page-embedded`                | **这一条从来没有匹配过**——Run 面板的宿主是 `.shared-drawer-shell` 下的 `.shared-drawer-pane`，不是 `.conversation-column`（那是探索页签那一栏）。旧布局的残留                     |
+| `.detail-page-embedded .run-facts`                            | `run-facts` 这个类**全仓模板里一处都没有**，连基础规则一起是死样式；这条覆盖规则跟着它删                                                                                          |
 
 > **重定向只查两个接口、不查线程列表**：`getRun` → `getPlan` 就够（Plan 上带着
 > `sourceExplorerThreadId` 与 `explorerPlanId`）。**任一步失败就退回只带 `runId` 的地址**——
@@ -1360,6 +1370,7 @@ repo-tracked files」**。
   （旧事件名，映射到 `CONTEXT`）——界面上 **4 条分隔行、0 条落在折叠区**，三条在任务1 的可见区、
   一条在任务2；截图里那条就夹在「任务阻塞 → **续跑检查点** → 执行说明」之间，
   "这一轮从这儿换了一轮"看得见。
+
 > 顺带一条排查经验：这 8 条检查点（两个 Run 各 4 条）在库里记的是**旧事件名
 > `agent.context.compacted`**，`payload_json like '%checkpoint%'` 搜不到——读侧两个名字都认
 > （`executionStream` 的 `event === "agent.loop.checkpointed" || event === "agent.context.compacted"`），
@@ -1591,12 +1602,12 @@ Provider（整个后端：Codex App Server / Claude Agent SDK）
   §0.3 的标题、§1.1 的注解、§7 那一行一并改。
 - §0.1 末尾补**四对最容易混的边界**——它们都不是靠"谁推的"能分出来的，因为 ②③④ 全经同一条流到达：
 
-  | 看起来像 | 其实是 | 判据 |
-  |---|---|---|
-  | `REASONING` 像 ④（Codex 那条正文是空的） | **②** | 它是模型的思维；**正文空着也仍然是 ②**，位置属于模型 |
-  | `HOOK` 像 ⑤ 的 Run 级活动 | **④** | Provider 自己的钩子（`hook/*`、`system/hook_*`）vs Factory 的 `HOOK_*`（执行日志，归 ⑤） |
-  | `PROVIDER_COMPACTION` 像 ⑤ 的 `CONTEXT` | **④** | 前者真压了上下文，后者只是续跑检查点（一个字节都没压） |
-  | `PROVIDER_MESSAGE` 像 ① 你说的 | **④** | 它是回显，不是任何人的新发言 |
+  | 看起来像                                 | 其实是 | 判据                                                                                     |
+  | ---------------------------------------- | ------ | ---------------------------------------------------------------------------------------- |
+  | `REASONING` 像 ④（Codex 那条正文是空的） | **②**  | 它是模型的思维；**正文空着也仍然是 ②**，位置属于模型                                     |
+  | `HOOK` 像 ⑤ 的 Run 级活动                | **④**  | Provider 自己的钩子（`hook/*`、`system/hook_*`）vs Factory 的 `HOOK_*`（执行日志，归 ⑤） |
+  | `PROVIDER_COMPACTION` 像 ⑤ 的 `CONTEXT`  | **④**  | 前者真压了上下文，后者只是续跑检查点（一个字节都没压）                                   |
+  | `PROVIDER_MESSAGE` 像 ① 你说的           | **④**  | 它是回显，不是任何人的新发言                                                             |
 
 - 代码里同步（**纯文案，符号名一个没动**）：`MESSAGE_CLASS_LABELS.provider`、16 处注释里的旧标签、
   4 处「会话设施」、3 条测试标题。`provider` 这个键、`PROVIDER_*` 类型名、`RUNTIME_KINDS` /
@@ -1638,12 +1649,12 @@ Provider（整个后端：Codex App Server / Claude Agent SDK）
 而探索侧早就把会话 / 时间线 / 输入请求 / SSE 各自抽成了 `useExplorer*` 的 composable，
 **执行侧一个都没有**。这一刀按同样的分法补齐，**行为零变化**。
 
-| 抽出来的 | 它自己的判据（这才是值得单独成文件的理由） |
-|---|---|
-| `utils/executionConversation.ts` + `composables/useExecutionConversation.ts` | 分组与折叠，约 150 行。**纯函数**、线程状态由参数传，所以能直接单测 |
-| `composables/useRunStream.ts` | SSE 与**续传游标**；`follow` 必须在并入**之前**测；`MERGE_READY` 不是终态 |
-| `composables/useRunControl.ts` | 暂停 / 终止 / 验证 / 合并；确认与执行分家、失败留在框里、路由形状不下沉 |
-| `composables/useRunComposer.ts` | 补充要求输入框；"能不能发"判的是 **Run 状态**，不是线程状态 |
+| 抽出来的                                                                     | 它自己的判据（这才是值得单独成文件的理由）                                |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| `utils/executionConversation.ts` + `composables/useExecutionConversation.ts` | 分组与折叠，约 150 行。**纯函数**、线程状态由参数传，所以能直接单测       |
+| `composables/useRunStream.ts`                                                | SSE 与**续传游标**；`follow` 必须在并入**之前**测；`MERGE_READY` 不是终态 |
+| `composables/useRunControl.ts`                                               | 暂停 / 终止 / 验证 / 合并；确认与执行分家、失败留在框里、路由形状不下沉   |
+| `composables/useRunComposer.ts`                                              | 补充要求输入框；"能不能发"判的是 **Run 状态**，不是线程状态               |
 
 - **分组与折叠此前一条行为用例都没有**，只有"这段代码还在不在"的源码断言。搬进 utils 之后补了
   12 条：两轮补充各写自己那句话、补充轮既不进任务组也不进未归属、空步骤**连续**才折、跑着的组不折、
@@ -1763,17 +1774,16 @@ Provider（整个后端：Codex App Server / Claude Agent SDK）
 **补充要求「生成修改摘要，并commit」**(22) / **补充要求「不要改动任何文件…」**(7)，
 各组合计 92 = 渲染总数（无重复）。新增 2 条用例（两轮的编号、`STEER` 不搬）。
 
-
 ## 2026-10-07 — 需求清单与 Run 上的弹框，跟新增需求统一成一套
 
 上一轮把「新增需求」从一句 `ElMessageBox.prompt` 换成了独立组件。这一轮把**同一个界面上的另外三个**
 也换过来——它们此前是三种互不相干的形状：
 
-| 位置 | 原来 | 现在 |
-|---|---|---|
-| 需求清单 · 重命名需求 | `ElMessageBox.prompt`（光秃秃一个输入框） | 与**线程改名共用** `ExplorerRenameDialog`，差别只在 `copy` 那几行字 |
-| 需求清单 · 删除需求 | `ElMessageBox.confirm`（一句话塞满代价） | `ConfirmDialog`：一句说"对谁做什么" + 代价逐条列出来 |
-| Run · 终止 Run | `ElMessageBox.confirm`（**文案还是英文**） | 同一个 `ConfirmDialog`，文案译成中文 |
+| 位置                  | 原来                                       | 现在                                                                |
+| --------------------- | ------------------------------------------ | ------------------------------------------------------------------- |
+| 需求清单 · 重命名需求 | `ElMessageBox.prompt`（光秃秃一个输入框）  | 与**线程改名共用** `ExplorerRenameDialog`，差别只在 `copy` 那几行字 |
+| 需求清单 · 删除需求   | `ElMessageBox.confirm`（一句话塞满代价）   | `ConfirmDialog`：一句说"对谁做什么" + 代价逐条列出来                |
+| Run · 终止 Run        | `ElMessageBox.confirm`（**文案还是英文**） | 同一个 `ConfirmDialog`，文案译成中文                                |
 
 ### Added
 
@@ -1813,7 +1823,6 @@ Provider（整个后端：Codex App Server / Claude Agent SDK）
 - `docs/消息类型及事件状态机流程图.md`：这轮**没有要改的**（它清点的是消息类型与状态机，而这次换的是
   收文本/确认的容器，报文一个没变）。只补了一句说明，把那组"不是消息面"的对话框列出来，免得后人以为漏了。
 
-
 ## 2026-10-07 — 「新增需求」对话框重做：从一行 textarea 变成一个像样的输入面
 
 报障是审美与易用性上的：现有输入框"只能说满足功能"——它就是一句
@@ -1852,7 +1861,6 @@ Provider（整个后端：Codex App Server / Claude Agent SDK）
   改用原生 `click()` 才确认——不是产品的问题，但下次别被那句 "Successfully clicked" 骗了。
 - `docs/消息类型及事件状态机流程图.md` 同步：§0 那张"怎么进去"的表给 A 补上「新增需求」这条入口，
   并写清它一步到位（提交那一刻就已经发出第一条消息，不存在"建完还停在清单上"的中间态）。
-
 
 ## 2026-10-07 — 分支名/工作区名的时间戳**到秒**（`factory/20261007-214805-slug`）
 
@@ -1895,7 +1903,6 @@ factory/20261007-214805-fix-task-project-validation   ← 现在
   "分支名会传给 Run 与 Worktree"的既有回归网。
 - `pnpm verify` 全绿：domain 444 / api 121 / web 599，运行库无悬空引用。
 
-
 ## 2026-10-07 — 悬空引用检查收进 scripts，并挂进 verify
 
 这一轮靠一个临时脚本扫运行库，两回各挖出真残留：**探针那条需求**（按四个 id 扫，漏掉了按 `loop_id`
@@ -1912,8 +1919,8 @@ factory/20261007-214805-fix-task-project-validation   ← 现在
 - **判据是"子列 → 父表"的对照表（38 条），不是 id 名单**。按 id 扫只能回答"我删的这几条干净了吗"，
   这里要回答的是"库里此刻还有没有孤儿"——不管谁留下的、什么时候留下的。第一版的 id 名单正是
   漏掉 288 行 steps 的原因。
-- **两类结论分开**：*悬空*（子行指着不存在的父行）→ 这个阶段失败；*对照表过期*（表在、列不在了，
-  多半是改了名）→ 也失败，因为那意味着某条检查**静默失效**了；*表整个不在* → 只跳过并打印一行
+- **两类结论分开**：_悬空_（子行指着不存在的父行）→ 这个阶段失败；_对照表过期_（表在、列不在了，
+  多半是改了名）→ 也失败，因为那意味着某条检查**静默失效**了；_表整个不在_ → 只跳过并打印一行
   （多半是库比代码旧，启动一次 api 就会补上），不当失败。
 - **没有运行库就跳过**（新克隆、CI 里根本没有），不是失败。
 - `--database=<路径>` 可以扫别的库（比如某份备份）。
@@ -1926,7 +1933,6 @@ factory/20261007-214805-fix-task-project-validation   ← 现在
 - 把副本里的 `run_guidance.run_id` 删掉（模拟列改名）：报"对照表过期了 1 条"，**退出码 1**。
 - 真库：**0 处**（核对了 38 条对照）。
 - `pnpm verify` 全绿（443 / 121 / 599），新阶段在最前面打 `全库悬空引用：0 处`。
-
 
 ## 2026-10-07 — Loop 面板改成列「结论」，不再列「最后 4 条」
 
@@ -1968,7 +1974,6 @@ factory/20261007-214805-fix-task-project-validation   ← 现在
     `PROVIDER_ACTIVITY` 一条都没露**。
 - `pnpm verify`：domain 443 / api 121 / web 599。
 
-
 ## 2026-10-07 — 删需求留下的空号会让新回合**撞号**
 
 删掉几条需求之后核对线程状态，发现**需求7 与需求10 的回合都占着 #13 / #14**——同一线程里两对回合
@@ -1994,7 +1999,6 @@ sequence: turns.length + 1,   // explorer/thread-service.ts
 前端用的稳定键，属于呈现层的事）。
 
 `pnpm verify`：domain 443 / api 121 / web 593。
-
 
 ## 2026-10-07 — 「上下文压缩」是个错名字：它从没压过
 
@@ -2036,7 +2040,6 @@ sequence: turns.length + 1,   // explorer/thread-service.ts
   - 探索侧需求10：`Factory · 续跑检查点 · 3 条消息 20:56`；
   - 执行侧 run-ff037bc2-26d：4 条 `Factory · 续跑检查点 已保存检查点，继续下一轮`；
   - 两页全文搜「上下文压缩」：**0 处**。
-
 
 ## 2026-10-07 — 需求清单里能删掉一条需求了
 
@@ -2136,7 +2139,6 @@ sequence: turns.length + 1,   // explorer/thread-service.ts
     三条 `explorer.plan.deleted` 事件落在 #236377 / #236378 / #236379。
 - `pnpm verify` 六阶段全绿：domain 441 / api 121 / web 592。
 
-
 ## 2026-10-07 — 需求能丢掉了；顺带修掉"刷新就弹右侧面板"
 
 起因是那条探针需求清不掉：**这个产品没有"删除需求"的路**。查到底——API 上需求只有
@@ -2188,13 +2190,13 @@ sequence: turns.length + 1,   // explorer/thread-service.ts
 按 run 找只会找到两条）、以及聚合在 **loop / merge 请求**上的领域事件（那两个 aggregate 从来不在四 id 里）。
 真正的数字是 **1398 行 + 1 行修补**，分布在 17 张表：
 
-| 表 | 行 | | 表 | 行 |
-|---|---|---|---|---|
-| `domain_events` | 836 | | `plan_revisions` / `candidate_plan_versions` / `candidate_plans` | 各 1 |
-| `agent_loop_steps` | 288 | | `explorer_plans` | 1 |
-| `execution_journal` | 257 | | `explorer_turns`（#19/#20） | 2 |
-| `agent_loops` | 3 | | `runs` | 1 |
-| 其余 9 张单行表 | 各 1 | | | |
+| 表                  | 行   |     | 表                                                               | 行   |
+| ------------------- | ---- | --- | ---------------------------------------------------------------- | ---- |
+| `domain_events`     | 836  |     | `plan_revisions` / `candidate_plan_versions` / `candidate_plans` | 各 1 |
+| `agent_loop_steps`  | 288  |     | `explorer_plans`                                                 | 1    |
+| `execution_journal` | 257  |     | `explorer_turns`（#19/#20）                                      | 2    |
+| `agent_loops`       | 3    |     | `runs`                                                           | 1    |
+| 其余 9 张单行表     | 各 1 |     |                                                                  |      |
 
 那 836 条事件的**聚合**也值得记一笔：`agent-loop-96f66c47-b66` 304、run 254、`agent-loop-b5ea4ee1-4d9` 164、
 探索 loop 77、plan 28、merge 请求 2 —— 光看 plan 与 run 两个聚合只能数到 282。
@@ -2216,7 +2218,6 @@ sequence: turns.length + 1,   // explorer/thread-service.ts
 备份：`.runtime/pipeline-factory.sqlite.before-probe-delete`（17.6 MB，`VACUUM INTO` 取的，
 比早先那份 `before-probe-cleanup` 更贴近删除前的状态）。清理脚本留在
 `.runtime/cleanup-probe.mjs`，**不带 `apply` 参数跑就是只报数的 dry-run**。
-
 
 ## 2026-10-07 — 补充要求：真跑一次之后挖出来的五个问题
 
@@ -2283,7 +2284,6 @@ Bash 工具调用并成功、`08:47:23` 就收到 `agent.loop.recovery_required`
   Loop、事件流不再在 `MERGE_READY` 关。
 - `pnpm verify` 六阶段全绿：domain 425 / api 117 / web 581。
 
-
 ## 2026-10-07 — pre-commit 钩子：提交前只排版这次暂存的文件
 
 `pnpm format` 是一次全量动作，日常提交更需要的是"只碰我这次改的东西"。钩子放在
@@ -2328,7 +2328,6 @@ ESLint 报错、提交中止、没有产生提交。
 顺带把 README 的「验证」一节补上 `pnpm --dir code verify`（原文还在列几条手敲的 `.bin` 命令），并新增
 「代码规范与提交钩子」一节。
 
-
 ## 2026-10-07 — 全量格式化（267 个文件）+ 把 `format:check` 接进门禁
 
 工具装好之后跑了 `pnpm --dir code format`，Prettier 重排了 **267 个文件**。这一步的真实代价不在
@@ -2366,7 +2365,6 @@ CSS 那几条（`styles.css` 从"一行一条规则"被拆成"一行一声明"�
 - 顺带记一笔排查过程里的一个假警报：中途 `verify` 报 web 只有 496 个用例，看着像丢了 82 个。实际是我在
   批量改断言时把四个测试文件的 `flat` 助手写坏了（正则里的字符类拼错），**解析失败的文件其用例不被计入**。
   修好之后回到 578，数目本来就是对的——"用例数变少"在这种情况下是语法错误的症状，不是删了测试。
-
 
 ## 2026-10-07 — 接入 ESLint / typescript-eslint / eslint-plugin-vue / Prettier
 
@@ -2423,7 +2421,6 @@ p90 是 125、p99 是 283。
   （domain 420 / api 117 / web 578）→ 循环依赖检查。
 - 三条 web 用例的源码断言跟着改（它们断言的是被删掉的那几行 destructuring 的字面量）；改的是断言
   文本，判据没变——它们要证的仍是"ExplorerView 把这些 composable 的返回值接上了"。
-
 
 ## 2026-10-07 — 执行完了但没合并，想再让 Agent 补一轮：输入框点不动
 
@@ -2503,7 +2500,6 @@ p90 是 125、p99 是 283。
   留给用户自己按第一下。
 - `pnpm verify`：domain 420 / api 117 / web 578 全绿，无新增值级循环依赖。
 
-
 ## 2026-10-07 — 用量栏的 Agent 显示成 codex：端点指纹只吃了角色名
 
 报障：项目里把执行侧 Agent 设成 Claude Code，"执行页面看着也像 Claude，但左下方那个 Agent 显示
@@ -2511,11 +2507,11 @@ p90 是 125、p99 是 283。
 
 **"模型对、Agent 不对"这条线索就是答案**——两者读的不是同一处。查 project4 那条 Run 的三份数据：
 
-| 来源 | 值 |
-|---|---|
-| Plan 确认时冻结的 executor 配置 | `{ model: claude-opus-5, backend: claude-agent-sdk }` |
-| 项目**当前**设置 | 同上 |
-| 线程里**记录**的 telemetry | `{ model: "claude-opus-5", backend: "codex-app-server" }` ← 错的是这个 |
+| 来源                            | 值                                                                     |
+| ------------------------------- | ---------------------------------------------------------------------- |
+| Plan 确认时冻结的 executor 配置 | `{ model: claude-opus-5, backend: claude-agent-sdk }`                  |
+| 项目**当前**设置                | 同上                                                                   |
+| 线程里**记录**的 telemetry      | `{ model: "claude-opus-5", backend: "codex-app-server" }` ← 错的是这个 |
 
 模型来自 `effectiveModelConfig`（项目覆盖当时就生效），后端来自 `agent.loop.started` 的**端点指纹**，
 而那个指纹是 `this.model.describeEndpoint?.(input.role)`——**只传角色名**。路由网关的
@@ -2607,7 +2603,6 @@ Explore 每次都要先问一遍"要 CONVERSATION 还是 REPOSITORY_FILE"，而�
 补做一轮"这条**两头都不通**（报障的现场：Run 是 `MERGE_READY`、线程已是 `COMPLETED`，输入框不可点）。
 要真能用，先得回答两个问题：补充的要求怎么进模型上下文、Loop 结束后怎么起新一轮。
 
-
 ## 2026-10-07 — 退役整页「项目设置」，只留 Explorer 里的对话框
 
 上一轮给 project4 配启动钩子时撞到的一件事：整页设置（`/projects/:id/settings`）的**命令编辑器
@@ -2649,7 +2644,6 @@ Explore 每次都要先问一遍"要 CONVERSATION 还是 REPOSITORY_FILE"，而�
 - 无孤儿全局 CSS 需要清：被删组件的样式是 `<style scoped>`，随文件一起消失；它与 `styles.css`
   共用的三个类（`saved-note` / `settings-notice` / `eyebrow`）都还有别的使用方。
 - `pnpm verify`：domain 405 / api 112 / web **579**（+6）全绿，无新增值级循环依赖。
-
 
 ## 2026-10-07 — 启动钩子：Worktree 初始化不必硬编码，且失败策略可配
 
@@ -2713,7 +2707,6 @@ worktree 只检出被跟踪的文件，于是每个 worktree 都得到一个**�
   切换、说明文案与「命令页签登记」那句都在位；控制台无报错。**只在页面上切了状态、没有保存**——
   这次要证明的是控件接线，不是往项目的真配置里写一条假命令。
 - `pnpm verify`：domain 405 / api 112 / web 573 全绿，无新增值级循环依赖。
-
 
 ## 2026-10-07 — 设置对话框的页脚按钮根本不保存（"改成 Claude 了，重开还是 codex"）
 
@@ -2788,15 +2781,16 @@ Claude 执行侧 5/5 条有正文，Codex 执行侧 0/5。
   2 条是 Factory 标记（留空）。这个 3:2 就是这次改动要分出来的东西。
 - **两条后端各跑了一次做对照**（同一个计划、同一天、同一个仓库，只换后端）：
 
-  | 侧 | 后端 | 推理条目 | 有正文 |
-  |---|---|---|---|
-  | 执行 | Codex `gpt-5.6-luna` | 5 | **0** |
-  | 执行 | Claude `claude-opus-5` | 5 | **5**（600 / 600 / 337 / 68 / 330 字） |
-  | 探索 | Codex | 5 | **0** |
-  | 探索 | Claude | 4 | **2**（其中一条 **1708 字**——旧的 240 上限只够开头） |
+  | 侧   | 后端                   | 推理条目 | 有正文                                               |
+  | ---- | ---------------------- | -------- | ---------------------------------------------------- |
+  | 执行 | Codex `gpt-5.6-luna`   | 5        | **0**                                                |
+  | 执行 | Claude `claude-opus-5` | 5        | **5**（600 / 600 / 337 / 68 / 330 字）               |
+  | 探索 | Codex                  | 5        | **0**                                                |
+  | 探索 | Claude                 | 4        | **2**（其中一条 **1708 字**——旧的 240 上限只够开头） |
 
   也就是说"换个 Agent 推理行就空了"是**字面成立**的，不是错觉；而 2000 这个上限对真实的一段推理
   是够用的（1708 < 2000）。
+
 - `pnpm verify`：domain 403 / api 111 / web 563 全绿。
 
 ## 2026-10-07 — 命令行的「显示结果」永远不出现
@@ -2848,7 +2842,12 @@ Codex 的 `reasoning` item 形状是 `{ content: string[], summary: string[] }`�
 翻 Codex 自己的 rollout 才看清：`reasoning` item 是
 
 ```json
-{ "type": "reasoning", "id": "rs_…", "summary": [], "encrypted_content": "<2084 字符>" }
+{
+  "type": "reasoning",
+  "id": "rs_…",
+  "summary": [],
+  "encrypted_content": "<2084 字符>"
+}
 ```
 
 ——`summary` 永远是空数组，正文在 `encrypted_content` 里（加密、不可读）。抽查最近 25 个会话、
@@ -2865,13 +2864,13 @@ Claude 侧的 `thinking` 块是真有文字的——那条路跑起来推理行�
 
 ### 合并
 
-| 并入哪 | 内容 |
-|---|---|
-| **§0.4**（新增，短） | 这些消息类型是从哪来的——两个 Provider 各有多少种原生消息，以及"某个字段没读"的后果 |
+| 并入哪                  | 内容                                                                                                                                                      |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **§0.4**（新增，短）    | 这些消息类型是从哪来的——两个 Provider 各有多少种原生消息，以及"某个字段没读"的后果                                                                        |
 | **§5 接入链路**（新增） | 四层图与每层做什么；两个 Provider 的原生消息清单（Codex 75 通知 / 18 `ThreadItem`；Claude 39 `SDKMessage`）；同一个事实两个名字的对照表；老数据的实测快照 |
-| **§6 呈现参考**（新增） | OpenClaw 与 Hermes 的做法、两者的七条共识、以及本仓与它们逐项对照（含仍然缺的那一件） |
-| **§0.1**（补） | 两个轴各自决定什么，以及这套分类能直接回答的三个设计问题 |
-| **§7.1**（新增） | 还没做的只有一件：子代理 / 搜索 / 生图的**专属卡片**——本轮只做到分类与标签 |
+| **§6 呈现参考**（新增） | OpenClaw 与 Hermes 的做法、两者的七条共识、以及本仓与它们逐项对照（含仍然缺的那一件）                                                                     |
+| **§0.1**（补）          | 两个轴各自决定什么，以及这套分类能直接回答的三个设计问题                                                                                                  |
+| **§7.1**（新增）        | 还没做的只有一件：子代理 / 搜索 / 生图的**专属卡片**——本轮只做到分类与标签                                                                                |
 
 原 §5/§6/§7（空转项 / V1 清点 / 落库粒度）顺延为 §7/§8/§9，交叉引用一并改。
 
@@ -3125,8 +3124,6 @@ Provider 明明给了的东西；消息大类只分"用户 / 模型 / 运行时"
   日志（log）才是它的本义。（代码符号名不变；那是另一次纯重命名。）
 - §2.3 C 补上启动恢复的判据与这次的修复（含实测数字），§5 补三行。
 
-
-
 ### 为什么做
 
 `PlanStatus` 有 14 个取值，但"哪些转换合法"这件事**没有任何地方管**：22 个 `updatePlanStatus` 调用点
@@ -3136,7 +3133,8 @@ Provider 明明给了的东西；消息大类只分"用户 / 模型 / 运行时"
 而"哪些转换存在"有**四份互不知道的副本**：四处散落的 `includes([...])` 白名单；
 `planLifecycle.ts` 的 `normalizedLifecycleStatus`（`QUEUED→ENQUEUED`、`STARTING/RUNNING→IN_PROGRESS`、
 `NEEDS_REVIEW→MERGE_READY` 三块补丁）；`recovery-coordinator.ts` 的 `RECONCILIABLE_PLAN_STATUSES`
-+ `planStatusForRun`；前端 `explorerRequirementRows.ts` 的 `CONFIRMED_PLAN_STATUSES`。
+
+- `planStatusForRun`；前端 `explorerRequirementRows.ts` 的 `CONFIRMED_PLAN_STATUSES`。
 
 **顺带查出三个幽灵状态**：`DESIGNED` / `PLANNED` / `QUEUED` 在 `PlanStatus` 里，但全仓没有任何写入点——
 前两个只出现在几处守卫的白名单里，后者那两处 `status: "QUEUED"` 写的是 `PlanDispatchState`（另一个类型）。
@@ -3388,12 +3386,12 @@ Run 详情页与项目列表页扫描一遍，已无英文状态词残留（只�
 
 同一个 Plan 状态在界面上能有三四个词，因为它们来自**三份互不相干的表**：
 
-| 状态 | 抽屉标题 | 候选方案卡 | 工作台 | 生命周期条 |
-|---|---|---|---|---|
-| `DRAFT` | `DRAFT`（**直接渲染枚举值**） | `Candidate` | `Draft` | `Candidate` |
-| `READY` | `READY` | `Confirmed` | `Ready` | `Confirmed` |
-| `MERGE_READY` | `MERGE_READY` | `Ready for review` | `Needs review` | `Ready for review` |
-| `MERGED` | `MERGED` | `Merged` | `Merged` | **`Completed`** |
+| 状态          | 抽屉标题                      | 候选方案卡         | 工作台         | 生命周期条         |
+| ------------- | ----------------------------- | ------------------ | -------------- | ------------------ |
+| `DRAFT`       | `DRAFT`（**直接渲染枚举值**） | `Candidate`        | `Draft`        | `Candidate`        |
+| `READY`       | `READY`                       | `Confirmed`        | `Ready`        | `Confirmed`        |
+| `MERGE_READY` | `MERGE_READY`                 | `Ready for review` | `Needs review` | `Ready for review` |
+| `MERGED`      | `MERGED`                      | `Merged`           | `Merged`       | **`Completed`**    |
 
 `PlanDetailContent.vue` 那句 `<el-tag>{{ plan.status }}</el-tag>` 是把**枚举值本身**端给用户看；
 `utils/statusVisual.ts` 另有一张自己的文案表，与 `utils/planStatus.ts` 早已漂成两套词。
@@ -3761,12 +3759,12 @@ project4 没登记任何验证命令，所以这条**现在触发不到**——�
 
 问题在解析器：它判的是 **V1 的字段形状**。
 
-| | 模型给的（V2） | 解析器找的（V1） |
-|---|---|---|
-| 目标 | `objective.goal` | 顶层 `goal` ← 不存在 |
-| 范围 | `scope.includePaths` | 顶层 `include` |
-| 验收 | `objective.acceptanceCriteria` | 顶层 `acceptanceCriteria` |
-| 验证命令 | `verification.commandIds` | 顶层 `verificationCommandIds` |
+|          | 模型给的（V2）                 | 解析器找的（V1）              |
+| -------- | ------------------------------ | ----------------------------- |
+| 目标     | `objective.goal`               | 顶层 `goal` ← 不存在          |
+| 范围     | `scope.includePaths`           | 顶层 `include`                |
+| 验收     | `objective.acceptanceCriteria` | 顶层 `acceptanceCriteria`     |
+| 验证命令 | `verification.commandIds`      | 顶层 `verificationCommandIds` |
 
 顶层没有 `goal` → 直接落到"校验失败"。**从 Plan V2 落地起，每一份新方案都会这样显示。**
 
@@ -4151,6 +4149,7 @@ Claude：`tool_use`/`tool_result`/`providerSession` + `started`/`succeeded`/`fai
   压在下面，早已失效——两条规则同时存在、只有一条生效，是本轮最容易误判的地方。
 
 **底部：模型与 agent 必须有答案**
+
 - **修一个真缺陷**：`projectRunThreadTelemetry` 重建 telemetry 对象时漏搬 `backend`，于是库里记着
   `codex-app-server`、界面上 AGENT 一栏**永远是"未记录"**。现在 `existing` 有的字段逐个带过去，
   缺失时才回退 Revision 快照。
@@ -4420,6 +4419,7 @@ dev 模式下 API 跑的是 `src/main.ts`（tsx），但 `@pipeline-factory/doma
 ### Changed
 
 **任务中心四分区（共享一份定义）**
+
 - 新增 `utils/taskBuckets.ts`：`taskBucketFor` / `countTaskBuckets` / `filterTasksByBucket` +
   `TASK_BUCKETS`（待执行 / 执行中 / 已完成 / 待处理）。判定**同时看 Plan 状态与 dispatch 状态**
   （排队等容量时 Plan 仍是 DISPATCHED，只看 `status` 会错报成"待执行"）。
@@ -4667,7 +4667,7 @@ dev 模式下 API 跑的是 `src/main.ts`（tsx），但 `@pipeline-factory/doma
 - Project 设置页与设置弹窗各加一个 **Agent 选择器**（`Explorer agent` / `Executor agent`），
   模型与推理强度的候选项跟着所选后端变；空值显示为"跟随全局（<生效后端>）"，保存为 `backend: null`。
 - `utils/modelOptions.ts`（一份写死的 Codex 模型清单）删除，换成 `utils/modelCatalog.ts`
-  + `composables/useModelBackends.ts`（模块级缓存一次目录）。未知的已配置模型**永远保持可选**。
+  - `composables/useModelBackends.ts`（模块级缓存一次目录）。未知的已配置模型**永远保持可选**。
 - 用量栏新增 **AGENT** 一格（`ProviderUsageFooter` 的可选 `backend` prop）：Explorer 侧取
   Project 覆盖后的探索后端，Run 侧取遥测里的 `backend`。"这一轮到底是谁跑的"在页面上第一次有了答案。
 
@@ -4788,11 +4788,11 @@ dev 模式下 API 跑的是 `src/main.ts`（tsx），但 `@pipeline-factory/doma
 
 ### 开启前的实测（真实库，只读，未动一行数据）
 
-| | |
-| --- | --- |
-| 全库事件 | 159,543 行 / 22.8 MB 载荷 |
-| 事件时间范围 | 2026-09-12 → 2026-09-28（16 天） |
-| **14 天 + 保底 200 会删** | **30,238 行 / 3.9 MB（19.0%）** |
+|                           |                                  |
+| ------------------------- | -------------------------------- |
+| 全库事件                  | 159,543 行 / 22.8 MB 载荷        |
+| 事件时间范围              | 2026-09-12 → 2026-09-28（16 天） |
+| **14 天 + 保底 200 会删** | **30,238 行 / 3.9 MB（19.0%）**  |
 
 - 删的全是那两个**逐字重复**的逐 token 增量类型：`agent.step.model_text_delta` 15,119 行 + `agent.model.text.delta` 15,119 行。两者各有 15,625 行早于 cutoff，其中 506 行被"每聚合保底 200 条"留下。
 - `explorer.turn.text.delta`（32,984 行）与 `project.execution.turn.text.delta`（299 行）**一行都不删**：它们最早分别是 09-17 与 09-26，全在 14 天以内。这不是白名单没生效，是这个库只比 14 天大两天。
@@ -4806,12 +4806,12 @@ dev 模式下 API 跑的是 `src/main.ts`（tsx），但 `@pipeline-factory/doma
 
 ### 首次开启的实测结果（重启前后各取一次全量快照比对）
 
-| | 重启前 | 重启后 |
-| --- | --- | --- |
-| `domain_events` 行数 | 159,556 | 129,320 |
-| 载荷 | 22.81 MB | 18.93 MB |
-| `MAX(sequence)` | 220,322 | 220,324 |
-| 序号高水位表 | 不存在（旧 dist 建的库） | `last_sequence = 220322` |
+|                      | 重启前                   | 重启后                   |
+| -------------------- | ------------------------ | ------------------------ |
+| `domain_events` 行数 | 159,556                  | 129,320                  |
+| 载荷                 | 22.81 MB                 | 18.93 MB                 |
+| `MAX(sequence)`      | 220,322                  | 220,324                  |
+| 序号高水位表         | 不存在（旧 dist 建的库） | `last_sequence = 220322` |
 
 **实际删除 30,238 行 / 3.88 MB，与开启前算出的预测逐行一致**，且只动了两个类型：
 
@@ -4830,7 +4830,7 @@ dev 模式下 API 跑的是 `src/main.ts`（tsx），但 `@pipeline-factory/doma
 ### 结论：那一条的依据在真实数据上不成立
 
 A2 把 `run.executor.event` 中 `payload.type === 'MODEL_OUTPUT'` 的部分列进了可回收白名单，依据是
-"它是 `execution_journal` 那一行的镜像"。白名单的**判据只有一条**——*最终态另有持久化副本*——
+"它是 `execution_journal` 那一行的镜像"。白名单的**判据只有一条**——_最终态另有持久化副本_——
 所以在真的按下开关之前，把这个类型**待删的每一行**拿去和 `execution_journal` 逐行关联（不是抽样）。
 结果是一条都关联不上，原因是两处：
 
@@ -4930,7 +4930,7 @@ ExplorerView 的发送路径挂到组件测试上），再动结构——那是�
 
 - `PipelineStore.pruneEvents({ cutoff, minPerAggregate })`：回收高频事件，返回删除条数。规则与白名单的**唯一**定义在新增的叶子模块 `store/event-retention.ts`，两个实现都按它来——SQLite 那条带窗口函数的 DELETE 是它的规格翻译。`cutoff` 由调用方算好传进来（而不是让存储层取 `now()`），这样"删哪些"完全由入参决定，两种实现才对得齐，测试也不必去伪造历史时间戳（`appendEvent` 的 `occurredAt` 由存储层生成，调用方给不了过去的时间）。
 - 配置项 `storage.eventRetentionDays` 与 `storage.eventRetentionMinPerAggregate`，并接进 `createApp` 的 store 构造。
-- **可回收白名单**（判定标准只有一条：*这一条事件是不是某段事实的中间态，而那段事实的最终态另有持久化副本*）：`explorer.turn.text.delta`（最终正文在 `explorer_turns.content`）、`agent.step.model_text_delta`（`agent_loop_steps` 那行的事件镜像）、`agent.model.text.delta`（与上一条逐字重复，A1a 已停止写入）、`project.execution.turn.text.delta`（最终正文在 `project_execution_messages.content`）。**任何参与业务判定的事件都不能进白名单**——`plan.*`、`run.paused`、`verification.completed` 删掉不是"少了几条历史"，是状态机少了输入。
+- **可回收白名单**（判定标准只有一条：_这一条事件是不是某段事实的中间态，而那段事实的最终态另有持久化副本_）：`explorer.turn.text.delta`（最终正文在 `explorer_turns.content`）、`agent.step.model_text_delta`（`agent_loop_steps` 那行的事件镜像）、`agent.model.text.delta`（与上一条逐字重复，A1a 已停止写入）、`project.execution.turn.text.delta`（最终正文在 `project_execution_messages.content`）。**任何参与业务判定的事件都不能进白名单**——`plan.*`、`run.paused`、`verification.completed` 删掉不是"少了几条历史"，是状态机少了输入。
 - 本条原文把 `run.executor.event` 中 `payload.type === 'MODEL_OUTPUT'` 的那部分也列进了白名单，依据是"它是 `execution_journal` 的镜像"。**那条依据是错的，已在开启回收前移除**，见上面「A2 白名单收紧」一节。
 - `store/event-retention.ts` 里另有 `prunableEventIds`（内存实现的判定）与 `isPrunableEvent`，两者与 SQLite 的 SQL 是同一套规则的两种表达。
 
@@ -5025,6 +5025,7 @@ ExplorerView 的发送路径挂到组件测试上），再动结构——那是�
   - `PlanDispatchCoordinator.evaluateWait` 在 revision 带 `resolvedContract` 时改读 V2 的 `resolvedContract.verification.commandIds`，且只把 `category === "verification"` 且 `enabled !== false` 的命令算作已注册。
 
   两套规则让"同一个 Plan 该不该被拦"取决于**谁先问**：派发前的 `evaluateWait` 放行，`Scheduler.start` 里的同名校验却抛 `RUN_PREREQUISITES_UNSATISFIED`。典型触发是 V2 的 `verification.mode: "NONE"`——解析后 `commandIds` 为空、按 README 应当被 `SKIPPED` 而非被拦，但只要它身上带着一份陈旧的 V1 镜像 id 就会被卡住。规则已收敛到 `plan/contract.ts` 的 `missingVerificationCommands` 一处，三处调用点改用它；统一到 coordinator 的那套（已解析的 V2 契约是权威来源）。
+
 - 判定规则两侧语义都被测试钉住（`plan/contract.test.ts`）：V2 分支保持严格（未启用或非 verification 类别的命令不算已注册），V1 回落分支保持历史行为（不收紧，否则旧库里的历史合同会突然无法确认）。
 
 ### Changed

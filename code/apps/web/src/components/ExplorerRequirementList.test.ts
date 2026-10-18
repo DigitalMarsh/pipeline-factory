@@ -66,17 +66,19 @@ function mountList(rows: ExplorerRequirementRow[], disabled = false) {
   hosts.push(host);
   const removed: string[] = [];
   const renamed: string[] = [];
+  const opened: string[] = [];
   createApp(ExplorerRequirementList, {
     rows,
     activeExplorerPlanId: rows[0]?.explorerPlan.id ?? null,
     disabled,
     onRemove: (id: string) => removed.push(id),
     onRename: (id: string) => renamed.push(id),
+    onOpen: (id: string) => opened.push(id),
   })
     .component("ElButton", ElButtonStub)
     .component("ElTag", ElTagStub)
     .mount(host);
-  return { host, removed, renamed };
+  return { host, removed, renamed, opened };
 }
 
 describe("需求清单的行内删除", () => {
@@ -116,5 +118,24 @@ describe("需求清单的行内删除", () => {
     const { host } = mountList(rows, true);
     for (const button of host.querySelectorAll<HTMLButtonElement>(".requirement-delete-button, .requirement-rename-button"))
       expect(button.disabled).toBe(true);
+  });
+});
+
+describe("需求清单的双击打开", () => {
+  const rows = [row(explorerPlan("explorer-plan-1", 1, "补一节目录结构")), row(explorerPlan("explorer-plan-2", 2, "加上甘特图"))];
+
+  it("双击行（含标题按钮）发出 open，id 就是那一行", () => {
+    const { host, opened } = mountList(rows);
+    host.querySelectorAll<HTMLElement>(".requirement-table-row")[1]!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    host.querySelectorAll<HTMLButtonElement>(".requirement-name-button")[0]!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    expect(opened).toEqual(["explorer-plan-2", "explorer-plan-1"]);
+  });
+
+  it("在动作按钮上双击不算打开行——那是连点了两下按钮", () => {
+    const { host, opened, removed } = mountList(rows);
+    const remove = host.querySelectorAll<HTMLButtonElement>('[data-requirement-action="delete"]')[1]!;
+    remove.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    expect(opened).toEqual([]);
+    expect(removed).toEqual([]);
   });
 });

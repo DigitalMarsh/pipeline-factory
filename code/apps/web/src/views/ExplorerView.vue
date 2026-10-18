@@ -1748,6 +1748,7 @@ onBeforeUnmount(() => {
           :active-explorer-plan-id="activeExplorerPlan?.id ?? null"
           :disabled="!thread || thread.state === 'ARCHIVED' || project?.status === 'ARCHIVED'"
           @add="openAddRequirementDialog"
+          @open="openRequirementChat"
           @select="selectRequirement"
           @explore="openRequirementChat"
           @view-plan="openRequirementPlan"

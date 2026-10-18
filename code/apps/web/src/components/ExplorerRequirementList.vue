@@ -15,6 +15,8 @@ defineProps<{
 
 const emit = defineEmits<{
   add: [];
+  /** 双击整行：打开右侧抽屉并落在「探索对话」页签。 */
+  open: [explorerPlanId: string];
   select: [explorerPlanId: string];
   explore: [explorerPlanId: string];
   viewPlan: [explorerPlanId: string];
@@ -22,6 +24,19 @@ const emit = defineEmits<{
   rename: [explorerPlanId: string];
   remove: [explorerPlanId: string];
 }>();
+
+/**
+ * 双击行 = 打开这一行的探索对话。
+ *
+ * 行内的动作按钮（删除 / 重命名 / 方案状态 / 查看 Vn / 任务状态）要排除：在它们上面双击
+ * 是"连点了两下按钮"，再顺手把抽屉打开等于替用户做了一个他没要求的动作。
+ */
+function onRowDoubleClick(event: MouseEvent, explorerPlanId: string): void {
+  const target = event.target instanceof Element ? event.target : null;
+  if (target?.closest('[data-requirement-action="delete"], .requirement-rename-button, .requirement-status-button, .requirement-plan-link'))
+    return;
+  emit("open", explorerPlanId);
+}
 </script>
 
 <template>
@@ -49,6 +64,8 @@ const emit = defineEmits<{
           :class="['requirement-table-row', { active: row.explorerPlan.id === activeExplorerPlanId }]"
           role="row"
           :data-explorer-plan-id="row.explorerPlan.id"
+          title="双击打开探索对话"
+          @dblclick="onRowDoubleClick($event, row.explorerPlan.id)"
         >
           <div class="requirement-cell requirement-name-cell" role="cell">
             <button
