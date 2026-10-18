@@ -200,7 +200,7 @@ async function confirmCleanup() {
       expectedBranchHead: target.lastCommit,
     });
     cleanupTarget.value = null;
-    if (response.result.branchDeleted) ElMessage.success(response.result.message);
+    if (response.result.branchDeleted && !response.result.cleanupHookNeedsAttention) ElMessage.success(response.result.message);
     else ElMessage.warning(response.result.message);
     await load();
   } catch (caught) {
@@ -349,25 +349,31 @@ onMounted(() => {
               :key="item.itemId"
               :class="{ selected: item.itemId === selectedItemId, base: item.isBaseBranch }"
               :data-worktree-item="item.itemId"
+              role="button"
+              tabindex="0"
+              :aria-label="`${item.displayName}：${worktreeStatusLabel(item.status)}`"
+              :aria-pressed="item.itemId === selectedItemId"
               @click="selectItem(item)"
+              @keydown.enter.prevent="selectItem(item)"
+              @keydown.space.prevent="selectItem(item)"
             >
-              <td>
+              <td class="col-status">
                 <el-tag size="small" effect="light" :type="worktreeStatusTagType(item.status)" data-worktree-status>
                   {{ worktreeStatusLabel(item.status) }}
                 </el-tag>
               </td>
-              <td>
-                <span class="cell-branch">{{ item.displayName }}</span>
+              <td class="col-branch">
+                <span class="cell-branch" :title="item.displayName">{{ item.displayName }}</span>
                 <el-tag v-if="item.isBaseBranch" size="small" effect="plain" type="primary">主分支</el-tag>
                 <el-tag v-if="item.missing" size="small" effect="plain" type="danger">目录缺失</el-tag>
               </td>
-              <td>
+              <td class="col-kind">
                 <el-tag size="small" effect="plain" :type="worktreeKindTagType(item.kind)">{{ worktreeKindLabel(item.kind) }}</el-tag>
               </td>
-              <td class="num">{{ item.aheadCount }}</td>
-              <td class="num">{{ item.behindCount }}</td>
-              <td class="cell-relation">{{ worktreeMergeRelationLabel(item.mergeRelation) }}</td>
-              <td class="cell-source">{{ factorySummary(item) }}</td>
+              <td class="num col-count">{{ item.aheadCount }}</td>
+              <td class="num col-count col-behind">{{ item.behindCount }}</td>
+              <td class="cell-relation col-relation">{{ worktreeMergeRelationLabel(item.mergeRelation) }}</td>
+              <td class="cell-source col-source">{{ factorySummary(item) }}</td>
               <td class="actions" @click.stop>
                 <div class="row-actions">
                   <el-button size="small" type="primary" :disabled="!item.mergeable" data-worktree-preview @click="openPreview(item)">
@@ -534,11 +540,18 @@ onMounted(() => {
 .worktrees-subtitle {
   display: flex;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 4px 12px;
   margin: 8px 0 0;
   color: #7d8ca3;
   font-size: 12px;
-  overflow-wrap: anywhere;
+}
+/* 仓库路径可能很长：单行省略，别让它把标题区撑成三行（矮视口下这直接吃掉表格的高度）。 */
+.worktrees-subtitle span {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .worktrees-subtitle code {
   color: #4d6483;
@@ -666,7 +679,12 @@ onMounted(() => {
 .worktrees-body {
   display: flex;
   flex: 1 1 auto;
-  min-height: 0;
+  /*
+   * **给表格一个下限**。标题区 + 筛选条在窄视口能占到 350px 以上；不设下限时 flex 会把
+   * `.worktrees-body` 压到 1px（实测 639×427 下就是 20px 的可视区），表格看起来"点了没反应"。
+   * 宁可让最底下被裁掉一点，也要保证表格本身能滚、能点。
+   */
+  min-height: 200px;
   gap: 0;
   border-top: 1px solid #eef1f5;
 }
@@ -755,10 +773,17 @@ onMounted(() => {
 .worktrees-table tbody tr.base {
   background: #fbfcfe;
 }
+/*
+ * 分支名可能很长（`factory/20261008-210238-add-task-handoff-status`）。**单行省略**而不是折行：
+ * 折行会让一行涨到几百像素高（窄屏实测 677px），整张表失去可读性；完整名字在 title 与详情面板里。
+ */
 .cell-branch {
+  display: block;
+  overflow: hidden;
   color: #26364d;
   font-weight: 600;
-  overflow-wrap: anywhere;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .cell-relation,
 .cell-source {
@@ -866,7 +891,46 @@ onMounted(() => {
   font-size: 11px;
   text-align: center;
 }
+/*
+ * 窄屏分级收列：先去掉信息量最低的「类型」与「合并关系」（详情面板里都有），
+ * 再把 Behind 收掉；剩下的列宽按新的百分比重算，避免固定布局下内容挤成一列一个字。
+ */
+@media (max-width: 1100px) {
+  .worktrees-table .col-kind,
+  .worktrees-table .col-relation {
+    display: none;
+  }
+  .worktrees-table .col-status {
+    width: 15%;
+  }
+  .worktrees-table .col-branch {
+    width: 35%;
+  }
+  .worktrees-table .col-count {
+    width: 7%;
+  }
+  .worktrees-table .col-source {
+    width: 20%;
+  }
+  .worktrees-table .col-actions {
+    width: 16%;
+  }
+}
 @media (max-width: 900px) {
+  .worktrees-header {
+    padding: 18px 16px 14px;
+  }
+  .worktrees-header h1 {
+    font-size: 21px;
+  }
+  .worktrees-toolbar {
+    gap: 8px;
+    padding: 10px 16px;
+  }
+  .filter-group button {
+    padding: 4px 8px;
+    font-size: 10px;
+  }
   .worktrees-body {
     flex-direction: column;
   }
@@ -874,6 +938,24 @@ onMounted(() => {
     flex: none;
     border-left: 0;
     border-top: 1px solid #eef1f5;
+  }
+  .worktrees-table .col-behind {
+    display: none;
+  }
+  .worktrees-table .col-status {
+    width: 17%;
+  }
+  .worktrees-table .col-branch {
+    width: 40%;
+  }
+  .worktrees-table .col-count {
+    width: 8%;
+  }
+  .worktrees-table .col-source {
+    width: 18%;
+  }
+  .worktrees-table .col-actions {
+    width: 17%;
   }
 }
 </style>

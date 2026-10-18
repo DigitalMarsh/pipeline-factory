@@ -860,4 +860,6 @@ export type WorktreeCleanupResult = {
   worktreeRemoved: boolean;
   branchDeleted: boolean;
   runWorkspaceCleared: boolean;
+  /** 回收走的是 Run 的 `releaseWorkspace` 时，cleanup 钩子是否需要关注。 */
+  cleanupHookNeedsAttention: boolean;
 };

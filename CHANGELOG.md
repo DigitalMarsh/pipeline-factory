@@ -1,5 +1,33 @@
 # Changelog
 
+## 2026-10-18 — Worktree 管理复盘：三处真缺口与一处可见性问题
+
+上线后按"逐条对照 worktree-manage + 怀疑最坏情况"复盘了一遍，修掉四处：
+
+- **清理会跳过 Run 的 cleanup 钩子**。清理走的是直接 `git worktree remove` + 清空
+  `run.workspacePath`，而 Factory 正常回收走 `Scheduler.releaseWorkspace`（钩子在这里跑）。
+  结果：项目靠 cleanup 钩子停服务的，从这个面板清理后服务不会被停。现在只要该 worktree 还是
+  某条 Run 的 workspace，就改走 `releaseWorkspace`；钩子失败不阻止删除，但会作为
+  `cleanupHookNeedsAttention` 回到响应里并显示成警告。
+- **MergeRequest 目标分支与项目默认分支不一致时会合错地方**。项目默认分支可改，已确认的
+  Revision 冻结的是当时的 base branch；两者不一致时，面板会合进项目当前默认分支，随后
+  `confirmMerged` 必然失败。现在预览阶段就阻断，并写明两条分支名。
+- **矮/窄视口下表格被压成一条缝（实测 639×427 时可视区只有 20px）**。标题区的仓库路径折成三行、
+  筛选条折成四行，把 `.worktrees-body` 挤到 1px——表现是"点按钮没反应"（点到了压在表格上的
+  栏位）。现在路径单行省略、窄屏收紧内边距与按钮、并给表格区 200px 下限；行高从 677px 回到 73px。
+- **表格行不能键盘选择**。补 `tabindex` / `role="button"` / Enter·Space，与鼠标行为一致。
+
+验证：`pnpm verify` 全绿（domain 513 / api 137 / web 681）。新增 4 条 domain 用例覆盖
+"合并后确认 MergeRequest + 回收 worktree""非 Factory 分支只报 not_found""目标分支不一致阻断"
+"清理走 releaseWorkspace"。浏览器复测：同一视口下表格 200px 可滚、`preview_click` 的真实鼠标事件
+能打开预览（此前失败确实是布局问题，不是事件绑定）。
+
+**仍然没做**（有意，均与 worktree-manage 对齐或超出本次范围）：每项目的忽略分支/分支模式；
+按时间排序与时间列；预览里的完整 Git Log / diff 浏览；worktree-manage 的"服务启停"；
+`ever_merged`（曾经合并过）历史；detached worktree 的清理；已合并本地分支的删除
+（Factory 的既定语义是"回收 worktree、保留分支"）。仓库正处在 rebase / cherry-pick 中时预览
+不会预告，确认合并会在 `git switch` 那一步失败并原样返回 git 的话（不产生任何改动）。
+
 ## 2026-10-17 — 把 worktree-manage 的业务能力迁进项目视角（能真的合并了）
 
 Factory 此前对"合并"只有观察这一半：`MergeService` 建 `MergeRequest`、按 Git 事实回填

@@ -222,4 +222,10 @@ export type WorktreeCleanupResult = {
   branchDeleted: boolean;
   /** 库里那条指向该目录的 Run 的 `workspacePath` 是否被清空。 */
   runWorkspaceCleared: boolean;
+  /**
+   * 该 worktree 属于某条 Run 时，回收走的是 `Scheduler.releaseWorkspace`，它会跑项目的 cleanup 钩子。
+   * 钩子失败不会阻止删除（与 Factory 既有语义一致），但必须让调用方看见——否则"服务没停掉"这件事
+   * 没有任何地方会提。
+   */
+  cleanupHookNeedsAttention: boolean;
 };

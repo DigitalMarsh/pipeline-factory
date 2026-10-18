@@ -370,6 +370,21 @@ export class WorktreeService {
       }
     }
 
+    /**
+     * 这条分支若挂着 `OPEN` 的 MergeRequest，**合并目标必须是那个请求的目标分支**。
+     * 项目默认分支可以被改，而已确认的 Revision 冻结的是**当时**的 base branch；两者不一致时，
+     * 在这里合并会合进另一条分支，随后的 `confirmMerged` 必然失败（target branch does not contain
+     * the reviewed source commit）。与其合错地方再报错，不如先拦住。
+     */
+    if (item.factory?.mergeRequestStatus === "OPEN" && item.factory.runId) {
+      const request = this.store.findMergeRequestByRun(item.factory.runId);
+      if (request && request.targetBranch && request.targetBranch !== project.defaultBranch) {
+        blockers.push(
+          `该 Run 的 MergeRequest 目标是 ${request.targetBranch}，而项目默认分支是 ${project.defaultBranch}；请在 Git 侧按 MergeRequest 的目标分支合并。`,
+        );
+      }
+    }
+
     if (item.behindCount > 0) {
       warnings.push(`主分支有 ${item.behindCount} 个提交不在该分支中（合并仍可进行）。`);
     }
@@ -600,7 +615,22 @@ export class WorktreeService {
         throw new WorktreeError("WORKTREE_STATE_CHANGED", "分支在预览之后发生了变化，请刷新后再清理。");
       }
 
-      if (!existsSync(item.worktreePath)) {
+      /**
+       * 这个 worktree 若还是某条 Run 的 workspace，就走 Factory 自己的回收路径：
+       * `releaseWorkspace` 会跑项目的 cleanup 钩子并把 `run.workspacePath` 清空。
+       * **不能只是删目录**——那样这条 Run 的 cleanup 钩子永远不会执行（项目可能靠它停服务），
+       * 而 `workspacePath` 还得我们另外去抹。没有 scheduler 的实例（测试/只读）仍走直接删除。
+       */
+      const ownerRun = this.runHoldingWorkspace(project.id, item.worktreePath);
+      let cleanupHookNeedsAttention = false;
+      if (ownerRun && this.options.scheduler) {
+        const hooks = this.store.getProject(project.id)?.settings.hooks ?? {};
+        const released = await this.options.scheduler.releaseWorkspace(ownerRun.id, hooks);
+        if (!released.worktreeRemoved) {
+          throw new WorktreeError("WORKTREE_CLEANUP_BLOCKED", `worktree 回收失败：${released.error ?? "未知原因"}`);
+        }
+        cleanupHookNeedsAttention = released.cleanupNeedsAttention;
+      } else if (!existsSync(item.worktreePath)) {
         // 目录已经不在了：把 git 的登记也清掉，否则后面的 branch -d 会一直说"被 worktree 占用"。
         await this.git.pruneWorktrees(project.repoRoot);
       } else {
@@ -621,11 +651,17 @@ export class WorktreeService {
         worktreeRemoved,
         branchDeleted: deleted.ok,
       });
+      const message = !deleted.ok
+        ? `worktree 已删除，但分支未能删除：${deleted.message}`
+        : cleanupHookNeedsAttention
+          ? "清理完成：worktree 与分支都已删除；cleanup 钩子需要关注（见项目设置）。"
+          : "清理完成：worktree 与分支都已删除。";
       return {
-        message: deleted.ok ? "清理完成：worktree 与分支都已删除。" : `worktree 已删除，但分支未能删除：${deleted.message}`,
+        message,
         worktreeRemoved,
         branchDeleted: deleted.ok,
         runWorkspaceCleared,
+        cleanupHookNeedsAttention,
       };
     });
   }
@@ -681,6 +717,8 @@ export class WorktreeService {
         const released = await this.options.scheduler.releaseWorkspace(run.id, hooks);
         workspace = { released: released.released, worktreeRemoved: released.worktreeRemoved };
         if (released.error) message = `worktree 回收失败：${released.error}`;
+        // 钩子失败不阻止合并，也不回滚——但必须说出来，否则"服务没停掉"没有任何地方会提。
+        else if (released.cleanupNeedsAttention) message = "cleanup 钩子需要关注（见项目设置）。";
       } catch (error) {
         message = `worktree 回收失败：${error instanceof Error ? error.message : String(error)}`;
       }
@@ -736,6 +774,15 @@ export class WorktreeService {
   private isLiveWorkspace(worktreePath: string | null, activeRuns: readonly Run[]): boolean {
     if (!worktreePath) return false;
     return activeRuns.some((run) => samePath(run.workspacePath, worktreePath));
+  }
+
+  /** 找一条 `workspacePath` 指向这个目录的 Run（用于走它自己的回收路径）。 */
+  private runHoldingWorkspace(projectId: string, worktreePath: string): Run | undefined {
+    return this.store
+      .listRuns()
+      .filter((run) => run.projectId === projectId)
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .find((run) => samePath(run.workspacePath, worktreePath));
   }
 
   private clearRunWorkspace(projectId: string, worktreePath: string): boolean {

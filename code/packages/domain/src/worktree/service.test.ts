@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { InMemoryPipelineStore } from "../store/in-memory-store.js";
 import { ProjectService } from "../project/project.js";
 import type { Project } from "../project/project.js";
+import { MergeService } from "../run/merge.js";
 import { WorktreeError, WorktreeService, classifyDetached, classifyNamedBranch } from "./service.js";
 import { createLocalWorktreeGit } from "./local-git.js";
 
@@ -415,5 +416,144 @@ describe("清理", () => {
     await expect(
       service.cleanup(fixture.project, { itemId: item?.itemId ?? "", expectedBranchHead: item?.lastCommit ?? null }),
     ).rejects.toMatchObject({ code: "WORKTREE_CLEANUP_BLOCKED" });
+  });
+});
+
+/**
+ * Factory 联动：合并成功后要确认 `OPEN` 的 MergeRequest、回收 worktree；清理要走 Run 自己的
+ * `releaseWorkspace`（这样 cleanup 钩子才会执行）。这三条是"搬进 Factory"之后新增的行为，
+ * worktree-manage 里没有对应物，所以必须有独立的用例。
+ */
+describe("Factory 联动", () => {
+  function seedRunWithMergeRequest(
+    fixture: Fixture,
+    branch: string,
+    workspacePath: string | null,
+    targetBranch = "main",
+    requestId = "merge-1",
+  ): void {
+    fixture.store.saveRun({
+      id: "run-1",
+      projectId: fixture.project.id,
+      planId: "plan-1",
+      planRevision: 1,
+      status: "MERGE_READY",
+      branch,
+      workspacePath,
+      baseCommit: "0000000000000000000000000000000000000000",
+      executionThreadId: "thread-1",
+      createdAt: "2026-10-01T00:00:00.000Z",
+      startedAt: "2026-10-01T00:00:00.000Z",
+    });
+    fixture.store.saveMergeRequest({
+      id: requestId,
+      runId: "run-1",
+      planId: "plan-1",
+      sourceCommit: "0000000000000000000000000000000000000000",
+      targetBranch,
+      status: "OPEN",
+      humanConfirmationRequired: true,
+      createdAt: "2026-10-01T00:00:00.000Z",
+      mergedAt: null,
+    });
+  }
+
+  it("合并成功后确认 OPEN 的 MergeRequest 并回收 worktree", async () => {
+    const fixture = setup();
+    createBranch(fixture.repoRoot, "feature/ahead", "ahead.txt", "ahead\n");
+    const worktreePath = addWorktree(fixture, "feature/ahead", "ahead");
+    seedRunWithMergeRequest(fixture, "feature/ahead", realpathSync(worktreePath));
+
+    const released: string[] = [];
+    const merger = new MergeService(fixture.store, {
+      // 没有 Plan 时 `confirmMerged` 不会拿这些去校验；给一份确定性的实现，避免依赖本机 Git 状态。
+      git: { commitExists: () => true, resolveCommit: () => null, isAncestor: () => true, branchContains: () => true },
+    });
+    const service = new WorktreeService(fixture.store, {
+      git: createLocalWorktreeGit(),
+      merger,
+      scheduler: {
+        releaseWorkspace: async (runId) => {
+          released.push(runId);
+          return { released: true, worktreeRemoved: true, cleanupNeedsAttention: false };
+        },
+      },
+    });
+
+    const preview = await service.preview(fixture.project, "branch:feature/ahead");
+    const result = await service.merge(fixture.project, {
+      itemId: "branch:feature/ahead",
+      expectedBranchHead: preview.expectedBranchHead,
+      expectedBaseHead: preview.expectedBaseHead,
+    });
+
+    expect(result.status).toBe("merged");
+    expect(result.factory).toMatchObject({ mergeRequest: "confirmed", runId: "run-1" });
+    expect(fixture.store.getMergeRequest("merge-1")?.status).toBe("MERGED");
+    expect(released).toEqual(["run-1"]);
+  });
+
+  it("分支不属于任何 Run 时只报告 not_found，不影响合并结果", async () => {
+    const fixture = setup();
+    createBranch(fixture.repoRoot, "feature/ahead", "ahead.txt", "ahead\n");
+    const service = serviceFor(fixture);
+    const preview = await service.preview(fixture.project, "branch:feature/ahead");
+
+    const result = await service.merge(fixture.project, {
+      itemId: "branch:feature/ahead",
+      expectedBranchHead: preview.expectedBranchHead,
+      expectedBaseHead: preview.expectedBaseHead,
+    });
+
+    expect(result.status).toBe("merged");
+    expect(result.factory).toMatchObject({ mergeRequest: "not_found" });
+  });
+
+  it("MergeRequest 目标分支与项目默认分支不一致时阻断", async () => {
+    const fixture = setup();
+    createBranch(fixture.repoRoot, "feature/ahead", "ahead.txt", "ahead\n");
+    // `saveMergeRequest` 是首次写入生效，所以这里直接给目标分支，不要先写一份 main 的再覆盖。
+    seedRunWithMergeRequest(fixture, "feature/ahead", null, "release");
+
+    const preview = await serviceFor(fixture).preview(fixture.project, "branch:feature/ahead");
+
+    expect(preview.canConfirm).toBe(false);
+    expect(preview.blockers.join("\n")).toContain("release");
+  });
+
+  it("清理属于 Run 的 worktree 时走 releaseWorkspace（cleanup 钩子才会执行）", async () => {
+    const fixture = setup();
+    createBranch(fixture.repoRoot, "feature/merged", "merged.txt", "merged\n");
+    const worktreePath = addWorktree(fixture, "feature/merged", "merged");
+    git(fixture.repoRoot, ["merge", "--no-ff", "--no-edit", "feature/merged"]);
+    seedRunWithMergeRequest(fixture, "feature/merged", realpathSync(worktreePath));
+
+    const released: string[] = [];
+    const service = new WorktreeService(fixture.store, {
+      git: createLocalWorktreeGit(),
+      scheduler: {
+        releaseWorkspace: async (runId) => {
+          released.push(runId);
+          // 真实实现会删目录并清空 workspacePath；这里照做，否则后面的 branch -d 会因为
+          // "分支仍被 worktree 占用"而失败。
+          git(fixture.repoRoot, ["worktree", "remove", "--force", worktreePath]);
+          const run = fixture.store.getRun(runId)!;
+          fixture.store.saveRun({ ...run, workspacePath: null });
+          return { released: true, worktreeRemoved: true, cleanupNeedsAttention: false };
+        },
+      },
+    });
+    const item = itemFor(await service.list(fixture.project), "feature/merged");
+
+    const result = await service.cleanup(fixture.project, {
+      itemId: "branch:feature/merged",
+      expectedBranchHead: item?.lastCommit ?? null,
+    });
+
+    expect(released).toEqual(["run-1"]);
+    expect(result.worktreeRemoved).toBe(true);
+    expect(result.branchDeleted).toBe(true);
+    expect(result.cleanupHookNeedsAttention).toBe(false);
+    expect(fixture.store.getRun("run-1")?.workspacePath).toBeNull();
   });
 });
