@@ -1,13 +1,13 @@
 /**
  * 测试职责：钉住 web 侧的中立词表镜像与领域实现**不漂移**，并回归"成功的调用不再显示状态未知"。
  *
- * 为什么需要这个文件：web 不能运行时依赖 `@pipeline-factory/domain`（会把整个领域层打进浏览器包），
+ * 为什么需要这个文件：web 不能运行时依赖 `@pipeline-factory/core`（会把整个领域层打进浏览器包），
  *   而 journal 载荷里的字段是无类型的字符串，所以 `utils/executionStream.ts` 里保留了一份镜像。
  *   镜像一旦漂移，同一条事件在领域侧与页面侧会得出不同结论——这正是本次要修的那类缺陷
  *   （Codex 的成功词 `completed` 两边认的不一样）。这里用同一批样例断言两边结论一致。
  */
 import { describe, expect, it } from "vitest";
-import { activityOutcome, classifyCodexActivity } from "@pipeline-factory/domain";
+import { activityOutcome, classifyCodexActivity } from "@pipeline-factory/core";
 import { legacyActivityKind, legacyActivityOutcome, projectExecutionJournal, type ExecutionJournalEntry } from "./executionStream";
 
 /** 有代表性的老事件载荷（本次改动之前写入的 journal 没有 activityKind / outcome）。 */

@@ -24,7 +24,7 @@
 import { resolve as resolvePath } from "node:path";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
-import { WorktreeError, type PipelineStore, type Project, type WorktreeService } from "@pipeline-factory/domain";
+import { WorktreeError, type PipelineStore, type Project, type WorktreeService } from "@pipeline-factory/core";
 import {
   worktreeCleanupBody,
   worktreeCommitParams,

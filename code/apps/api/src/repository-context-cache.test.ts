@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { Project } from "@pipeline-factory/domain";
+import type { Project } from "@pipeline-factory/core";
 import { RepositoryContextCache } from "./repository-context-cache.js";
 
 const temporaryRepositories: string[] = [];

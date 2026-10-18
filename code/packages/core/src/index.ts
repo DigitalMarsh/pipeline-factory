@@ -80,7 +80,20 @@ export type {
 // DomainEvent 的 id / sequence / occurredAt 由 Store 赋值、脱敏也在 appendEvent 内完成，
 // 所以它放在 store/types.ts 而不是某个业务域。
 export type { AttachmentOwnerType, DomainEvent, MessageAttachment, MessageAttachmentView } from "./store/types.js";
-export type { EventQuery, PipelineStore } from "./store/pipeline-store.js";
+export type {
+  AgentLoopStore,
+  ClockStore,
+  EventQuery,
+  EventStore,
+  ExplorerStore,
+  IdempotencyStore,
+  MessageAttachmentStore,
+  PipelineStore,
+  PlanStore,
+  ProjectStore,
+  RunStore,
+  TransactionalStore,
+} from "./store/pipeline-store.js";
 export { imagesByOwner } from "./store/message-attachments.js";
 export type { AttachmentPathResolver } from "./store/message-attachments.js";
 export type { EventPruneInput } from "./store/event-retention.js";

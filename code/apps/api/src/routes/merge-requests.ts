@@ -22,7 +22,7 @@
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import type { MergeRequest, MergeService, PipelineStore, PlanDispatchCoordinator, Scheduler } from "@pipeline-factory/domain";
+import type { MergeRequest, MergeService, PipelineStore, PlanDispatchCoordinator, Scheduler } from "@pipeline-factory/core";
 import { sourceCommitBody, targetCommitBody } from "@pipeline-factory/contracts";
 import { projectThreadParams } from "@pipeline-factory/contracts";
 

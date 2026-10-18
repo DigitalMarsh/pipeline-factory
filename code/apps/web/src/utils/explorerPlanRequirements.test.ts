@@ -1,4 +1,4 @@
-import { EXPLORER_PLAN_REQUIREMENTS } from "@pipeline-factory/domain";
+import { EXPLORER_PLAN_REQUIREMENTS } from "@pipeline-factory/core";
 import { describe, expect, it } from "vitest";
 import { DEFAULT_EXPLORER_PLAN_REQUIREMENTS } from "./explorerPlanRequirements";
 

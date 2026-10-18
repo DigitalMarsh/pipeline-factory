@@ -26,7 +26,7 @@ import {
   Scheduler,
   ToolGateway,
   inspectWorkspaceScope,
-} from "@pipeline-factory/domain";
+} from "@pipeline-factory/core";
 import type {
   AttachmentPathResolver,
   ComputerUseBridge,
@@ -35,7 +35,7 @@ import type {
   PipelineStore,
   PluginRegistry,
   ProjectExecutionSnapshot,
-} from "@pipeline-factory/domain";
+} from "@pipeline-factory/core";
 import type { FactoryConfig } from "../config.js";
 import { readCommandDefinitions } from "./commands.js";
 import { planStorageFor } from "./plan-directory.js";
@@ -140,7 +140,7 @@ export function createDefaultScheduler(
                 ? {
                     computerUseExecutor: (input: Record<string, unknown>) =>
                       computerUse.call({
-                        action: input.action as import("@pipeline-factory/domain").ComputerUseAction,
+                        action: input.action as import("@pipeline-factory/core").ComputerUseAction,
                         ...(typeof input.requestId === "string" ? { requestId: input.requestId } : {}),
                         ...(typeof input.timeoutMs === "number" ? { timeoutMs: input.timeoutMs } : {}),
                       }),

@@ -50,7 +50,7 @@ import type {
   PlanService,
   PlanStatus,
   Scheduler,
-} from "@pipeline-factory/domain";
+} from "@pipeline-factory/core";
 import { actorBody, projectThreadParams } from "@pipeline-factory/contracts";
 import { planIdParams, planRevisionParams, revisionDraftBody, revisionDraftParams, threadPlanQuery } from "@pipeline-factory/contracts";
 import { explorerCandidateQuery, projectExplorerParams, projectExplorerPlanParams } from "@pipeline-factory/contracts";

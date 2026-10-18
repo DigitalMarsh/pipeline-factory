@@ -13,7 +13,7 @@ import { execFileSync } from "node:child_process";
 import { lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { InMemoryPipelineStore, ProjectService, type Project } from "@pipeline-factory/domain";
+import { InMemoryPipelineStore, ProjectService, type Project } from "@pipeline-factory/core";
 import { createApp } from "./server.js";
 import { isProcessAlive } from "./runtime/worktree-services.js";
 

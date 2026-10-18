@@ -16,7 +16,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { get as httpGet, type IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
-import { ExplorerService, InMemoryPipelineStore, ProjectService, type PipelineStore } from "@pipeline-factory/domain";
+import { ExplorerService, InMemoryPipelineStore, ProjectService, type PipelineStore } from "@pipeline-factory/core";
 import { createApp } from "./server.js";
 
 const apps: Array<Awaited<ReturnType<typeof createApp>>> = [];

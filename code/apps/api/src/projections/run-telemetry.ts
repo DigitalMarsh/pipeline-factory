@@ -22,7 +22,7 @@
  *   4) 同理，`durationMs` 只在起止时间都存在时才算，`usageSource` 缺省写 `"not-recorded"`
  *      而不是 `"estimated"`：**不猜**是这条投影的语义。
  */
-import type { ExecutionTelemetry, ExecutionThread, PipelineStore } from "@pipeline-factory/domain";
+import type { ExecutionTelemetry, ExecutionThread, PipelineStore } from "@pipeline-factory/core";
 import { attachmentsFor } from "./attachments.js";
 
 export type RunExecutorConfig = { model: string | null; backend: string | null; reasoningEffort: string | null };

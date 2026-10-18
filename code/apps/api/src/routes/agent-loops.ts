@@ -15,7 +15,7 @@
  *      直接 import 会成环"的临时形状。**新增投影请落到 `projections/`，不要退回传函数。**
  */
 import type { FastifyInstance } from "fastify";
-import type { AgentLoopRunner, PipelineStore } from "@pipeline-factory/domain";
+import type { AgentLoopRunner, PipelineStore } from "@pipeline-factory/core";
 import { agentLoopParams, loopEventsQuery } from "@pipeline-factory/contracts";
 import { loopReasonBody, projectThreadParams } from "@pipeline-factory/contracts";
 import { v4ThreadQuery } from "@pipeline-factory/contracts";

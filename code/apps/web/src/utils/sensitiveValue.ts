@@ -5,7 +5,7 @@
  *   "展开看结果"），而它们里面可能有令牌、邮箱、带凭据的命令行。**落库与投影都保留原样**，
  *   抹掉发生在最后一次搬运——同一份数据还要给排障与审计读，在写侧抹掉就再也拿不回来了。
  *
- * 与 `packages/domain/src/platform/redaction.ts` 是**一对镜像**，不是重复代码：
+ * 与 `packages/core/src/platform/redaction.ts` 是**一对镜像**，不是重复代码：
  *   web 不能运行时依赖领域层（会把整个领域打进浏览器包），而那边的 `redactAuditText` 是同一个
  *   意图在写侧的实现。`sensitiveValue.test.ts` 用同一批样例断言两边结论一致——改一边必须改另一边。
  *

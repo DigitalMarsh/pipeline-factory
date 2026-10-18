@@ -6,7 +6,7 @@
  *   一对镜像（web 不能运行时依赖领域层），两边漂移会让"同一个值在库里被抹掉、在页面上露出来"。
  */
 import { describe, expect, it } from "vitest";
-import { redactAuditText } from "@pipeline-factory/domain";
+import { redactAuditText } from "@pipeline-factory/core";
 import { presentableText, presentableValue, redactSensitiveValue, truncateForDisplay } from "./sensitiveValue";
 
 /** 有代表性的样例：两边必须给出同一个结论。 */

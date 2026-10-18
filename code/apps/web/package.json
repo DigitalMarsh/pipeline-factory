@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "pretest": "pnpm --filter @pipeline-factory/domain build && pnpm --filter @pipeline-factory/contracts build",
+    "pretest": "pnpm --filter @pipeline-factory/core build && pnpm --filter @pipeline-factory/contracts build",
     "test": "vitest run",
-    "pretypecheck": "pnpm --filter @pipeline-factory/domain build && pnpm --filter @pipeline-factory/contracts build",
+    "pretypecheck": "pnpm --filter @pipeline-factory/core build && pnpm --filter @pipeline-factory/contracts build",
     "typecheck": "vue-tsc --noEmit",
     "build": "vite build"
   },
@@ -21,7 +21,7 @@
     "@pipeline-factory/contracts": "workspace:*"
   },
   "devDependencies": {
-    "@pipeline-factory/domain": "workspace:*",
+    "@pipeline-factory/core": "workspace:*",
     "@vitejs/plugin-vue": "^5.2.1",
     "jsdom": "^25.0.1",
     "vite": "^6.0.7",

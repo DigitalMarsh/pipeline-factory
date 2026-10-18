@@ -89,10 +89,42 @@ export type EventQuery = {
   limitFrom?: "head" | "tail";
 };
 
-/** Domain 的持久化端口；内存和 SQLite 实现必须保持相同的事实及事件语义。 */
-export type PipelineStore = {
+/**
+ * 持久化端口按**业务域**拆成若干窄接口，再由 `PipelineStore` 组合而成。
+ *
+ * 为什么拆：这个端口曾经是 90+ 个方法的单一体，服务构造函数里的 `store: PipelineStore` 意味着
+ *   "你可以调用任何域的任何方法"——读代码时无法从签名判断一个服务真正依赖什么，测试替身也只能
+ *   整份实现或整份 mock。拆开之后，新代码可以只声明自己需要的那一两个接口（见各 Service 的构造
+ *   参数），而实现方仍只需提供一个组合对象（内存 / SQLite 类都同时满足全部子接口）。
+ *
+ * 维护提示：
+ *   1) 这是**类型的组合，不是实现的拆分**：两个实现仍是单类，事务边界与事件语义不变。
+ *   2) 新增方法时放进对应子接口；拿不准归属就放进 `PipelineStore` 末尾并写清理由，
+ *      不要造一个"misc"。归属混乱会让这次拆分退化成另一种单一体。
+ *   3) 子接口的名字是公开契约（从 barrel 导出），改名会牵动使用方。
+ */
+export type ClockStore = {
   now(): string;
   nextId(prefix: string): string;
+};
+
+export type ProjectStore = {
+  saveProject(project: Project): Project;
+  getProject(projectId: string): Project | undefined;
+  listProjects(): Project[];
+  updateProject(project: Project): Project;
+  saveProjectConfigRevision(revision: ProjectConfigRevision): ProjectConfigRevision;
+  listProjectConfigRevisions(projectId: string): ProjectConfigRevision[];
+  saveProjectExecutionThread(thread: ProjectExecutionThread): ProjectExecutionThread;
+  getProjectExecutionThread(projectId: string): ProjectExecutionThread | undefined;
+  updateProjectExecutionThread(thread: ProjectExecutionThread): ProjectExecutionThread;
+  saveProjectExecutionMessage(message: ProjectExecutionMessage): ProjectExecutionMessage;
+  getProjectExecutionMessageByClientTurnId(threadId: string, clientTurnId: string): ProjectExecutionMessage | undefined;
+  listProjectExecutionMessages(threadId: string): ProjectExecutionMessage[];
+  updateProjectExecutionMessage(message: ProjectExecutionMessage): ProjectExecutionMessage;
+};
+
+export type ExplorerStore = {
   saveThread(input: RegisterThreadInput): ExplorerThread;
   getThread(id: string): ExplorerThread | undefined;
   listThreads(): ExplorerThread[];
@@ -101,19 +133,6 @@ export type PipelineStore = {
   getExplorerPlan(id: string): ExplorerPlan | undefined;
   listExplorerPlans(threadId?: string): ExplorerPlan[];
   updateExplorerPlan(plan: ExplorerPlan): ExplorerPlan;
-  saveProject(project: Project): Project;
-  getProject(projectId: string): Project | undefined;
-  saveProjectExecutionThread(thread: ProjectExecutionThread): ProjectExecutionThread;
-  getProjectExecutionThread(projectId: string): ProjectExecutionThread | undefined;
-  updateProjectExecutionThread(thread: ProjectExecutionThread): ProjectExecutionThread;
-  saveProjectExecutionMessage(message: ProjectExecutionMessage): ProjectExecutionMessage;
-  getProjectExecutionMessageByClientTurnId(threadId: string, clientTurnId: string): ProjectExecutionMessage | undefined;
-  listProjectExecutionMessages(threadId: string): ProjectExecutionMessage[];
-  updateProjectExecutionMessage(message: ProjectExecutionMessage): ProjectExecutionMessage;
-  listProjects(): Project[];
-  updateProject(project: Project): Project;
-  saveProjectConfigRevision(revision: ProjectConfigRevision): ProjectConfigRevision;
-  listProjectConfigRevisions(projectId: string): ProjectConfigRevision[];
   saveTurn(turn: ExplorerTurn): ExplorerTurn;
   updateTurn(turn: ExplorerTurn): ExplorerTurn;
   listTurns(threadId: string): ExplorerTurn[];
@@ -121,6 +140,16 @@ export type PipelineStore = {
   getInputRequest(id: string): ExplorerInputRequest | undefined;
   listInputRequests(threadId: string, status?: ExplorerInputRequestStatus): ExplorerInputRequest[];
   updateInputRequest(request: ExplorerInputRequest): ExplorerInputRequest;
+  deleteExplorerCascade(input: ExplorerDeletionInput): ExplorerDeletionSummary;
+  /**
+   * 删除线程里**一条需求**名下的全部行。与 deleteExplorerCascade 的关键差别：**不碰线程行**——
+   * 线程还在，只是少了一条需求，所以线程上那几个指针由 ExplorerService 用 updateThread 写回，
+   * 两个 store 实现都不必各自重写"谁接任"的判定。同样不删 domain_events（审计事件保留）。
+   */
+  deleteExplorerPlanCascade(input: ExplorerPlanDeletionInput): ExplorerDeletionSummary;
+};
+
+export type PlanStore = {
   savePlan(plan: CandidatePlan): CandidatePlan;
   getPlan(id: string): CandidatePlan | undefined;
   listPlans(): CandidatePlan[];
@@ -139,6 +168,11 @@ export type PipelineStore = {
   getRevisionDraft(draftId: string): PlanRevisionDraft | undefined;
   listRevisionDrafts(planId?: string): PlanRevisionDraft[];
   updateRevisionDraft(draft: PlanRevisionDraft): PlanRevisionDraft;
+  savePlanQueryProjection(projection: PlanQueryProjection): PlanQueryProjection;
+  listPlanQueryProjection(projectId?: string): PlanQueryProjection[];
+};
+
+export type RunStore = {
   saveRun(run: Run): Run;
   getRun(runId: string): Run | undefined;
   listRuns(): Run[];
@@ -153,8 +187,6 @@ export type PipelineStore = {
   }): ExecutionJournalEntry;
   saveHookExecution(execution: HookExecution): HookExecution;
   listHookExecutions(runId?: string): HookExecution[];
-  savePlanQueryProjection(projection: PlanQueryProjection): PlanQueryProjection;
-  listPlanQueryProjection(projectId?: string): PlanQueryProjection[];
   saveVerificationRun(verification: VerificationRun): VerificationRun;
   getVerificationRun(runId: string): VerificationRun | undefined;
   listVerificationRuns(runId?: string): VerificationRun[];
@@ -164,8 +196,12 @@ export type PipelineStore = {
   listMergeRequests(): MergeRequest[];
   updateMergeRequest(request: MergeRequest): MergeRequest;
   saveRunGuidance(guidance: RunGuidance): RunGuidance;
+  updateRunGuidance(guidance: RunGuidance): RunGuidance;
+  /** 按创建顺序返回某个 Run 的补充要求；两个过滤条件都可省略（省略即不筛）。 */
+  listRunGuidance(runId: string, filter?: { mode?: RunGuidanceMode; status?: RunGuidanceStatus }): RunGuidance[];
+};
 
-  // ── 消息附件（图片） ──
+export type MessageAttachmentStore = {
   /** 首次写入生效（与其它 save* 同一语义）。 */
   saveAttachment(attachment: MessageAttachment): MessageAttachment;
   getAttachment(id: string): MessageAttachment | undefined;
@@ -175,9 +211,9 @@ export type PipelineStore = {
   listAttachments(ownerType: AttachmentOwnerType, ownerIds: readonly string[]): MessageAttachment[];
   /** 删除给定 owner 的附件并返回被删的行（调用方据此删文件）。 */
   deleteAttachmentsForOwners(ownerType: AttachmentOwnerType, ownerIds: readonly string[]): MessageAttachment[];
-  updateRunGuidance(guidance: RunGuidance): RunGuidance;
-  /** 按创建顺序返回某个 Run 的补充要求；两个过滤条件都可省略（省略即不筛）。 */
-  listRunGuidance(runId: string, filter?: { mode?: RunGuidanceMode; status?: RunGuidanceStatus }): RunGuidance[];
+};
+
+export type AgentLoopStore = {
   saveAgentLoop(loop: AgentLoop): AgentLoop;
   getAgentLoop(loopId: string): AgentLoop | undefined;
   listAgentLoops(ownerId?: string): AgentLoop[];
@@ -191,6 +227,9 @@ export type PipelineStore = {
   getToolCall(callId: string): PersistedToolCall | undefined;
   listToolCalls(loopId?: string): PersistedToolCall[];
   updateToolCall(call: PersistedToolCall): PersistedToolCall;
+};
+
+export type EventStore = {
   appendEvent(event: Omit<DomainEvent, "id" | "occurredAt" | "sequence">): DomainEvent;
   subscribeEvents?(listener: (event: DomainEvent) => void): () => void;
   /**
@@ -205,15 +244,26 @@ export type PipelineStore = {
    * SQLite 实现的白名单 SQL 必须与它逐条对应。
    */
   pruneEvents(input: EventPruneInput): { deleted: number };
-  deleteExplorerCascade(input: ExplorerDeletionInput): ExplorerDeletionSummary;
-  /**
-   * 删除线程里**一条需求**名下的全部行。与 deleteExplorerCascade 的关键差别：**不碰线程行**——
-   * 线程还在，只是少了一条需求，所以线程上那几个指针由 ExplorerService 用 updateThread 写回，
-   * 两个 store 实现都不必各自重写"谁接任"的判定。同样不删 domain_events（审计事件保留）。
-   */
-  deleteExplorerPlanCascade(input: ExplorerPlanDeletionInput): ExplorerDeletionSummary;
+};
+
+export type IdempotencyStore = {
   getIdempotency(scope: string, key: string): Record<string, unknown> | undefined;
   saveIdempotency(scope: string, key: string, result: Record<string, unknown>): void;
-  /** Optional store-level transaction used for startup recovery atomicity. */
+};
+
+/** 事务是**可选**能力：只有 SQLite 实现提供，调用方必须容忍它不存在（见维护提示 4）。 */
+export type TransactionalStore = {
   runInTransaction?<T>(work: () => T): T;
 };
+
+/** Domain 的持久化端口；内存和 SQLite 实现必须保持相同的事实及事件语义。 */
+export type PipelineStore = ClockStore &
+  ProjectStore &
+  ExplorerStore &
+  PlanStore &
+  RunStore &
+  MessageAttachmentStore &
+  AgentLoopStore &
+  EventStore &
+  IdempotencyStore &
+  TransactionalStore;

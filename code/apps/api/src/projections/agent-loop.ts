@@ -13,8 +13,8 @@
  *      以避免 route ↔ 组合根的类型环。搬进本目录后 route 直接 import，回调 deps 已删除。
  *      新增投影时优先落到本目录，不要退回"传函数进去"的写法。
  */
-import { AGENT_LOOP_DIAGNOSTIC_STEP_TYPES, projectAgentLoopDiagnostics } from "@pipeline-factory/domain";
-import type { AgentLoop, AgentLoopDiagnostics, PipelineStore } from "@pipeline-factory/domain";
+import { AGENT_LOOP_DIAGNOSTIC_STEP_TYPES, projectAgentLoopDiagnostics } from "@pipeline-factory/core";
+import type { AgentLoop, AgentLoopDiagnostics, PipelineStore } from "@pipeline-factory/core";
 
 export function projectAgentLoopResponse(store: PipelineStore, loop: AgentLoop): AgentLoop & { diagnostics: AgentLoopDiagnostics } {
   return { ...loop, checkpointJson: null, diagnostics: loopDiagnostics(store, loop) };
@@ -25,6 +25,6 @@ export function projectAgentLoopResponse(store: PipelineStore, loop: AgentLoop):
  * 使该投影从“读取整个 Loop 历史”降为“读取少量相关步骤”。
  */
 
-export function loopDiagnostics(store: PipelineStore, loop: import("@pipeline-factory/domain").AgentLoop) {
+export function loopDiagnostics(store: PipelineStore, loop: import("@pipeline-factory/core").AgentLoop) {
   return projectAgentLoopDiagnostics(loop, store.listAgentLoopSteps(loop.id, { stepTypes: AGENT_LOOP_DIAGNOSTIC_STEP_TYPES }));
 }

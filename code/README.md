@@ -6,7 +6,7 @@
 
 代码注释规范见仓库根目录的 [`docs/COMMENTING.md`](../docs/COMMENTING.md)。
 
-- `packages/domain`：Plan 状态、ExplorerThread 谱系推导、生命周期 Hook 领域服务。
+- `packages/core`：Plan 状态、ExplorerThread 谱系推导、生命周期 Hook 领域服务。
 - `apps/api`：Node.js + Fastify API，提供 ExplorerThread、Plan confirm/enqueue、Plan 查询、Hook 配置和 v4 SSE/结构化输入接口。
 - `apps/web`：Vue 3 + Vite + Element Plus 控制台，提供 ExplorerThread 工作区、Full Plan 抽屉、结构化选择弹窗和 Plan Center。
 
@@ -21,7 +21,7 @@ pnpm dev
 
 开发模式仍是两个进程：API 默认监听 `http://127.0.0.1:4310`，Web/Vite 默认监听
 `http://127.0.0.1:5173`，Vite proxy 负责把 API 与 SSE 请求转发到 4310。API 带热重载：
-它以 `node --watch` 运行，监听**已加载的源码模块**，改 `apps/api/src` 或 `packages/domain/src`
+它以 `node --watch` 运行，监听**已加载的源码模块**，改 `apps/api/src` 或 `packages/core/src`
 都会自动重启，不需要手动重启、也不需要重新构建。代价是重启会切断进程内的 SSE 连接并重置
 调度器内存状态（数据库与事件流本身是持久的），正在执行的 Run 期间改代码请自己权衡时机。
 
@@ -105,7 +105,7 @@ Git 根目录的 `.runtime/`（API 为 `.runtime/api.pid` / `.runtime/api.log`�
 
 API 的运行参数全部来自 `config/pipeline-factory.config.json`，也可以通过 `--config` 指定
 其他配置文件；不读取环境变量。dev 下的 API 通过 `--conditions=pipeline-dev` 解析
-`@pipeline-factory/domain`，命中 `packages/domain/package.json` 的 exports 条件
+`@pipeline-factory/core`，命中 `packages/core/package.json` 的 exports 条件
 `"pipeline-dev": "./src/index.ts"`，因此运行时加载的是 domain 的**源码**而不是 `dist`——
 热重载没有"忘了重新构建"这一环。这个条件只在 `apps/api` 的 `dev` 脚本里打开，`tsc` 与
 `pnpm build && pnpm start` 走的仍是 `types`/`import`（`dist/`），两条路径互不影响。
@@ -434,8 +434,8 @@ ChangeProposal 的 API 为 `POST /api/v4/runs/:runId/change-proposals`、`GET /a
 ## 验证
 
 ```bash
-./node_modules/.bin/vitest run packages/domain/src/index.test.ts apps/api/src/server.test.ts
-./node_modules/.bin/tsc -p packages/domain/tsconfig.json
+./node_modules/.bin/vitest run packages/core/src/index.test.ts apps/api/src/server.test.ts
+./node_modules/.bin/tsc -p packages/core/tsconfig.json
 ./node_modules/.bin/tsc -p apps/api/tsconfig.json --noEmit
 ./apps/web/node_modules/.bin/vue-tsc -p apps/web/tsconfig.json --noEmit
 ./apps/web/node_modules/.bin/vite build

@@ -8,7 +8,7 @@
  *   1) `url` 是相对 API 根的路径，浏览器直接当 `<img src>`；不要在别处再拼一遍。
  *   2) 一次 `listAttachments` 批量取，**不要在调用方逐条 getAttachment**。
  */
-import type { AttachmentOwnerType, MessageAttachment, PipelineStore } from "@pipeline-factory/domain";
+import type { AttachmentOwnerType, MessageAttachment, PipelineStore } from "@pipeline-factory/core";
 
 export type AttachmentDto = {
   id: string;

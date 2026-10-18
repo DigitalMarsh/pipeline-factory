@@ -20,7 +20,7 @@ import {
   type MergeRequest,
   type PipelineStore,
   planContractFixture,
-} from "@pipeline-factory/domain";
+} from "@pipeline-factory/core";
 import { decoratePlanRows, planProjection } from "./plan-lifecycle.js";
 
 /** 记录两张"按 Plan 反复读就会爆"的表被读了几次。 */

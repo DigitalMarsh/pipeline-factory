@@ -27,7 +27,7 @@ import {
   type PlanService,
   type ProjectService,
   type ProjectSettingsInput,
-} from "@pipeline-factory/domain";
+} from "@pipeline-factory/core";
 import {
   projectCreateBody,
   projectSelectExplorerBody,

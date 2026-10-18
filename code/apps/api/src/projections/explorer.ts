@@ -9,10 +9,10 @@
  *   2) `sanitizeExplorerRequirementStatusEvent` 是 SSE 转发的**白名单**：事件类型、四个字段的
  *      类型、status 枚举、以及"ExplorerPlan 必须属于该 Thread 且属于该 Project"四条同时成立
  *      才返回转发载荷，否则返回 null。放宽任意一条都会把不属于当前订阅者的事件漏出去。
- *   3) 它是 `packages/domain` 之外的少量"业务判定留在 api 侧"的例子：判定要吃 `store.getExplorerPlan`
+ *   3) 它是 `packages/core` 之外的少量"业务判定留在 api 侧"的例子：判定要吃 `store.getExplorerPlan`
  *      的实时行，放到 domain 会逼出一个只为它存在的 Store 方法。**这不是遗漏**。
  */
-import type { DomainEvent, ExplorerThread, PipelineStore } from "@pipeline-factory/domain";
+import type { DomainEvent, ExplorerThread, PipelineStore } from "@pipeline-factory/core";
 
 /**
  * 这条**探索线程**实际用的 agent：`{ model, backend }`；两样都没有就是 null（界面留空，不要编）。

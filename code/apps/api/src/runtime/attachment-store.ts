@@ -17,7 +17,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, extname, isAbsolute, resolve } from "node:path";
-import type { MessageAttachment } from "@pipeline-factory/domain";
+import type { MessageAttachment } from "@pipeline-factory/core";
 
 /** 白名单 mime → 落盘扩展名。与上传路由、前端校验共用同一组取值。 */
 export const ATTACHMENT_MIME_EXTENSIONS: Readonly<Record<string, string>> = {

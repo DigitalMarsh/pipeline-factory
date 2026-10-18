@@ -38,7 +38,7 @@ import type {
   Scheduler,
   VerificationCommandExecutor,
   VerificationService,
-} from "@pipeline-factory/domain";
+} from "@pipeline-factory/core";
 import { guidanceBody } from "@pipeline-factory/contracts";
 import { attachmentsFor } from "../projections/attachments.js";
 import { loopEventsQuery } from "@pipeline-factory/contracts";

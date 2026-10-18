@@ -55,7 +55,7 @@ import {
   type ExplorerTurn,
   type PipelineStore,
   type PlanRevisionDraft,
-} from "@pipeline-factory/domain";
+} from "@pipeline-factory/core";
 import {
   projectExplorerParams,
   projectExplorerPlanParams,

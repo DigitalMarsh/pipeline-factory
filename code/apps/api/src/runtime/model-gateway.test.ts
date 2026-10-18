@@ -10,7 +10,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ModelCapabilities, ModelEvent, ModelGateway, ModelRequest } from "@pipeline-factory/domain";
+import type { ModelCapabilities, ModelEvent, ModelGateway, ModelRequest } from "@pipeline-factory/core";
 import { loadFactoryConfig, type ResolvedModelBackend } from "../config.js";
 import { createModelGateway, RoutingModelGateway } from "./model-gateway.js";
 

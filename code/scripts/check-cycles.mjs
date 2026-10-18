@@ -20,7 +20,7 @@ const baselinePath = join(here, "cycle-baseline.json");
 
 /** 被扫描的源码根。web 的 @ 别名指向它自己的 src。 */
 const SCAN_ROOTS = [
-  { root: join(repoRoot, "packages/domain/src"), alias: null },
+  { root: join(repoRoot, "packages/core/src"), alias: null },
   { root: join(repoRoot, "packages/contracts/src"), alias: null },
   { root: join(repoRoot, "apps/api/src"), alias: null },
   { root: join(repoRoot, "apps/web/src"), alias: "@" },
@@ -73,7 +73,7 @@ function allNamedBindingsTyped(clause) {
 
 /**
  * 抽取一条语句引用的模块。specifier 只保留相对路径与 @ 别名——
- * 跨包 import（如 @pipeline-factory/domain）在本次重构范围内不会形成环。
+ * 跨包 import（如 @pipeline-factory/core）在本次重构范围内不会形成环。
  *
  * clause 用 `[^;]*?` 而不是 `[\s\S]*?` 卡住，这是必须的：真正的 import/export-from
  * 语句在 from 之前不可能出现分号。放宽成 `[\s\S]*?` 时，`export async function f() {...}`

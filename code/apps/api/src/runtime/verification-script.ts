@@ -20,7 +20,7 @@ import {
   type Project,
   type VerificationScriptPlan,
   type VerificationScriptPreset,
-} from "@pipeline-factory/domain";
+} from "@pipeline-factory/core";
 
 export type InstallVerificationScriptInput = {
   project: Project;

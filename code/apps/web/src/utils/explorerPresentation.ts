@@ -256,7 +256,7 @@ export type ExplorerDisplayMode = "card" | "text" | "prose" | "line" | "reasonin
  * 否则新活动类型会静默消失（它是 ④ 里唯一露面的那个）。
  *
  * 注意 `INPUT_REQUIRED` / `INPUT_RESOLVED` **不在这张表里**：那两条生命周期行已经不产出条目
- * （见 `packages/domain/src/explorer/explorer-activity.ts` 的模块注释 3），
+ * （见 `packages/core/src/explorer/explorer-activity.ts` 的模块注释 3），
  * "问了什么、答了什么"由结构化输入卡自己承载。
  */
 export const EXPLORER_DISPLAY_MODES: Record<ExplorerMessageType, ExplorerDisplayMode> = {
@@ -332,7 +332,7 @@ export function explorerDisplayMode(type: ExplorerMessageType): ExplorerDisplayM
  * 这条调用的**结构化载荷**（参数、返回、输出、退出码、耗时）。
  *
  * 载荷由领域的 `structuredProviderPayload` 写进 `details`（见
- * `packages/domain/src/platform/provider-payload.ts`），这里只把它取出来给展开区用。
+ * `packages/core/src/platform/provider-payload.ts`），这里只把它取出来给展开区用。
  * 取不到的键**不写**：`undefined` 是"Provider 没给"，空串是"Provider 说这里什么都没有"。
  */
 export function explorerActivityResult(activity: ExplorerActivityItem): {

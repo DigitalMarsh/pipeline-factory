@@ -27,7 +27,7 @@
  *      的模块头（浏览器拿不到绝对路径）。测试用 `chooseDirectory` 注入假实现，不弹真对话框。
  */
 import type { FastifyInstance } from "fastify";
-import { EXPLORER_PLAN_REQUIREMENTS, type McpToolRegistry, type ModelGateway, type PluginRegistry } from "@pipeline-factory/domain";
+import { EXPLORER_PLAN_REQUIREMENTS, type McpToolRegistry, type ModelGateway, type PluginRegistry } from "@pipeline-factory/core";
 import type { FactoryConfig } from "../config.js";
 import { describeModelBackends } from "../runtime/model-catalog.js";
 import { chooseDirectory, DirectoryDialogError, type DirectoryDialogResult } from "../runtime/directory-dialog.js";

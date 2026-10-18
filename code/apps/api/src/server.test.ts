@@ -25,7 +25,7 @@ import {
   type PlanRevision,
   type VerificationCommandExecutor,
   planContractFixture,
-} from "@pipeline-factory/domain";
+} from "@pipeline-factory/core";
 import { createApp } from "./server.js";
 import { loadFactoryConfig } from "./config.js";
 import { DirectoryDialogError } from "./runtime/directory-dialog.js";
@@ -327,7 +327,7 @@ describe("Pipeline Factory v4 API", () => {
    * **这条用例此前打的是 `PUT /projects/:id/settings/hooks`**，那个专用端点已退役（它没有客户端；
    * 设置对话框一直走 `PATCH /projects/:id` 整体保存 `settings`）。所以断言搬到 PATCH 上——
    * 判据本身没变：`blocking` 必须活着穿过这一跳，而且**只属于 start**（配在 cleanup 上由领域层拒，
-   * 见 `packages/domain` 的 `project.test.ts`）。
+   * 见 `packages/core` 的 `project.test.ts`）。
    */
   it("carries the start hook's failure policy through the project update", async () => {
     const store = new InMemoryPipelineStore();
@@ -1220,7 +1220,7 @@ describe("Pipeline Factory v4 API", () => {
     createTestProject(store);
     const app = createApp({ store, seed: false });
     apps.push(app);
-    const planService = (await import("@pipeline-factory/domain")).PlanService;
+    const planService = (await import("@pipeline-factory/core")).PlanService;
     const plans = new planService(store);
     plans.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
     const plan = plans.createCandidatePlan({
@@ -1423,7 +1423,7 @@ describe("Pipeline Factory v4 API", () => {
     createTestProject(store);
     const app = createApp({ store, seed: false });
     apps.push(app);
-    const plans = new (await import("@pipeline-factory/domain")).PlanService(store);
+    const plans = new (await import("@pipeline-factory/core")).PlanService(store);
     plans.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
     const explorerPlanId = store.listExplorerPlans("thread-1")[0]!.id;
 
@@ -1632,7 +1632,7 @@ describe("Pipeline Factory v4 API", () => {
     };
     const app = createApp({ store, model, seed: false });
     apps.push(app);
-    const plans = new (await import("@pipeline-factory/domain")).PlanService(store);
+    const plans = new (await import("@pipeline-factory/core")).PlanService(store);
     createTestProject(store);
     plans.registerThread({ id: "thread-1", projectId: "project-1", parentThreadId: null });
 

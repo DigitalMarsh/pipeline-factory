@@ -10,8 +10,8 @@
  *      的语义（调用方按 exitCode 走），抛出去会变成 500，把可恢复的失败变成接口错误。
  *   3) 每次调用都重新读 `store.getRevision(...)`，不缓存——Revision 可能在上一次调用后被换掉。
  */
-import { RegisteredCommandExecutor } from "@pipeline-factory/domain";
-import type { PipelineStore, VerificationCommandExecutor } from "@pipeline-factory/domain";
+import { RegisteredCommandExecutor } from "@pipeline-factory/core";
+import type { PipelineStore, VerificationCommandExecutor } from "@pipeline-factory/core";
 import type { FactoryConfig } from "../config.js";
 import { readCommandDefinitions } from "./commands.js";
 

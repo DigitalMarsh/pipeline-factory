@@ -18,7 +18,7 @@
  *   3) 空数组的语义是"这个后端不消费该字段"（不是"什么都不接受"），见 ModelBackendCatalog。
  */
 import { resolveModelBackends, roleBackendId, type FactoryConfig, type ResolvedModelBackend } from "../config.js";
-import type { ModelBackendCatalog } from "@pipeline-factory/domain";
+import type { ModelBackendCatalog } from "@pipeline-factory/core";
 
 /** 各类后端的候选模型名；`models: []` 表示没有建议值。 */
 const BUILT_IN_MODELS_BY_KIND: Record<string, string[]> = {

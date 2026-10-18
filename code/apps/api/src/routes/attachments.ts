@@ -13,7 +13,7 @@
  *   4) `attachmentsFor` 一次 `listAttachments` 批量取，**不要在路由里逐条 getAttachment**。
  */
 import type { FastifyInstance } from "fastify";
-import type { PipelineStore } from "@pipeline-factory/domain";
+import type { PipelineStore } from "@pipeline-factory/core";
 import { attachmentParams, attachmentUploadBody } from "@pipeline-factory/contracts";
 import { attachmentDto } from "../projections/attachments.js";
 import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MIME_EXTENSIONS, sniffImageMime, type AttachmentStore } from "../runtime/attachment-store.js";

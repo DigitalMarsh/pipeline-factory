@@ -24,7 +24,7 @@ import {
   type ExecutionTelemetry,
   type PlanRevision,
   planContractFixture,
-} from "@pipeline-factory/domain";
+} from "@pipeline-factory/core";
 import { projectRunThreadTelemetry, resolveRunExecutorConfig } from "./run-telemetry.js";
 
 /** `frozenBackend: null` 表示冻结配置里**没写**后端——那一格就跟随全局，只能由指纹回答。 */

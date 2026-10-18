@@ -917,7 +917,7 @@ describe("补充要求有两轮时", () => {
 
 /**
  * 这条测试**从领域侧搬过来的**：④ 的判据（`isRuntimeKind` / `isRuntimeAlertKind`）原本定义在
- * `packages/domain/src/model/provider-activity.ts`，但那边没有任何生产代码在调它——两个消费方
+ * `packages/core/src/model/provider-activity.ts`，但那边没有任何生产代码在调它——两个消费方
  * （执行会话投影、Run 头诊断区）用的都是本文件这份。空定义已删，判据只剩这一处，断言跟着过来。
  *
  * 它守的是**性质**不是取值：④ 是"跑模型的程序在报自己的状态"，这条线画在哪要可判定，

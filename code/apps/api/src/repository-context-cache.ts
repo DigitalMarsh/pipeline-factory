@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { lstatSync, readFileSync, readlinkSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { planDirectoryRepoPath } from "@pipeline-factory/domain";
-import type { Project } from "@pipeline-factory/domain";
+import { planDirectoryRepoPath } from "@pipeline-factory/core";
+import type { Project } from "@pipeline-factory/core";
 
 export type RepositoryContext = { key: string; summary: string };
 

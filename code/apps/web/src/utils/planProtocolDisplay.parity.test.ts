@@ -11,7 +11,7 @@
  *   任何一边改了判定都会在这里红。
  */
 import { describe, expect, it } from "vitest";
-import { projectExplorerActivity } from "@pipeline-factory/domain";
+import { projectExplorerActivity } from "@pipeline-factory/core";
 import { parsePlanProtocolDisplay } from "./planProtocolDisplay";
 
 /** 领域层的活动投影要一堆持久化事实才能跑；这里只造跑通所需的最小集合。 */

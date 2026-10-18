@@ -19,7 +19,7 @@
  */
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import type { PipelineStore, ProjectExecutionThreadService } from "@pipeline-factory/domain";
+import type { PipelineStore, ProjectExecutionThreadService } from "@pipeline-factory/core";
 import { projectExecutionEventsQuery, projectExecutionPreferencesBody, projectExecutionTurnBody } from "@pipeline-factory/contracts";
 import { projectThreadParams } from "@pipeline-factory/contracts";
 import { openSseChannel } from "../http/sse.js";

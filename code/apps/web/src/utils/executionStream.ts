@@ -929,7 +929,7 @@ function projectToolCall(
 }
 
 /**
- * Provider 活动的中立词表。**这是 packages/domain/src/model/provider-activity.ts 的一份镜像**——
+ * Provider 活动的中立词表。**这是 packages/core/src/model/provider-activity.ts 的一份镜像**——
  * web 不能运行时依赖领域层（会把整个领域打进浏览器包），而 journal 载荷里的字段是无类型的字符串。
  * 两边必须一致：`executionStream.parity.test.ts` 用同一批样例断言镜像与领域实现给出相同结论，
  * 改这里就要同步改那边，测试会拦住漂移。

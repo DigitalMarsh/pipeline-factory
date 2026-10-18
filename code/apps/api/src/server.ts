@@ -56,7 +56,7 @@ import {
   type ModelRole,
   type Project,
   type AgentLoopRunner,
-} from "@pipeline-factory/domain";
+} from "@pipeline-factory/core";
 import { detectDefaultBranch } from "./runtime/git.js";
 import { resolveModelBackends, roleBackendId, type FactoryConfig, type ModelBackendKind } from "./config.js";
 import { RepositoryContextCache } from "./repository-context-cache.js";
@@ -216,7 +216,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
                     ? {
                         computerUseExecutor: (input: Record<string, unknown>) =>
                           options.computerUse!.call({
-                            action: input.action as import("@pipeline-factory/domain").ComputerUseAction,
+                            action: input.action as import("@pipeline-factory/core").ComputerUseAction,
                             ...(typeof input.requestId === "string" ? { requestId: input.requestId } : {}),
                             ...(typeof input.timeoutMs === "number" ? { timeoutMs: input.timeoutMs } : {}),
                           }),

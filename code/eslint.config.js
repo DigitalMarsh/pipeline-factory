@@ -3,7 +3,7 @@
  *
  * 三条范围约定，都是有意的：
  *
- *   1) **只检查 src 与 scripts，不碰 dist**。`packages/domain/dist` 是 tsc 的产物，检查它等于
+ *   1) **只检查 src 与 scripts，不碰 dist**。`packages/core/dist` 是 tsc 的产物，检查它等于
  *      给同一份代码报两遍，而且报的位置在生成物里、改不了。
  *   2) **Node 与浏览器的全局变量按目录分开**。混在一起会让 `apps/api` 里写 `document`、
  *      或 `apps/web` 里写 `process` 都不报错——那正是这两类项目最容易犯的错，而它们各自都不会在

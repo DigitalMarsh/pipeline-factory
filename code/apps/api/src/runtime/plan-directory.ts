@@ -9,7 +9,7 @@
  * 维护提示：`planDirectory` 是配置里**唯一不按配置文件所在目录解析**的路径字段——它相对的是
  *   **受管工程**的根目录，而每个 Project 可以有不同的根，所以只能在这里（拿到 repoRoot 之后）解析。
  */
-import { planDirectoryRepoPath, resolvePlanDirectory } from "@pipeline-factory/domain";
+import { planDirectoryRepoPath, resolvePlanDirectory } from "@pipeline-factory/core";
 import type { FactoryConfig } from "../config.js";
 
 /** 某个受管工程的 Plan 落盘目录与该目录对应的干净检查白名单。 */

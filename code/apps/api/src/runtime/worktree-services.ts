@@ -28,7 +28,7 @@ import type {
   WorktreeServiceLogEntry,
   WorktreeServiceState,
   WorktreeServices,
-} from "@pipeline-factory/domain";
+} from "@pipeline-factory/core";
 
 /** 单个服务保留的日志行数上限。 */
 const DEFAULT_MAX_LOG_LINES = 500;

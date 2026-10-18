@@ -27,7 +27,7 @@
  *      取消会留下一个还在跑的 Provider turn，而每个后端都会忽略不属于自己的 conversationId）。
  */
 
-import { ClaudeAgentSdkGateway, CodexAppServerGateway, OpenAIModelGateway, StubModelGateway } from "@pipeline-factory/domain";
+import { ClaudeAgentSdkGateway, CodexAppServerGateway, OpenAIModelGateway, StubModelGateway } from "@pipeline-factory/core";
 import type {
   ModelCapabilities,
   ModelEvent,
@@ -37,7 +37,7 @@ import type {
   ModelRoleConfig,
   ModelRequest,
   ProviderEndpoint,
-} from "@pipeline-factory/domain";
+} from "@pipeline-factory/core";
 import { resolveModelBackends, roleBackendId, type FactoryConfig, type ResolvedModelBackend } from "../config.js";
 
 const CLAUDE_ENDPOINT_PROBE_TIMEOUT_MS = 2_000;

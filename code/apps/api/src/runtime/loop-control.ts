@@ -15,7 +15,7 @@
  *      不是调用方传进来的——新增一个可迁移的目标状态，必须同时在这里加事件类型映射，
  *      否则该状态没有对应事件，投影读不到（`AgentLoop` 的状态集合真有变化时，这是最容易漏的一处）。
  */
-import type { AgentLoop, PipelineStore } from "@pipeline-factory/domain";
+import type { AgentLoop, PipelineStore } from "@pipeline-factory/core";
 
 /** 在没有真实 Loop Controller 的测试/降级场景中持久化控制事实，并复用相同状态转换检查。 */
 export function persistLoopControl(store: PipelineStore, loop: AgentLoop, state: AgentLoop["state"], reason: string): AgentLoop {

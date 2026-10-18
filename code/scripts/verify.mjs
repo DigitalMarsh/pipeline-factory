@@ -21,7 +21,7 @@ import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CODE_ROOT = resolve(HERE, "..");
-const PACKAGES = ["@pipeline-factory/domain", "@pipeline-factory/api", "@pipeline-factory/web"];
+const PACKAGES = ["@pipeline-factory/core", "@pipeline-factory/api", "@pipeline-factory/web"];
 
 const temporary = mkdtempSync(join(tmpdir(), "pipeline-factory-verify-"));
 const allowlist = new Set(
@@ -33,7 +33,7 @@ const problems = [];
 const counts = [];
 
 try {
-  runStage("domain build", "pnpm", ["--filter", "@pipeline-factory/domain", "build"]);
+  runStage("domain build", "pnpm", ["--filter", "@pipeline-factory/core", "build"]);
   // contracts 的 d.ts 引用 domain 的类型，必须在 domain 之后构建；api/web 的 typecheck 再读 contracts。
   runStage("contracts build", "pnpm", ["--filter", "@pipeline-factory/contracts", "build"]);
   runStage("typecheck", "pnpm", ["--recursive", "--no-bail", "typecheck"]);

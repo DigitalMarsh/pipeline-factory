@@ -23,7 +23,7 @@
  *
  * 依赖方向：本文件不依赖同目录其他投影。
  */
-import type { CandidatePlan, MergeRequest, PipelineStore, PlanLifecycleEntry, PlanLifecycleStatus, Run } from "@pipeline-factory/domain";
+import type { CandidatePlan, MergeRequest, PipelineStore, PlanLifecycleEntry, PlanLifecycleStatus, Run } from "@pipeline-factory/core";
 
 const PLAN_LIFECYCLE_ORDER: Array<PlanLifecycleStatus> = [
   "DRAFT",
