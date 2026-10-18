@@ -58,10 +58,9 @@ node scripts/service.mjs status
   新增后端 = 注册一个 kind，不改 `createModelGateway` 的分派。MCP / Plugin 已有各自注册表，
   项目命令是数据驱动，不要重复造。
 - **发布物**：`pnpm pack:release` 生成 `release/pipeline-factory-<version>/` 与同名 tar.gz
-  （`app/` 生产依赖 + `web/` 静态产物 + 示例配置 + `bin/pipeline-factory` 启动器）。
-  启动后 `GET /health` 返回 `appVersion`（package.json 版本）与 `schemaVersion`
-  （SQLite `PRAGMA user_version`），排障时先看这两项。安装、升级与安全说明见
-  [`docs/INSTALL.md`](../docs/INSTALL.md)。
+  （`app/` 生产依赖 + `web/` 静态产物 + `config/` + `bin/pipeline` 命令行 + `install.sh`）。
+  安装后统一用 `pipeline start|stop|restart|status|logs|update` 管理；启动后 `GET /health` 返回
+  `appVersion` 与 `schemaVersion`。安装、升级与安全说明见 [`docs/INSTALL.md`](../docs/INSTALL.md)。
 - **安装包不包含 Claude Agent SDK**：它按需懒加载（`CLAUDE_AGENT_SDK_UNAVAILABLE` 只在真正用
   Claude 后端时出现），由目标机器提供，或用 `model.claudeAgent.sdkPath` 指向入口文件。
 - **来源边界**：CORS 只允许回环与 `server.allowedOrigins`，Host 必须是回环主机名；

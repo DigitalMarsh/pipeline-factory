@@ -102,6 +102,8 @@ export function registerAgentLoopRoutes(app: FastifyInstance, deps: AgentLoopRou
       send();
     });
     if (unsubscribe) sse.onClose(unsubscribe);
+    // 订阅建立之前可能已经追加了事件（send 与 subscribe 之间有窗口）：补扫一次。
+    send();
   });
 
   app.post("/api/v4/agent-loops/:loopId/pause", async (request, reply) => {

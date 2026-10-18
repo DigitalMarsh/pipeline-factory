@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-10-18 — 安装脚本与 `pipeline` 命令；复盘补丁
+
+### 安装 / 运维
+
+- 新增根目录 `install.sh`：检查 Node ≥ 22.5，安装到 `~/.pipeline-factory`（可用 `--dir` /
+  `PIPELINE_HOME` 覆盖），把 `pipeline` 链接到 `~/.local/bin`，保留已有 `config/` 与 `var/`。
+- 新增 `bin/pipeline` CLI：`start / stop / restart / status / logs [-f] / update / version / config`。
+  PID 与日志固定在 `<root>/var/`；停止前核对该 PID 的命令行，避免误杀回收后的 PID。
+- `pipeline update` 支持 GitHub Releases 默认地址、`--file <tar.gz>`、`--from <url>`；
+  升级前停止、备份并替换 `app/web/bin`，保留 `config/var`，失败自动回滚。
+- `docs/INSTALL.md` 与根 README 改为"解压 → ./install.sh → pipeline start"的流程。
+
+### 复盘补丁
+
+- **SSE 订阅建立窗口**：订阅后补扫一次，避免 `send()` 与 `subscribeEvents` 之间追加的事件静默丢失。
+- **非回环监听的浏览器来源**：默认把 `server.host:port` 的 http/https 来源加入允许列表，
+  否则配了 token 也打不开界面；`0.0.0.0`/`::` 仍需显式配 `allowedOrigins`。
+- **派发唤醒的追不上风险**：单次 wake 最多连续重扫 5 轮，仍未收敛则让出事件循环下一拍再扫，
+  避免高频事件下无限循环。
+
+验证：`pnpm verify` 全绿；发布物重新打包（7.3MB，无 Claude SDK）；
+`install.sh` → `pipeline start/status/stop` 与 `pipeline update --file` 在临时安装目录实测通过。
+
 ## 2026-10-18 — 架构补完：contracts 成为真正底座；服务改用窄端口
 
 1. **依赖方向反转**：跨端实体/状态类型（Explorer、Run、Plan、Worktree、Agent Loop、项目执行、

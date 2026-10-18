@@ -389,7 +389,17 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
   const browserOrigins = allowedBrowserOrigins({
     serverPort,
     webPort,
-    extra: options.config?.server.allowedOrigins ?? [],
+    extra: [
+      ...(options.config?.server.allowedOrigins ?? []),
+      // 非回环监听时，浏览器页面通常就是从这台机器的 IP/主机名访问的；把该来源默认放进来，
+      // 否则"配了 token 也打不开界面"。0.0.0.0 / :: 不是可访问的主机名，必须显式配 allowedOrigins。
+      ...(!loopbackOnly && serverHost !== "0.0.0.0" && serverHost !== "::"
+        ? [
+            `http://${serverHost.includes(":") ? `[${serverHost}]` : serverHost}:${serverPort}`,
+            `https://${serverHost.includes(":") ? `[${serverHost}]` : serverHost}:${serverPort}`,
+          ]
+        : []),
+    ],
   });
   void app.register(cors, {
     origin: (origin, callback) => callback(null, isAllowedOrigin(origin ?? undefined, browserOrigins)),

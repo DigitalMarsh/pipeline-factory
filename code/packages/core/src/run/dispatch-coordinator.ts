@@ -268,17 +268,19 @@ export class PlanDispatchCoordinator {
     }
     this.wakePromise = (async () => {
       let states: PlanDispatchState[];
+      let passes = 0;
       do {
         this.wakeRequested = false;
         states = await this.performWake();
-      } while (this.wakeRequested);
+        passes += 1;
+      } while (this.wakeRequested && passes < 5);
       return states;
     })().finally(() => {
       this.wakePromise = null;
-      // 关闭窗口：如果请求恰好落在"循环判断退出"和"清空 promise"之间，补一次。
+      // 连续事件可能让"再扫一轮"永远追不上；超过上限后让出事件循环，下一拍再扫。
       if (this.wakeRequested) {
         this.wakeRequested = false;
-        void this.wake();
+        setTimeout(() => void this.wake(), 0).unref?.();
       }
     });
     return this.wakePromise;

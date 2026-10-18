@@ -24,7 +24,7 @@
  *   3) 生成配置时只改 `serveWeb` 与 `webDistPath` 两项。`project.root`、`codexAppServer.cwd`、
  *      `storage.*` 是与部署机器相关的路径，**不替用户猜**——写进 RELEASE.md 让他自己改。
  */
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -106,15 +106,17 @@ function main() {
   example.storage = { ...example.storage, eventRetentionDays: 14 };
   writeFileSync(join(stage, "config/pipeline-factory.config.json"), `${JSON.stringify(example, null, 2)}\n`);
 
-  writeFileSync(join(stage, "bin/pipeline-factory"), launcherSource());
-  chmodSync(join(stage, "bin/pipeline-factory"), 0o755);
+  copyFileSync(join(CODE_ROOT, "scripts", "pipeline.mjs"), join(stage, "bin", "pipeline"));
+  chmodSync(join(stage, "bin", "pipeline"), 0o755);
+  copyFileSync(join(CODE_ROOT, "..", "install.sh"), join(stage, "install.sh"));
+  chmodSync(join(stage, "install.sh"), 0o755);
   writeFileSync(join(stage, "RELEASE.md"), releaseNotes(version));
   cpSync(join(CODE_ROOT, "..", "docs", "INSTALL.md"), join(stage, "INSTALL.md"));
   run("write tarball", "tar", ["-czf", join(RELEASE_ROOT, `${stageName}.tar.gz`), "-C", RELEASE_ROOT, stageName]);
 
   console.log(`\n[package] 完成：${stage}`);
   console.log(`[package] 压缩包：${join(RELEASE_ROOT, `${stageName}.tar.gz`)}`);
-  console.log("[package] 启动：bin/pipeline-factory --config config/pipeline-factory.config.json");
+  console.log("[package] 安装：./install.sh，然后用 pipeline start");
 }
 
 function run(label, command, args, options = {}) {
@@ -130,32 +132,6 @@ function run(label, command, args, options = {}) {
  * 启动器：把 `--config` 的缺省值钉在发布物自己的 config 目录，并把 cwd 放到发布根目录——
  * 这样 `storage.*` / `project.root` 这些相对路径的解析与"用户在哪执行命令"无关。
  */
-function launcherSource() {
-  const paths = [
-    'import { spawn } from "node:child_process";',
-    'import { dirname, join, resolve } from "node:path";',
-    'import { fileURLToPath } from "node:url";',
-  ];
-  return `#!/usr/bin/env node
-// 由 scripts/package.mjs 生成：发布物启动器。不要手改，改生成器。
-${paths.join("\n")}
-
-const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const args = process.argv.slice(2);
-const configIndex = args.indexOf("--config");
-const config = configIndex >= 0
-  ? resolve(args[configIndex + 1])
-  : join(root, "config", "pipeline-factory.config.json");
-const child = spawn(
-  process.execPath,
-  ["--disable-warning=ExperimentalWarning", join(root, "app", "dist", "main.js"), "--config", config],
-  { stdio: "inherit", cwd: root, env: process.env },
-);
-for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => child.kill(signal));
-child.on("exit", (code, signal) => process.exit(signal ? 1 : (code ?? 0)));
-`;
-}
-
 function releaseNotes(version) {
   return `# Pipeline Factory ${version} 发布物
 
@@ -169,10 +145,22 @@ function releaseNotes(version) {
   \`@anthropic-ai/claude-agent-sdk\`（或用 \`model.claudeAgent.sdkPath\` 指向其入口）。
   **本安装包不包含 Claude Agent SDK**。
 
-## 启动
+## 安装
 
 \`\`\`bash
-bin/pipeline-factory --config config/pipeline-factory.config.json
+./install.sh
+pipeline start
+\`\`\`
+
+安装脚本默认装到 \`~/.pipeline-factory\`，并把 \`pipeline\` 链接到 \`~/.local/bin\`。
+
+## 启动与运维
+
+\`\`\`bash
+pipeline start|stop|restart|status
+pipeline logs [-f]
+pipeline update                 # 从 GitHub Releases 下载最新发布物
+pipeline update --file x.tar.gz # 或从本地发布物升级
 \`\`\`
 
 默认监听 \`127.0.0.1:4310\`，同时提供 Web 页面与 \`/api/v4/*\`（配置里 \`server.serveWeb = true\`）。

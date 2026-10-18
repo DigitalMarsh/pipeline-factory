@@ -29,6 +29,28 @@ cd code && pnpm build && pnpm start
 至少要按受管项目改 `project.root` 与 `storage.databasePath`。仓库里已有一份本地配置，**不要**
 用模板直接覆盖它——那会丢掉本机的项目路径与模型设置。
 
+## 发布物安装
+
+发布物（`pipeline-factory-<version>.tar.gz`）自带安装脚本与 `pipeline` 命令：
+
+```bash
+tar -xzf pipeline-factory-0.1.0.tar.gz
+cd pipeline-factory-0.1.0
+./install.sh
+pipeline start
+```
+
+日常管理：
+
+```bash
+pipeline status
+pipeline logs -f
+pipeline stop
+pipeline update
+```
+
+完整说明见 [docs/INSTALL.md](docs/INSTALL.md)（前置条件、Codex/Claude 配置、升级、安全边界与排障）。
+
 ## 文档
 
 - [code/README.md](code/README.md) —— 目录结构、配置字段、运行与停止、API 约定。**从这里开始。**

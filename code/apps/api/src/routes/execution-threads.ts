@@ -126,5 +126,7 @@ export function registerExecutionThreadRoutes(app: FastifyInstance, deps: Execut
       send();
     });
     if (unsubscribe) sse.onClose(unsubscribe);
+    // 订阅建立之前可能已经追加了事件：补扫一次，避免这一段在静默期丢失。
+    send();
   });
 }
