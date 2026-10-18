@@ -7,12 +7,11 @@
  *   凭据 —— 让 domain 认识 `backends` 会把"Factory 只在组合根读一次密钥"这条边界打破。
  *
  * 维护提示：
- *   1) **这是全仓唯一读取 `config.model.openai.apiKey` 与 `config.model.claudeAgent.authToken`
- *      的地方**（`grep -rn apiKey apps packages` 可复核）。其余 backend 都不需要密钥：`stub` 没有模型，
- *      `codex-app-server` 与 `claude-agent-sdk` 的缺省形态都由子进程自己持有凭证（Claude 侧即
- *      ~/.claude/settings.json，cc-switch 作用的那一层）。**要接新 backend 就在这里加分支，
- *      不要在别处读 `config.model`** —— 凭据读取点收敛成一处，是"Factory 不在项目里存 API key"
- *      这条设计承诺能被审计的前提。
+ *   1) **凭据读取点收敛**：`config.model.openai.apiKey` 与 `config.model.claudeAgent.authToken`
+ *      只在 `runtime/model-backends.ts` 的工厂里被读取（其余 backend 不需要密钥：`stub` 没有模型，
+ *      `codex-app-server` / `claude-agent-sdk` 由子进程自己持有凭证）。**要接新 backend 就去
+ *      那个注册表注册一个 kind**，不要在本文件加 `if (kind === …)`，也不要在别处读 `config.model`
+ *      —— 凭据读取点收敛成一处，是"Factory 不在项目里存 API key"这条设计承诺能被审计的前提。
  *   2) 几处 `throw` 都是**启动期失败**：缺少 backend 必需字段时宁可起不来，也不要等到第一次模型调用
  *      才报错——那时错误已经离配置很远了。`probeClaudeEndpoint` 是同一原则的延伸：显式配了
  *      baseUrl（例如 cc-switch 的本地代理）就先探一次，省得第一次探索跑到一半才发现代理没起。
@@ -27,7 +26,6 @@
  *      取消会留下一个还在跑的 Provider turn，而每个后端都会忽略不属于自己的 conversationId）。
  */
 
-import { ClaudeAgentSdkGateway, CodexAppServerGateway, OpenAIModelGateway, StubModelGateway } from "@pipeline-factory/core";
 import type {
   ModelCapabilities,
   ModelEvent,
@@ -39,6 +37,7 @@ import type {
   ProviderEndpoint,
 } from "@pipeline-factory/core";
 import { resolveModelBackends, roleBackendId, type FactoryConfig, type ResolvedModelBackend } from "../config.js";
+import { createDefaultModelBackendRegistry, type ModelBackendRegistry, type ModelBackendRoleConfig } from "./model-backends.js";
 
 const CLAUDE_ENDPOINT_PROBE_TIMEOUT_MS = 2_000;
 
@@ -200,75 +199,22 @@ function unsupportedCapabilities(): ModelCapabilities {
  * `describeEndpoint()` 在两个角色同后端时给出的是同一个指纹。之所以不特判"单后端就直接返回"，
  * 是因为 Project 可以在运行期把某个角色覆盖到另一个后端 —— 特判会让那种覆盖被静默忽略。
  */
-export function createModelGateway(config: FactoryConfig): ModelGateway {
+export function createModelGateway(
+  config: FactoryConfig,
+  registry: ModelBackendRegistry = createDefaultModelBackendRegistry(),
+): ModelGateway {
   const backends = resolveModelBackends(config.model);
-  const roles = config.model.roles as Record<ModelRole, ModelRoleConfigLike>;
+  const roles = config.model.roles as Record<ModelRole, ModelBackendRoleConfig>;
   const roleBackend = { explorer: roleBackendId(config.model, "explorer"), executor: roleBackendId(config.model, "executor") };
   const gateway = new RoutingModelGateway({
     backends,
     roleBackend,
     defaultBackendId: config.model.backend,
-    create: (_id, backend) => createBackendGateway(backend, roles, config.model.loop.maxSteps),
+    create: (_id, backend) => registry.create(backend, { roles, maxSteps: config.model.loop.maxSteps }),
   });
   // 角色默认后端在启动期构造：配置写错（例如 codex 少了 codexAppServer 块）要在这里就失败。
   gateway.warmUp([roleBackend.explorer, roleBackend.executor]);
   return gateway;
-}
-
-/** `config.model.roles` 经 zod 校验后的形状；路由层不二次校验，只做类型收敛。 */
-type ModelRoleConfigLike = {
-  model: string;
-  backend?: string | undefined;
-  mode?: "plan" | "default" | undefined;
-  temperature?: number | undefined;
-  maxOutputTokens?: number | undefined;
-  reasoningEffort?: string | undefined;
-  developerInstructions?: string | undefined;
-  loopMode?: "provider-controlled" | "factory-controlled" | undefined;
-};
-
-/** 一个后端定义 → 具体实现。缺必需字段在这里抛，错误信息指向配置项本身。 */
-function createBackendGateway(
-  backend: ResolvedModelBackend,
-  roles: Record<ModelRole, ModelRoleConfigLike>,
-  maxSteps: number,
-): ModelGateway {
-  const kind = backend.kind;
-  if (kind === "stub") return new StubModelGateway(roles as never);
-  if (kind === "claude-agent-sdk") {
-    const claude = backend.claudeAgent;
-    return new ClaudeAgentSdkGateway({
-      roles: roles as never,
-      ...(claude?.baseUrl ? { baseUrl: claude.baseUrl } : {}),
-      ...(claude?.authToken ? { authToken: claude.authToken } : {}),
-      ...(claude?.settingsPath ? { settingsPath: claude.settingsPath } : {}),
-      ...(claude?.env && Object.keys(claude.env).length > 0 ? { env: claude.env } : {}),
-      // 单次 query 的回合上限与 loop 的步数上限同源：Provider 内部回合不该比 loop 允许的步骤还多。
-      maxTurns: claude?.maxTurns ?? maxSteps,
-    });
-  }
-  if (kind === "openai-responses") {
-    const openai = backend.openai;
-    if (!openai?.apiKey)
-      throw new Error(
-        `Factory configuration requires an apiKey for the openai-responses backend${backend.source === "registry" ? ` "${backend.id}"` : ""}`,
-      );
-    return new OpenAIModelGateway({ apiKey: openai.apiKey, roles: roles as never, ...(openai.baseUrl ? { baseUrl: openai.baseUrl } : {}) });
-  }
-  const appServer = backend.codexAppServer;
-  if (!appServer)
-    throw new Error(`Factory configuration requires model.codexAppServer (or a model.backends entry) for the codex-app-server backend`);
-  return new CodexAppServerGateway({
-    roles: roles as never,
-    command: appServer.command,
-    args: appServer.args,
-    cwd: appServer.cwd,
-    startupTimeoutMs: appServer.startupTimeoutMs,
-    requestTimeoutMs: appServer.requestTimeoutMs,
-    maxRestarts: appServer.maxRestarts,
-    clientName: appServer.clientName,
-    clientVersion: appServer.clientVersion,
-  });
 }
 
 /**
