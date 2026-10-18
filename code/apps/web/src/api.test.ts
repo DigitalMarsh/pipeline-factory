@@ -210,3 +210,56 @@ describe("Worktree 管理接口", () => {
     fetchSpy.mockRestore();
   });
 });
+
+/** 复盘后补的接口：范围开关、提交历史与 diff、服务启停。 */
+describe("Worktree 扩展接口", () => {
+  it("includeFiltered 拼成查询参数", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => new Response(JSON.stringify({ items: [] }), { status: 200 }));
+
+    await api.worktrees("project-1");
+    expect(fetchSpy).toHaveBeenLastCalledWith("/api/v4/projects/project-1/worktrees", { headers: {} });
+    await api.worktrees("project-1", { includeFiltered: true });
+    expect(fetchSpy).toHaveBeenLastCalledWith("/api/v4/projects/project-1/worktrees?includeFiltered=1", { headers: {} });
+
+    fetchSpy.mockRestore();
+  });
+
+  it("提交历史与 diff 的路径编码正确", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => new Response(JSON.stringify({ items: [], diff: "" }), { status: 200 }));
+
+    await api.worktreeLog("project-1", "feature/a", 5);
+    expect(fetchSpy).toHaveBeenLastCalledWith("/api/v4/projects/project-1/worktrees/log?ref=feature%2Fa&limit=5", {
+      headers: {},
+    });
+    await api.worktreeCommitDiff("project-1", "abc123", "src/a b.ts", "src/old.ts");
+    expect(fetchSpy).toHaveBeenLastCalledWith(
+      "/api/v4/projects/project-1/worktrees/commits/abc123/diff?path=src%2Fa%20b.ts&previousPath=src%2Fold.ts",
+      { headers: {} },
+    );
+
+    fetchSpy.mockRestore();
+  });
+
+  it("服务启停带 itemId 与 serviceId", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => new Response(JSON.stringify({ state: { status: "running" } }), { status: 200 }));
+
+    await api.startWorktreeService("project-1", "branch:feature/a", "api");
+    expect(fetchSpy).toHaveBeenLastCalledWith(
+      "/api/v4/projects/project-1/worktrees/services/start",
+      expect.objectContaining({ body: JSON.stringify({ itemId: "branch:feature/a", serviceId: "api" }) }),
+    );
+    await api.worktreeServiceLogs("project-1", "branch:feature/a", "api");
+    expect(fetchSpy).toHaveBeenLastCalledWith(
+      "/api/v4/projects/project-1/worktrees/services/logs?itemId=branch%3Afeature%2Fa&serviceId=api",
+      { headers: {} },
+    );
+
+    fetchSpy.mockRestore();
+  });
+});

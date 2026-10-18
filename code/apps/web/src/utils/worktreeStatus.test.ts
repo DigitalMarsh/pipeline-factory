@@ -9,8 +9,13 @@ import { describe, expect, it } from "vitest";
 import type { WorktreeItem } from "../types";
 import {
   cleanupDisabledReason,
+  formatBranchPatterns,
+  formatWorktreeTime,
   matchesWorktreeFilters,
   mergeDisabledReason,
+  parseBranchPatterns,
+  sortWorktreeItems,
+  toggleIgnoredBranch,
   worktreeHasConflict,
   worktreeKindLabel,
   worktreeNeedsAttention,
@@ -45,6 +50,10 @@ function item(overrides: Partial<WorktreeItem> = {}): WorktreeItem {
     cleanupable: false,
     cleanupBlockers: ["该分支当前未合并到主分支，不能清理。"],
     isLiveRunWorkspace: false,
+    everMerged: false,
+    isIgnored: false,
+    matchesScope: true,
+    containedInBranch: true,
     factory: null,
     ...overrides,
   };
@@ -130,5 +139,58 @@ describe("不能做时的原因", () => {
   it("detached 没有分支名，合并原因直接说明", () => {
     const detached = item({ kind: "detached_worktree", branch: null, isDetached: true, conflictFiles: [] });
     expect(mergeDisabledReason(detached)).toContain("detached");
+  });
+});
+
+describe("排序", () => {
+  const base = item({ itemId: "branch:main", branch: "main", displayName: "main", isBaseBranch: true, lastCommitAt: 100 });
+  const older = item({ itemId: "branch:a", displayName: "a", lastCommitAt: 200 });
+  const newer = item({ itemId: "branch:b", displayName: "b", lastCommitAt: 300 });
+  const noTime = item({ itemId: "detached:/x", displayName: "detached", isDetached: true, lastCommitAt: null });
+
+  it("主分支永远置顶，时间倒序把最新放前面", () => {
+    const sorted = sortWorktreeItems([older, base, newer], { key: "time", direction: "desc" });
+    expect(sorted.map((entry) => entry.displayName)).toEqual(["main", "b", "a"]);
+  });
+
+  it("正序、按名称、按 ahead", () => {
+    expect(sortWorktreeItems([older, newer], { key: "time", direction: "asc" }).map((entry) => entry.displayName)).toEqual(["a", "b"]);
+    expect(sortWorktreeItems([newer, older], { key: "name", direction: "asc" }).map((entry) => entry.displayName)).toEqual(["a", "b"]);
+    expect(
+      sortWorktreeItems([item({ displayName: "x", aheadCount: 5 }), item({ displayName: "y", aheadCount: 1 })], {
+        key: "ahead",
+        direction: "desc",
+      }).map((entry) => entry.displayName),
+    ).toEqual(["x", "y"]);
+  });
+
+  it("没有提交时间的项排在最后", () => {
+    const sorted = sortWorktreeItems([noTime, older], { key: "time", direction: "desc" });
+    expect(sorted.map((entry) => entry.displayName)).toEqual(["a", "detached"]);
+  });
+});
+
+describe("时间与范围表单", () => {
+  it("一周内用相对时间、更早用日期", () => {
+    const now = Date.UTC(2026, 9, 18, 12, 0, 0);
+    expect(formatWorktreeTime(now / 1000 - 30, now)).toBe("刚刚");
+    expect(formatWorktreeTime(now / 1000 - 120, now)).toBe("2 分钟前");
+    expect(formatWorktreeTime(now / 1000 - 7200, now)).toBe("2 小时前");
+    expect(formatWorktreeTime(now / 1000 - 2 * 86_400, now)).toBe("2 天前");
+    expect(formatWorktreeTime(Date.UTC(2026, 0, 5) / 1000, now)).toBe("2026-01-05");
+    expect(formatWorktreeTime(null, now)).toBe("—");
+  });
+
+  it("模式列表接受换行与逗号，去重去空行", () => {
+    expect(parseBranchPatterns("factory/*\nfeature/*, factory/*\n\n")).toEqual(["factory/*", "feature/*"]);
+    expect(formatBranchPatterns(["a", "b"])).toBe("a\nb");
+  });
+
+  it("忽略开关不改入参并按名称排序", () => {
+    expect(toggleIgnoredBranch(["b"], "a", true)).toEqual(["a", "b"]);
+    expect(toggleIgnoredBranch(["a", "b"], "a", false)).toEqual(["b"]);
+    const original = ["a"];
+    toggleIgnoredBranch(original, "b", true);
+    expect(original).toEqual(["a"]);
   });
 });

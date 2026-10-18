@@ -1,5 +1,55 @@
 # Changelog
 
+## 2026-10-18 — Worktree 管理补齐十项能力（范围过滤 / 三种清理 / 提交历史 / 服务启停 / 自动刷新…）
+
+按 10-18 复盘里"仍然缺的"清单逐条补齐，顺序即清单顺序:
+
+1. **项目范围**：`settings.worktree` 新增 `filterMode`（`all` / `patterns`）、`branchPatterns`、
+   `ignoredBranches`、`includeDetachedWorktrees`。服务端先按范围过滤再跑 git；主分支永远显示；
+   `?includeFiltered=1` 可看回被过滤的项，**写路径一律按全量清单解析目标**。界面上有「范围」面板与
+   每条分支的「忽略 / 取消忽略」。
+2. **删除已合并的本地分支**：清理从"只认 branch worktree"扩到三种对象（worktree / 无 worktree 的
+   本地分支 / detached worktree，后者要求 HEAD 已被某个本地分支包含）。确认框按 kind 给不同文案
+   ——三种清理做的事不一样，用一套"删除 worktree 与分支"会让只删分支显得更危险、让 detached 显得会丢提交。
+3. **时间列与排序**：`最近提交` 一列（一周内相对时间，更早给日期）+ 时间/名称/Ahead × 正序/倒序；
+   主分支恒置顶。
+4. **提交历史**：`/worktrees/log`、`/worktrees/commits/:commit`、`.../diff` 三条只读接口与
+   「提交历史」对话框（提交 → 文件 → diff）。只读：不 checkout、不 reset。
+5. **服务启停**：读取 worktree 内的 `.pipeline-factory/services.json`（原生 `argv`，不经 shell），
+   兼容 `.worktree-manage/services.json`（`start_command` 走 `sh -lc`）。进程管理在
+   `apps/api/src/runtime/worktree-services.ts`：`workdir` 必须仍在 worktree 内；只停本进程启动的子进程
+   （SIGTERM 进程组 → 3 秒 → SIGKILL），日志按行环形缓冲；API 关闭时统一回收。
+6. **曾经合并过**：`everMerged` / `mergeRelation: was_merged_before` 来自 `worktree.merge.*` 事件。
+   **边界**：只覆盖从这个面板执行过的合并，Git 侧手合并的历史不在其中。
+7. **进行中的 Git 操作**：不只 `merge`——rebase / cherry-pick / revert / bisect 都会被识别并阻断，
+   横幅按类型给指引（只有 merge 提供继续/中止）。
+8. **自动刷新**：`GET /worktrees/events`（SSE）只推 `type + sequence`，客户端防抖 400ms 重拉清单。
+9. **性能**：范围过滤前移；ahead/behind 有界并发（8）；脏/冲突判定合并成一次 `status --porcelain -z`。
+10. 与 1/5 配套的**工作区判据修正**（见下）。
+
+### 验证中发现并修掉的真问题
+
+- **工具元数据目录让 worktree 变脏**：`.pipeline-factory/services.json` 是未跟踪文件，配上服务之后
+  "1 项可清理"直接变 0，且 `git worktree remove` 也会拒绝（`contains modified or untracked files`）。
+  现在这两个目录从脏判据里排除，删除改用 `--force`——干净性由我们自己的判据负责，
+  `--force` 只掩盖那一类元数据文件（与 Factory 自己的 `releaseWorkspace` 同一条做法）。
+- **`includeFiltered` 的按钮会消失**：过滤数归零后只按 `filteredOutCount > 0` 渲染，勾上"显示全部"
+  就再也切不回范围视图。条件补上 `includeFiltered`。
+- **优雅关闭被 SSE 长连接挂住**：`app.close()` 默认等连接自己结束，`node --watch` 每次重启都卡在
+  "Waiting for graceful termination..."、API 再也不起来。改为 `Fastify({ forceCloseConnections: true })`
+  + 3 秒兜底退出。
+- 组件 prop 叫 `ref` 会被 Vue 当成模板引用（`:ref="x"` 轮不到 props），改名 `target`。
+
+### Verification
+
+- `pnpm verify` 全绿：domain **528** / api **152** / web **697** 用例。新增覆盖：范围过滤（忽略/模式/
+  detached）、写路径按全量解析、曾经合并、本地分支与 detached 清理、元数据目录不算脏、rebase 阻断、
+  提交历史与 diff、服务配置解析与真实子进程启停、面板排序/范围保存/忽略/事件刷新/日志对话框。
+- 浏览器端到端（临时仓库 + 临时 DB + 独立端口，未触碰用户数据）：范围模式切换与持久化 →
+  「显示被过滤的项」→ 忽略/取消忽略 → 服务启动/读日志/停止（含 `ticker-ready` 真实输出）→
+  提交历史与 diff → 合并 → worktree 清理 → **已合并本地分支清理**，结果均在 `git worktree list` /
+  `git branch` / `ps` 里核对（无残留目录、分支与进程）。
+
 ## 2026-10-18 — Worktree 管理复盘：三处真缺口与一处可见性问题
 
 上线后按"逐条对照 worktree-manage + 怀疑最坏情况"复盘了一遍，修掉四处：

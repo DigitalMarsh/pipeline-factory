@@ -10,7 +10,7 @@
  */
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryPipelineStore, ProjectService, type Project } from "@pipeline-factory/domain";
@@ -199,3 +199,224 @@ describe("Worktree 路由", () => {
     expect(response.json()).toMatchObject({ code: "PROJECT_ARCHIVED" });
   });
 });
+
+/**
+ * 复盘后补齐的能力：项目范围过滤、提交历史与 diff、删除已合并本地分支、detached 清理、
+ * 服务启停路由、进行中的 rebase。都走真实 HTTP（`app.inject`）与真实仓库。
+ */
+describe("Worktree 路由：范围过滤与提交历史", () => {
+  it("includeFiltered 只影响读：被忽略的分支默认不出现", async () => {
+    const { app, project } = setup();
+    // 通过 API 改项目范围（与界面走同一条路）。
+    const patched = await app.inject({
+      method: "PATCH",
+      url: `/api/v4/projects/${project.id}`,
+      payload: { settings: { worktree: { ignoredBranches: ["feature/ahead"] } } },
+    });
+    expect(patched.statusCode).toBe(200);
+
+    const hidden = await app.inject({ method: "GET", url: `/api/v4/projects/${project.id}/worktrees` });
+    expect(hidden.json()).toMatchObject({ filteredOutCount: 1 });
+    expect((hidden.json() as { items: Array<{ branch: string | null }> }).items.some((item) => item.branch === "feature/ahead")).toBe(
+      false,
+    );
+
+    const all = await app.inject({ method: "GET", url: `/api/v4/projects/${project.id}/worktrees?includeFiltered=1` });
+    const allItems = (all.json() as { items: Array<{ branch: string | null; isIgnored: boolean }> }).items;
+    expect(allItems.find((item) => item.branch === "feature/ahead")?.isIgnored).toBe(true);
+  });
+
+  it("提交历史、提交文件与文件 diff", async () => {
+    const { app, project } = setup();
+    const log = await app.inject({
+      method: "GET",
+      url: `/api/v4/projects/${project.id}/worktrees/log?ref=${encodeURIComponent("feature/ahead")}&limit=5`,
+    });
+    expect(log.statusCode).toBe(200);
+    const commits = (log.json() as { items: Array<{ hash: string; subject: string }> }).items;
+    expect(commits[0]?.subject).toContain("feature change");
+
+    const files = await app.inject({
+      method: "GET",
+      url: `/api/v4/projects/${project.id}/worktrees/commits/${commits[0]?.hash}`,
+    });
+    expect(files.statusCode).toBe(200);
+    expect((files.json() as { items: Array<{ path: string }> }).items.map((file) => file.path)).toContain("ahead.txt");
+
+    const diff = await app.inject({
+      method: "GET",
+      url: `/api/v4/projects/${project.id}/worktrees/commits/${commits[0]?.hash}/diff?path=ahead.txt`,
+    });
+    expect(diff.statusCode).toBe(200);
+    expect((diff.json() as { diff: string }).diff).toContain("+ahead");
+  });
+
+  it("不存在的 ref / 提交返回 404", async () => {
+    const { app, project } = setup();
+    const log = await app.inject({ method: "GET", url: `/api/v4/projects/${project.id}/worktrees/log?ref=nope` });
+    expect(log.statusCode).toBe(404);
+    expect(log.json()).toMatchObject({ code: "WORKTREE_NOT_FOUND" });
+
+    const diff = await app.inject({
+      method: "GET",
+      url: `/api/v4/projects/${project.id}/worktrees/commits/deadbeef/diff?path=a.txt`,
+    });
+    expect(diff.statusCode).toBe(404);
+  });
+});
+
+describe("Worktree 路由：新的清理对象", () => {
+  it("已合并的本地分支可以删除；未合并的不能", async () => {
+    const { app, project, repoRoot } = setup();
+    git(repoRoot, ["merge", "--no-ff", "--no-edit", "feature/ahead"]);
+
+    const cleanup = await app.inject({
+      method: "POST",
+      url: `/api/v4/projects/${project.id}/worktrees/cleanup`,
+      payload: { itemId: "branch:feature/ahead", expectedBranchHead: null },
+    });
+    // `expectedBranchHead` 必须与分支头一致，否则是 409 状态已变（乐观并发）。
+    expect(cleanup.statusCode).toBe(409);
+    expect(cleanup.json()).toMatchObject({ code: "WORKTREE_STATE_CHANGED" });
+
+    const list = await app.inject({ method: "GET", url: `/api/v4/projects/${project.id}/worktrees` });
+    const item = (list.json() as { items: Array<{ branch: string | null; lastCommit: string; cleanupable: boolean }> }).items.find(
+      (entry) => entry.branch === "feature/ahead",
+    );
+    expect(item?.cleanupable).toBe(true);
+
+    const removed = await app.inject({
+      method: "POST",
+      url: `/api/v4/projects/${project.id}/worktrees/cleanup`,
+      payload: { itemId: "branch:feature/ahead", expectedBranchHead: item?.lastCommit ?? null },
+    });
+    expect(removed.statusCode).toBe(200);
+    expect(removed.json()).toMatchObject({ result: { branchDeleted: true, worktreeRemoved: false } });
+  });
+
+  it("detached worktree 在提交被分支包含时可以删除目录", async () => {
+    const { app, project, repoRoot } = setup();
+    const worktreeRoot = mkdtempSync(join(tmpdir(), "pipeline-worktree-api-detached-"));
+    temporaryPaths.push(worktreeRoot);
+    git(repoRoot, ["worktree", "add", "--detach", worktreeRoot, "main"]);
+
+    const list = await app.inject({ method: "GET", url: `/api/v4/projects/${project.id}/worktrees` });
+    const item = (
+      list.json() as { items: Array<{ itemId: string; isDetached: boolean; lastCommit: string; cleanupable: boolean }> }
+    ).items.find((entry) => entry.isDetached);
+    expect(item?.cleanupable).toBe(true);
+
+    const removed = await app.inject({
+      method: "POST",
+      url: `/api/v4/projects/${project.id}/worktrees/cleanup`,
+      payload: { itemId: item?.itemId, expectedBranchHead: item?.lastCommit },
+    });
+    expect(removed.statusCode).toBe(200);
+    expect(removed.json()).toMatchObject({ result: { worktreeRemoved: true, branchDeleted: false } });
+  });
+});
+
+describe("Worktree 路由：服务启停", () => {
+  function withServiceConfig(repoRoot: string, worktreePath: string): void {
+    mkdirSync(join(worktreePath, ".pipeline-factory"), { recursive: true });
+    writeFileSync(
+      join(worktreePath, ".pipeline-factory", "services.json"),
+      JSON.stringify({
+        services: [
+          {
+            serviceId: "ticker",
+            name: "Ticker",
+            argv: [process.execPath, "-e", "console.log('ticker-ready'); setInterval(() => {}, 1000);"],
+          },
+        ],
+      }),
+    );
+    void repoRoot;
+  }
+
+  it("没有 worktree 的本地分支返回 409；有配置的 worktree 能启停并读日志", async () => {
+    const { app, project, repoRoot } = setup();
+    const worktreePath = mkdtempSync(join(tmpdir(), "pipeline-worktree-api-svc-"));
+    temporaryPaths.push(worktreePath);
+    git(repoRoot, ["worktree", "add", worktreePath, "feature/ahead"]);
+    withServiceConfig(repoRoot, worktreePath);
+    const itemId = `branch:feature/ahead`;
+
+    const services = await app.inject({
+      method: "GET",
+      url: `/api/v4/projects/${project.id}/worktrees/services?itemId=${encodeURIComponent(itemId)}`,
+    });
+    expect(services.statusCode).toBe(200);
+    expect((services.json() as { services: Array<{ serviceId: string }> }).services[0]?.serviceId).toBe("ticker");
+
+    const started = await app.inject({
+      method: "POST",
+      url: `/api/v4/projects/${project.id}/worktrees/services/start`,
+      payload: { itemId, serviceId: "ticker" },
+    });
+    expect(started.statusCode).toBe(200);
+    expect(started.json()).toMatchObject({ state: { status: "running" } });
+
+    await waitFor(async () => {
+      const logs = await app.inject({
+        method: "GET",
+        url: `/api/v4/projects/${project.id}/worktrees/services/logs?itemId=${encodeURIComponent(itemId)}&serviceId=ticker`,
+      });
+      return (logs.json() as { items: Array<{ text: string }> }).items.some((entry) => entry.text.trim() === "ticker-ready");
+    });
+
+    const stopped = await app.inject({
+      method: "POST",
+      url: `/api/v4/projects/${project.id}/worktrees/services/stop`,
+      payload: { itemId, serviceId: "ticker" },
+    });
+    expect(stopped.statusCode).toBe(200);
+    expect(stopped.json()).toMatchObject({ state: { status: "stopped" } });
+  });
+
+  it("没有 worktree 的条目返回 409 WORKTREE_SERVICES_UNSUPPORTED", async () => {
+    const { app, project } = setup();
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/v4/projects/${project.id}/worktrees/services?itemId=branch:feature/ahead`,
+    });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ code: "WORKTREE_SERVICES_UNSUPPORTED" });
+  });
+});
+
+describe("Worktree 路由：进行中的 rebase", () => {
+  it("rebase 停在冲突中间时，预览给出 409 与原因", async () => {
+    const { app, project, repoRoot } = setup();
+    writeFileSync(join(repoRoot, "README.md"), "main side\n");
+    git(repoRoot, ["add", "-A"]);
+    commit(repoRoot, "main changes README");
+    git(repoRoot, ["switch", "feature/ahead"]);
+    // feature/ahead 上改同一行，rebase 到 main 会冲突并停在 rebase-merge。
+    writeFileSync(join(repoRoot, "README.md"), "feature side\n");
+    git(repoRoot, ["add", "-A"]);
+    commit(repoRoot, "feature changes README");
+    expect(() => git(repoRoot, ["rebase", "main"])).toThrow();
+
+    const list = await app.inject({ method: "GET", url: `/api/v4/projects/${project.id}/worktrees` });
+    expect(list.json()).toMatchObject({ mergeInProgress: { kind: "rebase" } });
+
+    const preview = await app.inject({
+      method: "POST",
+      url: `/api/v4/projects/${project.id}/worktrees/preview`,
+      payload: { itemId: "branch:feature/ahead" },
+    });
+    // 预览本身照常返回（预览不改仓库），但结论是阻断。
+    expect(preview.statusCode).toBe(200);
+    expect(preview.json()).toMatchObject({ preview: { canConfirm: false } });
+    expect((preview.json() as { preview: { blockers: string[] } }).preview.blockers.join("\n")).toContain("rebase");
+  });
+});
+
+async function waitFor(check: () => Promise<boolean> | boolean, timeoutMs = 8_000): Promise<void> {
+  const started = Date.now();
+  while (!(await check())) {
+    if (Date.now() - started > timeoutMs) throw new Error("等待超时");
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}

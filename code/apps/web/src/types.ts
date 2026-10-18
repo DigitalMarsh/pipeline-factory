@@ -120,6 +120,13 @@ export type ProjectSettings = {
     };
   };
   toolPolicy: { allowedMcpTools: string[]; allowedPluginTools: string[]; computerUseEnabled: boolean };
+  /** Worktree 清单的默认范围（可选：老项目没有这一格，读路径按缺省处理）。 */
+  worktree?: {
+    filterMode: "all" | "patterns";
+    branchPatterns: string[];
+    ignoredBranches: string[];
+    includeDetachedWorktrees: boolean;
+  };
 };
 
 /** Project Catalog 和设置页使用的后端 Project 投影。 */
@@ -724,7 +731,7 @@ export type WorktreeItemStatus =
   | "detached_dirty_with_commits"
   | "detached_dirty"
   | "detached_clean";
-export type WorktreeMergeRelation = "current_merged" | "current_unmerged" | "detached";
+export type WorktreeMergeRelation = "current_merged" | "current_unmerged" | "was_merged_before" | "detached";
 
 export type WorktreeFactoryLink = {
   runId: string;
@@ -770,10 +777,21 @@ export type WorktreeItem = {
   cleanupable: boolean;
   cleanupBlockers: string[];
   isLiveRunWorkspace: boolean;
+  everMerged: boolean;
+  isIgnored: boolean;
+  matchesScope: boolean;
+  containedInBranch: boolean;
   factory: WorktreeFactoryLink | null;
 };
 
-export type WorktreeMergeInProgress = { mergeHead: string; currentBranch: string | null; conflictFiles: string[] };
+export type WorktreeInProgressOperation = "merge" | "rebase" | "cherry-pick" | "revert" | "bisect";
+
+export type WorktreeMergeInProgress = {
+  kind: WorktreeInProgressOperation;
+  mergeHead: string | null;
+  currentBranch: string | null;
+  conflictFiles: string[];
+};
 
 export type WorktreeInventory = {
   projectId: string;
@@ -783,9 +801,27 @@ export type WorktreeInventory = {
   currentBranch: string | null;
   mergeInProgress: WorktreeMergeInProgress | null;
   activeRunIds: string[];
+  filter: ProjectWorktreeFilter;
+  filteredOutCount: number;
   items: WorktreeItem[];
   truncated: boolean;
   warnings: string[];
+};
+
+export type ProjectWorktreeFilter = {
+  filterMode: "all" | "patterns";
+  branchPatterns: string[];
+  ignoredBranches: string[];
+  includeDetachedWorktrees: boolean;
+};
+
+export type WorktreeLogCommit = {
+  hash: string;
+  shortHash: string;
+  subject: string;
+  author: string;
+  authoredAt: string;
+  relativeTime: string;
 };
 
 export type WorktreePreviewCommit = { hash: string; subject: string; author: string; relativeTime: string };
@@ -862,4 +898,39 @@ export type WorktreeCleanupResult = {
   runWorkspaceCleared: boolean;
   /** 回收走的是 Run 的 `releaseWorkspace` 时，cleanup 钩子是否需要关注。 */
   cleanupHookNeedsAttention: boolean;
+};
+
+// ─────────────── Worktree 内的服务启停（进程管理在 API 侧，这里是契约） ───────────────
+export type WorktreeServiceConfig = {
+  serviceId: string;
+  name: string;
+  role: string;
+  workdir: string;
+  argv: string[] | null;
+  shellCommand: string | null;
+  healthUrl: string | null;
+  enabled: boolean;
+  source: "pipeline-factory" | "worktree-manage";
+};
+
+export type WorktreeServiceStatus = "stopped" | "running" | "failed";
+
+export type WorktreeServiceState = {
+  serviceId: string;
+  status: WorktreeServiceStatus;
+  pid: number | null;
+  startedAt: string | null;
+  exitCode: number | null;
+  error: string | null;
+};
+
+export type WorktreeServiceLogEntry = { sequence: number; stream: "stdout" | "stderr"; text: string };
+
+export type WorktreeServices = {
+  itemId: string;
+  worktreePath: string;
+  configPath: string | null;
+  configError: string | null;
+  services: WorktreeServiceConfig[];
+  states: WorktreeServiceState[];
 };

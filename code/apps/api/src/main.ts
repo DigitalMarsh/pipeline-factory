@@ -31,6 +31,22 @@ app
     process.exitCode = 1;
   });
 
+/**
+ * 优雅关闭：SIGTERM/SIGINT 时先 `app.close()`——组合根的 onClose 会在那里停掉本进程启动的
+ * Worktree 服务并释放 store。没有这段，`node --watch` 每次重启都会留下一批孤儿服务进程。
+ */
+let shuttingDown = false;
+for (const signal of ["SIGTERM", "SIGINT"] as const) {
+  process.once(signal, () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    // 兜底：`app.close()` 万一被某个连接拖住，也不能让进程永挂（`node --watch` 会一直等它退出）。
+    const forceExit = setTimeout(() => process.exit(0), 3_000);
+    forceExit.unref();
+    void app.close().finally(() => process.exit(0));
+  });
+}
+
 function readConfigPath(args: string[]): string | undefined {
   const index = args.indexOf("--config");
   if (index < 0) return undefined;

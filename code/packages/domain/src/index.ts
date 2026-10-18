@@ -344,7 +344,13 @@ export { localGitMergeInspector } from "./git/merge-inspector.js";
 export type { GitMergeInspector } from "./git/merge-inspector.js";
 
 // ─────────────────────────── project/：项目聚合与配置快照 ───────────────────────────
-export { EXECUTION_SLOT_RUN_STATUSES, knownModelFamily, ProjectService } from "./project/project.js";
+export {
+  DEFAULT_WORKTREE_FILTER,
+  EXECUTION_SLOT_RUN_STATUSES,
+  knownModelFamily,
+  ProjectService,
+  validateWorktreeFilter,
+} from "./project/project.js";
 export {
   VERIFICATION_SCRIPT_PRESETS,
   VerificationScriptExistsError,
@@ -363,13 +369,21 @@ export type {
   ProjectSettingsInput,
   ProjectStatus,
   ProjectSummary,
+  ProjectWorktreeFilter,
   UpdateProjectInput,
 } from "./project/project.js";
 
 // ─────────────────────────── worktree/：项目视角的 Worktree 盘点与合并 ───────────────────────────
 // 与 git/worktree.ts 的 WorkspaceAdapter 不是一回事：那个为一条 Run 建/收 worktree，
 // 这里盘点仓库里已有的全部分支与 worktree，并执行人按下的那一次真实合并。
-export { WorktreeError, WorktreeService, classifyDetached, classifyNamedBranch } from "./worktree/service.js";
+export {
+  WorktreeError,
+  WorktreeService,
+  classifyDetached,
+  classifyNamedBranch,
+  matchesBranchPattern,
+  matchesBranchScope,
+} from "./worktree/service.js";
 export type { WorktreeCleanupInput, WorktreeErrorCode, WorktreeMergeInput, WorktreeServiceOptions } from "./worktree/service.js";
 export { assertSafeRef, createLocalWorktreeGit } from "./worktree/local-git.js";
 export type {
@@ -392,11 +406,18 @@ export type {
   WorktreeInventory,
   WorktreeItem,
   WorktreeItemKind,
+  WorktreeInProgressOperation,
   WorktreeItemStatus,
+  WorktreeLogCommit,
   WorktreeMergeConclusion,
   WorktreeMergeInProgress,
   WorktreeMergePreview,
   WorktreeMergeRelation,
   WorktreeMergeResult,
   WorktreePreviewCommit,
+  WorktreeServiceConfig,
+  WorktreeServiceLogEntry,
+  WorktreeServiceState,
+  WorktreeServiceStatus,
+  WorktreeServices,
 } from "./worktree/types.js";

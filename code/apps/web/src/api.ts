@@ -27,9 +27,14 @@ import type {
   RunGuidance,
   VerificationRun,
   WorktreeCleanupResult,
+  WorktreeFileChange,
   WorktreeInventory,
+  WorktreeLogCommit,
   WorktreeMergePreview,
   WorktreeMergeResult,
+  WorktreeServiceLogEntry,
+  WorktreeServiceState,
+  WorktreeServices,
 } from "./types";
 
 export class ApiRequestError extends Error {
@@ -315,7 +320,43 @@ export const api = {
    * （`merge-reconciliation` 只观察、不回填）。`expected*` 是预览给出的乐观并发凭据，
    * 合并与清理都必须原样带回；服务端发现状态已变会返回 409 `WORKTREE_STATE_CHANGED`。
    */
-  worktrees: (projectId: string) => request<WorktreeInventory>(`/api/v4/projects/${encodeURIComponent(projectId)}/worktrees`),
+  worktrees: (projectId: string, options: { includeFiltered?: boolean } = {}) =>
+    request<WorktreeInventory>(
+      `/api/v4/projects/${encodeURIComponent(projectId)}/worktrees${options.includeFiltered ? "?includeFiltered=1" : ""}`,
+    ),
+  /** 事件流只推"该刷新了"（type + sequence），客户端据此防抖重拉清单。 */
+  worktreeEventsUrl: (projectId: string, afterSequence?: number) =>
+    `/api/v4/projects/${encodeURIComponent(projectId)}/worktrees/events${afterSequence === undefined ? "" : `?afterSequence=${afterSequence}`}`,
+  worktreeLog: (projectId: string, ref: string, limit = 50) =>
+    request<{ items: WorktreeLogCommit[] }>(
+      `/api/v4/projects/${encodeURIComponent(projectId)}/worktrees/log?ref=${encodeURIComponent(ref)}&limit=${limit}`,
+    ),
+  worktreeCommitFiles: (projectId: string, commit: string) =>
+    request<{ items: WorktreeFileChange[] }>(
+      `/api/v4/projects/${encodeURIComponent(projectId)}/worktrees/commits/${encodeURIComponent(commit)}`,
+    ),
+  worktreeCommitDiff: (projectId: string, commit: string, path: string, previousPath?: string | null) =>
+    request<{ diff: string }>(
+      `/api/v4/projects/${encodeURIComponent(projectId)}/worktrees/commits/${encodeURIComponent(commit)}/diff?path=${encodeURIComponent(path)}${
+        previousPath ? `&previousPath=${encodeURIComponent(previousPath)}` : ""
+      }`,
+    ),
+  worktreeServices: (projectId: string, itemId: string) =>
+    request<WorktreeServices>(`/api/v4/projects/${encodeURIComponent(projectId)}/worktrees/services?itemId=${encodeURIComponent(itemId)}`),
+  startWorktreeService: (projectId: string, itemId: string, serviceId: string) =>
+    request<{ state: WorktreeServiceState }>(`/api/v4/projects/${encodeURIComponent(projectId)}/worktrees/services/start`, {
+      method: "POST",
+      body: JSON.stringify({ itemId, serviceId }),
+    }),
+  stopWorktreeService: (projectId: string, itemId: string, serviceId: string) =>
+    request<{ state: WorktreeServiceState }>(`/api/v4/projects/${encodeURIComponent(projectId)}/worktrees/services/stop`, {
+      method: "POST",
+      body: JSON.stringify({ itemId, serviceId }),
+    }),
+  worktreeServiceLogs: (projectId: string, itemId: string, serviceId: string) =>
+    request<{ items: WorktreeServiceLogEntry[] }>(
+      `/api/v4/projects/${encodeURIComponent(projectId)}/worktrees/services/logs?itemId=${encodeURIComponent(itemId)}&serviceId=${encodeURIComponent(serviceId)}`,
+    ),
   previewWorktreeMerge: (projectId: string, itemId: string) =>
     request<{ preview: WorktreeMergePreview }>(`/api/v4/projects/${encodeURIComponent(projectId)}/worktrees/preview`, {
       method: "POST",

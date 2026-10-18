@@ -13,7 +13,7 @@
     4) 页面进入时不自动刷新合并预览，只拉清单；预览要跑 `merge-tree`，每次进页面都跑一遍是浪费。
 -->
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { CopyDocument, Refresh, Warning } from "@element-plus/icons-vue";
 import { api } from "../api";
@@ -28,14 +28,23 @@ import {
   worktreeMergeRelationTagType,
   worktreeRunStatusLabel,
   worktreeSourceLabel,
+  formatWorktreeTime,
+  formatBranchPatterns,
+  parseBranchPatterns,
+  sortWorktreeItems,
+  toggleIgnoredBranch,
   worktreeStatusLabel,
   worktreeStatusTagType,
   type WorktreeKindFilter,
+  type WorktreeSortDirection,
+  type WorktreeSortKey,
   type WorktreeStatusFilter,
 } from "../utils/worktreeStatus";
 import WorktreeMergePreviewDialog from "./WorktreeMergePreviewDialog.vue";
 import WorktreeMergeResultDialog from "./WorktreeMergeResultDialog.vue";
 import ConfirmDialog from "./ConfirmDialog.vue";
+import WorktreeLogDialog from "./WorktreeLogDialog.vue";
+import WorktreeServicesPanel from "./WorktreeServicesPanel.vue";
 
 const props = defineProps<{ projectId: string; project: Project | null }>();
 
@@ -61,7 +70,22 @@ const cleanupTarget = ref<WorktreeItem | null>(null);
 const cleanupBusy = ref(false);
 const cleanupError = ref("");
 
+/** 是否越过项目范围看全量（服务端 `includeFiltered`）。 */
+const includeFiltered = ref(false);
+const sortKey = ref<WorktreeSortKey>("time");
+const sortDirection = ref<WorktreeSortDirection>("desc");
+const scopeOpen = ref(false);
+const scopeMode = ref<"all" | "patterns">("all");
+const scopePatterns = ref("");
+const scopeDetached = ref(true);
+const scopeBusy = ref(false);
+const scopeError = ref("");
+const logOpen = ref(false);
+const logRef = ref("");
+
 let requestGeneration = 0;
+let eventSource: EventSource | null = null;
+let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 
 const statusFilters: Array<{ key: WorktreeStatusFilter; label: string }> = [
   { key: "all", label: "全部" },
@@ -77,11 +101,51 @@ const kindFilters: Array<{ key: WorktreeKindFilter; label: string }> = [
   { key: "detached", label: "Detached" },
 ];
 
+const sortOptions: Array<{ key: WorktreeSortKey; label: string }> = [
+  { key: "time", label: "时间" },
+  { key: "name", label: "名称" },
+  { key: "ahead", label: "Ahead" },
+];
+
 const items = computed(() => inventory.value?.items ?? []);
 const filteredItems = computed(() =>
-  items.value.filter((item) => matchesWorktreeFilters(item, { status: statusFilter.value, kind: kindFilter.value })),
+  sortWorktreeItems(
+    items.value.filter((item) => matchesWorktreeFilters(item, { status: statusFilter.value, kind: kindFilter.value })),
+    { key: sortKey.value, direction: sortDirection.value },
+  ),
 );
 const selectedItem = computed(() => items.value.find((item) => item.itemId === selectedItemId.value) ?? null);
+/**
+ * 清理确认框的文案必须按 kind 分：三种清理对象做的事不一样（删目录+分支 / 只删分支 / 只删目录），
+ * 一律写"删除 worktree 与分支"会让"只删一条已合并分支"看起来比实际危险，也会让 detached 那条
+ * 显得会丢提交。
+ */
+const cleanupMessage = computed(() => {
+  const item = cleanupTarget.value;
+  if (!item) return "";
+  if (item.kind === "local_branch") return `将删除本地分支 ${item.branch}（这条分支没有 worktree）。`;
+  if (item.kind === "detached_worktree") return `将删除 detached worktree 目录 ${item.effectivePath}（它的提交仍被本地分支包含）。`;
+  return `将删除 ${item.branch} 的 worktree 目录，并删除这条本地分支。`;
+});
+const cleanupHeading = computed(() => {
+  const item = cleanupTarget.value;
+  if (item?.kind === "local_branch") return "删除已合并的本地分支";
+  if (item?.kind === "detached_worktree") return "删除 detached worktree 目录";
+  return "删除 worktree 与分支";
+});
+const cleanupDetails = computed(() => {
+  const item = cleanupTarget.value;
+  if (item?.kind === "local_branch")
+    return ["只有已合并到主分支的分支会走到这一步", "分支用 git branch -d 删除（未合并时 git 会拒绝）", "没有 worktree 目录需要删除"];
+  if (item?.kind === "detached_worktree")
+    return ["这个 worktree 的 HEAD 已被某个本地分支包含，删除不会丢提交", "worktree 目录会被 git worktree remove 删除", "不删除任何分支"];
+  return [
+    "只有「已提交已合并」且工作区干净的分支会走到这一步",
+    "worktree 目录会被 git worktree remove 删除",
+    "分支用 git branch -d 删除（未合并时 git 会拒绝）",
+  ];
+});
+
 const mergeableCount = computed(() => items.value.filter((item) => item.mergeable).length);
 const cleanupableCount = computed(() => items.value.filter((item) => item.cleanupable).length);
 const mergeInProgress = computed(() => inventory.value?.mergeInProgress ?? null);
@@ -92,9 +156,15 @@ async function load() {
   loading.value = true;
   error.value = "";
   try {
-    const next = await api.worktrees(projectId);
+    const next = await api.worktrees(projectId, { includeFiltered: includeFiltered.value });
     if (generation !== requestGeneration || projectId !== props.projectId) return;
     inventory.value = next;
+    // 只在没有未保存改动时把服务端的范围回填到表单，避免轮询把用户正在编辑的值冲掉。
+    if (!scopeBusy.value) {
+      scopeMode.value = next.filter.filterMode;
+      scopePatterns.value = formatBranchPatterns(next.filter.branchPatterns);
+      scopeDetached.value = next.filter.includeDetachedWorktrees;
+    }
     if (selectedItemId.value && !next.items.some((item) => item.itemId === selectedItemId.value)) {
       selectedItemId.value = null;
     }
@@ -225,17 +295,112 @@ function factorySummary(item: WorktreeItem): string {
   return `${worktreeSourceLabel(item.factory)} · ${worktreeRunStatusLabel(item.factory.runStatus)}`;
 }
 
+/**
+ * 自动刷新：服务端事件流只推 "type + sequence"，这里防抖 400ms 后重拉清单。
+ * **不做本地增量更新**——合并/清理会同时改 ahead/behind、worktree 是否存在、Factory 联动，
+ * 本地拼出来的那一行很容易与下一次刷新不一致（同维护提示 3）。
+ */
+function scheduleRefresh() {
+  if (refreshTimer) return;
+  refreshTimer = setTimeout(() => {
+    refreshTimer = null;
+    void load();
+  }, 400);
+}
+
+function closeEvents() {
+  eventSource?.close();
+  eventSource = null;
+}
+
+function connectEvents() {
+  closeEvents();
+  if (typeof EventSource === "undefined") return; // jsdom / 不支持 SSE 的环境
+  const source = new EventSource(api.worktreeEventsUrl(props.projectId));
+  source.addEventListener("worktree", () => scheduleRefresh());
+  // EventSource 自己会重连；不要在这里 close，否则断线后就再也不刷新了。
+  source.onerror = () => undefined;
+  eventSource = source;
+}
+
+/** 保存项目范围（模式 / 模式列表 / detached 开关）。忽略列表由条目上的"忽略"按钮维护。 */
+async function saveScope() {
+  if (scopeBusy.value) return;
+  scopeBusy.value = true;
+  scopeError.value = "";
+  try {
+    await api.updateProject(props.projectId, {
+      settings: {
+        worktree: {
+          filterMode: scopeMode.value,
+          branchPatterns: parseBranchPatterns(scopePatterns.value),
+          includeDetachedWorktrees: scopeDetached.value,
+        },
+      },
+    });
+    ElMessage.success("范围已保存");
+    await load();
+  } catch (caught) {
+    scopeError.value = caught instanceof Error ? caught.message : "范围保存失败";
+  } finally {
+    scopeBusy.value = false;
+  }
+}
+
+/** 忽略 / 取消忽略一条分支（写进项目设置，跨浏览器一致）。 */
+async function toggleIgnore(item: WorktreeItem) {
+  if (!item.branch) {
+    ElMessage.warning("detached worktree 没有分支名，不能忽略。");
+    return;
+  }
+  if (scopeBusy.value) return;
+  scopeBusy.value = true;
+  scopeError.value = "";
+  try {
+    const current = inventory.value?.filter.ignoredBranches ?? [];
+    await api.updateProject(props.projectId, {
+      settings: { worktree: { ignoredBranches: toggleIgnoredBranch(current, item.branch, !item.isIgnored) } },
+    });
+    ElMessage.success(item.isIgnored ? "已取消忽略" : "已忽略这条分支");
+    await load();
+  } catch (caught) {
+    scopeError.value = caught instanceof Error ? caught.message : "忽略状态保存失败";
+  } finally {
+    scopeBusy.value = false;
+  }
+}
+
+function openLog(item: WorktreeItem) {
+  const ref = item.branch ?? item.lastCommit;
+  if (!ref) {
+    ElMessage.warning("这一项没有可查看的提交。");
+    return;
+  }
+  logRef.value = ref;
+  logOpen.value = true;
+}
+
 watch(
   () => props.projectId,
   () => {
     selectedItemId.value = null;
     inventory.value = null;
     void load();
+    connectEvents();
   },
 );
 
 onMounted(() => {
   void load();
+  connectEvents();
+});
+
+onBeforeUnmount(() => {
+  closeEvents();
+  if (refreshTimer) {
+    clearTimeout(refreshTimer);
+    refreshTimer = null;
+  }
 });
 </script>
 
@@ -268,11 +433,14 @@ onMounted(() => {
 
     <section v-if="mergeInProgress" class="merge-banner" role="alert" data-merge-in-progress>
       <div class="merge-banner-copy">
-        <strong>仓库里有进行中的合并</strong>
+        <strong>仓库里有进行中的 {{ mergeInProgress.kind === "merge" ? "合并" : mergeInProgress.kind }}</strong>
         <p>
-          当前分支 <code>{{ mergeInProgress.currentBranch ?? "detached" }}</code
-          >，MERGE_HEAD <code>{{ mergeInProgress.mergeHead.slice(0, 12) }}</code
-          >。解决冲突后继续，或直接中止。
+          当前分支 <code>{{ mergeInProgress.currentBranch ?? "detached" }}</code>
+          <template v-if="mergeInProgress.mergeHead"
+            >，MERGE_HEAD <code>{{ mergeInProgress.mergeHead.slice(0, 12) }}</code></template
+          >。
+          <template v-if="mergeInProgress.kind === 'merge'">解决冲突后继续，或直接中止。</template>
+          <template v-else>请先在 Git 里完成或中止这次操作，再回到这里刷新。</template>
         </p>
         <ul v-if="mergeInProgress.conflictFiles.length" class="merge-banner-files">
           <li v-for="file in mergeInProgress.conflictFiles" :key="file">
@@ -281,7 +449,7 @@ onMounted(() => {
         </ul>
         <p v-if="mergeActionError" class="merge-banner-error">{{ mergeActionError }}</p>
       </div>
-      <div class="merge-banner-actions">
+      <div v-if="mergeInProgress.kind === 'merge'" class="merge-banner-actions">
         <el-button type="primary" :loading="mergeActionBusy === 'continue'" data-merge-continue @click="continueMerge">
           继续合并
         </el-button>
@@ -318,8 +486,73 @@ onMounted(() => {
           {{ entry.label }}
         </button>
       </div>
+      <div class="filter-group" role="group" aria-label="排序">
+        <button
+          v-for="entry in sortOptions"
+          :key="entry.key"
+          type="button"
+          :class="{ active: sortKey === entry.key }"
+          :data-worktree-sort="entry.key"
+          @click="sortKey = entry.key"
+        >
+          {{ entry.label }}
+        </button>
+        <button type="button" data-worktree-sort-direction @click="sortDirection = sortDirection === 'desc' ? 'asc' : 'desc'">
+          {{ sortDirection === "desc" ? "倒序" : "正序" }}
+        </button>
+      </div>
+      <button type="button" class="scope-toggle" :class="{ active: scopeOpen }" data-worktree-scope-toggle @click="scopeOpen = !scopeOpen">
+        范围
+      </button>
+      <!--
+        条件必须包含 `includeFiltered`：勾上"显示被过滤的项"之后若过滤数归零（比如刚把忽略清空），
+        只按 `filteredOutCount > 0` 渲染会让按钮消失，于是再也切不回范围视图（浏览器实测踩过）。
+      -->
+      <button
+        v-if="inventory && (includeFiltered || inventory.filteredOutCount > 0)"
+        type="button"
+        class="scope-toggle"
+        :class="{ active: includeFiltered }"
+        data-worktree-include-filtered
+        @click="
+          includeFiltered = !includeFiltered;
+          load();
+        "
+      >
+        {{ includeFiltered ? "只看项目范围" : `显示被过滤的 ${inventory.filteredOutCount} 项` }}
+      </button>
       <span class="toolbar-count" data-worktrees-visible-count>{{ filteredItems.length }} / {{ items.length }} 项</span>
     </div>
+
+    <section v-if="scopeOpen" class="scope-panel" data-worktree-scope-panel>
+      <div class="scope-row">
+        <label>
+          默认范围
+          <select v-model="scopeMode" data-scope-mode>
+            <option value="all">全部分支</option>
+            <option value="patterns">只显示匹配的分支</option>
+          </select>
+        </label>
+        <label class="scope-checkbox">
+          <input v-model="scopeDetached" type="checkbox" data-scope-detached />
+          包含 detached worktree
+        </label>
+      </div>
+      <label v-if="scopeMode === 'patterns'" class="scope-patterns">
+        分支模式（一行一条，支持 <code>factory/*</code> 与 <code>*</code>）
+        <textarea v-model="scopePatterns" rows="3" data-scope-patterns></textarea>
+      </label>
+      <p class="scope-hint">
+        忽略列表：{{ inventory?.filter.ignoredBranches.length ?? 0 }} 条。在条目详情里点「忽略这条分支」。
+        <template v-if="!includeFiltered && (inventory?.filter.ignoredBranches.length ?? 0) > 0"
+          >取消忽略前先点上面的「显示被过滤的项」。</template
+        >
+      </p>
+      <p v-if="scopeError" class="scope-error" role="alert">{{ scopeError }}</p>
+      <div class="scope-actions">
+        <el-button size="small" type="primary" :loading="scopeBusy" data-scope-save @click="saveScope">保存范围</el-button>
+      </div>
+    </section>
 
     <div class="worktrees-body">
       <div class="worktrees-table-wrap">
@@ -339,6 +572,7 @@ onMounted(() => {
               <th scope="col" class="num col-count">Ahead</th>
               <th scope="col" class="num col-count">Behind</th>
               <th scope="col" class="col-relation">合并关系</th>
+              <th scope="col" class="col-time">最近提交</th>
               <th scope="col" class="col-source">来源</th>
               <th scope="col" class="actions col-actions">操作</th>
             </tr>
@@ -373,6 +607,7 @@ onMounted(() => {
               <td class="num col-count">{{ item.aheadCount }}</td>
               <td class="num col-count col-behind">{{ item.behindCount }}</td>
               <td class="cell-relation col-relation">{{ worktreeMergeRelationLabel(item.mergeRelation) }}</td>
+              <td class="cell-time col-time">{{ formatWorktreeTime(item.lastCommitAt) }}</td>
               <td class="cell-source col-source">{{ factorySummary(item) }}</td>
               <td class="actions" @click.stop>
                 <div class="row-actions">
@@ -410,6 +645,12 @@ onMounted(() => {
               复制分支
             </el-button>
             <el-button size="small" :icon="CopyDocument" @click="copy(selectedItem.effectivePath)">复制路径</el-button>
+            <el-button size="small" data-worktree-log-open @click="openLog(selectedItem)">提交历史</el-button>
+          </div>
+          <div v-if="selectedItem.branch && !selectedItem.isBaseBranch" class="detail-tag-actions">
+            <el-button size="small" :loading="scopeBusy" data-worktree-toggle-ignore @click="toggleIgnore(selectedItem)">
+              {{ selectedItem.isIgnored ? "取消忽略" : "忽略这条分支" }}
+            </el-button>
           </div>
         </div>
 
@@ -464,6 +705,8 @@ onMounted(() => {
             <li v-for="reason in selectedItem.cleanupBlockers" :key="reason">{{ reason }}</li>
           </ul>
         </div>
+
+        <WorktreeServicesPanel v-if="selectedItem.hasWorktree" :project-id="props.projectId" :item="selectedItem" />
       </aside>
     </div>
 
@@ -477,17 +720,14 @@ onMounted(() => {
     <p v-if="previewLoading" class="preview-loading" role="status">正在生成合并预览…</p>
 
     <WorktreeMergeResultDialog v-model="resultVisible" :result="mergeResult" />
+    <WorktreeLogDialog v-model="logOpen" :project-id="props.projectId" :target="logRef" :title="logRef" />
 
     <ConfirmDialog
       :model-value="Boolean(cleanupTarget)"
-      eyebrow="清理 Worktree"
-      heading="删除 worktree 与分支"
-      :message="`将删除 ${cleanupTarget?.branch ?? ''} 的 worktree 目录，并删除这条本地分支。`"
-      :details="[
-        '只有「已提交已合并」且工作区干净的分支会走到这一步',
-        'worktree 目录会被 git worktree remove 删除',
-        '分支用 git branch -d 删除（未合并时 git 会拒绝）',
-      ]"
+      eyebrow="清理"
+      :heading="cleanupHeading"
+      :message="cleanupMessage"
+      :details="cleanupDetails"
       confirm-label="确认清理"
       cancel-label="取消"
       :busy="cleanupBusy"
@@ -643,6 +883,82 @@ onMounted(() => {
   font-size: 11px;
   line-height: 1.6;
 }
+.scope-toggle {
+  padding: 5px 10px;
+  border: 1px solid #e3e9f1;
+  border-radius: 999px;
+  background: #fff;
+  color: #6b7c94;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.scope-toggle.active {
+  border-color: #bfd7f1;
+  background: #eef5fd;
+  color: #2c6cad;
+  font-weight: 700;
+}
+.scope-panel {
+  display: grid;
+  gap: 8px;
+  margin: 0 clamp(20px, 4vw, 48px) 4px;
+  padding: 12px 14px;
+  border: 1px solid #e3e9f1;
+  border-radius: 10px;
+  background: #fbfcfe;
+}
+.scope-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+  color: #52637e;
+  font-size: 11px;
+}
+.scope-row select,
+.scope-patterns textarea {
+  margin-left: 6px;
+  padding: 4px 6px;
+  border: 1px solid #dce4ee;
+  border-radius: 6px;
+  background: #fff;
+  color: #33425a;
+  font: inherit;
+  font-size: 11px;
+}
+.scope-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.scope-patterns {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: #52637e;
+  font-size: 11px;
+}
+.scope-patterns textarea {
+  width: 100%;
+  margin-left: 0;
+  resize: vertical;
+}
+.scope-hint {
+  margin: 0;
+  color: #93a1b5;
+  font-size: 10px;
+  line-height: 1.6;
+}
+.scope-error {
+  margin: 0;
+  color: #a94851;
+  font-size: 11px;
+}
+.scope-actions {
+  display: flex;
+  justify-content: flex-end;
+}
 .worktrees-toolbar {
   display: flex;
   align-items: center;
@@ -735,8 +1051,11 @@ onMounted(() => {
 .worktrees-table .col-relation {
   width: 11%;
 }
+.worktrees-table .col-time {
+  width: 11%;
+}
 .worktrees-table .col-source {
-  width: 15%;
+  width: 14%;
 }
 .worktrees-table .col-actions {
   width: 16%;
@@ -785,6 +1104,7 @@ onMounted(() => {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.cell-time,
 .cell-relation,
 .cell-source {
   overflow: hidden;
@@ -836,7 +1156,11 @@ onMounted(() => {
 }
 .detail-copy-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
+}
+.detail-tag-actions {
+  margin-top: 6px;
 }
 .detail-facts {
   display: grid;
@@ -895,6 +1219,11 @@ onMounted(() => {
  * 窄屏分级收列：先去掉信息量最低的「类型」与「合并关系」（详情面板里都有），
  * 再把 Behind 收掉；剩下的列宽按新的百分比重算，避免固定布局下内容挤成一列一个字。
  */
+@media (max-width: 1180px) {
+  .worktrees-table .col-time {
+    display: none;
+  }
+}
 @media (max-width: 1100px) {
   .worktrees-table .col-kind,
   .worktrees-table .col-relation {
@@ -922,6 +1251,82 @@ onMounted(() => {
   }
   .worktrees-header h1 {
     font-size: 21px;
+  }
+  .scope-toggle {
+    padding: 5px 10px;
+    border: 1px solid #e3e9f1;
+    border-radius: 999px;
+    background: #fff;
+    color: #6b7c94;
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .scope-toggle.active {
+    border-color: #bfd7f1;
+    background: #eef5fd;
+    color: #2c6cad;
+    font-weight: 700;
+  }
+  .scope-panel {
+    display: grid;
+    gap: 8px;
+    margin: 0 clamp(20px, 4vw, 48px) 4px;
+    padding: 12px 14px;
+    border: 1px solid #e3e9f1;
+    border-radius: 10px;
+    background: #fbfcfe;
+  }
+  .scope-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 14px;
+    color: #52637e;
+    font-size: 11px;
+  }
+  .scope-row select,
+  .scope-patterns textarea {
+    margin-left: 6px;
+    padding: 4px 6px;
+    border: 1px solid #dce4ee;
+    border-radius: 6px;
+    background: #fff;
+    color: #33425a;
+    font: inherit;
+    font-size: 11px;
+  }
+  .scope-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .scope-patterns {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    color: #52637e;
+    font-size: 11px;
+  }
+  .scope-patterns textarea {
+    width: 100%;
+    margin-left: 0;
+    resize: vertical;
+  }
+  .scope-hint {
+    margin: 0;
+    color: #93a1b5;
+    font-size: 10px;
+    line-height: 1.6;
+  }
+  .scope-error {
+    margin: 0;
+    color: #a94851;
+    font-size: 11px;
+  }
+  .scope-actions {
+    display: flex;
+    justify-content: flex-end;
   }
   .worktrees-toolbar {
     gap: 8px;

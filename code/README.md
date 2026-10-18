@@ -234,37 +234,77 @@ Run 终态会触发协调器重新评估，排队的 Plan 因此自动让位。*
 ## Worktree 管理（项目视角）
 
 每个项目的左栏都有「Worktree 管理」（地址 `?workspace=worktrees`，与「项目执行线程」同一套外壳）。
-它盘点该仓库的**全部本地分支与 worktree**（含 detached），按 `no_updates` / `dirty_uncommitted` /
-`committed_unmerged` / `merged_clean` / `merged_dirty` / `detached_*` 分类，并在合并前给出预览。
-这一能力迁自独立的 worktree-manage 工程：**只搬业务能力**，不包含它的 Rust/Tauri 客户端、菜单栏、
-托盘与"打开终端 / SourceTree"这类桌面动作。
+它盘点该仓库的本地分支与 worktree（含 detached），按 `no_updates` / `dirty_uncommitted` /
+`committed_unmerged` / `merged_clean` / `merged_dirty` / `detached_*` 分类，提供合并预览、真实合并、
+冲突续做/中止、三种清理、提交历史与 worktree 内的服务启停。这一能力迁自独立的 worktree-manage 工程：
+**只搬业务能力**，不包含它的 Rust/Tauri 客户端、菜单栏、托盘与"打开终端 / SourceTree"这类桌面动作。
 
 ```text
-GET  /api/v4/projects/:projectId/worktrees
-POST /api/v4/projects/:projectId/worktrees/preview          { itemId }
-POST /api/v4/projects/:projectId/worktrees/merge            { itemId, expectedBranchHead, expectedBaseHead }
+GET  /api/v4/projects/:projectId/worktrees                    ?includeFiltered=1
+POST /api/v4/projects/:projectId/worktrees/preview            { itemId }
+POST /api/v4/projects/:projectId/worktrees/merge              { itemId, expectedBranchHead, expectedBaseHead }
 POST /api/v4/projects/:projectId/worktrees/merge/continue
 POST /api/v4/projects/:projectId/worktrees/merge/abort
-POST /api/v4/projects/:projectId/worktrees/cleanup          { itemId, expectedBranchHead }
+POST /api/v4/projects/:projectId/worktrees/cleanup            { itemId, expectedBranchHead }
+GET  /api/v4/projects/:projectId/worktrees/log                ?ref=&limit=
+GET  /api/v4/projects/:projectId/worktrees/commits/:commit
+GET  /api/v4/projects/:projectId/worktrees/commits/:commit/diff ?path=&previousPath=
+GET  /api/v4/projects/:projectId/worktrees/services           ?itemId=
+POST /api/v4/projects/:projectId/worktrees/services/start|stop { itemId, serviceId }
+GET  /api/v4/projects/:projectId/worktrees/services/logs      ?itemId=&serviceId=
+GET  /api/v4/projects/:projectId/worktrees/events             ?afterSequence=   (SSE)
 ```
+
+### 合并
 
 - **这是唯一真的执行合并的入口**。它做 `git switch <defaultBranch>` + `git merge --no-ff <branch>`，
   工作目录是受管仓库根目录。只有预览通过、且带回的两个 SHA 与当前状态一致时才执行；不一致返回
   `409 WORKTREE_STATE_CHANGED`（"我审核的那一版"与"实际合并的那一版"必须是同一版）。
 - **阻断项**（任何一条成立都不能合并）：分支不存在 / 是主分支 / detached / 没有领先提交 / 已经合并 /
-  worktree 有未提交改动 / 仓库根目录有未提交改动（Plan 留档目录放行）/ 项目有活动 Run /
-  仓库里已有进行中的合并 / 主分支被另一个 worktree 占用。
+  worktree 有未提交改动 / 仓库根目录有未提交改动（Plan 留档目录与工具元数据目录放行）/ 项目有活动 Run /
+  仓库里有进行中的合并、rebase、cherry-pick、revert 或 bisect / 主分支被另一个 worktree 占用 /
+  MergeRequest 的目标分支与项目默认分支不一致。
 - **冲突后停在合并中**：不自动 `merge --abort`（那是用户的工作），也不自动 `--continue`。
-  面板顶部常驻「合并进行中」横幅并列出冲突文件。这个状态会挡住 Plan 确认与 Run 派发
-  （工作区干净检查），所以它必须显式处理。
+  面板顶部常驻横幅并列出冲突文件；其它进行中的 Git 操作只提示、不提供继续/中止（那些要在 Git 里收尾）。
 - **合并成功后追回 Factory**：若该分支属于某条 Run 且有 `OPEN` 的 MergeRequest，就用合并后的 HEAD
-  调 `MergeService.confirmMerged`（Plan → `MERGED`），并按 `merge-requests` 路由同样的方式回收 Worktree、
-  唤醒调度协调器。这一步失败只作为提醒返回，**不回滚已经发生的合并**；`SUPERSEDED` 的请求不会因为
-  这次合并被承认。
-- **清理**：只有「已提交已合并 + 工作区干净 + 无活动 Run 且不是活动 Run 的 workspace」才允许；
-  先 `git worktree remove`（不带 `--force`）再 `git branch -d`（不是 `-D`）。detached worktree 一律不清理。
+  调 `MergeService.confirmMerged`（Plan → `MERGED`），并回收 Worktree、唤醒调度协调器。这一步失败
+  只作为提醒返回，**不回滚已经发生的合并**；`SUPERSEDED` 的请求不会因为这次合并被承认。
+
+### 清理（三种对象，共用一条命令）
+
+| kind                          | 前提                                                           |
+| ----------------------------- | -------------------------------------------------------------- |
+| `branch_worktree`             | 分支已合并 + 工作区干净 + 不是活动 Run 的 workspace            |
+| `local_branch`（无 worktree） | 分支已合并 + **不是仓库当前检出的分支**                        |
+| `detached_worktree`           | 工作区干净 + **HEAD 已被某个本地分支包含**（否则删掉就丢提交） |
+
+三者都要求项目没有活动 Run、仓库没有进行中的 Git 操作。删目录用 `git worktree remove --force`
+（干净性由我们自己的判据负责：工具元数据目录不算脏，不带 force 时 git 会因为它拒绝删除），
+删分支用 `git branch -d`（不是 `-D`）。属于 Run 的 worktree 会走 `Scheduler.releaseWorkspace`，
+所以 cleanup 钩子照常执行；钩子失败不阻止删除，但会作为 `cleanupHookNeedsAttention` 返回。
+
+### 项目范围
+
+项目设置里可以配置默认范围（`settings.worktree`）：`filterMode`（`all` / `patterns`）、
+`branchPatterns`（`*`、`prefix*`、精确名）、`ignoredBranches`（显式隐藏）、
+`includeDetachedWorktrees`。主分支永远显示；被过滤的项可以通过 `?includeFiltered=1`（界面上是
+「显示被过滤的 N 项」）看回来，**写操作始终按全量清单解析目标**，隐藏不会让合并变成"不存在"。
+「曾经合并过」（`was_merged_before`）来自 Factory 自己记的合并事件，只覆盖从这个面板执行过的合并。
+
+### 其它
+
+- **自动刷新**：面板挂载时订阅 `worktrees/events`（SSE），事件里只有 `type + sequence`，
+  收到后防抖 400ms 重拉清单；清单内容仍以重拉结果为准，不做本地增量推断。
+- **服务启停**：读取 worktree 根目录下的 `.pipeline-factory/services.json`（原生，`argv` 直接执行），
+  兼容 `.worktree-manage/services.json`（`start_command` 走 `sh -lc`）。`workdir` 解析后必须仍在
+  worktree 内；**只停止本进程启动的子进程**（先 SIGTERM 进程组、3 秒后 SIGKILL），不按端口杀。
+  这两个目录被排除在"工作区脏"判据之外——配置文件不该让 worktree 变成不可合并。
+- **提交历史**：`log` / `commits` / `diff` 三条只读接口，界面上的「提交历史」对话框用它们；
+  只读，不 checkout、不 reset。
 - **git 版本**：冲突预测依赖 `git merge-tree --write-tree`（≥ 2.38），`git switch` 需要 ≥ 2.23。
   版本更旧时冲突预测显示"不可用"，但**不影响合并本身**。
+- **性能**：清单按项目范围先过滤再跑 git；每条分支的 ahead/behind 用有界并发（8）执行；
+  worktree 的脏/冲突判定合并为一次 `status --porcelain -z`；分支数超过 300 条时截断并标记。
 
 ## Plan V2 与项目验证
 

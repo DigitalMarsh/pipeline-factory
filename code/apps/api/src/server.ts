@@ -67,6 +67,7 @@ import { planStorageFor } from "./runtime/plan-directory.js";
 import { createDefaultScheduler } from "./runtime/scheduler.js";
 import { createDefaultVerificationExecutor } from "./runtime/verification.js";
 import { createModelGateway } from "./runtime/model-gateway.js";
+import { WorktreeServiceRunner } from "./runtime/worktree-services.js";
 import { createModelCatalog } from "./runtime/model-catalog.js";
 import type { DirectoryDialogResult } from "./runtime/directory-dialog.js";
 // 全部 100 条路由已分域搬进 `routes/`，组合根不再直接持有任何 zod schema、任何投影函数、
@@ -260,6 +261,11 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
    * 而留档目录相对的是各个受管工程自己的根目录（见 plan/plan-directory.ts）。
    * 没有配置时给空数组——宁可要求工作区干净，也不要放行一个猜出来的目录。
    */
+  /**
+   * Worktree 内的服务进程管理。**只停本进程启动的子进程**（见 runtime/worktree-services.ts 维护提示 1），
+   * 所以它必须与 API 进程同生命周期：`onClose` 里统一回收。
+   */
+  const worktreeServices = new WorktreeServiceRunner();
   const worktrees = new WorktreeService(store, {
     git: createLocalWorktreeGit(),
     ignoreDirtyPathsFor: (repoRoot) => (factoryConfig ? planStorageFor(factoryConfig, repoRoot).ignoreDirtyPaths : []),
@@ -350,7 +356,13 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     });
   }
 
-  const app = Fastify({ logger: false });
+  /**
+   * `forceCloseConnections`：`app.close()` 默认会**等所有连接自己结束**，而本服务有 SSE 长连接
+   * （浏览器开着任何一页就有一条）。没有这个开关时 `SIGTERM` 会一直挂着——实测 `node --watch`
+   * 每次重启都卡在 "Waiting for graceful termination..."，API 再也不起来。
+   * 代价是关闭时正在飞的请求会被打断：这是停机语义，可以接受；启动/运行期不受影响。
+   */
+  const app = Fastify({ logger: false, forceCloseConnections: true });
   void app.register(cors, { origin: true });
   // 先做 Project 存在性和归档状态校验，再进入具体 handler；前端禁用按钮不能替代这一层保护。
   app.addHook("preHandler", async (request, reply) => {
@@ -406,6 +418,8 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     console.error(`[error] ${request.method} ${request.url} ${status} ${error.stack ?? error.message}`);
   });
   app.addHook("onClose", async () => {
+    // 先收服务进程：它们是长驻子进程，晚于 store 关闭就没有日志可写了。
+    await worktreeServices.stopAll();
     dispatchCoordinator?.dispose();
     if (ownsStore && "close" in store && typeof store.close === "function") store.close();
     if (ownsModel && "close" in model && typeof model.close === "function") await model.close();
@@ -430,6 +444,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
     explorerThread: explorer,
     merger,
     worktrees,
+    worktreeServices,
     verifier,
     scheduler,
     dispatchCoordinator,

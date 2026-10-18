@@ -24,6 +24,7 @@
  */
 
 import type { RunStatus, VerificationStatus } from "../run/types.js";
+import type { ProjectWorktreeFilter } from "../project/project.js";
 
 /** 工作目录当前的脏状态：clean / 有未提交改动 / 存在未解决的合并冲突。 */
 export type WorktreeGitDirtyState = "clean" | "dirty" | "conflict";
@@ -49,8 +50,15 @@ export type WorktreeItemStatus =
   | "detached_dirty"
   | "detached_clean";
 
-/** 合并状态：当前已合并 / 当前未合并 / detached（没有可比较的分支）。 */
-export type WorktreeMergeRelation = "current_merged" | "current_unmerged" | "detached";
+/**
+ * 合并状态：当前已合并 / 当前未合并 / 曾经合并过 / detached（没有可比较的分支）。
+ *
+ * `was_merged_before` 与 worktree-manage 同义：这条分支**曾经**进过主分支，之后又有了新提交。
+ * 判定依据是 Factory 自己记下的合并事件（`worktree.merge.completed` / `.continued`），
+ * 因此**只覆盖从这个面板执行过的合并**——在 Git 侧手动合并的历史不在其中，这是有意的边界：
+ * 与其猜，不如只承认自己记过的事实。
+ */
+export type WorktreeMergeRelation = "current_merged" | "current_unmerged" | "was_merged_before" | "detached";
 
 /**
  * 该分支若属于一条 Factory Run，这里给出它的来源与当前生命周期。
@@ -100,12 +108,30 @@ export type WorktreeItem = {
   cleanupBlockers: string[];
   /** 该 worktree 正被一条活动 Run 使用（`workspacePath` 指向它且 Run 尚未结束）。 */
   isLiveRunWorkspace: boolean;
+  /** 该分支曾经通过本面板合并进主分支（见 `WorktreeMergeRelation` 的边界说明）。 */
+  everMerged: boolean;
+  /** 被项目设置显式忽略（`worktree.ignoredBranches`）；主分支恒为 false。 */
+  isIgnored: boolean;
+  /** 命中项目设置的默认范围（模式/模式匹配/detached 开关）；主分支恒为 true。 */
+  matchesScope: boolean;
+  /**
+   * 仅 detached worktree 使用：它的 HEAD 是否已被某个本地分支包含。
+   * 为真时删掉这个 worktree 不会丢提交——这是清理它的唯一前提。
+   */
+  containedInBranch: boolean;
   factory: WorktreeFactoryLink | null;
 };
 
-/** 进行中的合并：`MERGE_HEAD` 存在时才有。冲突后 repoRoot 停在这个状态，界面必须显式提示。 */
+/**
+ * 进行中的 Git 操作。`kind` 不只 `merge`：rebase / cherry-pick / revert / bisect 都会让
+ * `git switch` 失败，而且它们留在仓库里的状态与合并冲突一样会挡住 Plan 确认与 Run 派发。
+ * 只有 `kind === "merge"` 才支持"继续/中止"两个按钮，其余的要人去 Git 里收尾。
+ */
+export type WorktreeInProgressOperation = "merge" | "rebase" | "cherry-pick" | "revert" | "bisect";
+
 export type WorktreeMergeInProgress = {
-  mergeHead: string;
+  kind: WorktreeInProgressOperation;
+  mergeHead: string | null;
   currentBranch: string | null;
   conflictFiles: string[];
 };
@@ -121,6 +147,10 @@ export type WorktreeInventory = {
   mergeInProgress: WorktreeMergeInProgress | null;
   /** 占用执行槽位的 Run；非空时合并与清理一律被拒。 */
   activeRunIds: string[];
+  /** 项目设置里的默认范围，随清单一起返回，界面据此渲染"范围"控制。 */
+  filter: ProjectWorktreeFilter;
+  /** 被项目范围过滤掉、当前响应里没有的项数（`includeFiltered` 时恒为 0）。 */
+  filteredOutCount: number;
   items: WorktreeItem[];
   /** 分支数超过上限时只返回前 N 条并置为 true。 */
   truncated: boolean;
@@ -228,4 +258,59 @@ export type WorktreeCleanupResult = {
    * 没有任何地方会提。
    */
   cleanupHookNeedsAttention: boolean;
+};
+
+/** 一条提交（Git Log / 提交详情共用）。 */
+export type WorktreeLogCommit = {
+  hash: string;
+  shortHash: string;
+  subject: string;
+  author: string;
+  authoredAt: string;
+  relativeTime: string;
+};
+
+/**
+ * 一个 worktree 的服务配置。`argv` 与 `shellCommand` **二选一**：
+ * - `argv`：本工程的原生格式，直接用 `execFile` 执行，不经过 shell。
+ * - `shellCommand`：兼容 worktree-manage 的 `services.json`（`start_command` 字段），走 `sh -lc`。
+ *   这条路径保留了旧文件可用，但它是一条**执行任意 shell** 的入口——只允许来自 worktree 内的配置文件。
+ */
+export type WorktreeServiceConfig = {
+  serviceId: string;
+  name: string;
+  role: string;
+  /** 相对 worktree 根目录的启动目录；解析后必须仍在 worktree 内。 */
+  workdir: string;
+  argv: string[] | null;
+  shellCommand: string | null;
+  healthUrl: string | null;
+  enabled: boolean;
+  /** 配置来源：原生 `.pipeline-factory/services.json` 或兼容的 `.worktree-manage/services.json`。 */
+  source: "pipeline-factory" | "worktree-manage";
+};
+
+export type WorktreeServiceStatus = "stopped" | "running" | "failed";
+
+/** 服务的运行状态；`pid` 只对"本应用启动的进程"有意义。 */
+export type WorktreeServiceState = {
+  serviceId: string;
+  status: WorktreeServiceStatus;
+  pid: number | null;
+  startedAt: string | null;
+  exitCode: number | null;
+  error: string | null;
+};
+
+export type WorktreeServiceLogEntry = { sequence: number; stream: "stdout" | "stderr"; text: string };
+
+/** 一个 worktree 的服务清单：配置 + 运行状态。 */
+export type WorktreeServices = {
+  itemId: string;
+  worktreePath: string;
+  configPath: string | null;
+  /** 配置文件存在但解析失败时的原因；`services` 此时为空。 */
+  configError: string | null;
+  services: WorktreeServiceConfig[];
+  states: WorktreeServiceState[];
 };

@@ -11,7 +11,7 @@
  */
 import { afterAll, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryPipelineStore } from "../store/in-memory-store.js";
@@ -152,9 +152,45 @@ describe("清单", () => {
     const detached = inventory.items.find((item) => item.kind === "detached_worktree");
     expect(detached?.status).toBe("detached_clean");
     expect(detached?.mergeable).toBe(false);
-    expect(detached?.cleanupable).toBe(false);
+    // 它停在 main 上、HEAD 被主分支包含：现在允许"只删目录、不删提交"。
+    expect(detached?.containedInBranch).toBe(true);
+    expect(detached?.cleanupable).toBe(true);
     expect(inventory.mergeInProgress).toBeNull();
     expect(inventory.currentBranch).toBe("main");
+  });
+
+  it("只有服务配置的 worktree 仍算 clean（工具元数据不算工作区改动）", async () => {
+    const fixture = setup();
+    createBranch(fixture.repoRoot, "feature/merged", "merged.txt", "merged\n");
+    const worktreePath = addWorktree(fixture, "feature/merged", "merged");
+    mkdirSync(join(worktreePath, ".pipeline-factory"), { recursive: true });
+    writeFileSync(join(worktreePath, ".pipeline-factory", "services.json"), JSON.stringify({ services: [] }));
+    git(fixture.repoRoot, ["merge", "--no-ff", "--no-edit", "feature/merged"]);
+
+    const item = itemFor(await serviceFor(fixture).list(fixture.project), "feature/merged");
+
+    expect(item?.gitDirtyState).toBe("clean");
+    expect(item?.cleanupable).toBe(true);
+  });
+
+  it("带服务配置的 worktree 可以真正删除（git 的 force 与我们的干净判据对齐）", async () => {
+    const fixture = setup();
+    createBranch(fixture.repoRoot, "feature/merged", "merged.txt", "merged\n");
+    const worktreePath = addWorktree(fixture, "feature/merged", "merged");
+    mkdirSync(join(worktreePath, ".pipeline-factory"), { recursive: true });
+    writeFileSync(join(worktreePath, ".pipeline-factory", "services.json"), JSON.stringify({ services: [] }));
+    git(fixture.repoRoot, ["merge", "--no-ff", "--no-edit", "feature/merged"]);
+    const service = serviceFor(fixture);
+    const item = itemFor(await service.list(fixture.project), "feature/merged");
+
+    const result = await service.cleanup(fixture.project, {
+      itemId: "branch:feature/merged",
+      expectedBranchHead: item?.lastCommit ?? null,
+    });
+
+    expect(result.worktreeRemoved).toBe(true);
+    expect(result.branchDeleted).toBe(true);
+    expect(() => git(fixture.repoRoot, ["rev-parse", "--verify", "refs/heads/feature/merged"])).toThrow();
   });
 
   it("repoRoot 不干净时挡住合并（白名单为空）", async () => {
@@ -406,10 +442,11 @@ describe("清理", () => {
     ).rejects.toMatchObject({ code: "WORKTREE_CLEANUP_BLOCKED" });
   });
 
-  it("detached worktree 不能清理", async () => {
+  it("有未提交改动的 detached worktree 不能清理", async () => {
     const fixture = setup();
-    const detachedPath = join(fixture.worktreeRoot, "detached");
+    const detachedPath = join(fixture.worktreeRoot, "detached-dirty");
     git(fixture.repoRoot, ["worktree", "add", "--detach", detachedPath, "main"]);
+    writeFileSync(join(detachedPath, "scratch.txt"), "uncommitted\n");
     const service = serviceFor(fixture);
     const item = (await service.list(fixture.project)).items.find((entry) => entry.kind === "detached_worktree");
 
@@ -555,5 +592,218 @@ describe("Factory 联动", () => {
     expect(result.branchDeleted).toBe(true);
     expect(result.cleanupHookNeedsAttention).toBe(false);
     expect(fixture.store.getRun("run-1")?.workspacePath).toBeNull();
+  });
+});
+
+/**
+ * 项目范围、曾经合并、三种清理、rebase 与提交历史 —— 复盘后补齐的能力。
+ * 每条都对应一个具体的误操作风险，所以用例名直接写"为什么"。
+ */
+describe("项目范围（忽略分支 / 分支模式 / detached 开关）", () => {
+  function withFilter(fixture: Fixture, worktree: Record<string, unknown>): void {
+    new ProjectService(fixture.store).update(fixture.project.id, {
+      settings: { worktree: worktree as never },
+      expectedConfigVersion: fixture.project.configVersion,
+    });
+    const updated = fixture.store.getProject(fixture.project.id);
+    if (updated) fixture.project = updated;
+  }
+
+  it("被忽略的分支不出现在默认清单，includeFiltered 时带着 isIgnored 回来", async () => {
+    const fixture = setup();
+    createBranch(fixture.repoRoot, "feature/ahead", "ahead.txt", "ahead\n");
+    createBranch(fixture.repoRoot, "feature/noise", "noise.txt", "noise\n");
+    withFilter(fixture, { ignoredBranches: ["feature/noise"] });
+    const service = serviceFor(fixture);
+
+    const hidden = await service.list(fixture.project);
+    expect(itemFor(hidden, "feature/noise")).toBeUndefined();
+    expect(hidden.filteredOutCount).toBe(1);
+    expect(itemFor(hidden, "feature/ahead")).toBeDefined();
+
+    const all = await service.list(fixture.project, { includeFiltered: true });
+    expect(itemFor(all, "feature/noise")?.isIgnored).toBe(true);
+    expect(all.filteredOutCount).toBe(0);
+  });
+
+  it("模式模式只保留匹配的分支，主分支永远在", async () => {
+    const fixture = setup();
+    createBranch(fixture.repoRoot, "factory/one", "one.txt", "one\n");
+    createBranch(fixture.repoRoot, "feature/two", "two.txt", "two\n");
+    withFilter(fixture, { filterMode: "patterns", branchPatterns: ["factory/*"] });
+    const service = serviceFor(fixture);
+
+    const inventory = await service.list(fixture.project);
+
+    expect(itemFor(inventory, "factory/one")).toBeDefined();
+    expect(itemFor(inventory, "feature/two")).toBeUndefined();
+    expect(itemFor(inventory, "main")?.kind).toBe("base_branch");
+    expect(inventory.filteredOutCount).toBe(1);
+  });
+
+  it("关闭 detached 开关后，detached worktree 不进清单但仍可显式查看", async () => {
+    const fixture = setup();
+    git(fixture.repoRoot, ["worktree", "add", "--detach", join(fixture.worktreeRoot, "detached"), "main"]);
+    withFilter(fixture, { includeDetachedWorktrees: false });
+    const service = serviceFor(fixture);
+
+    expect((await service.list(fixture.project)).items.some((item) => item.isDetached)).toBe(false);
+    expect((await service.list(fixture.project, { includeFiltered: true })).items.some((item) => item.isDetached)).toBe(true);
+  });
+
+  it("被过滤的分支仍然可以预览：写路径按全量清单解析", async () => {
+    const fixture = setup();
+    createBranch(fixture.repoRoot, "feature/ahead", "ahead.txt", "ahead\n");
+    withFilter(fixture, { ignoredBranches: ["feature/ahead"] });
+
+    const preview = await serviceFor(fixture).preview(fixture.project, "branch:feature/ahead");
+
+    expect(preview.canConfirm).toBe(true);
+  });
+});
+
+describe("曾经合并过", () => {
+  it("合并后又有新提交的分支标记为 was_merged_before", async () => {
+    const fixture = setup();
+    createBranch(fixture.repoRoot, "feature/ahead", "ahead.txt", "ahead\n");
+    const service = serviceFor(fixture);
+    const preview = await service.preview(fixture.project, "branch:feature/ahead");
+    await service.merge(fixture.project, {
+      itemId: "branch:feature/ahead",
+      expectedBranchHead: preview.expectedBranchHead,
+      expectedBaseHead: preview.expectedBaseHead,
+    });
+
+    // 合并之后又推了一个提交：现在既不 merged，也不是从未合并过。
+    git(fixture.repoRoot, ["switch", "feature/ahead"]);
+    writeFileSync(join(fixture.repoRoot, "later.txt"), "later\n");
+    git(fixture.repoRoot, ["add", "-A"]);
+    commit(fixture.repoRoot, "later change");
+    git(fixture.repoRoot, ["switch", "main"]);
+
+    const item = itemFor(await service.list(fixture.project), "feature/ahead");
+    expect(item?.everMerged).toBe(true);
+    expect(item?.mergeRelation).toBe("was_merged_before");
+    expect(item?.status).toBe("committed_unmerged");
+  });
+});
+
+describe("删除已合并的本地分支", () => {
+  it("无 worktree 且已合并的本地分支可以删除", async () => {
+    const fixture = setup();
+    createBranch(fixture.repoRoot, "feature/done", "done.txt", "done\n");
+    git(fixture.repoRoot, ["merge", "--no-ff", "--no-edit", "feature/done"]);
+    const service = serviceFor(fixture);
+    const item = itemFor(await service.list(fixture.project), "feature/done");
+
+    expect(item?.kind).toBe("local_branch");
+    expect(item?.cleanupable).toBe(true);
+
+    const result = await service.cleanup(fixture.project, { itemId: "branch:feature/done", expectedBranchHead: item?.lastCommit ?? null });
+
+    expect(result.branchDeleted).toBe(true);
+    expect(result.worktreeRemoved).toBe(false);
+    expect(() => git(fixture.repoRoot, ["rev-parse", "--verify", "refs/heads/feature/done"])).toThrow();
+  });
+
+  it("未合并的本地分支不能删除", async () => {
+    const fixture = setup();
+    createBranch(fixture.repoRoot, "feature/ahead", "ahead.txt", "ahead\n");
+    const item = itemFor(await serviceFor(fixture).list(fixture.project), "feature/ahead");
+
+    expect(item?.cleanupable).toBe(false);
+    expect(item?.cleanupBlockers.join("\n")).toContain("未合并");
+  });
+
+  it("正被仓库检出的合并分支不能删除", async () => {
+    const fixture = setup();
+    // main 自己就是"已合并且被检出"——用主分支验证这条判据（主分支另有一条更早的阻断）。
+    const item = itemFor(await serviceFor(fixture).list(fixture.project), "main");
+    expect(item?.cleanupBlockers.join("\n")).toContain("主分支不能清理");
+  });
+});
+
+describe("detached worktree 的清理", () => {
+  it("提交已被本地分支包含时可以删除目录（提交不丢）", async () => {
+    const fixture = setup();
+    const detachedPath = join(fixture.worktreeRoot, "detached-main");
+    git(fixture.repoRoot, ["worktree", "add", "--detach", detachedPath, "main"]);
+    const service = serviceFor(fixture);
+    const item = (await service.list(fixture.project)).items.find((entry) => entry.itemId === `detached:${realpathSync(detachedPath)}`);
+
+    expect(item?.containedInBranch).toBe(true);
+    expect(item?.cleanupable).toBe(true);
+
+    const result = await service.cleanup(fixture.project, {
+      itemId: item?.itemId ?? "",
+      expectedBranchHead: item?.lastCommit ?? null,
+    });
+
+    expect(result.worktreeRemoved).toBe(true);
+    expect(result.branchDeleted).toBe(false);
+    expect(git(fixture.repoRoot, ["worktree", "list"])).not.toContain("detached-main");
+  });
+
+  it("有独有提交的 detached worktree 不能删除", async () => {
+    const fixture = setup();
+    const detachedPath = join(fixture.worktreeRoot, "detached-unique");
+    git(fixture.repoRoot, ["worktree", "add", "--detach", detachedPath, "main"]);
+    writeFileSync(join(detachedPath, "unique.txt"), "unique\n");
+    git(detachedPath, ["add", "-A"]);
+    commit(detachedPath, "unique commit");
+    const service = serviceFor(fixture);
+    const item = (await service.list(fixture.project)).items.find((entry) => entry.isDetached);
+
+    expect(item?.containedInBranch).toBe(false);
+    expect(item?.cleanupable).toBe(false);
+    expect(item?.cleanupBlockers.join("\n")).toContain("不属于任何本地分支");
+  });
+});
+
+describe("进行中的 Git 操作", () => {
+  it("rebase 进行中时如实报告并阻断合并", async () => {
+    const fixture = setup();
+    createBranch(fixture.repoRoot, "feature/conflict", "README.md", "feature side\n");
+    writeFileSync(join(fixture.repoRoot, "README.md"), "main side\n");
+    git(fixture.repoRoot, ["add", "-A"]);
+    commit(fixture.repoRoot, "main changes README");
+    git(fixture.repoRoot, ["switch", "feature/conflict"]);
+    // 这一步会冲突并停在 rebase 中间（rebase-merge 目录存在）。
+    expect(() => git(fixture.repoRoot, ["rebase", "main"])).toThrow();
+    const service = serviceFor(fixture);
+
+    const inventory = await service.list(fixture.project);
+
+    expect(inventory.mergeInProgress?.kind).toBe("rebase");
+    const branch = itemFor(inventory, "feature/conflict");
+    expect(branch?.mergeable).toBe(false);
+    expect(branch?.blockers.join("\n")).toContain("rebase");
+    // 收尾，避免残留状态影响同文件后面的用例（每个用例的仓库是独立的，这里只是整洁）。
+    git(fixture.repoRoot, ["rebase", "--abort"]);
+  });
+});
+
+describe("提交历史与 diff", () => {
+  it("返回提交列表、单个提交的文件与文本 diff", async () => {
+    const fixture = setup();
+    createBranch(fixture.repoRoot, "feature/ahead", "ahead.txt", "ahead\n");
+    const service = serviceFor(fixture);
+
+    const commits = await service.log(fixture.project, { ref: "feature/ahead", limit: 10 });
+    expect(commits[0]?.subject).toContain("feature/ahead");
+    expect(commits[0]?.shortHash).toHaveLength(7);
+
+    const files = await service.commitFiles(fixture.project, commits[0]?.hash ?? "");
+    expect(files.map((file) => file.path)).toContain("ahead.txt");
+
+    const diff = await service.commitDiff(fixture.project, { commit: commits[0]?.hash ?? "", path: "ahead.txt" });
+    expect(diff).toContain("+ahead");
+  });
+
+  it("不存在 ref / 提交时返回 WORKTREE_NOT_FOUND", async () => {
+    const fixture = setup();
+    const service = serviceFor(fixture);
+    await expect(service.log(fixture.project, { ref: "nope" })).rejects.toMatchObject({ code: "WORKTREE_NOT_FOUND" });
+    await expect(service.commitFiles(fixture.project, "deadbeef")).rejects.toMatchObject({ code: "WORKTREE_NOT_FOUND" });
   });
 });

@@ -24,6 +24,32 @@ export type ModelBackendCatalog = {
   effortLevelsFor(id: string): string[];
 };
 
+/**
+ * 项目视角 Worktree 清单的**默认范围**（照搬 worktree-manage 的三个字段）。
+ *
+ * 为什么放在 Project 设置里而不是面板的本地状态：它是"这个仓库里哪些分支与我有关系"的判断，
+ * 换台机器、换个浏览器都该是同一份；而面板上的状态/类型筛选是**这一次查看**的偏好。
+ *
+ * 语义（服务端执行，客户端只负责展示与切换）：
+ * - `filterMode: "all"` 全显示；`"patterns"` 只保留匹配 `branchPatterns` 的分支。
+ * - `branchPatterns` 支持 `*`（全部）、`prefix*`（前缀）与精确名。
+ * - `ignoredBranches` 是**显式隐藏**，优先于模式；主分支永远不隐藏。
+ * - `includeDetachedWorktrees` 控制 detached worktree 是否进清单。
+ */
+export type ProjectWorktreeFilter = {
+  filterMode: "all" | "patterns";
+  branchPatterns: string[];
+  ignoredBranches: string[];
+  includeDetachedWorktrees: boolean;
+};
+
+export const DEFAULT_WORKTREE_FILTER: ProjectWorktreeFilter = {
+  filterMode: "all",
+  branchPatterns: [],
+  ignoredBranches: [],
+  includeDetachedWorktrees: true,
+};
+
 export type ProjectSettings = {
   concurrency: {
     /** 同一 Project 同时可跑的 Run 上限（占执行槽位的状态见 EXECUTION_SLOT_RUN_STATUSES）；由 dispatcher 在派发前判定。 */
@@ -69,6 +95,11 @@ export type ProjectSettings = {
     start?: HookDefinition;
     cleanup?: HookDefinition;
   };
+  /**
+   * Worktree 清单的默认范围。**可选**：本字段之前落库的 Project 没有它，读路径一律按
+   * `DEFAULT_WORKTREE_FILTER` 处理——不为一个新开关改写用户已有的配置行。
+   */
+  worktree?: ProjectWorktreeFilter | undefined;
   models: {
     explorer: ModelRoleConfig;
     executor: ModelRoleConfig;
@@ -104,6 +135,7 @@ export type ProjectSettingsInput = {
   defaultVerificationCommandIds?: string[];
   defaultArtifactMode?: "CONVERSATION" | "REPOSITORY_FILE" | undefined;
   hooks?: ProjectSettings["hooks"];
+  worktree?: Partial<ProjectWorktreeFilter> | undefined;
   models?: {
     explorer?: ModelRoleConfigInput & { model: string };
     executor?: ModelRoleConfigInput & { model: string };
@@ -204,6 +236,7 @@ export const DEFAULT_PROJECT_SETTINGS: ProjectSettings = {
   // 只有 REPOSITORY_FILE 能被入队与执行；理由见 ProjectSettings.defaultArtifactMode。
   defaultArtifactMode: "REPOSITORY_FILE",
   hooks: {},
+  worktree: DEFAULT_WORKTREE_FILTER,
   models: {
     explorer: { model: "gpt-5.6-luna", mode: "plan", temperature: 0.1, loopMode: "provider-controlled" },
     executor: { model: "gpt-5.6-luna", mode: "default", temperature: 0, loopMode: "provider-controlled" },
@@ -317,6 +350,7 @@ function validateProjectSettings(settings: ProjectSettings, catalog?: ModelBacke
       throw new Error(`default verification command ${commandId} must be an enabled verification command`);
   }
 
+  validateWorktreeFilter(settings.worktree ?? DEFAULT_WORKTREE_FILTER);
   if (!isRecord(settings.hooks)) throw new Error("hooks must be an object");
   for (const [name, hook] of Object.entries(settings.hooks)) {
     if (!isRecord(hook) || typeof hook.commandId !== "string" || hook.commandId.trim() === "")
@@ -355,6 +389,24 @@ function validateProjectSettings(settings: ProjectSettings, catalog?: ModelBacke
   if (typeof settings.toolPolicy.computerUseEnabled !== "boolean") throw new Error("toolPolicy.computerUseEnabled must be a boolean");
 }
 
+/** 校验 Worktree 范围配置；与 worktree-manage 的 `validate_branch_patterns` 对齐。 */
+export function validateWorktreeFilter(filter: ProjectWorktreeFilter): void {
+  if (filter.filterMode !== "all" && filter.filterMode !== "patterns") throw new Error("worktree.filterMode must be all or patterns");
+  assertStringArray(filter.branchPatterns, "worktree.branchPatterns");
+  assertStringArray(filter.ignoredBranches, "worktree.ignoredBranches");
+  if (filter.filterMode === "patterns" && filter.branchPatterns.length === 0)
+    throw new Error('worktree.branchPatterns must not be empty in patterns mode; use ["*"] to show every named branch');
+  if (filter.branchPatterns.some((pattern) => pattern !== pattern.trim()))
+    throw new Error("worktree.branchPatterns must not contain surrounding whitespace");
+  if (new Set(filter.branchPatterns).size !== filter.branchPatterns.length)
+    throw new Error("worktree.branchPatterns must not contain duplicates");
+  if (filter.ignoredBranches.some((branch) => branch !== branch.trim()))
+    throw new Error("worktree.ignoredBranches must not contain surrounding whitespace");
+  if (new Set(filter.ignoredBranches).size !== filter.ignoredBranches.length)
+    throw new Error("worktree.ignoredBranches must not contain duplicates");
+  if (typeof filter.includeDetachedWorktrees !== "boolean") throw new Error("worktree.includeDetachedWorktrees must be a boolean");
+}
+
 /** 合并并校验局部 Settings，返回可安全保存和快照的完整配置。 */
 export function normalizeProjectSettings(
   input?: ProjectSettingsInput,
@@ -368,6 +420,7 @@ export function normalizeProjectSettings(
   if (value.defaultVerificationCommandIds !== undefined && !Array.isArray(value.defaultVerificationCommandIds))
     throw new Error("defaultVerificationCommandIds must be an array");
   if (value.hooks !== undefined && !isRecord(value.hooks)) throw new Error("hooks must be an object");
+  if (value.worktree !== undefined && !isRecord(value.worktree)) throw new Error("worktree must be an object");
   if (value.models !== undefined && !isRecord(value.models)) throw new Error("models must be an object");
   if (value.toolPolicy !== undefined && !isRecord(value.toolPolicy)) throw new Error("toolPolicy must be an object");
   const settings: ProjectSettings = {
@@ -392,6 +445,16 @@ export function normalizeProjectSettings(
     // 老配置行没有这一格：缺省即 REPOSITORY_FILE，与全新 Project 一致（理由见 ProjectSettings 里的说明）。
     defaultArtifactMode: value.defaultArtifactMode ?? base.defaultArtifactMode ?? "REPOSITORY_FILE",
     hooks: { ...base.hooks, ...value.hooks },
+    worktree: {
+      ...(base.worktree ?? DEFAULT_WORKTREE_FILTER),
+      ...(value.worktree ?? {}),
+      branchPatterns: value.worktree?.branchPatterns
+        ? [...value.worktree.branchPatterns]
+        : [...(base.worktree ?? DEFAULT_WORKTREE_FILTER).branchPatterns],
+      ignoredBranches: value.worktree?.ignoredBranches
+        ? [...value.worktree.ignoredBranches]
+        : [...(base.worktree ?? DEFAULT_WORKTREE_FILTER).ignoredBranches],
+    },
     models: {
       explorer: mergeRoleModels(base.models.explorer, value.models?.explorer),
       executor: mergeRoleModels(base.models.executor, value.models?.executor),

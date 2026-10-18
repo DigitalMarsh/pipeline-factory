@@ -80,13 +80,16 @@ export function worktreeMergeRelationLabel(relation: WorktreeMergeRelation): str
   const labels: Record<WorktreeMergeRelation, string> = {
     current_merged: "当前已合并",
     current_unmerged: "当前未合并",
+    was_merged_before: "曾经合并过",
     detached: "Detached",
   };
   return labels[relation] ?? "未知关系";
 }
 
 export function worktreeMergeRelationTagType(relation: WorktreeMergeRelation): TagType {
-  return relation === "current_merged" ? "success" : "info";
+  if (relation === "current_merged") return "success";
+  if (relation === "was_merged_before") return "warning";
+  return "info";
 }
 
 /** 来源一栏：属于 Factory 的 Run 就显示计划标题，否则明确写"手动分支"。 */
@@ -165,4 +168,78 @@ export function cleanupDisabledReason(item: WorktreeItem): string {
   if (item.cleanupBlockers.length > 0) return item.cleanupBlockers.join("；");
   if (item.kind !== "branch_worktree") return "只有已创建 worktree 的分支可以清理。";
   return "";
+}
+
+// ───────────────────────────── 排序 / 时间 / 项目范围 ─────────────────────────────
+
+export type WorktreeSortKey = "time" | "name" | "ahead";
+export type WorktreeSortDirection = "asc" | "desc";
+
+/**
+ * 清单排序。**主分支永远置顶**（它是所有比较的基准，混在中间只会让人先去找它）。
+ * `time` 用 `lastCommitAt`（Unix 秒）；没有时间的项（detached）排在最后，不参与比较。
+ */
+export function sortWorktreeItems(
+  items: readonly WorktreeItem[],
+  sort: { key: WorktreeSortKey; direction: WorktreeSortDirection },
+): WorktreeItem[] {
+  const factor = sort.direction === "asc" ? 1 : -1;
+  return [...items].sort((left, right) => {
+    if (left.isBaseBranch !== right.isBaseBranch) return left.isBaseBranch ? -1 : 1;
+    if (sort.key === "name") return left.displayName.localeCompare(right.displayName) * factor;
+    if (sort.key === "ahead") return (left.aheadCount - right.aheadCount) * factor;
+    const leftTime = left.lastCommitAt ?? 0;
+    const rightTime = right.lastCommitAt ?? 0;
+    if (leftTime === rightTime) return left.displayName.localeCompare(right.displayName) * factor;
+    return (leftTime - rightTime) * factor;
+  });
+}
+
+/**
+ * 展示"最近提交"时间：一周内用相对时间，更早用绝对日期。
+ * `now` 可注入——否则这个函数在测试里会随运行时刻漂移。
+ */
+export function formatWorktreeTime(epochSeconds: number | null, now: number = Date.now()): string {
+  if (!epochSeconds) return "—";
+  const date = new Date(epochSeconds * 1000);
+  const diffSeconds = Math.round((now - date.getTime()) / 1000);
+  if (diffSeconds < 60) return "刚刚";
+  if (diffSeconds < 3600) return `${Math.floor(diffSeconds / 60)} 分钟前`;
+  if (diffSeconds < 86_400) return `${Math.floor(diffSeconds / 3600)} 小时前`;
+  if (diffSeconds < 7 * 86_400) return `${Math.floor(diffSeconds / 86_400)} 天前`;
+  const month = `${date.getMonth() + 1}`.padStart(2, "0");
+  const day = `${date.getDate()}`.padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
+/** 项目范围里的分支模式：一行一条，也接受逗号分隔；空行忽略。 */
+export function parseBranchPatterns(text: string): string[] {
+  return [
+    ...new Set(
+      text
+        .split(/[\n,]/)
+        .map((pattern) => pattern.trim())
+        .filter(Boolean),
+    ),
+  ];
+}
+
+export function formatBranchPatterns(patterns: readonly string[]): string {
+  return patterns.join("\n");
+}
+
+/** 切换一条分支的"忽略"状态，返回新数组（不改入参）。 */
+export function toggleIgnoredBranch(ignoredBranches: readonly string[], branch: string, ignore: boolean): string[] {
+  const next = new Set(ignoredBranches);
+  if (ignore) next.add(branch);
+  else next.delete(branch);
+  return [...next].sort();
+}
+
+export function worktreeServiceStatusLabel(status: "stopped" | "running" | "failed"): string {
+  return status === "running" ? "运行中" : status === "failed" ? "已退出（异常）" : "未运行";
+}
+
+export function worktreeServiceStatusTagType(status: "stopped" | "running" | "failed"): TagType {
+  return status === "running" ? "success" : status === "failed" ? "danger" : "info";
 }

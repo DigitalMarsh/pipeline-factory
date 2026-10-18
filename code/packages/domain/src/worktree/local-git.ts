@@ -23,6 +23,8 @@
  *      repoRoot 上。把 cwd 搞混的后果是"worktree 看起来永远干净"或"仓库看起来永远脏"。
  */
 import { execFile } from "node:child_process";
+import { existsSync } from "node:fs";
+import { resolve as resolvePath } from "node:path";
 
 /** 一次 git 调用的结果；`exitCode` 非 0 时 stdout 仍可能有内容（`merge-tree` 就是这样回答冲突的）。 */
 export type WorktreeGitResult = { exitCode: number; stdout: string; stderr: string };
@@ -33,8 +35,15 @@ export type WorktreeGitRunner = (args: string[], cwd: string) => Promise<Worktre
 export type GitWorktreeEntry = { path: string; head: string | null; branch: string | null; detached: boolean; bare: boolean };
 /** `refs/heads` 的一条分支。 */
 export type GitBranchEntry = { name: string; head: string | null; committedAt: number | null };
-/** 合并预览里的单条提交（端口层形状，与 `WorktreePreviewCommit` 同形）。 */
-export type GitLogEntry = { hash: string; subject: string; author: string; relativeTime: string };
+/** 一条提交。预览只用前四个字段；Git Log 页签要 `shortHash` 与绝对时间。 */
+export type GitLogEntry = {
+  hash: string;
+  shortHash: string;
+  subject: string;
+  author: string;
+  authoredAt: string;
+  relativeTime: string;
+};
 /** `--name-status` 的一行。 */
 export type GitNameStatus = { status: string; path: string; previousPath: string | null };
 
@@ -56,10 +65,21 @@ export type WorktreeGitPort = {
   resolveCommit(repoPath: string, ref: string): Promise<string | null>;
   currentBranch(repoRoot: string): Promise<string | null>;
   mergeHead(repoRoot: string): Promise<string | null>;
+  /** 仓库里正在进行的 Git 操作；没有则 null。合并之外的操作也会挡住 `switch`。 */
+  inProgressOperation(repoRoot: string): Promise<"merge" | "rebase" | "cherry-pick" | "revert" | "bisect" | null>;
+  /** 一次 `status --porcelain -z` 同时回答"脏不脏"与"哪些文件有冲突"。 */
+  worktreeState(worktreePath: string): Promise<{ dirty: boolean; conflictFiles: string[] }>;
+  /** 包含这个提交的本地分支（用于判断 detached worktree 上有没有"只存在于这里"的提交）。 */
+  branchesContaining(repoRoot: string, commit: string): Promise<string[]>;
   isAncestor(repoRoot: string, ancestor: string, descendant: string): Promise<boolean>;
   hasCommit(repoRoot: string, commit: string): Promise<boolean>;
   mergeBase(repoRoot: string, left: string, right: string): Promise<string | null>;
   recentCommits(repoRoot: string, fromRef: string, toRef: string, limit: number): Promise<GitLogEntry[]>;
+  /** 某条 ref 的提交历史（不是区间）。 */
+  logCommits(repoRoot: string, ref: string, limit: number): Promise<GitLogEntry[]>;
+  commitFiles(repoRoot: string, commit: string): Promise<GitNameStatus[]>;
+  /** 单个文件在某个提交里的文本 diff；没有可显示的差异时返回空串。 */
+  commitFileDiff(repoRoot: string, commit: string, path: string, previousPath: string | null): Promise<string>;
   diffNameStatus(repoRoot: string, fromRef: string, toRef: string): Promise<GitNameStatus[]>;
   predictConflicts(
     repoRoot: string,
@@ -179,13 +199,55 @@ export function parseMergeTreeConflicts(input: string): string[] {
   return [...new Set(files)].sort();
 }
 
-/** 解析 git 版本；`git version 2.55.0 (Apple Git-…)` → `{ major: 2, minor: 55 }`。 */
+/**
+ * 解析 `git status --porcelain=v1 -z`。
+ * 未解决冲突的状态码是 `DD AU UD UA DU AA UU`；rename/copy 在 `-z` 下是**两个 NUL 分隔的字段**
+ * （没有 `->`），第二段是新路径，解析时要一起跳过。
+ */
+export function parsePorcelainZ(input: string): { dirty: boolean; conflictFiles: string[] } {
+  const tokens = input.split("\0").filter((token) => token.length > 0);
+  const conflictFiles: string[] = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const entry = tokens[index] ?? "";
+    if (entry.length < 3) continue;
+    const status = entry.slice(0, 2);
+    const path = entry.slice(3);
+    if (status[0] === "R" || status[0] === "C") index += 1;
+    if (["DD", "AU", "UD", "UA", "DU", "AA", "UU"].includes(status) && path) conflictFiles.push(path);
+  }
+  return { dirty: tokens.length > 0, conflictFiles: [...new Set(conflictFiles)].sort() };
+}
+
+/** 解析 `git version`；`git version 2.55.0 (Apple Git-…)` → `{ major: 2, minor: 55 }`。 */
 export function parseGitVersion(input: string): GitVersion {
   const match = input.match(/(\d+)\.(\d+)/);
   if (!match) return null;
   const major = Number.parseInt(match[1] ?? "", 10);
   const minor = Number.parseInt(match[2] ?? "", 10);
   return Number.isFinite(major) && Number.isFinite(minor) ? { major, minor } : null;
+}
+
+/** 解析 `%H\x1f%h\x1f%s\x1f%an\x1f%ai\x1f%cr\x1e` 的记录流；预览与 Git Log 共用。 */
+function parseLogEntries(output: string): GitLogEntry[] {
+  return output
+    .split("\x1e")
+    .map((record) => record.trim())
+    .filter(Boolean)
+    .flatMap((record) => {
+      const [hash, shortHash, subject, author, authoredAt, relativeTime] = record.split("\x1f");
+      return hash
+        ? [
+            {
+              hash,
+              shortHash: shortHash ?? hash.slice(0, 7),
+              subject: subject ?? "",
+              author: author ?? "",
+              authoredAt: authoredAt ?? "",
+              relativeTime: relativeTime ?? "",
+            },
+          ]
+        : [];
+    });
 }
 
 const GIT_MAX_BUFFER = 64 * 1024 * 1024;
@@ -200,6 +262,13 @@ function defaultGitRunner(args: string[], cwd: string): Promise<WorktreeGitResul
 }
 
 /** 用本地 `git` 命令实现端口；`runGit` 仅供测试替换。 */
+/**
+ * 工具自身的元数据目录：服务配置写在这里，**不该被算成"工作区有未提交改动"**。
+ * 不排除的话，一个只有 `services.json` 的 worktree 会被判成 dirty——既不能合并也不能清理
+ * （实测：e2e 里配了一个服务之后，"1 项可清理"直接变成 0）。
+ */
+export const WORKTREE_METADATA_DIRS = [".pipeline-factory", ".worktree-manage"] as const;
+
 export function createLocalWorktreeGit(options: { runGit?: WorktreeGitRunner | undefined } = {}): WorktreeGitPort {
   const runGit = options.runGit ?? defaultGitRunner;
 
@@ -278,6 +347,46 @@ export function createLocalWorktreeGit(options: { runGit?: WorktreeGitRunner | u
       return result.exitCode === 0 ? result.stdout.trim() || null : null;
     },
 
+    async inProgressOperation(repoRoot) {
+      // rebase 在前：它有自己的 REBASE_HEAD 目录，且不会产生 MERGE_HEAD，顺序反过来也不会错，
+      // 但先问 rebase 能让"既 rebase 又停下解冲突"的现场报得更准。
+      const gitPath = async (name: string): Promise<string | null> => {
+        const result = await runGit(["rev-parse", "--git-path", name], repoRoot);
+        if (result.exitCode !== 0) return null;
+        const value = result.stdout.trim();
+        return value ? resolvePath(repoRoot, value) : null;
+      };
+      const rebaseMerge = await gitPath("rebase-merge");
+      const rebaseApply = await gitPath("rebase-apply");
+      if ((rebaseMerge && existsSync(rebaseMerge)) || (rebaseApply && existsSync(rebaseApply))) return "rebase";
+      if (await answersYes(["rev-parse", "-q", "--verify", "MERGE_HEAD"], repoRoot)) return "merge";
+      if (await answersYes(["rev-parse", "-q", "--verify", "CHERRY_PICK_HEAD"], repoRoot)) return "cherry-pick";
+      if (await answersYes(["rev-parse", "-q", "--verify", "REVERT_HEAD"], repoRoot)) return "revert";
+      const bisectLog = await gitPath("BISECT_LOG");
+      if (bisectLog && existsSync(bisectLog)) return "bisect";
+      return null;
+    },
+
+    async worktreeState(worktreePath) {
+      const result = await runGit(
+        ["status", "--porcelain=v1", "-z", "--", ".", ...WORKTREE_METADATA_DIRS.map((directory) => `:(exclude)${directory}`)],
+        worktreePath,
+      );
+      if (result.exitCode !== 0) throw new Error(result.stderr.trim() || "git status 失败");
+      return parsePorcelainZ(result.stdout);
+    },
+
+    async branchesContaining(repoRoot, commit) {
+      const output = await read(
+        ["for-each-ref", "--contains", assertSafeRef(commit, "提交"), "--format=%(refname:short)", "refs/heads"],
+        repoRoot,
+      );
+      return output
+        .split("\n")
+        .map((line) => line.trim())
+        .filter(Boolean);
+    },
+
     async isAncestor(repoRoot, ancestor, descendant) {
       return answersYes(["merge-base", "--is-ancestor", assertSafeRef(ancestor, "提交"), assertSafeRef(descendant, "提交")], repoRoot);
     },
@@ -292,23 +401,45 @@ export function createLocalWorktreeGit(options: { runGit?: WorktreeGitRunner | u
     },
 
     async recentCommits(repoRoot, fromRef, toRef, limit) {
+      // 与 `logCommits` 共用同一套记录格式与解析：两条路径的字段必须逐字一致，否则预览里的
+      // "最近提交"会因为少一个字段而整列变空（改格式时只改一处是这里最容易犯的错）。
       const output = await read(
         [
           "log",
-          "--format=%h%x09%s%x09%an%x09%cr",
+          "--format=%H%x1f%h%x1f%s%x1f%an%x1f%ai%x1f%cr%x1e",
           "-n",
           String(Math.max(1, Math.min(limit, 50))),
           `${assertSafeRef(fromRef, "起始提交")}..${assertSafeRef(toRef, "结束提交")}`,
         ],
         repoRoot,
       );
-      return output
-        .split("\n")
-        .filter(Boolean)
-        .flatMap((line) => {
-          const [hash, subject, author, relativeTime] = line.split("\t");
-          return hash ? [{ hash, subject: subject ?? "", author: author ?? "", relativeTime: relativeTime ?? "" }] : [];
-        });
+      return parseLogEntries(output);
+    },
+
+    async logCommits(repoRoot, ref, limit) {
+      const output = await read(
+        [
+          "log",
+          "--format=%H%x1f%h%x1f%s%x1f%an%x1f%ai%x1f%cr%x1e",
+          "-n",
+          String(Math.max(1, Math.min(limit, 200))),
+          assertSafeRef(ref, "分支"),
+        ],
+        repoRoot,
+      );
+      return parseLogEntries(output);
+    },
+
+    async commitFiles(repoRoot, commit) {
+      return parseNameStatus(await read(["show", "--name-status", "--format=", "--find-renames", assertSafeRef(commit, "提交")], repoRoot));
+    },
+
+    async commitFileDiff(repoRoot, commit, path, previousPath) {
+      const args = ["show", "--format=", "--find-renames", assertSafeRef(commit, "提交"), "--"];
+      if (previousPath && previousPath.trim()) args.push(previousPath.trim());
+      args.push(assertSafeRef(path, "文件路径"));
+      const result = await runGit(args, repoRoot);
+      return result.exitCode === 0 ? result.stdout : "";
     },
 
     async diffNameStatus(repoRoot, fromRef, toRef) {
@@ -357,7 +488,13 @@ export function createLocalWorktreeGit(options: { runGit?: WorktreeGitRunner | u
 
     async removeWorktree(repoRoot, worktreePath) {
       if (!worktreePath.trim()) return { ok: false, message: "worktree 路径为空" };
-      const result = await runGit(["worktree", "remove", worktreePath], repoRoot);
+      /**
+       * **必须带 `--force`**，但"干不干净"这个判断已经在我们这边做过了（`worktreeState` 会排除
+       * 工具元数据目录）。不带 force 时 git 会因为 `.pipeline-factory/services.json` 这类未跟踪文件
+       * 直接拒绝删除——实测报 `contains modified or untracked files, use --force`，于是"可清理"
+       * 的条目点了没反应。与 Factory 自己的 `LocalGitWorktreeAdapter.remove` 用的是同一个做法。
+       */
+      const result = await runGit(["worktree", "remove", "--force", worktreePath], repoRoot);
       return { ok: result.exitCode === 0, message: (result.stderr || result.stdout).trim() };
     },
 

@@ -31,8 +31,8 @@
  *   7) `list()` **不跑冲突预测**：`merge-tree` 对每条分支跑一次会把刷新拖成秒级。预览才预测。
  */
 import { existsSync, realpathSync } from "node:fs";
-import { EXECUTION_SLOT_RUN_STATUSES } from "../project/project.js";
-import type { Project } from "../project/project.js";
+import { DEFAULT_WORKTREE_FILTER, EXECUTION_SLOT_RUN_STATUSES } from "../project/project.js";
+import type { Project, ProjectWorktreeFilter } from "../project/project.js";
 import type { PipelineStore } from "../store/pipeline-store.js";
 import type { MergeService } from "../run/merge.js";
 import type { Scheduler } from "../run/scheduler.js";
@@ -48,8 +48,11 @@ import type {
   WorktreeCleanupResult,
   WorktreeFactoryLink,
   WorktreeGitDirtyState,
+  WorktreeInProgressOperation,
   WorktreeItemStatus,
+  WorktreeLogCommit,
 } from "./types.js";
+import { WORKTREE_METADATA_DIRS } from "./local-git.js";
 import type { WorktreeGitPort } from "./local-git.js";
 
 /** 本域的错误码；路由按它映射 HTTP 状态，**不靠错误文案正则匹配**。 */
@@ -94,6 +97,12 @@ export type WorktreeServiceOptions = {
 };
 
 const DEFAULT_MAX_BRANCHES = 300;
+/**
+ * 并发执行的 git 子进程上限。清单的每条分支要跑一次 `rev-list`，串行时 300 条分支就是 300 次
+ * 进程往返（实测在主仓库上要好几秒）。并发 8 条能把墙钟时间压到 1/5 左右，同时不至于把
+ * 机器打满（每个 git 进程自己也会再起线程）。
+ */
+const GIT_CONCURRENCY = 8;
 
 /** named branch 的分类；判据逐条对应 worktree-manage 的 `classify_named_branch_state`。 */
 export function classifyNamedBranch(
@@ -120,6 +129,45 @@ export function classifyDetached(dirty: WorktreeGitDirtyState, ahead: number): W
   if (dirty !== "clean") return "detached_dirty";
   return "detached_clean";
 }
+
+/** worktree-manage 的分支模式匹配：`*` = 全部、`prefix*` = 前缀、其余精确匹配。 */
+export function matchesBranchPattern(branch: string, pattern: string): boolean {
+  if (pattern === "*") return true;
+  if (pattern.endsWith("*")) return branch.startsWith(pattern.slice(0, -1));
+  return branch === pattern;
+}
+
+/** 分支是否命中项目设置的默认范围（模式之外的一律视为命中）。 */
+export function matchesBranchScope(filter: ProjectWorktreeFilter, branch: string): boolean {
+  if (filter.filterMode !== "patterns") return true;
+  return filter.branchPatterns.some((pattern) => matchesBranchPattern(branch, pattern));
+}
+
+/** 有界并发的 map；用于把"每条分支一次 git 调用"摊开到几个进程上。 */
+async function mapWithConcurrency<T, R>(items: readonly T[], limit: number, work: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    for (;;) {
+      const index = cursor;
+      cursor += 1;
+      const item = items[index];
+      if (item === undefined) return;
+      results[index] = await work(item);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+/** 进行中的 Git 操作在界面/错误里的人话名字。 */
+const OPERATION_LABEL: Record<WorktreeInProgressOperation, string> = {
+  merge: "合并",
+  rebase: "rebase",
+  "cherry-pick": "cherry-pick",
+  revert: "revert",
+  bisect: "bisect",
+};
 
 /** 汇总 `--name-status` 的结果。 */
 function summarizeFileChanges(changes: readonly WorktreeFileChange[]): WorktreeFileSummary {
@@ -160,8 +208,13 @@ export class WorktreeService {
     this.maxBranches = Math.max(1, options.maxBranches ?? DEFAULT_MAX_BRANCHES);
   }
 
-  /** 盘点一个项目的全部分支与 worktree。只读；不跑冲突预测。 */
-  async list(project: Project): Promise<WorktreeInventory> {
+  /**
+   * 盘点一个项目的分支与 worktree。只读；不跑冲突预测。
+   *
+   * `includeFiltered` 为 true 时**忽略项目设置的默认范围**（模式/忽略/ detached 开关）。
+   * 写操作（preview / merge / cleanup）一律用它解析目标——被项目隐藏的分支不该变成"不存在"。
+   */
+  async list(project: Project, options: { includeFiltered?: boolean } = {}): Promise<WorktreeInventory> {
     const repoRoot = project.repoRoot;
     const baseBranch = project.defaultBranch;
     const warnings: string[] = [];
@@ -170,13 +223,17 @@ export class WorktreeService {
     if (!existsSync(repoRoot)) {
       throw new WorktreeError("WORKTREE_GIT_FAILED", `仓库目录不存在：${repoRoot}（请检查项目设置里的仓库路径）`);
     }
+    const filter = project.settings.worktree ?? DEFAULT_WORKTREE_FILTER;
     const worktrees = await this.readGit(() => this.git.listWorktrees(repoRoot), "读取 worktree 列表");
     const branches = await this.readGit(() => this.git.listBranches(repoRoot), "读取本地分支");
     const baseHead = await this.git.resolveCommit(repoRoot, baseBranch);
     const currentBranch = await this.git.currentBranch(repoRoot);
-    const mergeHead = await this.git.mergeHead(repoRoot);
-    const conflictFiles = mergeHead ? await this.git.conflictFiles(repoRoot) : [];
+    // 不只 merge：rebase / cherry-pick / revert / bisect 都会让 `git switch` 失败。
+    const operation = await this.git.inProgressOperation(repoRoot).catch(() => null);
+    const mergeHead = operation === "merge" ? await this.git.mergeHead(repoRoot) : null;
+    const conflictFiles = operation ? await this.git.conflictFiles(repoRoot).catch(() => []) : [];
     const activeRuns = this.activeRuns(project.id);
+    const everMerged = this.everMergedBranches(project.id);
 
     let mergedBranches = new Set<string>();
     try {
@@ -205,110 +262,164 @@ export class WorktreeService {
     const runsByBranch = this.runsByBranch(project.id);
     const truncated = branches.length > this.maxBranches;
     const visibleBranches = truncated ? branches.slice(0, this.maxBranches) : branches;
+    const includeFiltered = Boolean(options.includeFiltered);
+    /** 先算范围（纯内存判断），再决定要不要为它跑 git —— 这是大仓库首屏开销的主要来源。 */
+    const inScope = (branch: string, isBaseBranch: boolean): boolean =>
+      isBaseBranch || (!filter.ignoredBranches.includes(branch) && matchesBranchScope(filter, branch));
 
-    const items: WorktreeItem[] = [];
-    for (const branch of visibleBranches) {
-      const worktree = worktreeByBranch.get(branch.name);
-      // 展示与 `git worktree remove` 都用 git 自报的路径；**比较**一律走 `samePath`（见 normalizeFsPath）。
-      const worktreePath = worktree ? worktree.path : null;
-      const missing = worktreePath ? !existsSync(worktreePath) : false;
-      const { dirty, conflictFiles: itemConflicts } = await this.dirtyState(worktreePath, missing, warnings);
-      const isBaseBranch = branch.name === baseBranch;
-      const { ahead, behind } = isBaseBranch
-        ? { ahead: 0, behind: 0 }
-        : await this.aheadBehindSafe(repoRoot, baseBranch, branch.name, warnings);
-      const merged = isBaseBranch || mergedBranches.has(branch.name);
-      const status = classifyNamedBranch(dirty, ahead, merged, isBaseBranch);
+    const named = await mapWithConcurrency(
+      visibleBranches.filter((branch) => includeFiltered || inScope(branch.name, branch.name === baseBranch)),
+      GIT_CONCURRENCY,
+      async (branch): Promise<WorktreeItem> => {
+        const worktree = worktreeByBranch.get(branch.name);
+        // 展示与 `git worktree remove` 都用 git 自报的路径；**比较**一律走 `samePath`。
+        const worktreePath = worktree ? worktree.path : null;
+        const missing = worktreePath ? !existsSync(worktreePath) : false;
+        const { dirty, conflictFiles: itemConflicts } = await this.dirtyState(worktreePath, missing, warnings);
+        const isBaseBranch = branch.name === baseBranch;
+        const { ahead, behind } = isBaseBranch
+          ? { ahead: 0, behind: 0 }
+          : await this.aheadBehindSafe(repoRoot, baseBranch, branch.name, warnings);
+        const merged = isBaseBranch || mergedBranches.has(branch.name);
+        const wasMerged = everMerged.has(branch.name);
+        const status = classifyNamedBranch(dirty, ahead, merged, isBaseBranch);
+        const isIgnored = !isBaseBranch && filter.ignoredBranches.includes(branch.name);
+        const matchesScope = isBaseBranch || matchesBranchScope(filter, branch.name);
 
-      const cheap = this.cheapMergeVerdict({
-        branch: branch.name,
-        isBaseBranch,
-        detached: false,
-        ahead,
-        merged,
-        dirty,
-        worktreePath,
-        missing,
-        activeRunIds: activeRuns,
-        mergeInProgress: Boolean(mergeHead),
-        baseOccupiedElsewhere,
-        repoDirtyPaths: repoDirty.clean ? [] : repoDirty.paths,
-      });
+        const verdict = this.mergeAndCleanupVerdict({
+          branch: branch.name,
+          kind: isBaseBranch ? "base_branch" : worktreePath ? "branch_worktree" : "local_branch",
+          detached: false,
+          containedInBranch: true,
+          ahead,
+          merged,
+          dirty,
+          worktreePath,
+          missing,
+          currentBranch,
+          activeRunIds: activeRuns,
+          operation,
+          baseOccupiedElsewhere,
+          repoDirtyPaths: repoDirty.clean ? [] : repoDirty.paths,
+        });
 
-      items.push({
-        itemId: `branch:${branch.name}`,
-        kind: isBaseBranch ? "base_branch" : worktreePath ? "branch_worktree" : "local_branch",
-        branch: branch.name,
-        displayName: branch.name,
-        isBaseBranch,
-        hasWorktree: Boolean(worktreePath),
-        isDetached: false,
-        worktreePath,
-        effectivePath: worktreePath ?? repoRoot,
-        missing,
-        status,
-        mergeRelation: merged ? "current_merged" : "current_unmerged",
-        gitDirtyState: dirty,
-        conflictFiles: itemConflicts,
-        aheadCount: ahead,
-        behindCount: behind,
-        merged,
-        lastCommit: branch.head,
-        lastCommitAt: branch.committedAt,
-        mergeable: cheap.blockers.length === 0,
-        blockers: cheap.blockers,
-        cleanupable: cheap.cleanupBlockers.length === 0,
-        cleanupBlockers: cheap.cleanupBlockers,
-        isLiveRunWorkspace: this.isLiveWorkspace(worktreePath, activeRuns),
-        factory: runsByBranch.get(branch.name) ?? null,
-      });
-    }
+        return {
+          itemId: `branch:${branch.name}`,
+          kind: isBaseBranch ? "base_branch" : worktreePath ? "branch_worktree" : "local_branch",
+          branch: branch.name,
+          displayName: branch.name,
+          isBaseBranch,
+          hasWorktree: Boolean(worktreePath),
+          isDetached: false,
+          worktreePath,
+          effectivePath: worktreePath ?? repoRoot,
+          missing,
+          status,
+          mergeRelation: merged ? "current_merged" : wasMerged ? "was_merged_before" : "current_unmerged",
+          gitDirtyState: dirty,
+          conflictFiles: itemConflicts,
+          aheadCount: ahead,
+          behindCount: behind,
+          merged,
+          lastCommit: branch.head,
+          lastCommitAt: branch.committedAt,
+          mergeable: verdict.blockers.length === 0,
+          blockers: verdict.blockers,
+          cleanupable: verdict.cleanupBlockers.length === 0,
+          cleanupBlockers: verdict.cleanupBlockers,
+          isLiveRunWorkspace: this.isLiveWorkspace(worktreePath, activeRuns),
+          everMerged: wasMerged,
+          isIgnored,
+          matchesScope,
+          containedInBranch: true,
+          factory: runsByBranch.get(branch.name) ?? null,
+        };
+      },
+    );
 
-    for (const worktree of detachedWorktrees) {
-      const worktreePath = worktree.path;
-      const missing = !existsSync(worktreePath);
-      const { dirty, conflictFiles: itemConflicts } = await this.dirtyState(worktreePath, missing, warnings);
-      const head = worktree.head;
-      const { ahead, behind } =
-        head && baseHead ? await this.aheadBehindSafe(repoRoot, baseBranch, head, warnings) : { ahead: 0, behind: 0 };
-      const status = classifyDetached(dirty, ahead);
-      items.push({
-        itemId: `detached:${worktreePath}`,
-        kind: "detached_worktree",
-        branch: null,
-        displayName: head ? `detached @ ${head.slice(0, 7)}` : "detached",
-        isBaseBranch: false,
-        hasWorktree: true,
-        isDetached: true,
-        worktreePath,
-        effectivePath: worktreePath,
-        missing,
-        status,
-        mergeRelation: "detached",
-        gitDirtyState: dirty,
-        conflictFiles: itemConflicts,
-        aheadCount: ahead,
-        behindCount: behind,
-        merged: false,
-        lastCommit: head,
-        lastCommitAt: null,
-        mergeable: false,
-        blockers: ["detached worktree 没有分支名，不能合并。"],
-        cleanupable: false,
-        cleanupBlockers: ["detached worktree 没有分支可判定是否已合并，不能清理（会丢失提交）。"],
-        isLiveRunWorkspace: this.isLiveWorkspace(worktreePath, activeRuns),
-        factory: null,
-      });
-    }
+    const detached = await mapWithConcurrency(
+      includeFiltered || filter.includeDetachedWorktrees ? detachedWorktrees : [],
+      GIT_CONCURRENCY,
+      async (worktree): Promise<WorktreeItem> => {
+        const worktreePath = worktree.path;
+        const missing = !existsSync(worktreePath);
+        const { dirty, conflictFiles: itemConflicts } = await this.dirtyState(worktreePath, missing, warnings);
+        const head = worktree.head;
+        const { ahead, behind } =
+          head && baseHead ? await this.aheadBehindSafe(repoRoot, baseBranch, head, warnings) : { ahead: 0, behind: 0 };
+        const live = this.isLiveWorkspace(worktreePath, activeRuns);
+        /**
+         * 只有"干净、目录在、没被 Run 占用"的 detached worktree 才值得去问"它的提交有没有别处收着"：
+         * 脏的那几个连清都不能清，多跑一次 `for-each-ref` 只是浪费。
+         */
+        let containedInBranch = false;
+        if (!missing && dirty === "clean" && !live && head) {
+          containedInBranch = (await this.git.branchesContaining(repoRoot, head).catch(() => [])).length > 0;
+        }
+        const status = classifyDetached(dirty, ahead);
+        const verdict = this.mergeAndCleanupVerdict({
+          branch: null,
+          kind: "detached_worktree",
+          detached: true,
+          containedInBranch,
+          ahead,
+          merged: false,
+          dirty,
+          worktreePath,
+          missing,
+          currentBranch,
+          activeRunIds: activeRuns,
+          operation,
+          baseOccupiedElsewhere,
+          repoDirtyPaths: repoDirty.clean ? [] : repoDirty.paths,
+        });
+
+        return {
+          itemId: `detached:${worktreePath}`,
+          kind: "detached_worktree",
+          branch: null,
+          displayName: head ? `detached @ ${head.slice(0, 7)}` : "detached",
+          isBaseBranch: false,
+          hasWorktree: true,
+          isDetached: true,
+          worktreePath,
+          effectivePath: worktreePath,
+          missing,
+          status,
+          mergeRelation: "detached",
+          gitDirtyState: dirty,
+          conflictFiles: itemConflicts,
+          aheadCount: ahead,
+          behindCount: behind,
+          merged: false,
+          lastCommit: head,
+          lastCommitAt: null,
+          mergeable: verdict.blockers.length === 0,
+          blockers: verdict.blockers,
+          cleanupable: verdict.cleanupBlockers.length === 0,
+          cleanupBlockers: verdict.cleanupBlockers,
+          isLiveRunWorkspace: live,
+          everMerged: false,
+          isIgnored: false,
+          matchesScope: filter.includeDetachedWorktrees,
+          containedInBranch,
+          factory: null,
+        };
+      },
+    );
 
     if (!repoDirty.clean) {
       warnings.push(`仓库工作目录不是 clean 状态（${repoDirty.paths.slice(0, 5).join("、")}），合并前需要先提交或 stash。`);
     }
-    items.sort((left, right) => {
+    const items = [...named, ...detached].sort((left, right) => {
       if (left.isBaseBranch !== right.isBaseBranch) return left.isBaseBranch ? -1 : 1;
       if (left.kind !== right.kind) return left.kind.localeCompare(right.kind);
       return left.displayName.localeCompare(right.displayName);
     });
+    const filteredOutCount = includeFiltered
+      ? 0
+      : visibleBranches.filter((branch) => branch.name !== baseBranch && !inScope(branch.name, false)).length +
+        (filter.includeDetachedWorktrees ? 0 : detachedWorktrees.length);
 
     return {
       projectId: project.id,
@@ -316,8 +427,10 @@ export class WorktreeService {
       baseBranch,
       baseHead,
       currentBranch,
-      mergeInProgress: mergeHead ? { mergeHead, currentBranch, conflictFiles } : null,
+      mergeInProgress: operation ? { kind: operation, mergeHead, currentBranch, conflictFiles } : null,
       activeRunIds: activeRuns.map((run) => run.id),
+      filter,
+      filteredOutCount,
       items,
       truncated,
       warnings,
@@ -326,7 +439,8 @@ export class WorktreeService {
 
   /** 合并预览：跑全部阻断判据 + 提交/文件变更 + 冲突预测。**确认合并的唯一依据。** */
   async preview(project: Project, itemId: string): Promise<WorktreeMergePreview> {
-    const inventory = await this.list(project);
+    // 目标解析必须看**全量**清单：被项目范围隐藏的分支仍然可以被预览/合并。
+    const inventory = await this.list(project, { includeFiltered: true });
     const item = inventory.items.find((candidate) => candidate.itemId === itemId);
     if (!item) throw new WorktreeError("WORKTREE_NOT_FOUND", `分支或 worktree 不存在：${itemId}`);
 
@@ -599,49 +713,70 @@ export class WorktreeService {
     });
   }
 
-  /** 清理一个已合并且干净的 branch worktree。见维护提示 5。 */
+  /**
+   * 清理一个"已合并 / 可安全删除"的项。三种 kind 走不同路径（判据见 `mergeAndCleanupVerdict`）：
+   * branch worktree（删目录 + 删分支）、无 worktree 的本地分支（只删分支）、
+   * detached worktree（只删目录，且要求提交已被某个本地分支包含）。
+   */
   async cleanup(project: Project, input: WorktreeCleanupInput): Promise<WorktreeCleanupResult> {
     return this.withProjectLock(project.id, async () => {
-      const inventory = await this.list(project);
+      const inventory = await this.list(project, { includeFiltered: true });
       const item = inventory.items.find((candidate) => candidate.itemId === input.itemId);
       if (!item) throw new WorktreeError("WORKTREE_NOT_FOUND", `分支或 worktree 不存在：${input.itemId}`);
-      if (item.kind !== "branch_worktree" || !item.branch || !item.worktreePath) {
-        throw new WorktreeError("WORKTREE_CLEANUP_BLOCKED", item.cleanupBlockers.join("\n") || "只有已创建 worktree 的分支可以清理。");
-      }
       if (item.cleanupBlockers.length > 0) {
         throw new WorktreeError("WORKTREE_CLEANUP_BLOCKED", item.cleanupBlockers.join("\n"));
       }
       if (input.expectedBranchHead !== item.lastCommit) {
-        throw new WorktreeError("WORKTREE_STATE_CHANGED", "分支在预览之后发生了变化，请刷新后再清理。");
+        throw new WorktreeError("WORKTREE_STATE_CHANGED", "分支或 worktree 在预览之后发生了变化，请刷新后再清理。");
       }
 
-      /**
-       * 这个 worktree 若还是某条 Run 的 workspace，就走 Factory 自己的回收路径：
-       * `releaseWorkspace` 会跑项目的 cleanup 钩子并把 `run.workspacePath` 清空。
-       * **不能只是删目录**——那样这条 Run 的 cleanup 钩子永远不会执行（项目可能靠它停服务），
-       * 而 `workspacePath` 还得我们另外去抹。没有 scheduler 的实例（测试/只读）仍走直接删除。
-       */
-      const ownerRun = this.runHoldingWorkspace(project.id, item.worktreePath);
-      let cleanupHookNeedsAttention = false;
-      if (ownerRun && this.options.scheduler) {
-        const hooks = this.store.getProject(project.id)?.settings.hooks ?? {};
-        const released = await this.options.scheduler.releaseWorkspace(ownerRun.id, hooks);
-        if (!released.worktreeRemoved) {
-          throw new WorktreeError("WORKTREE_CLEANUP_BLOCKED", `worktree 回收失败：${released.error ?? "未知原因"}`);
-        }
-        cleanupHookNeedsAttention = released.cleanupNeedsAttention;
-      } else if (!existsSync(item.worktreePath)) {
-        // 目录已经不在了：把 git 的登记也清掉，否则后面的 branch -d 会一直说"被 worktree 占用"。
-        await this.git.pruneWorktrees(project.repoRoot);
-      } else {
-        const removed = await this.git.removeWorktree(project.repoRoot, item.worktreePath);
-        if (!removed.ok) throw new WorktreeError("WORKTREE_CLEANUP_BLOCKED", `worktree 删除失败：${removed.message}`);
+      if (item.kind === "detached_worktree") {
+        if (!item.worktreePath) throw new WorktreeError("WORKTREE_CLEANUP_BLOCKED", "detached worktree 缺少目录路径。");
+        await this.removeWorktreePath(project.repoRoot, item.worktreePath);
+        this.appendEvent("worktree.cleaned", project.id, {
+          projectId: project.id,
+          itemId: item.itemId,
+          branch: null,
+          worktreePath: item.worktreePath,
+          worktreeRemoved: true,
+          branchDeleted: false,
+        });
+        return {
+          message: "清理完成：detached worktree 目录已删除（它的提交仍被本地分支包含）。",
+          worktreeRemoved: true,
+          branchDeleted: false,
+          runWorkspaceCleared: this.clearRunWorkspace(project.id, item.worktreePath),
+          cleanupHookNeedsAttention: false,
+        };
       }
-      // 走到这里目录一定已经不在（要么本来就没有，要么刚刚删掉）。
-      const worktreeRemoved = true;
+
+      if (!item.branch) throw new WorktreeError("WORKTREE_CLEANUP_BLOCKED", "缺少分支名，不能清理。");
+
+      let worktreeRemoved = false;
+      let cleanupHookNeedsAttention = false;
+      if (item.worktreePath) {
+        /**
+         * 这个 worktree 若还是某条 Run 的 workspace，就走 Factory 自己的回收路径：
+         * `releaseWorkspace` 会跑项目的 cleanup 钩子并把 `run.workspacePath` 清空。
+         * **不能只是删目录**——那样这条 Run 的 cleanup 钩子永远不会执行（项目可能靠它停服务），
+         * 而 `workspacePath` 还得我们另外去抹。没有 scheduler 的实例（测试/只读）仍走直接删除。
+         */
+        const ownerRun = this.runHoldingWorkspace(project.id, item.worktreePath);
+        if (ownerRun && this.options.scheduler) {
+          const hooks = this.store.getProject(project.id)?.settings.hooks ?? {};
+          const released = await this.options.scheduler.releaseWorkspace(ownerRun.id, hooks);
+          if (!released.worktreeRemoved) {
+            throw new WorktreeError("WORKTREE_CLEANUP_BLOCKED", `worktree 回收失败：${released.error ?? "未知原因"}`);
+          }
+          cleanupHookNeedsAttention = released.cleanupNeedsAttention;
+        } else {
+          await this.removeWorktreePath(project.repoRoot, item.worktreePath);
+        }
+        worktreeRemoved = true;
+      }
 
       // 目录确认删掉之后才清库里的 workspacePath：删除失败时那条记录仍是事实，不能提前抹掉。
-      const runWorkspaceCleared = this.clearRunWorkspace(project.id, item.worktreePath);
+      const runWorkspaceCleared = item.worktreePath ? this.clearRunWorkspace(project.id, item.worktreePath) : false;
       const deleted = await this.git.deleteBranch(project.repoRoot, item.branch);
       this.appendEvent("worktree.cleaned", project.id, {
         projectId: project.id,
@@ -651,11 +786,14 @@ export class WorktreeService {
         worktreeRemoved,
         branchDeleted: deleted.ok,
       });
+
       const message = !deleted.ok
-        ? `worktree 已删除，但分支未能删除：${deleted.message}`
+        ? `${worktreeRemoved ? "worktree 已删除，但" : ""}分支未能删除：${deleted.message}`
         : cleanupHookNeedsAttention
-          ? "清理完成：worktree 与分支都已删除；cleanup 钩子需要关注（见项目设置）。"
-          : "清理完成：worktree 与分支都已删除。";
+          ? "清理完成：分支已删除；cleanup 钩子需要关注（见项目设置）。"
+          : worktreeRemoved
+            ? "清理完成：worktree 与分支都已删除。"
+            : "清理完成：已删除本地分支。";
       return {
         message,
         worktreeRemoved,
@@ -664,6 +802,51 @@ export class WorktreeService {
         cleanupHookNeedsAttention,
       };
     });
+  }
+
+  /**
+   * 某条分支/ref 的提交历史（界面上的「提交历史」）。
+   * 先 `resolveCommit` 确认 ref 真实存在：既挡掉拼错的参数，也避免把任意字符串当 rev 传给 git。
+   */
+  async log(project: Project, input: { ref: string; limit?: number | undefined }): Promise<WorktreeLogCommit[]> {
+    const ref = input.ref.trim();
+    if (!ref) throw new WorktreeError("WORKTREE_NOT_FOUND", "分支或提交不能为空。");
+    const resolved = await this.git.resolveCommit(project.repoRoot, ref);
+    if (!resolved) throw new WorktreeError("WORKTREE_NOT_FOUND", `仓库里没有这个分支或提交：${ref}`);
+    const limit = Math.max(1, Math.min(input.limit ?? 50, 200));
+    return this.git.logCommits(project.repoRoot, ref, limit);
+  }
+
+  /** 按 itemId 解析一个清单项（全量清单，不受项目范围过滤影响）。 */
+  async item(project: Project, itemId: string): Promise<WorktreeItem> {
+    const inventory = await this.list(project, { includeFiltered: true });
+    const item = inventory.items.find((candidate) => candidate.itemId === itemId);
+    if (!item) throw new WorktreeError("WORKTREE_NOT_FOUND", `分支或 worktree 不存在：${itemId}`);
+    return item;
+  }
+
+  /** 某个提交改了哪些文件。 */
+  async commitFiles(project: Project, commit: string): Promise<WorktreeFileChange[]> {
+    const sha = await this.requireCommit(project, commit);
+    return this.git.commitFiles(project.repoRoot, sha);
+  }
+
+  /** 某个提交里单个文件的文本 diff；没有可显示的差异时返回空串（由界面给提示）。 */
+  async commitDiff(project: Project, input: { commit: string; path: string; previousPath?: string | null | undefined }): Promise<string> {
+    const sha = await this.requireCommit(project, input.commit);
+    const path = input.path.trim();
+    if (!path) throw new WorktreeError("WORKTREE_NOT_FOUND", "文件路径不能为空。");
+    return this.git.commitFileDiff(project.repoRoot, sha, path, input.previousPath?.trim() || null);
+  }
+
+  /** 校验一个提交确实存在于该项目仓库，返回它解析后的 SHA。 */
+  private async requireCommit(project: Project, commit: string): Promise<string> {
+    const value = commit.trim();
+    if (!value) throw new WorktreeError("WORKTREE_NOT_FOUND", "提交不能为空。");
+    if (!(await this.git.hasCommit(project.repoRoot, value))) {
+      throw new WorktreeError("WORKTREE_NOT_FOUND", `仓库里没有这个提交：${value}`);
+    }
+    return value;
   }
 
   // ───────────────────────────── 内部 ─────────────────────────────
@@ -727,6 +910,26 @@ export class WorktreeService {
     return { mergeRequest: "confirmed", runId: run.id, workspace, message };
   }
 
+  /**
+   * "曾经合并过"的分支集合，来自 Factory 自己记的合并事件。
+   *
+   * 为什么不问 Git：历史合并没有留下可查询的标记（`--merged` 只回答"现在是否已合并"）。
+   * 也不单独建表：事件已经是审计事实，而 `worktree.merge.*` 不在可裁剪白名单里，不会被清掉。
+   * **边界**：只覆盖从这个面板执行过的合并；在 Git 侧手合并的历史不在其中。
+   */
+  private everMergedBranches(projectId: string): Set<string> {
+    const branches = new Set<string>();
+    const events = this.store.listEvents({
+      aggregateId: projectId,
+      types: ["worktree.merge.completed", "worktree.merge.continued"],
+    });
+    for (const event of events) {
+      const branch = event.payload.branch;
+      if (typeof branch === "string" && branch) branches.add(branch);
+    }
+    return branches;
+  }
+
   private activeRuns(projectId: string): Run[] {
     return this.store.listRuns().filter((run) => run.projectId === projectId && EXECUTION_SLOT_RUN_STATUSES.has(run.status));
   }
@@ -776,6 +979,17 @@ export class WorktreeService {
     return activeRuns.some((run) => samePath(run.workspacePath, worktreePath));
   }
 
+  /** 删除一个 worktree 目录；目录已经不在了就把 Git 的登记清掉。 */
+  private async removeWorktreePath(repoRoot: string, worktreePath: string): Promise<void> {
+    if (!existsSync(worktreePath)) {
+      // 目录已经不在了：把 git 的登记也清掉，否则后面的 branch -d 会一直说"被 worktree 占用"。
+      await this.git.pruneWorktrees(repoRoot);
+      return;
+    }
+    const removed = await this.git.removeWorktree(repoRoot, worktreePath);
+    if (!removed.ok) throw new WorktreeError("WORKTREE_CLEANUP_BLOCKED", `worktree 删除失败：${removed.message}`);
+  }
+
   /** 找一条 `workspacePath` 指向这个目录的 Run（用于走它自己的回收路径）。 */
   private runHoldingWorkspace(projectId: string, worktreePath: string): Run | undefined {
     return this.store
@@ -798,7 +1012,8 @@ export class WorktreeService {
 
   /** repoRoot 的工作区干净检查；白名单只放行 Factory 自己的产物（Plan 留档目录）。 */
   private async inspectRepoRoot(project: Project) {
-    const ignorePaths = this.options.ignoreDirtyPathsFor?.(project.repoRoot) ?? [];
+    // Plan 留档目录 + 工具自己的元数据目录都放行：前者是 Factory 的产物，后者是服务配置。
+    const ignorePaths = [...(this.options.ignoreDirtyPathsFor?.(project.repoRoot) ?? []), ...WORKTREE_METADATA_DIRS];
     return inspectWorkingTree({
       repoRoot: project.repoRoot,
       ...(ignorePaths.length > 0 ? { ignorePaths } : {}),
@@ -830,10 +1045,10 @@ export class WorktreeService {
       return { dirty: "clean", conflictFiles: [] };
     }
     try {
-      const conflicts = await this.git.conflictFiles(worktreePath);
-      if (conflicts.length > 0) return { dirty: "conflict", conflictFiles: conflicts };
-      const status = await this.git.statusShort(worktreePath);
-      return { dirty: status.length > 0 ? "dirty" : "clean", conflictFiles: [] };
+      // 一次 `status --porcelain -z` 同时回答脏不脏与冲突文件——此前是两次调用。
+      const state = await this.git.worktreeState(worktreePath);
+      if (state.conflictFiles.length > 0) return { dirty: "conflict", conflictFiles: state.conflictFiles };
+      return { dirty: state.dirty ? "dirty" : "clean", conflictFiles: [] };
     } catch (error) {
       warnings.push(`无法读取 ${worktreePath} 的工作区状态：${error instanceof Error ? error.message : String(error)}`);
       return { dirty: "clean", conflictFiles: [] };
@@ -854,28 +1069,41 @@ export class WorktreeService {
     }
   }
 
-  /** 清单层面的廉价判据；完整判据（冲突预测、文件变更）留给 `preview()`。 */
-  private cheapMergeVerdict(input: {
+  /**
+   * 清单层面的判据（合并与清理各一组）。完整判据（冲突预测、文件变更）留给 `preview()`。
+   *
+   * 清理按 kind 分三档，这是本次扩出来的两档（此前只有 branch_worktree）：
+   * - `branch_worktree`：分支已合并 + 工作区干净 + 不是活动 Run 的 workspace。
+   * - `local_branch`：分支已合并 + **不是仓库当前检出的分支**（git 不允许删它）。
+   * - `detached_worktree`：工作区干净 + HEAD 已被某个本地分支包含（否则删掉就丢提交）。
+   * 三档共同前提：项目没有活动 Run。
+   */
+  private mergeAndCleanupVerdict(input: {
     branch: string | null;
-    isBaseBranch: boolean;
+    kind: "base_branch" | "local_branch" | "branch_worktree" | "detached_worktree";
     detached: boolean;
+    /** detached：HEAD 是否已被某个本地分支包含。 */
+    containedInBranch: boolean;
     ahead: number;
     merged: boolean;
     dirty: WorktreeGitDirtyState;
     worktreePath: string | null;
     missing: boolean;
+    currentBranch: string | null;
     activeRunIds: readonly Run[];
-    mergeInProgress: boolean;
+    operation: WorktreeInProgressOperation | null;
     baseOccupiedElsewhere: string | null;
     /** repoRoot 的脏路径（白名单已排除 Plan 留档目录）。合并要 `switch`，非空时必须阻断。 */
     repoDirtyPaths: readonly string[];
   }): { blockers: string[]; cleanupBlockers: string[] } {
     const blockers: string[] = [];
+    const operationLabel = input.operation ? OPERATION_LABEL[input.operation] : null;
+
     if (input.detached) blockers.push("detached worktree 没有分支名，不能合并。");
-    if (input.isBaseBranch) blockers.push("不能合并主分支自身。");
+    if (input.kind === "base_branch") blockers.push("不能合并主分支自身。");
     if (!input.branch && !input.detached) blockers.push("缺少分支名，不能合并。");
-    if (input.ahead === 0 && !input.isBaseBranch) blockers.push("该分支没有领先主分支的提交。");
-    if (input.merged && !input.isBaseBranch) blockers.push("该分支已经合并到主分支。");
+    if (input.ahead === 0 && input.kind !== "base_branch") blockers.push("该分支没有领先主分支的提交。");
+    if (input.merged && input.kind !== "base_branch") blockers.push("该分支已经合并到主分支。");
     // `missing` 的 worktree 读不到工作区状态；分支本身仍可合并，所以不在这里阻断。
     if (!input.missing && input.dirty !== "clean") {
       blockers.push(`worktree 当前不是 clean 状态，未提交内容不会进入合并：${input.dirty}。`);
@@ -891,19 +1119,29 @@ export class WorktreeService {
           .join("、")}），先等它们结束再合并。`,
       );
     }
-    if (input.mergeInProgress) blockers.push("仓库里已有进行中的合并，请先继续或中止它。");
+    if (operationLabel) blockers.push(`仓库里正在进行 ${operationLabel}，请先处理完再合并。`);
     if (input.baseOccupiedElsewhere) {
       blockers.push(`主分支正被另一个 worktree 占用（${input.baseOccupiedElsewhere}），无法切换过去执行合并。`);
     }
 
     const cleanupBlockers: string[] = [];
-    if (input.detached) cleanupBlockers.push("detached worktree 没有分支可判定是否已合并，不能清理（会丢失提交）。");
-    else if (input.isBaseBranch) cleanupBlockers.push("主分支不能清理。");
-    else if (!input.worktreePath) cleanupBlockers.push("这条分支没有 worktree，没有可清理的东西。");
-    else {
+    if (input.activeRunIds.length > 0) cleanupBlockers.push("项目有活动 Run，暂不能清理。");
+    if (input.operation) cleanupBlockers.push(`仓库里正在进行 ${operationLabel}，先处理完再清理。`);
+    if (input.kind === "base_branch") cleanupBlockers.push("主分支不能清理。");
+    else if (input.detached) {
+      if (input.missing) cleanupBlockers.push("worktree 目录已不存在，刷新后会自动从 Git 里清掉。");
+      if (!input.missing && input.dirty !== "clean") cleanupBlockers.push(`worktree 当前不是 clean 状态（${input.dirty}），不能清理。`);
+      if (!input.containedInBranch)
+        cleanupBlockers.push("这个 detached worktree 的提交不属于任何本地分支，删除会丢提交；先给它建一条分支再清理。");
+      if (input.activeRunIds.some((run) => samePath(run.workspacePath, input.worktreePath))) {
+        cleanupBlockers.push("这个 worktree 正被一条活动 Run 使用，不能清理。");
+      }
+    } else if (input.kind === "local_branch") {
+      if (!input.merged) cleanupBlockers.push("该分支当前未合并到主分支，不能删除。");
+      if (input.branch && input.branch === input.currentBranch) cleanupBlockers.push("该分支正被仓库检出，先切换到别的分支再删除。");
+    } else {
       if (!input.merged) cleanupBlockers.push("该分支当前未合并到主分支，不能清理。");
       if (!input.missing && input.dirty !== "clean") cleanupBlockers.push(`worktree 当前不是 clean 状态（${input.dirty}），不能清理。`);
-      if (input.activeRunIds.length > 0) cleanupBlockers.push("项目有活动 Run，暂不能清理。");
       if (input.activeRunIds.some((run) => samePath(run.workspacePath, input.worktreePath))) {
         cleanupBlockers.push("这个 worktree 正被一条活动 Run 使用，不能清理。");
       }

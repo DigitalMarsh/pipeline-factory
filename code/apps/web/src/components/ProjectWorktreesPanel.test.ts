@@ -19,9 +19,33 @@ const { apiMocks } = vi.hoisted(() => ({
     continueWorktreeMerge: vi.fn(),
     abortWorktreeMerge: vi.fn(),
     cleanupWorktree: vi.fn(),
+    updateProject: vi.fn(),
+    worktreeLog: vi.fn(),
+    worktreeCommitFiles: vi.fn(),
+    worktreeCommitDiff: vi.fn(),
+    worktreeServices: vi.fn(),
+    startWorktreeService: vi.fn(),
+    stopWorktreeService: vi.fn(),
+    worktreeServiceLogs: vi.fn(),
+    worktreeEventsUrl: vi.fn((projectId: string) => `/api/v4/projects/${projectId}/worktrees/events`),
   },
 }));
 vi.mock("../api", () => ({ api: apiMocks }));
+
+/** 极简 EventSource 桩：测试只需要 `addEventListener` + 一个触发入口。 */
+class FakeEventSource extends EventTarget {
+  static instances: FakeEventSource[] = [];
+  onerror: ((event: Event) => void) | null = null;
+  readonly url: string;
+  constructor(url: string) {
+    super();
+    this.url = url;
+    FakeEventSource.instances.push(this);
+  }
+  close() {
+    FakeEventSource.instances = FakeEventSource.instances.filter((instance) => instance !== this);
+  }
+}
 
 const ElDialogStub = defineComponent({
   props: { modelValue: { type: Boolean, default: false } },
@@ -47,6 +71,7 @@ afterEach(() => {
     app.unmount();
     host.remove();
   });
+  FakeEventSource.instances = [];
   vi.clearAllMocks();
 });
 
@@ -76,6 +101,10 @@ function item(overrides: Partial<WorktreeItem> = {}): WorktreeItem {
     cleanupable: false,
     cleanupBlockers: ["该分支当前未合并到主分支，不能清理。"],
     isLiveRunWorkspace: false,
+    everMerged: false,
+    isIgnored: false,
+    matchesScope: true,
+    containedInBranch: true,
     factory: null,
     ...overrides,
   };
@@ -90,6 +119,8 @@ function inventory(overrides: Partial<WorktreeInventory> = {}): WorktreeInventor
     currentBranch: "main",
     mergeInProgress: null,
     activeRunIds: [],
+    filter: { filterMode: "all", branchPatterns: [], ignoredBranches: [], includeDetachedWorktrees: true },
+    filteredOutCount: 0,
     items: [
       item({
         itemId: "branch:main",
@@ -160,6 +191,16 @@ function preview(overrides: Partial<WorktreeMergePreview> = {}): WorktreeMergePr
 
 async function mountPanel(next: WorktreeInventory) {
   apiMocks.worktrees.mockResolvedValue(next);
+  apiMocks.updateProject.mockResolvedValue({ project: { id: "project-1" } });
+  apiMocks.worktreeServices.mockResolvedValue({
+    itemId: "branch:feature/a",
+    worktreePath: "/repo-wt/a",
+    configPath: null,
+    configError: null,
+    services: [],
+    states: [],
+  });
+  (globalThis as unknown as { EventSource: typeof FakeEventSource }).EventSource = FakeEventSource;
   const host = document.createElement("div");
   document.body.appendChild(host);
   const app = createApp(ProjectWorktreesPanel, { projectId: "project-1", project: { name: "Project 1" } as Project });
@@ -218,7 +259,9 @@ describe("Worktree 面板", () => {
       },
     });
     const host = await mountPanel(
-      inventory({ mergeInProgress: { mergeHead: "deadbeefdeadbeef", currentBranch: "main", conflictFiles: ["README.md"] } }),
+      inventory({
+        mergeInProgress: { kind: "merge", mergeHead: "deadbeefdeadbeef", currentBranch: "main", conflictFiles: ["README.md"] },
+      }),
     );
 
     const banner = host.querySelector("[data-merge-in-progress]");
@@ -288,5 +331,145 @@ describe("Worktree 面板", () => {
 
     expect(mergedRow?.querySelector<HTMLButtonElement>("[data-worktree-cleanup]")?.disabled).toBe(false);
     expect(unmergedRow?.querySelector<HTMLButtonElement>("[data-worktree-cleanup]")?.disabled).toBe(true);
+  });
+});
+
+describe("Worktree 面板：复盘后新增的交互", () => {
+  it("按名称排序会改变行序（主分支仍置顶）", async () => {
+    const inventoryWithTimes = inventory();
+    inventoryWithTimes.items[1] = item({ itemId: "branch:zeta", branch: "zeta", displayName: "zeta", lastCommitAt: 100 });
+    inventoryWithTimes.items[2] = item({
+      itemId: "branch:alpha",
+      branch: "alpha",
+      displayName: "alpha",
+      lastCommitAt: 300,
+      status: "merged_clean",
+      merged: true,
+      mergeRelation: "current_merged",
+      cleanupable: true,
+      cleanupBlockers: [],
+    });
+    const host = await mountPanel(inventoryWithTimes);
+
+    // 方向与键是**两个独立开关**：默认倒序（最近提交在前）。先切正序，再按名称。
+    host.querySelector<HTMLButtonElement>("[data-worktree-sort-direction]")?.click();
+    host.querySelector<HTMLButtonElement>('[data-worktree-sort="name"]')?.click();
+    await flush();
+    const rows = [...host.querySelectorAll("[data-worktree-item]")].map((row) => row.getAttribute("data-worktree-item"));
+    expect(rows[0]).toBe("branch:main");
+    expect(rows.slice(1)).toEqual(["branch:alpha", "branch:zeta"]);
+  });
+
+  it("保存范围把模式与 detached 开关写进项目设置", async () => {
+    const host = await mountPanel(inventory());
+    host.querySelector<HTMLButtonElement>("[data-worktree-scope-toggle]")?.click();
+    await flush();
+    const select = host.querySelector<HTMLSelectElement>("[data-scope-mode]");
+    if (select) {
+      select.value = "patterns";
+      select.dispatchEvent(new Event("change"));
+    }
+    await flush();
+    const textarea = host.querySelector<HTMLTextAreaElement>("[data-scope-patterns]");
+    if (textarea) {
+      textarea.value = "factory/*\nfeature/*";
+      textarea.dispatchEvent(new Event("input"));
+    }
+    await flush();
+    host.querySelector<HTMLButtonElement>("[data-scope-save]")?.click();
+    await flush();
+
+    expect(apiMocks.updateProject).toHaveBeenCalledWith("project-1", {
+      settings: {
+        worktree: {
+          filterMode: "patterns",
+          branchPatterns: ["factory/*", "feature/*"],
+          includeDetachedWorktrees: true,
+        },
+      },
+    });
+  });
+
+  it("详情里的忽略按钮把分支写进 ignoredBranches", async () => {
+    const host = await mountPanel(inventory());
+    const row = host.querySelector<HTMLElement>('[data-worktree-item="branch:feature/a"]');
+    row?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flush();
+
+    host.querySelector<HTMLButtonElement>("[data-worktree-toggle-ignore]")?.click();
+    await flush();
+
+    expect(apiMocks.updateProject).toHaveBeenCalledWith("project-1", {
+      settings: { worktree: { ignoredBranches: ["feature/a"] } },
+    });
+  });
+
+  it("显示被过滤的项时带 includeFiltered 重新拉清单", async () => {
+    const host = await mountPanel(inventory({ filteredOutCount: 3 }));
+    const button = host.querySelector<HTMLButtonElement>("[data-worktree-include-filtered]");
+    expect(button?.textContent).toContain("3");
+    button?.click();
+    await flush();
+    expect(apiMocks.worktrees).toHaveBeenLastCalledWith("project-1", { includeFiltered: true });
+  });
+
+  it("includeFiltered 为真且过滤数归零时按钮仍在，能切回范围视图", async () => {
+    const host = await mountPanel(inventory({ filteredOutCount: 1 }));
+    // 切到"显示全部"之后服务端回 0 条被过滤项：此时若只按 filteredOutCount 渲染，按钮会消失，
+    // 用户再也切不回范围视图（浏览器实测踩过）。
+    apiMocks.worktrees.mockResolvedValue(inventory({ filteredOutCount: 0 }));
+    host.querySelector<HTMLButtonElement>("[data-worktree-include-filtered]")?.click();
+    await flush();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    await flush();
+
+    const button = host.querySelector<HTMLButtonElement>("[data-worktree-include-filtered]");
+    expect(button).not.toBeNull();
+    expect(button?.textContent).toContain("只看项目范围");
+
+    button?.click();
+    await flush();
+    expect(apiMocks.worktrees).toHaveBeenLastCalledWith("project-1", { includeFiltered: false });
+  });
+
+  it("服务端事件只触发一次防抖刷新", async () => {
+    const host = await mountPanel(inventory());
+    const source = FakeEventSource.instances[0];
+    expect(source?.url).toContain("/worktrees/events");
+    const callsBefore = apiMocks.worktrees.mock.calls.length;
+
+    source?.dispatchEvent(new Event("worktree"));
+    source?.dispatchEvent(new Event("worktree"));
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    await flush();
+
+    expect(apiMocks.worktrees.mock.calls.length).toBe(callsBefore + 1);
+    void host;
+  });
+
+  it("提交历史按钮打开只读日志对话框", async () => {
+    apiMocks.worktreeLog.mockResolvedValue({
+      items: [
+        {
+          hash: "abc1234",
+          shortHash: "abc1234",
+          subject: "feature change",
+          author: "Bill",
+          authoredAt: "2026-10-17",
+          relativeTime: "1 天前",
+        },
+      ],
+    });
+    apiMocks.worktreeCommitFiles.mockResolvedValue({ items: [{ status: "A", path: "ahead.txt", previousPath: null }] });
+    const host = await mountPanel(inventory());
+    host.querySelector<HTMLElement>('[data-worktree-item="branch:feature/a"]')?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flush();
+
+    host.querySelector<HTMLButtonElement>("[data-worktree-log-open]")?.click();
+    await flush();
+    await flush();
+
+    expect(apiMocks.worktreeLog).toHaveBeenCalledWith("project-1", "feature/a");
+    expect(host.querySelector("[data-worktree-log]")?.textContent).toContain("feature change");
   });
 });

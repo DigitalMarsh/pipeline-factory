@@ -1,5 +1,6 @@
 /**
- * 模块职责：Worktree 域的 6 条路由 —— 盘点、合并预览、执行合并、继续 / 中止合并、清理。
+ * 模块职责：Worktree 域的 13 条路由 —— 盘点（含项目范围过滤）、合并预览、执行合并、继续 / 中止合并、
+ *   清理、提交历史、提交文件、单文件 diff、服务启停与日志，以及项目级 Worktree 事件流。
  *
  * 为什么这一组单独成文件：它们是**唯一会真的改动受管仓库 Git 状态**的 HTTP 入口
  *   （`run/merge.ts` 那条 MergeRequest 链路只观察、不回写）。把"会写仓库"的入口集中在一处，
@@ -10,17 +11,40 @@
  *      消息决定状态码的做法是历史包袱（那边自己也标了"动措辞必须连这里一起动"），本文件不复制。
  *   2) 未找到项目一律 404（组合根的 `preHandler` 已经拦过一次，这里保留是为了让本文件单独可测）；
  *      归档项目由 `preHandler` 统一拦非 GET 请求，本文件不重复判。
- *   3) 409 的响应体必须带 `code`：同一个 409 下有"被阻断""状态已变""没有进行中的合并"三种原因，
- *      界面要按 `code` 给不同说法（`ApiRequestError` 正是为此把 body 带出来）。
+ *   3) 409 的响应体必须带 `code`：同一个 409 下有"被阻断""状态已变""没有进行中的合并""仓库读不到"
+ *      几种原因，界面要按 `code` 给不同说法（`ApiRequestError` 正是为此把 body 带出来）。
  *   4) `merge` / `cleanup` 是**长耗时**操作（git 子进程），但不要为此改成后台任务：
  *      调用方需要同步拿到"合并成功 / 冲突文件有哪些"才能继续操作，异步化只会把结果藏进另一个轮询接口。
+ *   5) **事件流只推"该刷新了"，不推业务内容**：帧里只有 type / sequence / occurredAt，客户端据此
+ *      防抖重拉清单。这样既不用为每个事件设计投影，也不会把可能带敏感字段的 payload 直接送出进程。
+ *   6) `includeFiltered=1` 只影响**读**：写路径（preview / merge / cleanup）在领域层一律按全量清单
+ *      解析目标，所以"被项目范围隐藏的分支"不会变成"不存在"。
  */
-import type { FastifyInstance } from "fastify";
-import { WorktreeError, type PipelineStore, type WorktreeService } from "@pipeline-factory/domain";
-import { worktreeCleanupBody, worktreeItemBody, worktreeMergeBody } from "../schemas/worktrees.js";
+import type { FastifyInstance, FastifyReply } from "fastify";
+import { z } from "zod";
+import { WorktreeError, type PipelineStore, type Project, type WorktreeService } from "@pipeline-factory/domain";
+import {
+  worktreeCleanupBody,
+  worktreeCommitParams,
+  worktreeDiffQuery,
+  worktreeItemBody,
+  worktreeListQuery,
+  worktreeLogQuery,
+  worktreeMergeBody,
+  worktreeServiceActionBody,
+  worktreeServiceLogsQuery,
+  worktreeServicesQuery,
+} from "../schemas/worktrees.js";
+import type { WorktreeServiceRunner } from "../runtime/worktree-services.js";
 import { projectThreadParams } from "../schemas/common.js";
+import { openSseChannel } from "../http/sse.js";
 
-export type WorktreeRouteDeps = { store: PipelineStore; worktrees: WorktreeService };
+export type WorktreeRouteDeps = {
+  store: PipelineStore;
+  worktrees: WorktreeService;
+  /** 可缺省：测试与只读实例不装服务进程管理，此时服务相关路由返回 503。 */
+  worktreeServices?: WorktreeServiceRunner | undefined;
+};
 
 /** 领域错误码 → HTTP 状态。未知错误一律 500（组合根的 onError 会留栈）。 */
 function statusFor(error: unknown): number {
@@ -47,16 +71,70 @@ function failure(error: unknown) {
   return { code, error: error instanceof Error ? error.message : String(error) };
 }
 
+/**
+ * 事件流转发的类型白名单：Worktree 自身的写操作 + 会影响清单状态的 Run/Plan 变化。
+ * **不是"所有项目事件"**——把模型输出、探索回调也推过来既浪费又扩大暴露面。
+ */
+const WORKTREE_EVENT_TYPES = new Set<string>([
+  "worktree.merge.completed",
+  "worktree.merge.conflict",
+  "worktree.merge.continued",
+  "worktree.merge.aborted",
+  "worktree.cleaned",
+  "merge.request.created",
+  "merge.detected",
+  "merge.confirmed",
+  "run.paused",
+  "run.resumed",
+  "run.recovery_required",
+  "plan.status.changed",
+  "plan.dispatched",
+]);
+
+/**
+ * 服务只能跑在 worktree 里：无 worktree 的本地分支与 detached 项没有"当前工作目录"这回事。
+ * 返回 `{ item }` 或 `{ error }`（后者已经是一个可直接 return 的 reply）。
+ */
+async function resolveServiceTarget(
+  worktrees: WorktreeService,
+  project: Project,
+  itemId: string,
+  reply: FastifyReply,
+): Promise<{ item: { itemId: string; worktreePath: string } } | { error: unknown }> {
+  try {
+    const item = await worktrees.item(project, itemId);
+    if (!item.hasWorktree || !item.worktreePath) {
+      return {
+        error: reply.code(409).send({
+          code: "WORKTREE_SERVICES_UNSUPPORTED",
+          error: `服务只能在 worktree 中运行，请先为 ${item.displayName} 创建 worktree。`,
+        }),
+      };
+    }
+    return { item: { itemId: item.itemId, worktreePath: item.worktreePath } };
+  } catch (error) {
+    return { error: reply.code(statusFor(error)).send(failure(error)) };
+  }
+}
+
 export function registerWorktreeRoutes(app: FastifyInstance, deps: WorktreeRouteDeps): void {
-  const { store, worktrees } = deps;
+  const { store, worktrees, worktreeServices } = deps;
+
+  /** 项目存在性：本文件每条路由都要，抽一处免得八处重复。 */
+  function projectOf(projectId: string) {
+    return store.getProject(projectId);
+  }
 
   app.get("/api/v4/projects/:projectId/worktrees", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
-    if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
-    const project = store.getProject(params.data.projectId);
+    const query = worktreeListQuery.safeParse(request.query ?? {});
+    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid worktree list request" });
+    const project = projectOf(params.data.projectId);
     if (!project) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
     try {
-      return await worktrees.list(project);
+      return await worktrees.list(project, {
+        includeFiltered: query.data.includeFiltered === "1" || query.data.includeFiltered === "true",
+      });
     } catch (error) {
       return reply.code(statusFor(error)).send(failure(error));
     }
@@ -66,7 +144,7 @@ export function registerWorktreeRoutes(app: FastifyInstance, deps: WorktreeRoute
     const params = projectThreadParams.safeParse(request.params);
     const body = worktreeItemBody.safeParse(request.body ?? {});
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid worktree preview request" });
-    const project = store.getProject(params.data.projectId);
+    const project = projectOf(params.data.projectId);
     if (!project) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
     try {
       return { preview: await worktrees.preview(project, body.data.itemId) };
@@ -79,7 +157,7 @@ export function registerWorktreeRoutes(app: FastifyInstance, deps: WorktreeRoute
     const params = projectThreadParams.safeParse(request.params);
     const body = worktreeMergeBody.safeParse(request.body ?? {});
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid worktree merge request" });
-    const project = store.getProject(params.data.projectId);
+    const project = projectOf(params.data.projectId);
     if (!project) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
     try {
       return { result: await worktrees.merge(project, body.data) };
@@ -91,7 +169,7 @@ export function registerWorktreeRoutes(app: FastifyInstance, deps: WorktreeRoute
   app.post("/api/v4/projects/:projectId/worktrees/merge/continue", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: "Invalid worktree merge continue request" });
-    const project = store.getProject(params.data.projectId);
+    const project = projectOf(params.data.projectId);
     if (!project) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
     try {
       return { result: await worktrees.continueMerge(project) };
@@ -103,7 +181,7 @@ export function registerWorktreeRoutes(app: FastifyInstance, deps: WorktreeRoute
   app.post("/api/v4/projects/:projectId/worktrees/merge/abort", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: "Invalid worktree merge abort request" });
-    const project = store.getProject(params.data.projectId);
+    const project = projectOf(params.data.projectId);
     if (!project) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
     try {
       return { result: await worktrees.abortMerge(project) };
@@ -116,12 +194,139 @@ export function registerWorktreeRoutes(app: FastifyInstance, deps: WorktreeRoute
     const params = projectThreadParams.safeParse(request.params);
     const body = worktreeCleanupBody.safeParse(request.body ?? {});
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid worktree cleanup request" });
-    const project = store.getProject(params.data.projectId);
+    const project = projectOf(params.data.projectId);
     if (!project) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
     try {
       return { result: await worktrees.cleanup(project, body.data) };
     } catch (error) {
       return reply.code(statusFor(error)).send(failure(error));
     }
+  });
+
+  app.get("/api/v4/projects/:projectId/worktrees/log", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    const query = worktreeLogQuery.safeParse(request.query ?? {});
+    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid worktree log request" });
+    const project = projectOf(params.data.projectId);
+    if (!project) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
+    try {
+      return { items: await worktrees.log(project, query.data) };
+    } catch (error) {
+      return reply.code(statusFor(error)).send(failure(error));
+    }
+  });
+
+  app.get("/api/v4/projects/:projectId/worktrees/commits/:commit", async (request, reply) => {
+    const params = worktreeCommitParams.safeParse(request.params);
+    if (!params.success) return reply.code(400).send({ error: "Invalid worktree commit request" });
+    const project = projectOf(params.data.projectId);
+    if (!project) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
+    try {
+      return { items: await worktrees.commitFiles(project, params.data.commit) };
+    } catch (error) {
+      return reply.code(statusFor(error)).send(failure(error));
+    }
+  });
+
+  app.get("/api/v4/projects/:projectId/worktrees/commits/:commit/diff", async (request, reply) => {
+    const params = worktreeCommitParams.safeParse(request.params);
+    const query = worktreeDiffQuery.safeParse(request.query ?? {});
+    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid worktree diff request" });
+    const project = projectOf(params.data.projectId);
+    if (!project) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
+    try {
+      return { diff: await worktrees.commitDiff(project, { commit: params.data.commit, ...query.data }) };
+    } catch (error) {
+      return reply.code(statusFor(error)).send(failure(error));
+    }
+  });
+
+  // ───────────── 服务启停（第三个参数是 worktree 根目录，进程管理在 runtime） ─────────────
+
+  app.get("/api/v4/projects/:projectId/worktrees/services", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    const query = worktreeServicesQuery.safeParse(request.query ?? {});
+    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid worktree services request" });
+    const project = projectOf(params.data.projectId);
+    if (!project) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
+    const target = await resolveServiceTarget(worktrees, project, query.data.itemId, reply);
+    if ("error" in target) return target.error;
+    if (!worktreeServices) return reply.code(503).send({ code: "WORKTREE_SERVICES_UNAVAILABLE", error: "本实例没有装配服务进程管理。" });
+    return worktreeServices.inspect(project.id, target.item.itemId, target.item.worktreePath);
+  });
+
+  app.post("/api/v4/projects/:projectId/worktrees/services/start", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    const body = worktreeServiceActionBody.safeParse(request.body ?? {});
+    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid worktree service start request" });
+    const project = projectOf(params.data.projectId);
+    if (!project) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
+    if (!worktreeServices) return reply.code(503).send({ code: "WORKTREE_SERVICES_UNAVAILABLE", error: "本实例没有装配服务进程管理。" });
+    const target = await resolveServiceTarget(worktrees, project, body.data.itemId, reply);
+    if ("error" in target) return target.error;
+    const services = worktreeServices.inspect(project.id, target.item.itemId, target.item.worktreePath);
+    const config = services.services.find((service) => service.serviceId === body.data.serviceId);
+    if (!config) return reply.code(404).send({ code: "WORKTREE_SERVICE_NOT_FOUND", error: `服务不存在：${body.data.serviceId}` });
+    try {
+      return { state: worktreeServices.start(project.id, target.item.itemId, target.item.worktreePath, config) };
+    } catch (error) {
+      return reply
+        .code(409)
+        .send({ code: "WORKTREE_SERVICE_START_FAILED", error: error instanceof Error ? error.message : "服务启动失败" });
+    }
+  });
+
+  app.post("/api/v4/projects/:projectId/worktrees/services/stop", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    const body = worktreeServiceActionBody.safeParse(request.body ?? {});
+    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid worktree service stop request" });
+    const project = projectOf(params.data.projectId);
+    if (!project) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
+    if (!worktreeServices) return reply.code(503).send({ code: "WORKTREE_SERVICES_UNAVAILABLE", error: "本实例没有装配服务进程管理。" });
+    const target = await resolveServiceTarget(worktrees, project, body.data.itemId, reply);
+    if ("error" in target) return target.error;
+    const state = await worktreeServices.stop(project.id, target.item.itemId, body.data.serviceId);
+    return { state };
+  });
+
+  app.get("/api/v4/projects/:projectId/worktrees/services/logs", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    const query = worktreeServiceLogsQuery.safeParse(request.query ?? {});
+    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid worktree service logs request" });
+    const project = projectOf(params.data.projectId);
+    if (!project) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
+    if (!worktreeServices) return reply.code(503).send({ code: "WORKTREE_SERVICES_UNAVAILABLE", error: "本实例没有装配服务进程管理。" });
+    const target = await resolveServiceTarget(worktrees, project, query.data.itemId, reply);
+    if ("error" in target) return target.error;
+    return { items: worktreeServices.logs(project.id, target.item.itemId, query.data.serviceId) };
+  });
+
+  /**
+   * 项目级 Worktree 事件流：推的是"该刷新了"而不是业务内容（见维护提示 5）。
+   * 订阅式通道——`store.subscribeEvents` 的回调里直接写帧；`onClose(unsubscribe)` 是必需的清理。
+   */
+  app.get("/api/v4/projects/:projectId/worktrees/events", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    const query = z.object({ afterSequence: z.coerce.number().int().min(0).optional() }).safeParse(request.query ?? {});
+    if (!params.success || !query.success) return reply.code(400).send({ error: "Invalid worktree event stream request" });
+    const projectId = params.data.projectId;
+    const project = projectOf(projectId);
+    if (!project) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${projectId} not found` });
+
+    // 先对齐库里已有的序号再握手：否则重连的客户端会以为中间丢了事件。
+    let cursor = Math.max(query.data.afterSequence ?? 0, store.getLastEventSequence(projectId));
+    const channel = openSseChannel(request, reply);
+    channel.ready(cursor, { projectId });
+
+    if (!store.subscribeEvents) return;
+    const unsubscribe = store.subscribeEvents((event) => {
+      if (event.aggregateId !== projectId) return;
+      if (!WORKTREE_EVENT_TYPES.has(event.type)) return;
+      if (event.sequence <= cursor) return;
+      cursor = event.sequence;
+      // 只发"发生了什么"的最小形状：类型 + 序号。payload 留在库里按需查。
+      channel.send(event.sequence, "worktree", { type: event.type, sequence: event.sequence, occurredAt: event.occurredAt });
+    });
+    channel.onClose(unsubscribe);
   });
 }
