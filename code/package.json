@@ -20,7 +20,8 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "verify": "node scripts/verify.mjs"
+    "verify": "node scripts/verify.mjs",
+    "pack:release": "node scripts/package.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

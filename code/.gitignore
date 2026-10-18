@@ -10,4 +10,6 @@ coverage/
 /attachments/
 .pipeline-worktrees/
 var/
+# 发布物（scripts/package.mjs 生成）
+release/
 config/*.local.json

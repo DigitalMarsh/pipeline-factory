@@ -103,6 +103,13 @@ import type {
 
 type SqliteRow = Record<string, unknown>;
 
+/**
+ * 当前库结构版本，存于 `PRAGMA user_version`；定义在 schema-version.ts（内存实现共用）。
+ * **新增不兼容变更时**先把那里 +1，再在构造函数迁移区写 `if (from < N)` 的步骤。
+ */
+import { CURRENT_SCHEMA_VERSION } from "./schema-version.js";
+export { CURRENT_SCHEMA_VERSION } from "./schema-version.js";
+
 /** 附件行的统一映射（两个读方法共用）。 */
 function attachmentFromRow(row: SqliteRow): MessageAttachment {
   return {
@@ -969,9 +976,17 @@ export class SqlitePipelineStore implements PipelineStore {
     this.backfillCandidateVersions();
     this.backfillLegacyVerificationRuns();
     this.backfillPlanQueryProjection();
+    // 结构版本：新库从 0 标到当前；旧库只要低于当前就对齐（当前只有 v1 基线，没有步骤迁移）。
+    if (this.schemaVersion() < CURRENT_SCHEMA_VERSION) this.database.exec(`PRAGMA user_version = ${CURRENT_SCHEMA_VERSION}`);
     // 回收放在**所有修复与回填之后**：那几步要读历史事件（或至少要和历史状态对齐），
     // 先删再修会让它们看到一份被削过的历史。
     if (this.retention && this.retention.retentionDays > 0) this.pruneOnStartup(this.retention);
+  }
+
+  /** 库结构版本（`PRAGMA user_version`）；健康检查与升级检查读它。 */
+  schemaVersion(): number {
+    const row = this.database.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined;
+    return Number(row?.user_version ?? 0);
   }
 
   /**

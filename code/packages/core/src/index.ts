@@ -92,6 +92,7 @@ export type {
   PlanStore,
   ProjectStore,
   RunStore,
+  StoreMetadata,
   TransactionalStore,
 } from "./store/pipeline-store.js";
 export { imagesByOwner } from "./store/message-attachments.js";

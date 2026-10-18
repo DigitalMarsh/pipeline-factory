@@ -6,9 +6,15 @@
 
 代码注释规范见仓库根目录的 [`docs/COMMENTING.md`](../docs/COMMENTING.md)。
 
-- `packages/core`：Plan 状态、ExplorerThread 谱系推导、生命周期 Hook 领域服务。
-- `apps/api`：Node.js + Fastify API，提供 ExplorerThread、Plan confirm/enqueue、Plan 查询、Hook 配置和 v4 SSE/结构化输入接口。
-- `apps/web`：Vue 3 + Vite + Element Plus 控制台，提供 ExplorerThread 工作区、Full Plan 抽屉、结构化选择弹窗和 Plan Center。
+- `packages/contracts`：Web 与 API 共享的契约层 —— 跨端 DTO 的类型再导出 + HTTP 输入 schema（zod）。
+  零运行时代码（只有 schema），Web 只从这里取类型，不再手抄 domain 定义。
+- `packages/core`：运行时核心 —— Plan/Explorer/Run 业务、Agent Loop、模型后端适配器、
+  SQLite/内存存储、Git 与 Worktree 操作。它**不是纯领域模型**（会 spawn Codex/Claude 子进程、
+  读写文件与数据库），改名 `core` 就是为了不再让"domain"暗示它只含业务规则。
+- `apps/api`：Node.js + Fastify API（组合根）：读取配置、装配服务、提供 v4 HTTP/SSE 接口，
+  生产模式下同时托管 `apps/web/dist`。
+- `apps/web`：Vue 3 + Vite + Element Plus 控制台，提供 ExplorerThread 工作区、Full Plan 抽屉、
+  结构化选择弹窗和 Plan Center。
 
 ## 本地运行
 
@@ -38,6 +44,24 @@ node scripts/service.mjs status
 > **改动前端代码后要重新构建**：单进程模式（API 在 4310 同时托管页面）服务的是
 > `apps/web/dist` 这份**静态构建产物**，不会热更新；`pnpm build` 之后还要**硬刷新浏览器**。
 > 想要热更新就用开发模式（Vite 5173）。
+
+## 架构分层与发布
+
+依赖方向固定为 `apps/web → packages/contracts ← apps/api → packages/core`：
+
+- **contracts 是最低层**：只依赖 zod 与 core 的**类型**（`export type` 编译后不产生 import）。
+  不要在这里转发运行时的类或函数，否则 Web 构建会把 core 拖进浏览器。
+- **core 不认识 HTTP 与 Vue**：它提供业务服务、存储端口（按域拆成 ProjectStore / ExplorerStore /
+  PlanStore / RunStore / EventStore …）与 Provider 适配器；组合根在 `apps/api/src/server.ts`。
+- **模型后端扩展点**：`apps/api/src/runtime/model-backends.ts` 的注册表按 `kind` 注册工厂；
+  新增后端 = 注册一个 kind，不改 `createModelGateway` 的分派。MCP / Plugin 已有各自注册表，
+  项目命令是数据驱动，不要重复造。
+- **发布物**：`pnpm pack:release` 生成 `release/pipeline-factory-<version>/` 与同名 tar.gz
+  （`app/` 生产依赖 + `web/` 静态产物 + 示例配置 + `bin/pipeline-factory` 启动器）。
+  启动后 `GET /health` 返回 `appVersion`（package.json 版本）与 `schemaVersion`
+  （SQLite `PRAGMA user_version`），排障时先看这两项。
+- **容器**：仓库根有 `Dockerfile` 与 `.dockerignore`；镜像不内置真实配置与数据，
+  配置和 `var/` 通过挂载提供。
 
 生产/单进程模式先构建，再由 API 在同一端口托管 Web 构建产物：
 

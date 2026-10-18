@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-10-18 — 架构收敛：contracts / core / 适配器注册表 / 发布物
+
+按目标架构四步落地（模块化单体，未改运行时形态）：
+
+1. **`packages/contracts`**：跨端 DTO 从 core 再导出（Web 不再手抄，重复定义会编译失败），
+   API 的 10 个 zod 输入 schema 搬入；`type-parity.test.ts` 只保留消息词表约束。
+2. **`packages/domain` → `packages/core`**：名字与职责对齐（运行时核心，不是纯领域模型）。
+   `PipelineStore` 拆成 Clock / Project / Explorer / Plan / Run / MessageAttachment / AgentLoop /
+   Event / Idempotency / Transactional 子端口，再由 `PipelineStore` 组合；实现不变。
+3. **模型后端注册表**（`apps/api/src/runtime/model-backends.ts`）：按 `kind` 注册工厂，
+   新增后端不再改 `createModelGateway` 的 if 链；凭据读取点仍只在工厂内。
+4. **发布与部署**：
+   - `pnpm pack:release` 生成 `release/pipeline-factory-<version>/`（app 生产依赖 + web 静态产物 +
+     示例配置 + `bin/pipeline-factory` 启动器）与同名 tar.gz。
+   - `GET /health` 新增 `appVersion`、`schemaVersion`；SQLite 用 `PRAGMA user_version` 持久化结构版本。
+   - 新增 `Dockerfile` / `.dockerignore`（真实配置与数据通过挂载提供）。
+
+### Verification
+
+- `pnpm verify` 全绿：core 564 / api 175 / web 718；零值级环、全库悬空引用 0。
+- 发布物冒烟：解包目录用生成的启动器在 4399 端口起服务，`/health` 返回
+  `appVersion=0.1.0, schemaVersion=1`，`/` 返回 200。
+
 ## 2026-10-18 — 需求清单：双击打开探索对话；列表不再撑满整屏
 
 - **双击需求行**打开右侧抽屉，默认落在「探索对话」页签（沿用 `openRequirementChat`：

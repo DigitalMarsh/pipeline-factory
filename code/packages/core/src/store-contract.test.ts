@@ -141,7 +141,11 @@ const REQUIRED_PORT_METHOD_NAMES = [
 ] as const satisfies readonly (keyof PipelineStore)[];
 
 /** 端口里**可选**的方法：按端口注释，两侧不必都提供（当前 subscribeEvents 两侧都有、runInTransaction 只有 SQLite）。 */
-const OPTIONAL_PORT_METHOD_NAMES = ["subscribeEvents", "runInTransaction"] as const satisfies readonly (keyof PipelineStore)[];
+const OPTIONAL_PORT_METHOD_NAMES = [
+  "subscribeEvents",
+  "runInTransaction",
+  "schemaVersion",
+] as const satisfies readonly (keyof PipelineStore)[];
 // 它只被下面那个类型用（`typeof ...`），而 ESLint 不把类型位置算作使用——这里显式引用一次，
 // 与下面 `void portMethodListIsComplete;` 同一个理由：清单本身是**给人读的文档**，不该被当成死代码。
 void OPTIONAL_PORT_METHOD_NAMES;
@@ -222,6 +226,13 @@ describe("store contract: 公共方法表面", () => {
     // 这条断言把"可选"钉成事实，避免将来有人误以为两侧都该有而给内存实现补一个假的。
     expect(typeof memoryStore().runInTransaction).toBe("undefined");
     expect(typeof sqliteStore().runInTransaction).toBe("function");
+  });
+
+  it("reports the same schema version on both implementations", () => {
+    // 版本号是升级检查与 /health 的输入；两侧不一致会让"这个进程读到哪一版库"变得不可信。
+    assertBothStores((store) => {
+      expect(store.schemaVersion?.()).toBe(1);
+    });
   });
 });
 

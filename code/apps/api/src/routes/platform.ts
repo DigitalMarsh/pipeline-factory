@@ -27,12 +27,20 @@
  *      的模块头（浏览器拿不到绝对路径）。测试用 `chooseDirectory` 注入假实现，不弹真对话框。
  */
 import type { FastifyInstance } from "fastify";
-import { EXPLORER_PLAN_REQUIREMENTS, type McpToolRegistry, type ModelGateway, type PluginRegistry } from "@pipeline-factory/core";
+import {
+  EXPLORER_PLAN_REQUIREMENTS,
+  type McpToolRegistry,
+  type ModelGateway,
+  type PipelineStore,
+  type PluginRegistry,
+} from "@pipeline-factory/core";
 import type { FactoryConfig } from "../config.js";
 import { describeModelBackends } from "../runtime/model-catalog.js";
 import { chooseDirectory, DirectoryDialogError, type DirectoryDialogResult } from "../runtime/directory-dialog.js";
+import { APP_VERSION } from "../version.js";
 
 export type PlatformRouteDeps = {
+  store: PipelineStore;
   model: ModelGateway;
   mcpRegistry?: McpToolRegistry | undefined;
   pluginRegistry?: PluginRegistry | undefined;
@@ -42,7 +50,7 @@ export type PlatformRouteDeps = {
 };
 
 export function registerPlatformRoutes(app: FastifyInstance, deps: PlatformRouteDeps): void {
-  const { model, mcpRegistry, pluginRegistry, config } = deps;
+  const { store, model, mcpRegistry, pluginRegistry, config } = deps;
   const backends = config ? describeModelBackends(config) : undefined;
   const pickDirectory = deps.chooseDirectory ?? chooseDirectory;
 
@@ -53,6 +61,10 @@ export function registerPlatformRoutes(app: FastifyInstance, deps: PlatformRoute
     status: "ok",
     service: "pipeline-factory-api",
     version: "v4",
+    /** 应用版本（package.json）；发布产物与升级检查读它。 */
+    appVersion: APP_VERSION,
+    /** 库结构版本（`PRAGMA user_version`）；内存实例没有迁移概念时返回 null。 */
+    schemaVersion: store.schemaVersion?.() ?? null,
     modelBackend: backends?.roles.explorer ?? config?.model.backend ?? "stub",
     modelBackends: backends?.roles ?? { explorer: config?.model.backend ?? "stub", executor: config?.model.backend ?? "stub" },
     model: model.configFor("explorer").model,

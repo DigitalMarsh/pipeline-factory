@@ -256,6 +256,16 @@ export type TransactionalStore = {
   runInTransaction?<T>(work: () => T): T;
 };
 
+/**
+ * 存储自身的元信息，供 `/health` 与升级检查读取。
+ *
+ * `schemaVersion` 可选：内存实现与测试替身没有"迁移"概念，缺省时健康检查如实返回 null，
+ * 而不是伪造一个版本号。SQLite 用 `PRAGMA user_version` 持久化这个值。
+ */
+export type StoreMetadata = {
+  schemaVersion?(): number;
+};
+
 /** Domain 的持久化端口；内存和 SQLite 实现必须保持相同的事实及事件语义。 */
 export type PipelineStore = ClockStore &
   ProjectStore &
@@ -266,4 +276,5 @@ export type PipelineStore = ClockStore &
   AgentLoopStore &
   EventStore &
   IdempotencyStore &
+  StoreMetadata &
   TransactionalStore;

@@ -29,6 +29,8 @@ export default tseslint.config(
       "**/dist/**",
       "**/node_modules/**",
       "**/coverage/**",
+      // 发布物（scripts/package.mjs 生成）：内含已压缩/已编译的第三方代码，检查它只会淹没信号。
+      "release/**",
       // 配置与脚本本身按 Node 跑，规则同上；显式列出是为了让 `eslint .` 的范围一目了然。
       "**/*.sqlite",
     ],

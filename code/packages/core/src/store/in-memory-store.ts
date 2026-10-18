@@ -28,6 +28,7 @@ import { planQueryProjectionFor, type PlanQueryProjection } from "../plan/query.
 import { redactAuditPayload, redactAuditText } from "../platform/redaction.js";
 import type { EventQuery, PipelineStore } from "./pipeline-store.js";
 import { prunableEventIds, type EventPruneInput } from "./event-retention.js";
+import { CURRENT_SCHEMA_VERSION } from "./schema-version.js";
 import type { AgentLoop, AgentLoopStep, AgentLoopStepInput } from "../agent/agent-loop.js";
 import type { PlanDispatchState } from "../run/dispatch-coordinator.js";
 import type { Project, ProjectConfigRevision } from "../project/project.js";
@@ -94,6 +95,11 @@ export class InMemoryPipelineStore implements PipelineStore {
   private readonly eventListeners = new Set<(event: DomainEvent) => void>();
   private sequence = 0;
   private eventSequence = 0;
+
+  /** 内存实现没有迁移概念；返回当前版本，便于测试断言。 */
+  schemaVersion(): number {
+    return CURRENT_SCHEMA_VERSION;
+  }
 
   now(): string {
     this.sequence += 1;
