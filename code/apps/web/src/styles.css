@@ -5588,8 +5588,9 @@ a {
 }
 .requirement-table-wrap {
   min-height: 0;
-  /* 清单不再一路撑到底：留出下方空白，窗口越高越明显。滚动仍在卡片内部。 */
-  max-height: min(58vh, 640px);
+  /* 卡片填满面板剩余高度，滚动发生在卡片内部。**不要再给 max-height**：
+     那样会在列表下方留下一条与窗口等高的空白（列表"没到底"）。列表的"矮"由行高控制。 */
+  flex: 1 1 auto;
   overflow: auto;
   border: 1px solid #e3e9f1;
   border-radius: 9px;
@@ -5615,7 +5616,7 @@ a {
   font-weight: 700;
 }
 .requirement-table-row {
-  min-height: 76px;
+  min-height: 66px;
   padding: 0 17px;
   border-bottom: 1px solid #edf0f4;
   transition: background 0.15s ease;
@@ -6088,7 +6089,6 @@ a {
   }
   .requirement-table-wrap {
     overflow: visible;
-    max-height: none;
     border: 0;
     background: transparent;
     box-shadow: none;
