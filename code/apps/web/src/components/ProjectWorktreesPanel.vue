@@ -87,6 +87,8 @@ const runtime = ref<WorktreeRuntimeInfo | null>(null);
 const runtimeBusy = ref(false);
 const runtimeError = ref("");
 const runtimeClearOpen = ref(false);
+/** 「补齐依赖软链」的在途标记。 */
+const dependenciesBusy = ref(false);
 
 /** 当前选中的条目是不是执行目录目标：是的话服务走 runtime 接口（路径/端口固定）。 */
 const isRuntimeTarget = computed(() => Boolean(selectedItem.value && runtime.value?.current?.itemId === selectedItem.value.itemId));
@@ -243,6 +245,31 @@ async function clearRuntime() {
     runtimeClearOpen.value = false;
   } finally {
     runtimeBusy.value = false;
+  }
+}
+
+/** 给选中的 worktree 补齐依赖软链（判据全部在服务端，这里只负责报告结果）。 */
+async function linkDependencies(item: WorktreeItem) {
+  if (dependenciesBusy.value) return;
+  dependenciesBusy.value = true;
+  try {
+    const response = await api.linkWorktreeDependencies(props.projectId, item.itemId);
+    const { linked, skipped, failed, folders } = response.result;
+    if (folders.length === 0) {
+      ElMessage.warning("没有配置依赖文件夹；先在「项目设置 → Worktree」里填目录列表。");
+    } else if (failed.length > 0) {
+      ElMessage.warning(
+        `补链完成：新建 ${linked.length} 条，跳过 ${skipped.length} 条，失败 ${failed.length} 条（${failed
+          .map((entry) => `${entry.path}：${entry.error}`)
+          .join("；")}）`,
+      );
+    } else {
+      ElMessage.success(`补链完成：新建 ${linked.length} 条，跳过 ${skipped.length} 条`);
+    }
+  } catch (caught) {
+    ElMessage.error(caught instanceof Error ? caught.message : "补齐依赖软链失败");
+  } finally {
+    dependenciesBusy.value = false;
   }
 }
 
@@ -706,11 +733,15 @@ onBeforeUnmount(() => {
             <el-button size="small" :icon="CopyDocument" @click="copy(selectedItem.effectivePath)">复制路径</el-button>
             <el-button size="small" data-worktree-log-open @click="openLog(selectedItem)">提交历史</el-button>
           </div>
-          <div v-if="selectedItem.hasWorktree" class="detail-runtime-actions">
+          <!--
+            没有 worktree 的条目也显示这两个按钮（禁用 + 一行说明）：按钮直接消失的话，
+            用户只会觉得"这里没有这个功能"——实测踩过。
+          -->
+          <div class="detail-runtime-actions">
             <el-button
               size="small"
               type="primary"
-              :disabled="isRuntimeTarget || selectedItem.missing"
+              :disabled="isRuntimeTarget || selectedItem.missing || !selectedItem.hasWorktree"
               :loading="runtimeBusy"
               data-runtime-switch
               @click="switchRuntime(selectedItem)"
@@ -720,13 +751,25 @@ onBeforeUnmount(() => {
             <el-button
               v-if="!isRuntimeTarget"
               size="small"
-              :disabled="selectedItem.missing"
+              :disabled="selectedItem.missing || !selectedItem.hasWorktree"
               :loading="runtimeBusy"
               data-runtime-switch-start
               @click="switchRuntime(selectedItem, true)"
               >切换并启动</el-button
             >
+            <el-button
+              size="small"
+              :disabled="selectedItem.missing || !selectedItem.hasWorktree"
+              :loading="dependenciesBusy"
+              data-worktree-dependencies
+              @click="linkDependencies(selectedItem)"
+              >补齐依赖软链</el-button
+            >
           </div>
+          <p v-if="!selectedItem.hasWorktree" class="detail-hint" data-worktree-no-worktree>
+            这条分支还没有 worktree：执行目录与依赖软链都需要先有一个 worktree（派发一条 Run，或在命令行
+            <code>git worktree add</code>）。
+          </p>
           <div v-if="selectedItem.branch && !selectedItem.isBaseBranch" class="detail-tag-actions">
             <el-button size="small" :loading="scopeBusy" data-worktree-toggle-ignore @click="toggleIgnore(selectedItem)">
               {{ selectedItem.isIgnored ? "取消忽略" : "忽略这条分支" }}
@@ -1255,6 +1298,12 @@ onBeforeUnmount(() => {
 }
 .detail-tag-actions {
   margin-top: 6px;
+}
+.detail-hint {
+  margin: 6px 0 0;
+  color: #93a1b5;
+  font-size: 10px;
+  line-height: 1.6;
 }
 .detail-runtime-actions {
   display: flex;

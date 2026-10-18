@@ -35,6 +35,10 @@ node scripts/service.mjs stop --only web
 node scripts/service.mjs status
 ```
 
+> **改动前端代码后要重新构建**：单进程模式（API 在 4310 同时托管页面）服务的是
+> `apps/web/dist` 这份**静态构建产物**，不会热更新；`pnpm build` 之后还要**硬刷新浏览器**。
+> 想要热更新就用开发模式（Vite 5173）。
+
 生产/单进程模式先构建，再由 API 在同一端口托管 Web 构建产物：
 
 ```bash
@@ -308,6 +312,12 @@ GET  /api/v4/projects/:projectId/worktrees/events             ?afterSequence=   
   worktree 内；**只停止本进程启动的子进程**（先 SIGTERM 进程组、3 秒后 SIGKILL），不按端口杀。
   这两个目录被排除在"工作区脏"判据之外，也排除在 Run 的自动提交之外（`git add -A` 不提交它们）
   ——本机运行配置不该让 worktree 变成不可合并，更不该随合并进主干。
+- **依赖文件夹软链**：「项目设置 → Worktree」里的 `linkedFolders`（`node_modules`、`.next`、
+  `target`…，相对仓库根目录）。**新建 Run 的 worktree 时自动建链**，已有 worktree 可在面板里点
+  「补齐依赖软链」。规则：只在该目录**存在于主仓库、且目标位置不存在**时建链；**不覆盖**已有内容、
+  **不改 Git 索引**（被跟踪的依赖目录应当由仓库自己 gitignore）；失败只报告、不影响 Run；
+  这些目录也会被排除在 Run 的自动提交之外（否则会把"指向本机主仓库的符号链接"发到主干上）。
+  它**属于执行配置**：改它会推进 `configVersion`，未确认的候选方案需要重新生成。
 - **项目级兜底服务配置**：worktree 里没有配置文件时，用「项目设置 → Worktree」里的
   `settings.worktreeServices`（JSON 数组，字段与 `services.json` 的 `services` 相同）。
   **文件整份优先，两份不合并**；文件存在但解析失败时也不回落——那会把"文件写坏了"伪装成

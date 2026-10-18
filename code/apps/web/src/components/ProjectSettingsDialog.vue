@@ -107,6 +107,8 @@ const form = reactive({
   ignoredBranches: [] as string[],
   /** 项目级兜底服务配置，按 JSON 文本编辑（形状与 services.json 的 services 数组一致）。 */
   worktreeServicesText: "",
+  /** 需要从主仓库软链到每个 worktree 的依赖目录，一行一个。 */
+  linkedFoldersText: "",
   configVersion: 0,
   defaultTimeoutMs: 120000,
   executionTimeoutMs: 1800000,
@@ -223,6 +225,7 @@ function setForm(value: Project) {
     includeDetachedWorktrees: settings.worktree?.includeDetachedWorktrees ?? true,
     ignoredBranches: [...(settings.worktree?.ignoredBranches ?? [])],
     worktreeServicesText: settings.worktreeServices?.length ? JSON.stringify(settings.worktreeServices, null, 2) : "",
+    linkedFoldersText: (settings.linkedFolders ?? []).join("\n"),
     configVersion: value.configVersion,
     defaultTimeoutMs: settings.concurrency.defaultTimeoutMs,
     executionTimeoutMs: settings.concurrency.executionTimeoutMs ?? 1800000,
@@ -459,6 +462,11 @@ function settingsPayload(worktreeServices: ProjectWorktreeService[] = []): Proje
     },
     // 兜底服务配置与范围同属"不影响执行"的那一类，不进 configHash。
     worktreeServices,
+    /**
+     * 依赖目录**属于执行配置**（它决定 Run 的 worktree 里有什么），因此参与 configHash：
+     * 改它会推进 configVersion，正在走的 Plan 需要在确认前重新生成——这是有意的。
+     */
+    linkedFolders: parseBranchPatterns(form.linkedFoldersText),
     models: {
       explorer: {
         model: form.explorerModel,
@@ -760,6 +768,29 @@ onBeforeUnmount(() => requestScope.invalidate());
                 <p v-if="!visibleBranchOptions.length" class="field-hint">没有匹配的分支。</p>
               </div>
             </template>
+
+            <div class="section-title worktree-ignored-heading">
+              <div>
+                <h2>依赖文件夹软链</h2>
+                <p>
+                  新建 Run 的 worktree 时，把主仓库里的这些目录用符号链接过去（省磁盘、免重复安装）； 已有 worktree
+                  可以在面板里用「补齐依赖软链」。
+                </p>
+              </div>
+            </div>
+            <label class="worktree-services-field"
+              >目录列表（一行一个，相对仓库根目录）<textarea
+                v-model="form.linkedFoldersText"
+                rows="4"
+                :disabled="project.status === 'ARCHIVED'"
+                spellcheck="false"
+                data-worktree-linked-folders
+                placeholder="node_modules&#10;.next&#10;target"
+              /><small class="field-hint"
+                >只在该目录**存在于主仓库、且在 worktree 里不存在**时建链；不会覆盖已有内容，也不会改 Git 索引。
+                常见：<code>node_modules</code>、<code>.next</code>、<code>vendor</code>、<code>target</code>。</small
+              ></label
+            >
 
             <div class="section-title worktree-ignored-heading">
               <div>

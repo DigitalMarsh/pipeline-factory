@@ -10,7 +10,7 @@
  */
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryPipelineStore, ProjectService, type Project } from "@pipeline-factory/domain";
@@ -525,6 +525,40 @@ async function waitFor(check: () => Promise<boolean> | boolean, timeoutMs = 8_00
 }
 
 /** 执行目录：合并前验证用的固定路径。 */
+describe("Worktree 路由：依赖软链", () => {
+  it("给已有 worktree 补齐依赖目录；没有 worktree 的分支返回 409", async () => {
+    const { app, project, repoRoot } = setup();
+    mkdirSync(join(repoRoot, "node_modules"));
+    const patched = await app.inject({
+      method: "PATCH",
+      url: `/api/v4/projects/${project.id}`,
+      payload: { settings: { linkedFolders: ["node_modules"] } },
+    });
+    expect(patched.statusCode).toBe(200);
+
+    const blocked = await app.inject({
+      method: "POST",
+      url: `/api/v4/projects/${project.id}/worktrees/dependencies`,
+      payload: { itemId: "branch:feature/ahead" },
+    });
+    expect(blocked.statusCode).toBe(409);
+    expect(blocked.json()).toMatchObject({ code: "WORKTREE_DEPENDENCY_BLOCKED" });
+
+    const worktreePath = mkdtempSync(join(tmpdir(), "pipeline-link-api-"));
+    temporaryPaths.push(worktreePath);
+    git(repoRoot, ["worktree", "add", worktreePath, "feature/ahead"]);
+
+    const linked = await app.inject({
+      method: "POST",
+      url: `/api/v4/projects/${project.id}/worktrees/dependencies`,
+      payload: { itemId: "branch:feature/ahead" },
+    });
+    expect(linked.statusCode).toBe(200);
+    expect(linked.json()).toMatchObject({ result: { folders: ["node_modules"], linked: ["node_modules"] } });
+    expect(lstatSync(join(worktreePath, "node_modules")).isSymbolicLink()).toBe(true);
+  });
+});
+
 describe("Worktree 路由：执行目录", () => {
   it("初始为空；切换后能反查出当前分支", async () => {
     const { app, project, repoRoot, worktreeRoot } = setup();

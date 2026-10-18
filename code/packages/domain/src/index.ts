@@ -341,6 +341,8 @@ export type { ToolCallLedgerEntry, ToolCallLedgerStatus } from "./tools/tool-cal
 export { LocalGitWorktreeAdapter } from "./git/worktree.js";
 export type { GitCommandRunner, LocalGitWorktreeOptions, Workspace, WorkspaceAdapter } from "./git/worktree.js";
 export { localGitMergeInspector } from "./git/merge-inspector.js";
+export { assertLinkableFolder, linkFolders } from "./git/linked-folders.js";
+export type { LinkFoldersResult } from "./git/linked-folders.js";
 export type { GitMergeInspector } from "./git/merge-inspector.js";
 
 // ─────────────────────────── project/：项目聚合与配置快照 ───────────────────────────
@@ -401,6 +403,7 @@ export type {
 export type {
   WorktreeCleanupResult,
   WorktreeConflictPrediction,
+  WorktreeDependencyLinkResult,
   WorktreeFactoryLink,
   WorktreeFactorySync,
   WorktreeFileChange,

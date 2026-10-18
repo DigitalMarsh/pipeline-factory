@@ -74,6 +74,13 @@ export function createDefaultScheduler(
         projectRoot: snapshot.repoRoot,
         worktreeRoot: snapshot.worktreeRoot,
         ignoreDirtyPaths: planStorageFor(config, snapshot.repoRoot).ignoreDirtyPaths,
+        // 依赖目录共享（`node_modules` 等）：随 Project 快照冻结，失败只出声、不挡住 Run。
+        linkedFolders: snapshot.settings.linkedFolders ?? [],
+        onLinkedFolders: (result) => {
+          if (result.failed.length > 0) {
+            console.warn(`[worktree] 依赖软链失败：${result.failed.map((entry) => `${entry.path}（${entry.error}）`).join("、")}`);
+          }
+        },
       }),
     hookRunnerFactory: (snapshot) => {
       const snapshotCommands = projectCommands(snapshot);

@@ -29,6 +29,7 @@
 import { execFile } from "node:child_process";
 import { resolve } from "node:path";
 import { inspectWorkingTree, workingTreeDirtyError } from "./working-tree.js";
+import { linkFolders, type LinkFoldersResult } from "./linked-folders.js";
 import type { CommandResult } from "../platform/commands.js";
 
 /** 一个 Run 的 Git Worktree 事实。 */
@@ -66,6 +67,13 @@ export type LocalGitWorktreeOptions = {
   worktreeRoot: string;
   ignoreDirtyPaths?: readonly string[] | undefined;
   runGit?: GitCommandRunner | undefined;
+  /**
+   * 建完 worktree 后要**从主仓库软链过去**的依赖目录（相对路径，如 `node_modules`）。
+   * 失败只回调、不抛：一个依赖目录链不上，不该让整条 Run 起不来。
+   */
+  linkedFolders?: readonly string[] | undefined;
+  /** 软链结果的回调（组合根用它出声；测试用它可以断言）。 */
+  onLinkedFolders?: ((result: LinkFoldersResult) => void) | undefined;
 };
 
 /** 使用 Git 创建和移除 Run 专属 Worktree；执行目录与只读 Explorer 的 repoRoot 分离。 */
@@ -91,6 +99,12 @@ export class LocalGitWorktreeAdapter implements WorkspaceAdapter {
     if (!inspection.clean) throw workingTreeDirtyError(inspection.paths);
     const created = await this.runGit(["worktree", "add", "-b", input.branch, path, input.baseCommit], this.options.projectRoot);
     if (created.exitCode !== 0) throw new Error(`Git worktree could not be created: ${created.stderr}`);
+    // 依赖目录共享：建链失败只回调，不影响 Run（见 linked-folders.ts 的模块头）。
+    if (this.options.linkedFolders?.length) {
+      this.options.onLinkedFolders?.(
+        linkFolders({ sourceRoot: this.options.projectRoot, targetRoot: path, folders: this.options.linkedFolders }),
+      );
+    }
     // 基线恒等于 baseCommit（理由见类头维护提示 3）。
     return { path, branch: input.branch, baseCommit: input.baseCommit };
   }
@@ -117,11 +131,12 @@ export class LocalGitWorktreeAdapter implements WorkspaceAdapter {
     if (status.exitCode !== 0) throw new Error(`Git status failed in ${workspace.path}: ${status.stderr}`);
     if (!status.stdout.trim()) return null;
     /**
-     * **排除工具自己的元数据目录**（服务配置）：它们属于本机的运行配置，不是这次 Run 的产物。
-     * 不排除的话，`git add -A` 会把 `.pipeline-factory/services.json` 一起提交进分支，
-     * 再随合并进主干——那是把本机配置当成代码发布。
+     * **排除工具自己的元数据目录**（服务配置）与**配置的依赖软链目录**：它们都不是这次 Run 的产物。
+     * 不排除的话，`git add -A` 会把 `.pipeline-factory/services.json` 一起提交进分支，也会把
+     * `node_modules` 那种"指向本机主仓库的符号链接"发到主干上。
      */
-    const added = await this.runGit(["add", "-A", "--", ".", ":(exclude).pipeline-factory", ":(exclude).worktree-manage"], workspace.path);
+    const excludes = [".pipeline-factory", ".worktree-manage", ...(this.options.linkedFolders ?? [])].map((entry) => `:(exclude)${entry}`);
+    const added = await this.runGit(["add", "-A", "--", ".", ...excludes], workspace.path);
     if (added.exitCode !== 0) throw new Error(`Git add failed in ${workspace.path}: ${added.stderr}`);
     const committed = await this.runGit(["commit", "-m", message], workspace.path);
     if (committed.exitCode !== 0) throw new Error(`Git commit failed in ${workspace.path}: ${committed.stderr}`);

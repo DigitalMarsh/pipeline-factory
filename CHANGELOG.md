@@ -1,5 +1,27 @@
 # Changelog
 
+## 2026-10-18 — 依赖文件夹软链；执行目录的两处实操修正
+
+接着执行目录，把"依赖共享"补上，并修掉上一轮的三个实操问题。
+
+1. **依赖文件夹软链**（`settings.linkedFolders`）：`node_modules` / `.next` / `target` 等目录在
+   **新建 Run 的 worktree 时自动从主仓库建链**；已有 worktree 可在面板详情里点「补齐依赖软链」。
+   规则与参考实现刻意不同：目标已存在就跳过（**绝不覆盖**）、**不改 Git 索引**（参考实现会
+   `git rm --cached`，那是在改分支索引）；失败只报告、不影响 Run。`linkedFolders` 属于执行配置
+   （参与 configHash / configVersion）。
+2. **自动提交排除依赖软链**：`git add -A` 现在同时排除 `.pipeline-factory`、`.worktree-manage`
+   与配置的依赖目录——否则会把一个指向本机主仓库的符号链接发到主干上。
+3. **没有 worktree 的条目不再"静默没有功能"**：执行目录与依赖软链的两个按钮改为**禁用 + 一行说明**
+   （此前按钮直接不渲染，被当成"功能没做"）。
+4. **文档补一条操作前提**：单进程托管（4310）服务的是 `apps/web/dist` 静态产物，改完前端必须
+   `pnpm build` 再硬刷新；要热更新请用 Vite（5173）。
+
+### Verification
+
+- `pnpm verify` 全绿：domain **553** / api **164** / web **707**。新增：软链规则（建链/不覆盖/
+  越界拒绝/嵌套父目录）、创建 Run worktree 时自动建链、commit 的 add 参数带 exclude、
+  补齐接口与面板按钮、设置里 `linkedFolders` 的校验与提交、无 worktree 的提示。
+
 ## 2026-10-18 — 执行目录：合并前的稳定运行与验证
 
 痛点：合并前想亲手验证改动，但每个 worktree 路径不同，端口/配置按路径写，验证一次就要来回对照。

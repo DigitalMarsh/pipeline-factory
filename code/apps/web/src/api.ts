@@ -27,6 +27,7 @@ import type {
   RunGuidance,
   VerificationRun,
   WorktreeCleanupResult,
+  WorktreeDependencyLinkResult,
   WorktreeFileChange,
   WorktreeInventory,
   WorktreeLogCommit,
@@ -344,6 +345,12 @@ export const api = {
         previousPath ? `&previousPath=${encodeURIComponent(previousPath)}` : ""
       }`,
     ),
+  /** 给已有 worktree 补齐依赖软链（`node_modules` 等）。 */
+  linkWorktreeDependencies: (projectId: string, itemId: string) =>
+    request<{ result: WorktreeDependencyLinkResult }>(`/api/v4/projects/${encodeURIComponent(projectId)}/worktrees/dependencies`, {
+      method: "POST",
+      body: JSON.stringify({ itemId }),
+    }),
   /** 执行目录：现状 + runtime 配置链解析出的服务清单。 */
   worktreeRuntime: (projectId: string) => request<WorktreeRuntimeResponse>(`/api/v4/projects/${encodeURIComponent(projectId)}/runtime`),
   switchWorktreeRuntime: (projectId: string, itemId: string) =>

@@ -66,3 +66,6 @@ export const worktreeServiceActionBody = z.object({
 export const worktreeRuntimeSwitchBody = z.object({ itemId: z.string().trim().min(1).max(4096) });
 export const worktreeRuntimeServiceBody = z.object({ serviceId: z.string().trim().min(1).max(200) });
 export const worktreeRuntimeLogsQuery = z.object({ serviceId: z.string().trim().min(1).max(200) });
+
+/** 给已有 worktree 补齐依赖软链。 */
+export const worktreeItemOnlyBody = z.object({ itemId: z.string().trim().min(1).max(4096) });

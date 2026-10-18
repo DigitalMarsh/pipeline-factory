@@ -34,6 +34,7 @@ const { apiMocks } = vi.hoisted(() => ({
     startRuntimeService: vi.fn(),
     stopRuntimeService: vi.fn(),
     runtimeServiceLogs: vi.fn(),
+    linkWorktreeDependencies: vi.fn(),
   },
 }));
 vi.mock("../api", () => ({ api: apiMocks }));
@@ -561,5 +562,45 @@ describe("Worktree 面板 · 执行目录", () => {
     await flush();
 
     expect(apiMocks.clearWorktreeRuntime).toHaveBeenCalledWith("project-1");
+  });
+});
+
+/** 依赖软链与"没有 worktree"的提示。 */
+describe("Worktree 面板 · 依赖软链", () => {
+  it("有 worktree 的条目可以补齐依赖软链", async () => {
+    apiMocks.linkWorktreeDependencies.mockResolvedValue({
+      result: { worktreePath: "/repo-wt/a", folders: ["node_modules"], linked: ["node_modules"], skipped: [], failed: [] },
+    });
+    const host = await mountPanel(inventory());
+    host.querySelector<HTMLElement>('[data-worktree-item="branch:feature/a"]')?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flush();
+
+    const button = host.querySelector<HTMLButtonElement>("[data-worktree-dependencies]");
+    expect(button?.disabled).toBe(false);
+    button?.click();
+    await flush();
+
+    expect(apiMocks.linkWorktreeDependencies).toHaveBeenCalledWith("project-1", "branch:feature/a");
+  });
+
+  it("没有 worktree 的本地分支：按钮禁用并给出说明（而不是消失）", async () => {
+    const list = inventory();
+    list.items.push(
+      item({
+        itemId: "branch:local",
+        branch: "local",
+        displayName: "local",
+        kind: "local_branch",
+        hasWorktree: false,
+        worktreePath: null,
+      }),
+    );
+    const host = await mountPanel(list);
+    host.querySelector<HTMLElement>('[data-worktree-item="branch:local"]')?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await flush();
+
+    expect(host.querySelector("[data-worktree-no-worktree]")?.textContent).toContain("还没有 worktree");
+    expect(host.querySelector<HTMLButtonElement>("[data-runtime-switch]")?.disabled).toBe(true);
+    expect(host.querySelector<HTMLButtonElement>("[data-worktree-dependencies]")?.disabled).toBe(true);
   });
 });

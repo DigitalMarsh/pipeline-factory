@@ -689,3 +689,35 @@ describe("ProjectSettingsDialog · 项目级兜底服务配置", () => {
     expect(mounted.host.textContent).toContain("不是合法 JSON");
   });
 });
+
+/** 依赖文件夹软链：属于执行配置，随 settings 提交。 */
+describe("ProjectSettingsDialog · 依赖文件夹软链", () => {
+  it("文本area 一行一个，保存时变成数组", async () => {
+    const initial = project();
+    vi.mocked(api.updateProject).mockClear();
+    vi.mocked(api.project).mockResolvedValue({ project: initial, summary: {} as never });
+    vi.mocked(api.worktrees).mockResolvedValue({ items: [{ itemId: "branch:main", branch: "main", isBaseBranch: true }] } as never);
+    vi.mocked(api.updateProject).mockResolvedValue({ project: initial });
+    const mounted = mountDialog();
+    await nextTick();
+    await nextTick();
+    [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("Worktree"))?.click();
+    await nextTick();
+    await nextTick();
+
+    const textarea = mounted.host.querySelector<HTMLTextAreaElement>("[data-worktree-linked-folders]");
+    expect(textarea).not.toBeNull();
+    if (textarea) {
+      textarea.value = "node_modules\n.next";
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+    [...mounted.host.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent?.includes("保存项目配置"))?.click();
+    await nextTick();
+    await nextTick();
+
+    expect(api.updateProject).toHaveBeenCalledWith(
+      "project-1",
+      expect.objectContaining({ settings: expect.objectContaining({ linkedFolders: ["node_modules", ".next"] }) }),
+    );
+  });
+});

@@ -129,6 +129,8 @@ export type ProjectSettings = {
   };
   /** 项目级兜底服务配置（worktree 内没有 services.json 时使用）。 */
   worktreeServices?: ProjectWorktreeService[];
+  /** 需要从主仓库软链到每个 worktree 的依赖目录（相对路径）。 */
+  linkedFolders?: string[];
 };
 
 /** Project Catalog 和设置页使用的后端 Project 投影。 */
@@ -973,3 +975,12 @@ export type RuntimeSwitchResponse = {
 };
 
 export type RuntimeClearResponse = { cleared: boolean; previousTarget: string | null; stoppedServices: number };
+
+/** 补齐依赖软链的结果。 */
+export type WorktreeDependencyLinkResult = {
+  worktreePath: string;
+  folders: string[];
+  linked: string[];
+  skipped: Array<{ path: string; reason: string }>;
+  failed: Array<{ path: string; error: string }>;
+};

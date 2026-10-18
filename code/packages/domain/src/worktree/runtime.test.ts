@@ -72,6 +72,33 @@ function addWorktree(fixture: Fixture, branch: string, name: string): string {
   return path;
 }
 
+describe("补齐依赖软链", () => {
+  it("把主仓库的依赖目录链到指定 worktree", async () => {
+    const fixture = setup();
+    createBranch(fixture.repoRoot, "feature/a", "a.txt");
+    const worktreePath = addWorktree(fixture, "feature/a", "a");
+    mkdirSync(join(fixture.repoRoot, "node_modules"));
+    const service = serviceFor(fixture);
+    fixture.store.saveProject({ ...fixture.project, settings: { ...fixture.project.settings, linkedFolders: ["node_modules"] } });
+    const project = fixture.store.getProject(fixture.project.id)!;
+
+    const result = await service.linkDependencies(project, "branch:feature/a");
+
+    expect(result.folders).toEqual(["node_modules"]);
+    expect(result.linked).toEqual(["node_modules"]);
+    expect(realpathSync(join(worktreePath, "node_modules"))).toBe(realpathSync(join(fixture.repoRoot, "node_modules")));
+  });
+
+  it("没有 worktree 的分支不能补链", async () => {
+    const fixture = setup();
+    createBranch(fixture.repoRoot, "feature/local", "local.txt");
+
+    await expect(serviceFor(fixture).linkDependencies(fixture.project, "branch:feature/local")).rejects.toMatchObject({
+      code: "WORKTREE_DEPENDENCY_BLOCKED",
+    });
+  });
+});
+
 describe("执行目录", () => {
   it("初始为空：只有固定路径，没有链接", async () => {
     const fixture = setup();

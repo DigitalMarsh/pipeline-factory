@@ -1,5 +1,5 @@
 /**
- * 模块职责：Worktree 域的 19 条路由 —— 盘点（含项目范围过滤）、合并预览、执行合并、继续 / 中止合并、
+ * 模块职责：Worktree 域的 20 条路由 —— 盘点（含项目范围过滤）、合并预览、执行合并、继续 / 中止合并、
  *   清理、提交历史、提交文件、单文件 diff、服务启停与日志、执行目录（切换/清空/runtime 服务），
  *   以及项目级 Worktree 事件流。
  *
@@ -33,6 +33,7 @@ import {
   worktreeListQuery,
   worktreeLogQuery,
   worktreeMergeBody,
+  worktreeItemOnlyBody,
   worktreeRuntimeLogsQuery,
   worktreeRuntimeServiceBody,
   worktreeRuntimeSwitchBody,
@@ -64,6 +65,7 @@ function statusFor(error: unknown): number {
     case "WORKTREE_STATE_CHANGED":
     case "WORKTREE_NO_MERGE_IN_PROGRESS":
     case "WORKTREE_RUNTIME_BLOCKED":
+    case "WORKTREE_DEPENDENCY_BLOCKED":
     case "WORKTREE_GIT_FAILED":
       return 409;
     default:
@@ -410,6 +412,20 @@ export function registerWorktreeRoutes(app: FastifyInstance, deps: WorktreeRoute
     const target = await requireRuntime(project, reply);
     if ("error" in target) return target.error;
     return { items: worktreeServices!.logs(project.id, RUNTIME_SERVICE_KEY, query.data.serviceId) };
+  });
+
+  /** 给已有 worktree 补齐依赖软链（`node_modules` 等）；判据与 Run 创建时同一套。 */
+  app.post("/api/v4/projects/:projectId/worktrees/dependencies", async (request, reply) => {
+    const params = projectThreadParams.safeParse(request.params);
+    const body = worktreeItemOnlyBody.safeParse(request.body ?? {});
+    if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid worktree dependency request" });
+    const project = projectOf(params.data.projectId);
+    if (!project) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
+    try {
+      return { result: await worktrees.linkDependencies(project, body.data.itemId) };
+    } catch (error) {
+      return reply.code(statusFor(error)).send(failure(error));
+    }
   });
 
   // ───────────── 单个 worktree 的服务启停（第三个参数是 worktree 根目录，进程管理在 runtime） ─────────────

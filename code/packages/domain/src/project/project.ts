@@ -6,6 +6,7 @@
 import { createHash } from "node:crypto";
 import { basename, isAbsolute, resolve } from "node:path";
 import { freezeDeep } from "../platform/freeze.js";
+import { assertLinkableFolder } from "../git/linked-folders.js";
 import { isRecord } from "../platform/guards.js";
 import type { HookDefinition, ModelRoleConfig, PipelineStore, RegisteredCommandDefinition, RunStatus } from "../index.js";
 
@@ -125,6 +126,11 @@ export type ProjectSettings = {
    */
   worktree?: ProjectWorktreeFilter | undefined;
   /**
+   * 需要从主仓库软链到每个 worktree 的依赖目录（相对路径，如 `node_modules` / `.next` / `target`）。
+   * **属于执行配置**：它改变 Run 的 worktree 里有什么，因此参与 configHash / configVersion。
+   */
+  linkedFolders?: string[] | undefined;
+  /**
    * 项目级兜底服务配置。**可选**：老 Project 没有这一格，读路径按空列表处理。
    * 与 `worktree` 一样**不参与执行配置指纹**（见 `projectHash`）。
    */
@@ -166,6 +172,7 @@ export type ProjectSettingsInput = {
   hooks?: ProjectSettings["hooks"];
   worktree?: Partial<ProjectWorktreeFilter> | undefined;
   worktreeServices?: ProjectWorktreeService[] | undefined;
+  linkedFolders?: string[] | undefined;
   models?: {
     explorer?: ModelRoleConfigInput & { model: string };
     executor?: ModelRoleConfigInput & { model: string };
@@ -266,6 +273,7 @@ export const DEFAULT_PROJECT_SETTINGS: ProjectSettings = {
   // 只有 REPOSITORY_FILE 能被入队与执行；理由见 ProjectSettings.defaultArtifactMode。
   defaultArtifactMode: "REPOSITORY_FILE",
   hooks: {},
+  linkedFolders: [],
   worktree: DEFAULT_WORKTREE_FILTER,
   worktreeServices: DEFAULT_WORKTREE_SERVICES,
   models: {
@@ -382,6 +390,8 @@ function validateProjectSettings(settings: ProjectSettings, catalog?: ModelBacke
   }
 
   validateWorktreeFilter(settings.worktree ?? DEFAULT_WORKTREE_FILTER);
+  // 依赖目录的路径校验复用同一个函数：相对、不越界（见 git/linked-folders.ts 维护提示 1）。
+  for (const folder of settings.linkedFolders ?? []) assertLinkableFolder(folder);
   validateWorktreeServices(settings.worktreeServices ?? DEFAULT_WORKTREE_SERVICES);
   if (!isRecord(settings.hooks)) throw new Error("hooks must be an object");
   for (const [name, hook] of Object.entries(settings.hooks)) {
@@ -535,6 +545,7 @@ export function normalizeProjectSettings(
      * 结果是范围里 9 个单字符模式，清单几乎被过滤空。非数组一律原样留给校验去拒绝。
      */
     worktreeServices: copyServicesForStorage(value.worktreeServices ?? base.worktreeServices ?? DEFAULT_WORKTREE_SERVICES),
+    linkedFolders: copyListForStorage(value.linkedFolders, base.linkedFolders),
     worktree: {
       ...(base.worktree ?? DEFAULT_WORKTREE_FILTER),
       ...(value.worktree ?? {}),

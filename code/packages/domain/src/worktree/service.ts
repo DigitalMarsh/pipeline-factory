@@ -55,8 +55,10 @@ import type {
   WorktreeRuntimeInfo,
   RuntimeSwitchResult,
   RuntimeClearResult,
+  WorktreeDependencyLinkResult,
 } from "./types.js";
 import { WORKTREE_METADATA_DIRS } from "./local-git.js";
+import { linkFolders } from "../git/linked-folders.js";
 import type { WorktreeGitPort } from "./local-git.js";
 
 /** 本域的错误码；路由按它映射 HTTP 状态，**不靠错误文案正则匹配**。 */
@@ -67,6 +69,7 @@ export type WorktreeErrorCode =
   | "WORKTREE_STATE_CHANGED"
   | "WORKTREE_NO_MERGE_IN_PROGRESS"
   | "WORKTREE_RUNTIME_BLOCKED"
+  | "WORKTREE_DEPENDENCY_BLOCKED"
   | "WORKTREE_GIT_FAILED";
 
 /** 带错误码的领域错误。`code` 是给调用方分支用的，`message` 是给人看的。 */
@@ -715,6 +718,27 @@ export class WorktreeService {
         commands: [`git -C ${project.repoRoot} merge --abort`],
         factory: null,
       };
+    });
+  }
+
+  /**
+   * 给一个已存在的 worktree **补齐依赖文件夹软链**（`node_modules` 等）。
+   * 判据与 Run 创建时的自动建链完全同一套（`git/linked-folders.ts`）：目标已存在就跳过、失败只报告。
+   */
+  async linkDependencies(project: Project, itemId: string): Promise<WorktreeDependencyLinkResult> {
+    return this.withProjectLock(project.id, async () => {
+      const inventory = await this.list(project, { includeFiltered: true });
+      const item = inventory.items.find((candidate) => candidate.itemId === itemId);
+      if (!item) throw new WorktreeError("WORKTREE_NOT_FOUND", `分支或 worktree 不存在：${itemId}`);
+      if (!item.hasWorktree || !item.worktreePath || item.missing) {
+        throw new WorktreeError(
+          "WORKTREE_DEPENDENCY_BLOCKED",
+          `只有磁盘上存在的 worktree 才能补依赖软链；${item.displayName} 没有可用的 worktree。`,
+        );
+      }
+      const folders = project.settings.linkedFolders ?? [];
+      const result = linkFolders({ sourceRoot: project.repoRoot, targetRoot: item.worktreePath, folders });
+      return { ...result, worktreePath: item.worktreePath, folders };
     });
   }
 

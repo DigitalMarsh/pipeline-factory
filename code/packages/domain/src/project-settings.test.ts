@@ -109,6 +109,18 @@ describe("Worktree 范围与执行配置的分界", () => {
     ).toThrow(/argv/);
   });
 
+  it("依赖文件夹软链：属于执行配置（推进版本），且路径必须相对、不越界", () => {
+    const { projects, project } = setup();
+
+    const updated = projects.update(project.id, { settings: { linkedFolders: ["node_modules", ".next"] } });
+    // 它决定 Run 的 worktree 里有什么 → 必须进入执行配置指纹。
+    expect(updated.configVersion).toBe(project.configVersion + 1);
+    expect(updated.settings.linkedFolders).toEqual(["node_modules", ".next"]);
+
+    expect(() => projects.update(project.id, { settings: { linkedFolders: ["/abs/path"] } })).toThrow(/相对/);
+    expect(() => projects.update(project.id, { settings: { linkedFolders: ["../outside"] } })).toThrow(/\.\./);
+  });
+
   it("范围模式与列表一起保存时，后续读取仍是同一份值", () => {
     const { projects, project } = setup();
     projects.update(project.id, { settings: { worktree: { includeDetachedWorktrees: false } } });

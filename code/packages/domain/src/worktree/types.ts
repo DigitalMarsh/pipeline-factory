@@ -355,3 +355,12 @@ export type RuntimeClearResult = {
   cleared: boolean;
   previousTarget: string | null;
 };
+
+/** 一次"补齐依赖软链"的结果。`folders` 是项目当前配置的目录列表，便于界面说明"为什么没东西可补"。 */
+export type WorktreeDependencyLinkResult = {
+  worktreePath: string;
+  folders: string[];
+  linked: string[];
+  skipped: Array<{ path: string; reason: string }>;
+  failed: Array<{ path: string; error: string }>;
+};
