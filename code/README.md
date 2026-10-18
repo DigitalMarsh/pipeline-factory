@@ -278,9 +278,11 @@ GET  /api/v4/projects/:projectId/worktrees/events             ?afterSequence=   
 | `local_branch`（无 worktree） | 分支已合并 + **不是仓库当前检出的分支**                        |
 | `detached_worktree`           | 工作区干净 + **HEAD 已被某个本地分支包含**（否则删掉就丢提交） |
 
-三者都要求项目没有活动 Run、仓库没有进行中的 Git 操作。删目录用 `git worktree remove --force`
+三者都要求项目没有活动 Run、仓库没有进行中的 Git 操作。**清理前会先停掉该 worktree 上由本应用启动的服务**
+——目录删掉之后进程就成了没有归属的孤儿。删目录用 `git worktree remove --force`
 （干净性由我们自己的判据负责：工具元数据目录不算脏，不带 force 时 git 会因为它拒绝删除），
-删分支用 `git branch -d`（不是 `-D`）。属于 Run 的 worktree 会走 `Scheduler.releaseWorkspace`，
+删分支先用 `git branch -d`；被拒时**再用 `merge-base --is-ancestor` 复核一次"已合并进主分支"**，成立才降到
+`-D`（`git -d` 只与 HEAD 比较，repoRoot 停在别的分支时会误拒）。属于 Run 的 worktree 会走 `Scheduler.releaseWorkspace`，
 所以 cleanup 钩子照常执行；钩子失败不阻止删除，但会作为 `cleanupHookNeedsAttention` 返回。
 
 ### 项目范围
@@ -291,10 +293,14 @@ GET  /api/v4/projects/:projectId/worktrees/events             ?afterSequence=   
 「显示被过滤的 N 项」）看回来，**写操作始终按全量清单解析目标**，隐藏不会让合并变成"不存在"。
 「曾经合并过」（`was_merged_before`）来自 Factory 自己记的合并事件，只覆盖从这个面板执行过的合并。
 
+**这些字段不属于执行配置**：它们不参与 `configHash`，改动也不推进 `configVersion`。所以"忽略一条分支"
+不会让正在走的 Plan 被判成"配置已变化，请重新生成"（`PlanService.confirm` 正是拿这两个值判过期的）。
+
 ### 其它
 
 - **自动刷新**：面板挂载时订阅 `worktrees/events`（SSE），事件里只有 `type + sequence`，
-  收到后防抖 400ms 重拉清单；清单内容仍以重拉结果为准，不做本地增量推断。
+  收到后防抖 400ms 重拉清单；清单内容仍以重拉结果为准，不做本地增量推断。断线重连成功后补一次刷新
+  （断线期间的事件不会补推）。
 - **服务启停**：读取 worktree 根目录下的 `.pipeline-factory/services.json`（原生，`argv` 直接执行），
   兼容 `.worktree-manage/services.json`（`start_command` 走 `sh -lc`）。`workdir` 解析后必须仍在
   worktree 内；**只停止本进程启动的子进程**（先 SIGTERM 进程组、3 秒后 SIGKILL），不按端口杀。

@@ -151,15 +151,24 @@ export function registerProjectRoutes(app: FastifyInstance, deps: ProjectRouteDe
       return { project: updated };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      /**
+       * **设置校验必须先判**：领域层的设置错误信息里经常出现 `branch` 之类的词
+       * （`worktree.branchPatterns must not be empty…`），落在下面那条 Git 正则上会被说成
+       * `INVALID_GIT_REPOSITORY` —— 用户看到的是一个和仓库无关的错误码。
+       */
       const code = /not found/i.test(message)
         ? "PROJECT_NOT_FOUND"
         : /configuration version conflict/i.test(message)
           ? "CONFIG_VERSION_CONFLICT"
           : /active runs/i.test(message)
             ? "PROJECT_HAS_ACTIVE_RUNS"
-            : /Git repository|branch|does not exist|absolute path/i.test(message)
-              ? "INVALID_GIT_REPOSITORY"
-              : "PROJECT_UPDATE_FAILED";
+            : /^(worktree|models|concurrency|commands|defaultVerificationCommandIds|defaultArtifactMode|hooks|toolPolicy)(\.|\s|$)/i.test(
+                  message,
+                )
+              ? "PROJECT_SETTINGS_INVALID"
+              : /Git repository|does not exist|absolute path|Invalid default branch/i.test(message)
+                ? "INVALID_GIT_REPOSITORY"
+                : "PROJECT_UPDATE_FAILED";
       /**
        * **409 只留给"状态冲突、稍后重试有用"的那两类**：等 Run 结束、或别人先改了配置。
        * 其余一律 422——它们是"这个配置本身不合法，原样重试还是失败"。

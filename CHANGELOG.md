@@ -1,5 +1,36 @@
 # Changelog
 
+## 2026-10-18（二次复盘）— 五处真缺陷：配置版本、删分支、连接生命周期
+
+十项能力合入后逐条重读，发现五处**会真的影响使用**的问题，全部修掉并补了用例：
+
+1. **忽略一条分支会让正在走的 Plan 变"过期"**。范围配置放在 `ProjectSettings` 里，而
+   `projectHash` 与 `configVersion` 覆盖整个 settings，于是"降噪"操作触发了
+   `PlanService.confirm` 的 `stale because Project configuration changed` —— 用户看到的是
+   "请重新生成方案"，根本指不到原因。现在 `settings.worktree` **不参与指纹**，且只改它时
+   不推进 `configVersion`、不写重复的配置修订（修订表以版本为主键，同版本再写会覆盖原来那份）。
+2. **repoRoot 停在别的分支时删不掉已合并分支**。`git branch -d` 只与 **HEAD** 比较，而我们
+   的判据是"已合并进主分支"；实测在 `feature/other`（早于合并点分叉）上删除一条已合进 main 的
+   分支会被拒："分支 'x' 没有完全合并"。现在 `-d` 被拒后用 `merge-base --is-ancestor` 复核，
+   成立才降到 `-D`；复核失败保留 git 的原话。
+3. **清理 worktree 不会停掉它上面跑着的服务**。目录删掉后进程还活着（cwd 指向不存在的路径），
+   而服务管理器仍持有它的 pid。清理路由现在先 `stopItem` 再删，响应里带 `stoppedServices`。
+4. **SSE 断线期间的事件不会补推，重连后也不刷新**。现在重连成功补一次刷新；首次连接不重复
+   （与 `onMounted` 的 `load()` 重复，白扫一遍仓库）。
+5. **设置校验错误被说成 `INVALID_GIT_REPOSITORY`**：错误信息里的 `branchPatterns` 命中了
+   Git 那条正则。现在设置类错误先判、给 `PROJECT_SETTINGS_INVALID`（422），并把 Git 正则收紧
+   到 `Invalid default branch`。
+
+顺带：服务路由改用 `worktreePathFor` 只解析路径（此前每选一次条目就跑一遍完整清单，十几次 git
+调用）；删除已无调用方的 `WorktreeService.item()`。
+
+### Verification
+
+- `pnpm verify` 全绿：domain **533** / api **154** / web **698**。新增用例：范围变化不动版本与
+  指纹、同版本不写第二份修订、HEAD 在别处时仍能删分支、`worktreePathFor` 的四种输入、
+  清理前停服务（真实子进程）、非法范围的错误码、SSE 重连补刷新。
+- 对运行中的 dev API 实测：非法范围 PATCH 返回 `422 PROJECT_SETTINGS_INVALID`，项目设置未被改动。
+
 ## 2026-10-18 — Worktree 管理补齐十项能力（范围过滤 / 三种清理 / 提交历史 / 服务启停 / 自动刷新…）
 
 按 10-18 复盘里"仍然缺的"清单逐条补齐，顺序即清单顺序:

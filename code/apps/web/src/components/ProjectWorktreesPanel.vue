@@ -270,8 +270,10 @@ async function confirmCleanup() {
       expectedBranchHead: target.lastCommit,
     });
     cleanupTarget.value = null;
-    if (response.result.branchDeleted && !response.result.cleanupHookNeedsAttention) ElMessage.success(response.result.message);
-    else ElMessage.warning(response.result.message);
+    const stopped = response.stoppedServices ?? 0;
+    if (response.result.branchDeleted && !response.result.cleanupHookNeedsAttention && stopped === 0)
+      ElMessage.success(response.result.message);
+    else ElMessage.warning(stopped > 0 ? `${response.result.message}（已先停掉 ${stopped} 个服务）` : response.result.message);
     await load();
   } catch (caught) {
     cleanupError.value = caught instanceof Error ? caught.message : "清理失败";
@@ -320,6 +322,18 @@ function connectEvents() {
   source.addEventListener("worktree", () => scheduleRefresh());
   // EventSource 自己会重连；不要在这里 close，否则断线后就再也不刷新了。
   source.onerror = () => undefined;
+  /**
+   * **断线期间发生的事件不会补推**（服务端不重放，只给新的）。所以重连成功后补一次刷新；
+   * 首次连接除外——那一次与 `onMounted` 的 `load()` 重复，白跑一遍扫仓库。
+   */
+  let firstOpen = true;
+  source.onopen = () => {
+    if (firstOpen) {
+      firstOpen = false;
+      return;
+    }
+    scheduleRefresh();
+  };
   eventSource = source;
 }
 

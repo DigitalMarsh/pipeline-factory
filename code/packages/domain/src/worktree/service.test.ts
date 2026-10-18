@@ -706,6 +706,34 @@ describe("删除已合并的本地分支", () => {
     expect(() => git(fixture.repoRoot, ["rev-parse", "--verify", "refs/heads/feature/done"])).toThrow();
   });
 
+  it("仓库停在别的分支时也能删除已合并分支（git -d 只与 HEAD 比较）", async () => {
+    const fixture = setup();
+    // 先造一条基于**合并之前**的 main 的分支，最后把仓库切过去——它不包含那条合并提交。
+    git(fixture.repoRoot, ["switch", "-c", "feature/other", "main"]);
+    writeFileSync(join(fixture.repoRoot, "other.txt"), "other\n");
+    git(fixture.repoRoot, ["add", "-A"]);
+    commit(fixture.repoRoot, "other change");
+    git(fixture.repoRoot, ["switch", "main"]);
+
+    createBranch(fixture.repoRoot, "feature/done", "done.txt", "done\n");
+    git(fixture.repoRoot, ["merge", "--no-ff", "--no-edit", "feature/done"]);
+    git(fixture.repoRoot, ["switch", "feature/other"]);
+
+    const service = serviceFor(fixture);
+    const item = itemFor(await service.list(fixture.project), "feature/done");
+    expect(item?.cleanupable).toBe(true);
+
+    const result = await service.cleanup(fixture.project, {
+      itemId: "branch:feature/done",
+      expectedBranchHead: item?.lastCommit ?? null,
+    });
+
+    expect(result.branchDeleted).toBe(true);
+    expect(() => git(fixture.repoRoot, ["rev-parse", "--verify", "refs/heads/feature/done"])).toThrow();
+    // 当前分支不能被误删
+    expect(git(fixture.repoRoot, ["rev-parse", "--abbrev-ref", "HEAD"]).trim()).toBe("feature/other");
+  });
+
   it("未合并的本地分支不能删除", async () => {
     const fixture = setup();
     createBranch(fixture.repoRoot, "feature/ahead", "ahead.txt", "ahead\n");
@@ -780,6 +808,22 @@ describe("进行中的 Git 操作", () => {
     expect(branch?.blockers.join("\n")).toContain("rebase");
     // 收尾，避免残留状态影响同文件后面的用例（每个用例的仓库是独立的，这里只是整洁）。
     git(fixture.repoRoot, ["rebase", "--abort"]);
+  });
+});
+
+describe("按 itemId 只解析 worktree 路径", () => {
+  it("有 worktree 的分支、detached 都返回路径；无 worktree 的本地分支返回 null", async () => {
+    const fixture = setup();
+    createBranch(fixture.repoRoot, "feature/ahead", "ahead.txt", "ahead\n");
+    createBranch(fixture.repoRoot, "feature/local", "local.txt", "local\n");
+    const worktreePath = addWorktree(fixture, "feature/ahead", "ahead");
+    git(fixture.repoRoot, ["worktree", "add", "--detach", join(fixture.worktreeRoot, "detached"), "main"]);
+    const service = serviceFor(fixture);
+
+    expect(await service.worktreePathFor(fixture.project, "branch:feature/ahead")).toBe(realpathSync(worktreePath));
+    expect(await service.worktreePathFor(fixture.project, "branch:feature/local")).toBeNull();
+    expect(await service.worktreePathFor(fixture.project, `detached:${realpathSync(join(fixture.worktreeRoot, "detached"))}`)).toBeTruthy();
+    await expect(service.worktreePathFor(fixture.project, "branch:nope")).rejects.toMatchObject({ code: "WORKTREE_NOT_FOUND" });
   });
 });
 

@@ -91,7 +91,8 @@ export type WorktreeGitPort = {
   continueMerge(repoRoot: string): Promise<{ ok: boolean; stdout: string; stderr: string }>;
   abortMerge(repoRoot: string): Promise<{ ok: boolean; stdout: string; stderr: string }>;
   removeWorktree(repoRoot: string, worktreePath: string): Promise<{ ok: boolean; message: string }>;
-  deleteBranch(repoRoot: string, branch: string): Promise<{ ok: boolean; message: string }>;
+  /** 删除本地分支。`force` 只在调用方**已经独立验证过"已合并进主分支"**时使用（见 service 的说明）。 */
+  deleteBranch(repoRoot: string, branch: string, force?: boolean): Promise<{ ok: boolean; message: string }>;
   pruneWorktrees(repoRoot: string): Promise<void>;
 };
 
@@ -498,9 +499,12 @@ export function createLocalWorktreeGit(options: { runGit?: WorktreeGitRunner | u
       return { ok: result.exitCode === 0, message: (result.stderr || result.stdout).trim() };
     },
 
-    async deleteBranch(repoRoot, branch) {
-      // `-d` 而不是 `-D`：未合并时 git 自己会拒绝，这是最后一道保险。
-      const result = await runGit(["branch", "-d", assertSafeRef(branch, "分支")], repoRoot);
+    async deleteBranch(repoRoot, branch, force = false) {
+      // 默认 `-d` 而不是 `-D`：未合并时 git 自己会拒绝，这是最后一道保险。
+      // `force` 只能由调用方在**用 `merge-base --is-ancestor` 独立验证过**之后传——
+      // 因为 git 的 `-d` 只拿 **HEAD** 做比较：repoRoot 停在别的分支时，一条已经合进主分支的
+      // 分支也会被拒绝（实测："分支 'x' 没有完全合并"）。
+      const result = await runGit(["branch", force ? "-D" : "-d", assertSafeRef(branch, "分支")], repoRoot);
       return { ok: result.exitCode === 0, message: (result.stderr || result.stdout).trim() };
     },
 

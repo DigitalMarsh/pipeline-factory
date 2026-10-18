@@ -375,11 +375,15 @@ export const api = {
     request<{ result: WorktreeMergeResult }>(`/api/v4/projects/${encodeURIComponent(projectId)}/worktrees/merge/abort`, {
       method: "POST",
     }),
+  /** `stoppedServices`：清理前被自动停掉的服务数（见清理路由的说明）。 */
   cleanupWorktree: (projectId: string, input: { itemId: string; expectedBranchHead: string | null }) =>
-    request<{ result: WorktreeCleanupResult }>(`/api/v4/projects/${encodeURIComponent(projectId)}/worktrees/cleanup`, {
-      method: "POST",
-      body: JSON.stringify(input),
-    }),
+    request<{ result: WorktreeCleanupResult; stoppedServices?: number }>(
+      `/api/v4/projects/${encodeURIComponent(projectId)}/worktrees/cleanup`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      },
+    ),
   getPlan: (planId: string) => request<PlanDetail>(`/api/v4/plans/${planId}`),
   candidatePlanVersions: (planId: string) =>
     request<{ planId: string; latestRevision: number; items: Array<Plan & { isLatest: boolean; readOnly: boolean }> }>(

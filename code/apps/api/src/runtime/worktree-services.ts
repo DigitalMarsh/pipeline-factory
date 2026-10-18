@@ -241,6 +241,22 @@ export class WorktreeServiceRunner {
     return this.processes.get(this.key(projectId, itemId, serviceId))?.logs ?? [];
   }
 
+  /**
+   * 停掉某个 item 下所有运行中的服务。清理 worktree 前必须调用：目录被删之后进程还活着的话，
+   * 它就成了没有归属的孤儿（cwd 指向一个不存在的路径），而我们仍然拿着它的 pid。
+   * 返回被停掉的数量。
+   */
+  async stopItem(projectId: string, itemId: string): Promise<number> {
+    const prefix = `${projectId}:${itemId}:`;
+    const running = [...this.processes.values()].filter((managed) => managed.key.startsWith(prefix) && managed.state.status === "running");
+    await Promise.all(running.map((managed) => this.terminate(managed)));
+    for (const managed of running) {
+      managed.state = { ...managed.state, status: "stopped", pid: null };
+      this.pushLine(managed, "stdout", "worktree 清理前，由本应用自动停止。");
+    }
+    return running.length;
+  }
+
   /** 应用关闭时统一回收；返回被停掉的数量。 */
   async stopAll(): Promise<number> {
     const running = [...this.processes.values()].filter((managed) => managed.state.status === "running");

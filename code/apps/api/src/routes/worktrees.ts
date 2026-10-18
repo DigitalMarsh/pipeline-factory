@@ -94,6 +94,10 @@ const WORKTREE_EVENT_TYPES = new Set<string>([
 /**
  * 服务只能跑在 worktree 里：无 worktree 的本地分支与 detached 项没有"当前工作目录"这回事。
  * 返回 `{ item }` 或 `{ error }`（后者已经是一个可直接 return 的 reply）。
+ *
+ * 这里**只解析路径**（`worktrees.worktreePathFor`），不拉完整清单：服务面板每选一次条目就会调它，
+ * 而完整清单要为每条分支跑 `rev-list`、为每个 worktree 跑 `status`——为了拿一个路径做十几次
+ * git 调用是不必要的。
  */
 async function resolveServiceTarget(
   worktrees: WorktreeService,
@@ -102,16 +106,16 @@ async function resolveServiceTarget(
   reply: FastifyReply,
 ): Promise<{ item: { itemId: string; worktreePath: string } } | { error: unknown }> {
   try {
-    const item = await worktrees.item(project, itemId);
-    if (!item.hasWorktree || !item.worktreePath) {
+    const worktreePath = await worktrees.worktreePathFor(project, itemId);
+    if (!worktreePath) {
       return {
         error: reply.code(409).send({
           code: "WORKTREE_SERVICES_UNSUPPORTED",
-          error: `服务只能在 worktree 中运行，请先为 ${item.displayName} 创建 worktree。`,
+          error: "服务只能在 worktree 中运行，请先为这条分支创建 worktree。",
         }),
       };
     }
-    return { item: { itemId: item.itemId, worktreePath: item.worktreePath } };
+    return { item: { itemId, worktreePath } };
   } catch (error) {
     return { error: reply.code(statusFor(error)).send(failure(error)) };
   }
@@ -197,7 +201,11 @@ export function registerWorktreeRoutes(app: FastifyInstance, deps: WorktreeRoute
     const project = projectOf(params.data.projectId);
     if (!project) return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: `Project ${params.data.projectId} not found` });
     try {
-      return { result: await worktrees.cleanup(project, body.data) };
+      // 先停掉这个 item 上跑着的服务：目录删掉之后进程会变成没有归属的孤儿。
+      // 放在 cleanup 之前是有意的——cleanup 的判据需要看当前状态，而"停服务"不会改变那些判据；
+      // 万一 cleanup 随后被拒，代价只是服务被停了一次（用户重新启动即可）。
+      const stoppedServices = worktreeServices ? await worktreeServices.stopItem(project.id, body.data.itemId) : 0;
+      return { result: await worktrees.cleanup(project, body.data), stoppedServices };
     } catch (error) {
       return reply.code(statusFor(error)).send(failure(error));
     }

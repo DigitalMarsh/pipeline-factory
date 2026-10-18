@@ -15,6 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { InMemoryPipelineStore, ProjectService, type Project } from "@pipeline-factory/domain";
 import { createApp } from "./server.js";
+import { isProcessAlive } from "./runtime/worktree-services.js";
 
 const temporaryPaths: string[] = [];
 const apps: Array<ReturnType<typeof createApp>> = [];
@@ -226,6 +227,25 @@ describe("Worktree 路由：范围过滤与提交历史", () => {
     expect(allItems.find((item) => item.branch === "feature/ahead")?.isIgnored).toBe(true);
   });
 
+  it("非法的范围配置返回 422 PROJECT_SETTINGS_INVALID，且不改动项目", async () => {
+    const { app, project } = setup();
+    const response = await app.inject({
+      method: "PATCH",
+      url: `/api/v4/projects/${project.id}`,
+      payload: { settings: { worktree: { filterMode: "patterns", branchPatterns: [] } } },
+    });
+
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toMatchObject({ code: "PROJECT_SETTINGS_INVALID" });
+
+    const reloaded = await app.inject({ method: "GET", url: `/api/v4/projects/${project.id}` });
+    // 项目上仍是默认范围（创建时写入了默认值），没有被这次非法请求改掉。
+    expect(
+      (reloaded.json() as { project: { settings: { worktree?: { filterMode: string; branchPatterns: string[] } } } }).project.settings
+        .worktree,
+    ).toMatchObject({ filterMode: "all", branchPatterns: [] });
+  });
+
   it("提交历史、提交文件与文件 diff", async () => {
     const { app, project } = setup();
     const log = await app.inject({
@@ -372,6 +392,44 @@ describe("Worktree 路由：服务启停", () => {
     });
     expect(stopped.statusCode).toBe(200);
     expect(stopped.json()).toMatchObject({ state: { status: "stopped" } });
+  });
+
+  it("清理 worktree 前先停掉它上面运行的服务", async () => {
+    const { app, project, repoRoot } = setup();
+    git(repoRoot, ["switch", "-c", "feature/merged", "main"]);
+    writeFileSync(join(repoRoot, "merged.txt"), "merged\n");
+    git(repoRoot, ["add", "-A"]);
+    commit(repoRoot, "merged change");
+    git(repoRoot, ["switch", "main"]);
+    git(repoRoot, ["merge", "--no-ff", "--no-edit", "feature/merged"]);
+    const worktreePath = mkdtempSync(join(tmpdir(), "pipeline-worktree-api-svc-cleanup-"));
+    temporaryPaths.push(worktreePath);
+    git(repoRoot, ["worktree", "add", worktreePath, "feature/merged"]);
+    withServiceConfig(repoRoot, worktreePath);
+    const itemId = "branch:feature/merged";
+
+    const started = await app.inject({
+      method: "POST",
+      url: `/api/v4/projects/${project.id}/worktrees/services/start`,
+      payload: { itemId, serviceId: "ticker" },
+    });
+    expect(started.statusCode).toBe(200);
+    const pid = (started.json() as { state: { pid: number | null } }).state.pid;
+    expect(pid).toBeTruthy();
+
+    const list = await app.inject({ method: "GET", url: `/api/v4/projects/${project.id}/worktrees` });
+    const item = (list.json() as { items: Array<{ branch: string | null; lastCommit: string }> }).items.find(
+      (entry) => entry.branch === "feature/merged",
+    );
+
+    const cleaned = await app.inject({
+      method: "POST",
+      url: `/api/v4/projects/${project.id}/worktrees/cleanup`,
+      payload: { itemId, expectedBranchHead: item?.lastCommit ?? null },
+    });
+    expect(cleaned.statusCode).toBe(200);
+    expect(cleaned.json()).toMatchObject({ stoppedServices: 1 });
+    await waitFor(() => !isProcessAlive(pid));
   });
 
   it("没有 worktree 的条目返回 409 WORKTREE_SERVICES_UNSUPPORTED", async () => {

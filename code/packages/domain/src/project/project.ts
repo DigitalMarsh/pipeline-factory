@@ -472,7 +472,14 @@ export function normalizeProjectSettings(
   return settings;
 }
 
+/**
+ * 影响**执行**的配置指纹。`settings.worktree`（Worktree 清单的默认范围）**有意不参与**：
+ * 它只是"看清单时默认显示哪些分支"，不影响 Plan 解析、派发与执行。算进去的后果很具体：
+ * 忽略一条分支就会改哈希与 `configVersion`，而 `PlanService.confirm` 会以"配置已变化"拒绝确认
+ * ——一次纯界面的降噪操作把正在走的方案打成过期。
+ */
 function projectHash(input: Pick<Project, "name" | "shortName" | "repoRoot" | "defaultBranch" | "worktreeRoot" | "settings">): string {
+  const { worktree: _ignoredWorktreeFilter, ...executionSettings } = input.settings;
   return `sha256:${createHash("sha256")
     .update(
       JSON.stringify({
@@ -481,10 +488,16 @@ function projectHash(input: Pick<Project, "name" | "shortName" | "repoRoot" | "d
         repoRoot: input.repoRoot,
         defaultBranch: input.defaultBranch,
         worktreeRoot: input.worktreeRoot,
-        settings: input.settings,
+        settings: executionSettings,
       }),
     )
     .digest("hex")}`;
+}
+
+/** 去掉 Worktree 范围后的设置，用于判断"这次改动是否影响执行"。 */
+function executionSettingsOf(settings: ProjectSettings): Record<string, unknown> {
+  const { worktree: _ignoredWorktreeFilter, ...rest } = settings;
+  return rest;
 }
 
 /** 从当前 Project 生成深拷贝快照；快照不含运行时可变字段。 */
@@ -720,6 +733,18 @@ export class ProjectService {
       JSON.stringify(nextSettings) !== JSON.stringify(project.settings);
     if (!changed) return project;
     /**
+     * **只有 Worktree 范围变了时不算"执行配置变化"**：不递增 `configVersion`、不改指纹、不写
+     * 配置修订。理由同 `projectHash`：这个字段只是清单的默认显示范围，让它给方案判过期是错的。
+     * 其余任何设置变化照旧推进版本（历史 Revision 靠它解释旧行为）。
+     */
+    const executionChanged =
+      name !== project.name ||
+      shortName !== project.shortName ||
+      repoRoot !== project.repoRoot ||
+      worktreeRoot !== project.worktreeRoot ||
+      defaultBranch !== project.defaultBranch ||
+      JSON.stringify(executionSettingsOf(nextSettings)) !== JSON.stringify(executionSettingsOf(project.settings));
+    /**
      * "高风险" = 会动到**正在跑的 Run 脚下那块地**的改动，只有两种：
      *   1) 仓库 / Worktree 路径与默认分支（运行中的 Worktree 就在 worktreeRoot 下，分支还牵着合并）；
      *   2) hooks（清理钩子在 Run 结束时执行）。
@@ -745,16 +770,19 @@ export class ProjectService {
       defaultBranch,
       worktreeRoot,
       settings: nextSettings,
-      configVersion: project.configVersion + 1,
-      configHash: projectHash({ name, shortName, repoRoot, defaultBranch, worktreeRoot, settings: nextSettings }),
+      configVersion: executionChanged ? project.configVersion + 1 : project.configVersion,
+      configHash: executionChanged
+        ? projectHash({ name, shortName, repoRoot, defaultBranch, worktreeRoot, settings: nextSettings })
+        : project.configHash,
       updatedAt: this.store.now(),
     };
     const saved = this.store.updateProject(updated);
-    this.saveConfigRevision(saved);
+    // 同版本不写修订：修订表以 (projectId, version) 为主键，同版本再写只会覆盖掉原来那一份。
+    if (executionChanged) this.saveConfigRevision(saved);
     this.store.appendEvent({
       type: "project.config.updated",
       aggregateId: projectId,
-      payload: { projectId, configVersion: saved.configVersion, configHash: saved.configHash },
+      payload: { projectId, configVersion: saved.configVersion, configHash: saved.configHash, executionChanged },
     });
     return saved;
   }

@@ -35,6 +35,7 @@ vi.mock("../api", () => ({ api: apiMocks }));
 /** 极简 EventSource 桩：测试只需要 `addEventListener` + 一个触发入口。 */
 class FakeEventSource extends EventTarget {
   static instances: FakeEventSource[] = [];
+  onopen: ((event: Event) => void) | null = null;
   onerror: ((event: Event) => void) | null = null;
   readonly url: string;
   constructor(url: string) {
@@ -444,6 +445,23 @@ describe("Worktree 面板：复盘后新增的交互", () => {
     await flush();
 
     expect(apiMocks.worktrees.mock.calls.length).toBe(callsBefore + 1);
+    void host;
+  });
+
+  it("重连后补一次刷新，首次连接不重复拉清单", async () => {
+    const host = await mountPanel(inventory());
+    const source = FakeEventSource.instances[0];
+    const calls = apiMocks.worktrees.mock.calls.length;
+
+    // 首次 open 与 onMounted 的 load() 重复，不该再拉一次。
+    source?.onopen?.(new Event("open"));
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    expect(apiMocks.worktrees.mock.calls.length).toBe(calls);
+
+    // 断线期间的写操作不会补推，所以重连成功要补一次。
+    source?.onopen?.(new Event("open"));
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(apiMocks.worktrees.mock.calls.length).toBe(calls + 1);
     void host;
   });
 

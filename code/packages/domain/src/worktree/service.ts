@@ -777,7 +777,7 @@ export class WorktreeService {
 
       // 目录确认删掉之后才清库里的 workspacePath：删除失败时那条记录仍是事实，不能提前抹掉。
       const runWorkspaceCleared = item.worktreePath ? this.clearRunWorkspace(project.id, item.worktreePath) : false;
-      const deleted = await this.git.deleteBranch(project.repoRoot, item.branch);
+      const deleted = await this.deleteBranchSafely(project, item.branch);
       this.appendEvent("worktree.cleaned", project.id, {
         projectId: project.id,
         itemId: item.itemId,
@@ -817,12 +817,29 @@ export class WorktreeService {
     return this.git.logCommits(project.repoRoot, ref, limit);
   }
 
-  /** 按 itemId 解析一个清单项（全量清单，不受项目范围过滤影响）。 */
-  async item(project: Project, itemId: string): Promise<WorktreeItem> {
-    const inventory = await this.list(project, { includeFiltered: true });
-    const item = inventory.items.find((candidate) => candidate.itemId === itemId);
-    if (!item) throw new WorktreeError("WORKTREE_NOT_FOUND", `分支或 worktree 不存在：${itemId}`);
-    return item;
+  /**
+   * 只解析 itemId 对应的 worktree 目录（不跑 ahead/behind、不读工作区状态）。
+   * 返回 `null` 表示这一项没有 worktree（本地分支）——服务启动器据此给出"只能在 worktree 里跑"。
+   * itemId 不存在时仍抛 `WORKTREE_NOT_FOUND`，与 `item()` 同一口径。
+   */
+  async worktreePathFor(project: Project, itemId: string): Promise<string | null> {
+    const worktrees = await this.readGit(() => this.git.listWorktrees(project.repoRoot), "读取 worktree 列表");
+    if (itemId.startsWith("detached:")) {
+      const path = itemId.slice("detached:".length);
+      const match = worktrees.find((worktree) => samePath(worktree.path, path));
+      if (!match) throw new WorktreeError("WORKTREE_NOT_FOUND", `worktree 不存在：${path}`);
+      return match.path;
+    }
+    if (!itemId.startsWith("branch:")) throw new WorktreeError("WORKTREE_NOT_FOUND", `无法识别的 itemId：${itemId}`);
+    const branch = itemId.slice("branch:".length);
+    const named = worktrees.find((worktree) => worktree.branch === branch);
+    if (named) return named.path;
+    // 分支存在但没有 worktree：返回 null（不是错误）；分支根本不存在才是 NOT_FOUND。
+    const branches = await this.readGit(() => this.git.listBranches(project.repoRoot), "读取本地分支");
+    if (!branches.some((entry) => entry.name === branch)) {
+      throw new WorktreeError("WORKTREE_NOT_FOUND", `分支不存在：${branch}`);
+    }
+    return null;
   }
 
   /** 某个提交改了哪些文件。 */
@@ -977,6 +994,20 @@ export class WorktreeService {
   private isLiveWorkspace(worktreePath: string | null, activeRuns: readonly Run[]): boolean {
     if (!worktreePath) return false;
     return activeRuns.some((run) => samePath(run.workspacePath, worktreePath));
+  }
+
+  /**
+   * 删除本地分支：先让 git 用 `-d` 自己判一次；被拒时**再用我们的判据复核一遍**——
+   * `git branch -d` 比较的是 **HEAD**，而 repoRoot 经常停在别的分支上，于是"已合并进主分支"
+   * 的分支也会被拒（实测复现）。只有 `merge-base --is-ancestor <branch> <base>` 仍然成立时，
+   * 才降到 `-D`。复核失败就保留 git 的原话，不让 `-D` 变成绕过检查的捷径。
+   */
+  private async deleteBranchSafely(project: Project, branch: string): Promise<{ ok: boolean; message: string }> {
+    const first = await this.git.deleteBranch(project.repoRoot, branch);
+    if (first.ok) return first;
+    const stillMerged = await this.git.isAncestor(project.repoRoot, branch, project.defaultBranch).catch(() => false);
+    if (!stillMerged) return first;
+    return this.git.deleteBranch(project.repoRoot, branch, true);
   }
 
   /** 删除一个 worktree 目录；目录已经不在了就把 Git 的登记清掉。 */
