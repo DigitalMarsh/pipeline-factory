@@ -79,8 +79,10 @@ export type {
 // ─────────────────────────── store/：审计事件与持久化 ───────────────────────────
 // DomainEvent 的 id / sequence / occurredAt 由 Store 赋值、脱敏也在 appendEvent 内完成，
 // 所以它放在 store/types.ts 而不是某个业务域。
-export type { DomainEvent } from "./store/types.js";
+export type { AttachmentOwnerType, DomainEvent, MessageAttachment, MessageAttachmentView } from "./store/types.js";
 export type { EventQuery, PipelineStore } from "./store/pipeline-store.js";
+export { imagesByOwner } from "./store/message-attachments.js";
+export type { AttachmentPathResolver } from "./store/message-attachments.js";
 export type { EventPruneInput } from "./store/event-retention.js";
 export { PRUNABLE_EVENT_TYPES, isPrunableEvent, prunableEventIds } from "./store/event-retention.js";
 export { InMemoryPipelineStore } from "./store/in-memory-store.js";
@@ -255,6 +257,7 @@ export type {
   ModelCapabilities,
   ModelEvent,
   ModelGateway,
+  ModelImagePart,
   ModelMessage,
   ModelMessagePhase,
   ModelRequest,

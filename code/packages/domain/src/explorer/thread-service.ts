@@ -31,6 +31,7 @@ import { composeExplorerTitle, normalizeExplorerTitle } from "./explorer-title.j
 import { projectPlaceholderExplorerTitle } from "./thread-selection.js";
 import { REQUIRED_PLAN_AREAS } from "../platform/plan-requirements.js";
 import { defaultExplorerPlan, defaultThreadContextSummary, stripPlanProtocol, summarizeExplorerMessage } from "../store/records.js";
+import { imagesByOwner, type AttachmentPathResolver } from "../store/message-attachments.js";
 import type { PipelineStore } from "../store/pipeline-store.js";
 import type { AgentLoop, AgentLoopEvent, AgentLoopRunner } from "../agent/agent-loop.js";
 import type { ExplorerTitleGenerator } from "./explorer-title.js";
@@ -77,6 +78,7 @@ export class ExplorerThreadService {
   private readonly cwdForProject: ((projectId: string) => string | undefined) | undefined;
   private readonly modelConfigForProject: ((projectId: string) => ModelRoleConfig | undefined) | undefined;
   private readonly repositoryContextForProject: ((projectId: string) => { key: string; summary: string } | undefined) | undefined;
+  private readonly attachmentPathFor: AttachmentPathResolver | undefined;
 
   constructor(
     private readonly store: PipelineStore,
@@ -92,12 +94,15 @@ export class ExplorerThreadService {
       cwdForProject?: ((projectId: string) => string | undefined) | undefined;
       modelConfigForProject?: ((projectId: string) => ModelRoleConfig | undefined) | undefined;
       repositoryContextForProject?: ((projectId: string) => { key: string; summary: string } | undefined) | undefined;
+      /** 附件记录 → 本机绝对路径；由组合根按存储目录注入（见 store/message-attachments.ts）。 */
+      attachmentPathFor?: AttachmentPathResolver | undefined;
     } = {},
   ) {
     this.titleGenerator = options.titleGenerator;
     this.cwdForProject = options.cwdForProject;
     this.modelConfigForProject = options.modelConfigForProject;
     this.repositoryContextForProject = options.repositoryContextForProject;
+    this.attachmentPathFor = options.attachmentPathFor;
     this.plans = new PlanService(store);
     this.loopMaxSteps = options.maxSteps ?? 40;
     this.agentLoops = new AgentLoopEngine(store, model, undefined, {
@@ -163,9 +168,13 @@ export class ExplorerThreadService {
     explorerPlanId: string;
     content: string;
     clientTurnId: string;
+    /** 已经上传、尚未挂到任何回合上的图片附件；在用户回合落库后立刻挂上。 */
+    attachmentIds?: string[] | undefined;
   }): Promise<{ user: ExplorerTurn; assistant: ExplorerTurn; eventsUrl: string; loopId: string | null }> {
     const thread = this.store.getThread(input.threadId);
     if (!thread) throw new Error(`ExplorerThread ${input.threadId} not found`);
+    // 先校验再建任何行：跨项目的附件 id 必须在落库前被拒绝，不能等回合建好再抛。
+    const attachmentIds = this.validAttachmentIds(thread.projectId, input.attachmentIds);
     if (!input.explorerPlanId) throw new Error("explorerPlanId is required for every Explorer turn");
     const prior = this.store.getIdempotency("explorer-turn", input.clientTurnId);
     if (prior) return prior as unknown as { user: ExplorerTurn; assistant: ExplorerTurn; eventsUrl: string; loopId: string | null };
@@ -212,6 +221,7 @@ export class ExplorerThreadService {
       explorerPlanId: plan.id,
     };
     this.store.saveTurn(user);
+    if (attachmentIds.length > 0) this.store.attachAttachments("explorer-turn", user.id, attachmentIds);
     this.store.saveTurn(assistant);
     this.store.updateThread({
       ...thread,
@@ -265,6 +275,39 @@ export class ExplorerThreadService {
     }
   }
 
+  /**
+   * 回合附件的准入：去重、限张数、必须属于本项目。
+   *
+   * 在**任何行落库之前**调用。跨项目的附件 id 一旦挂上，等于把别的项目的截图发给这个项目的模型；
+   * 而"先建回合再校验"会在失败后留下一个没有用户消息的助手回合。
+   */
+  private validAttachmentIds(projectId: string, ids: readonly string[] | undefined): string[] {
+    if (!ids || ids.length === 0) return [];
+    const unique = [...new Set(ids)];
+    if (unique.length > 5) throw new Error("ATTACHMENT_LIMIT_EXCEEDED");
+    for (const id of unique) {
+      const attachment = this.store.getAttachment(id);
+      if (!attachment || attachment.projectId !== projectId) throw new Error(`ATTACHMENT_NOT_FOUND: ${id}`);
+    }
+    return unique;
+  }
+
+  /** 把历史用户回合的附件挂回模型消息：常规续接时 Provider 只发最新一条，但图片要跟着那条走。 */
+  private messagesWithImages(
+    turns: readonly ExplorerTurn[],
+  ): Array<{ role: ExplorerTurn["role"]; content: string; images?: { path: string; mimeType: string }[] }> {
+    const images = imagesByOwner(
+      this.store,
+      "explorer-turn",
+      turns.filter((turn) => turn.role === "user").map((turn) => turn.id),
+      this.attachmentPathFor,
+    );
+    return turns.map((turn) => {
+      const attached = images.get(turn.id);
+      return { role: turn.role, content: turn.content, ...(attached?.length ? { images: attached } : {}) };
+    });
+  }
+
   private async startQueuedTurn(threadId: string, assistantId: string): Promise<AgentLoop> {
     const thread = this.store.getThread(threadId);
     const assistant = this.store.listTurns(threadId).find((turn) => turn.id === assistantId && turn.role === "assistant");
@@ -315,15 +358,16 @@ export class ExplorerThreadService {
       mode: this.modelConfigForProject?.(thread.projectId)?.loopMode ?? "provider-controlled",
       maxSteps: this.loopMaxSteps,
       modelRequest: {
-        messages: this.store
-          .listTurns(thread.id)
-          .filter(
-            (turn) =>
-              turn.explorerPlanId === plan.id &&
-              turn.sequence < assistant.sequence &&
-              !(turn.role === "assistant" && turn.status === "QUEUED"),
-          )
-          .map((turn) => ({ role: turn.role, content: turn.content })),
+        messages: this.messagesWithImages(
+          this.store
+            .listTurns(thread.id)
+            .filter(
+              (turn) =>
+                turn.explorerPlanId === plan.id &&
+                turn.sequence < assistant.sequence &&
+                !(turn.role === "assistant" && turn.status === "QUEUED"),
+            ),
+        ),
         conversationId: plan.id,
         continuationPrompt: planBoundary,
         ...(plan.providerThreadId ? { providerThreadId: plan.providerThreadId } : {}),

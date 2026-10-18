@@ -14,7 +14,7 @@
  *      （没有工具调用细节），但比丢失全部上下文好得多。
  *   3) 这里不 import 任何实现模块，只依赖 types.js 的类型 —— 保持 type-only 叶子，避免制造值级环。
  */
-import type { ModelMessage, ModelMode, ModelRoleConfig } from "./types.js";
+import type { ModelImagePart, ModelMessage, ModelMode, ModelRoleConfig } from "./types.js";
 
 /** 解析本次调用的模式：请求级覆盖优先，其次角色配置，最后按角色取默认。 */
 export function resolveModelMode(
@@ -28,8 +28,23 @@ export function resolveModelMode(
 export function replayConversation(messages: ModelMessage[]): string {
   const transcript = messages
     .filter((message) => message.role !== "system")
-    .map((message) => `${message.role === "user" ? "User" : "Assistant"}: ${message.content}`)
+    .map((message) => {
+      const header = `${message.role === "user" ? "User" : "Assistant"}: ${message.content}`;
+      // 回放是一条纯文本提示，图片本身没法重新挂上去；把落盘路径写进去，让有读文件能力的
+      // 后端仍能自己打开看（Codex / Claude 都有读取工具），而不是让用户以为图丢了。
+      return message.images?.length ? `${header}\n[attached images: ${message.images.map((image) => image.path).join(", ")}]` : header;
+    })
     .join("\n\n");
   if (!transcript) return "Continue.";
   return `Our conversation so far (replayed because the provider session was lost):\n\n${transcript}\n\nContinue from this point.`;
+}
+
+/** 最新一条用户消息的正文；没有用户消息时退到最后一条，再没有就是 "Continue."。 */
+export function latestUserMessage(messages: ModelMessage[]): string {
+  return [...messages].reverse().find((message) => message.role === "user")?.content ?? messages.at(-1)?.content ?? "Continue.";
+}
+
+/** 最新一条用户消息随带的图片（常规续接路径上要原生发给 Provider 的那几张）。 */
+export function latestUserImages(messages: ModelMessage[]): ModelImagePart[] {
+  return [...messages].reverse().find((message) => message.role === "user")?.images ?? [];
 }

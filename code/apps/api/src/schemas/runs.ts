@@ -8,6 +8,7 @@
  *   现在提取只是把一行代码换个位置。
  */
 import { z } from "zod";
+import { attachmentIds } from "./attachments.js";
 
 /**
  * 投递补充要求的形状。
@@ -19,4 +20,5 @@ import { z } from "zod";
 export const guidanceBody = z.object({
   content: z.string().trim().min(1).max(20_000),
   mode: z.enum(["auto", "steer", "queue"]).optional(),
+  attachmentIds: attachmentIds,
 });

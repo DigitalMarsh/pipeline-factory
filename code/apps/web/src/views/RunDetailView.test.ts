@@ -295,7 +295,9 @@ describe("Run detail execution conversation", () => {
      */
     it("把输入框换成提示，而不是留一个灰掉的框", () => {
       expect(flat(runDetailSource)).toContain(flat('<div v-if="!canSendExecutionMessage" class="composer-closed">'));
-      expect(flat(runDetailSource)).toContain(flat('<div v-else class="composer-input">'));
+      // 输入框外面现在包着 AttachmentComposer（图片附件条），composer-input 本身仍在 `v-else` 分支里。
+      expect(flat(runDetailSource)).toContain(flat("<AttachmentComposer v-else"));
+      expect(flat(runDetailSource)).toContain(flat('<div class="composer-input">'));
       // 发送键跟着输入框一起收走：提示里那个圆圈按钮点不动，就又是一次"按下去没反应"。
       expect(flat(runDetailSource)).toContain(flat('<div v-if="canSendExecutionMessage" class="composer-footer">'));
       // 原因那句话仍然来自同一个判据（不要在这里另写一套文案对不上号的理由）。

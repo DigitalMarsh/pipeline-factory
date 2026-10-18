@@ -13,6 +13,7 @@ import type {
   ExplorerThread,
   ExplorerTurn,
   MergeRequest,
+  MessageAttachment,
   ModelBackendsResponse,
   Plan,
   PlanDetail,
@@ -130,14 +131,14 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify(preferences),
     }),
-  submitProjectExecutionTurn: (projectId: string, content: string, clientTurnId: string) =>
+  submitProjectExecutionTurn: (projectId: string, content: string, clientTurnId: string, attachmentIds: string[] = []) =>
     request<{
       thread: ProjectExecutionThread;
       user: ProjectExecutionThreadSnapshot["messages"][number];
       assistant: ProjectExecutionThreadSnapshot["messages"][number];
     }>(`/api/v4/projects/${encodeURIComponent(projectId)}/execution-thread/turns`, {
       method: "POST",
-      body: JSON.stringify({ content, clientTurnId }),
+      body: JSON.stringify({ content, clientTurnId, ...(attachmentIds.length > 0 ? { attachmentIds } : {}) }),
     }),
   cancelProjectExecutionTurn: (projectId: string, messageId: string) =>
     request<{ message: ProjectExecutionThreadSnapshot["messages"][number] }>(
@@ -253,11 +254,36 @@ export const api = {
       `/api/v4/projects/${encodeURIComponent(projectId)}/explorers/${encodeURIComponent(explorerId)}/explorer-plans/${encodeURIComponent(explorerPlanId)}/selected-plan`,
       { method: "POST", body: JSON.stringify({ planId }) },
     ),
-  startExplorerTurn: (projectId: string, threadId: string, content: string, clientTurnId: string, explorerPlanId: string) =>
+  startExplorerTurn: (
+    projectId: string,
+    threadId: string,
+    content: string,
+    clientTurnId: string,
+    explorerPlanId: string,
+    attachmentIds: string[] = [],
+  ) =>
     request<{ turn: { user: ExplorerTurn; assistant: ExplorerTurn }; eventsUrl: string; loopId: string | null; state: string }>(
       `/api/v4/projects/${projectId}/explorer-thread/turns`,
-      { method: "POST", body: JSON.stringify({ threadId, content, clientTurnId, explorerPlanId }) },
+      {
+        method: "POST",
+        body: JSON.stringify({
+          threadId,
+          content,
+          clientTurnId,
+          explorerPlanId,
+          ...(attachmentIds.length > 0 ? { attachmentIds } : {}),
+        }),
+      },
     ),
+  /**
+   * 上传一张图片附件。走 base64 JSON（不引入 multipart）：服务端单独给了 8MB 上限，
+   * 解码后再按 5MB 与文件头复核。返回的 `url` 可直接用于 `<img src>`。
+   */
+  uploadAttachment: (projectId: string, input: { fileName: string; mimeType: string; dataBase64: string }) =>
+    request<{ attachment: MessageAttachment }>(`/api/v4/projects/${encodeURIComponent(projectId)}/attachments`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
   getExplorerTurns: (projectId: string, threadId: string, explorerPlanId: string) =>
     request<{ items: ExplorerTurn[]; lastEventSequence: number }>(
       `/api/v4/projects/${projectId}/explorer-thread/turns?threadId=${encodeURIComponent(threadId)}&explorerPlanId=${encodeURIComponent(explorerPlanId)}`,
@@ -527,10 +553,10 @@ export const api = {
    * 投递补充要求。`mode` 是投递方式：`steer` 交给正在跑的那一轮（下一个步骤边界生效）、`queue`
    * 等这一轮结束后起新的一轮、`auto` 交给服务端按"有没有在跑的 Loop"自己选。
    */
-  addRunGuidance: (runId: string, content: string, mode: "auto" | "steer" | "queue" = "auto") =>
+  addRunGuidance: (runId: string, content: string, mode: "auto" | "steer" | "queue" = "auto", attachmentIds: string[] = []) =>
     request<{ thread: ExecutionThread; guidance: RunGuidance; continued: boolean; run: Run | null }>(`/api/v4/runs/${runId}/guidance`, {
       method: "POST",
-      body: JSON.stringify({ content, mode }),
+      body: JSON.stringify({ content, mode, ...(attachmentIds.length > 0 ? { attachmentIds } : {}) }),
     }),
   verifyRun: (runId: string) => request<{ verification: VerificationRun }>(`/api/v4/runs/${runId}/verify`, { method: "POST" }),
   createMergeRequest: (runId: string, sourceCommit: string) =>

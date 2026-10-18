@@ -65,6 +65,7 @@ import { registerApiRoutes } from "./routes/index.js";
 import { persistLoopControl } from "./runtime/loop-control.js";
 import { planStorageFor } from "./runtime/plan-directory.js";
 import { createDefaultScheduler } from "./runtime/scheduler.js";
+import { AttachmentStore } from "./runtime/attachment-store.js";
 import { createDefaultVerificationExecutor } from "./runtime/verification.js";
 import { createModelGateway } from "./runtime/model-gateway.js";
 import { WorktreeServiceRunner } from "./runtime/worktree-services.js";
@@ -116,6 +117,9 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       },
     });
   new RecoveryCoordinator(store).recover();
+  // 附件文件跟着数据库目录走（`<dirname(databasePath)>/attachments/`）：不新增配置项，
+  // 也不进任何仓库。领域服务只拿 `pathFor`，不知道数据库在哪。
+  const attachments = new AttachmentStore(options.databasePath ?? options.config?.storage.databasePath ?? "pipeline-factory.sqlite");
   const modelCatalog = options.config ? createModelCatalog(options.config) : undefined;
   const projects = new ProjectService(store, modelCatalog);
   // 预检与 Plan 落盘都要知道"计划目录"（预检拿它做工区干净检查的白名单，落盘拿它写文件），
@@ -165,10 +169,12 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       return project ? repositoryContextCache.get(project) : undefined;
     },
     titleGenerator: new ModelExplorerTitleGenerator(model),
+    attachmentPathFor: attachments.pathFor,
   });
   void explorer.backfillTitles();
   void explorer.recoverQueuedTurns();
   const projectExecution = new ProjectExecutionThreadService(store, model, {
+    attachmentPathFor: attachments.pathFor,
     ...(options.config
       ? {
           maxSteps: options.config.model.loop.maxSteps,
@@ -232,7 +238,9 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
   projectExecution.recoverQueuedTurns();
   const scheduler =
     options.scheduler ??
-    (options.config ? createDefaultScheduler(store, options.config, model, mcpRegistry, pluginRegistry, options.computerUse) : undefined);
+    (options.config
+      ? createDefaultScheduler(store, options.config, model, mcpRegistry, pluginRegistry, options.computerUse, attachments.pathFor)
+      : undefined);
   /**
    * 验证成功收尾（PASSED / SKIPPED）之前，先把工作区提交到它自己的分支上——不提交的话
    * `MERGE_READY` 就是一句空话：分支上一个提交都没有，人照界面点「确认合并」合并过去什么都没有。
@@ -438,6 +446,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
   registerApiRoutes(app, {
     config: options.config,
     store,
+    attachments,
     projects,
     plans,
     explorers,

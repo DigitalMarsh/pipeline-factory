@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-10-18 — 对话里粘贴截图；执行目录一键起停服务
+
+三处对话输入框（探索、Run 的补充要求、项目执行线程）现在支持**截图后直接粘贴**（⌘⇧4 → ⌘V）：
+缩略图出现在输入框上方，点击看原图、可逐张删除。交互对齐 Codex / Claude desktop——**没有"选择文件"
+按钮**，粘贴就是主路径（拖拽仍可用）。
+
+1. **附件落盘与元数据**：文件放 `<databasePath 目录>/attachments/<projectId>/`，元数据在
+   `message_attachments`（内存与 SQLite 两个实现都有契约测试）。上传路由单独 8MB `bodyLimit`，
+   解码后按 5MB / 白名单 / **文件头**复核；读取按项目校验归属（跨项目 id 404）。
+2. **随消息持久化**：三个回合接口接受 `attachmentIds`（≤5），创建后挂到用户消息 / 补充要求上；
+   `ExplorerTurn`、`ProjectExecutionMessage`、`RunGuidance` 与执行 journal 都带回了附件视图。
+   删除探索线程 / 需求时附件行与文件一起清理。
+3. **按后端原生传给模型**：Codex `localImage`、Claude 单条用户消息流里的 base64 image block、
+   OpenAI `input_image`；无图路径的请求形状完全不变。会话重建时回放文本保留图片路径。
+4. **执行目录顶栏**：新增「启动 / 停止全部」（`data-runtime-start` / `data-runtime-stop`）与
+   服务计数；服务配置在执行目录里有 `services.json` 时优先用那一份。
+
+### Verification
+
+- `pnpm verify` 全绿：domain / api / web 三个包的 typecheck、lint、测试与循环依赖检查。
+- 新增测试：附件双存储契约、三种 Provider 的请求形状与回放、上传校验与归属、回合挂载、
+  前端准入 / 预览 URL 释放 / 上传顺序与失败定位。
+
 ## 2026-10-18 — 依赖文件夹软链；执行目录的两处实操修正
 
 接着执行目录，把"依赖共享"补上，并修掉上一轮的三个实操问题。

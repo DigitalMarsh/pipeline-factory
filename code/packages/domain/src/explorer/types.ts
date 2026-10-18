@@ -34,6 +34,7 @@
  */
 import type { ExplorerTitleSource, ExplorerTitleStatus } from "./explorer-title.js";
 import type { PlanValidationIssue } from "../plan/plan-spec.js";
+import type { MessageAttachmentView } from "../store/types.js";
 
 /** ExplorerThread 的工作状态；ARCHIVED 只禁止新写入，不删除历史。 */
 export type ExplorerThreadState = "ACTIVE" | "WAITING_FOR_INPUT" | "COMPRESSED" | "ARCHIVED";
@@ -126,6 +127,8 @@ export type ExplorerTurn = {
   sequence: number;
   /** 新数据必填；缺失表示需要按旧线程回填到 Plan 1。 */
   explorerPlanId?: string;
+  /** 仅用户回合：随消息提交的图片；由 API 出站时补齐。 */
+  attachments?: MessageAttachmentView[];
 };
 
 /** ExplorerThread 删除所需的完整业务关联集合；物理删除由 Store 统一执行。 */

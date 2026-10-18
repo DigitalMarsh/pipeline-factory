@@ -56,6 +56,7 @@ import type { PlanDispatchState } from "../run/dispatch-coordinator.js";
 import type { Project, ProjectConfigRevision, ProjectExecutionSnapshot, ProjectSettings } from "../project/project.js";
 import type { GeneratedPlanSpec, ResolvedPlanContract } from "../plan/plan-spec.js";
 import type {
+  AttachmentOwnerType,
   CandidatePlan,
   DomainEvent,
   DurableToolCallStatus,
@@ -76,6 +77,7 @@ import type {
   HookExecution,
   JournalEntryType,
   MergeRequest,
+  MessageAttachment,
   RunGuidance,
   RunGuidanceMode,
   RunGuidanceStatus,
@@ -100,6 +102,21 @@ import type {
 } from "../index.js";
 
 type SqliteRow = Record<string, unknown>;
+
+/** 附件行的统一映射（两个读方法共用）。 */
+function attachmentFromRow(row: SqliteRow): MessageAttachment {
+  return {
+    id: String(row.id),
+    projectId: String(row.project_id),
+    ownerType: row.owner_type === null || row.owner_type === undefined ? null : (String(row.owner_type) as AttachmentOwnerType),
+    ownerId: row.owner_id === null || row.owner_id === undefined ? null : String(row.owner_id),
+    fileName: String(row.file_name),
+    mimeType: String(row.mime_type),
+    byteSize: Number(row.byte_size),
+    relativePath: String(row.relative_path),
+    createdAt: String(row.created_at),
+  };
+}
 
 function sqlIn(column: string, values: readonly string[]): { clause: string; values: string[] } | null {
   if (values.length === 0) return null;
@@ -238,6 +255,19 @@ export class SqlitePipelineStore implements PipelineStore {
       );
       CREATE UNIQUE INDEX IF NOT EXISTS project_execution_client_turn_id ON project_execution_messages(thread_id, client_turn_id) WHERE client_turn_id IS NOT NULL;
       CREATE INDEX IF NOT EXISTS project_execution_messages_order ON project_execution_messages(thread_id, sequence);
+      -- 消息附件（图片）：owner 在上传时为空，回合创建成功后才挂上（见 store/types.ts 的 MessageAttachment）。
+      CREATE TABLE IF NOT EXISTS message_attachments (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL,
+        owner_type TEXT,
+        owner_id TEXT,
+        file_name TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        byte_size INTEGER NOT NULL,
+        relative_path TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS message_attachments_owner ON message_attachments(owner_type, owner_id);
       CREATE TABLE IF NOT EXISTS project_config_revisions (
         project_id TEXT NOT NULL,
         version INTEGER NOT NULL,
@@ -1884,6 +1914,60 @@ export class SqlitePipelineStore implements PipelineStore {
     return this.getMergeRequest(request.id) as MergeRequest;
   }
 
+  // ── 消息附件（图片） ──
+  saveAttachment(attachment: MessageAttachment): MessageAttachment {
+    this.statement(
+      "INSERT OR IGNORE INTO message_attachments (id, project_id, owner_type, owner_id, file_name, mime_type, byte_size, relative_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(
+      attachment.id,
+      attachment.projectId,
+      attachment.ownerType,
+      attachment.ownerId,
+      attachment.fileName,
+      attachment.mimeType,
+      attachment.byteSize,
+      attachment.relativePath,
+      attachment.createdAt,
+    );
+    return this.getAttachment(attachment.id) as MessageAttachment;
+  }
+
+  getAttachment(id: string): MessageAttachment | undefined {
+    const row = this.statement("SELECT * FROM message_attachments WHERE id = ?").get(id) as unknown as SqliteRow | undefined;
+    return row ? attachmentFromRow(row) : undefined;
+  }
+
+  attachAttachments(ownerType: AttachmentOwnerType, ownerId: string, ids: readonly string[]): MessageAttachment[] {
+    const attached: MessageAttachment[] = [];
+    const update = this.statement(
+      "UPDATE message_attachments SET owner_type = ?, owner_id = ? WHERE id = ? AND (owner_id IS NULL OR owner_id = ?)",
+    );
+    for (const id of ids) {
+      const result = update.run(ownerType, ownerId, id, ownerId) as { changes?: number | bigint };
+      if (Number(result.changes ?? 0) === 0) continue;
+      const attachment = this.getAttachment(id);
+      if (attachment) attached.push(attachment);
+    }
+    return attached;
+  }
+
+  listAttachments(ownerType: AttachmentOwnerType, ownerIds: readonly string[]): MessageAttachment[] {
+    if (ownerIds.length === 0) return [];
+    const placeholders = ownerIds.map(() => "?").join(",");
+    const rows = this.statement(
+      `SELECT * FROM message_attachments WHERE owner_type = ? AND owner_id IN (${placeholders}) ORDER BY created_at ASC, rowid ASC`,
+    ).all(ownerType, ...ownerIds) as unknown as SqliteRow[];
+    return rows.map(attachmentFromRow);
+  }
+
+  deleteAttachmentsForOwners(ownerType: AttachmentOwnerType, ownerIds: readonly string[]): MessageAttachment[] {
+    if (ownerIds.length === 0) return [];
+    const removed = this.listAttachments(ownerType, ownerIds);
+    const placeholders = ownerIds.map(() => "?").join(",");
+    this.statement(`DELETE FROM message_attachments WHERE owner_type = ? AND owner_id IN (${placeholders})`).run(ownerType, ...ownerIds);
+    return removed;
+  }
+
   saveRunGuidance(guidance: RunGuidance): RunGuidance {
     this.statement(
       "INSERT OR IGNORE INTO run_guidance (id, run_id, content, mode, status, author_id, created_at, consumed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -2246,6 +2330,14 @@ export class SqlitePipelineStore implements PipelineStore {
     const executionThreadEntityIds = sqlIn("id", input.executionThreadIds);
 
     if (runIds) {
+      // 先取补充要求 id 再删行：附件行按 owner 关联，guidance 没了就再也查不到它们。
+      const guidanceRows = this.statement(`SELECT id FROM run_guidance WHERE ${runIds.clause}`).all(
+        ...runIds.values,
+      ) as unknown as SqliteRow[];
+      this.deleteAttachmentsForOwners(
+        "run-guidance",
+        guidanceRows.map((row) => String(row.id)),
+      );
       this.statement(`DELETE FROM execution_journal WHERE ${runIds.clause}`).run(...runIds.values);
       this.statement(`DELETE FROM hook_executions WHERE ${runIds.clause}`).run(...runIds.values);
       this.statement(`DELETE FROM verification_runs WHERE ${runIds.clause}`).run(...runIds.values);
@@ -2300,6 +2392,7 @@ export class SqlitePipelineStore implements PipelineStore {
         this.statement("DELETE FROM idempotency_keys WHERE scope = ? AND key = ?").run(String(row.scope), String(row.key));
     }
     this.statement("DELETE FROM explorer_threads WHERE id = ? AND project_id = ?").run(input.explorerId, input.projectId);
+    this.deleteAttachmentsForOwners("explorer-turn", input.turnIds);
     return { taskCount: input.explorerPlanIds.length, planCount: input.planIds.length, runCount: input.runIds.length };
   }
 
@@ -2321,6 +2414,14 @@ export class SqlitePipelineStore implements PipelineStore {
     const explorerPlanEntityIds = sqlIn("id", input.explorerPlanIds);
 
     if (runIds) {
+      // 先取补充要求 id 再删行：附件行按 owner 关联，guidance 没了就再也查不到它们。
+      const guidanceRows = this.statement(`SELECT id FROM run_guidance WHERE ${runIds.clause}`).all(
+        ...runIds.values,
+      ) as unknown as SqliteRow[];
+      this.deleteAttachmentsForOwners(
+        "run-guidance",
+        guidanceRows.map((row) => String(row.id)),
+      );
       this.statement(`DELETE FROM execution_journal WHERE ${runIds.clause}`).run(...runIds.values);
       this.statement(`DELETE FROM hook_executions WHERE ${runIds.clause}`).run(...runIds.values);
       this.statement(`DELETE FROM verification_runs WHERE ${runIds.clause}`).run(...runIds.values);
@@ -2352,6 +2453,8 @@ export class SqlitePipelineStore implements PipelineStore {
     }
     if (explorerPlanEntityIds)
       this.statement(`DELETE FROM explorer_plans WHERE ${explorerPlanEntityIds.clause}`).run(...explorerPlanEntityIds.values);
+    // 回合没了，它们的附件行随之消失（文件由 API 按 relativePath 清理）。
+    this.deleteAttachmentsForOwners("explorer-turn", input.turnIds);
 
     const deletedIds = new Set([
       ...input.explorerPlanIds,

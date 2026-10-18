@@ -3,6 +3,7 @@
  * 并将消息、逐轮配置和可回放进度写入 PipelineStore。
  */
 import { AgentLoopEngine, type AgentLoopEvent } from "./agent-loop.js";
+import { imagesByOwner, type AttachmentPathResolver } from "../store/message-attachments.js";
 import type {
   ModelGateway,
   ModelMessage,
@@ -58,6 +59,8 @@ export type ProjectExecutionThreadServiceOptions = {
    * 否则会出现"下拉里有、选了却被拒"的死路。
    */
   modelCatalogForProject?: (project: Project) => { models: string[]; reasoningEfforts: string[] } | undefined;
+  /** 附件记录 → 本机绝对路径；由组合根按存储目录注入。 */
+  attachmentPathFor?: AttachmentPathResolver | undefined;
 };
 
 /** 管理每个项目唯一的长期执行会话，并以单项目 FIFO 队列运行请求。 */
@@ -138,7 +141,7 @@ export class ProjectExecutionThreadService {
   /** 保存请求及其助手占位；clientTurnId 对重试保持幂等。 */
   submit(
     projectId: string,
-    input: { content: string; clientTurnId: string },
+    input: { content: string; clientTurnId: string; attachmentIds?: string[] | undefined },
   ): { thread: ProjectExecutionThread; user: ProjectExecutionMessage; assistant: ProjectExecutionMessage } {
     const project = this.requireProject(projectId);
     if (project.status !== "ACTIVE") throw new Error("PROJECT_ARCHIVED");
@@ -146,6 +149,8 @@ export class ProjectExecutionThreadService {
     const clientTurnId = input.clientTurnId.trim();
     if (!content) throw new Error("PROJECT_EXECUTION_MESSAGE_EMPTY");
     if (!clientTurnId || clientTurnId.length > 160) throw new Error("PROJECT_EXECUTION_CLIENT_TURN_ID_INVALID");
+    // 与 Explorer 同一套准入：去重、限 5 张、必须属于本项目；失败发生在任何行落库之前。
+    const attachmentIds = this.validAttachmentIds(projectId, input.attachmentIds);
     const thread = this.getOrCreate(project);
     const existing = this.store.getProjectExecutionMessageByClientTurnId(thread.id, clientTurnId);
     if (existing) {
@@ -192,6 +197,7 @@ export class ProjectExecutionThreadService {
       reasoningEffort: null,
     };
     this.store.saveProjectExecutionMessage(user);
+    if (attachmentIds.length > 0) this.store.attachAttachments("project-execution-message", user.id, attachmentIds);
     this.store.saveProjectExecutionMessage(assistant);
     this.store.updateProjectExecutionThread({ ...thread, updatedAt: createdAt });
     this.store.appendEvent({
@@ -304,6 +310,32 @@ export class ProjectExecutionThreadService {
     return thread;
   }
 
+  /** 提交附件的准入：去重、限 5 张、必须属于本项目；在任何行落库之前调用。 */
+  private validAttachmentIds(projectId: string, ids: readonly string[] | undefined): string[] {
+    if (!ids || ids.length === 0) return [];
+    const unique = [...new Set(ids)];
+    if (unique.length > 5) throw new Error("ATTACHMENT_LIMIT_EXCEEDED");
+    for (const id of unique) {
+      const attachment = this.store.getAttachment(id);
+      if (!attachment || attachment.projectId !== projectId) throw new Error(`ATTACHMENT_NOT_FOUND: ${id}`);
+    }
+    return unique;
+  }
+
+  /** 用户消息的附件挂回模型消息；历史与当前那条一起批量取，避免逐条查询。 */
+  private messagesWithImages(messages: readonly ProjectExecutionMessage[]): ModelMessage[] {
+    const images = imagesByOwner(
+      this.store,
+      "project-execution-message",
+      messages.filter((message) => message.role === "user").map((message) => message.id),
+      this.options.attachmentPathFor,
+    );
+    return messages.map((message) => {
+      const attached = images.get(message.id);
+      return { role: message.role, content: message.content, ...(attached?.length ? { images: attached } : {}) };
+    });
+  }
+
   private startWorker(projectId: string, threadId: string): void {
     if (this.workers.has(threadId)) return;
     const worker = this.drain(projectId, threadId).finally(() => {
@@ -359,14 +391,13 @@ export class ProjectExecutionThreadService {
           startedAt,
         },
       });
-      const conversation: ModelMessage[] = this.store
+      const history = this.store
         .listProjectExecutionMessages(threadId)
-        .filter((message) => message.sequence <= running.sequence && message.turnId !== running.turnId)
-        .map((message) => ({ role: message.role, content: message.content }));
+        .filter((message) => message.sequence <= running.sequence && message.turnId !== running.turnId);
       const userMessage = this.store
         .listProjectExecutionMessages(threadId)
         .find((message) => message.turnId === running.turnId && message.role === "user");
-      if (userMessage) conversation.push({ role: "user", content: userMessage.content });
+      const conversation: ModelMessage[] = this.messagesWithImages(userMessage ? [...history, userMessage] : history);
       const system: ModelMessage = {
         role: "system",
         content: [

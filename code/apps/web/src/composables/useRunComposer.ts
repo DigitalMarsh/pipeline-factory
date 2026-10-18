@@ -20,6 +20,7 @@ import { api } from "../api";
 import type { ExecutionThread, Run } from "../types";
 import { shouldSubmitComposer } from "../utils/composerKeyboard";
 import { canContinueRun } from "../utils/runControls";
+import { useImageAttachments } from "./useImageAttachments";
 
 export type RunComposerDeps = {
   run: Ref<Run | null>;
@@ -34,6 +35,15 @@ export function useRunComposer(deps: RunComposerDeps) {
   const sendingExecutionMessage = ref(false);
   /** 一轮还在跑时的投递方式；没在跑时它不参与，服务端按 `auto` 自己定。 */
   const executionGuidanceMode = ref<"steer" | "queue">("queue");
+  // 补充要求的图片附件：与另外两个输入框共用同一套校验 / 上传逻辑。
+  const {
+    items: attachmentItems,
+    error: attachmentError,
+    addFiles: addAttachmentFiles,
+    remove: removeAttachment,
+    clear: clearAttachments,
+    upload: uploadAttachments,
+  } = useImageAttachments();
 
   const canSendExecutionMessage = computed(() => canContinueRun(deps.run.value?.status ?? ""));
   /** 还有一轮在跑吗——决定补充要求是"交给这一轮"还是"起新的一轮"。 */
@@ -57,11 +67,19 @@ export function useRunComposer(deps: RunComposerDeps) {
     deps.actionBusy.value = true;
     sendingExecutionMessage.value = true;
     try {
+      // 先上传图片再投递：补充要求一旦落库就会被当成"已投递"，那时再失败会让用户以为图跟着去了。
+      const attachmentIds = await uploadAttachments(deps.run.value.projectId);
       // 一轮还在跑时由用户选"引导 / 排队"；没在跑时两种等价，交给服务端按实际状态自己定（`auto`）。
-      const result = await api.addRunGuidance(deps.run.value.id, content, executorLoopRunning.value ? executionGuidanceMode.value : "auto");
+      const result = await api.addRunGuidance(
+        deps.run.value.id,
+        content,
+        executorLoopRunning.value ? executionGuidanceMode.value : "auto",
+        attachmentIds,
+      );
       deps.setThread(result.thread);
       if (result.run) deps.run.value = { ...deps.run.value, ...result.run };
       executionDraft.value = "";
+      clearAttachments();
       // 说清它到底发生了什么（见维护提示 3）。
       ElMessage.success(
         result.continued
@@ -88,6 +106,10 @@ export function useRunComposer(deps: RunComposerDeps) {
     executionDraft,
     sendingExecutionMessage,
     executionGuidanceMode,
+    attachmentItems,
+    attachmentError,
+    addAttachmentFiles,
+    removeAttachment,
     canSendExecutionMessage,
     executorLoopRunning,
     executionComposerDisabledReason,

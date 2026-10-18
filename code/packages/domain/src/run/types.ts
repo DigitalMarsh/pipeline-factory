@@ -211,6 +211,8 @@ export type RunGuidance = {
   authorId: string;
   createdAt: string;
   consumedAt: string | null;
+  /** 随这条补充要求提交的图片；由 API 出站时补齐。 */
+  attachments?: import("../store/types.js").MessageAttachmentView[];
 };
 
 export type MergeReconciliationOutcome = "DETECTED" | "ALREADY_OPEN" | "NOT_MERGED" | "UNAVAILABLE" | "ALREADY_MERGED";

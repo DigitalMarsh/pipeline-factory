@@ -501,26 +501,26 @@ describe("Worktree 面板：复盘后新增的交互", () => {
   });
 });
 
+function runtimeInfo(overrides: Partial<{ itemId: string; branch: string; displayName: string }> = {}, services: unknown = null) {
+  return {
+    runtime: {
+      path: "/worktrees/.runtime",
+      exists: true,
+      link: { path: "/worktrees/.runtime/repo", target: "/worktrees/a", isSymlink: true, exists: true },
+      current: {
+        itemId: overrides.itemId ?? "branch:feature/a",
+        branch: overrides.branch ?? "feature/a",
+        displayName: overrides.displayName ?? "feature/a",
+        worktreePath: "/worktrees/a",
+      },
+      servicesConfigPath: null,
+    },
+    services,
+  };
+}
+
 /** 执行目录：合并前验证用的固定路径。 */
 describe("Worktree 面板 · 执行目录", () => {
-  function runtimeInfo(overrides: Partial<{ itemId: string; branch: string; displayName: string }> = {}) {
-    return {
-      runtime: {
-        path: "/worktrees/.runtime",
-        exists: true,
-        link: { path: "/worktrees/.runtime/repo", target: "/worktrees/a", isSymlink: true, exists: true },
-        current: {
-          itemId: overrides.itemId ?? "branch:feature/a",
-          branch: overrides.branch ?? "feature/a",
-          displayName: overrides.displayName ?? "feature/a",
-          worktreePath: "/worktrees/a",
-        },
-        servicesConfigPath: null,
-      },
-      services: null,
-    };
-  }
-
   it("未切换时显示「尚未切换」，详情里可以设为执行目录", async () => {
     const host = await mountPanel(inventory());
     expect(host.querySelector("[data-worktree-runtime]")?.textContent).toContain("尚未切换");
@@ -602,5 +602,74 @@ describe("Worktree 面板 · 依赖软链", () => {
     expect(host.querySelector("[data-worktree-no-worktree]")?.textContent).toContain("还没有 worktree");
     expect(host.querySelector<HTMLButtonElement>("[data-runtime-switch]")?.disabled).toBe(true);
     expect(host.querySelector<HTMLButtonElement>("[data-worktree-dependencies]")?.disabled).toBe(true);
+  });
+});
+
+/** 执行目录条上的「启动全部服务 / 停止全部」。 */
+describe("Worktree 面板 · 执行目录的服务按钮", () => {
+  const services = {
+    itemId: "runtime",
+    worktreePath: "/worktrees/.runtime/repo",
+    configSource: "runtime",
+    configPath: "/worktrees/.runtime/services.json",
+    configError: null,
+    services: [
+      {
+        serviceId: "web",
+        name: "网页",
+        role: "worker",
+        workdir: ".",
+        argv: ["node", "serve.mjs"],
+        shellCommand: null,
+        healthUrl: null,
+        enabled: true,
+        source: "runtime",
+      },
+      {
+        serviceId: "off",
+        name: "停用",
+        role: "worker",
+        workdir: ".",
+        argv: ["true"],
+        shellCommand: null,
+        healthUrl: null,
+        enabled: false,
+        source: "runtime",
+      },
+    ],
+    states: [],
+  };
+
+  it("有启用服务时显示「启动全部服务」，点击逐个启动", async () => {
+    apiMocks.startRuntimeService.mockResolvedValue({ state: { serviceId: "web", status: "running" } });
+    const host = await mountPanel(inventory(), { runtime: runtimeInfo({}, services) });
+    await flush();
+
+    expect(host.querySelector("[data-runtime-service-count]")?.textContent).toContain("0/1");
+    const start = host.querySelector<HTMLButtonElement>("[data-runtime-start]");
+    expect(start).not.toBeNull();
+    start?.click();
+    await flush();
+
+    // 只启动 enabled 的那一条。
+    expect(apiMocks.startRuntimeService).toHaveBeenCalledTimes(1);
+    expect(apiMocks.startRuntimeService).toHaveBeenCalledWith("project-1", "web");
+  });
+
+  it("有服务在跑时显示「停止全部」", async () => {
+    apiMocks.stopRuntimeService.mockResolvedValue({ state: { serviceId: "web", status: "stopped" } });
+    const running = {
+      ...services,
+      states: [{ serviceId: "web", status: "running", pid: 123, startedAt: "2026-10-18T00:00:00.000Z", exitCode: null, error: null }],
+    };
+    const host = await mountPanel(inventory(), { runtime: runtimeInfo({}, running) });
+    await flush();
+
+    expect(host.querySelector("[data-runtime-service-count]")?.textContent).toContain("1/1");
+    const stop = host.querySelector<HTMLButtonElement>("[data-runtime-stop]");
+    expect(stop).not.toBeNull();
+    stop?.click();
+    await flush();
+    expect(apiMocks.stopRuntimeService).toHaveBeenCalledWith("project-1", "web");
   });
 });

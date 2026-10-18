@@ -31,6 +31,7 @@
  *      见 PRUNABLE_EVENT_TYPES 的注释。
  */
 import type { EventPruneInput } from "./event-retention.js";
+import type { AttachmentOwnerType, MessageAttachment } from "./types.js";
 import type {
   AgentLoop,
   AgentLoopStep,
@@ -163,6 +164,17 @@ export type PipelineStore = {
   listMergeRequests(): MergeRequest[];
   updateMergeRequest(request: MergeRequest): MergeRequest;
   saveRunGuidance(guidance: RunGuidance): RunGuidance;
+
+  // ── 消息附件（图片） ──
+  /** 首次写入生效（与其它 save* 同一语义）。 */
+  saveAttachment(attachment: MessageAttachment): MessageAttachment;
+  getAttachment(id: string): MessageAttachment | undefined;
+  /** 把附件挂到某个消息上；只接受尚未挂载、或已经属于同一 owner 的行。返回实际挂上的行。 */
+  attachAttachments(ownerType: AttachmentOwnerType, ownerId: string, ids: readonly string[]): MessageAttachment[];
+  /** 按 owner 批量读（一次查完，不要 N+1）。 */
+  listAttachments(ownerType: AttachmentOwnerType, ownerIds: readonly string[]): MessageAttachment[];
+  /** 删除给定 owner 的附件并返回被删的行（调用方据此删文件）。 */
+  deleteAttachmentsForOwners(ownerType: AttachmentOwnerType, ownerIds: readonly string[]): MessageAttachment[];
   updateRunGuidance(guidance: RunGuidance): RunGuidance;
   /** 按创建顺序返回某个 Run 的补充要求；两个过滤条件都可省略（省略即不筛）。 */
   listRunGuidance(runId: string, filter?: { mode?: RunGuidanceMode; status?: RunGuidanceStatus }): RunGuidance[];

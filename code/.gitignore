@@ -6,6 +6,8 @@ coverage/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+# 消息附件的默认落盘目录（与数据库同目录；属于运行时数据，不进仓库）
+/attachments/
 .pipeline-worktrees/
 var/
 config/*.local.json

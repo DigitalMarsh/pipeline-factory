@@ -80,6 +80,7 @@ describe("ModelGateway", () => {
     expect(gateway.capabilities("executor")).toEqual({
       supportsStructuredUserInput: false,
       supportsToolCalls: false,
+      supportsImages: true,
       supportedLoopModes: ["provider-controlled"],
     });
   });

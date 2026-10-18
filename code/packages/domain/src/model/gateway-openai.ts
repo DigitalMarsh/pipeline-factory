@@ -29,8 +29,18 @@
  *      （批 D 当时从 ../index.js 取，是为了让搬迁提交保持"只搬不改"的形态）。
  *      这是一条 type-only 边，本文件与 model/types.ts 之间不构成值级环。
  */
+import { readFileSync } from "node:fs";
 import { normalizeModelUsage, type ModelUsage } from "./usage.js";
-import type { ModelCapabilities, ModelEvent, ModelGateway, ModelRequest, ModelRole, ModelRoleConfig, ProviderEndpoint } from "./types.js";
+import type {
+  ModelCapabilities,
+  ModelEvent,
+  ModelGateway,
+  ModelMessage,
+  ModelRequest,
+  ModelRole,
+  ModelRoleConfig,
+  ProviderEndpoint,
+} from "./types.js";
 
 /** 非流式模型调用的规范化结果。 */
 export type ModelResult = { text: string; requestId: string | null; model: string; usage: ModelUsage | null };
@@ -87,14 +97,20 @@ export class OpenAIModelGateway implements ModelGateway {
   }
 
   capabilities(_role: ModelRole): ModelCapabilities {
-    return { supportsStructuredUserInput: false, supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] };
+    return {
+      supportsStructuredUserInput: false,
+      supportsToolCalls: false,
+      supportsImages: true,
+      supportedLoopModes: ["provider-controlled"],
+    };
   }
 
   async complete(request: ModelRequest): Promise<ModelResult> {
     const config = { ...this.configFor(request.role), ...(request.modelConfig ?? {}) };
-    const input = request.continuationPrompt
-      ? [...request.messages, { role: "user" as const, content: request.continuationPrompt }]
+    const messages: ModelMessage[] = request.continuationPrompt
+      ? [...request.messages, { role: "user", content: request.continuationPrompt }]
       : request.messages;
+    const input = messages.map(toResponsesInput);
     const body: Record<string, unknown> = { model: config.model, input, stream: false };
     if (request.tools?.length) body.tools = request.tools;
     if (config.temperature !== undefined) body.temperature = config.temperature;
@@ -153,6 +169,27 @@ function hostOf(url: string): string {
   } catch {
     return url;
   }
+}
+
+/**
+ * 把规范化消息映射成 Responses API 的 input 项。
+ *
+ * 只有**带图**的用户消息需要换成 parts 数组；其余消息原样（role + 字符串 content）继续传，
+ * 保持与改动前完全一致的请求形状——这条后端只跑标题生成之类的简单调用，不该因为图片支持
+ * 把每条消息都改写成数组。
+ */
+function toResponsesInput(message: ModelMessage): Record<string, unknown> {
+  if (message.role !== "user" || !message.images?.length) return { ...message };
+  return {
+    role: "user",
+    content: [
+      { type: "input_text", text: message.content },
+      ...message.images.map((image) => ({
+        type: "input_image",
+        image_url: `data:${image.mimeType};base64,${readFileSync(image.path).toString("base64")}`,
+      })),
+    ],
+  };
 }
 
 function extractResponseText(payload: Record<string, unknown>): string {

@@ -196,7 +196,7 @@ export type AgentLoopInput = {
    * **它只在下一个 Provider 回合生效**：provider-controlled 模式下 Provider 一个回合内部可以跑
    * 很多工具调用，这里等的是**回合结束**，插不进正在跑的那一个回合中间。界面据此写「下一轮生效」。
    */
-  takePendingGuidance?: (() => Promise<readonly string[]>) | undefined;
+  takePendingGuidance?: (() => Promise<readonly ModelMessage[]>) | undefined;
   maxRepeatedToolCalls?: number;
   maxNoProgressSteps?: number;
   modelRequest: Omit<ModelRequest, "role">;
@@ -631,7 +631,7 @@ export class AgentLoopEngine implements AgentLoopRunner {
         // 引擎不自己查表，取哪几条由调用方决定（它才知道哪些属于这个 Run）。
         if (input.takePendingGuidance) {
           const steered = await input.takePendingGuidance();
-          for (const text of steered) messages.push({ role: "user", content: text });
+          messages.push(...steered);
         }
         loop = { ...loop, stepCount: loop.stepCount + 1 };
         this.store.updateAgentLoop(loop);

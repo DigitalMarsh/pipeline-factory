@@ -59,4 +59,6 @@ export type ProjectExecutionMessage = {
   loopId: string | null;
   model: string | null;
   reasoningEffort: string | null;
+  /** 仅用户消息：随消息提交的图片；由 API 出站时补齐。 */
+  attachments?: import("../store/types.js").MessageAttachmentView[];
 };

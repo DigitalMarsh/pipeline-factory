@@ -23,6 +23,7 @@ import type { PipelineStore, ProjectExecutionThreadService } from "@pipeline-fac
 import { projectExecutionEventsQuery, projectExecutionPreferencesBody, projectExecutionTurnBody } from "../schemas/execution-threads.js";
 import { projectThreadParams } from "../schemas/common.js";
 import { openSseChannel } from "../http/sse.js";
+import { attachmentsFor } from "../projections/attachments.js";
 
 export type ExecutionThreadRouteDeps = {
   store: PipelineStore;
@@ -37,7 +38,20 @@ export function registerExecutionThreadRoutes(app: FastifyInstance, deps: Execut
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     try {
       const snapshot = projectExecution.get(params.data.projectId);
-      return { ...snapshot, events: store.listEvents({ aggregateId: snapshot.thread.id }) };
+      const attachments = attachmentsFor(
+        store,
+        params.data.projectId,
+        "project-execution-message",
+        snapshot.messages.filter((message) => message.role === "user").map((message) => message.id),
+      );
+      return {
+        ...snapshot,
+        messages: snapshot.messages.map((message) => ({
+          ...message,
+          attachments: attachments.get(message.id) ?? [],
+        })),
+        events: store.listEvents({ aggregateId: snapshot.thread.id }),
+      };
     } catch (error) {
       return reply.code(404).send({ code: "PROJECT_NOT_FOUND", error: error instanceof Error ? error.message : "Project not found" });
     }
@@ -61,7 +75,10 @@ export function registerExecutionThreadRoutes(app: FastifyInstance, deps: Execut
     const body = projectExecutionTurnBody.safeParse(request.body ?? {});
     if (!params.success || !body.success) return reply.code(400).send({ error: "Invalid project execution turn" });
     try {
-      return projectExecution.submit(params.data.projectId, body.data);
+      const result = projectExecution.submit(params.data.projectId, body.data);
+      const attached =
+        attachmentsFor(store, params.data.projectId, "project-execution-message", [result.user.id]).get(result.user.id) ?? [];
+      return { ...result, user: { ...result.user, attachments: attached } };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Project execution turn cannot be submitted";
       const status = message === "PROJECT_NOT_FOUND" ? 404 : message === "PROJECT_ARCHIVED" ? 409 : 400;

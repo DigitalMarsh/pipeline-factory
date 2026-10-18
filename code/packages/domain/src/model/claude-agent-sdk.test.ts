@@ -10,7 +10,7 @@
  */
 import { describe, expect, it } from "vitest";
 import type { Options, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import { ClaudeAgentSdkGateway, type ClaudeQueryHandle } from "../index.js";
+import { ClaudeAgentSdkGateway, type ClaudeQueryFactory, type ClaudeQueryHandle } from "../index.js";
 import type { ModelEvent, ModelRequest } from "../index.js";
 
 const message = (value: unknown): SDKMessage => value as SDKMessage;
@@ -74,7 +74,7 @@ function resultMessage(sessionId: string, input: Record<string, unknown> = {}): 
   });
 }
 
-type Capture = { prompt: string; options: Options; handle: ClaudeQueryHandle };
+type Capture = { prompt: Parameters<ClaudeQueryFactory>[0]["prompt"]; options: Options; handle: ClaudeQueryHandle };
 
 /** 用一段消息脚本构造 query 工厂；脚本可显式触发 canUseTool 以复现结构化提问。 */
 function createFactory(
@@ -84,7 +84,7 @@ function createFactory(
     sessionId: string;
     runPermission: (toolName: string, input: Record<string, unknown>, requestId: string, toolUseID: string) => Promise<unknown>;
   }) => AsyncIterable<SDKMessage>,
-): (input: { prompt: string; options: Options }) => Promise<ClaudeQueryHandle> {
+): (input: Parameters<ClaudeQueryFactory>[0]) => Promise<ClaudeQueryHandle> {
   return async ({ prompt, options }) => {
     const handle: ClaudeQueryHandle = {
       stream: () =>

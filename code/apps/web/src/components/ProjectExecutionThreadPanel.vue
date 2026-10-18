@@ -5,6 +5,9 @@ import { ElMessage } from "element-plus";
 import { api } from "../api";
 import type { Project, ProjectExecutionEvent, ProjectExecutionMessage, ProjectExecutionThreadSnapshot } from "../types";
 import MarkdownMessage from "./MarkdownMessage.vue";
+import AttachmentComposer from "./AttachmentComposer.vue";
+import MessageAttachments from "./MessageAttachments.vue";
+import { useImageAttachments } from "../composables/useImageAttachments";
 import { backendLabel, modelOptionsFor, reasoningOptionsWith } from "../utils/modelCatalog";
 import { useModelBackends } from "../composables/useModelBackends";
 import { projectExecutionStatusTagType } from "../utils/statusTag";
@@ -14,6 +17,15 @@ const snapshot = ref<ProjectExecutionThreadSnapshot | null>(null);
 const messages = ref<ProjectExecutionMessage[]>([]);
 const events = ref<ProjectExecutionEvent[]>([]);
 const draft = ref("");
+// 图片附件状态（粘贴 / 拖拽 / 选择文件）由共用 composable 管；这里只负责在提交时上传、成功后清空。
+const {
+  items: attachmentItems,
+  error: attachmentError,
+  addFiles: addAttachmentFiles,
+  remove: removeAttachment,
+  clear: clearAttachments,
+  upload: uploadAttachments,
+} = useImageAttachments();
 const loading = ref(true);
 const sending = ref(false);
 const savingPreferences = ref(false);
@@ -197,7 +209,9 @@ async function submit() {
   const clientTurnId = `project-execution-${globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(36).slice(2)}`}`;
   draft.value = "";
   try {
-    const result = await api.submitProjectExecutionTurn(props.projectId, content, clientTurnId);
+    const attachmentIds = await uploadAttachments(props.projectId);
+    const result = await api.submitProjectExecutionTurn(props.projectId, content, clientTurnId, attachmentIds);
+    clearAttachments();
     const currentAssistant = messages.value.find((item) => item.id === result.assistant.id);
     const currentUser = messages.value.find((item) => item.id === result.user.id);
     messages.value = [
@@ -343,6 +357,7 @@ onBeforeUnmount(() => {
           <span class="project-execution-user-mark" aria-hidden="true">›</span
           ><MarkdownMessage v-if="message.content" :source="message.content" />
         </div>
+        <MessageAttachments v-if="message.role === 'user'" :attachments="message.attachments" />
         <MarkdownMessage v-else-if="message.content" :source="message.content" :streaming="message.status === 'RUNNING'" />
         <p v-else-if="message.status === 'RUNNING'" class="project-execution-placeholder">正在执行…</p>
         <p v-if="message.error" class="project-execution-message-error"><Warning :size="14" /> {{ message.error }}</p>
@@ -372,13 +387,21 @@ onBeforeUnmount(() => {
     </div>
 
     <footer class="project-execution-composer">
-      <textarea
-        v-model="draft"
-        :disabled="project?.status === 'ARCHIVED' || !snapshot || loading"
-        aria-label="项目执行请求"
-        placeholder="描述要在项目中执行的任务…"
-        @keydown="handleComposerKeydown"
-      />
+      <AttachmentComposer
+        :items="attachmentItems"
+        :error="attachmentError"
+        :disabled="project?.status === 'ARCHIVED' || !snapshot || loading || sending"
+        @add="addAttachmentFiles"
+        @remove="removeAttachment"
+      >
+        <textarea
+          v-model="draft"
+          :disabled="project?.status === 'ARCHIVED' || !snapshot || loading"
+          aria-label="项目执行请求"
+          placeholder="描述要在项目中执行的任务…"
+          @keydown="handleComposerKeydown"
+        />
+      </AttachmentComposer>
       <div class="project-execution-composer-footer">
         <label class="project-execution-select"
           ><span>Agent</span><output class="project-execution-agent" :title="executorBackend">{{ executorBackendLabel }}</output></label

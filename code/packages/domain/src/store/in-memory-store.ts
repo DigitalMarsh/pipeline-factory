@@ -32,6 +32,7 @@ import type { AgentLoop, AgentLoopStep, AgentLoopStepInput } from "../agent/agen
 import type { PlanDispatchState } from "../run/dispatch-coordinator.js";
 import type { Project, ProjectConfigRevision } from "../project/project.js";
 import type {
+  AttachmentOwnerType,
   CandidatePlan,
   DomainEvent,
   ExecutionJournalEntry,
@@ -48,6 +49,7 @@ import type {
   HookExecution,
   JournalEntryType,
   MergeRequest,
+  MessageAttachment,
   PersistedToolCall,
   RunGuidance,
   RunGuidanceMode,
@@ -80,6 +82,7 @@ export class InMemoryPipelineStore implements PipelineStore {
   private readonly verificationRuns = new Map<string, VerificationRun>();
   private readonly mergeRequests = new Map<string, MergeRequest>();
   private readonly runGuidance = new Map<string, RunGuidance>();
+  private readonly attachments = new Map<string, MessageAttachment>();
   private readonly agentLoops = new Map<string, AgentLoop>();
   private readonly agentLoopSteps = new Map<string, AgentLoopStep[]>();
   private readonly toolCalls = new Map<string, PersistedToolCall>();
@@ -451,6 +454,44 @@ export class InMemoryPipelineStore implements PipelineStore {
     this.mergeRequests.set(request.id, request);
     return request;
   }
+  // ── 消息附件 ──
+  saveAttachment(attachment: MessageAttachment): MessageAttachment {
+    if (!this.attachments.has(attachment.id)) this.attachments.set(attachment.id, attachment);
+    return this.attachments.get(attachment.id)!;
+  }
+  getAttachment(id: string): MessageAttachment | undefined {
+    return this.attachments.get(id);
+  }
+  attachAttachments(ownerType: AttachmentOwnerType, ownerId: string, ids: readonly string[]): MessageAttachment[] {
+    const attached: MessageAttachment[] = [];
+    for (const id of ids) {
+      const attachment = this.attachments.get(id);
+      if (!attachment) continue;
+      // 已挂在别的消息上的不抢；同一 owner 重复挂载是幂等的。
+      if (attachment.ownerId && attachment.ownerId !== ownerId) continue;
+      const next = { ...attachment, ownerType, ownerId };
+      this.attachments.set(id, next);
+      attached.push(next);
+    }
+    return attached;
+  }
+  listAttachments(ownerType: AttachmentOwnerType, ownerIds: readonly string[]): MessageAttachment[] {
+    const owners = new Set(ownerIds);
+    return [...this.attachments.values()]
+      .filter((attachment) => attachment.ownerType === ownerType && attachment.ownerId && owners.has(attachment.ownerId))
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id));
+  }
+  deleteAttachmentsForOwners(ownerType: AttachmentOwnerType, ownerIds: readonly string[]): MessageAttachment[] {
+    const owners = new Set(ownerIds);
+    const removed: MessageAttachment[] = [];
+    for (const [id, attachment] of this.attachments) {
+      if (attachment.ownerType !== ownerType || !attachment.ownerId || !owners.has(attachment.ownerId)) continue;
+      this.attachments.delete(id);
+      removed.push(attachment);
+    }
+    return removed;
+  }
+
   saveRunGuidance(guidance: RunGuidance): RunGuidance {
     if (!this.runGuidance.has(guidance.id)) this.runGuidance.set(guidance.id, guidance);
     return this.runGuidance.get(guidance.id)!;
@@ -612,7 +653,12 @@ export class InMemoryPipelineStore implements PipelineStore {
     for (const [key, request] of this.mergeRequests)
       if (runIds.has(request.runId) || planIds.has(request.planId)) this.mergeRequests.delete(key);
     // 补充要求跟着它的 Run 一起走：Run 都没了，一条待投递的要求没有任何去处。
+    // 先收 id 再删记录：附件行按 owner 关联，记录没了就查不到它们。
+    const deletedGuidanceIds = [...this.runGuidance.values()]
+      .filter((guidance) => runIds.has(guidance.runId))
+      .map((guidance) => guidance.id);
     for (const [key, guidance] of this.runGuidance) if (runIds.has(guidance.runId)) this.runGuidance.delete(key);
+    this.deleteAttachmentsForOwners("run-guidance", deletedGuidanceIds);
     for (const runId of runIds) this.runs.delete(runId);
     for (const executionThreadId of executionThreadIds) this.executionThreads.delete(executionThreadId);
     for (const call of [...this.toolCalls.values()]) if (agentLoopIds.has(call.loopId)) this.toolCalls.delete(call.callId);
@@ -628,6 +674,8 @@ export class InMemoryPipelineStore implements PipelineStore {
     for (const [id, plan] of this.explorerPlans)
       if (explorerPlanIds.has(id) || plan.explorerThreadId === input.explorerId) this.explorerPlans.delete(id);
     this.threads.delete(input.explorerId);
+    // 回合没了，它的附件行也没有归属；文件由 API 在调用前后按 relativePath 清理。
+    this.deleteAttachmentsForOwners("explorer-turn", input.turnIds);
     for (const [key, result] of this.idempotency) if (containsAnyString(result, deletedIds)) this.idempotency.delete(key);
     return { taskCount: input.explorerPlanIds.length, planCount: input.planIds.length, runCount: input.runIds.length };
   }
@@ -663,7 +711,12 @@ export class InMemoryPipelineStore implements PipelineStore {
     for (const [key, verification] of this.verificationRuns) if (runIds.has(verification.runId)) this.verificationRuns.delete(key);
     for (const [key, request] of this.mergeRequests)
       if (runIds.has(request.runId) || planIds.has(request.planId)) this.mergeRequests.delete(key);
+    // 先收 id 再删记录：附件行按 owner 关联，记录没了就查不到它们。
+    const deletedGuidanceIds = [...this.runGuidance.values()]
+      .filter((guidance) => runIds.has(guidance.runId))
+      .map((guidance) => guidance.id);
     for (const [key, guidance] of this.runGuidance) if (runIds.has(guidance.runId)) this.runGuidance.delete(key);
+    this.deleteAttachmentsForOwners("run-guidance", deletedGuidanceIds);
     for (const runId of runIds) this.runs.delete(runId);
     for (const executionThreadId of executionThreadIds) this.executionThreads.delete(executionThreadId);
     for (const call of [...this.toolCalls.values()]) if (agentLoopIds.has(call.loopId)) this.toolCalls.delete(call.callId);
@@ -682,6 +735,7 @@ export class InMemoryPipelineStore implements PipelineStore {
     }
     for (const planId of planIds) this.plans.delete(planId);
     for (const explorerPlanId of explorerPlanIds) this.explorerPlans.delete(explorerPlanId);
+    this.deleteAttachmentsForOwners("explorer-turn", input.turnIds);
     for (const [key, result] of this.idempotency) if (containsAnyString(result, deletedIds)) this.idempotency.delete(key);
     return { taskCount: input.explorerPlanIds.length, planCount: input.planIds.length, runCount: input.runIds.length };
   }

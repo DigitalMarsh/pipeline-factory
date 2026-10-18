@@ -7,7 +7,7 @@
  *   结果是 OpenClaw / Hermes 那种"展开看结果"做不出来。**模型的私有思维链（`thinking` 的原文）
  *   仍然不展示**——展示的是 Provider 自己给的推理摘要。
  */
-import type { ExecutionJournalPayload, ModelMessagePhase, PlanTask } from "../types";
+import type { ExecutionJournalPayload, MessageAttachment, ModelMessagePhase, PlanTask } from "../types";
 import { SHARED_MESSAGE_CLASSES, type MessageClass, type SharedMessageType } from "./conversationTypes";
 
 export type ExecutionJournalEntry = {
@@ -84,6 +84,8 @@ export type ExecutionStreamItem = {
   continuationRound?: number | undefined;
   /** 这句补充要求是怎么投的。只有 `QUEUE` 算"起了一轮"，`STEER` 是插进正在跑的那一轮里的。 */
   guidanceDelivery?: "STEER" | "QUEUE" | undefined;
+  /** 补充要求随带的图片（由 API 在 journal payload 上补齐）。 */
+  attachments?: MessageAttachment[] | undefined;
   plan?: ExecutionPlanSnapshot;
 };
 
@@ -1340,6 +1342,7 @@ function projectExecutionActivity(
   };
   if (entry.type === "USER_GUIDANCE") {
     const delivery = payload.delivery === "STEER" || payload.delivery === "QUEUE" ? payload.delivery : undefined;
+    const attachments = messageAttachments(payload.attachments);
     return {
       id: `execution-guidance-${entry.sequence}`,
       kind: "user",
@@ -1352,6 +1355,7 @@ function projectExecutionActivity(
       sequence: entry.sequence,
       messageType: "USER_MESSAGE",
       ...(delivery ? { guidanceDelivery: delivery } : {}),
+      ...(attachments ? { attachments } : {}),
       ...association,
     };
   }
@@ -1480,6 +1484,20 @@ function stringValue(value: unknown): string | undefined {
 
 function numberValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/** journal payload 上的附件是 API 补的，形状可能有缺失（旧数据 / 半截写入）；只收形状齐全的。 */
+function messageAttachments(value: unknown): MessageAttachment[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const items = value.filter(
+    (item): item is MessageAttachment =>
+      Boolean(item) &&
+      typeof item === "object" &&
+      typeof (item as MessageAttachment).id === "string" &&
+      typeof (item as MessageAttachment).url === "string" &&
+      typeof (item as MessageAttachment).mimeType === "string",
+  );
+  return items.length > 0 ? items : undefined;
 }
 
 function stringArray(value: unknown): string[] {

@@ -34,6 +34,7 @@
  *      ~/.claude/projects/ 下，所以重建前先用 getSessionInfo 确认它在不在，见 resolveResume()。
  */
 
+import { readFileSync } from "node:fs";
 import {
   getSessionInfo,
   query,
@@ -42,9 +43,10 @@ import {
   type PermissionMode,
   type PermissionResult,
   type SDKMessage,
+  type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import { EXPLORER_PLAN_INSTRUCTIONS } from "../platform/plan-requirements.js";
-import { replayConversation, resolveModelMode } from "./provider-session.js";
+import { latestUserImages, latestUserMessage, replayConversation, resolveModelMode } from "./provider-session.js";
 import { classifyClaudeActivity, type ProviderActivityKind } from "./provider-activity.js";
 import { normalizeModelUsage } from "./usage.js";
 import type { ModelInputAnswers, ModelInputQuestion, ModelInputRequest } from "../explorer/types.js";
@@ -52,6 +54,7 @@ import type {
   ModelCapabilities,
   ModelEvent,
   ModelGateway,
+  ModelImagePart,
   ModelMessage,
   ModelRequest,
   ModelMode,
@@ -68,8 +71,11 @@ export type ClaudeQueryHandle = {
   interrupt?(): Promise<unknown>;
 };
 
-/** 创建一次 Provider 会话的工厂，便于重启和测试注入。 */
-export type ClaudeQueryFactory = (input: { prompt: string; options: Options }) => Promise<ClaudeQueryHandle>;
+/** 创建一次 Provider 会话的工厂，便于重启和测试注入。图片输入走 SDK 的异步消息流形态。 */
+export type ClaudeQueryFactory = (input: {
+  prompt: string | AsyncIterable<SDKUserMessage>;
+  options: Options;
+}) => Promise<ClaudeQueryHandle>;
 
 /** Claude Agent SDK Gateway 的运行参数；凭据只从这里进来，不落库。 */
 export type ClaudeAgentSdkGatewayOptions = {
@@ -196,7 +202,12 @@ export class ClaudeAgentSdkGateway implements ModelGateway {
   capabilities(role: ModelRole): ModelCapabilities {
     // 结构化提问只有 Explorer 有回传通道（见维护提示 3）；工具循环归 Claude 引擎自己管，
     // 与 Codex 一样只支持 provider-controlled，能力不足时不静默降级成 factory-controlled。
-    return { supportsStructuredUserInput: role === "explorer", supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] };
+    return {
+      supportsStructuredUserInput: role === "explorer",
+      supportsToolCalls: false,
+      supportsImages: true,
+      supportedLoopModes: ["provider-controlled"],
+    };
   }
 
   /** 端点指纹：配置里写到哪一层，加上 init 消息自报的 CLI 版本/凭据来源/模型名。 */
@@ -251,9 +262,13 @@ export class ClaudeAgentSdkGateway implements ModelGateway {
           providerItemId: resume.sessionId ?? "provider-session",
         });
       }
-      const prompt = resume.rebuilt
+      const promptText = resume.rebuilt
         ? replayConversation(request.messages)
         : (request.continuationPrompt ?? latestUserMessage(request.messages));
+      // 只有"常规续接 + 最新用户消息带图"才走消息流；其余路径逐字保持原来的字符串形态，
+      // 回归面最小（重建路径的图片已以路径形式写进回放文本）。
+      const images = !resume.rebuilt && !request.continuationPrompt ? latestUserImages(request.messages) : [];
+      const prompt = images.length > 0 ? imagePromptStream(promptText, images) : promptText;
       const handle = await this.queryFactory({
         prompt,
         options: this.buildOptions(request, roleConfig, mode, controller, conversationId, cwd, resume, events, stderrTail),
@@ -867,8 +882,41 @@ function asEffort(value: string | undefined): "low" | "medium" | "high" | "xhigh
   return value === "low" || value === "medium" || value === "high" || value === "xhigh" || value === "max" ? value : undefined;
 }
 
-function latestUserMessage(messages: ModelMessage[]): string {
-  return [...messages].reverse().find((message) => message.role === "user")?.content ?? messages.at(-1)?.content ?? "Continue.";
+/** 把"一句话 + 若干本地图片"包成 SDK 的单条用户消息流；SDK 只在这种形态下接受图片块。 */
+function imagePromptStream(text: string, images: ModelImagePart[]): AsyncIterable<SDKUserMessage> {
+  return (async function* () {
+    yield {
+      type: "user",
+      parent_tool_use_id: null,
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text },
+          ...images.map((image) => ({
+            type: "image" as const,
+            source: {
+              type: "base64" as const,
+              media_type: imageMediaType(image.mimeType),
+              data: readFileSync(image.path).toString("base64"),
+            },
+          })),
+        ],
+      },
+    };
+  })();
+}
+
+/** SDK 的 media_type 是窄联合；上游白名单之外的取值在这里显式失败，而不是悄悄发出去。 */
+function imageMediaType(mimeType: string): "image/jpeg" | "image/png" | "image/gif" | "image/webp" {
+  switch (mimeType) {
+    case "image/jpeg":
+    case "image/png":
+    case "image/gif":
+    case "image/webp":
+      return mimeType;
+    default:
+      throw new Error(`Claude Agent SDK 不支持这种图片类型：${mimeType}`);
+  }
 }
 
 function systemInstructions(messages: ModelMessage[]): string {

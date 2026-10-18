@@ -12,9 +12,11 @@ import { mergeModelUsage, normalizeModelUsage } from "../model/usage.js";
 import { isProviderActivityKind, isProviderActivityOutcome } from "../model/provider-activity.js";
 import { structuredProviderPayload } from "../platform/provider-payload.js";
 import { updatePlanStatus } from "../plan/status-transition.js";
+import { imagesByOwner, type AttachmentPathResolver } from "../store/message-attachments.js";
 // 用 import type 而不是"具名绑定带 type 前缀"：这样"本模块对 index.js 只剩类型依赖"是显式的，
 // check-cycles.mjs 也据此判定这条回流边已被切断。
 import type { ExecutionTelemetry, ModelGateway, ModelRoleConfig, PipelineStore, PlanRevision, Run } from "../index.js";
+import type { ModelImagePart, ModelMessage } from "../model/types.js";
 import type { ToolRuntime } from "../tools/tool-runtime.js";
 
 const REPORT_START = "<pipeline-factory-execution-report>";
@@ -95,6 +97,8 @@ export type ExecutorContinuation = {
   planTaskIds: readonly string[];
   /** 上一轮 Loop 的 Provider 会话标识；传下去才接得上同一段对话（Codex 用它 resumeThread）。 */
   previousProviderThreadId?: string | undefined;
+  /** 这次续跑随补充要求一起提交的图片（已解析成本机绝对路径）。 */
+  images?: ModelImagePart[] | undefined;
 };
 
 /** Executor Agent 的运行限制；ProjectExecutionSnapshot 优先于全局默认策略。 */
@@ -111,6 +115,8 @@ export type ExecutorAgentOptions = {
    * 组合根用它去消费"排队中的补充要求"——那件事属于 Scheduler，本类不该知道它，所以这里只是一个回调。
    */
   onRunStopped?: (runId: string) => void;
+  /** 附件记录 → 本机绝对路径；由组合根按存储目录注入（STEER 的图片要用）。 */
+  attachmentPathFor?: AttachmentPathResolver | undefined;
 };
 
 /**
@@ -394,6 +400,7 @@ export class ExecutorAgent {
           content: continuation
             ? this.continuationPrompt(continuation)
             : `Execute the approved plan: ${revision.planId}@${revision.revision}.`,
+          ...(continuation?.images?.length ? { images: continuation.images } : {}),
         },
       ],
     };
@@ -833,7 +840,7 @@ export class ExecutorAgent {
    * 为什么记账要分两处：投递那一刻写的 journal 是「待处理」（人可能投完就把页面关了），这一条
    * `guidance-consumed` 才是"真的交给模型了"。界面据此把那一行从待处理翻成已生效，不必猜。
    */
-  private async takePendingSteers(run: Run): Promise<readonly string[]> {
+  private async takePendingSteers(run: Run): Promise<readonly ModelMessage[]> {
     const pending = this.store.listRunGuidance(run.id, { mode: "STEER", status: "PENDING" });
     if (pending.length === 0) return [];
     const consumedAt = this.store.now();
@@ -846,7 +853,17 @@ export class ExecutorAgent {
         consumedAt,
       });
     }
-    return pending.map((item) => item.content);
+    // 图片随引导一起进这一轮的上下文：只把正文交出去会让"这三张图哪里不对"变成一句没有指代的话。
+    const images = imagesByOwner(
+      this.store,
+      "run-guidance",
+      pending.map((item) => item.id),
+      this.options.attachmentPathFor,
+    );
+    return pending.map((item) => {
+      const attached = images.get(item.id);
+      return { role: "user" as const, content: item.content, ...(attached?.length ? { images: attached } : {}) };
+    });
   }
 
   private setRunStatus(run: Run, status: "READY_FOR_VERIFY" | "BLOCKED" | "CANCELLED", reason?: string): void {

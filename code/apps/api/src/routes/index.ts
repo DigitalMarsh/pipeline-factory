@@ -38,6 +38,7 @@ import { registerMergeRequestRoutes, type MergeRequestRouteDeps } from "./merge-
 import { registerAgentLoopRoutes, type AgentLoopRouteDeps } from "./agent-loops.js";
 import { registerExecutionThreadRoutes, type ExecutionThreadRouteDeps } from "./execution-threads.js";
 import { registerWorktreeRoutes, type WorktreeRouteDeps } from "./worktrees.js";
+import { registerAttachmentRoutes, type AttachmentRouteDeps } from "./attachments.js";
 
 /** 全部域所需依赖的并集（由各域 deps 类型交集推出，见模块头 1）。 */
 export type ApiRouteDeps = PlatformRouteDeps &
@@ -48,7 +49,8 @@ export type ApiRouteDeps = PlatformRouteDeps &
   MergeRequestRouteDeps &
   AgentLoopRouteDeps &
   ExecutionThreadRouteDeps &
-  WorktreeRouteDeps;
+  WorktreeRouteDeps &
+  AttachmentRouteDeps;
 
 export function registerApiRoutes(app: FastifyInstance, deps: ApiRouteDeps): void {
   registerPlatformRoutes(app, deps);
@@ -60,4 +62,5 @@ export function registerApiRoutes(app: FastifyInstance, deps: ApiRouteDeps): voi
   registerAgentLoopRoutes(app, deps);
   registerExecutionThreadRoutes(app, deps);
   registerWorktreeRoutes(app, deps);
+  registerAttachmentRoutes(app, deps);
 }

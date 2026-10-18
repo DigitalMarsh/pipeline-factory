@@ -73,6 +73,8 @@ import { openSseChannel } from "../http/sse.js";
 import { planProjection } from "../projections/plan-lifecycle.js";
 import { projectAgentLoopResponse } from "../projections/agent-loop.js";
 import { explorerThreadAgent, findProjectThread, sanitizeExplorerRequirementStatusEvent } from "../projections/explorer.js";
+import { attachmentsFor } from "../projections/attachments.js";
+import type { AttachmentStore } from "../runtime/attachment-store.js";
 
 export type ExplorerRouteDeps = {
   store: PipelineStore;
@@ -80,6 +82,8 @@ export type ExplorerRouteDeps = {
   explorers: ExplorerService;
   /** 一次对话回合的执行（startTurn / answerInput / cancelTurn / subscribeEvents）。 */
   explorerThread: ExplorerThreadService;
+  /** 删除线程 / 需求时清理附件文件（元数据行由 store 的级联删除处理）。 */
+  attachments: AttachmentStore;
 };
 
 /**
@@ -107,7 +111,19 @@ function planActivityInput(
   const loops = store.listAgentLoops().filter((loop) => loop.ownerType === "explorer-turn" && turnIds.has(loop.ownerId));
   const loopIds = new Set(loops.map((loop) => loop.id));
   const steps = loops.flatMap((loop) => store.listAgentLoopSteps(loop.id)).filter((step) => loopIds.has(step.loopId));
-  return { turns, loops, activity: projectExplorerActivity({ turns, loops, steps }) };
+  const projected = projectExplorerActivity({ turns, loops, steps });
+  // 用户消息的图片挂在 `details.attachments` 上：活动条目本身是展示投影，不加领域字段。
+  const attachments = attachmentsFor(
+    store,
+    explorer.projectId,
+    "explorer-turn",
+    turns.filter((turn) => turn.role === "user").map((turn) => turn.id),
+  );
+  const activity = projected.map((item) => {
+    const attached = attachments.get(item.turnId);
+    return attached?.length ? { ...item, details: { ...(item.details ?? {}), attachments: attached } } : item;
+  });
+  return { turns, loops, activity };
 }
 
 /** 一份草稿能被确认 / 继续编辑的三个状态。`CONFIRMED` / `DISCARDED` 是终态，不再是"当前草稿"。 */
@@ -137,7 +153,7 @@ function currentRevisionDraft(store: PipelineStore, explorerPlan: ExplorerPlan):
 }
 
 export function registerExplorerRoutes(app: FastifyInstance, deps: ExplorerRouteDeps): void {
-  const { store, explorers, explorerThread } = deps;
+  const { store, explorers, explorerThread, attachments } = deps;
 
   app.post("/api/v4/projects/:projectId/explorers", async (request, reply) => {
     const params = projectThreadParams.safeParse(request.params);
@@ -284,7 +300,18 @@ export function registerExplorerRoutes(app: FastifyInstance, deps: ExplorerRoute
     if (!explorerPlan || explorerPlan.explorerThreadId !== explorer.id || explorerPlan.projectId !== explorer.projectId)
       return reply.code(404).send({ error: "ExplorerPlan not found" });
     try {
+      // 先记下这条需求名下回合的附件文件：级联删除会带走元数据行，之后再也查不到 relativePath。
+      const attachmentPaths = store
+        .listAttachments(
+          "explorer-turn",
+          store
+            .listTurns(explorer.id)
+            .filter((turn) => turn.explorerPlanId === params.data.explorerPlanId)
+            .map((turn) => turn.id),
+        )
+        .map((item) => item.relativePath);
       const result = explorers.deletePlan(explorer.id, params.data.explorerPlanId);
+      for (const path of attachmentPaths) attachments.delete(path);
       return {
         deletedExplorerPlanId: params.data.explorerPlanId,
         explorer: result.explorer,
@@ -346,7 +373,15 @@ export function registerExplorerRoutes(app: FastifyInstance, deps: ExplorerRoute
     const explorer = store.getThread(params.data.explorerId);
     if (!explorer || explorer.projectId !== params.data.projectId) return reply.code(404).send({ error: "Explorer not found" });
     try {
+      // 同删除需求那条：先拿文件路径，再走级联删除。
+      const attachmentPaths = store
+        .listAttachments(
+          "explorer-turn",
+          store.listTurns(explorer.id).map((turn) => turn.id),
+        )
+        .map((item) => item.relativePath);
       const result = explorers.delete(explorer.id);
+      for (const path of attachmentPaths) attachments.delete(path);
       return {
         deletedExplorerId: explorer.id,
         replacementExplorer: result.replacementExplorer,
@@ -397,9 +432,11 @@ export function registerExplorerRoutes(app: FastifyInstance, deps: ExplorerRoute
         explorerPlanId: body.data.explorerPlanId,
         content: body.data.content,
         clientTurnId: body.data.clientTurnId,
+        attachmentIds: body.data.attachmentIds,
       });
+      const attached = attachmentsFor(store, thread.projectId, "explorer-turn", [accepted.user.id]).get(accepted.user.id) ?? [];
       return reply.code(202).send({
-        turn: { user: accepted.user, assistant: accepted.assistant },
+        turn: { user: { ...accepted.user, attachments: attached }, assistant: accepted.assistant },
         eventsUrl: accepted.eventsUrl,
         loopId: accepted.loopId,
         state: accepted.assistant.status,
@@ -418,8 +455,15 @@ export function registerExplorerRoutes(app: FastifyInstance, deps: ExplorerRoute
     const explorerPlan = store.getExplorerPlan(query.data.explorerPlanId);
     if (!explorerPlan || explorerPlan.explorerThreadId !== thread.id || explorerPlan.projectId !== thread.projectId)
       return reply.code(404).send({ error: "ExplorerPlan not found" });
+    const turns = store.listTurns(thread.id).filter((turn) => turn.explorerPlanId === explorerPlan.id);
+    const attachments = attachmentsFor(
+      store,
+      thread.projectId,
+      "explorer-turn",
+      turns.filter((turn) => turn.role === "user").map((turn) => turn.id),
+    );
     return {
-      items: store.listTurns(thread.id).filter((turn) => turn.explorerPlanId === explorerPlan.id),
+      items: turns.map((turn) => ({ ...turn, attachments: attachments.get(turn.id) ?? [] })),
       lastEventSequence: store.getLastEventSequence(thread.id),
     };
   });

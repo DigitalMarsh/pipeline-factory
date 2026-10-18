@@ -19,6 +19,7 @@ import ExecutionHeaderStatus from "../components/ExecutionHeaderStatus.vue";
 import ConfirmDialog from "../components/ConfirmDialog.vue";
 import ProviderUsageFooter from "../components/ProviderUsageFooter.vue";
 import ExecutionMessageRow from "../components/ExecutionMessageRow.vue";
+import AttachmentComposer from "../components/AttachmentComposer.vue";
 import { api } from "../api";
 import type { AgentLoopStep, ExecutionTask, ExecutionThread, MergeRequest, Plan, PlanTask, Run, VerificationRun } from "../types";
 import { streamStatusTagType } from "../utils/statusTag";
@@ -209,6 +210,10 @@ const {
   executionDraft,
   sendingExecutionMessage,
   executionGuidanceMode,
+  attachmentItems: executionAttachmentItems,
+  attachmentError: executionAttachmentError,
+  addAttachmentFiles: addExecutionAttachmentFiles,
+  removeAttachment: removeExecutionAttachment,
   canSendExecutionMessage,
   executorLoopRunning,
   executionComposerDisabledReason,
@@ -697,25 +702,34 @@ onBeforeUnmount(() => {
               <el-button size="small" type="primary" plain @click="openPlanDetail">查看方案</el-button>
             </div>
           </div>
-          <div v-else class="composer-input">
-            <textarea
-              v-model="executionDraft"
-              aria-label="执行会话消息"
-              :placeholder="executorLoopRunning ? '补充要求，交给正在跑的这一轮…' : '补充要求，执行线程会重新开工…'"
-              :disabled="actionBusy"
-              @keydown="handleExecutionComposerKeydown"
-            />
-            <!-- 一轮还在跑时才有得选：排队 = 等它结束再起一轮；引导 = 下一个步骤边界插进这一轮。
-                 没在跑时两种等价，不由用户选。 -->
-            <label v-if="executorLoopRunning" class="composer-guidance-mode"
-              ><span>投递</span
-              ><select v-model="executionGuidanceMode" :disabled="actionBusy" aria-label="补充要求的投递方式">
-                <option value="queue">排队 · 这一轮结束后再开工</option>
-                <option value="steer">引导 · 下一轮生效</option>
-              </select></label
-            >
-            <span v-else class="composer-mode">Run 模式</span>
-          </div>
+          <AttachmentComposer
+            v-else
+            :items="executionAttachmentItems"
+            :error="executionAttachmentError"
+            :disabled="actionBusy"
+            @add="addExecutionAttachmentFiles"
+            @remove="removeExecutionAttachment"
+          >
+            <div class="composer-input">
+              <textarea
+                v-model="executionDraft"
+                aria-label="执行会话消息"
+                :placeholder="executorLoopRunning ? '补充要求，交给正在跑的这一轮…' : '补充要求，执行线程会重新开工…'"
+                :disabled="actionBusy"
+                @keydown="handleExecutionComposerKeydown"
+              />
+              <!-- 一轮还在跑时才有得选：排队 = 等它结束再起一轮；引导 = 下一个步骤边界插进这一轮。
+                   没在跑时两种等价，不由用户选。 -->
+              <label v-if="executorLoopRunning" class="composer-guidance-mode"
+                ><span>投递</span
+                ><select v-model="executionGuidanceMode" :disabled="actionBusy" aria-label="补充要求的投递方式">
+                  <option value="queue">排队 · 这一轮结束后再开工</option>
+                  <option value="steer">引导 · 下一轮生效</option>
+                </select></label
+              >
+              <span v-else class="composer-mode">Run 模式</span>
+            </div>
+          </AttachmentComposer>
           <div v-if="canSendExecutionMessage" class="composer-footer">
             <ProviderUsageFooter
               :model="executionModelIdentity.model"

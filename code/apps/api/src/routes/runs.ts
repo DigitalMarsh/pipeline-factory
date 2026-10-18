@@ -40,6 +40,7 @@ import type {
   VerificationService,
 } from "@pipeline-factory/domain";
 import { guidanceBody } from "../schemas/runs.js";
+import { attachmentsFor } from "../projections/attachments.js";
 import { loopEventsQuery } from "../schemas/agent-loops.js";
 import { loopReasonBody, projectThreadParams } from "../schemas/common.js";
 import { openSseChannel } from "../http/sse.js";
@@ -195,9 +196,18 @@ export function registerRunRoutes(app: FastifyInstance, deps: RunRouteDeps): voi
     try {
       // HTTP 用大写风格与领域枚举不同（`steer` vs `STEER`）：这一层就是那条翻译边，别把它下推。
       const mode = body.data.mode === "steer" ? ("STEER" as const) : body.data.mode === "queue" ? ("QUEUE" as const) : ("auto" as const);
-      const { thread, guidance, continued } = await scheduler.addGuidance(params.data.runId, body.data.content, { mode });
+      const { thread, guidance, continued } = await scheduler.addGuidance(params.data.runId, body.data.content, {
+        mode,
+        attachmentIds: body.data.attachmentIds,
+      });
       const run = store.getRun(params.data.runId);
-      return { thread: run ? projectRunThreadTelemetry(store, run, thread) : thread, guidance, continued, run: run ?? null };
+      const attached = run ? (attachmentsFor(store, run.projectId, "run-guidance", [guidance.id]).get(guidance.id) ?? []) : [];
+      return {
+        thread: run ? projectRunThreadTelemetry(store, run, thread) : thread,
+        guidance: { ...guidance, attachments: attached },
+        continued,
+        run: run ?? null,
+      };
     } catch (error) {
       return reply
         .code(409)

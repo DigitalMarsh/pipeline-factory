@@ -149,3 +149,40 @@ export type DomainEvent = {
   occurredAt: string;
   payload: Record<string, unknown>;
 };
+
+/** 消息附件的归属：三种对话输入框各一种。 */
+export type AttachmentOwnerType = "explorer-turn" | "project-execution-message" | "run-guidance";
+
+/**
+ * 用户随消息上传的附件（本轮只有图片）。
+ *
+ * `ownerType` / `ownerId` 在上传时为空，**回合创建成功后才挂上**：先落盘再建回合，
+ * 回合失败时这些行就成了"未挂载附件"，可以安全清理。
+ * `relativePath` 相对 `storage.databasePath` 所在目录（`attachments/<projectId>/<id>.<ext>`）。
+ */
+export type MessageAttachment = {
+  id: string;
+  projectId: string;
+  ownerType: AttachmentOwnerType | null;
+  ownerId: string | null;
+  fileName: string;
+  mimeType: string;
+  byteSize: number;
+  relativePath: string;
+  createdAt: string;
+};
+
+/**
+ * 返回给前端的附件视图。`url` 是相对 API 根的读取路径。
+ *
+ * 它出现在 `ExplorerTurn` / `ProjectExecutionMessage` / `RunGuidance` 的可选字段上：那些实体
+ * 由各域服务落库，附件在 API 出站时批量补齐；类型上允许缺省，是为了让领域层不必知道 HTTP 路由。
+ */
+export type MessageAttachmentView = {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  byteSize: number;
+  url: string;
+  createdAt: string;
+};

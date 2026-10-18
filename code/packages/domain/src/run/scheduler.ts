@@ -32,6 +32,7 @@ import { PlanService } from "../plan/service.js";
 // 直接从模块 import 而不是走 barrel：`import type ... from "../index.js"` 那一片是本模块对 barrel
 // 的**类型级**依赖，加一条值级 import 会立刻变成 check-cycles 会报的运行时环。
 import { parseExecutorReport } from "../agent/executor-agent.js";
+import { imagesByOwner, type AttachmentPathResolver } from "../store/message-attachments.js";
 import { allocateRunBranchLeaf, composeRunBranchLeaf, normalizeRunBranchSlug, runBranchName } from "./run-branch.js";
 import type { PipelineStore } from "../store/pipeline-store.js";
 import type { RunBranchNameGenerator } from "./run-branch.js";
@@ -64,6 +65,8 @@ export type SchedulerOptions = {
   workspaceFactory?: (snapshot: ProjectExecutionSnapshot) => WorkspaceAdapter;
   hookRunnerFactory?: (snapshot: ProjectExecutionSnapshot) => LifecycleHookRunner;
   branchNameGenerator?: RunBranchNameGenerator;
+  /** 附件记录 → 本机绝对路径；补充要求里的图片要用。 */
+  attachmentPathFor?: AttachmentPathResolver | undefined;
   executor?: {
     /** 第三个参数非空表示这是**补充要求驱动的续跑**（问模型什么、接不接上一轮会话都由它决定）。 */
     start(run: Run, revision: PlanRevision, continuation?: ExecutorContinuation | undefined): Promise<AgentLoop>;
@@ -574,11 +577,18 @@ export class Scheduler {
   async addGuidance(
     runId: string,
     content: string,
-    options: { mode?: RunGuidanceMode | "auto" | undefined; actorId?: string | undefined } = {},
+    options: {
+      mode?: RunGuidanceMode | "auto" | undefined;
+      actorId?: string | undefined;
+      /** 已经上传、尚未挂到任何记录上的图片附件。 */
+      attachmentIds?: string[] | undefined;
+    } = {},
   ): Promise<{ thread: ExecutionThread; guidance: RunGuidance; continued: boolean }> {
     const run = this.run(runId);
     const thread = this.thread(run.executionThreadId);
     this.assertAcceptsGuidance(run);
+    // 先校验再落任何行：跨项目的附件 id 若等落库后再发现，会留下一条没有图（却已被当成已投递）的要求。
+    const attachmentIds = this.validGuidanceAttachments(run.projectId, options.attachmentIds);
     const runningLoop = this.runningRunLoop(run.id);
     const requested = options.mode === undefined || options.mode === "auto" ? undefined : options.mode;
     // 没有在跑的 Loop 时两种模式等价（都得起新的一轮），行上就记 QUEUE —— 那正是接下来实际走的那条路。
@@ -593,6 +603,7 @@ export class Scheduler {
       createdAt: this.options.store.now(),
       consumedAt: null,
     });
+    if (attachmentIds.length > 0) this.options.store.attachAttachments("run-guidance", guidance.id, attachmentIds);
     /**
      * **不盖 `taskId`**：补充要求不属于任何计划任务——它既不是某个步骤做的工作，也不该被折进
      * 某个步骤的分组里。此前这里按"当前活跃任务"盖了一个，界面上那句「你补充了要求」于是挂在了
@@ -665,9 +676,19 @@ export class Scheduler {
       tasksUnchanged: true,
     });
     const previousProviderThreadId = this.latestRunLoop(run.id)?.providerThreadId ?? undefined;
+    // 多条补充要求一起续跑时图片拼成一组：模型看到的是"这一轮新增的要求 + 它们各自的图"。
+    const guidanceImages = [
+      ...imagesByOwner(
+        this.options.store,
+        "run-guidance",
+        guidance.map((item) => item.id),
+        this.options.attachmentPathFor,
+      ).values(),
+    ].flat();
     try {
       const loop = await this.options.executor.start(this.run(runId), revision, {
         guidance: guidance.map((item) => item.content).join("\n\n"),
+        ...(guidanceImages.length > 0 ? { images: guidanceImages } : {}),
         completedTaskIds,
         planTaskIds: revision.resolvedContract.tasks.map((task) => task.id),
         ...(previousProviderThreadId ? { previousProviderThreadId } : {}),
@@ -711,6 +732,18 @@ export class Scheduler {
     const pending = this.options.store.listRunGuidance(runId, { mode: "QUEUE", status: "PENDING" });
     if (pending.length === 0) return false;
     return this.continueRun(runId, pending);
+  }
+
+  /** 补充要求附件的准入：去重、限 5 张、必须属于这个 Run 所在的项目。 */
+  private validGuidanceAttachments(projectId: string, ids: readonly string[] | undefined): string[] {
+    if (!ids || ids.length === 0) return [];
+    const unique = [...new Set(ids)];
+    if (unique.length > 5) throw new Error("ATTACHMENT_LIMIT_EXCEEDED");
+    for (const id of unique) {
+      const attachment = this.options.store.getAttachment(id);
+      if (!attachment || attachment.projectId !== projectId) throw new Error(`ATTACHMENT_NOT_FOUND: ${id}`);
+    }
+    return unique;
   }
 
   /** 一个 Run 允许接受补充要求的那些状态；其余一律拒绝并说明该走哪条路。 */

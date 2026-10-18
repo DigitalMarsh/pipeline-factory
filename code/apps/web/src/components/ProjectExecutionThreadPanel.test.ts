@@ -171,6 +171,7 @@ describe("ProjectExecutionThreadPanel", () => {
       "project-1",
       "please update the project",
       expect.stringContaining("project-execution-"),
+      [],
     );
   });
 

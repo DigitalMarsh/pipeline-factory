@@ -17,7 +17,15 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { ElMessage } from "element-plus";
 import { CopyDocument, Refresh, Warning } from "@element-plus/icons-vue";
 import { api } from "../api";
-import type { Project, WorktreeInventory, WorktreeItem, WorktreeMergePreview, WorktreeMergeResult, WorktreeRuntimeInfo } from "../types";
+import type {
+  Project,
+  WorktreeInventory,
+  WorktreeItem,
+  WorktreeMergePreview,
+  WorktreeMergeResult,
+  WorktreeRuntimeInfo,
+  WorktreeServices,
+} from "../types";
 import {
   cleanupDisabledReason,
   matchesWorktreeFilters,
@@ -87,12 +95,24 @@ const runtime = ref<WorktreeRuntimeInfo | null>(null);
 const runtimeBusy = ref(false);
 const runtimeError = ref("");
 const runtimeClearOpen = ref(false);
+/** 执行目录上可用的服务与状态（随 runtime 一起返回）；顶部按钮据此显示"启动/停止"。 */
+const runtimeServices = ref<WorktreeServices | null>(null);
+const runtimeServiceBusy = ref(false);
 /** 「补齐依赖软链」的在途标记。 */
 const dependenciesBusy = ref(false);
 
 /** 当前选中的条目是不是执行目录目标：是的话服务走 runtime 接口（路径/端口固定）。 */
 const isRuntimeTarget = computed(() => Boolean(selectedItem.value && runtime.value?.current?.itemId === selectedItem.value.itemId));
 const runtimeServicesMode = computed<"worktree" | "runtime">(() => (isRuntimeTarget.value ? "runtime" : "worktree"));
+
+/** 顶部执行目录条的按钮状态：有几个启用的服务、其中几个在跑。 */
+const runtimeServiceSummary = computed(() => {
+  const services = runtimeServices.value?.services ?? [];
+  const states = runtimeServices.value?.states ?? [];
+  const enabled = services.filter((service) => service.enabled);
+  const running = enabled.filter((service) => states.some((state) => state.serviceId === service.serviceId && state.status === "running"));
+  return { total: enabled.length, running: running.length, canStart: enabled.length > running.length, canStop: running.length > 0 };
+});
 
 let requestGeneration = 0;
 let eventSource: EventSource | null = null;
@@ -189,6 +209,7 @@ async function load() {
     if (generation !== requestGeneration || projectId !== props.projectId) return;
     inventory.value = next;
     runtime.value = runtimeResponse?.runtime ?? null;
+    runtimeServices.value = runtimeResponse?.services ?? null;
     if (selectedItemId.value && !next.items.some((item) => item.itemId === selectedItemId.value)) {
       selectedItemId.value = null;
     }
@@ -228,6 +249,53 @@ async function switchRuntime(item: WorktreeItem, startServices = false) {
     runtimeError.value = caught instanceof Error ? caught.message : "执行目录切换失败";
   } finally {
     runtimeBusy.value = false;
+  }
+}
+
+/**
+ * 顶部「启动全部 / 停止全部」：逐个调用，任一失败就停在那一条并报错。
+ * 有服务在跑时先以执行目录为准——它和详情里的单服务按钮走的是同一组接口。
+ */
+async function startAllRuntimeServices() {
+  if (runtimeServiceBusy.value) return;
+  runtimeServiceBusy.value = true;
+  runtimeError.value = "";
+  try {
+    const services = (runtimeServices.value?.services ?? []).filter((service) => service.enabled);
+    const states = runtimeServices.value?.states ?? [];
+    for (const service of services) {
+      if (states.some((state) => state.serviceId === service.serviceId && state.status === "running")) continue;
+      try {
+        await api.startRuntimeService(props.projectId, service.serviceId);
+      } catch (caught) {
+        runtimeError.value = `服务 ${service.name} 启动失败：${caught instanceof Error ? caught.message : String(caught)}`;
+        break;
+      }
+    }
+    await load();
+  } finally {
+    runtimeServiceBusy.value = false;
+  }
+}
+
+async function stopAllRuntimeServices() {
+  if (runtimeServiceBusy.value) return;
+  runtimeServiceBusy.value = true;
+  runtimeError.value = "";
+  try {
+    const states: WorktreeServices["states"] = runtimeServices.value?.states ?? [];
+    for (const state of states) {
+      if (state.status !== "running") continue;
+      try {
+        await api.stopRuntimeService(props.projectId, state.serviceId);
+      } catch (caught) {
+        runtimeError.value = `服务 ${state.serviceId} 停止失败：${caught instanceof Error ? caught.message : String(caught)}`;
+        break;
+      }
+    }
+    await load();
+  } finally {
+    runtimeServiceBusy.value = false;
   }
 }
 
@@ -565,6 +633,27 @@ onBeforeUnmount(() => {
         <span v-else class="runtime-empty">尚未切换</span>
       </div>
       <div class="runtime-actions">
+        <span v-if="runtimeServiceSummary.total > 0" class="runtime-service-count" data-runtime-service-count>
+          服务 {{ runtimeServiceSummary.running }}/{{ runtimeServiceSummary.total }}
+        </span>
+        <el-button
+          v-if="runtime.current && runtimeServiceSummary.total > 0"
+          size="small"
+          type="primary"
+          :disabled="!runtimeServiceSummary.canStart"
+          :loading="runtimeServiceBusy"
+          data-runtime-start
+          @click="startAllRuntimeServices"
+          >启动全部服务</el-button
+        >
+        <el-button
+          v-if="runtime.current && runtimeServiceSummary.running > 0"
+          size="small"
+          :loading="runtimeServiceBusy"
+          data-runtime-stop
+          @click="stopAllRuntimeServices"
+          >停止全部</el-button
+        >
         <el-button v-if="runtime.link?.isSymlink" size="small" :loading="runtimeBusy" data-runtime-clear @click="runtimeClearOpen = true">
           清空
         </el-button>
@@ -1058,7 +1147,18 @@ onBeforeUnmount(() => {
   color: #8a6a22;
 }
 .runtime-actions {
+  display: flex;
   flex: none;
+  align-items: center;
+  gap: 6px;
+}
+.runtime-actions :deep(.el-button + .el-button) {
+  margin-left: 0;
+}
+.runtime-service-count {
+  color: #7c8ba3;
+  font-size: 10px;
+  white-space: nowrap;
 }
 .runtime-error {
   margin: 8px clamp(20px, 4vw, 48px) 0;

@@ -32,6 +32,8 @@ import ExplorerRequirementDialog from "../components/ExplorerRequirementDialog.v
 import ConfirmDialog from "../components/ConfirmDialog.vue";
 import ExplorerHeaderStatus from "../components/ExplorerHeaderStatus.vue";
 import ProviderUsageFooter from "../components/ProviderUsageFooter.vue";
+import AttachmentComposer from "../components/AttachmentComposer.vue";
+import { useImageAttachments } from "../composables/useImageAttachments";
 import RunDetailView from "./RunDetailView.vue";
 import scrollToLatestIcon from "../assets/scroll-to-latest.png";
 import { normalizePlanProjection } from "../utils/planProjection";
@@ -98,6 +100,15 @@ const projectSettingsProjectId = ref<string | null>(null);
 const projectSettingsInitialTab = ref<string | null>(null);
 const planRequirements = ref<ExplorerPlanRequirement[]>([]);
 const draft = ref("");
+// 图片附件的待发送状态（粘贴 / 拖拽 / 文件选择）；发送成功后才清空，失败时保留以便重试。
+const {
+  items: attachmentItems,
+  error: attachmentError,
+  addFiles: addAttachmentFiles,
+  remove: removeAttachment,
+  clear: clearAttachments,
+  upload: uploadAttachments,
+} = useImageAttachments();
 const requirementDrafts = new Map<string, string>();
 const pendingSendPlanIds = ref<Set<string>>(new Set());
 type FailedExplorerSend = {
@@ -1417,6 +1428,23 @@ async function sendTurn(): Promise<boolean> {
     ElMessage.error("请先选择一个需求再发送消息");
     return false;
   }
+  // 本地预览先按服务端的附件形状拍一份快照：乐观消息要立刻显示缩略图，而上传完成后
+  // 这些 object URL 会在清空附件时被 revoke。
+  const localAttachments = attachmentItems.value.map((item) => ({
+    id: item.key,
+    fileName: item.fileName,
+    mimeType: item.mimeType,
+    byteSize: item.byteSize,
+    url: item.previewUrl,
+    createdAt: now,
+  }));
+  let attachmentIds: string[];
+  try {
+    attachmentIds = await uploadAttachments(requestProjectId);
+  } catch (caught) {
+    ElMessage.error(caught instanceof Error ? caught.message : "图片上传失败");
+    return false;
+  }
   requirementDrafts.delete(currentPlanId);
   const previousFailure = failedExplorerSends.get(currentPlanId);
   const retrying = previousFailure?.content === content ? previousFailure : null;
@@ -1471,7 +1499,7 @@ async function sendTurn(): Promise<boolean> {
         status: "COMPLETED",
         title: "You",
         summary: content,
-        details: null,
+        details: localAttachments.length > 0 ? { attachments: localAttachments } : null,
         occurredAt: now,
         explorerPlanId: currentPlanId,
       },
@@ -1491,7 +1519,14 @@ async function sendTurn(): Promise<boolean> {
   await nextTick();
   if (drawerTab.value === "explorer" && timeline.value) scrollTimelineToLatest(timeline.value);
   try {
-    const response = await api.startExplorerTurn(requestProjectId, requestThreadId, content, failedSend.clientTurnId, currentPlanId);
+    const response = await api.startExplorerTurn(
+      requestProjectId,
+      requestThreadId,
+      content,
+      failedSend.clientTurnId,
+      currentPlanId,
+      attachmentIds,
+    );
     if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== requestThreadId) return false;
     if (response.loopId) {
       const loopResponse = await api.agentLoop(response.loopId);
@@ -1503,6 +1538,8 @@ async function sendTurn(): Promise<boolean> {
     activity.value = activity.value.filter((item) => item.id !== failedSend.assistantActivityId);
     failedExplorerSends.delete(currentPlanId);
     await refreshActivity();
+    // 服务端活动已带回真实附件 URL，这时才能释放本地预览。
+    clearAttachments();
     if (thread.value)
       thread.value = { ...thread.value, messageCount: thread.value.messageCount + 2, lastActivityAt: response.turn.assistant.createdAt };
     ElMessage.success("消息已发送");
@@ -1951,15 +1988,23 @@ onBeforeUnmount(() => {
                 </div>
               </div>
               <div v-if="!activeRunId" class="composer">
-                <div class="composer-input">
-                  <textarea
-                    v-model="draft"
-                    :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || explorerPaused"
-                    aria-label="探索消息"
-                    placeholder="继续探索，或提出修改…"
-                    @keydown="handleComposerKeydown"
-                  /><span class="composer-mode">Plan 模式</span>
-                </div>
+                <AttachmentComposer
+                  :items="attachmentItems"
+                  :error="attachmentError"
+                  :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || explorerPaused || busy"
+                  @add="addAttachmentFiles"
+                  @remove="removeAttachment"
+                >
+                  <div class="composer-input">
+                    <textarea
+                      v-model="draft"
+                      :disabled="!thread || thread?.state === 'ARCHIVED' || project?.status === 'ARCHIVED' || explorerPaused"
+                      aria-label="探索消息"
+                      placeholder="继续探索，或提出修改…"
+                      @keydown="handleComposerKeydown"
+                    /><span class="composer-mode">Plan 模式</span>
+                  </div>
+                </AttachmentComposer>
                 <div class="composer-footer">
                   <ProviderUsageFooter
                     :model="explorerModel"

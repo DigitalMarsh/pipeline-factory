@@ -5,7 +5,7 @@
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { EXPLORER_PLAN_INSTRUCTIONS } from "../platform/plan-requirements.js";
-import { replayConversation, resolveModelMode } from "./provider-session.js";
+import { latestUserImages, latestUserMessage, replayConversation, resolveModelMode } from "./provider-session.js";
 import { activityOutcome, classifyCodexActivity, type ProviderActivityKind } from "./provider-activity.js";
 import { normalizeModelUsage } from "./usage.js";
 // 用 import type 而不是"具名绑定带 type 前缀"：这样"本模块对模型契约只剩类型依赖"是显式的，
@@ -48,7 +48,12 @@ export type CodexThreadStartParams = {
 /** 启动 Provider turn 的输入和可取消信号。 */
 export type CodexTurnStartParams = {
   threadId: string;
-  input: Array<{ type: "text"; text: string }>;
+  /**
+   * 与文本并列的输入项。图片走 `localImage`：路径在本机、由 app-server 自己读取，
+   * 省掉把 5MB 图片 base64 塞进 JSON-RPC 的开销（协议里还有 `image` + url 的形态，
+   * 若某个版本拒收 `localImage` 再退回去）。
+   */
+  input: Array<{ type: "text"; text: string } | { type: "localImage"; path: string }>;
   model: string;
   effort?: string;
   cwd?: string;
@@ -434,7 +439,12 @@ export class CodexAppServerGateway implements ModelGateway {
   }
 
   capabilities(role: ModelRole): ModelCapabilities {
-    return { supportsStructuredUserInput: role === "explorer", supportsToolCalls: false, supportedLoopModes: ["provider-controlled"] };
+    return {
+      supportsStructuredUserInput: role === "explorer",
+      supportsToolCalls: false,
+      supportsImages: true,
+      supportedLoopModes: ["provider-controlled"],
+    };
   }
 
   async *stream(request: ModelRequest): AsyncIterable<ModelEvent> {
@@ -505,9 +515,15 @@ export class CodexAppServerGateway implements ModelGateway {
       // 常规续接只发最新一条用户消息（历史在 Provider 侧）；重建出来的线程没有那份历史，
       // 必须回放本地对话，否则模型只看到最后一句。
       const text = rebuilt ? replayConversation(request.messages) : latestUserMessage(request.messages);
+      // 重建/续写的路径不回传图：重建已把路径写进回放文本，continuationPrompt 是"接着干"的
+      // 短指令，图在上一轮已经发过。常规续接才把最新一条用户消息的图挂上。
+      const images = !rebuilt && !request.continuationPrompt ? latestUserImages(request.messages) : [];
       for await (const event of session.streamTurn({
         threadId: providerThreadId,
-        input: [{ type: "text", text: request.continuationPrompt ?? text }],
+        input: [
+          { type: "text", text: request.continuationPrompt ?? text },
+          ...images.map((image) => ({ type: "localImage" as const, path: image.path })),
+        ],
         model: roleConfig.model,
         ...(roleConfig.reasoningEffort ? { effort: roleConfig.reasoningEffort } : {}),
         ...(request.cwd ? { cwd: request.cwd } : {}),
@@ -890,10 +906,6 @@ function numberField(value: unknown, key: string): number | undefined {
   if (!value || typeof value !== "object") return undefined;
   const candidate = (value as JsonObject)[key];
   return typeof candidate === "number" && Number.isFinite(candidate) ? candidate : undefined;
-}
-
-function latestUserMessage(messages: ModelMessage[]): string {
-  return [...messages].reverse().find((message) => message.role === "user")?.content ?? messages.at(-1)?.content ?? "Continue.";
 }
 
 function systemInstructions(messages: ModelMessage[]): string {

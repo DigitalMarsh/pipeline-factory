@@ -71,10 +71,15 @@ export type ModelRoleConfig = {
   reasoningEffort?: string | undefined;
   developerInstructions?: string | undefined;
 };
-/** Provider 能力声明，决定结构化输入、工具和 Loop 模式是否可用。 */
+/** Provider 能力声明，决定结构化输入、工具、Loop 模式与图片输入是否可用。 */
 export type ModelCapabilities = {
   supportsStructuredUserInput: boolean;
   supportsToolCalls: boolean;
+  /**
+   * 用户消息能不能带图片。缺省（旧实现或旧测试桩）按 **false** 处理——界面据此隐藏附图入口，
+   * 不要让一次没声明的能力变成运行期被 Provider 拒绝的回合。
+   */
+  supportsImages?: boolean;
   supportedLoopModes: import("../agent/agent-loop.js").AgentLoopMode[];
 };
 /** 传给模型的受控工具描述和输入 schema。 */
@@ -83,8 +88,23 @@ export type ModelToolDefinition = {
   description: string;
   inputSchema: Record<string, unknown>;
 };
+/**
+ * 随用户消息一起发给模型的图片。
+ *
+ * `path` 是**本机绝对路径** —— 附件已由 API 落盘，Provider 自己去读（Codex 的 localImage、
+ * Claude 的 base64 块也都从同一个文件读）。放在这里而不是 base64，是为了让领域层不必碰文件系统、
+ * 也不让一份图片在内存里被复制两遍；只有真正上传请求的 Provider 实现才读文件。
+ */
+export type ModelImagePart = { path: string; mimeType: string };
+
 /** Provider 会话中的规范化消息。 */
-export type ModelMessage = { role: "system" | "user" | "assistant" | "tool"; content: string; toolCallId?: string };
+export type ModelMessage = {
+  role: "system" | "user" | "assistant" | "tool";
+  content: string;
+  toolCallId?: string;
+  /** 仅用户消息可能有；顺序即用户选择顺序。 */
+  images?: ModelImagePart[];
+};
 
 /** 一次 Explorer/Executor 模型调用的完整上下文。 */
 export type ModelRequest = {

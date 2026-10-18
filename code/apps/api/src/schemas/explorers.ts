@@ -12,6 +12,7 @@
  *   3) `content` 上限 20_000 与 `projectExecutionTurnBody` 保持一致（同一棵对话树的两个入口）。
  */
 import { z } from "zod";
+import { attachmentIds } from "./attachments.js";
 
 export const projectExplorerParams = z.object({ projectId: z.string().min(1), explorerId: z.string().min(1) });
 export const projectExplorerPlanParams = z.object({
@@ -36,6 +37,7 @@ export const v4TurnBody = z.object({
   explorerPlanId: z.string().min(1),
   content: z.string().trim().min(1).max(20_000),
   clientTurnId: z.string().min(1).max(200),
+  attachmentIds: attachmentIds,
 });
 export const v4AnswerBody = z.object({
   clientRequestId: z.string().min(1).max(200),

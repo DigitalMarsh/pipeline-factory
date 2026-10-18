@@ -22,7 +22,7 @@
  */
 import { computed } from "vue";
 import { Check, InfoFilled, Warning } from "@element-plus/icons-vue";
-import type { ExplorerInputRequest, Plan } from "../types";
+import type { ExplorerInputRequest, MessageAttachment, Plan } from "../types";
 import { explorerTimelineTarget, inputRequestTarget, type ExplorerTimelineItem } from "../utils/explorerTimeline";
 import { inputAnswerDisplayLabels, inputAnswerDisplayText } from "../utils/explorerInput";
 import type { ExplorerInputProgress } from "../utils/explorerInputProgressDraft";
@@ -41,6 +41,7 @@ import ExplorerActivityRow from "./ExplorerActivityRow.vue";
 import ExplorerCandidatePlanCard from "./ExplorerCandidatePlanCard.vue";
 import ExplorerDividerRow from "./ExplorerDividerRow.vue";
 import ExplorerReasoningRow from "./ExplorerReasoningRow.vue";
+import MessageAttachments from "./MessageAttachments.vue";
 
 const props = defineProps<{
   item: ExplorerTimelineItem;
@@ -73,6 +74,13 @@ const rowMode = computed<ExplorerRowMode | null>(() =>
 );
 /** 方案卡显不显示也问同一张清单表——与整个条目要不要显示是同一条判据（见文件头维护提示 1）。 */
 const showCandidatePlanCard = explorerDisplayMode("CANDIDATE_PLAN") !== "hidden";
+
+/** 用户消息随带的图片：由 API 投影在 `details.attachments` 上（见 routes/explorers.ts）。 */
+const userAttachments = computed<MessageAttachment[]>(() => {
+  if (!activity.value || activity.value.kind !== "USER_MESSAGE") return [];
+  const value = activity.value.details?.attachments;
+  return Array.isArray(value) ? (value as MessageAttachment[]) : [];
+});
 
 /** 三道答案文案都把本地状态喂给 utils 里的纯函数——与对话框里的编辑态同源。 */
 function answerLabelsFor(request: ExplorerInputRequest, questionIndex: number): string[] {
@@ -162,6 +170,7 @@ function statusTextFor(request: ExplorerInputRequest): string {
     <span class="timeline-user-mark" aria-hidden="true">›</span>
     <div class="timeline-user-body">
       <MarkdownMessage :source="activity.summary" />
+      <MessageAttachments :attachments="userAttachments" />
       <time>{{ formatTurnTime(activity.occurredAt) }}</time>
     </div>
   </article>

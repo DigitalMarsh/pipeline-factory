@@ -9,10 +9,12 @@
  *      增删推理强度要同时看三处：这里、web 的选择器、以及模型网关对推理强度的处理。
  */
 import { z } from "zod";
+import { attachmentIds } from "./attachments.js";
 
 export const projectExecutionTurnBody = z.object({
   content: z.string().trim().min(1).max(20_000),
   clientTurnId: z.string().trim().min(1).max(160),
+  attachmentIds: attachmentIds,
 });
 export const projectExecutionPreferencesBody = z.object({
   model: z.string().trim().min(1).max(200).nullable(),

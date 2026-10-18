@@ -36,6 +36,14 @@ const REASONING_EFFORTS_BY_KIND: Record<string, string[]> = {
   stub: [],
 };
 
+/** 各类后端是否原生接受用户消息里的图片。stub 只用于测试，明确不支持。 */
+const SUPPORTS_IMAGES_BY_KIND: Record<string, boolean> = {
+  "codex-app-server": true,
+  "claude-agent-sdk": true,
+  "openai-responses": true,
+  stub: false,
+};
+
 export type ModelBackendDescriptor = {
   id: string;
   kind: string;
@@ -43,6 +51,8 @@ export type ModelBackendDescriptor = {
   source: "registry" | "implicit";
   models: string[];
   reasoningEfforts: string[];
+  /** 用户消息能不能带图片；界面据此决定是否显示附图入口。 */
+  supportsImages: boolean;
   /** 端点指纹（不含凭据）或该后端自己的 CLI；由 Provider 设置解析时为 null。 */
   endpoint: string | null;
   /** 端点来源：config = 本配置文件给出；provider-settings = Provider 自己的设置/登录态。 */
@@ -92,6 +102,7 @@ export function describeModelBackends(config: FactoryConfig): {
       source: backend.source,
       models: backend.models.length > 0 ? backend.models : (BUILT_IN_MODELS_BY_KIND[backend.kind] ?? []),
       reasoningEfforts: REASONING_EFFORTS_BY_KIND[backend.kind] ?? [],
+      supportsImages: SUPPORTS_IMAGES_BY_KIND[backend.kind] ?? false,
       ...describeEndpoint(backend),
     }))
     .sort((left, right) => (left.source === right.source ? left.id.localeCompare(right.id) : left.source === "implicit" ? -1 : 1));

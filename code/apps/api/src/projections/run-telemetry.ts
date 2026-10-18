@@ -23,6 +23,7 @@
  *      而不是 `"estimated"`：**不猜**是这条投影的语义。
  */
 import type { ExecutionTelemetry, ExecutionThread, PipelineStore } from "@pipeline-factory/domain";
+import { attachmentsFor } from "./attachments.js";
 
 export type RunExecutorConfig = { model: string | null; backend: string | null; reasoningEffort: string | null };
 
@@ -74,5 +75,25 @@ export function projectRunThreadTelemetry(
     usageSource: existing?.usageSource ?? "not-recorded",
     usageScope: existing?.usageScope ?? null,
   };
-  return { ...thread, telemetry };
+  // 补充要求的图片挂在 journal 条目上：执行会话的时间线是从 journal 重建的，附件必须跟着同一条
+  // 事实走（`USER_GUIDANCE` 的 payload.guidanceId → run-guidance 附件）。只在这里补一次，
+  // 所有返回 thread 的路由（详情 / 指导 / 暂停 / 恢复）就都带上了。
+  const projectId = run.projectId;
+  const journal = projectId ? withGuidanceAttachments(store, projectId, thread.journal) : thread.journal;
+  return { ...thread, journal, telemetry };
+}
+
+function withGuidanceAttachments(store: PipelineStore, projectId: string, journal: ExecutionThread["journal"]): ExecutionThread["journal"] {
+  const guidanceIds = journal
+    .filter((entry) => entry.type === "USER_GUIDANCE")
+    .map((entry) => entry.payload.guidanceId)
+    .filter((value): value is string => typeof value === "string" && value.length > 0);
+  if (guidanceIds.length === 0) return journal;
+  const attachments = attachmentsFor(store, projectId, "run-guidance", guidanceIds);
+  return journal.map((entry) => {
+    if (entry.type !== "USER_GUIDANCE") return entry;
+    const guidanceId = entry.payload.guidanceId;
+    const list = typeof guidanceId === "string" ? attachments.get(guidanceId) : undefined;
+    return list?.length ? { ...entry, payload: { ...entry.payload, attachments: list } } : entry;
+  });
 }

@@ -369,6 +369,25 @@ GET  /api/v4/projects/:projectId/runtime/services/logs        ?serviceId=
 > 合并与权限；而"路径/端口固定"这件事单仓库内部就能解决。需要"前后端一键一起切"时，
 > 后续可以加一个轻量「执行组」而不动模型。
 
+## 对话里的图片输入
+
+三个对话输入框（探索、Run 的补充要求、项目执行线程）都支持**截图后直接粘贴**：⌘⇧4 截一张、
+在输入框里 ⌘V，缩略图出现在输入框**上方**，点击看原图、右上角 × 删除。与 Codex / Claude desktop
+的交互一致——没有"选择文件"按钮，粘贴就是主路径（拖拽图片到输入框仍然可用）。
+
+- **上限**：单张 ≤ **5MB**、每条消息 ≤ **5 张**，只收 `png / jpeg / webp / gif`；前后端各校验一次，
+  第几张超限会直接说出来（"第 2 张：单张图片不能超过 5MB"）。
+- **存储**：文件在 `<storage.databasePath 所在目录>/attachments/<projectId>/`，元数据在
+  `message_attachments` 表；不新增配置项，也不进任何 Git 仓库。上传走 base64 JSON
+  （该路由单独 `bodyLimit: 8MB`），落盘前按**文件头**复核 mime。
+- **传给模型是原生的**：Codex 用 `localImage`（路径由 app-server 自己读）、Claude 用单条用户消息流里的
+  base64 image block、OpenAI 用 `input_image`。**只有带图时才切换这些形态**，无图路径完全不变。
+- **会话重建**（Provider 线程丢了、换机器）：回放文本里保留图片的落盘路径，而不是把图丢掉——
+  有读文件能力的后端仍能自己打开看。
+- **失败与清理**：上传失败不会清掉本地预览，可以重试或删掉那一张；删除探索线程 / 需求时，
+  附件行与文件一起清理。
+- 图片会占用上下文：5 张 ×5MB 是**文件**上限，不是"模型一定能一次看完"的承诺。
+
 ## Plan V2 与项目验证
 
 新 Explorer 只能产出 `GeneratedPlanSpec`（`schemaVersion: 2`）。模型可以声明目标、范围、任务、验证模式和合并意图，但不能提供项目 ID、仓库路径、Git branch/commit、配置版本/哈希或任何命令 ID。Factory 在候选生成时用已绑定 Project、真实 Git 基线和冻结的 Project 配置解析为 `ResolvedPlanContract`；绝对路径、`..` 路径穿越和概念性 scope 会被拒绝。Project 配置在 Confirm 前变化会使 Candidate 过期，已 Confirm 的 Revision 始终使用冻结快照。

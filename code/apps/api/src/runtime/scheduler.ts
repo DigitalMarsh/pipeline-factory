@@ -28,6 +28,7 @@ import {
   inspectWorkspaceScope,
 } from "@pipeline-factory/domain";
 import type {
+  AttachmentPathResolver,
   ComputerUseBridge,
   McpToolRegistry,
   ModelGateway,
@@ -47,6 +48,7 @@ export function createDefaultScheduler(
   mcpRegistry?: McpToolRegistry,
   pluginRegistry?: PluginRegistry,
   computerUse?: ComputerUseBridge,
+  attachmentPathFor?: AttachmentPathResolver,
 ): Scheduler {
   const definitions = readCommandDefinitions(config);
   // **延迟绑定**：Scheduler 与 ExecutorAgent 互相需要——后者要在 Run 停下时通知前者去消费"排队中的
@@ -62,6 +64,7 @@ export function createDefaultScheduler(
   const projectDefinitions = (snapshot: ProjectExecutionSnapshot) => [...snapshot.settings.commands];
   const scheduler = new Scheduler({
     store,
+    ...(attachmentPathFor ? { attachmentPathFor } : {}),
     branchNameGenerator: new ModelRunBranchNameGenerator(model),
     workspace: new LocalGitWorktreeAdapter({
       projectRoot: config.project.root,
@@ -87,6 +90,7 @@ export function createDefaultScheduler(
       return new LifecycleHookRunner(snapshotCommands.execute.bind(snapshotCommands), { cleanupCwd: snapshot.repoRoot });
     },
     executor: new ExecutorAgent(store, model, undefined, {
+      ...(attachmentPathFor ? { attachmentPathFor } : {}),
       // Run 的执行停下时，去把排队中的补充要求取出来起一轮（它属于 Scheduler：Run/Plan/Thread
       // 怎么回退是那边的规则）。没有排队的就是一次空转。
       onRunStopped: (runId) => {

@@ -293,6 +293,19 @@ export type ExplorerActivityKind =
   | "GATE"
   | "TURN_STATUS";
 
+/**
+ * 用户随消息上传的附件（本轮只有图片）。
+ * `url` 是相对 API 根的路径，浏览器可直接当 `<img src>` 用，无需再拼 query。
+ */
+export type MessageAttachment = {
+  id: string;
+  fileName: string;
+  mimeType: string;
+  byteSize: number;
+  url: string;
+  createdAt: string;
+};
+
 export type ExplorerActivityItem = {
   id: string;
   explorerId: string;
@@ -317,6 +330,8 @@ export type ExplorerTurn = {
   createdAt: string;
   sequence: number;
   explorerPlanId?: string | undefined;
+  /** 仅用户回合：随消息提交的图片。 */
+  attachments?: MessageAttachment[];
 };
 
 export type ProjectExecutionTurnStatus = "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED" | "RECOVERY_REQUIRED";
@@ -345,6 +360,8 @@ export type ProjectExecutionMessage = {
   loopId: string | null;
   model: string | null;
   reasoningEffort: string | null;
+  /** 仅用户消息：随消息提交的图片。 */
+  attachments?: MessageAttachment[];
 };
 
 export type ProjectExecutionEvent = {
@@ -376,6 +393,8 @@ export type ModelBackendDescriptor = {
   source: "registry" | "implicit";
   models: string[];
   reasoningEfforts: string[];
+  /** 这个后端能不能原生接收图片；false 时输入框隐藏附图入口。 */
+  supportsImages?: boolean;
   endpoint: string | null;
   endpointSource: "config" | "provider-settings";
 };
@@ -686,6 +705,8 @@ export type RunGuidance = {
   authorId: string;
   createdAt: string;
   consumedAt: string | null;
+  /** 随这条补充要求提交的图片。 */
+  attachments?: MessageAttachment[];
 };
 
 export type ExecutionThread = {
