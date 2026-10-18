@@ -105,10 +105,10 @@ function onDrop(event: DragEvent): void {
 }
 .attachment-thumb {
   position: relative;
-  width: 140px;
-  height: 140px;
+  width: 70px;
+  height: 70px;
   border: 1px solid var(--el-border-color-light);
-  border-radius: 10px;
+  border-radius: 6px;
   overflow: hidden;
   background: var(--el-fill-color-light);
 }
@@ -120,10 +120,10 @@ function onDrop(event: DragEvent): void {
 }
 .thumb-remove {
   position: absolute;
-  top: 4px;
-  right: 4px;
-  width: 20px;
-  height: 20px;
+  top: 2px;
+  right: 2px;
+  width: 16px;
+  height: 16px;
   padding: 0;
   border: none;
   border-radius: 50%;
@@ -133,7 +133,7 @@ function onDrop(event: DragEvent): void {
   background: rgb(0 0 0 / 55%);
   color: #fff;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 10px;
   opacity: 0;
   transition: opacity 0.15s ease;
 }
