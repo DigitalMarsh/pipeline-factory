@@ -34,8 +34,8 @@ import {
   projectUpdateBody,
   projectValidateBody,
   verificationScriptBody,
-} from "../schemas/projects.js";
-import { projectThreadParams } from "../schemas/common.js";
+} from "@pipeline-factory/contracts";
+import { projectThreadParams } from "@pipeline-factory/contracts";
 import { assertGitBranch, inspectGitRepository } from "../runtime/git.js";
 import { installVerificationScript } from "../runtime/verification-script.js";
 

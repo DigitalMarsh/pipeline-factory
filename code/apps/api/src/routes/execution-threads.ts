@@ -20,8 +20,8 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { PipelineStore, ProjectExecutionThreadService } from "@pipeline-factory/domain";
-import { projectExecutionEventsQuery, projectExecutionPreferencesBody, projectExecutionTurnBody } from "../schemas/execution-threads.js";
-import { projectThreadParams } from "../schemas/common.js";
+import { projectExecutionEventsQuery, projectExecutionPreferencesBody, projectExecutionTurnBody } from "@pipeline-factory/contracts";
+import { projectThreadParams } from "@pipeline-factory/contracts";
 import { openSseChannel } from "../http/sse.js";
 import { attachmentsFor } from "../projections/attachments.js";
 

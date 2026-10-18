@@ -40,9 +40,9 @@ import {
   worktreeServiceActionBody,
   worktreeServiceLogsQuery,
   worktreeServicesQuery,
-} from "../schemas/worktrees.js";
+} from "@pipeline-factory/contracts";
 import type { WorktreeServiceRunner } from "../runtime/worktree-services.js";
-import { projectThreadParams } from "../schemas/common.js";
+import { projectThreadParams } from "@pipeline-factory/contracts";
 import { openSseChannel } from "../http/sse.js";
 
 export type WorktreeRouteDeps = {

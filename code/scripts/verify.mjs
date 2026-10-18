@@ -34,6 +34,8 @@ const counts = [];
 
 try {
   runStage("domain build", "pnpm", ["--filter", "@pipeline-factory/domain", "build"]);
+  // contracts 的 d.ts 引用 domain 的类型，必须在 domain 之后构建；api/web 的 typecheck 再读 contracts。
+  runStage("contracts build", "pnpm", ["--filter", "@pipeline-factory/contracts", "build"]);
   runStage("typecheck", "pnpm", ["--recursive", "--no-bail", "typecheck"]);
   // 代码规范：ESLint 只报**不依赖类型信息**的那一层（见 eslint.config.js 的说明），所以它与上面的
   // typecheck 不重复，而是补上 tsc 看不见的那一类（未使用的声明、Vue 模板属性顺序、被吞掉的错误原因）。

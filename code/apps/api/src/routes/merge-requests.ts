@@ -23,8 +23,8 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { MergeRequest, MergeService, PipelineStore, PlanDispatchCoordinator, Scheduler } from "@pipeline-factory/domain";
-import { sourceCommitBody, targetCommitBody } from "../schemas/merge-requests.js";
-import { projectThreadParams } from "../schemas/common.js";
+import { sourceCommitBody, targetCommitBody } from "@pipeline-factory/contracts";
+import { projectThreadParams } from "@pipeline-factory/contracts";
 
 export type MergeRequestRouteDeps = {
   store: PipelineStore;

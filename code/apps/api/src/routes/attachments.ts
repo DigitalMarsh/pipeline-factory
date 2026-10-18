@@ -14,7 +14,7 @@
  */
 import type { FastifyInstance } from "fastify";
 import type { PipelineStore } from "@pipeline-factory/domain";
-import { attachmentParams, attachmentUploadBody } from "../schemas/attachments.js";
+import { attachmentParams, attachmentUploadBody } from "@pipeline-factory/contracts";
 import { attachmentDto } from "../projections/attachments.js";
 import { ATTACHMENT_MAX_BYTES, ATTACHMENT_MIME_EXTENSIONS, sniffImageMime, type AttachmentStore } from "../runtime/attachment-store.js";
 

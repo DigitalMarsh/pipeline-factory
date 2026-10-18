@@ -67,8 +67,8 @@ import {
   v4ThreadQuery,
   v4ThreadStatusQuery,
   v4TurnBody,
-} from "../schemas/explorers.js";
-import { projectThreadParams } from "../schemas/common.js";
+} from "@pipeline-factory/contracts";
+import { projectThreadParams } from "@pipeline-factory/contracts";
 import { openSseChannel } from "../http/sse.js";
 import { planProjection } from "../projections/plan-lifecycle.js";
 import { projectAgentLoopResponse } from "../projections/agent-loop.js";

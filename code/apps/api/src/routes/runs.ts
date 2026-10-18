@@ -39,10 +39,10 @@ import type {
   VerificationCommandExecutor,
   VerificationService,
 } from "@pipeline-factory/domain";
-import { guidanceBody } from "../schemas/runs.js";
+import { guidanceBody } from "@pipeline-factory/contracts";
 import { attachmentsFor } from "../projections/attachments.js";
-import { loopEventsQuery } from "../schemas/agent-loops.js";
-import { loopReasonBody, projectThreadParams } from "../schemas/common.js";
+import { loopEventsQuery } from "@pipeline-factory/contracts";
+import { loopReasonBody, projectThreadParams } from "@pipeline-factory/contracts";
 import { openSseChannel } from "../http/sse.js";
 import { projectRunThreadTelemetry, resolveRunExecutorConfig } from "../projections/run-telemetry.js";
 

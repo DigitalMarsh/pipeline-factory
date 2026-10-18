@@ -51,9 +51,9 @@ import type {
   PlanStatus,
   Scheduler,
 } from "@pipeline-factory/domain";
-import { actorBody, projectThreadParams } from "../schemas/common.js";
-import { planIdParams, planRevisionParams, revisionDraftBody, revisionDraftParams, threadPlanQuery } from "../schemas/plans.js";
-import { explorerCandidateQuery, projectExplorerParams, projectExplorerPlanParams } from "../schemas/explorers.js";
+import { actorBody, projectThreadParams } from "@pipeline-factory/contracts";
+import { planIdParams, planRevisionParams, revisionDraftBody, revisionDraftParams, threadPlanQuery } from "@pipeline-factory/contracts";
+import { explorerCandidateQuery, projectExplorerParams, projectExplorerPlanParams } from "@pipeline-factory/contracts";
 import { planProjection, decoratePlanRows } from "../projections/plan-lifecycle.js";
 
 export type PlanRouteDeps = {

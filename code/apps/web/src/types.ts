@@ -1,71 +1,66 @@
 /**
  * 模块职责：集中声明 Web 使用的领域响应、事件和交互状态类型。
  *
- * 维护提示：本文件的公共契约或关键状态约束变化时，应同步更新说明。
+ * 维护提示：
+ *   1) **跨端共享的类型一律从 `@pipeline-factory/contracts` 再导出**，不要在这里重新手抄。
+ *      此前每个 DTO 都在 domain 与 web 各写一遍，再靠 `type-parity.test.ts` 锁住——那只能发现
+ *      漂移，不能阻止它。现在只有 Web 自己的页面投影类型（Plan、Project 视图等）留在这里。
+ *   2) 这里保留的 `export type { … }` 在编译后被擦除，Web 不会因此把 contracts 的运行时代码
+ *      （zod schema）打进浏览器；将来如果要在表单里复用 schema，再显式 import。
+ *   3) **同一份清单要同时 import 一次**：`export type { X } from` 只把 X 再导出，不会把它带进
+ *      本模块的作用域；下面那些 Web 自己的投影类型（Plan、Run 等）还要按名字引用它们。
  */
-export type PlanStatus =
-  "DRAFT" | "DISCARDED" | "READY" | "ENQUEUED" | "DISPATCHED" | "IN_PROGRESS" | "VERIFYING" | "MERGE_READY" | "MERGED" | "BLOCKED";
-export type PlanLifecycleStatus = PlanStatus | "NEEDS_CONFIGURATION";
-export type PlanLifecycleEntry = {
-  status: PlanLifecycleStatus;
-  occurredAt: string | null;
-  revision: number;
-  current: boolean;
-  reason?: string | null;
-  runId?: string | null;
-  executionThreadId?: string | null;
-};
-/**
- * 执行线程摘要。`model` / `backend` 来自线程的 telemetry —— **记录下来的事实**，
- * 需求清单用它显示"这一轮是哪个 agent 跑的"（配置可能事后被改，不能回填历史）。
- */
-export type ExecutionThreadSummary = {
-  id: string;
-  runId: string;
-  state: string;
-  model?: string | null;
-  backend?: string | null;
-} | null;
-export type PlanDispatchStatus = "QUEUED" | "WAITING" | "DISPATCHING" | "RUNNING" | "VERIFYING" | "NEEDS_REVIEW" | "BLOCKED" | "COMPLETED";
-export type PlanDispatchWaitReason =
-  "WAITING_DEPENDENCY" | "WAITING_CONFLICT" | "WAITING_PROJECT_CAPACITY" | "WAITING_GLOBAL_CAPACITY" | "NEEDS_CONFIGURATION";
-export type PlanDispatchState = Readonly<{
-  planId: string;
-  revision?: number;
-  projectId: string;
-  status: PlanDispatchStatus;
-  waitReason: PlanDispatchWaitReason | null;
-  queuedAt: string;
-  runId: string | null;
-  attempt: number;
-  updatedAt: string;
-  lastError: string | null;
-  phase?:
-    | "VALIDATING"
-    | "VALIDATION_FAILED"
-    | "FROZEN"
-    | "ENQUEUING"
-    | "ENQUEUE_FAILED"
-    | "ENQUEUED"
-    | "DISPATCHING"
-    | "DISPATCH_FAILED"
-    | "DISPATCHED"
-    | "STARTING_RUN"
-    | "RUN_STARTED"
-    | "WAITING"
-    | "RUN_START_FAILED"
-    | "NEEDS_REVIEW"
-    | "ATTENTION"
-    | "COMPLETED";
-  automatic?: boolean;
-  confirmedBy?: string | null;
-}>;
-
-export type AgentLoopDiagnostics = {
-  providerActivityCount: number;
-  lastGate: { action: string; reason: string } | null;
-  terminal: { code: string; message: string } | null;
-};
+import type {
+  AgentLoopDiagnostics,
+  AgentLoopState,
+  ExecutionJournalPayload,
+  ExecutionTelemetry,
+  ExecutionThreadSummary,
+  ExplorerThreadContextSummary,
+  MergeRequest,
+  PlanDispatchState,
+  PlanLifecycleEntry,
+  PlanStatus,
+  ProjectExecutionMessage,
+  ProjectExecutionThread,
+  VerificationRun,
+  WorktreeServices,
+} from "@pipeline-factory/contracts";
+export type {
+  AgentLoopDiagnostics,
+  AgentLoopState,
+  ExecutionJournalPayload,
+  ExecutionTelemetry,
+  ExecutionThreadSummary,
+  ExplorerActivityItem,
+  ExplorerActivityKind,
+  ExplorerInputRequest,
+  ExplorerThreadContextSummary,
+  ExplorerTurn,
+  MergeRequest,
+  MessageAttachment,
+  ModelInputQuestion,
+  ModelMessagePhase,
+  ModelUsage,
+  PlanDispatchState,
+  PlanDispatchStatus,
+  PlanDispatchWaitReason,
+  PlanLifecycleEntry,
+  PlanLifecycleStatus,
+  PlanStatus,
+  ProjectExecutionMessage,
+  ProjectExecutionThread,
+  ProjectExecutionTurnStatus,
+  RunGuidance,
+  VerificationRun,
+  WorktreeCleanupResult,
+  WorktreeInventory,
+  WorktreeItem,
+  WorktreeLogCommit,
+  WorktreeMergePreview,
+  WorktreeMergeResult,
+  WorktreeServices,
+} from "@pipeline-factory/contracts";
 
 export type ProjectSettings = {
   concurrency: {
@@ -206,20 +201,6 @@ export type ExplorerThread = {
   };
 };
 
-export type ExplorerThreadContextSummary = {
-  version: 1;
-  updatedAt: string;
-  completedPlans: Array<{
-    explorerPlanId: string;
-    title: string;
-    status: "INCOMPLETE" | "READY";
-    goal: string | null;
-    keyConstraints: string[];
-    latestUserMessageSummary: string | null;
-  }>;
-  openPlanIds: string[];
-};
-
 export type ExplorerPlan = {
   id: string;
   explorerThreadId: string;
@@ -254,8 +235,6 @@ export type ExplorerPlan = {
  * 与领域侧 `ModelMessagePhase` 同集合：这一段正文是"过程叙述"还是"最终回答"。
  * **只有 Codex 给**（`agentMessage.phase`）；拿不到时按"未知"处理，不猜。
  */
-export type ModelMessagePhase = "commentary" | "final_answer";
-
 /**
  * 与领域侧 `ExplorerActivityKind` 同集合；两边的名字也是执行线程那套词表（见 utils/conversationTypes.ts）。
  *
@@ -263,107 +242,10 @@ export type ModelMessagePhase = "commentary" | "final_answer";
  * ① 你说的 → ② 模型说的 → ③ 模型做的 → ④ Provider 说的 → ⑤ Factory 说的。
  * ④ 那一组不进会话正文，归宿是头部状态卡的「Provider 运行事实」。
  */
-export type ExplorerActivityKind =
-  // ①
-  | "USER_MESSAGE"
-  // ②
-  | "ASSISTANT_MESSAGE"
-  | "REASONING"
-  // ③
-  | "COMMAND"
-  | "FILE_CHANGE"
-  | "TOOL_CALL"
-  | "MCP_CALL"
-  | "SUBAGENT"
-  | "WEB_SEARCH"
-  | "IMAGE_GENERATION"
-  // ④
-  | "PROVIDER_COMPACTION"
-  | "PERMISSION_DENIED"
-  | "RATE_LIMIT"
-  | "PROVIDER_RETRY"
-  | "BACKGROUND_TASK"
-  | "HOOK"
-  | "PROVIDER_WARNING"
-  | "UNCLASSIFIED"
-  | "PROVIDER_MESSAGE"
-  | "SESSION"
-  // ⑤
-  | "CONTEXT"
-  | "GATE"
-  | "TURN_STATUS";
-
 /**
  * 用户随消息上传的附件（本轮只有图片）。
  * `url` 是相对 API 根的路径，浏览器可直接当 `<img src>` 用，无需再拼 query。
  */
-export type MessageAttachment = {
-  id: string;
-  fileName: string;
-  mimeType: string;
-  byteSize: number;
-  url: string;
-  createdAt: string;
-};
-
-export type ExplorerActivityItem = {
-  id: string;
-  explorerId: string;
-  turnId: string;
-  sequence: number;
-  kind: ExplorerActivityKind;
-  status: "RUNNING" | "COMPLETED" | "FAILED" | "WAITING" | "UNKNOWN";
-  title: string;
-  summary: string;
-  details: Record<string, unknown> | null;
-  occurredAt: string;
-  explorerPlanId?: string | undefined;
-};
-
-export type ExplorerTurn = {
-  id: string;
-  threadId: string;
-  role: "user" | "assistant";
-  content: string;
-  status?: "QUEUED" | "RUNNING" | "WAITING_FOR_INPUT" | "PAUSED" | "COMPLETED" | "FAILED" | "CANCELLED";
-  error?: string;
-  createdAt: string;
-  sequence: number;
-  explorerPlanId?: string | undefined;
-  /** 仅用户回合：随消息提交的图片。 */
-  attachments?: MessageAttachment[];
-};
-
-export type ProjectExecutionTurnStatus = "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED" | "RECOVERY_REQUIRED";
-
-export type ProjectExecutionThread = {
-  id: string;
-  projectId: string;
-  providerThreadId: string | null;
-  modelOverride: string | null;
-  reasoningEffortOverride: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
-
-export type ProjectExecutionMessage = {
-  id: string;
-  threadId: string;
-  turnId: string;
-  clientTurnId: string | null;
-  role: "user" | "assistant";
-  content: string;
-  status: ProjectExecutionTurnStatus;
-  error: string | null;
-  createdAt: string;
-  sequence: number;
-  loopId: string | null;
-  model: string | null;
-  reasoningEffort: string | null;
-  /** 仅用户消息：随消息提交的图片。 */
-  attachments?: MessageAttachment[];
-};
-
 export type ProjectExecutionEvent = {
   id: string;
   sequence: number;
@@ -405,46 +287,7 @@ export type ModelBackendsResponse = {
   defaultBackend: string;
 };
 
-export type ModelInputQuestion = {
-  id: string;
-  header: string;
-  question: string;
-  isOther: boolean;
-  isSecret: boolean;
-  options: Array<{ label: string; description: string }> | null;
-};
-
 /** 结构化提问的安全投影；答案正文不从 API 响应回填，避免泄露敏感值。 */
-export type ExplorerInputRequest = {
-  id: string;
-  threadId: string;
-  localTurnId: string;
-  providerRequestId: string | number;
-  providerThreadId: string;
-  providerTurnId: string;
-  itemId: string;
-  questions: ModelInputQuestion[];
-  isBlocking: boolean;
-  status: "OPEN" | "SUBMITTING" | "ANSWERED" | "CANCELLED" | "RECOVERY_REQUIRED";
-  createdAt: string;
-  answeredAt: string | null;
-  answeredBy: string | null;
-  redactedAnswerSummary: Record<string, unknown> | null;
-  explorerPlanId?: string | undefined;
-};
-
-export type AgentLoopState =
-  | "CREATED"
-  | "RUNNING"
-  | "WAITING_FOR_INPUT"
-  | "PAUSED"
-  | "RECOVERING"
-  | "BLOCKED"
-  | "COMPLETED"
-  | "FAILED"
-  | "CANCELLED"
-  | "NEEDS_RECONCILIATION";
-
 export type AgentLoop = {
   id: string;
   ownerType: "explorer-turn" | "run";
@@ -636,79 +479,12 @@ export type Run = {
   agentLoops?: AgentLoop[];
 };
 
-export type VerificationRun = {
-  id: string;
-  runId: string;
-  status: "PASSED" | "SKIPPED" | "FAILED" | "BLOCKED";
-  repairAttempts: number;
-  commandResults: Array<{ commandId: string; result: { exitCode: number | null; stdout: string; stderr: string } }>;
-  reason?: "NO_PROJECT_VERIFICATION_COMMANDS";
-  completedAt: string;
-};
-
-export type MergeRequest = {
-  id: string;
-  runId: string;
-  planId: string;
-  sourceCommit: string;
-  targetBranch: string;
-  /** `SUPERSEDED` = 这个 Run 后来又被补充要求推回去重做了一轮，此请求指向的 commit 已经不是最新的。 */
-  status: "OPEN" | "MERGED" | "SUPERSEDED";
-  humanConfirmationRequired: true;
-  createdAt: string;
-  mergedAt: string | null;
-  detectedTargetCommit?: string | null;
-};
-
-export type ModelUsage = {
-  inputTokens: number | null;
-  outputTokens: number | null;
-  reasoningTokens: number | null;
-  totalTokens: number | null;
-};
-
-export type ExecutionTelemetry = {
-  model: string | null;
-  reasoningEffort: string | null;
-  /** 执行这次 Run 的 agent（后端 id）；旧数据没有这个字段，读路径要容忍 undefined。 */
-  backend?: string | null;
-  startedAt: string | null;
-  completedAt: string | null;
-  durationMs: number | null;
-  usage: ModelUsage | null;
-  usageSource: "provider" | "not-recorded";
-  usageScope: "turn" | "total" | null;
-};
-
 /** Run 的可审计 journal 容器，也是执行对话的事实来源。 */
-export type ExecutionJournalPayload = Record<string, unknown> & {
-  taskId?: string;
-  modelStep?: number;
-  loopId?: string;
-  providerThreadId?: string;
-  providerTurnId?: string;
-  providerItemId?: string;
-  callId?: string;
-};
-
 /**
  * 一条补充要求及其投递状态。
  * `mode` 是投递方式：`STEER` 在正在跑的那一轮的下一个步骤边界生效，`QUEUE` 等它结束后起新的一轮。
  * **`status === "PENDING"` 时必须显示成「待处理」**——它还没到模型手里，显示成已生效就是在骗人。
  */
-export type RunGuidance = {
-  id: string;
-  runId: string;
-  content: string;
-  mode: "STEER" | "QUEUE";
-  status: "PENDING" | "CONSUMED" | "CANCELLED";
-  authorId: string;
-  createdAt: string;
-  consumedAt: string | null;
-  /** 随这条补充要求提交的图片。 */
-  attachments?: MessageAttachment[];
-};
-
 export type ExecutionThread = {
   id: string;
   runId: string;
@@ -777,38 +553,6 @@ export type WorktreeFactoryLink = {
   mergeRequestStatus: "OPEN" | "MERGED" | "SUPERSEDED" | null;
 };
 
-export type WorktreeItem = {
-  itemId: string;
-  kind: WorktreeItemKind;
-  branch: string | null;
-  displayName: string;
-  isBaseBranch: boolean;
-  hasWorktree: boolean;
-  isDetached: boolean;
-  worktreePath: string | null;
-  effectivePath: string;
-  missing: boolean;
-  status: WorktreeItemStatus;
-  mergeRelation: WorktreeMergeRelation;
-  gitDirtyState: WorktreeGitDirtyState;
-  conflictFiles: string[];
-  aheadCount: number;
-  behindCount: number;
-  merged: boolean;
-  lastCommit: string | null;
-  lastCommitAt: number | null;
-  mergeable: boolean;
-  blockers: string[];
-  cleanupable: boolean;
-  cleanupBlockers: string[];
-  isLiveRunWorkspace: boolean;
-  everMerged: boolean;
-  isIgnored: boolean;
-  matchesScope: boolean;
-  containedInBranch: boolean;
-  factory: WorktreeFactoryLink | null;
-};
-
 export type WorktreeInProgressOperation = "merge" | "rebase" | "cherry-pick" | "revert" | "bisect";
 
 export type WorktreeMergeInProgress = {
@@ -816,21 +560,6 @@ export type WorktreeMergeInProgress = {
   mergeHead: string | null;
   currentBranch: string | null;
   conflictFiles: string[];
-};
-
-export type WorktreeInventory = {
-  projectId: string;
-  repoRoot: string;
-  baseBranch: string;
-  baseHead: string | null;
-  currentBranch: string | null;
-  mergeInProgress: WorktreeMergeInProgress | null;
-  activeRunIds: string[];
-  filter: ProjectWorktreeFilter;
-  filteredOutCount: number;
-  items: WorktreeItem[];
-  truncated: boolean;
-  warnings: string[];
 };
 
 /** 项目级兜底服务配置的一条（与 domain 的 ProjectWorktreeService 逐字对齐）。 */
@@ -850,15 +579,6 @@ export type ProjectWorktreeFilter = {
   branchPatterns: string[];
   ignoredBranches: string[];
   includeDetachedWorktrees: boolean;
-};
-
-export type WorktreeLogCommit = {
-  hash: string;
-  shortHash: string;
-  subject: string;
-  author: string;
-  authoredAt: string;
-  relativeTime: string;
 };
 
 export type WorktreePreviewCommit = { hash: string; subject: string; author: string; relativeTime: string };
@@ -881,60 +601,11 @@ export type WorktreeConflictPrediction = {
 };
 export type WorktreeMergeConclusion = "ready" | "conflict_risk" | "blocked";
 
-export type WorktreeMergePreview = {
-  projectId: string;
-  repoRoot: string;
-  itemId: string;
-  branch: string | null;
-  baseBranch: string;
-  baseHead: string | null;
-  taskHead: string | null;
-  mergeBase: string | null;
-  aheadCount: number;
-  behindCount: number;
-  dirtyState: WorktreeGitDirtyState;
-  merged: boolean;
-  conclusion: WorktreeMergeConclusion;
-  conclusionLabel: string;
-  canConfirm: boolean;
-  blockers: string[];
-  warnings: string[];
-  recentCommits: WorktreePreviewCommit[];
-  fileSummary: WorktreeFileSummary;
-  fileChanges: WorktreeFileChange[];
-  conflictPrediction: WorktreeConflictPrediction;
-  commands: string[];
-  expectedBranchHead: string | null;
-  expectedBaseHead: string | null;
-  factory: WorktreeFactoryLink | null;
-};
-
 export type WorktreeFactorySync = {
   mergeRequest: "confirmed" | "not_found" | "failed";
   runId: string | null;
   workspace: { released: boolean; worktreeRemoved: boolean } | null;
   message: string | null;
-};
-
-export type WorktreeMergeResult = {
-  status: "merged" | "merge_conflict" | "aborted" | "error";
-  message: string;
-  branch: string | null;
-  baseBranch: string;
-  conflictFiles: string[];
-  baseHeadBefore: string | null;
-  baseHeadAfter: string | null;
-  commands: string[];
-  factory: WorktreeFactorySync | null;
-};
-
-export type WorktreeCleanupResult = {
-  message: string;
-  worktreeRemoved: boolean;
-  branchDeleted: boolean;
-  runWorkspaceCleared: boolean;
-  /** 回收走的是 Run 的 `releaseWorkspace` 时，cleanup 钩子是否需要关注。 */
-  cleanupHookNeedsAttention: boolean;
 };
 
 // ─────────────── Worktree 内的服务启停（进程管理在 API 侧，这里是契约） ───────────────
@@ -962,16 +633,6 @@ export type WorktreeServiceState = {
 };
 
 export type WorktreeServiceLogEntry = { sequence: number; stream: "stdout" | "stderr"; text: string };
-
-export type WorktreeServices = {
-  itemId: string;
-  worktreePath: string;
-  configSource: "runtime" | "worktree-file" | "project-fallback" | null;
-  configPath: string | null;
-  configError: string | null;
-  services: WorktreeServiceConfig[];
-  states: WorktreeServiceState[];
-};
 
 // ─────────────────────── 执行目录（合并前验证） ───────────────────────
 export type WorktreeRuntimeInfo = {

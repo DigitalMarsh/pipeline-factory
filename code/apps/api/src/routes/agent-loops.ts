@@ -16,9 +16,9 @@
  */
 import type { FastifyInstance } from "fastify";
 import type { AgentLoopRunner, PipelineStore } from "@pipeline-factory/domain";
-import { agentLoopParams, loopEventsQuery } from "../schemas/agent-loops.js";
-import { loopReasonBody, projectThreadParams } from "../schemas/common.js";
-import { v4ThreadQuery } from "../schemas/explorers.js";
+import { agentLoopParams, loopEventsQuery } from "@pipeline-factory/contracts";
+import { loopReasonBody, projectThreadParams } from "@pipeline-factory/contracts";
+import { v4ThreadQuery } from "@pipeline-factory/contracts";
 import { openSseChannel } from "../http/sse.js";
 import { loopDiagnostics, projectAgentLoopResponse } from "../projections/agent-loop.js";
 import { findProjectThread } from "../projections/explorer.js";

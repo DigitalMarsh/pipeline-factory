@@ -21,6 +21,7 @@ const baselinePath = join(here, "cycle-baseline.json");
 /** 被扫描的源码根。web 的 @ 别名指向它自己的 src。 */
 const SCAN_ROOTS = [
   { root: join(repoRoot, "packages/domain/src"), alias: null },
+  { root: join(repoRoot, "packages/contracts/src"), alias: null },
   { root: join(repoRoot, "apps/api/src"), alias: null },
   { root: join(repoRoot, "apps/web/src"), alias: "@" },
 ];
