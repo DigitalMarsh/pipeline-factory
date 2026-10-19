@@ -412,7 +412,7 @@ export function createApp(options: PipelineAppOptions = {}): FastifyInstance {
       return reply.code(403).send({ code: "ORIGIN_FORBIDDEN", error: "This origin is not allowed to call the local API" });
     if (loopbackOnly && !isAllowedLoopbackHostHeader(typeof request.headers.host === "string" ? request.headers.host : undefined))
       return reply.code(403).send({ code: "HOST_FORBIDDEN", error: "The Host header is not a loopback hostname" });
-    if (!loopbackOnly && path !== "/health") {
+    if (!loopbackOnly && request.method !== "OPTIONS" && path !== "/health") {
       const authorization = typeof request.headers.authorization === "string" ? request.headers.authorization : "";
       const headerToken = authorization.startsWith("Bearer ") ? authorization.slice(7) : undefined;
       const provided =

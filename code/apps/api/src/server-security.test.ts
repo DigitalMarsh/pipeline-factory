@@ -124,6 +124,13 @@ describe("request guards", () => {
 
     expect((await app.inject({ method: "GET", url: "/health" })).statusCode).toBe(200);
     expect((await app.inject({ method: "GET", url: "/api/v4/model-backends" })).statusCode).toBe(401);
+    // 浏览器预检不带 Authorization；它必须在鉴权之前被放行，否则"配了 token 的远程 UI"根本发不出请求。
+    const preflight = await app.inject({
+      method: "OPTIONS",
+      url: "/api/v4/model-backends",
+      headers: { origin: "http://127.0.0.1:4399", "access-control-request-method": "GET" },
+    });
+    expect(preflight.statusCode).toBe(204);
     const authorized = await app.inject({
       method: "GET",
       url: "/api/v4/model-backends",

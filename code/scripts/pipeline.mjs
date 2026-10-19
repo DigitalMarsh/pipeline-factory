@@ -26,6 +26,7 @@ import {
   mkdtempSync,
   openSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -143,8 +144,7 @@ async function start(args) {
     console.error(`启动后 ${HEALTH_TIMEOUT_MS / 1000}s 内健康检查未通过。最近日志：`);
     printTail(30);
     console.error(`进程仍以 PID ${child.pid} 运行；需要时执行 pipeline stop。`);
-    process.exitCode = 1;
-    return;
+    throw new Error("STARTUP_HEALTHCHECK_FAILED");
   }
   console.log(`Pipeline Factory 已启动（PID ${child.pid}）：${healthUrl(configData)}`);
 }
@@ -243,30 +243,57 @@ async function update(args) {
     const nextVersion = readVersion(newRoot);
     console.log(`准备更新：${version()} → ${nextVersion}`);
     stop([]);
-    const backup = join(temp, "backup");
-    mkdirSync(backup, { recursive: true });
-    for (const entry of ["app", "web", "bin"]) {
-      if (existsSync(join(ROOT, entry))) cpSync(join(ROOT, entry), join(backup, entry), { recursive: true });
-    }
+    // 上一次升级可能停在"旧目录已移走、新目录还没就位"的瞬间；先把旧目录恢复出来。
+    recoverInterruptedUpdate();
+    const staging = join(ROOT, ".update-staging");
+    const previous = join(ROOT, ".update-old");
+    rmSync(staging, { recursive: true, force: true });
+    mkdirSync(staging, { recursive: true });
+    mkdirSync(previous, { recursive: true });
     try {
+      // 先把新版本完整复制到 .update-staging（此阶段线上目录完全不动），再逐个 rename 交换。
       for (const entry of ["app", "web", "bin"]) {
-        rmSync(join(ROOT, entry), { recursive: true, force: true });
-        cpSync(join(newRoot, entry), join(ROOT, entry), { recursive: true });
+        if (!existsSync(join(newRoot, entry))) continue;
+        cpSync(join(newRoot, entry), join(staging, entry), { recursive: true });
+      }
+      for (const entry of ["app", "web", "bin"]) {
+        if (existsSync(join(ROOT, entry))) renameSync(join(ROOT, entry), join(previous, entry));
+        if (existsSync(join(staging, entry))) renameSync(join(staging, entry), join(ROOT, entry));
       }
       for (const entry of ["INSTALL.md", "RELEASE.md", "install.sh"]) {
         if (existsSync(join(newRoot, entry))) copyFileSync(join(newRoot, entry), join(ROOT, entry));
       }
       chmodSync(join(ROOT, "bin", "pipeline"), 0o755);
+      if (!noStart) await start([]);
+      // 新版本起来了才删除旧版本；在此之前 `.update-old` 是回滚凭据。
+      rmSync(previous, { recursive: true, force: true });
     } catch (error) {
       console.error(`更新失败，正在回滚：${error instanceof Error ? error.message : String(error)}`);
+      // 先停掉可能已经起来/半起来的新进程，再把旧目录换回去。
+      try {
+        stop([]);
+      } catch {
+        /* 旧版本可能本就没在跑 */
+      }
       for (const entry of ["app", "web", "bin"]) {
-        rmSync(join(ROOT, entry), { recursive: true, force: true });
-        if (existsSync(join(backup, entry))) cpSync(join(backup, entry), join(ROOT, entry), { recursive: true });
+        if (existsSync(join(previous, entry))) {
+          rmSync(join(ROOT, entry), { recursive: true, force: true });
+          renameSync(join(previous, entry), join(ROOT, entry));
+        }
+      }
+      rmSync(staging, { recursive: true, force: true });
+      if (!noStart) {
+        try {
+          await start([]);
+        } catch {
+          console.error("旧版本已恢复，但自动重启失败；请检查配置后执行 pipeline start。");
+        }
       }
       throw error;
+    } finally {
+      rmSync(staging, { recursive: true, force: true });
     }
     console.log(`已更新到 ${nextVersion}。config/ 与 var/ 保持不动。`);
-    if (!noStart) await start([]);
   } finally {
     rmSync(temp, { recursive: true, force: true });
   }
@@ -389,6 +416,26 @@ function version() {
   return "0.0.0";
 }
 
+/**
+ * 上一次升级如果停在 rename 交换中途，`.update-old` 里会有旧版本的一部分。
+ * 下一次升级开始前把它换回来，避免在"半个 app"上再叠一次更新。
+ */
+function recoverInterruptedUpdate() {
+  const previous = join(ROOT, ".update-old");
+  const staging = join(ROOT, ".update-staging");
+  if (existsSync(previous)) {
+    for (const entry of ["app", "web", "bin"]) {
+      const old = join(previous, entry);
+      if (!existsSync(old)) continue;
+      rmSync(join(ROOT, entry), { recursive: true, force: true });
+      renameSync(old, join(ROOT, entry));
+    }
+    rmSync(previous, { recursive: true, force: true });
+    console.warn("检测到上次升级中断，已恢复旧版本目录。");
+  }
+  rmSync(staging, { recursive: true, force: true });
+}
+
 async function resolveUpdateSource(source, temp) {
   if (existsSync(source)) {
     const stat = statSync(source);
@@ -437,6 +484,9 @@ async function extractRelease(source, temp) {
   execFileSync("tar", ["-xzf", source, "-C", extracted]);
   const entries = execFileSync("ls", ["-1", extracted], { encoding: "utf8" }).trim().split("\n").filter(Boolean);
   const root = entries.length === 1 && existsSync(join(extracted, entries[0], "app")) ? join(extracted, entries[0]) : extracted;
+  for (const entry of ["app", "web", "bin"]) {
+    if (!existsSync(join(root, entry))) throw new Error(`更新包结构不正确：缺少 ${entry}/`);
+  }
   if (!existsSync(join(root, "app", "dist", "main.js"))) throw new Error("更新包结构不正确：缺少 app/dist/main.js");
   return root;
 }

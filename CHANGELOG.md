@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-10-19 — v0.2.1 复盘补丁
+
+1. **升级原子化**：`pipeline update` 先把新版本复制到 `<root>/.update-staging`，再逐个
+   `rename` 交换 `app/web/bin`；旧版本保留在 `.update-old` 直到新版本健康检查通过。
+   中途失败/被杀可恢复旧版本，下次升级前会先修复被中断的交换。
+2. **预检请求免鉴权**：非回环监听下 `OPTIONS` 不再要求 Bearer token（浏览器预检不带
+   Authorization，此前会让"配了 token 的远程 UI"连预检都过不去）；`/health` 仍然豁免。
+3. **更新包结构校验**：`app/`、`web/`、`bin/` 与 `app/dist/main.js` 缺一即拒绝升级。
+4. 启动健康检查失败改为抛出错误，便于 `update` 捕获并回滚/重启旧版本。
+
+验证：`pnpm verify` 全绿；从 v0.1.0 安装后 `pipeline update` 升级到 v0.2.0 的链路此前已实测，
+本补丁继续用真实 Release 验证。
+
 ## 2026-10-19 — v0.2.0 正式发布（main）
 
 `main-artechure-switch-claude-worktree` 已合并到 `main`（294 个提交），版本号从 0.1.0 升到 **0.2.0**，
