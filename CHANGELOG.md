@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-10-19 — v0.2.0 正式发布（main）
+
+`main-artechure-switch-claude-worktree` 已合并到 `main`（294 个提交），版本号从 0.1.0 升到 **0.2.0**，
+作为第一个正式发布：
+
+- 发布物：`pipeline-factory-0.2.0.tar.gz`（7.3MB，不含 Claude Agent SDK）；
+- 安装：`./install.sh` → `pipeline start`；管理：`start/stop/restart/status/logs/update`；
+- 本版包含图片输入、Worktree 管理/执行目录、安全边界、contracts/core 分层与发布 CLI；
+- 验证：`pnpm verify` 全绿；`pipeline update` 能通过 GitHub Releases 自动找到并下载本版本。
+
 ## 2026-10-18 — 安装脚本与 `pipeline` 命令；复盘补丁
 
 ### 安装 / 运维
