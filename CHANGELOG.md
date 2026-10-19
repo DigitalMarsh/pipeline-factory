@@ -10,6 +10,12 @@
   PID 与日志固定在 `<root>/var/`；停止前核对该 PID 的命令行，避免误杀回收后的 PID。
 - `pipeline update` 支持 GitHub Releases 默认地址、`--file <tar.gz>`、`--from <url>`；
   升级前停止、备份并替换 `app/web/bin`，保留 `config/var`，失败自动回滚。
+  默认通过 GitHub API 匹配 `pipeline-factory-*.tar.gz` 资产（`PIPELINE_UPDATE_URL` / `PIPELINE_UPDATE_REPO` /
+  `GITHUB_TOKEN` 可覆盖）。
+- `pipeline start` 会识别**陈旧 PID 文件**（PID 被回收后指向无关进程）并重新启动；
+  `project.root` 仍指向用户主目录时打印警告；`logs -f` 在日志被删除/轮转时干净退出。
+- 修正 `install.sh --from <tar.gz|URL>` 的发布物查找深度（原先 `-maxdepth 2` 找不到
+  `<顶层目录>/app/dist/main.js`）。
 - `docs/INSTALL.md` 与根 README 改为"解压 → ./install.sh → pipeline start"的流程。
 
 ### 复盘补丁

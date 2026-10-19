@@ -59,12 +59,12 @@ if [ -n "$FROM" ]; then
       echo "下载 $FROM ..."
       curl -fsSL "$FROM" -o "$TEMP_DIR/release.tar.gz"
       tar -xzf "$TEMP_DIR/release.tar.gz" -C "$TEMP_DIR"
-      SOURCE_DIR=$(find "$TEMP_DIR" -maxdepth 2 -type f -path '*/app/dist/main.js' -print | head -n 1 | sed 's#/app/dist/main.js##')
+      SOURCE_DIR=$(find "$TEMP_DIR" -maxdepth 4 -type f -path '*/app/dist/main.js' -print | head -n 1 | sed 's#/app/dist/main.js##')
       ;;
     *.tar.gz|*.tgz)
       TEMP_DIR=$(mktemp -d)
       tar -xzf "$FROM" -C "$TEMP_DIR"
-      SOURCE_DIR=$(find "$TEMP_DIR" -maxdepth 2 -type f -path '*/app/dist/main.js' -print | head -n 1 | sed 's#/app/dist/main.js##')
+      SOURCE_DIR=$(find "$TEMP_DIR" -maxdepth 4 -type f -path '*/app/dist/main.js' -print | head -n 1 | sed 's#/app/dist/main.js##')
       ;;
     *)
       SOURCE_DIR="$FROM"

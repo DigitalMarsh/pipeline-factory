@@ -13,7 +13,8 @@
  *     web/                 # apps/web/dist
  *     config/pipeline-factory.config.json   # 由 example 生成，serveWeb/webDistPath 已改好
  *     var/                 # 数据库、worktree、附件（运行时生成）
- *     bin/pipeline-factory # 启动器（--config 缺省指向 config/…）
+ *     bin/pipeline         # 命令行（start / stop / status / logs / update）
+ *     install.sh           # 安装脚本
  *     RELEASE.md           # 部署前必须改的几项
  *
  * 维护提示：

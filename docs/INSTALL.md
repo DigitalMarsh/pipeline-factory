@@ -118,10 +118,13 @@ cd -
 ## 5. 升级
 
 ```bash
-pipeline update                          # 从 GitHub Releases 下载最新 pipeline-factory.tar.gz
+pipeline update                          # 读取 GitHub Releases 最新发布的 pipeline-factory-<version>.tar.gz
 pipeline update --file ./pipeline-factory-0.2.0.tar.gz
 pipeline update --from https://example.com/pipeline-factory-0.2.0.tar.gz
 ```
+
+默认通过 GitHub API 找最新 release 资产（按 `pipeline-factory-*.tar.gz` 匹配）；私有仓库可设置
+`GITHUB_TOKEN`，固定下载地址可设置 `PIPELINE_UPDATE_URL`，换仓库可设置 `PIPELINE_UPDATE_REPO`。
 
 升级流程：停止 → 备份并替换 `app/` `web/` `bin/` → 保留 `config/` 与 `var/` → 重新启动。
 任何一步失败会回滚 `app/` `web/` `bin/`。

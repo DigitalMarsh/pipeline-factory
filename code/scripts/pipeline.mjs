@@ -30,7 +30,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -42,8 +42,7 @@ const APP_ENTRY = existsSync(join(ROOT, "app", "dist", "main.js"))
 const DEFAULT_CONFIG = join(ROOT, "config", "pipeline-factory.config.json");
 const PID_FILE = join(ROOT, "var", "pipeline.pid");
 const LOG_FILE = join(ROOT, "var", "pipeline.log");
-const DEFAULT_UPDATE_URL =
-  process.env.PIPELINE_UPDATE_URL ?? "https://github.com/DigitalMarsh/pipeline-factory/releases/latest/download/pipeline-factory.tar.gz";
+const DEFAULT_UPDATE_REPO = process.env.PIPELINE_UPDATE_REPO ?? "DigitalMarsh/pipeline-factory";
 const HEALTH_TIMEOUT_MS = 30_000;
 const STOP_TIMEOUT_MS = 10_000;
 
@@ -107,10 +106,19 @@ async function start(args) {
       cause: error,
     });
   }
-  const running = runningPid();
-  if (running) {
-    console.log(`Pipeline Factory 已在运行（PID ${running}）。`);
-    return;
+  // 发布配置的 project.root 默认是 "../../"（相对 config/）——不编辑就启动会把用户主目录当成受管仓库。
+  const projectRoot = resolve(dirname(config), configData.project?.root ?? "");
+  if (projectRoot === homedir()) {
+    console.warn(`警告：project.root 仍指向用户主目录（${projectRoot}）。请编辑 ${config} 指向真实代码仓库。`);
+  }
+  const running = readPid();
+  if (running && isAlive(running)) {
+    // pid 文件可能是陈旧的：PID 被系统回收后指向了无关进程。只有命令行走查属于本安装目录才认。
+    if (ownsProcess(running)) {
+      console.log(`Pipeline Factory 已在运行（PID ${running}）。`);
+      return;
+    }
+    rmSync(PID_FILE, { force: true });
   }
   ensureVar();
   const out = openSync(LOG_FILE, "a");
@@ -122,8 +130,15 @@ async function start(args) {
   });
   closeSync(out);
   child.unref();
+  // spawn 失败（例如权限/解释器问题）会以 error 事件异步到达；没有监听器会变成未捕获异常。
+  let spawnError = null;
+  child.on("error", (error) => {
+    spawnError = error;
+    rmSync(PID_FILE, { force: true });
+  });
   writeFileSync(PID_FILE, String(child.pid));
   const healthy = await waitForHealth(configData);
+  if (spawnError) throw spawnError;
   if (!healthy) {
     console.error(`启动后 ${HEALTH_TIMEOUT_MS / 1000}s 内健康检查未通过。最近日志：`);
     printTail(30);
@@ -162,15 +177,22 @@ function stop(_args) {
 
 async function status(args) {
   const pid = runningPid();
-  const config = existsSync(configPath(args)) ? safeConfig(configPath(args)) : null;
+  const owned = pid !== null && ownsProcess(pid);
+  const path = configPath(args);
+  const exists = existsSync(path);
+  const config = exists ? safeConfig(path) : null;
   console.log(`目录：${ROOT}`);
   console.log(`版本：${version()}`);
-  console.log(`PID ：${pid ?? "未运行"}`);
-  if (!config) {
-    console.log(`配置：${configPath(args)}（不存在）`);
+  console.log(`PID ：${owned ? pid : pid ? `${pid}（陈旧 pid 文件，不属于本安装）` : "未运行"}`);
+  if (!exists) {
+    console.log(`配置：${path}（不存在）`);
     return;
   }
-  console.log(`配置：${configPath(args)}`);
+  if (!config) {
+    console.log(`配置：${path}（不是合法 JSON）`);
+    return;
+  }
+  console.log(`配置：${path}`);
   const url = healthUrl(config);
   try {
     const response = await fetch(url, { signal: AbortSignal.timeout(2000) });
@@ -190,10 +212,20 @@ async function logs(args) {
   const follow = args.includes("--follow") || args.includes("-f");
   printTail(200);
   if (!follow) return;
-  let offset = statSync(LOG_FILE).size;
+  let offset;
+  try {
+    offset = statSync(LOG_FILE).size;
+  } catch {
+    return;
+  }
   for (;;) {
     await sleep(500);
-    const size = statSync(LOG_FILE).size;
+    let size;
+    try {
+      size = statSync(LOG_FILE).size;
+    } catch {
+      return;
+    }
     if (size <= offset) continue;
     const content = readFileSync(LOG_FILE).subarray(offset);
     process.stdout.write(content);
@@ -202,14 +234,14 @@ async function logs(args) {
 }
 
 async function update(args) {
-  const source = flag(args, "--file") ?? flag(args, "--from") ?? DEFAULT_UPDATE_URL;
+  const explicitSource = flag(args, "--file") ?? flag(args, "--from") ?? process.env.PIPELINE_UPDATE_URL ?? null;
   const noStart = args.includes("--no-start");
   const temp = mkdtempSync(join(tmpdir(), "pipeline-update-"));
   try {
-    const archive = await resolveUpdateSource(source, temp);
+    const archive = explicitSource ? await resolveUpdateSource(explicitSource, temp) : await resolveLatestRelease(temp);
     const newRoot = await extractRelease(archive, temp);
     const nextVersion = readVersion(newRoot);
-    console.log(`准备更新：${version()} → ${nextVersion}（来源 ${source}）`);
+    console.log(`准备更新：${version()} → ${nextVersion}`);
     stop([]);
     const backup = join(temp, "backup");
     mkdirSync(backup, { recursive: true });
@@ -221,7 +253,7 @@ async function update(args) {
         rmSync(join(ROOT, entry), { recursive: true, force: true });
         cpSync(join(newRoot, entry), join(ROOT, entry), { recursive: true });
       }
-      for (const entry of ["INSTALL.md", "RELEASE.md"]) {
+      for (const entry of ["INSTALL.md", "RELEASE.md", "install.sh"]) {
         if (existsSync(join(newRoot, entry))) copyFileSync(join(newRoot, entry), join(ROOT, entry));
       }
       chmodSync(join(ROOT, "bin", "pipeline"), 0o755);
@@ -371,6 +403,31 @@ async function resolveUpdateSource(source, temp) {
   const archive = join(temp, basename(new URL(source).pathname) || "pipeline-factory.tar.gz");
   writeFileSync(archive, bytes);
   return archive;
+}
+
+/**
+ * 默认更新源：GitHub Releases 的**最新 release**。不能写死 `latest/download/pipeline-factory.tar.gz`：
+ * 本项目发布物带版本号（`pipeline-factory-0.1.0.tar.gz`），写死文件名会 404。
+ * 需要私有仓库时设置 GITHUB_TOKEN（只用于读取 release 元数据/资产）。
+ */
+async function resolveLatestRelease(temp) {
+  const headers = { accept: "application/vnd.github+json" };
+  if (process.env.GITHUB_TOKEN) headers.authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+  const response = await fetch(`https://api.github.com/repos/${DEFAULT_UPDATE_REPO}/releases/latest`, { headers });
+  if (!response.ok) {
+    throw new Error(
+      `无法读取最新发布（HTTP ${response.status}）。可以用 --file <tar.gz> 或 --from <url> 指定发布物，` +
+        `或设置 PIPELINE_UPDATE_URL 指向固定的发布物地址。`,
+    );
+  }
+  const release = await response.json();
+  const assets = Array.isArray(release.assets) ? release.assets : [];
+  const asset =
+    assets.find((candidate) => /^pipeline-factory-.*\.tar\.gz$/.test(candidate.name)) ??
+    assets.find((candidate) => typeof candidate.name === "string" && candidate.name.endsWith(".tar.gz"));
+  if (!asset?.browser_download_url) throw new Error("最新发布里没有 pipeline-factory-*.tar.gz 资产。");
+  console.log(`最新发布：${release.tag_name ?? "?"} / ${asset.name}`);
+  return resolveUpdateSource(asset.browser_download_url, temp);
 }
 
 async function extractRelease(source, temp) {
