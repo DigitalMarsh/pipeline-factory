@@ -56,6 +56,15 @@ export default tseslint.config(
       parserOptions: { sourceType: "module" },
     },
   },
+
+  // ── 官网静态站点：浏览器运行时，无模块系统 ────────────────────────────────
+  {
+    files: ["site/**/*.js"],
+    languageOptions: {
+      globals: { ...globals.browser },
+      parserOptions: { sourceType: "script" },
+    },
+  },
   /**
    * Vue 插件只挂在 `.vue` 上，**不是整个 web 目录**。
    *

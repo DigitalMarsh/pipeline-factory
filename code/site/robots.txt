@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://digitalmarsh.github.io/pipeline-factory/sitemap.xml

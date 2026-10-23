@@ -1,0 +1,526 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Pipeline Factory — 需求进来，流水线出去</title>
+    <meta
+      name="description"
+      content="Pipeline Factory 把一条需求变成可执行、可验证、可追溯的软件流水线：只读探索、Plan 契约、独立 Worktree 执行、门禁验证与事件溯源。"
+    />
+    <meta name="color-scheme" content="light" />
+    <link rel="icon" type="image/svg+xml" href="assets/favicon.svg" />
+    <link rel="canonical" href="https://digitalmarsh.github.io/pipeline-factory/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Pipeline Factory — 需求进来，流水线出去" />
+    <meta property="og:description" content="把一条需求变成可执行、可验证、可追溯的软件流水线。探索只读，契约先行，执行隔离，门禁放行。" />
+    <meta property="og:url" content="https://digitalmarsh.github.io/pipeline-factory/" />
+    <meta property="og:site_name" content="Pipeline Factory" />
+    <meta property="og:image" content="https://digitalmarsh.github.io/pipeline-factory/assets/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Pipeline Factory — 需求进来，流水线出去" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Pipeline Factory — 需求进来，流水线出去" />
+    <meta name="twitter:description" content="把一条需求变成可执行、可验证、可追溯的软件流水线。探索只读，契约先行，执行隔离，门禁放行。" />
+    <meta name="twitter:image" content="https://digitalmarsh.github.io/pipeline-factory/assets/og.png" />
+    <meta name="theme-color" content="#0c1929" />
+    <link rel="stylesheet" href="styles.css?v=20261019" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到正文</a>
+
+    <header class="site-header">
+      <div class="wrap header-inner">
+        <a class="brand" href="#top" aria-label="Pipeline Factory 首页">
+          <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+            <path d="M5 9h8M19 9h8M9 9v14h14M23 23v-5" fill="none" stroke="currentColor" stroke-width="2" />
+            <circle cx="9" cy="9" r="2.6" fill="currentColor" />
+            <circle cx="23" cy="23" r="2.6" fill="currentColor" />
+          </svg>
+          <span class="brand-name">Pipeline Factory</span>
+          <span class="brand-version">v4</span>
+        </a>
+
+        <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="site-nav">
+          <span class="nav-toggle-bars" aria-hidden="true"></span>
+          <span class="visually-hidden">打开导航</span>
+        </button>
+
+        <nav class="site-nav" id="site-nav" aria-label="主导航">
+          <a href="#pipeline">工作方式</a>
+          <a href="#capabilities">能力</a>
+          <a href="#console">界面</a>
+          <a href="#install">开始使用</a>
+          <a href="#faq">排障</a>
+          <a class="nav-github" href="https://github.com/DigitalMarsh/pipeline-factory" target="_blank" rel="noreferrer">
+            GitHub <span aria-hidden="true">↗</span>
+          </a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero" id="top">
+        <div class="wrap hero-grid">
+          <div class="hero-copy">
+            <p class="hero-kicker">AI Software Pipeline Factory</p>
+            <h1>需求进来，<br />流水线出去。</h1>
+            <p class="lede">
+              Pipeline Factory 把一条需求变成可执行、可验证、可追溯的软件流水线。探索阶段只读澄清，派发前锁成契约，执行在独立 Worktree
+              里跑，门禁不过不合并。全过程写进事件流，随时回放。
+            </p>
+            <div class="hero-actions">
+              <a class="btn btn-primary" href="#install">开始安装</a>
+              <a class="btn btn-quiet" href="https://github.com/DigitalMarsh/pipeline-factory" target="_blank" rel="noreferrer">
+                在 GitHub 上查看
+              </a>
+            </div>
+            <ul class="hero-facts" aria-label="产品要点">
+              <li>本地优先</li>
+              <li>单进程托管</li>
+              <li>事件溯源</li>
+              <li>Node ≥ 22.5</li>
+            </ul>
+          </div>
+
+          <div class="run-panel" id="run-panel" aria-label="一次 Run 的示意">
+            <div class="run-head">
+              <span class="run-id">RUN&nbsp;&nbsp;run-8f2c</span>
+              <span class="run-state" data-run-state>执行中</span>
+            </div>
+
+            <ol class="rail" aria-label="流水线阶段">
+              <li class="rail-step" data-step><span class="rail-dot"></span><span class="rail-label">探索</span></li>
+              <li class="rail-step" data-step><span class="rail-dot"></span><span class="rail-label">契约</span></li>
+              <li class="rail-step" data-step><span class="rail-dot"></span><span class="rail-label">入队</span></li>
+              <li class="rail-step" data-step><span class="rail-dot"></span><span class="rail-label">执行</span></li>
+              <li class="rail-step" data-step><span class="rail-dot"></span><span class="rail-label">验证</span></li>
+              <li class="rail-step" data-step><span class="rail-dot"></span><span class="rail-label">合并</span></li>
+            </ol>
+
+            <div class="run-log" aria-label="事件流示意">
+              <p class="log-line" data-log>
+                <span class="log-time">12:04:07</span><span class="log-kind">explorer</span>读取 14 个文件，提出 3 个澄清问题
+              </p>
+              <p class="log-line" data-log>
+                <span class="log-time">12:05:32</span><span class="log-kind">plan</span>pipeline-factory-plan 契约完整，等待确认
+              </p>
+              <p class="log-line" data-log>
+                <span class="log-time">12:06:10</span><span class="log-kind">enqueue</span>方案已确认，落盘到 docs/pipeline/plans
+              </p>
+              <p class="log-line" data-log>
+                <span class="log-time">12:06:12</span><span class="log-kind">run</span>worktree factory/20261019-health-check
+              </p>
+              <p class="log-line" data-log>
+                <span class="log-time">12:11:48</span><span class="log-kind">verify</span>pnpm verify · 141 passed
+              </p>
+              <p class="log-line" data-log>
+                <span class="log-time">12:12:03</span><span class="log-kind">merge</span>MERGE READY · 等待人工确认
+              </p>
+            </div>
+
+            <div class="run-foot">
+              <span>base 3f8a1c7</span>
+              <span>128 条事件 · 可回放</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="pipeline">
+        <div class="wrap">
+          <div class="section-head">
+            <h2>一条需求，六个工位</h2>
+            <p>每个工位都有明确的输入、产物和边界。模型做模型擅长的事，人做只有人能做的决定。</p>
+          </div>
+
+          <div class="stages">
+            <article class="stage">
+              <div class="stage-index">01</div>
+              <div class="stage-body">
+                <h3>探索</h3>
+                <p>Explorer 在 plan 模式里读仓库、查历史、提结构化问题。它不写文件、不改 Git，在你确认之前始终只读。</p>
+              </div>
+              <pre class="stage-artifact"><code>mode    plan / read-only
+tools   read · search · ask
+writes  0</code></pre>
+            </article>
+
+            <article class="stage">
+              <div class="stage-index">02</div>
+              <div class="stage-body">
+                <h3>契约</h3>
+                <p>方案被固化成可审阅的 Plan。缺关键项会自动续探索；只有完整契约才形成 CandidatePlan，确认与入队都是人的操作。</p>
+              </div>
+              <pre class="stage-artifact"><code>docs/pipeline/plans/
+  plan-7c1e-v1.md
+  plan-7c1e-v2.md</code></pre>
+            </article>
+
+            <article class="stage">
+              <div class="stage-index">03</div>
+              <div class="stage-body">
+                <h3>入队</h3>
+                <p>依赖、验证子集与优先级由人来挑。Plan 是 Factory-owned 的契约，模型不能替你把前置条件填上。</p>
+              </div>
+              <pre class="stage-artifact"><code>{
+  "planId": "plan-7c1e",
+  "revision": 2,
+  "verification": ["typecheck", "test"]
+}</code></pre>
+            </article>
+
+            <article class="stage">
+              <div class="stage-index">04</div>
+              <div class="stage-body">
+                <h3>执行</h3>
+                <p>
+                  每个方案一棵独立 Git Worktree，基线恒为 baseCommit。工作区不干净就硬阻断——你本地看到的代码和 Agent 改的代码必须是同一棵。
+                </p>
+              </div>
+              <pre class="stage-artifact"><code>branch    factory/20261019-health-check
+base      3f8a1c7
+worktree  .pipeline-worktrees/run-8f2c</code></pre>
+            </article>
+
+            <article class="stage">
+              <div class="stage-index">05</div>
+              <div class="stage-body">
+                <h3>验证</h3>
+                <p>验证命令按 tag 选择，结果写进 Run 详情与事件流。不通过就停在那里，不会给你一个“看起来成功”的结果。</p>
+              </div>
+              <pre class="stage-artifact"><code>$ pnpm verify
+✓ domain build
+✓ typecheck · 3 packages
+✓ test · 141 passed
+✓ no cycles
+MERGE READY</code></pre>
+            </article>
+
+            <article class="stage">
+              <div class="stage-index">06</div>
+              <div class="stage-body">
+                <h3>合并</h3>
+                <p>最后一步留给人。查看 Merge Request、冲突预测和验证结果，确认后再合并；整条链路都有据可查。</p>
+              </div>
+              <pre class="stage-artifact"><code>run-8f2c   MERGE_READY
+target     main
+action     confirm-merged</code></pre>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="capabilities">
+        <div class="wrap">
+          <div class="section-head">
+            <h2>它替你守住的边界</h2>
+            <p>不是“让 Agent 更自由”，而是让每一步都有明确的权限、产物和停点。</p>
+          </div>
+
+          <div class="cap-grid">
+            <article class="cap">
+              <h3>只读探索</h3>
+              <p>Explorer 恒为 plan 模式。读代码、查历史、提问都可以；改文件、动 Git 不行。你确认之前，它碰不到工作区。</p>
+            </article>
+            <article class="cap">
+              <h3>契约先于代码</h3>
+              <p>Plan 缺失关键项会自动发起内部续探索。只有完整契约才生成 CandidatePlan，确认与入队是人的决定。</p>
+            </article>
+            <article class="cap">
+              <h3>隔离执行</h3>
+              <p>每个 Run 有自己的 Worktree 和分支，基线固定为派发时的 baseCommit。未提交改动不会被偷偷带进工作树。</p>
+            </article>
+            <article class="cap">
+              <h3>门禁验证</h3>
+              <p>验证命令按 tag 挑选，结果进入 Run 详情和事件流。失败就是失败，暂停、补要求、重新验证都在同一个 Run 上完成。</p>
+            </article>
+            <article class="cap">
+              <h3>事件溯源</h3>
+              <p>需求、Plan、Run、门禁、合并都写事件。SSE 推送实时时间线，历史事件可回放，排障不靠猜。</p>
+            </article>
+            <article class="cap">
+              <h3>多后端，按角色分工</h3>
+              <p>Codex App Server 与 Claude Agent SDK 同构。你可以让探索走一个后端、执行走另一个，每个 Project 还能单独覆盖。</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="console">
+        <div class="wrap">
+          <div class="section-head">
+            <h2>控制台</h2>
+            <p>需求清单、时间线、Plan 抽屉与 Run 详情在同一个工作区里。下面是界面示意，数据为示例。</p>
+          </div>
+
+          <figure class="console-figure">
+            <div class="console" aria-label="Pipeline Factory 控制台界面示意">
+              <div class="console-top">
+                <div class="console-brand">
+                  <span class="console-dot"></span>
+                  Pipeline Factory <span class="console-version">v4</span>
+                </div>
+                <div class="console-health"><i></i> API 正常</div>
+                <div class="console-avatar">PF</div>
+              </div>
+
+              <div class="console-body">
+                <aside class="console-rail">
+                  <div class="rail-item is-active"><span class="rail-icon"></span>探索</div>
+                  <div class="rail-item"><span class="rail-icon"></span>项目</div>
+                </aside>
+
+                <div class="console-main">
+                  <div class="console-project">
+                    <span>demo-api</span>
+                    <h3>需求清单</h3>
+                    <button type="button" tabindex="-1">＋ 新增需求</button>
+                  </div>
+
+                  <div class="console-cards">
+                    <div class="console-card is-running">
+                      <div class="card-title">
+                        <span class="card-num">01</span>
+                        <div>
+                          <strong>把健康检查改成并发安全</strong>
+                          <small>Plan v2 已确认 · factory/20261019-health-check</small>
+                        </div>
+                        <span class="pill pill-green">执行中</span>
+                      </div>
+                      <div class="card-meta">
+                        <span>AGENT <b>Claude · claude-opus-5</b></span>
+                        <span>VERIFY <b>3 / 3 通过</b></span>
+                        <span>EVENTS <b>128</b></span>
+                      </div>
+                    </div>
+
+                    <div class="console-card">
+                      <div class="card-title">
+                        <span class="card-num">02</span>
+                        <div>
+                          <strong>给上传接口补限流</strong>
+                          <small>结构化 Plan 完整 · 等待确认</small>
+                        </div>
+                        <span class="pill pill-amber">待确认</span>
+                      </div>
+                      <div class="card-meta">
+                        <span>AGENT <b>Codex · gpt-5.6-luna</b></span>
+                        <span>VERIFY <b>未选择</b></span>
+                        <span>EVENTS <b>42</b></span>
+                      </div>
+                    </div>
+
+                    <div class="console-card">
+                      <div class="card-title">
+                        <span class="card-num">03</span>
+                        <div>
+                          <strong>回放一次失败的 Run</strong>
+                          <small>Run 已取消 · 保留完整事件流</small>
+                        </div>
+                        <span class="pill pill-muted">已取消</span>
+                      </div>
+                      <div class="card-meta">
+                        <span>AGENT <b>Codex · gpt-5.6-luna</b></span>
+                        <span>VERIFY <b>1 / 3 失败</b></span>
+                        <span>EVENTS <b>96</b></span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <figcaption>界面示意 · 示例数据，不代表真实 Project</figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="section" id="install">
+        <div class="wrap">
+          <div class="section-head">
+            <h2>开始使用</h2>
+            <p>发布物自带安装脚本和 <code>pipeline</code> 命令。安装完成后，配置与数据都留在本机。</p>
+          </div>
+
+          <div class="start-grid">
+            <div class="start-copy">
+              <div class="prereqs">
+                <h3>前置条件</h3>
+                <ul>
+                  <li><b>Node.js</b> ≥ 22.5（使用 <code>node:sqlite</code>）</li>
+                  <li><b>Git</b> ≥ 2.38（冲突预测需要 <code>git merge-tree</code>）</li>
+                  <li><b>Codex CLI</b> 或 <b>Claude Code</b> 之一，并已登录</li>
+                </ul>
+              </div>
+
+              <ol class="start-steps">
+                <li>
+                  <b>下载发布物</b>
+                  <span>从 GitHub Releases 取对应平台的 <code>pipeline-factory-&lt;version&gt;.tar.gz</code>。</span>
+                </li>
+                <li>
+                  <b>安装</b>
+                  <span>安装到 <code>~/.pipeline-factory</code>，并把 <code>pipeline</code> 链接到 <code>~/.local/bin</code>。</span>
+                </li>
+                <li>
+                  <b>改配置</b>
+                  <span>至少确认 <code>project.root</code>、<code>storage</code> 和 <code>model</code>；重复安装不会覆盖已有配置。</span>
+                </li>
+                <li>
+                  <b>启动</b>
+                  <span>打开 <code>http://127.0.0.1:4310/</code>。首次启动会初始化 SQLite 与运行时目录。</span>
+                </li>
+              </ol>
+
+              <p class="note">
+                安装包不包含 Claude Agent SDK。使用 Claude 后端时，按安装文档把 SDK 装进安装目录，或配置
+                <code>model.claudeAgent.sdkPath</code>；Codex 后端不受影响。
+              </p>
+            </div>
+
+            <div class="terminal" aria-label="安装命令">
+              <div class="terminal-head">
+                <span>zsh — pipeline-factory</span>
+                <button class="copy-btn" type="button" data-copy-target="install-code">复制</button>
+              </div>
+              <pre id="install-code"><code><span class="t-comment"># 1. 解压发布物</span>
+tar -xzf pipeline-factory-0.2.0.tar.gz
+cd pipeline-factory-0.2.0
+
+<span class="t-comment"># 2. 安装（保留已有 config/ 与 var/）</span>
+./install.sh
+
+<span class="t-comment"># 3. 确认受管项目与模型后端</span>
+$EDITOR ~/.pipeline-factory/config/pipeline-factory.config.json
+
+<span class="t-comment"># 4. 启动</span>
+pipeline start
+<span class="t-comment"># → http://127.0.0.1:4310/</span></code></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="commands">
+        <div class="wrap">
+          <div class="section-head">
+            <h2>日常命令</h2>
+            <p>一个 <code>pipeline</code> 命令管理启动、日志与升级；数据与日志都在安装目录的 <code>var/</code> 下。</p>
+          </div>
+
+          <div class="table-wrap">
+            <table class="command-table">
+              <thead>
+                <tr>
+                  <th scope="col">命令</th>
+                  <th scope="col">作用</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>pipeline start</code></td>
+                  <td>后台启动；PID 与日志在 <code>~/.pipeline-factory/var/</code></td>
+                </tr>
+                <tr>
+                  <td><code>pipeline status</code></td>
+                  <td>查看版本、PID 与健康检查结果</td>
+                </tr>
+                <tr>
+                  <td><code>pipeline logs -f</code></td>
+                  <td>跟随 <code>var/pipeline.log</code></td>
+                </tr>
+                <tr>
+                  <td><code>pipeline stop</code></td>
+                  <td>停止服务</td>
+                </tr>
+                <tr>
+                  <td><code>pipeline restart</code></td>
+                  <td>重启服务</td>
+                </tr>
+                <tr>
+                  <td><code>pipeline update</code></td>
+                  <td>从 GitHub Releases 升级到最新发布物</td>
+                </tr>
+                <tr>
+                  <td><code>pipeline update --file &lt;tar.gz&gt;</code></td>
+                  <td>从本地发布物升级</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="faq">
+        <div class="wrap">
+          <div class="section-head">
+            <h2>排障</h2>
+            <p>先看 <code>pipeline status</code>，再看 <code>pipeline logs -f</code>。大部分问题在这两步里就能定位。</p>
+          </div>
+
+          <div class="faq-list">
+            <details>
+              <summary>启动后页面打不开，或提示端口被占用？<span class="faq-plus" aria-hidden="true"></span></summary>
+              <p>
+                先运行 <code>pipeline status</code> 确认实例是否已在运行。出现 <code>EADDRINUSE 127.0.0.1:4310</code>
+                通常表示 API 已经启动，不要重复启动同一实例。页面是旧界面时，确认发布物已升级，然后硬刷新浏览器。
+              </p>
+            </details>
+            <details>
+              <summary>出现 <code>CLAUDE_AGENT_SDK_UNAVAILABLE</code>？<span class="faq-plus" aria-hidden="true"></span></summary>
+              <p>
+                只有使用 Claude 后端时才会出现。把 SDK 装进安装目录的 <code>app/</code>，或在配置里用
+                <code>model.claudeAgent.sdkPath</code> 指向 SDK 入口文件。使用 Codex 后端不受影响。
+              </p>
+            </details>
+            <details>
+              <summary>出现 <code>SCHEMA_TOO_NEW</code>？<span class="faq-plus" aria-hidden="true"></span></summary>
+              <p>
+                旧程序打开了新版本创建的数据库。运行 <code>pipeline update</code> 升级发布物，不要降级程序版本。 结构版本由 SQLite 的
+                <code>PRAGMA user_version</code> 自动对齐。
+              </p>
+            </details>
+            <details>
+              <summary>能把服务暴露到局域网或公网吗？<span class="faq-plus" aria-hidden="true"></span></summary>
+              <p>
+                默认只监听回环地址。把 <code>server.host</code> 改成非回环地址时，必须同时配置
+                <code>server.authToken</code>，否则服务拒绝启动。API 的能力等同于本机 shell、文件系统与 Git，
+                请先读安装文档里的安全边界，再决定是否对外暴露。
+              </p>
+            </details>
+            <details>
+              <summary>数据在哪里？怎么备份？<span class="faq-plus" aria-hidden="true"></span></summary>
+              <p>
+                运行时数据都在安装目录的 <code>var/</code> 下：SQLite 数据库、对话图片附件和 Run 的 Git Worktree。 先
+                <code>pipeline stop</code>，再复制整个 <code>config/</code> 与 <code>var/</code>。
+              </p>
+            </details>
+            <details>
+              <summary>模型 API Key 存在 Pipeline Factory 里吗？<span class="faq-plus" aria-hidden="true"></span></summary>
+              <p>不存。Factory 不读取也不保存 API Key；Codex 与 Claude 的登录态、端点和凭据由各自的 CLI 管理。</p>
+            </details>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="wrap footer-grid">
+        <div class="footer-brand">
+          <span class="brand-name">Pipeline Factory</span>
+          <p>把需求变成可执行、可验证、可追溯的软件流水线。</p>
+        </div>
+        <div class="footer-links">
+          <a href="https://github.com/DigitalMarsh/pipeline-factory" target="_blank" rel="noreferrer">GitHub</a>
+          <a href="https://github.com/DigitalMarsh/pipeline-factory/blob/main/docs/INSTALL.md" target="_blank" rel="noreferrer">安装文档</a>
+          <a href="https://github.com/DigitalMarsh/pipeline-factory/blob/main/CHANGELOG.md" target="_blank" rel="noreferrer">更新日志</a>
+          <a href="https://github.com/DigitalMarsh/pipeline-factory/releases/latest" target="_blank" rel="noreferrer">下载</a>
+        </div>
+        <p class="footer-meta">本地优先 · 事件留痕 · <span id="year">2026</span></p>
+      </div>
+    </footer>
+
+    <script src="app.js?v=20261019" defer></script>
+  </body>
+</html>

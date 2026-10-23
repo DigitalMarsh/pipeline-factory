@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Pipeline Factory">
+  <rect width="32" height="32" rx="6" fill="#0c1929" />
+  <path d="M8 11h6M18 11h6M11 11v10h10M21 21v-4" fill="none" stroke="#6c9bff" stroke-width="2" stroke-linecap="round" />
+  <circle cx="11" cy="11" r="2.2" fill="#6c9bff" />
+  <circle cx="21" cy="21" r="2.2" fill="#7fd8aa" />
+</svg>
