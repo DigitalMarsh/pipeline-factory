@@ -57,6 +57,7 @@ pipeline update     # npm install -g pipeline-factory@latest
 
 - [code/README.md](code/README.md) —— 目录结构、配置字段、运行与停止、API 约定。**从这里开始。**
 - [docs/COMMENTING.md](docs/COMMENTING.md) —— 代码注释规范。
+- [docs/发布流程.md](docs/发布流程.md) —— 定版本、门禁、npm / GitHub 双通道发布、验证与回滚。
 - [CHANGELOG.md](CHANGELOG.md) —— 按日期记录每次改动的动机、影响面与验证方式。
 
 ## 开发门禁
