@@ -12,7 +12,7 @@ python3 -m http.server 4173 --directory code/site
 
 打开 <http://127.0.0.1:4173/>。修改 HTML/CSS/JS 后刷新即可，不需要重新构建。
 
-## 部署到 GitHub Pages（推荐）
+## 部署到 GitHub Pages
 
 站点由 GitHub Actions 直接发布 `code/site/`，不走 Jekyll、也不需要把构建产物提交到另一个分支。
 
@@ -42,31 +42,11 @@ gh run list --workflow=pages.yml
 
 - 项目站点挂在 `/pipeline-factory/` 子路径下，因此 `index.html` 里必须使用相对路径
   （`styles.css`、`app.js`、`assets/...`），不要写成以 `/` 开头的绝对路径。
-- GitHub Pages **不支持自定义响应头**，`_headers` 不会生效；它只对 Cloudflare Pages 有意义。
-  需要 COOP / Permissions-Policy 这类头时，继续用 Cloudflare，或在前方加一层代理。
+- GitHub Pages **不支持自定义响应头**。需要 COOP / Permissions-Policy 这类头时，得在前方加一层
+  代理或 CDN。
 - `.nojekyll` 用来避免 Jekyll 处理以下划线开头的文件；Actions 产物部署本来不跑 Jekyll，
   这个文件主要保护以后改回分支部署的情况。
 - 换成自定义域名后，同步更新 `index.html` 的 canonical / OG URL、`robots.txt` 与 `sitemap.xml`。
-
-## 部署到 Cloudflare Pages（可选）
-
-如果要把 Cloudflare 作为镜像或主站，使用仓库根目录的 `wrangler.jsonc`（已指向 `./code/site`）：
-
-```bash
-npx --yes wrangler@latest login
-npx --yes wrangler@latest pages deploy --commit-dirty=true
-```
-
-也可以显式指定目录：
-
-```bash
-npx --yes wrangler@latest pages deploy code/site --project-name pipeline-factory --commit-dirty=true
-```
-
-- Cloudflare 地址：<https://pipeline-factory.pages.dev>
-- Cloudflare 新版本会把 `pages project create` 委托成 Workers 项目；如需保留传统 Pages 地址，
-  首次创建时加 `--force`（只需要一次）。
-- 如果两个站点同时在线，请把 canonical 指向真正的主站，避免重复内容。
 
 ## 目录
 
@@ -77,7 +57,6 @@ npx --yes wrangler@latest pages deploy code/site --project-name pipeline-factory
 | `app.js` | Run 动画、移动端导航、命令复制、导航高亮 |
 | `assets/favicon.svg` | 站点图标 |
 | `assets/og.png` | 社交分享图 |
-| `_headers` | Cloudflare Pages 响应头（GitHub Pages 忽略） |
 | `.nojekyll` | 告诉 GitHub Pages 不要跑 Jekyll |
 | `robots.txt` / `sitemap.xml` | 搜索引擎元数据 |
 
