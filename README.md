@@ -29,16 +29,17 @@ cd code && pnpm build && pnpm start
 至少要按受管项目改 `project.root` 与 `storage.databasePath`。仓库里已有一份本地配置，**不要**
 用模板直接覆盖它——那会丢掉本机的项目路径与模型设置。
 
-## 发布物安装
+## 安装
 
-发布物（`pipeline-factory-<version>.tar.gz`）自带安装脚本与 `pipeline` 命令：
+推荐用 npm 全局安装（类似 OpenClaw）：
 
 ```bash
-tar -xzf pipeline-factory-0.1.0.tar.gz
-cd pipeline-factory-0.1.0
-./install.sh
+npm install -g pipeline-factory
 pipeline start
 ```
+
+数据与配置在 `~/.pipeline-factory`（`PIPELINE_HOME` 可改），首次启动会自动生成配置。
+需要 **Node.js ≥ 22.5**。
 
 日常管理：
 
@@ -46,10 +47,11 @@ pipeline start
 pipeline status
 pipeline logs -f
 pipeline stop
-pipeline update
+pipeline update     # npm install -g pipeline-factory@latest
 ```
 
-完整说明见 [docs/INSTALL.md](docs/INSTALL.md)（前置条件、Codex/Claude 配置、升级、安全边界与排障）。
+离线环境仍可用发布物：解压后 `./install.sh`，之后同样使用 `pipeline` 命令。
+完整说明见 [docs/INSTALL.md](docs/INSTALL.md)。
 
 ## 文档
 

@@ -4,6 +4,8 @@
 **/coverage/**
 # 发布物是生成目录，里面的第三方代码不该被格式化。
 release/
+# npm 单包的打包中间产物（scripts/build-npm.mjs 生成）。
+npm-package/
 
 # 本机运行时数据（SQLite 与它的 WAL/SHM、Run 的 worktree）。
 *.sqlite

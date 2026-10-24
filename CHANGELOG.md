@@ -1,5 +1,28 @@
 # Changelog
 
+## 2026-10-24 — v0.2.2：npm 全局安装
+
+新增 **npm 分发方式**，不再需要下载安装包：
+
+```bash
+npm install -g pipeline-factory
+pipeline start
+```
+
+- `pnpm pack:npm` 产物是单包 `pipeline-factory`，esbuild 把 core/contracts
+  内联进 `dist/main.js`，web 静态产物随包；fastify/zod 由 npm 正常安装，Claude SDK 仍是 optional peer。
+- 用户数据与 npm 包目录分离：默认 `~/.pipeline-factory`（`PIPELINE_HOME` 可改）；首次启动自动生成配置，
+  并把 Web 产物同步到数据目录，nvm 切换 Node 版本不会让静态路径失效。
+- `pipeline update` 在 npm 布局下执行 `npm install -g --prefix <当前前缀> pipeline-factory@latest`，
+  不再下载/替换目录；发布物布局仍保留原子化 tarball 升级。
+- **启动健康检查加入实例 ID**：只接受本次拉起的进程（`/health` 的 `instanceId`），
+  避免端口上已有另一个实例时误报"启动成功"。
+- 安装脚本 / tarball 方式继续可用，作为离线安装路径。
+
+验证：`pnpm verify` 全绿；`npm pack` → `npm install -g --prefix <tmp>` → `pipeline start/status/stop`
+实测通过（含首次配置生成与 Web 同步）；`pipeline update --file <0.2.2.tgz>` 实测停止→安装→重启，
+且 `--prefix` 指向当前前缀。
+
 ## 2026-10-19 — v0.2.1 复盘补丁
 
 1. **升级原子化**：`pipeline update` 先把新版本复制到 `<root>/.update-staging`，再逐个

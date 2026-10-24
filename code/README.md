@@ -57,8 +57,9 @@ node scripts/service.mjs status
 - **模型后端扩展点**：`apps/api/src/runtime/model-backends.ts` 的注册表按 `kind` 注册工厂；
   新增后端 = 注册一个 kind，不改 `createModelGateway` 的分派。MCP / Plugin 已有各自注册表，
   项目命令是数据驱动，不要重复造。
-- **发布物**：`pnpm pack:release` 生成 `release/pipeline-factory-<version>/` 与同名 tar.gz
-  （`app/` 生产依赖 + `web/` 静态产物 + `config/` + `bin/pipeline` 命令行 + `install.sh`）。
+- **发布物**：`pnpm pack:npm` 生成可发布的 npm 单包 `pipeline-factory`（`npm-package/` 与
+  `release/pipeline-factory-<version>.tgz`）：esbuild 把 core/contracts 内联进 `dist/main.js`，
+  web 静态产物随包；`pnpm pack:release` 仍生成离线 tar.gz + `install.sh`。
   安装后统一用 `pipeline start|stop|restart|status|logs|update` 管理；启动后 `GET /health` 返回
   `appVersion` 与 `schemaVersion`。安装、升级与安全说明见 [`docs/INSTALL.md`](../docs/INSTALL.md)。
 - **安装包不包含 Claude Agent SDK**：它按需懒加载（`CLAUDE_AGENT_SDK_UNAVAILABLE` 只在真正用

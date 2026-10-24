@@ -61,6 +61,11 @@ export function registerPlatformRoutes(app: FastifyInstance, deps: PlatformRoute
     status: "ok",
     service: "pipeline-factory-api",
     version: "v4",
+    /**
+     * 本次进程的随机标识（由 CLI 启动时通过 PIPELINE_INSTANCE_ID 注入）。
+     * 健康检查用它区分"我拉起的进程"和"端口上已经存在的另一个实例"。
+     */
+    instanceId: process.env.PIPELINE_INSTANCE_ID ?? null,
     /** 应用版本（package.json）；发布产物与升级检查读它。 */
     appVersion: APP_VERSION,
     /** 库结构版本（`PRAGMA user_version`）；内存实例没有迁移概念时返回 null。 */

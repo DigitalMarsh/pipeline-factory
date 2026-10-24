@@ -50,15 +50,15 @@ gh run list --workflow=pages.yml
 
 ## 目录
 
-| 文件 | 作用 |
-| --- | --- |
-| `index.html` | 页面内容与结构 |
-| `styles.css` | 视觉与响应式布局 |
-| `app.js` | Run 动画、移动端导航、命令复制、导航高亮 |
-| `assets/favicon.svg` | 站点图标 |
-| `assets/og.png` | 社交分享图 |
-| `.nojekyll` | 告诉 GitHub Pages 不要跑 Jekyll |
-| `robots.txt` / `sitemap.xml` | 搜索引擎元数据 |
+| 文件                         | 作用                                     |
+| ---------------------------- | ---------------------------------------- |
+| `index.html`                 | 页面内容与结构                           |
+| `styles.css`                 | 视觉与响应式布局                         |
+| `app.js`                     | Run 动画、移动端导航、命令复制、导航高亮 |
+| `assets/favicon.svg`         | 站点图标                                 |
+| `assets/og.png`              | 社交分享图                               |
+| `.nojekyll`                  | 告诉 GitHub Pages 不要跑 Jekyll          |
+| `robots.txt` / `sitemap.xml` | 搜索引擎元数据                           |
 
 ## 内容维护
 

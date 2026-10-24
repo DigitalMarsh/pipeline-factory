@@ -15,7 +15,8 @@
  *   3) 更新失败要能回滚：替换前把 app/web/bin 移到临时备份目录，任一步失败就搬回并尝试重启。
  *   4) 平台与构建机绑定：发布物不跨平台，update 只应在同一平台/架构上使用。
  */
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   chmodSync,
   closeSync,
@@ -36,13 +37,30 @@ import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const ROOT = resolve(process.env.PIPELINE_ROOT ?? resolve(HERE, ".."));
-const APP_ENTRY = existsSync(join(ROOT, "app", "dist", "main.js"))
-  ? join(ROOT, "app", "dist", "main.js")
-  : join(ROOT, "apps", "api", "dist", "main.js");
-const DEFAULT_CONFIG = join(ROOT, "config", "pipeline-factory.config.json");
-const PID_FILE = join(ROOT, "var", "pipeline.pid");
-const LOG_FILE = join(ROOT, "var", "pipeline.log");
+/** npm 全局安装的包根（bin/ 的上一级）；PIPELINE_ROOT 只用于测试/自定义布局。 */
+const PACKAGE_ROOT = resolve(process.env.PIPELINE_ROOT ?? resolve(HERE, ".."));
+/**
+ * 两种安装形态：
+ *   - npm 全局包：<package>/dist/main.js + web/；用户数据在 ~/.pipeline-factory；
+ *   - 传统发布物：<root>/app/dist/main.js；用户数据就在 <root>/。
+ */
+const IS_NPM_LAYOUT = existsSync(join(PACKAGE_ROOT, "dist", "main.js")) && !existsSync(join(PACKAGE_ROOT, "app", "dist", "main.js"));
+const ROOT = PACKAGE_ROOT;
+const DATA_ROOT = resolve(process.env.PIPELINE_HOME ?? (IS_NPM_LAYOUT ? join(homedir(), ".pipeline-factory") : ROOT));
+/**
+ * npm 全局安装时的前缀（<prefix>/lib/node_modules/pipeline-factory）。
+ * update 必须显式带 --prefix：否则 npm 可能装到另一个前缀（或因为写权限失败），
+ * 而正在使用的包仍然指向旧版本。可用 PIPELINE_NPM_PREFIX 覆盖非标准布局。
+ */
+const NPM_PREFIX = IS_NPM_LAYOUT ? resolve(process.env.PIPELINE_NPM_PREFIX ?? resolve(PACKAGE_ROOT, "..", "..", "..")) : null;
+const APP_ENTRY = IS_NPM_LAYOUT
+  ? join(PACKAGE_ROOT, "dist", "main.js")
+  : existsSync(join(ROOT, "app", "dist", "main.js"))
+    ? join(ROOT, "app", "dist", "main.js")
+    : join(ROOT, "apps", "api", "dist", "main.js");
+const DEFAULT_CONFIG = join(DATA_ROOT, "config", "pipeline-factory.config.json");
+const PID_FILE = join(DATA_ROOT, "var", "pipeline.pid");
+const LOG_FILE = join(DATA_ROOT, "var", "pipeline.log");
 const DEFAULT_UPDATE_REPO = process.env.PIPELINE_UPDATE_REPO ?? "DigitalMarsh/pipeline-factory";
 const HEALTH_TIMEOUT_MS = 30_000;
 const STOP_TIMEOUT_MS = 10_000;
@@ -94,8 +112,10 @@ async function main() {
 }
 
 async function start(args) {
-  if (!existsSync(APP_ENTRY)) throw new Error(`找不到应用入口：${APP_ENTRY}（发布物不完整？）`);
+  if (!existsSync(APP_ENTRY)) throw new Error(`找不到应用入口：${APP_ENTRY}（安装不完整？）`);
   const config = configPath(args);
+  ensureConfig(config);
+  syncWebAssets();
   if (!existsSync(config))
     throw new Error(`找不到配置文件：${config}\n先复制示例配置并修改：${join(ROOT, "config", "pipeline-factory.config.example.json")}`);
   // 健康检查要读**配置对象**（端口/host）；把路径字符串传进去会回落默认 4310，误把别的服务当成自己。
@@ -123,11 +143,12 @@ async function start(args) {
   }
   ensureVar();
   const out = openSync(LOG_FILE, "a");
+  const instanceId = randomUUID();
   const child = spawn(process.execPath, ["--disable-warning=ExperimentalWarning", APP_ENTRY, "--config", config], {
-    cwd: ROOT,
+    cwd: DATA_ROOT,
     detached: true,
     stdio: ["ignore", out, out],
-    env: process.env,
+    env: { ...process.env, PIPELINE_INSTANCE_ID: instanceId },
   });
   closeSync(out);
   child.unref();
@@ -137,9 +158,21 @@ async function start(args) {
     spawnError = error;
     rmSync(PID_FILE, { force: true });
   });
+  // 端口被别的实例占着时，子进程会立刻退出而健康检查仍能拿到**别人**的 200：
+  // 用 exit 事件让 waitForHealth 提前收手，别白等满 30s 超时。
+  let childExited = false;
+  child.on("exit", () => {
+    childExited = true;
+  });
   writeFileSync(PID_FILE, String(child.pid));
-  const healthy = await waitForHealth(configData);
+  const healthy = await waitForHealth(configData, instanceId, () => !childExited);
   if (spawnError) throw spawnError;
+  // 端口上可能已经有**别的**实例/服务：健康检查成功不等于我们刚拉起的子进程还活着。
+  // 不核对存活就会把"端口被占用、子进程已退出"误报成启动成功。
+  if (!isAlive(child.pid)) {
+    rmSync(PID_FILE, { force: true });
+    throw new Error("STARTUP_PROCESS_EXITED: 启动的进程已退出（端口被占用或配置错误），请查看 pipeline logs。");
+  }
   if (!healthy) {
     console.error(`启动后 ${HEALTH_TIMEOUT_MS / 1000}s 内健康检查未通过。最近日志：`);
     printTail(30);
@@ -236,6 +269,8 @@ async function logs(args) {
 async function update(args) {
   const explicitSource = flag(args, "--file") ?? flag(args, "--from") ?? process.env.PIPELINE_UPDATE_URL ?? null;
   const noStart = args.includes("--no-start");
+  // npm 全局安装：升级 = npm install -g（最新版或指定 tarball/URL），不需要下载/交换目录。
+  if (IS_NPM_LAYOUT) return updateViaNpm(explicitSource, noStart);
   const temp = mkdtempSync(join(tmpdir(), "pipeline-update-"));
   try {
     const archive = explicitSource ? await resolveUpdateSource(explicitSource, temp) : await resolveLatestRelease(temp);
@@ -321,7 +356,59 @@ function printHelp() {
 }
 
 function ensureVar() {
-  mkdirSync(join(ROOT, "var"), { recursive: true });
+  mkdirSync(join(DATA_ROOT, "var"), { recursive: true });
+}
+
+/**
+ * npm 安装时把 Web 静态产物同步到数据目录：这样配置里的 webDistPath 不依赖全局包的绝对路径
+ * （nvm 切换 Node 版本会换掉那个路径），升级后按版本号自动刷新。
+ */
+function syncWebAssets() {
+  if (!IS_NPM_LAYOUT) return;
+  const source = join(PACKAGE_ROOT, "web");
+  if (!existsSync(join(source, "index.html"))) return;
+  ensureVar();
+  const target = join(DATA_ROOT, "web");
+  const marker = join(DATA_ROOT, "var", ".web-version");
+  let current = "";
+  try {
+    current = readFileSync(marker, "utf8").trim();
+  } catch {
+    /* 首次安装 */
+  }
+  if (current === version() && existsSync(join(target, "index.html"))) return;
+  rmSync(target, { recursive: true, force: true });
+  cpSync(source, target, { recursive: true });
+  writeFileSync(marker, version());
+}
+
+/**
+ * 首次启动自动生成配置（npm 安装没有随包的用户配置）。
+ * 路径全部写成绝对路径：npm 全局包升级后目录不变，但不要让相对路径依赖 cwd。
+ */
+function ensureConfig(config) {
+  if (existsSync(config)) return;
+  const candidates = [
+    join(PACKAGE_ROOT, "config", "pipeline-factory.config.example.json"),
+    join(PACKAGE_ROOT, "config", "pipeline-factory.config.json"),
+  ];
+  const source = candidates.find((candidate) => existsSync(candidate));
+  if (!source) return;
+  mkdirSync(dirname(config), { recursive: true });
+  ensureVar();
+  const example = JSON.parse(readFileSync(source, "utf8"));
+  example.server = { ...example.server, serveWeb: true, webDistPath: join(DATA_ROOT, "web") };
+  example.storage = {
+    ...example.storage,
+    databasePath: join(DATA_ROOT, "var", "pipeline-factory.sqlite"),
+    worktreeRoot: join(DATA_ROOT, "var", "worktrees"),
+  };
+  example.project = { ...example.project, root: process.cwd() };
+  if (example.model?.codexAppServer)
+    example.model = { ...example.model, codexAppServer: { ...example.model.codexAppServer, cwd: process.cwd() } };
+  writeFileSync(config, `${JSON.stringify(example, null, 2)}\n`);
+  console.log(`已生成配置：${config}`);
+  console.log(`project.root 暂定为当前目录：${process.cwd()}（请按需修改）`);
 }
 
 function configPath(args) {
@@ -348,13 +435,18 @@ function healthUrl(config) {
   return `http://${probeHost.includes(":") ? `[${probeHost}]` : probeHost}:${port}/health`;
 }
 
-async function waitForHealth(config) {
+async function waitForHealth(config, instanceId, stillStarting = () => true) {
   const url = healthUrl(config);
   const deadline = Date.now() + HEALTH_TIMEOUT_MS;
   while (Date.now() < deadline) {
+    if (!stillStarting()) return false;
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(1000) });
-      if (response.ok) return true;
+      if (response.ok) {
+        const body = await response.json().catch(() => null);
+        // 只认**本进程拉起的实例**：端口上可能已有另一个 Pipeline Factory（另一个版本/另一个数据目录）。
+        if (body?.instanceId === instanceId) return true;
+      }
     } catch {
       /* 还没起来 */
     }
@@ -406,7 +498,11 @@ function printTail(lines) {
 }
 
 function version() {
-  for (const path of [join(ROOT, "app", "package.json"), join(ROOT, "apps", "api", "package.json")]) {
+  // npm 包只有包根的 package.json（version 就是发布版本）；发布物/开发目录看 app 或 apps/api。
+  const candidates = IS_NPM_LAYOUT
+    ? [join(PACKAGE_ROOT, "package.json")]
+    : [join(ROOT, "app", "package.json"), join(ROOT, "apps", "api", "package.json")];
+  for (const path of candidates) {
     try {
       return JSON.parse(readFileSync(path, "utf8")).version ?? "0.0.0";
     } catch {
@@ -434,6 +530,17 @@ function recoverInterruptedUpdate() {
     console.warn("检测到上次升级中断，已恢复旧版本目录。");
   }
   rmSync(staging, { recursive: true, force: true });
+}
+
+async function updateViaNpm(source, noStart) {
+  const spec = source ?? "pipeline-factory@latest";
+  console.log(`升级命令：npm install -g ${NPM_PREFIX ? `--prefix ${NPM_PREFIX} ` : ""}${spec}`);
+  stop([]);
+  const args = ["install", "-g", ...(NPM_PREFIX ? ["--prefix", NPM_PREFIX] : []), spec];
+  const result = spawnSync("npm", args, { stdio: "inherit", env: process.env });
+  if (result.status !== 0) throw new Error(`npm install -g ${spec} 失败（exit ${result.status ?? "signal"}）`);
+  console.log(`已更新到 ${version()}。配置与数据目录保持不动：${DATA_ROOT}`);
+  if (!noStart) await start([]);
 }
 
 async function resolveUpdateSource(source, temp) {
