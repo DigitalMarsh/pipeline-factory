@@ -48,6 +48,62 @@ gh run list --workflow=pages.yml
   这个文件主要保护以后改回分支部署的情况。
 - 换成自定义域名后，同步更新 `index.html` 的 canonical / OG URL、`robots.txt` 与 `sitemap.xml`。
 
+## 更新与发布流程
+
+日常改站点按这个顺序走：
+
+1. **改内容**：编辑 `code/site/` 下的文件。
+2. **本地预览**：
+
+   ```bash
+   cd code && pnpm site:preview
+   ```
+
+   打开 <http://127.0.0.1:4173/>。修改 HTML/CSS/JS 后刷新即可。
+
+3. **改了 CSS/JS 就换缓存版本**：把 `index.html` 里 `styles.css?v=...` 与 `app.js?v=...`
+   的日期一起改掉，避免浏览器继续用缓存。
+4. **检查**：
+
+   ```bash
+   cd code && pnpm site:check
+   ```
+
+5. **提交并推送**：
+
+   ```bash
+   git add code/site
+   git commit -m "feat(site): ..."
+   git push origin main
+   ```
+
+6. **自动部署**：推送到 `main` 且改动涉及 `code/site/**` 或工作流本身时，
+   `.github/workflows/pages.yml` 自动运行。查看状态：
+
+   ```bash
+   gh run list --workflow=pages.yml
+   gh run watch <run-id>
+   ```
+
+7. **验证线上**：打开 <https://digitalmarsh.github.io/pipeline-factory/>，确认页面与
+   `styles.css` / `app.js` / `assets/og.png` 都正常。
+
+不提交代码、只想重新发布当前 `main`：
+
+```bash
+gh workflow run pages.yml
+```
+
+回滚：`git revert <commit>` 后再推送，工作流会按回滚后的内容重新部署；也可以在
+GitHub Actions 页面重跑旧的一次成功部署。
+
+注意：
+
+- 工作流的路径过滤是 `code/site/**`，所以只改 `code/site/README.md` 也会触发一次部署；
+  页面内容不会变，但部署记录会多一条。
+- 发布产物是整个 `code/site/` 目录，不要把未完成的本机文件或临时资源放进去。
+- 首次启用 Pages 见上一节；日常发布不需要再改仓库设置。
+
 ## 目录
 
 | 文件                         | 作用                                     |
