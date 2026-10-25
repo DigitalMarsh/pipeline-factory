@@ -31,7 +31,7 @@
     />
     <meta name="twitter:image" content="https://digitalmarsh.github.io/pipeline-factory/assets/og.png" />
     <meta name="theme-color" content="#f7f9fc" />
-    <link rel="stylesheet" href="styles.css?v=20261025a" />
+    <link rel="stylesheet" href="styles.css?v=20261025b" />
   </head>
   <body>
     <a class="skip-link" href="#main">跳到正文</a>
@@ -196,12 +196,23 @@
         <div class="wrap">
           <div class="section-head">
             <h2>快速开始</h2>
-            <p>四条命令，跑起来一条可以审阅的流水线。安装包自带 <code>pipeline</code> 命令，配置和数据都留在本机。</p>
+            <p>选一种方式，跑起来一条可以审阅的流水线。安装后自带 <code>pipeline</code> 命令，配置和数据都留在本机。</p>
           </div>
 
           <div class="install" data-tabs>
             <div class="tabs" role="tablist" aria-label="安装方式">
-              <button class="tab" id="tab-release" type="button" role="tab" aria-selected="true" aria-controls="panel-release" tabindex="0">
+              <button class="tab" id="tab-npm" type="button" role="tab" aria-selected="true" aria-controls="panel-npm" tabindex="0">
+                npm 安装
+              </button>
+              <button
+                class="tab"
+                id="tab-release"
+                type="button"
+                role="tab"
+                aria-selected="false"
+                aria-controls="panel-release"
+                tabindex="-1"
+              >
                 发布物安装
               </button>
               <button class="tab" id="tab-source" type="button" role="tab" aria-selected="false" aria-controls="panel-source" tabindex="-1">
@@ -212,15 +223,40 @@
               </button>
             </div>
 
-            <div class="tab-panel" id="panel-release" role="tabpanel" aria-labelledby="tab-release">
+            <div class="tab-panel" id="panel-npm" role="tabpanel" aria-labelledby="tab-npm">
+              <div class="terminal">
+                <div class="terminal-head">
+                  <span>zsh — npm</span>
+                  <button class="copy-btn" type="button" data-copy-target="code-npm">复制</button>
+                </div>
+                <pre id="code-npm"><code><span class="t-comment"># 全局安装（需要 Node.js ≥ 22.5）</span>
+npm install -g pipeline-factory
+
+<span class="t-comment"># 启动</span>
+pipeline start
+<span class="t-comment"># → http://127.0.0.1:4310/</span>
+
+<span class="t-comment"># 升级</span>
+pipeline update
+<span class="t-comment"># 等价于 npm install -g --prefix &lt;当前前缀&gt; pipeline-factory@latest</span></code></pre>
+              </div>
+              <p class="panel-note">
+                主发布通道：
+                <a href="https://www.npmjs.com/package/pipeline-factory" target="_blank" rel="noreferrer"
+                  >npmjs.com/package/pipeline-factory</a
+                >。 数据与配置仍在 <code>~/.pipeline-factory</code>；npm 包不包含 Claude Agent SDK。
+              </p>
+            </div>
+
+            <div class="tab-panel" id="panel-release" role="tabpanel" aria-labelledby="tab-release" hidden>
               <div class="terminal">
                 <div class="terminal-head">
                   <span>zsh — pipeline-factory</span>
                   <button class="copy-btn" type="button" data-copy-target="code-release">复制</button>
                 </div>
                 <pre id="code-release"><code><span class="t-comment"># 1. 解压发布物</span>
-tar -xzf pipeline-factory-0.2.0.tar.gz
-cd pipeline-factory-0.2.0
+tar -xzf pipeline-factory-0.2.2.tar.gz
+cd pipeline-factory-0.2.2
 
 <span class="t-comment"># 2. 安装（保留已有 config/ 与 var/）</span>
 ./install.sh
@@ -647,6 +683,6 @@ npm install --no-save @anthropic-ai/claude-agent-sdk@0.3.283
       </div>
     </footer>
 
-    <script src="app.js?v=20261025a" defer></script>
+    <script src="app.js?v=20261025b" defer></script>
   </body>
 </html>
