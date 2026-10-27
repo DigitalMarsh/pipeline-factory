@@ -31,7 +31,7 @@
     />
     <meta name="twitter:image" content="https://digitalmarsh.github.io/pipeline-factory/assets/og.png" />
     <meta name="theme-color" content="#f7f9fc" />
-    <link rel="stylesheet" href="styles.css?v=20261025b" />
+    <link rel="stylesheet" href="styles.css?v=20261025c" />
   </head>
   <body>
     <a class="skip-link" href="#main">跳到正文</a>
@@ -300,15 +300,21 @@ pnpm start
                   <span>zsh — claude backend</span>
                   <button class="copy-btn" type="button" data-copy-target="code-claude">复制</button>
                 </div>
-                <pre id="code-claude"><code><span class="t-comment"># 安装包不包含 Claude Agent SDK，按需装进安装目录</span>
-cd ~/.pipeline-factory/app
-npm install --no-save @anthropic-ai/claude-agent-sdk@0.3.283
+                <pre id="code-claude"><code><span class="t-comment"># npm 全局安装：与 pipeline-factory 用同一个 prefix（兄弟包）</span>
+npm install -g @anthropic-ai/claude-agent-sdk@0.3.283
 
-<span class="t-comment"># 配置里切后端与模型</span>
-<span class="t-comment"># "model": { "backend": "claude-agent-sdk" }</span>
-<span class="t-comment"># 或指向 SDK 入口：model.claudeAgent.sdkPath</span></code></pre>
+<span class="t-comment"># 离线发布物：装进 app/，Node 会向上解析</span>
+cd ~/.pipeline-factory/app && npm install --no-save @anthropic-ai/claude-agent-sdk@0.3.283
+
+<span class="t-comment"># 任意系统目录：用 sdkPath 指向入口文件（升级不影响）</span>
+<span class="t-comment"># "model": { "backend": "claude-agent-sdk",</span>
+<span class="t-comment">#   "claudeAgent": { "sdkPath": "/path/to/sdk.mjs" } }</span></code></pre>
               </div>
-              <p class="panel-note">SDK 缺失只会影响 Claude 后端（<code>CLAUDE_AGENT_SDK_UNAVAILABLE</code>）；Codex 后端不受影响。</p>
+              <p class="panel-note">
+                安装包不包含 SDK。npm 全局安装时让 SDK 与 Factory 用同一个 prefix；离线发布物的
+                <code>app/</code> 会在升级时被替换，装在那里需要在升级后重装，或改用 <code>sdkPath</code> 指向固定位置。SDK 缺失只影响
+                Claude 后端。
+              </p>
             </div>
           </div>
 
@@ -683,6 +689,6 @@ npm install --no-save @anthropic-ai/claude-agent-sdk@0.3.283
       </div>
     </footer>
 
-    <script src="app.js?v=20261025b" defer></script>
+    <script src="app.js?v=20261025c" defer></script>
   </body>
 </html>
