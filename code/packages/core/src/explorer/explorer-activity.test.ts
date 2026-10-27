@@ -132,6 +132,77 @@ describe("Explorer activity projection", () => {
     expect(items[0]).toMatchObject({ kind: "ASSISTANT_MESSAGE", summary: "完成的回复", status: "COMPLETED" });
   });
 
+  it("marks a text-bearing assistant activity cancelled when the user stopped the turn", () => {
+    const items = projectExplorerActivity({
+      turns: [
+        {
+          id: "assistant-1",
+          threadId: "explorer-1",
+          role: "assistant",
+          content: "本轮已取消",
+          status: "CANCELLED",
+          createdAt: "2026-08-29T10:00:00.000Z",
+          sequence: 1,
+        },
+      ],
+      loops: [
+        {
+          id: "loop-1",
+          ownerType: "explorer-turn",
+          ownerId: "assistant-1",
+          role: "explorer",
+          mode: "provider-controlled",
+          state: "CANCELLED",
+          stepCount: 1,
+          maxSteps: 40,
+          startedAt: "2026-08-29T10:00:00.000Z",
+          completedAt: "2026-08-29T10:00:02.000Z",
+          providerThreadId: null,
+          providerTurnId: null,
+          checkpointJson: null,
+        },
+      ],
+      steps: [
+        {
+          loopId: "loop-1",
+          sequence: 1,
+          stepType: "MODEL_TEXT_DELTA",
+          status: "COMPLETED",
+          callId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          payload: { text: "说到一半的回复" },
+          occurredAt: "2026-08-29T10:00:01.000Z",
+        },
+      ],
+    });
+
+    // 用户点了「停止」：已经产出的正文保留，但状态不能说成「已完成」。
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "ASSISTANT_MESSAGE", summary: "说到一半的回复", status: "CANCELLED" });
+  });
+
+  it("marks the content fallback cancelled when the turn stopped before any delta", () => {
+    const items = projectExplorerActivity({
+      turns: [
+        {
+          id: "assistant-1",
+          threadId: "explorer-1",
+          role: "assistant",
+          content: "本轮已取消",
+          status: "CANCELLED",
+          createdAt: "2026-08-29T10:00:00.000Z",
+          sequence: 1,
+        },
+      ],
+      loops: [],
+      steps: [],
+    });
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "ASSISTANT_MESSAGE", status: "CANCELLED" });
+  });
+
   it("renders loop steps in chronological order and groups contiguous model deltas", () => {
     const items = projectExplorerActivity({
       turns: [

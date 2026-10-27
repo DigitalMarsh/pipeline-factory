@@ -320,7 +320,7 @@ export type ExplorerActivityItem = {
   turnId: string;
   sequence: number;
   kind: ExplorerActivityKind;
-  status: "RUNNING" | "COMPLETED" | "FAILED" | "WAITING" | "UNKNOWN";
+  status: "RUNNING" | "COMPLETED" | "FAILED" | "WAITING" | "CANCELLED" | "UNKNOWN";
   title: string;
   summary: string;
   details: Record<string, unknown> | null;

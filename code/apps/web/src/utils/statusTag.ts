@@ -21,13 +21,14 @@ import type { RequirementStatusTone } from "./explorerRequirementRows";
 export type StatusTagType = "primary" | "success" | "info" | "warning" | "danger";
 
 /** 执行会话条目（`ExecutionStreamItem`）与探索活动（`ExplorerActivityItem`）共用的状态取值。 */
-export function statusTagType(status: "RUNNING" | "COMPLETED" | "WAITING" | "FAILED" | "INFO" | "UNKNOWN"): StatusTagType {
+export function statusTagType(status: "RUNNING" | "COMPLETED" | "WAITING" | "FAILED" | "CANCELLED" | "INFO" | "UNKNOWN"): StatusTagType {
   return (
     {
       RUNNING: "warning",
       COMPLETED: "success",
       WAITING: "info",
       FAILED: "danger",
+      CANCELLED: "info",
       INFO: "info",
       UNKNOWN: "info",
     } as const

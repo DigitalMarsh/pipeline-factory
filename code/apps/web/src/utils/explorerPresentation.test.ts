@@ -69,19 +69,21 @@ describe("输入请求状态文案", () => {
 });
 
 describe("活动条目文案", () => {
-  it("五档状态都有中文文案，与执行线程同一套词", () => {
+  it("各档状态都有中文文案，与执行线程同一套词", () => {
     expect(activityStatusLabel({ status: "WAITING" })).toBe("等待中");
     expect(activityStatusLabel({ status: "FAILED" })).toBe("失败");
     expect(activityStatusLabel({ status: "RUNNING" })).toBe("进行中");
     expect(activityStatusLabel({ status: "COMPLETED" })).toBe("已完成");
+    expect(activityStatusLabel({ status: "CANCELLED" })).toBe("已停止");
     expect(activityStatusLabel({ status: "UNKNOWN" })).toBe("状态未知");
   });
 
-  it("助手消息卡片把回合状态归成四档（`WAITING` 自己一档，不并进「已完成」）", () => {
+  it("助手消息卡片把回合状态归成五档（`WAITING` 自己一档，不并进「已完成」；停止也不并进「已完成」）", () => {
     expect(assistantActivityLabel({ status: "RUNNING" })).toBe("进行中");
     expect(assistantActivityLabel({ status: "WAITING" })).toBe("等待中");
     expect(assistantActivityLabel({ status: "FAILED" })).toBe("失败");
     expect(assistantActivityLabel({ status: "COMPLETED" })).toBe("已完成");
+    expect(assistantActivityLabel({ status: "CANCELLED" })).toBe("已停止");
     // 与活动行同一套词：同一种状态在探索侧只有一种说法。
     expect(assistantActivityLabel({ status: "WAITING" })).toBe(activityStatusLabel({ status: "WAITING" }));
   });

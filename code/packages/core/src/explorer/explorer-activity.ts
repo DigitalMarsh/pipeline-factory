@@ -350,7 +350,7 @@ export function projectExplorerActivity(input: ExplorerActivityInput): ExplorerA
           ...(turn.explorerPlanId ? { explorerPlanId: turn.explorerPlanId } : {}),
           turnId: turn.id,
           kind: "ASSISTANT_MESSAGE",
-          status: turn.status === "FAILED" ? "FAILED" : "COMPLETED",
+          status: turn.status === "FAILED" ? "FAILED" : turn.status === "CANCELLED" ? "CANCELLED" : "COMPLETED",
           title: "Plan Explorer",
           summary: display.summary,
           details: turn.error ? { error: turn.error, ...(display.details ?? {}) } : display.details,
@@ -367,14 +367,22 @@ export function projectExplorerActivity(input: ExplorerActivityInput): ExplorerA
           turnId: turn.id,
           kind: "TURN_STATUS",
           status:
-            turn.status === "WAITING_FOR_INPUT" || turn.status === "QUEUED" ? "WAITING" : turn.status === "FAILED" ? "FAILED" : "RUNNING",
+            turn.status === "WAITING_FOR_INPUT" || turn.status === "QUEUED"
+              ? "WAITING"
+              : turn.status === "FAILED"
+                ? "FAILED"
+                : turn.status === "CANCELLED"
+                  ? "CANCELLED"
+                  : "RUNNING",
           title: "Plan Explorer",
           summary:
             turn.status === "WAITING_FOR_INPUT"
               ? "等待输入"
               : turn.status === "QUEUED"
                 ? "已排队，等待 worker 接手"
-                : "Plan Explorer 正在处理",
+                : turn.status === "CANCELLED"
+                  ? "本轮已停止"
+                  : "Plan Explorer 正在处理",
           details: turn.error ? { error: turn.error } : null,
           occurredAt: turn.createdAt,
         },
@@ -430,7 +438,9 @@ function closeDanglingCalls(items: Iterable<ActivityWithOrder>): void {
 function assistantActivityStatus(status: ExplorerTurn["status"]): ExplorerActivityItem["status"] {
   if (status === "FAILED") return "FAILED";
   if (status === "WAITING_FOR_INPUT" || status === "QUEUED") return "WAITING";
-  if (status === "COMPLETED" || status === "CANCELLED") return "COMPLETED";
+  // 用户点了「停止」：这一轮不是跑完的，气泡不能写「已完成」——保留已经产出的正文，但状态要说实话。
+  if (status === "CANCELLED") return "CANCELLED";
+  if (status === "COMPLETED") return "COMPLETED";
   return "RUNNING";
 }
 

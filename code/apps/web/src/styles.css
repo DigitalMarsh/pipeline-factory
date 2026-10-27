@@ -2428,11 +2428,20 @@ a {
 .composer-status {
   margin-right: auto;
 }
-.composer-send.el-button {
+.composer-send.el-button,
+.composer-stop.el-button {
   width: 32px;
   height: 32px;
   padding: 0;
   border-radius: 50%;
+}
+/* 停止按钮里的方块：不用图标字体，纯 CSS 画出来，颜色跟着 el-button 的 currentColor 走。 */
+.composer-stop-icon {
+  display: block;
+  width: 9px;
+  height: 9px;
+  border-radius: 1px;
+  background: currentColor;
 }
 .composer-footer {
   gap: 12px;

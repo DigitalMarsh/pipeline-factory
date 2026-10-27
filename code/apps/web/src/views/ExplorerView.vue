@@ -19,6 +19,7 @@ import { scrollTimelineToLatest } from "../utils/scrollTimeline";
 import { optional } from "../utils/optional";
 import { closePolicyPanel, openPolicyPanel } from "../utils/policyPanel";
 import { createOptimisticUserTurn, settleOptimisticTurn } from "../utils/optimisticTurn";
+import { stoppableExplorerTurn } from "../utils/explorerTurnControl";
 import { formatContextUsage } from "../utils/explorerStatus";
 import ExplorerInputDialog from "../components/ExplorerInputDialog.vue";
 import ExplorerMessageRow from "../components/ExplorerMessageRow.vue";
@@ -331,6 +332,13 @@ const activePlanBusy = computed(() =>
   ),
 );
 const activePlanWaitingForInput = computed(() => visibleTurns.value.some((turn) => turn.status === "WAITING_FOR_INPUT"));
+/**
+ * 「停止」指向的回合：当前需求里正在跑（或排队）的助手回合，在跑的那一轮优先
+ * （判据见 `utils/explorerTurnControl`）。发送请求还没回来（`sendingCurrentPlan`）时
+ * 没有服务端回合可取消，按钮在模板里一并收起。
+ */
+const stoppableTurn = computed(() => stoppableExplorerTurn(visibleTurns.value));
+const stoppingTurnId = ref<string | null>(null);
 const sendingCurrentPlan = computed(() => Boolean(activeExplorerPlan.value && pendingSendPlanIds.value.has(activeExplorerPlan.value.id)));
 
 /**
@@ -1405,6 +1413,37 @@ async function load(): Promise<boolean> {
   }
 }
 
+/**
+ * 停止当前探索回合：本轮立刻转 CANCELLED（服务端同时取消 Provider 调用 / AgentLoop、关闭待回答的输入卡），
+ * 输入口随之让出来——用户可以补充消息后重新发起。
+ *
+ * 服务端会发 `turn.cancelled` SSE，`refreshTurnsAfterEvent` 随后补齐投影；这里先本地改状态，
+ * 让停止按钮立刻收起、输入框立刻可用，不用等下一帧事件。
+ */
+async function stopExplorerTurn(): Promise<void> {
+  const turn = stoppableTurn.value;
+  const currentThread = thread.value;
+  const requestProjectId = projectId.value;
+  if (!turn || !currentThread || !requestProjectId || stoppingTurnId.value) return;
+  stoppingTurnId.value = turn.id;
+  try {
+    const response = await api.cancelExplorerTurn(requestProjectId, currentThread.id, turn.id, "user_cancelled");
+    if (thread.value?.id !== currentThread.id) return;
+    turns.value = turns.value.map((item) => (item.id === turn.id ? response.turn : item));
+    await refreshActivity();
+    ElMessage.info("已停止本轮探索，可以补充消息后重新发起");
+    await nextTick();
+    document.querySelector<HTMLTextAreaElement>(".composer textarea")?.focus();
+  } catch (caught) {
+    // 回合可能刚好自己跑完了（服务端找不到可取消的 job）：刷新一次让界面回到真实状态，
+    // 而不是让用户对着一个永远停不掉的按钮。
+    await refreshPlanProjection();
+    ElMessage.error(caught instanceof Error ? `停止探索失败：${caught.message}` : "停止探索失败");
+  } finally {
+    stoppingTurnId.value = null;
+  }
+}
+
 /** 先乐观写入用户消息，再由 v4 API/SSE 补齐 Provider 输出和 Plan 活动。 */
 async function sendTurn(): Promise<boolean> {
   const content = draft.value.trim();
@@ -1989,6 +2028,8 @@ onBeforeUnmount(() => {
                 :busy="busy"
                 :active-plan-busy="activePlanBusy"
                 :active-plan-waiting-for-input="activePlanWaitingForInput"
+                :stoppable="Boolean(stoppableTurn) && !sendingCurrentPlan"
+                :stopping="stoppingTurnId !== null"
                 :sending="sendingCurrentPlan"
                 :pending-input="Boolean(pendingInput)"
                 :input-answer-in-flight="inputAnswerInFlight"
@@ -1999,6 +2040,7 @@ onBeforeUnmount(() => {
                 :backend="explorerBackendLabel"
                 :context="contextUsage"
                 @send="sendTurn"
+                @stop="stopExplorerTurn"
                 @add="addAttachmentFiles"
                 @remove="removeAttachment"
               />

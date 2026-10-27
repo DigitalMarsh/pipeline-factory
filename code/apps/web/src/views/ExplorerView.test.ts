@@ -846,6 +846,19 @@ describe("Explorer composer availability", () => {
     );
   });
 
+  it("turns the send button into a stop button while the requirement has a running turn", () => {
+    // 按钮位在 ExplorerComposer；"这一轮能不能停"与真正发取消请求都归视图。
+    expect(flat(explorerComposerSource)).toContain(flat('v-if="stoppable"'));
+    expect(flat(explorerComposerSource)).toContain(flat(`@click="emit('stop')"`));
+    expect(flat(explorerComposerSource)).toContain(flat('aria-label="停止本轮探索"'));
+    expect(flat(explorerComposerSource)).toContain(flat("Plan Explorer 正在探索，可随时停止并补充消息。"));
+    expect(flat(explorerViewSource)).toContain(flat(':stoppable="Boolean(stoppableTurn) && !sendingCurrentPlan"'));
+    expect(flat(explorerViewSource)).toContain(flat('@stop="stopExplorerTurn"'));
+    expect(flat(explorerViewSource)).toContain(
+      flat('api.cancelExplorerTurn(requestProjectId, currentThread.id, turn.id, "user_cancelled")'),
+    );
+  });
+
   it("explains why the send button is unavailable while the selected requirement is running", () => {
     expect(flat(explorerComposerSource)).toContain(
       flat(`:title="pendingInput ? '请先回答上方结构化问题' : activePlanBusy ? '当前需求回合执行中，完成后可继续' : '发送消息'"`),

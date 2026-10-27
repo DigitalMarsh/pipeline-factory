@@ -54,6 +54,7 @@ export function activityStatusLabel(item: Pick<ExplorerActivityItem, "status">):
       COMPLETED: "已完成",
       FAILED: "失败",
       WAITING: "等待中",
+      CANCELLED: "已停止",
       UNKNOWN: "状态未知",
     } as Record<ExplorerActivityItem["status"], string>
   )[item.status];
@@ -71,6 +72,7 @@ export function assistantActivityLabel(item: Pick<ExplorerActivityItem, "status"
   if (item.status === "RUNNING") return "进行中";
   if (item.status === "WAITING") return "等待中";
   if (item.status === "FAILED") return "失败";
+  if (item.status === "CANCELLED") return "已停止";
   return "已完成";
 }
 
