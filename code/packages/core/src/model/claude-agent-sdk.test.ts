@@ -299,6 +299,8 @@ describe("ClaudeAgentSdkGateway", () => {
     expect(captures[0]?.options.tools).not.toContain("AskUserQuestion");
     expect(captures[0]?.options.disallowedTools).toContain("AskUserQuestion");
     expect(captures[0]?.options.permissionMode).toBe("acceptEdits");
+    // 执行侧有真实的 Bash，不能带"没有 shell"那段说明。
+    expect((captures[0]?.options.systemPrompt as { append?: string } | undefined)?.append ?? "").not.toContain("本会话没有 Bash");
   });
 
   it("keeps the explorer read-only in plan mode and denies requests that leave the session directory", async () => {
@@ -328,6 +330,11 @@ describe("ClaudeAgentSdkGateway", () => {
     expect(captures[0]?.options.permissionMode).toBe("plan");
     expect(captures[0]?.options.cwd).toBe("/tmp/repo");
     expect(typeof captures[0]?.options.planModeInstructions).toBe("string");
+    // 工具清单里没有 Bash，提示词必须把这件事说死，否则模型会先试 `ls` / `git status` 白费一轮。
+    const append = (captures[0]?.options.systemPrompt as { append?: string } | undefined)?.append ?? "";
+    expect(append).toContain("本会话没有 Bash");
+    expect(append).toContain("Glob");
+    expect(append).toContain("Read");
     expect(outsideResult).toMatchObject({ behavior: "deny" });
   });
 

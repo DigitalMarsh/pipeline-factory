@@ -1,5 +1,30 @@
 # Changelog
 
+## 2026-10-27 — v0.2.4：探索会话的工具说明
+
+Claude 后端下，Explorer 的工具清单本来就没有 Bash（只读），但模型会按 Claude Code 的习惯先试
+`ls` / `git status`，于是收到 `No such tool available: Bash` 并白费一轮；读一个不存在的路径也会
+换来一句 `File does not exist`。两者都会作为工具错误出现在探索时间线上。
+
+- Explorer 的系统提示词现在明确写出：本会话没有 Bash / shell 工具，列目录与找文件用 Glob、
+  搜内容用 Grep；Read 之前先用 Glob 或 Grep 确认路径；WebFetch 的域名校验失败时不要反复重试。
+- 这段说明是**代码里的全局默认**，对所有项目和已有配置生效，不需要改
+  `models.explorer.developerInstructions`；Codex 后端不受影响（它的 Explorer 有只读沙箱 shell）。
+- WebFetch 的域名预检属于 Claude Code 的设置项：受限网络下仍需在 `~/.claude/settings.json`
+  （或 `model.claudeAgent.settingsPath` 指向的文件）里加 `"skipWebFetchPreflight": true`，
+  本次改动只是让模型不再对该失败反复重试。
+
+本版无数据库 schema 或配置字段变更，可直接升级：
+
+```bash
+pipeline update
+# 或
+npm install -g pipeline-factory@latest
+```
+
+验证：`pnpm verify` 全绿；Claude 适配器测试断言 Explorer 提示词包含该说明、Executor 不含；
+打包、临时前缀安装与升级链路实测。
+
 ## 2026-10-27 — v0.2.3：Claude Agent SDK 安装提示修正
 
 修正 `CLAUDE_AGENT_SDK_UNAVAILABLE` 的排障提示。旧提示建议“全局安装并配置 NODE_PATH”，

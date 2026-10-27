@@ -32,6 +32,9 @@
  *      （要越出会话目录）的请求一律拒绝 —— 这是本适配器唯一的安全策略，不要放宽成"一律 allow"。
  *   5) 会话丢失（换供应商、清目录、换机器）时用本地 turns 重建：SDK 的会话记录落在
  *      ~/.claude/projects/ 下，所以重建前先用 getSessionInfo 确认它在不在，见 resolveResume()。
+ *   6) **Explorer 的提示词里明说"没有 Bash"**（CLAUDE_EXPLORER_TOOL_NOTES）：工具清单本身就不含
+ *      Bash，但模型会按 Claude Code 的习惯先试 `ls` / `git status`，于是拿到
+ *      "No such tool available: Bash" 白费一轮。它是代码里的全局默认，不依赖项目配置。
  */
 
 import { readFileSync } from "node:fs";
@@ -150,6 +153,22 @@ const ROLE_DISALLOWED_TOOLS: Record<ModelRole, string[]> = {
   explorer: ["ExitPlanMode"],
   executor: ["ExitPlanMode", "AskUserQuestion", "WebFetch", "WebSearch", "Task"],
 };
+
+/**
+ * Explorer 会话的工具使用说明。**没有 Bash 是工具清单层面的事实**（见 ROLE_TOOLS），
+ * 但模型会按 Claude Code 的习惯先试 `ls` / `git status`，拿到 "No such tool available: Bash"
+ * 再改道——白费一轮，错误文本还会落进时间线。这里把它说死；顺带要求 Read 之前先确认路径，
+ * 因为读一个不存在的文件同样只换来一句 "File does not exist"。
+ *
+ * 写成代码里的全局默认而不是项目配置里的 `developerInstructions`：已有项目升级后不用再改配置。
+ * **只加在 Claude 一侧**——Codex 的 Explorer 有 read-only 沙箱 shell，那段说明对它不成立。
+ */
+const CLAUDE_EXPLORER_TOOL_NOTES = [
+  "本会话没有 Bash，也没有任何 shell 工具；可用工具是 Read、Grep、Glob、WebSearch、WebFetch、Task、AskUserQuestion。",
+  "不要尝试调用 Bash，也不要用命令查看目录、读取文件或执行 git：列目录与找文件用 Glob，搜内容用 Grep。",
+  "调用 Read 之前先用 Glob 或 Grep 确认路径存在，不要凭记忆拼路径；读取不存在的文件只会白白浪费一轮。",
+  "需要外部资料时用 WebFetch / WebSearch；某个域名无法校验或抓取失败时不要反复重试，改用已有信息或向用户说明。",
+].join("\n");
 
 /** Provider 侧本次提问的原始题目：生成 Domain 结构、回译答案、以及 init 状态都用它。 */
 type ProviderQuestion = {
@@ -368,7 +387,13 @@ export class ClaudeAgentSdkGateway implements ModelGateway {
     events: ModelEventQueue,
     stderrTail: string[],
   ): Options {
-    const systemPromptAppend = [systemInstructions(request.messages), roleConfig.developerInstructions].filter(Boolean).join("\n\n");
+    const systemPromptAppend = [
+      systemInstructions(request.messages),
+      request.role === "explorer" ? CLAUDE_EXPLORER_TOOL_NOTES : "",
+      roleConfig.developerInstructions,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
     const effort = asEffort(roleConfig.reasoningEffort);
     return {
       cwd,
