@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-10-27 — v0.2.3：Claude Agent SDK 安装提示修正
+
+修正 `CLAUDE_AGENT_SDK_UNAVAILABLE` 的排障提示。旧提示建议“全局安装并配置 NODE_PATH”，
+但 ESM 的裸包解析并不认 `NODE_PATH`，照着做仍然会失败。
+
+- 未配置 `sdkPath` 时，提示改为：把 SDK 装到与 Pipeline Factory 相同的 npm prefix（全局安装的兄弟包）；
+  离线发布物可装进 `app/`；其他位置用 `model.claudeAgent.sdkPath` 指向入口文件的绝对路径。
+- 配置了 `sdkPath` 但加载失败时，提示确认它确实指向 SDK 入口文件，或删除后改用同一 prefix / `app/`。
+- 同步更新 `sdkPath` 的类型注释与官网 FAQ。
+
+本版无数据库 schema 或配置字段变更，可直接升级：
+
+```bash
+pipeline update
+# 或
+npm install -g pipeline-factory@latest
+```
+
+验证：`pnpm verify` 全绿；`claude-sdk-loading` 测试通过；打包、临时前缀安装与升级链路实测。
+
 ## 2026-10-24 — v0.2.2：npm 全局安装
 
 新增 **npm 分发方式**，不再需要下载安装包：
