@@ -120,7 +120,7 @@ GitHub Actions 页面重跑旧的一次成功部署。
 
 页面里的版本号、安装命令与 GitHub 链接需要和发布物保持一致。升级发布物时，至少检查：
 
-- `index.html` 中的 `pipeline-factory-0.2.2.tar.gz` 文件名与 npm 版本号；
+- `index.html` 中的 `pipeline-factory-0.2.3.tar.gz` 文件名与 npm 版本号；
 - 前置条件（Node / Git 版本）；
 - FAQ 中的错误码与处理方式。
 
