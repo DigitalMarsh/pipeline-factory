@@ -81,11 +81,12 @@ export type ClaudeAgentSdkGatewayOptions = {
   /** 每次 query 的最大回合数；作为 loop 步数上限之外的二级保护。 */
   maxTurns?: number | undefined;
   /**
-   * `@anthropic-ai/claude-agent-sdk` 的模块名或**绝对路径**。
+   * `@anthropic-ai/claude-agent-sdk` 的模块名或**入口文件绝对路径**。
    *
    * 发布物**不携带**这个 SDK（体积主要来自平台二进制）；目标机器需要自行提供：
-   * 让 Node 能解析到该包（例如全局安装并在 NODE_PATH 中），或把这里指向 SDK 的入口文件。
-   * 缺省是包名，解析失败时只在真正使用 Claude 后端时抛出可诊断错误。
+   * 装到与 Factory 相同的 npm prefix（全局安装时的兄弟包），或离线发布物的 app/ 目录；
+   * 也可以放在任意系统位置，把这里指向 SDK 入口文件。缺省是包名，解析失败时只在真正
+   * 使用 Claude 后端时抛出可诊断错误。
    */
   sdkPath?: string | undefined;
   /** 测试注入；缺省用 SDK 的 query()。 */
@@ -110,11 +111,12 @@ function loadClaudeSdk(sdkPath?: string): Promise<ClaudeSdkModule> {
   const loading = import(specifier).catch((error: unknown) => {
     sdkModules.delete(specifier);
     const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `CLAUDE_AGENT_SDK_UNAVAILABLE: cannot load "${specifier}". 安装包不包含 Claude Agent SDK；` +
-        `请让目标机器上的 Node 能解析该包（全局安装并配置 NODE_PATH），或在 model.claudeAgent.sdkPath 指向其入口文件。` +
-        ` 原因：${reason}`,
-    );
+    const guidance = sdkPath?.trim()
+      ? `model.claudeAgent.sdkPath 指向的文件无法加载；请确认它是 SDK 入口文件的绝对路径，` +
+        `或删除 sdkPath 后把 SDK 装到与 Pipeline Factory 相同的 npm prefix（或离线发布物的 app/ 目录）。`
+      : `请把 SDK 装到与 Pipeline Factory 相同的 npm prefix（npm install -g @anthropic-ai/claude-agent-sdk，` +
+        `自定义 prefix 时加同一个 --prefix）；离线发布物可装进 app/；其他位置请用 model.claudeAgent.sdkPath 指向入口文件。`;
+    throw new Error(`CLAUDE_AGENT_SDK_UNAVAILABLE: cannot load "${specifier}". 安装包不包含 Claude Agent SDK；${guidance} 原因：${reason}`);
   });
   sdkModules.set(specifier, loading);
   return loading;

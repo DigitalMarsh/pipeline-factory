@@ -31,7 +31,7 @@
     />
     <meta name="twitter:image" content="https://digitalmarsh.github.io/pipeline-factory/assets/og.png" />
     <meta name="theme-color" content="#f7f9fc" />
-    <link rel="stylesheet" href="styles.css?v=20261025c" />
+    <link rel="stylesheet" href="styles.css?v=20261025d" />
   </head>
   <body>
     <a class="skip-link" href="#main">跳到正文</a>
@@ -590,8 +590,9 @@ cd ~/.pipeline-factory/app && npm install --no-save @anthropic-ai/claude-agent-s
             <details>
               <summary>出现 <code>CLAUDE_AGENT_SDK_UNAVAILABLE</code>？<span class="faq-plus" aria-hidden="true"></span></summary>
               <p>
-                只有使用 Claude 后端时才会出现。把 SDK 装进安装目录的 <code>app/</code>，或在配置里用
-                <code>model.claudeAgent.sdkPath</code> 指向 SDK 入口文件。使用 Codex 后端不受影响。
+                只有使用 Claude 后端时才会出现。npm 全局安装时把 SDK 装到与 Factory 相同的 prefix；离线发布物可装进
+                <code>app/</code>（升级会替换该目录，需重装）；其他位置用 <code>model.claudeAgent.sdkPath</code> 指向 SDK
+                入口文件的绝对路径。使用 Codex 后端不受影响。
               </p>
             </details>
             <details>
@@ -689,6 +690,6 @@ cd ~/.pipeline-factory/app && npm install --no-save @anthropic-ai/claude-agent-s
       </div>
     </footer>
 
-    <script src="app.js?v=20261025c" defer></script>
+    <script src="app.js?v=20261025d" defer></script>
   </body>
 </html>
