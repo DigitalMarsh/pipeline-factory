@@ -71,7 +71,6 @@ function setup(options: { withLoop?: boolean; sequence?: number | null } = {}) {
   const agentLoop = ref<AgentLoop | null>(options.withLoop ? ({ id: "loop-1", state: "RUNNING" } as unknown as AgentLoop) : null);
   const explorerPaused = ref(false);
   const explorerEventSequence = ref<number | null>(options.sequence ?? null);
-  const timeline = ref<HTMLElement | null>(null);
   const refreshActivity = vi.fn(async () => undefined);
   const refreshPlanProjection = vi.fn(async () => undefined);
   const scheduleProjectionRefresh = vi.fn();
@@ -90,7 +89,6 @@ function setup(options: { withLoop?: boolean; sequence?: number | null } = {}) {
     agentLoop,
     explorerPaused,
     explorerEventSequence,
-    timeline,
     projectScopeToken: () => token,
     isCurrentProjectScope,
     refreshActivity,

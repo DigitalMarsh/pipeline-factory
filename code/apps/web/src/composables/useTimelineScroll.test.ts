@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * 测试职责：锁住时间线的"是否已滚到底"与"当前激活键"两条判定。
+ * 测试职责：锁住时间线的"是否已滚到底"、"当前激活键"与"新内容到达时是否跟随"三条判定。
  *
  * 设计说明：composable 不用生命周期钩子，所以可以脱离组件直接调用（放进 effectScope
  * 以保留 `ref`/`computed` 的作用域语义）。仓库没有 `@vue/test-utils`，这里用裸 DOM
@@ -11,7 +11,7 @@
  * 不是像素几何。像素几何由样式与 `marker` 常量承担，改 `data-nav-key` 约定时
  * 必须同步改这里断言的字符串。
  */
-import { effectScope, ref } from "vue";
+import { effectScope, nextTick, ref } from "vue";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ExplorerActivityItem, Plan } from "../types";
 import { useTimelineScroll } from "./useTimelineScroll";
@@ -65,10 +65,11 @@ function navNode(parent: HTMLElement, navKey: string, id?: string): HTMLElement 
 function setup() {
   const visibleActivity = ref<ExplorerActivityItem[]>([]);
   const planBindings = ref<Map<string, Plan>>(new Map());
+  const content = ref<unknown>(0);
   const timeline = ref<HTMLElement | null>(null);
   const scope = effectScope();
-  const api = scope.run(() => useTimelineScroll(timeline, { visibleActivity, planBindings }))!;
-  return { ...api, timeline, visibleActivity, planBindings, scope };
+  const api = scope.run(() => useTimelineScroll(timeline, { visibleActivity, planBindings, content }))!;
+  return { ...api, timeline, visibleActivity, planBindings, content, scope };
 }
 
 afterEach(() => {
@@ -117,6 +118,64 @@ describe("跳回最新", () => {
     expect(showScrollToLatest.value).toBe(false);
     jumpToLatest();
     expect(el.scrollTop).toBe(1000);
+  });
+});
+
+describe("新内容到达时的跟随", () => {
+  /**
+   * 一次内容变化要跨两个 nextTick：第一跳跑 pre-flush 的判定（此时读到的还是旧高度），
+   * 第二跳才轮到判定之后的下一次渲染与滚动。两次之间是"显式跳锚点"能插进来的窗口。
+   */
+  async function settleContentChange() {
+    await nextTick();
+    await nextTick();
+  }
+
+  it("原本贴着底部：内容变化后继续贴底", async () => {
+    const { timeline, content, showScrollToLatest } = setup();
+    const el = container({ clientHeight: 100, scrollHeight: 1000, scrollTop: 900 });
+    timeline.value = el;
+    showScrollToLatest.value = true;
+
+    content.value = 1;
+    await settleContentChange();
+
+    expect(el.scrollTop).toBe(1000);
+    expect(showScrollToLatest.value).toBe(false);
+  });
+
+  it("原本已经往上翻：不滚动，只亮出「跳到最新」", async () => {
+    const { timeline, content, showScrollToLatest } = setup();
+    const el = container({ clientHeight: 100, scrollHeight: 1000, scrollTop: 0 });
+    timeline.value = el;
+
+    content.value = 1;
+    await settleContentChange();
+
+    expect(el.scrollTop).toBe(0);
+    expect(showScrollToLatest.value).toBe(true);
+  });
+
+  it("同一次更新里显式跳了锚点：跟随让位，不把定位滚掉", async () => {
+    const { timeline, content, jumpToTimelineTarget } = setup();
+    const el = container({ clientHeight: 100, scrollHeight: 1000, scrollTop: 900 });
+    navNode(el, "message-activity-1", "message-anchor");
+    timeline.value = el;
+
+    content.value = 1;
+    await nextTick();
+    // 实际时序：切需求时视图在 nextTick 之后才跳锚点，正落在跟随回调"判定完、还没滚"之间。
+    jumpToTimelineTarget("message-anchor", "message-activity-1");
+    await nextTick();
+
+    expect(el.scrollTop).toBe(900);
+  });
+
+  it("没有容器时是空操作", async () => {
+    const { content } = setup();
+
+    content.value = 1;
+    await settleContentChange();
   });
 });
 

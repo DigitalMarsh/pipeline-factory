@@ -15,11 +15,10 @@
  * 5. 轮询刷新只做节流：Turn 文本 delta 仍即时合并到 turns，终态 / 输入 / Plan 事件
  *    仍按原语义立即回查；不要把业务投影逻辑塞进 EventSource handler。
  */
-import { nextTick, type Ref } from "vue";
+import type { Ref } from "vue";
 import { api } from "../api";
 import type { AgentLoop, ExplorerInputRequest, ExplorerPlan, ExplorerThread, ExplorerTurn } from "../types";
 import { createSseReplayGate } from "../utils/sseReplayGate";
-import { scrollTimelineToLatest } from "../utils/scrollTimeline";
 import { PROJECTION_REFRESH_INTERVAL_MS } from "./usePlanProjection";
 
 export type ExplorerSseDeps = {
@@ -32,7 +31,6 @@ export type ExplorerSseDeps = {
   agentLoop: Ref<AgentLoop | null>;
   explorerPaused: Ref<boolean>;
   explorerEventSequence: Ref<number | null>;
-  timeline: Ref<HTMLElement | null>;
   projectScopeToken: () => number;
   isCurrentProjectScope: (requestProjectId: string, requestToken?: number) => boolean;
   refreshActivity: () => Promise<void>;
@@ -87,8 +85,6 @@ export function useExplorerSse(deps: ExplorerSseDeps) {
     )
       return;
     deps.adoptInputRequest(null, inputResponse.items);
-    await nextTick();
-    if (deps.timeline.value) scrollTimelineToLatest(deps.timeline.value);
   }
 
   function connectEvents() {

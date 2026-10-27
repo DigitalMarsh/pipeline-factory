@@ -472,11 +472,11 @@ function planForTimelineItem(item: ExplorerTimelineItem): Plan | null {
 }
 
 /**
- * 时间线滚动状态（"是否已到底"与两条激活键）交给 composable。
+ * 时间线滚动状态（"是否已到底"、"两条激活键"与"新内容到达时是否跟随"）交给 composable。
  * `timeline` 的模板 ref 留在本文件——`ref="timeline"` 要求它是个顶层绑定。
  */
 const { activePlanKey, activeTimelineKey, jumpToLatest, jumpToTimelineTarget, showScrollToLatest, updateTimelineScrollState } =
-  useTimelineScroll(timeline, { visibleActivity, planBindings });
+  useTimelineScroll(timeline, { visibleActivity, planBindings, content: renderedTimelineItems });
 
 /**
  * 三条 SSE 通道及其生命周期交给 composable；视图只提供状态 ref、刷新回调与 load 回调。
@@ -492,7 +492,6 @@ const { connectEvents, connectLoopEvents, connectLoopEventsIfConnected, closeEve
   agentLoop,
   explorerPaused,
   explorerEventSequence,
-  timeline,
   projectScopeToken,
   isCurrentProjectScope,
   refreshActivity,
