@@ -1,25 +1,19 @@
 <!--
   模块职责：探索时间线上的**一条消息**——按行型选分支渲染（输入卡 / 你说的 / 模型说的 / 推理 /
   分隔行 / 动作行），最后一条兜底当场显示。
-  维护提示：新增一种行型时，先把它归到 `EXPLORER_ROW_MODES` 或 `EXPLORER_INLINE_MODES`（编译期护栏
-  会逼着人回答"它归哪一边"），再来这里补分支。
+
+  维护提示：
+  1. 行的几何、头像、meta、锚点全部交给 `ChatMessageShell`（与执行线程共用）；本文件只决定
+     "这一条是哪种形态、内容是什么"。
+  2. **过程行不挂头像**：推理 / 工具 / 输入卡都从内容栏开始，与正文同一左边界；头像只表示"谁在说"。
+  3. **它不判断"这条该不该显示"**：隐显由视图用 `EXPLORER_DISPLAY_MODES` 过一遍
+     （`renderedTimelineItems`），这里只管"长什么样"。新增取值没归到任何一边时，掉进
+     `.chat-unknown-row` **当场显示**。
+  4. 输入卡上的答案文案读的是本地草稿与在途标记（`inputProgress` / `inputAnswerInFlight`），
+     以 props 传入，不在这里复制一份状态。
+  5. 方案卡绑到哪条助手消息由视图算好（`planTimeline.planActivityBindings`），这里只负责摆。
 -->
 <script setup lang="ts">
-/**
- * 为什么单独成文件：这三段就地模板（用户消息 / 助手正文 / 结构化输入卡）与那串 `v-if` 分派原先住在
- * `ExplorerView.vue`（2127 行）里，与加载、SSE、抽屉、需求清单混在一处——改一次行型要把两千行从头读到尾。
- * 执行侧早就这么分了（`ExecutionMessageRow.vue` 是外壳、六个叶子各一个文件），这里补齐同一分法，
- * 与 §0.2 那条"**渲染只跟形态走**"是同一件事。
- *
- * 维护提示：
- * 1. **它不判断"这条该不该显示"**：隐显由视图用 `EXPLORER_DISPLAY_MODES` 过一遍（`renderedTimelineItems`），
- *    这里只管"长什么样"。新增取值没归到任何一边时，掉进 `.timeline-unknown-row` **当场显示**。
- * 2. 输入卡上那三处答案文案读的是**本地草稿与在途标记**（`inputProgress` / `inputAnswerInFlight`），
- *    它们归 `useExplorerInputRequests` 所有——以 props 传进来，不在这里复制一份状态
- *    （复制一份就会与对话框里的编辑态不同步）。
- * 3. 方案卡绑到哪条助手消息由视图算好（`planTimeline.planActivityBindings`），这里只负责摆；
- *    查看 / 确认 / 入队都往上报，动作由视图做（它拿着当前需求与 busy）。
- */
 import { computed, ref, watch } from "vue";
 import { Check, InfoFilled, Warning } from "@element-plus/icons-vue";
 import type { ExplorerActivityItem, ExplorerInputRequest, MessageAttachment, Plan } from "../types";
@@ -27,15 +21,18 @@ import { explorerTimelineTarget, inputRequestTarget, type ExplorerTimelineItem }
 import { inputAnswerDisplayLabels, inputAnswerDisplayText } from "../utils/explorerInput";
 import type { ExplorerInputProgress } from "../utils/explorerInputProgressDraft";
 import {
+  activityStatusLabel,
   assistantActivityLabel,
+  explorerActivityLine,
   explorerDisplayMode,
-  formatTurnTime,
   inputStatusLabel,
   EXPLORER_ROW_MODES,
   type ExplorerRowMode,
 } from "../utils/explorerPresentation";
 import { inputStatusTagType, statusTagType } from "../utils/statusTag";
+import { formatMessageTime } from "../utils/messageTime";
 import { readableAssistantText } from "../utils/planProtocolDisplay";
+import ChatMessageShell from "./ChatMessageShell.vue";
 import MarkdownMessage from "./MarkdownMessage.vue";
 import ExplorerActivityRow from "./ExplorerActivityRow.vue";
 import ExplorerCandidatePlanCard from "./ExplorerCandidatePlanCard.vue";
@@ -89,7 +86,9 @@ const mode = computed(() => (activity.value ? explorerDisplayMode(activity.value
 const rowMode = computed<ExplorerRowMode | null>(() =>
   mode.value && (EXPLORER_ROW_MODES as readonly string[]).includes(mode.value) ? (mode.value as ExplorerRowMode) : null,
 );
-/** 方案卡显不显示也问同一张清单表——与整个条目要不要显示是同一条判据（见文件头维护提示 1）。 */
+/** 活动行要摆的字段（标签 / 名字 / 引用 / 正文）；与纯函数同源，壳只负责摆位置。 */
+const activityLine = computed(() => (activity.value ? explorerActivityLine(activity.value) : null));
+/** 方案卡显不显示也问同一张清单表——与整个条目要不要显示是同一条判据（见文件头维护提示 3）。 */
 const showCandidatePlanCard = explorerDisplayMode("CANDIDATE_PLAN") !== "hidden";
 
 /** 用户消息随带的图片：由 API 投影在 `details.attachments` 上（见 routes/explorers.ts）。 */
@@ -113,113 +112,121 @@ function statusTextFor(request: ExplorerInputRequest): string {
 
 <template>
   <!-- 结构化输入卡：提问 + 你的回答 + 这一问当前的状态，三者合成一张，按**提问时间**插进时间线。 -->
-  <article
+  <ChatMessageShell
     v-if="item.kind === 'input'"
-    :id="inputRequestTarget(item.request)"
-    :data-nav-key="`input:${item.request.id}`"
-    :class="[
-      'input-request-card',
-      'timeline-input-request',
-      {
-        recovery: item.request.status === 'RECOVERY_REQUIRED',
-        answered: item.request.status === 'ANSWERED',
-        cancelled: item.request.status === 'CANCELLED',
-      },
-    ]"
+    side="assistant"
+    compact
+    headline="结构化输入"
+    :status-label="statusTextFor(item.request)"
+    :status-type="inputStatusTagType(item.request.status)"
+    :time="formatMessageTime(item.request.createdAt)"
+    :datetime="item.request.createdAt"
+    :anchor-id="inputRequestTarget(item.request)"
+    :nav-key="`input:${item.request.id}`"
+    :aria-label="`结构化输入：${statusTextFor(item.request)}`"
   >
-    <div class="input-request-card-icon">
-      <Check v-if="item.request.status === 'ANSWERED'" :size="16" /><Warning
-        v-else-if="item.request.status === 'RECOVERY_REQUIRED' || item.request.status === 'CANCELLED'"
-        :size="16"
-      /><InfoFilled v-else :size="16" />
-    </div>
-    <div class="input-request-card-body">
-      <div class="message-meta">
-        <strong>Plan Explorer 输入</strong
-        ><el-tag size="small" effect="light" :type="inputStatusTagType(item.request.status)">{{ statusTextFor(item.request) }}</el-tag>
+    <article
+      :class="[
+        'input-request-card',
+        'timeline-input-request',
+        {
+          recovery: item.request.status === 'RECOVERY_REQUIRED',
+          answered: item.request.status === 'ANSWERED',
+          cancelled: item.request.status === 'CANCELLED',
+        },
+      ]"
+    >
+      <div class="input-request-card-icon">
+        <Check v-if="item.request.status === 'ANSWERED'" :size="16" /><Warning
+          v-else-if="item.request.status === 'RECOVERY_REQUIRED' || item.request.status === 'CANCELLED'"
+          :size="16"
+        /><InfoFilled v-else :size="16" />
       </div>
-      <div class="input-request-event-times">
-        <span
-          ><strong>问题生成</strong><time>{{ formatTurnTime(item.request.createdAt) }}</time></span
-        ><span v-if="item.request.answeredAt"
-          ><strong>回答提交</strong><time>{{ formatTurnTime(item.request.answeredAt) }}</time></span
-        >
-      </div>
-      <p v-if="item.request.status === 'SUBMITTING' || inputAnswerInFlight === item.request.id">
-        已提交的答案正在等待 Provider 确认。刷新后会保留非敏感答案草稿，请勿重复提交。
-      </p>
-      <p v-else-if="item.request.status === 'RECOVERY_REQUIRED'">
-        App Server 在回答确认前中断。本次回答不会自动重试，请恢复 Provider 会话后从此线程继续。
-      </p>
-      <p v-else-if="item.request.status === 'CANCELLED'">本次结构化输入已取消，问题和当时的时间点仍保留在对话记录中。</p>
-      <p v-else-if="item.request.status === 'ANSWERED'">本轮结构化问题与回答已按原始时间线保留。</p>
-      <p v-else>{{ item.request.questions.length }} 个结构化问题正在等待回答，回答后本轮才能继续。</p>
-      <div class="input-request-section-label">问题与回答</div>
-      <div class="input-stream-questions">
-        <div v-for="(question, questionIndex) in item.request.questions" :key="question.id" class="input-stream-question">
-          <span class="question-index">{{ questionIndex + 1 }}</span>
-          <div>
-            <strong>{{ question.header }}</strong>
-            <p>{{ question.question }}</p>
-            <small :class="{ answered: answerLabelsFor(item.request, questionIndex).length }"
-              >回答：{{ answerTextFor(item.request, questionIndex) }}</small
-            >
+      <div class="input-request-card-body">
+        <div class="input-request-event-times">
+          <span
+            ><strong>问题生成</strong><time>{{ formatMessageTime(item.request.createdAt) }}</time></span
+          ><span v-if="item.request.answeredAt"
+            ><strong>回答提交</strong><time>{{ formatMessageTime(item.request.answeredAt) }}</time></span
+          >
+        </div>
+        <p v-if="item.request.status === 'SUBMITTING' || inputAnswerInFlight === item.request.id">
+          已提交的答案正在等待 Provider 确认。刷新后会保留非敏感答案草稿，请勿重复提交。
+        </p>
+        <p v-else-if="item.request.status === 'RECOVERY_REQUIRED'">
+          App Server 在回答确认前中断。本次回答不会自动重试，请恢复 Provider 会话后从此线程继续。
+        </p>
+        <p v-else-if="item.request.status === 'CANCELLED'">本次结构化输入已取消，问题和当时的时间点仍保留在对话记录中。</p>
+        <p v-else-if="item.request.status === 'ANSWERED'">本轮结构化问题与回答已按原始时间线保留。</p>
+        <p v-else>{{ item.request.questions.length }} 个结构化问题正在等待回答，回答后本轮才能继续。</p>
+        <div class="input-request-section-label">问题与回答</div>
+        <div class="input-stream-questions">
+          <div v-for="(question, questionIndex) in item.request.questions" :key="question.id" class="input-stream-question">
+            <span class="question-index">{{ questionIndex + 1 }}</span>
+            <div>
+              <strong>{{ question.header }}</strong>
+              <p>{{ question.question }}</p>
+              <small :class="{ answered: answerLabelsFor(item.request, questionIndex).length }"
+                >回答：{{ answerTextFor(item.request, questionIndex) }}</small
+              >
+            </div>
           </div>
         </div>
       </div>
-    </div>
-    <el-button
-      v-if="pendingInputId === item.request.id && inputAnswerInFlight !== item.request.id"
-      type="primary"
-      plain
-      @click="emit('answer')"
-      >回答</el-button
-    >
-  </article>
+      <el-button
+        v-if="pendingInputId === item.request.id && inputAnswerInFlight !== item.request.id"
+        type="primary"
+        plain
+        @click="emit('answer')"
+        >回答</el-button
+      >
+    </article>
+  </ChatMessageShell>
 
-  <!-- 你自己说的话：一行原文，靠右、带 `›`，**没有头像、没有卡片、没有展开按钮**。 -->
-  <article
+  <!-- 你说的：右对齐气泡，头像「你」，时间在气泡下方。 -->
+  <ChatMessageShell
     v-else-if="activity && mode === 'text'"
-    :id="explorerTimelineTarget(activity, index)"
-    :data-nav-key="explorerTimelineTarget(activity, index)"
-    :class="['timeline-user-text', { 'failed-message': activity.status === 'FAILED' }]"
+    side="user"
+    avatar="user"
+    :time="formatMessageTime(activity.occurredAt)"
+    :datetime="activity.occurredAt"
+    :anchor-id="explorerTimelineTarget(activity, index)"
+    :nav-key="explorerTimelineTarget(activity, index)"
+    :failed="activity.status === 'FAILED'"
+    :aria-label="`你：${activity.summary.slice(0, 60)}`"
   >
-    <span class="timeline-user-mark" aria-hidden="true">›</span>
-    <div class="timeline-user-body">
-      <MarkdownMessage :source="activity.summary" />
-      <MessageAttachments :attachments="userAttachments" />
-      <time>{{ formatTurnTime(activity.occurredAt) }}</time>
-    </div>
-  </article>
+    <MarkdownMessage :source="activity.summary" />
+    <MessageAttachments :attachments="userAttachments" />
+  </ChatMessageShell>
 
-  <!-- 模型说的正文：铺开、不套气泡；上面一行 meta 说"还在跑 / 失败"，方案卡内嵌在这一块里。 -->
-  <article
+  <!-- 模型说的正文：头像 + 一行 meta，正文铺开；方案卡内嵌在这一块里。 -->
+  <ChatMessageShell
     v-else-if="activity && mode === 'prose'"
-    :id="explorerTimelineTarget(activity, index)"
-    :data-nav-key="explorerTimelineTarget(activity, index)"
-    :class="['timeline-assistant-prose', { 'failed-message': activity.status === 'FAILED' }]"
+    side="assistant"
+    avatar="explorer"
+    :author="activity.title"
+    :status-label="assistantActivityLabel(activity)"
+    :status-type="statusTagType(activity.status)"
+    :time="formatMessageTime(activity.occurredAt)"
+    :datetime="activity.occurredAt"
+    :anchor-id="explorerTimelineTarget(activity, index)"
+    :nav-key="explorerTimelineTarget(activity, index)"
+    :failed="activity.status === 'FAILED'"
+    :running="activity.status === 'RUNNING'"
   >
-    <div class="timeline-assistant-body">
-      <div class="timeline-assistant-meta">
-        <span class="thread-mark" :class="{ 'thread-mark-live': activity.status === 'RUNNING' }" /><strong>{{ activity.title }}</strong
-        ><el-tag size="small" effect="light" :type="statusTagType(activity.status)">{{ assistantActivityLabel(activity) }}</el-tag
-        ><span>{{ formatTurnTime(activity.occurredAt) }}</span>
+    <template v-if="activity.status === 'FAILED'">
+      <p class="timeline-failure-summary">模型调用失败，本轮没有产出结果。可以查看详情，或重试上一条消息。</p>
+      <div class="timeline-failure-actions">
+        <button type="button" class="timeline-failure-link" :aria-expanded="errorExpanded" @click="errorExpanded = !errorExpanded">
+          {{ errorExpanded ? "收起详情" : "查看详情" }}
+        </button>
+        <button type="button" class="timeline-failure-retry" @click="emit('retry', activity)">重试</button>
       </div>
-      <template v-if="activity.status === 'FAILED'">
-        <p class="timeline-failure-summary">模型调用失败，本轮没有产出结果。可以查看详情，或重试上一条消息。</p>
-        <div class="timeline-failure-actions">
-          <button type="button" class="timeline-failure-link" :aria-expanded="errorExpanded" @click="errorExpanded = !errorExpanded">
-            {{ errorExpanded ? "收起详情" : "查看详情" }}
-          </button>
-          <button type="button" class="timeline-failure-retry" @click="emit('retry', activity)">重试</button>
-        </div>
-        <pre v-if="errorExpanded" class="timeline-failure-detail">{{ failureDetail(activity) }}</pre>
-      </template>
-      <MarkdownMessage
-        v-else
-        :source="readableAssistantText(activity.summary)"
-        :streaming="activity.status === 'RUNNING'"
-      /><ExplorerCandidatePlanCard
+      <pre v-if="errorExpanded" class="timeline-failure-detail">{{ failureDetail(activity) }}</pre>
+    </template>
+    <template v-else>
+      <MarkdownMessage :source="readableAssistantText(activity.summary)" :streaming="activity.status === 'RUNNING'" />
+      <ExplorerCandidatePlanCard
         v-if="showCandidatePlanCard && plan"
         :plan="plan"
         :is-candidate="isCandidatePlan"
@@ -228,11 +235,40 @@ function statusTextFor(request: ExplorerInputRequest): string {
         @confirm="emit('confirm-plan', $event)"
         @enqueue="emit('enqueue-plan', $event)"
       />
-    </div>
-  </article>
+    </template>
+  </ChatMessageShell>
 
-  <template v-else-if="activity && mode === 'reasoning'"><ExplorerReasoningRow :activity="activity" :index="index" /></template>
-  <template v-else-if="activity && mode === 'divider'"><ExplorerDividerRow :activity="activity" :index="index" /></template>
-  <template v-else-if="activity && rowMode"><ExplorerActivityRow :activity="activity" :index="index" :mode="rowMode" /></template>
-  <article v-else class="timeline-unknown-row">未识别的行型：{{ mode }}（{{ activity?.kind }}）</article>
+  <ChatMessageShell
+    v-else-if="activity && mode === 'reasoning'"
+    side="assistant"
+    compact
+    :anchor-id="explorerTimelineTarget(activity, index)"
+    :nav-key="explorerTimelineTarget(activity, index)"
+    :running="activity.status === 'RUNNING'"
+  >
+    <ExplorerReasoningRow :activity="activity" />
+  </ChatMessageShell>
+
+  <ExplorerDividerRow v-else-if="activity && mode === 'divider'" :activity="activity" :index="index" />
+
+  <ChatMessageShell
+    v-else-if="activity && rowMode && activityLine"
+    side="assistant"
+    compact
+    :headline="activityLine.label"
+    :name="activityLine.name"
+    :status-label="activityStatusLabel(activity)"
+    :status-type="statusTagType(activity.status)"
+    :time="formatMessageTime(activity.occurredAt)"
+    :datetime="activity.occurredAt"
+    :anchor-id="explorerTimelineTarget(activity, index)"
+    :nav-key="explorerTimelineTarget(activity, index)"
+    :running="activity.status === 'RUNNING'"
+  >
+    <ExplorerActivityRow :activity="activity" :mode="rowMode" :line="activityLine" />
+  </ChatMessageShell>
+
+  <ChatMessageShell v-else-if="activity" side="assistant" compact :time="formatMessageTime(activity.occurredAt)">
+    <article class="chat-unknown-row">未识别的行型：{{ mode }}（{{ activity.kind }}）</article>
+  </ChatMessageShell>
 </template>

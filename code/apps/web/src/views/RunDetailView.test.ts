@@ -48,28 +48,32 @@ const executionReasoningRowSource = readFileSync(
   fileURLToPath(new URL("../components/ExecutionReasoningRow.vue", import.meta.url)),
   "utf8",
 );
+const chatReasoningRowSource = readFileSync(fileURLToPath(new URL("../components/ChatReasoningRow.vue", import.meta.url)), "utf8");
 
 describe("Run detail execution conversation", () => {
   it("正文与用户消息各走自己的行组件，都经同一个 Markdown 组件渲染", () => {
     // **形态**在行组件里选（视图这一层只按分组摆行）；"长什么样"在各自的组件里。
     expect(flat(executionMessageRowSource)).toContain(flat("item.kind === 'model'"));
     expect(flat(executionMessageRowSource)).toContain(flat("item.kind === 'user'"));
-    // 你自己说的话不走卡片、也不带头像：Codex 那种「› + 纯文本」，仍然靠右。
-    // （助手正文同样不带头像——与探索侧同档同形，见 docs 的共用档位表。）
-    expect(flat(executionMessageRowSource)).toContain(flat('props.item.kind !== "user" && props.item.kind !== "model"'));
+    // 行的几何、头像、meta 与锚点交给探索侧共用的消息壳：用户消息右对齐气泡 + 「你」，
+    // 执行者正文左对齐 + 「执」；过程行不挂头像。
+    expect(flat(executionMessageRowSource)).toContain(flat("import ChatMessageShell"));
+    expect(flat(executionMessageRowSource)).toContain(flat("<ChatMessageShell"));
+    expect(flat(executionMessageRowSource)).toContain(flat(`:avatar="isUser ? 'user' : isModel ? 'executor' : null"`));
+    expect(flat(executionMessageRowSource)).not.toContain("execution-message-avatar");
     expect(flat(executionModelRowSource)).toContain(
       flat('<MarkdownMessage :source="item.content" :streaming="item.status === \'RUNNING\'" />'),
     );
     expect(flat(executionUserRowSource)).toContain(flat('<MarkdownMessage :source="item.content" />'));
-    expect(flat(executionUserRowSource)).toContain(flat('class="execution-user-mark"'));
+    expect(executionUserRowSource).not.toContain("execution-user-mark");
     expect(executionMessageRowSource).not.toContain("{{ item.content }}<span v-if=\"item.status === 'RUNNING'\"");
   });
 
   it("形态分支是显式的，兜底会当场显示出来", () => {
     // 七种形态各有自己的分支；某种形态掉到兜底说明模板没跟上——显示出来，不静默降级。
     expect(flat(executionMessageRowSource)).toContain(flat("item.kind === 'activity' || item.kind === 'tool'"));
-    expect(flat(executionMessageRowSource)).toContain(flat("execution-unknown-row"));
-    expect(runDetailStyles).toContain(flat(".execution-unknown-row"));
+    expect(flat(executionMessageRowSource)).toContain(flat("chat-unknown-row"));
+    expect(flat(runDetailStyles)).toContain(flat(".chat-unknown-row"));
   });
 
   it("**权重**的判据不是白名单：新增一种就不会有消息从会话里消失", () => {
@@ -97,25 +101,27 @@ describe("Run detail execution conversation", () => {
 
   it("续跑检查点在执行侧也是**分隔线**，与探索侧同形", () => {
     // 它是会话边界不是事件——画成又一条活动行，读的人不会意识到分界在哪。
-    expect(flat(executionDividerRowSource)).toContain(flat("timeline-divider"));
+    expect(flat(executionDividerRowSource)).toContain(flat("chat-divider"));
     expect(flat(executionDividerRowSource)).toContain(flat("Factory · 续跑检查点"));
+    // 边界不用行首圆点；标签与时间就够。
+    expect(executionDividerRowSource).not.toContain("thread-mark");
   });
 
-  it("推理是**可折叠的推理卡**，与探索侧同形", () => {
-    expect(flat(executionReasoningRowSource)).toContain(flat("<details"));
+  it("推理是**可折叠的推理卡**，与探索侧共用同一个组件", () => {
+    // 折叠 / 无障碍 / 脱敏在共享的 ChatReasoningRow 里；执行侧只是把 item 的字段递进去。
+    expect(flat(executionReasoningRowSource)).toContain(flat("<ChatReasoningRow"));
+    expect(flat(executionReasoningRowSource)).toContain(flat("item.content.trim()"));
+    expect(flat(chatReasoningRowSource)).toContain(flat('<details v-if="hasBody"'));
     // 跑着的时候默认展开——那时候它正在说事；跑完收起来，把视线还给正文。
-    expect(flat(executionReasoningRowSource)).toContain(flat(':open="streaming"'));
-    // **没有正文时不摆这个折叠**：本机库里 13/13 条老推理行都是空的（那时还不记摘要），
-    // 一个点开只有空白的展开区比没有更糟。也不补"未记录摘要"这类句子——上面那行 meta
-    // 已经写着「推理」，正文留空就是"这一轮没有可说的"。
-    expect(flat(executionReasoningRowSource)).toContain(flat('<details v-if="hasBody"'));
-    expect(flat(executionReasoningRowSource)).toContain(flat("props.item.content.trim()"));
+    expect(flat(chatReasoningRowSource)).toContain(flat(':open="running"'));
+    // **没有正文时不摆这个折叠**：只留一行说明。
+    expect(flat(chatReasoningRowSource)).toContain(flat('v-else class="chat-reasoning-inline"'));
     // 正文过一遍展示边界的脱敏（与工具结果同一个口）。
-    expect(flat(executionReasoningRowSource)).toContain(flat("presentableText"));
+    expect(flat(chatReasoningRowSource)).toContain(flat("presentableText"));
   });
 
   it("动作行的正文保持纯文本，不渲染成 markdown", () => {
-    expect(flat(executionActivityRowSource)).toContain(flat('class="execution-activity-detail"'));
+    expect(flat(executionActivityRowSource)).toContain(flat('class="chat-activity-detail"'));
     expect(executionActivityRowSource).not.toContain("MarkdownMessage");
   });
 
@@ -187,8 +193,9 @@ describe("Run detail execution conversation", () => {
   });
 
   it("puts my messages on the right and collapses provider diagnostics", () => {
-    // 左右分栏：我的消息（role=user）靠右，执行者的靠左。
-    expect(flat(executionMessageRowSource)).toContain(flat("mine: item.role === 'user'"));
+    // 左右分栏：我的消息（role=user）走共享壳的 user 侧（内容靠右、头像「你」）。
+    expect(flat(executionMessageRowSource)).toContain(flat("mine: isUser"));
+    expect(flat(executionMessageRowSource)).toContain(flat(`:side="isUser ? 'user' : 'assistant'"`));
     // 诊断字段默认收起（Turn #/Call/Provider item/Provider session），hover 与"详情"里才看得到。
     expect(flat(executionMessageRowSource)).toContain(flat(':title="executionMessageDiagnosticsTitle(item)"'));
     expect(flat(executionMessageRowSource)).toContain(flat('v-if="details.length"'));

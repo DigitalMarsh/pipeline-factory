@@ -524,10 +524,14 @@ function activityFromStep(turn: ExplorerTurn, step: AgentLoopStep): Omit<Explore
       },
     };
   }
-  // 轮次开始只是一条"这一轮跑起来了"的标记，正文留空——呈现层会退回行首标签（"推理"），
-  // 比摆一句 `Plan Explorer started step 3.` 更少噪音，也不必为它想一句中文。
-  if (step.stepType === "MODEL_STARTED")
-    return { ...base, kind: "REASONING", status: "RUNNING", title: "", summary: "", details: { step: payload.step ?? step.sequence } };
+  /**
+   * 轮次开始（`MODEL_STARTED`）**不再单独成行**。
+   *
+   * 它以前被投影成一条空的 `REASONING`，与随后 Provider 真正报的推理并排，时间线上就会出现两条
+   * 「推理」——其中一条没有正文、没有折叠箭头、状态永远停在 RUNNING（实测报障）。
+   * "这一轮跑起来了"由头部状态卡与随后到达的正文/推理行表达，时间线不再重复。
+   */
+  if (step.stepType === "MODEL_STARTED") return null;
   if (step.stepType === "TOOL_REQUESTED") return toolStep(base, "RUNNING", nonEmptyString(payload.tool), step.callId, null);
   // 一次调用的四种结束：正常完成、被策略拒绝、执行失败、需要人工对账。
   // 后两种此前**连一行都没有**（这里没有分支，静默掉了）——"工具失败了"在时间线上看不见。

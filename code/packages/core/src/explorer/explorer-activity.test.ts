@@ -1021,6 +1021,55 @@ describe("Explorer activity projection", () => {
     expect(items.find((item) => item.kind === "COMMAND")?.summary.length).toBe(240);
   });
 
+  it("轮次开始不单独成行：只有 MODEL_STARTED 时时间线是空的", () => {
+    const items = projectExplorerActivity({
+      turns: [assistantTurn("RUNNING")],
+      loops: [explorerLoop()],
+      steps: [step(1, "MODEL_STARTED", "RUNNING", { step: 1 }, null, "2026-08-29T10:00:01.000Z")],
+    });
+
+    // 「这一轮跑起来了」由头部状态与随后到达的正文表达；再摆一条空「推理」只会和真正的推理重复。
+    expect(items).toEqual([]);
+  });
+
+  it("MODEL_STARTED + Provider 推理时只剩 Provider 那一条推理", () => {
+    const items = projectExplorerActivity({
+      turns: [assistantTurn()],
+      loops: [explorerLoop()],
+      steps: [
+        step(1, "MODEL_STARTED", "RUNNING", { step: 1 }, null, "2026-08-29T10:00:01.000Z"),
+        providerStep(
+          2,
+          { phase: "completed", itemId: "r-1", itemType: "reasoning", summary: "先看现有的活动" },
+          "2026-08-29T10:00:02.000Z",
+        ),
+      ],
+    });
+
+    const reasoning = items.filter((item) => item.kind === "REASONING");
+    expect(reasoning).toHaveLength(1);
+    expect(reasoning[0]).toMatchObject({
+      summary: "先看现有的活动",
+      status: "COMPLETED",
+      details: { providerControlled: true },
+    });
+  });
+
+  it("MODEL_STARTED + MODEL_COMPLETED 只留下一条轮次状态行", () => {
+    const items = projectExplorerActivity({
+      turns: [assistantTurn()],
+      loops: [explorerLoop()],
+      steps: [
+        step(1, "MODEL_STARTED", "RUNNING", { step: 1 }, null, "2026-08-29T10:00:01.000Z"),
+        step(2, "MODEL_COMPLETED", "COMPLETED", { step: 1 }, null, "2026-08-29T10:00:02.000Z"),
+      ],
+    });
+
+    expect(items.filter((item) => item.kind === "REASONING")).toHaveLength(0);
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ kind: "TURN_STATUS", status: "COMPLETED" });
+  });
+
   it("不把 Provider 的回声渲染成工具行，认不出来的仍然照实显示", () => {
     const items = projectExplorerActivity({
       turns: [assistantTurn()],

@@ -47,6 +47,13 @@
   --space-6: 32px;
   --radius-sm: 6px;
   --radius-md: 9px;
+  /* 聊天行的统一几何：探索与执行共用。 */
+  --chat-avatar-size: 36px;
+  --chat-gutter: 10px;
+  --chat-row-gap: 18px;
+  --chat-prose-max: 760px;
+  --chat-bubble-max: 640px;
+  --chat-card-max: 760px;
   /* 宽屏停靠对话的宽度：至少留住 330px 左栏 + 420px 需求列表。 */
   --conversation-dock-width: min(900px, calc(100vw - 750px));
   /* Element Plus 的默认主色/状态色与自绘色是两套，这里统一到同一套语义色。 */
@@ -312,23 +319,11 @@ a {
   min-height: 530px;
 }
 .timeline-day {
-  margin: 0 0 17px 34px;
+  margin: 0 0 17px calc(var(--chat-avatar-size) + var(--chat-gutter));
   color: var(--muted);
   font-size: var(--fs-meta);
   font-weight: 800;
   letter-spacing: 0.11em;
-}
-.message-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 2px 0 7px;
-  font-size: var(--fs-meta);
-}
-.message-meta span:not(.el-tag) {
-  color: var(--muted);
-  font-size: var(--fs-meta);
-  font-weight: 400;
 }
 /* Candidate Plan、消息中的执行契约预览和 composer。 */
 .candidate-head {
@@ -991,46 +986,6 @@ a {
   margin-left: 0;
   justify-content: center;
 }
-@media (max-width: 980px) {
-}
-
-/* 模型的回复：与用户消息同一档重量——正文直接铺开，不套气泡。
-   上一行 meta（线程侧标记点 + 名字 + 状态 + 时间）留着，因为它是探索侧少数**会变**的类型：
-   「还在跑 / 失败」得有地方说，内嵌的候选方案卡也挂在这块里。 */
-.timeline-assistant-prose {
-  margin: 0 0 20px;
-}
-.timeline-assistant-body {
-  min-width: 0;
-}
-.timeline-assistant-meta {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 0 9px;
-  font-size: var(--fs-meta);
-}
-.timeline-assistant-meta strong {
-  color: #52657f;
-  font-size: var(--fs-meta);
-}
-.timeline-assistant-meta > span:not(.el-tag):not(.thread-mark) {
-  color: var(--muted);
-  font-size: var(--fs-meta);
-}
-.timeline-assistant-body .markdown-body {
-  max-width: 760px;
-  color: #3f4f66;
-  font-size: var(--fs-read);
-  line-height: 1.7;
-  overflow-wrap: anywhere;
-}
-.timeline-assistant-prose.failed-message .markdown-body {
-  color: #a34853;
-}
-.timeline-assistant-prose.failed-message .timeline-assistant-meta strong {
-  color: var(--red);
-}
 /* 失败消息：一句人话 + 可展开的原始错误 + 重试，而不是把整段英文铺成红字。 */
 .timeline-failure-summary {
   margin: 2px 0 0;
@@ -1079,47 +1034,6 @@ a {
   overflow-wrap: anywhere;
 }
 
-/* 用户消息：Codex 那种「› + 纯文本」——不套卡片、不折叠、不带头像，正文原样摆出来。
-   **靠右**，与执行线程的 `.execution-message.mine` 是同一套读法（谁说的先被看见，说了什么随后）；
-   那条 `›` 是"这句是我说的"的记号，也是与助手正文唯一的形态差别。 */
-.timeline-user-text {
-  display: flex;
-  justify-content: flex-end;
-  align-items: flex-start;
-  gap: 7px;
-  max-width: 800px;
-  margin: 0 0 18px auto;
-}
-.timeline-user-mark {
-  flex: 0 0 auto;
-  color: var(--muted);
-  font-size: var(--fs-read);
-  line-height: 1.75;
-  user-select: none;
-}
-.timeline-user-body {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  align-items: flex-end;
-}
-.timeline-user-body .markdown-body {
-  max-width: 640px;
-  color: #35445a;
-  font-size: var(--fs-read);
-  line-height: 1.65;
-  overflow-wrap: anywhere;
-  text-align: left;
-}
-.timeline-user-body time {
-  margin-top: 4px;
-  color: var(--muted);
-  font-size: var(--fs-meta);
-}
-.timeline-user-text.failed-message .markdown-body {
-  color: #a34853;
-}
-
 .composer-input input {
   min-width: 0;
   flex: 1;
@@ -1134,21 +1048,6 @@ a {
 }
 .composer-status {
   color: var(--blue) !important;
-}
-
-/* 线程侧标记点：**探索时间线上"这一侧在说"的唯一记号**——助手正文、推理、调用、Factory 自己的记录，
-   行首都是同一个点；用户那一侧用 `›`。`-live` 时闪动，表示这一轮还在跑。 */
-.thread-mark {
-  display: inline-block;
-  width: 9px;
-  height: 9px;
-  flex: 0 0 9px;
-  border-radius: 50%;
-  background: #5e8bff;
-}
-.thread-mark-live {
-  box-shadow: 0 0 0 4px rgba(94, 139, 255, 0.16);
-  animation: explorer-dot-pulse 1.15s ease-in-out infinite;
 }
 
 .processing-dots {
@@ -1313,68 +1212,6 @@ a {
   padding: 12px 20px 18px;
   scroll-behavior: smooth;
 }
-
-.execution-message {
-  display: flex;
-  gap: 11px;
-  padding: 13px 0;
-  border-bottom: 1px solid #f0f3f7;
-}
-.execution-message:last-child {
-  border-bottom: 0;
-}
-.execution-message-avatar {
-  display: grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  flex: 0 0 28px;
-  border-radius: 50%;
-  background: #eef3fb;
-  color: #5479bf;
-  font-size: var(--fs-meta);
-  font-weight: 800;
-}
-.execution-message-activity .execution-message-avatar,
-.execution-message-tool .execution-message-avatar {
-  background: #f2f5f9;
-  color: #8997a8;
-}
-.execution-message-body {
-  min-width: 0;
-  flex: 1;
-}
-.execution-message-meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  color: var(--muted);
-  font-size: var(--fs-meta);
-}
-.execution-message-meta strong {
-  color: #52657f;
-  font-size: var(--fs-meta);
-}
-.execution-message-body > p {
-  margin: 6px 0 0;
-  color: var(--text-secondary);
-  font-size: var(--fs-read);
-  line-height: 1.65;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-.execution-message-model .execution-message-body > p {
-  color: #405571;
-}
-.execution-message-user .execution-message-body > p {
-  color: #4d6d9e;
-}
-/* 我的消息靠右、执行者的靠左：和模型对话的常规读法。宽度收窄才看得出"这是我说的一句话"——
-   原来 flex-basis 92% 几乎占满整行，右对齐等于没做。 */
-.execution-message.mine {
-  flex-direction: row-reverse;
-}
 /* 你自己说的话：Codex 那种「› + 纯文本」——没有头像，正文原样摆出来，仍然靠右。 */
 /* 形态兜底：某种 ExecutionStreamItem.kind 掉到这里，说明模板没跟上——当场显示，不静默降级。 */
 .execution-unknown-row {
@@ -1385,40 +1222,6 @@ a {
   background: #fff8f8;
   color: #a8545f;
   font-size: var(--fs-meta);
-}
-.execution-user-text {
-  display: flex;
-  justify-content: flex-end;
-  align-items: flex-start;
-  gap: 7px;
-  margin-top: 6px;
-}
-.execution-user-mark {
-  flex: 0 0 auto;
-  color: var(--muted);
-  font-size: var(--fs-body);
-  line-height: 1.7;
-  user-select: none;
-}
-.execution-user-text .markdown-body {
-  max-width: 600px;
-  color: #3f5a86;
-  font-size: var(--fs-read);
-  line-height: 1.65;
-  overflow-wrap: anywhere;
-}
-.execution-message.mine .execution-message-body {
-  display: flex;
-  flex: 0 1 min(620px, 78%);
-  flex-direction: column;
-  align-items: flex-end;
-}
-.execution-message.mine .execution-message-meta {
-  justify-content: flex-end;
-}
-/* 诊断细节默认不露面（见 utils/executionMessageDetails.ts）：常驻只留标题、状态与时间。 */
-.execution-message-time {
-  color: var(--muted);
 }
 .execution-message-toggle {
   padding: 0;
@@ -1438,52 +1241,6 @@ a {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 5px;
-  color: var(--muted);
-  font-size: var(--fs-meta);
-}
-.execution-message.mine .execution-message-details {
-  justify-content: flex-end;
-}
-.execution-message-activity,
-.execution-message-tool {
-  margin: 4px 0;
-  padding: 10px 12px;
-  border: 1px solid #edf0f4;
-  border-radius: 7px;
-  background: #fbfcfe;
-}
-.execution-message-activity .execution-message-avatar,
-.execution-message-tool .execution-message-avatar {
-  margin-top: 1px;
-}
-.execution-message-activity.running,
-.execution-message-tool.running {
-  border-color: #dbe7ff;
-  background: #f8fbff;
-}
-.execution-message-activity.waiting {
-  border-color: #f2e4c7;
-  background: #fffaf0;
-}
-.execution-message-activity.failed,
-.execution-message-tool.failed {
-  border-color: #f0d9dc;
-  background: #fff8f8;
-}
-.execution-message-activity.unknown,
-.execution-message-tool.unknown {
-  border-color: #edf0f4;
-  background: #fbfcfe;
-}
-.execution-activity-detail {
-  color: #65768d !important;
-  font-size: var(--fs-meta) !important;
-  line-height: 1.55 !important;
-  overflow-wrap: anywhere;
-}
-.execution-message-note {
-  display: block;
   margin-top: 5px;
   color: var(--muted);
   font-size: var(--fs-meta);
@@ -1755,16 +1512,6 @@ a {
 }
 .run-activity-item.tone-failed strong {
   color: #b34e57;
-}
-.execution-message.failed .execution-message-meta strong {
-  color: var(--red);
-}
-.execution-message-plan {
-  align-items: flex-start;
-}
-.execution-message-plan .execution-message-avatar {
-  background: #eaf1ff;
-  color: var(--blue);
 }
 .execution-plan-message {
   max-width: 760px;
@@ -2613,8 +2360,6 @@ a {
     gap: 7px;
   }
 }
-@media (max-width: 720px) {
-}
 .agent-loop-strip {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -2977,201 +2722,11 @@ a {
 .pause-notice {
   margin-top: 10px;
 }
-.loop-activity-card {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  margin: 0 0 16px 34px;
-  padding: 10px 12px;
-  border: 1px solid #e7ebf2;
-  border-radius: 8px;
-  background: #fbfcfe;
-  scroll-margin-top: 18px;
-}
-.loop-activity-card.waiting {
-  border-color: #ead9af;
-  background: #fffaf0;
-}
-.loop-activity-card.failed {
-  border-color: #f0c8cd;
-  background: #fff7f7;
-}
-.loop-activity-copy {
-  min-width: 0;
-}
-.loop-activity-meta {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--muted);
-  font-size: var(--fs-meta);
-}
-.loop-activity-meta strong {
-  color: #64738a;
-  font-size: var(--fs-meta);
-}
-.loop-activity-copy p {
-  margin: 4px 0 0;
-  color: var(--muted);
-  font-size: var(--fs-meta);
-  line-height: 1.55;
-}
-.loop-activity-copy code {
-  color: var(--muted);
-  font:
-    9px ui-monospace,
-    monospace;
-}
-/* 八类过程活动各走各的行：推理是最轻的背景音、续跑检查点是一条分隔线、工具 / 门禁 / 轮次状态共用卡片骨架但各有语调。 */
-/* 行型兜底：某种 ExplorerDisplayMode 掉到这里，说明"映射归了类、模板没跟上"。
-   显示出来而不是静默渲染成裸卡——静默降级正是这一轮要堵掉的那种失效。 */
-.timeline-unknown-row {
-  margin: 0 0 16px 34px;
-  padding: 8px 11px;
-  border: 1px dashed #e2c9cd;
-  border-radius: 7px;
-  background: #fff8f8;
-  color: #a8545f;
-  font-size: var(--fs-meta);
-}
-.timeline-note {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 0 13px 34px;
-  color: var(--muted);
-  font-size: var(--fs-meta);
-  scroll-margin-top: 18px;
-}
-.timeline-note p {
-  min-width: 0;
-  flex: 1;
-  margin: 0;
-  overflow: hidden;
-  color: var(--muted);
-  line-height: 1.5;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.timeline-note time {
-  flex: none;
-  color: var(--muted);
-  font:
-    9px ui-monospace,
-    monospace;
-}
-.timeline-note .timeline-reasoning {
-  min-width: 0;
-  flex: 1;
-}
-.timeline-reasoning > summary {
-  color: var(--muted);
-  cursor: pointer;
-  font-size: var(--fs-meta);
-  list-style: none;
-}
-.timeline-reasoning > summary::-webkit-details-marker {
-  display: none;
-}
-.timeline-reasoning > summary::before {
-  content: "▸ ";
-  color: var(--muted);
-}
-.timeline-reasoning[open] > summary::before {
-  content: "▾ ";
-}
-.timeline-reasoning p {
-  margin: 4px 0 0;
-  overflow: visible;
-  color: var(--muted);
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-.timeline-reasoning-plain {
-  min-width: 0;
-  flex: 1;
-  margin: 0;
-  color: var(--muted);
-}
-/* Provider 报了这次推理、却没给可读正文（Codex 只回加密内容）——明说，别让它看着像"没推理"。 */
-.timeline-reasoning-unreadable {
-  color: var(--muted);
-  font-style: italic;
-}
-.timeline-divider {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 20px 0 20px 34px;
-  scroll-margin-top: 18px;
-}
-.timeline-divider-rule {
-  height: 1px;
-  flex: 1;
-  background: #e7ebf2;
-}
-.timeline-divider-label {
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  gap: 7px;
-  color: var(--muted);
-  font-size: var(--fs-meta);
-  font-weight: 700;
-}
-.timeline-divider-label em {
-  color: var(--muted);
-  font-style: normal;
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: none;
-}
-.timeline-divider time {
-  flex: none;
-  color: var(--muted);
-  font:
-    9px ui-monospace,
-    monospace;
-}
-.activity-line .loop-activity-meta code {
-  padding: 1px 6px;
-  border-radius: 4px;
-  background: #eef3fd;
-  color: #47618f;
-  font-weight: 700;
-}
-.loop-activity-copy code.activity-reference {
-  display: block;
-  margin-top: 5px;
-  color: var(--muted);
-  font:
-    9px ui-monospace,
-    monospace;
-}
-.loop-activity-card > .thread-mark {
-  margin-top: 5px;
-}
-.loop-activity-card.running > .thread-mark {
-  animation: explorer-status-pulse 1.2s ease-in-out infinite;
-}
-.activity-gate {
-  border-left: 2px solid #cdd9ec;
-}
-.activity-gate.failed {
-  border-left-color: #e2a8b0;
-}
-.activity-turn-status {
-  border-style: dashed;
-  background: transparent;
-}
-.activity-turn-status .loop-activity-copy p {
-  color: var(--muted);
-}
 .timeline-empty {
   display: grid;
   justify-items: center;
   gap: 8px;
-  margin: 54px 34px;
+  margin: 54px calc(var(--chat-avatar-size) + var(--chat-gutter));
   padding: 38px 20px;
   border: 1px dashed #dce4ee;
   border-radius: 9px;
@@ -3265,9 +2820,6 @@ a {
 .timeline-input-request.answered .input-request-card-icon {
   background: #e8f7ec;
   color: #4c9a65;
-}
-.timeline-input-request.answered .input-request-card-body .message-meta strong {
-  color: #4e8060;
 }
 .timeline-input-request.answered .input-request-card-body p {
   color: #70907b;
@@ -5447,9 +4999,6 @@ a {
     padding-inline: 18px;
     padding-bottom: 0;
   }
-  .execution-message.mine .execution-message-body {
-    flex-basis: 92%;
-  }
   .execution-plan-message-scope {
     grid-template-columns: 1fr;
   }
@@ -5571,67 +5120,6 @@ a {
   text-decoration: underline;
 }
 .markdown-body del {
-  color: var(--muted);
-}
-.execution-message-body > .markdown-body {
-  margin-top: 6px;
-  color: #5f7087;
-  font-size: var(--fs-meta);
-  line-height: 1.65;
-  overflow-wrap: anywhere;
-}
-.execution-message-model .execution-message-body > .markdown-body {
-  color: #405571;
-}
-.execution-message-model .execution-message-body > .markdown-body {
-  display: block;
-  max-width: 720px;
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-}
-/* 推理是**背景音**：默认折起来让正文干净，流式时才自动展开（与 Hermes 的 Reasoning notes 同形）。 */
-.execution-reasoning {
-  margin: 4px 0 0;
-}
-.execution-reasoning > summary {
-  color: var(--muted);
-  cursor: pointer;
-  font-size: var(--fs-meta);
-  list-style: none;
-}
-.execution-reasoning > summary::-webkit-details-marker {
-  display: none;
-}
-.execution-reasoning > summary::before {
-  content: "▸ ";
-  color: #b3bdc9;
-}
-.execution-reasoning[open] > summary::before {
-  content: "▾ ";
-}
-.execution-reasoning-body {
-  margin: 6px 0 0;
-  padding: 2px 0 2px 10px;
-  border-left: 2px solid #e3e9f2;
-  color: var(--muted);
-  font-size: var(--fs-meta);
-  line-height: 1.6;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-.execution-reasoning-unreadable {
-  margin: 4px 0 0;
-  color: var(--muted);
-  font-size: var(--fs-meta);
-  font-style: italic;
-}
-/* 压缩是**边界不是事件**：与探索侧同形的一条分隔线（探索时间线有 34px 的偏移，这里没有）。 */
-.execution-divider {
-  margin: 14px 0;
-}
-.execution-divider .timeline-divider-label {
   color: var(--muted);
 }
 /* 动作行的「显示结果」：默认只占一行，需要时展开看这一调用到底做了什么。 */
@@ -6522,4 +6010,329 @@ a {
   height: 5px;
   border-radius: 50%;
   background: currentColor;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   聊天行：探索线程与执行线程共用的一套壳。
+   几何只有一处：头像栏 + 内容栏；用户侧镜像。用户消息是气泡，助手正文铺开，
+   过程行（推理 / 工具 / 输入卡 / Plan 卡）不挂头像但仍从内容栏开始。
+   ───────────────────────────────────────────────────────────────────────── */
+.chat-message {
+  display: grid;
+  grid-template-columns: var(--chat-avatar-size) minmax(0, 1fr);
+  column-gap: var(--chat-gutter);
+  align-items: start;
+  min-width: 0;
+  margin: 0 0 var(--chat-row-gap);
+  scroll-margin-top: 18px;
+}
+.chat-message-user {
+  grid-template-columns: minmax(0, 1fr) var(--chat-avatar-size);
+}
+.chat-content {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 0;
+}
+.chat-message-user .chat-content {
+  display: flex;
+  max-width: min(var(--chat-bubble-max), 84%);
+  flex-direction: column;
+  align-items: flex-end;
+  justify-self: end;
+  grid-column: 1;
+}
+.chat-avatar {
+  display: grid;
+  width: var(--chat-avatar-size);
+  height: var(--chat-avatar-size);
+  grid-column: 1;
+  grid-row: 1;
+  place-items: center;
+  border-radius: 50%;
+  font-size: var(--fs-meta);
+  font-weight: 800;
+  user-select: none;
+}
+.chat-message-user .chat-avatar {
+  grid-column: 2;
+}
+.chat-avatar-explorer {
+  background: var(--blue-soft);
+  color: var(--blue);
+}
+.chat-avatar-executor {
+  background: #eef1f6;
+  color: #394a60;
+}
+.chat-avatar-user {
+  background: #e8eef7;
+  color: #41536a;
+}
+.chat-message-running .chat-avatar {
+  box-shadow: 0 0 0 4px rgba(47, 111, 208, 0.16);
+  animation: chat-avatar-pulse 1.15s ease-in-out infinite;
+}
+@keyframes chat-avatar-pulse {
+  50% {
+    box-shadow: 0 0 0 6px rgba(47, 111, 208, 0.08);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-message-running .chat-avatar {
+    animation: none;
+  }
+}
+.chat-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-2);
+  color: var(--muted);
+  font-size: var(--fs-meta);
+}
+.chat-author {
+  color: #52657f;
+  font-size: var(--fs-meta);
+  font-weight: 700;
+}
+.chat-headline {
+  color: var(--text-secondary);
+  font-size: var(--fs-meta);
+}
+.chat-name {
+  padding: 1px 6px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: #eef3fd;
+  color: #47618f;
+  font:
+    700 var(--fs-meta) ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-time {
+  color: var(--muted);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+}
+.chat-body {
+  min-width: 0;
+}
+.chat-message-assistant .chat-body {
+  max-width: var(--chat-prose-max);
+}
+.chat-message-assistant .chat-body .markdown-body {
+  color: #3f4f66;
+  font-size: var(--fs-read);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.chat-bubble {
+  padding: 9px 12px;
+  border: 1px solid #dbe7ff;
+  border-radius: 14px 4px 14px 14px;
+  background: var(--blue-soft);
+}
+.chat-message-user .chat-body .markdown-body {
+  color: #35445a;
+  font-size: var(--fs-read);
+  line-height: 1.65;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.chat-message-user .chat-body .markdown-body > :first-child {
+  margin-top: 0;
+}
+.chat-message-user .chat-body .markdown-body > :last-child {
+  margin-bottom: 0;
+}
+.chat-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-1);
+  color: var(--muted);
+  font-size: var(--fs-meta);
+}
+.chat-message-failed .chat-body .markdown-body,
+.chat-message-failed .chat-author {
+  color: #a34853;
+}
+.chat-message-process {
+  margin-bottom: 10px;
+}
+.chat-message-process .chat-meta {
+  margin-bottom: 6px;
+}
+.chat-message-note {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: var(--fs-meta);
+}
+/* 推理：只有正文时才折叠；没有正文就是一行字。 */
+.chat-reasoning > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: var(--fs-meta);
+  list-style: none;
+}
+.chat-reasoning > summary .chat-time,
+.chat-reasoning-inline .chat-time {
+  margin-left: auto;
+}
+.chat-reasoning > summary::-webkit-details-marker {
+  display: none;
+}
+.chat-reasoning > summary::before {
+  content: "▸";
+  color: var(--faint);
+  font-size: 10px;
+  transition: transform 0.15s ease;
+}
+.chat-reasoning[open] > summary::before {
+  content: "▾";
+}
+.chat-reasoning > summary:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid #bfd2f6;
+  outline-offset: 2px;
+}
+.chat-reasoning-body {
+  margin: 6px 0 0 14px;
+  padding-left: 10px;
+  border-left: 2px solid var(--line);
+  color: var(--muted);
+  font-size: var(--fs-body);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.chat-reasoning-inline {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--fs-meta);
+}
+.chat-reasoning-unreadable {
+  font-style: italic;
+}
+/* 分隔行：横跨内容栏，不再有行首圆点。 */
+.chat-divider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-5) 0;
+  margin-left: calc(var(--chat-avatar-size) + var(--chat-gutter));
+  scroll-margin-top: 18px;
+}
+.chat-divider-rule {
+  height: 1px;
+  flex: 1;
+  background: var(--line);
+}
+.chat-divider-label {
+  display: inline-flex;
+  gap: 6px;
+  color: var(--muted);
+  font-size: var(--fs-meta);
+  font-weight: 700;
+}
+.chat-divider time {
+  color: var(--muted);
+  font-size: var(--fs-meta);
+  font-variant-numeric: tabular-nums;
+}
+/* 过程卡片：工具 / 命令 / 门禁 / 输入。 */
+.chat-activity-card {
+  padding: var(--space-3);
+  border: 1px solid #e7ebf2;
+  border-radius: var(--radius-md);
+  background: #fbfcfe;
+}
+.chat-activity-detail {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-body);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.chat-activity-card.failed {
+  border-color: #efc9ce;
+  background: #fff7f8;
+}
+.chat-activity-card.waiting {
+  border-color: #ead9af;
+  background: #fffaf0;
+}
+.chat-activity-card.activity-gate {
+  border-left: 2px solid #cdd9ec;
+}
+.chat-activity-card.activity-gate.failed {
+  border-left-color: #e2a8b0;
+}
+.chat-activity-card.activity-turn-status {
+  border-style: dashed;
+  background: transparent;
+}
+.chat-activity-card.activity-turn-status .chat-activity-detail {
+  color: var(--muted);
+}
+.chat-activity-card .activity-reference {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font:
+    var(--fs-meta) ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  overflow-wrap: anywhere;
+}
+.chat-activity-card .activity-result-shell {
+  margin-top: 6px;
+}
+.chat-divider em {
+  font-style: normal;
+  font-weight: 700;
+}
+.chat-unknown-row {
+  margin: 0;
+  padding: 8px 11px;
+  border: 1px dashed #e2a8b0;
+  border-radius: var(--radius-sm);
+  color: #a34853;
+  font-size: var(--fs-meta);
+}
+/* 抽屉宽度而不是视口宽度决定紧凑档：1440 视口的停靠抽屉只有 ~690px。 */
+.shared-drawer-shell {
+  container-type: inline-size;
+  container-name: chat-surface;
+}
+@container chat-surface (max-width: 700px) {
+  .chat-message {
+    --chat-avatar-size: 30px;
+    --chat-gutter: 8px;
+    --chat-row-gap: 14px;
+  }
+  .chat-message-user .chat-content {
+    max-width: 88%;
+  }
+  .chat-meta {
+    gap: var(--space-1) var(--space-2);
+  }
+  .chat-divider {
+    margin-block: var(--space-4);
+  }
 }

@@ -386,20 +386,23 @@ describe("Explorer rail layout", () => {
 });
 
 describe("Explorer inline message presentation", () => {
-  it("用户消息是「› + 纯文本」的一行，靠右，不再是可以折叠的卡片", () => {
+  it("用户消息是右侧气泡 + 「你」头像，行结构交给共享消息壳", () => {
     expect(threadRailSource).not.toContain("<el-tree");
     expect(threadRailSource).not.toContain("explorer-thread-tree");
     expect(threadRailSource).not.toContain('command="new-requirement"');
     // "这一行怎么摆"在行组件里；视图只把条目递进去。
     expect(flat(explorerMessageRowSource)).toContain(flat("mode === 'text'"));
-    expect(flat(explorerMessageRowSource)).toContain(flat('class="timeline-user-mark"'));
-    // 卡片那一套（头像 + 首行摘要 + 展开按钮）已经删掉：用户输入是一行原文，不是一份要点提要。
+    expect(flat(explorerMessageRowSource)).toContain(flat("<ChatMessageShell"));
+    expect(flat(explorerMessageRowSource)).toContain(flat('side="user"'));
+    expect(flat(explorerMessageRowSource)).toContain(flat('avatar="user"'));
+    // 卡片那一套（首行摘要 + 展开按钮）已经删掉：用户输入是气泡里的一段原文。
     expect(explorerViewSource).not.toContain("user-message-summary");
     expect(explorerViewSource).not.toContain("isUserMessageExpanded");
     expect(explorerStylesSource).not.toContain(".user-message-summary");
-    // 我的消息靠右（与执行线程的 `.execution-message.mine` 同一套读法）：那个 `auto` 左外边距掉了
-    // 就会悄悄退回左对齐——那不是"没样式"，是读起来像两个人在同一侧说话。
-    expect(explorerStylesSource).toMatch(/\.timeline-user-text \{[^}]*margin: 0 0 18px auto;/);
+    // 用户侧镜像对齐：内容靠右、头像在右；气泡底色来自品牌浅色 token。
+    expect(explorerStylesSource).toMatch(/\.chat-message-user \{[^}]*grid-template-columns: minmax\(0, 1fr\) var\(--chat-avatar-size\);/);
+    expect(explorerStylesSource).toMatch(/\.chat-message-user \.chat-content \{[^}]*align-items: flex-end;/);
+    expect(explorerStylesSource).toMatch(/\.chat-bubble \{[^}]*background: var\(--blue-soft\);/);
   });
 
   it("视图把每条条目交给行组件，并把它读不到的本地状态一起递进去", () => {
@@ -475,12 +478,14 @@ describe("Explorer inline message presentation", () => {
     expect(flat(explorerMessageRowSource)).toContain(flat("<ExplorerDividerRow"));
     expect(flat(explorerMessageRowSource)).toContain(flat("<ExplorerActivityRow"));
     // 兜底：行型掉到这里说明映射与模板没跟上，**当场显示**，不要静默渲染成一张裸卡。
-    expect(flat(explorerMessageRowSource)).toContain(flat("timeline-unknown-row"));
+    expect(flat(explorerMessageRowSource)).toContain(flat("chat-unknown-row"));
     expect(flat(explorerMessageRowSource)).not.toContain("activityMode");
-    expect(flat(explorerStylesSource)).toContain(flat(".timeline-unknown-row"));
+    expect(flat(explorerStylesSource)).toContain(flat(".chat-unknown-row"));
     expect(explorerViewSource).not.toContain("activityKindLabel");
-    expect(flat(explorerStylesSource)).toContain(flat(".timeline-note"));
-    expect(flat(explorerStylesSource)).toContain(flat(".timeline-divider-label"));
+    // 推理/分隔/过程行都走共享壳与共享推理组件，不再各写一套圆点与缩进。
+    expect(flat(explorerStylesSource)).toContain(flat(".chat-reasoning > summary"));
+    expect(flat(explorerStylesSource)).toContain(flat(".chat-divider-label"));
+    expect(flat(explorerStylesSource)).toContain(flat(".chat-activity-card"));
     expect(flat(explorerStylesSource)).toContain(flat(".activity-turn-status"));
   });
 
@@ -619,8 +624,8 @@ describe("Explorer thread switching", () => {
     // 锚点用**活动 id** 而不是 turnId：同一个回合里的多条助手活动因此各有各的锚点。
     expect(flat(explorerTimelineSource)).toContain(flat("return `message-${item.id}`;"));
     // 锚点算在行组件里（它拿得到这条的序号），视图只把序号递进去。
-    expect(flat(explorerMessageRowSource)).toContain(flat(':id="explorerTimelineTarget(activity, index)"'));
-    expect(flat(explorerMessageRowSource)).toContain(flat(':data-nav-key="explorerTimelineTarget(activity, index)"'));
+    expect(flat(explorerMessageRowSource)).toContain(flat(':anchor-id="explorerTimelineTarget(activity, index)"'));
+    expect(flat(explorerMessageRowSource)).toContain(flat(':nav-key="explorerTimelineTarget(activity, index)"'));
     expect(flat(explorerViewSource)).toContain(flat(':index="index"'));
   });
 
@@ -956,7 +961,7 @@ describe("Explorer markdown rendering", () => {
     expect(flat(explorerMessageRowSource)).toContain(flat('import MarkdownMessage from "./MarkdownMessage.vue"'));
     expect(flat(explorerMessageRowSource)).toContain(flat('<MarkdownMessage :source="activity.summary" />'));
     expect(flat(explorerMessageRowSource)).toContain(
-      flat(`<MarkdownMessage v-else :source="readableAssistantText(activity.summary)" :streaming="activity.status === 'RUNNING'" />`),
+      flat(`<MarkdownMessage :source="readableAssistantText(activity.summary)" :streaming="activity.status === 'RUNNING'" />`),
     );
     // 失败的回合不再把整段错误铺成红字：一句人话 + 可展开详情 + 重试。
     expect(flat(explorerMessageRowSource)).toContain(flat('class="timeline-failure-detail"'));
@@ -972,23 +977,25 @@ describe("Explorer markdown rendering", () => {
  * 于是所有推理行都没有正文——而它们没正文时看着像"本来就没话说"，不容易被发现。
  */
 const explorerReasoningRowSource = readFileSync(fileURLToPath(new URL("../components/ExplorerReasoningRow.vue", import.meta.url)), "utf8");
+const chatReasoningRowSource = readFileSync(fileURLToPath(new URL("../components/ChatReasoningRow.vue", import.meta.url)), "utf8");
 
 describe("推理行：有正文可折叠，没有正文就明说", () => {
   it("有正文时是折叠卡，没有正文时不摆折叠", () => {
-    expect(flat(explorerReasoningRowSource)).toContain(flat('<details v-if="hasBody"'));
-    expect(flat(explorerReasoningRowSource)).toContain(flat(':open="running"'));
+    // 探索侧的推理行是薄壳，折叠/无障碍语义在共享的 ChatReasoningRow 里。
+    expect(flat(explorerReasoningRowSource)).toContain(flat("<ChatReasoningRow"));
+    expect(flat(chatReasoningRowSource)).toContain(flat('<details v-if="hasBody"'));
+    expect(flat(chatReasoningRowSource)).toContain(flat(':open="running"'));
     // **没有正文时不摆 `<details>`**：一个点开只有空白的展开区比没有更糟。
-    expect(flat(explorerReasoningRowSource)).toContain(flat('v-else class="timeline-reasoning-plain"'));
+    expect(flat(chatReasoningRowSource)).toContain(flat('v-else class="chat-reasoning-inline"'));
   });
 
-  it("**两种「没正文」要分得开**：Provider 没给 vs Factory 自己的标记", () => {
-    // 前者明说「未提供正文」——否则那一行就是一个光秃秃的「推理」，看着像这一轮根本没推理过。
-    // 后者（`MODEL_STARTED`，"这一轮跑起来了"）留空，不编句子。
+  it("Provider 报了推理却没给可读正文时明说「未提供正文」", () => {
+    // 光秃秃的「推理」看着像这一轮根本没推理过——用户没法知道是"没有"还是"读不到"。
     expect(flat(explorerReasoningRowSource)).toContain(flat("isProviderControlled"));
     expect(flat(explorerReasoningRowSource)).toContain(flat("未提供正文"));
     // **正文过一遍展示边界的脱敏**：模型可能把它读到的令牌、邮箱原样复述出来。
-    expect(flat(explorerReasoningRowSource)).toContain(flat("presentableText"));
-    expect(flat(explorerStylesSource)).toContain(flat(".timeline-reasoning-unreadable"));
+    expect(flat(chatReasoningRowSource)).toContain(flat("presentableText"));
+    expect(flat(explorerStylesSource)).toContain(flat(".chat-reasoning-unreadable"));
   });
 });
 
