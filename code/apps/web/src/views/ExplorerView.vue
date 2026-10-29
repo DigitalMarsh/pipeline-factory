@@ -381,6 +381,20 @@ const {
 });
 
 /**
+ * 宽屏把需求对话**停靠**在主区右侧，而不是覆盖式抽屉：需求列表留在原地、随时可点，
+ * 切换需求不再"关抽屉 → 找行 → 再打开"。
+ *
+ * 判据只有视口宽度（≥1281px，此时左栏 330px + 列表 420px）。窄屏仍旧走模态抽屉，
+ * 因为屏幕放不下两栏。抽屉的尺寸与预留空间共用 `--conversation-dock-width`。
+ */
+const wideConversationDock = ref(false);
+const conversationDocked = computed(() => wideConversationDock.value && drawerOpen.value && !projectWorkspaceMode.value);
+let conversationDockQuery: MediaQueryList | null = null;
+function syncWideConversationDock(): void {
+  wideConversationDock.value = conversationDockQuery?.matches ?? false;
+}
+
+/**
  * 抽屉里那份 Plan 详情是**快照**（见 `usePlanDetailDrawer` 维护提示 5）：Run 起来了、验证过了、
  * 合并了，它都不会自己变——实测 Run 已经 `IN_PROGRESS`，卡片上还写着「已派发」。所以在投影里
  * 这条 Plan 的状态 / Run / 调度状态一变时，就把它换成新的：这样"确认之后十几秒 Run 自己出现"
@@ -1057,16 +1071,6 @@ async function createRequirement(description: string, files: File[] = []): Promi
   }
 }
 
-async function selectRequirement(explorerPlanId: string): Promise<void> {
-  drawerOpen.value = false;
-  drawerTab.value = "explorer";
-  if (activeExplorerPlan.value?.id !== explorerPlanId) await selectExplorerPlan(explorerPlanId, false);
-  const query = { ...route.query };
-  delete query.runId;
-  delete query.requirementTab;
-  await router.replace({ path: route.path, query: { ...query, explorerPlanId } });
-}
-
 async function openRequirementChat(explorerPlanId: string): Promise<void> {
   drawerOpen.value = false;
   drawerTab.value = "explorer";
@@ -1444,6 +1448,25 @@ async function stopExplorerTurn(): Promise<void> {
   }
 }
 
+/**
+ * 失败回合的「重试」：把这一轮之前最近的一条用户消息重新发出去。
+ *
+ * 走的是正常 `sendTurn`（乐观插入 + 真实回合），所以失败会照常落成新的一条失败消息，
+ * 而不是把旧的那条改成"进行中"——时间线保留每次尝试的记录。
+ */
+async function retryFailedTurn(activity: ExplorerActivityItem): Promise<void> {
+  const index = visibleTurns.value.findIndex((turn) => turn.id === activity.turnId);
+  const scope = index >= 0 ? visibleTurns.value.slice(0, index) : visibleTurns.value;
+  const previousUser = [...scope].reverse().find((turn) => turn.role === "user" && turn.content.trim());
+  if (!previousUser) {
+    ElMessage.info("找不到可重发的消息，请在下方输入框补充后发送");
+    return;
+  }
+  draft.value = previousUser.content;
+  await nextTick();
+  await sendTurn();
+}
+
 /** 先乐观写入用户消息，再由 v4 API/SSE 补齐 Provider 输出和 Plan 活动。 */
 async function sendTurn(): Promise<boolean> {
   const content = draft.value.trim();
@@ -1711,6 +1734,11 @@ watch(
 );
 onMounted(() => {
   mounted.value = true;
+  if (typeof window.matchMedia === "function") {
+    conversationDockQuery = window.matchMedia("(min-width: 1281px)");
+    syncWideConversationDock();
+    conversationDockQuery.addEventListener("change", syncWideConversationDock);
+  }
   syncPanelStateFromRoute();
   consumeSettingsQuery();
   void loadModelBackends();
@@ -1721,6 +1749,8 @@ onMounted(() => {
 });
 onBeforeUnmount(() => {
   mounted.value = false;
+  conversationDockQuery?.removeEventListener("change", syncWideConversationDock);
+  conversationDockQuery = null;
   invalidateProjectScope();
   closeEvents();
   closeRequirementStatusEvents();
@@ -1728,7 +1758,16 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div :class="['console-layout', { 'project-execution-mode': projectExecutionMode, 'project-worktrees-mode': worktreesMode }]">
+  <div
+    :class="[
+      'console-layout',
+      {
+        'project-execution-mode': projectExecutionMode,
+        'project-worktrees-mode': worktreesMode,
+        'conversation-docked': conversationDocked,
+      },
+    ]"
+  >
     <ThreadRail
       :panel="leftPanel"
       :thread="thread"
@@ -1780,8 +1819,6 @@ onBeforeUnmount(() => {
           :active-explorer-plan-id="activeExplorerPlan?.id ?? null"
           :disabled="!thread || thread.state === 'ARCHIVED' || project?.status === 'ARCHIVED'"
           @add="openAddRequirementDialog"
-          @open="openRequirementChat"
-          @select="selectRequirement"
           @explore="openRequirementChat"
           @view-plan="openRequirementPlan"
           @open-task="openRequirementTask"
@@ -1793,9 +1830,12 @@ onBeforeUnmount(() => {
     <el-drawer
       v-if="!projectWorkspaceMode"
       :model-value="drawerOpen"
-      class="shared-requirement-drawer"
+      :class="['shared-requirement-drawer', { 'is-docked': conversationDocked }]"
       direction="rtl"
-      size="min(900px, 96vw)"
+      :size="conversationDocked ? 'var(--conversation-dock-width)' : 'min(900px, 96vw)'"
+      :modal="!conversationDocked"
+      :modal-penetrable="conversationDocked"
+      :lock-scroll="!conversationDocked"
       :with-header="false"
       :append-to-body="true"
       @update:model-value="updateSharedDrawer"
@@ -2003,6 +2043,7 @@ onBeforeUnmount(() => {
                       :input-progress="inputProgress"
                       :input-answer-in-flight="inputAnswerInFlight"
                       @answer="openInputRequest"
+                      @retry="retryFailedTurn"
                       @view-plan="openPlanDetail"
                       @confirm-plan="confirmPlan"
                       @enqueue-plan="enqueuePlan"

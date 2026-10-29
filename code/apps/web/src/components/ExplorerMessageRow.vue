@@ -20,9 +20,9 @@
  * 3. 方案卡绑到哪条助手消息由视图算好（`planTimeline.planActivityBindings`），这里只负责摆；
  *    查看 / 确认 / 入队都往上报，动作由视图做（它拿着当前需求与 busy）。
  */
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 import { Check, InfoFilled, Warning } from "@element-plus/icons-vue";
-import type { ExplorerInputRequest, MessageAttachment, Plan } from "../types";
+import type { ExplorerActivityItem, ExplorerInputRequest, MessageAttachment, Plan } from "../types";
 import { explorerTimelineTarget, inputRequestTarget, type ExplorerTimelineItem } from "../utils/explorerTimeline";
 import { inputAnswerDisplayLabels, inputAnswerDisplayText } from "../utils/explorerInput";
 import type { ExplorerInputProgress } from "../utils/explorerInputProgressDraft";
@@ -63,7 +63,24 @@ const emit = defineEmits<{
   (event: "view-plan", plan: Plan): void;
   (event: "confirm-plan", plan: Plan): void;
   (event: "enqueue-plan", plan: Plan): void;
+  /** 失败回合的「重试」：由视图决定重发哪一条用户消息。 */
+  (event: "retry", activity: ExplorerActivityItem): void;
 }>();
+
+/** 失败详情默认收起：整段英文错误铺在时间线上既刺眼又难扫。 */
+const errorExpanded = ref(false);
+watch(
+  () => props.item.key,
+  () => {
+    errorExpanded.value = false;
+  },
+);
+
+/** 详情优先用投影带回来的原始错误；没有时退回正文。 */
+function failureDetail(activity: ExplorerActivityItem): string {
+  const error = activity.details?.error;
+  return typeof error === "string" && error.trim() ? error : activity.summary;
+}
 
 /** 活动条目的行型；输入卡走另一条路（`item.kind === "input"`）。 */
 const activity = computed(() => (props.item.kind === "activity" ? props.item.activity : null));
@@ -188,7 +205,18 @@ function statusTextFor(request: ExplorerInputRequest): string {
         ><el-tag size="small" effect="light" :type="statusTagType(activity.status)">{{ assistantActivityLabel(activity) }}</el-tag
         ><span>{{ formatTurnTime(activity.occurredAt) }}</span>
       </div>
+      <template v-if="activity.status === 'FAILED'">
+        <p class="timeline-failure-summary">模型调用失败，本轮没有产出结果。可以查看详情，或重试上一条消息。</p>
+        <div class="timeline-failure-actions">
+          <button type="button" class="timeline-failure-link" :aria-expanded="errorExpanded" @click="errorExpanded = !errorExpanded">
+            {{ errorExpanded ? "收起详情" : "查看详情" }}
+          </button>
+          <button type="button" class="timeline-failure-retry" @click="emit('retry', activity)">重试</button>
+        </div>
+        <pre v-if="errorExpanded" class="timeline-failure-detail">{{ failureDetail(activity) }}</pre>
+      </template>
       <MarkdownMessage
+        v-else
         :source="readableAssistantText(activity.summary)"
         :streaming="activity.status === 'RUNNING'"
       /><ExplorerCandidatePlanCard

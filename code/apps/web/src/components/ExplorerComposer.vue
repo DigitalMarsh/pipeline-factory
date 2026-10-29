@@ -78,7 +78,7 @@ function onKeydown(event: KeyboardEvent): void {
       </div>
     </AttachmentComposer>
     <div class="composer-footer">
-      <ProviderUsageFooter :model="model" :backend="backend" :context="context" context-note="estimated" />
+      <ProviderUsageFooter :model="model" :backend="backend" :context="context" context-note="估算" />
       <span v-if="inputAnswerInFlight || inputSubmitting" class="composer-status" role="status" aria-live="polite"
         >正在提交结构化答案，确认后本轮会继续…</span
       ><span v-else-if="pendingInput" class="composer-status" role="status" aria-live="polite">请先回答上方结构化问题，再继续探索。</span

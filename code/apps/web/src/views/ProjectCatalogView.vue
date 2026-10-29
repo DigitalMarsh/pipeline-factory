@@ -118,7 +118,7 @@ watch(() => route.query.create, consumeCreateQuery);
         <p>每个 Project 对应一个 Git 仓库，并独立保存 Explorer、Plan、Run 和执行配置。</p>
       </div>
       <div class="catalog-actions">
-        <el-button plain @click="load"><Refresh :size="15" /> Refresh</el-button
+        <el-button plain @click="load"><Refresh :size="15" /> 刷新</el-button
         ><el-button type="primary" @click="openCreate"><Plus :size="15" /> 新建项目</el-button>
       </div>
     </div>

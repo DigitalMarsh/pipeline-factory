@@ -5,7 +5,7 @@
  * 这里钉住的是"按钮在不在、发的是哪一条"：删除是不可恢复的动作，按钮必须逐行可辨（aria-label 带标题）、
  * 只能发自己那一行的 id。至于"能不能删"，判据在服务端，不在这个组件里——所以这里也不测。
  */
-import { createApp, defineComponent, h } from "vue";
+import { createApp, defineComponent, h, nextTick } from "vue";
 import { afterEach, describe, expect, it } from "vitest";
 import ExplorerRequirementList from "./ExplorerRequirementList.vue";
 import type { ExplorerRequirementRow } from "../utils/explorerRequirementRows";
@@ -73,7 +73,7 @@ function mountList(rows: ExplorerRequirementRow[], disabled = false) {
     disabled,
     onRemove: (id: string) => removed.push(id),
     onRename: (id: string) => renamed.push(id),
-    onOpen: (id: string) => opened.push(id),
+    onExplore: (id: string) => opened.push(id),
   })
     .component("ElButton", ElButtonStub)
     .component("ElTag", ElTagStub)
@@ -121,21 +121,61 @@ describe("需求清单的行内删除", () => {
   });
 });
 
-describe("需求清单的双击打开", () => {
+describe("需求清单的打开交互", () => {
   const rows = [row(explorerPlan("explorer-plan-1", 1, "补一节目录结构")), row(explorerPlan("explorer-plan-2", 2, "加上甘特图"))];
 
-  it("双击行（含标题按钮）发出 open，id 就是那一行", () => {
+  it("单击需求名就打开探索对话（不再要求双击）", () => {
     const { host, opened } = mountList(rows);
-    host.querySelectorAll<HTMLElement>(".requirement-table-row")[1]!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
-    host.querySelectorAll<HTMLButtonElement>(".requirement-name-button")[0]!.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
-    expect(opened).toEqual(["explorer-plan-2", "explorer-plan-1"]);
+    host.querySelectorAll<HTMLButtonElement>(".requirement-name-button")[1]!.click();
+    expect(opened).toEqual(["explorer-plan-2"]);
   });
 
-  it("在动作按钮上双击不算打开行——那是连点了两下按钮", () => {
+  it("只点动作按钮不会顺带打开对话", () => {
     const { host, opened, removed } = mountList(rows);
-    const remove = host.querySelectorAll<HTMLButtonElement>('[data-requirement-action="delete"]')[1]!;
-    remove.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    host.querySelectorAll<HTMLButtonElement>('[data-requirement-action="delete"]')[1]!.click();
     expect(opened).toEqual([]);
-    expect(removed).toEqual([]);
+    expect(removed).toEqual(["explorer-plan-2"]);
+  });
+
+  it("失败的需求给「查看并重试」主操作，指向同一行", () => {
+    const failed = {
+      ...row(explorerPlan("explorer-plan-3", 3, "跑不通的需求")),
+      planStatus: { label: "探索失败", tone: "danger" as const },
+    };
+    const { host, opened } = mountList([...rows, failed]);
+    const retry = host.querySelector<HTMLButtonElement>('[data-requirement-action="retry"]')!;
+    expect(retry.textContent).toContain("查看并重试");
+    retry.click();
+    expect(opened).toEqual(["explorer-plan-3"]);
+  });
+});
+
+describe("需求清单的筛选", () => {
+  const rows = [
+    row(explorerPlan("explorer-plan-1", 1, "补一节目录结构")),
+    row(explorerPlan("explorer-plan-2", 2, "加上甘特图")),
+    row(explorerPlan("explorer-plan-3", 3, "修一下归属校验")),
+  ];
+
+  it("按标题筛选，只剩匹配的行", async () => {
+    const { host } = mountList(rows);
+    const input = host.querySelector<HTMLInputElement>(".requirement-filter")!;
+    input.value = "甘特";
+    input.dispatchEvent(new Event("input"));
+    await nextTick();
+    expect([...host.querySelectorAll(".requirement-table-row")]).toHaveLength(1);
+    expect(host.textContent).toContain("加上甘特图");
+  });
+
+  it("没有匹配时显示空态，清除筛选后恢复全部", async () => {
+    const { host } = mountList(rows);
+    const input = host.querySelector<HTMLInputElement>(".requirement-filter")!;
+    input.value = "不存在的关键词";
+    input.dispatchEvent(new Event("input"));
+    await nextTick();
+    expect(host.textContent).toContain("没有匹配的需求");
+    host.querySelector<HTMLButtonElement>(".requirement-empty-reset")!.click();
+    await nextTick();
+    expect([...host.querySelectorAll(".requirement-table-row")]).toHaveLength(3);
   });
 });

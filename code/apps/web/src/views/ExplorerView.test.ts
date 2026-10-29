@@ -78,6 +78,10 @@ const threadRailSource = readFileSync(fileURLToPath(new URL("../components/Threa
 const explorerHeaderStatusSource = readFileSync(fileURLToPath(new URL("../components/ExplorerHeaderStatus.vue", import.meta.url)), "utf8");
 const providerUsageFooterSource = readFileSync(fileURLToPath(new URL("../components/ProviderUsageFooter.vue", import.meta.url)), "utf8");
 const explorerComposerSource = readFileSync(fileURLToPath(new URL("../components/ExplorerComposer.vue", import.meta.url)), "utf8");
+const explorerRequirementListSource = readFileSync(
+  fileURLToPath(new URL("../components/ExplorerRequirementList.vue", import.meta.url)),
+  "utf8",
+);
 const projectCatalogSource = readFileSync(fileURLToPath(new URL("./ProjectCatalogView.vue", import.meta.url)), "utf8");
 
 describe("Explorer thread actions", () => {
@@ -129,7 +133,7 @@ describe("Provider usage footer wiring", () => {
     // 输入区已抽成 ExplorerComposer；footer 的 import 与用法跟着它走。
     expect(flat(explorerComposerSource)).toContain(flat('import ProviderUsageFooter from "./ProviderUsageFooter.vue"'));
     expect(flat(explorerComposerSource)).toContain(
-      flat('<ProviderUsageFooter :model="model" :backend="backend" :context="context" context-note="estimated" />'),
+      flat('<ProviderUsageFooter :model="model" :backend="backend" :context="context" context-note="估算" />'),
     );
     expect(flat(explorerViewSource)).toContain(flat("<ExplorerComposer"));
     expect(explorerViewSource).not.toContain('class="codex-status-popover"');
@@ -810,8 +814,33 @@ describe("Explorer header status layout", () => {
     expect(flat(explorerViewSource)).toContain(flat('class="demo-notice pause-notice"'));
     expect(flat(explorerViewSource)).toContain(flat('class="demo-notice"'));
     expect(flat(explorerStylesSource)).toContain(flat(".conversation-header-copy h1"));
-    expect(flat(explorerStylesSource)).toContain(flat(".explorer-header-status-trigger { display: grid;"));
+    // 三段状态现在是一条紧凑摘要条（flex 行内片段），不再是三张独立卡片。
+    expect(flat(explorerStylesSource)).toContain(flat(".explorer-header-status-cards { display: flex;"));
+    expect(flat(explorerStylesSource)).toContain(flat(".explorer-header-status-trigger { display: flex;"));
     expect(flat(explorerStylesSource)).toContain(flat(".explorer-header-status-popper"));
+  });
+});
+
+describe("Explorer wide-screen conversation dock", () => {
+  it("docks the conversation beside the requirement list on wide screens and keeps the modal drawer on narrow ones", () => {
+    expect(flat(explorerViewSource)).toContain(flat("const wideConversationDock = ref(false)"));
+    expect(flat(explorerViewSource)).toContain(flat('window.matchMedia("(min-width: 1281px)")'));
+    expect(flat(explorerViewSource)).toContain(flat("conversationDocked ? 'var(--conversation-dock-width)' : 'min(900px, 96vw)'"));
+    expect(flat(explorerViewSource)).toContain(flat(':modal="!conversationDocked"'));
+    expect(flat(explorerViewSource)).toContain(flat(':modal-penetrable="conversationDocked"'));
+    expect(flat(explorerViewSource)).toContain(flat("'conversation-docked': conversationDocked"));
+    expect(flat(explorerStylesSource)).toContain(flat("--conversation-dock-width"));
+    expect(flat(explorerStylesSource)).toContain(flat(".console-layout.conversation-docked {"));
+    expect(flat(explorerStylesSource)).toContain(flat(".shared-requirement-drawer.is-docked {"));
+  });
+
+  it("opens a requirement with a single click and resends the previous message from a failed turn", () => {
+    // 双击是隐藏手势：现在单击需求名就打开对话，失败回合给「重试」。
+    expect(flat(explorerRequirementListSource)).toContain(flat(`@click="emit('explore', row.explorerPlan.id)"`));
+    expect(explorerRequirementListSource).not.toContain("@dblclick");
+    expect(flat(explorerViewSource)).toContain(flat('@retry="retryFailedTurn"'));
+    expect(flat(explorerViewSource)).toContain(flat("draft.value = previousUser.content"));
+    expect(flat(explorerViewSource)).toContain(flat("await sendTurn()"));
   });
 });
 
@@ -905,8 +934,11 @@ describe("Explorer markdown rendering", () => {
     expect(flat(explorerMessageRowSource)).toContain(flat('import MarkdownMessage from "./MarkdownMessage.vue"'));
     expect(flat(explorerMessageRowSource)).toContain(flat('<MarkdownMessage :source="activity.summary" />'));
     expect(flat(explorerMessageRowSource)).toContain(
-      flat('<MarkdownMessage :source="readableAssistantText(activity.summary)" :streaming="activity.status === \'RUNNING\'" />'),
+      flat(`<MarkdownMessage v-else :source="readableAssistantText(activity.summary)" :streaming="activity.status === 'RUNNING'" />`),
     );
+    // 失败的回合不再把整段错误铺成红字：一句人话 + 可展开详情 + 重试。
+    expect(flat(explorerMessageRowSource)).toContain(flat('class="timeline-failure-detail"'));
+    expect(flat(explorerMessageRowSource)).toContain(flat(`@click="emit('retry', activity)"`));
     expect(explorerMessageRowSource).not.toContain(
       `: activity.summary }}<span v-if="activity.status === 'RUNNING'" class="processing-dots"`,
     );
