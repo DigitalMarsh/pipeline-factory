@@ -79,6 +79,17 @@ describe("ChatMessageShell", () => {
     expect(host.querySelector(".chat-headline")?.textContent).toBe("工具调用");
   });
 
+  it("过程行：类型图标占头像栏，不画角色头像", () => {
+    const IconStub = defineComponent({ setup: () => () => h("svg", { class: "stub-icon" }) });
+    const host = mount(
+      { side: "assistant", compact: true, icon: IconStub, headline: "工具调用", time: "21:30" },
+      { default: () => h("p", "Glob") },
+    );
+
+    expect(host.querySelector(".chat-avatar")).toBeNull();
+    expect(host.querySelector(".chat-process-icon svg.stub-icon")).not.toBeNull();
+  });
+
   it("锚点与外部属性都落在根节点上", () => {
     const host = mount({
       side: "assistant",

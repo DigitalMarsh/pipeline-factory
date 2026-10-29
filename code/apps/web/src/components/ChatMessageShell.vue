@@ -13,7 +13,7 @@
   4. 状态文案、时间格式化由调用方传入；这里不认识领域状态，也不读全局 store。
 -->
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, type Component } from "vue";
 import type { StatusTagType } from "../utils/statusTag";
 
 export type ChatAvatar = "explorer" | "executor" | "user";
@@ -23,6 +23,8 @@ const props = withDefaults(
     side: "assistant" | "user";
     /** 角色头像；过程行留空。 */
     avatar?: ChatAvatar | null;
+    /** 过程行的类型图标（工具 / 命令 / 文件 / 推理…）；与 avatar 二选一。 */
+    icon?: Component | null;
     /** 说话者名字（助手行 meta 的第一段）。 */
     author?: string | null;
     /** meta 的主标题：活动标签、执行条目标题。 */
@@ -49,6 +51,7 @@ const props = withDefaults(
   }>(),
   {
     avatar: null,
+    icon: null,
     author: null,
     headline: null,
     name: null,
@@ -95,6 +98,7 @@ const avatarLabel = computed(() => (props.avatar ? AVATAR_LABEL[props.avatar] : 
     <div v-if="avatar" class="chat-avatar" :class="`chat-avatar-${avatar}`" aria-hidden="true">
       <slot name="avatar">{{ AVATAR_GLYPH[avatar] }}</slot>
     </div>
+    <div v-else-if="icon" class="chat-process-icon" aria-hidden="true"><component :is="icon" /></div>
     <div class="chat-content">
       <header v-if="hasMeta" class="chat-meta">
         <strong v-if="author" class="chat-author">{{ author }}</strong>

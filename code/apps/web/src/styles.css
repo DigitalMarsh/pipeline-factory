@@ -6069,6 +6069,21 @@ a {
   background: #e8eef7;
   color: #41536a;
 }
+/* 过程行的类型图标：占头像栏的位置，但不画角色头像——工具、命令、文件、推理一眼可辨。 */
+.chat-process-icon {
+  display: grid;
+  width: var(--chat-avatar-size);
+  height: var(--chat-avatar-size);
+  grid-column: 1;
+  grid-row: 1;
+  place-items: center;
+  color: var(--muted);
+  font-size: 18px;
+}
+.chat-process-icon svg {
+  width: 18px;
+  height: 18px;
+}
 .chat-message-running .chat-avatar {
   box-shadow: 0 0 0 4px rgba(47, 111, 208, 0.16);
   animation: chat-avatar-pulse 1.15s ease-in-out infinite;

@@ -31,6 +31,7 @@ import {
 } from "../utils/explorerPresentation";
 import { inputStatusTagType, statusTagType } from "../utils/statusTag";
 import { formatMessageTime } from "../utils/messageTime";
+import { EXPLORER_INPUT_ICON, EXPLORER_UNKNOWN_ICON, explorerProcessIcon } from "../utils/chatIcons";
 import { readableAssistantText } from "../utils/planProtocolDisplay";
 import ChatMessageShell from "./ChatMessageShell.vue";
 import MarkdownMessage from "./MarkdownMessage.vue";
@@ -88,6 +89,8 @@ const rowMode = computed<ExplorerRowMode | null>(() =>
 );
 /** 活动行要摆的字段（标签 / 名字 / 引用 / 正文）；与纯函数同源，壳只负责摆位置。 */
 const activityLine = computed(() => (activity.value ? explorerActivityLine(activity.value) : null));
+/** 过程行的类型图标：工具 / 命令 / 文件 / 推理…（头像只留给"谁在说"）。 */
+const activityIcon = computed(() => (activity.value ? explorerProcessIcon(activity.value.kind) : EXPLORER_UNKNOWN_ICON));
 /** 方案卡显不显示也问同一张清单表——与整个条目要不要显示是同一条判据（见文件头维护提示 3）。 */
 const showCandidatePlanCard = explorerDisplayMode("CANDIDATE_PLAN") !== "hidden";
 
@@ -116,6 +119,7 @@ function statusTextFor(request: ExplorerInputRequest): string {
     v-if="item.kind === 'input'"
     side="assistant"
     compact
+    :icon="EXPLORER_INPUT_ICON"
     headline="结构化输入"
     :status-label="statusTextFor(item.request)"
     :status-type="inputStatusTagType(item.request.status)"
@@ -242,6 +246,7 @@ function statusTextFor(request: ExplorerInputRequest): string {
     v-else-if="activity && mode === 'reasoning'"
     side="assistant"
     compact
+    :icon="explorerProcessIcon('REASONING')"
     :anchor-id="explorerTimelineTarget(activity, index)"
     :nav-key="explorerTimelineTarget(activity, index)"
     :running="activity.status === 'RUNNING'"
@@ -255,6 +260,7 @@ function statusTextFor(request: ExplorerInputRequest): string {
     v-else-if="activity && rowMode && activityLine"
     side="assistant"
     compact
+    :icon="activityIcon"
     :headline="activityLine.label"
     :name="activityLine.name"
     :status-label="activityStatusLabel(activity)"
@@ -268,7 +274,13 @@ function statusTextFor(request: ExplorerInputRequest): string {
     <ExplorerActivityRow :activity="activity" :mode="rowMode" :line="activityLine" />
   </ChatMessageShell>
 
-  <ChatMessageShell v-else-if="activity" side="assistant" compact :time="formatMessageTime(activity.occurredAt)">
+  <ChatMessageShell
+    v-else-if="activity"
+    side="assistant"
+    compact
+    :icon="EXPLORER_UNKNOWN_ICON"
+    :time="formatMessageTime(activity.occurredAt)"
+  >
     <article class="chat-unknown-row">未识别的行型：{{ mode }}（{{ activity.kind }}）</article>
   </ChatMessageShell>
 </template>

@@ -18,6 +18,7 @@ import { executionMessageStatusLabel, type ExecutionStreamItem } from "../utils/
 import { executionMessageDetails, executionMessageDiagnosticsTitle } from "../utils/executionMessageDetails";
 import { statusTagType } from "../utils/statusTag";
 import { formatMessageTime } from "../utils/messageTime";
+import { executionProcessIcon } from "../utils/chatIcons";
 import ChatMessageShell from "./ChatMessageShell.vue";
 import ExecutionActivityRow from "./ExecutionActivityRow.vue";
 import ExecutionDividerRow from "./ExecutionDividerRow.vue";
@@ -45,6 +46,8 @@ const time = computed(() => formatMessageTime(props.item.occurredAt));
 const details = computed(() => executionMessageDetails(props.item));
 /** 推理块的标题由 ChatReasoningRow 自己写（「推理 · 第 N 轮」），meta 里不再重复。 */
 const headline = computed(() => (props.item.kind === "reasoning" ? null : props.item.title));
+/** 过程行的类型图标：方案 / 推理 / 工具 / 文件 / 搜索…（头像只留给"谁在说"）。 */
+const processIcon = computed(() => (isProcess.value ? executionProcessIcon(props.item) : null));
 
 function toggleDetails(): void {
   emit("toggle-details", props.item.id);
@@ -61,6 +64,7 @@ function viewPlan(): void {
     v-else
     :side="isUser ? 'user' : 'assistant'"
     :avatar="isUser ? 'user' : isModel ? 'executor' : null"
+    :icon="processIcon"
     :author="isModel ? 'Executor' : null"
     :headline="headline"
     :status-label="statusLabel"
