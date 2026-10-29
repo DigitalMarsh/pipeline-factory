@@ -4371,6 +4371,56 @@ a {
   color: #91adca;
   font-size: var(--fs-meta);
 }
+/*
+ * 三条入口（项目执行 / Worktree / 新建探索）压成一行紧凑按钮：
+ * 线程列表才是左栏主体，三张 48px 大卡会把首屏占掉一半；详细说明改放 title。
+ */
+.left-quick-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+.left-quick-actions .left-panel-create {
+  width: auto;
+  min-width: 0;
+  min-height: 30px;
+  flex: 1 1 auto;
+  gap: 6px;
+  padding: 0 9px;
+  border-radius: var(--radius-sm);
+}
+.left-quick-actions .left-panel-create:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+.left-quick-actions .left-panel-create-icon {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  border-radius: 5px;
+}
+.left-quick-actions .left-quick-action-label {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.left-quick-actions .left-quick-action-label strong {
+  font-size: var(--fs-meta);
+  font-weight: 600;
+}
+/* 线程标题两行：左栏只有 250px，一行会截成「探索-20260…」，分不清是哪条线程。 */
+.explorer-list-item .left-list-copy strong {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: var(--fs-body);
+  line-height: 1.35;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
 .context-panel-shell {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 68px;
@@ -5698,9 +5748,9 @@ a {
 }
 .requirement-table-wrap {
   min-height: 0;
-  /* 卡片填满面板剩余高度，滚动发生在卡片内部。**不要再给 max-height**：
-     那样会在列表下方留下一条与窗口等高的空白（列表"没到底"）。列表的"矮"由行高控制。 */
-  flex: 1 1 auto;
+  /* 卡片随内容长，不再撑满面板：4 行数据下面拖一张与窗口等高的空白边框卡，比留白更显空。
+     行数超出可用高度时收缩并内部滚动（flex-shrink: 1 + overflow: auto）。 */
+  flex: 0 1 auto;
   overflow: auto;
   border: 1px solid #e3e9f1;
   border-radius: 9px;

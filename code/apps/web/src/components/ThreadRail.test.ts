@@ -235,7 +235,9 @@ describe("ThreadRail left workspace navigation", () => {
     const createExplorer = mounted.host.querySelector<HTMLButtonElement>('button[aria-label="新建 Explorer"]');
 
     expect(projectCard).not.toBeNull();
-    expect(executionEntry?.textContent).toContain("项目执行线程");
+    // 入口收成了紧凑按钮：短标签 + 完整 aria-label（原来的两行大卡会被线程列表挤掉）。
+    expect(executionEntry?.textContent).toContain("项目执行");
+    expect(executionEntry?.getAttribute("aria-label")).toBe("项目执行线程");
     expect(executionEntry?.classList.contains("active")).toBe(true);
     expect(executionEntry?.getAttribute("aria-current")).toBe("page");
     expect(projectCard!.compareDocumentPosition(executionEntry!) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
@@ -571,7 +573,8 @@ describe("ThreadRail left workspace navigation", () => {
     const createButton = mounted.host.querySelector<HTMLButtonElement>('button[aria-label="新建 Explorer"]');
 
     expect(createButton).not.toBeNull();
-    expect(createButton?.textContent).toContain("新建 Explorer");
+    expect(createButton?.getAttribute("aria-label")).toBe("新建 Explorer");
+    expect(createButton?.textContent).toContain("新建探索");
     createButton?.click();
     await nextTick();
     expect(mounted.getCreateExplorerCount()).toBe(1);
@@ -654,7 +657,8 @@ describe("ThreadRail left workspace navigation", () => {
     const entry = mounted.host.querySelector<HTMLButtonElement>("[data-worktrees-entry]");
 
     expect(entry).not.toBeNull();
-    expect(entry?.textContent).toContain("Worktree 管理");
+    expect(entry?.getAttribute("aria-label")).toBe("Worktree 管理");
+    expect(entry?.textContent).toContain("Worktree");
     expect(entry?.getAttribute("aria-current")).toBe("page");
     entry?.click();
     expect(mounted.getSelectedProjectWorktrees()).toBe(true);

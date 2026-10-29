@@ -284,41 +284,47 @@ function emitThreadAction(command: string | number): void {
       </div>
 
       <div v-else class="left-panel-scroll explorer-list">
-        <button
-          v-if="props.project"
-          :class="['left-panel-create', 'project-execution-entry', { active: props.projectExecutionActive }]"
-          type="button"
-          aria-label="项目执行线程"
-          :aria-current="props.projectExecutionActive ? 'page' : undefined"
-          data-project-execution-entry
-          @click="emit('select-project-execution')"
-        >
-          <span class="left-panel-create-icon"><Connection :size="16" /></span>
-          <span><strong>项目执行线程</strong><small>在项目目录中直接执行</small></span>
-        </button>
-        <button
-          v-if="props.project"
-          :class="['left-panel-create', 'project-worktrees-entry', { active: props.projectWorktreesActive }]"
-          type="button"
-          aria-label="Worktree 管理"
-          :aria-current="props.projectWorktreesActive ? 'page' : undefined"
-          data-worktrees-entry
-          @click="emit('select-project-worktrees')"
-        >
-          <span class="left-panel-create-icon"><Files :size="16" /></span>
-          <span><strong>Worktree 管理</strong><small>分支状态与合并</small></span>
-        </button>
-        <button
-          class="left-panel-create"
-          type="button"
-          aria-label="新建 Explorer"
-          :disabled="props.creatingExplorer"
-          :aria-busy="props.creatingExplorer ? 'true' : undefined"
-          @click="emit('create-explorer')"
-        >
-          <span class="left-panel-create-icon"><Plus :size="16" /></span>
-          <span><strong>新建 Explorer</strong><small>从全新上下文开始</small></span>
-        </button>
+        <!-- 三条入口压成一行半：线程列表才是这一栏的主体，三张大卡会把首屏占掉一半。 -->
+        <div class="left-quick-actions">
+          <button
+            v-if="props.project"
+            :class="['left-panel-create', 'project-execution-entry', { active: props.projectExecutionActive }]"
+            type="button"
+            aria-label="项目执行线程"
+            title="项目执行线程：在项目目录中直接执行"
+            :aria-current="props.projectExecutionActive ? 'page' : undefined"
+            data-project-execution-entry
+            @click="emit('select-project-execution')"
+          >
+            <span class="left-panel-create-icon"><Connection :size="14" /></span>
+            <span class="left-quick-action-label"><strong>项目执行</strong></span>
+          </button>
+          <button
+            v-if="props.project"
+            :class="['left-panel-create', 'project-worktrees-entry', { active: props.projectWorktreesActive }]"
+            type="button"
+            aria-label="Worktree 管理"
+            title="Worktree 管理：分支状态与合并"
+            :aria-current="props.projectWorktreesActive ? 'page' : undefined"
+            data-worktrees-entry
+            @click="emit('select-project-worktrees')"
+          >
+            <span class="left-panel-create-icon"><Files :size="14" /></span>
+            <span class="left-quick-action-label"><strong>Worktree</strong></span>
+          </button>
+          <button
+            class="left-panel-create"
+            type="button"
+            aria-label="新建 Explorer"
+            title="新建 Explorer：从全新上下文开始"
+            :disabled="props.creatingExplorer"
+            :aria-busy="props.creatingExplorer ? 'true' : undefined"
+            @click="emit('create-explorer')"
+          >
+            <span class="left-panel-create-icon"><Plus :size="14" /></span>
+            <span class="left-quick-action-label"><strong>新建探索</strong></span>
+          </button>
+        </div>
 
         <div class="left-list-label-row">
           <div class="left-list-label">线程清单</div>
@@ -372,9 +378,14 @@ function emitThreadAction(command: string | number): void {
                 <span class="left-list-copy"
                   ><strong>{{ row.explorer.title }}</strong></span
                 >
-                <el-tag size="small" effect="light" :type="explorerThreadStatusTagType(row.explorer.state)">{{
-                  explorerThreadStateLabel(row.explorer.state)
-                }}</el-tag>
+                <!-- 「启用中」对每一行都成立，等于占着 50px 不说任何事；只有归档线程才标状态。 -->
+                <el-tag
+                  v-if="row.explorer.state !== 'ACTIVE'"
+                  size="small"
+                  effect="light"
+                  :type="explorerThreadStatusTagType(row.explorer.state)"
+                  >{{ explorerThreadStateLabel(row.explorer.state) }}</el-tag
+                >
               </button>
               <div v-if="row.explorer.id === props.thread?.id" class="explorer-thread-row-actions" @click.stop>
                 <el-dropdown
