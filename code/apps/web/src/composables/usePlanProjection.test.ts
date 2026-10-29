@@ -229,6 +229,37 @@ describe("applyPlanProjection 与 workspace", () => {
     expect(s.explorerEventSequence.value).toBe(8);
   });
 
+  it("先取后切：fetch 不写状态，apply 才落地", async () => {
+    const s = setup();
+    s.thread.value = thread();
+    vi.mocked(api.explorerPlanWorkspace).mockResolvedValue({
+      explorerPlan: explorerPlan("ep-1"),
+      turns: [turn("turn-1")],
+      activity: [activity("activity-1")],
+      inputRequests: [],
+      candidate: plan("candidate"),
+      revisionDraft: draft(),
+      loops: [{ startedAt: "2026-09-01T10:00:00Z", state: "PAUSED" } as AgentLoop],
+      lastEventSequence: 8,
+    });
+
+    // 切换需求的调用方：先取数……
+    const workspace = await s.fetchActivePlanWorkspace("explorer-1", "ep-1", "project-1", 1);
+    expect(workspace?.turns.map((item) => item.id)).toEqual(["turn-1"]);
+    // ……此时旧时间线仍在（没有任何 ref 被写过），不会空一帧。
+    expect(s.turns.value).toEqual([]);
+    expect(s.activity.value).toEqual([]);
+    expect(s.setInputRequests).not.toHaveBeenCalled();
+    expect(s.explorerEventSequence.value).toBeNull();
+
+    // 再把 id 与工作区放进同一个同步块：apply 一次性写入。
+    s.applyActivePlanWorkspace(workspace!);
+    expect(s.turns.value.map((item) => item.id)).toEqual(["turn-1"]);
+    expect(s.activity.value.map((item) => item.id)).toEqual(["activity-1"]);
+    expect(s.candidate.value?.id).toBe("candidate");
+    expect(s.explorerEventSequence.value).toBe(8);
+  });
+
   it("没有激活需求时不请求 workspace", async () => {
     const s = setup();
     await expect(s.loadActivePlanWorkspace("explorer-1", null, "project-1", 1)).resolves.toBe(true);

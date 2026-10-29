@@ -510,7 +510,7 @@ describe("Explorer inline message presentation", () => {
     expect(flat(planProjectionComposableSource)).toContain(flat("const explorerPlans = ref<ExplorerPlan[]>([]);"));
     expect(flat(explorerViewSource)).toContain(
       flat(
-        "enqueued, explorerEventSequence, activeExplorerPlan, allPlans, planFromRevisionDraft, applyPlanProjection, loadActivePlanWorkspace, refreshPlanProjection",
+        "enqueued, explorerEventSequence, activeExplorerPlan, allPlans, planFromRevisionDraft, applyPlanProjection, fetchActivePlanWorkspace, applyActivePlanWorkspace, loadActivePlanWorkspace, refreshPlanProjection",
       ),
     );
     expect(flat(explorerViewSource)).toContain(flat("api.explorerPlanGroups(requestProjectId, selected.id)"));
@@ -549,11 +549,33 @@ describe("Explorer thread switching", () => {
     expect(flat(explorerViewSource)).toContain(flat("async function selectExplorer(explorerId: string)"));
     expect(flat(explorerViewSource)).toContain(flat('query: explorerRouteQuery(explorerId), hash: "" });'));
     expect(flat(explorerViewSource)).toContain(flat("void reloadSelectedExplorer();"));
-    // P7-9：workspace 加载的 API 调用搬进了 composable，视图这一侧只留委托调用。
+    // P7-9：workspace 加载的 API 调用搬进了 composable；切换需求这里是**先取数、后切换**：
+    // 取数（fetch）不落地，和激活 id 一起在同一个同步块里写，避免旧数据被过滤后空一帧。
     expect(flat(planProjectionComposableSource)).toContain(flat("api.explorerPlanWorkspace(requestProjectId, explorerId, explorerPlanId)"));
     expect(flat(explorerViewSource)).toContain(
-      flat("await loadActivePlanWorkspace(currentThread.id, selectedPlan.id, requestProjectId, requestToken)"),
+      flat("fetchActivePlanWorkspace(currentThread.id, selectedPlan.id, requestProjectId, requestToken)"),
     );
+    expect(flat(explorerViewSource)).toContain(flat("applyActivePlanWorkspace(workspace)"));
+    // 切换后 SSE 从工作区游标续传，首帧不再回查整套投影（那是切换抖动的来源之一）。
+    expect(flat(explorerViewSource)).toContain(flat("connectEvents({ initialCatchUp: false })"));
+  });
+
+  it("keeps the conversation pane mounted while switching requirements", () => {
+    // 切需求先关抽屉再打开，会让宽屏停靠布局先展开再收起——那一下闪动主要就是它。
+    const openChat = explorerViewSource.match(/async function openRequirementChat\([\s\S]*?\n\}/)?.[0] ?? "";
+    expect(openChat).not.toContain("drawerOpen.value = false");
+    expect(flat(openChat)).toContain(flat("drawerOpen.value = true"));
+    // 先取数、后切换：激活 id 与工作区在同一个同步块里写，渲染只发生一次。
+    const selectPlan = explorerViewSource.match(/async function selectExplorerPlan\([\s\S]*?\n\}/)?.[0] ?? "";
+    expect(flat(selectPlan)).toContain(flat("const [activation, workspace] = await Promise.all(["));
+    expect(selectPlan.indexOf("applyActivePlanWorkspace(workspace)")).toBeGreaterThan(
+      selectPlan.indexOf("activeExplorerPlanId.value = selectedPlan.id"),
+    );
+    // 目标行先进入加载态，重复点击同一行被挡住。
+    expect(flat(explorerViewSource)).toContain(flat(':switching-plan-id="switchingPlanId"'));
+    const listSource = readFileSync(fileURLToPath(new URL("../components/ExplorerRequirementList.vue", import.meta.url)), "utf8");
+    expect(flat(listSource)).toContain(flat("pending: row.explorerPlan.id === switchingPlanId"));
+    expect(flat(listSource)).toContain(flat("row.explorerPlan.id === switchingPlanId"));
   });
 
   it("separates Explorer creation from turn busy state and clears stale thread data", () => {

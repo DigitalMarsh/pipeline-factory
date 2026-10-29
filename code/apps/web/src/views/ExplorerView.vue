@@ -262,6 +262,8 @@ const {
   allPlans,
   planFromRevisionDraft,
   applyPlanProjection,
+  fetchActivePlanWorkspace,
+  applyActivePlanWorkspace,
   loadActivePlanWorkspace,
   refreshPlanProjection,
   refreshActivity,
@@ -389,6 +391,8 @@ const {
  */
 const wideConversationDock = ref(false);
 const conversationDocked = computed(() => wideConversationDock.value && drawerOpen.value && !projectWorkspaceMode.value);
+/** 正在切换到的需求 id：列表用它显示"这一行正在加载"，同时挡住同一行的重复点击。 */
+const switchingPlanId = ref<string | null>(null);
 let conversationDockQuery: MediaQueryList | null = null;
 function syncWideConversationDock(): void {
   wideConversationDock.value = conversationDockQuery?.matches ?? false;
@@ -974,25 +978,41 @@ async function selectExplorerPlan(explorerPlanId: string, shouldScroll = true): 
   const currentThread = thread.value;
   const selectedPlan = explorerPlans.value.find((plan) => plan.id === explorerPlanId);
   if (!currentThread || !selectedPlan || selectedPlan.explorerThreadId !== currentThread.id) return;
+  if (switchingPlanId.value === explorerPlanId) return;
   const requestProjectId = projectId.value;
   const requestToken = projectScopeToken();
   const requestVersion = beginPlanProjection();
   const previousPlanId = activeExplorerPlanId.value;
   if (previousPlanId && previousPlanId !== selectedPlan.id) requirementDrafts.set(previousPlanId, draft.value);
   if (previousPlanId !== selectedPlan.id) draft.value = requirementDrafts.get(selectedPlan.id) ?? "";
+  switchingPlanId.value = selectedPlan.id;
   closeEvents();
-  activeExplorerPlanId.value = selectedPlan.id;
-  thread.value = { ...currentThread, activeExplorerPlanId: selectedPlan.id };
   try {
-    const activation = await api.activateExplorerPlan(requestProjectId, currentThread.id, selectedPlan.id);
+    /**
+     * **先取数、后切换。** `activateExplorerPlan` 只把服务端的"当前需求"指过来；工作区数据用
+     * `fetchActivePlanWorkspace` 并行拉、但**先不落地**。两者都到手后才在同一个同步块里写
+     * `activeExplorerPlanId` / `thread` / turns & activity：Vue 只渲染一次，不会出现
+     * "旧需求已被过滤、新需求还没到"的空时间线——实测那正是切换时的闪动来源。
+     */
+    const [activation, workspace] = await Promise.all([
+      api.activateExplorerPlan(requestProjectId, currentThread.id, selectedPlan.id),
+      fetchActivePlanWorkspace(currentThread.id, selectedPlan.id, requestProjectId, requestToken),
+    ]);
     if (
       !isCurrentProjectScope(requestProjectId, requestToken) ||
       !isCurrentPlanProjection(requestVersion) ||
       thread.value?.id !== currentThread.id
     )
       return;
+    if (!workspace) {
+      // 工作区没取到（请求失败）：留在原需求上，并把事件流接回去——开头已经 closeEvents 了。
+      connectEvents();
+      return;
+    }
+    activeExplorerPlanId.value = selectedPlan.id;
     thread.value = activation.explorer;
     explorers.value = explorers.value.map((item) => (item.id === currentThread.id ? activation.explorer : item));
+    applyActivePlanWorkspace(workspace);
     try {
       const planGroupsResponse = await api.explorerPlanGroups(requestProjectId, currentThread.id);
       if (
@@ -1012,17 +1032,25 @@ async function selectExplorerPlan(explorerPlanId: string, shouldScroll = true): 
     )
       return;
     await router.replace({ path: route.path, query: explorerRouteQuery(currentThread.id, selectedPlan.id), hash: route.hash });
-    await loadActivePlanWorkspace(currentThread.id, selectedPlan.id, requestProjectId, requestToken);
-    if (!isCurrentProjectScope(requestProjectId, requestToken) || thread.value?.id !== currentThread.id) return;
-    connectEvents();
+    // 工作区是刚取回来的，SSE 从它的游标续传；首帧不必再回查整套投影（切换时的那一轮抖动就来自这里）。
+    connectEvents({ initialCatchUp: false });
     if (shouldScroll) {
       await nextTick();
       jumpToTimelineTarget(explorerPlanAnchorId(selectedPlan.id), `explorer-plan-${selectedPlan.id}`);
       const composer = document.querySelector<HTMLTextAreaElement>(".composer textarea");
       composer?.focus();
+    } else if (drawerTab.value === "explorer" && timeline.value) {
+      // 打开另一条需求 = 打开另一段对话：落在它的最新消息，而不是沿用上一条的滚动位置。
+      await nextTick();
+      scrollTimelineToLatest(timeline.value);
+      updateTimelineScrollState();
     }
   } catch (caught) {
+    // 切换失败时原需求的对话还在屏幕上：事件流必须接回去，否则它从现在起不再更新。
+    connectEvents();
     ElMessage.error(caught instanceof Error ? `需求工作区加载失败：${caught.message}` : "需求工作区加载失败");
+  } finally {
+    if (switchingPlanId.value === selectedPlan.id) switchingPlanId.value = null;
   }
 }
 
@@ -1072,11 +1100,12 @@ async function createRequirement(description: string, files: File[] = []): Promi
 }
 
 async function openRequirementChat(explorerPlanId: string): Promise<void> {
-  drawerOpen.value = false;
   drawerTab.value = "explorer";
+  // **不要在切换前先关抽屉**：宽屏停靠时关掉会让主区先展开、再收起，切换需求时那一下闪动
+  // 主要就是它。保持打开，旧对话会一直显示到新工作区取回来、同一帧替换为止。
+  drawerOpen.value = true;
   if (activeExplorerPlan.value?.id !== explorerPlanId) await selectExplorerPlan(explorerPlanId, false);
   if (activeExplorerPlan.value?.id !== explorerPlanId) return;
-  drawerOpen.value = true;
   await router.replace({
     path: route.path,
     query: { ...route.query, explorerId: thread.value?.id, explorerPlanId, requirementTab: "explorer" },
@@ -1089,14 +1118,12 @@ async function returnToCurrentRequirementChat(): Promise<void> {
 }
 
 async function openRequirementPlan(explorerPlanId: string): Promise<void> {
-  drawerOpen.value = false;
   if (activeExplorerPlan.value?.id !== explorerPlanId) await selectExplorerPlan(explorerPlanId, false);
   const row = requirementRows.value.find((item) => item.explorerPlan.id === explorerPlanId);
   if (row?.plan) await openPlanDetail(row.plan);
 }
 
 async function openRequirementTask(explorerPlanId: string): Promise<void> {
-  drawerOpen.value = false;
   if (activeExplorerPlan.value?.id !== explorerPlanId) await selectExplorerPlan(explorerPlanId, false);
   const row = requirementRows.value.find((item) => item.explorerPlan.id === explorerPlanId);
   if (!row?.plan) return;
@@ -1817,6 +1844,7 @@ onBeforeUnmount(() => {
         <ExplorerRequirementList
           :rows="requirementRows"
           :active-explorer-plan-id="activeExplorerPlan?.id ?? null"
+          :switching-plan-id="switchingPlanId"
           :disabled="!thread || thread.state === 'ARCHIVED' || project?.status === 'ARCHIVED'"
           @add="openAddRequirementDialog"
           @explore="openRequirementChat"

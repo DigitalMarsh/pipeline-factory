@@ -5789,7 +5789,14 @@ a {
 }
 .requirement-table-row.active {
   background: #f2f7ff;
-  box-shadow: inset 3px 0 #4e81db;
+  box-shadow: inset 3px 0 var(--blue);
+}
+/* 正在切换到的需求：目标行先亮起来，用户在数据到达前就知道"点到了"。 */
+.requirement-table-row.pending {
+  background: #f7fbff;
+}
+.requirement-table-row.pending .requirement-name-button {
+  cursor: progress;
 }
 .requirement-cell {
   display: flex;
@@ -5852,6 +5859,19 @@ a {
   color: var(--blue);
   font-size: var(--fs-meta);
   font-weight: 800;
+}
+.requirement-ordinal.is-loading {
+  animation: requirement-ordinal-pulse 0.9s ease-in-out infinite;
+}
+@keyframes requirement-ordinal-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .requirement-ordinal.is-loading {
+    animation: none;
+  }
 }
 .requirement-name-copy {
   display: block;

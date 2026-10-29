@@ -48,6 +48,9 @@ import { planIdentity } from "../utils/planTimeline";
  */
 export const PROJECTION_REFRESH_INTERVAL_MS = 400;
 
+/** `api.explorerPlanWorkspace` 的返回形状；"先取后切"的两步共用同一份类型。 */
+type ExplorerPlanWorkspace = Awaited<ReturnType<typeof api.explorerPlanWorkspace>>;
+
 export type PlanProjectionDeps = {
   projectId: Ref<string>;
   thread: Ref<ExplorerThread | null>;
@@ -119,15 +122,27 @@ export function usePlanProjection(deps: PlanProjectionDeps) {
     dispatched.value = projection.dispatched.filter((plan) => plan.dispatchedAt !== null && plan.dispatchedAt !== undefined);
   }
 
-  async function loadActivePlanWorkspace(
+  /**
+   * 拉取一条需求的工作区，**但不写任何状态**。
+   *
+   * 切换需求时必须先取数、后切换：一旦先把 `activeExplorerPlanId` 指过去，旧需求的活动会被
+   * `belongsToPlan` 立刻过滤掉，而新数据还在路上——时间线会空一帧，看起来就是切换时的闪动。
+   * 拿到了就在同一个同步块里连同 id 一起写（见视图的 `selectExplorerPlan`）。
+   */
+  async function fetchActivePlanWorkspace(
     explorerId: string,
     explorerPlanId: string | null,
     requestProjectId: string,
     requestToken: number,
-  ): Promise<boolean> {
-    if (!explorerPlanId) return true;
+  ): Promise<ExplorerPlanWorkspace | null> {
+    if (!explorerPlanId) return null;
     const workspace = await api.explorerPlanWorkspace(requestProjectId, explorerId, explorerPlanId);
-    if (!deps.isCurrentProjectScope(requestProjectId, requestToken) || deps.thread.value?.id !== explorerId) return false;
+    if (!deps.isCurrentProjectScope(requestProjectId, requestToken) || deps.thread.value?.id !== explorerId) return null;
+    return workspace;
+  }
+
+  /** 把 `fetchActivePlanWorkspace` 的结果写进会话状态。调用方保证激活需求已经指向它。 */
+  function applyActivePlanWorkspace(workspace: ExplorerPlanWorkspace): void {
     deps.turns.value = workspace.turns;
     deps.activity.value = workspace.activity;
     deps.setInputRequests(workspace.inputRequests);
@@ -137,6 +152,18 @@ export function usePlanProjection(deps: PlanProjectionDeps) {
     deps.explorerPaused.value = deps.agentLoop.value?.state === "PAUSED";
     explorerEventSequence.value = Math.max(explorerEventSequence.value ?? 0, workspace.lastEventSequence ?? 0);
     deps.inputDialogOpen.value = Boolean(deps.pendingInput.value?.isBlocking);
+  }
+
+  async function loadActivePlanWorkspace(
+    explorerId: string,
+    explorerPlanId: string | null,
+    requestProjectId: string,
+    requestToken: number,
+  ): Promise<boolean> {
+    if (!explorerPlanId) return true;
+    const workspace = await fetchActivePlanWorkspace(explorerId, explorerPlanId, requestProjectId, requestToken);
+    if (!workspace) return false;
+    applyActivePlanWorkspace(workspace);
     return true;
   }
 
@@ -252,6 +279,8 @@ export function usePlanProjection(deps: PlanProjectionDeps) {
     allPlans,
     planFromRevisionDraft,
     applyPlanProjection,
+    fetchActivePlanWorkspace,
+    applyActivePlanWorkspace,
     loadActivePlanWorkspace,
     refreshPlanProjection,
     refreshActivity,

@@ -159,6 +159,18 @@ describe("需求 Turn 通道", () => {
     expect(s.refreshPlanProjection).toHaveBeenCalled();
   });
 
+  it("切换需求后的首次连接只续传，不再回查整套投影", async () => {
+    const s = setup({ sequence: 7 });
+
+    s.connectEvents({ initialCatchUp: false });
+    await FakeEventSource.instances[1]!.emit("stream.ready");
+
+    // 工作区刚取回来、游标就在手上：这一轮再拉五条投影只会让时间线重渲染第二次。
+    expect(api.getExplorerTurns).not.toHaveBeenCalled();
+    expect(s.refreshActivity).not.toHaveBeenCalled();
+    expect(s.refreshPlanProjection).not.toHaveBeenCalled();
+  });
+
   it("turn.input_required 按 payload requestId 通过 adoptInputRequest 落位", async () => {
     const s = setup();
     vi.mocked(api.inputRequests).mockResolvedValue({ items: [request("first"), request("target")] });

@@ -87,7 +87,15 @@ export function useExplorerSse(deps: ExplorerSseDeps) {
     deps.adoptInputRequest(null, inputResponse.items);
   }
 
-  function connectEvents() {
+  /**
+   * 建立事件流。
+   *
+   * `initialCatchUp` 默认 true：首次连接 / 重连时用一次完整的投影回查兜底。
+   * 切换需求时传 false——调用方刚刚拿到工作区与续传游标，`stream.ready` 之后再拉一遍
+   * 五条投影只会把同一份数据写第二次，是切换时那一下抖动的来源之一。漏掉的事件仍会由
+   * 服务端按游标重放，并走各自的事件处理。 */
+  function connectEvents(options: { initialCatchUp?: boolean } = {}): void {
+    const catchUpOnReady = options.initialCatchUp ?? true;
     if (!deps.thread.value || !deps.activeExplorerPlan.value || typeof EventSource === "undefined") return;
     connectRequirementStatusEvents();
     const connectionProjectId = deps.projectId.value;
@@ -108,7 +116,7 @@ export function useExplorerSse(deps: ExplorerSseDeps) {
     eventSource.addEventListener("stream.ready", () => {
       if (!isConnectionCurrent()) return;
       replayGate.accept("stream.ready");
-      void refreshTurnsAfterEvent();
+      if (catchUpOnReady) void refreshTurnsAfterEvent();
     });
     eventSource.addEventListener("turn.text.delta", (raw) => {
       if (!isConnectionCurrent() || !replayGate.accept("turn.text.delta")) return;

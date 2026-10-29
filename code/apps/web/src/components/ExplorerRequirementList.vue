@@ -16,6 +16,8 @@ import { requirementStatusTagType } from "../utils/statusTag";
 const props = defineProps<{
   rows: ExplorerRequirementRow[];
   activeExplorerPlanId: string | null;
+  /** 正在打开 / 切换到的需求：该行显示加载态，并挡住同一行的重复点击。 */
+  switchingPlanId?: string | null;
   disabled?: boolean;
 }>();
 
@@ -68,18 +70,25 @@ const visibleRows = computed(() => {
         <article
           v-for="row in visibleRows"
           :key="row.explorerPlan.id"
-          :class="['requirement-table-row', { active: row.explorerPlan.id === activeExplorerPlanId }]"
+          :class="[
+            'requirement-table-row',
+            { active: row.explorerPlan.id === activeExplorerPlanId, pending: row.explorerPlan.id === switchingPlanId },
+          ]"
           role="row"
           :data-explorer-plan-id="row.explorerPlan.id"
+          :aria-busy="row.explorerPlan.id === switchingPlanId ? 'true' : undefined"
         >
           <div class="requirement-cell requirement-name-cell" role="cell">
             <button
               class="requirement-name-button"
               type="button"
               :aria-current="row.explorerPlan.id === activeExplorerPlanId ? 'true' : undefined"
+              :disabled="row.explorerPlan.id === switchingPlanId"
               @click="emit('explore', row.explorerPlan.id)"
             >
-              <span class="requirement-ordinal">{{ row.explorerPlan.ordinal }}</span>
+              <span class="requirement-ordinal" :class="{ 'is-loading': row.explorerPlan.id === switchingPlanId }">{{
+                row.explorerPlan.ordinal
+              }}</span>
               <span class="requirement-name-copy">
                 <strong>{{ row.title }}</strong>
                 <small>{{ row.explorerPlan.latestUserMessageSummary ?? "尚未开始探索" }}</small>
