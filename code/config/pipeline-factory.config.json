@@ -40,7 +40,8 @@
     },
     "roles": {
       "explorer": {
-        "model": "gpt-5.6-luna",
+        "model": "claude-opus-5",
+        "backend": "claude-agent-sdk",
         "mode": "plan",
         "temperature": 0.1,
         "loopMode": "provider-controlled"
