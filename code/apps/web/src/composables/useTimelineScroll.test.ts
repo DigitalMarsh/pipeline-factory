@@ -179,6 +179,37 @@ describe("新内容到达时的跟随", () => {
   });
 });
 
+describe("折叠区里的锚点", () => {
+  it("收起的折叠区里的行不参与激活判定", () => {
+    const { timeline, updateTimelineScrollState, activeTimelineKey } = setup();
+    const el = container({ clientHeight: 100, scrollHeight: 1000, scrollTop: 0 });
+    navNode(el, "message-turn-1");
+    const details = document.createElement("details");
+    navNode(details, "message-turn-2");
+    el.append(details);
+    timeline.value = el;
+
+    updateTimelineScrollState();
+
+    // 折叠区里的行还在 DOM 里，但它不可见——激活键不能指向它。
+    expect(activeTimelineKey.value).toBe("message-turn-1");
+  });
+
+  it("跳到折叠区里的目标时先展开再定位", () => {
+    const el = container({ clientHeight: 100, scrollHeight: 1000, scrollTop: 0 });
+    const details = document.createElement("details");
+    navNode(details, "message-hidden", "message-hidden");
+    el.append(details);
+    const { timeline, jumpToTimelineTarget, activeTimelineKey } = setup();
+    timeline.value = el;
+
+    jumpToTimelineTarget("message-hidden", "message-hidden");
+
+    expect(details.open).toBe(true);
+    expect(activeTimelineKey.value).toBe("message-hidden");
+  });
+});
+
 describe("当前激活键", () => {
   it("取判定线以内最后一条导航项", () => {
     const { timeline, updateTimelineScrollState, activeTimelineKey } = setup();

@@ -42,6 +42,9 @@ export function useTimelineScroll(timeline: Ref<HTMLElement | null>, deps: Timel
     const target = document.getElementById(targetId);
     if (!timeline.value || !target) return;
     jumpVersion += 1;
+    // 目标可能收在「过程 N 步」的折叠区里：先展开再量位置，否则跳到一个高度为 0 的隐藏节点。
+    const closed = target.closest<HTMLDetailsElement>("details:not([open])");
+    if (closed) closed.open = true;
     const timelineRect = timeline.value.getBoundingClientRect();
     const targetRect = target.getBoundingClientRect();
     const targetTop = timeline.value.scrollTop + targetRect.top - timelineRect.top - 20;
@@ -52,7 +55,13 @@ export function useTimelineScroll(timeline: Ref<HTMLElement | null>, deps: Timel
 
   function updateActiveTimeline() {
     if (!timeline.value) return;
-    const nodes = [...timeline.value.querySelectorAll<HTMLElement>("[data-nav-key]")];
+    /**
+     * 折叠区里的行仍在 DOM 里，但**不可见、也没有可用的位置**。把它们排除在激活判定之外，
+     * 否则滚动时"当前这一条"会指向折叠区里的某个隐藏行。
+     */
+    const nodes = [...timeline.value.querySelectorAll<HTMLElement>("[data-nav-key]")].filter(
+      (node) => !node.closest("details:not([open])"),
+    );
     const marker = timeline.value.scrollTop + 72;
     const timelineRect = timeline.value.getBoundingClientRect();
     let current = nodes[0]?.dataset.navKey ?? activeTimelineKey.value;

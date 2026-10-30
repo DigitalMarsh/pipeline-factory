@@ -6333,13 +6333,118 @@ a {
   color: #a34853;
   font-size: var(--fs-meta);
 }
+/* ─────────────────────────────────────────────────────────────────────────
+   回合块：Plan Explorer → 正文 + 折叠的过程。
+   层级由「回合头 → 内容列 → 过程行缩进」表达；过程行不再与正文平级。
+   ───────────────────────────────────────────────────────────────────────── */
+.chat-turn {
+  min-width: 0;
+  margin: 0 0 var(--chat-row-gap);
+}
+.chat-turn-head {
+  display: grid;
+  grid-template-columns: var(--chat-avatar-size) minmax(0, 1fr);
+  column-gap: var(--chat-gutter);
+  align-items: start;
+  margin-bottom: var(--space-2);
+}
+.chat-turn-head .chat-meta {
+  margin: 0;
+}
+.chat-turn-body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-left: calc(var(--chat-avatar-size) + var(--chat-gutter));
+}
+.chat-turn-item {
+  min-width: 0;
+  scroll-margin-top: 18px;
+}
+.chat-turn-prose {
+  max-width: var(--chat-prose-max);
+}
+.chat-turn-prose .markdown-body {
+  color: #3f4f66;
+  font-size: var(--fs-read);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.chat-turn-prose.failed .markdown-body {
+  color: #a34853;
+}
+.chat-turn-process,
+.chat-turn-input {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  column-gap: var(--space-2);
+  align-items: start;
+}
+.chat-turn-item-icon {
+  display: grid;
+  height: 18px;
+  place-items: center;
+  color: var(--muted);
+  font-size: 18px;
+}
+.chat-turn-item-icon svg {
+  width: 18px;
+  height: 18px;
+}
+.chat-turn-item-main {
+  min-width: 0;
+}
+.chat-turn-item-main > .chat-meta {
+  margin: 0 0 6px;
+}
+.chat-turn-item-main > .input-request-card {
+  margin: 0;
+}
+.chat-turn-fold {
+  margin-top: var(--space-1);
+}
+.chat-turn-fold > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: var(--fs-meta);
+  list-style: none;
+}
+.chat-turn-fold > summary::-webkit-details-marker {
+  display: none;
+}
+.chat-turn-fold > summary::before {
+  content: "▸";
+  color: var(--faint);
+  font-size: 10px;
+}
+.chat-turn-fold[open] > summary::before {
+  content: "▾";
+}
+.chat-turn-fold > summary:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid #bfd2f6;
+  outline-offset: 2px;
+}
+.chat-turn-fold-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+  padding-left: var(--space-3);
+  border-left: 2px solid var(--line);
+}
 /* 抽屉宽度而不是视口宽度决定紧凑档：1440 视口的停靠抽屉只有 ~690px。 */
 .shared-drawer-shell {
   container-type: inline-size;
   container-name: chat-surface;
 }
 @container chat-surface (max-width: 700px) {
-  .chat-message {
+  .chat-message,
+  .chat-turn {
     --chat-avatar-size: 30px;
     --chat-gutter: 8px;
     --chat-row-gap: 14px;

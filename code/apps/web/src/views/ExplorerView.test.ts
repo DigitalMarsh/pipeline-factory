@@ -25,6 +25,11 @@ const explorerViewSource = readFileSync(fileURLToPath(new URL("./ExplorerView.vu
  * 所以行型的断言从视图搬到了这里。
  */
 const explorerMessageRowSource = readFileSync(fileURLToPath(new URL("../components/ExplorerMessageRow.vue", import.meta.url)), "utf8");
+const explorerTurnGroupSource = readFileSync(fileURLToPath(new URL("../components/ExplorerTurnGroup.vue", import.meta.url)), "utf8");
+const explorerInputRequestCardSource = readFileSync(
+  fileURLToPath(new URL("../components/ExplorerInputRequestCard.vue", import.meta.url)),
+  "utf8",
+);
 const explorerStylesSource = readFileSync(fileURLToPath(new URL("../styles.css", import.meta.url)), "utf8");
 /**
  * **CSS 的换行与缩进不是这些断言的判据**：Prettier 会把一条规则从"一行写完"重排成"一行一声明"，
@@ -414,8 +419,14 @@ describe("Explorer inline message presentation", () => {
     expect(flat(explorerViewSource)).toContain(flat(':pending-input-id="pendingInput?.id ?? null"'));
     expect(flat(explorerViewSource)).toContain(flat('@answer="openInputRequest"'));
     // 条目本身、锚点序号、方案卡都由视图算好递进去（它拿得到当前需求与 planBindings）。
-    expect(flat(explorerViewSource)).toContain(flat(':item="item"'));
-    expect(flat(explorerViewSource)).toContain(flat(':index="index"'));
+    expect(flat(explorerViewSource)).toContain(flat(':item="block.entry.item"'));
+    expect(flat(explorerViewSource)).toContain(flat(':index="block.entry.index"'));
+    // 回合块里的子行由 ExplorerTurnGroup 递同样的上下文。
+    expect(flat(explorerTurnGroupSource)).toContain(flat(':item="entry.item"'));
+    expect(flat(explorerTurnGroupSource)).toContain(flat(':index="entry.index"'));
+    expect(flat(explorerTurnGroupSource)).toContain(flat(':plan="planForItem(entry.item)"'));
+    expect(flat(explorerViewSource)).toContain(flat(':plan-for-item="planForTimelineItem"'));
+    expect(flat(explorerViewSource)).toContain(flat(':is-candidate-plan="isCandidatePlan"'));
     expect(flat(explorerViewSource)).toContain(flat('@view-plan="openPlanDetail"'));
     expect(flat(explorerViewSource)).toContain(flat('@confirm-plan="confirmPlan"'));
     expect(flat(explorerViewSource)).toContain(flat('@enqueue-plan="enqueuePlan"'));
@@ -448,7 +459,8 @@ describe("Explorer inline message presentation", () => {
     expect(explorerViewSource).not.toContain("item.kind === 'plan'");
     expect(explorerViewSource).not.toContain("plan-created-event");
     // 绑定由视图算好（它拿着当前需求与 `planBindings`），**从外面递进去**；行组件只管摆。
-    expect(flat(explorerViewSource)).toContain(flat(':plan="planForTimelineItem(item)"'));
+    expect(flat(explorerViewSource)).toContain(flat(':plan-for-item="planForTimelineItem"'));
+    expect(flat(explorerTurnGroupSource)).toContain(flat(':plan="planForItem(entry.item)"'));
     expect(flat(explorerMessageRowSource)).toContain(flat('v-if="showCandidatePlanCard && plan"'));
     expect(explorerViewSource).not.toContain("syntheticPlanItems");
     expect(explorerViewSource).not.toContain('v-for="item in syntheticPlanItems"');
@@ -457,7 +469,8 @@ describe("Explorer inline message presentation", () => {
   it("时间线的显隐与内嵌方案卡都问同一张清单表", () => {
     // 呈现方式表（`EXPLORER_DISPLAY_MODES`）必须是**唯一**的判据：模板里再自己写一遍
     // "哪些 kind 要显示"，就等于把表绕过去了——改表不再生效，而且没人会发现。
-    expect(flat(explorerViewSource)).toContain(flat('v-for="(item, index) in renderedTimelineItems"'));
+    expect(flat(explorerViewSource)).toContain(flat('v-for="block in timelineBlocks"'));
+    expect(flat(explorerViewSource)).toContain(flat("groupExplorerTimeline("));
     expect(flat(explorerViewSource)).toContain(flat("explorerDisplayMode(explorerTimelineMessageType(item))"));
     // 两次查表分别在两处：条目要不要出现（视图）与内嵌卡要不要出现（行组件）。
     expect(flat(explorerMessageRowSource)).toContain(flat('explorerDisplayMode("CANDIDATE_PLAN")'));
@@ -626,7 +639,7 @@ describe("Explorer thread switching", () => {
     // 锚点算在行组件里（它拿得到这条的序号），视图只把序号递进去。
     expect(flat(explorerMessageRowSource)).toContain(flat(':anchor-id="explorerTimelineTarget(activity, index)"'));
     expect(flat(explorerMessageRowSource)).toContain(flat(':nav-key="explorerTimelineTarget(activity, index)"'));
-    expect(flat(explorerViewSource)).toContain(flat(':index="index"'));
+    expect(flat(explorerViewSource)).toContain(flat(':index="block.entry.index"'));
   });
 
   it("resets archived-thread visibility when switching projects", () => {
@@ -941,17 +954,42 @@ describe("Explorer composer availability", () => {
     );
     // 卡上那三处答案文案（草稿优先 / 密钥显示已隐藏 / 提交中…）现在由**行组件**直接调纯函数算——
     // 它把草稿与在途标记当 props 收下（见"视图把每条条目交给行组件"那一条），视图不再中转这三层。
-    expect(flat(explorerMessageRowSource)).toContain(
-      flat("inputAnswerDisplayLabels(request, request.questions[questionIndex]!, props.inputProgress)"),
+    // 卡上的三道答案文案在独立出来的 `ExplorerInputRequestCard.vue`（回合内/独立行共用一份内容）。
+    expect(flat(explorerInputRequestCardSource)).toContain(
+      flat("inputAnswerDisplayLabels(props.request, props.request.questions[questionIndex]!, props.inputProgress)"),
     );
-    expect(flat(explorerMessageRowSource)).toContain(
-      flat("inputAnswerDisplayText(request, request.questions[questionIndex]!, props.inputProgress, props.inputAnswerInFlight)"),
+    expect(flat(explorerInputRequestCardSource)).toContain(
+      flat(
+        "inputAnswerDisplayText(props.request, props.request.questions[questionIndex]!, props.inputProgress, props.inputAnswerInFlight)",
+      ),
     );
     // 这两条测的是**模板**里的用户可见文案：状态文案在 ExplorerComposer，视图只负责把
     // "结构化输入是否在提交"这一事实作为 prop 传进去。
     expect(flat(explorerComposerSource)).toContain(flat("正在提交结构化答案，确认后本轮会继续"));
     expect(flat(explorerComposerSource)).toContain(flat("inputAnswerInFlight || inputSubmitting"));
     expect(flat(explorerViewSource)).toContain(flat(`:input-submitting="inputCardRequest?.status === 'SUBMITTING'"`));
+  });
+});
+
+describe("探索回合分组", () => {
+  it("按回合渲染 Plan Explorer 头：正文可见、过程行折在「过程 N 步」里", () => {
+    // 分组在 utils/explorerTurnGroups（有独立单测）；视图只负责把块交给回合组件。
+    expect(flat(explorerViewSource)).toContain(flat("groupExplorerTimeline("));
+    expect(flat(explorerViewSource)).toContain(flat("<ExplorerTurnGroup"));
+    expect(flat(explorerViewSource)).toContain(flat(':block="block"'));
+    expect(flat(explorerTurnGroupSource)).toContain(flat('class="chat-turn-head"'));
+    expect(flat(explorerTurnGroupSource)).toContain(flat("Plan Explorer"));
+    expect(flat(explorerTurnGroupSource)).toContain(flat("assistantActivityLabel({ status: props.block.status })"));
+    expect(flat(explorerTurnGroupSource)).toContain(flat("过程 {{ block.folded.length }} 步"));
+    // 运行中的回合默认展开折叠区，结束后收起；失败行由分组算法留在外面。
+    expect(flat(explorerTurnGroupSource)).toContain(flat(':open="live"'));
+    expect(flat(explorerTurnGroupSource)).toContain(flat('v-for="entry in block.visible"'));
+    expect(flat(explorerTurnGroupSource)).toContain(flat('v-for="entry in block.folded"'));
+    // 子行走 grouped 模式：回合头已经给了角色/状态/时间，子行不重复头像。
+    expect(flat(explorerTurnGroupSource)).toContain(flat("grouped"));
+    expect(flat(explorerMessageRowSource)).toContain(flat("grouped && activity && mode === 'prose'"));
+    // 用户消息 / 分隔行仍是独立条目（不并入回合块）。
+    expect(flat(explorerViewSource)).toContain(flat("<ExplorerMessageRow"));
   });
 });
 

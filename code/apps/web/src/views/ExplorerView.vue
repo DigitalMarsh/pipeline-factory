@@ -23,6 +23,7 @@ import { stoppableExplorerTurn } from "../utils/explorerTurnControl";
 import { formatContextUsage } from "../utils/explorerStatus";
 import ExplorerInputDialog from "../components/ExplorerInputDialog.vue";
 import ExplorerMessageRow from "../components/ExplorerMessageRow.vue";
+import ExplorerTurnGroup from "../components/ExplorerTurnGroup.vue";
 import ProjectExecutionThreadPanel from "../components/ProjectExecutionThreadPanel.vue";
 import ProjectWorktreesPanel from "../components/ProjectWorktreesPanel.vue";
 import ProjectSettingsDialog from "../components/ProjectSettingsDialog.vue";
@@ -44,6 +45,7 @@ import { taskDisplayTitle } from "../utils/taskTree";
 import { explorerPathFor } from "../utils/projectRoutes";
 import { explorerPlanAnchorId, explorerTimelineMessageType, type ExplorerTimelineItem } from "../utils/explorerTimeline";
 import { explorerDisplayMode, explorerDisplayTitle, explorerRuntimeFacts } from "../utils/explorerPresentation";
+import { groupExplorerTimeline } from "../utils/explorerTurnGroups";
 import {
   formatAgentLoopCompletion,
   formatAgentLoopGate,
@@ -484,6 +486,18 @@ const runtimeFacts = computed(() => explorerRuntimeFacts(visibleActivity.value))
  */
 const renderedTimelineItems = computed(() =>
   timelineItems.value.filter((item) => explorerDisplayMode(explorerTimelineMessageType(item)) !== "hidden"),
+);
+
+/**
+ * 时间线的**回合块**：同一 `turnId` 的正文/推理/工具收成一个块（见 `utils/explorerTurnGroups`），
+ * 正文在前、过程行折进「过程 N 步」；用户消息与分隔行仍是独立条目。
+ * 条目序号随分组原样带过去，锚点（`explorerTimelineTarget`）不受影响。
+ */
+const timelineBlocks = computed(() =>
+  groupExplorerTimeline(
+    renderedTimelineItems.value.map((item, index) => ({ item, index })),
+    visibleTurns.value,
+  ),
 );
 
 /**
@@ -2059,23 +2073,39 @@ onBeforeUnmount(() => {
                       }}</strong
                       ><span>当前需求还没有消息；切换需求不会删除其他对话内容。</span>
                     </div>
-                    <ExplorerMessageRow
-                      v-for="(item, index) in renderedTimelineItems"
-                      :key="item.key"
-                      :item="item"
-                      :index="index"
-                      :plan="planForTimelineItem(item)"
-                      :is-candidate-plan="isCandidatePlan(planForTimelineItem(item))"
-                      :busy="busy"
-                      :pending-input-id="pendingInput?.id ?? null"
-                      :input-progress="inputProgress"
-                      :input-answer-in-flight="inputAnswerInFlight"
-                      @answer="openInputRequest"
-                      @retry="retryFailedTurn"
-                      @view-plan="openPlanDetail"
-                      @confirm-plan="confirmPlan"
-                      @enqueue-plan="enqueuePlan"
-                    />
+                    <template v-for="block in timelineBlocks" :key="block.key">
+                      <ExplorerTurnGroup
+                        v-if="block.kind === 'turn'"
+                        :block="block"
+                        :plan-for-item="planForTimelineItem"
+                        :is-candidate-plan="isCandidatePlan"
+                        :busy="busy"
+                        :pending-input-id="pendingInput?.id ?? null"
+                        :input-progress="inputProgress"
+                        :input-answer-in-flight="inputAnswerInFlight"
+                        @answer="openInputRequest"
+                        @retry="retryFailedTurn"
+                        @view-plan="openPlanDetail"
+                        @confirm-plan="confirmPlan"
+                        @enqueue-plan="enqueuePlan"
+                      />
+                      <ExplorerMessageRow
+                        v-else
+                        :item="block.entry.item"
+                        :index="block.entry.index"
+                        :plan="planForTimelineItem(block.entry.item)"
+                        :is-candidate-plan="isCandidatePlan(planForTimelineItem(block.entry.item))"
+                        :busy="busy"
+                        :pending-input-id="pendingInput?.id ?? null"
+                        :input-progress="inputProgress"
+                        :input-answer-in-flight="inputAnswerInFlight"
+                        @answer="openInputRequest"
+                        @retry="retryFailedTurn"
+                        @view-plan="openPlanDetail"
+                        @confirm-plan="confirmPlan"
+                        @enqueue-plan="enqueuePlan"
+                      />
+                    </template>
                   </div>
                   <button
                     v-if="showScrollToLatest"
